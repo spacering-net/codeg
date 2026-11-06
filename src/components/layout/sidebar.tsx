@@ -19,13 +19,14 @@ import {
   Map as MapIcon,
   Menu,
   MessagesSquare,
-  Sparkles,
   SquarePen,
   Zap,
   type LucideIcon,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
+import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
+import { UserRoundStar } from "@/components/icons/user-round-star"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
@@ -85,6 +86,7 @@ import {
   type SidebarSectionOrder,
 } from "@/lib/sidebar-view-mode-storage"
 import { useCanvasBoardsStore } from "@/stores/canvas-boards-store"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { useConversationTagsStore } from "@/stores/conversation-tags-store"
 import {
   EMPTY_TAG_FILTER,
@@ -124,12 +126,16 @@ const RECENT_HIDDEN: ReadonlySet<SidebarSectionId> = new Set(["recent"])
 // carry the same glyph as the row they switch, so that group reads as a mirror
 // of the nav block rather than three bare labels.
 const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
-  personalAgent: Sparkles,
+  personalAgent: UserRoundStar,
   automations: Zap,
   tasks: ListTodo,
   forge: LayoutTemplate,
   canvas: MapIcon,
 }
+
+/** The personal agent's avatar on its row, in px at 100% zoom: larger than
+ *  the other rows' icons, so a picture or emoji still reads. */
+const NAV_AVATAR_SIZE = 20
 
 /**
  * A fixed top-of-sidebar action / route row. `active` marks the row as the
@@ -140,12 +146,17 @@ const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
  */
 function SidebarNavButton({
   icon: Icon,
+  leading,
   label,
   onClick,
   active,
   trailing,
 }: {
   icon: LucideIcon
+  /** Drawn in the icon's place (the personal agent's avatar). It takes the
+   *  icon's width in the row, whatever its own, so every label starts on
+   *  the same line. */
+  leading?: ReactNode
   label: string
   onClick: () => void
   active?: boolean
@@ -165,7 +176,13 @@ function SidebarNavButton({
         active && "bg-sidebar-primary/8"
       )}
     >
-      <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
+      {leading ? (
+        <span className="flex w-[0.875rem] shrink-0 justify-center">
+          {leading}
+        </span>
+      ) : (
+        <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
+      )}
       <span className="truncate">{label}</span>
       {trailing}
     </button>
@@ -179,7 +196,17 @@ export function Sidebar() {
   const { openNewConversationTab, openChatModeTab } = useTabActions()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
-  const { needsOwner: personalAgentNeedsOwner } = usePersonalAgent()
+  const { needsOwner: personalAgentNeedsOwner, snapshot: personalAgentState } =
+    usePersonalAgent()
+  // Once set up, the agent's row is the agent: its avatar and name.
+  const personalAgent = personalAgentState?.agent ?? null
+  const personalAgentLabel = personalAgent?.name.trim() || t("personalAgent")
+  // What the assistants said that the owner has not seen — none while the
+  // page shows the newest to them (it is marked seen as it lands).
+  const personalAgentWatching = usePersonalAgentUi((s) => s.watching)
+  const personalAgentUnseen = personalAgentWatching
+    ? 0
+    : (personalAgentState?.status.unseen ?? 0)
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
@@ -601,15 +628,36 @@ export function Sidebar() {
             page they just opened stays hidden behind the sidebar. */}
         {isNavItemVisible(navItems, "personalAgent") && (
           <SidebarNavButton
-            icon={Sparkles}
-            label={t("personalAgent")}
+            icon={UserRoundStar}
+            leading={
+              personalAgent ? (
+                <AssistantAvatar
+                  avatar={personalAgent.avatar}
+                  name={personalAgentLabel}
+                  size={NAV_AVATAR_SIZE}
+                />
+              ) : undefined
+            }
+            label={personalAgentLabel}
             active={routeId === "personalAgent"}
             onClick={() => {
               if (isMobile) toggle()
               setRoute("personalAgent")
             }}
             trailing={
-              personalAgentNeedsOwner ? (
+              personalAgentUnseen > 0 ? (
+                // Unseen messages: a count on the theme colour, as a
+                // messenger shows one (the tasks count's geometry). It
+                // stands for the waiting dot too: the page says the rest.
+                <span
+                  className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-primary px-1 font-mono text-[0.625rem] font-medium leading-none text-primary-foreground"
+                  aria-label={t("personalAgentUnseen", {
+                    count: personalAgentUnseen,
+                  })}
+                >
+                  {personalAgentUnseen > 99 ? "99+" : personalAgentUnseen}
+                </span>
+              ) : personalAgentNeedsOwner ? (
                 // The agent waits on the owner (a question or a permission
                 // request): the same quiet dot-badge as the tasks count.
                 <span className="ml-auto inline-flex size-2 shrink-0 rounded-full bg-primary" />

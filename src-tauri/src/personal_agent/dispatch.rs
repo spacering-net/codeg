@@ -29,7 +29,9 @@ use crate::db::entities::personal_agent_item::{ItemKind, ItemStatus, WaitsFor};
 use crate::db::entities::personal_agent_timeline::TimelineKind;
 use crate::db::entities::work_task::WorkTaskStatus;
 use crate::db::service::personal_agent_service as svc;
-use crate::db::service::personal_agent_service::{DispatchWrite, ItemWrite, NewDispatch, NewRow};
+use crate::db::service::personal_agent_service::{
+    DispatchWrite, ItemWrite, NewDispatch, NewEvent, NewRow,
+};
 use crate::models::personal_agent::{DispatchExecutorSnapshot, PersonalAgentChange};
 use crate::models::{AgentType, AssistantRunSnapshot, FollowUpIntent, WorkTaskConfig, WorkTaskDraft};
 
@@ -416,6 +418,7 @@ impl PersonalAgentEngine {
             };
             if let Some(message) = d.followup.clone() {
                 if let Err(e) = self.send_followup(&d, message, &[DispatchState::Queued]).await {
+                    self.fail_followup_card(d.id, None, &e).await;
                     // Claimed and then not sent: it failed as a round. Not
                     // claimed: it never left the queue.
                     match svc::get_dispatch(&self.db.conn, d.id).await {
@@ -792,24 +795,7 @@ impl PersonalAgentEngine {
             self.emit(PersonalAgentChange::Dispatch { id: d.id });
             return;
         }
-        let fresh = svc::insert_event(
-            &self.db.conn,
-            "dispatch_status",
-            &source_key,
-            Some(format!("dispatch:{}", d.id)),
-            summary.clone(),
-            Some(serde_json::json!({
-                "dispatch_id": d.id,
-                "state": d.state,
-                "on_done": d.on_done,
-            })),
-            wake,
-        )
-        .await
-        .unwrap_or(false);
-        if !fresh {
-            return;
-        }
+        // Read before the write: the event and its card go in as one.
         // A chat dispatch's conversation sits in its own hidden folder; the
         // card's link needs it to open the conversation.
         let conversation_folder_id = match d.conversation_id {
@@ -819,9 +805,20 @@ impl PersonalAgentEngine {
                 .map(|c| c.folder_id),
             None => None,
         };
-        let mut card = NewRow::new(TimelineKind::Result, summary);
+        // The card follows up on the reply of the turn that last dispatched
+        // or continued the work.
+        let reply_to = match d.source_batch_id {
+            Some(b) => svc::anchor_row_of_batch(&self.db.conn, b)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| r.id),
+            None => None,
+        };
+        let mut card = NewRow::new(TimelineKind::Result, summary.clone());
         card.dispatch_id = Some(d.id);
         card.segment_id = self.state.lock().await.connection_segment;
+        card.reply_to = reply_to;
         card.data = Some(serde_json::json!({
             "mode": d.mode,
             "state": d.state,
@@ -831,12 +828,44 @@ impl PersonalAgentEngine {
             "agent_type": executor.agent_type,
             "excerpt": excerpt,
             "note": note,
+            // What brought the news (`boot`, `lost`, `gone`, `turn`…): the
+            // page words the notes codeg writes itself in the owner's
+            // language, and shows an agent's own error as it came.
+            "cause": cause,
             "work_task_id": d.work_task_id,
             "conversation_id": d.conversation_id,
             "conversation_folder_id": conversation_folder_id,
             "folder_id": d.folder_id,
         }));
-        self.push_row(card).await;
+        // One transaction: a delivery that takes the event finds its card
+        // there, to number it and to mark it read.
+        let inserted = svc::insert_event_with_row(
+            &self.db.conn,
+            NewEvent {
+                kind: "dispatch_status".into(),
+                source_key,
+                coalesce_key: Some(format!("dispatch:{}", d.id)),
+                summary,
+                payload: Some(serde_json::json!({
+                    "dispatch_id": d.id,
+                    "state": d.state,
+                    "on_done": d.on_done,
+                })),
+                wake,
+            },
+            card,
+        )
+        .await;
+        let card = match inserted {
+            Ok(Some((_, card))) => card,
+            // A repeated arrival of the same state.
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!("[personal_agent] dispatch #{} progress not recorded: {e}", d.id);
+                return;
+            }
+        };
+        self.emit_rows(vec![svc::to_row(card)]);
         if let Ok(Some(item)) = svc::item_of_dispatch(&self.db.conn, d.id).await {
             let (status, waits_for) = match d.state {
                 DispatchState::WaitingInput | DispatchState::Review => {
@@ -1156,6 +1185,69 @@ impl PersonalAgentEngine {
         }
     }
 
+    /// A follow-up about to go out (or to wait for a slot): it shows in the
+    /// reply of the turn that asked for it, and the results it brings follow
+    /// up on that reply — so the dispatch's source is that turn, from before
+    /// the round can report. Returns the card.
+    async fn record_followup(&self, d: &dispatch_entity::Model, message: &str) -> Option<i32> {
+        let batch = self.current_batch().await;
+        if let Some(b) = batch {
+            let _ = svc::update_dispatch(
+                &self.db.conn,
+                d.id,
+                None,
+                DispatchWrite {
+                    source_batch_id: Some(Some(b)),
+                    ..Default::default()
+                },
+            )
+            .await;
+        }
+        let executor = executor_of(d);
+        let mut card = NewRow::new(TimelineKind::Dispatch, d.title.clone());
+        card.dispatch_id = Some(d.id);
+        card.segment_id = self.state.lock().await.connection_segment;
+        card.batch_id = batch;
+        card.data = Some(serde_json::json!({
+            "followup": true,
+            "excerpt": cut(message, 200),
+            "mode": d.mode,
+            "executor": executor.name,
+            "executor_id": executor.assistant_id,
+            "agent_type": executor.agent_type,
+            "folder_id": d.folder_id,
+            "state": d.state,
+        }));
+        self.push_row(card).await.map(|r| r.id)
+    }
+
+    /// The follow-up card of a round that could not be sent.
+    async fn fail_followup_card(&self, dispatch_id: i32, card: Option<i32>, error: &str) {
+        let card = match card {
+            Some(id) => svc::get_row(&self.db.conn, id).await.ok().flatten(),
+            None => svc::latest_followup_row(&self.db.conn, dispatch_id)
+                .await
+                .ok()
+                .flatten(),
+        };
+        let Some(card) = card else {
+            return;
+        };
+        let mut data = card
+            .data
+            .as_deref()
+            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(map) = data.as_object_mut() {
+            map.insert("failed".into(), true.into());
+            map.insert("error".into(), cut(error, 300).into());
+        }
+        let _ = svc::update_row_data(&self.db.conn, card.id, None, Some(data)).await;
+        if let Ok(Some(updated)) = svc::get_row(&self.db.conn, card.id).await {
+            self.emit_rows(vec![svc::to_row(updated)]);
+        }
+    }
+
     async fn followup_task(
         &self,
         d: &dispatch_entity::Model,
@@ -1170,7 +1262,11 @@ impl PersonalAgentEngine {
         match task.status {
             WorkTaskStatus::Review => {
                 let intent = FollowUpIntent::from_wire(intent.as_deref())?;
-                engine.return_task(task_id, intent, message, Vec::new()).await?;
+                let card = self.record_followup(d, &message).await;
+                if let Err(e) = engine.return_task(task_id, intent, message, Vec::new()).await {
+                    self.fail_followup_card(d.id, card, &e).await;
+                    return Err(e);
+                }
                 self.sync_task_dispatch(d.id).await;
                 Ok(format!(
                     "Sent a {} round to task #{task_id}; it reports back when it is done.",
@@ -1181,7 +1277,11 @@ impl PersonalAgentEngine {
                 if intent.is_some() {
                     return Err("a failed task is retried; `intent` applies to a task in review".into());
                 }
-                engine.retry(task_id, Some(message), Vec::new(), false).await?;
+                let card = self.record_followup(d, &message).await;
+                if let Err(e) = engine.retry(task_id, Some(message), Vec::new(), false).await {
+                    self.fail_followup_card(d.id, card, &e).await;
+                    return Err(e);
+                }
                 self.sync_task_dispatch(d.id).await;
                 Ok(format!("Retrying task #{task_id}; it reports back when it is done."))
             }
@@ -1228,7 +1328,7 @@ impl PersonalAgentEngine {
                     state: Some(DispatchState::Queued),
                     result_excerpt: Some(None),
                     error: Some(None),
-                    followup: Some(Some(message)),
+                    followup: Some(Some(message.clone())),
                     ..Default::default()
                 },
             )
@@ -1237,6 +1337,9 @@ impl PersonalAgentEngine {
             else {
                 return Err("the dispatch changed state meanwhile; check item_list".into());
             };
+            // Recorded as it is queued: it is the turn asking for it now that
+            // it belongs to, whenever a slot frees up.
+            self.record_followup(d, &message).await;
             self.reopen_item(d.id).await;
             self.emit(PersonalAgentChange::Dispatch { id: d.id });
             self.emit(PersonalAgentChange::Status);
@@ -1246,7 +1349,12 @@ impl PersonalAgentEngine {
                 d.id
             ));
         }
-        self.send_followup(d, message, FOLLOWUP_FROM).await
+        let card = self.record_followup(d, &message).await;
+        let sent = self.send_followup(d, message, FOLLOWUP_FROM).await;
+        if let Err(e) = &sent {
+            self.fail_followup_card(d.id, card, e).await;
+        }
+        sent
     }
 
     /// Send a follow-up round into a dispatch's conversation, on its live

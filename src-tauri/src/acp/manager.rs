@@ -1187,6 +1187,7 @@ impl ConnectionManager {
         mut blocks: Vec<PromptInputBlock>,
         user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)>,
         internal_suffix: Vec<PromptInputBlock>,
+        reply_token: Option<String>,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
         // prompt produces no turn — and thus no `TurnComplete` to clear the gate
@@ -1248,6 +1249,7 @@ impl ConnectionManager {
             blocks,
             user_message,
             internal_suffix,
+            reply_token,
         });
         Ok(())
     }
@@ -1273,7 +1275,7 @@ impl ConnectionManager {
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        self.send_prompt_inner(conn_id, blocks, None, Vec::new())
+        self.send_prompt_inner(conn_id, blocks, None, Vec::new(), None)
             .await
     }
 
@@ -1344,6 +1346,33 @@ impl ConnectionManager {
             delegation,
             client_message_id,
             Vec::new(),
+            None,
+        )
+        .await
+    }
+
+    /// The personal agent engine's send: as [`Self::send_prompt_linked`],
+    /// tagged with `reply_token` so the connection builds the reply of this
+    /// prompt's turn under it (see [`crate::acp::reply_turn`]).
+    pub async fn send_personal_agent_prompt(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        reply_token: Option<String>,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            None,
+            None,
+            Vec::new(),
+            reply_token,
         )
         .await
     }
@@ -1373,6 +1402,7 @@ impl ConnectionManager {
             delegation,
             None,
             internal_suffix,
+            None,
         )
         .await
     }
@@ -1388,6 +1418,7 @@ impl ConnectionManager {
         delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
         internal_suffix: Vec<PromptInputBlock>,
+        reply_token: Option<String>,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -1835,7 +1866,7 @@ impl ConnectionManager {
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
         match self
-            .send_prompt_inner(conn_id, blocks, user_message, internal_suffix)
+            .send_prompt_inner(conn_id, blocks, user_message, internal_suffix, reply_token)
             .await
         {
             Ok(()) => {
@@ -6296,6 +6327,7 @@ mod tests {
             blocks,
             user_message,
             internal_suffix,
+            ..
         } = cmd_rx.try_recv().expect("one prompt command")
         else {
             panic!("expected prompt command");
@@ -7067,6 +7099,7 @@ mod tests {
                 }],
                 user_message: None,
                 internal_suffix: Vec::new(),
+                reply_token: None,
             })
             .await
             .unwrap();
@@ -7080,6 +7113,7 @@ mod tests {
             }],
             None,
             Vec::new(),
+            None,
         );
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
         assert!(

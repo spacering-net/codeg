@@ -2330,6 +2330,7 @@
       "noRecentCli": "Keine letzten Unterhaltungen von der Kommandozeile",
       "recentFilterMenuLabel": "In „Zuletzt“ anzeigen",
       "personalAgent": "Persönlicher Agent",
+      "personalAgentUnseen": "{count, plural, one {# ungelesene Nachricht} other {# ungelesene Nachrichten}}",
       "personalAgentBadge": "Vom persönlichen Agenten zugewiesen"
     },
     "conversation": {
@@ -7676,7 +7677,6 @@
   },
   "PersonalAgent": {
     "title": "Persönlicher Agent",
-    "settingsButton": "Einstellungen des persönlichen Agenten",
     "readOnly": "Der persönliche Agent läuft in einem anderen codeg-Prozess mit diesem Datenverzeichnis, daher ist diese Seite hier schreibgeschützt.",
     "noAssistants": "Noch keine Rollen-Assistenten: An sie gibt der persönliche Agent seine Arbeit ab. Lege einen unter Einstellungen → Zusammenarbeit → Assistenten an.",
     "viewSession": "Sitzung ansehen",
@@ -7715,108 +7715,45 @@
       "recovery": "alte Sitzung ließ sich nicht fortsetzen",
       "overflow": "Kontextüberlauf"
     },
-    "initiator": {
-      "auto": "von codeg",
-      "owner": "von dir",
-      "agent": "vom Agenten"
-    },
-    "marker": {
-      "segmentStart": "Sitzung {seq} · {agent} · {reason}",
-      "pendingSwitch": "Mit der nächsten Nachricht beginnt eine neue Sitzung ({reason})",
-      "optionsChanged": "Optionen geändert: {changes}",
-      "modeIs": "Modus {mode}",
-      "reconnected": "Wieder mit derselben Sitzung verbunden",
-      "compaction": {
-        "ok": "Kontext {who} verdichtet{range}",
-        "failed": "Verdichtung {who} fehlgeschlagen{range}",
-        "canceled": "Verdichtung {who} abgebrochen{range}"
-      },
-      "compactionRange": " · {before}% → {after}%",
-      "compactionFrom": " · vorher {before}%",
-      "compactionPaused": "Automatische Verdichtung für diese Sitzung pausiert: Verdichten hat zweimal hintereinander nicht geholfen",
-      "turnCanceled": "Runde gestoppt",
-      "turnFailed": "Die Runde ist fehlgeschlagen: {error}",
-      "turnInterrupted": "Die Runde wurde nicht beendet",
-      "overflowNewSegment": "Der Kontext ist nach dem Verdichten erneut übergelaufen: Eine neue Sitzung beginnt",
-      "overflowCompact": "Der Kontext ist übergelaufen: Vor der nächsten Nachricht wird verdichtet",
-      "workdirChanged": "Arbeitsverzeichnis verschoben nach {path}"
-    },
     "timeline": {
       "loadOlder": "Frühere laden",
       "empty": "Sag Hallo oder gib ihm eine Aufgabe.",
-      "supplement": "Während der Runde ergänzt",
-      "queued": "In Warteschlange",
-      "interrupted": "Nicht beendet",
-      "resend": "Erneut senden",
-      "resent": "Erneut gesendet",
-      "question": "Frage",
-      "plan": "Plan-Freigabe",
-      "questionState": {
-        "pending": "Wartet auf deine Antwort",
-        "answered": "Beantwortet",
-        "skipped": "Übersprungen",
-        "resolved": "Geschlossen"
-      },
-      "planDecision": {
-        "approve": "Freigegeben",
-        "request_changes": "Änderungen angefordert",
-        "abandon": "Verworfen"
-      },
-      "answered": "Deine Antwort: {answer}",
-      "permission": "Berechtigungsanfrage",
-      "permissionPending": "Wartet auf deine Entscheidung",
-      "permissionWithdrawn": "Zurückgezogen",
-      "permissionChose": "Deine Wahl: {option}",
-      "dispatched": "Zuweisung",
-      "result": "Rückmeldung",
-      "executor": "ausgeführt von {name}",
+      "newMessages": "Neue Nachrichten",
       "openTask": "Im Board öffnen",
       "openConversation": "Unterhaltung öffnen",
-      "open": "Öffnen"
+      "viewSession": "Konversation anzeigen"
+    },
+    "work": {
+      "taskNotStarted": "Diese Aufgabe hat noch nicht begonnen. Sobald sie startet, erscheint ihre Konversation hier.",
+      "taskGone": "Diese Aufgabe wurde nicht gefunden – vielleicht wurde sie gelöscht."
     },
     "composer": {
-      "placeholder": "Nachricht an deinen persönlichen Agenten…",
-      "placeholderBusy": "Er ist beschäftigt – deine Nachricht geht mit der nächsten Runde raus",
+      "placeholder": "Nachricht an {name}…",
+      "placeholderBusy": "{name} arbeitet gerade – deine Nachricht kommt danach dran",
       "readOnly": "In diesem Prozess schreibgeschützt",
       "ariaLabel": "Nachricht an deinen persönlichen Agenten",
       "send": "Senden",
       "queue": "Einreihen",
-      "supplement": "Zu dieser Runde hinzufügen",
-      "supplementHint": "In die laufende Runde einfließen lassen, statt auf ihr Ende zu warten",
-      "supplemented": "Zur laufenden Runde hinzugefügt.",
-      "queuedInstead": "Eingereiht – geht mit der nächsten Runde raus.",
-      "waitForUpload": "Warte, bis das Bild hochgeladen ist.",
-      "stop": "Stoppen",
-      "cancelCompaction": "Verdichtung stoppen",
-      "compact": "Verdichten",
-      "compactHint": "Kontext der Sitzung jetzt verdichten",
-      "newSession": "Neue Sitzung",
-      "newSessionHint": "Mit der nächsten Nachricht eine neue Sitzung beginnen; die Zeitleiste läuft weiter",
-      "newSessionQueued": "Mit deiner nächsten Nachricht beginnt eine neue Sitzung.",
-      "compacting": "Kontext wird verdichtet…",
-      "replying": "Antwortet…",
-      "brain": "Der Agent, auf dem er läuft",
-      "queuedCount": "{count, plural, one {# Nachricht eingereiht} other {# Nachrichten eingereiht}}"
+      "waitForUpload": "Warte, bis das Bild hochgeladen ist."
     },
     "aux": {
-      "status": "Status",
-      "dispatches": "Zuweisungen",
-      "items": "Offen",
-      "data": "Daten"
+      "title": "Assistentenbereich",
+      "tab": {
+        "work": "Arbeit",
+        "status": "Status",
+        "stats": "Zahlen"
+      },
+      "waiting": "{count, plural, one {# Sache wartet auf dich} other {# Sachen warten auf dich}}"
     },
     "status": {
       "elsewhere": "Der Agent läuft in einem anderen codeg-Prozess; was du hier siehst, stammt aus der Datenbank.",
-      "brain": "Gehirn",
-      "agent": "Agent",
       "model": "Modell",
       "mode": "Modus",
       "session": "Sitzung",
-      "segment": "Aktuell",
+      "started": "Gestartet",
+      "connection": "Verbindung",
       "segmentValue": "Nr. {seq} · {reason}",
       "noSegment": "Noch nicht gestartet",
-      "startedAt": "Gestartet",
-      "pending": "Nächste Nachricht startet eine neue",
-      "connection": "Verbindung",
       "connected": "Verbunden",
       "disconnected": "Nicht verbunden (verbindet sich mit der nächsten Nachricht neu)",
       "handoff": "Übergabekarte",
@@ -7831,7 +7768,6 @@
       "usageUnknown": "Nutzung unbekannt – dieser Agent meldet sie nicht",
       "threshold": "Verdichtet automatisch ab {percent}%",
       "thresholdOff": "Automatische Verdichtung aus",
-      "command": "Befehl {command}",
       "noCommand": "Kein Verdichtungsbefehl für diesen Agenten bekannt",
       "compactions": "Verdichtungen",
       "compactionCounts": "codeg {auto} · du {manual} · Agent {agent}",
@@ -7847,36 +7783,29 @@
       },
       "paused": "Automatische Verdichtung für diese Sitzung pausiert",
       "resume": "Fortsetzen",
-      "work": "Arbeit",
       "queued": "Wartend",
       "queuedValue": "{messages} Nachrichten · {events} Rückmeldungen",
       "dispatchSlots": "Zugewiesene Unterhaltungen",
       "slotsValue": "{running} von {limit} laufen · {queued} warten",
       "slotsUnlimited": "{running} laufen · {queued} warten",
-      "waiting": "Freigaben",
-      "waitingOwner": "Wartet auf dich",
       "engine": "Läuft in",
       "engineHere": "diesem Prozess",
       "engineElsewhere": "einem anderen codeg-Prozess",
       "workdir": "Arbeitsverzeichnis",
       "lastError": "Letzter Fehler",
-      "lastCompaction": "Letzte Verdichtung",
       "compactionStatus": {
         "ok": "erfolgreich",
         "failed": "fehlgeschlagen",
         "canceled": "abgebrochen",
         "running": "läuft"
       },
-      "usageUnknownOffline": "Nutzung unbekannt – wird nach dem Neuverbinden gelesen"
-    },
-    "dispatches": {
-      "all": "Alle",
-      "empty": "Noch nichts zugewiesen.",
-      "meta": "{executor} · {folder} · {when}",
-      "noProject": "kein Projekt"
+      "usageUnknownOffline": "Nutzung unbekannt – wird nach dem Neuverbinden gelesen",
+      "copyPath": "Pfad kopieren",
+      "copied": "Kopiert",
+      "startedValue": "Begonnen {when}",
+      "pendingValue": "Mit der nächsten Nachricht beginnt eine neue Sitzung: {reason}"
     },
     "items": {
-      "empty": "Keine offenen Punkte.",
       "waits": {
         "owner": "Wartet auf dich",
         "agent": "Für den Agenten",
@@ -7909,7 +7838,19 @@
       "notSynced": "Token-Zahlen erscheinen nach einem Nutzungsabgleich (Seite Token-Verbrauch).",
       "usageCurve": "Kontextnutzung",
       "noUsage": "Noch keine Messwerte.",
-      "empty": "Noch keine Daten"
+      "empty": "Noch keine Daten",
+      "range": "Letzte {days} Tage",
+      "figure": {
+        "conversation": "Nachrichten",
+        "conversationSub": "Du {owner} · Antworten {replies}",
+        "dispatches": "Zuweisungen",
+        "dispatchesSub": "Erledigt {completed} · fehlgeschlagen {failed}",
+        "completion": "Abschlussquote",
+        "completionSub": "Vom Vergebenen",
+        "tokens": "Token",
+        "tokensSub": "Agent {agent} · Arbeit {dispatch}",
+        "tokensUnsynced": "Nach dem nächsten Abgleich"
+      }
     },
     "settings": {
       "title": "Einstellungen des persönlichen Agenten",
@@ -7921,7 +7862,7 @@
       "tabDispatch": "Zuweisung",
       "tabPersona": "Persona & Gedächtnis",
       "name": "Name",
-      "nameHint": "So heißt er auf seiner Seite. Leer lassen für den Standardnamen.",
+      "nameHint": "Name und Bild, mit denen er auf seiner Seite und in seinen Nachrichten erscheint; der Agent kennt seinen Namen auch. Ohne Namen gilt der Standardname.",
       "namePlaceholder": "Persönlicher Agent",
       "agentHint": "Der Agent und alle Optionen, mit denen er läuft – wie bei einem Assistenten.",
       "switchNote": "Der Wechsel zu einem anderen Agenten startet mit deiner nächsten Nachricht eine neue Sitzung. Eine alte wird nicht fortgesetzt; stattdessen übergibt codeg der neuen Sitzung die Zeitleiste.",
@@ -7936,11 +7877,201 @@
       "handoffBudgetHint": "Zeichen, die die Übergabekarte einer neuen Sitzung nutzen darf; Gekürztes kann der Agent mit seinen Werkzeugen nachlesen.",
       "skill": "Integrierter Skill",
       "skillHint": "Bring dem Agenten seine Konventionen (Zuweisungsarten, offene Punkte, Gedächtnisdateien) über einen Skill in seinem Arbeitsverzeichnis bei.",
-      "filesNote": "Diese Dateien liegen im Arbeitsverzeichnis des Agenten und werden nach jeder Runde committet. Änderungen an Persona und Regeln erreichen den Agenten mit deiner nächsten Nachricht.",
+      "filesNote": "Diese Dateien liegen im Arbeitsverzeichnis des Agenten und werden nach jeder Runde committet. Änderungen an Name, Persona und Regeln erreichen den Agenten mit deiner nächsten Nachricht.",
       "saveFile": "Datei speichern",
       "fileSaved": "{name} gespeichert.",
       "cancel": "Abbrechen",
-      "save": "Speichern"
+      "save": "Speichern",
+      "fileGroups": {
+        "persona": "Persona",
+        "rules": "Regeln",
+        "owner": "Über dich",
+        "memory": "Gedächtnis"
+      },
+      "byOwner": "Von dir gepflegt",
+      "byAgent": "Vom Agenten gepflegt",
+      "soulHint": "Wer der Agent ist und wie er spricht. Schreibst du: Der Agent ändert sie nur, wenn du ihn darum bittest. Er liest sie zu Beginn jeder Sitzung vollständig.",
+      "rulesHint": "Woran sich der Agent immer halten muss. Schreibst du: Der Agent ändert sie nur, wenn du ihn darum bittest. Er liest sie zu Beginn jeder Sitzung vollständig.",
+      "userHint": "Was der Agent über dich weiß: deine Rolle, Projekte, Vorlieben. Er aktualisiert das, sobald er Neues erfährt, und liest es zu Beginn jeder Sitzung vollständig.",
+      "memoryHint": "Der Index dessen, woran sich der Assistent erinnert, eine Zeile pro Eintrag: Fakten, Verweise und Lektionen über die eigene Arbeitsweise (was du korrigiert, was du bestätigt hast). Jeder Eintrag ist eine eigene Datei unter memory/, seine Art steht am Anfang. Der Assistent pflegt beides. Jede Sitzung beginnt mit den ersten 200 Zeilen des Index; Einträge werden bei Bedarf gelesen.",
+      "entryHint": "Ein Eintrag, den der Agent bei Bedarf liest. Beim Löschen verschwindet auch seine Zeile im Index.",
+      "entryType": {
+        "lesson": "Lektion",
+        "fact": "Fakt",
+        "reference": "Verweis"
+      },
+      "deleteEntry": "Löschen",
+      "confirmDelete": "Löschen",
+      "confirmDeleteHint": "Diesen Eintrag und seine Zeile im Index löschen?",
+      "entryDeleted": "{name} gelöscht."
+    },
+    "statusWord": {
+      "idle": "Bereit",
+      "replying": "Antwortet…",
+      "compacting": "Räumt seinen Kontext auf…",
+      "waiting": "Wartet auf dich",
+      "elsewhere": "Läuft in einem anderen Prozess (schreibgeschützt)",
+      "open": "Status anzeigen"
+    },
+    "menu": {
+      "more": "Mehr",
+      "showPanel": "Seitenbereich einblenden",
+      "hidePanel": "Seitenbereich ausblenden",
+      "settings": "Einstellungen des persönlichen Agenten…",
+      "viewSession": "Zugrunde liegende Sitzung ansehen",
+      "compact": "Kontext komprimieren",
+      "compactHint": "Den Kontext der Sitzung jetzt komprimieren",
+      "stopCompaction": "Aufräumen stoppen",
+      "stopReply": "Antwort stoppen",
+      "newSession": "Neue Sitzung starten…"
+    },
+    "newSession": {
+      "title": "Neue Sitzung starten?",
+      "description": "Deine nächste Nachricht geht in einer neuen zugrunde liegenden Sitzung weiter. Persönlichkeit, Gedächtnis und offene Punkte werden übernommen; das Gespräch hier bleibt, wie es ist.",
+      "cancel": "Abbrechen",
+      "confirm": "Neue Sitzung starten",
+      "queued": "Mit deiner nächsten Nachricht beginnt eine neue Sitzung."
+    },
+    "time": {
+      "yesterday": "Gestern {time}"
+    },
+    "actions": {
+      "quote": "Zitieren",
+      "copy": "Kopieren",
+      "copySelection": "Auswahl kopieren",
+      "copied": "Kopiert",
+      "copyFailed": "Kopieren fehlgeschlagen",
+      "stop": "Antwort stoppen",
+      "timeTook": "{time} · dauerte {took}"
+    },
+    "owner": {
+      "unread": "Ungelesen",
+      "unfinished": "Nicht fertig",
+      "resend": "Erneut senden",
+      "resent": "Erneut gesendet"
+    },
+    "quote": {
+      "you": "Du",
+      "dispatch": "Vergeben: {title}",
+      "attachment": "[Anhang]",
+      "noText": "(kein Text)",
+      "unavailable": "Die ursprüngliche Nachricht ist nicht verfügbar",
+      "jump": "Zur ursprünglichen Nachricht",
+      "dismiss": "Zitat entfernen",
+      "preview": "Ursprüngliche Nachricht",
+      "previewHint": "Die zitierte Nachricht, zu weit zurück, um sie hier zu laden."
+    },
+    "step": {
+      "awaiting": "Wartet auf dich: {title}",
+      "anAction": "eine Aktion",
+      "thinking": "Denkt nach…",
+      "compacting": "Räumt seinen Kontext auf…",
+      "plan": "Aktualisiert den Plan",
+      "planNamed": "Plan: {title}",
+      "own": {
+        "dispatch": "Vergibt Arbeit",
+        "dispatch_followup": "Hakt bei einer Arbeit nach",
+        "items": "Aktualisiert die offenen Punkte",
+        "timeline_read": "Liest das Gespräch nach",
+        "assistant_list": "Prüft die Assistenten",
+        "project_list": "Prüft die Projekte"
+      },
+      "kind": {
+        "read": "Liest eine Datei",
+        "edit": "Bearbeitet eine Datei",
+        "delete": "Löscht eine Datei",
+        "move": "Verschiebt eine Datei",
+        "search": "Sucht",
+        "execute": "Führt einen Befehl aus",
+        "think": "Denkt nach…",
+        "fetch": "Öffnet eine Webseite",
+        "plan": "Aktualisiert den Plan",
+        "compact": "Räumt seinen Kontext auf…",
+        "question": "Fragt dich",
+        "other": "Nutzt ein Werkzeug"
+      }
+    },
+    "reply": {
+      "starting": "Beginnt",
+      "noteDispatched": "{count, plural, one {# Aufgabe vergeben} other {# Aufgaben vergeben}}",
+      "noteContinued": "{count, plural, one {Bei # Aufgabe nachgehakt} other {Bei # Aufgaben nachgehakt}}",
+      "noteNothing": "Erledigt, ohne schriftliche Antwort",
+      "answeredPermission": "Deine Wahl: {option}",
+      "answeredQuestion": "Deine Antwort: {answer}",
+      "answeredSkipped": "Du hast die Frage übersprungen",
+      "answeredPlan": {
+        "approve": "Du hast den Plan freigegeben",
+        "request_changes": "Du hast Änderungen am Plan verlangt",
+        "abandon": "Du hast den Plan verworfen"
+      },
+      "stopped": "Gestoppt",
+      "errorMidway": "Bei der Antwort trat ein Fehler auf: {error}",
+      "interrupted": "Diese Antwort wurde nicht fertig: {reason}",
+      "truncated": "Die Antwort erreichte ihre Längengrenze und wurde abgeschnitten",
+      "resend": "{count, plural, one {Nachricht erneut senden} other {Die # Nachrichten erneut senden}}",
+      "why": {
+        "connection": "die Verbindung ging verloren",
+        "overflow": "der Kontext war voll",
+        "rejected": "der Agent hat abgelehnt",
+        "error": "es trat ein Fehler auf",
+        "restart": "codeg wurde neu gestartet",
+        "unknown": "es brach unerwartet ab"
+      }
+    },
+    "dispatchCard": {
+      "continue": "Weiter: {title}",
+      "notSent": "Nicht gesendet",
+      "more": "{count} weitere"
+    },
+    "event": {
+      "someone": "Ein Assistent",
+      "more": "Alles anzeigen",
+      "less": "Weniger anzeigen",
+      "note": {
+        "boot": "codeg wurde neu gestartet",
+        "lost": "Die Verbindung der Sitzung ging verloren",
+        "gone": "Die Aufgabe wurde vom Board gelöscht"
+      }
+    },
+    "overview": {
+      "editBrain": "Ändern, worauf er läuft",
+      "lastCompaction": "Zuletzt aufgeräumt: {when}, {outcome}{range}",
+      "runLog": "Ablaufprotokoll",
+      "details": "Details",
+      "command": "Komprimierungsbefehl"
+    },
+    "runLog": {
+      "empty": "Noch nichts.",
+      "newSession": "Neue Sitzung auf {agent} gestartet ({reason})",
+      "pendingSwitch": "Mit der nächsten Nachricht beginnt eine neue Sitzung ({reason})",
+      "reconnected": "Wieder mit derselben Sitzung verbunden",
+      "optionsChanged": "Seine Optionen haben sich geändert",
+      "range": " · {before}% → {after}%",
+      "by": {
+        "auto": " automatisch",
+        "owner": " von dir",
+        "agent": " vom Agenten"
+      },
+      "compaction": {
+        "ok": "Kontext{who} aufgeräumt{range}",
+        "failed": "Aufräumen des Kontexts{who} fehlgeschlagen{range}",
+        "canceled": "Aufräumen des Kontexts{who} gestoppt{range}"
+      },
+      "compactionPaused": "Automatisches Aufräumen für diese Sitzung pausiert: Es half zweimal hintereinander nicht",
+      "overflowNewSession": "Der Kontext lief nach dem Aufräumen erneut über: Eine neue Sitzung wurde gestartet",
+      "overflowCompact": "Der Kontext lief über: Vor der nächsten Nachricht wurde aufgeräumt",
+      "turnStopped": "Eine Antwort wurde gestoppt",
+      "turnFailed": "Eine Antwort ist fehlgeschlagen: {error}",
+      "turnInterrupted": "Eine Antwort wurde nicht fertig",
+      "workdirChanged": "Das Arbeitsverzeichnis wurde nach {path} verschoben"
+    },
+    "matters": {
+      "ended": "Beendet",
+      "showAll": "Alle {count} anzeigen",
+      "emptyTitle": "Nichts offen",
+      "emptyHint": "Hier erscheinen vergebene Arbeit, Erinnerungen und Fragen an dich.",
+      "noneOpen": "Gerade ist nichts offen.",
+      "origin": "Zur Ursprungsnachricht"
     }
   }
 }

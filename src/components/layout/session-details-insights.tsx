@@ -58,19 +58,21 @@ export function SessionDetailsInsights({
 
 /**
  * A section of the panel: a header row — the chevron that folds it, then its
- * title and a summary of what it holds — then its body. The chevron takes the
+ * title and a summary of what it holds — then its body. The personal agent
+ * panel's sections are these too. The chevron takes the
  * rows' left column, over their step icons and message numbers, so the title
  * lines up with the text of the rows under it. The body renders in either
  * state: what a section still shows while folded is its own business. A
  * `sticky` header stays at the top of the panel while the section scrolls
  * under it.
  */
-function InsightsSection({
+export function InsightsSection({
   title,
   summary,
   open,
   onOpenChange,
   sticky = false,
+  flush = false,
   children,
 }: {
   title: string
@@ -78,6 +80,11 @@ function InsightsSection({
   open: boolean
   onOpenChange: (open: boolean) => void
   sticky?: boolean
+  /** For a body with no left column of its own (no step icons, no message
+   *  numbers): the chevron's stroke sits on the column's edge, where the body
+   *  starts and a card above has its border, and the title follows it close.
+   *  The body lays itself out flush with that edge. */
+  flush?: boolean
   children: ReactNode
 }) {
   return (
@@ -94,9 +101,19 @@ function InsightsSection({
           type="button"
           aria-expanded={open}
           onClick={() => onOpenChange(!open)}
-          className="group/section flex h-7 w-full min-w-0 items-center gap-2 rounded-md text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className={cn(
+            "group/section flex h-7 w-full min-w-0 items-center rounded-md text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            flush ? "gap-1.5" : "gap-2"
+          )}
         >
-          <span aria-hidden="true" className="flex w-7 shrink-0 justify-center">
+          <span
+            aria-hidden="true"
+            className={cn(
+              "flex shrink-0",
+              // The glyph's box has 3px of air before its stroke.
+              flush ? "-ms-[3px]" : "w-7 justify-center"
+            )}
+          >
             <ChevronDown
               className={cn(
                 "size-3.5 text-muted-foreground transition-transform group-hover/section:text-foreground",

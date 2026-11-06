@@ -41,12 +41,19 @@ export const SWATCH_CLASSES: Record<AssistantAvatarColor, string> = {
   pink: "bg-pink-500",
 }
 
+/** A length given in px at 100% zoom, as rem (app zoom scales the root font
+ *  size). */
+function rem(px: number): string {
+  return `${px / 16}rem`
+}
+
 export interface AssistantAvatarProps {
   /** `null` draws the generic assistant glyph (an id nothing here knows). */
   avatar: AssistantAvatarValue | null | undefined
   /** The name a monogram is drawn from. */
   name: string
-  /** Pixel size of the (round) avatar. */
+  /** Size of the (round) avatar, in px at 100% zoom: drawn in rem, so it
+   *  grows and shrinks with the app zoom like the text beside it. */
   size: number
   className?: string
 }
@@ -58,7 +65,11 @@ export function AssistantAvatar({
   size,
   className,
 }: AssistantAvatarProps) {
-  const style = { width: size, height: size, fontSize: Math.round(size * 0.45) }
+  const style = {
+    width: rem(size),
+    height: rem(size),
+    fontSize: rem(Math.round(size * 0.45)),
+  }
   if (!avatar) {
     return (
       <span
@@ -70,7 +81,9 @@ export function AssistantAvatar({
         style={style}
         aria-hidden
       >
-        <UserRound style={{ width: size * 0.55, height: size * 0.55 }} />
+        <UserRound
+          style={{ width: rem(size * 0.55), height: rem(size * 0.55) }}
+        />
       </span>
     )
   }
@@ -83,8 +96,13 @@ export function AssistantAvatar({
         src={avatar.data_url}
         alt=""
         draggable={false}
-        className={cn("shrink-0 rounded-full object-cover", className)}
-        style={{ width: size, height: size }}
+        // `max-w-none`: an image's base `max-width: 100%` would squeeze it
+        // into a box narrower than its size (the discs above just overflow).
+        className={cn(
+          "max-w-none shrink-0 rounded-full object-cover",
+          className
+        )}
+        style={{ width: rem(size), height: rem(size) }}
       />
     )
   }
@@ -103,7 +121,9 @@ export function AssistantAvatar({
         style={style}
         aria-hidden
       >
-        <UserRound style={{ width: size * 0.5, height: size * 0.5 }} />
+        <UserRound
+          style={{ width: rem(size * 0.5), height: rem(size * 0.5) }}
+        />
       </span>
     )
   }
@@ -117,7 +137,7 @@ export function AssistantAvatar({
       )}
       style={
         avatar.kind === "emoji"
-          ? { ...style, fontSize: Math.round(size * 0.55) }
+          ? { ...style, fontSize: rem(Math.round(size * 0.55)) }
           : style
       }
       aria-hidden

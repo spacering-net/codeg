@@ -2330,6 +2330,7 @@
       "noRecentCli": "沒有最近從命令列啟動的對話",
       "recentFilterMenuLabel": "最近顯示",
       "personalAgent": "個人助手",
+      "personalAgentUnseen": "{count} 則未讀訊息",
       "personalAgentBadge": "由個人助手派出"
     },
     "conversation": {
@@ -7676,7 +7677,6 @@
   },
   "PersonalAgent": {
     "title": "個人助手",
-    "settingsButton": "個人助手設定",
     "readOnly": "個人助手在同一資料目錄的另一個 codeg 處理程序中執行，本頁在這裡為唯讀。",
     "noAssistants": "還沒有角色助手：個人助手只把工作派給它們。請到「設定 → 協作 → 助手」新增。",
     "viewSession": "檢視底層會話",
@@ -7715,108 +7715,45 @@
       "recovery": "原會話無法恢復",
       "overflow": "上下文溢位"
     },
-    "initiator": {
-      "auto": "codeg",
-      "owner": "你",
-      "agent": "agent 自己"
-    },
-    "marker": {
-      "segmentStart": "第 {seq} 段 · {agent} · {reason}",
-      "pendingSwitch": "下一則訊息起新會話（{reason}）",
-      "optionsChanged": "選項已變更：{changes}",
-      "modeIs": "模式 {mode}",
-      "reconnected": "已重新連線原會話",
-      "compaction": {
-        "ok": "上下文已壓縮（發起方：{who}）{range}",
-        "failed": "壓縮失敗（發起方：{who}）{range}",
-        "canceled": "壓縮已取消（發起方：{who}）{range}"
-      },
-      "compactionRange": " · {before}% → {after}%",
-      "compactionFrom": " · 壓縮前 {before}%",
-      "compactionPaused": "連續兩次壓縮都沒有效果，本段已暫停自動壓縮",
-      "turnCanceled": "回合已停止",
-      "turnFailed": "回合失敗：{error}",
-      "turnInterrupted": "回合沒有正常結束",
-      "overflowNewSegment": "壓縮後上下文再次溢位，新起會話",
-      "overflowCompact": "上下文溢位，下一則訊息前先壓縮",
-      "workdirChanged": "工作目錄已更換為 {path}"
-    },
     "timeline": {
       "loadOlder": "載入更早的記錄",
       "empty": "打個招呼，或者交給它一件事。",
-      "supplement": "執行中補充",
-      "queued": "已排隊",
-      "interrupted": "未完成",
-      "resend": "重新傳送",
-      "resent": "已重新傳送",
-      "question": "提問",
-      "plan": "計畫核准",
-      "questionState": {
-        "pending": "等你回答",
-        "answered": "已回答",
-        "skipped": "已略過",
-        "resolved": "已關閉"
-      },
-      "planDecision": {
-        "approve": "已核准",
-        "request_changes": "已要求修改",
-        "abandon": "已放棄"
-      },
-      "answered": "你的回答：{answer}",
-      "permission": "權限請求",
-      "permissionPending": "等你決定",
-      "permissionWithdrawn": "已撤回",
-      "permissionChose": "你選擇了：{option}",
-      "dispatched": "已派出",
-      "result": "進展",
-      "executor": "執行：{name}",
+      "newMessages": "以下是新訊息",
       "openTask": "在看板中開啟",
       "openConversation": "開啟會話",
-      "open": "開啟"
+      "viewSession": "檢視會話"
+    },
+    "work": {
+      "taskNotStarted": "這個任務還沒開始，開始後這裡會顯示它的會話。",
+      "taskGone": "找不到這個任務，可能已被刪除。"
     },
     "composer": {
-      "placeholder": "傳訊息給個人助手…",
-      "placeholderBusy": "正在忙——你的訊息會隨下一回合送出",
+      "placeholder": "傳訊息給 {name}…",
+      "placeholderBusy": "{name} 正在處理，你的訊息會排在後面",
       "readOnly": "在此處理程序中唯讀",
       "ariaLabel": "傳給個人助手的訊息",
       "send": "傳送",
       "queue": "加入佇列",
-      "supplement": "補充到本回合",
-      "supplementHint": "併入正在執行的回合，不等它結束",
-      "supplemented": "已補充到進行中的回合。",
-      "queuedInstead": "已轉入佇列，將隨下一回合送出。",
-      "waitForUpload": "請等圖片上傳完成。",
-      "stop": "停止",
-      "cancelCompaction": "停止壓縮",
-      "compact": "壓縮",
-      "compactHint": "立即壓縮目前會話的上下文",
-      "newSession": "新會話",
-      "newSessionHint": "下一則訊息起新會話，時間軸保持連續",
-      "newSessionQueued": "你的下一則訊息會起一個新會話。",
-      "compacting": "正在壓縮上下文…",
-      "replying": "正在回覆…",
-      "brain": "它執行的 agent",
-      "queuedCount": "{count, plural, other {# 則訊息排隊中}}"
+      "waitForUpload": "請等圖片上傳完成。"
     },
     "aux": {
-      "status": "狀態",
-      "dispatches": "近期派活",
-      "items": "在途",
-      "data": "資料"
+      "title": "助理面板",
+      "tab": {
+        "work": "事項",
+        "status": "狀態",
+        "stats": "數據"
+      },
+      "waiting": "{count} 件等你處理"
     },
     "status": {
       "elsewhere": "個人助手在另一個 codeg 處理程序中執行，這裡顯示的是資料庫裡的狀態。",
-      "brain": "大腦",
-      "agent": "Agent",
       "model": "模型",
       "mode": "模式",
       "session": "會話段",
-      "segment": "目前",
+      "started": "開始於",
+      "connection": "連線",
       "segmentValue": "第 {seq} 段 · {reason}",
       "noSegment": "尚未開始",
-      "startedAt": "開始於",
-      "pending": "下一則訊息起新會話",
-      "connection": "連線",
       "connected": "線上",
       "disconnected": "未連線（下一則訊息時重新連線）",
       "handoff": "交接卡",
@@ -7831,7 +7768,6 @@
       "usageUnknown": "用量未知：這個 agent 不回報用量",
       "threshold": "達到 {percent}% 自動壓縮",
       "thresholdOff": "自動壓縮已關閉",
-      "command": "指令 {command}",
       "noCommand": "不知道這個 agent 的壓縮指令",
       "compactions": "壓縮次數",
       "compactionCounts": "codeg {auto} · 你 {manual} · agent {agent}",
@@ -7847,36 +7783,29 @@
       },
       "paused": "本段已暫停自動壓縮",
       "resume": "恢復",
-      "work": "工作",
       "queued": "等待中",
       "queuedValue": "{messages} 則訊息 · {events} 則進展",
       "dispatchSlots": "派出的會話",
       "slotsValue": "執行 {running}/{limit} · 排隊 {queued}",
       "slotsUnlimited": "執行 {running} · 排隊 {queued}",
-      "waiting": "待核准",
-      "waitingOwner": "等你處理",
       "engine": "執行於",
       "engineHere": "此處理程序",
       "engineElsewhere": "另一個 codeg 處理程序",
       "workdir": "工作目錄",
       "lastError": "最近錯誤",
-      "lastCompaction": "最近一次壓縮",
       "compactionStatus": {
         "ok": "成功",
         "failed": "失敗",
         "canceled": "已取消",
         "running": "進行中"
       },
-      "usageUnknownOffline": "用量未知：重新連線後讀取"
-    },
-    "dispatches": {
-      "all": "全部",
-      "empty": "還沒有派過活。",
-      "meta": "{executor} · {folder} · {when}",
-      "noProject": "無專案"
+      "usageUnknownOffline": "用量未知：重新連線後讀取",
+      "copyPath": "複製路徑",
+      "copied": "已複製",
+      "startedValue": "開始於 {when}",
+      "pendingValue": "下一則訊息起新會話：{reason}"
     },
     "items": {
-      "empty": "沒有在途事項。",
       "waits": {
         "owner": "等你",
         "agent": "等助手",
@@ -7909,7 +7838,19 @@
       "notSynced": "token 資料會在用量同步後顯示（見「Token 用量」頁）。",
       "usageCurve": "上下文用量",
       "noUsage": "還沒有讀數。",
-      "empty": "尚無資料"
+      "empty": "尚無資料",
+      "range": "近 {days} 天",
+      "figure": {
+        "conversation": "對話",
+        "conversationSub": "你 {owner} · 回覆 {replies}",
+        "dispatches": "派活",
+        "dispatchesSub": "完成 {completed} · 失敗 {failed}",
+        "completion": "完成率",
+        "completionSub": "派出去的工作中",
+        "tokens": "Token",
+        "tokensSub": "助手 {agent} · 派活 {dispatch}",
+        "tokensUnsynced": "用量同步後顯示"
+      }
     },
     "settings": {
       "title": "個人助手設定",
@@ -7921,7 +7862,7 @@
       "tabDispatch": "派活",
       "tabPersona": "人設與記憶",
       "name": "名稱",
-      "nameHint": "在它的頁面上顯示的名字，留空則使用預設名稱。",
+      "nameHint": "它在頁面和訊息裡顯示的名字和頭像；助手也知道自己叫這個名字。名字留空則使用預設名稱。",
       "namePlaceholder": "個人助手",
       "agentHint": "它執行的 agent 和全部選項，與角色助手的設定方式相同。",
       "switchNote": "換成另一個 agent 後，下一則訊息會新起一個會話。不會續接舊會話，codeg 會把時間軸交接給新會話。",
@@ -7936,11 +7877,201 @@
       "handoffBudgetHint": "新會話交接卡最多使用多少字；裁掉的部分，助手可以用工具翻閱。",
       "skill": "內建技能",
       "skillHint": "透過工作目錄裡的技能，教助手它的慣例（派活方式、在途事項、記憶檔案）。",
-      "filesNote": "這些檔案位於助手的工作目錄，每個回合結束後提交到 git。人設與規則的變更會隨你的下一則訊息傳給助手。",
+      "filesNote": "這些檔案位於助手的工作目錄，每個回合結束後提交到 git。名字、人設與規則的變更會隨你的下一則訊息傳給助手。",
       "saveFile": "儲存檔案",
       "fileSaved": "已儲存 {name}。",
       "cancel": "取消",
-      "save": "儲存"
+      "save": "儲存",
+      "fileGroups": {
+        "persona": "人設",
+        "rules": "規則",
+        "owner": "主人",
+        "memory": "記憶"
+      },
+      "byOwner": "你維護",
+      "byAgent": "助手維護",
+      "soulHint": "它是誰、怎麼說話。由你來寫，助手只在你要求時才改。每個會話開始時完整讀入。",
+      "rulesHint": "它必須遵守的規則。由你來寫，助手只在你要求時才改。每個會話開始時完整讀入。",
+      "userHint": "助手對你的了解：角色、專案、偏好。它了解到新情況會自己更新，每個會話開始時完整讀入。",
+      "memoryHint": "記憶的索引，每條一行：事實、參考資料，以及工作方式上的教訓（你糾正過的、認可過的做法）。每一條是 memory/ 下自己的檔案，類型寫在檔案開頭。兩者都由助手維護。每個工作階段開始時讀入索引的前 200 行，條目在需要時才讀。",
+      "entryHint": "單個條目，助手需要時才讀。刪除時，索引裡指向它的那一行也會一併刪掉。",
+      "entryType": {
+        "lesson": "教訓",
+        "fact": "事實",
+        "reference": "參考"
+      },
+      "deleteEntry": "刪除",
+      "confirmDelete": "確定刪除",
+      "confirmDeleteHint": "刪除這個條目和索引裡指向它的那一行？",
+      "entryDeleted": "已刪除 {name}。"
+    },
+    "statusWord": {
+      "idle": "閒置",
+      "replying": "正在回覆…",
+      "compacting": "正在整理上下文…",
+      "waiting": "等你確認",
+      "elsewhere": "在另一個程序執行（唯讀）",
+      "open": "查看狀態"
+    },
+    "menu": {
+      "more": "更多",
+      "showPanel": "顯示輔助面板",
+      "hidePanel": "隱藏輔助面板",
+      "settings": "個人助理設定…",
+      "viewSession": "查看底層工作階段",
+      "compact": "壓縮上下文",
+      "compactHint": "現在就壓縮工作階段的上下文",
+      "stopCompaction": "停止整理",
+      "stopReply": "停止回覆",
+      "newSession": "開啟新工作階段…"
+    },
+    "newSession": {
+      "title": "開啟新工作階段？",
+      "description": "你的下一則訊息會在一個新的底層工作階段裡繼續。人設、記憶、進行中的事項都會帶過去，這裡的對話照常保留。",
+      "cancel": "取消",
+      "confirm": "開啟新工作階段",
+      "queued": "下一則訊息會在新工作階段裡繼續。"
+    },
+    "time": {
+      "yesterday": "昨天 {time}"
+    },
+    "actions": {
+      "quote": "引用",
+      "copy": "複製",
+      "copySelection": "複製選取內容",
+      "copied": "已複製",
+      "copyFailed": "複製失敗",
+      "stop": "停止回覆",
+      "timeTook": "{time} · 用時 {took}"
+    },
+    "owner": {
+      "unread": "未讀",
+      "unfinished": "未處理完",
+      "resend": "重新傳送",
+      "resent": "已重新傳送"
+    },
+    "quote": {
+      "you": "你",
+      "dispatch": "派工：{title}",
+      "attachment": "[附件]",
+      "noText": "（沒有文字）",
+      "unavailable": "原訊息無法取得",
+      "jump": "跳到原訊息",
+      "dismiss": "取消引用",
+      "preview": "原訊息",
+      "previewHint": "被引用的訊息，時間太早，沒有載入到這裡。"
+    },
+    "step": {
+      "awaiting": "等你確認：{title}",
+      "anAction": "一項操作",
+      "thinking": "思考中…",
+      "compacting": "正在整理上下文…",
+      "plan": "更新計畫",
+      "planNamed": "計畫：{title}",
+      "own": {
+        "dispatch": "派出一項工作",
+        "dispatch_followup": "繼續一項工作",
+        "items": "整理進行中的事項",
+        "timeline_read": "翻看對話紀錄",
+        "assistant_list": "查看職務助理",
+        "project_list": "查看專案"
+      },
+      "kind": {
+        "read": "讀取檔案",
+        "edit": "修改檔案",
+        "delete": "刪除檔案",
+        "move": "移動檔案",
+        "search": "搜尋",
+        "execute": "執行命令",
+        "think": "思考中…",
+        "fetch": "開啟網頁",
+        "plan": "更新計畫",
+        "compact": "正在整理上下文…",
+        "question": "向你提問",
+        "other": "使用工具"
+      }
+    },
+    "reply": {
+      "starting": "開始處理",
+      "noteDispatched": "已派出 {count} 項工作",
+      "noteContinued": "已繼續 {count} 項工作",
+      "noteNothing": "已處理，沒有文字回覆",
+      "answeredPermission": "你選擇了：{option}",
+      "answeredQuestion": "你的回答：{answer}",
+      "answeredSkipped": "你跳過了這個問題",
+      "answeredPlan": {
+        "approve": "你核准了計畫",
+        "request_changes": "你要求修改計畫",
+        "abandon": "你放棄了計畫"
+      },
+      "stopped": "已停止",
+      "errorMidway": "回覆中途出錯：{error}",
+      "interrupted": "這次回覆沒有完成：{reason}",
+      "truncated": "回覆達到長度上限，被截斷了",
+      "resend": "{count, plural, one {重新傳送這則訊息} other {重新傳送這 # 則訊息}}",
+      "why": {
+        "connection": "連線中斷了",
+        "overflow": "上下文滿了",
+        "rejected": "agent 拒絕了",
+        "error": "出錯了",
+        "restart": "codeg 重新啟動了",
+        "unknown": "意外停止了"
+      }
+    },
+    "dispatchCard": {
+      "continue": "繼續：{title}",
+      "notSent": "沒送出",
+      "more": "還有 {count} 項"
+    },
+    "event": {
+      "someone": "職務助理",
+      "more": "展開",
+      "less": "收合",
+      "note": {
+        "boot": "codeg 重新啟動了",
+        "lost": "工作階段連線中斷了",
+        "gone": "看板上的任務被刪除了"
+      }
+    },
+    "overview": {
+      "editBrain": "更換它執行的 agent",
+      "lastCompaction": "上次整理：{when}，{outcome}{range}",
+      "runLog": "執行紀錄",
+      "details": "執行詳情",
+      "command": "壓縮命令"
+    },
+    "runLog": {
+      "empty": "還沒有紀錄。",
+      "newSession": "在 {agent} 上換了新工作階段（{reason}）",
+      "pendingSwitch": "下一則訊息起換新工作階段（{reason}）",
+      "reconnected": "重新連上了原工作階段",
+      "optionsChanged": "選項變了",
+      "range": " · {before}% → {after}%",
+      "by": {
+        "auto": "（自動）",
+        "owner": "（你發起的）",
+        "agent": "（agent 自己）"
+      },
+      "compaction": {
+        "ok": "上下文已整理{who}{range}",
+        "failed": "整理上下文失敗{who}{range}",
+        "canceled": "整理上下文被停止{who}{range}"
+      },
+      "compactionPaused": "連續兩次整理都沒有作用，這個工作階段暫停了自動整理",
+      "overflowNewSession": "整理後上下文又溢出了，換了新工作階段",
+      "overflowCompact": "上下文溢出，已自動整理",
+      "turnStopped": "一次回覆被停止了",
+      "turnFailed": "一次回覆失敗了：{error}",
+      "turnInterrupted": "一次回覆沒有完成",
+      "workdirChanged": "工作目錄換到了 {path}"
+    },
+    "matters": {
+      "ended": "已結束",
+      "showAll": "查看全部 {count} 件",
+      "emptyTitle": "沒有進行中的事項",
+      "emptyHint": "派出去的工作、提醒和要問你的事會出現在這裡。",
+      "noneOpen": "目前沒有進行中的事項。",
+      "origin": "跳到來源訊息"
     }
   }
 }

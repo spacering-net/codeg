@@ -1,43 +1,32 @@
 "use client"
 
 /**
- * The personal agent's turn while it runs: its streaming reply and tool
- * activity, drawn by the conversation's own turn renderer, and the blocking
- * prompts it may be parked on (permission request, question, plan approval),
- * answered through the personal agent's own commands so the timeline records
- * them in full. Only shown while a turn is in flight — the timeline keeps the
- * reply text once it ends.
- *
- * The connection is the engine's, not this page's: the page attaches to it
+ * The personal agent's live connection, as its page uses it: attached
  * read-only (`attachDelegationChild`, an identity parent mapping, as the task
- * transcript viewer does) and never spawns or disconnects it.
+ * transcript viewer does — the page never spawns or disconnects it), for the
+ * prompts the agent may be parked on: a permission request, a question, a
+ * plan approval. They are answered through the personal agent's own
+ * commands, so its timeline records the answers.
+ *
+ * The reply itself is not read from here: the engine builds it from the same
+ * events and pushes the step it is on (`replyView`).
  */
 
-import { useEffect, useMemo, useState } from "react"
-import { useTranslations } from "next-intl"
+import { useEffect } from "react"
+import { toast } from "sonner"
 
 import { AskQuestionCard } from "@/components/chat/ask-question-card"
 import { PermissionDialog } from "@/components/chat/permission-dialog"
 import { PlanApprovalCard } from "@/components/chat/plan-approval-card"
-import { Message, MessageContent } from "@/components/ai-elements/message"
-import { ActivityLiveProvider } from "@/components/message/activity/activity-live-context"
-import { CompletedTurnContent } from "@/components/message/completed-turn-content"
 import { useConnectionStateById } from "@/components/message/live-transcript-view"
-import {
-  extractPermissionToolCallId,
-  useAcpActions,
-} from "@/contexts/acp-connections-context"
-import { adaptMessageTurn } from "@/lib/adapters/ai-elements-adapter"
+import { useAcpActions } from "@/contexts/acp-connections-context"
 import {
   personalAgentAnswerPlan,
   personalAgentAnswerQuestion,
   personalAgentRespondPermission,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
 import type { AgentType } from "@/lib/types"
-import { buildStreamingTurnsFromLiveMessage } from "@/stores/conversation-runtime-store"
-import { toast } from "sonner"
 
 /** Attach the page to the personal agent's live connection while it exists. */
 export function usePersonalAgentAttachment(
@@ -59,93 +48,9 @@ export function usePersonalAgentAttachment(
   }, [connectionId, agentType, attachDelegationChild, detachDelegationChild])
 }
 
-interface LiveTurnProps {
-  connectionId: string
-  conversationId: number | null
-  agentType: AgentType
-}
-
-/** The streaming reply of the turn in flight. */
-export function LiveTurn({
-  connectionId,
-  conversationId,
-  agentType,
-}: LiveTurnProps) {
-  const sharedT = useTranslations("Folder.chat.shared")
-  const pageHandoffName = usePageHandoffName()
-  const conn = useConnectionStateById(connectionId)
-  const [roundOpen, setRoundOpen] = useState(true)
-  const adapterText = useMemo(
-    () => ({
-      attachedResources: sharedT("attachedResources"),
-      toolCallFailed: sharedT("toolCallFailed"),
-      pageHandoffName,
-    }),
-    [sharedT, pageHandoffName]
-  )
-  const liveMessage = conn?.liveMessage ?? null
-  const parts = useMemo(() => {
-    if (!liveMessage) return []
-    const built = buildStreamingTurnsFromLiveMessage(
-      conversationId ?? -1,
-      liveMessage
-    )
-    return (
-      built.turns
-        // The owner's own words are on the timeline already.
-        .filter((turn) => turn.role === "assistant")
-        .flatMap(
-          (turn) =>
-            adaptMessageTurn(
-              turn,
-              adapterText,
-              true,
-              built.inProgressToolCallIds
-            ).content
-        )
-    )
-  }, [liveMessage, conversationId, adapterText])
-  const awaitingUser =
-    conn?.pendingPermission != null ||
-    conn?.pendingAskQuestion != null ||
-    conn?.pendingPlanApproval != null
-  const pendingPermission = conn?.pendingPermission ?? null
-  const toolApprovals = conn?.toolApprovals
-  const live = useMemo(
-    () => ({
-      awaitingToolCallId: pendingPermission
-        ? extractPermissionToolCallId(pendingPermission)
-        : null,
-      awaitingUser,
-      approvals: toolApprovals ?? {},
-    }),
-    [pendingPermission, awaitingUser, toolApprovals]
-  )
-
-  return (
-    <div className="flex flex-col gap-3">
-      <ActivityLiveProvider value={live}>
-        <Message from="assistant">
-          <MessageContent>
-            <CompletedTurnContent
-              parts={parts}
-              completed={false}
-              currentRound
-              roundOpen={roundOpen}
-              onRoundOpenChange={setRoundOpen}
-              pending={parts.length === 0}
-            />
-          </MessageContent>
-        </Message>
-      </ActivityLiveProvider>
-      <BlockingPrompts connectionId={connectionId} agentType={agentType} />
-    </div>
-  )
-}
-
 /** The prompt the agent is parked on, answered through the personal agent so
  *  the timeline keeps the answer. */
-function BlockingPrompts({
+export function BlockingPrompts({
   connectionId,
   agentType,
 }: {

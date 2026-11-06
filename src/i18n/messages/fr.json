@@ -2330,6 +2330,7 @@
       "noRecentCli": "Aucune conversation récente depuis la ligne de commande",
       "recentFilterMenuLabel": "Afficher dans Récents",
       "personalAgent": "Agent personnel",
+      "personalAgentUnseen": "{count, plural, one {# message non lu} other {# messages non lus}}",
       "personalAgentBadge": "Confiée par l'agent personnel"
     },
     "conversation": {
@@ -7676,7 +7677,6 @@
   },
   "PersonalAgent": {
     "title": "Agent personnel",
-    "settingsButton": "Paramètres de l'agent personnel",
     "readOnly": "L'agent personnel s'exécute dans un autre processus codeg sur ce répertoire de données ; cette page est donc en lecture seule ici.",
     "noAssistants": "Aucun assistant spécialisé pour l'instant : c'est à eux que l'agent personnel confie son travail. Ajoutez-en un dans Paramètres → Collaboration → Assistants.",
     "viewSession": "Voir la session",
@@ -7715,108 +7715,45 @@
       "recovery": "impossible de reprendre l'ancienne session",
       "overflow": "dépassement du contexte"
     },
-    "initiator": {
-      "auto": "codeg",
-      "owner": "vous",
-      "agent": "l'agent"
-    },
-    "marker": {
-      "segmentStart": "Session {seq} · {agent} · {reason}",
-      "pendingSwitch": "Une nouvelle session commence avec le prochain message ({reason})",
-      "optionsChanged": "Options modifiées : {changes}",
-      "modeIs": "mode {mode}",
-      "reconnected": "Reconnecté à la même session",
-      "compaction": {
-        "ok": "Contexte compacté par {who}{range}",
-        "failed": "Échec du compactage lancé par {who}{range}",
-        "canceled": "Compactage lancé par {who} annulé{range}"
-      },
-      "compactionRange": " · {before}% → {after}%",
-      "compactionFrom": " · avant : {before}%",
-      "compactionPaused": "Compactage automatique suspendu pour cette session : compacter n'a pas aidé deux fois de suite",
-      "turnCanceled": "Tour arrêté",
-      "turnFailed": "Le tour a échoué : {error}",
-      "turnInterrupted": "Le tour ne s'est pas terminé",
-      "overflowNewSegment": "Le contexte a de nouveau débordé après le compactage : une nouvelle session commence",
-      "overflowCompact": "Le contexte a débordé : compactage avant le prochain message",
-      "workdirChanged": "Répertoire de travail déplacé vers {path}"
-    },
     "timeline": {
       "loadOlder": "Charger les précédents",
       "empty": "Dites bonjour, ou confiez-lui quelque chose.",
-      "supplement": "Ajouté en cours de tour",
-      "queued": "En file d'attente",
-      "interrupted": "Non terminé",
-      "resend": "Renvoyer",
-      "resent": "Renvoyé",
-      "question": "Question",
-      "plan": "Validation du plan",
-      "questionState": {
-        "pending": "En attente de votre réponse",
-        "answered": "Réponse donnée",
-        "skipped": "Ignorée",
-        "resolved": "Fermée"
-      },
-      "planDecision": {
-        "approve": "Approuvé",
-        "request_changes": "Modifications demandées",
-        "abandon": "Abandonné"
-      },
-      "answered": "Votre réponse : {answer}",
-      "permission": "Demande d'autorisation",
-      "permissionPending": "En attente de votre décision",
-      "permissionWithdrawn": "Retirée",
-      "permissionChose": "Vous avez choisi : {option}",
-      "dispatched": "Mission confiée",
-      "result": "Mise à jour",
-      "executor": "exécutée par {name}",
+      "newMessages": "Nouveaux messages",
       "openTask": "Ouvrir dans le tableau",
       "openConversation": "Ouvrir la conversation",
-      "open": "Ouvrir"
+      "viewSession": "Voir la conversation"
+    },
+    "work": {
+      "taskNotStarted": "Cette tâche n'a pas encore commencé. Sa conversation s'affichera ici dès qu'elle démarrera.",
+      "taskGone": "Tâche introuvable — elle a peut-être été supprimée."
     },
     "composer": {
-      "placeholder": "Écrivez à votre agent personnel…",
-      "placeholderBusy": "Il est occupé — votre message partira avec le prochain tour",
+      "placeholder": "Écrire à {name}…",
+      "placeholderBusy": "{name} travaille — votre message passera après",
       "readOnly": "Lecture seule dans ce processus",
       "ariaLabel": "Message à votre agent personnel",
       "send": "Envoyer",
       "queue": "Mettre en file",
-      "supplement": "Ajouter à ce tour",
-      "supplementHint": "L'intégrer au tour en cours au lieu d'attendre qu'il se termine",
-      "supplemented": "Ajouté au tour en cours.",
-      "queuedInstead": "Mis en file d'attente — il partira avec le prochain tour.",
-      "waitForUpload": "Attendez la fin de l'envoi de l'image.",
-      "stop": "Arrêter",
-      "cancelCompaction": "Arrêter le compactage",
-      "compact": "Compacter",
-      "compactHint": "Compacter maintenant le contexte de la session",
-      "newSession": "Nouvelle session",
-      "newSessionHint": "Démarrer une nouvelle session avec le prochain message ; la chronologie continue",
-      "newSessionQueued": "Une nouvelle session commencera avec votre prochain message.",
-      "compacting": "Compactage du contexte…",
-      "replying": "Réponse en cours…",
-      "brain": "L'agent sur lequel il s'exécute",
-      "queuedCount": "{count, plural, one {# message en attente} other {# messages en attente}}"
+      "waitForUpload": "Attendez la fin de l'envoi de l'image."
     },
     "aux": {
-      "status": "Statut",
-      "dispatches": "Missions",
-      "items": "En suspens",
-      "data": "Données"
+      "title": "Panneau de l'assistant",
+      "tab": {
+        "work": "Travail",
+        "status": "État",
+        "stats": "Chiffres"
+      },
+      "waiting": "{count, plural, one {# élément vous attend} other {# éléments vous attendent}}"
     },
     "status": {
       "elsewhere": "L'agent s'exécute dans un autre processus codeg ; ce que vous voyez ici est lu dans la base de données.",
-      "brain": "Cerveau",
-      "agent": "Agent",
       "model": "Modèle",
       "mode": "Mode",
       "session": "Session",
-      "segment": "Actuelle",
+      "started": "Début",
+      "connection": "Connexion",
       "segmentValue": "n° {seq} · {reason}",
       "noSegment": "Pas encore commencée",
-      "startedAt": "Début",
-      "pending": "Le prochain message en démarre une nouvelle",
-      "connection": "Connexion",
       "connected": "Active",
       "disconnected": "Non connecté (reconnexion au prochain message)",
       "handoff": "Fiche de passation",
@@ -7831,7 +7768,6 @@
       "usageUnknown": "Utilisation inconnue — cet agent ne la communique pas",
       "threshold": "Compactage auto à {percent}%",
       "thresholdOff": "Compactage auto désactivé",
-      "command": "Commande {command}",
       "noCommand": "Aucune commande de compactage connue pour cet agent",
       "compactions": "Compactages",
       "compactionCounts": "codeg {auto} · vous {manual} · agent {agent}",
@@ -7847,36 +7783,29 @@
       },
       "paused": "Compactage auto suspendu pour cette session",
       "resume": "Reprendre",
-      "work": "Travail",
       "queued": "En attente",
       "queuedValue": "{messages} messages · {events} mises à jour",
       "dispatchSlots": "Conversations confiées",
       "slotsValue": "{running} sur {limit} en cours · {queued} en attente",
       "slotsUnlimited": "{running} en cours · {queued} en attente",
-      "waiting": "Validations",
-      "waitingOwner": "En attente de votre part",
       "engine": "S'exécute dans",
       "engineHere": "ce processus",
       "engineElsewhere": "un autre processus codeg",
       "workdir": "Répertoire de travail",
       "lastError": "Dernière erreur",
-      "lastCompaction": "Dernier compactage",
       "compactionStatus": {
         "ok": "terminé",
         "failed": "échoué",
         "canceled": "annulé",
         "running": "en cours"
       },
-      "usageUnknownOffline": "Utilisation inconnue — lue à la reconnexion"
-    },
-    "dispatches": {
-      "all": "Toutes",
-      "empty": "Aucune mission pour l'instant.",
-      "meta": "{executor} · {folder} · {when}",
-      "noProject": "aucun projet"
+      "usageUnknownOffline": "Utilisation inconnue — lue à la reconnexion",
+      "copyPath": "Copier le chemin",
+      "copied": "Copié",
+      "startedValue": "Commencée le {when}",
+      "pendingValue": "Une nouvelle session commence au prochain message : {reason}"
     },
     "items": {
-      "empty": "Aucun point en suspens.",
       "waits": {
         "owner": "Vous attend",
         "agent": "Pour l'agent",
@@ -7909,7 +7838,19 @@
       "notSynced": "Les chiffres de tokens apparaissent après une synchronisation de l'utilisation (page Consommation de tokens).",
       "usageCurve": "Utilisation du contexte",
       "noUsage": "Aucune mesure pour l'instant.",
-      "empty": "Aucune donnée pour l'instant"
+      "empty": "Aucune donnée pour l'instant",
+      "range": "{days} derniers jours",
+      "figure": {
+        "conversation": "Messages",
+        "conversationSub": "Vous {owner} · réponses {replies}",
+        "dispatches": "Missions",
+        "dispatchesSub": "Terminées {completed} · échouées {failed}",
+        "completion": "Taux de réussite",
+        "completionSub": "Sur le travail confié",
+        "tokens": "Jetons",
+        "tokensSub": "Agent {agent} · travail {dispatch}",
+        "tokensUnsynced": "Après la prochaine synchro"
+      }
     },
     "settings": {
       "title": "Paramètres de l'agent personnel",
@@ -7921,7 +7862,7 @@
       "tabDispatch": "Missions",
       "tabPersona": "Persona et mémoire",
       "name": "Nom",
-      "nameHint": "Le nom affiché sur sa page. Laissez vide pour utiliser le nom par défaut.",
+      "nameHint": "Le nom et l’image qu’il porte sur sa page et dans ses messages ; l’agent connaît aussi son nom. Sans nom, le nom par défaut est utilisé.",
       "namePlaceholder": "Agent personnel",
       "agentHint": "L'agent et toutes les options avec lesquelles il s'exécute, comme pour un assistant.",
       "switchNote": "Passer à un autre agent démarre une nouvelle session avec votre prochain message. L'ancienne n'est pas reprise ; codeg transmet plutôt la chronologie à la nouvelle session.",
@@ -7936,11 +7877,201 @@
       "handoffBudgetHint": "Nombre de caractères que la fiche de passation d'une nouvelle session peut utiliser ; ce qui est coupé peut être relu avec les outils de l'agent.",
       "skill": "Compétence intégrée",
       "skillHint": "Apprendre à l'agent ses conventions (façons de confier le travail, points en suspens, fichiers de mémoire) grâce à une compétence dans son répertoire de travail.",
-      "filesNote": "Ces fichiers se trouvent dans le répertoire de travail de l'agent et sont commités après chaque tour. Les modifications de la persona et des règles parviennent à l'agent avec votre prochain message.",
+      "filesNote": "Ces fichiers se trouvent dans le répertoire de travail de l'agent et sont commités après chaque tour. Les modifications de son nom, de la persona et des règles parviennent à l'agent avec votre prochain message.",
       "saveFile": "Enregistrer le fichier",
       "fileSaved": "{name} enregistré.",
       "cancel": "Annuler",
-      "save": "Enregistrer"
+      "save": "Enregistrer",
+      "fileGroups": {
+        "persona": "Persona",
+        "rules": "Règles",
+        "owner": "À propos de vous",
+        "memory": "Mémoire"
+      },
+      "byOwner": "Rédigé par vous",
+      "byAgent": "Tenu par l'agent",
+      "soulHint": "Qui est l'agent et comment il s'exprime. C'est à vous de l'écrire : l'agent ne la modifie que si vous le lui demandez. Il la lit en entier au début de chaque session.",
+      "rulesHint": "Ce que l'agent doit toujours respecter. C'est à vous de l'écrire : l'agent ne les modifie que si vous le lui demandez. Il les lit en entier au début de chaque session.",
+      "userHint": "Ce que l'agent sait de vous : votre rôle, vos projets, vos préférences. Il le met à jour au fil de ce qu'il apprend et le lit en entier au début de chaque session.",
+      "memoryHint": "L’index de ce dont l’assistant se souvient, une ligne par entrée : des faits, des références et des leçons sur sa propre façon de travailler (ce que vous avez corrigé, ce que vous avez confirmé). Chaque entrée est son propre fichier sous memory/, avec son type en tête. L’assistant tient les deux à jour. Chaque session commence avec les 200 premières lignes de l’index ; les entrées sont lues au besoin.",
+      "entryHint": "Une entrée, que l'agent lit quand il en a besoin. La supprimer retire aussi sa ligne de l'index.",
+      "entryType": {
+        "lesson": "Leçon",
+        "fact": "Fait",
+        "reference": "Référence"
+      },
+      "deleteEntry": "Supprimer",
+      "confirmDelete": "Supprimer",
+      "confirmDeleteHint": "Supprimer cette entrée et sa ligne dans l'index ?",
+      "entryDeleted": "{name} supprimé."
+    },
+    "statusWord": {
+      "idle": "Inactif",
+      "replying": "Répond…",
+      "compacting": "Range son contexte…",
+      "waiting": "Attend votre confirmation",
+      "elsewhere": "Tourne dans un autre processus (lecture seule)",
+      "open": "Afficher l'état"
+    },
+    "menu": {
+      "more": "Plus",
+      "showPanel": "Afficher le panneau latéral",
+      "hidePanel": "Masquer le panneau latéral",
+      "settings": "Réglages de l'agent personnel…",
+      "viewSession": "Voir la session sous-jacente",
+      "compact": "Compacter le contexte",
+      "compactHint": "Compacter maintenant le contexte de la session",
+      "stopCompaction": "Arrêter le rangement",
+      "stopReply": "Arrêter la réponse",
+      "newSession": "Démarrer une nouvelle session…"
+    },
+    "newSession": {
+      "title": "Démarrer une nouvelle session ?",
+      "description": "Votre prochain message se poursuit dans une nouvelle session sous-jacente. Sa personnalité, sa mémoire et les sujets en cours sont conservés ; la conversation ici reste telle quelle.",
+      "cancel": "Annuler",
+      "confirm": "Démarrer une nouvelle session",
+      "queued": "Une nouvelle session commence avec votre prochain message."
+    },
+    "time": {
+      "yesterday": "Hier {time}"
+    },
+    "actions": {
+      "quote": "Citer",
+      "copy": "Copier",
+      "copySelection": "Copier la sélection",
+      "copied": "Copié",
+      "copyFailed": "Impossible de copier",
+      "stop": "Arrêter la réponse",
+      "timeTook": "{time} · a pris {took}"
+    },
+    "owner": {
+      "unread": "Non lu",
+      "unfinished": "Inachevé",
+      "resend": "Renvoyer",
+      "resent": "Renvoyé"
+    },
+    "quote": {
+      "you": "Vous",
+      "dispatch": "Confié : {title}",
+      "attachment": "[Pièce jointe]",
+      "noText": "(sans texte)",
+      "unavailable": "Le message d'origine n'est pas disponible",
+      "jump": "Aller au message d'origine",
+      "dismiss": "Retirer la citation",
+      "preview": "Message d'origine",
+      "previewHint": "Le message cité, trop ancien pour être chargé ici."
+    },
+    "step": {
+      "awaiting": "Attend votre confirmation : {title}",
+      "anAction": "une action",
+      "thinking": "Réfléchit…",
+      "compacting": "Range son contexte…",
+      "plan": "Met à jour le plan",
+      "planNamed": "Plan : {title}",
+      "own": {
+        "dispatch": "Confie du travail",
+        "dispatch_followup": "Relance un travail",
+        "items": "Met à jour les sujets en cours",
+        "timeline_read": "Relit la conversation",
+        "assistant_list": "Consulte les assistants",
+        "project_list": "Consulte les projets"
+      },
+      "kind": {
+        "read": "Lit un fichier",
+        "edit": "Modifie un fichier",
+        "delete": "Supprime un fichier",
+        "move": "Déplace un fichier",
+        "search": "Recherche",
+        "execute": "Exécute une commande",
+        "think": "Réfléchit…",
+        "fetch": "Ouvre une page web",
+        "plan": "Met à jour le plan",
+        "compact": "Range son contexte…",
+        "question": "Vous pose une question",
+        "other": "Utilise un outil"
+      }
+    },
+    "reply": {
+      "starting": "Démarre",
+      "noteDispatched": "{count, plural, one {A confié # travail} other {A confié # travaux}}",
+      "noteContinued": "{count, plural, one {A relancé # travail} other {A relancé # travaux}}",
+      "noteNothing": "Fait, sans réponse écrite",
+      "answeredPermission": "Votre choix : {option}",
+      "answeredQuestion": "Votre réponse : {answer}",
+      "answeredSkipped": "Vous avez passé la question",
+      "answeredPlan": {
+        "approve": "Vous avez approuvé le plan",
+        "request_changes": "Vous avez demandé des changements au plan",
+        "abandon": "Vous avez abandonné le plan"
+      },
+      "stopped": "Arrêté",
+      "errorMidway": "La réponse a rencontré une erreur : {error}",
+      "interrupted": "Cette réponse ne s'est pas terminée : {reason}",
+      "truncated": "La réponse a atteint sa limite de longueur et a été coupée",
+      "resend": "{count, plural, one {Renvoyer le message} other {Renvoyer les # messages}}",
+      "why": {
+        "connection": "la connexion a été perdue",
+        "overflow": "le contexte était plein",
+        "rejected": "l'agent a refusé",
+        "error": "une erreur est survenue",
+        "restart": "codeg a redémarré",
+        "unknown": "elle s'est arrêtée de façon inattendue"
+      }
+    },
+    "dispatchCard": {
+      "continue": "Suite : {title}",
+      "notSent": "Non envoyé",
+      "more": "{count} de plus"
+    },
+    "event": {
+      "someone": "Un assistant",
+      "more": "Tout afficher",
+      "less": "Réduire",
+      "note": {
+        "boot": "codeg a redémarré",
+        "lost": "La connexion de la session a été perdue",
+        "gone": "Sa tâche a été supprimée du tableau"
+      }
+    },
+    "overview": {
+      "editBrain": "Changer ce sur quoi il tourne",
+      "lastCompaction": "Dernier rangement : {when}, {outcome}{range}",
+      "runLog": "Journal d'exécution",
+      "details": "Détails",
+      "command": "Commande de compactage"
+    },
+    "runLog": {
+      "empty": "Rien pour l'instant.",
+      "newSession": "Nouvelle session démarrée sur {agent} ({reason})",
+      "pendingSwitch": "Une nouvelle session commence avec le prochain message ({reason})",
+      "reconnected": "Reconnecté à la même session",
+      "optionsChanged": "Ses options ont changé",
+      "range": " · {before} % → {after} %",
+      "by": {
+        "auto": " automatiquement",
+        "owner": " par vous",
+        "agent": " par l'agent"
+      },
+      "compaction": {
+        "ok": "Contexte rangé{who}{range}",
+        "failed": "Le rangement du contexte{who} a échoué{range}",
+        "canceled": "Le rangement du contexte{who} a été arrêté{range}"
+      },
+      "compactionPaused": "Rangement automatique suspendu pour cette session : il n'a pas aidé deux fois de suite",
+      "overflowNewSession": "Le contexte a de nouveau débordé après rangement : une nouvelle session a démarré",
+      "overflowCompact": "Le contexte a débordé : rangé avant le message suivant",
+      "turnStopped": "Une réponse a été arrêtée",
+      "turnFailed": "Une réponse a échoué : {error}",
+      "turnInterrupted": "Une réponse ne s'est pas terminée",
+      "workdirChanged": "Le répertoire de travail a été déplacé vers {path}"
+    },
+    "matters": {
+      "ended": "Terminé",
+      "showAll": "Voir les {count}",
+      "emptyTitle": "Rien en cours",
+      "emptyHint": "Le travail confié, les rappels et les questions pour vous apparaissent ici.",
+      "noneOpen": "Rien en cours pour l'instant.",
+      "origin": "Aller au message d'origine"
     }
   }
 }

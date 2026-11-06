@@ -581,7 +581,9 @@ fn find_separated_frame(input: &str, from: usize) -> Option<(usize, usize)> {
 /// nonce and full instruction wording included. Prose that reproduces all of
 /// that was copied out of a frame, not typed. The residue an agent leaves in
 /// place of the separators is left to the callers' existing trims — it is
-/// whitespace, and the frames are always the last thing in the record.
+/// whitespace, and the frames are always the last thing in the record. A body
+/// that a parser's own trim cut one newline short at the end of the text is
+/// the same body (see [`trimmed_frame_end`]).
 fn find_unseparated_frame(input: &str, from: usize) -> Option<(usize, usize)> {
     FRAME_KINDS
         .iter()
@@ -598,12 +600,39 @@ fn find_unseparated_frame_of(kind: FrameKind, input: &str, from: usize) -> Optio
             if kind.accepts_body(&input[start..end]) {
                 return Some((start, end));
             }
+        } else if let Some(end) = trimmed_frame_end(input, start, kind.max_bytes()) {
+            // The record was trimmed, taking the body's last newline with it:
+            // still the whole body, byte for byte, but for that one newline.
+            let mut body = String::with_capacity(end - start + 1);
+            body.push_str(&input[start..end]);
+            body.push('\n');
+            if kind.accepts_body(&body) {
+                return Some((start, end));
+            }
         }
         // Same rule as the separated scan: a look-alike opening must not hide a
         // real frame further along.
         search_from = start + prefix.len();
     }
     None
+}
+
+/// End of an unseparated candidate whose last newline a trim took: exactly two
+/// newlines, then the third line running to the very end of the text.
+///
+/// A frame codeg sends inside the prompt's own blocks — a task dispatch's
+/// brief, which rides in the task's `prompt_blocks` — loses its separators to
+/// the ingress scrub, and Claude's parser trims every text block it reads back
+/// (`strip_system_tags`), so the body comes back one newline short. A trim only
+/// ever cuts at the end, which is why this form is only looked for there:
+/// anything after the third line, whitespace included, means the text was not
+/// trimmed at this frame.
+fn trimmed_frame_end(input: &str, start: usize, max_bytes: usize) -> Option<usize> {
+    let rest = &input[start..];
+    if rest.len() >= max_bytes || rest.ends_with(char::is_whitespace) {
+        return None;
+    }
+    (rest.matches('\n').count() == 2).then_some(input.len())
 }
 
 /// End of an unseparated candidate: the body is exactly three newline-terminated
@@ -1108,6 +1137,47 @@ mod tests {
         // Only the body goes; the spaces that replaced the separators are the
         // caller's trim to make (`parsers::sanitize_text`).
         assert_eq!(strip_internal_frames(&persisted).trim_end(), visible);
+    }
+
+    #[test]
+    fn a_brief_whose_last_newline_a_parser_trimmed_is_still_stripped() {
+        // A task dispatch sends the brief inside the task's own prompt blocks:
+        // the ingress scrub takes its separators, and Claude's parser trims
+        // every text block it reads back, taking the body's last newline too.
+        let brief = render_assistant_brief("Reviewer", "Be terse.").unwrap();
+        let stored = brief.replace(ROUTE_FRAME_SEPARATOR, "").trim().to_string();
+        assert!(
+            !stored.ends_with('\n'),
+            "the fixture must have LOST its last newline, or it proves nothing"
+        );
+        assert!(contains_internal_frames(&stored));
+        assert_eq!(strip_internal_frames(&stored), "");
+        // Joined after the task, as a parser that keeps one record does.
+        let joined = format!("Fix the bug\n\n{stored}");
+        assert_eq!(strip_internal_frames(&joined).trim_end(), "Fix the bug");
+
+        // Only at the very end, where a trim cuts: text after the short third
+        // line — even a space — and it is prose.
+        let followed = format!("{stored} and more");
+        assert_eq!(strip_internal_frames(&followed), followed);
+        let spaced = format!("{stored} ");
+        assert_eq!(strip_internal_frames(&spaced), spaced);
+        // And still byte for byte.
+        let reworded = stored.replace("task above.", "task above!");
+        assert_eq!(strip_internal_frames(&reworded), reworded);
+        let short = &stored[..stored.len() - 1];
+        assert_eq!(strip_internal_frames(short), short);
+
+        // A routing frame trimmed the same way goes too.
+        let mut blocks = vec![PromptInputBlock::Text {
+            text: "ask [@Codex](codeg://agent/codex)".into(),
+        }];
+        append_agent_routes(&mut blocks, true);
+        let routes = text(&blocks[1])
+            .replace(ROUTE_FRAME_SEPARATOR, "")
+            .trim()
+            .to_string();
+        assert_eq!(strip_internal_frames(&routes), "");
     }
 
     #[test]

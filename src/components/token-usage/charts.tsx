@@ -90,6 +90,7 @@ export function TrendChart({
   freshLabel,
   emptyLabel,
   className,
+  height = TREND_HEIGHT,
 }: {
   data: TrendDatum[]
   /** Accessible name for the plot — what the chart shows, not what it says
@@ -99,6 +100,9 @@ export function TrendChart({
   freshLabel: string
   emptyLabel: string
   className?: string
+  /** The plot's height in px, axis labels included (a side panel's charts
+   *  are shorter than the dashboard's). */
+  height?: number
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>()
   const [hover, setHover] = useState<number | null>(null)
@@ -107,7 +111,7 @@ export function TrendChart({
     () => data.reduce((m, d) => Math.max(m, d.cache + d.fresh), 0),
     [data]
   )
-  const plotHeight = TREND_HEIGHT - TREND_PAD_TOP - TREND_PAD_BOTTOM
+  const plotHeight = height - TREND_PAD_TOP - TREND_PAD_BOTTOM
   const slot = data.length > 0 && width > 0 ? width / data.length : 0
 
   const marks = useMemo(() => {
@@ -179,12 +183,13 @@ export function TrendChart({
       <div
         className={cn(
           // px, deliberately: this placeholder stands in for the chart, whose
-          // own `height={TREND_HEIGHT}` is px (the svg has no viewBox and every
-          // offset in it is px math). rem here would make the card change
-          // height between the empty and populated states at any zoom but 100%.
-          "flex h-[224px] items-center justify-center text-sm text-muted-foreground",
+          // own `height` is px (the svg has no viewBox and every offset in it
+          // is px math). rem here would make the card change height between
+          // the empty and populated states at any zoom but 100%.
+          "flex items-center justify-center text-sm text-muted-foreground",
           className
         )}
+        style={{ height }}
       >
         {emptyLabel}
       </div>
@@ -198,7 +203,7 @@ export function TrendChart({
       {width > 0 && (
         <svg
           width={width}
-          height={TREND_HEIGHT}
+          height={height}
           role="img"
           aria-label={label}
           className="block overflow-visible"
@@ -245,7 +250,7 @@ export function TrendChart({
               any realistic bucket count, and the tooltip carries the rest. */}
           <text
             x={0}
-            y={TREND_HEIGHT - 6}
+            y={height - 6}
             className="fill-muted-foreground text-[0.6875rem]"
           >
             {data[0]?.label}
@@ -253,7 +258,7 @@ export function TrendChart({
           {data.length > 1 && (
             <text
               x={width}
-              y={TREND_HEIGHT - 6}
+              y={height - 6}
               textAnchor="end"
               className="fill-muted-foreground text-[0.6875rem]"
             >

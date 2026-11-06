@@ -2330,6 +2330,7 @@
       "noRecentCli": "コマンドラインからの最近の会話はありません",
       "recentFilterMenuLabel": "最近の表示",
       "personalAgent": "パーソナルエージェント",
+      "personalAgentUnseen": "未読メッセージ {count} 件",
       "personalAgentBadge": "パーソナルエージェントが依頼"
     },
     "conversation": {
@@ -7676,7 +7677,6 @@
   },
   "PersonalAgent": {
     "title": "パーソナルエージェント",
-    "settingsButton": "パーソナルエージェントの設定",
     "readOnly": "パーソナルエージェントはこのデータディレクトリを使う別の codeg プロセスで動作しているため、ここではこのページは読み取り専用です。",
     "noAssistants": "アシスタントがまだありません。パーソナルエージェントは作業をアシスタントに依頼します。「設定 → コラボレーション → アシスタント」で追加してください。",
     "viewSession": "セッションを表示",
@@ -7715,108 +7715,45 @@
       "recovery": "元のセッションを再開できず",
       "overflow": "コンテキスト超過"
     },
-    "initiator": {
-      "auto": "codeg が",
-      "owner": "手動で",
-      "agent": "エージェントが"
-    },
-    "marker": {
-      "segmentStart": "セッション {seq} · {agent} · {reason}",
-      "pendingSwitch": "次のメッセージから新しいセッションが始まります（{reason}）",
-      "optionsChanged": "オプションを変更しました：{changes}",
-      "modeIs": "モード {mode}",
-      "reconnected": "同じセッションに再接続しました",
-      "compaction": {
-        "ok": "{who}コンテキストを圧縮しました{range}",
-        "failed": "{who}開始した圧縮に失敗しました{range}",
-        "canceled": "{who}開始した圧縮はキャンセルされました{range}"
-      },
-      "compactionRange": " · {before}% → {after}%",
-      "compactionFrom": " · 圧縮前 {before}%",
-      "compactionPaused": "2 回続けて圧縮の効果がなかったため、このセッションの自動圧縮を一時停止しました",
-      "turnCanceled": "ターンを停止しました",
-      "turnFailed": "ターンが失敗しました：{error}",
-      "turnInterrupted": "ターンが完了しませんでした",
-      "overflowNewSegment": "圧縮後もコンテキストがあふれたため、新しいセッションを開始します",
-      "overflowCompact": "コンテキストがあふれました。次のメッセージの前に圧縮します",
-      "workdirChanged": "作業ディレクトリを {path} に移動しました"
-    },
     "timeline": {
       "loadOlder": "以前の記録を読み込む",
       "empty": "あいさつするか、何か任せてみましょう。",
-      "supplement": "ターン中に追加",
-      "queued": "待機中",
-      "interrupted": "未完了",
-      "resend": "再送信",
-      "resent": "再送信済み",
-      "question": "質問",
-      "plan": "プランの承認",
-      "questionState": {
-        "pending": "回答待ち",
-        "answered": "回答済み",
-        "skipped": "スキップ",
-        "resolved": "終了"
-      },
-      "planDecision": {
-        "approve": "承認済み",
-        "request_changes": "修正を依頼済み",
-        "abandon": "中止"
-      },
-      "answered": "あなたの回答：{answer}",
-      "permission": "権限リクエスト",
-      "permissionPending": "あなたの判断待ち",
-      "permissionWithdrawn": "取り下げ済み",
-      "permissionChose": "あなたの選択：{option}",
-      "dispatched": "依頼済み",
-      "result": "進捗",
-      "executor": "担当：{name}",
+      "newMessages": "ここから新着メッセージ",
       "openTask": "ボードで開く",
       "openConversation": "会話を開く",
-      "open": "開く"
+      "viewSession": "会話を表示"
+    },
+    "work": {
+      "taskNotStarted": "このタスクはまだ始まっていません。始まるとここに会話が表示されます。",
+      "taskGone": "このタスクが見つかりません。削除された可能性があります。"
     },
     "composer": {
-      "placeholder": "パーソナルエージェントにメッセージ…",
-      "placeholderBusy": "処理中です — メッセージは次のターンで送信されます",
+      "placeholder": "{name}にメッセージ…",
+      "placeholderBusy": "{name}は作業中です。メッセージはこのあとに処理されます",
       "readOnly": "このプロセスでは読み取り専用",
       "ariaLabel": "パーソナルエージェントへのメッセージ",
       "send": "送信",
       "queue": "キューに追加",
-      "supplement": "このターンに追加",
-      "supplementHint": "実行中のターンが終わるのを待たずに、そのターンに組み込みます",
-      "supplemented": "進行中のターンに追加しました。",
-      "queuedInstead": "キューに入れました。次のターンで送信されます。",
-      "waitForUpload": "画像のアップロードが終わるまでお待ちください。",
-      "stop": "停止",
-      "cancelCompaction": "圧縮を停止",
-      "compact": "圧縮",
-      "compactHint": "このセッションのコンテキストを今すぐ圧縮します",
-      "newSession": "新しいセッション",
-      "newSessionHint": "次のメッセージから新しいセッションを始めます。タイムラインはそのまま続きます",
-      "newSessionQueued": "次のメッセージから新しいセッションが始まります。",
-      "compacting": "コンテキストを圧縮中…",
-      "replying": "返信中…",
-      "brain": "動かすエージェント",
-      "queuedCount": "{count, plural, other {# 件のメッセージが待機中}}"
+      "waitForUpload": "画像のアップロードが終わるまでお待ちください。"
     },
     "aux": {
-      "status": "ステータス",
-      "dispatches": "依頼",
-      "items": "未完了",
-      "data": "データ"
+      "title": "アシスタントパネル",
+      "tab": {
+        "work": "やること",
+        "status": "状態",
+        "stats": "統計"
+      },
+      "waiting": "{count} 件があなたの対応待ち"
     },
     "status": {
       "elsewhere": "エージェントは別の codeg プロセスで動作しています。ここに表示される内容はデータベースから読み取ったものです。",
-      "brain": "頭脳",
-      "agent": "エージェント",
       "model": "モデル",
       "mode": "モード",
       "session": "セッション",
-      "segment": "現在",
+      "started": "開始",
+      "connection": "接続",
       "segmentValue": "#{seq} · {reason}",
       "noSegment": "まだ開始していません",
-      "startedAt": "開始日時",
-      "pending": "次のメッセージで新規セッション",
-      "connection": "接続",
       "connected": "接続中",
       "disconnected": "未接続（次のメッセージで再接続します）",
       "handoff": "引き継ぎカード",
@@ -7831,7 +7768,6 @@
       "usageUnknown": "使用量不明 — このエージェントは使用量を報告しません",
       "threshold": "{percent}% で自動圧縮",
       "thresholdOff": "自動圧縮オフ",
-      "command": "コマンド {command}",
       "noCommand": "このエージェントの圧縮コマンドが不明です",
       "compactions": "圧縮回数",
       "compactionCounts": "codeg {auto} · 手動 {manual} · エージェント {agent}",
@@ -7847,36 +7783,29 @@
       },
       "paused": "このセッションの自動圧縮は一時停止中です",
       "resume": "再開",
-      "work": "作業",
       "queued": "待機中",
       "queuedValue": "メッセージ {messages} 件 · 進捗 {events} 件",
       "dispatchSlots": "依頼した会話",
       "slotsValue": "実行中 {running}/{limit} · 待機 {queued}",
       "slotsUnlimited": "実行中 {running} · 待機 {queued}",
-      "waiting": "承認",
-      "waitingOwner": "あなたの対応待ち",
       "engine": "実行場所",
       "engineHere": "このプロセス",
       "engineElsewhere": "別の codeg プロセス",
       "workdir": "作業ディレクトリ",
       "lastError": "直近のエラー",
-      "lastCompaction": "前回の圧縮",
       "compactionStatus": {
         "ok": "完了",
         "failed": "失敗",
         "canceled": "キャンセル",
         "running": "実行中"
       },
-      "usageUnknownOffline": "使用量不明 — 再接続後に読み取ります"
-    },
-    "dispatches": {
-      "all": "すべて",
-      "empty": "まだ何も依頼していません。",
-      "meta": "{executor} · {folder} · {when}",
-      "noProject": "プロジェクトなし"
+      "usageUnknownOffline": "使用量不明 — 再接続後に読み取ります",
+      "copyPath": "パスをコピー",
+      "copied": "コピーしました",
+      "startedValue": "{when} に開始",
+      "pendingValue": "次のメッセージで新しいセッション：{reason}"
     },
     "items": {
-      "empty": "未完了の案件はありません。",
       "waits": {
         "owner": "あなたの対応待ち",
         "agent": "エージェント待ち",
@@ -7909,7 +7838,19 @@
       "notSynced": "トークン数は使用量を同期すると表示されます（トークン使用量ページ）。",
       "usageCurve": "コンテキスト使用量",
       "noUsage": "まだ測定値がありません。",
-      "empty": "まだデータがありません"
+      "empty": "まだデータがありません",
+      "range": "直近 {days} 日",
+      "figure": {
+        "conversation": "会話",
+        "conversationSub": "あなた {owner} · 返信 {replies}",
+        "dispatches": "依頼",
+        "dispatchesSub": "完了 {completed} · 失敗 {failed}",
+        "completion": "完了率",
+        "completionSub": "依頼した仕事のうち",
+        "tokens": "トークン",
+        "tokensSub": "エージェント {agent} · 依頼 {dispatch}",
+        "tokensUnsynced": "使用量の同期後に表示"
+      }
     },
     "settings": {
       "title": "パーソナルエージェントの設定",
@@ -7921,7 +7862,7 @@
       "tabDispatch": "依頼",
       "tabPersona": "ペルソナとメモリ",
       "name": "名前",
-      "nameHint": "このページに表示される呼び名です。空欄なら既定の名前を使います。",
+      "nameHint": "ページとメッセージに表示される名前とアイコンです。エージェント自身もこの名前を知っています。名前が空欄なら既定の名前を使います。",
       "namePlaceholder": "パーソナルエージェント",
       "agentHint": "動かすエージェントとそのすべてのオプション。アシスタントと同じように設定します。",
       "switchNote": "別のエージェントに切り替えると、次のメッセージから新しいセッションが始まります。古いセッションは再開せず、代わりに codeg がタイムラインを新しいセッションに引き継ぎます。",
@@ -7936,11 +7877,201 @@
       "handoffBudgetHint": "新しいセッションの引き継ぎカードに使える文字数です。切り詰められた部分は、エージェントがツールで読み返せます。",
       "skill": "組み込みスキル",
       "skillHint": "作業ディレクトリ内のスキルを使って、エージェントに決まりごと（依頼の方法、未完了の案件、メモリファイル）を教えます。",
-      "filesNote": "これらのファイルはエージェントの作業ディレクトリにあり、ターンごとにコミットされます。ペルソナとルールの変更は、次のメッセージと一緒にエージェントに届きます。",
+      "filesNote": "これらのファイルはエージェントの作業ディレクトリにあり、ターンごとにコミットされます。名前、ペルソナ、ルールの変更は、次のメッセージと一緒にエージェントに届きます。",
       "saveFile": "ファイルを保存",
       "fileSaved": "{name} を保存しました。",
       "cancel": "キャンセル",
-      "save": "保存"
+      "save": "保存",
+      "fileGroups": {
+        "persona": "ペルソナ",
+        "rules": "ルール",
+        "owner": "あなたについて",
+        "memory": "メモリ"
+      },
+      "byOwner": "あなたが管理",
+      "byAgent": "エージェントが管理",
+      "soulHint": "エージェントが何者で、どう話すか。あなたが書くもので、エージェントはあなたに頼まれたときだけ変更します。セッション開始のたびに全文を読み込みます。",
+      "rulesHint": "エージェントが常に守るルール。あなたが書くもので、エージェントはあなたに頼まれたときだけ変更します。セッション開始のたびに全文を読み込みます。",
+      "userHint": "エージェントが知っているあなたのこと（役割、プロジェクト、好み）。新しく分かったことはエージェントが自分で更新し、セッション開始のたびに全文を読み込みます。",
+      "memoryHint": "記憶のインデックス。1 件 1 行で、事実、参考情報、そして仕事の進め方の教訓（あなたが直したこと、認めたやり方）が並びます。各項目は memory/ 配下の個別ファイルで、種類はファイルの先頭に書かれます。どちらもアシスタントが管理します。各セッションの開始時にインデックスの先頭 200 行を読み込み、項目は必要なときに読みます。",
+      "entryHint": "1 件の項目で、エージェントが必要なときに読みます。削除すると、索引の該当行も一緒に削除されます。",
+      "entryType": {
+        "lesson": "教訓",
+        "fact": "事実",
+        "reference": "参考"
+      },
+      "deleteEntry": "削除",
+      "confirmDelete": "削除する",
+      "confirmDeleteHint": "この項目と索引の行を削除しますか？",
+      "entryDeleted": "{name} を削除しました。"
+    },
+    "statusWord": {
+      "idle": "待機中",
+      "replying": "返信中…",
+      "compacting": "コンテキストを整理中…",
+      "waiting": "あなたの確認待ち",
+      "elsewhere": "別のプロセスで実行中（読み取り専用）",
+      "open": "状態を表示"
+    },
+    "menu": {
+      "more": "その他",
+      "showPanel": "サイドパネルを表示",
+      "hidePanel": "サイドパネルを隠す",
+      "settings": "パーソナルエージェントの設定…",
+      "viewSession": "下層のセッションを表示",
+      "compact": "コンテキストを圧縮",
+      "compactHint": "セッションのコンテキストを今すぐ圧縮します",
+      "stopCompaction": "整理を停止",
+      "stopReply": "返信を停止",
+      "newSession": "新しいセッションを開始…"
+    },
+    "newSession": {
+      "title": "新しいセッションを開始しますか？",
+      "description": "次のメッセージから新しい下層セッションで続けます。人格・記憶・進行中の事項は引き継がれ、ここでの会話はそのまま残ります。",
+      "cancel": "キャンセル",
+      "confirm": "新しいセッションを開始",
+      "queued": "次のメッセージから新しいセッションで続けます。"
+    },
+    "time": {
+      "yesterday": "昨日 {time}"
+    },
+    "actions": {
+      "quote": "引用",
+      "copy": "コピー",
+      "copySelection": "選択部分をコピー",
+      "copied": "コピーしました",
+      "copyFailed": "コピーできませんでした",
+      "stop": "返信を停止",
+      "timeTook": "{time} · 所要 {took}"
+    },
+    "owner": {
+      "unread": "未読",
+      "unfinished": "未完了",
+      "resend": "再送信",
+      "resent": "再送信済み"
+    },
+    "quote": {
+      "you": "あなた",
+      "dispatch": "依頼：{title}",
+      "attachment": "[添付]",
+      "noText": "（テキストなし）",
+      "unavailable": "元のメッセージは利用できません",
+      "jump": "元のメッセージへ移動",
+      "dismiss": "引用を外す",
+      "preview": "元のメッセージ",
+      "previewHint": "引用されたメッセージ。古すぎるためここには読み込まれていません。"
+    },
+    "step": {
+      "awaiting": "確認待ち：{title}",
+      "anAction": "操作",
+      "thinking": "考え中…",
+      "compacting": "コンテキストを整理中…",
+      "plan": "計画を更新中",
+      "planNamed": "計画：{title}",
+      "own": {
+        "dispatch": "作業を依頼中",
+        "dispatch_followup": "作業をフォローアップ中",
+        "items": "進行中の事項を整理中",
+        "timeline_read": "会話をさかのぼって確認中",
+        "assistant_list": "アシスタントを確認中",
+        "project_list": "プロジェクトを確認中"
+      },
+      "kind": {
+        "read": "ファイルを読み込み中",
+        "edit": "ファイルを編集中",
+        "delete": "ファイルを削除中",
+        "move": "ファイルを移動中",
+        "search": "検索中",
+        "execute": "コマンドを実行中",
+        "think": "考え中…",
+        "fetch": "Web ページを開いています",
+        "plan": "計画を更新中",
+        "compact": "コンテキストを整理中…",
+        "question": "あなたに質問中",
+        "other": "ツールを使用中"
+      }
+    },
+    "reply": {
+      "starting": "開始中",
+      "noteDispatched": "{count} 件の作業を依頼しました",
+      "noteContinued": "{count} 件の作業をフォローアップしました",
+      "noteNothing": "処理しました（テキストでの返信はありません）",
+      "answeredPermission": "あなたの選択：{option}",
+      "answeredQuestion": "あなたの回答：{answer}",
+      "answeredSkipped": "質問をスキップしました",
+      "answeredPlan": {
+        "approve": "計画を承認しました",
+        "request_changes": "計画の修正を依頼しました",
+        "abandon": "計画を取りやめました"
+      },
+      "stopped": "停止しました",
+      "errorMidway": "返信の途中でエラーが発生しました：{error}",
+      "interrupted": "この返信は完了しませんでした：{reason}",
+      "truncated": "返信が長さの上限に達し、途中で切れました",
+      "resend": "{count, plural, other {# 件のメッセージを再送信}}",
+      "why": {
+        "connection": "接続が切れました",
+        "overflow": "コンテキストがいっぱいになりました",
+        "rejected": "エージェントが拒否しました",
+        "error": "エラーが発生しました",
+        "restart": "codeg が再起動しました",
+        "unknown": "予期せず停止しました"
+      }
+    },
+    "dispatchCard": {
+      "continue": "続き：{title}",
+      "notSent": "送信されませんでした",
+      "more": "ほか {count} 件"
+    },
+    "event": {
+      "someone": "アシスタント",
+      "more": "すべて表示",
+      "less": "折りたたむ",
+      "note": {
+        "boot": "codeg が再起動しました",
+        "lost": "セッションの接続が切れました",
+        "gone": "ボードのタスクが削除されました"
+      }
+    },
+    "overview": {
+      "editBrain": "実行するエージェントを変更",
+      "lastCompaction": "前回の整理：{when}、{outcome}{range}",
+      "runLog": "実行ログ",
+      "details": "詳細",
+      "command": "圧縮コマンド"
+    },
+    "runLog": {
+      "empty": "まだありません。",
+      "newSession": "{agent} で新しいセッションを開始（{reason}）",
+      "pendingSwitch": "次のメッセージから新しいセッション（{reason}）",
+      "reconnected": "同じセッションに再接続しました",
+      "optionsChanged": "オプションが変わりました",
+      "range": " · {before}% → {after}%",
+      "by": {
+        "auto": "（自動）",
+        "owner": "（あなた）",
+        "agent": "（エージェント自身）"
+      },
+      "compaction": {
+        "ok": "コンテキストを整理しました{who}{range}",
+        "failed": "コンテキストの整理に失敗しました{who}{range}",
+        "canceled": "コンテキストの整理を停止しました{who}{range}"
+      },
+      "compactionPaused": "2 回続けて効果がなかったため、このセッションの自動整理を一時停止しました",
+      "overflowNewSession": "整理後もコンテキストがあふれたため、新しいセッションを開始しました",
+      "overflowCompact": "コンテキストがあふれたため、自動で整理しました",
+      "turnStopped": "返信が停止されました",
+      "turnFailed": "返信に失敗しました：{error}",
+      "turnInterrupted": "返信が完了しませんでした",
+      "workdirChanged": "作業ディレクトリを {path} に移しました"
+    },
+    "matters": {
+      "ended": "終了",
+      "showAll": "すべて表示（{count} 件）",
+      "emptyTitle": "進行中のものはありません",
+      "emptyHint": "依頼した仕事、リマインダー、あなたへの質問がここに表示されます。",
+      "noneOpen": "現在進行中のものはありません。",
+      "origin": "元のメッセージへ移動"
     }
   }
 }

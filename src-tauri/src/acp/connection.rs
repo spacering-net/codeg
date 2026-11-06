@@ -1340,6 +1340,12 @@ pub enum ConnectionCommand {
         /// broadcast and the title seed only ever read `blocks`. Empty for
         /// every other prompt.
         internal_suffix: Vec<PromptInputBlock>,
+        /// The personal agent engine's tag for this prompt: when it starts,
+        /// the connection builds the reply of its turn under this token
+        /// (`SessionState::reply_turns`). Carried on the command for the same
+        /// reason as `internal_suffix`: it can only ride the prompt it was
+        /// meant for. `None` for every other prompt.
+        reply_token: Option<String>,
     },
     SetMode {
         mode_id: String,
@@ -8273,7 +8279,10 @@ where
     };
     let flags = CompanionFeatureFlags {
         delegation: delegation_enabled,
-        feedback: feedback_enabled,
+        // The personal agent takes the owner's words only as queued messages
+        // its engine delivers; a live-feedback note has no way in, and the
+        // tool would only leave empty checks in its replies.
+        feedback: feedback_enabled && !groups.personal_agent,
         ask: injection.ask.is_enabled().await,
         sessions: injection.sessions.is_enabled().await,
         tasks: groups.tasks,
@@ -14770,6 +14779,7 @@ async fn run_conversation_loop(
                 blocks,
                 user_message,
                 internal_suffix,
+                reply_token,
             }) => {
                 // Fingerprint the outgoing prompt for the background watcher's
                 // foreground/out-of-turn classifier BEFORE the blocks are
@@ -14860,13 +14870,20 @@ async fn run_conversation_loop(
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
                 }
 
-                emit_with_state(
-                    state,
-                    emitter,
-                    AcpEvent::StatusChanged {
+                // The personal agent's reply to this prompt starts with this
+                // prompt's own turn — not at the command, which Grok's turn
+                // closed just above can precede — and in the same critical
+                // section, so no event of another turn falls in between.
+                emit_with_state_built(state, emitter, |s| {
+                    if let Some(token) = reply_token {
+                        if s.personal_agent {
+                            s.reply_turns.open(token);
+                        }
+                    }
+                    Some(AcpEvent::StatusChanged {
                         status: ConnectionStatus::Prompting,
-                    },
-                )
+                    })
+                })
                 .await;
 
                 // Broadcast the user's prompt to cross-client viewers BEFORE
@@ -35875,6 +35892,7 @@ mod tests {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
                 })
                 .await
                 .expect("the connection is running");
@@ -44288,14 +44306,19 @@ mod tests {
     }
 
     /// The personal agent's connection gets its own group whatever the
-    /// settings say — and never the delegation or board-authoring ones, even
-    /// with every one of them switched on: it hands work out only through its
-    /// dispatch tool.
+    /// settings say — and never the delegation, board-authoring or
+    /// live-feedback ones, even with every one of them switched on: it hands
+    /// work out only through its dispatch tool, and takes the owner's words
+    /// only as queued messages.
     #[tokio::test]
     async fn the_personal_agent_gets_its_group_and_no_delegation_or_authoring() {
         let injection = test_delegation_injection(
             Arc::new(TestAllAgentsAvailable) as Arc<dyn AgentAvailabilityLookup>
         );
+        injection
+            .feedback
+            .set(crate::acp::feedback::FeedbackConfig { enabled: true })
+            .await;
         injection
             .broker
             .set_config(crate::acp::delegation::broker::DelegationConfig {
@@ -44338,7 +44361,7 @@ mod tests {
             .expect("a --features value");
         let groups: Vec<&str> = features.split(',').collect();
         assert!(groups.contains(&"personal_agent"), "{features}");
-        for withheld in ["delegation", "automations", "taskboard"] {
+        for withheld in ["delegation", "automations", "taskboard", "feedback"] {
             assert!(!groups.contains(&withheld), "{withheld} leaked: {features}");
         }
     }
@@ -45673,6 +45696,7 @@ mod tests {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -46838,6 +46862,7 @@ mod tests {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -47091,6 +47116,7 @@ mod tests {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -47475,6 +47501,7 @@ mod tests {
                     }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -48229,6 +48256,7 @@ mod tests {
                     }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -48540,6 +48568,7 @@ mod tests {
                         }],
                         user_message: None,
                         internal_suffix: Vec::new(),
+                        reply_token: None,
                     })
                     .await
                     .expect("the loop is running");
@@ -48662,6 +48691,7 @@ mod tests {
             blocks: vec![PromptInputBlock::Text { text: text.into() }],
             user_message: None,
             internal_suffix: Vec::new(),
+            reply_token: None,
         }
     }
 

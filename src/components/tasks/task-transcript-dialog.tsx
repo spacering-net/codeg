@@ -24,7 +24,7 @@
  * transcript's own `delegate_to_agent` cards then open a third layer.
  */
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { Loader2 } from "lucide-react"
 
@@ -55,6 +55,12 @@ interface TaskTranscriptDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   task: WorkTask | null
+  /** Drawn at the header's end, before the close button (a way out of the
+   *  drawer, such as opening the task on the board). */
+  headerActions?: ReactNode
+  /** Drawn instead while there is no session to show: no task, or one that
+   *  has not started. */
+  fallback?: ReactNode
 }
 
 /** Statuses in which the engine may hold a live connection worth attaching
@@ -81,6 +87,8 @@ export function TaskTranscriptDialog({
   open,
   onOpenChange,
   task,
+  headerActions,
+  fallback,
 }: TaskTranscriptDialogProps) {
   const t = useTranslations("Tasks")
 
@@ -95,9 +103,11 @@ export function TaskTranscriptDialog({
         <DrawerDescription className="sr-only">
           {t("transcriptDescription")}
         </DrawerDescription>
-        {open && task != null && task.conversation_id != null ? (
-          <TaskAgentResolver task={task} />
-        ) : null}
+        {!open ? null : task != null && task.conversation_id != null ? (
+          <TaskAgentResolver task={task} headerActions={headerActions} />
+        ) : (
+          (fallback ?? null)
+        )}
       </DrawerContent>
     </Drawer>
   )
@@ -112,7 +122,13 @@ export function TaskTranscriptDialog({
  * read returns the agent recorded at dispatch, with the folder's default agent
  * covering a failed read.
  */
-function TaskAgentResolver({ task }: { task: WorkTask }) {
+function TaskAgentResolver({
+  task,
+  headerActions,
+}: {
+  task: WorkTask
+  headerActions?: ReactNode
+}) {
   const folders = useAppWorkspaceStore((s) => s.folders)
   const override = task.config?.agent_type ?? null
   const folderDefault =
@@ -146,15 +162,23 @@ function TaskAgentResolver({ task }: { task: WorkTask }) {
       </div>
     )
   }
-  return <TaskTranscriptBody task={task} agentType={resolved} />
+  return (
+    <TaskTranscriptBody
+      task={task}
+      agentType={resolved}
+      headerActions={headerActions}
+    />
+  )
 }
 
 function TaskTranscriptBody({
   task,
   agentType,
+  headerActions,
 }: {
   task: WorkTask
   agentType: AgentType
+  headerActions?: ReactNode
 }) {
   const t = useTranslations("Tasks")
   const { attachDelegationChild, detachDelegationChild } = useAcpActions()
@@ -289,6 +313,7 @@ function TaskTranscriptBody({
           {task.title}
         </span>
         <StatusChip task={task} />
+        {headerActions}
       </div>
       <LiveTranscriptView
         conversationId={task.conversation_id as number}

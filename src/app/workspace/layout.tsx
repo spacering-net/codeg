@@ -56,7 +56,12 @@ import {
   WorkbenchRoutePage,
   WorkbenchRouteStrip,
   useHasWorkbenchRouteStrip,
+  useWorkbenchRouteDrawsBand,
 } from "@/components/workbench/workbench-content"
+import {
+  WorkbenchBandContext,
+  type WorkbenchBand,
+} from "@/components/workbench/workbench-band"
 import {
   AuxPanelProvider,
   useAuxPanelContext,
@@ -348,6 +353,7 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
 
   const { isConversations } = useWorkbenchRoute()
   const hasRouteStrip = useHasWorkbenchRouteStrip()
+  const routeDrawsBand = useWorkbenchRouteDrawsBand()
   const { isOpen: sidebarOpen } = useSidebarContext()
   const { isOpen: auxOpen } = useAuxPanelContext()
   const { isMac, isWindows, isLinux } = usePlatform()
@@ -369,6 +375,14 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   // width slides in and out with the panel's own toggle (ChromeReserve).
   const leftCornerWidth = sidebarOpen ? 0 : leftReserve
   const rightCornerWidth = auxOpen ? 0 : rightReserve
+  // A route that draws the window-chrome band itself (see below) gets the
+  // band's slots: the left corner's, and what its right edge keeps clear —
+  // the workspace's aux panel is closed under a full-page route, so the
+  // route holds the window's right edge.
+  const routeBand = useMemo<WorkbenchBand | null>(
+    () => (routeDrawsBand ? { leftCornerWidth, rightReserve } : null),
+    [routeDrawsBand, leftCornerWidth, rightReserve]
+  )
   // The conversation column covers the whole middle area, the file column
   // hidden under it: there is no file column (conversation mode), or the
   // conversation is maximized over it.
@@ -607,19 +621,24 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
               closes with the sidebar-header hairline (ws-chrome-border keeps
               it legible over a background image) — which is why its left
               reserve, sliding with the sidebar like the tab strips' do, draws
-              no strip hairline of its own. */}
-          <div
-            className={cn(
-              "flex h-10 shrink-0 items-stretch",
-              hasRouteStrip && "border-b border-border/50 ws-chrome-border"
-            )}
-          >
-            <ChromeReserve width={leftCornerWidth} line={false} />
-            <WorkbenchRouteStrip />
-            <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
-          </div>
+              no strip hairline of its own. A route that draws the band itself
+              reaches the top edge instead, its slots handed down. */}
+          {routeBand ? null : (
+            <div
+              className={cn(
+                "flex h-10 shrink-0 items-stretch",
+                hasRouteStrip && "border-b border-border/50 ws-chrome-border"
+              )}
+            >
+              <ChromeReserve width={leftCornerWidth} line={false} />
+              <WorkbenchRouteStrip />
+              <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
+            </div>
+          )}
           <div className="min-h-0 flex-1">
-            <WorkbenchRoutePage />
+            <WorkbenchBandContext.Provider value={routeBand}>
+              <WorkbenchRoutePage />
+            </WorkbenchBandContext.Provider>
           </div>
         </div>
       ) : null}

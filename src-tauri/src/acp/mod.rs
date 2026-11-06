@@ -49,6 +49,7 @@ pub mod prompt_hydration;
 pub mod provider_models;
 pub mod question;
 pub mod registry;
+pub mod reply_turn;
 pub mod remote_registry;
 pub(crate) mod reported_usage;
 pub mod result_tool;

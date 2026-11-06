@@ -2330,6 +2330,7 @@
       "noRecentCli": "لا توجد محادثات حديثة من سطر الأوامر",
       "recentFilterMenuLabel": "عرض في الأحدث",
       "personalAgent": "الوكيل الشخصي",
+      "personalAgentUnseen": "{count, plural, zero {لا رسائل غير مقروءة} one {رسالة واحدة غير مقروءة} two {رسالتان غير مقروءتين} few {# رسائل غير مقروءة} many {# رسالة غير مقروءة} other {# رسالة غير مقروءة}}",
       "personalAgentBadge": "أسندها الوكيل الشخصي"
     },
     "conversation": {
@@ -7676,7 +7677,6 @@
   },
   "PersonalAgent": {
     "title": "الوكيل الشخصي",
-    "settingsButton": "إعدادات الوكيل الشخصي",
     "readOnly": "يعمل الوكيل الشخصي في عملية codeg أخرى على مجلد البيانات هذا، لذا فهذه الصفحة للقراءة فقط هنا.",
     "noAssistants": "لا يوجد مساعدون متخصصون بعد: إليهم يُسند الوكيل الشخصي عمله. أضف واحدًا من الإعدادات → التعاون → المساعدون.",
     "viewSession": "عرض الجلسة",
@@ -7715,108 +7715,45 @@
       "recovery": "تعذّر استئناف الجلسة القديمة",
       "overflow": "تجاوز سعة السياق"
     },
-    "initiator": {
-      "auto": "من codeg",
-      "owner": "منك",
-      "agent": "من الوكيل"
-    },
-    "marker": {
-      "segmentStart": "الجلسة {seq} · {agent} · {reason}",
-      "pendingSwitch": "تبدأ جلسة جديدة مع الرسالة التالية ({reason})",
-      "optionsChanged": "تغيّرت الخيارات: {changes}",
-      "modeIs": "الوضع {mode}",
-      "reconnected": "أُعيد الاتصال بالجلسة نفسها",
-      "compaction": {
-        "ok": "ضُغط السياق بطلب {who}{range}",
-        "failed": "فشل طلب الضغط المقدَّم {who}{range}",
-        "canceled": "أُلغي طلب الضغط المقدَّم {who}{range}"
-      },
-      "compactionRange": " · {before}% → {after}%",
-      "compactionFrom": " · قبل الضغط {before}%",
-      "compactionPaused": "أُوقف الضغط التلقائي مؤقتًا لهذه الجلسة: لم يُجدِ الضغط نفعًا مرتين متتاليتين",
-      "turnCanceled": "أُوقفت الجولة",
-      "turnFailed": "فشلت الجولة: {error}",
-      "turnInterrupted": "لم تكتمل الجولة",
-      "overflowNewSegment": "تجاوز السياق سعته مجددًا بعد الضغط: تبدأ جلسة جديدة",
-      "overflowCompact": "تجاوز السياق سعته: سيُضغط قبل الرسالة التالية",
-      "workdirChanged": "نُقل مجلد العمل إلى {path}"
-    },
     "timeline": {
       "loadOlder": "تحميل الأقدم",
       "empty": "ألقِ التحية، أو اطلب منه أن يتولّى أمرًا ما.",
-      "supplement": "أُضيفت أثناء الجولة",
-      "queued": "في قائمة الانتظار",
-      "interrupted": "لم تكتمل",
-      "resend": "إعادة الإرسال",
-      "resent": "أُعيد إرسالها",
-      "question": "سؤال",
-      "plan": "اعتماد الخطة",
-      "questionState": {
-        "pending": "بانتظار إجابتك",
-        "answered": "تمت الإجابة",
-        "skipped": "تم التخطي",
-        "resolved": "مُغلق"
-      },
-      "planDecision": {
-        "approve": "اعتُمدت",
-        "request_changes": "طُلبت تعديلات",
-        "abandon": "تم التخلي عنها"
-      },
-      "answered": "إجابتك: {answer}",
-      "permission": "طلب إذن",
-      "permissionPending": "بانتظار قرارك",
-      "permissionWithdrawn": "سُحب",
-      "permissionChose": "اخترت: {option}",
-      "dispatched": "إسناد",
-      "result": "تحديث",
-      "executor": "المنفّذ: {name}",
+      "newMessages": "رسائل جديدة",
       "openTask": "فتح في اللوحة",
       "openConversation": "فتح المحادثة",
-      "open": "فتح"
+      "viewSession": "عرض المحادثة"
+    },
+    "work": {
+      "taskNotStarted": "لم تبدأ هذه المهمة بعد. ستظهر محادثتها هنا بمجرد أن تبدأ.",
+      "taskGone": "تعذر العثور على هذه المهمة — ربما حُذفت."
     },
     "composer": {
-      "placeholder": "راسل وكيلك الشخصي…",
-      "placeholderBusy": "إنه مشغول — ستُرسل رسالتك مع الجولة التالية",
+      "placeholder": "راسل {name}…",
+      "placeholderBusy": "{name} يعمل الآن — ستأتي رسالتك بعد ذلك",
       "readOnly": "للقراءة فقط في هذه العملية",
       "ariaLabel": "رسالة إلى وكيلك الشخصي",
       "send": "إرسال",
       "queue": "إضافة إلى قائمة الانتظار",
-      "supplement": "إضافة إلى هذه الجولة",
-      "supplementHint": "دمجها في الجولة الجارية بدلًا من انتظار انتهائها",
-      "supplemented": "أُضيفت إلى الجولة الجارية.",
-      "queuedInstead": "أُضيفت إلى قائمة الانتظار — ستُرسل مع الجولة التالية.",
-      "waitForUpload": "انتظر حتى يكتمل رفع الصورة.",
-      "stop": "إيقاف",
-      "cancelCompaction": "إيقاف الضغط",
-      "compact": "ضغط",
-      "compactHint": "ضغط سياق الجلسة الآن",
-      "newSession": "جلسة جديدة",
-      "newSessionHint": "بدء جلسة جديدة مع الرسالة التالية؛ ويستمر الخط الزمني",
-      "newSessionQueued": "ستبدأ جلسة جديدة مع رسالتك التالية.",
-      "compacting": "جارٍ ضغط السياق…",
-      "replying": "جارٍ الرد…",
-      "brain": "الوكيل الذي يعمل عليه",
-      "queuedCount": "{count, plural, zero {لا رسائل في قائمة الانتظار} one {رسالة واحدة في قائمة الانتظار} two {رسالتان في قائمة الانتظار} few {# رسائل في قائمة الانتظار} many {# رسالة في قائمة الانتظار} other {# رسالة في قائمة الانتظار}}"
+      "waitForUpload": "انتظر حتى يكتمل رفع الصورة."
     },
     "aux": {
-      "status": "الحالة",
-      "dispatches": "المهام المُسندة",
-      "items": "المعلّقة",
-      "data": "البيانات"
+      "title": "لوحة المساعد",
+      "tab": {
+        "work": "العمل",
+        "status": "الحالة",
+        "stats": "الإحصاءات"
+      },
+      "waiting": "{count, plural, zero {لا شيء بانتظارك} one {عنصر واحد بانتظارك} two {عنصران بانتظارك} few {# عناصر بانتظارك} many {# عنصرًا بانتظارك} other {# عنصر بانتظارك}}"
     },
     "status": {
       "elsewhere": "يعمل الوكيل في عملية codeg أخرى؛ ما تراه هنا مقروء من قاعدة البيانات.",
-      "brain": "العقل",
-      "agent": "الوكيل",
       "model": "النموذج",
       "mode": "الوضع",
       "session": "الجلسة",
-      "segment": "الحالية",
+      "started": "البدء",
+      "connection": "الاتصال",
       "segmentValue": "رقم {seq} · {reason}",
       "noSegment": "لم تبدأ بعد",
-      "startedAt": "وقت البدء",
-      "pending": "الرسالة التالية تبدأ جلسة جديدة",
-      "connection": "الاتصال",
       "connected": "متصل",
       "disconnected": "غير متصل (يُعاد الاتصال مع الرسالة التالية)",
       "handoff": "بطاقة التسليم",
@@ -7831,7 +7768,6 @@
       "usageUnknown": "الاستخدام غير معروف — هذا الوكيل لا يُبلغ عنه",
       "threshold": "ضغط تلقائي عند {percent}%",
       "thresholdOff": "الضغط التلقائي متوقف",
-      "command": "الأمر {command}",
       "noCommand": "لا يُعرف أمر ضغط لهذا الوكيل",
       "compactions": "مرات الضغط",
       "compactionCounts": "codeg {auto} · أنت {manual} · الوكيل {agent}",
@@ -7847,36 +7783,29 @@
       },
       "paused": "الضغط التلقائي متوقف مؤقتًا لهذه الجلسة",
       "resume": "استئناف",
-      "work": "العمل",
       "queued": "في الانتظار",
       "queuedValue": "{messages} رسالة · {events} تحديث",
       "dispatchSlots": "المحادثات المُسندة",
       "slotsValue": "{running} من {limit} قيد التشغيل · {queued} في الانتظار",
       "slotsUnlimited": "{running} قيد التشغيل · {queued} في الانتظار",
-      "waiting": "الموافقات",
-      "waitingOwner": "بانتظارك",
       "engine": "يعمل في",
       "engineHere": "هذه العملية",
       "engineElsewhere": "عملية codeg أخرى",
       "workdir": "مجلد العمل",
       "lastError": "آخر خطأ",
-      "lastCompaction": "آخر ضغط",
       "compactionStatus": {
         "ok": "تم",
         "failed": "فشل",
         "canceled": "أُلغي",
         "running": "قيد التنفيذ"
       },
-      "usageUnknownOffline": "الاستخدام غير معروف — يُقرأ بعد إعادة الاتصال"
-    },
-    "dispatches": {
-      "all": "الكل",
-      "empty": "لم يُسند أي عمل بعد.",
-      "meta": "{executor} · {folder} · {when}",
-      "noProject": "بلا مشروع"
+      "usageUnknownOffline": "الاستخدام غير معروف — يُقرأ بعد إعادة الاتصال",
+      "copyPath": "نسخ المسار",
+      "copied": "تم النسخ",
+      "startedValue": "بدأت {when}",
+      "pendingValue": "تبدأ جلسة جديدة مع الرسالة التالية: {reason}"
     },
     "items": {
-      "empty": "لا توجد أمور معلّقة.",
       "waits": {
         "owner": "بانتظارك",
         "agent": "لدى الوكيل",
@@ -7909,7 +7838,19 @@
       "notSynced": "تظهر أرقام الرموز بعد مزامنة الاستخدام (صفحة استهلاك الرموز).",
       "usageCurve": "استخدام السياق",
       "noUsage": "لا توجد قراءات بعد.",
-      "empty": "لا توجد بيانات بعد"
+      "empty": "لا توجد بيانات بعد",
+      "range": "آخر {days} يومًا",
+      "figure": {
+        "conversation": "الرسائل",
+        "conversationSub": "أنت {owner} · ردود {replies}",
+        "dispatches": "الإسناد",
+        "dispatchesSub": "مكتملة {completed} · فاشلة {failed}",
+        "completion": "معدل الإنجاز",
+        "completionSub": "من العمل المُسند",
+        "tokens": "الرموز",
+        "tokensSub": "الوكيل {agent} · العمل {dispatch}",
+        "tokensUnsynced": "بعد المزامنة التالية"
+      }
     },
     "settings": {
       "title": "إعدادات الوكيل الشخصي",
@@ -7921,7 +7862,7 @@
       "tabDispatch": "الإسناد",
       "tabPersona": "الشخصية والذاكرة",
       "name": "الاسم",
-      "nameHint": "الاسم الذي يظهر على صفحته. اتركه فارغًا لاستخدام الاسم الافتراضي.",
+      "nameHint": "الاسم والصورة اللذان يظهر بهما على صفحته وفي رسائله، ويعرف الوكيل اسمه أيضًا. إذا تركت الاسم فارغًا يُستخدم الاسم الافتراضي.",
       "namePlaceholder": "الوكيل الشخصي",
       "agentHint": "الوكيل وجميع الخيارات التي يعمل بها، كما في إعداد المساعد.",
       "switchNote": "التبديل إلى وكيل آخر يبدأ جلسة جديدة مع رسالتك التالية. لا يستأنف جلسة قديمة؛ بل يسلّم codeg الخط الزمني إلى الجلسة الجديدة.",
@@ -7936,11 +7877,201 @@
       "handoffBudgetHint": "عدد الأحرف المسموح بها لبطاقة تسليم الجلسة الجديدة؛ ويمكن قراءة ما قُصّ منها بأدوات الوكيل.",
       "skill": "مهارة مدمجة",
       "skillHint": "علّم الوكيل أعرافه (طرق الإسناد، والأمور المعلّقة، وملفات الذاكرة) عبر مهارة في مجلد عمله.",
-      "filesNote": "توجد هذه الملفات في مجلد عمل الوكيل، ويُجرى لها commit في git بعد كل جولة. تصل تغييرات الشخصية والقواعد إلى الوكيل مع رسالتك التالية.",
+      "filesNote": "توجد هذه الملفات في مجلد عمل الوكيل، ويُجرى لها commit في git بعد كل جولة. تصل تغييرات الاسم والشخصية والقواعد إلى الوكيل مع رسالتك التالية.",
       "saveFile": "حفظ الملف",
       "fileSaved": "تم حفظ {name}.",
       "cancel": "إلغاء",
-      "save": "حفظ"
+      "save": "حفظ",
+      "fileGroups": {
+        "persona": "الشخصية",
+        "rules": "القواعد",
+        "owner": "عنك",
+        "memory": "الذاكرة"
+      },
+      "byOwner": "تحرره أنت",
+      "byAgent": "يحرره الوكيل",
+      "soulHint": "من هو الوكيل وكيف يتحدث. تكتبه أنت، ولا يغيّره الوكيل إلا إذا طلبت ذلك. يقرؤه كاملًا في بداية كل جلسة.",
+      "rulesHint": "ما يجب على الوكيل الالتزام به دائمًا. تكتبه أنت، ولا يغيّره الوكيل إلا إذا طلبت ذلك. يقرؤه كاملًا في بداية كل جلسة.",
+      "userHint": "ما يعرفه الوكيل عنك: دورك ومشاريعك وتفضيلاتك. يحدّثه كلما عرف جديدًا، ويقرؤه كاملًا في بداية كل جلسة.",
+      "memoryHint": "فهرس ما يتذكره المساعد، سطر لكل إدخال: حقائق ومراجع ودروس عن طريقة عمله (ما صحّحته وما أقررته). كل إدخال ملف مستقل داخل memory/، ونوعه في أوله. يتولى المساعد الاثنين. تبدأ كل جلسة بأول 200 سطر من الفهرس، وتُقرأ الإدخالات عند الحاجة.",
+      "entryHint": "إدخال واحد يقرؤه الوكيل عند الحاجة. حذفه يزيل أيضًا سطره من الفهرس.",
+      "entryType": {
+        "lesson": "درس",
+        "fact": "حقيقة",
+        "reference": "مرجع"
+      },
+      "deleteEntry": "حذف",
+      "confirmDelete": "حذف",
+      "confirmDeleteHint": "هل تريد حذف هذا الإدخال وسطره في الفهرس؟",
+      "entryDeleted": "تم حذف {name}."
+    },
+    "statusWord": {
+      "idle": "خامل",
+      "replying": "يرد…",
+      "compacting": "يرتّب سياقه…",
+      "waiting": "بانتظار تأكيدك",
+      "elsewhere": "يعمل في عملية أخرى (للقراءة فقط)",
+      "open": "عرض الحالة"
+    },
+    "menu": {
+      "more": "المزيد",
+      "showPanel": "إظهار اللوحة الجانبية",
+      "hidePanel": "إخفاء اللوحة الجانبية",
+      "settings": "إعدادات الوكيل الشخصي…",
+      "viewSession": "عرض الجلسة الأساسية",
+      "compact": "ضغط السياق",
+      "compactHint": "ضغط سياق الجلسة الآن",
+      "stopCompaction": "إيقاف الترتيب",
+      "stopReply": "إيقاف الرد",
+      "newSession": "بدء جلسة جديدة…"
+    },
+    "newSession": {
+      "title": "بدء جلسة جديدة؟",
+      "description": "تستمر رسالتك التالية في جلسة أساسية جديدة. تنتقل الشخصية والذاكرة والأمور المفتوحة معها، وتبقى المحادثة هنا كما هي.",
+      "cancel": "إلغاء",
+      "confirm": "بدء جلسة جديدة",
+      "queued": "تبدأ جلسة جديدة مع رسالتك التالية."
+    },
+    "time": {
+      "yesterday": "أمس {time}"
+    },
+    "actions": {
+      "quote": "اقتباس",
+      "copy": "نسخ",
+      "copySelection": "نسخ النص المحدد",
+      "copied": "تم النسخ",
+      "copyFailed": "تعذّر النسخ",
+      "stop": "إيقاف الرد",
+      "timeTook": "{time} · استغرق {took}"
+    },
+    "owner": {
+      "unread": "غير مقروءة",
+      "unfinished": "لم تكتمل",
+      "resend": "إرسال مجددًا",
+      "resent": "أُرسلت مجددًا"
+    },
+    "quote": {
+      "you": "أنت",
+      "dispatch": "مُسند: {title}",
+      "attachment": "[مرفق]",
+      "noText": "(بلا نص)",
+      "unavailable": "الرسالة الأصلية غير متاحة",
+      "jump": "الانتقال إلى الرسالة الأصلية",
+      "dismiss": "إزالة الاقتباس",
+      "preview": "الرسالة الأصلية",
+      "previewHint": "الرسالة المقتبسة، قديمة جدًا لتحميلها هنا."
+    },
+    "step": {
+      "awaiting": "بانتظار تأكيدك: {title}",
+      "anAction": "إجراء",
+      "thinking": "يفكر…",
+      "compacting": "يرتّب سياقه…",
+      "plan": "يحدّث الخطة",
+      "planNamed": "الخطة: {title}",
+      "own": {
+        "dispatch": "يُسند عملًا",
+        "dispatch_followup": "يتابع عملًا",
+        "items": "يحدّث الأمور المفتوحة",
+        "timeline_read": "يراجع المحادثة",
+        "assistant_list": "يراجع المساعدين",
+        "project_list": "يراجع المشاريع"
+      },
+      "kind": {
+        "read": "يقرأ ملفًا",
+        "edit": "يعدّل ملفًا",
+        "delete": "يحذف ملفًا",
+        "move": "ينقل ملفًا",
+        "search": "يبحث",
+        "execute": "ينفّذ أمرًا",
+        "think": "يفكر…",
+        "fetch": "يفتح صفحة ويب",
+        "plan": "يحدّث الخطة",
+        "compact": "يرتّب سياقه…",
+        "question": "يسألك",
+        "other": "يستخدم أداة"
+      }
+    },
+    "reply": {
+      "starting": "يبدأ",
+      "noteDispatched": "{count, plural, zero {لم يُسند أي عمل} one {أسند عملًا واحدًا} two {أسند عملين} few {أسند # أعمال} many {أسند # عملًا} other {أسند # عمل}}",
+      "noteContinued": "{count, plural, zero {لم يتابع أي عمل} one {تابع عملًا واحدًا} two {تابع عملين} few {تابع # أعمال} many {تابع # عملًا} other {تابع # عمل}}",
+      "noteNothing": "تم، دون رد مكتوب",
+      "answeredPermission": "اخترت: {option}",
+      "answeredQuestion": "إجابتك: {answer}",
+      "answeredSkipped": "تخطيت السؤال",
+      "answeredPlan": {
+        "approve": "وافقت على الخطة",
+        "request_changes": "طلبت تعديلات على الخطة",
+        "abandon": "تخليت عن الخطة"
+      },
+      "stopped": "توقف",
+      "errorMidway": "واجه الرد خطأً: {error}",
+      "interrupted": "لم يكتمل هذا الرد: {reason}",
+      "truncated": "بلغ الرد حدّه الأقصى للطول فقُطع",
+      "resend": "{count, plural, zero {لا شيء لإعادة إرساله} one {إعادة إرسال الرسالة} two {إعادة إرسال الرسالتين} few {إعادة إرسال # رسائل} many {إعادة إرسال # رسالة} other {إعادة إرسال # رسالة}}",
+      "why": {
+        "connection": "انقطع الاتصال",
+        "overflow": "امتلأ السياق",
+        "rejected": "رفضه الوكيل",
+        "error": "حدث خطأ",
+        "restart": "أُعيد تشغيل codeg",
+        "unknown": "توقف على نحو غير متوقع"
+      }
+    },
+    "dispatchCard": {
+      "continue": "متابعة: {title}",
+      "notSent": "لم يُرسل",
+      "more": "{count} أخرى"
+    },
+    "event": {
+      "someone": "مساعد",
+      "more": "عرض الكل",
+      "less": "عرض أقل",
+      "note": {
+        "boot": "أُعيد تشغيل codeg",
+        "lost": "انقطع اتصال الجلسة",
+        "gone": "حُذفت المهمة من اللوحة"
+      }
+    },
+    "overview": {
+      "editBrain": "تغيير الوكيل الذي يعمل عليه",
+      "lastCompaction": "آخر ترتيب: {when}، {outcome}{range}",
+      "runLog": "سجل التشغيل",
+      "details": "تفاصيل",
+      "command": "أمر الضغط"
+    },
+    "runLog": {
+      "empty": "لا شيء بعد.",
+      "newSession": "بدأت جلسة جديدة على {agent} ({reason})",
+      "pendingSwitch": "تبدأ جلسة جديدة مع الرسالة التالية ({reason})",
+      "reconnected": "أُعيد الاتصال بالجلسة نفسها",
+      "optionsChanged": "تغيّرت خياراته",
+      "range": " · {before}% → {after}%",
+      "by": {
+        "auto": " تلقائيًا",
+        "owner": " بواسطتك",
+        "agent": " بواسطة الوكيل"
+      },
+      "compaction": {
+        "ok": "رُتّب السياق{who}{range}",
+        "failed": "فشل ترتيب السياق{who}{range}",
+        "canceled": "أُوقف ترتيب السياق{who}{range}"
+      },
+      "compactionPaused": "أُوقف الترتيب التلقائي مؤقتًا لهذه الجلسة: لم يُجدِ مرتين متتاليتين",
+      "overflowNewSession": "فاض السياق مجددًا بعد الترتيب: بدأت جلسة جديدة",
+      "overflowCompact": "فاض السياق: رُتّب قبل الرسالة التالية",
+      "turnStopped": "أُوقف أحد الردود",
+      "turnFailed": "فشل أحد الردود: {error}",
+      "turnInterrupted": "لم يكتمل أحد الردود",
+      "workdirChanged": "نُقل مجلد العمل إلى {path}"
+    },
+    "matters": {
+      "ended": "منتهية",
+      "showAll": "عرض الكل ({count})",
+      "emptyTitle": "لا شيء مفتوح",
+      "emptyHint": "يظهر هنا العمل الذي يُسنده والتذكيرات والأسئلة الموجهة إليك.",
+      "noneOpen": "لا شيء مفتوح الآن.",
+      "origin": "الانتقال إلى الرسالة الأصلية"
     }
   }
 }

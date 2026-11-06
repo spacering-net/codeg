@@ -10,7 +10,8 @@ use crate::commands::personal_agent as pa;
 use crate::db::entities::personal_agent_dispatch::DispatchMode;
 use crate::models::personal_agent::{
     DispatchInfo, ItemInfo, PersonalAgentDraft, PersonalAgentFile, PersonalAgentInfo,
-    PersonalAgentSnapshot, PersonalAgentStats, TimelinePage, TimelineRow,
+    PersonalAgentSnapshot, PersonalAgentStats, TimelineChanges, TimelineCursor, TimelinePage,
+    TimelineRow,
 };
 
 pub async fn personal_agent_get(
@@ -26,6 +27,8 @@ pub struct TimelineParams {
     pub before_id: Option<i32>,
     #[serde(default)]
     pub limit: Option<u32>,
+    #[serde(default)]
+    pub since_id: Option<i32>,
 }
 
 pub async fn personal_agent_timeline(
@@ -33,7 +36,54 @@ pub async fn personal_agent_timeline(
     Json(params): Json<TimelineParams>,
 ) -> Result<Json<TimelinePage>, AppCommandError> {
     Ok(Json(
-        pa::personal_agent_timeline_core(&state.db, params.before_id, params.limit).await?,
+        pa::personal_agent_timeline_core(
+            &state.db,
+            params.before_id,
+            params.limit,
+            params.since_id,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineRowsParams {
+    pub ids: Vec<i32>,
+}
+
+pub async fn personal_agent_timeline_rows(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<TimelineRowsParams>,
+) -> Result<Json<Vec<TimelineRow>>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_timeline_rows_core(&state.db, params.ids).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineUpdatedSinceParams {
+    #[serde(default)]
+    pub since: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub after: Option<TimelineCursor>,
+    #[serde(default)]
+    pub min_id: Option<i32>,
+}
+
+pub async fn personal_agent_timeline_updated_since(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<TimelineUpdatedSinceParams>,
+) -> Result<Json<TimelineChanges>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_timeline_updated_since_core(
+            &state.db,
+            params.since,
+            params.after,
+            params.min_id,
+        )
+        .await?,
     ))
 }
 
@@ -58,6 +108,8 @@ pub struct DispatchesParams {
     pub mode: Option<DispatchMode>,
     #[serde(default)]
     pub limit: Option<u32>,
+    #[serde(default)]
+    pub ids: Option<Vec<i32>>,
 }
 
 pub async fn personal_agent_dispatches(
@@ -65,7 +117,8 @@ pub async fn personal_agent_dispatches(
     Json(params): Json<DispatchesParams>,
 ) -> Result<Json<Vec<DispatchInfo>>, AppCommandError> {
     Ok(Json(
-        pa::personal_agent_dispatches_core(&state.db, params.mode, params.limit).await?,
+        pa::personal_agent_dispatches_core(&state.db, params.mode, params.limit, params.ids)
+            .await?,
     ))
 }
 
@@ -107,24 +160,16 @@ pub struct SendParams {
     pub text: String,
     #[serde(default)]
     pub blocks: Option<Vec<PromptInputBlock>>,
+    #[serde(default)]
+    pub reply_to: Option<i32>,
 }
 
 pub async fn personal_agent_send(
     Json(params): Json<SendParams>,
 ) -> Result<Json<TimelineRow>, AppCommandError> {
-    Ok(Json(pa::personal_agent_send_core(params.text, params.blocks).await?))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SupplementParams {
-    pub text: String,
-}
-
-pub async fn personal_agent_supplement(
-    Json(params): Json<SupplementParams>,
-) -> Result<Json<pa::SupplementResult>, AppCommandError> {
-    Ok(Json(pa::personal_agent_supplement_core(params.text).await?))
+    Ok(Json(
+        pa::personal_agent_send_core(params.text, params.blocks, params.reply_to).await?,
+    ))
 }
 
 pub async fn personal_agent_cancel() -> Result<Json<()>, AppCommandError> {
@@ -162,6 +207,20 @@ pub async fn personal_agent_resend(
     Json(params): Json<ResendParams>,
 ) -> Result<Json<TimelineRow>, AppCommandError> {
     Ok(Json(pa::personal_agent_resend_core(params.row_id).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkSeenParams {
+    pub up_to: i32,
+}
+
+pub async fn personal_agent_mark_seen(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<MarkSeenParams>,
+) -> Result<Json<()>, AppCommandError> {
+    pa::personal_agent_mark_seen_core(&state.db, params.up_to).await?;
+    Ok(Json(()))
 }
 
 #[derive(Deserialize)]
@@ -222,13 +281,31 @@ pub async fn personal_agent_file_save(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FileDeleteParams {
+    pub name: String,
+}
+
+pub async fn personal_agent_file_delete(
+    Json(params): Json<FileDeleteParams>,
+) -> Result<Json<()>, AppCommandError> {
+    pa::personal_agent_file_delete_core(params.name).await?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetWorkdirParams {
     #[serde(default)]
     pub path: Option<String>,
+    /// The UI's locale, for the template files of a directory made anew.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 pub async fn personal_agent_set_workdir(
     Json(params): Json<SetWorkdirParams>,
 ) -> Result<Json<PersonalAgentInfo>, AppCommandError> {
-    Ok(Json(pa::personal_agent_set_workdir_core(params.path).await?))
+    Ok(Json(
+        pa::personal_agent_set_workdir_core(params.path, params.locale).await?,
+    ))
 }

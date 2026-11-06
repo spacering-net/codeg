@@ -2168,6 +2168,41 @@ mod route_sanitizer_tests {
         assert_eq!(detail.summary.message_count, 2);
     }
 
+    /// A task dispatch's brief rides in the task's own prompt blocks, after the
+    /// task and before the work-task context codeg adds: the ingress scrub
+    /// takes its separators, and Claude's parser trims each text block, taking
+    /// its last newline. History shows the task and that context, not the
+    /// brief.
+    #[test]
+    fn a_brief_inside_a_tasks_own_prompt_never_surfaces_in_history() {
+        let task = "TASK-WORK: look at the bug and report.";
+        let context = "—— Work task context ——\nYou are working inside a dedicated git worktree.";
+        let brief =
+            crate::acp::agent_mentions::render_assistant_brief("Researcher", "Answer briefly.")
+                .expect("brief");
+        let mut user = turn(TurnRole::User, task);
+        user.blocks.push(ContentBlock::Text {
+            text: brief.replace('\u{1e}', "").trim().to_string(),
+        });
+        user.blocks.push(ContentBlock::Text {
+            text: context.into(),
+        });
+        let detail = sanitized(Fixture {
+            summary: summary(Some(task), 2),
+            turns: vec![user, turn(TurnRole::Assistant, "done")],
+        });
+        let texts: Vec<&str> = detail.turns[0]
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec![task, context]);
+        assert_eq!(detail.summary.message_count, 2);
+    }
+
     #[test]
     fn assistant_turns_and_look_alike_user_prose_are_left_alone() {
         // Only a complete frame that re-renders byte-for-byte is removed, so

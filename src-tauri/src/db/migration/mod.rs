@@ -57,6 +57,7 @@ mod m20261020_000001_folder_command_run_local;
 mod m20261022_000001_tool_approval;
 mod m20261022_000001_work_task_delivery;
 mod m20261103_000001_personal_agent;
+mod m20261104_000001_personal_agent_chat;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -120,6 +121,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261022_000001_tool_approval::Migration),
             Box::new(m20261022_000001_work_task_delivery::Migration),
             Box::new(m20261103_000001_personal_agent::Migration),
+            Box::new(m20261104_000001_personal_agent_chat::Migration),
         ]
     }
 }

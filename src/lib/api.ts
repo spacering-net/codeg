@@ -40,7 +40,8 @@ import type {
   PersonalAgentInfo,
   PersonalAgentSnapshot,
   PersonalAgentStats,
-  PersonalAgentSupplementResult,
+  TimelineChanges,
+  TimelineCursor,
   TimelinePage,
   TimelineRow,
   Automation,
@@ -2505,31 +2506,51 @@ export async function personalAgentSave(
   return getTransport().call("personal_agent_save", { draft })
 }
 
+/** A page older than `beforeId` (the newest without), never cutting a turn
+ *  — or, with `sinceId`, every row from `sinceId` up to `beforeId` (none and
+ *  `too_far` when that is more than one read returns). */
 export async function personalAgentTimeline(
   beforeId?: number | null,
-  limit?: number
+  limit?: number,
+  sinceId?: number | null
 ): Promise<TimelinePage> {
   return getTransport().call("personal_agent_timeline", {
     beforeId: beforeId ?? null,
     limit: limit ?? null,
+    sinceId: sinceId ?? null,
+  })
+}
+
+/** Rows by id (at most 100). */
+export async function personalAgentTimelineRows(
+  ids: number[]
+): Promise<TimelineRow[]> {
+  return getTransport().call("personal_agent_timeline_rows", { ids })
+}
+
+/** Rows changed since `since` (inclusive), or past `after`, from `minId` up. */
+export async function personalAgentTimelineUpdatedSince(
+  since: string | null,
+  after: TimelineCursor | null,
+  minId: number | null
+): Promise<TimelineChanges> {
+  return getTransport().call("personal_agent_timeline_updated_since", {
+    since,
+    after,
+    minId,
   })
 }
 
 export async function personalAgentSend(
   text: string,
-  blocks?: unknown[] | null
+  blocks?: unknown[] | null,
+  replyTo?: number | null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_send", {
     text,
     blocks: blocks && blocks.length > 0 ? blocks : null,
+    replyTo: replyTo ?? null,
   })
-}
-
-/** Fold a message into the running turn; queued instead when it can't be. */
-export async function personalAgentSupplement(
-  text: string
-): Promise<PersonalAgentSupplementResult> {
-  return getTransport().call("personal_agent_supplement", { text })
 }
 
 export async function personalAgentCancel(): Promise<void> {
@@ -2554,6 +2575,11 @@ export async function personalAgentKeepalive(): Promise<void> {
 
 export async function personalAgentResend(rowId: number): Promise<TimelineRow> {
   return getTransport().call("personal_agent_resend", { rowId })
+}
+
+/** The owner has seen the timeline up to row `upTo`. */
+export async function personalAgentMarkSeen(upTo: number): Promise<void> {
+  return getTransport().call("personal_agent_mark_seen", { upTo })
 }
 
 export async function personalAgentAnswerQuestion(
@@ -2594,13 +2620,16 @@ export async function personalAgentItems(
   })
 }
 
+/** Dispatches newest first: these `ids`, or the latest `limit` of `mode`. */
 export async function personalAgentDispatches(
   mode?: DispatchMode | null,
-  limit?: number
+  limit?: number | null,
+  ids?: number[] | null
 ): Promise<DispatchInfo[]> {
   return getTransport().call("personal_agent_dispatches", {
     mode: mode ?? null,
     limit: limit ?? null,
+    ids: ids ?? null,
   })
 }
 
@@ -2621,11 +2650,19 @@ export async function personalAgentFileSave(
   return getTransport().call("personal_agent_file_save", { name, content })
 }
 
-/** `null` returns to the data directory's default. */
+/** A memory entry (`memory/<name>.md`), with the lines of the index that
+ *  link to it. */
+export async function personalAgentFileDelete(name: string): Promise<void> {
+  return getTransport().call("personal_agent_file_delete", { name })
+}
+
+/** `null` returns to the data directory's default. `locale` is the UI's: the
+ *  language of the template files of a directory made anew. */
 export async function personalAgentSetWorkdir(
-  path: string | null
+  path: string | null,
+  locale?: string
 ): Promise<PersonalAgentInfo> {
-  return getTransport().call("personal_agent_set_workdir", { path })
+  return getTransport().call("personal_agent_set_workdir", { path, locale })
 }
 
 export async function listConversationTags(): Promise<ConversationTagDetail[]> {

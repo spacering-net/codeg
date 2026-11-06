@@ -18,12 +18,16 @@ interface WorkbenchPageTitleProps {
   titleActionLabel?: string
   /** Further breadcrumb segments after the title. */
   trail?: ReactNode
+  /** Who the page is, drawn just before its title: the personal agent's
+   *  avatar. Not a route glyph (see below). */
+  leading?: ReactNode
 }
 
 /**
  * Shared header for every full-page workbench route, rendered into the
  * window-chrome strip above the page (the h-10 band the fixed corner overlays
- * sit on — see `WorkbenchRouteStrip` in workbench-content.tsx).
+ * sit on — see `WorkbenchRouteStrip` in workbench-content.tsx), or into that
+ * band where a route draws it itself (`WorkbenchBand`).
  *
  * It reads as a breadcrumb: a conversations button, a chevron, then the route's
  * title. That leading button is the ONLY way back out of a full-page route — it
@@ -32,13 +36,15 @@ interface WorkbenchPageTitleProps {
  * page". Here the trail itself says it.
  *
  * No route glyph before the title: it repeated the icon on the sidebar row the
- * user just came from, and the title already names the page.
+ * user just came from, and the title already names the page. A page that is
+ * someone — the personal agent — puts their avatar there instead (`leading`).
  */
 export function WorkbenchPageTitle({
   title,
   onTitleClick,
   titleActionLabel,
   trail,
+  leading,
 }: WorkbenchPageTitleProps) {
   const tTitleBar = useTranslations("Folder.folderTitleBar")
   const { openConversations } = useWorkbenchRoute()
@@ -61,6 +67,9 @@ export function WorkbenchPageTitle({
         className="size-3 shrink-0 text-muted-foreground/50"
         aria-hidden="true"
       />
+      {leading ? (
+        <span className="ms-0.5 inline-flex shrink-0">{leading}</span>
+      ) : null}
       {onTitleClick ? (
         // Same rail as the heading it replaces: `px-1` puts the text where the
         // heading's `pl-1` did, so going one level down doesn't shift it.

@@ -4,11 +4,12 @@
  * Where the personal agent keeps its persona, rules and memory: a fixed
  * working directory, the data directory's `personal-agent` unless the owner
  * picks another. Moving it starts a new session at the next message; the old
- * directory is left exactly as it is.
+ * directory is left exactly as it is. A directory made anew starts with the
+ * template files in the UI's language.
  */
 
 import { useEffect, useState } from "react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { FolderCog, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -21,6 +22,7 @@ import type { PersonalAgentSnapshot } from "@/lib/types"
 
 export function PersonalAgentWorkdirSettings() {
   const t = useTranslations("CollaborationSettings.personalAgent")
+  const locale = useLocale()
   const [snapshot, setSnapshot] = useState<PersonalAgentSnapshot | null>(null)
   const [path, setPath] = useState("")
   const [saving, setSaving] = useState(false)
@@ -44,7 +46,7 @@ export function PersonalAgentWorkdirSettings() {
   const save = async (next: string | null) => {
     setSaving(true)
     try {
-      const info = await personalAgentSetWorkdir(next)
+      const info = await personalAgentSetWorkdir(next, locale)
       setSnapshot((s) => (s ? { ...s, agent: info } : s))
       setPath(info.workdir_custom ? info.workdir : "")
       toast.message(t("saved"))

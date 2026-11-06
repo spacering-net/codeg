@@ -428,6 +428,11 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             let mut lines = Vec::new();
             let mut out = Vec::new();
             for r in rows.into_iter().rev() {
+                // A reply still being written (this one), or one that never
+                // started.
+                if svc::is_unwritten_reply(&r) {
+                    continue;
+                }
                 let row = svc::to_row(r);
                 let who = match row.kind {
                     crate::db::entities::personal_agent_timeline::TimelineKind::Owner => "owner",
@@ -463,6 +468,12 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
         }
         other => ToolOutcome::refused(format!("unknown personal-agent tool: {other}")),
     }
+}
+
+/// Tests: `timeline_read` as the agent would call it.
+#[cfg(test)]
+pub(crate) async fn timeline_read_for_test(engine: &Arc<PersonalAgentEngine>) -> String {
+    answer(engine, "timeline_read", json!({ "limit": 50 })).await.text
 }
 
 /// Tests: `item_update` as the agent would call it.

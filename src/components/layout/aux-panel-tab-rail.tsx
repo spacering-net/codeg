@@ -32,7 +32,9 @@ import { cn } from "@/lib/utils"
 // and an icon rail would have to undo nearly every class. The primitives keep
 // what matters — the Tabs context, roving focus, and the trigger ids each
 // panel's `aria-labelledby` points at.
-const TRIGGER_CLASS = cn(
+/** A tab of the rail: an icon button, tinted while selected. Shared with the
+ *  personal agent page's panel, which is laid out as this one is. */
+export const AUX_RAIL_TRIGGER_CLASS = cn(
   "flex size-8 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors",
   "hover:bg-foreground/[0.06] hover:text-foreground",
   "focus-visible:ring-2 focus-visible:ring-ring/50",
@@ -41,6 +43,18 @@ const TRIGGER_CLASS = cn(
   "data-[state=active]:bg-primary/10 data-[state=active]:text-primary",
   "[&_svg]:pointer-events-none [&_svg]:shrink-0"
 )
+
+/** The rail itself, down the panel's end edge. No background of its own, so
+ *  it shows the same surface as the panel body beside it: the column's
+ *  `bg-background`, or the workspace background image when one is on. The
+ *  start border is what separates the two; `ws-chrome-border` boosts it over
+ *  a background image, where the theme hairline washes out.
+ *  `w-12` centres the icons 1.5rem in from the window edge: right under the
+ *  settings button of the corner overlay above (`pr-3` + half an `h-6 w-6`
+ *  button, both rem, so they stay lined up at any zoom), and within a pixel
+ *  of the Windows/Linux close button's centre. */
+export const AUX_RAIL_CLASS =
+  "flex w-12 shrink-0 flex-col items-center border-s border-border py-1.5 ws-chrome-border"
 
 /** Alt+↑/↓ moves the focused tab — the keyboard way to do what a drag does.
  *  Radix's roving focus ignores modified arrows, so the two never collide. */
@@ -145,19 +159,7 @@ export function AuxPanelTabRail({
   return (
     <TabsPrimitive.List
       data-aux-tab-rail
-      className={cn(
-        // No background of its own, so the rail shows the same surface as the
-        // panel body beside it: the column's `bg-background`, or the workspace
-        // background image when one is on. The start border is what separates
-        // the two; `ws-chrome-border` boosts it over a background image, where
-        // the theme hairline washes out.
-        // `w-12` centres the icons 1.5rem in from the window edge: right under
-        // the settings button of the corner overlay above (`pr-3` + half an
-        // `h-6 w-6` button, both rem, so they stay lined up at any zoom), and
-        // within a pixel of the Windows/Linux close button's centre.
-        "flex w-12 shrink-0 flex-col items-center border-s border-border py-1.5 ws-chrome-border",
-        !visible && "hidden"
-      )}
+      className={cn(AUX_RAIL_CLASS, !visible && "hidden")}
     >
       {visible ? (
         <Reorder.Group
@@ -195,7 +197,7 @@ export function AuxPanelTabRail({
               value={tab}
               title={label}
               aria-label={label}
-              className={TRIGGER_CLASS}
+              className={AUX_RAIL_TRIGGER_CLASS}
             >
               <Icon className="size-4" />
             </TabsPrimitive.Trigger>
@@ -303,7 +305,7 @@ function AuxTabRailItem({
         aria-keyshortcuts={MOVE_KEYS}
         onKeyDown={onKeyDown}
         {...reselect.triggerProps}
-        className={TRIGGER_CLASS}
+        className={AUX_RAIL_TRIGGER_CLASS}
       >
         <Icon className="size-4" />
       </TabsPrimitive.Trigger>

@@ -4201,3 +4201,258 @@ div.monaco-diff-editor.side-by-side .editor.modified {
     opacity: 0;
   }
 }
+
+/* Personal agent: the message a jump landed on flashes once (2s) — a ring,
+   so the bubble keeps its own fill; with reduced motion the ring holds for
+   the same time instead (the page removes the class). */
+@keyframes pa-flash {
+  0%,
+  35% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 40%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+.pa-flash {
+  animation: pa-flash 2s ease-out;
+}
+.pa-flash-static {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 35%, transparent);
+}
+
+/* Personal agent: what sits inside a bubble (a work row, a work pill, a
+   quote, code) is the bubble's own colour a step deeper — a translucent wash
+   over it, never a colour of its own (a white card on the grey read as a
+   hole in it) — and a step deeper again under the pointer and when pressed:
+   `--pa-inset`, `--pa-inset-hover`, `--pa-inset-active`. Each state moves
+   away from the bubble, never back towards it, so a hovered card stands out
+   more rather than fading into its bubble (Radix Colors' component steps,
+   Material's state layers). Being translucent, the washes read the same
+   over a workspace background image. */
+
+/* Personal agent: the owner's bubble is a tint of the theme's primary over
+   the page, so it reads as theirs in every theme; the assistant's bubbles
+   (below) are grey. Base colour first: an engine without color-mix keeps
+   the page colour, not a solid primary. What sits inside (a quote) washes
+   it with more of the primary: a deeper tint of the same hue. Over a
+   workspace background image it turns translucent like the conversation's
+   message surfaces (`ws-msg-*`), with their hairline ring. */
+.pa-owner-bubble {
+  --pa-inset: color-mix(in oklab, var(--primary) 6%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--primary) 10%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--primary) 14%, transparent);
+  background-color: color-mix(in oklab, var(--background) 89%, var(--primary));
+}
+.dark .pa-owner-bubble {
+  --pa-inset: color-mix(in oklab, var(--primary) 8%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--primary) 12%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--primary) 16%, transparent);
+  background-color: color-mix(in oklab, var(--background) 80%, var(--primary));
+}
+[data-workspace-bg="on"] .pa-owner-bubble {
+  background-color: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--muted) 89%, var(--primary)) 58%,
+    transparent
+  );
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* Personal agent: the bubbles on the assistants' side — the personal
+   agent's replies, and the news of the work it handed out — are a plain
+   grey with no border, whatever the theme's colour: the theme's own text
+   colour mixed into its page colour (a light grey in the light theme, a
+   dark one in the dark), so a tinted theme gives it no more than its own
+   faint cast. What sits inside one (a work row, a work pill, a quote, code)
+   washes it with more of the text colour: a deeper grey in the light theme,
+   a lighter one in the dark — the step a dark theme's raised surfaces take.
+   Over a workspace background image the bubble turns translucent as the
+   owner's does, with its hairline. */
+.pa-agent-bubble {
+  --pa-inset: color-mix(in oklab, var(--foreground) 4%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--foreground) 7%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--foreground) 10%, transparent);
+  background-color: var(--muted);
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 4.5%,
+    var(--background)
+  );
+}
+.dark .pa-agent-bubble {
+  --pa-inset: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--foreground) 12%, transparent);
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 9%,
+    var(--background)
+  );
+}
+[data-workspace-bg="on"] .pa-agent-bubble {
+  background-color: color-mix(in oklab, var(--muted) 58%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+/* Markdown's own surfaces, in the bubble, by the same steps: inline code, a
+   code block and a diagram are the bubble a step deeper, instead of their
+   own greys (one of them the bubble's own) and a code body of the page
+   colour — a white card on the grey; a code block's title bar and a
+   table's head a step deeper again, a table's body the bubble itself; and
+   no frame round a code block, as round nothing else in a bubble. A table
+   keeps its lines: they are its structure. */
+.pa-agent-bubble [data-streamdown="inline-code"],
+.pa-agent-bubble [data-streamdown="code-block"],
+.pa-agent-bubble [data-streamdown="mermaid-block"],
+.pa-agent-bubble [data-streamdown="code-block-header"],
+.pa-agent-bubble [data-streamdown="table-header"] {
+  background-color: var(--pa-inset);
+}
+.pa-agent-bubble [data-streamdown="code-block-body"],
+.pa-agent-bubble [data-streamdown="table-body"] {
+  background-color: transparent;
+}
+.pa-agent-bubble [data-streamdown="code-block"] {
+  border-color: transparent;
+}
+.pa-agent-bubble [data-streamdown="code-block-header"] {
+  box-shadow: none;
+}
+
+/* Personal agent: the bubble a right-click opened its menu on, ringed in the
+   theme's colour (as a jump flashes it, softer) until the menu closes. */
+[data-pa-frame][data-state="open"] > [data-bubble] {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 30%, transparent);
+}
+[data-workspace-bg="on"] [data-pa-frame][data-state="open"] > .pa-owner-bubble,
+[data-workspace-bg="on"] [data-pa-frame][data-state="open"] > .pa-agent-bubble {
+  box-shadow:
+    inset 0 0 0 1px var(--border),
+    0 0 0 2px color-mix(in oklab, var(--primary) 30%, transparent);
+}
+
+/* Personal agent: an executor's avatar with its agent's mark at its bottom
+   end corner (`ExecutorAvatar`) — a round hole cut in the avatar around the
+   mark, rather than a ring of some surface colour, so the two read apart on
+   any surface: a card's well, a translucent bubble over a workspace image.
+   The wrapper sets the hole's radius and its centre's distance from the
+   avatar's bottom and end edges. */
+[data-pa-badged] {
+  --pa-badge-x: calc(100% - var(--pa-badge-center));
+}
+[dir="rtl"] [data-pa-badged] {
+  --pa-badge-x: var(--pa-badge-center);
+}
+[data-pa-badged] > [data-slot="assistant-avatar"] {
+  -webkit-mask-image: radial-gradient(
+    circle at var(--pa-badge-x) calc(100% - var(--pa-badge-center)),
+    transparent var(--pa-badge-hole),
+    #000 calc(var(--pa-badge-hole) + 0.5px)
+  );
+  mask-image: radial-gradient(
+    circle at var(--pa-badge-x) calc(100% - var(--pa-badge-center)),
+    transparent var(--pa-badge-hole),
+    #000 calc(var(--pa-badge-hole) + 0.5px)
+  );
+}
+
+/* The personal agent's input box scrolls inside its round box: the
+   OverlayScrollbars look of `.field-scrollbar` (the side panel's bar), with
+   the gutter kept so the text does not re-wrap when the bar appears. Text
+   scrolled past an edge fades out there instead of being cut against the
+   buttons; the bar's strip stays unmasked. `data-fade` is kept by the box. */
+.pa-composer .codeg-composer-scroll {
+  scrollbar-gutter: stable;
+}
+.pa-composer .codeg-composer-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.pa-composer .codeg-composer-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pa-composer .codeg-composer-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: var(--border);
+  background-clip: padding-box;
+}
+.pa-composer .codeg-composer-scroll::-webkit-scrollbar-thumb:hover {
+  border-width: 1px;
+  background-color: var(--muted-foreground);
+}
+@supports not selector(::-webkit-scrollbar) {
+  .pa-composer .codeg-composer-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+.pa-composer .codeg-composer-scroll[data-fade] {
+  -webkit-mask-image:
+    linear-gradient(
+      to bottom,
+      var(--pa-fade-top, #000),
+      #000 1.25rem,
+      #000 calc(100% - 1.25rem),
+      var(--pa-fade-bottom, #000)
+    ),
+    linear-gradient(#000, #000);
+  mask-image:
+    linear-gradient(
+      to bottom,
+      var(--pa-fade-top, #000),
+      #000 1.25rem,
+      #000 calc(100% - 1.25rem),
+      var(--pa-fade-bottom, #000)
+    ),
+    linear-gradient(#000, #000);
+  -webkit-mask-size:
+    calc(100% - 10px) 100%,
+    10px 100%;
+  mask-size:
+    calc(100% - 10px) 100%,
+    10px 100%;
+  -webkit-mask-position:
+    left top,
+    right top;
+  mask-position:
+    left top,
+    right top;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+[dir="rtl"] .pa-composer .codeg-composer-scroll[data-fade] {
+  -webkit-mask-position:
+    right top,
+    left top;
+  mask-position:
+    right top,
+    left top;
+}
+.pa-composer .codeg-composer-scroll[data-fade~="top"] {
+  --pa-fade-top: transparent;
+}
+.pa-composer .codeg-composer-scroll[data-fade~="bottom"] {
+  --pa-fade-bottom: transparent;
+}
+/* The input box's text: the editor's own size (0.875rem on a wide screen,
+   1rem on a narrow one, which stops a phone zooming in on focus) on a
+   1.375rem line — in the editor's 0.25rem padding, the buttons' 1.875rem, so
+   a box of one line stays round at the ends. After the editor's own
+   `line-height: 1.55`, which it overrides. */
+.pa-composer .ProseMirror {
+  line-height: 1.375rem;
+}
+/* One line of placeholder, cut short with an ellipsis: on a single-line box
+   a wrapped one would spill under the buttons. */
+.pa-composer .ProseMirror p.is-editor-empty:first-child {
+  position: relative;
+}
+.pa-composer .ProseMirror p.is-editor-empty:first-child::before {
+  position: absolute;
+  inset-inline: 0;
+  float: none;
+  height: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

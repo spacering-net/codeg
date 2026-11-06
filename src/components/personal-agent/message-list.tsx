@@ -1,0 +1,480 @@
+"use client"
+
+/**
+ * The conversation with the personal agent: the owner's messages, the
+ * assistant's replies, and the news about the work it handed out, oldest at
+ * the top, in the chat column the conversations use (the same width as the
+ * input box under it). It follows the newest while the reader is at the
+ * bottom (a reply growing included) and holds still while they read back;
+ * a message the owner sends takes them to the bottom wherever they were.
+ * Its scrollbar is the side panel's (OverlayScrollbars).
+ *
+ * What the assistants said is new to the owner until they see it: while
+ * the list is at its bottom in a window that has focus, everything up to
+ * the newest is marked seen as it lands. When they come to it — opening the
+ * page, coming back to the window, scrolling back down — with something new
+ * waiting, a "new messages" line goes above the first of it, and stays until
+ * they leave the page or send a message.
+ *
+ * A jump to a message (a quote's click) scrolls it to the middle and flashes
+ * it; one older than what is loaded is loaded first, and one too far back to
+ * load opens as a preview instead. Each jump is numbered, so a slow load
+ * answering after a newer jump never moves the page.
+ */
+
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
+import { useTranslations } from "next-intl"
+import { Loader2 } from "lucide-react"
+import { toast } from "sonner"
+
+import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
+import { MessageResponse } from "@/components/ai-elements/message"
+import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Separator } from "@/components/ui/separator"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { usePersonalAgent } from "@/contexts/personal-agent-context"
+import { useReducedMotion } from "@/hooks/use-chat-motion"
+import { toErrorMessage } from "@/lib/app-error"
+import { cn } from "@/lib/utils"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+import { EventCard } from "./event-card"
+import { BlockingPrompts } from "./live-turn"
+import { useMessageTime } from "./message-actions"
+import {
+  buildMessageItems,
+  drawnRowIds,
+  newLineIndex,
+  type MessageItem,
+} from "./message-items"
+import { OwnerBubble } from "./owner-bubble"
+import { useQuoteAuthor, useQuotedRow } from "./quote-bar"
+import { ReplyBubble } from "./reply-bubble"
+import { followsBottom } from "./follow-bottom"
+import {
+  BUBBLE_MARKDOWN,
+  MARKDOWN_LIST_ROOM,
+  str,
+  usePageScope,
+} from "./shared"
+import { useOwnerSeen } from "./use-owner-seen"
+
+const FLASH_MS = 2000
+
+/** Whether the window shows the page to someone: visible, and focused. */
+function windowAttended(): boolean {
+  if (typeof document === "undefined") return false
+  return document.visibilityState === "visible" && document.hasFocus()
+}
+
+function useWindowAttended(): boolean {
+  const [attended, setAttended] = useState(windowAttended)
+  useEffect(() => {
+    const update = () => setAttended(windowAttended())
+    window.addEventListener("focus", update)
+    window.addEventListener("blur", update)
+    document.addEventListener("visibilitychange", update)
+    update()
+    return () => {
+      window.removeEventListener("focus", update)
+      window.removeEventListener("blur", update)
+      document.removeEventListener("visibilitychange", update)
+    }
+  }, [])
+  return attended
+}
+
+/**
+ * A line across the list with a word in its middle, as the conversation
+ * marks a compaction: hairlines fading out toward the edges. As much room
+ * over it as under it (the message under it adds none), so it sits in the
+ * middle of the gap between two messages.
+ */
+function ListDivider({
+  tone,
+  children,
+  ...attrs
+}: {
+  tone?: "new"
+  children: React.ReactNode
+} & Record<`data-${string}`, boolean>) {
+  const hairline = cn(
+    "flex-1 bg-transparent from-transparent",
+    tone === "new" ? "to-primary/40" : "to-border/70"
+  )
+  return (
+    <div
+      {...attrs}
+      data-pa-divider
+      className={cn(
+        "flex items-center gap-3 py-3 text-xs select-none first:pt-0",
+        tone === "new" ? "text-primary" : "text-muted-foreground/80"
+      )}
+    >
+      <Separator
+        className={cn(hairline, "bg-gradient-to-r rtl:bg-gradient-to-l")}
+      />
+      <span className="shrink-0">{children}</span>
+      <Separator
+        className={cn(hairline, "bg-gradient-to-l rtl:bg-gradient-to-r")}
+      />
+    </div>
+  )
+}
+
+function NewLine() {
+  const t = useTranslations("PersonalAgent.timeline")
+  return (
+    <ListDivider tone="new" data-pa-new>
+      {t("newMessages")}
+    </ListDivider>
+  )
+}
+
+function TimeLine({ at }: { at: string }) {
+  const time = useMessageTime()
+  return (
+    <ListDivider data-pa-time>
+      <span className="tabular-nums">{time(at)}</span>
+    </ListDivider>
+  )
+}
+
+function Item({ item }: { item: MessageItem }) {
+  switch (item.kind) {
+    case "time":
+      return <TimeLine at={item.at} />
+    case "owner":
+      return <OwnerBubble item={item} />
+    case "reply":
+      return <ReplyBubble item={item} />
+    case "event":
+      return <EventCard item={item} />
+  }
+}
+
+/** A message too far back to load around: shown on its own. */
+function PreviewDialog({
+  rowId,
+  onOpenChange,
+}: {
+  rowId: number | null
+  onOpenChange: (open: boolean) => void
+}) {
+  const t = useTranslations("PersonalAgent.quote")
+  return (
+    <Dialog open={rowId != null} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        {rowId != null ? <PreviewBody rowId={rowId} /> : null}
+        <DialogDescription className="sr-only">
+          {t("previewHint")}
+        </DialogDescription>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function PreviewBody({ rowId }: { rowId: number }) {
+  const t = useTranslations("PersonalAgent.quote")
+  const row = useQuotedRow(rowId)
+  const author = useQuoteAuthor()
+  const time = useMessageTime()
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle className="text-sm">
+          {row ? `${author(row)} · ${time(row.created_at)}` : t("preview")}
+        </DialogTitle>
+      </DialogHeader>
+      {row === undefined ? (
+        <div className="h-24 rounded-lg bg-foreground/5 motion-safe:animate-pulse" />
+      ) : row === null ? (
+        <p className="text-sm text-muted-foreground">{t("unavailable")}</p>
+      ) : (
+        <ScrollArea className="max-h-[60vh] text-sm">
+          <JsonRenderScope>
+            <MessageResponse
+              className={cn(MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
+            >
+              {row.kind === "result"
+                ? [str(row.data, "title"), str(row.data, "excerpt") ?? row.body]
+                    .filter(Boolean)
+                    .join("\n\n")
+                : row.body || t("noText")}
+            </MessageResponse>
+          </JsonRenderScope>
+        </ScrollArea>
+      )}
+    </>
+  )
+}
+
+export function MessageList({
+  jumpRef,
+  sentRef,
+}: {
+  /** Where the list publishes its jump, for the page's scope. */
+  jumpRef: React.RefObject<((rowId: number) => void) | null>
+  /** Where it publishes what to do once the owner sent a message. */
+  sentRef: React.RefObject<(() => void) | null>
+}) {
+  const t = useTranslations("PersonalAgent.timeline")
+  const scope = usePageScope()
+  const { rows, hasOlder, loadOlder, loadSince, snapshot } = usePersonalAgent()
+  const reduced = useReducedMotion()
+  const items = useMemo(() => buildMessageItems(rows), [rows])
+  const drawn = useMemo(() => drawnRowIds(items), [items])
+  const rowsById = scope.rowsById
+
+  // The OverlayScrollbars viewport: it initializes a few frames after
+  // mount, so everything that scrolls waits for it.
+  const scrollRef = useRef<HTMLElement | null>(null)
+  const [scrollReady, setScrollReady] = useState(false)
+  const onViewport = useCallback((el: HTMLElement | null) => {
+    scrollRef.current = el
+    setScrollReady(el != null)
+  }, [])
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const atBottom = useRef(true)
+  // The same, for what renders on it.
+  const [bottomed, setBottomed] = useState(true)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [preview, setPreview] = useState<number | null>(null)
+  const jumpSeq = useRef(0)
+
+  // Follow what comes in — a new row, a reply growing, a step's height
+  // animating — while the reader is at the bottom. Content changes size
+  // without React re-rendering it (a transition), so watch the size itself.
+  useEffect(() => {
+    const el = scrollRef.current
+    const content = contentRef.current
+    if (!el || !content || typeof ResizeObserver === "undefined") return
+    const follow = () => {
+      if (atBottom.current) el.scrollTop = el.scrollHeight
+    }
+    let lastTop = el.scrollTop
+    const onScroll = () => {
+      atBottom.current = followsBottom({
+        was: atBottom.current,
+        gap: el.scrollHeight - el.scrollTop - el.clientHeight,
+        top: el.scrollTop,
+        lastTop,
+      })
+      lastTop = el.scrollTop
+      setBottomed(atBottom.current)
+    }
+    const ro = new ResizeObserver(follow)
+    ro.observe(content)
+    follow()
+    el.addEventListener("scroll", onScroll, { passive: true })
+    return () => {
+      ro.disconnect()
+      el.removeEventListener("scroll", onScroll)
+    }
+  }, [scrollReady])
+
+  const flash = useCallback(
+    (el: HTMLElement) => {
+      const cls = reduced ? "pa-flash-static" : "pa-flash"
+      el.classList.remove("pa-flash", "pa-flash-static")
+      // Restart the animation on a second jump to the same row.
+      void el.offsetWidth
+      el.classList.add(cls)
+      window.setTimeout(() => el.classList.remove(cls), FLASH_MS + 100)
+    },
+    [reduced]
+  )
+
+  const scrollToRow = useCallback(
+    (id: number) => {
+      const root = scrollRef.current
+      const el = root?.querySelector<HTMLElement>(`[data-row-id="${id}"]`)
+      if (!root || !el) return false
+      atBottom.current = false
+      el.scrollIntoView({
+        block: "center",
+        behavior: reduced ? "auto" : "smooth",
+      })
+      // Once more after the next paint: rows drawn just now may have moved
+      // it.
+      requestAnimationFrame(() => {
+        const again = root.querySelector<HTMLElement>(`[data-row-id="${id}"]`)
+        again?.scrollIntoView({ block: "center", behavior: "auto" })
+      })
+      flash(el.querySelector<HTMLElement>("[data-bubble]") ?? el)
+      return true
+    },
+    [flash, reduced]
+  )
+
+  const jumpTo = useCallback(
+    (id: number) => {
+      const seq = ++jumpSeq.current
+      if (drawn.has(id) && scrollToRow(id)) return
+      const oldest = rows[0]?.id
+      if (oldest == null || id >= oldest) {
+        // Held but not drawn (a marker), or newer than anything held.
+        setPreview(id)
+        return
+      }
+      loadSince(id)
+        .then((outcome) => {
+          if (seq !== jumpSeq.current) return
+          if (outcome === "too_far") {
+            setPreview(id)
+            return
+          }
+          // Drawn on the next render.
+          requestAnimationFrame(() => {
+            if (seq !== jumpSeq.current) return
+            if (!scrollToRow(id)) setPreview(id)
+          })
+        })
+        .catch((e) => toast.error(toErrorMessage(e)))
+    },
+    [drawn, rows, loadSince, scrollToRow]
+  )
+
+  useEffect(() => {
+    jumpRef.current = jumpTo
+  }, [jumpRef, jumpTo])
+
+  // ── what is new to the owner ────────────────────────────────────────────
+  const attended = useWindowAttended()
+  const watching = scrollReady && bottomed && attended
+  const setWatching = usePersonalAgentUi((s) => s.setWatching)
+  useEffect(() => {
+    setWatching(watching)
+  }, [watching, setWatching])
+  useEffect(() => () => setWatching(false), [setWatching])
+
+  const { newFrom, clearNewFrom } = useOwnerSeen({
+    rows,
+    watching,
+    unseenCount: snapshot?.status.unseen ?? 0,
+  })
+
+  // The owner sent a message: to the bottom, to see it land, and following
+  // from there; what was new is behind them now.
+  const toBottom = useCallback(() => {
+    clearNewFrom()
+    const el = scrollRef.current
+    if (!el) return
+    atBottom.current = true
+    setBottomed(true)
+    el.scrollTop = el.scrollHeight
+  }, [clearNewFrom])
+  useEffect(() => {
+    sentRef.current = toBottom
+  }, [sentRef, toBottom])
+  const newLineAt = newFrom != null ? newLineIndex(items, newFrom) : -1
+  // The message right above the "new messages" line is the last before a
+  // line, as one above a time line is: it closes its run with a round
+  // corner, and shows its actions on hover.
+  const placed = useMemo(() => {
+    const above = items[newLineAt - 1]
+    if (newLineAt <= 0 || above.kind === "time" || above.tail) return items
+    return items.map((item, i) =>
+      i === newLineAt - 1 ? { ...above, tail: true } : item
+    )
+  }, [items, newLineAt])
+
+  // A prompt the agent waits on that no reply bubble shows (a turn with no
+  // reply row): at the end of the list.
+  const promptInBubble =
+    scope.liveRowId != null && rowsById.has(scope.liveRowId)
+  const orphanPrompt =
+    !promptInBubble && !scope.readOnly && scope.connectionId && scope.agentType
+
+  return (
+    <>
+      <ScrollArea
+        className="min-h-0 flex-1"
+        onViewportRef={onViewport}
+        defer={false}
+      >
+        <div
+          ref={contentRef}
+          className={cn(
+            // The bottom keeps room for the last message's actions, which
+            // float under it.
+            "ws-msg-scope mx-auto flex w-full chat-content-w flex-col px-4 pt-4 pb-8",
+            // Drawn once the viewport is there to put it at the bottom: no
+            // flash of the oldest messages first.
+            !scrollReady && "invisible"
+          )}
+        >
+          {hasOlder ? (
+            <div className="flex justify-center pb-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-muted-foreground"
+                disabled={loadingOlder}
+                onClick={() => {
+                  const el = scrollRef.current
+                  const before = el?.scrollHeight ?? 0
+                  setLoadingOlder(true)
+                  loadOlder()
+                    .then(() => {
+                      // Keep the reader where they were.
+                      requestAnimationFrame(() => {
+                        if (el) el.scrollTop += el.scrollHeight - before
+                      })
+                    })
+                    .catch((e) => toast.error(toErrorMessage(e)))
+                    .finally(() => setLoadingOlder(false))
+                }}
+              >
+                {loadingOlder ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : null}
+                {t("loadOlder")}
+              </Button>
+            </div>
+          ) : null}
+          {items.length === 0 ? (
+            <p className="py-16 text-center text-sm text-muted-foreground">
+              {t("empty")}
+            </p>
+          ) : null}
+          {placed.map((item, i) => (
+            <Fragment key={item.key}>
+              {i === newLineAt ? <NewLine /> : null}
+              <Item item={item} />
+            </Fragment>
+          ))}
+          {orphanPrompt ? (
+            // On the replies' line (they carry no avatar) and no wider;
+            // under the room the last message's actions float in.
+            <div className="mt-8 flex max-w-[88%] flex-col gap-2 empty:hidden">
+              <BlockingPrompts
+                connectionId={scope.connectionId!}
+                agentType={scope.agentType!}
+              />
+            </div>
+          ) : null}
+        </div>
+      </ScrollArea>
+      <PreviewDialog
+        rowId={preview}
+        onOpenChange={(open) => {
+          if (!open) setPreview(null)
+        }}
+      />
+    </>
+  )
+}

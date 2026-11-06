@@ -5,10 +5,13 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 #[serde(rename_all = "snake_case")]
 pub enum TimelineKind {
-    /// The owner's message (or a supplement sent while a turn ran).
+    /// The owner's message.
     #[sea_orm(string_value = "owner")]
     Owner,
-    /// The visible text the assistant wrote in one turn.
+    /// The assistant's reply in one turn: created when the turn starts
+    /// (`data.state` = `running`), settled in place when it ends with the
+    /// last text the assistant wrote. `data.state` = `discarded` is a reply
+    /// whose prompt never reached the agent: it is treated as absent.
     #[sea_orm(string_value = "reply")]
     Reply,
     /// A question the assistant asked, with the owner's answer.
@@ -62,6 +65,16 @@ pub struct Model {
     pub dispatch_id: Option<i32>,
     #[sea_orm(column_type = "Text", nullable)]
     pub ref_id: Option<String>,
+    /// The row this one quotes.
+    pub reply_to: Option<i32>,
+    /// When the assistant started on it (owner messages and result cards);
+    /// `None` is unread.
+    pub read_at: Option<DateTimeUtc>,
+    /// The event a result card stands for.
+    pub event_id: Option<i32>,
+    /// When the owner saw it (an assistant reply once it settled, a result
+    /// card); `None` is new to the owner.
+    pub seen_at: Option<DateTimeUtc>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

@@ -1885,6 +1885,10 @@ export interface PersonalAgentSettings {
   /** 0 = no limit. */
   dispatch_concurrency: number
   skill_enabled: boolean
+  /** The UI language the owner last saved from — kept by the backend (the
+   *  dialog sends its `locale` beside the settings), for the template files
+   *  of a working directory made anew. */
+  locale?: AppLocale | null
 }
 
 export interface PersonalAgentInfo {
@@ -1939,10 +1943,20 @@ export interface TimelineRow {
   kind: TimelineKind
   status: OwnerStatus | null
   body: string
-  /** Shaped per kind; markers carry `marker`. */
+  /** Shaped per kind; markers carry `marker`, replies `state`. */
   data: Record<string, unknown> | null
   dispatch_id: number | null
   ref_id: string | null
+  /** The row this one quotes. */
+  reply_to: number | null
+  /** When the assistant started on it (owner messages, result cards);
+   *  `null` is unread. */
+  read_at: string | null
+  /** The event a result card stands for. */
+  event_id: number | null
+  /** When the owner saw it (an assistant reply once it settled, a result
+   *  card); `null` is new to the owner. */
+  seen_at: string | null
   created_at: string
   updated_at: string
 }
@@ -1950,6 +1964,39 @@ export interface TimelineRow {
 export interface TimelinePage {
   rows: TimelineRow[]
   has_older: boolean
+  /** A range read (`sinceId`) spans more rows than it returns: none came. */
+  too_far: boolean
+}
+
+/** Where a read of changed rows goes on from. */
+export interface TimelineCursor {
+  updated_at: string
+  id: number
+}
+
+export interface TimelineChanges {
+  rows: TimelineRow[]
+  next: TimelineCursor | null
+}
+
+/** The step a reply is on (mirrors `acp::reply_turn::ReplyStep`). */
+export type ReplyStep =
+  | { t: "text"; n: number; text: string }
+  | {
+      t: "step"
+      n: number
+      id?: string
+      /** ACP tool kind, or `think` / `plan` / `compact` / `question`. */
+      kind: string
+      title: string
+      status?: string
+      awaiting?: boolean
+    }
+
+/** The reply in flight, as a snapshot carries it. */
+export interface LiveReply {
+  row_id: number
+  current: ReplyStep | null
 }
 
 export interface SegmentInfo {
@@ -2007,6 +2054,8 @@ export interface DispatchInfo {
   conversation_id: number | null
   /** The folder the conversation sits in (a chat dispatch's hidden one). */
   conversation_folder_id: number | null
+  /** The connection a chat or session dispatch runs on while it does. */
+  connection_id: string | null
   state: DispatchState
   result_excerpt: string | null
   error: string | null
@@ -2085,6 +2134,8 @@ export interface PersonalAgentStatus {
   } | null
   queued_messages: number
   pending_events: number
+  /** The assistants' messages the owner has not seen yet. */
+  unseen: number
   dispatch_running: number
   dispatch_queued: number
   dispatch_limit: number
@@ -2092,6 +2143,8 @@ export interface PersonalAgentStatus {
   pending_question: boolean
   last_error: string | null
   workdir: string | null
+  /** The reply being written, for a page opened mid-turn. */
+  live_reply: LiveReply | null
 }
 
 export interface PersonalAgentSnapshot {
@@ -2099,6 +2152,9 @@ export interface PersonalAgentSnapshot {
   status: PersonalAgentStatus
 }
 
+/** One of the personal agent's files: a fixed one (`SOUL.md`, `AGENTS.md`,
+ *  `USER.md`, and the memory index `MEMORY.md`), or an entry the index lists
+ *  (`memory/<name>.md`: a fact, a reference or a lesson). */
 export interface PersonalAgentFile {
   name: string
   content: string
@@ -2139,15 +2195,11 @@ export interface PersonalAgentStats {
   tokens_synced_at: string | null
 }
 
-export interface PersonalAgentSupplementResult {
-  row: TimelineRow
-  /** Folded into the running turn; false means it was queued instead. */
-  steered: boolean
-}
-
-/** Payload for `personal-agent://changed`. Timeline rows ride along whole. */
+/** Payload for `personal-agent://changed`. Timeline rows ride along whole,
+ *  and so does the step the reply in flight is on. */
 export type PersonalAgentChange =
   | { kind: "timeline"; rows: TimelineRow[] }
+  | { kind: "reply"; row_id: number; current: ReplyStep | null }
   | { kind: "status" }
   | { kind: "agent" }
   | { kind: "dispatch"; id: number }

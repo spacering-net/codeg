@@ -52,6 +52,14 @@ const WORKBENCH_ROUTE_STRIPS: Partial<Record<WorkbenchRouteId, ComponentType>> =
     canvas: CanvasPageTitle,
   }
 
+/** Routes that draw the desktop's window-chrome band themselves, their title
+ *  in it (see `WorkbenchBand`): the personal agent's page, whose side panel
+ *  has its strip in that band. Their entry above still titles a narrow
+ *  screen's bar. */
+const WORKBENCH_ROUTES_DRAWING_BAND: ReadonlySet<WorkbenchRouteId> = new Set([
+  "personalAgent",
+])
+
 /** What a chrome cluster hands its route's buttons: the host's own button
  *  metrics, so one component fits both the desktop overlay (`h-6`) and the
  *  mobile title bar (`h-8`) without knowing which it is in. */
@@ -105,4 +113,12 @@ export function WorkbenchRouteChromeActions(
 export function useHasWorkbenchRouteStrip(): boolean {
   const { routeId } = useWorkbenchRoute()
   return WORKBENCH_ROUTE_STRIPS[routeId] != null
+}
+
+/** Whether the active route draws the desktop band itself: the desktop host
+ *  then leaves the band out and hands the route its slots instead
+ *  (`WorkbenchBandContext`). */
+export function useWorkbenchRouteDrawsBand(): boolean {
+  const { routeId } = useWorkbenchRoute()
+  return WORKBENCH_ROUTES_DRAWING_BAND.has(routeId)
 }

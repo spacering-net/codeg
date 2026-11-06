@@ -26,7 +26,7 @@ use crate::db::AppDatabase;
 use crate::models::personal_agent::{
     DispatchInfo, ItemInfo, PersonalAgentDayStat, PersonalAgentDraft, PersonalAgentExecutorStat,
     PersonalAgentFile, PersonalAgentInfo, PersonalAgentSnapshot, PersonalAgentStats,
-    PersonalAgentUsagePoint, TimelinePage, TimelineRow,
+    PersonalAgentUsagePoint, TimelineChanges, TimelineCursor, TimelinePage, TimelineRow,
 };
 use crate::personal_agent::engine::{self as pa_engine, PersonalAgentEngine};
 use crate::personal_agent::workdir;
@@ -64,16 +64,62 @@ pub async fn personal_agent_get_core(
     Ok(pa_engine::snapshot_any(db, data_dir).await)
 }
 
+/// A page of the timeline (`before_id`, `limit`), or — with `since_id` — every
+/// row from `since_id` up to `before_id`, which a jump to an older message
+/// loads at once (none, `too_far`, when that is more than a range read
+/// takes).
 pub async fn personal_agent_timeline_core(
     db: &AppDatabase,
     before_id: Option<i32>,
     limit: Option<u32>,
+    since_id: Option<i32>,
 ) -> Result<TimelinePage, AppCommandError> {
+    if let Some(since) = since_id {
+        let (rows, too_far) = svc::range(&db.conn, since, before_id).await?;
+        let has_older = match rows.first() {
+            Some(first) => svc::has_rows_before(&db.conn, first.id).await?,
+            None => true,
+        };
+        return Ok(TimelinePage {
+            rows: rows.into_iter().map(svc::to_row).collect(),
+            has_older,
+            too_far,
+        });
+    }
     let limit = limit.unwrap_or(60).clamp(1, 500) as u64;
     let (rows, has_older) = svc::page(&db.conn, before_id, limit).await?;
     Ok(TimelinePage {
         rows: rows.into_iter().map(svc::to_row).collect(),
         has_older,
+        too_far: false,
+    })
+}
+
+/// Rows by id (at most 100): a quote's preview, a jump too far to load.
+pub async fn personal_agent_timeline_rows_core(
+    db: &AppDatabase,
+    ids: Vec<i32>,
+) -> Result<Vec<TimelineRow>, AppCommandError> {
+    Ok(svc::rows_by_ids(&db.conn, &ids)
+        .await?
+        .into_iter()
+        .map(svc::to_row)
+        .collect())
+}
+
+/// Rows changed since `since` (or past `after`, continuing a read), from
+/// `min_id` up: how a page that cannot hear the engine follows the rows it
+/// holds.
+pub async fn personal_agent_timeline_updated_since_core(
+    db: &AppDatabase,
+    since: Option<chrono::DateTime<Utc>>,
+    after: Option<TimelineCursor>,
+    min_id: Option<i32>,
+) -> Result<TimelineChanges, AppCommandError> {
+    let (rows, next) = svc::changed_since(&db.conn, since, after, min_id.unwrap_or(0)).await?;
+    Ok(TimelineChanges {
+        rows: rows.into_iter().map(svc::to_row).collect(),
+        next,
     })
 }
 
@@ -111,13 +157,21 @@ pub async fn personal_agent_items_core(
     Ok(out)
 }
 
+/// Dispatches, newest first: by `ids` when given (the cards a page shows),
+/// else the latest `limit` of `mode`.
 pub async fn personal_agent_dispatches_core(
     db: &AppDatabase,
     mode: Option<DispatchMode>,
     limit: Option<u32>,
+    ids: Option<Vec<i32>>,
 ) -> Result<Vec<DispatchInfo>, AppCommandError> {
-    let rows = svc::list_dispatches(&db.conn, &[], mode, limit.unwrap_or(100).clamp(1, 500) as u64)
-        .await?;
+    let rows = match ids {
+        Some(ids) => svc::dispatches_by_ids(&db.conn, &ids).await?,
+        None => {
+            svc::list_dispatches(&db.conn, &[], mode, limit.unwrap_or(100).clamp(1, 500) as u64)
+                .await?
+        }
+    };
     let mut folder_names: HashMap<i32, Option<String>> = HashMap::new();
     let mut out = Vec::with_capacity(rows.len());
     for d in rows {
@@ -152,6 +206,7 @@ pub async fn personal_agent_dispatches_core(
             work_task_id: d.work_task_id,
             conversation_id: d.conversation_id,
             conversation_folder_id,
+            connection_id: d.connection_id,
             state: d.state,
             result_excerpt: d.result_excerpt,
             error: d.error,
@@ -181,6 +236,10 @@ pub async fn personal_agent_files_core(
             exists: content.is_some(),
             content: content.unwrap_or_default(),
         });
+    }
+    // Then the entries the index lists, as `memory/<name>.md`.
+    for (name, content) in workdir::list_entries(&dir) {
+        out.push(PersonalAgentFile { name, content, exists: true });
     }
     Ok(out)
 }
@@ -216,7 +275,13 @@ pub async fn personal_agent_stats_core(
         if let Some(day) = by_day.get_mut(&key(r.created_at)) {
             match r.kind {
                 TimelineKind::Owner => day.owner_messages += 1,
-                TimelineKind::Reply => day.replies += 1,
+                // A reply counts once it is settled (a phase-one row has no
+                // state and always was).
+                TimelineKind::Reply
+                    if !matches!(svc::reply_state(&r), Some("running" | "discarded")) =>
+                {
+                    day.replies += 1
+                }
                 _ => {}
             }
         }
@@ -373,23 +438,12 @@ pub async fn personal_agent_save_core(
 pub async fn personal_agent_send_core(
     text: String,
     blocks: Option<Vec<PromptInputBlock>>,
+    reply_to: Option<i32>,
 ) -> Result<TimelineRow, AppCommandError> {
     engine()?
-        .send_owner_message(text, blocks.unwrap_or_default())
+        .send_owner_message(text, blocks.unwrap_or_default(), reply_to)
         .await
         .map_err(refused)
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SupplementResult {
-    pub row: TimelineRow,
-    /// Folded into the running turn; `false` means it was queued instead.
-    pub steered: bool,
-}
-
-pub async fn personal_agent_supplement_core(text: String) -> Result<SupplementResult, AppCommandError> {
-    let (row, steered) = engine()?.supplement(text).await.map_err(refused)?;
-    Ok(SupplementResult { row, steered })
 }
 
 pub async fn personal_agent_cancel_core() -> Result<(), AppCommandError> {
@@ -417,6 +471,22 @@ pub async fn personal_agent_keepalive_core() -> Result<(), AppCommandError> {
 
 pub async fn personal_agent_resend_core(row_id: i32) -> Result<TimelineRow, AppCommandError> {
     engine()?.resend(row_id).await.map_err(refused)
+}
+
+/// The owner has seen the page up to row `up_to`. Not an act of the agent's,
+/// so a read-only page marks too: straight in the database, where the
+/// running process reads it at its next snapshot.
+pub async fn personal_agent_mark_seen_core(
+    db: &AppDatabase,
+    up_to: i32,
+) -> Result<(), AppCommandError> {
+    match pa_engine::engine() {
+        Some(e) => e.mark_seen(up_to).await.map_err(refused),
+        None => {
+            svc::mark_seen(&db.conn, up_to).await?;
+            Ok(())
+        }
+    }
 }
 
 pub async fn personal_agent_answer_question_core(
@@ -453,10 +523,18 @@ pub async fn personal_agent_file_save_core(name: String, content: String) -> Res
     engine()?.save_file(&name, &content).await.map_err(refused)
 }
 
+pub async fn personal_agent_file_delete_core(name: String) -> Result<(), AppCommandError> {
+    engine()?.delete_file(&name).await.map_err(refused)
+}
+
 pub async fn personal_agent_set_workdir_core(
     path: Option<String>,
+    locale: Option<String>,
 ) -> Result<PersonalAgentInfo, AppCommandError> {
-    engine()?.set_workdir(path).await.map_err(refused)
+    engine()?
+        .set_workdir(path, locale.as_deref())
+        .await
+        .map_err(refused)
 }
 
 // ── Tauri commands ──────────────────────────────────────────────────────────
@@ -485,8 +563,29 @@ pub async fn personal_agent_timeline(
     db: State<'_, AppDatabase>,
     before_id: Option<i32>,
     limit: Option<u32>,
+    since_id: Option<i32>,
 ) -> Result<TimelinePage, AppCommandError> {
-    personal_agent_timeline_core(&db, before_id, limit).await
+    personal_agent_timeline_core(&db, before_id, limit, since_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_timeline_rows(
+    db: State<'_, AppDatabase>,
+    ids: Vec<i32>,
+) -> Result<Vec<TimelineRow>, AppCommandError> {
+    personal_agent_timeline_rows_core(&db, ids).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_timeline_updated_since(
+    db: State<'_, AppDatabase>,
+    since: Option<chrono::DateTime<Utc>>,
+    after: Option<TimelineCursor>,
+    min_id: Option<i32>,
+) -> Result<TimelineChanges, AppCommandError> {
+    personal_agent_timeline_updated_since_core(&db, since, after, min_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -504,8 +603,9 @@ pub async fn personal_agent_dispatches(
     db: State<'_, AppDatabase>,
     mode: Option<DispatchMode>,
     limit: Option<u32>,
+    ids: Option<Vec<i32>>,
 ) -> Result<Vec<DispatchInfo>, AppCommandError> {
-    personal_agent_dispatches_core(&db, mode, limit).await
+    personal_agent_dispatches_core(&db, mode, limit, ids).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -537,14 +637,9 @@ pub async fn personal_agent_save(draft: PersonalAgentDraft) -> Result<PersonalAg
 pub async fn personal_agent_send(
     text: String,
     blocks: Option<Vec<PromptInputBlock>>,
+    reply_to: Option<i32>,
 ) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_send_core(text, blocks).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_supplement(text: String) -> Result<SupplementResult, AppCommandError> {
-    personal_agent_supplement_core(text).await
+    personal_agent_send_core(text, blocks, reply_to).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -585,6 +680,15 @@ pub async fn personal_agent_resend(row_id: i32) -> Result<TimelineRow, AppComman
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_mark_seen(
+    db: State<'_, AppDatabase>,
+    up_to: i32,
+) -> Result<(), AppCommandError> {
+    personal_agent_mark_seen_core(&db, up_to).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_answer_question(
     question_id: String,
     answer: crate::acp::question::QuestionAnswer,
@@ -618,6 +722,15 @@ pub async fn personal_agent_file_save(name: String, content: String) -> Result<(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_set_workdir(path: Option<String>) -> Result<PersonalAgentInfo, AppCommandError> {
-    personal_agent_set_workdir_core(path).await
+pub async fn personal_agent_file_delete(name: String) -> Result<(), AppCommandError> {
+    personal_agent_file_delete_core(name).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_set_workdir(
+    path: Option<String>,
+    locale: Option<String>,
+) -> Result<PersonalAgentInfo, AppCommandError> {
+    personal_agent_set_workdir_core(path, locale).await
 }

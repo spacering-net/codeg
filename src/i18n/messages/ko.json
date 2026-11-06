@@ -2330,6 +2330,7 @@
       "noRecentCli": "명령줄에서 시작한 최근 대화가 없습니다",
       "recentFilterMenuLabel": "최근 항목 표시",
       "personalAgent": "개인 에이전트",
+      "personalAgentUnseen": "읽지 않은 메시지 {count}개",
       "personalAgentBadge": "개인 에이전트가 배정함"
     },
     "conversation": {
@@ -7676,7 +7677,6 @@
   },
   "PersonalAgent": {
     "title": "개인 에이전트",
-    "settingsButton": "개인 에이전트 설정",
     "readOnly": "개인 에이전트가 이 데이터 디렉터리를 사용하는 다른 codeg 프로세스에서 실행 중이므로 여기서는 이 페이지가 읽기 전용입니다.",
     "noAssistants": "아직 역할별 어시스턴트가 없습니다. 개인 에이전트는 작업을 어시스턴트에게 맡깁니다. 설정 → 협업 → 어시스턴트에서 추가하세요.",
     "viewSession": "세션 보기",
@@ -7715,108 +7715,45 @@
       "recovery": "기존 세션을 재개할 수 없음",
       "overflow": "컨텍스트 초과"
     },
-    "initiator": {
-      "auto": "codeg가",
-      "owner": "직접",
-      "agent": "에이전트가"
-    },
-    "marker": {
-      "segmentStart": "세션 {seq} · {agent} · {reason}",
-      "pendingSwitch": "다음 메시지부터 새 세션이 시작됩니다({reason})",
-      "optionsChanged": "옵션이 변경되었습니다: {changes}",
-      "modeIs": "모드 {mode}",
-      "reconnected": "같은 세션에 다시 연결했습니다",
-      "compaction": {
-        "ok": "{who} 컨텍스트를 압축했습니다{range}",
-        "failed": "{who} 시작한 압축이 실패했습니다{range}",
-        "canceled": "{who} 시작한 압축이 취소되었습니다{range}"
-      },
-      "compactionRange": " · {before}% → {after}%",
-      "compactionFrom": " · 압축 전 {before}%",
-      "compactionPaused": "압축이 두 번 연속 효과가 없어 이 세션의 자동 압축을 일시 중지했습니다",
-      "turnCanceled": "턴을 중지했습니다",
-      "turnFailed": "턴이 실패했습니다: {error}",
-      "turnInterrupted": "턴이 끝나지 않았습니다",
-      "overflowNewSegment": "압축 후에도 컨텍스트가 다시 넘쳐 새 세션을 시작합니다",
-      "overflowCompact": "컨텍스트가 넘쳤습니다. 다음 메시지 전에 압축합니다",
-      "workdirChanged": "작업 디렉터리 이동: {path}"
-    },
     "timeline": {
       "loadOlder": "이전 기록 불러오기",
       "empty": "인사를 건네거나 맡길 일을 알려 주세요.",
-      "supplement": "턴 중에 추가함",
-      "queued": "대기 중",
-      "interrupted": "완료되지 않음",
-      "resend": "다시 보내기",
-      "resent": "다시 보냄",
-      "question": "질문",
-      "plan": "계획 승인",
-      "questionState": {
-        "pending": "내 답변 대기",
-        "answered": "답변함",
-        "skipped": "건너뜀",
-        "resolved": "종료됨"
-      },
-      "planDecision": {
-        "approve": "승인함",
-        "request_changes": "수정 요청함",
-        "abandon": "중단함"
-      },
-      "answered": "내 답변: {answer}",
-      "permission": "권한 요청",
-      "permissionPending": "내 결정 대기",
-      "permissionWithdrawn": "철회됨",
-      "permissionChose": "내 선택: {option}",
-      "dispatched": "배정함",
-      "result": "진행 상황",
-      "executor": "담당: {name}",
+      "newMessages": "여기부터 새 메시지",
       "openTask": "보드에서 열기",
       "openConversation": "대화 열기",
-      "open": "열기"
+      "viewSession": "대화 보기"
+    },
+    "work": {
+      "taskNotStarted": "이 작업은 아직 시작되지 않았습니다. 시작되면 여기에 대화가 표시됩니다.",
+      "taskGone": "이 작업을 찾을 수 없습니다. 삭제되었을 수 있습니다."
     },
     "composer": {
-      "placeholder": "개인 에이전트에게 메시지 보내기…",
-      "placeholderBusy": "작업 중입니다 — 메시지는 다음 턴에 함께 전달됩니다",
+      "placeholder": "{name}에게 메시지…",
+      "placeholderBusy": "{name}이(가) 작업 중입니다. 메시지는 이어서 처리됩니다",
       "readOnly": "이 프로세스에서는 읽기 전용",
       "ariaLabel": "개인 에이전트에게 보낼 메시지",
       "send": "보내기",
       "queue": "대기열에 추가",
-      "supplement": "이번 턴에 추가",
-      "supplementHint": "실행 중인 턴이 끝나기를 기다리지 않고 그 턴에 합칩니다",
-      "supplemented": "진행 중인 턴에 추가했습니다.",
-      "queuedInstead": "대기열에 넣었습니다. 다음 턴에 전달됩니다.",
-      "waitForUpload": "이미지 업로드가 끝날 때까지 기다려 주세요.",
-      "stop": "중지",
-      "cancelCompaction": "압축 중지",
-      "compact": "압축",
-      "compactHint": "지금 세션의 컨텍스트를 압축합니다",
-      "newSession": "새 세션",
-      "newSessionHint": "다음 메시지부터 새 세션을 시작합니다. 타임라인은 그대로 이어집니다",
-      "newSessionQueued": "다음 메시지부터 새 세션이 시작됩니다.",
-      "compacting": "컨텍스트 압축 중…",
-      "replying": "응답 중…",
-      "brain": "실행할 에이전트",
-      "queuedCount": "{count, plural, other {메시지 #개 대기 중}}"
+      "waitForUpload": "이미지 업로드가 끝날 때까지 기다려 주세요."
     },
     "aux": {
-      "status": "상태",
-      "dispatches": "배정 내역",
-      "items": "미결 사항",
-      "data": "데이터"
+      "title": "어시스턴트 패널",
+      "tab": {
+        "work": "할 일",
+        "status": "상태",
+        "stats": "통계"
+      },
+      "waiting": "{count}건이 내 응답 대기 중"
     },
     "status": {
       "elsewhere": "에이전트가 다른 codeg 프로세스에서 실행 중입니다. 여기 표시되는 내용은 데이터베이스에서 읽어 온 것입니다.",
-      "brain": "두뇌",
-      "agent": "에이전트",
       "model": "모델",
       "mode": "모드",
       "session": "세션",
-      "segment": "현재",
+      "started": "시작",
+      "connection": "연결",
       "segmentValue": "#{seq} · {reason}",
       "noSegment": "아직 시작하지 않음",
-      "startedAt": "시작 시각",
-      "pending": "다음 메시지에 새 세션 시작",
-      "connection": "연결",
       "connected": "연결됨",
       "disconnected": "연결 안 됨(다음 메시지 때 다시 연결)",
       "handoff": "인계 카드",
@@ -7831,7 +7768,6 @@
       "usageUnknown": "사용량 알 수 없음 — 이 에이전트는 사용량을 보고하지 않습니다",
       "threshold": "{percent}%에서 자동 압축",
       "thresholdOff": "자동 압축 꺼짐",
-      "command": "명령 {command}",
       "noCommand": "이 에이전트의 압축 명령을 알 수 없습니다",
       "compactions": "압축 횟수",
       "compactionCounts": "codeg {auto} · 직접 {manual} · 에이전트 {agent}",
@@ -7847,36 +7783,29 @@
       },
       "paused": "이 세션의 자동 압축이 일시 중지됨",
       "resume": "재개",
-      "work": "작업",
       "queued": "대기 중",
       "queuedValue": "메시지 {messages}개 · 진행 상황 {events}개",
       "dispatchSlots": "배정된 대화",
       "slotsValue": "{limit}개 중 {running}개 실행 중 · {queued}개 대기",
       "slotsUnlimited": "{running}개 실행 중 · {queued}개 대기",
-      "waiting": "승인",
-      "waitingOwner": "내 응답 대기",
       "engine": "실행 위치",
       "engineHere": "이 프로세스",
       "engineElsewhere": "다른 codeg 프로세스",
       "workdir": "작업 디렉터리",
       "lastError": "마지막 오류",
-      "lastCompaction": "마지막 압축",
       "compactionStatus": {
         "ok": "완료",
         "failed": "실패",
         "canceled": "취소됨",
         "running": "진행 중"
       },
-      "usageUnknownOffline": "사용량 알 수 없음 — 다시 연결되면 읽습니다"
-    },
-    "dispatches": {
-      "all": "전체",
-      "empty": "아직 배정한 작업이 없습니다.",
-      "meta": "{executor} · {folder} · {when}",
-      "noProject": "프로젝트 없음"
+      "usageUnknownOffline": "사용량 알 수 없음 — 다시 연결되면 읽습니다",
+      "copyPath": "경로 복사",
+      "copied": "복사했습니다",
+      "startedValue": "{when} 시작",
+      "pendingValue": "다음 메시지부터 새 세션: {reason}"
     },
     "items": {
-      "empty": "미결 사항이 없습니다.",
       "waits": {
         "owner": "내 응답 대기",
         "agent": "에이전트 대기",
@@ -7909,7 +7838,19 @@
       "notSynced": "토큰 수치는 사용량을 동기화한 뒤 표시됩니다(토큰 사용량 페이지).",
       "usageCurve": "컨텍스트 사용량",
       "noUsage": "아직 측정값이 없습니다.",
-      "empty": "아직 데이터가 없습니다"
+      "empty": "아직 데이터가 없습니다",
+      "range": "최근 {days}일",
+      "figure": {
+        "conversation": "대화",
+        "conversationSub": "나 {owner} · 답장 {replies}",
+        "dispatches": "배정",
+        "dispatchesSub": "완료 {completed} · 실패 {failed}",
+        "completion": "완료율",
+        "completionSub": "배정한 일 중",
+        "tokens": "토큰",
+        "tokensSub": "에이전트 {agent} · 배정 {dispatch}",
+        "tokensUnsynced": "사용량 동기화 후 표시"
+      }
     },
     "settings": {
       "title": "개인 에이전트 설정",
@@ -7921,7 +7862,7 @@
       "tabDispatch": "배정",
       "tabPersona": "페르소나와 메모리",
       "name": "이름",
-      "nameHint": "개인 에이전트 페이지에 표시되는 이름입니다. 비워 두면 기본 이름을 씁니다.",
+      "nameHint": "페이지와 메시지에 표시되는 이름과 아바타입니다. 에이전트도 자기 이름을 압니다. 이름을 비워 두면 기본 이름을 씁니다.",
       "namePlaceholder": "개인 에이전트",
       "agentHint": "실행할 에이전트와 모든 옵션입니다. 어시스턴트와 같은 방식으로 설정합니다.",
       "switchNote": "다른 에이전트로 바꾸면 다음 메시지부터 새 세션이 시작됩니다. 이전 세션을 재개하지 않고, 대신 codeg가 타임라인을 새 세션에 넘겨줍니다.",
@@ -7936,11 +7877,201 @@
       "handoffBudgetHint": "새 세션의 인계 카드에 쓸 수 있는 글자 수입니다. 잘린 부분은 에이전트가 도구로 다시 읽을 수 있습니다.",
       "skill": "내장 스킬",
       "skillHint": "작업 디렉터리의 스킬로 에이전트에게 규칙(배정 방식, 미결 사항, 메모리 파일)을 가르칩니다.",
-      "filesNote": "이 파일들은 에이전트의 작업 디렉터리에 있으며 턴이 끝날 때마다 커밋됩니다. 페르소나와 규칙의 변경 사항은 다음 메시지와 함께 에이전트에게 전달됩니다.",
+      "filesNote": "이 파일들은 에이전트의 작업 디렉터리에 있으며 턴이 끝날 때마다 커밋됩니다. 이름, 페르소나, 규칙의 변경 사항은 다음 메시지와 함께 에이전트에게 전달됩니다.",
       "saveFile": "파일 저장",
       "fileSaved": "{name} 저장 완료.",
       "cancel": "취소",
-      "save": "저장"
+      "save": "저장",
+      "fileGroups": {
+        "persona": "페르소나",
+        "rules": "규칙",
+        "owner": "나에 대해",
+        "memory": "메모리"
+      },
+      "byOwner": "내가 관리",
+      "byAgent": "에이전트가 관리",
+      "soulHint": "에이전트가 누구이고 어떻게 말하는지. 내가 쓰는 파일로, 에이전트는 내가 요청할 때만 바꿉니다. 세션이 시작될 때마다 전체를 읽습니다.",
+      "rulesHint": "에이전트가 항상 지켜야 하는 규칙. 내가 쓰는 파일로, 에이전트는 내가 요청할 때만 바꿉니다. 세션이 시작될 때마다 전체를 읽습니다.",
+      "userHint": "에이전트가 아는 나에 대한 정보(역할, 프로젝트, 선호). 새로 알게 되면 에이전트가 직접 업데이트하고, 세션이 시작될 때마다 전체를 읽습니다.",
+      "memoryHint": "기억의 색인으로, 항목마다 한 줄입니다. 사실, 참고 자료, 그리고 일하는 방식에 대한 교훈(당신이 바로잡은 것, 인정한 방식)이 들어갑니다. 각 항목은 memory/ 아래의 개별 파일이며 종류는 파일 맨 앞에 적힙니다. 둘 다 어시스턴트가 관리합니다. 세션마다 시작할 때 색인의 처음 200줄을 읽고, 항목은 필요할 때 읽습니다.",
+      "entryHint": "항목 하나로, 에이전트가 필요할 때 읽습니다. 삭제하면 색인에서 이 항목을 가리키는 줄도 함께 삭제됩니다.",
+      "entryType": {
+        "lesson": "교훈",
+        "fact": "사실",
+        "reference": "참고"
+      },
+      "deleteEntry": "삭제",
+      "confirmDelete": "삭제",
+      "confirmDeleteHint": "이 항목과 색인의 해당 줄을 삭제할까요?",
+      "entryDeleted": "{name}을(를) 삭제했습니다."
+    },
+    "statusWord": {
+      "idle": "대기 중",
+      "replying": "답장 중…",
+      "compacting": "컨텍스트 정리 중…",
+      "waiting": "확인을 기다리는 중",
+      "elsewhere": "다른 프로세스에서 실행 중(읽기 전용)",
+      "open": "상태 보기"
+    },
+    "menu": {
+      "more": "더 보기",
+      "showPanel": "사이드 패널 표시",
+      "hidePanel": "사이드 패널 숨기기",
+      "settings": "개인 에이전트 설정…",
+      "viewSession": "기반 세션 보기",
+      "compact": "컨텍스트 압축",
+      "compactHint": "지금 세션의 컨텍스트를 압축합니다",
+      "stopCompaction": "정리 중지",
+      "stopReply": "답장 중지",
+      "newSession": "새 세션 시작…"
+    },
+    "newSession": {
+      "title": "새 세션을 시작할까요?",
+      "description": "다음 메시지부터 새 기반 세션에서 이어집니다. 페르소나, 기억, 진행 중인 일은 그대로 넘어가고 여기의 대화도 그대로 남습니다.",
+      "cancel": "취소",
+      "confirm": "새 세션 시작",
+      "queued": "다음 메시지부터 새 세션에서 이어집니다."
+    },
+    "time": {
+      "yesterday": "어제 {time}"
+    },
+    "actions": {
+      "quote": "인용",
+      "copy": "복사",
+      "copySelection": "선택한 내용 복사",
+      "copied": "복사됨",
+      "copyFailed": "복사하지 못했습니다",
+      "stop": "답장 중지",
+      "timeTook": "{time} · 소요 {took}"
+    },
+    "owner": {
+      "unread": "읽지 않음",
+      "unfinished": "처리 미완료",
+      "resend": "다시 보내기",
+      "resent": "다시 보냄"
+    },
+    "quote": {
+      "you": "나",
+      "dispatch": "맡긴 일: {title}",
+      "attachment": "[첨부]",
+      "noText": "(텍스트 없음)",
+      "unavailable": "원본 메시지를 볼 수 없습니다",
+      "jump": "원본 메시지로 이동",
+      "dismiss": "인용 제거",
+      "preview": "원본 메시지",
+      "previewHint": "인용된 메시지입니다. 너무 오래되어 여기에 불러오지 않았습니다."
+    },
+    "step": {
+      "awaiting": "확인 대기: {title}",
+      "anAction": "작업",
+      "thinking": "생각 중…",
+      "compacting": "컨텍스트 정리 중…",
+      "plan": "계획 업데이트",
+      "planNamed": "계획: {title}",
+      "own": {
+        "dispatch": "일을 맡기는 중",
+        "dispatch_followup": "맡긴 일을 이어가는 중",
+        "items": "진행 중인 일 정리 중",
+        "timeline_read": "대화 기록 확인 중",
+        "assistant_list": "어시스턴트 확인 중",
+        "project_list": "프로젝트 확인 중"
+      },
+      "kind": {
+        "read": "파일 읽는 중",
+        "edit": "파일 수정 중",
+        "delete": "파일 삭제 중",
+        "move": "파일 이동 중",
+        "search": "검색 중",
+        "execute": "명령 실행 중",
+        "think": "생각 중…",
+        "fetch": "웹 페이지 여는 중",
+        "plan": "계획 업데이트",
+        "compact": "컨텍스트 정리 중…",
+        "question": "질문하는 중",
+        "other": "도구 사용 중"
+      }
+    },
+    "reply": {
+      "starting": "시작하는 중",
+      "noteDispatched": "일 {count}건을 맡겼습니다",
+      "noteContinued": "맡긴 일 {count}건을 이어갔습니다",
+      "noteNothing": "처리했습니다(텍스트 답장 없음)",
+      "answeredPermission": "선택: {option}",
+      "answeredQuestion": "답변: {answer}",
+      "answeredSkipped": "질문을 건너뛰었습니다",
+      "answeredPlan": {
+        "approve": "계획을 승인했습니다",
+        "request_changes": "계획 수정을 요청했습니다",
+        "abandon": "계획을 취소했습니다"
+      },
+      "stopped": "중지됨",
+      "errorMidway": "답장 도중 오류가 발생했습니다: {error}",
+      "interrupted": "이 답장은 완료되지 않았습니다: {reason}",
+      "truncated": "답장이 길이 한도에 도달해 잘렸습니다",
+      "resend": "{count, plural, other {메시지 #개 다시 보내기}}",
+      "why": {
+        "connection": "연결이 끊어졌습니다",
+        "overflow": "컨텍스트가 가득 찼습니다",
+        "rejected": "에이전트가 거부했습니다",
+        "error": "오류가 발생했습니다",
+        "restart": "codeg가 다시 시작되었습니다",
+        "unknown": "예기치 않게 중지되었습니다"
+      }
+    },
+    "dispatchCard": {
+      "continue": "이어서: {title}",
+      "notSent": "보내지 못함",
+      "more": "{count}건 더"
+    },
+    "event": {
+      "someone": "어시스턴트",
+      "more": "전체 보기",
+      "less": "접기",
+      "note": {
+        "boot": "codeg가 다시 시작되었습니다",
+        "lost": "세션 연결이 끊어졌습니다",
+        "gone": "보드 작업이 삭제되었습니다"
+      }
+    },
+    "overview": {
+      "editBrain": "실행 에이전트 변경",
+      "lastCompaction": "마지막 정리: {when}, {outcome}{range}",
+      "runLog": "실행 기록",
+      "details": "세부 정보",
+      "command": "압축 명령"
+    },
+    "runLog": {
+      "empty": "아직 없습니다.",
+      "newSession": "{agent}에서 새 세션 시작({reason})",
+      "pendingSwitch": "다음 메시지부터 새 세션({reason})",
+      "reconnected": "같은 세션에 다시 연결했습니다",
+      "optionsChanged": "옵션이 바뀌었습니다",
+      "range": " · {before}% → {after}%",
+      "by": {
+        "auto": "(자동)",
+        "owner": "(직접)",
+        "agent": "(에이전트 스스로)"
+      },
+      "compaction": {
+        "ok": "컨텍스트를 정리했습니다{who}{range}",
+        "failed": "컨텍스트 정리에 실패했습니다{who}{range}",
+        "canceled": "컨텍스트 정리를 중지했습니다{who}{range}"
+      },
+      "compactionPaused": "두 번 연속 효과가 없어 이 세션의 자동 정리를 일시 중지했습니다",
+      "overflowNewSession": "정리 후에도 컨텍스트가 넘쳐 새 세션을 시작했습니다",
+      "overflowCompact": "컨텍스트가 넘쳐 자동으로 정리했습니다",
+      "turnStopped": "답장이 중지되었습니다",
+      "turnFailed": "답장이 실패했습니다: {error}",
+      "turnInterrupted": "답장이 완료되지 않았습니다",
+      "workdirChanged": "작업 디렉터리를 {path}(으)로 옮겼습니다"
+    },
+    "matters": {
+      "ended": "종료됨",
+      "showAll": "{count}건 모두 보기",
+      "emptyTitle": "진행 중인 일이 없습니다",
+      "emptyHint": "배정한 일, 리마인더, 나에게 묻는 질문이 여기에 표시됩니다.",
+      "noneOpen": "지금 진행 중인 일이 없습니다.",
+      "origin": "원래 메시지로 이동"
     }
   }
 }

@@ -697,13 +697,6 @@ pub struct SessionState {
     /// `delegation_call_id`-bound child outcome. Cleared on the next prompt.
     pub last_assistant_text: Option<String>,
 
-    /// Every main-thread text of the just-completed turn, in order — the
-    /// prose before, between and after its tool calls, each run separated by
-    /// a blank line. Captured at TurnComplete beside `last_assistant_text`,
-    /// which keeps only the concluding run; the personal agent records the
-    /// whole of what the owner saw. Never a subagent's or the thinking's text.
-    pub last_turn_main_text: Option<String>,
-
     /// The just-completed turn's tool-call progress ([`Self::turn_progress`]),
     /// captured at TurnComplete beside `last_assistant_text` — by the time the
     /// delegation broker records a finished child's result, the turn's tool
@@ -829,6 +822,12 @@ pub struct SessionState {
     /// delegation child. Never on the snapshot.
     pub personal_agent: bool,
 
+    /// The personal agent's replies, built from the events of the prompts its
+    /// engine tagged (see [`crate::acp::reply_turn`]). Opened when such a
+    /// prompt starts, fed by [`Self::apply_event`] under the write lock,
+    /// released by the engine. Never on the snapshot.
+    pub reply_turns: crate::acp::reply_turn::ReplyTurns,
+
     /// Which writer owns the conversation-status write of a `TurnComplete`,
     /// keyed by that event's envelope `seq`. See [`Self::claim_turn_status`].
     pub turn_status_claim: Option<(u64, TurnStatusWriter)>,
@@ -950,7 +949,6 @@ impl SessionState {
             async_tasks: BTreeMap::new(),
             async_task_activity_at: None,
             last_assistant_text: None,
-            last_turn_main_text: None,
             last_turn_progress: None,
             pending_user_message: None,
             pending_user_message_started_at: None,
@@ -966,6 +964,7 @@ impl SessionState {
             cli_run: None,
             cli_output_schema: None,
             personal_agent: false,
+            reply_turns: Default::default(),
             turn_status_claim: None,
         }
     }
@@ -1016,6 +1015,15 @@ impl SessionState {
     /// 单一分发器：把一个 AcpEvent 应用到 self。注意此方法**不**自增 event_seq——
     /// seq 由 emit_with_state 在外层管理（这样 apply_event 可独立单元测试）。
     pub fn apply_event(&mut self, payload: &AcpEvent) {
+        // The personal agent's reply in the making sees every event, before
+        // anything below changes the state it reads. `event_seq` is bumped
+        // right after this applies (`emit_with_state_built`), so the event's
+        // envelope seq is the next one.
+        if self.reply_turns.is_active() {
+            let turn_open = self.turn_in_flight || self.live_message.is_some();
+            self.reply_turns
+                .apply(payload, self.event_seq + 1, turn_open);
+        }
         match payload {
             AcpEvent::SessionStarted { session_id } => {
                 if self.external_id.as_deref() != Some(session_id.as_str()) {
@@ -1393,7 +1401,6 @@ impl SessionState {
                 // captured.
                 if self.turn_in_flight || self.live_message.is_some() {
                     self.last_assistant_text = None;
-                    self.last_turn_main_text = None;
                     self.last_turn_progress = self.turn_progress();
                 }
                 if let Some(live) = self.live_message.as_ref() {
@@ -1421,10 +1428,6 @@ impl SessionState {
                         .join("");
                     if !assembled.trim().is_empty() {
                         self.last_assistant_text = Some(assembled);
-                    }
-                    let whole = main_thread_text(&live.content);
-                    if !whole.trim().is_empty() {
-                        self.last_turn_main_text = Some(whole);
                     }
                 }
                 self.live_message = None;
@@ -2470,37 +2473,6 @@ impl SessionState {
             event_seq: self.event_seq,
         }
     }
-}
-
-/// The main-thread prose of a turn's content, in order. Consecutive text
-/// blocks are one run (deltas of the same paragraph); anything else between
-/// them — a tool call, a thought, a plan — ends the run, and runs are joined
-/// with a blank line. Subagent text (`parent_tool_use_id` set) is the child's
-/// voice and is left out, like the thinking itself.
-pub(crate) fn main_thread_text(content: &[LiveContentBlock]) -> String {
-    let mut runs: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for block in content {
-        match block {
-            LiveContentBlock::Text {
-                text,
-                parent_tool_use_id: None,
-            } => current.push_str(text),
-            // A subagent's prose streams inside its tool call: it neither
-            // belongs to the run nor ends it.
-            LiveContentBlock::Text { .. } | LiveContentBlock::Thinking { .. } => {}
-            LiveContentBlock::ToolCallRef { .. } | LiveContentBlock::Plan { .. } => {
-                if !current.trim().is_empty() {
-                    runs.push(current.trim().to_string());
-                }
-                current.clear();
-            }
-        }
-    }
-    if !current.trim().is_empty() {
-        runs.push(current.trim().to_string());
-    }
-    runs.join("\n\n")
 }
 
 /// Whether someone types the prompts of a connection with this owner label, so
@@ -4393,53 +4365,6 @@ mod tests {
             agent_type: "claude_code".into(),
         });
         assert_eq!(s.last_assistant_text.as_deref(), Some("final answer"));
-    }
-
-    /// The personal agent records ALL the prose of a turn: before, between
-    /// and after its tool calls, a blank line apart — never a subagent's or a
-    /// thought.
-    #[test]
-    fn main_thread_text_keeps_every_run_of_the_turn() {
-        let blocks = vec![
-            LiveContentBlock::Text {
-                text: "Let me look.".into(),
-                parent_tool_use_id: None,
-            },
-            LiveContentBlock::Thinking {
-                text: "hmm".into(),
-                parent_tool_use_id: None,
-            },
-            LiveContentBlock::ToolCallRef {
-                tool_call_id: "t1".into(),
-            },
-            LiveContentBlock::Text {
-                text: "child prose".into(),
-                parent_tool_use_id: Some("t1".into()),
-            },
-            LiveContentBlock::Text {
-                text: "Found it: ".into(),
-                parent_tool_use_id: None,
-            },
-            LiveContentBlock::Text {
-                text: "line 42.".into(),
-                parent_tool_use_id: None,
-            },
-        ];
-        assert_eq!(main_thread_text(&blocks), "Let me look.\n\nFound it: line 42.");
-        assert_eq!(main_thread_text(&[]), "");
-
-        let mut s = fresh_state();
-        s.status = ConnectionStatus::Prompting;
-        s.apply_event(&AcpEvent::ContentDelta {
-            text: "first".into(),
-            parent_tool_use_id: None,
-        });
-        s.apply_event(&AcpEvent::TurnComplete {
-            session_id: "sess-1".into(),
-            stop_reason: "end_turn".into(),
-            agent_type: "claude_code".into(),
-        });
-        assert_eq!(s.last_turn_main_text.as_deref(), Some("first"));
     }
 
     #[test]

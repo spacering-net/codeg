@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::agent::AgentType;
 use super::assistant::{AssistantAgentConfig, AssistantAvatar, AssistantLabelSnapshot};
+use super::system::AppLocale;
 use crate::acp::delegation::types::AgentDelegationDefaults;
 use crate::db::entities::personal_agent_batch::BatchKind;
 use crate::db::entities::personal_agent_dispatch::{DispatchMode, DispatchState};
@@ -21,7 +22,7 @@ use crate::db::entities::personal_agent_timeline::{OwnerStatus, TimelineKind};
 /// The default auto-compaction threshold. Unlike the kanban's (off by
 /// default), the personal agent's session is in use all the time, so without
 /// compaction it fills up for certain.
-pub const DEFAULT_AUTO_COMPACT_PERCENT: i32 = 70;
+pub const DEFAULT_AUTO_COMPACT_PERCENT: i32 = 50;
 /// The default size budget of a handoff card, in characters.
 pub const DEFAULT_HANDOFF_BUDGET_CHARS: u32 = 32_000;
 /// The default number of dispatched conversations running at once.
@@ -72,6 +73,12 @@ pub struct PersonalAgentSettings {
     /// installed into the working directory.
     #[serde(default = "default_true")]
     pub skill_enabled: bool,
+    /// The language of the UI the owner last saved these settings from — no
+    /// field of the dialog: codeg keeps it so that what it writes for the
+    /// owner without a request from the UI (the template files of a working
+    /// directory made anew at the next session) is in their language.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<AppLocale>,
 }
 
 impl Default for PersonalAgentSettings {
@@ -83,6 +90,7 @@ impl Default for PersonalAgentSettings {
             handoff_budget_chars: DEFAULT_HANDOFF_BUDGET_CHARS,
             dispatch_concurrency: DEFAULT_DISPATCH_CONCURRENCY,
             skill_enabled: true,
+            locale: None,
         }
     }
 }
@@ -150,8 +158,9 @@ pub struct PersonalAgentDraft {
     pub agent_config: Option<AssistantAgentConfig>,
     #[serde(default)]
     pub settings: Option<PersonalAgentSettings>,
-    /// The UI locale, used once: to pick the language of the template files
-    /// written into a new working directory.
+    /// The UI locale the dialog saves from (`zh-CN`, `ja`…): the language of
+    /// the template files written into a new working directory, remembered
+    /// in the settings (`PersonalAgentSettings::locale`).
     #[serde(default)]
     pub locale: Option<String>,
 }
@@ -168,6 +177,16 @@ pub struct TimelineRow {
     pub data: Option<serde_json::Value>,
     pub dispatch_id: Option<i32>,
     pub ref_id: Option<String>,
+    /// The row this one quotes.
+    pub reply_to: Option<i32>,
+    /// When the assistant started on it (owner messages and result cards);
+    /// `None` is unread.
+    pub read_at: Option<DateTime<Utc>>,
+    /// The event a result card stands for.
+    pub event_id: Option<i32>,
+    /// When the owner saw it (an assistant reply once it settled, a result
+    /// card); `None` is new to the owner.
+    pub seen_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -178,6 +197,31 @@ pub struct TimelinePage {
     pub rows: Vec<TimelineRow>,
     /// Whether rows older than the first one exist.
     pub has_older: bool,
+    /// A range read (`since_id`) spans more rows than it may return: none
+    /// are returned.
+    pub too_far: bool,
+}
+
+/// Where a read of changed rows goes on from: past this `(updated_at, id)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineCursor {
+    pub updated_at: DateTime<Utc>,
+    pub id: i32,
+}
+
+/// Rows changed since a moment, in `(updated_at, id)` order.
+#[derive(Debug, Clone, Serialize)]
+pub struct TimelineChanges {
+    pub rows: Vec<TimelineRow>,
+    /// More changed than one read returns: read on from here.
+    pub next: Option<TimelineCursor>,
+}
+
+/// The step the reply in flight is on, for the page that draws it.
+#[derive(Debug, Clone, Serialize)]
+pub struct LiveReply {
+    pub row_id: i32,
+    pub current: Option<crate::acp::reply_turn::ReplyStep>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -233,6 +277,9 @@ pub struct DispatchInfo {
     /// The folder the conversation sits in — a chat dispatch's own hidden
     /// chat folder, a session dispatch's project.
     pub conversation_folder_id: Option<i32>,
+    /// The connection a chat or session dispatch's conversation runs on while
+    /// it does, so a viewer can follow it live.
+    pub connection_id: Option<String>,
     pub state: DispatchState,
     pub result_excerpt: Option<String>,
     pub error: Option<String>,
@@ -340,6 +387,9 @@ pub struct PersonalAgentStatus {
     pub last_compaction: Option<LastCompaction>,
     pub queued_messages: u32,
     pub pending_events: u32,
+    /// The assistants' messages the owner has not seen yet (settled replies
+    /// and result cards).
+    pub unseen: u32,
     pub dispatch_running: u32,
     pub dispatch_queued: u32,
     pub dispatch_limit: u32,
@@ -347,6 +397,8 @@ pub struct PersonalAgentStatus {
     pub pending_question: bool,
     pub last_error: Option<String>,
     pub workdir: Option<String>,
+    /// The reply being written, so a page opened mid-turn draws it at once.
+    pub live_reply: Option<LiveReply>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -409,12 +461,18 @@ pub struct PersonalAgentStats {
 }
 
 /// Payload of `personal-agent://changed`. Timeline rows ride along whole, so
-/// an open page appends them without a refetch; everything else is a nudge to
-/// refetch.
+/// an open page appends them without a refetch, and so does the step the
+/// reply in flight is on; everything else is a nudge to refetch.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PersonalAgentChange {
     Timeline { rows: Vec<TimelineRow> },
+    /// The step reply row `row_id` is on now — whole, so a lost one is
+    /// made good by the next.
+    Reply {
+        row_id: i32,
+        current: Option<crate::acp::reply_turn::ReplyStep>,
+    },
     Status,
     Agent,
     Dispatch { id: i32 },

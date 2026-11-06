@@ -29,6 +29,13 @@ type ScrollAreaProps = {
    * at its right edge and counts down into negatives).
    */
   dir?: "ltr" | "rtl"
+  /**
+   * Initialize when the browser is idle (the default: cheap for many
+   * instances), or right after mount — for a view that must scroll somewhere
+   * before it is shown (a chat opening at its newest message), where waiting
+   * for an idle moment on a busy page would hold it back.
+   */
+  defer?: boolean
   ref?: React.Ref<OverlayScrollbarsComponentRef>
 }
 
@@ -64,6 +71,7 @@ export function ScrollArea({
   onScroll,
   onViewportRef,
   dir,
+  defer = true,
   ref,
 }: ScrollAreaProps) {
   const options = useMemo<OverlayScrollbarsComponentProps["options"]>(
@@ -96,7 +104,7 @@ export function ScrollArea({
       dir={dir}
       options={options}
       events={events}
-      defer
+      defer={defer}
     >
       {children}
     </OverlayScrollbarsComponent>

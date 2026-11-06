@@ -12,8 +12,8 @@
 use chrono::{DateTime, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, Condition, DatabaseConnection,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
 };
 
 use crate::db::entities::personal_agent_batch::{self as batch, BatchKind, BatchStatus};
@@ -24,7 +24,14 @@ use crate::db::entities::personal_agent_segment::{self as segment, SegmentReason
 use crate::db::entities::personal_agent_timeline::{self as timeline, OwnerStatus, TimelineKind};
 use crate::db::entities::personal_agent as agent;
 use crate::db::error::DbError;
-use crate::models::personal_agent::TimelineRow;
+use crate::models::personal_agent::{TimelineCursor, TimelineRow};
+
+/// Rows a range read (`since_id`) returns at most.
+pub const RANGE_ROWS_MAX: u64 = 500;
+/// Rows a read of changed rows returns at most.
+pub const CHANGED_ROWS_MAX: u64 = 500;
+/// Rows a page may be pulled back by so it does not split a turn.
+const BATCH_PULL_MAX: u64 = 500;
 
 // ── the agent row ───────────────────────────────────────────────────────────
 
@@ -427,9 +434,44 @@ pub fn to_row(m: timeline::Model) -> TimelineRow {
         data: m.data.as_deref().and_then(|d| serde_json::from_str(d).ok()),
         dispatch_id: m.dispatch_id,
         ref_id: m.ref_id,
+        reply_to: m.reply_to,
+        read_at: m.read_at,
+        event_id: m.event_id,
+        seen_at: m.seen_at,
         created_at: m.created_at,
         updated_at: m.updated_at,
     }
+}
+
+/// Whether a row is a reply whose prompt never reached the agent: every
+/// reader treats it as absent.
+pub fn is_discarded(m: &timeline::Model) -> bool {
+    m.kind == TimelineKind::Reply && reply_state(m) == Some("discarded")
+}
+
+/// A reply row's `data.state`: `running`, `done`, `canceled`,
+/// `interrupted`, `discarded` — `None` on a phase-one row, which has none.
+pub fn reply_state(m: &timeline::Model) -> Option<&'static str> {
+    let data = m.data.as_deref()?;
+    let state = serde_json::from_str::<serde_json::Value>(data)
+        .ok()?
+        .get("state")?
+        .as_str()?
+        .to_string();
+    ["running", "done", "canceled", "interrupted", "discarded"]
+        .into_iter()
+        .find(|s| *s == state)
+}
+
+/// Whether a reply row holds nothing to read yet: running with no body, or
+/// discarded.
+pub fn is_unwritten_reply(m: &timeline::Model) -> bool {
+    m.kind == TimelineKind::Reply
+        && match reply_state(m) {
+            Some("discarded") => true,
+            Some("running") => m.body.trim().is_empty(),
+            _ => false,
+        }
 }
 
 /// A timeline row to write.
@@ -443,6 +485,8 @@ pub struct NewRow {
     pub data: Option<serde_json::Value>,
     pub dispatch_id: Option<i32>,
     pub ref_id: Option<String>,
+    pub reply_to: Option<i32>,
+    pub event_id: Option<i32>,
 }
 
 impl NewRow {
@@ -456,30 +500,278 @@ impl NewRow {
             data: None,
             dispatch_id: None,
             ref_id: None,
+            reply_to: None,
+            event_id: None,
+        }
+    }
+
+    fn into_active(self, now: DateTime<Utc>) -> timeline::ActiveModel {
+        timeline::ActiveModel {
+            id: NotSet,
+            segment_id: Set(self.segment_id),
+            batch_id: Set(self.batch_id),
+            kind: Set(self.kind),
+            status: Set(self.status),
+            body: Set(self.body),
+            data: Set(self.data.map(|d| d.to_string())),
+            dispatch_id: Set(self.dispatch_id),
+            ref_id: Set(self.ref_id),
+            reply_to: Set(self.reply_to),
+            read_at: Set(None),
+            event_id: Set(self.event_id),
+            seen_at: Set(None),
+            created_at: Set(now),
+            updated_at: Set(now),
         }
     }
 }
 
 pub async fn insert_row(conn: &DatabaseConnection, row: NewRow) -> Result<timeline::Model, DbError> {
-    let now = Utc::now();
-    let active = timeline::ActiveModel {
-        id: NotSet,
-        segment_id: Set(row.segment_id),
-        batch_id: Set(row.batch_id),
-        kind: Set(row.kind),
-        status: Set(row.status),
-        body: Set(row.body),
-        data: Set(row.data.map(|d| d.to_string())),
-        dispatch_id: Set(row.dispatch_id),
-        ref_id: Set(row.ref_id),
-        created_at: Set(now),
-        updated_at: Set(now),
-    };
-    Ok(active.insert(conn).await?)
+    Ok(row.into_active(Utc::now()).insert(conn).await?)
 }
 
 pub async fn get_row(conn: &DatabaseConnection, id: i32) -> Result<Option<timeline::Model>, DbError> {
     Ok(timeline::Entity::find_by_id(id).one(conn).await?)
+}
+
+/// Only a reply row still running: a checkpoint landing after the turn was
+/// settled must not roll it back, and a turn is settled once.
+fn still_running() -> sea_orm::sea_query::SimpleExpr {
+    Expr::cust("json_extract(data, '$.state') = 'running'")
+}
+
+/// Write the progress of a running reply row (its step in the slot, its last
+/// text so far), for a page that cannot hear the engine and for a restart.
+/// `false` when the row is no longer running.
+pub async fn checkpoint_reply_row(
+    conn: &DatabaseConnection,
+    id: i32,
+    data: serde_json::Value,
+) -> Result<bool, DbError> {
+    let res = timeline::Entity::update_many()
+        .col_expr(timeline::Column::Data, Expr::value(data.to_string()))
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(timeline::Column::Id.eq(id))
+        .filter(timeline::Column::Kind.eq(TimelineKind::Reply))
+        .filter(still_running())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+/// Settle a running reply row in place: its body, data and quote, in one
+/// write. `None` when it was settled already.
+pub async fn settle_reply_row(
+    conn: &DatabaseConnection,
+    id: i32,
+    body: String,
+    data: serde_json::Value,
+    reply_to: Option<i32>,
+) -> Result<Option<timeline::Model>, DbError> {
+    let res = timeline::Entity::update_many()
+        .col_expr(timeline::Column::Body, Expr::value(body))
+        .col_expr(timeline::Column::Data, Expr::value(data.to_string()))
+        .col_expr(timeline::Column::ReplyTo, Expr::value(reply_to))
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(timeline::Column::Id.eq(id))
+        .filter(timeline::Column::Kind.eq(TimelineKind::Reply))
+        .filter(still_running())
+        .exec(conn)
+        .await?;
+    if res.rows_affected == 0 {
+        return Ok(None);
+    }
+    get_row(conn, id).await
+}
+
+/// The reply row of a batch, when it has one.
+pub async fn reply_row_of_batch(
+    conn: &DatabaseConnection,
+    batch_id: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Kind.eq(TimelineKind::Reply))
+        .filter(timeline::Column::BatchId.eq(batch_id))
+        .order_by_asc(timeline::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// The row a batch's turn is drawn at: its reply row, else (a phase-one
+/// batch, which wrote a reply only when there was text) its first row that is
+/// not an owner message.
+pub async fn anchor_row_of_batch(
+    conn: &DatabaseConnection,
+    batch_id: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    if let Some(reply) = reply_row_of_batch(conn, batch_id).await? {
+        if !is_discarded(&reply) {
+            return Ok(Some(reply));
+        }
+    }
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::BatchId.eq(batch_id))
+        .filter(timeline::Column::Kind.ne(TimelineKind::Owner))
+        .filter(timeline::Column::Kind.ne(TimelineKind::Reply))
+        .order_by_asc(timeline::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// The newest follow-up card of a dispatch.
+pub async fn latest_followup_row(
+    conn: &DatabaseConnection,
+    dispatch_id: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Kind.eq(TimelineKind::Dispatch))
+        .filter(timeline::Column::DispatchId.eq(dispatch_id))
+        .filter(Expr::cust("json_extract(data, '$.followup') = 1"))
+        .order_by_desc(timeline::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// Whether any row is older than `id`.
+pub async fn has_rows_before(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Id.lt(id))
+        .one(conn)
+        .await?
+        .is_some())
+}
+
+/// Rows by id (at most 100), id order.
+pub async fn rows_by_ids(
+    conn: &DatabaseConnection,
+    ids: &[i32],
+) -> Result<Vec<timeline::Model>, DbError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<i32> = ids.iter().copied().take(100).collect();
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Id.is_in(ids))
+        .order_by_asc(timeline::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// The rows from `since_id` up to (not including) `before_id`, oldest first —
+/// or, when that is more than [`RANGE_ROWS_MAX`] rows, none and `true`.
+pub async fn range(
+    conn: &DatabaseConnection,
+    since_id: i32,
+    before_id: Option<i32>,
+) -> Result<(Vec<timeline::Model>, bool), DbError> {
+    let mut query = timeline::Entity::find()
+        .filter(timeline::Column::Id.gte(since_id))
+        .order_by_asc(timeline::Column::Id);
+    if let Some(before) = before_id {
+        query = query.filter(timeline::Column::Id.lt(before));
+    }
+    let rows = query.limit(RANGE_ROWS_MAX + 1).all(conn).await?;
+    if rows.len() as u64 > RANGE_ROWS_MAX {
+        return Ok((Vec::new(), true));
+    }
+    // The turn the first row belongs to starts where it is drawn.
+    Ok((pull_back_to_turn_start(conn, rows).await?, false))
+}
+
+/// Rows changed since a moment, `(updated_at, id)` order, from `min_id` up:
+/// after `after` when continuing a read, else from `since` (inclusive — a
+/// row written later in the same instant as the last one read is not
+/// missed; the reader drops what it already holds). Returns where to go on
+/// from when more changed than [`CHANGED_ROWS_MAX`].
+pub async fn changed_since(
+    conn: &DatabaseConnection,
+    since: Option<DateTime<Utc>>,
+    after: Option<TimelineCursor>,
+    min_id: i32,
+) -> Result<(Vec<timeline::Model>, Option<TimelineCursor>), DbError> {
+    changed_since_limited(conn, since, after, min_id, CHANGED_ROWS_MAX).await
+}
+
+/// [`changed_since`], `limit` rows at a time.
+pub async fn changed_since_limited(
+    conn: &DatabaseConnection,
+    since: Option<DateTime<Utc>>,
+    after: Option<TimelineCursor>,
+    min_id: i32,
+    limit: u64,
+) -> Result<(Vec<timeline::Model>, Option<TimelineCursor>), DbError> {
+    use sea_orm::Condition;
+    let mut query = timeline::Entity::find().filter(timeline::Column::Id.gte(min_id));
+    if let Some(cursor) = after {
+        query = query.filter(
+            Condition::any()
+                .add(timeline::Column::UpdatedAt.gt(cursor.updated_at))
+                .add(
+                    Condition::all()
+                        .add(timeline::Column::UpdatedAt.eq(cursor.updated_at))
+                        .add(timeline::Column::Id.gt(cursor.id)),
+                ),
+        );
+    } else if let Some(since) = since {
+        query = query.filter(timeline::Column::UpdatedAt.gte(since));
+    }
+    let mut rows = query
+        .order_by_asc(timeline::Column::UpdatedAt)
+        .order_by_asc(timeline::Column::Id)
+        .limit(limit + 1)
+        .all(conn)
+        .await?;
+    let next = if rows.len() as u64 > limit {
+        rows.truncate(limit as usize);
+        rows.last().map(|r| TimelineCursor {
+            updated_at: r.updated_at,
+            id: r.id,
+        })
+    } else {
+        None
+    };
+    Ok((rows, next))
+}
+
+/// Mark the result cards of these events read (`Some`) or unread (`None`).
+/// Returns the rows changed.
+pub async fn set_result_rows_read(
+    conn: &DatabaseConnection,
+    event_ids: &[i32],
+    read_at: Option<DateTime<Utc>>,
+) -> Result<Vec<timeline::Model>, DbError> {
+    if event_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    timeline::Entity::update_many()
+        .col_expr(timeline::Column::ReadAt, Expr::value(read_at))
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(timeline::Column::Kind.eq(TimelineKind::Result))
+        .filter(timeline::Column::EventId.is_in(event_ids.to_vec()))
+        .exec(conn)
+        .await?;
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Kind.eq(TimelineKind::Result))
+        .filter(timeline::Column::EventId.is_in(event_ids.to_vec()))
+        .order_by_asc(timeline::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// The result cards of these events, by event id.
+pub async fn result_rows_of_events(
+    conn: &DatabaseConnection,
+    event_ids: &[i32],
+) -> Result<Vec<timeline::Model>, DbError> {
+    if event_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Kind.eq(TimelineKind::Result))
+        .filter(timeline::Column::EventId.is_in(event_ids.to_vec()))
+        .order_by_asc(timeline::Column::Id)
+        .all(conn)
+        .await?)
 }
 
 /// Replace a row's data (and optionally its body).
@@ -521,6 +813,69 @@ pub async fn count_queued_owner_rows(conn: &DatabaseConnection) -> Result<u64, D
         .await?)
 }
 
+/// What the owner has not seen: a result card, or a reply that settled
+/// (one still running is neither counted nor marked, so a turn the owner
+/// left before it ended is new once it does).
+fn unseen_by_owner() -> Condition {
+    Condition::all()
+        .add(timeline::Column::SeenAt.is_null())
+        .add(
+            Condition::any()
+                .add(timeline::Column::Kind.eq(TimelineKind::Result))
+                .add(
+                    Condition::all()
+                        .add(timeline::Column::Kind.eq(TimelineKind::Reply))
+                        .add(Expr::cust(
+                            "COALESCE(json_extract(data, '$.state'), '') \
+                             NOT IN ('running', 'discarded')",
+                        )),
+                ),
+        )
+}
+
+pub async fn count_unseen(conn: &DatabaseConnection) -> Result<u64, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(unseen_by_owner())
+        .count(conn)
+        .await?)
+}
+
+/// The owner has seen the timeline up to row `up_to`: what of it was new to
+/// them is marked so (and touched, so a page following changed rows hears
+/// of it). Returns the rows marked.
+pub async fn mark_seen(
+    conn: &DatabaseConnection,
+    up_to: i32,
+) -> Result<Vec<timeline::Model>, DbError> {
+    let now = Utc::now();
+    let res = timeline::Entity::update_many()
+        .col_expr(timeline::Column::SeenAt, Expr::value(now))
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
+        .filter(timeline::Column::Id.lte(up_to))
+        .filter(unseen_by_owner())
+        .exec(conn)
+        .await?;
+    if res.rows_affected == 0 {
+        return Ok(Vec::new());
+    }
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Id.lte(up_to))
+        .filter(timeline::Column::SeenAt.eq(now))
+        .order_by_asc(timeline::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// What a move does to the read mark of the rows it moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadMark {
+    Keep,
+    /// The assistant starts on them now.
+    Read,
+    /// Back to unread: they never reached the assistant.
+    Unread,
+}
+
 /// Move owner rows to `to`, but only those still in `from` — so a row
 /// another path already settled keeps its state. Returns the rows moved.
 pub async fn move_owner_rows(
@@ -530,13 +885,15 @@ pub async fn move_owner_rows(
     to: OwnerStatus,
     batch_id: Option<i32>,
     segment_id: Option<i32>,
+    read: ReadMark,
 ) -> Result<Vec<timeline::Model>, DbError> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
+    let now = Utc::now();
     let mut update = timeline::Entity::update_many()
         .col_expr(timeline::Column::Status, Expr::value(to))
-        .col_expr(timeline::Column::UpdatedAt, Expr::value(Utc::now()))
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
         .filter(timeline::Column::Id.is_in(ids.to_vec()))
         .filter(timeline::Column::Kind.eq(TimelineKind::Owner))
         .filter(timeline::Column::Status.is_in(from.to_vec()));
@@ -545,6 +902,18 @@ pub async fn move_owner_rows(
     }
     if let Some(s) = segment_id {
         update = update.col_expr(timeline::Column::SegmentId, Expr::value(s));
+    }
+    match read {
+        ReadMark::Keep => {}
+        ReadMark::Read => {
+            update = update.col_expr(timeline::Column::ReadAt, Expr::value(Some(now)));
+        }
+        ReadMark::Unread => {
+            update = update.col_expr(
+                timeline::Column::ReadAt,
+                Expr::value(Option::<DateTime<Utc>>::None),
+            );
+        }
     }
     update.exec(conn).await?;
     Ok(timeline::Entity::find()
@@ -568,7 +937,10 @@ pub async fn owner_rows_of_batch(
 }
 
 /// A page of the timeline, newest last: up to `limit` rows older than
-/// `before_id` (or the newest ones).
+/// `before_id` (or the newest ones) — pulled back further when it would cut a
+/// turn in two: the page then starts at the first row of every turn it holds
+/// (the reply, or a phase-one turn's first card), so the page draws each turn
+/// whole.
 pub async fn page(
     conn: &DatabaseConnection,
     before_id: Option<i32>,
@@ -582,7 +954,58 @@ pub async fn page(
     let has_older = rows.len() as u64 > limit;
     rows.truncate(limit as usize);
     rows.reverse();
+    if !has_older {
+        return Ok((rows, false));
+    }
+    let rows = pull_back_to_turn_start(conn, rows).await?;
+    let has_older = match rows.first() {
+        Some(first) => has_rows_before(conn, first.id).await?,
+        None => false,
+    };
     Ok((rows, has_older))
+}
+
+/// `rows` (oldest first) with the rows before them that the turns they show
+/// begin with: a turn is drawn at its first row that is not an owner message
+/// (its reply, or a phase-one turn's first card), so a read must not start
+/// after it.
+async fn pull_back_to_turn_start(
+    conn: &DatabaseConnection,
+    rows: Vec<timeline::Model>,
+) -> Result<Vec<timeline::Model>, DbError> {
+    let Some(first) = rows.first().map(|r| r.id) else {
+        return Ok(rows);
+    };
+    let mut batches: Vec<i32> = rows
+        .iter()
+        .filter(|r| r.kind != TimelineKind::Owner)
+        .filter_map(|r| r.batch_id)
+        .collect();
+    batches.sort_unstable();
+    batches.dedup();
+    if batches.is_empty() {
+        return Ok(rows);
+    }
+    let anchor = timeline::Entity::find()
+        .filter(timeline::Column::BatchId.is_in(batches))
+        .filter(timeline::Column::Kind.ne(TimelineKind::Owner))
+        .filter(timeline::Column::Id.lt(first))
+        .order_by_asc(timeline::Column::Id)
+        .one(conn)
+        .await?;
+    let Some(anchor) = anchor else {
+        return Ok(rows);
+    };
+    let mut pulled = timeline::Entity::find()
+        .filter(timeline::Column::Id.gte(anchor.id))
+        .filter(timeline::Column::Id.lt(first))
+        .order_by_desc(timeline::Column::Id)
+        .limit(BATCH_PULL_MAX)
+        .all(conn)
+        .await?;
+    pulled.reverse();
+    pulled.extend(rows);
+    Ok(pulled)
 }
 
 /// The newest `limit` rows of the given kinds, oldest first.
@@ -682,13 +1105,14 @@ pub async fn pending_events(conn: &DatabaseConnection) -> Result<Vec<event::Mode
         .await?)
 }
 
+/// Hand pending events to a batch. Returns the ids actually moved.
 pub async fn mark_events_delivered(
     conn: &DatabaseConnection,
     ids: &[i32],
     batch_id: i32,
-) -> Result<(), DbError> {
+) -> Result<Vec<i32>, DbError> {
     if ids.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     event::Entity::update_many()
         .col_expr(event::Column::State, Expr::value(EventState::Delivered))
@@ -698,7 +1122,20 @@ pub async fn mark_events_delivered(
         .filter(event::Column::State.eq(EventState::Pending))
         .exec(conn)
         .await?;
-    Ok(())
+    delivered_event_ids(conn, batch_id).await
+}
+
+/// The events a batch holds now.
+async fn delivered_event_ids(conn: &DatabaseConnection, batch_id: i32) -> Result<Vec<i32>, DbError> {
+    Ok(event::Entity::find()
+        .filter(event::Column::BatchId.eq(batch_id))
+        .filter(event::Column::State.eq(EventState::Delivered))
+        .order_by_asc(event::Column::Id)
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|e| e.id)
+        .collect())
 }
 
 /// The events a batch carried are handled.
@@ -717,34 +1154,113 @@ pub async fn finish_batch_events(conn: &DatabaseConnection, batch_id: i32) -> Re
 /// once, so the next delivery hands it over again with a note. An event that
 /// was already put back once is considered handled — a second interruption of
 /// the same event most likely means it is what kills the turn.
-pub async fn requeue_batch_events(conn: &DatabaseConnection, batch_id: i32) -> Result<(), DbError> {
+///
+/// Returns the ids put back.
+pub async fn requeue_batch_events(conn: &DatabaseConnection, batch_id: i32) -> Result<Vec<i32>, DbError> {
     let now = Utc::now();
+    let back: Vec<i32> = event::Entity::find()
+        .filter(event::Column::BatchId.eq(batch_id))
+        .filter(event::Column::State.eq(EventState::Delivered))
+        .filter(event::Column::Requeues.eq(0))
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    if back.is_empty() {
+        finish_batch_events(conn, batch_id).await?;
+        return Ok(back);
+    }
     event::Entity::update_many()
         .col_expr(event::Column::State, Expr::value(EventState::Pending))
         .col_expr(event::Column::BatchId, Expr::value(Option::<i32>::None))
         .col_expr(event::Column::RequeuedFrom, Expr::value(batch_id))
         .col_expr(event::Column::Requeues, Expr::col(event::Column::Requeues).add(1))
         .col_expr(event::Column::UpdatedAt, Expr::value(now))
-        .filter(event::Column::BatchId.eq(batch_id))
+        .filter(event::Column::Id.is_in(back.clone()))
         .filter(event::Column::State.eq(EventState::Delivered))
         .filter(event::Column::Requeues.eq(0))
         .exec(conn)
         .await?;
-    finish_batch_events(conn, batch_id).await
+    finish_batch_events(conn, batch_id).await?;
+    Ok(back)
 }
 
 /// A batch that never reached the agent: its events wait again, as if never
-/// handed out (no requeue counted).
-pub async fn revert_batch_events(conn: &DatabaseConnection, batch_id: i32) -> Result<(), DbError> {
+/// handed out (no requeue counted). Returns the ids put back.
+pub async fn revert_batch_events(conn: &DatabaseConnection, batch_id: i32) -> Result<Vec<i32>, DbError> {
+    let back = delivered_event_ids(conn, batch_id).await?;
+    if back.is_empty() {
+        return Ok(back);
+    }
     event::Entity::update_many()
         .col_expr(event::Column::State, Expr::value(EventState::Pending))
         .col_expr(event::Column::BatchId, Expr::value(Option::<i32>::None))
         .col_expr(event::Column::UpdatedAt, Expr::value(Utc::now()))
-        .filter(event::Column::BatchId.eq(batch_id))
+        .filter(event::Column::Id.is_in(back.clone()))
         .filter(event::Column::State.eq(EventState::Delivered))
         .exec(conn)
         .await?;
-    Ok(())
+    Ok(back)
+}
+
+/// Queue an event together with its result card, in one transaction: an
+/// event is never handed out before its card exists (the delivery quotes the
+/// card's id, and marks it read). `None` when the event's `source_key` was
+/// recorded already — a repeated arrival is the same event.
+pub async fn insert_event_with_row(
+    conn: &DatabaseConnection,
+    event: NewEvent,
+    mut row: NewRow,
+) -> Result<Option<(event::Model, timeline::Model)>, DbError> {
+    use sea_orm::TransactionTrait;
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    // Insert first: the unique index decides a repeat, and a transaction
+    // that reads before it writes can fail under WAL (see the module docs).
+    let inserted = event::ActiveModel {
+        id: NotSet,
+        kind: Set(event.kind),
+        source_key: Set(event.source_key),
+        coalesce_key: Set(event.coalesce_key),
+        summary: Set(event.summary),
+        payload: Set(event.payload.map(|p| p.to_string())),
+        wake: Set(event.wake),
+        state: Set(EventState::Pending),
+        batch_id: Set(None),
+        requeues: Set(0),
+        requeued_from: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(&txn)
+    .await;
+    let ev = match inserted {
+        Ok(ev) => ev,
+        Err(e) if matches!(e.sql_err(), Some(sea_orm::SqlErr::UniqueConstraintViolation(_))) => {
+            txn.rollback().await?;
+            return Ok(None);
+        }
+        Err(e) => {
+            let _ = txn.rollback().await;
+            return Err(e.into());
+        }
+    };
+    row.event_id = Some(ev.id);
+    let card = row.into_active(now).insert(&txn).await?;
+    txn.commit().await?;
+    Ok(Some((ev, card)))
+}
+
+/// An event to queue.
+#[derive(Debug, Clone)]
+pub struct NewEvent {
+    pub kind: String,
+    pub source_key: String,
+    pub coalesce_key: Option<String>,
+    pub summary: String,
+    pub payload: Option<serde_json::Value>,
+    pub wake: bool,
 }
 
 pub async fn count_pending_events(conn: &DatabaseConnection) -> Result<u64, DbError> {
@@ -880,6 +1396,7 @@ pub async fn create_dispatch(
         result_excerpt: Set(None),
         error: Set(None),
         origin_batch_id: Set(new.origin_batch_id),
+        source_batch_id: Set(new.origin_batch_id),
         on_done: Set(new.on_done),
         turns: Set(0),
         followup: Set(None),
@@ -907,6 +1424,7 @@ pub struct DispatchWrite {
     pub result_excerpt: Option<Option<String>>,
     pub error: Option<Option<String>>,
     pub followup: Option<Option<String>>,
+    pub source_batch_id: Option<Option<i32>>,
     pub bump_turns: bool,
 }
 
@@ -959,6 +1477,9 @@ pub async fn update_dispatch(
     if let Some(v) = write.followup {
         update = update.col_expr(dispatch::Column::Followup, Expr::value(v));
     }
+    if let Some(v) = write.source_batch_id {
+        update = update.col_expr(dispatch::Column::SourceBatchId, Expr::value(v));
+    }
     if write.bump_turns {
         update = update.col_expr(dispatch::Column::Turns, Expr::col(dispatch::Column::Turns).add(1));
     }
@@ -983,6 +1504,21 @@ pub async fn list_dispatches(
         query = query.filter(dispatch::Column::Mode.eq(m));
     }
     Ok(query.limit(limit).all(conn).await?)
+}
+
+/// Dispatches by id, newest first.
+pub async fn dispatches_by_ids(
+    conn: &DatabaseConnection,
+    ids: &[i32],
+) -> Result<Vec<dispatch::Model>, DbError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::Id.is_in(ids.iter().copied().take(500).collect::<Vec<_>>()))
+        .order_by_desc(dispatch::Column::Id)
+        .all(conn)
+        .await?)
 }
 
 /// Dispatches created since `since`, oldest first.

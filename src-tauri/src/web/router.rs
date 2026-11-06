@@ -386,6 +386,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_timeline),
         )
         .route(
+            "/personal_agent_timeline_rows",
+            post(handlers::personal_agent::personal_agent_timeline_rows),
+        )
+        .route(
+            "/personal_agent_timeline_updated_since",
+            post(handlers::personal_agent::personal_agent_timeline_updated_since),
+        )
+        .route(
             "/personal_agent_items",
             post(handlers::personal_agent::personal_agent_items),
         )
@@ -408,10 +416,6 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/personal_agent_send",
             post(handlers::personal_agent::personal_agent_send),
-        )
-        .route(
-            "/personal_agent_supplement",
-            post(handlers::personal_agent::personal_agent_supplement),
         )
         .route(
             "/personal_agent_cancel",
@@ -438,6 +442,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_resend),
         )
         .route(
+            "/personal_agent_mark_seen",
+            post(handlers::personal_agent::personal_agent_mark_seen),
+        )
+        .route(
             "/personal_agent_answer_question",
             post(handlers::personal_agent::personal_agent_answer_question),
         )
@@ -452,6 +460,10 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/personal_agent_file_save",
             post(handlers::personal_agent::personal_agent_file_save),
+        )
+        .route(
+            "/personal_agent_file_delete",
+            post(handlers::personal_agent::personal_agent_file_delete),
         )
         .route(
             "/personal_agent_set_workdir",

@@ -25,6 +25,7 @@ import {
   resetFolderTabsStore,
   useFolderTabsStore,
 } from "@/stores/folder-tabs-store"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 // Stable spies + mutable active-folder, referenced from the hoisted mock
 // factories below (vi.mock is hoisted above imports).
@@ -53,6 +54,8 @@ const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
   // The personal agent waits on the owner (a question or a permission).
   personalAgentNeedsOwner: false,
+  // Messages from the assistants the owner has not seen.
+  personalAgentUnseen: 0,
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
@@ -114,7 +117,13 @@ vi.mock("@/contexts/tasks-view-context", () => ({
   }),
 }))
 vi.mock("@/contexts/personal-agent-context", () => ({
-  usePersonalAgent: () => ({ needsOwner: mockState.personalAgentNeedsOwner }),
+  usePersonalAgent: () => ({
+    needsOwner: mockState.personalAgentNeedsOwner,
+    snapshot: {
+      agent: null,
+      status: { unseen: mockState.personalAgentUnseen },
+    },
+  }),
 }))
 vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({
@@ -172,6 +181,8 @@ describe("Sidebar — fixed nav region", () => {
     spies.openConversations.mockClear()
     mockState.activeFolder = { id: 7, path: "/x" }
     mockState.personalAgentNeedsOwner = false
+    mockState.personalAgentUnseen = 0
+    usePersonalAgentUi.setState({ watching: false })
   })
 
   it("Automations navigates to the automations route", () => {
@@ -194,6 +205,31 @@ describe("Sidebar — fixed nav region", () => {
     mockState.personalAgentNeedsOwner = true
     renderSidebar()
     expect(row().querySelector("span.rounded-full")).not.toBeNull()
+  })
+
+  it("counts the assistants' unseen messages on the Personal agent row", () => {
+    mockState.personalAgentUnseen = 3
+    mockState.personalAgentNeedsOwner = true
+    renderSidebar()
+    const badge = screen.getByLabelText("3 unread messages")
+    expect(badge.textContent).toBe("3")
+    // The count stands for the waiting dot too.
+    expect(
+      badge.closest("button")?.querySelectorAll("span.rounded-full")
+    ).toHaveLength(1)
+  })
+
+  it("caps the unseen count at 99+", () => {
+    mockState.personalAgentUnseen = 120
+    renderSidebar()
+    expect(screen.getByLabelText("120 unread messages").textContent).toBe("99+")
+  })
+
+  it("shows no count while the page shows the owner the newest", () => {
+    mockState.personalAgentUnseen = 2
+    usePersonalAgentUi.setState({ watching: true })
+    renderSidebar()
+    expect(screen.queryByLabelText("2 unread messages")).toBeNull()
   })
 
   it("New chat returns to the conversation workspace", () => {

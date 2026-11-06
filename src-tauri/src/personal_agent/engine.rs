@@ -37,12 +37,13 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::MissedTickBehavior;
 
-use super::cards::{self, AssistantLine, ItemLine, RecentLine};
+use super::cards::{self, AssistantLine, ItemLine, OwnerLine, RecentLine};
 use super::compaction::{self, PreDelivery, Streaks};
 use super::dispatch::DispatchConn;
 use super::workdir;
 use super::{DISPATCH_OWNER_LABEL, OWNER_LABEL};
 use crate::acp::manager::ConnectionManager;
+use crate::acp::reply_turn::{ReplySnapshot, ReplyStep};
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope, PromptInputBlock};
 use crate::acp::InternalEventBus;
 use crate::db::entities::personal_agent as agent_entity;
@@ -51,13 +52,14 @@ use crate::db::entities::personal_agent_item::ItemStatus;
 use crate::db::entities::personal_agent_segment::{self as segment_entity, SegmentReason};
 use crate::db::entities::personal_agent_timeline::{OwnerStatus, TimelineKind};
 use crate::db::service::personal_agent_service as svc;
-use crate::db::service::personal_agent_service::NewRow;
+use crate::db::service::personal_agent_service::{NewRow, ReadMark};
 use crate::db::AppDatabase;
 use crate::models::personal_agent::{
-    CompactCheck, CompactInitiator, EngineHost, PersonalAgentChange, PersonalAgentInfo,
+    CompactCheck, CompactInitiator, EngineHost, LiveReply, PersonalAgentChange, PersonalAgentInfo,
     PersonalAgentSettings, PersonalAgentSnapshot, PersonalAgentStatus, SegmentInfo, TimelineRow,
     TurnInfo, UsageReading,
 };
+use crate::models::system::{AppLocale, LanguageMode};
 use crate::models::{AgentType, AssistantAgentConfig, AssistantAvatar, AssistantLabelSnapshot};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 use crate::work_task::compact;
@@ -76,6 +78,13 @@ const IDLE_GRACE: chrono::Duration = chrono::Duration::seconds(3);
 const HANDOFF_RECENT_ROWS: u64 = 24;
 /// Open matters a card lists.
 const CARD_ITEMS: u64 = 40;
+/// The least time between two pushes of the reply in flight.
+const REPLY_PUSH_GAP: Duration = Duration::from_millis(100);
+/// How often the reply in flight is written to its row while one step goes
+/// on (every new step is written at once).
+const REPLY_CHECKPOINT_EVERY: Duration = Duration::from_secs(2);
+/// How much of a quoted row a delivery repeats.
+const QUOTE_EXCERPT_CHARS: usize = 200;
 
 static ENGINE: OnceLock<Arc<PersonalAgentEngine>> = OnceLock::new();
 
@@ -164,6 +173,15 @@ struct ActiveTurn {
     /// For a delivery: the agent compacted its own context during it, after
     /// this delivery's cards went in — what they carried may be gone again.
     agent_compacted: bool,
+    /// For a delivery: its reply row, made when the turn started.
+    reply_row_id: Option<i32>,
+    /// For a delivery: the tag its prompt carried. The connection builds the
+    /// turn's reply under it; it is how this turn's end is told from any
+    /// other's.
+    reply_token: Option<String>,
+    /// For a delivery of one event and no message: the event's result card,
+    /// which the reply quotes unless it names another row itself.
+    auto_quote: Option<i32>,
 }
 
 /// How a turn ended.
@@ -174,6 +192,92 @@ enum TurnEnd {
     Completed(Option<String>),
     /// The connection went away mid-turn.
     Lost(String),
+}
+
+/// A delivery's reply as it stood when its end was decided — taken then, not
+/// when it is settled: by then the next turn may have started on the
+/// connection.
+#[derive(Debug, Clone)]
+enum ReplyCapture {
+    /// The connection's own copy (every event applied, the last ones the
+    /// engine had not read yet included).
+    Live(Box<ReplySnapshot>),
+    /// None to be had (the connection's state is gone): the last checkpoint
+    /// on the reply row stands.
+    Checkpoint,
+}
+
+/// What a settled reply is made of.
+#[derive(Debug, Clone, Default)]
+struct ReplyContent {
+    text: String,
+    last_text_n: Option<u32>,
+    step_count: u32,
+    quotes: Vec<i64>,
+}
+
+impl ReplyContent {
+    fn from_snapshot(s: &ReplySnapshot) -> Self {
+        Self {
+            text: s.last_text.as_ref().map(|t| t.text.clone()).unwrap_or_default(),
+            last_text_n: s.last_text.as_ref().map(|t| t.n),
+            step_count: s.step_count,
+            quotes: s.quotes.clone(),
+        }
+    }
+
+    /// What a running reply row last recorded.
+    fn from_checkpoint(data: Option<&str>) -> Self {
+        let data = data
+            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+            .unwrap_or_default();
+        let last = data.get("last_text");
+        Self {
+            text: last
+                .and_then(|t| t.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            last_text_n: last
+                .and_then(|t| t.get("n"))
+                .and_then(|n| n.as_u64())
+                .and_then(|n| u32::try_from(n).ok()),
+            step_count: data
+                .get("step_count")
+                .and_then(|n| n.as_u64())
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(0),
+            quotes: data
+                .get("quotes")
+                .and_then(|q| q.as_array())
+                .map(|q| q.iter().filter_map(|v| v.as_i64()).collect())
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// How a reply ended, as its row records it.
+#[derive(Debug, Clone)]
+struct ReplyOutcome {
+    /// `done` | `canceled` | `interrupted`.
+    state: &'static str,
+    /// Why an interrupted one did not finish: `connection`, `overflow`,
+    /// `rejected`, `error`, `restart`.
+    why: Option<&'static str>,
+    stop_reason: Option<String>,
+    error: Option<String>,
+}
+
+/// The pushes and checkpoints of the reply in flight.
+#[derive(Default)]
+struct ReplyPush {
+    last_push: Option<tokio::time::Instant>,
+    /// The row, step and moment of the last checkpoint.
+    checkpoint_row: Option<i32>,
+    checkpoint_n: Option<u32>,
+    checkpoint_at: Option<tokio::time::Instant>,
+    /// A checkpoint is due later for what the last push did not write.
+    trailing: bool,
 }
 
 #[derive(Default)]
@@ -209,6 +313,9 @@ pub struct PersonalAgentEngine {
     pump_again: AtomicBool,
     wake: Notify,
     booted: AtomicBool,
+    /// A push of the reply in flight is scheduled.
+    reply_push_pending: AtomicBool,
+    reply_push: Mutex<ReplyPush>,
 }
 
 /// Build the engine and publish it. Call ONLY where the work-task engine was
@@ -233,6 +340,8 @@ pub fn build(
         pump_again: AtomicBool::new(false),
         wake: Notify::new(),
         booted: AtomicBool::new(false),
+        reply_push_pending: AtomicBool::new(false),
+        reply_push: Mutex::new(ReplyPush::default()),
     });
     ENGINE.set(engine.clone()).ok()?;
     Some(engine)
@@ -258,6 +367,8 @@ impl PersonalAgentEngine {
             pump_again: AtomicBool::new(false),
             wake: Notify::new(),
             booted: AtomicBool::new(true),
+            reply_push_pending: AtomicBool::new(false),
+            reply_push: Mutex::new(ReplyPush::default()),
         })
     }
 
@@ -306,7 +417,71 @@ impl PersonalAgentEngine {
             usage_after: None,
             compaction_reported: None,
             agent_compacted: false,
+            reply_row_id: None,
+            reply_token: None,
+            auto_quote: None,
         });
+    }
+
+    /// Put a delivery on record on `conn` as `deliver` would after sending:
+    /// its reply row made, its prompt tagged `token`.
+    #[cfg(test)]
+    pub(crate) async fn begin_delivery_for_test(
+        &self,
+        conn: &str,
+        segment_id: i32,
+        batch_id: i32,
+        token: &str,
+        start_seq: u64,
+    ) -> i32 {
+        let mut row = NewRow::new(TimelineKind::Reply, "");
+        row.segment_id = Some(segment_id);
+        row.batch_id = Some(batch_id);
+        row.data = Some(serde_json::json!({ "state": "running", "started_at": Utc::now() }));
+        let row = svc::insert_row(&self.db.conn, row).await.expect("reply row");
+        let mut st = self.state.lock().await;
+        st.connection_id = Some(conn.to_string());
+        st.connection_segment = Some(segment_id);
+        st.turn = Some(ActiveTurn {
+            batch_id,
+            segment_id,
+            kind: BatchKind::Delivery,
+            conn_id: conn.to_string(),
+            start_seq,
+            started_at: Utc::now(),
+            owner_row_ids: Vec::new(),
+            compaction: None,
+            carried: Carried::default(),
+            overflow: false,
+            error: None,
+            usage_after: None,
+            compaction_reported: None,
+            agent_compacted: false,
+            reply_row_id: Some(row.id),
+            reply_token: Some(token.to_string()),
+            auto_quote: None,
+        });
+        row.id
+    }
+
+    /// Run one liveness check, as the tick does.
+    #[cfg(test)]
+    pub(crate) async fn liveness_for_test(&self) {
+        self.liveness_tick().await;
+    }
+
+    /// Whether a turn is on record.
+    #[cfg(test)]
+    pub(crate) async fn turn_in_flight_for_test(&self) -> bool {
+        self.state.lock().await.turn.is_some()
+    }
+
+    /// Move the turn in flight's start back, past the liveness grace.
+    #[cfg(test)]
+    pub(crate) async fn backdate_turn_for_test(&self, secs: i64) {
+        if let Some(t) = self.state.lock().await.turn.as_mut() {
+            t.started_at -= chrono::Duration::seconds(secs);
+        }
     }
 
     /// Hand one bus event to the engine, as its loop would.
@@ -346,6 +521,9 @@ pub async fn run(engine: Arc<PersonalAgentEngine>) {
                     tracing::warn!(
                         "[personal_agent] event bus lagged: {n} events dropped; the ticks recover"
                     );
+                    // The reply is read from the connection's state, which
+                    // missed nothing: push it as it stands.
+                    engine.schedule_reply_push();
                     engine.liveness_tick().await;
                 }
                 Err(RecvError::Closed) => break,
@@ -458,8 +636,28 @@ impl PersonalAgentEngine {
         self.boot_dispatches().await;
     }
 
-    /// Mark a delivery's owner messages interrupted and put its events back.
-    async fn interrupt_delivery(&self, batch_id: i32, segment_id: Option<i32>, why: &str) {
+    /// Mark a delivery's owner messages interrupted and put its events back
+    /// (unread again). Its reply row, still running when nothing settled it
+    /// first (a restart), keeps what it last recorded.
+    async fn interrupt_delivery(&self, batch_id: i32, segment_id: Option<i32>, why: &'static str) {
+        if let Ok(Some(reply)) = svc::reply_row_of_batch(&self.db.conn, batch_id).await {
+            if svc::reply_state(&reply) == Some("running") {
+                let content = ReplyContent::from_checkpoint(reply.data.as_deref());
+                self.settle_reply(
+                    reply.id,
+                    reply.created_at,
+                    ReplyOutcome {
+                        state: "interrupted",
+                        why: Some(why),
+                        stop_reason: None,
+                        error: None,
+                    },
+                    content,
+                    None,
+                )
+                .await;
+            }
+        }
         let owners = svc::owner_rows_of_batch(&self.db.conn, batch_id)
             .await
             .unwrap_or_default();
@@ -471,11 +669,20 @@ impl PersonalAgentEngine {
             OwnerStatus::Interrupted,
             None,
             None,
+            ReadMark::Keep,
         )
         .await
         .unwrap_or_default();
         self.emit_rows(moved.into_iter().map(svc::to_row).collect());
-        let _ = svc::requeue_batch_events(&self.db.conn, batch_id).await;
+        // Put back means not handled: the cards of exactly those are unread
+        // again; an event already put back once is settled, and stays read.
+        let back = svc::requeue_batch_events(&self.db.conn, batch_id)
+            .await
+            .unwrap_or_default();
+        let unread = svc::set_result_rows_read(&self.db.conn, &back, None)
+            .await
+            .unwrap_or_default();
+        self.emit_rows(unread.into_iter().map(svc::to_row).collect());
         self.marker(
             segment_id,
             "turn_interrupted",
@@ -496,6 +703,7 @@ impl PersonalAgentEngine {
             )
         };
         if is_mine {
+            self.schedule_reply_push();
             self.on_own_event(env).await;
         } else if let Some(id) = dispatch_id {
             self.on_dispatch_event(id, env).await;
@@ -505,19 +713,52 @@ impl PersonalAgentEngine {
     async fn on_own_event(&self, env: &EventEnvelope) {
         match &env.payload {
             AcpEvent::TurnComplete { stop_reason, .. } => {
-                let ours = {
+                let (ours, token) = {
                     let st = self.state.lock().await;
                     let fenced = st
                         .fence
                         .get(&env.connection_id)
                         .is_some_and(|mark| env.seq <= *mark);
-                    matches!(&st.turn, Some(t) if t.conn_id == env.connection_id
+                    let ours = matches!(&st.turn, Some(t) if t.conn_id == env.connection_id
                         && env.seq > t.start_seq)
-                        && !fenced
+                        && !fenced;
+                    (ours, st.turn.as_ref().and_then(|t| t.reply_token.clone()))
                 };
-                if ours {
-                    self.finish_turn(TurnEnd::Completed(Some(stop_reason.clone())), Some(env.seq))
+                if !ours {
+                    return;
+                }
+                let end = TurnEnd::Completed(Some(stop_reason.clone()));
+                let Some(token) = token else {
+                    // A compaction: its prompt carries no tag, and the seq
+                    // and the fence tell its end.
+                    self.finish_turn(end, Some(env.seq), ReplyCapture::Checkpoint)
                         .await;
+                    return;
+                };
+                // A delivery ends with ITS prompt's turn only: the reply the
+                // connection built under its tag was sealed by this very
+                // event. A completion the connection emitted for another turn
+                // — Grok's own, closed just before this prompt started — is
+                // not it, nor one of a prompt sent from elsewhere.
+                let Some(state) = self.manager.get_state(&env.connection_id).await else {
+                    // Gone: the liveness check settles it as lost.
+                    return;
+                };
+                let snapshot = state.read().await.reply_turns.snapshot(&token);
+                match snapshot {
+                    Some(s) if s.completed_seq == Some(env.seq) => {
+                        self.finish_turn(end, Some(env.seq), ReplyCapture::Live(Box::new(s)))
+                            .await;
+                    }
+                    // Sealed by an earlier completion the bus dropped: the
+                    // turn is over all the same, and its own completion
+                    // said how.
+                    Some(s) if s.completed_seq.is_some_and(|sealed| sealed < env.seq) => {
+                        let end = TurnEnd::Completed(s.stop_reason.clone());
+                        self.finish_turn(end, Some(env.seq), ReplyCapture::Live(Box::new(s)))
+                            .await;
+                    }
+                    _ => {}
                 }
             }
             AcpEvent::Error {
@@ -536,7 +777,9 @@ impl PersonalAgentEngine {
                     st.last_error = Some(message.clone());
                 }
                 if *terminal {
-                    self.finish_turn(TurnEnd::Lost(message.clone()), None).await;
+                    let capture = self.capture_reply(&env.connection_id).await;
+                    self.finish_turn(TurnEnd::Lost(message.clone()), None, capture)
+                        .await;
                     self.drop_connection(&env.connection_id).await;
                 }
                 self.emit(PersonalAgentChange::Status);
@@ -544,8 +787,13 @@ impl PersonalAgentEngine {
             AcpEvent::StatusChanged {
                 status: ConnectionStatus::Disconnected | ConnectionStatus::Error,
             } => {
-                self.finish_turn(TurnEnd::Lost("the connection was lost".into()), None)
-                    .await;
+                let capture = self.capture_reply(&env.connection_id).await;
+                self.finish_turn(
+                    TurnEnd::Lost("the connection was lost".into()),
+                    None,
+                    capture,
+                )
+                .await;
                 self.drop_connection(&env.connection_id).await;
                 self.emit(PersonalAgentChange::Status);
             }
@@ -956,30 +1204,255 @@ impl PersonalAgentEngine {
             return;
         };
         let Some(state) = self.manager.get_state(&turn.conn_id).await else {
-            self.finish_turn(TurnEnd::Lost("the connection was lost".into()), None)
-                .await;
+            self.finish_turn(
+                TurnEnd::Lost("the connection was lost".into()),
+                None,
+                ReplyCapture::Checkpoint,
+            )
+            .await;
             self.drop_connection(&turn.conn_id).await;
             return;
         };
-        let (in_flight, dead, seq) = {
+        // Decided and copied under one read: the reply then is the turn's
+        // whole reply, whatever starts on the connection after.
+        let (in_flight, dead, seq, capture) = {
             let s = state.read().await;
+            let capture = match turn.reply_token.as_deref() {
+                Some(token) => s
+                    .reply_turns
+                    .snapshot(token)
+                    .map(|r| ReplyCapture::Live(Box::new(r)))
+                    .unwrap_or(ReplyCapture::Checkpoint),
+                None => ReplyCapture::Checkpoint,
+            };
             (
                 s.turn_in_flight,
                 matches!(s.status, ConnectionStatus::Disconnected | ConnectionStatus::Error),
                 s.event_seq,
+                capture,
             )
         };
         if dead {
-            self.finish_turn(TurnEnd::Lost("the connection was lost".into()), Some(seq))
-                .await;
+            self.finish_turn(
+                TurnEnd::Lost("the connection was lost".into()),
+                Some(seq),
+                capture,
+            )
+            .await;
             self.drop_connection(&turn.conn_id).await;
             return;
         }
         if !in_flight && Utc::now() - turn.started_at > IDLE_GRACE {
             // Ended without our seeing it: settle from the state, and fence
             // everything already emitted so the late event settles nothing.
-            self.finish_turn(TurnEnd::Completed(None), Some(seq)).await;
+            // A sealed reply knows how its turn stopped.
+            let stop = match &capture {
+                ReplyCapture::Live(s) => s.stop_reason.clone(),
+                ReplyCapture::Checkpoint => None,
+            };
+            self.finish_turn(TurnEnd::Completed(stop), Some(seq), capture)
+                .await;
         }
+    }
+
+    /// The reply of the delivery in flight on `conn_id`, from the connection's
+    /// state while it still exists.
+    async fn capture_reply(&self, conn_id: &str) -> ReplyCapture {
+        let token = {
+            let st = self.state.lock().await;
+            match &st.turn {
+                Some(t) if t.conn_id == conn_id => t.reply_token.clone(),
+                _ => None,
+            }
+        };
+        let Some(token) = token else {
+            return ReplyCapture::Checkpoint;
+        };
+        match self.manager.get_state(conn_id).await {
+            Some(state) => state
+                .read()
+                .await
+                .reply_turns
+                .snapshot(&token)
+                .map(|r| ReplyCapture::Live(Box::new(r)))
+                .unwrap_or(ReplyCapture::Checkpoint),
+            None => ReplyCapture::Checkpoint,
+        }
+    }
+
+    // ── the reply in flight ─────────────────────────────────────────────────
+
+    /// Push the step the reply in flight is on, at most every
+    /// [`REPLY_PUSH_GAP`]; the last push of a burst always goes out. Read
+    /// from the connection's state when it goes, so an event the bus dropped
+    /// costs nothing.
+    pub(super) fn schedule_reply_push(self: &Arc<Self>) {
+        if self.reply_push_pending.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let engine = self.clone();
+        tokio::spawn(async move {
+            let wait = {
+                let p = engine.reply_push.lock().await;
+                p.last_push
+                    .map(|t| (t + REPLY_PUSH_GAP).saturating_duration_since(tokio::time::Instant::now()))
+            };
+            if let Some(wait) = wait.filter(|w| !w.is_zero()) {
+                tokio::time::sleep(wait).await;
+            }
+            // Cleared before reading: an event applied from here on schedules
+            // the next push, which reads it.
+            engine.reply_push_pending.store(false, Ordering::SeqCst);
+            engine.push_reply().await;
+        });
+    }
+
+    /// The delivery in flight's reply row and tag, on its connection.
+    async fn reply_in_flight(&self) -> Option<(i32, String, String)> {
+        let st = self.state.lock().await;
+        let t = st.turn.as_ref()?;
+        Some((t.reply_row_id?, t.reply_token.clone()?, t.conn_id.clone()))
+    }
+
+    /// The reply in flight's row and the connection's copy of it now.
+    async fn reply_snapshot(&self) -> Option<(i32, ReplySnapshot)> {
+        let (row_id, token, conn_id) = self.reply_in_flight().await?;
+        let state = self.manager.get_state(&conn_id).await?;
+        let snap = state.read().await.reply_turns.snapshot(&token)?;
+        Some((row_id, snap))
+    }
+
+    async fn push_reply(self: &Arc<Self>) {
+        let Some((row_id, snap)) = self.reply_snapshot().await else {
+            return;
+        };
+        let n = snap.current.as_ref().map(ReplyStep::n);
+        let now = tokio::time::Instant::now();
+        let checkpoint = {
+            let mut p = self.reply_push.lock().await;
+            p.last_push = Some(now);
+            let due = p.checkpoint_row != Some(row_id)
+                || p.checkpoint_n != n
+                || p.checkpoint_at
+                    .is_none_or(|t| now.duration_since(t) >= REPLY_CHECKPOINT_EVERY);
+            if due {
+                p.checkpoint_row = Some(row_id);
+                p.checkpoint_n = n;
+                p.checkpoint_at = Some(now);
+            } else if !p.trailing {
+                // What this push did not write lands with the next due
+                // checkpoint, even if nothing else happens until then.
+                p.trailing = true;
+                let at = p.checkpoint_at.map(|t| t + REPLY_CHECKPOINT_EVERY);
+                let engine = self.clone();
+                tokio::spawn(async move {
+                    if let Some(at) = at {
+                        tokio::time::sleep_until(at).await;
+                    }
+                    engine.trailing_checkpoint().await;
+                });
+            }
+            due
+        };
+        self.emit(PersonalAgentChange::Reply {
+            row_id,
+            current: snap.current.clone(),
+        });
+        if checkpoint {
+            self.checkpoint_reply(row_id, &snap).await;
+        }
+    }
+
+    /// The checkpoint a push left for later.
+    async fn trailing_checkpoint(&self) {
+        let Some((row_id, snap)) = self.reply_snapshot().await else {
+            self.reply_push.lock().await.trailing = false;
+            return;
+        };
+        {
+            let mut p = self.reply_push.lock().await;
+            p.trailing = false;
+            p.checkpoint_row = Some(row_id);
+            p.checkpoint_n = snap.current.as_ref().map(ReplyStep::n);
+            p.checkpoint_at = Some(tokio::time::Instant::now());
+        }
+        self.checkpoint_reply(row_id, &snap).await;
+    }
+
+    /// Write the reply in flight's progress to its row (still `running`).
+    async fn checkpoint_reply(&self, row_id: i32, snap: &ReplySnapshot) {
+        let Ok(Some(row)) = svc::get_row(&self.db.conn, row_id).await else {
+            return;
+        };
+        let mut data = row
+            .data
+            .as_deref()
+            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+            .unwrap_or_else(|| serde_json::json!({ "state": "running" }));
+        if let Some(map) = data.as_object_mut() {
+            map.insert("current".into(), serde_json::to_value(&snap.current).unwrap_or_default());
+            map.insert(
+                "last_text".into(),
+                serde_json::to_value(&snap.last_text).unwrap_or_default(),
+            );
+            map.insert("step_count".into(), snap.step_count.into());
+            map.insert("quotes".into(), serde_json::to_value(&snap.quotes).unwrap_or_default());
+        }
+        if let Ok(true) = svc::checkpoint_reply_row(&self.db.conn, row_id, data).await {
+            if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row_id).await {
+                self.emit_rows(vec![svc::to_row(updated)]);
+            }
+        }
+    }
+
+    /// Settle a reply row: its last text becomes the body, its quote is
+    /// resolved, and it records how the turn ended. A row settled already is
+    /// left alone.
+    async fn settle_reply(
+        &self,
+        row_id: i32,
+        started_at: DateTime<Utc>,
+        outcome: ReplyOutcome,
+        content: ReplyContent,
+        auto_quote: Option<i32>,
+    ) {
+        let reply_to = match self.resolve_quote(row_id, &content.quotes).await {
+            Some(id) => Some(id),
+            None => auto_quote,
+        };
+        let finished_at = Utc::now();
+        let data = serde_json::json!({
+            "state": outcome.state,
+            "why": outcome.why,
+            "stop_reason": outcome.stop_reason,
+            "error": outcome.error,
+            "step_count": content.step_count,
+            "last_text_n": content.last_text_n,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "duration_ms": (finished_at - started_at).num_milliseconds().max(0),
+        });
+        if let Ok(Some(row)) =
+            svc::settle_reply_row(&self.db.conn, row_id, content.text, data, reply_to).await
+        {
+            self.emit_rows(vec![svc::to_row(row)]);
+        }
+    }
+
+    /// The first row the reply's markers name that it may quote: one that
+    /// exists, came before it, and has something to show.
+    async fn resolve_quote(&self, row_id: i32, quotes: &[i64]) -> Option<i32> {
+        for id in quotes.iter().filter_map(|q| i32::try_from(*q).ok()) {
+            if id <= 0 || id >= row_id {
+                continue;
+            }
+            if let Ok(Some(target)) = svc::get_row(&self.db.conn, id).await {
+                if !svc::is_unwritten_reply(&target) && target.kind != TimelineKind::Marker {
+                    return Some(id);
+                }
+            }
+        }
+        None
     }
 
     // ── segment state ───────────────────────────────────────────────────────
@@ -1159,7 +1632,7 @@ impl PersonalAgentEngine {
     async fn ensure_session(&self, row: &agent_entity::Model) -> Result<Session, String> {
         let config = brain_of(row).ok_or("the personal agent's agent is not readable")?;
         let workdir = self.workdir_of(row);
-        workdir::ensure_initialized(&workdir, None)
+        workdir::ensure_initialized(&workdir, self.owner_locale(row, None).await)
             .await
             .map_err(|e| e.to_string())?;
         let folder_id = self.ensure_folder(row, &workdir).await?;
@@ -1520,6 +1993,9 @@ impl PersonalAgentEngine {
                 usage_after: None,
                 compaction_reported: None,
                 agent_compacted: false,
+                reply_row_id: None,
+                reply_token: None,
+                auto_quote: None,
             });
             st.last_check = Some(CompactCheck {
                 at: Utc::now(),
@@ -1607,6 +2083,17 @@ impl PersonalAgentEngine {
                 *slot = (*slot).max(id);
                 m
             });
+        // Each line is numbered with its result card: the agent quotes it by
+        // that number, the way the owner's messages are numbered.
+        let cards: HashMap<i32, i32> = svc::result_rows_of_events(
+            &self.db.conn,
+            &events.iter().map(|e| e.id).collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|r| Some((r.event_id?, r.id)))
+        .collect();
         let mut lines = Vec::new();
         for e in events.iter().filter(|e| match e.coalesce_key.as_deref() {
             Some(k) => newest.get(k) == Some(&e.id),
@@ -1632,6 +2119,7 @@ impl PersonalAgentEngine {
                     .and_then(|p| p.get("on_done").and_then(|v| v.as_str()).map(str::to_string)),
             };
             lines.push(cards::EventLine {
+                row_id: cards.get(&e.id).copied(),
                 summary: e.summary.clone(),
                 on_done,
             });
@@ -1676,7 +2164,7 @@ impl PersonalAgentEngine {
         let settings = settings_of(row);
         let config = brain_of(row).ok_or("the personal agent's agent is not readable")?;
         let seg_state = SegmentState::parse(&session.segment.state);
-        let digest = workdir::persona_digest(&workdir);
+        let digest = workdir::persona_digest(&workdir, &row.name);
         let soul = workdir::read_text(&workdir, workdir::SOUL_FILE);
         let rules = workdir::read_text(&workdir, workdir::RULES_FILE);
 
@@ -1695,14 +2183,23 @@ impl PersonalAgentEngine {
             cards_text.push(card.text);
             carried.handoff = true;
         } else if seg_state.needs_state_card {
-            cards_text.push(cards::state_card(&soul, &rules, &items));
+            let user = workdir::read_text(&workdir, workdir::USER_FILE);
+            let memory = workdir::read_text(&workdir, workdir::MEMORY_FILE);
+            let identity = cards::Identity {
+                name: &row.name,
+                soul: &soul,
+                rules: &rules,
+                user: &user,
+                memory: &memory,
+            };
+            cards_text.push(cards::state_card(&identity, &items));
             carried.state_card = true;
         } else if seg_state.persona_resend || session.segment.persona_digest.as_deref() != Some(&digest)
         {
             // Changed between turns, not by the agent itself: its own edits
             // are folded into the digest at the end of each of its turns.
             if session.segment.persona_digest.is_some() || seg_state.persona_resend {
-                cards_text.push(cards::persona_update(&soul, &rules));
+                cards_text.push(cards::persona_update(&row.name, &soul, &rules));
                 carried.persona = true;
             }
         }
@@ -1711,8 +2208,24 @@ impl PersonalAgentEngine {
         }
         let event_lines = self.event_lines(&events).await;
         let events_text = cards::events_block(&event_lines);
-        let owner_texts: Vec<String> = owners.iter().map(|o| o.body.clone()).collect();
-        let text = cards::delivery_text(&cards_text, events_text.as_deref(), &owner_texts);
+        let mut owner_lines = Vec::with_capacity(owners.len());
+        for o in &owners {
+            owner_lines.push(OwnerLine {
+                id: o.id,
+                quote: match o.reply_to {
+                    Some(id) => self.quote_excerpt(id).await.map(|text| (id, text)),
+                    None => None,
+                },
+                text: o.body.clone(),
+            });
+        }
+        let text = cards::delivery_text(&cards_text, events_text.as_deref(), &owner_lines);
+        // An event alone, no message: the reply answers that event.
+        let auto_quote = if owners.is_empty() && event_lines.len() == 1 {
+            event_lines[0].row_id
+        } else {
+            None
+        };
 
         // Attachments ride after the text, in message order.
         let mut blocks = vec![PromptInputBlock::Text { text }];
@@ -1749,6 +2262,7 @@ impl PersonalAgentEngine {
         .map_err(|e| e.to_string())?;
         let owner_ids: Vec<i32> = owners.iter().map(|o| o.id).collect();
         let event_ids: Vec<i32> = events.iter().map(|e| e.id).collect();
+        // The assistant starts on them now: read.
         let moved = svc::move_owner_rows(
             &self.db.conn,
             &owner_ids,
@@ -1756,10 +2270,25 @@ impl PersonalAgentEngine {
             OwnerStatus::Delivered,
             Some(batch.id),
             Some(session.segment.id),
+            ReadMark::Read,
         )
         .await
         .map_err(|e| e.to_string())?;
-        let _ = svc::mark_events_delivered(&self.db.conn, &event_ids, batch.id).await;
+        let taken = svc::mark_events_delivered(&self.db.conn, &event_ids, batch.id)
+            .await
+            .unwrap_or_default();
+        let read_cards = svc::set_result_rows_read(&self.db.conn, &taken, Some(Utc::now()))
+            .await
+            .unwrap_or_default();
+        // The reply exists from the start: it streams in place and settles
+        // in place.
+        let started_at = Utc::now();
+        let mut reply = NewRow::new(TimelineKind::Reply, "");
+        reply.segment_id = Some(session.segment.id);
+        reply.batch_id = Some(batch.id);
+        reply.data = Some(serde_json::json!({ "state": "running", "started_at": started_at }));
+        let reply = svc::insert_row(&self.db.conn, reply).await.ok();
+        let token = format!("pa-{}-{}", batch.id, uuid::Uuid::new_v4().simple());
         let start_seq = self.current_seq(&session.conn_id).await;
         // Registered before the send, for the reason `start_compaction` gives.
         {
@@ -1770,7 +2299,7 @@ impl PersonalAgentEngine {
                 kind: BatchKind::Delivery,
                 conn_id: session.conn_id.clone(),
                 start_seq,
-                started_at: Utc::now(),
+                started_at,
                 owner_row_ids: owner_ids.clone(),
                 compaction: None,
                 carried,
@@ -1779,24 +2308,33 @@ impl PersonalAgentEngine {
                 usage_after: None,
                 compaction_reported: None,
                 agent_compacted: false,
+                reply_row_id: reply.as_ref().map(|r| r.id),
+                reply_token: reply.as_ref().map(|_| token.clone()),
+                auto_quote,
             });
             st.last_error = None;
         }
+        let mut shown: Vec<TimelineRow> = moved.iter().cloned().map(svc::to_row).collect();
+        shown.extend(read_cards.into_iter().map(svc::to_row));
+        if let Some(r) = reply.as_ref() {
+            shown.push(svc::to_row(r.clone()));
+        }
+        self.emit_rows(shown);
         let sent = self
             .manager
-            .send_prompt_linked_with_message_id(
+            .send_personal_agent_prompt(
                 &self.db,
                 &session.conn_id,
                 blocks,
                 Some(session.folder_id),
                 session.segment.conversation_id,
-                None,
-                None,
+                reply.as_ref().map(|_| token.clone()),
             )
             .await;
         if let Err(e) = sent {
             self.clear_turn(batch.id).await;
-            // Nothing reached the agent: everything goes back as it was.
+            // Nothing reached the agent: everything goes back as it was —
+            // unread — and the reply that never started is void.
             let back = svc::move_owner_rows(
                 &self.db.conn,
                 &owner_ids,
@@ -1804,10 +2342,20 @@ impl PersonalAgentEngine {
                 OwnerStatus::Queued,
                 None,
                 None,
+                ReadMark::Unread,
             )
             .await
             .unwrap_or_default();
-            let _ = svc::revert_batch_events(&self.db.conn, batch.id).await;
+            let returned = svc::revert_batch_events(&self.db.conn, batch.id)
+                .await
+                .unwrap_or_default();
+            let unread = svc::set_result_rows_read(&self.db.conn, &returned, None)
+                .await
+                .unwrap_or_default();
+            if let Some(r) = reply.as_ref() {
+                self.discard_reply(r.id).await;
+            }
+            self.emit_rows(unread.into_iter().map(svc::to_row).collect());
             let _ = svc::finish_batch(
                 &self.db.conn,
                 batch.id,
@@ -1829,9 +2377,43 @@ impl PersonalAgentEngine {
                 .await;
         }
         let _ = svc::set_segment_persona_digest(&self.db.conn, session.segment.id, Some(digest)).await;
-        self.emit_rows(moved.into_iter().map(svc::to_row).collect());
         self.emit(PersonalAgentChange::Status);
         Ok(())
+    }
+
+    /// A reply whose prompt never reached the agent: kept, void.
+    async fn discard_reply(&self, row_id: i32) {
+        let data = serde_json::json!({ "state": "discarded", "finished_at": Utc::now() });
+        if let Ok(Some(row)) =
+            svc::settle_reply_row(&self.db.conn, row_id, String::new(), data, None).await
+        {
+            self.emit_rows(vec![svc::to_row(row)]);
+        }
+    }
+
+    /// What a delivery repeats of a quoted row, so the agent knows what is
+    /// meant even when it is no longer in its context.
+    async fn quote_excerpt(&self, id: i32) -> Option<String> {
+        let row = svc::get_row(&self.db.conn, id).await.ok().flatten()?;
+        if svc::is_unwritten_reply(&row) {
+            return None;
+        }
+        let text = match row.kind {
+            TimelineKind::Result => row
+                .data
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                .and_then(|d| d.get("title").and_then(|t| t.as_str()).map(str::to_string))
+                .map(|title| format!("{title}: {}", row.body))
+                .unwrap_or(row.body),
+            _ => row.body,
+        };
+        let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut excerpt: String = line.chars().take(QUOTE_EXCERPT_CHARS).collect();
+        if line.chars().count() > QUOTE_EXCERPT_CHARS {
+            excerpt.push('…');
+        }
+        Some(excerpt)
     }
 
     /// The open matters, as cards list them.
@@ -1881,7 +2463,6 @@ impl PersonalAgentEngine {
         items: &[ItemLine],
         budget: u32,
     ) -> cards::Card {
-        let _ = row;
         let recent_rows = svc::recent_rows(
             &self.db.conn,
             &[
@@ -1899,7 +2480,10 @@ impl PersonalAgentEngine {
             .into_iter()
             // The messages this very delivery carries are in it already.
             .filter(|r| !(r.kind == TimelineKind::Owner && r.status == Some(OwnerStatus::Queued)))
+            // A reply still being written, or one that never started.
+            .filter(|r| !svc::is_unwritten_reply(r))
             .map(|r| RecentLine {
+                id: r.id,
                 who: match r.kind {
                     TimelineKind::Owner => "Owner",
                     TimelineKind::Reply => "You",
@@ -1940,15 +2524,22 @@ impl PersonalAgentEngine {
             .rfind(|s| s.id < seg.id)
             .and_then(|s| serde_json::from_str::<AssistantAgentConfig>(&s.agent_options).ok())
             .map(|c| c.label_snapshot.agent);
+        let soul = workdir::read_text(workdir, workdir::SOUL_FILE);
+        let rules = workdir::read_text(workdir, workdir::RULES_FILE);
+        let user = workdir::read_text(workdir, workdir::USER_FILE);
+        let memory = workdir::read_text(workdir, workdir::MEMORY_FILE);
         cards::handoff_card(&cards::HandoffInput {
             segment_seq: seg.seq,
             reason: seg.start_reason,
             previous_agent: previous.as_deref(),
             current_agent: &config.label_snapshot.agent,
-            soul: &workdir::read_text(workdir, workdir::SOUL_FILE),
-            rules: &workdir::read_text(workdir, workdir::RULES_FILE),
-            user: &workdir::read_text(workdir, workdir::USER_FILE),
-            memory: &workdir::read_text(workdir, workdir::MEMORY_FILE),
+            identity: cards::Identity {
+                name: &row.name,
+                soul: &soul,
+                rules: &rules,
+                user: &user,
+                memory: &memory,
+            },
             items,
             recent: &recent,
             assistants: &assistants,
@@ -1958,7 +2549,7 @@ impl PersonalAgentEngine {
 
     // ── a turn ends ─────────────────────────────────────────────────────────
 
-    async fn finish_turn(&self, end: TurnEnd, seq: Option<u64>) {
+    async fn finish_turn(&self, end: TurnEnd, seq: Option<u64>, capture: ReplyCapture) {
         let turn = {
             let mut st = self.state.lock().await;
             let Some(turn) = st.turn.take() else {
@@ -1971,63 +2562,87 @@ impl PersonalAgentEngine {
             turn
         };
         match turn.kind {
-            BatchKind::Delivery => self.finish_delivery(turn, end).await,
+            BatchKind::Delivery => self.finish_delivery(turn, end, capture).await,
             BatchKind::Compaction => self.finish_compaction(turn, end).await,
         }
         self.emit(PersonalAgentChange::Status);
         self.nudge();
     }
 
-    async fn finish_delivery(&self, turn: ActiveTurn, end: TurnEnd) {
+    async fn finish_delivery(&self, turn: ActiveTurn, end: TurnEnd, capture: ReplyCapture) {
         let (stop, lost) = match &end {
             TurnEnd::Completed(stop) => (stop.clone(), None),
             TurnEnd::Lost(why) => (None, Some(why.clone())),
         };
-        let text = match self.manager.get_state(&turn.conn_id).await {
-            Some(state) => {
-                let s = state.read().await;
-                match &end {
-                    TurnEnd::Completed(_) => s.last_turn_main_text.clone(),
-                    // No completion captured this turn's text, and the field
-                    // still holds the turn before's. What it streamed so far
-                    // is in the live message, which every prompt starts
-                    // empty — so it is this turn's.
-                    TurnEnd::Lost(_) => s
-                        .live_message
-                        .as_ref()
-                        .map(|live| crate::acp::session_state::main_thread_text(&live.content)),
-                }
-            }
+        // The reply as it was when the end was decided; when that could not
+        // be read, what its row last recorded (at most a checkpoint behind).
+        let reply_row = match turn.reply_row_id {
+            Some(id) => svc::get_row(&self.db.conn, id).await.ok().flatten(),
             None => None,
-        }
-        .filter(|t| !t.trim().is_empty());
+        };
+        let content = match &capture {
+            ReplyCapture::Live(snap) => ReplyContent::from_snapshot(snap),
+            ReplyCapture::Checkpoint => {
+                if turn.reply_token.is_some() {
+                    tracing::info!(
+                        "[personal_agent] the reply of batch {} is settled from its last checkpoint",
+                        turn.batch_id
+                    );
+                }
+                ReplyContent::from_checkpoint(reply_row.as_ref().and_then(|r| r.data.as_deref()))
+            }
+        };
+        let has_text = !content.text.trim().is_empty();
         let canceled = matches!(stop.as_deref(), Some("cancelled" | "canceled"));
         let rejected = stop.as_deref() == Some("rejected");
         let interrupted = lost.is_some() || turn.overflow || rejected
-            || (turn.error.is_some() && text.is_none() && !canceled);
+            || (turn.error.is_some() && !has_text && !canceled);
+        let why = if turn.overflow {
+            "overflow"
+        } else if lost.is_some() {
+            "connection"
+        } else if rejected {
+            "rejected"
+        } else {
+            "error"
+        };
 
-        // The reply: everything visible the agent wrote, even when the turn
-        // did not end well — the owner saw it stream.
-        if let Some(text) = text.clone() {
-            let mut row = NewRow::new(TimelineKind::Reply, text);
-            row.segment_id = Some(turn.segment_id);
-            row.batch_id = Some(turn.batch_id);
-            row.data = Some(serde_json::json!({
-                "stop_reason": stop,
-                "canceled": canceled,
-                "interrupted": interrupted,
-            }));
-            self.push_row(row).await;
+        // The reply settles in place: the page saw it stream there. Pushed
+        // once more as it stood, then the row with its body.
+        if let Some(row) = reply_row {
+            if let (ReplyCapture::Live(snap), Some(row_id)) = (&capture, turn.reply_row_id) {
+                self.emit(PersonalAgentChange::Reply {
+                    row_id,
+                    current: snap.current.clone(),
+                });
+            }
+            self.settle_reply(
+                row.id,
+                turn.started_at,
+                ReplyOutcome {
+                    state: if interrupted {
+                        "interrupted"
+                    } else if canceled {
+                        "canceled"
+                    } else {
+                        "done"
+                    },
+                    why: interrupted.then_some(why),
+                    stop_reason: stop.clone(),
+                    error: turn.error.clone().or(lost.clone()),
+                },
+                content,
+                turn.auto_quote,
+            )
+            .await;
+        }
+        if let Some(token) = turn.reply_token.as_deref() {
+            if let Some(state) = self.manager.get_state(&turn.conn_id).await {
+                state.write().await.reply_turns.release(token);
+            }
         }
 
         if interrupted {
-            let why = if turn.overflow {
-                "overflow"
-            } else if lost.is_some() {
-                "connection"
-            } else {
-                "error"
-            };
             let _ = svc::finish_batch(
                 &self.db.conn,
                 turn.batch_id,
@@ -2066,6 +2681,7 @@ impl PersonalAgentEngine {
                 OwnerStatus::Answered,
                 None,
                 None,
+                ReadMark::Keep,
             )
             .await
             .unwrap_or_default();
@@ -2138,7 +2754,7 @@ impl PersonalAgentEngine {
             return;
         };
         let workdir = self.workdir_of(&row);
-        let digest = workdir::persona_digest(&workdir);
+        let digest = workdir::persona_digest(&workdir, &row.name);
         let _ = svc::set_segment_persona_digest(&self.db.conn, turn.segment_id, Some(digest)).await;
         let seg = svc::get_segment(&self.db.conn, turn.segment_id).await.ok().flatten();
         if let Some(seg) = seg.as_ref() {
@@ -2296,11 +2912,13 @@ impl PersonalAgentEngine {
 
     // ── what the page does ──────────────────────────────────────────────────
 
-    /// Queue one owner message.
+    /// Queue one owner message, unread until a delivery carries it.
+    /// `reply_to` quotes an earlier row.
     pub async fn send_owner_message(
         &self,
         text: String,
         blocks: Vec<PromptInputBlock>,
+        reply_to: Option<i32>,
     ) -> Result<TimelineRow, String> {
         if self.agent_row().await.is_none() {
             return Err("configure the personal agent first".into());
@@ -2309,8 +2927,18 @@ impl PersonalAgentEngine {
         if text.is_empty() && blocks.is_empty() {
             return Err("the message is empty".into());
         }
+        if let Some(id) = reply_to {
+            let target = svc::get_row(&self.db.conn, id)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or("the quoted message does not exist")?;
+            if svc::is_unwritten_reply(&target) || target.kind == TimelineKind::Marker {
+                return Err("that message cannot be quoted".into());
+            }
+        }
         let mut row = NewRow::new(TimelineKind::Owner, text);
         row.status = Some(OwnerStatus::Queued);
+        row.reply_to = reply_to;
         if !blocks.is_empty() {
             row.data = Some(serde_json::json!({ "blocks": blocks }));
         }
@@ -2318,41 +2946,6 @@ impl PersonalAgentEngine {
         self.emit(PersonalAgentChange::Status);
         self.nudge();
         Ok(row)
-    }
-
-    /// Steer the turn in flight with a supplement (the existing live-feedback
-    /// channel), recorded on the timeline. While compacting, or when the turn
-    /// cannot take it, the message is queued instead — `Ok(false)`.
-    pub async fn supplement(&self, text: String) -> Result<(TimelineRow, bool), String> {
-        let text = text.trim().to_string();
-        if text.is_empty() {
-            return Err("the message is empty".into());
-        }
-        let turn = self.state.lock().await.turn.clone();
-        if let Some(turn) = turn.filter(|t| t.kind == BatchKind::Delivery) {
-            if self
-                .manager
-                .submit_feedback(&turn.conn_id, text.clone(), None)
-                .await
-                .is_ok()
-            {
-                let mut row = NewRow::new(TimelineKind::Owner, text);
-                row.status = Some(OwnerStatus::Delivered);
-                row.segment_id = Some(turn.segment_id);
-                row.batch_id = Some(turn.batch_id);
-                row.data = Some(serde_json::json!({ "supplement": true }));
-                let row = self.push_row(row).await.ok_or("could not record the message")?;
-                // Answered with the turn it was folded into.
-                if let Some(t) = self.state.lock().await.turn.as_mut() {
-                    if t.batch_id == turn.batch_id {
-                        t.owner_row_ids.push(row.id);
-                    }
-                }
-                return Ok((row, true));
-            }
-        }
-        let row = self.send_owner_message(text, Vec::new()).await?;
-        Ok((row, false))
     }
 
     /// Stop the turn in flight, delivery or compaction.
@@ -2428,6 +3021,19 @@ impl PersonalAgentEngine {
         }
     }
 
+    /// The owner has seen the page up to row `up_to`: what of it was new to
+    /// them stops counting, every page hears it.
+    pub async fn mark_seen(&self, up_to: i32) -> Result<(), String> {
+        let marked = svc::mark_seen(&self.db.conn, up_to)
+            .await
+            .map_err(|e| e.to_string())?;
+        if !marked.is_empty() {
+            self.emit_rows(marked.into_iter().map(svc::to_row).collect());
+            self.emit(PersonalAgentChange::Status);
+        }
+        Ok(())
+    }
+
     /// Offer an interrupted message again, as a new message at the end.
     pub async fn resend(&self, row_id: i32) -> Result<TimelineRow, String> {
         let row = svc::get_row(&self.db.conn, row_id)
@@ -2444,7 +3050,17 @@ impl PersonalAgentEngine {
             .and_then(|d| d.get("blocks").cloned())
             .and_then(|b| serde_json::from_value::<Vec<PromptInputBlock>>(b).ok())
             .unwrap_or_default();
-        let new = self.send_owner_message(row.body.clone(), blocks).await?;
+        // The quote goes with it — unless what it quoted cannot be any more.
+        let reply_to = match row.reply_to {
+            Some(id) => match svc::get_row(&self.db.conn, id).await {
+                Ok(Some(t)) if !svc::is_unwritten_reply(&t) => Some(id),
+                _ => None,
+            },
+            None => None,
+        };
+        let new = self
+            .send_owner_message(row.body.clone(), blocks, reply_to)
+            .await?;
         let mut data = row
             .data
             .as_deref()
@@ -2476,9 +3092,17 @@ impl PersonalAgentEngine {
         }
         let old_config = existing.as_ref().and_then(brain_of);
         let mut settings = existing.as_ref().map(settings_of).unwrap_or_default();
+        let remembered = settings.locale;
         if let Some(s) = draft.settings.clone() {
             settings = s.normalized();
         }
+        // The owner's language is no field of the dialog: the one this save
+        // came from, else the one remembered.
+        settings.locale = draft
+            .locale
+            .as_deref()
+            .map(super::templates::template_locale)
+            .or(remembered);
         let new_config = draft.agent_config.clone();
         if let Some(config) = new_config.as_ref() {
             crate::db::service::assistant_service::validate_agent_config(config)
@@ -2517,12 +3141,21 @@ impl PersonalAgentEngine {
         }
         write.settings_json = Some(serde_json::to_string(&settings).map_err(|e| e.to_string())?);
         let first_save = existing.is_none();
+        let renamed = existing
+            .as_ref()
+            .zip(write.name.as_deref())
+            .is_some_and(|(row, name)| row.name.trim() != name.trim());
         let saved = svc::save_agent(&self.db.conn, write)
             .await
             .map_err(|e| e.to_string())?;
+        if renamed {
+            if let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await {
+                self.update_segment_state(seg.id, |s| s.persona_resend = true).await;
+            }
+        }
         if first_save {
             let workdir = self.workdir_of(&saved);
-            workdir::ensure_initialized(&workdir, draft.locale.as_deref())
+            workdir::ensure_initialized(&workdir, self.owner_locale(&saved, None).await)
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -2616,9 +3249,31 @@ impl PersonalAgentEngine {
         .await;
     }
 
+    /// The language codeg writes in for the owner: the UI's when a request
+    /// from it carries one, else the one the settings remember, else the UI
+    /// language the owner picked in codeg's settings (in "follow the system"
+    /// mode only the UI knows it), else English.
+    async fn owner_locale(&self, row: &agent_entity::Model, ui: Option<&str>) -> AppLocale {
+        if let Some(tag) = ui.map(str::trim).filter(|t| !t.is_empty()) {
+            return super::templates::template_locale(tag);
+        }
+        if let Some(locale) = settings_of(row).locale {
+            return locale;
+        }
+        match crate::commands::system_settings::load_system_language_settings(&self.db.conn).await {
+            Ok(s) if s.mode == LanguageMode::Manual => s.language,
+            _ => AppLocale::En,
+        }
+    }
+
     /// Move the working directory. Idle only; the old directory is left as it
-    /// is, and the next delivery starts a new segment there.
-    pub async fn set_workdir(&self, path: Option<String>) -> Result<PersonalAgentInfo, String> {
+    /// is, and the next delivery starts a new segment there. `locale` is the
+    /// UI's, for the template files of a directory made anew.
+    pub async fn set_workdir(
+        &self,
+        path: Option<String>,
+        locale: Option<&str>,
+    ) -> Result<PersonalAgentInfo, String> {
         if self.state.lock().await.turn.is_some() {
             return Err("wait for the turn in flight to finish".into());
         }
@@ -2630,7 +3285,7 @@ impl PersonalAgentEngine {
         if target == self.workdir_of(&row) {
             return self.info_of(&row).ok_or_else(|| "unreadable".into());
         }
-        workdir::ensure_initialized(&target, None)
+        workdir::ensure_initialized(&target, self.owner_locale(&row, locale).await)
             .await
             .map_err(|e| e.to_string())?;
         let folder = crate::db::service::folder_service::ensure_personal_folder(
@@ -2677,6 +3332,19 @@ impl PersonalAgentEngine {
         Ok(())
     }
 
+    /// Delete a memory entry the owner no longer wants kept, with its line in
+    /// the index.
+    pub async fn delete_file(&self, name: &str) -> Result<(), String> {
+        let row = self.agent_row().await.ok_or("configure the personal agent first")?;
+        let workdir = self.workdir_of(&row);
+        workdir::delete_entry(&workdir, name).map_err(|e| e.to_string())?;
+        let message = format!("owner: delete {name}");
+        tokio::spawn(async move {
+            workdir::commit_all(&workdir, &message).await;
+        });
+        Ok(())
+    }
+
     /// Whether `connection_id` is the personal agent's current connection —
     /// the only one its tools answer.
     pub async fn is_current_connection(&self, connection_id: &str) -> bool {
@@ -2710,6 +3378,20 @@ impl PersonalAgentEngine {
             )
         };
         status.connection_id = conn.clone();
+        if let Some(t) = turn.as_ref() {
+            if let (Some(row_id), Some(token)) = (t.reply_row_id, t.reply_token.as_deref()) {
+                let current = match self.manager.get_state(&t.conn_id).await {
+                    Some(state) => state
+                        .read()
+                        .await
+                        .reply_turns
+                        .snapshot(token)
+                        .and_then(|s| s.current),
+                    None => None,
+                };
+                status.live_reply = Some(LiveReply { row_id, current });
+            }
+        }
         status.turn = turn.as_ref().map(|t| TurnInfo {
             batch_id: t.batch_id,
             kind: t.kind,
@@ -2922,6 +3604,7 @@ pub async fn status_from_db(
         last_compaction,
         queued_messages: svc::count_queued_owner_rows(&db.conn).await.unwrap_or(0) as u32,
         pending_events: svc::count_pending_events(&db.conn).await.unwrap_or(0) as u32,
+        unseen: svc::count_unseen(&db.conn).await.unwrap_or(0) as u32,
         dispatch_running: running,
         dispatch_queued: queued,
         dispatch_limit: settings.dispatch_concurrency,
@@ -2929,6 +3612,7 @@ pub async fn status_from_db(
         pending_question: false,
         last_error: None,
         workdir,
+        live_reply: None,
     }
 }
 

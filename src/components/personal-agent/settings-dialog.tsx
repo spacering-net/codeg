@@ -5,13 +5,12 @@
  * with every option picked, the assistant editor's flow and validation), the
  * auto-compaction threshold and command (the kanban task settings' two
  * fields), dispatch concurrency, and the persona and memory files of its
- * working directory. The working directory itself lives in Settings →
- * Collaboration.
+ * working directory (`PersonaFiles`). The working directory itself lives in
+ * Settings → Collaboration.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { toast } from "sonner"
 import {
   Bot,
   FileText,
@@ -20,7 +19,6 @@ import {
   Shrink,
   Sparkles,
   SquareSlash,
-  UserRound,
 } from "lucide-react"
 
 import {
@@ -39,6 +37,7 @@ import {
   EMPTY_SELECTION,
   type AssistantSelection,
 } from "@/components/settings/assistant-agent-config"
+import { AssistantAvatarPicker } from "@/components/settings/assistant-avatar-picker"
 import {
   RequiredOptionsSection,
   useRequiredOptionsGate,
@@ -58,30 +57,29 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Textarea } from "@/components/ui/textarea"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
-import {
-  personalAgentFileSave,
-  personalAgentFiles,
-  personalAgentSave,
-} from "@/lib/api"
+import { personalAgentSave } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { getAgentLabel } from "@/lib/custom-agents"
 import type {
   AgentType,
   AssistantAgentConfig,
-  PersonalAgentFile,
+  AssistantAvatar,
   PersonalAgentInfo,
   PersonalAgentSettings,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { PersonaFiles } from "./persona-files"
+
 export type SettingsTab = "brain" | "compaction" | "dispatch" | "persona"
 
 const DEFAULT_SETTINGS: PersonalAgentSettings = {
-  auto_compact_percent: 70,
+  auto_compact_percent: 50,
   compact_command: null,
   compact_command_agent: null,
   handoff_budget_chars: 32000,
@@ -90,6 +88,13 @@ const DEFAULT_SETTINGS: PersonalAgentSettings = {
 }
 
 const TAB_BODY_CLASS = "mt-1 flex min-h-[22rem] flex-col gap-3"
+
+/** What a new agent starts with — the backend's own default. */
+const DEFAULT_AVATAR: AssistantAvatar = {
+  kind: "emoji",
+  emoji: "🧭",
+  color: "violet",
+}
 
 interface PersonalAgentSettingsDialogProps {
   open: boolean
@@ -130,6 +135,7 @@ function SettingsBody({
   onClose: () => void
 }) {
   const t = useTranslations("PersonalAgent.settings")
+  const tPage = useTranslations("PersonalAgent")
   const tm = useTranslations("AcpAgentSettings.multiAgent")
   const ta = useTranslations("AcpAgentSettings.multiAgent.assistants")
   const locale = useLocale()
@@ -138,6 +144,9 @@ function SettingsBody({
   const saved = agent?.settings ?? DEFAULT_SETTINGS
 
   const [name, setName] = useState(agent?.name ?? "")
+  const [avatar, setAvatar] = useState<AssistantAvatar>(
+    agent?.avatar ?? DEFAULT_AVATAR
+  )
   const [agentType, setAgentType] = useState<AgentType | null>(
     agent?.agent_type ?? null
   )
@@ -328,6 +337,7 @@ function SettingsBody({
     try {
       await personalAgentSave({
         name: name.trim(),
+        avatar,
         ...(brain.config ? { agent_config: brain.config } : {}),
         settings,
         locale,
@@ -358,179 +368,207 @@ function SettingsBody({
           void save()
         }}
       >
-        <div className="relative min-h-0 flex-1 overflow-y-auto border-y border-border/60 px-4 py-4 sm:px-6">
-          <Tabs value={tab} onValueChange={(v) => setTab(v as SettingsTab)}>
-            <TabsList className="w-full">
-              <TabsTrigger value="brain" className="flex-1">
-                {t("tabBrain")}
-              </TabsTrigger>
-              <TabsTrigger value="compaction" className="flex-1">
-                {t("tabCompaction")}
-              </TabsTrigger>
-              <TabsTrigger value="dispatch" className="flex-1">
-                {t("tabDispatch")}
-              </TabsTrigger>
-              <TabsTrigger value="persona" className="flex-1" disabled={!agent}>
-                {t("tabPersona")}
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="brain" className={TAB_BODY_CLASS}>
-              <SettingCard>
-                <SettingRow
-                  icon={UserRound}
-                  title={t("name")}
-                  description={t("nameHint")}
-                  htmlFor="pa-name"
+        {/* Only the fields scroll, on the side panel's scrollbar; the footer
+            stays in view. `relative` keeps the selects' hidden native inputs
+            inside the scrolled content. */}
+        <ScrollArea className="min-h-0 flex-1 border-y border-border/60">
+          <div className="relative px-4 py-4 sm:px-6">
+            <Tabs value={tab} onValueChange={(v) => setTab(v as SettingsTab)}>
+              <TabsList className="w-full">
+                <TabsTrigger value="brain" className="flex-1">
+                  {t("tabBrain")}
+                </TabsTrigger>
+                <TabsTrigger value="compaction" className="flex-1">
+                  {t("tabCompaction")}
+                </TabsTrigger>
+                <TabsTrigger value="dispatch" className="flex-1">
+                  {t("tabDispatch")}
+                </TabsTrigger>
+                <TabsTrigger
+                  value="persona"
+                  className="flex-1"
+                  disabled={!agent}
                 >
-                  <Input
-                    id="pa-name"
-                    value={name}
-                    maxLength={40}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder={t("namePlaceholder")}
-                    className="h-8 bg-background text-sm"
-                  />
-                </SettingRow>
-              </SettingCard>
-              <SettingCard>
-                <SettingRow
-                  icon={Bot}
-                  title={ta("agentLabel")}
-                  description={
-                    agentType === null ? ta("pickAgentFirst") : t("agentHint")
-                  }
-                  control={
-                    <AgentSelect
-                      value={agentType}
-                      onChange={pickAgent}
-                      agents={agents.filter(
-                        (a) => a.enabled || a.agent_type === agentType
-                      )}
-                      fallbackLabel={savedAgent?.label_snapshot.agent}
-                      disabled={saving}
-                    />
-                  }
-                />
-                {agentType !== null ? (
-                  <RequiredOptionsSection
-                    gate={gate}
-                    loading={probe.loading}
-                    saved={agentTouched ? null : savedAgent}
-                    driftCount={driftCount}
-                    renderRow={renderRow}
-                    onRetry={() => probe.reload()}
-                  />
-                ) : null}
-              </SettingCard>
-              {agent && agentType !== null && agentType !== agent.agent_type ? (
-                <SettingNote icon={Sparkles}>{t("switchNote")}</SettingNote>
-              ) : null}
-            </TabsContent>
+                  {t("tabPersona")}
+                </TabsTrigger>
+              </TabsList>
 
-            <TabsContent value="compaction" className={TAB_BODY_CLASS}>
-              <SettingCard>
-                <SettingRow
-                  icon={Shrink}
-                  title={t("autoCompact")}
-                  description={t("autoCompactHint")}
-                  htmlFor="pa-auto-compact"
-                  control={
-                    <div className="flex items-center gap-1.5">
+              <TabsContent value="brain" className={TAB_BODY_CLASS}>
+                <SettingCard>
+                  {/* Who it is: the avatar its messages carry and its name,
+                    side by side as in the assistant editor. A monogram is
+                    drawn from the name in effect — the default one while the
+                    field is empty. */}
+                  <div className="flex items-start gap-3 p-3">
+                    <div className="mt-0.5 shrink-0">
+                      <AssistantAvatarPicker
+                        avatar={avatar}
+                        name={name.trim() || tPage("title")}
+                        onChange={setAvatar}
+                        disabled={saving}
+                      />
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                      <Label htmlFor="pa-name" className="text-sm">
+                        {t("name")}
+                      </Label>
                       <Input
-                        id="pa-auto-compact"
+                        id="pa-name"
+                        dir="auto"
+                        value={name}
+                        maxLength={40}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder={t("namePlaceholder")}
+                        disabled={saving}
+                        className="h-8 bg-background text-sm"
+                      />
+                      <span className="text-xs leading-5 text-muted-foreground">
+                        {t("nameHint")}
+                      </span>
+                    </div>
+                  </div>
+                </SettingCard>
+                <SettingCard>
+                  <SettingRow
+                    icon={Bot}
+                    title={ta("agentLabel")}
+                    description={
+                      agentType === null ? ta("pickAgentFirst") : t("agentHint")
+                    }
+                    control={
+                      <AgentSelect
+                        value={agentType}
+                        onChange={pickAgent}
+                        agents={agents.filter(
+                          (a) => a.enabled || a.agent_type === agentType
+                        )}
+                        fallbackLabel={savedAgent?.label_snapshot.agent}
+                        disabled={saving}
+                      />
+                    }
+                  />
+                  {agentType !== null ? (
+                    <RequiredOptionsSection
+                      gate={gate}
+                      loading={probe.loading}
+                      saved={agentTouched ? null : savedAgent}
+                      driftCount={driftCount}
+                      renderRow={renderRow}
+                      onRetry={() => probe.reload()}
+                    />
+                  ) : null}
+                </SettingCard>
+                {agent &&
+                agentType !== null &&
+                agentType !== agent.agent_type ? (
+                  <SettingNote icon={Sparkles}>{t("switchNote")}</SettingNote>
+                ) : null}
+              </TabsContent>
+
+              <TabsContent value="compaction" className={TAB_BODY_CLASS}>
+                <SettingCard>
+                  <SettingRow
+                    icon={Shrink}
+                    title={t("autoCompact")}
+                    description={t("autoCompactHint")}
+                    htmlFor="pa-auto-compact"
+                    control={
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          id="pa-auto-compact"
+                          inputMode="numeric"
+                          value={compactPercent}
+                          onChange={(e) =>
+                            setCompactPercent(
+                              e.target.value.replace(/[^0-9]/g, "").slice(0, 3)
+                            )
+                          }
+                          className="h-8 w-16 bg-background text-center"
+                        />
+                        <span className="text-xs text-muted-foreground">%</span>
+                      </div>
+                    }
+                  />
+                  <SettingRow
+                    icon={SquareSlash}
+                    title={t("compactCommand")}
+                    description={t("compactCommandHint")}
+                    htmlFor="pa-compact-command"
+                  >
+                    <Input
+                      id="pa-compact-command"
+                      value={compactCommand}
+                      onChange={(e) => setCompactCommand(e.target.value)}
+                      placeholder="/compact"
+                      className="h-8 bg-background font-mono text-xs"
+                    />
+                  </SettingRow>
+                </SettingCard>
+                <SettingNote icon={Shrink}>{t("compactionNote")}</SettingNote>
+              </TabsContent>
+
+              <TabsContent value="dispatch" className={TAB_BODY_CLASS}>
+                <SettingCard>
+                  <SettingRow
+                    icon={Gauge}
+                    title={t("concurrency")}
+                    description={t("concurrencyHint")}
+                    htmlFor="pa-concurrency"
+                    control={
+                      <Input
+                        id="pa-concurrency"
                         inputMode="numeric"
-                        value={compactPercent}
+                        value={concurrency}
                         onChange={(e) =>
-                          setCompactPercent(
-                            e.target.value.replace(/[^0-9]/g, "").slice(0, 3)
+                          setConcurrency(
+                            e.target.value.replace(/[^0-9]/g, "").slice(0, 2)
                           )
                         }
                         className="h-8 w-16 bg-background text-center"
                       />
-                      <span className="text-xs text-muted-foreground">%</span>
-                    </div>
-                  }
-                />
-                <SettingRow
-                  icon={SquareSlash}
-                  title={t("compactCommand")}
-                  description={t("compactCommandHint")}
-                  htmlFor="pa-compact-command"
-                >
-                  <Input
-                    id="pa-compact-command"
-                    value={compactCommand}
-                    onChange={(e) => setCompactCommand(e.target.value)}
-                    placeholder="/compact"
-                    className="h-8 bg-background font-mono text-xs"
+                    }
                   />
-                </SettingRow>
-              </SettingCard>
-              <SettingNote icon={Shrink}>{t("compactionNote")}</SettingNote>
-            </TabsContent>
+                  <SettingRow
+                    icon={FileText}
+                    title={t("handoffBudget")}
+                    description={t("handoffBudgetHint")}
+                    htmlFor="pa-handoff"
+                    control={
+                      <Input
+                        id="pa-handoff"
+                        inputMode="numeric"
+                        value={handoffBudget}
+                        onChange={(e) =>
+                          setHandoffBudget(
+                            e.target.value.replace(/[^0-9]/g, "").slice(0, 6)
+                          )
+                        }
+                        className="h-8 w-24 bg-background text-center"
+                      />
+                    }
+                  />
+                  <SettingRow
+                    icon={Sparkles}
+                    title={t("skill")}
+                    description={t("skillHint")}
+                    htmlFor="pa-skill"
+                    control={
+                      <Switch
+                        id="pa-skill"
+                        checked={skillEnabled}
+                        onCheckedChange={setSkillEnabled}
+                      />
+                    }
+                  />
+                </SettingCard>
+              </TabsContent>
 
-            <TabsContent value="dispatch" className={TAB_BODY_CLASS}>
-              <SettingCard>
-                <SettingRow
-                  icon={Gauge}
-                  title={t("concurrency")}
-                  description={t("concurrencyHint")}
-                  htmlFor="pa-concurrency"
-                  control={
-                    <Input
-                      id="pa-concurrency"
-                      inputMode="numeric"
-                      value={concurrency}
-                      onChange={(e) =>
-                        setConcurrency(
-                          e.target.value.replace(/[^0-9]/g, "").slice(0, 2)
-                        )
-                      }
-                      className="h-8 w-16 bg-background text-center"
-                    />
-                  }
-                />
-                <SettingRow
-                  icon={FileText}
-                  title={t("handoffBudget")}
-                  description={t("handoffBudgetHint")}
-                  htmlFor="pa-handoff"
-                  control={
-                    <Input
-                      id="pa-handoff"
-                      inputMode="numeric"
-                      value={handoffBudget}
-                      onChange={(e) =>
-                        setHandoffBudget(
-                          e.target.value.replace(/[^0-9]/g, "").slice(0, 6)
-                        )
-                      }
-                      className="h-8 w-24 bg-background text-center"
-                    />
-                  }
-                />
-                <SettingRow
-                  icon={Sparkles}
-                  title={t("skill")}
-                  description={t("skillHint")}
-                  htmlFor="pa-skill"
-                  control={
-                    <Switch
-                      id="pa-skill"
-                      checked={skillEnabled}
-                      onCheckedChange={setSkillEnabled}
-                    />
-                  }
-                />
-              </SettingCard>
-            </TabsContent>
-
-            <TabsContent value="persona" className={TAB_BODY_CLASS}>
-              {agent ? <PersonaFiles /> : null}
-            </TabsContent>
-          </Tabs>
-        </div>
+              <TabsContent value="persona" className={TAB_BODY_CLASS}>
+                {agent ? <PersonaFiles /> : null}
+              </TabsContent>
+            </Tabs>
+          </div>
+        </ScrollArea>
         <DialogFooter className="items-center gap-3 px-4 py-4 sm:justify-between sm:px-6">
           <p
             className={cn(
@@ -558,84 +596,5 @@ function SettingsBody({
         </DialogFooter>
       </form>
     </>
-  )
-}
-
-/** The persona, rules and memory files, each saved on its own. */
-function PersonaFiles() {
-  const t = useTranslations("PersonalAgent.settings")
-  const [files, setFiles] = useState<PersonalAgentFile[] | null>(null)
-  const [active, setActive] = useState("SOUL.md")
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [saving, setSaving] = useState(false)
-  useEffect(() => {
-    let cancelled = false
-    personalAgentFiles()
-      .then((list) => {
-        if (cancelled) return
-        setFiles(list)
-        setDrafts(Object.fromEntries(list.map((f) => [f.name, f.content])))
-      })
-      .catch((e) => toast.error(toErrorMessage(e)))
-    return () => {
-      cancelled = true
-    }
-  }, [])
-  if (!files)
-    return (
-      <Loader2 className="mx-auto my-8 size-4 animate-spin text-muted-foreground" />
-    )
-  const current = files.find((f) => f.name === active)
-  const dirty = current != null && drafts[active] !== current.content
-  return (
-    <div className="flex flex-col gap-2">
-      <SettingNote icon={FileText}>{t("filesNote")}</SettingNote>
-      <div className="flex flex-wrap gap-1">
-        {files.map((f) => (
-          <Button
-            key={f.name}
-            type="button"
-            variant={f.name === active ? "secondary" : "ghost"}
-            size="sm"
-            className="h-7 px-2 font-mono text-xs"
-            onClick={() => setActive(f.name)}
-          >
-            {f.name}
-            {drafts[f.name] !== f.content ? " •" : ""}
-          </Button>
-        ))}
-      </div>
-      <Textarea
-        dir="auto"
-        value={drafts[active] ?? ""}
-        onChange={(e) => setDrafts((d) => ({ ...d, [active]: e.target.value }))}
-        className="field-scrollbar min-h-64 bg-background font-mono text-xs"
-      />
-      <div className="flex justify-end">
-        <Button
-          type="button"
-          size="sm"
-          disabled={!dirty || saving}
-          onClick={() => {
-            const content = drafts[active] ?? ""
-            setSaving(true)
-            personalAgentFileSave(active, content)
-              .then(() => {
-                setFiles((list) =>
-                  (list ?? []).map((f) =>
-                    f.name === active ? { ...f, content, exists: true } : f
-                  )
-                )
-                toast.message(t("fileSaved", { name: active }))
-              })
-              .catch((e) => toast.error(toErrorMessage(e)))
-              .finally(() => setSaving(false))
-          }}
-        >
-          {saving ? <Loader2 className="animate-spin" aria-hidden /> : null}
-          {t("saveFile")}
-        </Button>
-      </div>
-    </div>
   )
 }

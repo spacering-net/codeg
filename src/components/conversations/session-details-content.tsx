@@ -274,8 +274,9 @@ function CopyableValue({
 }
 
 /** A copy button for one property row of `SessionDetailsCard`: it shows while
- *  the row is hovered or holds focus. */
-function CopyPropertyButton({
+ *  the row is hovered or holds focus. Shared with the personal agent panel's
+ *  card, which is laid out as this one is. */
+export function CopyPropertyButton({
   text,
   copyLabel,
   copiedLabel,
@@ -322,8 +323,9 @@ function MiddleTruncatedId({ value }: { value: string }) {
   )
 }
 
-/** One label–value row of `SessionDetailsCard`'s property grid. */
-function PropertyRow({
+/** One label–value row of `SessionDetailsCard`'s property grid (and of the
+ *  personal agent panel's card). */
+export function PropertyRow({
   label,
   children,
 }: {

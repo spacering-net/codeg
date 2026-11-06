@@ -73,6 +73,9 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub error: Option<String>,
     pub origin_batch_id: Option<i32>,
+    /// The delivery that last dispatched or continued it: its result cards
+    /// quote that turn's reply.
+    pub source_batch_id: Option<i32>,
     #[sea_orm(column_type = "Text", nullable)]
     pub on_done: Option<String>,
     pub turns: i32,
