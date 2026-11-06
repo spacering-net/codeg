@@ -179,6 +179,48 @@ describe("ForgeIssueRowItem", () => {
     expect(blocked.parentElement).toHaveAttribute("title", "busy elsewhere")
   })
 
+  /** The box has no column of its own: it shares the state glyph's cell,
+   *  faded out at rest and shown on hover or focus, and once ticked it stays
+   *  in place of the glyph. jsdom has no hover, so the classes that carry it
+   *  are what is pinned here. */
+  it("swaps the state glyph for the tick box in one cell", () => {
+    const renderWith = (checked: boolean, blockedReason: string | null) =>
+      render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <ForgeIssueRowItem
+            row={row()}
+            link={null}
+            selection={{ checked, blockedReason, onToggle: vi.fn() }}
+            onOpenDetail={onOpenDetail}
+            onStart={vi.fn()}
+          />
+        </NextIntlClientProvider>
+      )
+
+    renderWith(false, null)
+    let box = screen.getByRole("checkbox", { name: "Select #42" })
+    let glyph = screen.getByRole("img", { name: "Open" })
+    expect(glyph.parentElement).toBe(box.parentElement)
+    expect(box).toHaveClass("opacity-0", "group-hover/row:opacity-100")
+    expect(glyph).not.toHaveClass("invisible")
+    expect(glyph).toHaveClass("group-hover/row:invisible")
+    cleanup()
+
+    renderWith(true, null)
+    box = screen.getByRole("checkbox", { name: "Select #42" })
+    glyph = screen.getByRole("img", { name: "Open" })
+    expect(box).toHaveClass("opacity-100")
+    expect(box).not.toHaveClass("opacity-0")
+    expect(glyph).toHaveClass("invisible")
+    cleanup()
+
+    // A greyed-out box must not linger at the base half opacity at rest.
+    renderWith(false, "busy elsewhere")
+    box = screen.getByRole("checkbox", { name: "Select #42" })
+    expect(box).toHaveClass("disabled:opacity-0")
+    expect(box).not.toHaveClass("disabled:opacity-50")
+  })
+
   it("shows a live status chip that goes to the board, with no re-trigger", async () => {
     const user = userEvent.setup()
     const onStart = mount(row(), link("running"))

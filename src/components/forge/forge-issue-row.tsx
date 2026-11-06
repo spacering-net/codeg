@@ -252,16 +252,25 @@ export function ForgeIssueRowItem({
     // a line of it — so it centres against the whole block via `self-center`.
     <div
       className={cn(
-        "group flex min-w-0 items-start gap-3 px-4 py-2.5 transition-colors hover:bg-muted/40",
+        "group group/row flex min-w-0 items-start gap-3 px-4 py-2.5 transition-colors hover:bg-muted/40",
         selection?.checked && "bg-primary/5 hover:bg-primary/10"
       )}
     >
       {selection ? (
-        // Its own h-5 box like the glyph's, so the tick sits on the title's
-        // line. The title attribute rides on the wrapper: a disabled control
-        // receives no pointer events, so a tooltip on it would never show.
+        // The tick box and the state glyph share ONE h-5 cell, stacked in the
+        // same grid area: the glyph shows at rest, the box takes its place
+        // while the row is hovered, while the box has keyboard focus, and for
+        // as long as the row is ticked. A fixed column of empty boxes down
+        // the list was noise for the common case of not selecting anything.
+        //
+        // The box is faded out with opacity rather than `invisible`, so it
+        // stays in the tab order (and under a tap on touch screens, which
+        // have no hover); `peer-focus-visible` brings it back for the
+        // keyboard. The title attribute rides on the wrapper: a disabled
+        // control receives no pointer events, so a tooltip on it would never
+        // show.
         <span
-          className="flex h-5 shrink-0 items-center"
+          className="grid h-5 w-4 shrink-0 place-items-center"
           title={selection.blockedReason ?? undefined}
           data-forge-select=""
         >
@@ -269,6 +278,17 @@ export function ForgeIssueRowItem({
             checked={selection.checked}
             disabled={selection.blockedReason != null}
             aria-label={t("selectItem", { number: row.number })}
+            className={cn(
+              "[grid-area:1/1]",
+              selection.checked
+                ? "opacity-100"
+                : selection.blockedReason != null
+                  ? // A greyed-out box: the base `disabled:opacity-50` would
+                    // otherwise outrank the resting `opacity-0` and leave a
+                    // faint box on every row with a task under way.
+                    "disabled:opacity-0 group-hover/row:disabled:opacity-50"
+                  : "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
+            )}
             // The click is handled here rather than through
             // `onCheckedChange`, because only the event says whether Shift
             // was held. Preventing the default keeps Radix from toggling on
@@ -278,15 +298,27 @@ export function ForgeIssueRowItem({
               selection.onToggle(e.shiftKey)
             }}
           />
+          <Icon
+            role="img"
+            aria-label={stateLabel}
+            className={cn(
+              "pointer-events-none h-3.5 w-3.5 [grid-area:1/1]",
+              glyphClass,
+              selection.checked
+                ? "invisible"
+                : "group-hover/row:invisible peer-focus-visible:invisible"
+            )}
+          />
         </span>
-      ) : null}
-      <span className="flex h-5 shrink-0 items-center">
-        <Icon
-          role="img"
-          aria-label={stateLabel}
-          className={cn("h-3.5 w-3.5", glyphClass)}
-        />
-      </span>
+      ) : (
+        <span className="flex h-5 shrink-0 items-center">
+          <Icon
+            role="img"
+            aria-label={stateLabel}
+            className={cn("h-3.5 w-3.5", glyphClass)}
+          />
+        </span>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
           {/* The title opens the panel on the right rather than the forge's
