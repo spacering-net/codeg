@@ -4673,13 +4673,32 @@ mod tests {
             agents.len(),
             crate::models::agent::BUILTIN_AGENT_TYPES.len()
         );
-        assert_eq!(agents[0], "claude_code");
-        assert_eq!(agents[14], "antigravity");
-        assert_eq!(agents[15], "kiro");
-        assert_eq!(agents[16], "zcode");
-        assert_eq!(agents[17], "trae");
-        assert_eq!(agents[18], "command_code");
-        assert_eq!(agents[19], "minimax_code");
+        assert_eq!(
+            Value::Array(agents),
+            serde_json::json!([
+                "claude_code",
+                "codex",
+                "open_code",
+                "gemini",
+                "cline",
+                "open_claw",
+                "hermes",
+                "code_buddy",
+                "kimi_code",
+                "pi",
+                "grok",
+                "cursor",
+                "deepseek",
+                "deepseek_official",
+                "qoder",
+                "antigravity",
+                "kiro",
+                "zcode",
+                "trae",
+                "command_code",
+                "minimax_code"
+            ])
+        );
     }
 
     #[tokio::test]

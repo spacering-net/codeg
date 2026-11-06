@@ -805,6 +805,7 @@ fn supported_agents() -> Vec<AgentType> {
         AgentType::Grok,
         AgentType::Cursor,
         AgentType::DeepSeek,
+        AgentType::DeepSeekOfficial,
         AgentType::Qoder,
         AgentType::Antigravity,
         AgentType::Kiro,

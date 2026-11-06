@@ -14,6 +14,7 @@ export type BuiltinAgentType =
   | "grok"
   | "cursor"
   | "deepseek"
+  | "deepseek_official"
   | "qoder"
   | "antigravity"
   | "kiro"
@@ -1119,6 +1120,7 @@ export const AGENT_DISPLAY_ORDER: BuiltinAgentType[] = [
   "grok",
   "cursor",
   "deepseek",
+  "deepseek_official",
   "qoder",
   "antigravity",
   "kiro",
@@ -1158,6 +1160,7 @@ export const ALL_AGENT_TYPES: BuiltinAgentType[] = [
   "grok",
   "cursor",
   "deepseek",
+  "deepseek_official",
   "qoder",
   "antigravity",
   "kiro",
@@ -1474,6 +1477,7 @@ export const AGENT_LABELS: Record<BuiltinAgentType, string> = {
   grok: "Grok",
   cursor: "Cursor",
   deepseek: "DeepSeek Harness",
+  deepseek_official: "DeepSeek Harness (Official ACP)",
   qoder: "Qoder",
   antigravity: "Google Antigravity",
   kiro: "Kiro CLI",
@@ -1497,6 +1501,7 @@ export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
   grok: "bg-neutral-900",
   cursor: "bg-zinc-800",
   deepseek: "bg-[#4D6BFE]",
+  deepseek_official: "bg-[#4D6BFE]",
   qoder: "bg-[#6C4CF1]",
   antigravity: "bg-[#1A73E8]",
   kiro: "bg-[#9046FF]",
