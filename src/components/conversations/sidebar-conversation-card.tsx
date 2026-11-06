@@ -419,11 +419,11 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                   >
                     {recent ? (
                       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                        <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                        <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
                           <ProjectIcon
                             projectId={projectId}
                             name={projectName || tDetails("none")}
-                            className="size-5 rounded-[0.3125rem] text-[0.6875rem]"
+                            className="size-4 text-[0.625rem]"
                           />
                           <span
                             className="min-w-0 flex-1 truncate"
@@ -680,7 +680,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     className={cn(
                       "flex shrink-0 items-center",
                       recent
-                        ? "absolute right-3 bottom-0.5"
+                        ? "absolute right-3 bottom-1.5"
                         : "h-full pr-[0.375rem]"
                     )}
                   >

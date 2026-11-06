@@ -43,7 +43,7 @@ export function ProjectIcon({
       aria-hidden
       data-project-icon={projectId}
       className={cn(
-        "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-xs font-medium text-white shadow-[inset_0_0_0_1px_rgb(255_255_255/14%)]",
+        "inline-flex size-5 shrink-0 items-center justify-center rounded-[0.25rem] text-[0.6875rem] leading-none font-medium text-white",
         className
       )}
       style={{

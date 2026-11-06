@@ -478,7 +478,7 @@ const FolderHeader = memo(function FolderHeader({
                   isDragging ? "cursor-grabbing" : "cursor-grab"
                 )}
                 style={{
-                  paddingLeft: `calc(var(--conv-rail-axis) + ${variant === "repo" ? "1.25rem" : "0.875rem"} + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
+                  paddingLeft: `calc(var(--conv-rail-axis) + ${variant === "repo" ? "1rem" : "0.875rem"} + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
                 }}
               >
                 {/* Connector spine (Show worktrees): a depth-1 sub-group header
@@ -495,8 +495,8 @@ const FolderHeader = memo(function FolderHeader({
                   style={{
                     top: "50%",
                     left: `calc(var(--conv-rail-axis) + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
-                    width: variant === "repo" ? "1.5rem" : "0.875rem",
-                    height: variant === "repo" ? "1.5rem" : "0.875rem",
+                    width: variant === "repo" ? "1.25rem" : "0.875rem",
+                    height: variant === "repo" ? "1.25rem" : "0.875rem",
                     transform: "translate(-50%, -50%)",
                   }}
                 >
