@@ -28,11 +28,11 @@ export const WINDOW_CAPTION_WIDTH = 138
 export const LEFT_CHROME_CLUSTER = 80
 
 /**
- * Right cluster: terminal + aux + settings (three icon buttons + padding).
- * A full-page workbench route swaps the first two for its own controls (see
+ * Right cluster: terminal + browser + aux + settings (four icon buttons + padding).
+ * A full-page workbench route swaps the first three for its own controls (see
  * `WorkbenchRouteChromeActions`), so the count — and this reservation — holds.
  */
-export const RIGHT_CHROME_CLUSTER = 116
+export const RIGHT_CHROME_CLUSTER = 144
 
 /**
  * Scale a DOM button-cluster width by the app's rem-based zoom.

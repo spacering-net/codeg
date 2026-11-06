@@ -2442,7 +2442,9 @@
       "search": "Buscar",
       "openSettings": "Abrir configuración",
       "backToConversations": "Volver a conversaciones",
-      "withShortcut": "{label} (atajo: {shortcut})"
+      "withShortcut": "{label} (atajo: {shortcut})",
+      "toggleBrowserPanel": "Alternar panel del navegador",
+      "newBrowserTab": "Nueva pestaña del navegador"
     },
     "statusBar": {
       "connection": {
