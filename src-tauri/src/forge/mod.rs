@@ -342,6 +342,13 @@ pub fn source_key(
     Ok(format!("{provider}:{host}:{repo}:{kind}:{number}"))
 }
 
+/// The work item number a key built by [`source_key`] ends with. No segment
+/// before it can hold a `:` (the host and the repository are both refused
+/// with one), so the last segment is always the number.
+pub fn source_key_number(key: &str) -> Option<i64> {
+    key.rsplit(':').next()?.parse().ok()
+}
+
 /// Repository-identity comparison. GitHub preserves canonical casing in API
 /// responses (`microsoft/TypeScript`) while our keys and remotes normalize to
 /// lowercase — an exact string compare would reject the right PR or mistake a
@@ -470,6 +477,49 @@ pub struct ForgeSourceMeta {
     /// which is the posture the old folder setting shipped with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writeback: Option<bool>,
+    /// Every issue of a task made from several related issues, in the task's
+    /// own order — the lead (the one `number`, `url` and `title` above name)
+    /// first. Empty, and absent from the JSON, on a task triggered from one
+    /// item: that one is the fields above. A display snapshot like the rest of
+    /// this struct; which items a task handles is QUERIED from
+    /// `work_task_source_key`, never from here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<ForgeSourceItem>,
+    /// Which of `items` the pull request this task opens closes — chosen by
+    /// the user at the task's first delivery and fixed from then on, so every
+    /// pull request the task ever opens (the first one, a replacement for one
+    /// closed since, the one a crash recovery adopted) closes the same issues.
+    /// The others are referenced, not closed. Absent until that first delivery,
+    /// and always on a single-item task, whose pull request closes its issue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_closes: Option<Vec<i64>>,
+}
+
+/// One issue of a task made from several related issues (see
+/// [`ForgeSourceMeta::items`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ForgeSourceItem {
+    pub number: i64,
+    /// Canonical html URL — server-derived, like [`ForgeSourceMeta::url`].
+    pub url: String,
+    /// Title at trigger time (display only; the prompt carries its own copy).
+    pub title: String,
+}
+
+impl ForgeSourceMeta {
+    /// Whether the task handles several items rather than one.
+    pub fn is_combined(&self) -> bool {
+        self.items.len() > 1
+    }
+
+    /// The numbers of every item the task handles, lead first.
+    pub fn item_numbers(&self) -> Vec<i64> {
+        if self.items.is_empty() {
+            vec![self.number]
+        } else {
+            self.items.iter().map(|item| item.number).collect()
+        }
+    }
 }
 
 /// Where a task WITHOUT forge provenance delivers its work: the repository its

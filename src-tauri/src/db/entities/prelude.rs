@@ -28,4 +28,5 @@ pub use super::tool_approval::Entity as ToolApproval;
 pub use super::work_task::Entity as WorkTask;
 pub use super::work_task_event::Entity as WorkTaskEvent;
 pub use super::work_task_settings::Entity as WorkTaskSettings;
+pub use super::work_task_source_key::Entity as WorkTaskSourceKey;
 pub use super::work_task_template::Entity as WorkTaskTemplate;

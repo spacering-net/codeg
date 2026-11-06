@@ -47,8 +47,9 @@ use crate::db::service::work_task_service::DeliveryRecord;
 use crate::db::service::{conversation_service, tab_service, work_task_service};
 use crate::db::AppDatabase;
 use crate::forge::deliver::{
-    adopt_pull_request, local_pull_request_body, pull_request_body, writeback_comment_body,
-    DeliveryCtx, ForgeDeliveryApi, ForgePr, NewPullRequest, PrAdoption, TaskOutcome,
+    adopt_pull_request, issues_pull_request_body, local_pull_request_body, pull_request_body,
+    writeback_comment_body, DeliveryCtx, ForgeDeliveryApi, ForgePr, NewPullRequest, PrAdoption,
+    TaskOutcome,
 };
 use crate::forge::{
     DeliveryTarget, ForgeItemKind, ForgeProvider, ForgeSourceMeta, WorkTaskDelivery,
@@ -4299,6 +4300,23 @@ impl TaskEngine {
         delete_worktree: bool,
         mark_done: bool,
     ) -> Result<String, String> {
+        self.deliver_pr_closing(task_id, pr_title, draft, delete_worktree, mark_done, None)
+            .await
+    }
+
+    /// [`Self::deliver_pr`], saying which issues the pull request closes —
+    /// for a task made from several related issues only (see
+    /// [`closing_list`]); `None` keeps the list already fixed for the task,
+    /// or closes every issue on its first delivery.
+    pub async fn deliver_pr_closing(
+        self: &Arc<Self>,
+        task_id: i32,
+        pr_title: Option<String>,
+        draft: bool,
+        delete_worktree: bool,
+        mark_done: bool,
+        closes: Option<Vec<i64>>,
+    ) -> Result<String, String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -4308,6 +4326,7 @@ impl TaskEngine {
         // The gate lives HERE, not in the UI: this command is reachable by id
         // from an old frontend or a direct web API call.
         let source = self.delivery_source(&task).await?;
+        let (source, pin_source_meta) = closing_list(source, closes)?;
 
         let (_root, wt, base_branch, work_branch) = self.merge_coordinates(&task).await?;
         // Whether the push goes INTO a pull request that already exists, and
@@ -4466,6 +4485,7 @@ impl TaskEngine {
                 &base_branch,
                 &work_branch,
                 &state,
+                pin_source_meta.as_deref(),
             )
             .await;
         // Only after the delivery SUCCEEDED and finished the task: one that
@@ -4613,6 +4633,10 @@ impl TaskEngine {
         }
     }
 
+    /// `pin_source_meta` is the task's snapshot with the closing list its
+    /// first delivery fixes (see [`closing_list`]), written in the same
+    /// transaction the delivery begins in — so the list is on the row before
+    /// anything is published, and never after a refusal that published nothing.
     #[allow(clippy::too_many_arguments)]
     async fn deliver_guarded(
         self: &Arc<Self>,
@@ -4623,12 +4647,18 @@ impl TaskEngine {
         base_branch: &str,
         work_branch: &str,
         state: &WorkTaskMergeState,
+        pin_source_meta: Option<&str>,
     ) -> Result<String, String> {
         let task_id = task.id;
-        let run_seq =
-            match work_task_service::begin_delivery(&self.db.conn, task_id, state, task.run_seq)
-                .await
-            {
+        let run_seq = match work_task_service::begin_delivery_recording(
+            &self.db.conn,
+            task_id,
+            state,
+            task.run_seq,
+            pin_source_meta,
+        )
+        .await
+        {
                 Err(e) => return Err(e.to_string()),
                 Ok(None) => return Err("task left review before the delivery began".to_string()),
                 Ok(Some(seq)) => seq,
@@ -5300,10 +5330,6 @@ impl TaskEngine {
                 nothing_to_land: *nothing_to_land,
             },
         };
-        // Where it is posted shapes what it may say: a pull request's thread
-        // hears what happened to that pull request, in its forge's own noun.
-        let body = writeback_comment_body(task_id, meta.provider, item_kind, &outcome, stats);
-
         let ctx = DeliveryCtx {
             conn: &self.db.conn,
             data_dir: &self.data_dir,
@@ -5312,25 +5338,47 @@ impl TaskEngine {
             account_id: &meta.account_id,
             owner_repo: &meta.owner_repo,
         };
-        let (kind, payload) = match self
-            .forge
-            .comment_issue(&ctx, item_kind, meta.number, &body)
-            .await
-        {
-            Ok(url) => ("forge_writeback", serde_json::json!({ "url": url })),
-            // Failure is recorded and dropped: the task is finished either way,
-            // and a comment nobody sees must not reopen a settled row.
-            Err(error) => (
-                "forge_writeback_failed",
-                serde_json::json!({ "error": error, "number": meta.number }),
-            ),
-        };
-        let _ =
-            work_task_service::record_event(&self.db.conn, task_id, kind, "engine", Some(payload))
-                .await;
-        // The card's own fields did not change; this is what makes an open
-        // detail sheet reload its timeline.
-        self.emit_upsert(task_id);
+        // Every item the task handles hears it, each in its own thread and on
+        // its own timeline entry — one that fails is recorded as that item's
+        // failure and leaves the others to go ahead.
+        let numbers = meta.item_numbers();
+        let combined = numbers.len() > 1;
+        for &number in &numbers {
+            let others: Vec<i64> = numbers.iter().copied().filter(|n| *n != number).collect();
+            // Where it is posted shapes what it may say: a pull request's
+            // thread hears what happened to that pull request, in its forge's
+            // own noun.
+            let body =
+                writeback_comment_body(task_id, meta.provider, item_kind, &outcome, stats, &others);
+            let (kind, payload) = match self
+                .forge
+                .comment_issue(&ctx, item_kind, number, &body)
+                .await
+            {
+                Ok(url) if combined => (
+                    "forge_writeback",
+                    serde_json::json!({ "url": url, "number": number }),
+                ),
+                Ok(url) => ("forge_writeback", serde_json::json!({ "url": url })),
+                // Failure is recorded and dropped: the task is finished either
+                // way, and a comment nobody sees must not reopen a settled row.
+                Err(error) => (
+                    "forge_writeback_failed",
+                    serde_json::json!({ "error": error, "number": number }),
+                ),
+            };
+            let _ = work_task_service::record_event(
+                &self.db.conn,
+                task_id,
+                kind,
+                "engine",
+                Some(payload),
+            )
+            .await;
+            // The card's own fields did not change; this is what makes an
+            // open detail sheet reload its timeline.
+            self.emit_upsert(task_id);
+        }
     }
 
     /// Crash recovery for a delivery: the forge is the only truth about what
@@ -6897,6 +6945,18 @@ impl DeliverySource {
     /// Body of the pull request a delivery of this task opens.
     fn pull_request_body(&self, task_id: i32) -> String {
         match self {
+            // Several issues: the closing list fixed at the first delivery,
+            // which `closing_list` has always filled in by the time a body is
+            // asked for — or every issue, should a row ever lack it.
+            DeliverySource::Issue(meta) if meta.is_combined() => {
+                let items: Vec<(i64, &str)> = meta
+                    .items
+                    .iter()
+                    .map(|item| (item.number, item.url.as_str()))
+                    .collect();
+                let closes = meta.pr_closes.clone().unwrap_or_else(|| meta.item_numbers());
+                issues_pull_request_body(&items, &closes, task_id)
+            }
             DeliverySource::Issue(meta) => pull_request_body(&meta.url, meta.number, task_id),
             // A pull-request task never opens one; the local body is the one
             // that claims nothing.
@@ -6985,6 +7045,85 @@ enum IntoPull {
     /// Closed or merged BEFORE anything was pushed, with commits still to
     /// push. Nothing was published.
     NoLongerOpen(ForgePr),
+}
+
+/// Which issues the pull request of a task made from several related issues
+/// closes, settled before its delivery begins — and the snapshot to record it
+/// in, when this is the delivery that fixes it.
+///
+/// The list is the user's call, taken at the task's FIRST delivery from the
+/// agent's per-issue verdicts (`requested`; `None` there closes every issue),
+/// and fixed from then on: every later delivery — into the pull request that
+/// one opened, into a new one after it was closed, or one a crash recovery
+/// settles — closes the same issues. The engine never edits a pull request it
+/// opened, and an earlier delivery may already have opened one the row does
+/// not know of yet, so a list chosen anew could contradict a description
+/// already published. A request naming a DIFFERENT list is refused, pointing
+/// at where the published one can be edited; naming the same one, or none,
+/// goes ahead.
+///
+/// Only such a task chooses. A one-issue task's pull request closes its issue,
+/// and nothing else closes anything — a list sent for either is refused rather
+/// than ignored, because it says the client believes something false.
+fn closing_list(
+    source: DeliverySource,
+    requested: Option<Vec<i64>>,
+) -> Result<(DeliverySource, Option<String>), String> {
+    let mut meta = match source {
+        DeliverySource::Issue(meta) if meta.is_combined() => meta,
+        other => {
+            return match requested {
+                None => Ok((other, None)),
+                Some(_) => Err(
+                    "only a task made from several issues chooses which of them its pull \
+                     request closes"
+                        .to_string(),
+                ),
+            }
+        }
+    };
+    let members = meta.item_numbers();
+    let requested = match requested {
+        None => None,
+        Some(numbers) => {
+            if let Some(stranger) = numbers.iter().find(|n| !members.contains(n)) {
+                return Err(format!("#{stranger} is not one of this task's issues"));
+            }
+            // In the task's own order, each once.
+            Some(
+                members
+                    .iter()
+                    .copied()
+                    .filter(|n| numbers.contains(n))
+                    .collect::<Vec<_>>(),
+            )
+        }
+    };
+    if let Some(fixed) = meta.pr_closes.clone() {
+        if let Some(asked) = requested {
+            let same = asked.len() == fixed.len() && asked.iter().all(|n| fixed.contains(n));
+            if !same {
+                let named = if fixed.is_empty() {
+                    "none of its issues".to_string()
+                } else {
+                    fixed
+                        .iter()
+                        .map(|n| format!("#{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                return Err(format!(
+                    "this task's pull request closes {named} — the list was fixed at its first \
+                     delivery; edit the pull request's description on the forge to change it"
+                ));
+            }
+        }
+        return Ok((DeliverySource::Issue(meta), None));
+    }
+    meta.pr_closes = Some(requested.unwrap_or(members));
+    let pinned = serde_json::to_string(&meta)
+        .map_err(|e| format!("could not record which issues the pull request closes: {e}"))?;
+    Ok((DeliverySource::Issue(meta), Some(pinned)))
 }
 
 /// What an interrupted delivery was delivering from, read back for crash
@@ -13669,6 +13808,272 @@ mod tests {
             f.forge.comments.lock().await.is_empty(),
             "no thread to write back to"
         );
+    }
+
+    /// The fixture's issue task as one made from several related issues: #7
+    /// (the lead the fixture already names) with #9 and #12. Delivery and the
+    /// write-back read the item list off the snapshot; the item rows are the
+    /// board's business and play no part here.
+    async fn as_issues_task(f: &Delivery) {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let task = row(&f.engine, f.task_id).await;
+        let mut meta = source_record(&task);
+        meta.items = [7, 9, 12]
+            .into_iter()
+            .map(|number| crate::forge::ForgeSourceItem {
+                number,
+                url: format!("https://github.com/acme/app/issues/{number}"),
+                title: format!("issue {number}"),
+            })
+            .collect();
+        let mut active = task.into_active_model();
+        active.source_meta = Set(Some(serde_json::to_string(&meta).expect("meta json")));
+        active
+            .update(&f.engine.db.conn)
+            .await
+            .expect("as a task of several issues");
+    }
+
+    /// A task made from several issues opens ONE pull request, closing the
+    /// issues its user picked — one keyword per line, which every forge
+    /// honours — and referencing the rest. The pick is fixed at that first
+    /// delivery: the next one, into the same pull request, may repeat it or
+    /// say nothing, but a different list is refused before anything moves.
+    #[tokio::test]
+    async fn an_issues_task_closes_the_issues_picked_at_its_first_delivery() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+
+        let url = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, false, Some(vec![12, 7]))
+            .await
+            .expect("first delivery");
+        let body = f.forge.bodies.lock().await[0].clone();
+        assert!(
+            body.starts_with("Closes #7\nCloses #12\n\nRelated to #9\n"),
+            "one keyword per closed issue, the rest referenced: {body}"
+        );
+        assert!(body.contains(&format!("work task `{}`", f.task_id)), "{body}");
+        assert!(body.contains("https://github.com/acme/app/issues/9"), "{body}");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        let meta = source_record(&task);
+        assert_eq!(meta.pr_closes, Some(vec![7, 12]), "fixed, in the task's own order");
+        assert_eq!(meta.result_pr.as_deref(), Some(url.as_str()));
+        assert_eq!(meta.items.len(), 3, "the settle kept the item list");
+
+        // A different list: refused before anything moves.
+        f.forge.existing.lock().await.push(opened_pull(&f.head));
+        let round_two = commit_another_round(&f).await;
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, false, Some(vec![9]))
+            .await
+            .expect_err("the list is fixed");
+        assert!(err.contains("closes #7, #12"), "{err}");
+        assert!(err.contains("first delivery"), "{err}");
+        assert_eq!(f.forge.pushes.lock().await.len(), 1, "nothing pushed");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+
+        // The same list, in any order, goes ahead — into the pull request the
+        // first delivery opened.
+        let again = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![12, 7]))
+            .await
+            .expect("same list");
+        assert_eq!(again, url);
+        let pushes = f.forge.pushes.lock().await.clone();
+        assert_eq!(pushes.last().map(|p| p.1.clone()), Some(round_two));
+        assert_eq!(f.forge.created.lock().await.len(), 1, "one pull request");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(source_record(&task).pr_closes, Some(vec![7, 12]));
+    }
+
+    /// The rules of the list, one answer each: fixed at the first delivery
+    /// (every issue when none was named), held to after it — a repeat in any
+    /// order or silence goes ahead, a different list does not — and only ever
+    /// a task-of-several's to give, among its own issues.
+    #[test]
+    fn the_closing_list_is_fixed_once_and_only_for_a_task_of_several() {
+        let issues = |pinned: Option<Vec<i64>>| {
+            let mut meta: ForgeSourceMeta = serde_json::from_value(serde_json::json!({
+                "provider": "github",
+                "server_host": "github.com",
+                "api_base": "https://api.github.com",
+                "account_id": "acc-1",
+                "owner_repo": "acme/app",
+                "number": 3,
+                "url": "https://github.com/acme/app/issues/3",
+                "title": "t",
+            }))
+            .expect("meta");
+            meta.items = [3, 5, 9]
+                .into_iter()
+                .map(|number| crate::forge::ForgeSourceItem {
+                    number,
+                    url: format!("https://github.com/acme/app/issues/{number}"),
+                    title: "t".into(),
+                })
+                .collect();
+            meta.pr_closes = pinned;
+            DeliverySource::Issue(meta)
+        };
+        let closes = |source: &DeliverySource| match source {
+            DeliverySource::Issue(meta) => meta.pr_closes.clone(),
+            _ => panic!("not an issue source"),
+        };
+        let pinned_of = |json: Option<String>| {
+            json.map(|j| {
+                serde_json::from_str::<ForgeSourceMeta>(&j)
+                    .expect("pinned meta")
+                    .pr_closes
+            })
+        };
+
+        // First delivery: what was named, in the task's order — or every issue.
+        let (source, pin) = closing_list(issues(None), Some(vec![9, 3, 9])).expect("named");
+        assert_eq!(closes(&source), Some(vec![3, 9]));
+        assert_eq!(pinned_of(pin), Some(Some(vec![3, 9])), "recorded as it is fixed");
+        let (source, pin) = closing_list(issues(None), None).expect("unnamed");
+        assert_eq!(closes(&source), Some(vec![3, 5, 9]));
+        assert!(pin.is_some());
+        let (_, pin) = closing_list(issues(None), Some(vec![])).expect("closing none");
+        assert_eq!(pinned_of(pin), Some(Some(vec![])));
+
+        // After it: repeated or unnamed goes ahead and records nothing new.
+        for asked in [None, Some(vec![9, 3])] {
+            let (source, pin) = closing_list(issues(Some(vec![3, 9])), asked).expect("held");
+            assert_eq!(closes(&source), Some(vec![3, 9]));
+            assert!(pin.is_none());
+        }
+        let err = closing_list(issues(Some(vec![3, 9])), Some(vec![3])).expect_err("changed");
+        assert!(err.contains("#3, #9") && err.contains("first delivery"), "{err}");
+        let err = closing_list(issues(Some(vec![])), Some(vec![3])).expect_err("changed");
+        assert!(err.contains("none of its issues"), "{err}");
+
+        // Only its own issues, and only a task of several.
+        let err = closing_list(issues(None), Some(vec![3, 4])).expect_err("stranger");
+        assert!(err.contains("#4 is not one of this task's issues"), "{err}");
+        let single = match issues(None) {
+            DeliverySource::Issue(mut meta) => {
+                meta.items.clear();
+                DeliverySource::Issue(meta)
+            }
+            _ => unreachable!(),
+        };
+        let (_, pin) = closing_list(single.clone(), None).expect("nothing asked");
+        assert!(pin.is_none());
+        assert!(closing_list(single, Some(vec![3])).is_err());
+    }
+
+    /// Without a list, the first delivery closes every issue.
+    #[tokio::test]
+    async fn an_issues_task_delivered_without_a_list_closes_every_issue() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        let body = f.forge.bodies.lock().await[0].clone();
+        assert!(
+            body.starts_with("Closes #7\nCloses #9\nCloses #12\n\nPrepared by"),
+            "{body}"
+        );
+        assert!(!body.contains("Related to"), "{body}");
+        assert_eq!(
+            source_record(&row(&f.engine, f.task_id).await).pr_closes,
+            Some(vec![7, 9, 12])
+        );
+    }
+
+    /// The list is only a task-of-several's to choose, and only among its own
+    /// issues; anything else is refused with the task left as it was. A
+    /// delivery refused before it began fixes nothing either — the user can
+    /// still pick again once the refusal is dealt with.
+    #[tokio::test]
+    async fn a_closing_list_is_refused_where_it_does_not_apply() {
+        let single = delivery_fixture(FakeForge::default()).await;
+        let err = single
+            .engine
+            .deliver_pr_closing(single.task_id, None, false, false, true, Some(vec![7]))
+            .await
+            .expect_err("a one-issue task closes its issue");
+        assert!(err.contains("several issues"), "{err}");
+        assert!(single.forge.pushes.lock().await.is_empty());
+        assert_eq!(
+            row(&single.engine, single.task_id).await.status,
+            WorkTaskStatus::Review
+        );
+
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7, 99]))
+            .await
+            .expect_err("not one of its issues");
+        assert!(err.contains("#99"), "{err}");
+
+        // Refused before the delivery began: nothing fixed.
+        std::fs::write(f.worktree.join("scratch.txt"), "wip\n").expect("write");
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![9]))
+            .await
+            .expect_err("uncommitted changes");
+        assert!(err.contains("uncommitted"), "{err}");
+        assert_eq!(source_record(&row(&f.engine, f.task_id).await).pr_closes, None);
+        std::fs::remove_file(f.worktree.join("scratch.txt")).expect("clean");
+        f.engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![12]))
+            .await
+            .expect("delivery");
+        assert_eq!(
+            source_record(&row(&f.engine, f.task_id).await).pr_closes,
+            Some(vec![12])
+        );
+    }
+
+    /// Every issue of the task hears how it ended, in its own thread and its
+    /// own timeline entry, and each comment names the others — numbers only,
+    /// and nothing about which of them the pull request closes.
+    #[tokio::test]
+    async fn every_issue_of_a_task_of_several_hears_how_it_ended() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+        enable_writeback(&f).await;
+        f.engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]))
+            .await
+            .expect("delivery");
+        let forge = f.forge.clone();
+        wait_for("three write-backs", move || {
+            let forge = forge.clone();
+            async move { forge.comments.lock().await.len() == 3 }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        let numbers: Vec<i64> = comments.iter().map(|c| c.1).collect();
+        assert_eq!(numbers, vec![7, 9, 12]);
+        assert!(comments.iter().all(|c| c.0 == ForgeItemKind::Issue));
+        let nine = &comments[1].2;
+        assert!(nine.contains("https://github.test/acme/app/pull/42"), "{nine}");
+        assert!(nine.ends_with("It handled this issue together with #7 and #12."), "{nine}");
+        assert!(!nine.to_lowercase().contains("close"), "{nine}");
+        let events = work_task_service::list_events(&f.engine.db.conn, f.task_id, 200)
+            .await
+            .expect("events");
+        let mut posted: Vec<i64> = events
+            .iter()
+            .filter(|e| e.kind == "forge_writeback")
+            .filter_map(|e| e.payload.as_ref()?.get("number")?.as_i64())
+            .collect();
+        posted.sort_unstable();
+        assert_eq!(posted, vec![7, 9, 12], "one timeline entry per issue");
     }
 
     /// Unchecking "mark done" keeps the task: back in review with its pull

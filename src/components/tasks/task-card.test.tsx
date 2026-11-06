@@ -334,6 +334,30 @@ describe("TaskCard forge provenance", () => {
     expect(onOpen).not.toHaveBeenCalled()
   })
 
+  /** A task made from several issues links each of them — four, then a
+   *  count — each straight to its own item. */
+  it("links every issue of a task made from several", () => {
+    const base = sourced()
+    const items = [3, 5, 9, 12, 15, 21].map((number) => ({
+      number,
+      url: `https://github.com/acme/widgets/issues/${number}`,
+      title: `issue ${number}`,
+    }))
+    renderCard({
+      ...base,
+      source_meta: { ...base.source_meta!, number: 3, items },
+    })
+    for (const number of [3, 5, 9, 12]) {
+      expect(screen.getByRole("link", { name: `#${number}` })).toHaveAttribute(
+        "href",
+        `https://github.com/acme/widgets/issues/${number}`
+      )
+    }
+    expect(screen.queryByRole("link", { name: "#15" })).toBeNull()
+    expect(screen.getByText("+2")).toBeInTheDocument()
+    expect(screen.getByText("· acme/widgets")).toBeInTheDocument()
+  })
+
   it("keeps the link off the folder/branch line", () => {
     // A repo path beside `repo / task/7` either crowds it or truncates itself
     // into uselessness — the link owns its own row.

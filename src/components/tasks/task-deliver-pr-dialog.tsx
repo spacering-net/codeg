@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import { workTaskDeliverPr, workTaskSettingsEffective } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { useFreshFolderForgeRemote } from "@/lib/forge-provider-cache"
+import { sourceItems } from "@/lib/forge-source-items"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -61,6 +62,14 @@ interface TaskDeliverPrDialogProps {
  * because the review it just fed is open and a second round on this branch is
  * a normal next step.
  *
+ * A task made from several related issues opens ONE pull request for all of
+ * them, and its first delivery asks which of them it closes: the agent's reply
+ * says, issue by issue, whether each report held up, and an issue the work did
+ * not resolve is referenced instead of closed. That answer is fixed from then
+ * on (the backend refuses a different one), so once the task has it the list
+ * only shows here — every later pull request the task opens closes the same
+ * issues.
+ *
  * Like the complete dialog and unlike the merge dialog, this settles
  * synchronously: no agent runs, so the command returns once the task has
  * settled, and a failure belongs here rather than on the card.
@@ -87,6 +96,14 @@ export function TaskDeliverPrDialog({
   // here that destroys something.
   const worktreeChoiceMade = useRef(false)
   const [submitting, setSubmitting] = useState(false)
+  // A task of several issues: which ones the pull request closes.
+  const items =
+    task?.source_kind === "forge_issue" && task.source_meta != null
+      ? sourceItems(task.source_meta)
+      : []
+  const several = items.length > 1
+  const fixedCloses = several ? (task?.source_meta?.pr_closes ?? null) : null
+  const [closes, setCloses] = useState<ReadonlySet<number>>(() => new Set())
   // The board only offers delivery while the worktree is there, so this is
   // normally true — it guards the stale card, keeping the request honest
   // rather than asking the backend to remove something already gone.
@@ -112,6 +129,15 @@ export function TaskDeliverPrDialog({
     setMarkDone(true)
     setTitle(task.title)
     setDeleteWorktree(false)
+    // The fixed list when there is one, otherwise every issue ticked.
+    setCloses(
+      new Set(
+        task.source_meta?.pr_closes ??
+          (task.source_meta ? sourceItems(task.source_meta) : []).map(
+            (item) => item.number
+          )
+      )
+    )
     worktreeChoiceMade.current = false
     // Same seed as the merge and complete dialogs: the folder's
     // worktree-cleanup default, and `true` when it cannot be read (which is
@@ -141,6 +167,9 @@ export function TaskDeliverPrDialog({
   // The worktree goes only with a delivery that finishes the task: one kept
   // in review runs its next round right there.
   const cleanup = hasWorktree && markDone && deleteWorktree
+  // Chosen here only before the task's first delivery fixed it, and only by a
+  // delivery that opens the pull request.
+  const closesEditable = several && fixedCloses == null && opensOne
 
   const submit = async () => {
     if (!task || remoteBlocked) return
@@ -148,15 +177,29 @@ export function TaskDeliverPrDialog({
     try {
       // A push into an existing pull request creates nothing, so it carries
       // neither title nor draft.
-      const url = opensOne
-        ? await workTaskDeliverPr(
-            task.id,
-            title.trim() || null,
-            draft,
-            cleanup,
-            markDone
-          )
-        : await workTaskDeliverPr(task.id, null, false, cleanup, markDone)
+      // The closing list only travels when this delivery is the one that
+      // fixes it — every other call is exactly what it always was.
+      const picked = items
+        .map((item) => item.number)
+        .filter((n) => closes.has(n))
+      const url = !opensOne
+        ? await workTaskDeliverPr(task.id, null, false, cleanup, markDone)
+        : closesEditable
+          ? await workTaskDeliverPr(
+              task.id,
+              title.trim() || null,
+              draft,
+              cleanup,
+              markDone,
+              picked
+            )
+          : await workTaskDeliverPr(
+              task.id,
+              title.trim() || null,
+              draft,
+              cleanup,
+              markDone
+            )
       onOpenChange(false)
       const done = pushBack
         ? mr
@@ -213,19 +256,23 @@ export function TaskDeliverPrDialog({
       ? mr
         ? t("deliverPrUpdateDescriptionMr", { repo, branch: workBranch })
         : t("deliverPrUpdateDescription", { repo, branch: workBranch })
-      : fromIssue
+      : fromIssue && several
         ? mr
-          ? t("deliverPrDescriptionMr", { repo, base })
-          : t("deliverPrDescription", { repo, base })
-        : remoteBlocked
-          ? fresh.status === "failed"
-            ? t("deliverPrRemoteFailed")
-            : fresh.status === "ready"
-              ? t("deliverPrRemoteUnsupported")
-              : t("deliverPrRemoteLoading")
-          : mr
-            ? t("deliverPrDescriptionLocalMr", { repo, base })
-            : t("deliverPrDescriptionLocal", { repo, base })
+          ? t("deliverPrDescriptionIssuesMr", { repo, base })
+          : t("deliverPrDescriptionIssues", { repo, base })
+        : fromIssue
+          ? mr
+            ? t("deliverPrDescriptionMr", { repo, base })
+            : t("deliverPrDescription", { repo, base })
+          : remoteBlocked
+            ? fresh.status === "failed"
+              ? t("deliverPrRemoteFailed")
+              : fresh.status === "ready"
+                ? t("deliverPrRemoteUnsupported")
+                : t("deliverPrRemoteLoading")
+            : mr
+              ? t("deliverPrDescriptionLocalMr", { repo, base })
+              : t("deliverPrDescriptionLocal", { repo, base })
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -255,6 +302,45 @@ export function TaskDeliverPrDialog({
                 {t("deliverPrDraft")}
               </Label>
             </>
+          ) : null}
+          {several ? (
+            <fieldset className="flex min-w-0 flex-col gap-1.5">
+              <legend className="mb-1.5 text-sm">
+                {t("deliverPrClosesLabel")}
+              </legend>
+              <div className="flex max-h-40 flex-col gap-1.5 overflow-y-auto">
+                {items.map((item) => (
+                  <Label
+                    key={item.number}
+                    className="min-w-0 text-sm font-normal"
+                  >
+                    <Checkbox
+                      checked={closes.has(item.number)}
+                      onCheckedChange={(v) =>
+                        setCloses((held) => {
+                          const next = new Set(held)
+                          if (v === true) next.add(item.number)
+                          else next.delete(item.number)
+                          return next
+                        })
+                      }
+                      disabled={submitting || !closesEditable}
+                    />
+                    <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                      #{item.number}
+                    </span>
+                    <span className="min-w-0 truncate" title={item.title}>
+                      {item.title}
+                    </span>
+                  </Label>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {closesEditable
+                  ? t("deliverPrClosesHint")
+                  : t(mr ? "deliverPrClosesFixedMr" : "deliverPrClosesFixed")}
+              </p>
+            </fieldset>
           ) : null}
           <div className="flex flex-col gap-2">
             <Label className="text-sm font-normal">

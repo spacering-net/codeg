@@ -1885,6 +1885,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::forge::work_task_create_from_forge),
         )
         .route(
+            "/work_task_create_from_forge_issues",
+            post(handlers::forge::work_task_create_from_forge_issues),
+        )
+        .route(
             "/work_task_lookup_by_source",
             post(handlers::forge::work_task_lookup_by_source),
         )

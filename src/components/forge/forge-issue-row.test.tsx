@@ -98,6 +98,87 @@ describe("ForgeIssueRowItem", () => {
     expect(setRoute).not.toHaveBeenCalled()
   })
 
+  /** The trigger refuses a merged change whatever the scenario, so the row
+   *  offers nothing that could only end in that refusal — neither Start nor,
+   *  once a task on it finished, a re-trigger. */
+  it("offers no Start on a merged pull request", () => {
+    mount(row({ is_pr: true, state: "merged" }), null)
+    expect(
+      screen.queryByRole("button", { name: "Start" })
+    ).not.toBeInTheDocument()
+    cleanup()
+    mount(row({ is_pr: true, state: "merged" }), link("done"))
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "re-trigger" })
+    ).not.toBeInTheDocument()
+    cleanup()
+    // A closed but unmerged one can be reopened, so it still can be started.
+    mount(row({ is_pr: true, state: "closed" }), null)
+    expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument()
+  })
+
+  /** A task made from several issues says so on each of their chips — in
+   *  words, for anyone who cannot see the glyph. */
+  it("names the other issues a combined task handles", () => {
+    mount(row({ number: 5 }), { ...link("running"), items: [3, 5, 9] })
+    expect(
+      screen.getByRole("button", {
+        name: "Running Handled together with #3, #9",
+      })
+    ).toBeInTheDocument()
+    cleanup()
+    mount(row({ number: 5 }), { ...link("running"), items: [5] })
+    expect(screen.getByRole("button", { name: "Running" })).toBeInTheDocument()
+  })
+
+  /** The tick box reports whether Shift was held, and a box the page has
+   *  blocked cannot be ticked at all — with the reason where a pointer finds
+   *  it. */
+  it("ticks through the page's selection, Shift included", async () => {
+    const user = userEvent.setup()
+    const onToggle = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ForgeIssueRowItem
+          row={row()}
+          link={null}
+          selection={{ checked: false, blockedReason: null, onToggle }}
+          onOpenDetail={onOpenDetail}
+          onStart={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    const box = screen.getByRole("checkbox", { name: "Select #42" })
+    await user.click(box)
+    await user.keyboard("{Shift>}")
+    await user.click(box)
+    await user.keyboard("{/Shift}")
+    expect(onToggle.mock.calls).toEqual([[false], [true]])
+    // Controlled: the page decides, the box does not flip on its own.
+    expect(box).not.toBeChecked()
+    cleanup()
+
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ForgeIssueRowItem
+          row={row()}
+          link={link("running")}
+          selection={{
+            checked: false,
+            blockedReason: "busy elsewhere",
+            onToggle,
+          }}
+          onOpenDetail={onOpenDetail}
+          onStart={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    const blocked = screen.getByRole("checkbox", { name: "Select #42" })
+    expect(blocked).toBeDisabled()
+    expect(blocked.parentElement).toHaveAttribute("title", "busy elsewhere")
+  })
+
   it("shows a live status chip that goes to the board, with no re-trigger", async () => {
     const user = userEvent.setup()
     const onStart = mount(row(), link("running"))

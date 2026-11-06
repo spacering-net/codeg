@@ -217,6 +217,78 @@ describe("TaskDeliverPrDialog", () => {
     )
   })
 
+  /** A task made from several issues picks, at its first delivery, which of
+   *  them the pull request closes — every one ticked to begin with — and the
+   *  pick travels with the request. */
+  it("asks a task of several issues which of them the pull request closes", async () => {
+    settingsMock.mockResolvedValue(settings())
+    const items = [3, 5, 9].map((number) => ({
+      number,
+      url: `https://github.com/acme/widget/issues/${number}`,
+      title: `issue ${number}`,
+    }))
+    renderDialog(
+      task({
+        source_kind: "forge_issue",
+        source_meta: meta({ head_ref: null, number: 3, items }),
+      })
+    )
+    expect(
+      await screen.findByText(/Merging it closes the issues ticked below/)
+    ).toBeInTheDocument()
+    const five = screen.getByRole("checkbox", { name: /#5/ })
+    expect(five).toBeChecked()
+    expect(screen.getByRole("checkbox", { name: /#3/ })).toBeChecked()
+    await userEvent.click(five)
+    expect(five).not.toBeChecked()
+
+    await userEvent.click(screen.getByRole("button", { name: "Push and open" }))
+    await waitFor(() =>
+      expect(deliverMock).toHaveBeenCalledWith(
+        7,
+        "Fix login",
+        false,
+        true,
+        true,
+        [3, 9]
+      )
+    )
+  })
+
+  /** Once fixed, the list only shows: the backend holds every later pull
+   *  request of the task to it, so the dialog sends none. */
+  it("shows a fixed closing list without letting it change", async () => {
+    settingsMock.mockResolvedValue(settings())
+    const items = [3, 5].map((number) => ({
+      number,
+      url: `https://github.com/acme/widget/issues/${number}`,
+      title: `issue ${number}`,
+    }))
+    renderDialog(
+      task({
+        source_kind: "forge_issue",
+        source_meta: meta({ head_ref: null, number: 3, items, pr_closes: [5] }),
+      })
+    )
+    const three = await screen.findByRole("checkbox", { name: /#3/ })
+    expect(three).not.toBeChecked()
+    expect(three).toBeDisabled()
+    expect(screen.getByRole("checkbox", { name: /#5/ })).toBeChecked()
+    expect(
+      screen.getByText(/edit the pull request's description on the forge/)
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Push and open" }))
+    await waitFor(() =>
+      expect(deliverMock).toHaveBeenCalledWith(
+        7,
+        "Fix login",
+        false,
+        true,
+        true
+      )
+    )
+  })
+
   it("offers no worktree choice when there is no worktree left", async () => {
     settingsMock.mockResolvedValue(settings())
     renderDialog(task({ worktree_missing: true }))

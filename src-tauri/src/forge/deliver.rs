@@ -860,6 +860,51 @@ pub fn pull_request_body(issue_url: &str, issue_number: i64, task_id: i32) -> St
     )
 }
 
+/// Body of the pull request codeg opens for a task made from several related
+/// issues: `Closes #N` for each issue its user chose to close, the rest
+/// referenced, so their threads link to it without being closed by it.
+///
+/// ONE keyword per line, per issue. That is the only spelling every forge
+/// codeg speaks closes on: a list after one keyword (`Closes #1, #2`) closes
+/// both on GitLab, and only `#1` on Gitea and Forgejo. Like the one-issue
+/// body, it is built from coordinates and the task id alone.
+pub fn issues_pull_request_body(items: &[(i64, &str)], closes: &[i64], task_id: i32) -> String {
+    let task = task_ref(task_id);
+    let mut out = String::new();
+    for (number, _) in items.iter().filter(|(number, _)| closes.contains(number)) {
+        out.push_str(&format!("Closes #{number}\n"));
+    }
+    let related: Vec<String> = items
+        .iter()
+        .filter(|(number, _)| !closes.contains(number))
+        .map(|(number, _)| format!("#{number}"))
+        .collect();
+    if !related.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("Related to {}\n", related.join(", ")));
+    }
+    let urls: Vec<String> = items.iter().map(|(_, url)| url.to_string()).collect();
+    out.push_str(&format!(
+        "\nPrepared by [codeg]({CODEG_HOME}) work task {task} \
+         from {}.\n\n\
+         Review the diff before merging — the task ran against issue text \
+         written by external authors.",
+        and_list(&urls)
+    ));
+    out
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn and_list(parts: &[String]) -> String {
+    match parts.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// Body of the pull request codeg opens for a task WITHOUT forge provenance.
 /// There is no issue to close and no external author whose text the task ran
 /// against, so it says only where the change came from. Built from the task id
@@ -908,7 +953,33 @@ pub enum TaskOutcome<'a> {
 /// committing, whose author would read the opposite of what the review found.
 /// So that settlement says what did NOT happen to this thread's item, in the
 /// thread's own terms: nothing was pushed to this pull request.
+///
+/// `together_with` names the other items of a task made from several related
+/// issues — numbers only, so it carries nothing anyone wrote either. Each of
+/// them gets its own comment, which says so. None says whether the pull
+/// request closes it: the closing list is in the pull request's description,
+/// which anyone with access can edit, and the forge shows the link itself.
 pub fn writeback_comment_body(
+    task_id: i32,
+    provider: ForgeProvider,
+    item: ForgeItemKind,
+    outcome: &TaskOutcome<'_>,
+    stats: Option<(i32, i32, i32)>,
+    together_with: &[i64],
+) -> String {
+    let base = outcome_sentence(task_id, provider, item, outcome, stats);
+    if together_with.is_empty() {
+        return base;
+    }
+    let thing = match item {
+        ForgeItemKind::Issue => "this issue".to_string(),
+        ForgeItemKind::Change => format!("this {}", provider.change_noun()),
+    };
+    let others: Vec<String> = together_with.iter().map(|n| format!("#{n}")).collect();
+    format!("{base} It handled {thing} together with {}.", and_list(&others))
+}
+
+fn outcome_sentence(
     task_id: i32,
     provider: ForgeProvider,
     item: ForgeItemKind,
@@ -1631,6 +1702,7 @@ mod tests {
                 base_branch: "main",
             },
             Some((3, 42, 7)),
+            &[],
         );
         // A code-spanned id, never `#12`: the number is codeg's, and both
         // forges would turn the bare form into a link to their own issue 12.
@@ -1650,13 +1722,14 @@ mod tests {
                 pr_url: "https://github.com/acme/app/pull/42",
             },
             Some((1, 1, 0)),
+            &[],
         );
         assert!(delivered.contains("https://github.com/acme/app/pull/42"), "{delivered}");
         assert!(delivered.contains("(1 file, +1/-0)"), "singular: {delivered}");
 
         // No recorded diff → the sentence still stands on its own.
         let bare =
-            writeback_comment_body(12, gh, issue, &TaskOutcome::Delivered { pr_url: "u" }, None);
+            writeback_comment_body(12, gh, issue, &TaskOutcome::Delivered { pr_url: "u" }, None, &[]);
         assert!(!bare.contains('('), "{bare}");
 
         // The third settlement says so rather than staying silent — the
@@ -1667,6 +1740,7 @@ mod tests {
             issue,
             &TaskOutcome::Accepted { nothing_to_land: true },
             None,
+            &[],
         );
         assert!(empty.contains("work task `12`") && empty.contains("it made no changes"), "{empty}");
         // …and an acceptance whose worktree was gone must NOT claim the task
@@ -1677,9 +1751,84 @@ mod tests {
             issue,
             &TaskOutcome::Accepted { nothing_to_land: false },
             Some((3, 42, 7)),
+            &[],
         );
         assert!(gone.contains("its work was not merged (3 files, +42/-7)"), "{gone}");
         assert!(!gone.contains("no changes"), "{gone}");
+    }
+
+    /// Several issues, one pull request: a closing keyword per line for each
+    /// issue picked — the one spelling every forge closes on — the rest
+    /// referenced on a line of their own, and the same provenance and warning
+    /// a one-issue body carries.
+    #[test]
+    fn a_pull_request_for_several_issues_closes_each_picked_issue_on_its_own_line() {
+        let items = [
+            (3, "https://github.com/acme/app/issues/3"),
+            (5, "https://github.com/acme/app/issues/5"),
+            (9, "https://github.com/acme/app/issues/9"),
+        ];
+        let body = issues_pull_request_body(&items, &[3, 9], 12);
+        assert!(body.starts_with("Closes #3\nCloses #9\n\nRelated to #5\n\nPrepared by"), "{body}");
+        assert!(body.contains("work task `12`"), "{body}");
+        assert!(!body.contains("#12"), "autolinkable task id: {body}");
+        assert!(
+            body.contains(
+                "from https://github.com/acme/app/issues/3, https://github.com/acme/app/issues/5 \
+                 and https://github.com/acme/app/issues/9."
+            ),
+            "{body}"
+        );
+        assert!(body.ends_with("written by external authors."), "{body}");
+        assert!(!body.contains("Closes #3, "), "never a list after one keyword");
+
+        let all = issues_pull_request_body(&items, &[3, 5, 9], 12);
+        assert!(all.starts_with("Closes #3\nCloses #5\nCloses #9\n\nPrepared by"), "{all}");
+        assert!(!all.contains("Related to"), "{all}");
+        let none = issues_pull_request_body(&items, &[], 12);
+        assert!(none.starts_with("Related to #3, #5, #9\n\nPrepared by"), "{none}");
+        assert!(!none.contains("Closes"), "{none}");
+    }
+
+    /// Each issue of a task of several hears the same outcome, plus which
+    /// other issues the task handled — numbers only, and nothing about which
+    /// of them the pull request closes. A one-item task's comment is exactly
+    /// what it was.
+    #[test]
+    fn a_task_of_several_says_which_issues_it_handled_together() {
+        let gh = ForgeProvider::GitHub;
+        let delivered = TaskOutcome::Delivered {
+            pr_url: "https://github.com/acme/app/pull/42",
+        };
+        let alone =
+            writeback_comment_body(12, gh, ForgeItemKind::Issue, &delivered, Some((1, 1, 0)), &[]);
+        assert!(!alone.contains("together"), "{alone}");
+        let together = writeback_comment_body(
+            12,
+            gh,
+            ForgeItemKind::Issue,
+            &delivered,
+            Some((1, 1, 0)),
+            &[3, 9],
+        );
+        assert_eq!(
+            together,
+            format!("{alone} It handled this issue together with #3 and #9.")
+        );
+        let lower = together.to_lowercase();
+        assert!(!lower.contains("close") && !lower.contains("fixed"), "{together}");
+        let merged = writeback_comment_body(
+            12,
+            gh,
+            ForgeItemKind::Issue,
+            &TaskOutcome::Merged {
+                commit: "abc1234def",
+                base_branch: "main",
+            },
+            None,
+            &[3, 5, 9],
+        );
+        assert!(merged.ends_with("together with #3, #5 and #9."), "{merged}");
     }
 
     /// A task finished with nothing landed must not read as a verdict on the
@@ -1704,6 +1853,7 @@ mod tests {
                         item,
                         &TaskOutcome::Accepted { nothing_to_land },
                         Some((3, 42, 7)),
+                        &[],
                     );
                     let at = format!("{provider:?} {item:?} nothing_to_land={nothing_to_land}");
                     assert!(body.starts_with("codeg work task `12` is done — "), "{at}: {body}");
