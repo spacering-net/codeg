@@ -394,6 +394,9 @@ function AddFileSubmenu({ onPick }: { onPick: (absPath: string) => void }) {
   const { allFiles, loading } = useFileTree({
     folderPath: searchFolder?.path,
     enabled: open && searchFolder != null,
+    query,
+    filesOnly: true,
+    limit: FILE_RESULT_LIMIT,
   })
 
   const results = useMemo(() => {

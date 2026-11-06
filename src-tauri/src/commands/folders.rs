@@ -5174,16 +5174,24 @@ fn build_file_tree(
 }
 
 /// Flat, gitignore-aware listing of every file and directory under `path`, for
-/// fuzzy file search. Unlike [`get_file_tree`], ignored directories
-/// (`node_modules`, `target`, `dist`, …) are pruned *during* the walk, so no
-/// depth cap is needed: deep files stay reachable while the heavy trees are
-/// never descended and the payload stays small. Gitignore handling that used to
-/// run client-side now happens here at native speed in a single pass.
+/// compatibility with clients that need enumeration. Search surfaces use
+/// `workspace_file_search` so an unbounded listing never reaches the renderer.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn list_workspace_files(
     path: String,
 ) -> Result<Vec<WorkspaceFileEntry>, AppCommandError> {
-    let root = PathBuf::from(&path);
+    let mut entries = Vec::new();
+    visit_workspace_files(&path, |entry| {
+        entries.push(entry);
+        true
+    });
+    Ok(entries)
+}
+
+/// Visit the search-visible entries without collecting the whole workspace.
+/// Returning false stops both the main walk and any authorized linked roots.
+pub(super) fn visit_workspace_files(path: &str, mut visit: impl FnMut(WorkspaceFileEntry) -> bool) {
+    let root = PathBuf::from(path);
     // Linked directories are walked separately below, rooted at the link so
     // their own `.gitignore` applies. Excluded from the main pass because the
     // walker reports a symlink as a leaf file.
@@ -5220,7 +5228,6 @@ pub async fn list_workspace_files(
         })
         .build();
 
-    let mut entries: Vec<WorkspaceFileEntry> = Vec::new();
     for result in walker {
         // Skip unreadable entries (permission errors, transient races) rather
         // than failing the whole search.
@@ -5244,7 +5251,7 @@ pub async fn list_workspace_files(
             .to_string_lossy()
             .replace('\\', "/");
 
-        entries.push(WorkspaceFileEntry {
+        if !visit(WorkspaceFileEntry {
             name,
             path: rel_path,
             kind: if is_dir {
@@ -5252,28 +5259,36 @@ pub async fn list_workspace_files(
             } else {
                 WorkspaceEntryKind::File
             },
-        });
+        }) {
+            return;
+        }
     }
 
     for (link_name, target) in linked {
-        entries.push(WorkspaceFileEntry {
+        if !visit(WorkspaceFileEntry {
             name: link_name.clone(),
             path: link_name.clone(),
             kind: WorkspaceEntryKind::Dir,
-        });
+        }) {
+            return;
+        }
         // Rooted at the resolved target so the linked project's own ignore
         // files apply, then re-prefixed with the link name so every path stays
         // relative to the workspace root and resolves back through the link.
-        entries.extend(list_files_under(&target, &link_name));
+        if !visit_files_under(&target, &link_name, &mut visit) {
+            return;
+        }
     }
-
-    Ok(entries)
 }
 
 /// Flat listing of `root`, with every path prefixed by `prefix/`. Shares the
 /// ignore configuration of [`list_workspace_files`]; nested symlinks are not
 /// followed, so this cannot recurse.
-fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
+fn visit_files_under(
+    root: &Path,
+    prefix: &str,
+    visit: &mut impl FnMut(WorkspaceFileEntry) -> bool,
+) -> bool {
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(false)
@@ -5295,7 +5310,6 @@ fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
         })
         .build();
 
-    let mut entries = Vec::new();
     for result in walker {
         let Ok(entry) = result else { continue };
         let entry_path = entry.path();
@@ -5308,7 +5322,7 @@ fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
         let is_dir = entry
             .file_type()
             .is_some_and(|t| entry_presents_as_dir(&t, entry_path));
-        entries.push(WorkspaceFileEntry {
+        if !visit(WorkspaceFileEntry {
             name: entry.file_name().to_string_lossy().to_string(),
             path: format!("{prefix}/{}", rel.to_string_lossy().replace('\\', "/")),
             kind: if is_dir {
@@ -5316,9 +5330,11 @@ fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
             } else {
                 WorkspaceEntryKind::File
             },
-        });
+        }) {
+            return false;
+        }
     }
-    entries
+    true
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]

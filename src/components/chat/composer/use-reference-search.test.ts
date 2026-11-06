@@ -415,6 +415,8 @@ const mocks = vi.hoisted(() => ({
   files: { allFiles: [] as FlatFileEntry[], loaded: false },
   listAllConversations: vi.fn(),
   gitLog: vi.fn(),
+  searchWorkspaceFiles: vi.fn(),
+  prepareWorkspaceFileSearch: vi.fn(),
 }))
 
 vi.mock("@/hooks/use-file-tree", () => ({
@@ -432,6 +434,10 @@ vi.mock("@/lib/api", () => ({
   listAllConversations: (...args: unknown[]) =>
     mocks.listAllConversations(...args),
   gitLog: (...args: unknown[]) => mocks.gitLog(...args),
+  searchWorkspaceFiles: (...args: unknown[]) =>
+    mocks.searchWorkspaceFiles(...args),
+  prepareWorkspaceFileSearch: (...args: unknown[]) =>
+    mocks.prepareWorkspaceFileSearch(...args),
 }))
 
 describe("useReferenceSearch", () => {
@@ -439,10 +445,40 @@ describe("useReferenceSearch", () => {
     resetAssistantsStore()
     mocks.agents = []
     mocks.files = { allFiles: [], loaded: false }
+    mocks.prepareWorkspaceFileSearch.mockReset().mockResolvedValue(undefined)
+    mocks.searchWorkspaceFiles.mockReset().mockImplementation(async () =>
+      mocks.files.loaded
+        ? mocks.files.allFiles.map((f) => ({
+            name: f.name,
+            path: f.relativePath,
+            kind: f.kind,
+          }))
+        : []
+    )
     mocks.listAllConversations.mockReset().mockResolvedValue([])
     mocks.gitLog
       .mockReset()
       .mockResolvedValue({ entries: [], has_upstream: false })
+  })
+
+  it("prepares native storage without transferring files until the file group is requested", async () => {
+    const { result } = renderHook(() =>
+      useReferenceSearch({ defaultPath: "/repo" })
+    )
+    expect(mocks.prepareWorkspaceFileSearch).toHaveBeenCalledWith("/repo")
+    expect(mocks.searchWorkspaceFiles).not.toHaveBeenCalled()
+    await act(async () => {
+      await result.current("a", undefined, ["agent"])
+    })
+    expect(mocks.searchWorkspaceFiles).not.toHaveBeenCalled()
+    await act(async () => {
+      await result.current("a", undefined, ["file"])
+    })
+    expect(mocks.searchWorkspaceFiles).toHaveBeenCalledExactlyOnceWith(
+      "/repo",
+      "a",
+      { limit: 51 }
+    )
   })
 
   it("returns a referentially stable search across data-source updates (R7)", async () => {

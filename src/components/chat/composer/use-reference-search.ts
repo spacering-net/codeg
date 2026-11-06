@@ -3,8 +3,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
 
 import { useAcpAgents } from "@/hooks/use-acp-agents"
-import { useFileTree, type FlatFileEntry } from "@/hooks/use-file-tree"
-import { gitLog, listAllConversations } from "@/lib/api"
+import type { FlatFileEntry } from "@/hooks/use-file-tree"
+import {
+  gitLog,
+  listAllConversations,
+  prepareWorkspaceFileSearch,
+  searchWorkspaceFiles,
+} from "@/lib/api"
 import type {
   AcpAgentInfo,
   AssistantInfo,
@@ -108,9 +113,8 @@ export function buildReferenceGroups(
 ): SuggestionGroup[] {
   const q = query.trim().toLowerCase()
 
-  // Files: filter the (potentially large) list on its pre-lowered fields before
-  // paying to adapt the survivors. `truncated` is a cheap boolean — set when a
-  // match is found past the cap — so we never scan the whole list for a count.
+  // Native search supplies at most MAX_PER_GROUP + 1 ranked matches. Keep the
+  // mention panel's substring semantics and use the extra row for truncation.
   const fileItems: SuggestionItem[] = []
   let fileTruncated = false
   const root = sources.workspaceRoot
@@ -239,9 +243,10 @@ export interface UseReferenceSearchOptions {
  * on window focus) updates the refs but leaves `search` identity untouched — the
  * open panel keeps its results and the user's selection (R7).
  *
- * Files and agents are hook-loaded (and pre-warmed via `enabled`); assistants
- * come from the assistants store, which the workspace layout keeps live. Sessions and
- * the git log are fetched lazily on the first `@`, key-cached in a ref, and
+ * File discovery is pre-warmed in shared, budgeted native storage; only the
+ * current query's matches are transferred on `@`. Agents are hook-loaded and
+ * assistants come from the live store. Sessions and the git log are fetched
+ * lazily on the first `@`, key-cached in a ref, and
  * awaited by `search` so the first open is populated without an extra keystroke;
  * window focus busts those caches so they stay fresh. A tab the user hid (the
  * `kinds` the panel passes leave it out) costs nothing: its source isn't
@@ -254,20 +259,19 @@ export function useReferenceSearch({
 }: UseReferenceSearchOptions): ReferenceSearch {
   const path = defaultPath || null
 
-  const { allFiles, loaded } = useFileTree({
-    folderPath: path ?? undefined,
-    enabled,
-  })
+  useEffect(() => {
+    if (enabled && path) void prepareWorkspaceFileSearch(path).catch(() => {})
+  }, [enabled, path])
   const { agents } = useAcpAgents()
   const assistants = useAssistants()
 
   // Mirror every changing source into a ref so `search` can stay identity-stable
   // (see the doc comment). Initialized from the first render so the refs are
   // sane even before the sync effect below runs.
-  const filesRef = useRef<{ root: string | null; files: FlatFileEntry[] }>({
-    root: null,
-    files: [],
-  })
+  const filesRef = useRef<{
+    key: string
+    promise: Promise<FlatFileEntry[]>
+  } | null>(null)
   const agentsRef = useRef(agents)
   const assistantsRef = useRef(assistants)
   const pathRef = useRef(path)
@@ -286,17 +290,10 @@ export function useReferenceSearch({
   }, [path, enabled])
 
   useEffect(() => {
-    // Only expose files once the tree has loaded for the *current* path, so the
-    // search never joins the current workspace root onto a previous folder's
-    // relative paths during a folder switch.
-    filesRef.current =
-      loaded && path
-        ? { root: path, files: allFiles }
-        : { root: null, files: [] }
     agentsRef.current = agents
     assistantsRef.current = assistants
     labelsRef.current = labels
-  }, [allFiles, loaded, path, agents, assistants, labels])
+  }, [agents, assistants, labels])
 
   // Lazily-fetched network sources, key-cached so repeat searches reuse the
   // in-flight/resolved promise while a folder switch refetches.
@@ -314,6 +311,7 @@ export function useReferenceSearch({
   // focus-refresh idiom of the other data hooks, without per-keystroke fetches.
   useEffect(() => {
     const onFocus = () => {
+      filesRef.current = null
       sessionsRef.current = null
       commitsRef.current = null
     }
@@ -326,6 +324,38 @@ export function useReferenceSearch({
 
     const path = pathRef.current
     const wants = (kind: ReferenceKind) => !kinds || kinds.includes(kind)
+
+    // Retain only this query's matches, never the workspace's full file index.
+    // Ask for one extra row so the existing per-group truncation cue survives.
+    let filesPromise: Promise<FlatFileEntry[]> = Promise.resolve([])
+    if (path && wants("file")) {
+      const key = JSON.stringify([path, query])
+      let entry = filesRef.current
+      if (entry?.key !== key) {
+        const created = {
+          key,
+          promise: searchWorkspaceFiles(path, query, {
+            limit: MAX_PER_GROUP + 1,
+          })
+            .then((files) =>
+              files.map((file) => ({
+                name: file.name,
+                relativePath: file.path,
+                kind: file.kind,
+                lowerName: file.name.toLowerCase(),
+                lowerPath: file.path.toLowerCase(),
+              }))
+            )
+            .catch(() => {
+              if (filesRef.current === created) filesRef.current = null
+              return [] as FlatFileEntry[]
+            }),
+        }
+        filesRef.current = created
+        entry = created
+      }
+      filesPromise = entry.promise
+    }
 
     // Lazy session fetch. On rejection the cache entry is cleared (not cached as
     // an empty result) so the next `@` retries instead of wedging on `[]`.
@@ -371,7 +401,8 @@ export function useReferenceSearch({
       commitsRef.current = null
     }
 
-    const [sessions, commits] = await Promise.all([
+    const [files, sessions, commits] = await Promise.all([
+      filesPromise,
       sessionsPromise,
       commitsPromise,
     ])
@@ -385,14 +416,12 @@ export function useReferenceSearch({
       return []
     }
 
-    const fileState = filesRef.current
     return buildReferenceGroups(
       query,
       {
-        // Already loaded by their hooks, but a hidden tab's rows would only be
-        // matched and adapted to be thrown away.
-        files: wants("file") ? fileState.files : [],
-        workspaceRoot: fileState.root,
+        // A hidden tab's rows would only be adapted to be thrown away.
+        files,
+        workspaceRoot: path,
         agents: wants("agent") ? agentsRef.current : [],
         assistants: wants("assistant") ? assistantsRef.current : [],
         assistantAgents: wants("assistant") ? agentsRef.current : [],

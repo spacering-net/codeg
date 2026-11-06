@@ -5021,14 +5021,32 @@ export async function getFileTree(
 }
 
 /**
- * Flat, gitignore-aware listing of every file/dir under `path`. Ignored
- * directories are pruned during the backend walk (no depth cap), so deeply
- * nested files are reachable while the payload stays small. Used by file search.
+ * Enumerate every non-ignored file/dir under `path`, without a depth cap.
+ * This can return millions of entries; search surfaces use searchWorkspaceFiles
+ * to keep the renderer's payload and retained state bounded.
  */
 export async function listWorkspaceFiles(
   path: string
 ): Promise<WorkspaceFileEntry[]> {
   return getTransport().call("list_workspace_files", { path })
+}
+
+/** Warm a shared, budgeted native index without sending its entries to JS. */
+export async function prepareWorkspaceFileSearch(path: string): Promise<void> {
+  return getTransport().call("prepare_workspace_file_search", { path })
+}
+
+/** Rank across the workspace and transfer only a bounded set of matches. */
+export async function searchWorkspaceFiles(
+  path: string,
+  query: string,
+  options: { limit?: number; filesOnly?: boolean; refresh?: boolean } = {}
+): Promise<WorkspaceFileEntry[]> {
+  return getTransport().call("search_workspace_files", {
+    path,
+    query,
+    ...options,
+  })
 }
 
 export async function startWorkspaceStateStream(

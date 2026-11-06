@@ -530,6 +530,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::folders::list_workspace_files),
         )
         .route(
+            "/search_workspace_files",
+            post(handlers::folders::search_workspace_files),
+        )
+        .route(
+            "/prepare_workspace_file_search",
+            post(handlers::folders::prepare_workspace_file_search),
+        )
+        .route(
             "/start_workspace_state_stream",
             post(handlers::workspace_state::start_workspace_state_stream),
         )
