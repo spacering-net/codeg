@@ -1324,6 +1324,8 @@ export function buildRows(args: {
    * omitted keeps every folder, as before.
    */
   hideEmptyFolders?: boolean
+  /** Folder conversation bodies live in tabs/history; keep hierarchy rows. */
+  hideFolderConversations?: boolean
 }): SidebarRow[] {
   const {
     pinned,
@@ -1348,6 +1350,7 @@ export function buildRows(args: {
     layout,
     groupExpanded = EMPTY_GROUP_EXPANDED,
     hideEmptyFolders = false,
+    hideFolderConversations = false,
   } = args
   const rows: SidebarRow[] = []
 
@@ -1390,6 +1393,7 @@ export function buildRows(args: {
   // sub-group or a worktree sub-group. The empty hint carries no depth; the
   // renderer derives its indent from the folder id (worktree/container → 1).
   const pushFolderBody = (folderId: number, baseDepth: number) => {
+    if (hideFolderConversations) return
     const convs = byFolder.get(folderId)
     if (!convs || convs.length === 0) {
       rows.push({

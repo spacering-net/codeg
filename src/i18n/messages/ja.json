@@ -2399,6 +2399,9 @@
     },
     "conversationCard": {
       "untitledConversation": "無題の会話",
+      "history": "会話履歴",
+      "historyEmpty": "未表示の会話はありません",
+      "historyLoadFailed": "会話履歴を読み込めませんでした",
       "newConversation": "新しい会話",
       "maximize": "最大化",
       "restore": "元に戻す",

@@ -2399,6 +2399,9 @@
     },
     "conversationCard": {
       "untitledConversation": "Conversation sans titre",
+      "history": "Historique des conversations",
+      "historyEmpty": "Aucune conversation non ouverte",
+      "historyLoadFailed": "Impossible de charger l’historique des conversations",
       "newConversation": "Nouvelle conversation",
       "maximize": "Agrandir",
       "restore": "Restaurer",

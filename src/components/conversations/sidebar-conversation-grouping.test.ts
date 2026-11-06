@@ -2019,3 +2019,72 @@ describe("buildRows under a tag filter (hideEmptyFolders)", () => {
     ).toEqual(["section:folders:1", "folder-group:1", "folder:20", "conv:7"])
   })
 })
+
+describe("buildRows — conversation body moved to folder tabs", () => {
+  function rowsFor(
+    byFolder: Map<number, DbConversationSummary[]>,
+    hideFolderConversations = false,
+    containerChildren = new Map<number, number[]>([[1, [2, 3]]])
+  ) {
+    return buildRows({
+      pinned: [conv(91, 1)],
+      pinnedExpanded: true,
+      orderedFolderIds: [1],
+      byFolder,
+      folderExpanded: {},
+      folderTotalCounts: new Map(),
+      foldersExpanded: true,
+      chatConversations: [conv(92, 0, { kind: "chat" })],
+      chatsExpanded: true,
+      recentConversations: [conv(93, 3)],
+      showRecent: true,
+      containerChildren,
+      hideFolderConversations,
+      conversationExpanded: new Set([21]),
+      childrenByParent: new Map([[21, [conv(22, 2, { parent_id: 21 })]]]),
+    })
+  }
+
+  it("hides all folder bodies and children, preserving hierarchy and other sections", () => {
+    const rows = rowsFor(
+      new Map([
+        [1, [conv(11, 1)]],
+        [2, [conv(21, 2, { child_count: 1 })]],
+        [3, [conv(31, 3)]],
+      ]),
+      true
+    )
+    expect(
+      rows
+        .filter((r) => r.kind === "conversation")
+        .map((r) => r.conversation.id)
+    ).toEqual([91, 92, 93])
+    expect(
+      rows.filter((r) => r.kind === "folder").map((r) => r.folderId)
+    ).toEqual([1, 2, 3])
+    expect(
+      rows.filter((r) => r.kind === "root-group").map((r) => r.folderId)
+    ).toEqual([1])
+  })
+
+  it("omits empty conversation hints for every folder", () => {
+    expect(rowsFor(new Map(), true).some((r) => r.kind === "empty")).toBe(false)
+    expect(
+      rowsFor(new Map())
+        .filter((r) => r.kind === "empty")
+        .map((r) => r.folderId)
+    ).toEqual([1, 2, 3])
+  })
+
+  it("hides merged worktree buckets and restores them when disabled", () => {
+    const bucket = new Map([
+      [1, [conv(11, 1), conv(21, 2, { child_count: 1 }), conv(31, 3)]],
+    ])
+    const ids = (hidden: boolean) =>
+      rowsFor(bucket, hidden, new Map())
+        .filter((r) => r.kind === "conversation")
+        .map((r) => r.conversation.id)
+    expect(ids(true)).toEqual([91, 92, 93])
+    expect(ids(false)).toEqual([91, 11, 21, 22, 31, 92, 93])
+  })
+})

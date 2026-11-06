@@ -2399,6 +2399,9 @@
     },
     "conversationCard": {
       "untitledConversation": "Unbenannte Konversation",
+      "history": "Gesprächsverlauf",
+      "historyEmpty": "Keine ungeöffneten Gespräche",
+      "historyLoadFailed": "Gesprächsverlauf konnte nicht geladen werden",
       "newConversation": "Neue Konversation",
       "maximize": "Maximieren",
       "restore": "Wiederherstellen",
