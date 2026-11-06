@@ -312,7 +312,7 @@ fn agent_data_roots(agent_type: AgentType, runtime_env: &BTreeMap<String, String
 ///   transport takes such an answer as one line: past its buffer limit it reads
 ///   the line in pieces instead of refusing it.
 /// - Kimi Code: its ACP file service asks for the whole file with only the
-///   session and the path (`acp-fs/acpFsService.ts`, 2.4.0 and 2.4.1) and cuts
+///   session and the path (`acp-fs/acpFsService.ts`, 2.4.0, 2.4.1 and 2.5.1) and cuts
 ///   out the page its `Read` tool returns, so the `line` / `limit` hint never
 ///   reaches it and the model only sees "Invalid params". It caps what the
 ///   model gets itself (2.4.1: 100,000 characters or about 25,000 tokens). The
@@ -340,7 +340,8 @@ fn read_response_limit(agent_type: AgentType) -> usize {
 /// once it has a plan. Through codeg's `fs/read_text_file` the read of a plan
 /// not written yet fails with a JSON-RPC error, and Kimi takes only a local
 /// `ENOENT` for "no plan yet" (`isMissingFileError` in its plan service,
-/// 2.3.3 through 2.4.1), so the error fails the call instead. The model never gets
+/// 2.3.3 through 2.4.1, and `isHostFsNotFound` in 2.5.1), so the error fails
+/// the call instead. The model never gets
 /// the plan file's path, its first tool call ends the turn with no reply, and
 /// plan mode cannot start. A missing plan file therefore reads as empty here,
 /// which is what Kimi reads from its own disk.
@@ -932,7 +933,8 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
         // 0.209.1), so its `~/.trae` never needs to be a write root either.
         // Command Code is the same case: codeg's transcript is its history,
         // and its tools never go through `fs/*` (verified against 1.84.0,
-        // 1.86.3, 1.88.0, 1.88.1 and 1.88.2). So is MiniMax Code: its tools
+        // 1.86.3, 1.88.0, 1.88.1, 1.88.2 and 1.88.4). So is MiniMax Code: its
+        // tools
         // run in-process and it sends codeg no `fs/*` or `terminal/*` request
         // (verified against 0.7.0).
         AgentType::Custom(_)

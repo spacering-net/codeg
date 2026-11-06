@@ -1372,12 +1372,13 @@ fn decode_step(
 }
 
 /// `agent.v1.ToolCall` oneof field number → tool name, for every variant the
-/// 2026.10.22-27dcf5f CLI models, plus the ones earlier builds stored and
+/// 2026.11.05-86047df CLI models, plus the ones earlier builds stored and
 /// later ones dropped (`update_pr_code_tour` = 50, which the 2026.07.16 CLI
-/// modeled, and the `pi_*` tools 61–67, which 27dcf5f removed), so older
-/// transcripts keep their cards. Undecoded variants still render a named
+/// modeled, and the `pi_*` tools 61–67, which 2026.10.22-27dcf5f removed), so
+/// older transcripts keep their cards. Undecoded variants still render a named
 /// card; a number missing here drops the call from the history altogether,
-/// although the live session showed it.
+/// although the live session showed it. 86047df adds `manage_access` (95) and
+/// `execute` (1000, a call that runs model-written `code`).
 fn tool_name_for_field(no: u32) -> Option<&'static str> {
     Some(match no {
         1 => "shell",
@@ -1460,6 +1461,8 @@ fn tool_name_for_field(no: u32) -> Option<&'static str> {
         91 => "update_tracked_task_tags",
         93 => "stop_project_updates",
         94 => "start_project_updates",
+        95 => "manage_access",
+        1000 => "execute",
         _ => return None,
     })
 }
@@ -3906,14 +3909,14 @@ mod tests {
         );
     }
 
-    /// The tool variants of `agent.v1.ToolCall` as the 2026.10.22-27dcf5f CLI
+    /// The tool variants of `agent.v1.ToolCall` as the 2026.11.05-86047df CLI
     /// declares it (read off its bundled descriptor). Fields 54, 57, 59 and 60
     /// of that message are not tools.
-    const CLI_27DCF5F_TOOL_FIELDS: &[u32] = &[
+    const CLI_86047DF_TOOL_FIELDS: &[u32] = &[
         1, 3, 4, 5, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30,
         31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 48, 49, 51, 52, 53, 55, 56,
         58, 68, 69, 70, 71, 73, 74, 75, 76, 77, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91,
-        93, 94,
+        93, 94, 95, 1000,
     ];
 
     /// A variant without a name is dropped from the history, so every one the
@@ -3921,7 +3924,7 @@ mod tests {
     #[test]
     fn names_every_tool_variant_the_cli_declares() {
         let dropped_since = [50, 61, 62, 63, 64, 65, 66, 67];
-        for no in CLI_27DCF5F_TOOL_FIELDS.iter().chain(&dropped_since) {
+        for no in CLI_86047DF_TOOL_FIELDS.iter().chain(&dropped_since) {
             assert!(
                 tool_name_for_field(*no).is_some(),
                 "ToolCall field {no} has no name"
@@ -3941,7 +3944,12 @@ mod tests {
     fn a_newer_tool_variant_reaches_the_history() {
         let conn = Connection::open_in_memory().unwrap();
         let state = DecodedState::default();
-        for (no, name) in [(81, "generate_video"), (94, "start_project_updates")] {
+        for (no, name) in [
+            (81, "generate_video"),
+            (94, "start_project_updates"),
+            (95, "manage_access"),
+            (1000, "execute"),
+        ] {
             let mut args = Vec::new();
             field_str(1, "x", &mut args);
             let mut call = Vec::new();

@@ -5842,16 +5842,16 @@ const HERMES_MODE_OPTION_ID: &str = "mode";
 const HERMES_SYNTHESIZED_OPTION_IDS: &[&str] = &[HERMES_MODEL_OPTION_ID, HERMES_MODE_OPTION_ID];
 
 /// Hermes lists its models in the session reply's legacy `models` (verified
-/// against 0.21.6, 0.22.2 and 0.22.6): every signed-in provider's models and
-/// every named endpoint's (`providers:` in config.yaml, codeg's own
+/// against 0.21.6, 0.22.2, 0.22.6 and 0.22.7): every signed-in provider's
+/// models and every named endpoint's (`providers:` in config.yaml, codeg's own
 /// `custom:codeg` among them), with `provider:model` ids —
 /// `openrouter:anthropic/claude-opus-5.5`, `custom:codeg:glm-5.2`. Through
-/// the pinned 0.22.2 that is the only place: it sends no `configOptions`, and
-/// takes a switch only as `session/set_model`, its `session/set_config_option`
-/// storing whatever it is sent and answering an empty list. 0.22.6 also sends
-/// the same rows, without the provider notes, as a `model` config option and
-/// takes a switch either way; codeg keeps building its selector from the
-/// legacy list and folds Hermes' own option into it
+/// 0.22.2 that is the only place: it sends no `configOptions`, and takes a
+/// switch only as `session/set_model`, its `session/set_config_option` storing
+/// whatever it is sent and answering an empty list. From 0.22.6 (0.22.7 is the
+/// pin) Hermes also sends the same rows, without the provider notes, as a
+/// `model` config option and takes a switch either way; codeg keeps building
+/// its selector from the legacy list and folds Hermes' own option into it
 /// ([`fold_hermes_config_options`]).
 ///
 /// The rows are grouped by provider under the label Hermes gives it, as in
@@ -6173,10 +6173,10 @@ async fn set_hermes_config_option(
     let outcome = match config_id.as_str() {
         // Hermes answers `{}` once the session runs on the new model, without
         // naming it; a model no provider serves is an error instead. So is a
-        // turn in progress through 0.22.2. By its source, 0.22.6 answers a
-        // pick made during a turn `{}` instead, says in the conversation that
-        // the pick waits, and at the turn's end applies it, refuses it or
-        // asks about it (not measured).
+        // turn in progress through 0.22.2. By its source, 0.22.6 and 0.22.7
+        // answer a pick made during a turn `{}` instead, say in the
+        // conversation that the pick waits, and at the turn's end apply it,
+        // refuse it or ask about it (not measured).
         HERMES_MODEL_OPTION_ID => {
             set_legacy_session_model(cx, session_id, &value_id).await?;
             SetterOutcome::Accepted
@@ -6834,8 +6834,8 @@ async fn apply_and_emit_session_config_options(
             // As for Kiro: once Hermes has a model selector its modes have to
             // be a config option too, or the composer drops them. Hermes
             // through 0.22.2 takes neither as a config option, so their saved
-            // values go out on their own channels, which 0.22.6 takes as well,
-            // and only the rest through the shared pipeline.
+            // values go out on their own channels, which 0.22.6 and 0.22.7 take
+            // as well, and only the rest through the shared pipeline.
             let standard_prefs: BTreeMap<String, String> = preferred_config_values
                 .iter()
                 .filter(|(id, _)| !HERMES_SYNTHESIZED_OPTION_IDS.contains(&id.as_str()))
@@ -7828,10 +7828,10 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
     //
     // Command Code joins it for the same reason: `command-code acp` loads
     // `~/.commandcode/mcp.json` and starts what `session/new` carries as well
-    // (verified against 1.84.0, 1.86.3, 1.88.0, 1.88.1 and 1.88.2, a server
-    // from each source in one session's tool list), and a name on both sides
-    // keeps the file's copy, as its docs say and 1.88.0, 1.88.1 and 1.88.2
-    // showed live. codeg's MCP settings UI manages that file.
+    // (verified against 1.84.0, 1.86.3, 1.88.0, 1.88.1, 1.88.2 and 1.88.4, a
+    // server from each source in one session's tool list), and a name on both
+    // sides keeps the file's copy, as its docs say and 1.88.0, 1.88.1, 1.88.2
+    // and 1.88.4 showed live. codeg's MCP settings UI manages that file.
     //
     // OpenCode joins it: 2.x loads `mcp.servers` from its own config, which
     // codeg's MCP settings UI manages, and turns each server `session/new`
@@ -13573,7 +13573,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.179.3) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.180.0) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -13659,7 +13659,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.179.3) answers the next prompt it runs `cancelled` even though that
+/// 2.180.0) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never

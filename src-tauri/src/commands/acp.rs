@@ -4323,9 +4323,9 @@ fn parse_grok_settings(raw_toml: &str) -> GrokSettings {
 /// (Grok's config reference: "Allowed reasoning-effort values for this model.
 /// When omitted, the menu comes from the endpoint's `/v1/models` row"). That
 /// endpoint is Grok's model catalog (xAI's, or `[endpoints].models_base_url`),
-/// matched by model id: grok 1.0.62 and 1.0.70 never fetch the list of a
-/// model's own `base_url`, so a custom model the catalog lacks has levels only
-/// from here.
+/// matched by model id: grok 1.0.62, 1.0.70 and 1.0.77 never fetch the list of
+/// a model's own `base_url`, so a custom model the catalog lacks has levels
+/// only from here.
 const GROK_REASONING_EFFORTS_KEY: &str = "reasoning_efforts";
 
 /// One `reasoning_efforts` level as the panel compares it: trimmed and
@@ -8543,7 +8543,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
         // Unreachable: Hermes is always an Npx distribution. Fall through to
         // the npx guidance with the same pinned spec so a future match-arm
         // change can't resurrect a stale recipe.
-        _ => "hermes-agent@0.22.2",
+        _ => "hermes-agent@0.22.7",
     };
     (
         hermes_npx_argv(package, &["acp", "--setup"]),
@@ -9868,7 +9868,7 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // a flat `<id>.md` — from `~/.commandcode/skills` and the shared
         // `~/.agents/skills` store, plus `.commandcode/skills` and
         // `.agents/skills` in the project. Verified against 1.84.0, 1.86.3,
-        // 1.88.0, 1.88.1 and 1.88.2 by planting one skill in each candidate
+        // 1.88.0, 1.88.1, 1.88.2 and 1.88.4 by planting one skill in each candidate
         // directory: exactly those four reached the session's commands, while
         // `.claude/skills` (project and user) and the flat file were ignored.
         // The Command Code directory leads so linking targets it without
@@ -17314,8 +17314,8 @@ mod tests {
             },
         )
         .unwrap();
-        // The shape verified against grok 1.0.62 and 1.0.70: bare levels make
-        // it advertise `supportsReasoningEffort` with exactly these
+        // The shape verified against grok 1.0.62, 1.0.70 and 1.0.77: bare levels
+        // make it advertise `supportsReasoningEffort` with exactly these
         // `reasoningEfforts`.
         assert_eq!(
             grok_efforts_text(&merged, "grok-4.7").as_deref(),
@@ -20294,7 +20294,7 @@ wire_api = "chat"
     // own version is also the recorded fallback when detection comes up empty.
     #[test]
     fn hermes_custom_version_spec_keeps_lifecycle_scripts_and_records_its_version() {
-        let spec = build_npm_install_spec("hermes-agent@0.22.2", Some("0.23.0")).unwrap();
+        let spec = build_npm_install_spec("hermes-agent@0.22.7", Some("0.23.0")).unwrap();
         assert_eq!(spec, "hermes-agent@0.23.0");
         assert!(npm_package_requires_scripts(&spec));
         assert_eq!(version_from_package_spec(&spec).as_deref(), Some("0.23.0"));
@@ -22037,7 +22037,7 @@ wire_api = "chat"
     /// script of a global install or an `npx` run.
     #[test]
     fn hermes_installs_name_the_package_whose_scripts_npm_must_run() {
-        for spec in ["hermes-agent@0.22.2", "hermes-agent@0.23.0", "hermes-agent"] {
+        for spec in ["hermes-agent@0.22.7", "hermes-agent@0.23.0", "hermes-agent"] {
             assert_eq!(
                 npm_run_scripts_args(spec),
                 ["--ignore-scripts=false", "--allow-scripts=hermes-agent"],
@@ -22047,20 +22047,20 @@ wire_api = "chat"
         // Every other agent keeps the user's own script policy.
         for spec in [
             "cline@3.0.74",
-            "@xai-official/grok@1.0.70",
+            "@xai-official/grok@1.0.77",
             "hermes-agent-npm@1.0.0",
         ] {
             assert!(npm_run_scripts_args(spec).is_empty(), "{spec}");
         }
         assert_eq!(
-            hermes_npx_argv("hermes-agent@0.22.2", &["acp", "--setup"]),
+            hermes_npx_argv("hermes-agent@0.22.7", &["acp", "--setup"]),
             [
                 "npx",
                 "-y",
                 "--ignore-scripts=false",
                 "--allow-scripts=hermes-agent",
                 "--package",
-                "hermes-agent@0.22.2",
+                "hermes-agent@0.22.7",
                 "hermes",
                 "acp",
                 "--setup",
@@ -22087,7 +22087,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(pkg_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.22.2")
+                    Some("hermes-agent@0.22.7")
                 );
                 assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -22699,7 +22699,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.22.2", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.22.7", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -22711,7 +22711,7 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.22.2",
+            "hermes-agent@0.22.7",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));

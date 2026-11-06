@@ -3769,10 +3769,12 @@ fn read_kimi_code_servers() -> Result<BTreeMap<String, Value>, AppCommandError> 
 /// (Kimi ignores it). `transport` is then dropped from the canonical spec so it
 /// can't leak into another agent's config on a cross-agent sync. See issue #325.
 ///
-/// Schema last checked against 2.2.0: unchanged since 0.23.3 apart from the
-/// optional `runtime_id` stdio field 0.38.0 added and 2.2.0 narrowing the stdio
-/// `executor` enum to `local` (see `is_kimi_extension_field`). 0.42.0 rewrote
-/// the agent loop but left `mcpCore/config-schema.ts` byte-identical.
+/// Schema last checked against 2.5.1: unchanged since 0.23.3 apart from the
+/// optional `runtime_id` stdio field 0.38.0 added, 2.2.0 narrowing the stdio
+/// `executor` enum to `local`, 2.5.0 renaming `runtime_id` to `environment_id`
+/// and letting `executor` name `kaos` again, and a `deferred` flag on every
+/// transport (see `is_kimi_extension_field`). 0.42.0 rewrote the agent loop but
+/// left `mcpCore/config-schema.ts` byte-identical.
 fn kimi_code_entry_to_canonical(spec: &Value, id: &str) -> Result<Value, AppCommandError> {
     let Some(obj) = spec.as_object() else {
         return canonicalize_spec(spec, "Kimi Code config");
@@ -3866,7 +3868,9 @@ fn is_kimi_timeout_ms(value: &Value) -> bool {
 /// merge leaves Kimi's value alone (see `merge_cursor_extension_fields`).
 const KIMI_OWNED_KEYS: &[&str] = &[
     "runtime_id",
+    "environment_id",
     "executor",
+    "deferred",
     "bearerTokenEnvVar",
     "startupTimeoutMs",
     "toolTimeoutMs",
@@ -3889,26 +3893,38 @@ const KIMI_SHARED_KEYS: &[&str] = &["auth"];
 /// Validation is not optional: Kimi rejects the ENTIRE `mcpServers` record when a
 /// field it knows has the wrong type, so a wrong-shaped value must be dropped
 /// rather than written back. `stdio` selects the branch of Kimi's discriminated
-/// union, since `runtime_id`/`executor` are stdio-only and `auth`/
-/// `bearerTokenEnvVar` are remote-only.
+/// union, since `runtime_id`/`environment_id`/`executor` are stdio-only and
+/// `auth`/`bearerTokenEnvVar` are remote-only.
 fn is_kimi_extension_field(key: &str, value: &Value, stdio: bool) -> bool {
     match key {
         // stdio: which runtime executes the command. `runtime_id` arrived in
-        // Kimi 0.38.0 alongside the runtime-binding rework.
+        // Kimi 0.38.0 alongside the runtime-binding rework. 2.5.0 renamed
+        // runtimes to environments: its schema no longer has the key, strips
+        // it, and starts such a server in the default `local` environment.
+        // Kept for a Kimi older than 2.5.0, which still honours it.
         "runtime_id" => stdio && is_non_empty_str(value),
-        // `local` is the only executor left. Kimi 2.2.0 deleted the
-        // never-implemented `kaos` from the enum, and one entry still naming
-        // it now fails the whole file at load ("mcp config initial load
-        // failed"), taking every other server in it down too. 2.1.1 only
-        // refused to start that one server. So codeg drops `kaos` from any
-        // entry it saves. Entries it does not touch keep it: upstream chose to
-        // fail them, and turning a `kaos` server into a local launch is not
-        // codeg's call.
+        // stdio, from 2.5.0: the environment that executes the command. One
+        // Kimi has no environment of fails that server alone ("environment
+        // <id> does not exist").
+        "environment_id" => stdio && is_non_empty_str(value),
+        // `local` is the only executor that starts. Kimi 2.2.0 deleted the
+        // never-implemented `kaos` from the enum, and through 2.4.1 one entry
+        // still naming it failed the whole file at load ("mcp config initial
+        // load failed"), taking every other server in it down too. 2.1.1
+        // only refused to start that one server, and so does 2.5.0, which
+        // takes `kaos` back into the enum but refuses it at start ("MCP stdio
+        // executor 'kaos' is not supported; use environment_id to select the
+        // execution environment"). So codeg drops `kaos` from any entry it
+        // saves. Entries it does not touch keep it: upstream chose to fail
+        // them, and turning a `kaos` server into a local launch is not codeg's
+        // call.
         "executor" => stdio && value.as_str() == Some("local"),
         // http/sse: OAuth is the only literal Kimi accepts for `auth`.
         "auth" => !stdio && value.as_str() == Some("oauth"),
         "bearerTokenEnvVar" => !stdio && is_non_empty_str(value),
-        // Common to every transport.
+        // Common to every transport. `deferred` holds a server's tools back
+        // from the model until it searches for them (seen in 2.4.1 and 2.5.1).
+        "deferred" => value.is_boolean(),
         "startupTimeoutMs" | "toolTimeoutMs" => is_kimi_timeout_ms(value),
         "enabledTools" | "disabledTools" => is_string_array(value),
         _ => false,
@@ -3942,8 +3958,8 @@ fn is_kimi_extension_field(key: &str, value: &Value, stdio: bool) -> bool {
 /// an echo left behind wins nothing.
 ///
 /// Every value must satisfy Kimi's schema for the transport the resolved spec
-/// declares: a stdio-only `runtime_id` is not folded onto a remote server, and a
-/// wrong-typed value is dropped rather than carried.
+/// declares: a stdio-only `runtime_id` or `environment_id` is not folded onto a
+/// remote server, and a wrong-typed value is dropped rather than carried.
 fn merge_kimi_extension_fields(
     canonical: &mut Value,
     kimi_spec: &Value,
@@ -4000,8 +4016,8 @@ fn canonical_to_kimi_code_entry(spec: &Value) -> Result<Value, AppCommandError> 
     // `is_kimi_extension_field` covers the keys Kimi models but codeg has no UI
     // for. They exist on disk when the user set them through Kimi's own
     // `/mcp-config`, and dropping them would quietly break that server — an
-    // OAuth'd remote losing its `auth`, or a `runtime_id` entry falling back
-    // to the local runtime. The scan folds Kimi's own copies into the spec
+    // OAuth'd remote losing its `auth`, or an `environment_id` entry falling
+    // back to the local environment. The scan folds Kimi's own copies into the spec
     // this receives (`merge_kimi_extension_fields`), so forwarding what the
     // spec carries keeps them.
     let mut out = Map::new();
@@ -4516,8 +4532,8 @@ fn remove_trae_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError>
 // `transport` discriminant — `{transport: "stdio", enabled, command, args,
 // env}` or `{transport: "http", enabled, url, headers}`, plus an `oauth` block
 // for a server that signs in. The loader behind its `mcp` commands
-// (`parseStoredMcpServer`, read against 1.84.0, 1.86.3, 1.88.0, 1.88.1 and
-// 1.88.2) takes `transport` first, then `type` as an alias, and otherwise
+// (`parseStoredMcpServer`, read against 1.84.0, 1.86.3, 1.88.0, 1.88.1, 1.88.2
+// and 1.88.4) takes `transport` first, then `type` as an alias, and otherwise
 // infers stdio from `command` and http from `url`. It models no `cwd`, and an
 // entry with any other transport (`sse` included) or a non-boolean `enabled`
 // fails and is dropped while the rest of the file still loads. codeg reads
@@ -4527,8 +4543,8 @@ fn remove_trae_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError>
 // non-boolean `enabled` as unset, so such a hand-written entry still starts
 // although neither list shows it. The `oauth` block is the one place codeg's
 // list sides with the session instead: `mcp list` also drops an entry whose
-// `oauth` block it cannot parse (`oauth: {}`, live on 1.86.3, 1.88.0, 1.88.1
-// and 1.88.2) or whose OAuth url is neither https nor loopback http, which the
+// `oauth` block it cannot parse (`oauth: {}`, live on 1.86.3, 1.88.0, 1.88.1,
+// 1.88.2 and 1.88.4) or whose OAuth url is neither https nor loopback http, which the
 // session still starts and codeg, reading no `oauth` rules, still lists.
 //
 // `command-code acp` loads this file itself, so `CommandCode` is on the ACP
@@ -4709,7 +4725,8 @@ fn remove_command_code_server_at(path: &Path, id: &str) -> Result<bool, AppComma
 //
 // Cursor's CLI (and IDE — the file is shared) reads its user-global MCP config
 // from `~/.cursor/mcp.json` — a JSON file with a top-level `mcpServers`
-// object. The CLI (checked against 2026.10.22-27dcf5f) parses each entry with
+// object. The CLI (checked against 2026.10.22-27dcf5f; 2026.11.05-86047df
+// starts, lists and rejects the same entries) parses each entry with
 // a Zod union: stdio when it has a `command` and its optional `type` is
 // `"stdio"`, otherwise remote when it has a `url` and its optional `type` is
 // `"http"` or `"sse"`. A remote entry tries streamable HTTP first and falls
@@ -10120,8 +10137,10 @@ mod tests {
         let on_disk = json!({
             "command": "npx",
             "args": ["-y", "server"],
-            "runtime_id": "remote-box",       // Kimi 0.38.0+
+            "runtime_id": "remote-box",       // Kimi 0.38.0 through 2.4.x
+            "environment_id": "docker-dev",   // Kimi 2.5.0+
             "executor": "local",
+            "deferred": true,
             "startupTimeoutMs": 30_000,
             "toolTimeoutMs": 120_000,
             "enabledTools": ["a", "b"],
@@ -10131,7 +10150,12 @@ mod tests {
         let written = canonical_to_kimi_code_entry(&canonical).expect("write");
         let obj = written.as_object().expect("object");
         assert_eq!(obj.get("runtime_id").and_then(Value::as_str), Some("remote-box"));
+        assert_eq!(
+            obj.get("environment_id").and_then(Value::as_str),
+            Some("docker-dev")
+        );
         assert_eq!(obj.get("executor").and_then(Value::as_str), Some("local"));
+        assert_eq!(obj.get("deferred").and_then(Value::as_bool), Some(true));
         assert_eq!(obj.get("startupTimeoutMs").and_then(Value::as_i64), Some(30_000));
         assert_eq!(obj.get("toolTimeoutMs").and_then(Value::as_i64), Some(120_000));
         assert_eq!(obj.get("enabledTools"), Some(&json!(["a", "b"])));
@@ -10143,10 +10167,12 @@ mod tests {
             "url": "https://host/mcp",
             "auth": "oauth",
             "bearerTokenEnvVar": "MCP_TOKEN",
+            "deferred": false,
         }))
         .expect("http entry");
         let remote = remote.as_object().expect("object");
         assert_eq!(remote.get("auth").and_then(Value::as_str), Some("oauth"));
+        assert_eq!(remote.get("deferred").and_then(Value::as_bool), Some(false));
         assert_eq!(
             remote.get("bearerTokenEnvVar").and_then(Value::as_str),
             Some("MCP_TOKEN")
@@ -10163,7 +10189,9 @@ mod tests {
             "type": "stdio",
             "command": "npx",
             "runtime_id": "remote-box",
+            "environment_id": "docker-dev",
             "executor": "local",
+            "deferred": true,
             "toolTimeoutMs": 120_000,
             "disabledTools": ["danger"],
         });
@@ -10173,7 +10201,12 @@ mod tests {
         merge_kimi_extension_fields(&mut canonical, &kimi, &none);
         let obj = canonical.as_object().expect("object");
         assert_eq!(obj.get("runtime_id").and_then(Value::as_str), Some("remote-box"));
+        assert_eq!(
+            obj.get("environment_id").and_then(Value::as_str),
+            Some("docker-dev")
+        );
         assert_eq!(obj.get("executor").and_then(Value::as_str), Some("local"));
+        assert_eq!(obj.get("deferred").and_then(Value::as_bool), Some(true));
         assert_eq!(obj.get("toolTimeoutMs").and_then(Value::as_i64), Some(120_000));
         assert_eq!(obj.get("disabledTools"), Some(&json!(["danger"])));
         // The winning spec still owns every key it already had.
@@ -10254,8 +10287,14 @@ mod tests {
         merge_kimi_extension_fields(&mut remote, &kimi, &none);
         let remote_obj = remote.as_object().expect("object");
         assert!(!remote_obj.contains_key("runtime_id"));
+        assert!(!remote_obj.contains_key("environment_id"));
         assert!(!remote_obj.contains_key("executor"));
         assert_eq!(remote_obj.get("toolTimeoutMs").and_then(Value::as_i64), Some(120_000));
+        // `deferred` is common to every transport, so it folds onto a remote too.
+        assert_eq!(
+            remote_obj.get("deferred").and_then(Value::as_bool),
+            Some(true)
+        );
 
         let mut stdio = json!({"type": "stdio", "command": "npx"});
         merge_kimi_extension_fields(
@@ -10273,8 +10312,9 @@ mod tests {
         // `is_kimi_extension_field` would be silently erased and never restored.
         let sample = |key: &str| -> (Value, bool) {
             match key {
-                "runtime_id" => (json!("local"), true),
+                "runtime_id" | "environment_id" => (json!("local"), true),
                 "executor" => (json!("local"), true),
+                "deferred" => (json!(true), false),
                 "auth" => (json!("oauth"), false),
                 "bearerTokenEnvVar" => (json!("TOKEN"), false),
                 "startupTimeoutMs" | "toolTimeoutMs" => (json!(1_000), true),
@@ -10348,7 +10388,9 @@ mod tests {
             "type": "stdio",
             "command": "npx",
             "runtime_id": "",              // schema wants min length 1
+            "environment_id": "",          // schema wants min length 1
             "executor": "podman",          // not `local`
+            "deferred": "yes",             // string, not bool
             "startupTimeoutMs": 0,         // schema wants >= 1
             "toolTimeoutMs": "30000",      // string, not int
             "enabledTools": ["a", 7],      // not all strings
@@ -10357,7 +10399,9 @@ mod tests {
         let obj = entry.as_object().expect("object");
         for key in [
             "runtime_id",
+            "environment_id",
             "executor",
+            "deferred",
             "startupTimeoutMs",
             "toolTimeoutMs",
             "enabledTools",
@@ -10374,10 +10418,12 @@ mod tests {
 
     #[test]
     fn kimi_code_retired_kaos_executor_is_never_written_back() {
-        // Kimi 2.2.0 narrowed the stdio `executor` enum to `local`, and one
-        // entry still naming `kaos` fails the whole `mcp.json` at load — every
-        // other server in the file stops starting too. So `kaos` is dropped on
-        // every path that could write it: the writer itself...
+        // Kimi 2.2.0 narrowed the stdio `executor` enum to `local`, and
+        // through 2.4.1 one entry still naming `kaos` fails the whole
+        // `mcp.json` at load — every other server in the file stops starting
+        // too (2.5.0 takes it back into the enum and fails only that server).
+        // So `kaos` is dropped on every path that could write it: the writer
+        // itself...
         let written = canonical_to_kimi_code_entry(&json!({
             "type": "stdio", "command": "npx", "executor": "kaos",
         }))

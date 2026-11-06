@@ -898,8 +898,9 @@ const GROK_DEFAULT_BASE_URL = "https://api.x.ai/v1"
  * `reasoning_efforts`. Each is one of Grok's canonical levels and reaches the
  * provider exactly as written. Unlike Kimi there is no free-text level: Grok
  * rejects an unknown one, and drops the model's WHOLE list with it (verified
- * against 1.0.62 and 1.0.70). `none` is left out because next to real levels
- * it reads as "declare none"; a hand-written one still shows as an extra chip.
+ * against 1.0.62, 1.0.70 and 1.0.77). `none` is left out because next to real
+ * levels it reads as "declare none"; a hand-written one still shows as an extra
+ * chip.
  */
 export const GROK_REASONING_EFFORT_LEVELS = [
   "minimal",

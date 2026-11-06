@@ -435,7 +435,7 @@ mod zcode_legacy_registration_tests {
         );
         match builtin.distribution {
             AgentDistribution::Npx { package, cmd, .. } => {
-                assert_eq!(package, "zcode-acp-server@0.82.0");
+                assert_eq!(package, "zcode-acp-server@0.82.1");
                 assert_eq!(cmd, "zcode-acp-server");
             }
             _ => panic!("builtin launch distribution changed"),
