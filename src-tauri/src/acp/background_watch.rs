@@ -73,9 +73,9 @@ use crate::models::agent::AgentType;
 use crate::models::message::MessageTurn;
 use crate::parsers::claude::{
     capture_tag, capture_title_record, claude_uri_link, find_clear_rollover_successor,
-    find_session_file_in, group_into_turns, is_meta_message, queued_human_prompt,
-    queued_task_notification, slash_command_display, task_notification_is_interim,
-    task_notification_result_regex, task_notification_status_regex,
+    find_session_file_in, group_into_turns, is_compact_command, is_meta_message,
+    queued_human_prompt, queued_task_notification, slash_command_display,
+    task_notification_is_interim, task_notification_result_regex, task_notification_status_regex,
     task_notification_summary_regex, task_notification_task_id_regex,
     task_notification_tool_use_id_regex, unescape_task_notification_text, ClaudeRecordAccumulator,
     BACKGROUND_RESULT_MAX_CHARS, CONTEXT_CONTINUATION_PREFIX,
@@ -857,6 +857,24 @@ pub(crate) struct WatchState {
     /// an unrelated initiator, and the safe failure is the pre-fix duplicate,
     /// never a hidden turn.
     foreground_submission_id: Option<String>,
+    /// The records of a compaction read in `Foreground` mode, held back until
+    /// the transcript says whose it is (see [`is_held_compaction_record`]).
+    ///
+    /// Claude Code writes a `/compact` in this order: the `compact_boundary`
+    /// record, the continuation summary, the `<local-command-caveat>`, and only
+    /// then the command's own echo. Which turn the compaction belongs to is
+    /// known only at the echo: a `/compact` codeg sent matches the ledger, and
+    /// the wire renders it. One the ledger does not hold is out-of-turn — the
+    /// one claude-agent-acp 0.101.0 sends itself when a large session has sat
+    /// idle for 54 minutes (#1522), with no prompt open — and opens an episode.
+    /// That episode is handed these records first, so the overlay draws the
+    /// divider and its summary exactly as the history parse will, instead of
+    /// the echo alone (which the parser drops when no divider precedes it) —
+    /// unless codeg is prompting when the echo is read: a prompt sent while
+    /// the compaction ran takes its remaining frames into the wire's turn. Any
+    /// other record ends the hold: an `assistant` record is the turn going on
+    /// after the CLI compacted it automatically, which the wire renders.
+    held_compaction: Vec<serde_json::Value>,
     /// `Prompting` state for the tick currently being processed. Set once at
     /// `tick()` entry from the caller-supplied snapshot so `account()` (called
     /// per transcript line within the same tick) can read it without an extra
@@ -931,6 +949,7 @@ impl WatchState {
             was_prompting: false,
             foreground_awaiting_reply: false,
             foreground_submission_id: None,
+            held_compaction: Vec::new(),
             currently_prompting: false,
             turn_origin_task_ids: HashMap::new(),
             last_disk_activity: None,
@@ -1215,6 +1234,7 @@ impl WatchState {
             self.committed = meta.len();
             self.carry.clear();
             self.episode = None;
+            self.held_compaction.clear();
             self.mode = Mode::Foreground;
         } else if !unchanged {
             match self.read_new_lines(&path) {
@@ -1326,6 +1346,8 @@ impl WatchState {
             self.seed_titles_from_history(&f, self.committed);
         }
         self.read_failed = false;
+        // Records held from another file belong to none of this one's turns.
+        self.held_compaction.clear();
         self.file = Some(f);
     }
 
@@ -1698,6 +1720,17 @@ impl WatchState {
             self.foreground_awaiting_reply = false;
         }
 
+        // A compaction read while the wire owns the transcript waits for its
+        // `/compact` echo to say whose it is (see `held_compaction`); any other
+        // record ends the wait, and the records go wherever this one does.
+        if matches!(self.mode, Mode::Foreground)
+            && is_held_compaction_record(value, !self.held_compaction.is_empty())
+        {
+            self.held_compaction.push(value.clone());
+            return;
+        }
+        let held_compaction = std::mem::take(&mut self.held_compaction);
+
         // A message folded into the running turn continues that turn and never
         // starts one. Matched against the ledger — a prompt codeg sent that
         // Claude Code folded into a turn it started on its own, or a steer — it
@@ -1761,17 +1794,37 @@ impl WatchState {
                 .episode
                 .as_ref()
                 .is_some_and(|e| e.acc.messages.len() >= MAX_EPISODE_MESSAGES);
-            if matches!(self.mode, Mode::Foreground) || self.episode.is_none() || rotate {
+            let from_foreground = matches!(self.mode, Mode::Foreground);
+            if from_foreground || self.episode.is_none() || rotate {
                 if rotate {
                     self.collect_changed_turns(cwd, changed_turns);
                 }
                 // Any stable, strictly-increasing base works — turn ids only
                 // need to be unique and stable within the watch.
+                let mut acc = ClaudeRecordAccumulator::new(
+                    self.file.clone().unwrap_or_else(|| PathBuf::from("")),
+                );
+                // A `/compact` nobody sent through codeg was written after its
+                // own boundary and summary: the episode reads them first, so
+                // the divider (and the echo the parser places at it) is drawn
+                // as the history parse draws it. Only the echo claims them —
+                // another initiator after a held compaction (none is known to
+                // occur) leaves them to the wire, as before. So does a prompt
+                // codeg sent while the compaction ran: its turn takes the
+                // compaction's remaining frames, and the composer draws the
+                // card there.
+                if from_foreground
+                    && !self.currently_prompting
+                    && matches!(&initiator, TurnInitiatorText::ReconstructedSlashCommand(display)
+                        if is_compact_command(display))
+                {
+                    for record in held_compaction {
+                        acc.feed_value(record);
+                    }
+                }
                 self.episode = Some(Episode {
                     start_offset: self.next_episode_base(),
-                    acc: ClaudeRecordAccumulator::new(
-                        self.file.clone().unwrap_or_else(|| PathBuf::from("")),
-                    ),
+                    acc,
                     emitted_hashes: HashMap::new(),
                     origin_task_id: task_notification_origin_id(initiator_text),
                 });
@@ -1948,6 +2001,38 @@ fn turn_initiator_text(value: &serde_json::Value) -> Option<TurnInitiatorText> {
         return None;
     }
     Some(TurnInitiatorText::Verbatim(text))
+}
+
+/// Whether `value` is one of the records a compaction writes ahead of its
+/// `/compact` echo (see `WatchState::held_compaction`). A `compact_boundary`
+/// record starts the run. While one is `holding`, the continuation summary,
+/// the `<local-command-caveat>` the CLI writes before a local command's echo,
+/// and every record that is neither `user` nor `assistant` (attachments, the
+/// CLI's bookkeeping) join it. Anything else — an `assistant` record, the echo,
+/// a prompt — ends it.
+fn is_held_compaction_record(value: &serde_json::Value, holding: bool) -> bool {
+    let record_type = value.get("type").and_then(|t| t.as_str());
+    if record_type == Some("system")
+        && value.get("subtype").and_then(|s| s.as_str()) == Some("compact_boundary")
+    {
+        return true;
+    }
+    if !holding {
+        return false;
+    }
+    match record_type {
+        Some("assistant") => false,
+        Some("user") => {
+            if value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true) {
+                return true;
+            }
+            let text = user_record_text(value).unwrap_or_default();
+            let text = text.trim_start();
+            text.starts_with(CONTEXT_CONTINUATION_PREFIX)
+                || (is_meta_message(value) && text.starts_with("<local-command-caveat>"))
+        }
+        _ => true,
+    }
 }
 
 /// The text of a message the user sent mid-turn, which Claude Code folded into
@@ -3128,6 +3213,221 @@ mod tests {
             event.is_none() || unpack(event.unwrap()).0.is_empty(),
             "the wire renders this turn — a rebuilt separator must not turn it \
              into an overlay copy"
+        );
+    }
+
+    /// The records Claude Code 2.1.318 writes for one `/compact`, in file
+    /// order, as a live transcript has them (claude-agent-acp 0.101.0): the
+    /// boundary, the continuation summary, the caveat, the command's echo and
+    /// its output. The echo's timestamp precedes the boundary's, but it is
+    /// written after it.
+    fn compact_records(tag: &str, prompt_id: &str) -> Vec<String> {
+        vec![
+            format!(
+                r#"{{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","isMeta":false,"timestamp":"2026-11-05T23:39:59.760Z","uuid":"b-{tag}","level":"info","compactMetadata":{{"trigger":"manual","preTokens":251005,"durationMs":18,"postTokens":2644,"cumulativeDroppedTokens":248361}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"timestamp":"2026-11-05T23:39:59.761Z","uuid":"s-{tag}","message":{{"role":"user","content":"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nPROBE SUMMARY: the user said hello.\n\nContinue the conversation from where it left off without asking the user any further questions."}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","isMeta":true,"timestamp":"2026-11-05T23:39:59.740Z","uuid":"c-{tag}","message":{{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>"}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","timestamp":"2026-11-05T23:39:59.740Z","uuid":"e-{tag}","message":{{"role":"user","content":"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","repeatsCompactSummary":true,"timestamp":"2026-11-05T23:39:59.872Z","uuid":"o-{tag}","message":{{"role":"user","content":"<local-command-stdout>Compacted PostCompact [callback] completed successfully</local-command-stdout>"}}}}"#
+            ),
+        ]
+    }
+
+    /// What a turn shows, without the ids and times that name its position.
+    fn shown(turns: &[MessageTurn]) -> Vec<serde_json::Value> {
+        turns
+            .iter()
+            .map(|t| serde_json::json!({ "role": t.role, "blocks": t.blocks }))
+            .collect()
+    }
+
+    /// claude-agent-acp 0.101.0 (#1522) sends `/compact` itself when a large
+    /// session has sat idle for 54 minutes: no prompt is open and codeg's
+    /// ledger holds nothing. The wire carries the compaction's frames outside
+    /// any turn, which the composer does not draw, so the overlay is the only
+    /// live view of it, and it must draw what reopening the conversation will:
+    /// the divider with its summary and the echo the parser places above it —
+    /// not the echo alone, which is all an episode opened at the echo saw.
+    #[test]
+    fn a_compact_nobody_sent_through_codeg_surfaces_with_its_divider() {
+        use crate::models::message::{ContentBlock, TurnRole};
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("hello idle");
+        write_lines(
+            &path,
+            &[
+                &user_prompt_array("u1", "hello idle"),
+                &assistant_text("a1", "ok"),
+            ],
+        );
+        assert!(tick_now(&mut ws, &ledger).is_none());
+
+        let records = compact_records("idle", "p-idle");
+        let lines: Vec<&str> = records.iter().map(String::as_str).collect();
+        write_lines(&path, &lines);
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("the idle compaction surfaces"));
+
+        let mut history = ClaudeRecordAccumulator::new(path.clone());
+        for line in &lines {
+            history.feed_line(line);
+        }
+        let history = group_into_turns(history.messages);
+        assert_eq!(
+            shown(&turns),
+            shown(&history),
+            "the overlay draws what history does"
+        );
+        assert_eq!(turns.len(), 2, "{turns:#?}");
+        assert!(matches!(turns[0].role, TurnRole::User));
+        assert!(matches!(
+            turns[0].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == "/compact"
+        ));
+        let divider = serde_json::to_string(&turns[1].blocks).unwrap();
+        assert!(divider.contains("\"preTokens\":251005"), "{divider}");
+        assert!(
+            divider.contains("PROBE SUMMARY: the user said hello."),
+            "{divider}"
+        );
+    }
+
+    /// The same records split across two reads: the hold outlives the tick.
+    #[test]
+    fn a_held_compaction_waits_across_ticks_for_its_echo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        let records = compact_records("split", "p-split");
+        let lines: Vec<&str> = records.iter().map(String::as_str).collect();
+        write_lines(&path, &lines[..3]);
+        assert!(tick_now(&mut ws, &ledger).is_none(), "nothing is known yet");
+        write_lines(&path, &lines[3..]);
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("surfaces at the echo"));
+        assert_eq!(turns.len(), 2, "{turns:#?}");
+        assert!(serde_json::to_string(&turns[1].blocks)
+            .unwrap()
+            .contains("\"preTokens\":251005"));
+    }
+
+    /// A `/compact` codeg sent stays on the wire, whichever tick reads its
+    /// records — the ledger claims the echo, and the held records go with it.
+    #[test]
+    fn a_compact_codeg_sent_never_reaches_the_overlay() {
+        for split in [5, 3] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = temp_session(&dir);
+            write_lines(&path, &[]);
+            let ledger = PromptLedger::shared();
+            let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+            ledger.record_text("/compact");
+            let records = compact_records("sent", "p-sent");
+            let lines: Vec<&str> = records.iter().map(String::as_str).collect();
+            write_lines(&path, &lines[..split]);
+            let first = tick_prompting(&mut ws, &ledger);
+            write_lines(&path, &lines[split..]);
+            let second = tick_now(&mut ws, &ledger);
+            for event in [first, second].into_iter().flatten() {
+                assert!(
+                    unpack(event).0.is_empty(),
+                    "split at {split}: the wire renders a /compact codeg sent"
+                );
+            }
+        }
+    }
+
+    /// The CLI compacts a long turn by itself: the boundary and the summary land
+    /// mid-turn and the reply goes on. That compaction is the wire's.
+    #[test]
+    fn an_automatic_compaction_inside_a_codeg_turn_stays_on_the_wire() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("refactor the parser");
+        let records = compact_records("auto", "p-auto");
+        write_lines(
+            &path,
+            &[
+                &user_prompt_array("u1", "refactor the parser"),
+                &assistant_text("a1", "Reading the files."),
+                &records[0].replace("\"manual\"", "\"auto\""),
+                &records[1],
+                &assistant_text("a2", "Continuing after the compaction."),
+            ],
+        );
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(event.is_none() || unpack(event.unwrap()).0.is_empty());
+        assert!(ws.held_compaction.is_empty(), "the reply ended the hold");
+    }
+
+    /// A prompt sent while the adapter's own compaction runs takes the
+    /// compaction's remaining frames into its turn, which the composer draws:
+    /// the overlay stays out of it rather than drawing the divider again.
+    #[test]
+    fn a_compact_read_while_codeg_prompts_is_left_to_the_wire() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("back again");
+        let records = compact_records("race", "p-race");
+        let mut lines: Vec<&str> = records.iter().map(String::as_str).collect();
+        let prompt = user_prompt_array("u2", "back again");
+        let reply = assistant_text("a2", "Picking up from the summary.");
+        lines.extend([prompt.as_str(), reply.as_str()]);
+        write_lines(&path, &lines);
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(
+            event.is_none() || unpack(event.unwrap()).0.is_empty(),
+            "the turn on the wire draws this compaction"
+        );
+    }
+
+    /// Only a `/compact` echo claims a held compaction: another initiator after
+    /// one opens its episode without it, as before.
+    #[test]
+    fn a_held_compaction_is_not_handed_to_another_initiator() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        let records = compact_records("other", "p-other");
+        write_lines(
+            &path,
+            &[
+                &records[0],
+                &records[1],
+                &cron_prompt("keep going"),
+                &assistant_text("a2", "resuming"),
+            ],
+        );
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("the cron turn surfaces"));
+        assert!(
+            !serde_json::to_string(&turns).unwrap().contains("preTokens"),
+            "{turns:#?}"
         );
     }
 

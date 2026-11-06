@@ -67,6 +67,8 @@ describe("ContextCompactionCard", () => {
     // it to `automatic`. Both mean the same thing to the reader.
     ["auto", "Automatically triggered"],
     ["manual", "Manually triggered"],
+    // claude-agent-acp 0.101.0's own `/compact` for a large idle session.
+    ["idle", "Triggered while idle, before the prompt cache expired"],
   ])("translates the %s trigger in the tooltip", (trigger, expected) => {
     renderCard({
       state: "output-available",

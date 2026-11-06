@@ -4237,7 +4237,8 @@
         "failed": "فشل ضغط السياق",
         "summary": "الملخص",
         "triggerManual": "تم التشغيل يدويًا",
-        "triggerAutomatic": "تم التشغيل تلقائيًا"
+        "triggerAutomatic": "تم التشغيل تلقائيًا",
+        "triggerIdle": "تم التشغيل أثناء الخمول، قبل انتهاء صلاحية ذاكرة التخزين المؤقت للموجّه"
       },
       "sessionFailure": {
         "category": {

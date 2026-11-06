@@ -3067,9 +3067,104 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     or settings.json as they are: `CLAUDE_CODE_SUBAGENT_EFFORT`,
             //     `CLAUDE_CODE_DISABLE_ULTRATHINK` and
             //     `permissions.blockWritesOutsideWorkingDirectories`.
+            //
+            // 0.101.0 moves the Claude Agent SDK to 0.3.318 (Claude Code
+            // 2.1.316 → 2.1.318); the ACP SDK stays 2.4.0, `engines.node` stays
+            // ">=22", and the CLI's model catalog is unchanged (the same 22 ids,
+            // the same latest model of each family). The scenario harness, run
+            // on the 0.101.0 sources with codeg's exact `clientCapabilities`,
+            // differs from 0.100.0's recording in one value in all 40 scenarios:
+            // the mode `session/new` reports (see (ccccc)). Measured live
+            // against the local fake Anthropic API, 0.100.0 and 0.101.0 side by
+            // side:
+            //
+            // (ccccc) **A new session starts in Auto** (#1533). With no
+            // `permissions.defaultMode` a session starts in `auto`, where 0.100.0
+            // started in `default` (Manual), as interactive Claude Code has since
+            // 2.1.283. A model the CLI marks as unable to run Auto starts in
+            // Manual. `disableAutoMode: "disable"` (top level or under
+            // `permissions`) now takes `auto` off the mode list, and a session
+            // resumed in `auto` then starts in `default` (#1520). Measured
+            // through a gateway (`ANTHROPIC_BASE_URL`), Auto is the start mode
+            // with `opus`, `sonnet`, `haiku` and an id the CLI does not know
+            // (`glm-4.6`) alike, and in it:
+            //   * a write in the working directory (`touch`, `echo > file`) runs
+            //     without a permission request, where Manual asked;
+            //   * a command Claude Code reviews goes to its classifier, which asks
+            //     the gateway (`claude-sonnet-5`, then `claude-opus-5-5` in the
+            //     measured session) and, with no usable answer, refuses the call
+            //     itself ("Permission denied: Classifier unavailable",
+            //     `nonExecutionKind: "automode-unavailable"`), so it never
+            //     reaches codeg's permission card;
+            //   * a session shows one warning notice that the gateway is not
+            //     eligible for free classifier requests.
+            // codeg keeps the upstream start mode, as it kept codex-acp's
+            // `auto_review` default: the composer's mode picker shows it, a pick
+            // saved there is replayed on every connect
+            // (`apply_preferred_session_options`), a saved `auto` that
+            // `disableAutoMode` withdrew is skipped (`session_modes_reject_id`),
+            // and the selector cache lives in memory only, so no draft shows a
+            // mode from the previous pin. A `codeg-cli` run's `--permissions`
+            // answers only what the agent asks, which in Auto is less of the run:
+            // docs/cli.md says so and points to `--mode default`.
+            //
+            // (ddddd) **An idle session compacts itself** (#1522). 54 minutes
+            // after a main-thread response whose cache write was 1h, a session of
+            // at least 200k context tokens with nothing running or waiting gets a
+            // `/compact` the adapter sends itself
+            // (`CLAUDE_AGENT_ACP_IDLE_COMPACT_DELAY_MS` changes the wait;
+            // `idleCompaction: false`, `autoCompactEnabled: false`,
+            // `DISABLE_COMPACT` and `DISABLE_AUTO_COMPACT` turn it off). No prompt
+            // is open: the client gets the `compaction_update` frames (the last
+            // with `trigger: "idle"`), a `usage_update` with the summary's size,
+            // and no async task. The transcript records it field by field like a
+            // `/compact` codeg sends: the boundary, the summary, the caveat, the
+            // command's echo and its output. Measured on a real server before
+            // this change: the composer files a tool call that arrives outside a
+            // turn away (`outOfTurnToolCalls`) instead of drawing it; the
+            // transcript watcher opened its episode at the echo, past the
+            // boundary, so the overlay drew nothing either; only the context ring
+            // dropped, and reopening the conversation showed the `/compact` and
+            // its divider. The watcher now holds a boundary read in foreground
+            // mode until the echo says whose it is
+            // (`background_watch::WatchState::held_compaction`): an echo the
+            // ledger does not hold opens an episode handed the boundary and the
+            // summary first, so the overlay draws what history draws. The
+            // compaction card translates `idle`, which a prompt sent while the
+            // compaction runs can still show live.
+            //
+            // (eeeee) **A config file that is not JSON stops every start**.
+            // Claude Code 2.1.318 refuses a start without a terminal with
+            // `startupFailureReason: "config_file_invalid"` and leaves the file
+            // as it is, the fix in its message ("Fix the JSON in …, or move the
+            // file aside to start with default settings"); 2.1.316 backed the
+            // file up and replaced it with defaults (both measured with a cut-off
+            // `.claude.json`). codeg reads the reason as a machine's (see
+            // (yyyy)): a new session ends with the CLI's sentence, and a reopen
+            // does not fall back to `session/new`. The other new reason,
+            // `initialize_not_first`, needs a wrapper between the adapter and the
+            // CLI, and codeg starts none.
+            //
+            // (fffff) Nothing to change in codeg, each checked:
+            //   * #1524 ships single-file executables on the release page (185 to
+            //     217 MB a platform, the CLI next to the adapter). The ACP registry
+            //     still lists npx only, and codeg keeps installing the npm
+            //     package. `agentCommand`, the command terminal auth runs, serves
+            //     those executables; codeg declares no terminal auth.
+            //   * #1512 streams a background command's output only to a client
+            //     that is not AIR; codeg is AIR.
+            //   * The SDK adds `session_writes_lost` (a full disk or quota lost
+            //     transcript lines), which the adapter logs to stderr, and
+            //     `credential_expires_at` on results, which it does not read.
+            //   * Per its changelog, CLI 2.1.317 checks before a web or shell call
+            //     sends the account's e-mail address and no longer answers a Read
+            //     of an unchanged file with a stub (codeg never read the stub),
+            //     and 2.1.318 stops rewriting `~/.claude.json` on every SDK run.
+            //     A TaskCreate plan entry now takes the subject and description
+            //     Claude Code saved.
             distribution: AgentDistribution::Npx {
-                version: "0.100.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.100.0",
+                version: "0.101.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.101.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -7876,8 +7971,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.100.0",
-            "@agentclientprotocol/claude-agent-acp@0.100.0",
+            "0.101.0",
+            "@agentclientprotocol/claude-agent-acp@0.101.0",
             Some("22.0.0"),
         );
         assert_npx_version(

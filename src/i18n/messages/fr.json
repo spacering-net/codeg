@@ -4237,7 +4237,8 @@
         "failed": "Échec de la compaction du contexte",
         "summary": "Résumé",
         "triggerManual": "Déclenchée manuellement",
-        "triggerAutomatic": "Déclenchée automatiquement"
+        "triggerAutomatic": "Déclenchée automatiquement",
+        "triggerIdle": "Déclenchée pendant l'inactivité, avant l'expiration du cache du prompt"
       },
       "sessionFailure": {
         "category": {

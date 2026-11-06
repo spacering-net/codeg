@@ -4237,7 +4237,8 @@
         "failed": "上下文壓縮失敗",
         "summary": "摘要",
         "triggerManual": "手動觸發",
-        "triggerAutomatic": "自動觸發"
+        "triggerAutomatic": "自動觸發",
+        "triggerIdle": "閒置時觸發，在提示快取過期前"
       },
       "sessionFailure": {
         "category": {

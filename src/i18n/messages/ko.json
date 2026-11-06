@@ -4237,7 +4237,8 @@
         "failed": "컨텍스트 압축 실패",
         "summary": "요약",
         "triggerManual": "수동 실행",
-        "triggerAutomatic": "자동 실행"
+        "triggerAutomatic": "자동 실행",
+        "triggerIdle": "유휴 상태에서 프롬프트 캐시가 만료되기 전에 실행"
       },
       "sessionFailure": {
         "category": {

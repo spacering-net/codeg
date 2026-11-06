@@ -972,7 +972,7 @@ fn continuation_summary_text(message: &str) -> String {
 
 /// Whether a reconstructed slash-command display line is a `/compact`
 /// invocation — bare, or carrying the focus instructions it accepts.
-fn is_compact_command(display: &str) -> bool {
+pub(crate) fn is_compact_command(display: &str) -> bool {
     display == "/compact" || display.starts_with("/compact ")
 }
 
@@ -2151,10 +2151,13 @@ impl ClaudeRecordAccumulator {
                     //
                     // `background_watch` also keys its overlay turn ids by
                     // position, so an insert inside an open episode re-emits
-                    // everything after it. Only a manual compaction inserts,
-                    // and a manual one is a foreground submission — the
-                    // watcher's foreground window is closed around it. Were
-                    // that ever to change the cost is a duplicate overlay
+                    // everything after it. A `/compact` codeg sent is a
+                    // foreground submission, which no episode sees. One it did
+                    // not send (claude-agent-acp 0.101.0 sends its own for an
+                    // idle session) opens an episode AT this echo, handed the
+                    // boundary and the summary the watcher held back for it,
+                    // so the insert lands before the episode's first emission.
+                    // Were that ever to change the cost is a duplicate overlay
                     // turn, which the refetch watermark retires.
                     for owner in usage_owner_by_message_id.values_mut() {
                         if *owner >= at {

@@ -4237,7 +4237,8 @@
         "failed": "Falha ao compactar o contexto",
         "summary": "Resumo",
         "triggerManual": "Acionada manualmente",
-        "triggerAutomatic": "Acionada automaticamente"
+        "triggerAutomatic": "Acionada automaticamente",
+        "triggerIdle": "Acionada na inatividade, antes de o cache do prompt expirar"
       },
       "sessionFailure": {
         "category": {

@@ -4237,7 +4237,8 @@
         "failed": "Context compaction failed",
         "summary": "Summary",
         "triggerManual": "Manually triggered",
-        "triggerAutomatic": "Automatically triggered"
+        "triggerAutomatic": "Automatically triggered",
+        "triggerIdle": "Triggered while idle, before the prompt cache expired"
       },
       "sessionFailure": {
         "category": {

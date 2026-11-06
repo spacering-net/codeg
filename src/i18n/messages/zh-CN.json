@@ -4237,7 +4237,8 @@
         "failed": "上下文压缩失败",
         "summary": "摘要",
         "triggerManual": "手动触发",
-        "triggerAutomatic": "自动触发"
+        "triggerAutomatic": "自动触发",
+        "triggerIdle": "空闲时触发，在提示缓存过期前"
       },
       "sessionFailure": {
         "category": {
