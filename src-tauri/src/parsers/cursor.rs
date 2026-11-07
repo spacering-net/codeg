@@ -282,6 +282,16 @@ impl CursorParser {
         let meta = read_chat_meta(&conn)?;
         resolved_session_model(&conn, &meta)
     }
+
+    /// Modification time of the session's store, for negative caching: a
+    /// failed model lookup is retried only after the store actually changed.
+    pub(crate) fn store_mtime_for_session(&self, session_id: &str) -> Option<std::time::SystemTime> {
+        let chat_dir = self.find_chat_dir(session_id)?;
+        std::fs::metadata(chat_dir.join("store.db"))
+            .ok()?
+            .modified()
+            .ok()
+    }
 }
 
 impl Default for CursorParser {
@@ -531,7 +541,11 @@ fn prompt_fingerprint_model(bytes: &[u8]) -> Option<String> {
     found
 }
 
-/// `"model" <ws> : <ws> "<id>"` inside `window`.
+/// `"model" <ws> : <ws> "<id>"` inside `window`, with the string value fully
+/// JSON-decoded (escapes included). An INCOMPLETE value — a backslash or the
+/// end of the window before the closing quote — is rejected outright: an
+/// escaped or window-cut id must never be persisted as a prefix of the real
+/// model.
 fn json_string_after_key(window: &[u8], key: &[u8]) -> Option<String> {
     let rel = window.windows(key.len()).position(|item| item == key)?;
     let mut i = rel + key.len();
@@ -549,12 +563,56 @@ fn json_string_after_key(window: &[u8], key: &[u8]) -> Option<String> {
         return None;
     }
     i += 1;
-    let start = i;
-    while window.get(i).is_some_and(|byte| *byte != b'"' && *byte != b'\\') {
-        i += 1;
+    decode_json_string(window, i)
+}
+
+/// Decode the JSON string that starts just after the opening quote at `from`
+/// (an index into `window`). Returns `None` when the closing quote is not in
+/// the window, an escape is malformed, or the decoded text is not valid
+/// UTF-8 — anything short of a complete, well-formed string is not a model.
+fn decode_json_string(window: &[u8], from: usize) -> Option<String> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut i = from;
+    loop {
+        let byte = *window.get(i)?;
+        match byte {
+            b'"' => {
+                let text = String::from_utf8(out).ok()?;
+                return (!text.is_empty() && text.len() <= 100).then_some(text);
+            }
+            b'\\' => {
+                i += 1;
+                match *window.get(i)? {
+                    b'"' => out.push(b'"'),
+                    b'\\' => out.push(b'\\'),
+                    b'/' => out.push(b'/'),
+                    b'b' => out.push(0x08),
+                    b'f' => out.push(0x0C),
+                    b'n' => out.push(b'\n'),
+                    b'r' => out.push(b'\r'),
+                    b't' => out.push(b'\t'),
+                    b'u' => {
+                        let hex = window.get(i + 1..i + 5)?;
+                        let code =
+                            u16::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?;
+                        // Surrogate halves are not a scalar value; a model id
+                        // never needs one, and accepting half a pair would
+                        // produce mojibake, so reject.
+                        let ch = char::from_u32(u32::from(code))?;
+                        let mut buf = [0u8; 4];
+                        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                        i += 4;
+                    }
+                    _ => return None,
+                }
+                i += 1;
+            }
+            _ => {
+                out.push(byte);
+                i += 1;
+            }
+        }
     }
-    let id = std::str::from_utf8(window.get(start..i)?).ok()?;
-    (!id.is_empty() && id.len() <= 100).then(|| id.to_string())
 }
 
 /// How many blobs one model lookup will open. A session DAG is a few hundred
@@ -2318,6 +2376,33 @@ mod tests {
         assert_eq!(s.folder_path.as_deref(), Some("/Users/me/proj"));
         assert_eq!(s.git_branch.as_deref(), Some("main"));
         assert!(s.ended_at.is_some());
+    }
+
+    #[test]
+    fn json_string_after_key_decodes_escapes_and_rejects_incomplete_values() {
+        // A plain value decodes as-is.
+        assert_eq!(
+            json_string_after_key(br#""model": "grok-4.7""#, b"\"model\"").as_deref(),
+            Some("grok-4.7")
+        );
+        // Escapes decode to the real character, not a prefix cut at the
+        // backslash.
+        assert_eq!(
+            json_string_after_key(br#""model": "foo\"bar\"baz""#, b"\"model\"").as_deref(),
+            Some("foo\"bar\"baz")
+        );
+        assert_eq!(
+            json_string_after_key(br#""model": "a\/b\\c""#, b"\"model\"").as_deref(),
+            Some("a/b\\c")
+        );
+        // A window cut before the closing quote (or mid-escape) yields
+        // NOTHING — never a truncated "complete-looking" id.
+        assert!(json_string_after_key(br#""model": "grok-4"#, b"\"model\"").is_none());
+        assert!(json_string_after_key(br#""model": "grok\"#, b"\"model\"").is_none());
+        assert!(json_string_after_key(br#""model": "grok\u12"#, b"\"model\"").is_none());
+        // Non-string values and malformed escapes are not models.
+        assert!(json_string_after_key(br#""model": 42"#, b"\"model\"").is_none());
+        assert!(json_string_after_key(br#""model": "a\qb""#, b"\"model\"").is_none());
     }
 
     #[test]

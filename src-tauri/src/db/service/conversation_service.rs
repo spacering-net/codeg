@@ -309,7 +309,11 @@ pub async fn seed_model_if_empty(
 
 /// Cursor rows whose sidebar chip is blank, with the session id needed to
 /// read the model out of that session's store. Deleted rows and rows that
-/// already have a model are not returned.
+/// already have a model are not returned. Rows in soft-deleted folders and
+/// loop conversations are excluded too: the workspace list hides them (same
+/// filter as `refresh_codex_auto_titles`), so a successful backfill must not
+/// broadcast an upsert that reinserts a hidden row into another client's
+/// workspace state.
 pub async fn cursor_sessions_missing_model(
     conn: &DatabaseConnection,
 ) -> Result<Vec<(i32, String)>, DbError> {
@@ -317,6 +321,16 @@ pub async fn cursor_sessions_missing_model(
         .filter(conversation::Column::DeletedAt.is_null())
         .filter(conversation::Column::AgentType.eq(AgentType::Cursor.as_wire().into_owned()))
         .filter(conversation::Column::ExternalId.is_not_null())
+        .filter(conversation::Column::Kind.ne(ConversationKind::Loop))
+        .filter(
+            conversation::Column::FolderId.in_subquery(
+                sea_orm::sea_query::Query::select()
+                    .column(folder::Column::Id)
+                    .from(folder::Entity)
+                    .and_where(folder::Column::DeletedAt.is_null())
+                    .to_owned(),
+            ),
+        )
         .filter(
             sea_orm::Condition::any()
                 .add(conversation::Column::Model.is_null())
@@ -331,6 +345,40 @@ pub async fn cursor_sessions_missing_model(
             Some((row.id, external_id))
         })
         .collect())
+}
+
+/// [`seed_model_if_empty`] plus an atomic identity check: the row must still
+/// be bound to the session the model was read from. A model lookup walks the
+/// session store off the async runtime; if `bind_external_id` rebinds the row
+/// to a different session during that walk, an ID-only write would persist
+/// the previous session's model on the replacement (and later backfills would
+/// then skip it). Matching the external id in the same UPDATE turns that race
+/// into a no-op.
+pub async fn seed_model_if_empty_for_session(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    external_id: &str,
+    model: &str,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let model = model.trim();
+    if model.is_empty() || external_id.trim().is_empty() {
+        return Ok(false);
+    }
+    let res = conversation::Entity::update_many()
+        .col_expr(conversation::Column::Model, Expr::value(model))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(conversation::Column::ExternalId.eq(external_id))
+        .filter(conversation::Column::AgentType.eq(AgentType::Cursor.as_wire().into_owned()))
+        .filter(
+            sea_orm::Condition::any()
+                .add(conversation::Column::Model.is_null())
+                .add(conversation::Column::Model.eq("")),
+        )
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
 }
 
 /// Lock a row's title WITHOUT rewriting it. For a conversation whose name was

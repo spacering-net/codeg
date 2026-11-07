@@ -62,14 +62,12 @@ pub(crate) async fn list_all_conversations_core(
     };
     // Cursor's conversation row is created before the store names a model, and
     // current stores have no `lastUsedModel`. Fill the blank chip from the
-    // fingerprint still linked in that session, then list. Once a row has a
-    // model this finds nothing and does not open the stores again.
-    if let Err(error) = backfill_cursor_models(conn, emitter).await {
-        tracing::warn!(
-            error = %error,
-            "conversation list: failed to backfill Cursor session models; continuing"
-        );
-    }
+    // fingerprint still linked in that session — in the BACKGROUND, off the
+    // request path: a store walk is up to 4,000 blob reads per session, and
+    // search hits this endpoint after every 300 ms debounce, so an unresolved
+    // store must never delay unrelated list results. Once a row has a model
+    // the query finds nothing and no store is opened again.
+    schedule_cursor_model_backfill(conn, emitter);
     list_all_conversations_core_with_codex_titles(
         conn,
         emitter,
@@ -78,6 +76,49 @@ pub(crate) async fn list_all_conversations_core(
         &codex_titles,
     )
     .await
+}
+
+/// Shared state for the background Cursor model backfill. `running` makes the
+/// scheduled pass single-flight (a 300 ms-debounced search must not stack
+/// walks). `failed_at_mtime` is the negative cache: a session whose store
+/// gave no model is not walked again until the store file changes — without
+/// it every list request would re-scan the same unresolvable history.
+#[derive(Default)]
+struct CursorModelBackfillState {
+    running: bool,
+    failed_at_mtime: HashMap<String, Option<std::time::SystemTime>>,
+}
+
+fn cursor_model_backfill_state() -> &'static std::sync::Mutex<CursorModelBackfillState> {
+    static STATE: std::sync::OnceLock<std::sync::Mutex<CursorModelBackfillState>> =
+        std::sync::OnceLock::new();
+    STATE.get_or_init(|| std::sync::Mutex::new(CursorModelBackfillState::default()))
+}
+
+fn schedule_cursor_model_backfill(conn: &sea_orm::DatabaseConnection, emitter: &EventEmitter) {
+    {
+        let mut state = cursor_model_backfill_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.running {
+            return;
+        }
+        state.running = true;
+    }
+    let conn = conn.clone();
+    let emitter = emitter.clone();
+    tokio::spawn(async move {
+        if let Err(error) = backfill_cursor_models(&conn, &emitter).await {
+            tracing::warn!(
+                error = %error,
+                "conversation list: failed to backfill Cursor session models; continuing"
+            );
+        }
+        cursor_model_backfill_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .running = false;
+    });
 }
 
 async fn backfill_cursor_models(
@@ -91,27 +132,56 @@ async fn backfill_cursor_models(
         return Ok(());
     }
     let cursor_env = agent_setting_service::load_agent_env(conn, AgentType::Cursor).await;
-    let found = tokio::task::spawn_blocking(move || {
+    let resolved = tokio::task::spawn_blocking(move || {
         let parser = CursorParser::for_env(&cursor_env);
-        missing
-            .into_iter()
-            .filter_map(|(id, external_id)| {
-                parser
-                    .model_for_session(&external_id)
-                    .map(|model| (id, model))
-            })
-            .collect::<Vec<_>>()
+        let mut found = Vec::new();
+        let mut failed = Vec::new();
+        for (id, external_id) in missing {
+            let mtime = parser.store_mtime_for_session(&external_id);
+            {
+                let state = cursor_model_backfill_state()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if state.failed_at_mtime.get(&external_id) == Some(&mtime) {
+                    // Store unchanged since the last unsuccessful walk.
+                    continue;
+                }
+            }
+            match parser.model_for_session(&external_id) {
+                Some(model) => found.push((id, external_id, model)),
+                None => failed.push((external_id, mtime)),
+            }
+        }
+        (found, failed)
     })
     .await
     .map_err(|error| {
         AppCommandError::task_execution_failed("Failed to read Cursor session models")
             .with_detail(error.to_string())
     })?;
-    for (id, model) in found {
-        if conversation_service::seed_model_if_empty(conn, id, &model)
+    let (found, failed) = resolved;
+    {
+        let mut state = cursor_model_backfill_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (external_id, mtime) in failed {
+            state.failed_at_mtime.insert(external_id, mtime);
+        }
+    }
+    for (id, external_id, model) in found {
+        // Match the session id in the same UPDATE: if the row was rebound to
+        // another session during the store walk, this write must no-op rather
+        // than pin the old session's model on the replacement.
+        if conversation_service::seed_model_if_empty_for_session(conn, id, &external_id, &model)
             .await
             .map_err(AppCommandError::from)?
         {
+            {
+                let mut state = cursor_model_backfill_state()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.failed_at_mtime.remove(&external_id);
+            }
             emit_conversation_upsert(emitter, conn, id).await;
         }
     }
@@ -166,7 +236,16 @@ pub(crate) async fn remember_cursor_session_model(
     let Some(model) = model else {
         return;
     };
-    match conversation_service::seed_model_if_empty(conn, conversation_id, &model).await {
+    // Match the external id in the same UPDATE: a row rebound to another
+    // session while the store was read must not inherit the old model.
+    match conversation_service::seed_model_if_empty_for_session(
+        conn,
+        conversation_id,
+        external_id,
+        &model,
+    )
+    .await
+    {
         Ok(true) => emit_conversation_upsert(emitter, conn, conversation_id).await,
         Ok(false) => {}
         Err(error) => tracing::warn!(

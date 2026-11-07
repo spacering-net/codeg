@@ -353,9 +353,17 @@ pub(crate) async fn handle_event(
             let Some(cid) = conversation_id else {
                 return Ok(());
             };
+            // The turn status goes out FIRST: it carries only the id and the
+            // status, and a Cursor row with no model would otherwise wait on
+            // database reads plus a store walk of up to 4,000 blobs before the
+            // client learns the turn completed. The model arrives through its
+            // own upsert right after.
+            if claimed {
+                write_turn_status(db_conn, &state_arc, &emitter, cid, stop_reason).await?;
+            }
             // Cursor does not put the model on the conversation row. The
-            // store has it once the turn is written; copy it onto the chip
-            // before the status broadcast so this same update shows the letter.
+            // store has it once the turn is written; copy it onto the chip so
+            // the sidebar letter appears without reopening the conversation.
             crate::commands::conversations::remember_cursor_session_model(
                 db_conn,
                 &emitter,
@@ -364,9 +372,6 @@ pub(crate) async fn handle_event(
                 external_id.as_deref(),
             )
             .await;
-            if claimed {
-                write_turn_status(db_conn, &state_arc, &emitter, cid, stop_reason).await?;
-            }
 
             // If this conversation was spawned by a delegation, resolve the
             // pending broker call. The broker maps the outcome onto the
