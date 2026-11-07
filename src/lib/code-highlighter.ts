@@ -35,6 +35,10 @@ const pending = new Map<
   { callbacks: Set<Callback>; cacheResult: boolean }
 >()
 const loading = new Map<string, Promise<void>>()
+// Only mounted subscribers wait here, without token trees or duplicate cache
+// keys. Their cleanup removes them when a view unmounts or streaming advances.
+const waiting = new Set<() => void>()
+let retryScheduled = false
 let cacheBytes = 0
 let shikiPromise: Promise<typeof import("shiki")> | undefined
 let highlighterPromise: Promise<Highlighter> | undefined
@@ -141,10 +145,10 @@ export function getCachedHighlightedCode(options: HighlightRequest) {
   return canHighlight(options.code) ? read(cacheKey(options)) : null
 }
 
-export function highlightCode(
+function requestHighlight(
   options: HighlightRequest,
   callback?: Callback
-): TokensResult | null {
+): TokensResult | null | "busy" {
   if (!canHighlight(options.code)) return rawCodeTokens(options.code)
   const key = cacheKey(options)
   const cached = read(key)
@@ -157,7 +161,7 @@ export function highlightCode(
   }
   // Bound requests waiting for a cold grammar/engine too, not just results.
   if (pending.size >= HIGHLIGHT_LIMITS.inFlight) {
-    return rawCodeTokens(options.code)
+    return "busy"
   }
   const request = {
     callbacks: new Set(callback ? [callback] : []),
@@ -223,22 +227,65 @@ export function highlightCode(
       }
     }
     request.callbacks.clear()
+    scheduleRetries()
   })()
   return null
+}
+
+function scheduleRetries() {
+  if (retryScheduled || waiting.size === 0) return
+  retryScheduled = true
+  queueMicrotask(() => {
+    retryScheduled = false
+    let remaining = HIGHLIGHT_LIMITS.inFlight
+    while (
+      remaining-- > 0 &&
+      pending.size < HIGHLIGHT_LIMITS.inFlight &&
+      waiting.size > 0
+    ) {
+      const retry = waiting.values().next().value!
+      waiting.delete(retry)
+      try {
+        retry()
+      } catch (error) {
+        console.error("Failed to deliver highlighted code:", error)
+      }
+    }
+    if (pending.size < HIGHLIGHT_LIMITS.inFlight) scheduleRetries()
+  })
+}
+
+export function highlightCode(
+  options: HighlightRequest,
+  callback?: Callback
+): TokensResult | null {
+  const result = requestHighlight(options, callback)
+  return result === "busy" ? rawCodeTokens(options.code) : result
 }
 
 export function subscribeHighlightedCode(
   options: HighlightRequest,
   callback: Callback
 ) {
-  const result = highlightCode(options, callback)
-  if (result) {
-    callback(result)
-    return () => {}
+  let active = true
+  const deliver: Callback = (result) => {
+    if (active) callback(result)
   }
-  const key = cacheKey(options)
+  const retry = () => {
+    if (!active) return
+    const result = requestHighlight(options, deliver)
+    if (result === "busy") {
+      waiting.add(retry)
+    } else if (result) {
+      deliver(result)
+    }
+  }
+  retry()
+  if (waiting.has(retry)) deliver(rawCodeTokens(options.code))
   return () => {
-    pending.get(key)?.callbacks.delete(callback)
+    active = false
+    waiting.delete(retry)
+    pending.get(cacheKey(options))?.callbacks.delete(deliver)
   }
 }
 
@@ -247,6 +294,7 @@ export function getCodeHighlightStats() {
     entries: cache.size,
     estimatedBytes: cacheBytes,
     inFlight: pending.size,
+    waiting: waiting.size,
   }
 }
 

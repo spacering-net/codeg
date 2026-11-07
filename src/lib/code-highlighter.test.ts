@@ -77,6 +77,7 @@ describe("shared code highlighting memory", () => {
       entries: 0,
       estimatedBytes: 0,
       inFlight: 0,
+      waiting: 0,
     })
     await highlight(options("const row = true;\n".repeat(128)))
     expect(service.getCodeHighlightStats().entries).toBe(1)
@@ -190,5 +191,37 @@ describe("shared code highlighting memory", () => {
       "a log line",
       expect.objectContaining({ lang: "text" })
     )
+  })
+
+  it("retries all mounted overflow subscribers within the concurrency bound", async () => {
+    let release!: (value: typeof engine) => void
+    mocks.createHighlighter.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      })
+    )
+    const listeners = Array.from({ length: 80 }, () => vi.fn())
+    const cleanups = listeners.map((listener, i) =>
+      service.subscribeHighlightedCode(options(`mounted ${i}`), listener)
+    )
+    expect(service.getCodeHighlightStats().inFlight).toBe(16)
+    expect(service.getCodeHighlightStats().waiting).toBe(64)
+    // The waiting view remains readable while the engine is cold.
+    expect(listeners[79].mock.lastCall?.[0].fg).toBe("inherit")
+    cleanups[79]()
+    await vi.waitFor(() =>
+      expect(mocks.createHighlighter).toHaveBeenCalledOnce()
+    )
+    release(engine)
+    await vi.waitFor(() => {
+      expect(service.getCodeHighlightStats().waiting).toBe(0)
+      expect(service.getCodeHighlightStats().inFlight).toBe(0)
+    })
+    for (const listener of listeners.slice(0, 79)) {
+      expect(listener.mock.lastCall?.[0].fg).toBe("#000")
+    }
+    expect(listeners[79]).toHaveBeenCalledTimes(1)
+    expect(mocks.codeToTokens).toHaveBeenCalledTimes(79)
+    cleanups.forEach((cleanup) => cleanup())
   })
 })
