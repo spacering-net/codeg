@@ -317,9 +317,15 @@ export function selectChatConversationsWithReuse(
  * in {@link selectPinnedWithReuse}.
  *
  * Deliberate inclusions / exclusions:
- * - Pinned conversations are excluded. They already have a dedicated top
- *   section, and a Recent copy would be a second row for the same conversation
- *   two sections apart.
+ * - Pinned conversations ARE included. Pinning is a bookmark that lifts a row
+ *   into the top section; it is not a statement that the conversation stopped
+ *   being recent. Dropping it here meant pinning a row silently removed it from
+ *   the one list the user scans by time. So it stays in Recent and shows twice
+ *   (Pinned + Recent), exactly like a conversation that appears under its folder
+ *   and in Recent.
+ * - A pinned conversation is admitted wherever it lives, closed folder or not,
+ *   matching the Pinned section's own reachability rule: the two sections must
+ *   never disagree about a row the user explicitly kept.
  * - Completed ones follow `showCompleted`, like every other section.
  * - A folder conversation is included only when its folder is OPEN
  *   (`openFolderIds`). `list_all_conversations` returns rows for every
@@ -351,10 +357,15 @@ export function selectRecentConversationsWithReuse(
 ): DbConversationSummary[] {
   const next: DbConversationSummary[] = []
   for (const conv of conversations) {
-    if (conv.pinned_at != null) continue
-    if (!showCompleted && conv.status === "completed") continue
     const isChat = conv.kind === "chat"
-    if (!isChat && !openFolderIds.has(conv.folder_id)) continue
+    // Pinned rows bypass both gates below, exactly as the Pinned section does
+    // (it ignores "Show completed" and closed folders too): pinning is an
+    // explicit "keep this handy" override, and the two sections must never
+    // disagree about a row the user deliberately kept.
+    if (conv.pinned_at == null) {
+      if (!showCompleted && conv.status === "completed") continue
+      if (!isChat && !openFolderIds.has(conv.folder_id)) continue
+    }
     // The user's "just chats" / "just folder sessions" narrowing. Same split
     // the Chat and Folders sections use, so the two views always agree.
     if (filter === "chats" && !isChat) continue
