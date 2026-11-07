@@ -219,7 +219,7 @@ impl LarkBackend {
         &self,
         msg_type: &str,
         content: &str,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         let token = self.get_tenant_access_token().await?;
 
         let resp = self
@@ -251,7 +251,7 @@ impl LarkBackend {
         }
 
         let message_id = result.data.and_then(|d| d.message_id).unwrap_or_default();
-        Ok(SentMessageId(message_id))
+        Ok(SendOutcome::Sent(SentMessageId(message_id)))
     }
 
     async fn start_ws_receiver(
@@ -603,7 +603,7 @@ impl ChatChannelBackend for LarkBackend {
         *self.status.lock().await
     }
 
-    async fn send_message(&self, text: &str) -> Result<SentMessageId, ChatChannelError> {
+    async fn send_message(&self, text: &str) -> Result<SendOutcome, ChatChannelError> {
         let content = serde_json::json!({ "text": text }).to_string();
         self.send_lark_message("text", &content).await
     }
@@ -611,7 +611,7 @@ impl ChatChannelBackend for LarkBackend {
     async fn send_rich_message(
         &self,
         message: &RichMessage,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         let card = build_lark_card(message);
         let content = serde_json::to_string(&card)
             .map_err(|e| ChatChannelError::SendFailed(e.to_string()))?;

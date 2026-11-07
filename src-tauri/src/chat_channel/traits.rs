@@ -22,13 +22,13 @@ pub trait ChatChannelBackend: Send + Sync + 'static {
     async fn status(&self) -> ChannelConnectionStatus;
 
     /// Send a plain text message.
-    async fn send_message(&self, text: &str) -> Result<SentMessageId, ChatChannelError>;
+    async fn send_message(&self, text: &str) -> Result<SendOutcome, ChatChannelError>;
 
     /// Send a rich/structured message (Telegram Markdown / Lark Card).
     async fn send_rich_message(
         &self,
         message: &RichMessage,
-    ) -> Result<SentMessageId, ChatChannelError>;
+    ) -> Result<SendOutcome, ChatChannelError>;
 
     /// Send a rich message to a provider-specific thread/topic target.
     /// Backends without thread semantics keep the existing channel-level behavior.
@@ -36,7 +36,7 @@ pub trait ChatChannelBackend: Send + Sync + 'static {
         &self,
         message: &RichMessage,
         _target: &ChannelMessageTarget,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         self.send_rich_message(message).await
     }
 
@@ -66,7 +66,7 @@ pub trait ChatChannelBackend: Send + Sync + 'static {
     async fn send_interactive_message(
         &self,
         message: &InteractiveMessage,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         self.send_rich_message(&message.to_rich_fallback()).await
     }
 
@@ -75,7 +75,7 @@ pub trait ChatChannelBackend: Send + Sync + 'static {
         &self,
         message: &InteractiveMessage,
         _target: &ChannelMessageTarget,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         self.send_interactive_message(message).await
     }
 

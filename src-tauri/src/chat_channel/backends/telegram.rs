@@ -91,7 +91,7 @@ impl TelegramBackend {
         text: &str,
         parse_mode: Option<&str>,
         target: Option<&ChannelMessageTarget>,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         self.send_text_with_reply_markup(text, parse_mode, target, None)
             .await
     }
@@ -102,7 +102,7 @@ impl TelegramBackend {
         parse_mode: Option<&str>,
         target: Option<&ChannelMessageTarget>,
         reply_markup: Option<serde_json::Value>,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         let body =
             telegram_send_message_body(&self.chat_id, text, parse_mode, target, reply_markup)?;
 
@@ -137,14 +137,14 @@ impl TelegramBackend {
             .map(|id| id.to_string())
             .unwrap_or_default();
 
-        Ok(SentMessageId(message_id))
+        Ok(SendOutcome::Sent(SentMessageId(message_id)))
     }
 
     async fn send_interactive_message_with_target(
         &self,
         message: &InteractiveMessage,
         target: Option<&ChannelMessageTarget>,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         let reply_markup = telegram_inline_keyboard(message);
         let markdown_text = format_telegram_markdown(&message.base);
         let result = self
@@ -177,7 +177,7 @@ impl TelegramBackend {
         &self,
         message: &RichMessage,
         target: Option<&ChannelMessageTarget>,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         let markdown_text = format_telegram_markdown(message);
         let result = self
             .send_text(&markdown_text, Some("MarkdownV2"), target)
@@ -454,14 +454,14 @@ impl ChatChannelBackend for TelegramBackend {
         *self.status.lock().await
     }
 
-    async fn send_message(&self, text: &str) -> Result<SentMessageId, ChatChannelError> {
+    async fn send_message(&self, text: &str) -> Result<SendOutcome, ChatChannelError> {
         self.send_text(text, None, None).await
     }
 
     async fn send_rich_message(
         &self,
         message: &RichMessage,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         self.send_rich_message_with_target(message, None).await
     }
 
@@ -469,7 +469,7 @@ impl ChatChannelBackend for TelegramBackend {
         &self,
         message: &RichMessage,
         target: &ChannelMessageTarget,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         self.send_rich_message_with_target(message, Some(target))
             .await
     }
@@ -477,7 +477,7 @@ impl ChatChannelBackend for TelegramBackend {
     async fn send_interactive_message(
         &self,
         message: &InteractiveMessage,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         self.send_interactive_message_with_target(message, None)
             .await
     }
@@ -486,7 +486,7 @@ impl ChatChannelBackend for TelegramBackend {
         &self,
         message: &InteractiveMessage,
         target: &ChannelMessageTarget,
-    ) -> Result<SentMessageId, ChatChannelError> {
+    ) -> Result<SendOutcome, ChatChannelError> {
         self.send_interactive_message_with_target(message, Some(target))
             .await
     }
