@@ -38,6 +38,7 @@ use crate::acp::delegation::listener::TokenRegistry;
 use crate::acp::delegation::service;
 use crate::acp::feedback::FeedbackRuntimeConfig;
 use crate::acp::question::QuestionRuntimeConfig;
+use crate::acp::render_page::RenderPageRuntimeConfig;
 use crate::acp::session_info::SessionInfoRuntimeConfig;
 use crate::app_error::AppCommandError;
 use crate::web::event_bridge::EventEmitter;
@@ -136,6 +137,7 @@ pub struct CodegMcpStatusSources<'a> {
     pub tokens: &'a TokenRegistry,
     pub feedback: &'a FeedbackRuntimeConfig,
     pub question: &'a QuestionRuntimeConfig,
+    pub render: &'a RenderPageRuntimeConfig,
     pub session_info: &'a SessionInfoRuntimeConfig,
     pub authoring: &'a ChatAuthoringRuntimeConfig,
     pub browser: &'a BrowserToolsRuntimeConfig,
@@ -178,6 +180,7 @@ pub async fn codeg_mcp_service_status_core(
         CodegMcpToolGroup::group("delegation", delegation_cfg.enabled),
         CodegMcpToolGroup::group("feedback", sources.feedback.is_enabled().await),
         CodegMcpToolGroup::group("ask", sources.question.is_enabled().await),
+        CodegMcpToolGroup::group("render", sources.render.is_enabled().await),
         CodegMcpToolGroup::group("sessions", sources.session_info.is_enabled().await),
         CodegMcpToolGroup::group("automations", authoring_cfg.automations_enabled),
         CodegMcpToolGroup::group("taskboard", authoring_cfg.work_tasks_enabled),
@@ -236,6 +239,7 @@ pub struct CodegMcpToolGroupTargets<'a> {
     pub broker: &'a DelegationBroker,
     pub feedback: &'a FeedbackRuntimeConfig,
     pub question: &'a QuestionRuntimeConfig,
+    pub render: &'a RenderPageRuntimeConfig,
     pub session_info: &'a SessionInfoRuntimeConfig,
     pub authoring: &'a ChatAuthoringRuntimeConfig,
     pub browser: &'a BrowserToolsRuntimeConfig,
@@ -256,8 +260,8 @@ pub struct CodegMcpToolGroupTargets<'a> {
 /// `automations`/`taskboard`, like `browser`/`browser_eval`, are two switches
 /// over one record that sit one click apart in this very popover — a
 /// read-modify-write of the pair loses whichever flip lands first. `feedback`,
-/// `ask` and `sessions` each own a single-field record, so their existing
-/// writer is already narrow.
+/// `ask`, `render` and `sessions` each own a single-field record, so their
+/// existing writer is already narrow.
 pub async fn set_codeg_mcp_tool_group_core(
     conn: &DatabaseConnection,
     targets: CodegMcpToolGroupTargets<'_>,
@@ -268,7 +272,7 @@ pub async fn set_codeg_mcp_tool_group_core(
     use crate::commands::chat_authoring::ChatAuthoringFlag;
     use crate::commands::{
         browser_tools, chat_authoring, computer_tools, delegation, feedback, question,
-        session_info,
+        render_page, session_info,
     };
 
     match key {
@@ -290,6 +294,15 @@ pub async fn set_codeg_mcp_tool_group_core(
                 targets.question,
                 emitter,
                 question::QuestionSettings { enabled },
+            )
+            .await?;
+        }
+        "render" => {
+            render_page::set_render_page_settings_core(
+                conn,
+                targets.render,
+                emitter,
+                render_page::RenderPageSettings { enabled },
             )
             .await?;
         }
@@ -370,7 +383,7 @@ pub async fn start_codeg_mcp_service_core() -> Result<(), AppCommandError> {
 
 // -------- Tauri commands -----------------------------------------------------
 
-// Seven sources, injected positionally as Tauri managed state — see the note
+// Eight sources, injected positionally as Tauri managed state — see the note
 // on `set_codeg_mcp_tool_group`.
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -379,6 +392,7 @@ pub async fn get_codeg_mcp_service_status(
     #[cfg(feature = "tauri-runtime")] tokens: tauri::State<'_, Arc<TokenRegistry>>,
     #[cfg(feature = "tauri-runtime")] feedback: tauri::State<'_, FeedbackRuntimeConfig>,
     #[cfg(feature = "tauri-runtime")] question: tauri::State<'_, QuestionRuntimeConfig>,
+    #[cfg(feature = "tauri-runtime")] render: tauri::State<'_, RenderPageRuntimeConfig>,
     #[cfg(feature = "tauri-runtime")] session_info: tauri::State<'_, SessionInfoRuntimeConfig>,
     #[cfg(feature = "tauri-runtime")] authoring: tauri::State<'_, ChatAuthoringRuntimeConfig>,
     #[cfg(feature = "tauri-runtime")] browser: tauri::State<'_, BrowserToolsRuntimeConfig>,
@@ -391,6 +405,7 @@ pub async fn get_codeg_mcp_service_status(
             tokens: tokens.inner(),
             feedback: feedback.inner(),
             question: question.inner(),
+            render: render.inner(),
             session_info: session_info.inner(),
             authoring: authoring.inner(),
             browser: browser.inner(),
@@ -410,7 +425,7 @@ pub async fn start_codeg_mcp_service() -> Result<(), AppCommandError> {
     start_codeg_mcp_service_core().await
 }
 
-// Seven runtime configs plus the db, the app handle and the two payload fields.
+// Eight runtime configs plus the db, the app handle and the two payload fields.
 // Tauri injects managed state positionally, so these cannot be bundled the way
 // `CodegMcpToolGroupTargets` bundles them for the `_core` helper below.
 #[allow(clippy::too_many_arguments)]
@@ -421,6 +436,7 @@ pub async fn set_codeg_mcp_tool_group(
     #[cfg(feature = "tauri-runtime")] broker: tauri::State<'_, Arc<DelegationBroker>>,
     #[cfg(feature = "tauri-runtime")] feedback: tauri::State<'_, FeedbackRuntimeConfig>,
     #[cfg(feature = "tauri-runtime")] question: tauri::State<'_, QuestionRuntimeConfig>,
+    #[cfg(feature = "tauri-runtime")] render: tauri::State<'_, RenderPageRuntimeConfig>,
     #[cfg(feature = "tauri-runtime")] session_info: tauri::State<'_, SessionInfoRuntimeConfig>,
     #[cfg(feature = "tauri-runtime")] authoring: tauri::State<'_, ChatAuthoringRuntimeConfig>,
     #[cfg(feature = "tauri-runtime")] browser: tauri::State<'_, BrowserToolsRuntimeConfig>,
@@ -439,6 +455,7 @@ pub async fn set_codeg_mcp_tool_group(
                 broker: broker.inner(),
                 feedback: feedback.inner(),
                 question: question.inner(),
+                render: render.inner(),
                 session_info: session_info.inner(),
                 authoring: authoring.inner(),
                 browser: browser.inner(),
@@ -483,6 +500,7 @@ mod tests {
         tokens: Arc<TokenRegistry>,
         feedback: FeedbackRuntimeConfig,
         question: QuestionRuntimeConfig,
+        render: RenderPageRuntimeConfig,
         session_info: SessionInfoRuntimeConfig,
         authoring: ChatAuthoringRuntimeConfig,
         browser: BrowserToolsRuntimeConfig,
@@ -499,6 +517,7 @@ mod tests {
                 tokens: Arc::new(TokenRegistry::default()),
                 feedback: FeedbackRuntimeConfig::new(),
                 question: QuestionRuntimeConfig::new(),
+                render: RenderPageRuntimeConfig::new(),
                 session_info: SessionInfoRuntimeConfig::new(),
                 authoring: ChatAuthoringRuntimeConfig::new(),
                 browser: BrowserToolsRuntimeConfig::new(),
@@ -512,6 +531,7 @@ mod tests {
                 tokens: &self.tokens,
                 feedback: &self.feedback,
                 question: &self.question,
+                render: &self.render,
                 session_info: &self.session_info,
                 authoring: &self.authoring,
                 browser: &self.browser,
@@ -535,6 +555,7 @@ mod tests {
                     broker: &self.broker,
                     feedback: &self.feedback,
                     question: &self.question,
+                    render: &self.render,
                     session_info: &self.session_info,
                     authoring: &self.authoring,
                     browser: &self.browser,
@@ -605,6 +626,9 @@ mod tests {
         assert!(group("delegation"));
         assert!(group("automations"));
         assert!(!group("taskboard"));
+        // `render` is its own bare switch; this fixture never turns it on, so
+        // the read side must mirror that rather than a settings default.
+        assert!(!group("render"));
         assert_eq!(status.depth_limit, 5);
         // `tasks` is per-spawn, never a switch — it must not appear.
         assert!(status.tool_groups.iter().all(|g| g.key != "tasks"));

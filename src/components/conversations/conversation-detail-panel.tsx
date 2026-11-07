@@ -62,6 +62,7 @@ import {
 } from "@/components/message/goal-control-context"
 import { useAdvertisedGoalActions } from "@/hooks/use-goal-actions"
 import { ConversationShell } from "@/components/chat/conversation-shell"
+import { useAnnotationInjection } from "@/components/chat/use-annotation-injection"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
 import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
@@ -139,6 +140,7 @@ import {
   type PromptDraft,
   type PromptInputBlock,
   type QuestionAnswer,
+  type RenderPageAnswer,
   type UserMessageBlock,
 } from "@/lib/types"
 import {
@@ -1648,6 +1650,15 @@ const ConversationTabView = memo(function ConversationTabView({
     [acpActions, tabId]
   )
 
+  // Awaiting-answer `render_page`: resolve the parked MCP call with the page
+  // submit (or a dismissal). The backend broadcasts `render_page_resolved` to
+  // clear the card on every client.
+  const handleAnswerRenderPage = useCallback(
+    (pageId: string, answer: RenderPageAnswer) =>
+      acpActions.answerRenderPage(tabId, pageId, answer),
+    [acpActions, tabId]
+  )
+
   // Grok `exit_plan_mode` approval: resolve the blocked ext request. The backend
   // broadcasts `plan_approval_resolved` to clear the card on every client.
   //
@@ -1769,6 +1780,15 @@ const ConversationTabView = memo(function ConversationTabView({
     if (!quoted) return
     setComposerInject({ text: quoted, mode: "append" })
   }, [])
+
+  // A finished render_page annotation attaches to the composer as one
+  // deletable chip (like a browser-page handoff), not as loose prose in the
+  // draft. Fresh object each time so the inject re-fires. (The shared hook
+  // also serves the canvas cards.)
+  const handleAnnotatePage = useAnnotationInjection(
+    dbConversationId,
+    setComposerInject
+  )
 
   /**
    * "Ask about this selection": start a SEPARATE conversation for the question
@@ -2157,6 +2177,7 @@ const ConversationTabView = memo(function ConversationTabView({
           onQuoteSelection={
             composerAvailable ? handleQuoteSelection : undefined
           }
+          onAnnotatePage={composerAvailable ? handleAnnotatePage : undefined}
           // Asking opens its own conversation, so it needs a folder to open it in
           // rather than a usable composer here — a transcript whose composer is
           // blocked (session/load failure) can still spawn the question elsewhere.
@@ -2317,6 +2338,7 @@ const ConversationTabView = memo(function ConversationTabView({
       pendingQuestion={conn.pendingQuestion}
       pendingAskQuestion={conn.pendingAskQuestion}
       pendingPlanApproval={conn.pendingPlanApproval}
+      pendingRenderPage={conn.pendingRenderPage}
       onFocus={handleFocus}
       onSend={handleSend}
       onCancel={handleCancel}
@@ -2324,6 +2346,9 @@ const ConversationTabView = memo(function ConversationTabView({
       onAnswerQuestion={handleAnswerQuestion}
       onAnswerAskQuestion={handleAnswerAskQuestion}
       onAnswerPlanApproval={handleAnswerPlanApproval}
+      onAnswerRenderPage={handleAnswerRenderPage}
+      onQuoteSelection={composerAvailable ? handleQuoteSelection : undefined}
+      onAnnotatePage={composerAvailable ? handleAnnotatePage : undefined}
       modes={connectionModes}
       configOptions={connectionConfigOptions}
       modeLoading={modeLoading}

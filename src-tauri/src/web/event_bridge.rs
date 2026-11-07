@@ -164,6 +164,12 @@ pub const FEEDBACK_SETTINGS_CHANGED_EVENT: &str = "feedback-settings://changed";
 /// bool }`).
 pub const QUESTION_SETTINGS_CHANGED_EVENT: &str = "question-settings://changed";
 
+/// Global side-channel announcing a `render_page` enable/disable. Same
+/// cross-window rationale as [`QUESTION_SETTINGS_CHANGED_EVENT`]: the settings UI
+/// runs in a separate window, so other views learn the flag flipped only via this
+/// backend broadcast. Payload: `RenderPageSettings` (`{ "enabled": bool }`).
+pub const RENDER_PAGE_SETTINGS_CHANGED_EVENT: &str = "render-page-settings://changed";
+
 /// Global side-channel announcing a `get_session_info` enable/disable. Same
 /// cross-window rationale as [`QUESTION_SETTINGS_CHANGED_EVENT`]: the settings UI
 /// runs in a separate window, so other views learn the flag flipped only via this

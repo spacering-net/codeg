@@ -19,6 +19,7 @@ import type {
   ConnectionStatus,
   PendingPlanApprovalState,
   PendingQuestionState,
+  PendingRenderPageState,
   PromptCapabilitiesInfo,
   QuestionAnswer,
   RemoteControlInfo,
@@ -97,6 +98,10 @@ export interface UseConnectionReturn {
   pendingQuestion: PendingQuestion | null
   pendingAskQuestion: PendingQuestionState | null
   pendingPlanApproval: PendingPlanApprovalState | null
+  /** Awaiting-answer `render_page` (the codeg-mcp blocking page). Set from a
+   *  `render_page_request` event or a snapshot; cleared on resolve or turn
+   *  end. Drives the pinned page card above the composer. */
+  pendingRenderPage: PendingRenderPageState | null
   claudeApiRetry: ClaudeApiRetryState | null
   /** AIR typed session failure table (active + resolved; see
    *  `lib/session-failures.ts`). `[]` when the connection has none. */
@@ -307,6 +312,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   const pendingQuestion = connection?.pendingQuestion ?? null
   const pendingAskQuestion = connection?.pendingAskQuestion ?? null
   const pendingPlanApproval = connection?.pendingPlanApproval ?? null
+  const pendingRenderPage = connection?.pendingRenderPage ?? null
   const claudeApiRetry = connection?.claudeApiRetry ?? null
   const sessionFailures = connection?.sessionFailures ?? EMPTY_SESSION_FAILURES
   const toolApprovals = connection?.toolApprovals ?? EMPTY_TOOL_APPROVALS
@@ -420,6 +426,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       pendingQuestion,
       pendingAskQuestion,
       pendingPlanApproval,
+      pendingRenderPage,
       claudeApiRetry,
       sessionFailures,
       toolApprovals,
@@ -467,6 +474,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       pendingQuestion,
       pendingAskQuestion,
       pendingPlanApproval,
+      pendingRenderPage,
       claudeApiRetry,
       sessionFailures,
       toolApprovals,

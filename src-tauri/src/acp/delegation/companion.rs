@@ -58,22 +58,24 @@ use crate::acp::delegation::transport::{
     client_computer_verify_round_trip, client_computer_windows_round_trip,
     client_create_automation_round_trip, client_create_work_task_round_trip,
     client_feedback_round_trip, client_list_assistants_round_trip, client_ping,
-    client_result_schema_round_trip, client_resume_task_round_trip, client_round_trip,
-    client_session_round_trip, client_status_round_trip, client_submit_result_round_trip,
-    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
-    BrokerBrowserActRequest, BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest,
-    BrokerBrowserEvalRequest, BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest,
-    BrokerBrowserTabsRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
-    BrokerCommitFeedbackRequest, BrokerComputerActRequest, BrokerComputerAppsRequest,
-    BrokerComputerCaptureRequest, BrokerComputerClipboardRequest, BrokerComputerLaunchRequest,
-    BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest, BrokerComputerWindowsRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
-    BrokerListAssistantsRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
+    client_render_round_trip, client_result_schema_round_trip, client_resume_task_round_trip,
+    client_round_trip, client_session_round_trip, client_status_round_trip,
+    client_submit_result_round_trip, client_task_complete_round_trip,
+    client_task_progress_round_trip, BrokerAskRequest, BrokerBrowserActRequest,
+    BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
+    BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
+    BrokerComputerClipboardRequest, BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest,
+    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCreateAutomationRequest,
+    BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerListAssistantsRequest,
+    BrokerRenderRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
     BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::delegation::assistants::{roster_for_schema, AssistantRosterEntry};
 use crate::acp::question::parse_questions;
+use crate::acp::render_page::{parse_render_page_arguments, ANSWERED_NOTE, DECLINED_NOTE, SHOWN_NOTE};
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
 use crate::models::AutomationAction;
 
@@ -163,6 +165,12 @@ pub struct CompanionFeatures {
     pub delegation: bool,
     pub feedback: bool,
     pub ask: bool,
+    /// `render_page` — the agent draws a self-contained HTML page inline in
+    /// the chat, optionally waiting for the user's answer on it. Gated apart
+    /// from `ask` because the effect is different: a page replaces the plain
+    /// card set with an agent-authored document (sandboxed in an iframe, but
+    /// still the agent's markup rendered into the user's chat).
+    pub render: bool,
     pub sessions: bool,
     /// Work-task reporting tools (`task_progress` / `task_complete`) — injected
     /// only into spawns launched by the task engine.
@@ -228,6 +236,7 @@ impl CompanionFeatures {
                 delegation: true,
                 feedback: false,
                 ask: false,
+                render: false,
                 sessions: false,
                 tasks: false,
                 result: false,
@@ -244,6 +253,7 @@ impl CompanionFeatures {
             delegation: false,
             feedback: false,
             ask: false,
+            render: false,
             sessions: false,
             tasks: false,
             result: false,
@@ -260,6 +270,7 @@ impl CompanionFeatures {
                 "delegation" => f.delegation = true,
                 "feedback" => f.feedback = true,
                 "ask" => f.ask = true,
+                "render" => f.render = true,
                 "sessions" => f.sessions = true,
                 "tasks" => f.tasks = true,
                 "result" => f.result = true,
@@ -281,6 +292,7 @@ impl CompanionFeatures {
         match name {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
+            "render_page" => self.render,
             "get_session_info" => self.sessions,
             "task_progress" | "task_complete" => self.tasks,
             "submit_result" => self.result,
@@ -1080,6 +1092,36 @@ async fn build_tools_call_spawn(
             // pending question down — no broker-side cancel to dispatch.
             let round_trip = Box::pin(async move { client_ask_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_ask_result).await
+        }
+        "render_page" => {
+            // Validate + parse HERE, like the ask arm: a malformed or oversized
+            // page is a synchronous -32602 the LLM can fix. The two halves of
+            // the tool then diverge inside the companion, before any socket
+            // traffic: a SHOW-ONLY page is complete the moment the card is on
+            // screen — and the card renders straight from this tool call's own
+            // input, live and on transcript replay alike — so the call answers
+            // locally without a broker round trip. Only an `awaitAnswer` page
+            // needs the socket: the listener arms the card for an answer and
+            // parks this connection until the user submits.
+            let spec = match parse_render_page_arguments(&arguments) {
+                Ok(spec) => spec,
+                Err(msg) => return LineAction::Respond(err(id, -32602, msg)),
+            };
+            if !spec.await_answer {
+                return LineAction::Respond(ok(id, render_shown_result(&spec.title)));
+            }
+            let req = BrokerRenderRequest {
+                token: ctx.token.clone(),
+                title: spec.title,
+                html: spec.html,
+            };
+            // No external_handle, like the ask arm: canceling a waiting page
+            // only suppresses the response; the dropped future closes the
+            // socket, and the listener's peer-close read tears the pending
+            // page down.
+            let round_trip =
+                Box::pin(async move { client_render_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, None, round_trip, render_page_answer_result).await
         }
         "get_session_info" => {
             // `session_id` is the codeg conversation id the agent read out of a
@@ -2028,6 +2070,53 @@ pub fn render_ask_result(outcome: &Value) -> Value {
         "content": [{ "type": "text", "text": text }],
         "isError": false,
         "structuredContent": { "answers": answers, "declined": declined, "hint": hint },
+    })
+}
+
+/// The tool result for a SHOW-ONLY `render_page` call — answered locally by the
+/// companion, no broker round trip. The card is already on the user's screen
+/// (rendered from this very tool input), so all the agent needs is the note
+/// keeping it from announcing the page it just drew. `title` rides in
+/// `structuredContent` so the frontend card header and the agent agree on what
+/// the page is called even when the agent gave it none.
+pub fn render_shown_result(title: &str) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": SHOWN_NOTE }],
+        "isError": false,
+        "structuredContent": { "shown": true, "title": title, "note": SHOWN_NOTE },
+    })
+}
+
+/// Map the awaiting-answer `render_page` round-trip outcome (a serialized
+/// [`crate::acp::render_page::RenderPageOutcome`] from the listener) into an MCP
+/// `tools/call` result. The `content` text states the answer in words (plus the
+/// note that tells the agent what to do with it); on decline it is just the
+/// note. The raw envelope rides along in `structuredContent`. `isError` is
+/// always `false` — a declined page is a valid result, not an error.
+pub fn render_page_answer_result(outcome: &Value) -> Value {
+    let answered = outcome
+        .get("answered")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let text = if answered {
+        let summary = outcome.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+        let data = outcome.get("data").cloned().unwrap_or(Value::Null);
+        let note = outcome
+            .get("note")
+            .and_then(|v| v.as_str())
+            .unwrap_or(ANSWERED_NOTE);
+        format!("The user answered on the page.\nsummary: {summary}\ndata: {data}\n{note}")
+    } else {
+        outcome
+            .get("note")
+            .and_then(|v| v.as_str())
+            .unwrap_or(DECLINED_NOTE)
+            .to_string()
+    };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome,
     })
 }
 
@@ -4446,6 +4535,7 @@ mod tests {
             delegation: true,
             feedback: false,
             ask: false,
+            render: false,
             sessions: false,
             tasks: false,
             result: false,
@@ -5077,6 +5167,7 @@ mod tests {
         delegation: false,
         feedback: true,
         ask: false,
+        render: false,
         sessions: false,
         tasks: false,
         result: false,
@@ -5092,6 +5183,7 @@ mod tests {
         delegation: true,
         feedback: true,
         ask: false,
+        render: false,
         sessions: false,
         tasks: false,
         result: false,
@@ -5107,6 +5199,7 @@ mod tests {
         delegation: false,
         feedback: false,
         ask: true,
+        render: false,
         sessions: false,
         tasks: false,
         result: false,
@@ -5122,6 +5215,7 @@ mod tests {
         delegation: false,
         feedback: false,
         ask: false,
+        render: false,
         sessions: true,
         tasks: false,
         result: false,
@@ -5613,6 +5707,7 @@ mod tests {
         delegation: false,
         feedback: false,
         ask: false,
+        render: false,
         sessions: false,
         tasks: false,
         result: false,
@@ -5628,6 +5723,7 @@ mod tests {
         delegation: false,
         feedback: false,
         ask: false,
+        render: false,
         sessions: false,
         tasks: false,
         result: false,
@@ -6452,6 +6548,7 @@ mod tests {
         delegation: false,
         feedback: false,
         ask: false,
+        render: false,
         sessions: false,
         tasks: false,
         result: false,

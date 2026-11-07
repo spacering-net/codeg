@@ -9,7 +9,7 @@
  * from a conversation.
  *
  * They used to be four sections, each with its own heading, description, card
- * and Save bar: four times the chrome for five switches, which is what made
+ * and Save bar: four times the chrome for six switches, which is what made
  * `/settings/general` read as far longer than it configures. It now sits on
  * `/settings/collaboration` under the delegation panel it shares a companion
  * process with.
@@ -19,10 +19,10 @@
  * and had drifted into calling three of them by different names.
  *
  * Persistence stays split the way the backend has it — `feedback.enabled`,
- * `question.enabled`, `session_info.enabled`, `browser_tools.*`,
- * `computer_tools.enabled` and `chat_authoring.*` remain six endpoints. Save
- * writes only the groups whose value actually moved, so a
- * failing endpoint can't roll back its neighbours, and a group whose *load*
+ * `question.enabled`, `render_page.enabled`, `session_info.enabled`,
+ * `browser_tools.*`, `computer_tools.enabled` and `chat_authoring.*` remain
+ * seven endpoints. Save writes only the groups whose value actually moved, so
+ * a failing endpoint can't roll back its neighbours, and a group whose *load*
  * failed (its switch is showing a default, not what is stored) is left alone
  * unless the user touched it.
  */
@@ -61,11 +61,13 @@ import {
   getChatAuthoringSettings,
   getFeedbackSettings,
   getQuestionSettings,
+  getRenderPageSettings,
   getSessionInfoSettings,
   setBrowserToolsSettings,
   setChatAuthoringSettings,
   setFeedbackSettings,
   setQuestionSettings,
+  setRenderPageSettings,
   setSessionInfoSettings,
   type BrowserToolsSettings,
   type ChatAuthoringSettings,
@@ -73,10 +75,11 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import { primeFeedbackEnabled } from "@/hooks/use-feedback-enabled"
 
-/** One field per switch, flattened across the five backend groups. */
+/** One field per switch, flattened across the six backend groups. */
 interface AgentToolValues {
   feedback: boolean
   question: boolean
+  render: boolean
   sessionInfo: boolean
   browserTools: boolean
   browserEval: boolean
@@ -94,6 +97,7 @@ interface AgentToolValues {
 const DEFAULTS: AgentToolValues = {
   feedback: false,
   question: true,
+  render: true,
   sessionInfo: true,
   browserTools: false,
   browserEval: false,
@@ -114,6 +118,7 @@ const DEFAULTS: AgentToolValues = {
 const TOOL_ROWS = [
   { key: "feedback", slug: "feedback", id: "agent-tools-feedback" },
   { key: "question", slug: "ask", id: "agent-tools-question" },
+  { key: "render", slug: "render", id: "agent-tools-render" },
   { key: "sessionInfo", slug: "sessions", id: "agent-tools-session-info" },
   { key: "browserTools", slug: "browser", id: "agent-tools-browser" },
   { key: "browserEval", slug: "browser_eval", id: "agent-tools-browser-eval" },
@@ -161,15 +166,23 @@ export function AgentToolsSettingsSection() {
     let cancelled = false
     void (async () => {
       const gen = { ...remoteGenRef.current }
-      const [feedback, question, sessionInfo, browserTools, computer, chat] =
-        await Promise.allSettled([
-          getFeedbackSettings(),
-          getQuestionSettings(),
-          getSessionInfoSettings(),
-          getBrowserToolsSettings(),
-          getComputerToolsSettings(),
-          getChatAuthoringSettings(),
-        ])
+      const [
+        feedback,
+        question,
+        render,
+        sessionInfo,
+        browserTools,
+        computer,
+        chat,
+      ] = await Promise.allSettled([
+        getFeedbackSettings(),
+        getQuestionSettings(),
+        getRenderPageSettings(),
+        getSessionInfoSettings(),
+        getBrowserToolsSettings(),
+        getComputerToolsSettings(),
+        getChatAuthoringSettings(),
+      ])
       if (cancelled) return
 
       // One endpoint being down shouldn't blank the other four switches, so
@@ -182,6 +195,8 @@ export function AgentToolsSettingsSection() {
       if (question.status === "fulfilled")
         next.question = question.value.enabled
       else failures.push(toErrorMessage(question.reason))
+      if (render.status === "fulfilled") next.render = render.value.enabled
+      else failures.push(toErrorMessage(render.reason))
       if (sessionInfo.status === "fulfilled")
         next.sessionInfo = sessionInfo.value.enabled
       else failures.push(toErrorMessage(sessionInfo.reason))
@@ -351,6 +366,7 @@ export function AgentToolsSettingsSection() {
   const dirty =
     values.feedback !== baseline.feedback ||
     values.question !== baseline.question ||
+    values.render !== baseline.render ||
     values.sessionInfo !== baseline.sessionInfo ||
     values.browserTools !== baseline.browserTools ||
     values.browserEval !== baseline.browserEval ||
@@ -377,6 +393,13 @@ export function AgentToolsSettingsSection() {
         writes.push(
           setQuestionSettings({ enabled: values.question }).then((applied) => ({
             question: applied.enabled,
+          }))
+        )
+      }
+      if (values.render !== baseline.render) {
+        writes.push(
+          setRenderPageSettings({ enabled: values.render }).then((applied) => ({
+            render: applied.enabled,
           }))
         )
       }

@@ -821,6 +821,74 @@ describe("MessageInput injectContent", () => {
     )
   })
 
+  it("attaches an annotation as one chip that sends as a resource block", async () => {
+    const onSend = vi.fn()
+    const { view, editor } = await mount({ onSend })
+    act(() => {
+      editor.commands.setContent("make these changes")
+    })
+
+    view.rerender(
+      tree({
+        onSend,
+        injectContent: {
+          annotation: {
+            text: "The user annotated the page...\nComment: bigger",
+            label: "Page annotation",
+          },
+        },
+      })
+    )
+    await nextFrame() // the inject's own frame
+    // The draft keeps its shape: the user's own text is untouched prose and
+    // the report is a badge, not loose lines in the input.
+    expect(serializeDocToText(editor.state.doc).trim()).toBe(
+      "make these changes"
+    )
+    expect(JSON.stringify(editor.getJSON())).toContain('"type":"reference"')
+    expect(JSON.stringify(editor.getJSON())).toContain("Page annotation")
+
+    pressEnter(editor)
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend.mock.calls[0][0].blocks).toEqual([
+      { type: "text", text: "make these changes" },
+      expect.objectContaining({
+        type: "resource",
+        mime_type: "text/markdown",
+        text: "The user annotated the page...\nComment: bigger",
+      }),
+    ])
+  })
+
+  it("falls an annotation back to prose when the agent takes no embedded context", async () => {
+    const { view, editor } = await mount({})
+    act(() => {
+      editor.commands.setContent("hello")
+    })
+    view.rerender(
+      tree({
+        promptCapabilities: {
+          image: true,
+          audio: false,
+          embedded_context: false,
+        },
+        injectContent: {
+          // The panel's real payload: a Label line the prose fallback has no
+          // badge to name, so it must not leak into the draft.
+          annotation: {
+            text: "Label: Page annotation - bigger\nComment: bigger",
+            label: "Page annotation - bigger",
+          },
+        },
+      })
+    )
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc)).toBe(
+        "hello\n\nComment: bigger\n\n"
+      )
+    )
+  })
+
   // A send handed back undelivered (a canvas card's prompt that bounced off a
   // turn already in flight). The composer had cleared itself for it, and the
   // user may have started writing again before it came back.

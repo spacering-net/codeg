@@ -13,6 +13,8 @@ import { AgentSelector } from "@/components/chat/agent-selector"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import type { ConversationFolderPickerOverride } from "@/components/chat/conversation-context-bar"
 import type { ComposerInjectContent } from "@/components/chat/message-input"
+import { useAnnotationInjection } from "@/components/chat/use-annotation-injection"
+import { buildQuotedMarkdown } from "@/lib/message-quote"
 import { MessageListView } from "@/components/message/message-list-view"
 import {
   getCachedSelectors,
@@ -46,6 +48,7 @@ import type {
   PlanApprovalAnswer,
   PromptDraft,
   QuestionAnswer,
+  RenderPageAnswer,
 } from "@/lib/types"
 import { cn, randomUUID } from "@/lib/utils"
 import { userPromptHistory } from "@/lib/composer-history"
@@ -281,6 +284,21 @@ export function CanvasConversationSurface({
   const handleComposerHandBackConsumed = useCallback(
     () => setComposerHandBacks((pending) => pending.slice(1)),
     []
+  )
+  // Quote and annotation join the same one-at-a-time queue the send bounce
+  // uses, so the card's composer takes them exactly like a handed-back send.
+  const pushInject = useCallback(
+    (payload: ComposerInjectContent) =>
+      setComposerHandBacks((pending) => [...pending, payload]),
+    []
+  )
+  const handleAnnotatePage = useAnnotationInjection(contextKey, pushInject)
+  const handleQuoteSelection = useCallback(
+    (selected: string) => {
+      const quoted = buildQuotedMarkdown(selected)
+      if (quoted) pushInject({ text: quoted, mode: "append" })
+    },
+    [pushInject]
   )
   const [sendSignal, setSendSignal] = useState(0)
   const creatingRef = useRef(false)
@@ -750,6 +768,12 @@ export function CanvasConversationSurface({
     [acpActions, contextKey]
   )
 
+  const handleAnswerRenderPage = useCallback(
+    (pageId: string, answer: RenderPageAnswer) =>
+      acpActions.answerRenderPage(contextKey, pageId, answer),
+    [acpActions, contextKey]
+  )
+
   const handleAnswerPlanApproval = useCallback(
     (approvalId: string, answer: PlanApprovalAnswer) =>
       acpActions.answerPlanApproval(contextKey, approvalId, answer),
@@ -858,6 +882,7 @@ export function CanvasConversationSurface({
           pendingQuestion={conn.pendingQuestion}
           pendingAskQuestion={conn.pendingAskQuestion}
           pendingPlanApproval={conn.pendingPlanApproval}
+          pendingRenderPage={conn.pendingRenderPage}
           onFocus={handleFocus}
           onSend={handleSend}
           onCancel={handleCancel}
@@ -865,6 +890,9 @@ export function CanvasConversationSurface({
           onAnswerQuestion={handleAnswerQuestion}
           onAnswerAskQuestion={handleAnswerAskQuestion}
           onAnswerPlanApproval={handleAnswerPlanApproval}
+          onAnswerRenderPage={handleAnswerRenderPage}
+          onQuoteSelection={handleQuoteSelection}
+          onAnnotatePage={handleAnnotatePage}
           modes={connectionModes}
           configOptions={connectionConfigOptions}
           modeLoading={modeLoading}
@@ -916,6 +944,8 @@ export function CanvasConversationSurface({
             acpLoadError={acpLoadError}
             hideEmptyState={isDraft}
             onSaveNoteSelection={onSaveSelectionAsNote}
+            onQuoteSelection={handleQuoteSelection}
+            onAnnotatePage={handleAnnotatePage}
           />
         </ConversationShell>
       </div>

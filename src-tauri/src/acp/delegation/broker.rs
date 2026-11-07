@@ -1096,6 +1096,7 @@ fn attach_blocked(report: &mut DelegationTaskReport, blocked: BlockedOn) {
         (BlockedKind::Permission, None) => "a tool permission".to_string(),
         (BlockedKind::Question, None) => "a question".to_string(),
         (BlockedKind::PlanApproval, None) => "a plan approval".to_string(),
+        (BlockedKind::RenderPage, None) => "an answer on a page".to_string(),
     };
     // The third line is guidance for the orchestrating LLM, in the same spirit
     // as `running_ack`'s "call get_delegation_status with this id". Keep it in

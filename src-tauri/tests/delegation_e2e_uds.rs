@@ -139,7 +139,7 @@ impl codeg_lib::acp::chat_authoring::ChatAuthoringAccess for NoAuthoring {
 /// Controllable question access for the ask round-trip test: `register_question`
 /// parks a sender keyed by a freshly-minted id; the test pops it via
 /// `take_pending` and resolves it, exactly as a user answering the card would.
-/// The delegation tests pass it as the 5th `DelegationListener::new` arg but
+/// The delegation tests pass it as the 6th `DelegationListener::new` arg but
 /// never trigger the ask path.
 #[derive(Default)]
 struct StubQuestions {
@@ -187,6 +187,22 @@ impl SessionQuestionAccess for StubQuestions {
     }
 }
 
+/// No-op render-page access — this e2e suite exercises delegation, not pages.
+struct NoRenders;
+#[async_trait]
+impl codeg_lib::acp::render_page::SessionRenderPageAccess for NoRenders {
+    async fn register_render_page(
+        &self,
+        _parent_connection_id: &str,
+        _title: String,
+        _html: String,
+    ) -> Option<codeg_lib::acp::render_page::RegisteredRenderPage> {
+        None
+    }
+    async fn cancel_render_page(&self, _parent_connection_id: &str, _page_id: &str) {}
+    async fn cancel_render_pages_by_parent(&self, _parent_connection_id: &str) {}
+}
+
 #[tokio::test]
 async fn end_to_end_uds_happy_path() {
     let mock = Arc::new(MockSpawner::new());
@@ -222,6 +238,7 @@ async fn end_to_end_uds_happy_path() {
         Arc::new(FixedParent(1)) as Arc<dyn ParentSessionLookup>,
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         Arc::new(StubQuestions::default()) as Arc<dyn SessionQuestionAccess>,
+        Arc::new(NoRenders) as Arc<dyn codeg_lib::acp::render_page::SessionRenderPageAccess>,
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
@@ -344,6 +361,7 @@ async fn end_to_end_uds_batch_status() {
         Arc::new(FixedParent(1)) as Arc<dyn ParentSessionLookup>,
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         Arc::new(StubQuestions::default()) as Arc<dyn SessionQuestionAccess>,
+        Arc::new(NoRenders) as Arc<dyn codeg_lib::acp::render_page::SessionRenderPageAccess>,
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
@@ -437,6 +455,7 @@ async fn end_to_end_uds_invalid_token_rejected() {
         Arc::new(FixedParent(1)) as Arc<dyn ParentSessionLookup>,
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         Arc::new(StubQuestions::default()) as Arc<dyn SessionQuestionAccess>,
+        Arc::new(NoRenders) as Arc<dyn codeg_lib::acp::render_page::SessionRenderPageAccess>,
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
@@ -509,6 +528,7 @@ async fn end_to_end_uds_ask_question_round_trip() {
         Arc::new(FixedParent(1)) as Arc<dyn ParentSessionLookup>,
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         questions.clone() as Arc<dyn SessionQuestionAccess>,
+        Arc::new(NoRenders) as Arc<dyn codeg_lib::acp::render_page::SessionRenderPageAccess>,
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
@@ -655,6 +675,7 @@ async fn end_to_end_uds_ask_revoked_after_register_declines() {
         Arc::new(FixedParent(1)) as Arc<dyn ParentSessionLookup>,
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         questions as Arc<dyn SessionQuestionAccess>,
+        Arc::new(NoRenders) as Arc<dyn codeg_lib::acp::render_page::SessionRenderPageAccess>,
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
@@ -806,6 +827,7 @@ async fn end_to_end_uds_assistant_delegation() {
         Arc::new(FixedParent(1)) as Arc<dyn ParentSessionLookup>,
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         Arc::new(StubQuestions::default()) as Arc<dyn SessionQuestionAccess>,
+        Arc::new(NoRenders) as Arc<dyn codeg_lib::acp::render_page::SessionRenderPageAccess>,
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,

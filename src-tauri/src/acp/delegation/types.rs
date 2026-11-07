@@ -365,6 +365,8 @@ pub enum BlockedKind {
     Question,
     /// Plan-mode approval (Grok's `exit_plan_mode` and friends).
     PlanApproval,
+    /// `render_page` with `awaitAnswer` — an answer on an interactive page.
+    RenderPage,
 }
 
 /// The blocking prompt itself: what kind, and a short label for the thing that

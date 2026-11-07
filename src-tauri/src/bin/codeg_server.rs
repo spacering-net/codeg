@@ -364,6 +364,7 @@ async fn async_main(
         delegation_socket_path,
         feedback_config,
         question_config,
+        render_config,
         session_info_config,
         chat_authoring_config,
         browser_tools_config,
@@ -392,6 +393,7 @@ async fn async_main(
         delegation_socket_path: delegation_socket_path.clone(),
         feedback_config: feedback_config.clone(),
         question_config: question_config.clone(),
+        render_config: render_config.clone(),
         session_info_config: session_info_config.clone(),
         chat_authoring_config: chat_authoring_config.clone(),
         browser_tools_config: browser_tools_config.clone(),
@@ -430,6 +432,12 @@ async fn async_main(
     codeg_lib::commands::question::apply_persisted_question_config(
         &state.db.conn,
         &question_config,
+    )
+    .await;
+    // Same for the render-page enable flag.
+    codeg_lib::commands::render_page::apply_persisted_render_config(
+        &state.db.conn,
+        &render_config,
     )
     .await;
     // Same for the get-session-info enable flag.
@@ -525,6 +533,9 @@ async fn async_main(
                 manager: Arc::new(state.connection_manager.clone_ref()),
             }),
             Arc::new(codeg_lib::acp::manager::ConnectionManagerQuestionLookup {
+                manager: Arc::new(state.connection_manager.clone_ref()),
+            }),
+            Arc::new(codeg_lib::acp::manager::ConnectionManagerRenderPageLookup {
                 manager: Arc::new(state.connection_manager.clone_ref()),
             }),
             Arc::new(codeg_lib::commands::session_info::DbSessionInfoLookup::new(

@@ -898,6 +898,12 @@ pub(crate) async fn do_start_web_server_tauri(
             .state::<crate::acp::question::QuestionRuntimeConfig>()
             .inner()
             .clone(),
+        // Reuse the same render-page config handle the desktop MCP injection
+        // reads, so HTTP-side render-page settings target the same flag.
+        render_config: app
+            .state::<crate::acp::render_page::RenderPageRuntimeConfig>()
+            .inner()
+            .clone(),
         // Reuse the same get-session-info config handle the desktop MCP injection
         // reads, so HTTP-side session-info settings target the same flag.
         session_info_config: app

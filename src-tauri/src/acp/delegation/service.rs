@@ -310,6 +310,20 @@ mod tests {
     }
 
     #[async_trait]
+    impl crate::acp::render_page::SessionRenderPageAccess for Stub {
+        async fn register_render_page(
+            &self,
+            _parent_connection_id: &str,
+            _title: String,
+            _html: String,
+        ) -> Option<crate::acp::render_page::RegisteredRenderPage> {
+            None
+        }
+        async fn cancel_render_page(&self, _parent_connection_id: &str, _page_id: &str) {}
+        async fn cancel_render_pages_by_parent(&self, _parent_connection_id: &str) {}
+    }
+
+    #[async_trait]
     impl crate::acp::session_info::SessionInfoAccess for Stub {
         async fn resolve(
             &self,
@@ -491,6 +505,7 @@ mod tests {
         let listener = DelegationListener::new(
             broker,
             Arc::new(TokenRegistry::default()),
+            Arc::new(Stub),
             Arc::new(Stub),
             Arc::new(Stub),
             Arc::new(Stub),

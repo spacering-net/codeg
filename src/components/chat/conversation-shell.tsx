@@ -5,11 +5,13 @@ import type {
   ConnectionStatus,
   PendingPlanApprovalState,
   PendingQuestionState,
+  PendingRenderPageState,
   PlanApprovalAnswer,
   PromptCapabilitiesInfo,
   PromptDraft,
   PromptInputBlock,
   QuestionAnswer,
+  RenderPageAnswer,
   SessionConfigOptionInfo,
   AsyncTaskRecord,
   SessionFailureRecord,
@@ -35,6 +37,7 @@ import { PermissionDialog } from "@/components/chat/permission-dialog"
 import { QuestionDialog } from "@/components/chat/question-dialog"
 import { AskQuestionCard } from "@/components/chat/ask-question-card"
 import { PlanApprovalCard } from "@/components/chat/plan-approval-card"
+import { RenderPageCard } from "@/components/chat/render-page-card"
 import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
 
 interface ConversationShellProps {
@@ -72,6 +75,9 @@ interface ConversationShellProps {
   pendingAskQuestion: PendingQuestionState | null
   /** Awaiting-decision Grok `exit_plan_mode` approval. */
   pendingPlanApproval: PendingPlanApprovalState | null
+  /** Awaiting-answer `render_page` (the agent blocks until the user submits on
+   *  the page or dismisses it). */
+  pendingRenderPage: PendingRenderPageState | null
   onFocus: () => void
   onSend: (draft: PromptDraft, modeId?: string | null) => void
   onCancel: () => void
@@ -85,6 +91,17 @@ interface ConversationShellProps {
     approvalId: string,
     answer: PlanApprovalAnswer
   ) => void | Promise<void>
+  onAnswerRenderPage: (
+    pageId: string,
+    answer: RenderPageAnswer
+  ) => void | Promise<void>
+  /** Quotes selected text (from the transcript or a live render_page) into
+   *  the composer. Omitted on surfaces without a composer — the quote action
+   *  is then not offered, only copy remains. */
+  onQuoteSelection?: (text: string) => void
+  /** Sends a finished render_page annotation session to the composer as
+   *  formatted text. Omitted on surfaces without a composer. */
+  onAnnotatePage?: (text: string) => void
   children: ReactNode
   modes?: SessionModeInfo[]
   configOptions?: SessionConfigOptionInfo[]
@@ -184,6 +201,7 @@ export function ConversationShell({
   pendingQuestion,
   pendingAskQuestion,
   pendingPlanApproval,
+  pendingRenderPage,
   onFocus,
   onSend,
   onCancel,
@@ -191,6 +209,9 @@ export function ConversationShell({
   onAnswerQuestion,
   onAnswerAskQuestion,
   onAnswerPlanApproval,
+  onAnswerRenderPage,
+  onQuoteSelection,
+  onAnnotatePage,
   children,
   modes,
   configOptions,
@@ -304,6 +325,19 @@ export function ConversationShell({
                 onAnswer={onAnswerPlanApproval}
               />
             </MarkdownImageProvider>
+          </div>
+        )}
+        {pendingRenderPage && (
+          <div className="mx-auto w-full chat-content-w px-4">
+            {/* key on page_id so the card remounts (fresh answer / error state)
+                when the slot is reused for a new awaiting page. */}
+            <RenderPageCard
+              key={pendingRenderPage.page_id}
+              page={pendingRenderPage}
+              onAnswer={onAnswerRenderPage}
+              onQuote={onQuoteSelection}
+              onAnnotate={onAnnotatePage}
+            />
           </div>
         )}
 
