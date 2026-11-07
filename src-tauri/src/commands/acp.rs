@@ -199,6 +199,11 @@ pub(crate) fn apply_custom_version_to_url(
 /// [`resolve_npx_command_for`]: PATH, then `~/.local/bin`, then the current npm
 /// global prefix, then the agent vendor's own native install. The fallbacks
 /// handle GUI environments that don't inherit the user's shell PATH.
+///
+/// Qoder on Windows resolves further at launch (see [`crate::acp::qoder`]): a
+/// wrapper whose target the user overrode through Agent Settings env, or one
+/// whose CLI went missing, passes this command-existence gate and reports the
+/// specific problem at connect rather than reading as "not installed" here.
 pub(crate) async fn is_cmd_available(agent_type: AgentType, cmd: &str) -> bool {
     resolve_npx_command_for(agent_type, cmd).await.is_some()
 }
@@ -1177,6 +1182,17 @@ async fn collect_agent_diag(
                 .await
                 .map(|p| p.to_string_lossy().to_string());
             diag.launchable = resolve_npx.clone();
+            // Qoder on Windows launches the program behind its wrapper (see
+            // `acp::qoder`), so the report names that program and, for an npm
+            // install, its entry; `resolve_npx` keeps naming the wrapper the
+            // lookup found.
+            if cfg!(windows) && agent_type == AgentType::Qoder {
+                diag.launchable = resolve_npx.as_ref().and_then(|p| {
+                    crate::acp::qoder::resolve_launch(Path::new(p), &BTreeMap::new())
+                        .ok()
+                        .map(|l| l.describe())
+                });
+            }
             diag.resolve_npx = resolve_npx;
 
             diag.system_prefix_bin = npm_prefix_g.and_then(|p| {
@@ -2313,6 +2329,20 @@ pub(crate) async fn system_probed_version(
     let declared_probe = agent_type
         .custom_id()
         .and_then(crate::acp::custom_registry::version_probe_of);
+    // Qoder on Windows runs the program behind its launcher, so the version is
+    // read from that exact program — resolved by the same steps the connect
+    // takes — and from nothing else: probing the wrapper or the global npm
+    // package can report an installation the launch will not start. A
+    // resolution that fails here has no version to report; the connect surfaces
+    // its specific error. The probe sees the process environment, so a
+    // per-agent `QODER_CLI_BIN` override shifts the launch only, and the
+    // recorded version stays the default installation's.
+    if cfg!(windows) && agent_type == AgentType::Qoder {
+        let Ok(launch) = crate::acp::qoder::resolve_launch(resolved_bin, &BTreeMap::new()) else {
+            return None;
+        };
+        return probe_cli_version_token(&launch.program, &launch.version_probe_args()).await;
+    }
     system_probed_version_with(declared_probe, resolved_bin, npm_package).await
 }
 
