@@ -1,0 +1,76 @@
+diff --git a/overlayscrollbars.cjs b/overlayscrollbars.cjs
+index 7268fd59a854208ab38233e920a995bf864ef6f1..08d68e9c5bf4d6f37c918bde631676f32fff83f0 100644
+--- a/overlayscrollbars.cjs
++++ b/overlayscrollbars.cjs
+@@ -62,7 +62,13 @@ const _ = getApi("IntersectionObserver");
+ 
+ const d = getApi("ResizeObserver");
+ 
+-const p = getApi("ScrollTimeline");
++// WebKit retains native allocations when scroll timelines interpolate the
++// container-relative calc() transforms used by scrollbar handles. Use the
++// existing scroll-event fallback in that engine; keep Blink's native path.
++const isWebKit = /AppleWebKit\//.test(n.navigator && n.navigator.userAgent || "") &&
++  !/(?:Chrome|Chromium|Edg|OPR)\//.test(n.navigator && n.navigator.userAgent || "");
++
++const p = isWebKit ? void 0 : getApi("ScrollTimeline");
+ 
+ const isUndefined = t => t === void 0;
+ 
+diff --git a/overlayscrollbars.cjs.js b/overlayscrollbars.cjs.js
+index 010b70bd487226ccd01fb6c0d772ab6bb8638c51..52c3be7101e1745d1179b0e317bdaf428e98bf08 100644
+--- a/overlayscrollbars.cjs.js
++++ b/overlayscrollbars.cjs.js
+@@ -62,7 +62,13 @@ const _ = getApi("IntersectionObserver");
+ 
+ const d = getApi("ResizeObserver");
+ 
+-const p = getApi("ScrollTimeline");
++// WebKit retains native allocations when scroll timelines interpolate the
++// container-relative calc() transforms used by scrollbar handles. Use the
++// existing scroll-event fallback in that engine; keep Blink's native path.
++const isWebKit = /AppleWebKit\//.test(n.navigator && n.navigator.userAgent || "") &&
++  !/(?:Chrome|Chromium|Edg|OPR)\//.test(n.navigator && n.navigator.userAgent || "");
++
++const p = isWebKit ? void 0 : getApi("ScrollTimeline");
+ 
+ const isUndefined = t => t === void 0;
+ 
+diff --git a/overlayscrollbars.esm.js b/overlayscrollbars.esm.js
+index c66166eacc57c3ed6a95f01e1bcc290a58c3d176..6126010e9e2e14c9a549b0a676b2c392bb027835 100644
+--- a/overlayscrollbars.esm.js
++++ b/overlayscrollbars.esm.js
+@@ -56,7 +56,13 @@ const _ = getApi("IntersectionObserver");
+ 
+ const d = getApi("ResizeObserver");
+ 
+-const p = getApi("ScrollTimeline");
++// WebKit retains native allocations when scroll timelines interpolate the
++// container-relative calc() transforms used by scrollbar handles. Use the
++// existing scroll-event fallback in that engine; keep Blink's native path.
++const isWebKit = /AppleWebKit\//.test(n.navigator && n.navigator.userAgent || "") &&
++  !/(?:Chrome|Chromium|Edg|OPR)\//.test(n.navigator && n.navigator.userAgent || "");
++
++const p = isWebKit ? void 0 : getApi("ScrollTimeline");
+ 
+ const isUndefined = t => t === void 0;
+ 
+diff --git a/overlayscrollbars.mjs b/overlayscrollbars.mjs
+index 82dc05b44e92c5125aee59691a00c3babee7d934..38dbcf4a58367b31dcbeca3fade685fc4df3caa1 100644
+--- a/overlayscrollbars.mjs
++++ b/overlayscrollbars.mjs
+@@ -56,7 +56,13 @@ const _ = getApi("IntersectionObserver");
+ 
+ const d = getApi("ResizeObserver");
+ 
+-const p = getApi("ScrollTimeline");
++// WebKit retains native allocations when scroll timelines interpolate the
++// container-relative calc() transforms used by scrollbar handles. Use the
++// existing scroll-event fallback in that engine; keep Blink's native path.
++const isWebKit = /AppleWebKit\//.test(n.navigator && n.navigator.userAgent || "") &&
++  !/(?:Chrome|Chromium|Edg|OPR)\//.test(n.navigator && n.navigator.userAgent || "");
++
++const p = isWebKit ? void 0 : getApi("ScrollTimeline");
+ 
+ const isUndefined = t => t === void 0;
+ 
