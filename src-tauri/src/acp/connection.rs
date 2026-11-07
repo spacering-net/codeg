@@ -2152,9 +2152,22 @@ fn agent_debug_callback(
 /// makes it exit, but each release tried from 1.1.0 to 1.1.84 (1.1.0, 1.1.30,
 /// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84) takes `--settings`, and
 /// 1.1.30 and 1.1.64 open sessions with this one as without it.
-const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
+pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
-/// The arguments codeg adds after an npx agent's registry `args`.
+/// The settings value for Qoder's `--settings`, inline as JSON everywhere.
+///
+/// Inline JSON survives a launch only when argv reaches the CLI verbatim. On
+/// Windows that means not going through the cmd wrappers `qoder` resolves to:
+/// the official installer's `qoder.cmd` forwards `%*` to a PowerShell `-File`
+/// script, whose command-line parser strips the JSON's embedded quotes as
+/// string delimiters (reproduced on a live 1.1.84): the CLI receives
+/// `{mcp:{lazyLoad:false}}`, calls it invalid JSON, and exits ~1s into the
+/// handshake — codeg sees `initialize` fail on a closed transport. So on
+/// Windows [`crate::acp::qoder`] resolves the wrapper to the real CLI first
+/// (the native `qodercli.exe`, or Node running the npm package's entry) and
+/// spawns that directly, which delivers the JSON as one untouched argv entry.
+///
+/// [`crate::acp::qoder`] is the Windows-only resolver the launch below uses.
 fn npx_launch_extra_args(agent_type: AgentType) -> &'static [&'static str] {
     match agent_type {
         AgentType::Qoder => &["--settings", QODER_LAUNCH_SETTINGS],
@@ -2268,8 +2281,27 @@ async fn build_agent(
             for (k, v) in &merged_env {
                 parts.push(format!("{k}={v}"));
             }
-            let bridge_command = crate::commands::acp::resolve_npx_command_for(agent_type, cmd)
-                .await
+            let resolved_command =
+                crate::commands::acp::resolve_npx_command_for(agent_type, cmd).await;
+            let qoder_direct = if agent_type == AgentType::Qoder && cfg!(windows) {
+                // Windows reaches Qoder through cmd wrappers that would strip
+                // the inline `--settings` JSON's quotes (see
+                // `npx_launch_extra_args`); resolve the wrapper to the real
+                // CLI and spawn that directly. A wrapper codeg cannot place a
+                // CLI behind is a clear error, never a silent fall back onto
+                // the fragile wrapper.
+                match resolved_command {
+                    Some(ref path) => {
+                        let launch = crate::acp::qoder::resolve_launch(path, runtime_env)
+                            .map_err(|error| AcpError::SdkNotInstalled(error.to_string()))?;
+                        Some(launch)
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
+            let bridge_command = resolved_command
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| {
                     crate::process::normalized_program(cmd)
@@ -2287,6 +2319,11 @@ async fn build_agent(
                 // bypassing npm shims that might select an older Node on PATH.
                 parts.push(runtime.node.to_string_lossy().into_owned());
                 parts.push(entry.to_string_lossy().into_owned());
+            } else if let Some(launch) = &qoder_direct {
+                parts.push(launch.program.to_string_lossy().into_owned());
+                for arg in &launch.prefix_args {
+                    parts.push(arg.to_string_lossy().into_owned());
+                }
             } else {
                 parts.push(bridge_command);
             }
@@ -43780,7 +43817,9 @@ mod tests {
     }
 
     /// The launch `build_agent` assembles for Qoder carries the settings right
-    /// after the registry's `--acp`.
+    /// after the registry's `--acp`. On Windows, where a Qoder installation
+    /// resolves, the launch names the real program rather than a cmd wrapper,
+    /// whose reparsing would strip the settings' quotes (see `acp::qoder`).
     #[tokio::test]
     async fn qoder_launch_carries_the_lazy_loading_settings() {
         let tail = Arc::new(StderrTail::new());
@@ -43800,6 +43839,15 @@ mod tests {
             "--acp", "--settings", QODER_LAUNCH_SETTINGS
         );
         assert!(launch.contains(&expected), "{launch}");
+        let installed = crate::commands::acp::resolve_npx_command_for(AgentType::Qoder, "qoder")
+            .await
+            .is_some();
+        if cfg!(windows) && installed {
+            assert!(
+                !launch.to_ascii_lowercase().contains(".cmd"),
+                "a Windows launch with an installed Qoder must not name a cmd wrapper: {launch}"
+            );
+        }
     }
 
     /// Only an update carrying a title and nothing else is a Kimi status.
