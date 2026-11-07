@@ -307,6 +307,32 @@ pub async fn seed_model_if_empty(
     Ok(res.rows_affected > 0)
 }
 
+/// Cursor rows whose sidebar chip is blank, with the session id needed to
+/// read the model out of that session's store. Deleted rows and rows that
+/// already have a model are not returned.
+pub async fn cursor_sessions_missing_model(
+    conn: &DatabaseConnection,
+) -> Result<Vec<(i32, String)>, DbError> {
+    let rows = conversation::Entity::find()
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(conversation::Column::AgentType.eq(AgentType::Cursor.as_wire().into_owned()))
+        .filter(conversation::Column::ExternalId.is_not_null())
+        .filter(
+            sea_orm::Condition::any()
+                .add(conversation::Column::Model.is_null())
+                .add(conversation::Column::Model.eq("")),
+        )
+        .all(conn)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let external_id = row.external_id.filter(|id| !id.trim().is_empty())?;
+            Some((row.id, external_id))
+        })
+        .collect())
+}
+
 /// Lock a row's title WITHOUT rewriting it. For a conversation whose name was
 /// typed by the user somewhere else — a work task's title, an automation's name
 /// — the seed passed to [`create`] already IS the name; all that's missing is

@@ -166,7 +166,10 @@ impl CursorParser {
                     .as_deref()
                     .map(title_from_user_text)
             });
-        Some(summary_from(chat_id, &meta, &state, &sidecar, title))
+        let model = resolved_session_model(&conn, &meta);
+        Some(summary_from(
+            chat_id, &meta, &state, &sidecar, title, model,
+        ))
     }
 
     fn build_detail(&self, chat_dir: &Path, chat_id: &str) -> Option<ConversationDetail> {
@@ -223,7 +226,8 @@ impl CursorParser {
             });
         let sidecar = read_sidecar_meta(chat_dir);
         let title = meta.name.clone().or_else(|| sidecar.title.clone()).or(title);
-        let summary = summary_from(chat_id, &meta, &state, &sidecar, title);
+        let model = resolved_session_model(&conn, &meta);
+        let summary = summary_from(chat_id, &meta, &state, &sidecar, title, model);
 
         Some(ConversationDetail {
             summary,
@@ -265,6 +269,19 @@ impl CursorParser {
             out.push(summary);
         }
     }
+
+    /// Model of one Cursor session, for the sidebar chip.
+    ///
+    /// `lastUsedModel` when the store still has it. Current ACP stores do
+    /// not: the model that actually ran is the `systemPromptFingerprint`
+    /// still linked from the latest conversation root. Blobs left over from
+    /// an earlier model, and no longer linked, are ignored.
+    pub(crate) fn model_for_session(&self, session_id: &str) -> Option<String> {
+        let chat_dir = self.find_chat_dir(session_id)?;
+        let conn = open_store(&chat_dir.join("store.db"))?;
+        let meta = read_chat_meta(&conn)?;
+        resolved_session_model(&conn, &meta)
+    }
 }
 
 impl Default for CursorParser {
@@ -304,6 +321,7 @@ fn summary_from(
     state: &DecodedState,
     sidecar: &SidecarMeta,
     title: Option<String>,
+    model: Option<String>,
 ) -> ConversationSummary {
     // The sidecar cwd is authoritative for ACP sessions: their stores are
     // keyed by session uuid (no md5(cwd) bucket), and the workspace refs
@@ -331,7 +349,7 @@ fn summary_from(
         ended_at,
         // user + assistant per agent turn (approximation before full decode).
         message_count: (state.turn_blob_ids.len() as u32).saturating_mul(2),
-        model: meta.last_used_model.clone(),
+        model,
         git_branch: state.git_branch.clone(),
         parent_id: None,
         parent_tool_use_id: None,
@@ -472,6 +490,105 @@ fn json_ms(v: Option<&Value>) -> Option<u64> {
     DateTime::parse_from_rfc3339(s)
         .ok()
         .and_then(|dt| u64::try_from(dt.timestamp_millis()).ok())
+}
+
+/// `lastUsedModel` when the store has it. Otherwise the model named by the
+/// `systemPromptFingerprint` still reachable from the latest root. A
+/// fingerprint left behind after a model switch, and no longer linked, is
+/// not the model this chat is using now.
+fn resolved_session_model(conn: &Connection, meta: &ChatMeta) -> Option<String> {
+    if let Some(model) = meta
+        .last_used_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        return Some(model.to_string());
+    }
+    let root = meta.latest_root_blob_id.as_deref()?;
+    fingerprint_model_from_root(conn, root)
+}
+
+fn prompt_fingerprint_model(bytes: &[u8]) -> Option<String> {
+    const MARKER: &[u8] = b"systemPromptFingerprint";
+    const KEY: &[u8] = b"\"model\"";
+    let mut from = 0;
+    let mut found = None;
+    while let Some(rel) = bytes[from..]
+        .windows(MARKER.len())
+        .position(|window| window == MARKER)
+    {
+        let at = from + rel;
+        let end = bytes.len().min(at + 500);
+        if let Some(model) = json_string_after_key(&bytes[at..end], KEY) {
+            found = Some(model);
+        }
+        from = at + MARKER.len();
+        if from >= bytes.len() {
+            break;
+        }
+    }
+    found
+}
+
+/// `"model" <ws> : <ws> "<id>"` inside `window`.
+fn json_string_after_key(window: &[u8], key: &[u8]) -> Option<String> {
+    let rel = window.windows(key.len()).position(|item| item == key)?;
+    let mut i = rel + key.len();
+    while window.get(i).is_some_and(u8::is_ascii_whitespace) {
+        i += 1;
+    }
+    if window.get(i) != Some(&b':') {
+        return None;
+    }
+    i += 1;
+    while window.get(i).is_some_and(u8::is_ascii_whitespace) {
+        i += 1;
+    }
+    if window.get(i) != Some(&b'"') {
+        return None;
+    }
+    i += 1;
+    let start = i;
+    while window.get(i).is_some_and(|byte| *byte != b'"' && *byte != b'\\') {
+        i += 1;
+    }
+    let id = std::str::from_utf8(window.get(start..i)?).ok()?;
+    (!id.is_empty() && id.len() <= 100).then(|| id.to_string())
+}
+
+/// How many blobs one model lookup will open. A session DAG is a few hundred
+/// blobs; the cap keeps a malformed cycle or a huge store from walking the
+/// whole file on every sidebar refresh.
+const FINGERPRINT_WALK_CAP: usize = 4_000;
+
+fn fingerprint_model_from_root(conn: &Connection, root: &[u8]) -> Option<String> {
+    let mut stack = vec![root.to_vec()];
+    let mut seen = HashSet::new();
+    let mut found = None;
+    while let Some(id) = stack.pop() {
+        if seen.len() >= FINGERPRINT_WALK_CAP || !seen.insert(id.clone()) {
+            continue;
+        }
+        let Some(bytes) = read_blob(conn, &id) else {
+            continue;
+        };
+        if let Some(model) = prompt_fingerprint_model(&bytes) {
+            found = Some(model);
+        }
+        let mut children = Vec::new();
+        for (_no, val) in wire::Fields::new(&bytes) {
+            if let Some(child) = val.bytes().filter(|child| child.len() == 32) {
+                children.push(child.to_vec());
+            }
+        }
+        // Reverse so the first field is walked first and a later field's
+        // fingerprint is the one that stays.
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+    found
 }
 
 fn read_blob(conn: &Connection, id: &[u8]) -> Option<Vec<u8>> {
@@ -2012,6 +2129,16 @@ mod tests {
             Self { conn, next_id: 1 }
         }
 
+        fn put_blob_exact(&self, id: &[u8], data: &[u8]) -> Vec<u8> {
+            self.conn
+                .execute(
+                    "INSERT OR REPLACE INTO blobs (id, data) VALUES (?1, ?2)",
+                    rusqlite::params![hex_encode(id), data],
+                )
+                .unwrap();
+            id.to_vec()
+        }
+
         fn put_blob(&mut self, data: &[u8]) -> Vec<u8> {
             let id = vec![0xab, 0xcd, self.next_id];
             self.next_id += 1;
@@ -2191,6 +2318,38 @@ mod tests {
         assert_eq!(s.folder_path.as_deref(), Some("/Users/me/proj"));
         assert_eq!(s.git_branch.as_deref(), Some("main"));
         assert!(s.ended_at.is_some());
+    }
+
+    #[test]
+    fn model_for_session_uses_the_fingerprint_still_linked_from_the_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let chat_id = "0198c9aa-aaaa-bbbb-cccc-ddddeeeeffff";
+        let chat_dir = tmp.path().join("chats").join("bucket").join(chat_id);
+        std::fs::create_dir_all(&chat_dir).unwrap();
+        let store = StoreBuilder::create(&chat_dir.join("store.db"));
+
+        let current = br#"{"systemPromptFingerprint":{"model":"grok-4.7"}}"#;
+        let current_id = store.put_blob_exact(&[0x11; 32], current);
+        // An earlier model still sitting in the store, but not linked from
+        // the latest root, must not become the sidebar chip.
+        let stale = br#"{"systemPromptFingerprint":{"model":"accounts/fireworks/models/kimi-k3"}}"#;
+        let _stale_id = store.put_blob_exact(&[0x22; 32], stale);
+
+        let mut root = Vec::new();
+        field_bytes(30, &current_id, &mut root);
+        let root_id = store.put_blob_exact(&[0x33; 32], &root);
+        store.put_meta(&serde_json::json!({
+            "agentId": chat_id,
+            "latestRootBlobId": hex_encode(&root_id),
+            "name": "Login Issue",
+            "createdAt": 1_u64,
+        }));
+
+        let parser = CursorParser::with_base_dir(tmp.path().join("chats"));
+        assert_eq!(
+            parser.model_for_session(chat_id).as_deref(),
+            Some("grok-4.7")
+        );
     }
 
     #[test]

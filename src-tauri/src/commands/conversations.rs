@@ -18,6 +18,7 @@ use crate::models::*;
 // index reader and not part of the `AgentParser` trait. Every history read goes
 // through `build_agent_parser`.
 use crate::parsers::codex::CodexParser;
+use crate::parsers::cursor::CursorParser;
 use crate::parsers::{
     build_agent_parser, folder_name_from_path, normalize_path_for_matching, path_eq_for_matching,
     AgentEnvs, AgentParser, ParseError,
@@ -59,6 +60,16 @@ pub(crate) async fn list_all_conversations_core(
             HashMap::new()
         }
     };
+    // Cursor's conversation row is created before the store names a model, and
+    // current stores have no `lastUsedModel`. Fill the blank chip from the
+    // fingerprint still linked in that session, then list. Once a row has a
+    // model this finds nothing and does not open the stores again.
+    if let Err(error) = backfill_cursor_models(conn, emitter).await {
+        tracing::warn!(
+            error = %error,
+            "conversation list: failed to backfill Cursor session models; continuing"
+        );
+    }
     list_all_conversations_core_with_codex_titles(
         conn,
         emitter,
@@ -67,6 +78,103 @@ pub(crate) async fn list_all_conversations_core(
         &codex_titles,
     )
     .await
+}
+
+async fn backfill_cursor_models(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+) -> Result<(), AppCommandError> {
+    let missing = conversation_service::cursor_sessions_missing_model(conn)
+        .await
+        .map_err(AppCommandError::from)?;
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let cursor_env = agent_setting_service::load_agent_env(conn, AgentType::Cursor).await;
+    let found = tokio::task::spawn_blocking(move || {
+        let parser = CursorParser::for_env(&cursor_env);
+        missing
+            .into_iter()
+            .filter_map(|(id, external_id)| {
+                parser
+                    .model_for_session(&external_id)
+                    .map(|model| (id, model))
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|error| {
+        AppCommandError::task_execution_failed("Failed to read Cursor session models")
+            .with_detail(error.to_string())
+    })?;
+    for (id, model) in found {
+        if conversation_service::seed_model_if_empty(conn, id, &model)
+            .await
+            .map_err(AppCommandError::from)?
+        {
+            emit_conversation_upsert(emitter, conn, id).await;
+        }
+    }
+    Ok(())
+}
+
+/// After a Cursor turn, copy the model named in that session's store onto the
+/// conversation row when the row still has none, and broadcast the sidebar
+/// chip. A no-op for every other agent, and for a Cursor row that already
+/// has a model.
+pub(crate) async fn remember_cursor_session_model(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    conversation_id: i32,
+    agent_type: AgentType,
+    external_id: Option<&str>,
+) {
+    if agent_type != AgentType::Cursor {
+        return;
+    }
+    let Some(external_id) = external_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let summary = match conversation_service::get_by_id(conn, conversation_id).await {
+        Ok(summary) => summary,
+        Err(_) => return,
+    };
+    if summary
+        .model
+        .as_deref()
+        .is_some_and(|model| !model.trim().is_empty())
+    {
+        return;
+    }
+    let cursor_env = agent_setting_service::load_agent_env(conn, AgentType::Cursor).await;
+    let session_id = external_id.to_string();
+    let model = match tokio::task::spawn_blocking(move || {
+        CursorParser::for_env(&cursor_env).model_for_session(&session_id)
+    })
+    .await
+    {
+        Ok(model) => model,
+        Err(error) => {
+            tracing::warn!(
+                conversation_id,
+                error = %error,
+                "cursor model chip: failed to read the session store"
+            );
+            return;
+        }
+    };
+    let Some(model) = model else {
+        return;
+    };
+    match conversation_service::seed_model_if_empty(conn, conversation_id, &model).await {
+        Ok(true) => emit_conversation_upsert(emitter, conn, conversation_id).await,
+        Ok(false) => {}
+        Err(error) => tracing::warn!(
+            conversation_id,
+            error = %error,
+            "cursor model chip: failed to store the model"
+        ),
+    }
 }
 
 async fn list_all_conversations_core_with_codex_titles(
