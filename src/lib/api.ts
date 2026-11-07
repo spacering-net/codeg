@@ -12,6 +12,7 @@ import {
   unauthorizedSource,
 } from "./transport/web-auth"
 import { notifyWebUnauthorized } from "./transport/web-connection-store"
+import { randomUUID } from "./utils"
 import { getCurrentEffectiveAppLocale } from "./i18n"
 import {
   DEFAULT_FORGE_COMMENT_PAGE_SIZE,
@@ -5028,14 +5029,64 @@ export async function getFileTree(
 }
 
 /**
- * Flat, gitignore-aware listing of every file/dir under `path`. Ignored
- * directories are pruned during the backend walk (no depth cap), so deeply
- * nested files are reachable while the payload stays small. Used by file search.
+ * Enumerate every non-ignored file/dir under `path`, without a depth cap.
+ * This can return millions of entries; search surfaces use searchWorkspaceFiles
+ * to keep the renderer's payload and retained state bounded.
  */
 export async function listWorkspaceFiles(
   path: string
 ): Promise<WorkspaceFileEntry[]> {
   return getTransport().call("list_workspace_files", { path })
+}
+
+/** Warm a shared, budgeted native index without sending its entries to JS. */
+export async function prepareWorkspaceFileSearch(path: string): Promise<void> {
+  return getTransport().call("prepare_workspace_file_search", { path })
+}
+
+/** Rank across the workspace and transfer only a bounded set of matches. */
+export async function searchWorkspaceFiles(
+  path: string,
+  query: string,
+  options: {
+    limit?: number
+    filesOnly?: boolean
+    refresh?: boolean
+    request?: { consumerId: string; generation: number }
+    signal?: AbortSignal
+  } = {}
+): Promise<WorkspaceFileEntry[]> {
+  const {
+    signal,
+    request = { consumerId: randomUUID(), generation: 0 },
+    ...params
+  } = options
+  if (signal?.aborted) return []
+  const transport = getTransport()
+  const cancel = () => {
+    void transport
+      .call("cancel_workspace_file_search", { request })
+      .catch(() => {})
+  }
+  signal?.addEventListener("abort", cancel, { once: true })
+  try {
+    return await transport.call(
+      "search_workspace_files",
+      {
+        path,
+        query,
+        ...params,
+        request,
+      },
+      {
+        // The backend bounds queue wait + traversal to five minutes. Give both
+        // HTTP transports time to receive that result, including a cold build.
+        timeoutMs: 330_000,
+      }
+    )
+  } finally {
+    signal?.removeEventListener("abort", cancel)
+  }
 }
 
 export async function startWorkspaceStateStream(

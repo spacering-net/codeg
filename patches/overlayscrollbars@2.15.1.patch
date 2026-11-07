@@ -1,0 +1,135 @@
+diff --git a/overlayscrollbars.cjs b/overlayscrollbars.cjs
+index 7268fd59a854208ab38233e920a995bf864ef6f1..19e256594fef0a5a535e81aa2da34b7e2d4c7804 100644
+--- a/overlayscrollbars.cjs
++++ b/overlayscrollbars.cjs
+@@ -62,7 +62,13 @@ const _ = getApi("IntersectionObserver");
+ 
+ const d = getApi("ResizeObserver");
+ 
+-const p = getApi("ScrollTimeline");
++// WebKit retains native allocations when scroll timelines interpolate the
++// container-relative calc() transforms used by scrollbar handles. Use the
++// existing scroll-event fallback in that engine; keep Blink's native path.
++const isWebKit = /AppleWebKit\//.test(n.navigator && n.navigator.userAgent || "") &&
++  !/(?:Chrome|Chromium|Edg|OPR)\//.test(n.navigator && n.navigator.userAgent || "");
++
++const p = isWebKit ? void 0 : getApi("ScrollTimeline");
+ 
+ const isUndefined = t => t === void 0;
+ 
+@@ -1967,7 +1973,7 @@ const createScrollbarsSetupElements = (t, n, o, s) => {
+   const generateScrollbarDOM = t => {
+     const n = t ? "x" : "y";
+     const o = t ? ft : _t;
+-    const e = createDiv(`${at} ${o}`);
++    const e = createDiv(`${at} ${o}${isWebKit ? " os-scrollbar-webkit" : ""}`);
+     const c = createDiv(dt);
+     const r = createDiv(pt);
+     const i = {
+diff --git a/overlayscrollbars.cjs.js b/overlayscrollbars.cjs.js
+index 010b70bd487226ccd01fb6c0d772ab6bb8638c51..1bd9797196a3079563be955c637fa23b530311d7 100644
+--- a/overlayscrollbars.cjs.js
++++ b/overlayscrollbars.cjs.js
+@@ -62,7 +62,13 @@ const _ = getApi("IntersectionObserver");
+ 
+ const d = getApi("ResizeObserver");
+ 
+-const p = getApi("ScrollTimeline");
++// WebKit retains native allocations when scroll timelines interpolate the
++// container-relative calc() transforms used by scrollbar handles. Use the
++// existing scroll-event fallback in that engine; keep Blink's native path.
++const isWebKit = /AppleWebKit\//.test(n.navigator && n.navigator.userAgent || "") &&
++  !/(?:Chrome|Chromium|Edg|OPR)\//.test(n.navigator && n.navigator.userAgent || "");
++
++const p = isWebKit ? void 0 : getApi("ScrollTimeline");
+ 
+ const isUndefined = t => t === void 0;
+ 
+@@ -1967,7 +1973,7 @@ const createScrollbarsSetupElements = (t, n, o, s) => {
+   const generateScrollbarDOM = t => {
+     const n = t ? "x" : "y";
+     const o = t ? ft : _t;
+-    const e = createDiv(`${at} ${o}`);
++    const e = createDiv(`${at} ${o}${isWebKit ? " os-scrollbar-webkit" : ""}`);
+     const c = createDiv(dt);
+     const r = createDiv(pt);
+     const i = {
+diff --git a/overlayscrollbars.esm.js b/overlayscrollbars.esm.js
+index c66166eacc57c3ed6a95f01e1bcc290a58c3d176..e054c67b241249d2bf2059bdc9872b23832e2bf6 100644
+--- a/overlayscrollbars.esm.js
++++ b/overlayscrollbars.esm.js
+@@ -56,7 +56,13 @@ const _ = getApi("IntersectionObserver");
+ 
+ const d = getApi("ResizeObserver");
+ 
+-const p = getApi("ScrollTimeline");
++// WebKit retains native allocations when scroll timelines interpolate the
++// container-relative calc() transforms used by scrollbar handles. Use the
++// existing scroll-event fallback in that engine; keep Blink's native path.
++const isWebKit = /AppleWebKit\//.test(n.navigator && n.navigator.userAgent || "") &&
++  !/(?:Chrome|Chromium|Edg|OPR)\//.test(n.navigator && n.navigator.userAgent || "");
++
++const p = isWebKit ? void 0 : getApi("ScrollTimeline");
+ 
+ const isUndefined = t => t === void 0;
+ 
+@@ -1961,7 +1967,7 @@ const createScrollbarsSetupElements = (t, n, o, s) => {
+   const generateScrollbarDOM = t => {
+     const n = t ? "x" : "y";
+     const o = t ? ft : _t;
+-    const e = createDiv(`${at} ${o}`);
++    const e = createDiv(`${at} ${o}${isWebKit ? " os-scrollbar-webkit" : ""}`);
+     const c = createDiv(dt);
+     const r = createDiv(pt);
+     const i = {
+diff --git a/overlayscrollbars.mjs b/overlayscrollbars.mjs
+index 82dc05b44e92c5125aee59691a00c3babee7d934..dd4e6826e75f48fca6d8e2784ed351873f5ce749 100644
+--- a/overlayscrollbars.mjs
++++ b/overlayscrollbars.mjs
+@@ -56,7 +56,13 @@ const _ = getApi("IntersectionObserver");
+ 
+ const d = getApi("ResizeObserver");
+ 
+-const p = getApi("ScrollTimeline");
++// WebKit retains native allocations when scroll timelines interpolate the
++// container-relative calc() transforms used by scrollbar handles. Use the
++// existing scroll-event fallback in that engine; keep Blink's native path.
++const isWebKit = /AppleWebKit\//.test(n.navigator && n.navigator.userAgent || "") &&
++  !/(?:Chrome|Chromium|Edg|OPR)\//.test(n.navigator && n.navigator.userAgent || "");
++
++const p = isWebKit ? void 0 : getApi("ScrollTimeline");
+ 
+ const isUndefined = t => t === void 0;
+ 
+@@ -1961,7 +1967,7 @@ const createScrollbarsSetupElements = (t, n, o, s) => {
+   const generateScrollbarDOM = t => {
+     const n = t ? "x" : "y";
+     const o = t ? ft : _t;
+-    const e = createDiv(`${at} ${o}`);
++    const e = createDiv(`${at} ${o}${isWebKit ? " os-scrollbar-webkit" : ""}`);
+     const c = createDiv(dt);
+     const r = createDiv(pt);
+     const i = {
+diff --git a/styles/overlayscrollbars.css b/styles/overlayscrollbars.css
+index 9fd60dce428b62713c7b2f216085402cf4ba8f3e..594d1304fc96a2e6b1c397971de457930ebd0c4a 100644
+--- a/styles/overlayscrollbars.css
++++ b/styles/overlayscrollbars.css
+@@ -478,15 +478,15 @@ body > .os-scrollbar {
+   .os-scrollbar-track {
+     container-type: size;
+   }
+-  .os-scrollbar-horizontal .os-scrollbar-handle {
++  .os-scrollbar-horizontal:not(.os-scrollbar-webkit) .os-scrollbar-handle {
+     left: auto;
+     transform: translateX(calc(var(--os-scroll-percent-directional) * 100cqw + var(--os-scroll-percent-directional) * -100%));
+   }
+-  .os-scrollbar-vertical .os-scrollbar-handle {
++  .os-scrollbar-vertical:not(.os-scrollbar-webkit) .os-scrollbar-handle {
+     top: auto;
+     transform: translateY(calc(var(--os-scroll-percent-directional) * 100cqh + var(--os-scroll-percent-directional) * -100%));
+   }
+-  .os-scrollbar-rtl.os-scrollbar-horizontal .os-scrollbar-handle {
++  .os-scrollbar-rtl.os-scrollbar-horizontal:not(.os-scrollbar-webkit) .os-scrollbar-handle {
+     right: auto;
+     left: 0;
+   }

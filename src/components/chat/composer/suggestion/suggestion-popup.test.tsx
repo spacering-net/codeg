@@ -709,10 +709,38 @@ describe("SuggestionPopup with a chosen tab order", () => {
     const spy = vi.fn<ReferenceSearch>(() => groups)
     mountPopup({ search: spy, tabs: ["file", "agent"] })
     await screen.findByText("alpha.md")
-    expect(spy).toHaveBeenCalledWith(state.query, expect.any(AbortSignal), [
-      "file",
-      "agent",
-    ])
+    expect(spy).toHaveBeenCalledWith(
+      state.query,
+      expect.any(AbortSignal),
+      ["file", "agent"],
+      expect.any(Function)
+    )
+  })
+
+  it("shows ready agents while files load and preserves selection when file results arrive", async () => {
+    let finish!: (groups: SuggestionGroup[]) => void
+    const progressive: ReferenceSearch = (_query, _signal, _kinds, update) => {
+      update?.(
+        groups.map((group) =>
+          group.kind === "file" ? { ...group, items: [], loading: true } : group
+        )
+      )
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    }
+    const { ref, onSelect } = mountPopup({
+      search: progressive,
+      tabs: ["agent", "file"],
+    })
+    await screen.findByText("Codex Helper")
+    fireEvent.click(screen.getByRole("tab", { name: /^Files/ }))
+    expect(screen.getByRole("status")).toHaveTextContent("Searching…")
+    fireEvent.click(screen.getByRole("tab", { name: /^Agents/ }))
+    act(() => ref.current?.onKeyDown(key("ArrowDown")))
+    await act(async () => finish(groups))
+    act(() => ref.current?.onKeyDown(key("Enter")))
+    expect(onSelect).toHaveBeenCalledWith(agentRef2, state.range)
   })
 
   it("re-queries when the shown tabs change while it is open", async () => {
@@ -739,11 +767,12 @@ describe("SuggestionPopup with a chosen tab order", () => {
     // keystroke.
     rerender(view(["file", "agent", "session"]))
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(2))
-    expect(spy).toHaveBeenLastCalledWith(state.query, expect.any(AbortSignal), [
-      "file",
-      "agent",
-      "session",
-    ])
+    expect(spy).toHaveBeenLastCalledWith(
+      state.query,
+      expect.any(AbortSignal),
+      ["file", "agent", "session"],
+      expect.any(Function)
+    )
     expect(screen.getAllByRole("tab")).toHaveLength(3)
   })
 

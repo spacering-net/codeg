@@ -207,18 +207,21 @@ export const SuggestionPopup = forwardRef<
   useEffect(() => {
     const abort = new AbortController()
     let active = true
+    let published = false
+    const publish = (groups: SuggestionGroup[]) => {
+      if (!active || abort.signal.aborted) return
+      const kinds = tabOrder.filter(
+        (kind) => !groups.some((group) => group.kind === kind && group.loading)
+      )
+      setResult({ query: state.query, kinds, groups })
+      // A late file result must not reset navigation within a ready group.
+      if (!published) setSelectedIndex(0)
+      published = true
+    }
     const timer = setTimeout(() => {
-      Promise.resolve(search(state.query, abort.signal, tabOrder))
-        .then((groups) => {
-          if (!active || abort.signal.aborted) return
-          setResult({ query: state.query, kinds: tabOrder, groups })
-          setSelectedIndex(0)
-        })
-        .catch(() => {
-          if (!active || abort.signal.aborted) return
-          setResult({ query: state.query, kinds: tabOrder, groups: [] })
-          setSelectedIndex(0)
-        })
+      Promise.resolve(search(state.query, abort.signal, tabOrder, publish))
+        .then(publish)
+        .catch(() => publish([]))
     }, FETCH_DEBOUNCE_MS)
     return () => {
       active = false
