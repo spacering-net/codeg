@@ -1981,6 +1981,7 @@ mod tauri_app {
                 folders::get_file_tree,
                 folders::list_workspace_files,
                 crate::commands::workspace_file_search::search_workspace_files,
+                crate::commands::workspace_file_search::cancel_workspace_file_search,
                 crate::commands::workspace_file_search::prepare_workspace_file_search,
                 folders::read_file_base64,
                 folders::read_workspace_file_base64,

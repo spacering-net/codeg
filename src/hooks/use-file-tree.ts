@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { prepareWorkspaceFileSearch, searchWorkspaceFiles } from "@/lib/api"
 import type { WorkspaceFileEntry } from "@/lib/types"
+import { randomUUID } from "@/lib/utils"
 
 export interface FlatFileEntry {
   name: string
@@ -27,8 +28,8 @@ interface UseFileTreeResult {
   allFiles: FlatFileEntry[]
   loading: boolean
   loaded: boolean
-  /** Discard in-flight results and refresh the native index on the next query. */
-  reset: () => void
+  /** Discard local results; an explicit refresh also invalidates native data. */
+  reset: (refreshIndex?: boolean) => void
 }
 
 /**
@@ -48,6 +49,7 @@ export function useFileTree({
   const [revision, setRevision] = useState(0)
   const generation = useRef(0)
   const refresh = useRef(false)
+  const consumer = useRef<string | undefined>(undefined)
 
   useEffect(() => {
     if (enabled && folderPath) {
@@ -64,6 +66,7 @@ export function useFileTree({
       return
     }
     let canceled = false
+    const abort = new AbortController()
     setLoading(true)
 
     async function load() {
@@ -71,7 +74,16 @@ export function useFileTree({
         const files: WorkspaceFileEntry[] = await searchWorkspaceFiles(
           folderPath!,
           query,
-          { limit, filesOnly, refresh: refresh.current }
+          {
+            limit,
+            filesOnly,
+            refresh: refresh.current,
+            request: {
+              consumerId: (consumer.current ??= randomUUID()),
+              generation: current,
+            },
+            signal: abort.signal,
+          }
         )
         if (canceled || generation.current !== current) return
         if (query.trim()) refresh.current = false
@@ -97,14 +109,15 @@ export function useFileTree({
     const timer = setTimeout(() => void load(), query.trim() ? 150 : 0)
     return () => {
       canceled = true
+      abort.abort()
       clearTimeout(timer)
     }
   }, [enabled, folderPath, query, limit, filesOnly, revision])
 
-  const reset = useCallback(() => {
+  const reset = useCallback((refreshIndex = false) => {
     loadedForPathRef.current = null
     generation.current += 1
-    refresh.current = true
+    refresh.current ||= refreshIndex
     setAllFiles([])
     setRevision((value) => value + 1)
   }, [])

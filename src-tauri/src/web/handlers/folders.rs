@@ -418,6 +418,7 @@ pub struct SearchWorkspaceFilesParams {
     pub limit: Option<usize>,
     pub files_only: Option<bool>,
     pub refresh: Option<bool>,
+    pub request: Option<crate::commands::workspace_file_search::SearchRequest>,
 }
 
 pub async fn search_workspace_files(
@@ -430,9 +431,22 @@ pub async fn search_workspace_files(
             params.limit,
             params.files_only,
             params.refresh,
+            params.request,
         )
         .await?,
     ))
+}
+
+#[derive(Deserialize)]
+pub struct CancelWorkspaceFileSearchParams {
+    pub request: crate::commands::workspace_file_search::SearchRequest,
+}
+
+pub async fn cancel_workspace_file_search(
+    Json(params): Json<CancelWorkspaceFileSearchParams>,
+) -> Result<Json<()>, AppCommandError> {
+    crate::commands::workspace_file_search::cancel_workspace_file_search(params.request).await?;
+    Ok(Json(()))
 }
 
 pub async fn prepare_workspace_file_search(

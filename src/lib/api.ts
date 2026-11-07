@@ -12,6 +12,7 @@ import {
   unauthorizedSource,
 } from "./transport/web-auth"
 import { notifyWebUnauthorized } from "./transport/web-connection-store"
+import { randomUUID } from "./utils"
 import { getCurrentEffectiveAppLocale } from "./i18n"
 import {
   DEFAULT_FORGE_COMMENT_PAGE_SIZE,
@@ -5040,13 +5041,45 @@ export async function prepareWorkspaceFileSearch(path: string): Promise<void> {
 export async function searchWorkspaceFiles(
   path: string,
   query: string,
-  options: { limit?: number; filesOnly?: boolean; refresh?: boolean } = {}
+  options: {
+    limit?: number
+    filesOnly?: boolean
+    refresh?: boolean
+    request?: { consumerId: string; generation: number }
+    signal?: AbortSignal
+  } = {}
 ): Promise<WorkspaceFileEntry[]> {
-  return getTransport().call("search_workspace_files", {
-    path,
-    query,
-    ...options,
-  })
+  const {
+    signal,
+    request = { consumerId: randomUUID(), generation: 0 },
+    ...params
+  } = options
+  if (signal?.aborted) return []
+  const transport = getTransport()
+  const cancel = () => {
+    void transport
+      .call("cancel_workspace_file_search", { request })
+      .catch(() => {})
+  }
+  signal?.addEventListener("abort", cancel, { once: true })
+  try {
+    return await transport.call(
+      "search_workspace_files",
+      {
+        path,
+        query,
+        ...params,
+        request,
+      },
+      {
+        // The backend bounds queue wait + traversal to five minutes. Give both
+        // HTTP transports time to receive that result, including a cold build.
+        timeoutMs: 330_000,
+      }
+    )
+  } finally {
+    signal?.removeEventListener("abort", cancel)
+  }
 }
 
 export async function startWorkspaceStateStream(

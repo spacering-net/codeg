@@ -477,7 +477,14 @@ describe("useReferenceSearch", () => {
     expect(mocks.searchWorkspaceFiles).toHaveBeenCalledExactlyOnceWith(
       "/repo",
       "a",
-      { limit: 51 }
+      {
+        limit: 51,
+        request: {
+          consumerId: expect.any(String),
+          generation: expect.any(Number),
+        },
+        signal: expect.any(AbortSignal),
+      }
     )
   })
 
@@ -765,5 +772,70 @@ describe("useReferenceSearch", () => {
     expect(mocks.listAllConversations).toHaveBeenCalledTimes(2)
     // …which succeeds and populates the group.
     expect(itemsOf(second, "session")).toHaveLength(1)
+  })
+
+  it("publishes ready groups while file discovery is pending and merges each source independently", async () => {
+    mocks.agents = [makeAgent("codex")]
+    useAssistantsStore.getState().merge([makeAssistant(3, "Reviewer")])
+    let filesReady!: (
+      files: { name: string; path: string; kind: "file" }[]
+    ) => void
+    mocks.searchWorkspaceFiles.mockReturnValue(
+      new Promise((resolve) => {
+        filesReady = resolve
+      })
+    )
+    let sessionsReady!: (sessions: DbConversationSummary[]) => void
+    mocks.listAllConversations.mockReturnValue(
+      new Promise((resolve) => {
+        sessionsReady = resolve
+      })
+    )
+    const { result } = renderHook(() =>
+      useReferenceSearch({ defaultPath: "/repo" })
+    )
+    const update = vi.fn()
+    const pending = result.current("", undefined, undefined, update)
+    const ready = update.mock.lastCall![0] as SuggestionGroup[]
+    expect(itemsOf(ready, "agent")).toHaveLength(1)
+    expect(itemsOf(ready, "assistant")).toHaveLength(1)
+    expect(ready.find((g) => g.kind === "file")?.loading).toBe(true)
+    sessionsReady([makeConversation(7, "Session")])
+    await vi.waitFor(() => {
+      expect(itemsOf(update.mock.lastCall![0], "session")).toHaveLength(1)
+    })
+    expect(
+      update.mock.lastCall![0].find((g: SuggestionGroup) => g.kind === "file")
+        ?.loading
+    ).toBe(true)
+    filesReady([{ name: "a.ts", path: "a.ts", kind: "file" }])
+    expect(itemsOf(await pending, "file")).toHaveLength(1)
+    expect(itemsOf(update.mock.lastCall![0], "file")).toHaveLength(1)
+  })
+
+  it("cancels superseded file searches and suppresses stale partial updates", async () => {
+    let resolveOld!: (files: []) => void
+    mocks.searchWorkspaceFiles.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveOld = resolve
+      })
+    )
+    const { result, unmount } = renderHook(() =>
+      useReferenceSearch({ defaultPath: "/repo" })
+    )
+    const oldUpdate = vi.fn()
+    const old = result.current("a", undefined, ["file"], oldUpdate)
+    const first = mocks.searchWorkspaceFiles.mock.calls[0][2]
+    const newer = result.current("ab", undefined, ["file"])
+    const second = mocks.searchWorkspaceFiles.mock.calls[1][2]
+    expect(first.signal.aborted).toBe(true)
+    expect(second.request.consumerId).toBe(first.request.consumerId)
+    expect(second.request.generation).toBeGreaterThan(first.request.generation)
+    await newer
+    oldUpdate.mockClear()
+    resolveOld([])
+    expect(await old).toEqual([])
+    expect(oldUpdate).not.toHaveBeenCalled()
+    unmount()
   })
 })

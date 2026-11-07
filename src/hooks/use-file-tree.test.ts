@@ -57,6 +57,11 @@ describe("bounded workspace file search", () => {
       limit: 100,
       filesOnly: false,
       refresh: false,
+      request: {
+        consumerId: expect.any(String),
+        generation: expect.any(Number),
+      },
+      signal: expect.any(AbortSignal),
     })
   })
 
@@ -97,7 +102,7 @@ describe("bounded workspace file search", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(150)
     })
-    act(() => result.current.reset())
+    act(() => result.current.reset(true))
     await act(async () => {
       await vi.advanceTimersByTimeAsync(150)
     })
@@ -112,5 +117,46 @@ describe("bounded workspace file search", () => {
     expect(result.current.allFiles.map((f) => f.relativePath)).toEqual([
       "fresh.ts",
     ])
+  })
+
+  it("closing and reopening clears local results without invalidating a warm index", async () => {
+    const { result, rerender } = renderHook(
+      (enabled: boolean) =>
+        useFileTree({ folderPath: "/repo", enabled, query: "ts" }),
+      { initialProps: false }
+    )
+    act(() => result.current.reset())
+    rerender(true)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150)
+    })
+    expect(api.search).toHaveBeenLastCalledWith(
+      "/repo",
+      "ts",
+      expect.objectContaining({ refresh: false })
+    )
+  })
+
+  it("cancels backend work for the old query and keeps a per-picker consumer", async () => {
+    api.search.mockReturnValue(new Promise(() => {}))
+    const { rerender, unmount } = renderHook(
+      (query: string) =>
+        useFileTree({ folderPath: "/repo", enabled: true, query }),
+      { initialProps: "a" }
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150)
+    })
+    const first = api.search.mock.calls[0][2]
+    rerender("ab")
+    expect(first.signal.aborted).toBe(true)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150)
+    })
+    const second = api.search.mock.calls[1][2]
+    expect(second.request.consumerId).toBe(first.request.consumerId)
+    expect(second.request.generation).toBeGreaterThan(first.request.generation)
+    unmount()
+    expect(second.signal.aborted).toBe(true)
   })
 })
