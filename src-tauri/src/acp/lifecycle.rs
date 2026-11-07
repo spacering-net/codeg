@@ -333,7 +333,7 @@ pub(crate) async fn handle_event(
             else {
                 return Ok(());
             };
-            let (conversation_id, last_text, claimed) = {
+            let (conversation_id, agent_type, external_id, last_text, claimed) = {
                 let mut snap = state_arc.write().await;
                 // Re-entrant for this worker: a retry of this same envelope
                 // claims again and goes on. Only a CLI run's fallback that
@@ -341,6 +341,8 @@ pub(crate) async fn handle_event(
                 let claimed = snap.claim_turn_status(envelope.seq, TurnStatusWriter::Lifecycle);
                 (
                     snap.conversation_id,
+                    snap.agent_type,
+                    snap.external_id.clone(),
                     snap.last_assistant_text.clone(),
                     claimed,
                 )
@@ -351,9 +353,25 @@ pub(crate) async fn handle_event(
             let Some(cid) = conversation_id else {
                 return Ok(());
             };
+            // The turn status goes out FIRST: it carries only the id and the
+            // status, and a Cursor row with no model would otherwise wait on
+            // database reads plus a store walk of up to 4,000 blobs before the
+            // client learns the turn completed. The model arrives through its
+            // own upsert right after.
             if claimed {
                 write_turn_status(db_conn, &state_arc, &emitter, cid, stop_reason).await?;
             }
+            // Cursor does not put the model on the conversation row. The
+            // store has it once the turn is written; copy it onto the chip so
+            // the sidebar letter appears without reopening the conversation.
+            crate::commands::conversations::remember_cursor_session_model(
+                db_conn,
+                &emitter,
+                cid,
+                agent_type,
+                external_id.as_deref(),
+            )
+            .await;
 
             // If this conversation was spawned by a delegation, resolve the
             // pending broker call. The broker maps the outcome onto the
