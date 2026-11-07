@@ -1104,6 +1104,13 @@ export const STATUS_COLORS: Record<ConversationStatus, string> = {
   cancelled: "bg-red-500",
 }
 
+/** Dot colour for a `pending_review` conversation the user has not opened yet.
+ *  NOT a `ConversationStatus` member — it is a view-only overlay on top of one
+ *  (see `ConversationStatusDot`'s `unread` prop), so it deliberately lives
+ *  outside `STATUS_COLORS`' key type. Purple is the only hue left that stays
+ *  distinguishable from all four statuses at the 8px `md` dot size. */
+export const UNREAD_COLOR = "bg-purple-500"
+
 export const AGENT_DISPLAY_ORDER: BuiltinAgentType[] = [
   "codex",
   "claude_code",
