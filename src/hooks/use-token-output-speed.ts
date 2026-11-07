@@ -6,15 +6,12 @@ import type { LiveMessage } from "@/contexts/acp-connections-context"
 import { TokenCountAccumulator, TokenSpeedTracker } from "@/lib/token-speed"
 
 /**
- * Sample period. One timer does all three jobs the reading needs — take a
- * measurement, repaint, and decay through a silent gap — so the gauge ticks at
- * a steady 2 Hz whether or not the wire is busy. Without a clock of its own the
- * reading would freeze rather than fall through a quiet long-running tool, a
- * retry backoff, or a permission / question prompt blocking the turn.
+ * Sample period. One timer runs at a steady 2 Hz to sample incremental token
+ * production and refresh the rolling average throughput over the last 10 active
+ * output samples (inspired by Hermes's status-bar token velocity).
  *
- * The connection dispatches far more often than this (once per wire envelope),
- * but the smoother is time-constant based rather than per-event, so a coarser
- * regular sample reads the same rate for a fraction of the work.
+ * During tool calls, silent pauses, or when text generation completes before the
+ * turn finishes, the rolling speed is preserved rather than decaying to 0.
  */
 const SAMPLE_MS = 500
 /** Clamp, so a nonsense spike can never stretch the row it renders in. */
@@ -25,12 +22,13 @@ const MAX_TPS = 999.9
  * from the message's `text` + `thinking` blocks — root agent only, since
  * sub-agent output belongs to its own capsule rather than to this turn's rate.
  *
+ * Modeled after Hermes's rolling history (`deque(maxlen=10)`), this computes
+ * the true throughput (`sum(tokens) / sum(latency)`) across up to the last 10
+ * active output samples.
+ *
  * `null` means "nothing to show": the turn has produced no output yet, or the
  * reading doesn't cover a meaningful slice of wall clock yet. The caller is
  * expected to mount this for the life of one turn and unmount when it ends.
- *
- * TODO: root-agent only; give sub-agent cards their own reading if cross-agent
- * delegation speed becomes something users ask about.
  */
 export function useTokenOutputSpeed(message: LiveMessage): number | null {
   const [tps, setTps] = useState<number | null>(null)
