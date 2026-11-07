@@ -22,6 +22,7 @@ import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { MobileTabSwitcher } from "@/components/tabs/mobile-tab-switcher"
 import { WorkbenchRouteChromeActions } from "@/components/workbench/workbench-content"
 import { MAC_TRAFFIC_LIGHT_INSET } from "@/lib/window-chrome"
 import { cn } from "@/lib/utils"
@@ -37,9 +38,10 @@ import { WindowControls } from "./window-controls"
  * / terminal are `Drawer` overlays that need a compact bar to summon them.
  *
  * It mirrors the desktop chrome directly (rather than via `AppTitleBar`): the
- * left holds the sidebar toggle + a new-conversation shortcut; the right holds
- * the same terminal / aux / settings cluster as `RightEdgeChrome` (active
- * `bg-accent`, same disabled predicates). The empty middle is a full-height
+ * left holds the sidebar toggle, search, the open-tabs switcher and a
+ * new-conversation shortcut; the right holds the same terminal / aux / settings
+ * cluster as `RightEdgeChrome` (active `bg-accent`, same disabled predicates).
+ * The empty middle is a full-height
  * `data-tauri-drag-region` filler so the window drags by it — plus a macOS
  * traffic-light inset and the Windows/Linux caption buttons (`WindowControls`
  * self-nulls elsewhere), exactly like the desktop edges.
@@ -87,9 +89,12 @@ export function FolderTitleBar() {
           style={{ width: MAC_TRAFFIC_LIGHT_INSET }}
         />
       )}
-      {/* Left cluster: sidebar toggle + search + new conversation. Search sits
-          directly after the toggle, mirroring the desktop `LeftEdgeChrome`
-          order (toggle → search) so the two bars read the same. */}
+      {/* Left cluster: sidebar toggle + search + open tabs + new conversation.
+          Search sits directly after the toggle, mirroring the desktop
+          `LeftEdgeChrome` order (toggle → search) so the two bars read the
+          same. The desktop tab strip is absent on this path, so the switcher is
+          the only direct entry to a background tab that the conversation list
+          no longer shows. */}
       <div className="flex shrink-0 items-center gap-1 pl-2">
         <Button
           variant="ghost"
@@ -116,6 +121,7 @@ export function FolderTitleBar() {
         >
           <Search className="h-4 w-4" />
         </Button>
+        <MobileTabSwitcher />
         <Button
           variant="ghost"
           size="icon"
