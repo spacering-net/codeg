@@ -211,6 +211,10 @@ pub async fn update_title(
 /// sets `title_locked = true`) that lands between a would-be read and the write
 /// can never be clobbered, because the lock predicate is re-evaluated at write
 /// time by the database. A non-existent row simply matches nothing (`false`).
+///
+/// A title with no Chinese does not replace one that already has Chinese.
+/// Cursor and Grok publish an English summary after the first prompt; that
+/// summary must not become the only name of a chat the user opened in Chinese.
 pub async fn refresh_auto_title(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -220,6 +224,16 @@ pub async fn refresh_auto_title(
     let title = title.trim();
     if title.is_empty() {
         return Ok(false);
+    }
+    if !title_has_cjk(title) {
+        if let Some(row) = conversation::Entity::find_by_id(conversation_id)
+            .one(conn)
+            .await?
+        {
+            if row.title.as_deref().is_some_and(title_has_cjk) {
+                return Ok(false);
+            }
+        }
     }
     let res = conversation::Entity::update_many()
         .col_expr(conversation::Column::Title, Expr::value(title))
@@ -265,6 +279,49 @@ pub async fn seed_auto_title_if_empty(
         .exec(conn)
         .await?;
     Ok(res.rows_affected > 0)
+}
+
+/// True when `title` contains a Chinese character (CJK Unified Ideographs,
+/// including Extension A). Used to keep a chat recognizable from the words
+/// the user actually typed.
+pub(crate) fn title_has_cjk(title: &str) -> bool {
+    title.chars().any(|c| {
+        matches!(c, '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}')
+    })
+}
+
+/// Name a chat from the prompt the user just sent.
+///
+/// An empty row takes the prompt. A Chinese prompt also replaces a stored
+/// title that has no Chinese, so an English agent summary that landed first
+/// does not stay as the name. A title that already contains Chinese is left
+/// alone: a later message must not rename the chat. Locked and deleted rows
+/// are never touched. Does not bump `updated_at`.
+pub async fn adopt_prompt_title(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    title: String,
+) -> Result<bool, DbError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Ok(false);
+    }
+    if !title_has_cjk(title) {
+        return seed_auto_title_if_empty(conn, conversation_id, title.to_string()).await;
+    }
+    let Some(row) = conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await?
+    else {
+        return Ok(false);
+    };
+    if row.title_locked || row.deleted_at.is_some() {
+        return Ok(false);
+    }
+    if row.title.as_deref().is_some_and(title_has_cjk) {
+        return Ok(false);
+    }
+    refresh_auto_title(conn, conversation_id, title.to_string()).await
 }
 
 /// Write the session's `model` ONLY when the row still has none. The sibling
@@ -2557,6 +2614,65 @@ mod tests {
             !summary.title_locked,
             "auto refresh must NOT lock — the title stays eligible for future refreshes"
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_auto_title_keeps_chinese_over_an_english_agent_summary() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-title-cjk").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Cursor,
+            Some("审品门禁批准卡住".into()),
+            None,
+        )
+        .await
+        .expect("create");
+
+        let wrote = refresh_auto_title(&db.conn, row.id, "Login Issue".into())
+            .await
+            .expect("auto");
+        assert!(!wrote, "an English agent title must not replace Chinese");
+
+        let summary = get_by_id(&db.conn, row.id).await.expect("get");
+        assert_eq!(summary.title.as_deref(), Some("审品门禁批准卡住"));
+
+        let replaced = refresh_auto_title(&db.conn, row.id, "审品逻辑优化".into())
+            .await
+            .expect("chinese refresh");
+        assert!(replaced, "a later Chinese title may still refine the name");
+        let summary = get_by_id(&db.conn, row.id).await.expect("get");
+        assert_eq!(summary.title.as_deref(), Some("审品逻辑优化"));
+    }
+
+    #[tokio::test]
+    async fn adopt_prompt_title_replaces_english_with_the_chinese_prompt() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-title-adopt").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Cursor,
+            Some("Login Issue".into()),
+            None,
+        )
+        .await
+        .expect("create");
+
+        let wrote = adopt_prompt_title(&db.conn, row.id, "审品门禁批准卡住".into())
+            .await
+            .expect("adopt");
+        assert!(wrote, "the Chinese prompt must replace the English summary");
+        let summary = get_by_id(&db.conn, row.id).await.expect("get");
+        assert_eq!(summary.title.as_deref(), Some("审品门禁批准卡住"));
+
+        let again = adopt_prompt_title(&db.conn, row.id, "下一条完全不同的话".into())
+            .await
+            .expect("second");
+        assert!(!again, "a later Chinese message must not rename the chat");
+        let summary = get_by_id(&db.conn, row.id).await.expect("get");
+        assert_eq!(summary.title.as_deref(), Some("审品门禁批准卡住"));
     }
 
     #[tokio::test]

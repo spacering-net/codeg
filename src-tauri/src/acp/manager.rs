@@ -1758,10 +1758,11 @@ impl ConnectionManager {
         } else {
             None
         };
-        // Seed an unlocked title from the first prompt so the sidebar is not
-        // "Untitled" while the agent is still working. Native ACP titles
-        // (session_info_update) replace this later via refresh_auto_title.
-        // Delegation children are already seeded at row create.
+        // Seed an unlocked title from the prompt so the sidebar is not
+        // "Untitled" while the agent is still working. A Chinese prompt is
+        // kept even after the agent publishes an English summary — see
+        // `adopt_prompt_title`. Delegation children are already seeded at
+        // row create.
         let first_prompt_title = if delegation.is_none() {
             delegation_child_title_seed(&blocks)
         } else {
@@ -1832,8 +1833,7 @@ impl ConnectionManager {
                 if let (Some(cid), Some(title)) =
                     (conversation_id_for_status, first_prompt_title)
                 {
-                    match conversation_service::seed_auto_title_if_empty(&db.conn, cid, title)
-                        .await
+                    match conversation_service::adopt_prompt_title(&db.conn, cid, title).await
                     {
                         Ok(true) => {
                             crate::commands::conversations::emit_conversation_upsert(
