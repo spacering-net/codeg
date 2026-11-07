@@ -3517,6 +3517,77 @@ async fn admit_permission(
     reply: PermissionReply,
     card: QueuedPermission,
 ) {
+    // Auto-approve: answer straight away instead of raising a card, for
+    // connections a codeg-driven launch marked with `CODEG_AUTO_APPROVE=1`.
+    // That env var is inherited by every ACP child codeg spawns, so a
+    // delegated sub-agent can never park on a card nobody is looking at.
+    //
+    // The motivating case is `deepseek-acp` 0.9.0: its ACP bridge has no
+    // approval MODE at all (`set_mode` / `availableModes` appear nowhere in
+    // the package), and the only options it ever offers are allow-once and
+    // reject-once (hard-coded in its `approval/request` handler). A write
+    // tool call therefore parked forever with its parent delegation waiting
+    // on it — twice for over 8 hours in 2026-11.
+    //
+    // Deliberately NOT gated on an agent type: the flag is the whole policy.
+    // `allow_once` only — never `allow_always`, which would write a standing
+    // rule into the user's own agent settings (see
+    // [`PermissionOptionInfo::allow_once_in`]). A request offering no such
+    // option falls through to the card exactly as before.
+    if crate::acp::auto_approve_enabled() {
+        if let Some(option_id) =
+            PermissionOptionInfo::allow_once_in(&card.options).map(|o| o.option_id.clone())
+        {
+            let scope = permission_log_scope(state).await;
+            tracing::info!(
+                "[ACP] permission {} auto-approved {scope} (option={option_id}, CODEG_AUTO_APPROVE)",
+                card.request_id
+            );
+            let tool_call_id = crate::acp::session_state::extract_tool_call_id(&card.tool_call);
+            let kind = PermissionOptionInfo::allow_once_in(&card.options)
+                .map(|o| o.kind.clone())
+                .unwrap_or_default();
+            let name = PermissionOptionInfo::allow_once_in(&card.options)
+                .map(|o| o.name.clone())
+                .unwrap_or_default();
+            // Answer the way a user's click does — `respond_selected` is the
+            // same responder tail a card runs — but without parking the reply
+            // in the queue first: nothing will ever promote or withdraw it.
+            match reply {
+                PermissionReply::Acp(responder) => {
+                    let outcome = RequestPermissionOutcome::Selected(
+                        SelectedPermissionOutcome::new(option_id),
+                    );
+                    let _ = responder.respond(RequestPermissionResponse::new(outcome));
+                }
+                PermissionReply::CodexElicitation {
+                    responder,
+                    approval,
+                } => {
+                    let response =
+                        crate::acp::question::build_elicitation_approval_response(&approval, &option_id);
+                    let _ = responder.respond(serde_json::to_value(response).unwrap_or_default());
+                }
+            }
+            if !tool_call_id.is_empty() {
+                emit_with_state(
+                    state,
+                    emitter,
+                    AcpEvent::ToolApproval {
+                        approval: ToolApprovalInfo {
+                            tool_call_id,
+                            option_kind: kind,
+                            option_name: name,
+                            origin: crate::acp::AUTO_APPROVE_ORIGIN.to_string(),
+                            decided_at: chrono::Utc::now(),
+                        },
+                    },
+                )
+                .await;
+            }
+            return;
+        }
+    }
     let cancellation = reply.cancellation();
     let (settled_tx, settled_rx) = oneshot::channel();
     let request_id = card.request_id.clone();
