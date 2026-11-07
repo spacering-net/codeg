@@ -142,7 +142,10 @@ describe("ComposerContextUsage cache hit rate", () => {
 })
 
 /** Render the indicator for a session whose stats are supplied wholesale. */
-function renderStats(stats: SessionStats | null) {
+function renderStats(
+  stats: SessionStats | null,
+  part?: "all" | "context" | "tokens"
+) {
   const tabs: TabSlice = {
     tabs: [{ id: "tab-1", kind: "conversation", conversationId: 7 }],
   }
@@ -155,7 +158,7 @@ function renderStats(stats: SessionStats | null) {
   )
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <ComposerContextUsage tabId="tab-1" />
+      <ComposerContextUsage tabId="tab-1" part={part} />
     </NextIntlClientProvider>
   )
 }
@@ -237,5 +240,50 @@ describe("ComposerContextUsage zeroed counters", () => {
     expect(valueFor(copy.usedMax)).toBe("2.8K / 180K")
     expect(valueFor(copy.input)).toBe("2.8K")
     expect(valueFor(copy.total)).toBe("2.8K")
+  })
+})
+
+describe("ComposerContextUsage split parts", () => {
+  const stats = {
+    total_usage: usage({
+      input_tokens: 700_959,
+      output_tokens: 66_593,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 19_890_944,
+    }),
+    total_tokens: 20_658_496,
+    total_duration_ms: 0,
+    context_window_used_tokens: 10_000,
+    context_window_max_tokens: 200_000,
+    context_window_usage_percent: 5,
+  } as SessionStats
+
+  it("tokens part: compact total on the trigger, cache hit and breakdown in the popover", async () => {
+    renderStats(stats, "tokens")
+    const trigger = screen.getByRole("button", { name: copy.tokenUsage })
+    expect(trigger).toHaveTextContent("20.7M")
+    await userEvent.click(trigger)
+    expect(screen.getByText("20,658,496")).toBeInTheDocument()
+    expect(screen.getByText(copy.cacheHit)).toBeInTheDocument()
+    expect(screen.getByText("19,890,944")).toBeInTheDocument()
+    expect(screen.queryByText(copy.contextWindow)).toBeNull()
+  })
+
+  it("context part: ring and occupancy only, no token breakdown", async () => {
+    renderStats(stats, "context")
+    await userEvent.click(screen.getByRole("button"))
+    expect(screen.getByText(copy.contextWindow)).toBeInTheDocument()
+    expect(screen.getByText(copy.usedMax)).toBeInTheDocument()
+    expect(screen.queryByText(copy.cacheHit)).toBeNull()
+    expect(screen.queryByText(copy.tokenUsage)).toBeNull()
+  })
+
+  it("each part renders nothing when its own data is missing", () => {
+    const noContext = { ...stats } as SessionStats
+    delete (noContext as Partial<SessionStats>).context_window_used_tokens
+    delete (noContext as Partial<SessionStats>).context_window_max_tokens
+    delete (noContext as Partial<SessionStats>).context_window_usage_percent
+    const { container } = renderStats(noContext, "context")
+    expect(container).toBeEmptyDOMElement()
   })
 })
