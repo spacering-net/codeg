@@ -56,6 +56,7 @@ function probe(userAgent: string, supported = true) {
               native: OverlayScrollbars.env().scrollTimeline,
               constructors, animations,
               handle: instance.elements().scrollbarVertical.handle instanceof window.HTMLElement,
+              webkitClass: instance.elements().scrollbarVertical.scrollbar.classList.contains("os-scrollbar-webkit"),
             }
             instance.destroy()
             dom.window.close()
@@ -72,6 +73,7 @@ function probe(userAgent: string, supported = true) {
         constructors: number
         animations: number
         handle: boolean
+        webkitClass: boolean
       }
   )
 }
@@ -94,6 +96,7 @@ describe("OverlayScrollbars native memory workaround", () => {
         constructors: 0,
         animations: 0,
         handle: true,
+        webkitClass: true,
       })
     }
   })
@@ -109,6 +112,7 @@ describe("OverlayScrollbars native memory workaround", () => {
       expect(result.constructors).toBeGreaterThan(0)
       expect(result.animations).toBeGreaterThan(0)
       expect(result.handle).toBe(true)
+      expect(result.webkitClass).toBe(false)
     }
   })
 
@@ -118,6 +122,7 @@ describe("OverlayScrollbars native memory workaround", () => {
       expect(result.constructors).toBe(0)
       expect(result.animations).toBe(0)
       expect(result.handle).toBe(true)
+      expect(result.webkitClass).toBe(true)
     }
   })
 })

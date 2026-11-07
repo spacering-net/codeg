@@ -9,7 +9,7 @@ overrides:
   ansi-to-react>linkify-it: ^5.0.2
 
 patchedDependencies:
-  overlayscrollbars@2.15.1: 9fa1e5027e3db465a4f6c2aae27adefc2159774da9f2e4071128cc3a4b05d762
+  overlayscrollbars@2.15.1: d31b0912d157c6838f7cea20573a5917730580b13fceaa2c7c53b4856f605328
 
 importers:
 
@@ -170,10 +170,10 @@ importers:
         version: 0.4.6(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       overlayscrollbars:
         specifier: ^2.15.1
-        version: 2.15.1(patch_hash=9fa1e5027e3db465a4f6c2aae27adefc2159774da9f2e4071128cc3a4b05d762)
+        version: 2.15.1(patch_hash=d31b0912d157c6838f7cea20573a5917730580b13fceaa2c7c53b4856f605328)
       overlayscrollbars-react:
         specifier: ^0.5.6
-        version: 0.5.6(overlayscrollbars@2.15.1(patch_hash=9fa1e5027e3db465a4f6c2aae27adefc2159774da9f2e4071128cc3a4b05d762))(react@19.2.4)
+        version: 0.5.6(overlayscrollbars@2.15.1(patch_hash=d31b0912d157c6838f7cea20573a5917730580b13fceaa2c7c53b4856f605328))(react@19.2.4)
       pdfjs-dist:
         specifier: 6.4.299
         version: 6.4.299
@@ -13028,12 +13028,12 @@ snapshots:
 
   outvariant@1.4.3: {}
 
-  overlayscrollbars-react@0.5.6(overlayscrollbars@2.15.1(patch_hash=9fa1e5027e3db465a4f6c2aae27adefc2159774da9f2e4071128cc3a4b05d762))(react@19.2.4):
+  overlayscrollbars-react@0.5.6(overlayscrollbars@2.15.1(patch_hash=d31b0912d157c6838f7cea20573a5917730580b13fceaa2c7c53b4856f605328))(react@19.2.4):
     dependencies:
-      overlayscrollbars: 2.15.1(patch_hash=9fa1e5027e3db465a4f6c2aae27adefc2159774da9f2e4071128cc3a4b05d762)
+      overlayscrollbars: 2.15.1(patch_hash=d31b0912d157c6838f7cea20573a5917730580b13fceaa2c7c53b4856f605328)
       react: 19.2.4
 
-  overlayscrollbars@2.15.1(patch_hash=9fa1e5027e3db465a4f6c2aae27adefc2159774da9f2e4071128cc3a4b05d762): {}
+  overlayscrollbars@2.15.1(patch_hash=d31b0912d157c6838f7cea20573a5917730580b13fceaa2c7c53b4856f605328): {}
 
   own-keys@1.0.1:
     dependencies:
