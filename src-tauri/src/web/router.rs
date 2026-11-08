@@ -1702,6 +1702,48 @@ pub fn build_router_with_proxy_auth(
             "/list_provider_models",
             post(handlers::model_provider::list_provider_models),
         )
+        // File-based model provider settings page (`model_provider_*` Tauri
+        // commands mirrored by `handlers::model_provider_file`).
+        .route(
+            "/model_provider_list",
+            post(handlers::model_provider_file::list_model_provider_records),
+        )
+        .route(
+            "/model_provider_builtin_list",
+            post(handlers::model_provider_file::list_builtin_model_providers),
+        )
+        .route(
+            "/model_provider_create",
+            post(handlers::model_provider_file::create_model_provider),
+        )
+        .route(
+            "/model_provider_update",
+            post(handlers::model_provider_file::update_model_provider),
+        )
+        .route(
+            "/model_provider_delete",
+            post(handlers::model_provider_file::delete_model_provider),
+        )
+        .route(
+            "/model_provider_set_enabled",
+            post(handlers::model_provider_file::set_model_provider_enabled),
+        )
+        .route(
+            "/model_provider_reorder",
+            post(handlers::model_provider_file::reorder_model_providers),
+        )
+        .route(
+            "/model_provider_clone_builtin",
+            post(handlers::model_provider_file::clone_builtin_model_provider),
+        )
+        .route(
+            "/model_provider_probe",
+            post(handlers::model_provider_file::probe_model_provider_models),
+        )
+        .route(
+            "/model_provider_test",
+            post(handlers::model_provider_file::test_model_provider_model),
+        )
         // ─── Quick Messages ───
         .route(
             "/quick_messages_list",
