@@ -116,6 +116,9 @@ export interface SnapshotPatch {
    *  `seedDelegationsFromSnapshot`); the reducer does not store this on
    *  ConnectionState. `[]` when the server omitted the field. */
   activeDelegations: ActiveDelegationState[]
+  /** Child connection ids of every running codeg delegation — the parent's
+   *  busy signal (`ConnectionState.delegatedChildren`). `[]` when absent. */
+  delegatedChildren: string[]
 }
 
 const DEFAULT_PROMPT_CAPS: PromptCapabilitiesInfo = {
@@ -187,6 +190,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     lastErrorLevel: routeAcpError(lastErrorCode).level,
     eventSeq: wire.event_seq,
     activeDelegations: wire.active_delegations ?? [],
+    delegatedChildren: wire.delegated_children ?? [],
   }
 }
 

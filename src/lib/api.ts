@@ -48,6 +48,8 @@ import type {
   ForgeIdentity,
   ForgeIssueList,
   ForgeIssueRow,
+  ForgeIssuesCreateResult,
+  ForgeIssuesTaskDraftInput,
   ForgeLabelList,
   ForgeMergeMethod,
   ForgeMergeOptions,
@@ -4359,7 +4361,11 @@ export async function workTaskDeliverPr(
   prTitle: string | null,
   draft: boolean,
   deleteWorktree: boolean,
-  markDone: boolean
+  markDone: boolean,
+  /** Which issues the pull request closes — a task made from several related
+   *  issues only, and only before its first delivery fixed the list. Omitted
+   *  (`undefined`) for every other delivery. */
+  closes?: number[]
 ): Promise<string> {
   return getTransport().call("work_task_deliver_pr", {
     id,
@@ -4367,6 +4373,7 @@ export async function workTaskDeliverPr(
     draft,
     deleteWorktree,
     markDone,
+    ...(closes === undefined ? {} : { closes }),
   })
 }
 
@@ -6684,6 +6691,13 @@ export async function workTaskCreateFromForge(
   draft: ForgeTaskDraftInput
 ): Promise<ForgeCreateResult> {
   return getTransport().call("work_task_create_from_forge", { draft })
+}
+
+/** One task for several related issues — see `ForgeIssuesTaskDraftInput`. */
+export async function workTaskCreateFromForgeIssues(
+  draft: ForgeIssuesTaskDraftInput
+): Promise<ForgeIssuesCreateResult> {
+  return getTransport().call("work_task_create_from_forge_issues", { draft })
 }
 
 /** Latest task per source key (any state) — drives the row chips. */

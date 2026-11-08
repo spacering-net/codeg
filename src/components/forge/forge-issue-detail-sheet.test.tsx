@@ -1168,6 +1168,18 @@ describe("ForgeIssueDetailSheet change section", () => {
     }
   }
 
+  /** The trigger refuses a merged change, and the panel's own read can know
+   *  it merged before the list row it was opened from does — Start goes as
+   *  soon as either says so. */
+  it("stops offering Start once the change is read back as merged", async () => {
+    forgeChangeDetail.mockResolvedValue(change({ state: "merged" }))
+    mount(row({ is_pr: true, state: "open" }))
+    expect(await screen.findByText("main")).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Start" })).toBeNull()
+    )
+  })
+
   it("is asked for only on a proposed change", async () => {
     mount(row({ is_pr: false }))
     await waitFor(() => expect(forgeListComments).toHaveBeenCalled())

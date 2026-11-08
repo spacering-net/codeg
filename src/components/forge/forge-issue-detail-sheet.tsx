@@ -25,6 +25,7 @@ import {
   ExternalLink,
   GitMerge,
   GitPullRequestClosed,
+  Layers,
   Link2,
   ListTodo,
   LoaderCircle,
@@ -43,10 +44,13 @@ import {
 } from "@/components/diff/unified-diff-preview"
 import {
   CHIP_FILL,
+  canStartTask,
   ForgeLabelChip,
+  numberList,
   ROW_ACTION,
   ROW_ACTION_GLYPH,
   stateGlyph,
+  togetherWith,
 } from "@/components/forge/forge-issue-row"
 import { statusLabelKey } from "@/components/tasks/task-card"
 import {
@@ -2605,6 +2609,12 @@ export function ForgeIssueDetailSheet({
   const chip = chipStateForLink(link)
   const active = chip === "active"
   const terminal = chip === "terminal"
+  // The row's own rules (see `canStartTask` / `togetherWith`), so the footer
+  // and the list never offer different things for the same item — plus the
+  // panel's own read of a change, which can know it merged before the list
+  // row does.
+  const startable = canStartTask(row) && detail.detail?.state !== "merged"
+  const others = togetherWith(link, row)
   const { Icon, className: glyphClass, labelKey } = stateGlyph(row)
   const stateLabel = t(labelKey)
   /** Which way the state button points — and whether there is one at all.
@@ -2867,21 +2877,23 @@ export function ForgeIssueDetailSheet({
 
           <div className="ms-auto flex items-center gap-1.5">
             {link == null ? (
-              <Button
-                type="button"
-                size="sm"
-                className={ROW_ACTION}
-                onClick={onStart}
-              >
-                <CirclePlay className={ROW_ACTION_GLYPH} aria-hidden />
-                {t("start")}
-              </Button>
+              startable ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className={ROW_ACTION}
+                  onClick={onStart}
+                >
+                  <CirclePlay className={ROW_ACTION_GLYPH} aria-hidden />
+                  {t("start")}
+                </Button>
+              ) : null
             ) : (
               // Siblings, never nested — same reason as on the row: a button
               // inside a button folds its text into the outer one's accessible
               // name and leaves keyboard activation to the browser.
               <>
-                {terminal ? (
+                {terminal && startable ? (
                   <button
                     type="button"
                     onClick={onStart}
@@ -2896,16 +2908,29 @@ export function ForgeIssueDetailSheet({
                   size="sm"
                   variant="ghost"
                   onClick={() => setRoute("tasks")}
-                  title={t("viewTask")}
+                  title={
+                    others.length > 0
+                      ? `${t("viewTask")} · ${t("combinedWith", { numbers: numberList(others) })}`
+                      : t("viewTask")
+                  }
                   className={cn(
                     ROW_ACTION,
                     active ? CHIP_FILL.active : CHIP_FILL.settled
                   )}
                 >
-                  <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
+                  {others.length > 0 ? (
+                    <Layers className={ROW_ACTION_GLYPH} aria-hidden />
+                  ) : (
+                    <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
+                  )}
                   {isDeferredLink(link)
                     ? tTasks("statusDeferred")
                     : tTasks(statusLabelKey(link.status))}
+                  {others.length > 0 ? (
+                    <span className="sr-only">
+                      {t("combinedWith", { numbers: numberList(others) })}
+                    </span>
+                  ) : null}
                 </Button>
               </>
             )}

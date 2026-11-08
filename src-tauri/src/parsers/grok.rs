@@ -328,8 +328,9 @@ impl GrokParser {
         // Grok's native `ask_user_question` leaves no picks the
         // `AskQuestionResultCard` can read in `updates.jsonl`: the call's completed
         // `tool_call_update` carries only the sentence the model gets ("User has
-        // answered your questions: "Q"="A". …", seen on 1.0.62 and 1.0.70; 1.0.70
-        // also adds a structured `rawOutput.UserAnswered.answers` list beside it),
+        // answered your questions: "Q"="A". …", seen on 1.0.62, 1.0.70 and 1.0.77;
+        // from 1.0.70 it also adds a structured `rawOutput.UserAnswered.answers`
+        // list beside it),
         // not the card's `{answers, declined}` envelope, so the card shows "未选择".
         // Recover the user's picks from `chat_history.jsonl` (the model-facing
         // transcript, whose `tool_result` carries the same sentence), parse them

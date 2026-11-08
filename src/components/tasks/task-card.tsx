@@ -225,6 +225,10 @@ export function liveNote(
   return task.latest_progress ?? null
 }
 
+/** Item links a card made from several issues shows before folding the rest
+ *  into a count — the same four its title names. */
+const SOURCE_LINKS_SHOWN = 4
+
 interface TaskCardProps extends TaskActionHandlers {
   task: WorkTask
   folderName: string | null
@@ -423,6 +427,10 @@ export function TaskCard({
   // `task.source_meta?.url` does not survive into the callback.
   const source = task.source_meta
   const sourceUrl = source?.url ?? null
+  // A task made from several issues links each of them — the first few, then
+  // a count — rather than only the one its snapshot leads with.
+  const combinedItems =
+    source?.items != null && source.items.length > 1 ? source.items : null
 
   const { primary, secondaries } = buildTaskActions(task, t, handlers)
 
@@ -512,7 +520,29 @@ export function TaskCard({
           meta line's own mt-1.5) keeps it reading as part of that block.
           inline-block, not block, so the hit area hugs the text — a
           full-width anchor would swallow clicks meant for the card. */}
-      {sourceUrl && source ? (
+      {combinedItems && source ? (
+        <div className="mt-1 flex min-w-0 items-baseline gap-x-1 font-mono text-[0.625rem] text-primary/80">
+          {combinedItems.slice(0, SOURCE_LINKS_SHOWN).map((item) => (
+            <BrowserLink
+              key={item.number}
+              href={item.url}
+              onClick={(e) => e.stopPropagation()}
+              className="shrink-0 hover:underline"
+              title={`${item.url} · ${item.title}`}
+            >
+              #{item.number}
+            </BrowserLink>
+          ))}
+          {combinedItems.length > SOURCE_LINKS_SHOWN ? (
+            <span className="shrink-0">
+              +{combinedItems.length - SOURCE_LINKS_SHOWN}
+            </span>
+          ) : null}
+          <span className="min-w-0 truncate" title={source.owner_repo}>
+            · {source.owner_repo}
+          </span>
+        </div>
+      ) : sourceUrl && source ? (
         <div className="mt-1 min-w-0">
           <BrowserLink
             href={sourceUrl}

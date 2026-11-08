@@ -2107,6 +2107,20 @@ export interface ForgeSourceMeta {
   /** The trigger dialog's write-back answer, frozen at trigger time. Absent on
    *  rows minted before the choice lived here — those stay silent. */
   writeback?: boolean | null
+  /** Every issue of a task made from several related issues, lead first (the
+   *  lead is also `number` / `url` / `title`). Absent on a one-item task. */
+  items?: ForgeSourceItem[]
+  /** Which of `items` the task's pull request closes — chosen at its first
+   *  delivery and fixed from then on. Absent until then, and always on a
+   *  one-item task. */
+  pr_closes?: number[] | null
+}
+
+/** One issue of a task made from several related issues. */
+export interface ForgeSourceItem {
+  number: number
+  url: string
+  title: string
 }
 
 /** Where a task without forge provenance delivered its work: the repository
@@ -2442,6 +2456,9 @@ export interface ForgeTaskLink {
   deferred?: boolean
   verdict: string | null
   updated_at: string
+  /** The numbers of every item the task handles, lead first — more than one
+   *  for a task made from several related issues. Absent on older servers. */
+  items?: number[]
 }
 
 /** How the trigger dialog asks the work item to be handled. A template NAME
@@ -2628,6 +2645,44 @@ export const FORGE_SCENARIO_PROMPT_ALL = "all"
 export type ForgeCreateResult =
   | { outcome: "created"; task: WorkTask }
   | { outcome: "duplicate"; existing: WorkTask }
+  | { outcome: "folder_mismatch"; folder_remote: ForgeRemote | null }
+
+/** Several related issues handled as ONE task (one agent, one worktree, one
+ *  pull request) — coordinates and display snapshots only, like
+ *  `ForgeTaskDraftInput`. */
+export interface ForgeIssuesTaskDraftInput {
+  folder_id: number
+  source: {
+    provider: ForgeProviderId
+    server_host: string
+    account_id?: string | null
+    owner_repo: string
+  }
+  /** At least two distinct issues. */
+  items: {
+    number: number
+    snapshot: ForgeTaskDraftInput["snapshot"]
+  }[]
+  /** `fix` or `plan_first`; absent = `fix`. */
+  scenario?: ForgeScenarioId | null
+  instruction?: string | null
+  /** One answer for every issue — each gets its own comment, or none does. */
+  writeback?: boolean | null
+  agent_type?: string | null
+  force?: boolean
+}
+
+/** One issue a live task already handles, and that task. */
+export interface ForgeCreateConflict {
+  number: number
+  existing: WorkTask
+}
+
+/** `ForgeCreateResult` for several issues: a dedup hit names every issue a
+ *  live task already handles. */
+export type ForgeIssuesCreateResult =
+  | { outcome: "created"; task: WorkTask }
+  | { outcome: "duplicate"; conflicts: ForgeCreateConflict[] }
   | { outcome: "folder_mismatch"; folder_remote: ForgeRemote | null }
 
 /** A merge parked on a reviewed task while its project lands another one. */
@@ -3334,6 +3389,17 @@ export type AcpEvent =
       assistant_name?: string | null
     }
   /**
+   * A codeg delegation of this (parent) connection started (`running`) or
+   * reached a terminal state. Lifecycle accounting only: unlike the two events
+   * above it also covers a delegation whose parent tool call couldn't be
+   * identified (no card), which still dies with its parent.
+   */
+  | {
+      type: "delegation_child_running"
+      child_connection_id: string
+      running: boolean
+    }
+  /**
    * The user's submitted prompt, broadcast on the connection stream so OTHER
    * clients viewing this conversation synthesize the user turn in real time.
    * The sending client renders its own optimistic turn and ignores this echo.
@@ -3789,6 +3855,10 @@ export interface LiveSessionSnapshot {
   /** Live sub-agent delegations recoverable from the snapshot. May be absent
    *  on older server payloads (then treated as `[]`). */
   active_delegations?: ActiveDelegationState[]
+  /** Child connection ids of every codeg delegation still running, card or
+   *  not (see `delegation_child_running`). Absent when empty / on older
+   *  servers (then treated as `[]`). */
+  delegated_children?: string[]
   /** Live-feedback notes for the current turn. Absent on older payloads /
    *  when empty (then treated as `[]`). */
   feedback?: FeedbackItem[]

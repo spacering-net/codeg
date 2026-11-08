@@ -9,6 +9,7 @@ import {
   GitPullRequestArrow,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  Layers,
   ListTodo,
   MessageSquare,
   RotateCcw,
@@ -17,6 +18,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { BrowserLink } from "@/components/ui/browser-link"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { statusLabelKey } from "@/components/tasks/task-card"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
@@ -166,6 +168,47 @@ export const CHIP_FILL = {
 } as const
 
 /**
+ * Whether a work task can be started from this item at all.
+ *
+ * A MERGED change cannot: the trigger refuses it whatever the scenario, since
+ * there is no branch left to work on and nowhere to deliver to (see
+ * `pull_is_workable` in src-tauri/src/forge/deliver.rs). Offering "Start" on
+ * one was a button whose only outcome is an error in the dialog it opens. The
+ * row and the detail panel ask the same question so they cannot disagree.
+ */
+export function canStartTask(row: ForgeIssueRow): boolean {
+  return !(row.is_pr && row.state === "merged")
+}
+
+/** The other items a linked task handles, when it handles more than this one
+ *  — a task made from several related issues. Empty for every other task. */
+export function togetherWith(
+  link: ForgeTaskLink | null,
+  row: ForgeIssueRow
+): number[] {
+  const items = link?.items ?? []
+  return items.length > 1 ? items.filter((n) => n !== row.number) : []
+}
+
+/** `#5, #9` — the numbers a combined chip names. */
+export function numberList(numbers: number[]): string {
+  return numbers.map((n) => `#${n}`).join(", ")
+}
+
+/**
+ * How this row takes part in the page's selection — the issues the page can
+ * hand to ONE task together. Absent on rows that cannot be picked at all
+ * (proposed changes), so their layout stays exactly as it was.
+ */
+export interface RowSelection {
+  checked: boolean
+  /** Why the box is greyed out, or `null` when it can be ticked. */
+  blockedReason: string | null
+  /** `range` = the Shift key was held: extend from the last row toggled. */
+  onToggle: (range: boolean) => void
+}
+
+/**
  * One workbench row: `#number title labels · author · updated` plus the
  * three-state action — start (no task), a live status chip (active task,
  * click-through to the board), or done/canceled with a re-trigger.
@@ -174,6 +217,7 @@ export function ForgeIssueRowItem({
   row,
   link,
   compact = false,
+  selection,
   onOpenDetail,
   onStart,
 }: {
@@ -181,6 +225,8 @@ export function ForgeIssueRowItem({
   link: ForgeTaskLink | null
   /** Phone width: fewer labels, since the title has to stay readable. */
   compact?: boolean
+  /** The row's tick box, when it has one (issues only). */
+  selection?: RowSelection
   /** Opens the right-side detail panel on this item. */
   onOpenDetail: () => void
   onStart: () => void
@@ -192,6 +238,8 @@ export function ForgeIssueRowItem({
   const chip = chipStateForLink(link)
   const active = chip === "active"
   const terminal = chip === "terminal"
+  const startable = canStartTask(row)
+  const others = togetherWith(link, row)
   const { Icon, className: glyphClass, labelKey } = stateGlyph(row)
   const stateLabel = t(labelKey)
 
@@ -202,14 +250,75 @@ export function ForgeIssueRowItem({
     // which puts the glyph on that line's centre wherever the block grows.
     // The TRAILING cluster is the opposite case — it belongs to the row, not to
     // a line of it — so it centres against the whole block via `self-center`.
-    <div className="group flex min-w-0 items-start gap-3 px-4 py-2.5 transition-colors hover:bg-muted/40">
-      <span className="flex h-5 shrink-0 items-center">
-        <Icon
-          role="img"
-          aria-label={stateLabel}
-          className={cn("h-3.5 w-3.5", glyphClass)}
-        />
-      </span>
+    <div
+      className={cn(
+        "group group/row flex min-w-0 items-start gap-3 px-4 py-2.5 transition-colors hover:bg-muted/40",
+        selection?.checked && "bg-primary/5 hover:bg-primary/10"
+      )}
+    >
+      {selection ? (
+        // The tick box and the state glyph share ONE h-5 cell, stacked in the
+        // same grid area: the glyph shows at rest, the box takes its place
+        // while the row is hovered, while the box has keyboard focus, and for
+        // as long as the row is ticked. A fixed column of empty boxes down
+        // the list was noise for the common case of not selecting anything.
+        //
+        // The box is faded out with opacity rather than `invisible`, so it
+        // stays in the tab order (and under a tap on touch screens, which
+        // have no hover); `peer-focus-visible` brings it back for the
+        // keyboard. The title attribute rides on the wrapper: a disabled
+        // control receives no pointer events, so a tooltip on it would never
+        // show.
+        <span
+          className="grid h-5 w-4 shrink-0 place-items-center"
+          title={selection.blockedReason ?? undefined}
+          data-forge-select=""
+        >
+          <Checkbox
+            checked={selection.checked}
+            disabled={selection.blockedReason != null}
+            aria-label={t("selectItem", { number: row.number })}
+            className={cn(
+              "[grid-area:1/1]",
+              selection.checked
+                ? "opacity-100"
+                : selection.blockedReason != null
+                  ? // A greyed-out box: the base `disabled:opacity-50` would
+                    // otherwise outrank the resting `opacity-0` and leave a
+                    // faint box on every row with a task under way.
+                    "disabled:opacity-0 group-hover/row:disabled:opacity-50"
+                  : "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
+            )}
+            // The click is handled here rather than through
+            // `onCheckedChange`, because only the event says whether Shift
+            // was held. Preventing the default keeps Radix from toggling on
+            // its own as well — the box is controlled, the page decides.
+            onClick={(e) => {
+              e.preventDefault()
+              selection.onToggle(e.shiftKey)
+            }}
+          />
+          <Icon
+            role="img"
+            aria-label={stateLabel}
+            className={cn(
+              "pointer-events-none h-3.5 w-3.5 [grid-area:1/1]",
+              glyphClass,
+              selection.checked
+                ? "invisible"
+                : "group-hover/row:invisible peer-focus-visible:invisible"
+            )}
+          />
+        </span>
+      ) : (
+        <span className="flex h-5 shrink-0 items-center">
+          <Icon
+            role="img"
+            aria-label={stateLabel}
+            className={cn("h-3.5 w-3.5", glyphClass)}
+          />
+        </span>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
           {/* The title opens the panel on the right rather than the forge's
@@ -275,19 +384,21 @@ export function ForgeIssueRowItem({
         ) : null}
 
         {link == null ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            className={ROW_ACTION}
-            onClick={onStart}
-          >
-            {/* Outline, like every other glyph on the row — a solid triangle
-                was the one filled shape in the list and pulled the eye off the
-                titles it sits beside. */}
-            <CirclePlay className={ROW_ACTION_GLYPH} aria-hidden />
-            {t("start")}
-          </Button>
+          startable ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className={ROW_ACTION}
+              onClick={onStart}
+            >
+              {/* Outline, like every other glyph on the row — a solid triangle
+                  was the one filled shape in the list and pulled the eye off
+                  the titles it sits beside. */}
+              <CirclePlay className={ROW_ACTION_GLYPH} aria-hidden />
+              {t("start")}
+            </Button>
+          ) : null
         ) : (
           // Two sibling controls, never one nested in the other: an interactive
           // element inside a button folds its text into the outer button's
@@ -301,7 +412,11 @@ export function ForgeIssueRowItem({
               size="sm"
               variant="ghost"
               onClick={() => setRoute("tasks")}
-              title={t("viewTask")}
+              title={
+                others.length > 0
+                  ? `${t("viewTask")} · ${t("combinedWith", { numbers: numberList(others) })}`
+                  : t("viewTask")
+              }
               className={cn(
                 ROW_ACTION,
                 active ? CHIP_FILL.active : CHIP_FILL.settled
@@ -310,13 +425,24 @@ export function ForgeIssueRowItem({
               {/* The sidebar's own to-do glyph, so "Running" reads as the
                   status of a WORK TASK rather than of the issue itself — and so
                   the chip looks like the place it navigates to. Decoration:
-                  the accessible name stays the status word. */}
-              <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
+                  the accessible name stays the status word. A task handling
+                  several issues swaps it for a stack, and says so in words
+                  for anyone who cannot see the glyph. */}
+              {others.length > 0 ? (
+                <Layers className={ROW_ACTION_GLYPH} aria-hidden />
+              ) : (
+                <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
+              )}
               {isDeferredLink(link)
                 ? tTasks("statusDeferred")
                 : tTasks(statusLabelKey(link.status))}
+              {others.length > 0 ? (
+                <span className="sr-only">
+                  {t("combinedWith", { numbers: numberList(others) })}
+                </span>
+              ) : null}
             </Button>
-            {terminal ? (
+            {terminal && startable ? (
               <button
                 type="button"
                 onClick={onStart}

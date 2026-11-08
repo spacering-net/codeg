@@ -137,10 +137,24 @@ pub struct WorkTaskDraft {
 pub struct WorkTaskSource {
     /// 'forge_issue' | 'forge_pr'
     pub kind: String,
-    /// Canonical key from `forge::source_key` — recomputed server-side.
+    /// Canonical key from `forge::source_key` — recomputed server-side. The
+    /// task's lead item: its only one, unless `extra_keys` names more.
     pub key: String,
+    /// The other items a task made from several related issues handles, in
+    /// the task's own order after the lead. Empty for a task triggered from
+    /// one item. Same derivation as `key`.
+    #[serde(default)]
+    pub extra_keys: Vec<String>,
     /// `ForgeSourceMeta` as JSON (URL, title, account id, PR head/base …).
     pub meta: serde_json::Value,
+}
+
+impl WorkTaskSource {
+    /// Every item the task handles, lead first — what its
+    /// `work_task_source_key` rows record.
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.key).chain(self.extra_keys.iter())
+    }
 }
 
 /// Wire DTO for a saved task template: a display name plus the title seed and

@@ -82,7 +82,9 @@
 //! is `M` where it was `P` in all six archives, and on darwin/x64 the spread
 //! helper's module is `y` and `onErrorNotRetried`'s is `S`, the reverse of the
 //! other five. Its closure is `q` in all six, passing its tools as `P`, and is
-//! otherwise the same.
+//! otherwise the same. `2026.11.05-86047df` ships that statement and that
+//! closure byte for byte as 27dcf5f's darwin/arm64 archive does, now in all
+//! six archives: darwin/x64 no longer swaps the two modules.
 //!
 //! So nothing about the splice is transcribed by hand any more:
 //!
@@ -139,6 +141,7 @@ const TRIAGED_AFFECTED_VERSIONS: &[&str] = &[
     "2026.10.18-ea085cb",
     "2026.10.19-6bbf2c4",
     "2026.10.22-27dcf5f",
+    "2026.11.05-86047df",
 ];
 
 /// Cursor agent-cli versions whose bundle was inspected and found to already
@@ -195,7 +198,8 @@ const RUN_OPTIONS_DECL: &str = r"(\w+)=(?:Object\.assign\()*\{conversationId:";
 /// names it `E` and the other archives `F`; windows passes its tools as `M`),
 /// `F` in every archive of `2026.10.16-e3cb207`, `E` on darwin/x64 but `F`
 /// elsewhere in `2026.10.18-ea085cb`, `F` in every archive of
-/// `2026.10.19-6bbf2c4`, and `q` in every archive of `2026.10.22-27dcf5f`.
+/// `2026.10.19-6bbf2c4`, and `q` in every archive of `2026.10.22-27dcf5f` and
+/// `2026.11.05-86047df`.
 /// The drain reuses it for follow-ups, run options and all.
 ///
 /// Captures the parameter, the follow-up splice when one is already there, and
@@ -1101,6 +1105,9 @@ mod tests {
     /// windows/arm64, `3635` windows/x64) ships it with the headers module
     /// named `M` instead of `P`, and on darwin/x64 the spread helper's module
     /// is `y` and `onErrorNotRetried`'s is `S`, the reverse of this fixture.
+    /// `2026.11.05-86047df` (`9673` darwin/arm64, `8403` darwin/x64, `6136`
+    /// both linux, `3327` windows/arm64, `697` windows/x64) ships 27dcf5f's
+    /// darwin/arm64 statement byte for byte in all six archives.
     const REAL_ES2020_RUN_OPTIONS: &str = concat!(
         r#"f=new d.ConversationAction({action:{case:"userMessageAction",value:l}}),"#,
         r#"w={conversationId:this.agentStore.getId(),headers:(0,P.o)(this.agentStore),"#,
@@ -1122,7 +1129,8 @@ mod tests {
     /// archives differ the same way as before. `2026.10.19-6bbf2c4` names it
     /// `F` in all six archives and is otherwise identical, windows still naming
     /// the tools local `M`. `2026.10.22-27dcf5f` names it `q` and the tools
-    /// local `P` in all six archives, and is otherwise identical.
+    /// local `P` in all six archives, and is otherwise identical, as is
+    /// `2026.11.05-86047df`.
     const REAL_ES2020_RUN_CLOSURE: &str = concat!(
         r#";(0,v.sx)("cli.request.create",{length:n.length,model:h?.modelId??"#,
         r#"this.currentModel.modelId??"unknown",mode:a,conversationId:this.agentStore.getId()});"#,

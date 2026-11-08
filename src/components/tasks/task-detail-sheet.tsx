@@ -109,6 +109,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { BrowserLink } from "@/components/ui/browser-link"
+import { sourceItems } from "@/lib/forge-source-items"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -1195,6 +1196,29 @@ export function TaskDetailSheet({
                     unbroken across the box. nth-last-child(-n+2) is the dt/dd
                     of the final row, which drops its rule. */}
                 <dl className="grid grid-cols-[auto_1fr] overflow-hidden rounded-xl border border-border text-xs [&>*:nth-last-child(-n+2)]:border-b-0">
+                  {/* Where the task came from: its issue or change — every
+                      one of them, for a task made from several issues — each
+                      a way out to the forge. */}
+                  {task.source_meta ? (
+                    <InfoRow label={t("detailSource")}>
+                      <ul className="flex min-w-0 flex-col gap-0.5">
+                        {sourceItems(task.source_meta).map((item) => (
+                          <li key={item.number} className="min-w-0">
+                            <BrowserLink
+                              href={item.url}
+                              className="inline-flex max-w-full items-baseline gap-1.5 underline-offset-2 hover:underline"
+                              title={item.url}
+                            >
+                              <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
+                                #{item.number}
+                              </span>
+                              <span className="truncate">{item.title}</span>
+                            </BrowserLink>
+                          </li>
+                        ))}
+                      </ul>
+                    </InfoRow>
+                  ) : null}
                   {task.work_branch ? (
                     <InfoRow label={t("detailBranch")}>
                       <span className="inline-flex min-w-0 max-w-full items-center gap-1 font-mono text-[0.6875rem]">

@@ -222,9 +222,21 @@ export function resetNativeSurfaceOcclusionForTests(): void {
 // portals, components that predate the lease). Watches the document for open
 // dialog / menu roles. Only consulted when no lease is held, and only
 // observing while some surface host is mounted.
+//
+// Streamdown's own full-window views (the table's "view fullscreen", and the
+// mermaid one — the app draws mermaid itself, but the view is still in the
+// library) are portaled to <body> as `role="dialog"` with no `data-state`:
+// they exist only while open, so they are matched on their marker alone.
+// Without it a fullscreen table opens behind the page of a browser tab beside
+// the conversation, and only the part left of that pane can be seen.
 
-const FALLBACK_SELECTOR =
-  '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="menu"][data-state="open"]'
+const FALLBACK_SELECTOR = [
+  '[role="dialog"][data-state="open"]',
+  '[role="alertdialog"][data-state="open"]',
+  '[role="menu"][data-state="open"]',
+  '[data-streamdown="table-fullscreen"]',
+  '[data-streamdown="mermaid-fullscreen"]',
+].join(", ")
 
 const fallbackListeners = new Set<() => void>()
 let fallbackObserver: MutationObserver | null = null

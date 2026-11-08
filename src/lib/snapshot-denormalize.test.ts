@@ -55,6 +55,15 @@ describe("denormalizeSnapshot — active_delegations", () => {
     const patch = denormalizeSnapshot(snap)
     expect(patch.activeDelegations).toEqual([])
   })
+
+  // Every running delegation, card or not: the parent's busy signal.
+  it("carries delegated_children, defaulting to [] when absent", () => {
+    expect(
+      denormalizeSnapshot(baseSnapshot({ delegated_children: ["c1", "c2"] }))
+        .delegatedChildren
+    ).toEqual(["c1", "c2"])
+    expect(denormalizeSnapshot(baseSnapshot()).delegatedChildren).toEqual([])
+  })
 })
 
 describe("denormalizeSnapshot — hasPrompted", () => {

@@ -659,20 +659,27 @@ pub async fn work_task_merge_unqueue_core(
 /// the task lands, the same offer the merge and complete acceptances make. It
 /// never changes the result: a removal that fails leaves a retryable
 /// `cleanup_state` on the card and the delivered URL still comes back.
+///
+/// `closes` is which issues the pull request closes, for a task made from
+/// several related issues only — chosen at its first delivery and fixed from
+/// then on (see `engine::closing_list`). `None` keeps the list already fixed,
+/// or closes them all on a first delivery.
 pub async fn work_task_deliver_pr_core(
     id: i32,
     pr_title: Option<String>,
     draft: bool,
     delete_worktree: bool,
     mark_done: Option<bool>,
+    closes: Option<Vec<i64>>,
 ) -> Result<String, DbError> {
     engine()?
-        .deliver_pr(
+        .deliver_pr_closing(
             id,
             pr_title,
             draft,
             delete_worktree,
             mark_done.unwrap_or(true),
+            closes,
         )
         .await
         .map_err(DbError::Validation)
@@ -1085,8 +1092,9 @@ pub async fn work_task_deliver_pr(
     draft: bool,
     delete_worktree: bool,
     mark_done: Option<bool>,
+    closes: Option<Vec<i64>>,
 ) -> Result<String, DbError> {
-    work_task_deliver_pr_core(id, pr_title, draft, delete_worktree, mark_done).await
+    work_task_deliver_pr_core(id, pr_title, draft, delete_worktree, mark_done, closes).await
 }
 
 #[cfg(feature = "tauri-runtime")]

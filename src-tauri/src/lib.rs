@@ -15,6 +15,7 @@
 
 pub mod acp;
 pub mod acp_transcript;
+pub mod agent_turn_files;
 pub use acp::{
     idle_sweep_task, idle_timeout_from_env, lifecycle_subscriber_task, SWEEP_INTERVAL_SECS,
 };
@@ -2348,6 +2349,7 @@ mod tauri_app {
                 forge_commands::forge_merge_options,
                 forge_commands::forge_merge_change,
                 forge_commands::work_task_create_from_forge,
+                forge_commands::work_task_create_from_forge_issues,
                 forge_commands::work_task_lookup_by_source,
                 forge_commands::forge_settings_get,
                 forge_commands::forge_settings_set,

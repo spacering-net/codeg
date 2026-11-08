@@ -564,7 +564,7 @@ pub async fn emit_with_state_built<F>(
 where
     F: FnOnce(&mut SessionState) -> Option<AcpEvent>,
 {
-    let (envelope_arc, stream, evicted) = {
+    let (envelope_arc, stream, evicted, turn_file_jobs) = {
         let mut s = state.write().await;
         let Some(payload) = build(&mut s) else {
             return false;
@@ -577,8 +577,27 @@ where
             payload,
         });
         let evicted = s.push_recent_event(Arc::clone(&envelope));
-        (envelope, s.event_stream(), evicted)
+        let turn_file_jobs = std::mem::take(&mut s.turn_file_jobs);
+        (envelope, s.event_stream(), evicted, turn_file_jobs)
     };
+
+    // Office auto-preview: confirm the files this turn's tool calls named.
+    // Filesystem work, so off the session lock and off the async workers.
+    if !turn_file_jobs.is_empty() {
+        let emitter = emitter.clone();
+        let run = move || {
+            for job in turn_file_jobs {
+                crate::agent_turn_files::run_job(job, &emitter);
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(run);
+            }
+            // Not reachable from the async callers today; never drop the work.
+            Err(_) => run(),
+        }
+    }
 
     // Per-connection broadcaster — primary delivery path for web/remote-
     // desktop transports (they use Subscribe-with-Snapshot attach for ACP

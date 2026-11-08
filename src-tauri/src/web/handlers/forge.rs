@@ -145,6 +145,12 @@ pub struct CreateFromForgeParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreateFromForgeIssuesParams {
+    pub draft: core::ForgeIssuesTaskDraft,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LookupParams {
     pub source_keys: Vec<String>,
 }
@@ -296,6 +302,16 @@ pub async fn work_task_create_from_forge(
 ) -> Result<Json<core::ForgeCreateResult>, AppCommandError> {
     Ok(Json(
         core::work_task_create_from_forge_core(&state.emitter, &state.db, params.draft).await?,
+    ))
+}
+
+pub async fn work_task_create_from_forge_issues(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<CreateFromForgeIssuesParams>,
+) -> Result<Json<core::ForgeIssuesCreateResult>, AppCommandError> {
+    Ok(Json(
+        core::work_task_create_from_forge_issues_core(&state.emitter, &state.db, params.draft)
+            .await?,
     ))
 }
 

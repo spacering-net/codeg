@@ -237,6 +237,7 @@ function makeConnState(overrides: Partial<ConnectionState>): ConnectionState {
     configStaleKind: null,
     configStaleDismissed: false,
     backgroundOutstanding: 0,
+    delegatedChildren: [],
     outOfTurnToolCalls: null,
     hasPrompted: false,
     cancelledTurn: null,
