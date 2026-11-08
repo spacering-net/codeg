@@ -1891,6 +1891,23 @@
   border-radius: 0;
 }
 
+/* HTML preview card inside Streamdown code block */
+[data-streamdown="code-block"]:has([data-chat-html="preview"]) {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+[data-streamdown="code-block"]:has([data-chat-html="preview"])
+  > [data-streamdown="code-block-header"] {
+  display: none !important;
+}
+[data-streamdown="code-block-body"]:has([data-chat-html="preview"]) {
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 0 !important;
+}
+
 /* Token colours. Shiki sets each token's colours as separate properties, so
    these do arrive: `--sdm-c` (light) and `--shiki-dark`. 2.7 paints the light
    one with its own `text-[var(--sdm-c,inherit)]`, a class from node_modules

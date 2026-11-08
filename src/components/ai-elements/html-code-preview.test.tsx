@@ -3,7 +3,10 @@ import { NextIntlClientProvider } from "next-intl"
 import type { ComponentType, ReactNode } from "react"
 import { beforeEach, describe, expect, it } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
-import { resetHtmlPreviewCachesForTests } from "./html-code-preview"
+import {
+  HtmlCodePreview,
+  resetHtmlPreviewCachesForTests,
+} from "./html-code-preview"
 import { messageBlockComponents, JsonRenderScope } from "./json-render-pre"
 import { MessageResponse } from "./message"
 
@@ -128,5 +131,82 @@ describe("HTML code preview", () => {
     expect(screen.getByTitle("HTML preview").getAttribute("srcdoc")).toContain(
       "<p>Kept</p>"
     )
+  })
+
+  describe("streaming progressive HTML preview", () => {
+    function renderPreview(source: string, pending = false) {
+      return (
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <HtmlCodePreview source={source} pending={pending}>
+            <div>{`Code content: ${source}`}</div>
+          </HtmlCodePreview>
+        </NextIntlClientProvider>
+      )
+    }
+
+    it("renders progressive preview and generating indicator when pending", async () => {
+      render(renderPreview("<h1>Streamed Title</h1>", true))
+      const frame = await screen.findByTitle("HTML preview")
+      expect(frame.getAttribute("srcdoc")).toContain("<h1>Streamed Title</h1>")
+      expect(frame).toHaveAttribute("sandbox", "allow-scripts")
+      expect(screen.getByRole("status")).toHaveTextContent("Generating HTML…")
+    })
+
+    it("maintains interactive allow-scripts preview and removes generating indicator once streaming finishes", async () => {
+      const { rerender } = render(renderPreview("<h1>Building</h1>", true))
+      const frame = await screen.findByTitle("HTML preview")
+      expect(frame).toHaveAttribute("sandbox", "allow-scripts")
+      rerender(renderPreview("<h1>Building</h1>", false))
+      await waitFor(() => {
+        expect(screen.getByTitle("HTML preview")).toHaveAttribute(
+          "sandbox",
+          "allow-scripts"
+        )
+      })
+      expect(screen.queryByRole("status")).toBeNull()
+    })
+
+    it("allows toggling between code and preview during streaming", async () => {
+      render(renderPreview("<p>Live token</p>", true))
+      await screen.findByTitle("HTML preview")
+      fireEvent.click(screen.getByRole("button", { name: "Code" }))
+      expect(screen.queryByTitle("HTML preview")).toBeNull()
+      expect(
+        screen.getByText("Code content: <p>Live token</p>")
+      ).toBeInTheDocument()
+      fireEvent.click(screen.getByRole("button", { name: "Preview" }))
+      expect(await screen.findByTitle("HTML preview")).toBeInTheDocument()
+    })
+
+    it("blocks author scripts and sets strict CSP with nonce during streaming preview", async () => {
+      render(
+        renderPreview(
+          "<div>Safe</div><script>window.ATTACK=true</script>",
+          true
+        )
+      )
+      const frame = await screen.findByTitle("HTML preview")
+      const srcdoc = frame.getAttribute("srcdoc") ?? ""
+      expect(srcdoc).toContain("<div>Safe</div>")
+      expect(srcdoc).not.toContain("window.ATTACK")
+      expect(srcdoc).toContain("script-src 'nonce-")
+      expect(frame).toHaveAttribute("sandbox", "allow-scripts")
+    })
+
+    it("throttles rapid token updates during streaming and flushes on complete", async () => {
+      const { rerender } = render(renderPreview("<div>Chunk 1", true))
+      await screen.findByTitle("HTML preview")
+
+      rerender(renderPreview("<div>Chunk 1 2", true))
+      rerender(renderPreview("<div>Chunk 1 2 3", true))
+      rerender(renderPreview("<div>Chunk 1 2 3 4", true))
+
+      rerender(renderPreview("<div>Chunk 1 2 3 4 complete</div>", false))
+      await waitFor(() => {
+        const frame = screen.getByTitle("HTML preview")
+        expect(frame.getAttribute("srcdoc")).toContain("Chunk 1 2 3 4 complete")
+        expect(frame).toHaveAttribute("sandbox", "allow-scripts")
+      })
+    })
   })
 })

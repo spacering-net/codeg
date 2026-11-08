@@ -5,10 +5,14 @@ import {
 } from "./html-preview-inline"
 import { htmlPreviewSizeReporter } from "./html-preview-frame"
 
-/** 复用文件预览的惰性解析与 CSP；模型脚本被移除，只有带随机 nonce 的高度桥接可执行。 */
+/** 复用文件预览的惰性解析与 CSP；模型脚本被移除，只有带随机 nonce 的高度桥接可执行。流式阶段安全隔离脚本。 */
 export async function buildChatHtmlDocument(
   source: string,
-  { nonce, dark, theme }: { nonce: string; dark: boolean; theme: string }
+  {
+    nonce,
+    dark,
+    theme,
+  }: { nonce: string; dark: boolean; theme: string; pending?: boolean }
 ): Promise<string> {
   const html = await inlineHtmlResources(source, {
     fileDir: "",
@@ -30,6 +34,9 @@ ${theme}
   )
   const withCsp = withSandboxCsp(themed, { reporterNonce: nonce })
   const end = withCsp.lastIndexOf("</body>")
+  if (end === -1) {
+    return withCsp + htmlPreviewSizeReporter(nonce)
+  }
   return (
     withCsp.slice(0, end) + htmlPreviewSizeReporter(nonce) + withCsp.slice(end)
   )
