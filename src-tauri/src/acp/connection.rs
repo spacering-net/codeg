@@ -2292,7 +2292,8 @@ async fn build_agent(
                 // the fragile wrapper.
                 match resolved_command {
                     Some(ref path) => {
-                        let launch = crate::acp::qoder::resolve_launch(path, runtime_env)
+                        let launch_env = merged_env.iter().cloned().collect();
+                        let launch = crate::acp::qoder::resolve_launch(path, &launch_env)
                             .map_err(|error| AcpError::SdkNotInstalled(error.to_string()))?;
                         Some(launch)
                     }
@@ -43839,14 +43840,84 @@ mod tests {
             "--acp", "--settings", QODER_LAUNCH_SETTINGS
         );
         assert!(launch.contains(&expected), "{launch}");
-        let installed = crate::commands::acp::resolve_npx_command_for(AgentType::Qoder, "qoder")
-            .await
-            .is_some();
-        if cfg!(windows) && installed {
-            assert!(
-                !launch.to_ascii_lowercase().contains(".cmd"),
-                "a Windows launch with an installed Qoder must not name a cmd wrapper: {launch}"
-            );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn qoder_build_and_spawn_preserve_argv_and_the_workspace() {
+        use tokio::io::AsyncReadExt;
+
+        let node = crate::commands::acp::resolve_command_on_path("node")
+            .expect("the fixture needs a real node");
+        let root = tempfile::tempdir().unwrap();
+        let tricky = root.path().join("Qoder A&%USERNAME% 中文");
+        let shim = crate::acp::qoder::tests::npm_fixture(&tricky, false);
+        let bin = shim.parent().unwrap();
+        let entry = bin.join("node_modules/@qoder-ai/qodercli/bundle/qodercli.js");
+        std::fs::write(
+            &entry,
+            "console.log(JSON.stringify({argv: process.argv.slice(2), cwd: process.cwd(), program: process.execPath}));\n",
+        )
+        .unwrap();
+        let node_dir = tricky.join("Node");
+        std::fs::create_dir_all(&node_dir).unwrap();
+        let native_node = node_dir.join("node.exe");
+        std::fs::copy(std::fs::canonicalize(node).unwrap(), &native_node).unwrap();
+        std::fs::write(bin.join("node.js"), "// npm must exclude this from lookup").unwrap();
+        let workspace = tricky.join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let dispatcher = crate::acp::qoder::tests::dispatcher_fixture(root.path());
+
+        // Both an npm qoder shim and the official dispatcher -> npm qodercli
+        // path go through the production builder and AcpAgent spawn.
+        for first_dir in [bin, dispatcher.parent().unwrap()] {
+            let path = std::env::join_paths([first_dir, bin, &node_dir]).unwrap();
+            let env = BTreeMap::from([
+                ("Path".into(), path.to_string_lossy().into_owned()),
+                ("PATHEXT".into(), ".EXE;.JS;.CMD".into()),
+                ("QODER_CLI_BIN".into(), String::new()),
+            ]);
+            temp_env::async_with_vars([("PATH", Some(path.as_os_str()))], async {
+                let tail = Arc::new(StderrTail::new());
+                let (agent, _) =
+                    build_agent(AgentType::Qoder, &env, &workspace, &tail, None, false)
+                        .await
+                        .unwrap();
+                let (stdin, mut stdout, mut stderr, mut child) = agent.spawn_process().unwrap();
+                drop(stdin);
+                let output = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                    let mut out = Vec::new();
+                    let mut err = Vec::new();
+                    let (out_result, err_result, status) = tokio::join!(
+                        stdout.read_to_end(&mut out),
+                        stderr.read_to_end(&mut err),
+                        child.wait()
+                    );
+                    out_result.unwrap();
+                    err_result.unwrap();
+                    (status.unwrap(), out, err)
+                })
+                .await;
+                if output.is_err() {
+                    let _ = child.kill().await;
+                }
+                let (status, out, err) = output.expect("the fixture exits");
+                assert!(status.success(), "{}", String::from_utf8_lossy(&err));
+                let received: serde_json::Value = serde_json::from_slice(&out).unwrap();
+                assert_eq!(
+                    received["argv"],
+                    serde_json::json!(["--acp", "--settings", QODER_LAUNCH_SETTINGS])
+                );
+                assert_eq!(
+                    std::fs::canonicalize(received["cwd"].as_str().unwrap()).unwrap(),
+                    std::fs::canonicalize(&workspace).unwrap()
+                );
+                assert_eq!(
+                    std::fs::canonicalize(received["program"].as_str().unwrap()).unwrap(),
+                    std::fs::canonicalize(&native_node).unwrap()
+                );
+            })
+            .await;
         }
     }
 

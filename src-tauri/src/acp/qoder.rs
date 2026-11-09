@@ -23,8 +23,8 @@
 //! follows npm's own shim rule (its Node beside it, else PATH's Node), so a
 //! manual `qoder` run and codeg's connect end up on the same CLI.
 //!
-//! PATH overrides are read from the launch env case-insensitively (Windows
-//! env keys are); `PATHEXT` is read by `which` from the process environment.
+//! PATH and PATHEXT overrides are read from the launch env case-insensitively,
+//! just as Windows reads the child's environment.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -105,8 +105,15 @@ pub(crate) enum LaunchError {
     CliMissing(String),
     #[error("Node.js could not be found for the npm-installed Qoder CLI. Install Node.js, or run Qoder from its official installer instead.")]
     NodeMissing,
+    #[error("Node.js resolved to {0}, which is not a native executable. Put node.exe on the agent's PATH, or use Qoder's official installer instead of launching through another wrapper.")]
+    NodeWrapper(String),
     #[error("QODER_CLI_BIN must be an absolute path or a command name, not a relative path: {0}")]
     RelativeOverride(String),
+    #[error("Could not resolve an absolute Qoder launch path for {path}: {source}")]
+    PathResolution {
+        path: String,
+        source: std::io::Error,
+    },
 }
 
 fn lower_extension(path: &Path) -> String {
@@ -128,17 +135,13 @@ fn is_relative_path(value: &str) -> bool {
 }
 
 /// Anchor a resolved file to the process cwd, so the returned launch survives
-/// a child with a different (workspace) cwd. Drive-relative spellings
-/// (`C:tools\…`, which Windows resolves against drive C's current folder) are
-/// rare enough in a PATH to leave to CreateProcess, which runs them the same
-/// way it would have run the string before anchoring.
-fn absolutize(path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        return path.to_path_buf();
-    }
-    std::env::current_dir()
-        .map(|cwd| cwd.join(path))
-        .unwrap_or_else(|_| path.to_path_buf())
+/// a child with a different (workspace) cwd. Unlike cwd.join(), absolute()
+/// also resolves drive-relative Windows paths such as C:tools\qodercli.exe.
+fn absolutize(path: &Path) -> Result<PathBuf, LaunchError> {
+    std::path::absolute(path).map_err(|source| LaunchError::PathResolution {
+        path: path.display().to_string(),
+        source,
+    })
 }
 
 fn read_launcher(path: &Path) -> Option<String> {
@@ -162,7 +165,11 @@ fn package_root_for(dispatcher: &Path) -> Option<(PathBuf, serde_json::Value)> {
         let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
             continue;
         };
-        if parsed.get("bin")?.get("qodercli").is_some() {
+        if parsed
+            .get("bin")
+            .and_then(|bin| bin.get("qodercli"))
+            .is_some()
+        {
             return Some((dir.to_path_buf(), parsed));
         }
     }
@@ -179,6 +186,7 @@ fn npm_entry(root: &Path, manifest: &serde_json::Value) -> Option<PathBuf> {
 
 fn env_lookup(env: &BTreeMap<String, String>, key: &str) -> Option<String> {
     env.iter()
+        .rev()
         .find(|(name, _)| name.eq_ignore_ascii_case(key))
         .map(|(_, value)| value.clone())
         .or_else(|| std::env::var(key).ok())
@@ -187,13 +195,39 @@ fn env_lookup(env: &BTreeMap<String, String>, key: &str) -> Option<String> {
 /// Resolve a program name through the launch env's PATH (falling back to the
 /// process PATH), without consulting the workspace cwd: a `qodercli.exe`
 /// committed to the repo must not shadow the installed CLI through cmd.exe's
-/// current-directory-first search. `PATHEXT` is read from the process
-/// environment by `which`.
+/// current-directory-first search. Resolve PATHEXT locally: which caches the
+/// process PATHEXT and cannot honor an agent's override.
 fn which_in_path(program: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
     let path = env_lookup(env, "PATH").unwrap_or_default();
-    let cwd = std::env::current_dir().ok()?;
-    let found = which::which_in(program, Some(std::ffi::OsString::from(path)), cwd).ok()?;
-    found.is_file().then(|| absolutize(&found))
+    let pathext = env_lookup(env, "PATHEXT")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
+    let extensions: Vec<_> = pathext
+        .split(';')
+        .filter(|ext| ext.starts_with('.') && ext.len() > 1)
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let mut names = Vec::new();
+    if Path::new(program).extension().is_some() {
+        names.push(program.to_string());
+    }
+    if !extensions
+        .iter()
+        .any(|ext| program.to_ascii_lowercase().ends_with(ext))
+    {
+        names.extend(extensions.iter().map(|ext| format!("{program}{ext}")));
+    }
+    // npm also writes an extensionless POSIX shell shim. Do not mistake that
+    // file for the Windows command; only PATHEXT candidates answer bare names.
+    std::env::split_paths(&path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .filter_map(|dir| absolutize(&dir).ok())
+        .find_map(|dir| {
+            names.iter().find_map(|name| {
+                let candidate = dir.join(name);
+                candidate.is_file().then_some(candidate)
+            })
+        })
 }
 
 /// The Node npm's own shim uses: its `node.exe` beside the shims when present,
@@ -203,17 +237,37 @@ fn which_in_path(program: &str, env: &BTreeMap<String, String>) -> Option<PathBu
 fn npm_node(shim_dir: &Path, env: &BTreeMap<String, String>) -> Result<PathBuf, LaunchError> {
     let beside = shim_dir.join("node.exe");
     if beside.is_file() {
-        return Ok(absolutize(&beside));
+        return absolutize(&beside);
     }
-    which_in_path("node", env).ok_or(LaunchError::NodeMissing)
+    // npm's cmd shim excludes .JS before looking up Node, so an unrelated
+    // node.js on an earlier PATH entry cannot shadow the native runtime.
+    let mut node_env = env.clone();
+    let pathext = env_lookup(env, "PATHEXT")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
+    let node_pathext = pathext
+        .split(';')
+        .filter(|ext| !ext.eq_ignore_ascii_case(".JS"))
+        .collect::<Vec<_>>()
+        .join(";");
+    if node_pathext.is_empty() {
+        return Err(LaunchError::NodeMissing);
+    }
+    node_env.retain(|key, _| !key.eq_ignore_ascii_case("PATHEXT"));
+    node_env.insert("PATHEXT".into(), node_pathext);
+    let node = which_in_path("node", &node_env).ok_or(LaunchError::NodeMissing)?;
+    if !matches!(lower_extension(&node).as_str(), "exe" | "com") {
+        return Err(LaunchError::NodeWrapper(node.display().to_string()));
+    }
+    Ok(node)
 }
 
-fn native_launch(path: &Path) -> QoderWindowsLaunch {
-    QoderWindowsLaunch {
-        program: absolutize(path),
+fn native_launch(path: &Path) -> Result<QoderWindowsLaunch, LaunchError> {
+    Ok(QoderWindowsLaunch {
+        program: absolutize(path)?,
         prefix_args: Vec::new(),
         kind: QoderInstallKind::NativeCli,
-    }
+    })
 }
 
 fn finish_npm(
@@ -224,7 +278,7 @@ fn finish_npm(
     let node = npm_node(shim_dir, env)?;
     Ok(QoderWindowsLaunch {
         program: node,
-        prefix_args: vec![absolutize(entry).into_os_string()],
+        prefix_args: vec![absolutize(entry)?.into_os_string()],
         kind: QoderInstallKind::NpmPackage,
     })
 }
@@ -277,7 +331,10 @@ fn npm_launch(
 /// Classify a target a dispatcher or a PATH hit leads to: only the two real
 /// installations. A dispatcher behind a dispatcher is an error rather than a
 /// walk — nesting that deep means the installation is not understood.
-fn classify_target(path: &Path, env: &BTreeMap<String, String>) -> Result<QoderWindowsLaunch, LaunchError> {
+fn classify_target(
+    path: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<QoderWindowsLaunch, LaunchError> {
     let extension = lower_extension(path);
     if matches!(extension.as_str(), "cmd" | "bat") {
         let launcher = read_launcher(path).unwrap_or_default();
@@ -315,7 +372,7 @@ fn classify(
     if extension == "exe" && path.is_file() {
         // A `.exe` that is not really a PE image fails at spawn, the same way
         // spawning any other non-runnable file would.
-        return Ok(native_launch(path));
+        return native_launch(path);
     }
     Err(LaunchError::UnknownWrapper(path.display().to_string()))
 }
@@ -328,7 +385,8 @@ fn dispatcher_launch(
     dispatcher: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<QoderWindowsLaunch, LaunchError> {
-    if let Some(explicit) = env_lookup(env, "QODER_CLI_BIN").filter(|value| !value.trim().is_empty())
+    if let Some(explicit) =
+        env_lookup(env, "QODER_CLI_BIN").filter(|value| !value.trim().is_empty())
     {
         if is_relative_path(&explicit) {
             return Err(LaunchError::RelativeOverride(explicit));
@@ -355,7 +413,7 @@ fn dispatcher_launch(
     if let Some(home) = home {
         let user_bin = home.join(".qoder/bin/qodercli/qodercli.exe");
         if user_bin.is_file() {
-            return Ok(native_launch(&user_bin));
+            return native_launch(&user_bin);
         }
     }
     Err(LaunchError::CliMissing(dispatcher.display().to_string()))
@@ -374,18 +432,17 @@ pub(crate) fn resolve_launch(
     resolved: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<QoderWindowsLaunch, LaunchError> {
-    classify(resolved, env)
+    classify(&absolutize(resolved)?, env)
 }
 
-#[cfg(windows)]
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A fake npm install: official npm shims for both bins in `bin`, the
     /// package under the shims' own `node_modules`, and (optionally) a Node
     /// beside the shims. Returns the `qoder.cmd` shim path.
-    fn npm_fixture(root: &Path, node_beside_shim: bool) -> PathBuf {
+    pub(crate) fn npm_fixture(root: &Path, node_beside_shim: bool) -> PathBuf {
         let bin = root.join("bin");
         let pkg = bin.join("node_modules/@qoder-ai/qodercli");
         std::fs::create_dir_all(pkg.join("bundle")).unwrap();
@@ -413,7 +470,7 @@ mod tests {
     }
 
     /// The official installer's dispatcher stub (its cmd half).
-    fn dispatcher_fixture(root: &Path) -> PathBuf {
+    pub(crate) fn dispatcher_fixture(root: &Path) -> PathBuf {
         let path = root.join("entry/qoder.cmd");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -426,14 +483,19 @@ mod tests {
 
     fn empty_env() -> BTreeMap<String, String> {
         // An empty PATH key means "this PATH", not "inherit the process's".
-        BTreeMap::from([("PATH".to_string(), String::new())])
+        BTreeMap::from([
+            ("PATH".to_string(), String::new()),
+            ("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string()),
+            ("QODER_CLI_BIN".to_string(), String::new()),
+        ])
     }
 
     #[test]
     fn npm_shim_resolves_to_its_own_package_entry() {
         let root = tempfile::tempdir().unwrap();
         let shim = npm_fixture(root.path(), true);
-        let launch = resolve_launch(&shim, &empty_env()).expect("the npm shim leads to its package");
+        let launch =
+            resolve_launch(&shim, &empty_env()).expect("the npm shim leads to its package");
         assert_eq!(launch.kind, QoderInstallKind::NpmPackage);
         assert_eq!(launch.prefix_args.len(), 1);
         assert!(launch.program.is_absolute() && Path::new(&launch.prefix_args[0]).is_absolute());
@@ -456,13 +518,29 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         npm_fixture(root.path(), true);
         let shim = root.path().join("bin/qodercli.cmd");
-        let launch = resolve_launch(&shim, &empty_env()).expect("the direct-entry shim leads to its package");
+        let launch = resolve_launch(&shim, &empty_env())
+            .expect("the direct-entry shim leads to its package");
         assert_eq!(launch.kind, QoderInstallKind::NpmPackage);
         assert_eq!(launch.prefix_args.len(), 1);
         assert_eq!(
             Path::new(&launch.prefix_args[0]),
             root.path()
                 .join("bin/node_modules/@qoder-ai/qodercli/bundle/qodercli.js")
+        );
+    }
+
+    #[test]
+    fn package_metadata_under_bundle_does_not_hide_the_package_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let shim = npm_fixture(root.path(), true);
+        let bundle = root
+            .path()
+            .join("bin/node_modules/@qoder-ai/qodercli/bundle");
+        std::fs::write(bundle.join("package.json"), r#"{"type":"commonjs"}"#).unwrap();
+        let launch = resolve_launch(&shim, &empty_env()).unwrap();
+        assert_eq!(
+            Path::new(&launch.prefix_args[0]),
+            bundle.join("qodercli.js")
         );
     }
 
@@ -477,14 +555,95 @@ mod tests {
         std::fs::create_dir_all(&node_dir).unwrap();
         let node = node_dir.join("node.exe");
         std::fs::write(&node, b"MZ fake").unwrap();
-        let mut env = BTreeMap::new();
+        let mut env = empty_env();
+        env.remove("PATH");
         // A lowercase `Path` key is the same override as `PATH`.
-        env.insert(
-            "Path".to_string(),
-            node_dir.to_string_lossy().into_owned(),
-        );
+        env.insert("Path".to_string(), node_dir.to_string_lossy().into_owned());
         let launch = resolve_launch(&shim, &env).expect("PATH answers for the missing beside Node");
         assert_eq!(launch.program, node);
+    }
+
+    #[test]
+    fn path_lookup_honors_the_launch_pathext_and_skips_the_posix_shim() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("qodercli.exe");
+        let cmd = root.path().join("qodercli.cmd");
+        std::fs::write(&exe, b"MZ fake").unwrap();
+        std::fs::write(&cmd, "@echo off").unwrap();
+        std::fs::write(root.path().join("qodercli"), "#!/bin/sh\n").unwrap();
+        let mut env = empty_env();
+        env.insert("PATH".into(), root.path().to_string_lossy().into_owned());
+        env.insert("Pathext".into(), ".CMD;.EXE".into());
+        assert_eq!(which_in_path("qodercli", &env), Some(cmd));
+        env.insert("Pathext".into(), ".EXE;.CMD".into());
+        assert_eq!(which_in_path("qodercli", &env), Some(exe));
+    }
+
+    #[test]
+    fn case_insensitive_env_duplicates_follow_the_childs_last_assignment() {
+        let env = BTreeMap::from([
+            ("PATH".into(), "first".into()),
+            ("Path".into(), "last".into()),
+        ]);
+        assert_eq!(env_lookup(&env, "PATH").as_deref(), Some("last"));
+    }
+
+    #[test]
+    fn npm_launch_rejects_a_node_cmd_wrapper() {
+        let root = tempfile::tempdir().unwrap();
+        let shim = npm_fixture(root.path(), false);
+        let node_dir = root.path().join("node");
+        std::fs::create_dir_all(&node_dir).unwrap();
+        let wrapper = node_dir.join("node.cmd");
+        std::fs::write(&wrapper, "@echo off\nnode.exe %*\n").unwrap();
+        let mut env = empty_env();
+        env.insert("PATH".into(), node_dir.to_string_lossy().into_owned());
+        assert!(matches!(
+            resolve_launch(&shim, &env),
+            Err(LaunchError::NodeWrapper(path)) if Path::new(&path) == wrapper
+        ));
+    }
+
+    #[test]
+    fn npm_node_lookup_excludes_js_like_the_npm_shim() {
+        let root = tempfile::tempdir().unwrap();
+        let shim = npm_fixture(root.path(), false);
+        let scripts = root.path().join("scripts");
+        let native = root.path().join("native");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::create_dir_all(&native).unwrap();
+        std::fs::write(scripts.join("node.js"), "// not a Node runtime").unwrap();
+        let node = native.join("node.exe");
+        std::fs::write(&node, b"MZ fake").unwrap();
+        let mut env = empty_env();
+        env.insert(
+            "PATH".into(),
+            std::env::join_paths([scripts, native])
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        env.insert("PATHEXT".into(), ".EXE;.JS;.CMD".into());
+        assert_eq!(resolve_launch(&shim, &env).unwrap().program, node);
+    }
+
+    #[test]
+    fn npm_launch_reports_a_missing_node_or_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let shim = npm_fixture(root.path(), false);
+        assert!(matches!(
+            resolve_launch(&shim, &empty_env()),
+            Err(LaunchError::NodeMissing)
+        ));
+        std::fs::remove_file(
+            root.path()
+                .join("bin/node_modules/@qoder-ai/qodercli/bundle/qodercli.js"),
+        )
+        .unwrap();
+        assert!(matches!(
+            resolve_launch(&shim, &empty_env()),
+            Err(LaunchError::EntryMissing(_))
+        ));
     }
 
     #[test]
@@ -495,10 +654,17 @@ mod tests {
         std::fs::create_dir_all(cli.parent().unwrap()).unwrap();
         std::fs::write(&cli, b"MZ fake").unwrap();
         let mut env = empty_env();
-        env.insert("QODER_CLI_BIN".to_string(), cli.to_string_lossy().into_owned());
+        env.insert(
+            "QODER_CLI_BIN".to_string(),
+            cli.to_string_lossy().into_owned(),
+        );
         let launch = resolve_launch(&dispatcher, &env).expect("QODER_CLI_BIN wins");
         assert_eq!(launch.kind, QoderInstallKind::NativeCli);
         assert_eq!(launch.program, cli);
+        let other = root.path().join("other.exe");
+        std::fs::write(&other, b"MZ fake").unwrap();
+        env.insert("qoder_cli_bin".into(), other.to_string_lossy().into_owned());
+        assert_eq!(resolve_launch(&dispatcher, &env).unwrap().program, other);
     }
 
     #[test]
@@ -514,7 +680,10 @@ mod tests {
         let mut env = empty_env();
         env.insert(
             "QODER_CLI_BIN".to_string(),
-            root.path().join("missing.exe").to_string_lossy().into_owned(),
+            root.path()
+                .join("missing.exe")
+                .to_string_lossy()
+                .into_owned(),
         );
         assert!(matches!(
             resolve_launch(&dispatcher, &env),
@@ -544,7 +713,10 @@ mod tests {
         let dispatcher = dispatcher_fixture(root.path());
         let nested = dispatcher_fixture(&root.path().join("other"));
         let mut env = empty_env();
-        env.insert("QODER_CLI_BIN".to_string(), nested.to_string_lossy().into_owned());
+        env.insert(
+            "QODER_CLI_BIN".to_string(),
+            nested.to_string_lossy().into_owned(),
+        );
         assert!(matches!(
             resolve_launch(&dispatcher, &env),
             Err(LaunchError::UnknownWrapper(_))
@@ -560,7 +732,10 @@ mod tests {
         std::fs::create_dir_all(user_bin.parent().unwrap()).unwrap();
         std::fs::write(&user_bin, b"MZ fake").unwrap();
         let mut env = empty_env();
-        env.insert("USERPROFILE".to_string(), home.to_string_lossy().into_owned());
+        env.insert(
+            "USERPROFILE".to_string(),
+            home.to_string_lossy().into_owned(),
+        );
         let launch = resolve_launch(&dispatcher, &env).expect("the user install answers");
         assert_eq!(launch.kind, QoderInstallKind::NativeCli);
         assert_eq!(launch.program, user_bin);
@@ -587,8 +762,19 @@ mod tests {
     /// with a workspace cwd cannot reinterpret them.
     #[test]
     fn relative_resolutions_are_anchored_to_absolute_paths() {
-        assert!(absolutize(Path::new("tools\\qodercli.exe")).is_absolute());
-        assert!(absolutize(Path::new("C:\\already\\absolute.exe")).is_absolute());
+        assert!(absolutize(Path::new("tools/qodercli.exe"))
+            .unwrap()
+            .is_absolute());
+        let absolute = std::env::current_dir().unwrap().join("qodercli.exe");
+        assert_eq!(absolutize(&absolute).unwrap(), absolute);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drive_relative_resolutions_are_anchored_before_the_child_changes_cwd() {
+        for path in ["C:tools\\qodercli.exe", "C:node.exe", "\\tools\\node.exe"] {
+            assert!(absolutize(Path::new(path)).unwrap().is_absolute(), "{path}");
+        }
     }
 
     #[test]
@@ -602,7 +788,9 @@ mod tests {
         let shim = npm_fixture(&tricky, true);
         let launch = resolve_launch(&shim, &empty_env()).expect("the tricky path resolves");
         assert_eq!(launch.kind, QoderInstallKind::NpmPackage);
-        assert!(launch.prefix_args[0].to_string_lossy().contains("%USERNAME%"));
+        assert!(launch.prefix_args[0]
+            .to_string_lossy()
+            .contains("%USERNAME%"));
     }
 
     /// The full Windows promise, against a real Node: what codeg's launch
@@ -613,61 +801,71 @@ mod tests {
         let node = crate::commands::acp::resolve_command_on_path("node")
             .expect("the fixture test needs a real node");
         let root = tempfile::tempdir().unwrap();
-        let tricky = root.path().join("Temp A&%USERNAME% 中文/bin");
-        std::fs::create_dir_all(&tricky).unwrap();
-        std::fs::write(
-            tricky.join("package.json"),
-            r#"{"name":"@qoder-ai/qodercli","bin":{"qodercli":"echo.js"},"engines":{"node":">=20.0.0"}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            tricky.join("echo.js"),
-            "console.log(JSON.stringify(process.argv.slice(1)));\n",
-        )
-        .unwrap();
-        let bin = root.path().join("shim/bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(
-            bin.join("qoder.cmd"),
-            "@ECHO off\r\nSET dp0=%~dp0%\r\n\"%_prog%\" \"%dp0%\\node_modules\\@qoder-ai\\qodercli\\bundle\\qodercli.js\" %*\r\n",
-        )
-        .unwrap();
+        let tricky = root.path().join("Temp A&%USERNAME% 中文");
+        let shim = npm_fixture(&tricky, false);
+        let bin = shim.parent().unwrap();
         let pkg = bin.join("node_modules/@qoder-ai/qodercli");
-        std::fs::create_dir_all(pkg.join("bundle")).unwrap();
-        std::fs::write(pkg.join("bundle/qodercli.js"), "// shim-named file").unwrap();
-        // The package's entry lives under the metacharacter path.
+        let entry = pkg.join("bundle/qodercli.js");
         std::fs::write(
-            pkg.join("package.json"),
-            format!(
-                r#"{{"name":"@qoder-ai/qodercli","bin":{{"qodercli":"{}"}},"engines":{{"node":">=20.0.0"}}}}"#,
-                tricky.join("echo.js").to_string_lossy().replace('\\', "\\\\")
-            ),
+            &entry,
+            "console.log(JSON.stringify({argv: process.argv.slice(1), cwd: process.cwd()}));\n",
         )
         .unwrap();
-        let shim = bin.join("qoder.cmd");
-        let mut env = BTreeMap::new();
-        env.insert("PATH".to_string(), node.parent().unwrap().to_string_lossy().into_owned());
-        let launch = resolve_launch(&shim, &env).expect("the fixture resolves");
-        assert_eq!(launch.program, node);
-        let mut command = crate::process::tokio_command(&launch.program);
-        command.args(launch.prefix_args.iter().map(|a| a.to_string_lossy().into_owned()));
-        command.args(["--acp", "--settings", crate::acp::connection::QODER_LAUNCH_SETTINGS]);
-        let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
-            .await
-            .expect("node runs")
-            .expect("node spawns");
-        let argv: Vec<String> = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(argv.len(), 4, "{argv:?}");
-        // Windows Node reports the script path with its own separator
-        // spelling; the prompt arguments arrive exactly as passed.
-        assert_eq!(Path::new(&argv[0]), Path::new(&launch.prefix_args[0]));
-        assert_eq!(
-            &argv[1..],
-            [
-                "--acp".to_string(),
-                "--settings".to_string(),
-                crate::acp::connection::QODER_LAUNCH_SETTINGS.to_string(),
-            ]
+        // Exercise metacharacters in the executable as well as the entry and
+        // workspace, with a child cwd different from the resolver's cwd.
+        let node_dir = tricky.join("Node");
+        std::fs::create_dir_all(&node_dir).unwrap();
+        let native_node = node_dir.join("node.exe");
+        std::fs::copy(std::fs::canonicalize(node).unwrap(), &native_node).unwrap();
+        let workspace = tricky.join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let mut env = empty_env();
+        env.insert(
+            "PATH".into(),
+            std::env::join_paths([bin, &node_dir])
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
         );
+        let dispatcher = dispatcher_fixture(root.path());
+        for launcher in [&shim, &dispatcher] {
+            let launch = resolve_launch(launcher, &env).expect("the fixture resolves");
+            assert_eq!(launch.program, native_node);
+            let mut command = crate::process::tokio_command(&launch.program);
+            command
+                .args(&launch.prefix_args)
+                .args([
+                    "--acp",
+                    "--settings",
+                    crate::acp::connection::QODER_LAUNCH_SETTINGS,
+                ])
+                .current_dir(&workspace)
+                .kill_on_drop(true);
+            let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+                .await
+                .expect("node runs")
+                .expect("node spawns");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let received: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            let argv: Vec<String> = serde_json::from_value(received["argv"].clone()).unwrap();
+            assert_eq!(argv.len(), 4, "{argv:?}");
+            assert_eq!(Path::new(&argv[0]), entry);
+            assert_eq!(
+                std::fs::canonicalize(received["cwd"].as_str().unwrap()).unwrap(),
+                std::fs::canonicalize(&workspace).unwrap()
+            );
+            assert_eq!(
+                &argv[1..],
+                [
+                    "--acp".to_string(),
+                    "--settings".to_string(),
+                    crate::acp::connection::QODER_LAUNCH_SETTINGS.to_string(),
+                ]
+            );
+        }
     }
 }
