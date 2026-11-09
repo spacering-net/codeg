@@ -45,6 +45,9 @@ const LIVE_DISPATCH_STATES = new Set([
 ])
 
 interface PersonalAgentContextValue {
+  /** The assistant this store holds: `null` is the primary. Every call a
+   *  page makes about it passes this on. */
+  botId: number | null
   snapshot: PersonalAgentSnapshot | null
   /** Timeline rows held, oldest first. */
   rows: TimelineRow[]
@@ -74,6 +77,12 @@ interface PersonalAgentContextValue {
 const PersonalAgentContext = createContext<PersonalAgentContextValue | null>(
   null
 )
+
+/** The assistant the enclosing store holds (`null`: the primary), for the
+ *  calls a component makes about it. */
+export function useBotId(): number | null {
+  return usePersonalAgent().botId
+}
 
 export function usePersonalAgent() {
   const ctx = useContext(PersonalAgentContext)
@@ -143,6 +152,26 @@ export function movesUnseen(row: TimelineRow): boolean {
   return state !== "running" && state !== "discarded"
 }
 
+/**
+ * Whether a broadcast is about the assistant a store holds: `botId` itself,
+ * or — for the primary's store (`botId` null) — the primary's id once known,
+ * and 0 (the primary before it is set up). `unknown` when the store does not
+ * know the primary's id yet and the broadcast names another: it may be the
+ * primary's, so the store reads itself again rather than take it.
+ */
+export function changeBelongs(
+  change: { bot_id?: number },
+  botId: number | null,
+  primaryId: number | null
+): "yes" | "no" | "unknown" {
+  const of = change.bot_id
+  if (of == null) return botId == null ? "yes" : "no"
+  if (botId != null) return of === botId ? "yes" : "no"
+  if (of === 0) return "yes"
+  if (primaryId == null) return "unknown"
+  return of === primaryId ? "yes" : "no"
+}
+
 /** The dispatches the rows' cards point at. */
 function dispatchIdsOf(rows: readonly TimelineRow[]): number[] {
   const ids = new Set<number>()
@@ -163,8 +192,21 @@ function dispatchIdsOf(rows: readonly TimelineRow[]): number[] {
  * hear the engine (it runs in another process) polls instead: the newest page,
  * then every row changed since the last poll wherever it sits.
  */
-export function PersonalAgentProvider({ children }: { children: ReactNode }) {
+export function PersonalAgentProvider({
+  children,
+  botId = null,
+}: {
+  children: ReactNode
+  /** The assistant to hold (`null`: the primary). Mount one store per
+   *  assistant — keyed by it, so another assistant starts afresh. */
+  botId?: number | null
+}) {
   const [snapshot, setSnapshot] = useState<PersonalAgentSnapshot | null>(null)
+  /** The primary's id, once its snapshot says (for the primary's store). */
+  const primaryId = useRef<number | null>(null)
+  useEffect(() => {
+    if (botId == null && snapshot?.agent) primaryId.current = snapshot.agent.id
+  }, [botId, snapshot])
   const [rows, setRows] = useState<TimelineRow[]>([])
   const [hasOlder, setHasOlder] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -200,7 +242,7 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
   const refreshSnapshot = useCallback(async () => {
     const id = ++snapReq.current
     try {
-      const snap = await personalAgentGet()
+      const snap = await personalAgentGet(botId)
       if (id !== snapReq.current) return
       setSnapshot(snap)
       const live = snap.status.live_reply
@@ -215,12 +257,12 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
     } catch {
       // keep the last good one; the next nudge recovers
     }
-  }, [])
+  }, [botId])
 
   /** The newest page, merged over what is held (older pages stay). */
   const refreshTimeline = useCallback(async () => {
     try {
-      const page = await personalAgentTimeline(null, PAGE_SIZE)
+      const page = await personalAgentTimeline(null, PAGE_SIZE, null, botId)
       if (rowsRef.current.length === 0) setHasOlder(page.has_older)
       // The first rows held are as of now: changes from here on are what
       // a read-only page reconciles.
@@ -233,7 +275,7 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false)
     }
-  }, [merge])
+  }, [merge, botId])
 
   const refresh = useCallback(async () => {
     await Promise.all([refreshSnapshot(), refreshTimeline()])
@@ -242,22 +284,22 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
   const loadOlder = useCallback(async () => {
     const oldest = rowsRef.current[0]?.id
     if (oldest == null) return
-    const page = await personalAgentTimeline(oldest, PAGE_SIZE)
+    const page = await personalAgentTimeline(oldest, PAGE_SIZE, null, botId)
     merge(page.rows)
     setHasOlder(page.has_older)
-  }, [merge])
+  }, [merge, botId])
 
   const loadSince = useCallback(
     async (id: number): Promise<"loaded" | "too_far"> => {
       const oldest = rowsRef.current[0]?.id ?? null
       if (oldest != null && id >= oldest) return "loaded"
-      const page = await personalAgentTimeline(oldest, undefined, id)
+      const page = await personalAgentTimeline(oldest, undefined, id, botId)
       if (page.too_far) return "too_far"
       merge(page.rows)
       setHasOlder(page.has_older)
       return "loaded"
     },
-    [merge]
+    [merge, botId]
   )
 
   // ── dispatches the cards point at ───────────────────────────────────────
@@ -265,29 +307,32 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
   /** Asked for again while a read of them was out: that read may predate
    *  the change, so they are read once more when it lands. */
   const staleDispatches = useRef(new Set<number>())
-  const fetchDispatches = useCallback(async function fetch(ids: number[]) {
-    const want: number[] = []
-    for (const id of ids) {
-      if (fetchingDispatches.current.has(id)) staleDispatches.current.add(id)
-      else want.push(id)
-    }
-    if (want.length === 0) return
-    for (const id of want) fetchingDispatches.current.add(id)
-    try {
-      const list = await personalAgentDispatches(null, null, want)
-      setDispatchById((held) => {
-        const next = new Map(held)
-        for (const d of list) next.set(d.id, d)
-        return next
-      })
-    } catch {
-      // the row's own data draws the card meanwhile
-    } finally {
-      for (const id of want) fetchingDispatches.current.delete(id)
-      const again = want.filter((id) => staleDispatches.current.delete(id))
-      if (again.length > 0) void fetch(again)
-    }
-  }, [])
+  const fetchDispatches = useCallback(
+    async function fetch(ids: number[]) {
+      const want: number[] = []
+      for (const id of ids) {
+        if (fetchingDispatches.current.has(id)) staleDispatches.current.add(id)
+        else want.push(id)
+      }
+      if (want.length === 0) return
+      for (const id of want) fetchingDispatches.current.add(id)
+      try {
+        const list = await personalAgentDispatches(null, null, want, botId)
+        setDispatchById((held) => {
+          const next = new Map(held)
+          for (const d of list) next.set(d.id, d)
+          return next
+        })
+      } catch {
+        // the row's own data draws the card meanwhile
+      } finally {
+        for (const id of want) fetchingDispatches.current.delete(id)
+        const again = want.filter((id) => staleDispatches.current.delete(id))
+        if (again.length > 0) void fetch(again)
+      }
+    },
+    [botId]
+  )
   const dispatchByIdRef = useRef(dispatchById)
   useEffect(() => {
     dispatchByIdRef.current = dispatchById
@@ -306,31 +351,34 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
   }, [quoted])
   const pendingQuotes = useRef(new Set<number>())
   const quoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const requestQuoted = useCallback((ids: number[]) => {
-    const held = new Set(rowsRef.current.map((r) => r.id))
-    for (const id of ids) {
-      if (!held.has(id) && !quotedRef.current.has(id)) {
-        pendingQuotes.current.add(id)
+  const requestQuoted = useCallback(
+    (ids: number[]) => {
+      const held = new Set(rowsRef.current.map((r) => r.id))
+      for (const id of ids) {
+        if (!held.has(id) && !quotedRef.current.has(id)) {
+          pendingQuotes.current.add(id)
+        }
       }
-    }
-    if (pendingQuotes.current.size === 0 || quoteTimer.current) return
-    // Coalesce: a page renders many quote bars in one pass.
-    quoteTimer.current = setTimeout(() => {
-      quoteTimer.current = null
-      const want = [...pendingQuotes.current].slice(0, 100)
-      for (const id of want) pendingQuotes.current.delete(id)
-      personalAgentTimelineRows(want)
-        .then((found) => {
-          setQuoted((held) => {
-            const next = new Map(held)
-            for (const id of want) next.set(id, null)
-            for (const r of found) next.set(r.id, r)
-            return next
+      if (pendingQuotes.current.size === 0 || quoteTimer.current) return
+      // Coalesce: a page renders many quote bars in one pass.
+      quoteTimer.current = setTimeout(() => {
+        quoteTimer.current = null
+        const want = [...pendingQuotes.current].slice(0, 100)
+        for (const id of want) pendingQuotes.current.delete(id)
+        personalAgentTimelineRows(want, botId)
+          .then((found) => {
+            setQuoted((held) => {
+              const next = new Map(held)
+              for (const id of want) next.set(id, null)
+              for (const r of found) next.set(r.id, r)
+              return next
+            })
           })
-        })
-        .catch(() => {})
-    }, 30)
-  }, [])
+          .catch(() => {})
+      }, 30)
+    },
+    [botId]
+  )
 
   // Coalesce status nudges: a turn sends several in a burst.
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -349,6 +397,19 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
     void subscribe<PersonalAgentChange>(
       PERSONAL_AGENT_CHANGED_EVENT,
       (change) => {
+        const belongs = changeBelongs(change, botId, primaryId.current)
+        if (belongs === "no") return
+        if (belongs === "unknown") {
+          // Not sure it is ours — the primary's store before it has read
+          // the primary's id, and a broadcast naming an assistant. What it
+          // carried is not taken; everything of ours is read again instead,
+          // so a row written meanwhile (a card, say) is not lost: this
+          // store never polls once the engine runs here.
+          void refresh()
+          setDispatchVersion((v) => v + 1)
+          setItemVersion((v) => v + 1)
+          return
+        }
         switch (change.kind) {
           case "timeline":
             merge(change.rows)
@@ -391,7 +452,7 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
       if (statusTimer.current) clearTimeout(statusTimer.current)
       if (quoteTimer.current) clearTimeout(quoteTimer.current)
     }
-  }, [refresh, nudgeStatus, merge, fetchDispatches])
+  }, [refresh, nudgeStatus, merge, fetchDispatches, botId])
 
   // Read-only elsewhere: poll, since the running process's broadcasts stay
   // in that process. The newest page brings new rows; the changed rows bring
@@ -414,8 +475,13 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
           // as the last one read is read again, not missed.
           let newest = since
           let page = cursor
-            ? await personalAgentTimelineUpdatedSince(null, cursor, minId)
-            : await personalAgentTimelineUpdatedSince(since, null, minId)
+            ? await personalAgentTimelineUpdatedSince(
+                null,
+                cursor,
+                minId,
+                botId
+              )
+            : await personalAgentTimelineUpdatedSince(since, null, minId, botId)
           const take = (rows: readonly TimelineRow[]) => {
             merge(rows)
             const n = newestStamp(rows)
@@ -426,7 +492,8 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
             page = await personalAgentTimelineUpdatedSince(
               null,
               page.next,
-              minId
+              minId,
+              botId
             )
             take(page.rows)
           }
@@ -454,7 +521,7 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
     }
     const timer = setInterval(() => void poll(), ELSEWHERE_POLL_MS)
     return () => clearInterval(timer)
-  }, [elsewhere, refresh, merge, fetchDispatches])
+  }, [elsewhere, refresh, merge, fetchDispatches, botId])
 
   const needsOwner =
     (snapshot?.status.pending_permission ?? false) ||
@@ -462,6 +529,7 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<PersonalAgentContextValue>(
     () => ({
+      botId,
       snapshot,
       rows,
       hasOlder,
@@ -478,6 +546,7 @@ export function PersonalAgentProvider({ children }: { children: ReactNode }) {
       requestQuoted,
     }),
     [
+      botId,
       snapshot,
       rows,
       hasOlder,

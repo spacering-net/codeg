@@ -64,6 +64,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { personalAgentSave } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { useBotId } from "@/contexts/personal-agent-context"
 import { getAgentLabel } from "@/lib/custom-agents"
 import type {
   AgentType,
@@ -135,6 +136,7 @@ function SettingsBody({
   onClose: () => void
 }) {
   const t = useTranslations("PersonalAgent.settings")
+  const botId = useBotId()
   const tPage = useTranslations("PersonalAgent")
   const tm = useTranslations("AcpAgentSettings.multiAgent")
   const ta = useTranslations("AcpAgentSettings.multiAgent.assistants")
@@ -335,13 +337,16 @@ function SettingsBody({
     }
     setSaving(true)
     try {
-      await personalAgentSave({
-        name: name.trim(),
-        avatar,
-        ...(brain.config ? { agent_config: brain.config } : {}),
-        settings,
-        locale,
-      })
+      await personalAgentSave(
+        {
+          name: name.trim(),
+          avatar,
+          ...(brain.config ? { agent_config: brain.config } : {}),
+          settings,
+          locale,
+        },
+        botId
+      )
       onClose()
     } catch (error) {
       setSubmitError(toErrorMessage(error))

@@ -70,7 +70,7 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { usePersonalAgent } from "@/contexts/personal-agent-context"
+import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useTabReselect } from "@/hooks/use-tab-reselect"
 import {
   personalAgentDispatches,
@@ -203,12 +203,13 @@ function useFold(key: string): [boolean, (open: boolean) => void] {
 /** The open matters and the dispatches, loaded for the panel: the work tab
  *  lists them, the rail counts what waits on the owner. */
 function useWork() {
-  const { itemVersion, dispatchVersion, dispatchById } = usePersonalAgent()
+  const { botId, itemVersion, dispatchVersion, dispatchById } =
+    usePersonalAgent()
   const [items, setItems] = useState<ItemInfo[] | null>(null)
   const [dispatches, setDispatches] = useState<DispatchInfo[] | null>(null)
   useEffect(() => {
     let cancelled = false
-    personalAgentItems("active")
+    personalAgentItems("active", botId)
       .then((list) => {
         if (!cancelled) setItems(list)
       })
@@ -216,10 +217,10 @@ function useWork() {
     return () => {
       cancelled = true
     }
-  }, [itemVersion, dispatchVersion])
+  }, [itemVersion, dispatchVersion, botId])
   useEffect(() => {
     let cancelled = false
-    personalAgentDispatches(null, DISPATCH_PAGE)
+    personalAgentDispatches(null, DISPATCH_PAGE, null, botId)
       .then((list) => {
         if (!cancelled) setDispatches(list)
       })
@@ -227,7 +228,7 @@ function useWork() {
     return () => {
       cancelled = true
     }
-  }, [dispatchVersion])
+  }, [dispatchVersion, botId])
   return useMemo(() => {
     if (items == null || dispatches == null) return null
     const byId = new Map(dispatches.map((d) => [d.id, d]))
@@ -1147,6 +1148,7 @@ function ContextSection({
   const when = useWhen()
   const [open, setOpen] = useFold("status.context")
   const [resuming, setResuming] = useState(false)
+  const botId = useBotId()
   const { status } = snapshot
   const seg = status.segment
   const last = status.last_compaction
@@ -1204,7 +1206,7 @@ function ContextSection({
                 disabled={resuming || readOnly}
                 onClick={() => {
                   setResuming(true)
-                  personalAgentResumeAutoCompact()
+                  personalAgentResumeAutoCompact(botId)
                     .catch((e) => toast.error(toErrorMessage(e)))
                     .finally(() => setResuming(false))
                 }}
@@ -1535,11 +1537,11 @@ function StatsTab() {
   const t = useTranslations("PersonalAgent.data")
   const locale = useLocale()
   const tm = useTranslations("PersonalAgent.mode")
-  const { dispatchVersion } = usePersonalAgent()
+  const { botId, dispatchVersion } = usePersonalAgent()
   const [stats, setStats] = useState<PersonalAgentStats | null>(null)
   useEffect(() => {
     let cancelled = false
-    personalAgentStats(STATS_DAYS)
+    personalAgentStats(STATS_DAYS, botId)
       .then((s) => {
         if (!cancelled) setStats(s)
       })
@@ -1547,7 +1549,7 @@ function StatsTab() {
     return () => {
       cancelled = true
     }
-  }, [dispatchVersion])
+  }, [dispatchVersion, botId])
   if (!stats) {
     return (
       <Loader2 className="mx-auto my-8 size-4 animate-spin text-muted-foreground" />

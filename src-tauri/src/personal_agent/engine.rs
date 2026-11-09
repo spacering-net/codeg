@@ -27,7 +27,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -46,7 +46,7 @@ use crate::acp::manager::ConnectionManager;
 use crate::acp::reply_turn::{ReplySnapshot, ReplyStep};
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope, PromptInputBlock};
 use crate::acp::InternalEventBus;
-use crate::db::entities::personal_agent as agent_entity;
+use crate::db::entities::personal_agent::{self as agent_entity, BotKind};
 use crate::db::entities::personal_agent_batch::{BatchKind, BatchStatus, BatchTrigger};
 use crate::db::entities::personal_agent_item::ItemStatus;
 use crate::db::entities::personal_agent_segment::{self as segment_entity, SegmentReason};
@@ -90,8 +90,21 @@ static ENGINE: OnceLock<Arc<PersonalAgentEngine>> = OnceLock::new();
 
 /// The engine of this process, when this process runs it (it holds the
 /// work-task engine). `None` everywhere else: the page is then read-only.
+/// It runs the primary assistant.
 pub fn engine() -> Option<Arc<PersonalAgentEngine>> {
     ENGINE.get().cloned()
+}
+
+/// The engine running the assistant `bot` (`None`: the primary) in this
+/// process, when one does. Only the primary runs so far: a worker has its
+/// records and its page, and no engine of its own yet.
+pub async fn engine_for(bot: Option<i32>) -> Option<Arc<PersonalAgentEngine>> {
+    let engine = engine()?;
+    match bot {
+        None => Some(engine),
+        Some(id) if engine.serves(id).await => Some(engine),
+        Some(_) => None,
+    }
 }
 
 /// What a segment owes the agent and how its compactions have gone. JSON on
@@ -119,6 +132,10 @@ pub struct SegmentState {
     pub streaks: Streaks,
     #[serde(default)]
     pub handoff_trimmed: bool,
+    /// For a worker: the fingerprint of the owner's profile (the primary's
+    /// `USER.md`) it was last given; a change is sent at the next delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_digest: Option<String>,
 }
 
 impl SegmentState {
@@ -305,6 +322,11 @@ pub(super) struct EngineState {
 }
 
 pub struct PersonalAgentEngine {
+    /// The assistant this engine runs: a worker's id, or `None` for the
+    /// primary — looked up, as it may not be set up yet.
+    fixed_bot: Option<i32>,
+    /// The primary's id once known (0 until then).
+    bot_cache: AtomicI32,
     pub(super) db: AppDatabase,
     pub(super) manager: ConnectionManager,
     pub(super) emitter: EventEmitter,
@@ -335,6 +357,8 @@ pub fn build(
     data_dir: PathBuf,
 ) -> Option<Arc<PersonalAgentEngine>> {
     let engine = Arc::new(PersonalAgentEngine {
+        fixed_bot: None,
+        bot_cache: AtomicI32::new(0),
         db,
         manager,
         emitter,
@@ -358,10 +382,22 @@ impl PersonalAgentEngine {
     /// boot.
     #[cfg(test)]
     pub(crate) fn new_for_test(db: AppDatabase, data_dir: PathBuf) -> Arc<Self> {
+        Self::new_for_bot_test(db, data_dir, None)
+    }
+
+    /// An engine for tests running one given assistant (`None`: the primary).
+    #[cfg(test)]
+    pub(crate) fn new_for_bot_test(
+        db: AppDatabase,
+        data_dir: PathBuf,
+        bot: Option<i32>,
+    ) -> Arc<Self> {
         let bus = Arc::new(InternalEventBus::new(Arc::new(
             crate::acp::EventBusMetrics::default(),
         )));
         Arc::new(Self {
+            fixed_bot: bot,
+            bot_cache: AtomicI32::new(0),
             db,
             manager: ConnectionManager::new(),
             emitter: EventEmitter::Noop,
@@ -445,7 +481,9 @@ impl PersonalAgentEngine {
         row.segment_id = Some(segment_id);
         row.batch_id = Some(batch_id);
         row.data = Some(serde_json::json!({ "state": "running", "started_at": Utc::now() }));
-        let row = svc::insert_row(&self.db.conn, row).await.expect("reply row");
+        let row = svc::insert_row(&self.db.conn, self.bot().await, row)
+            .await
+            .expect("reply row");
         let mut st = self.state.lock().await;
         st.connection_id = Some(conn.to_string());
         st.connection_segment = Some(segment_id);
@@ -582,23 +620,62 @@ impl PersonalAgentEngine {
 
     // ── configuration ───────────────────────────────────────────────────────
 
+    /// This engine's assistant's row, when it is set up (and not deleted).
     pub(super) async fn agent_row(&self) -> Option<agent_entity::Model> {
-        svc::get_agent(&self.db.conn).await.ok().flatten()
+        let row = match self.fixed_bot {
+            Some(id) => svc::get_bot(&self.db.conn, id).await,
+            None => svc::primary_bot(&self.db.conn).await,
+        }
+        .ok()
+        .flatten();
+        if let (None, Some(r)) = (self.fixed_bot, row.as_ref()) {
+            self.bot_cache.store(r.id, Ordering::SeqCst);
+        }
+        row
+    }
+
+    /// The id of this engine's assistant — what every one of its records is
+    /// filed under. 0 while the primary is not set up: it has no records,
+    /// and a write under 0 is refused.
+    pub(super) async fn bot(&self) -> i32 {
+        if let Some(id) = self.fixed_bot {
+            return id;
+        }
+        let cached = self.bot_cache.load(Ordering::SeqCst);
+        if cached > 0 {
+            return cached;
+        }
+        self.agent_row().await.map(|r| r.id).unwrap_or(0)
+    }
+
+    /// Whether this engine runs the assistant `bot`.
+    pub async fn serves(&self, bot: i32) -> bool {
+        bot > 0 && self.bot().await == bot
     }
 
     pub(super) fn workdir_of(&self, row: &agent_entity::Model) -> PathBuf {
-        match row.workdir.as_deref() {
-            Some(p) if !p.trim().is_empty() => PathBuf::from(p),
-            _ => workdir::default_workdir(&self.data_dir),
-        }
+        workdir::workdir_of_bot(&self.data_dir, row)
     }
 
     pub(super) fn info_of(&self, row: &agent_entity::Model) -> Option<PersonalAgentInfo> {
         to_info(row, &self.workdir_of(row))
     }
 
+    /// The id of this engine's assistant as far as it is known without
+    /// asking the database: 0 before the primary is first read.
+    fn bot_now(&self) -> i32 {
+        self.fixed_bot
+            .unwrap_or_else(|| self.bot_cache.load(Ordering::SeqCst))
+    }
+
+    /// Broadcast a change, naming the assistant it is about (`bot_id`; 0 is
+    /// the primary before it is set up), so a page shows only its own.
     pub(super) fn emit(&self, change: PersonalAgentChange) {
-        emit_event(&self.emitter, PERSONAL_AGENT_CHANGED_EVENT, change);
+        emit_event(
+            &self.emitter,
+            PERSONAL_AGENT_CHANGED_EVENT,
+            change_payload(self.bot_now(), &change),
+        );
     }
 
     pub(super) fn emit_rows(&self, rows: Vec<TimelineRow>) {
@@ -609,7 +686,7 @@ impl PersonalAgentEngine {
 
     /// Write one timeline row and broadcast it.
     pub(super) async fn push_row(&self, row: NewRow) -> Option<TimelineRow> {
-        match svc::insert_row(&self.db.conn, row).await {
+        match svc::insert_row(&self.db.conn, self.bot().await, row).await {
             Ok(m) => {
                 let r = svc::to_row(m);
                 self.emit_rows(vec![r.clone()]);
@@ -650,7 +727,9 @@ impl PersonalAgentEngine {
     /// and its events put back once; a compaction's batch was never sent, so
     /// nothing else changes.
     async fn boot_reconcile(&self) {
-        let running = svc::running_batches(&self.db.conn).await.unwrap_or_default();
+        let running = svc::running_batches(&self.db.conn, self.bot().await)
+            .await
+            .unwrap_or_default();
         for batch in running {
             let _ = svc::finish_batch(
                 &self.db.conn,
@@ -715,7 +794,7 @@ impl PersonalAgentEngine {
         let back = svc::requeue_batch_events(&self.db.conn, batch_id)
             .await
             .unwrap_or_default();
-        let unread = svc::set_result_rows_read(&self.db.conn, &back, None)
+        let unread = svc::set_result_rows_read(&self.db.conn, self.bot().await, &back, None)
             .await
             .unwrap_or_default();
         self.emit_rows(unread.into_iter().map(svc::to_row).collect());
@@ -906,7 +985,7 @@ impl PersonalAgentEngine {
                 // The running process keeps its launch-time settings; a change
                 // to them takes a new process, which the plan makes a new
                 // segment (at the next delivery, never mid-turn).
-                if let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await {
+                if let Ok(Some(seg)) = svc::open_segment(&self.db.conn, self.bot().await).await {
                     if seg.pending_reason.is_none() {
                         let _ = svc::set_pending_reason(
                             &self.db.conn,
@@ -1033,7 +1112,7 @@ impl PersonalAgentEngine {
         options: &[crate::acp::types::PermissionOptionInfo],
     ) {
         if let Ok(Some(_)) =
-            svc::row_by_ref(&self.db.conn, TimelineKind::Permission, request_id).await
+            svc::row_by_ref(&self.db.conn, self.bot().await, TimelineKind::Permission, request_id).await
         {
             return;
         }
@@ -1066,7 +1145,7 @@ impl PersonalAgentEngine {
         origin: Option<&crate::acp::types::PermissionAnswerOrigin>,
     ) {
         let Ok(Some(row)) =
-            svc::row_by_ref(&self.db.conn, TimelineKind::Permission, request_id).await
+            svc::row_by_ref(&self.db.conn, self.bot().await, TimelineKind::Permission, request_id).await
         else {
             return;
         };
@@ -1099,7 +1178,7 @@ impl PersonalAgentEngine {
         questions: &[crate::acp::question::QuestionSpec],
     ) {
         if let Ok(Some(_)) =
-            svc::row_by_ref(&self.db.conn, TimelineKind::Question, question_id).await
+            svc::row_by_ref(&self.db.conn, self.bot().await, TimelineKind::Question, question_id).await
         {
             return;
         }
@@ -1122,7 +1201,7 @@ impl PersonalAgentEngine {
 
     async fn record_plan_request(&self, approval_id: &str, plan_markdown: &str) {
         if let Ok(Some(_)) =
-            svc::row_by_ref(&self.db.conn, TimelineKind::Question, approval_id).await
+            svc::row_by_ref(&self.db.conn, self.bot().await, TimelineKind::Question, approval_id).await
         {
             return;
         }
@@ -1139,7 +1218,7 @@ impl PersonalAgentEngine {
     /// page), or — `None`, from the resolved event — that it is no longer
     /// pending without codeg having seen the answer.
     async fn settle_question_row(&self, ref_id: &str, answer: Option<serde_json::Value>) {
-        let Ok(Some(row)) = svc::row_by_ref(&self.db.conn, TimelineKind::Question, ref_id).await
+        let Ok(Some(row)) = svc::row_by_ref(&self.db.conn, self.bot().await, TimelineKind::Question, ref_id).await
         else {
             return;
         };
@@ -1482,7 +1561,7 @@ impl PersonalAgentEngine {
             if id <= 0 || id >= row_id {
                 continue;
             }
-            if let Ok(Some(target)) = svc::get_row(&self.db.conn, id).await {
+            if let Ok(Some(target)) = svc::get_row_of(&self.db.conn, self.bot().await, id).await {
                 if !svc::is_unwritten_reply(&target) && target.kind != TimelineKind::Marker {
                     return Some(id);
                 }
@@ -1598,10 +1677,10 @@ impl PersonalAgentEngine {
         let Some(row) = self.agent_row().await else {
             return Ok(());
         };
-        let owners = svc::queued_owner_rows(&self.db.conn)
+        let owners = svc::queued_owner_rows(&self.db.conn, self.bot().await)
             .await
             .map_err(|e| e.to_string())?;
-        let events = svc::pending_events(&self.db.conn)
+        let events = svc::pending_events(&self.db.conn, self.bot().await)
             .await
             .map_err(|e| e.to_string())?;
         if owners.is_empty() && !events.iter().any(|e| e.wake) {
@@ -1657,7 +1736,7 @@ impl PersonalAgentEngine {
 
     /// Mark the open segment to be replaced at the next delivery.
     pub(super) async fn request_new_segment(&self, reason: SegmentReason) {
-        if let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await {
+        if let Ok(Some(seg)) = svc::open_segment(&self.db.conn, self.bot().await).await {
             let _ = svc::set_pending_reason(&self.db.conn, seg.id, Some(reason)).await;
         }
     }
@@ -1668,12 +1747,16 @@ impl PersonalAgentEngine {
     async fn ensure_session(&self, row: &agent_entity::Model) -> Result<Session, String> {
         let config = brain_of(row).ok_or("the personal agent's agent is not readable")?;
         let workdir = self.workdir_of(row);
-        workdir::ensure_initialized(&workdir, self.owner_locale(row, None).await)
-            .await
-            .map_err(|e| e.to_string())?;
+        workdir::ensure_bot_workdir(
+            &workdir,
+            self.owner_locale(row, None).await,
+            row.kind == BotKind::Worker,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         let folder_id = self.ensure_folder(row, &workdir).await?;
 
-        let seg = svc::open_segment(&self.db.conn)
+        let seg = svc::open_segment(&self.db.conn, self.bot().await)
             .await
             .map_err(|e| e.to_string())?;
         if let Some(open) = seg.as_ref() {
@@ -1792,6 +1875,7 @@ impl PersonalAgentEngine {
         let snapshot = serde_json::to_string(config).map_err(|e| e.to_string())?;
         let seg = svc::create_segment(
             &self.db.conn,
+            self.bot().await,
             &config.agent_type.as_wire(),
             snapshot,
             reason,
@@ -1839,7 +1923,12 @@ impl PersonalAgentEngine {
     ) -> Result<Session, String> {
         let agent_type = config.agent_type;
         let settings = settings_of(row);
-        workdir::sync_skill(workdir, agent_type, settings.skill_enabled);
+        workdir::sync_bot_skill(
+            workdir,
+            agent_type,
+            settings.skill_enabled,
+            row.kind == BotKind::Worker,
+        );
         let env = crate::commands::acp::build_session_runtime_env(
             &self.db,
             agent_type,
@@ -1990,6 +2079,7 @@ impl PersonalAgentEngine {
         };
         let batch = svc::create_batch(
             &self.db.conn,
+            self.bot().await,
             session.segment.id,
             BatchKind::Compaction,
             Some(serde_json::json!({
@@ -2237,9 +2327,13 @@ impl PersonalAgentEngine {
         let digest = workdir::persona_digest(&workdir, &row.name);
         let soul = workdir::read_text(&workdir, workdir::SOUL_FILE);
         let rules = workdir::read_text(&workdir, workdir::RULES_FILE);
+        // A worker's facts about the owner: the primary's profile.
+        let owner = self.owner_profile(row).await;
+        let owner_digest = owner.as_deref().map(text_digest);
 
         let mut cards_text: Vec<String> = Vec::new();
         let mut carried = Carried::default();
+        let mut owner_given = false;
         let items = self.item_lines().await;
         if seg_state.handoff_pending {
             let card = self
@@ -2252,8 +2346,12 @@ impl PersonalAgentEngine {
                 .await;
             cards_text.push(card.text);
             carried.handoff = true;
+            owner_given = true;
         } else if seg_state.needs_state_card {
-            let user = workdir::read_text(&workdir, workdir::USER_FILE);
+            let user = match owner.as_deref() {
+                Some(o) => o.to_string(),
+                None => workdir::read_text(&workdir, workdir::USER_FILE),
+            };
             let memory = workdir::read_text(&workdir, workdir::MEMORY_FILE);
             let identity = cards::Identity {
                 name: &row.name,
@@ -2261,9 +2359,11 @@ impl PersonalAgentEngine {
                 rules: &rules,
                 user: &user,
                 memory: &memory,
+                worker: owner.is_some(),
             };
             cards_text.push(cards::state_card(&identity, &items));
             carried.state_card = true;
+            owner_given = true;
         } else if seg_state.persona_resend || session.segment.persona_digest.as_deref() != Some(&digest)
         {
             // Changed between turns, not by the agent itself: its own edits
@@ -2271,6 +2371,14 @@ impl PersonalAgentEngine {
             if session.segment.persona_digest.is_some() || seg_state.persona_resend {
                 cards_text.push(cards::persona_update(&row.name, &soul, &rules));
                 carried.persona = true;
+            }
+        }
+        // The primary changed the owner's profile since this worker last got
+        // it: the new one, whole.
+        if let (Some(o), false) = (owner.as_deref(), owner_given) {
+            if seg_state.owner_digest.as_deref() != owner_digest.as_deref() {
+                cards_text.push(cards::owner_update(o));
+                owner_given = true;
             }
         }
         // What this delivery re-delivers: events an interrupted turn had
@@ -2350,6 +2458,7 @@ impl PersonalAgentEngine {
         let ledger_from = self.ledger_ancestry(&direct).await;
         let batch = svc::create_batch_with(
             &self.db.conn,
+            self.bot().await,
             session.segment.id,
             BatchKind::Delivery,
             Some(serde_json::json!({
@@ -2384,7 +2493,7 @@ impl PersonalAgentEngine {
         let taken = svc::mark_events_delivered(&self.db.conn, &event_ids, batch.id)
             .await
             .unwrap_or_default();
-        let read_cards = svc::set_result_rows_read(&self.db.conn, &taken, Some(Utc::now()))
+        let read_cards = svc::set_result_rows_read(&self.db.conn, self.bot().await, &taken, Some(Utc::now()))
             .await
             .unwrap_or_default();
         // The reply exists from the start: it streams in place and settles
@@ -2394,7 +2503,7 @@ impl PersonalAgentEngine {
         reply.segment_id = Some(session.segment.id);
         reply.batch_id = Some(batch.id);
         reply.data = Some(serde_json::json!({ "state": "running", "started_at": started_at }));
-        let reply = svc::insert_row(&self.db.conn, reply).await.ok();
+        let reply = svc::insert_row(&self.db.conn, self.bot().await, reply).await.ok();
         let token = format!("pa-{}-{}", batch.id, uuid::Uuid::new_v4().simple());
         let start_seq = self.current_seq(&session.conn_id).await;
         // Registered before the send, for the reason `start_compaction` gives.
@@ -2457,7 +2566,7 @@ impl PersonalAgentEngine {
             let returned = svc::revert_batch_events(&self.db.conn, batch.id)
                 .await
                 .unwrap_or_default();
-            let unread = svc::set_result_rows_read(&self.db.conn, &returned, None)
+            let unread = svc::set_result_rows_read(&self.db.conn, self.bot().await, &returned, None)
                 .await
                 .unwrap_or_default();
             if let Some(r) = reply.as_ref() {
@@ -2485,8 +2594,25 @@ impl PersonalAgentEngine {
                 .await;
         }
         let _ = svc::set_segment_persona_digest(&self.db.conn, session.segment.id, Some(digest)).await;
+        if owner_given {
+            self.update_segment_state(session.segment.id, |s| s.owner_digest = owner_digest.clone())
+                .await;
+        }
         self.emit(PersonalAgentChange::Status);
         Ok(())
+    }
+
+    /// For a worker, the owner's profile: the primary assistant's `USER.md`,
+    /// the one copy there is. `None` for the primary, which keeps its own.
+    pub(super) async fn owner_profile(&self, row: &agent_entity::Model) -> Option<String> {
+        if row.kind != BotKind::Worker {
+            return None;
+        }
+        let primary = svc::primary_bot(&self.db.conn).await.ok().flatten();
+        Some(match primary {
+            Some(p) => workdir::read_text(&workdir::workdir_of_bot(&self.data_dir, &p), workdir::USER_FILE),
+            None => String::new(),
+        })
     }
 
     /// A reply whose prompt never reached the agent: kept, void.
@@ -2502,7 +2628,10 @@ impl PersonalAgentEngine {
     /// What a delivery repeats of a quoted row, so the agent knows what is
     /// meant even when it is no longer in its context.
     async fn quote_excerpt(&self, id: i32) -> Option<String> {
-        let row = svc::get_row(&self.db.conn, id).await.ok().flatten()?;
+        let row = svc::get_row_of(&self.db.conn, self.bot().await, id)
+            .await
+            .ok()
+            .flatten()?;
         if svc::is_unwritten_reply(&row) {
             return None;
         }
@@ -2528,6 +2657,7 @@ impl PersonalAgentEngine {
     pub(super) async fn item_lines(&self) -> Vec<ItemLine> {
         let items = svc::list_items(
             &self.db.conn,
+            self.bot().await,
             &[ItemStatus::Open, ItemStatus::Waiting],
             CARD_ITEMS,
         )
@@ -2573,6 +2703,7 @@ impl PersonalAgentEngine {
     ) -> cards::Card {
         let recent_rows = svc::recent_rows(
             &self.db.conn,
+            self.bot().await,
             &[
                 TimelineKind::Owner,
                 TimelineKind::Reply,
@@ -2625,7 +2756,7 @@ impl PersonalAgentEngine {
                     agent: a.label_snapshot.agent,
                 })
                 .collect();
-        let previous = svc::list_segments(&self.db.conn)
+        let previous = svc::list_segments(&self.db.conn, self.bot().await)
             .await
             .unwrap_or_default()
             .into_iter()
@@ -2634,7 +2765,11 @@ impl PersonalAgentEngine {
             .map(|c| c.label_snapshot.agent);
         let soul = workdir::read_text(workdir, workdir::SOUL_FILE);
         let rules = workdir::read_text(workdir, workdir::RULES_FILE);
-        let user = workdir::read_text(workdir, workdir::USER_FILE);
+        let owner = self.owner_profile(row).await;
+        let user = match owner.as_deref() {
+            Some(o) => o.to_string(),
+            None => workdir::read_text(workdir, workdir::USER_FILE),
+        };
         let memory = workdir::read_text(workdir, workdir::MEMORY_FILE);
         cards::handoff_card(&cards::HandoffInput {
             segment_seq: seg.seq,
@@ -2647,6 +2782,7 @@ impl PersonalAgentEngine {
                 rules: &rules,
                 user: &user,
                 memory: &memory,
+                worker: owner.is_some(),
             },
             items,
             recent: &recent,
@@ -3048,7 +3184,7 @@ impl PersonalAgentEngine {
             return Err("the message is empty".into());
         }
         if let Some(id) = reply_to {
-            let target = svc::get_row(&self.db.conn, id)
+            let target = svc::get_row_of(&self.db.conn, self.bot().await, id)
                 .await
                 .map_err(|e| e.to_string())?
                 .ok_or("the quoted message does not exist")?;
@@ -3113,7 +3249,7 @@ impl PersonalAgentEngine {
 
     /// The owner's "new session": takes effect at the next delivery.
     pub async fn new_session(&self) -> Result<(), String> {
-        let Some(seg) = svc::open_segment(&self.db.conn).await.map_err(|e| e.to_string())? else {
+        let Some(seg) = svc::open_segment(&self.db.conn, self.bot().await).await.map_err(|e| e.to_string())? else {
             return Ok(());
         };
         let _ = svc::set_pending_reason(&self.db.conn, seg.id, Some(SegmentReason::Manual)).await;
@@ -3130,7 +3266,7 @@ impl PersonalAgentEngine {
 
     /// Lift a paused auto-compaction.
     pub async fn resume_auto_compact(&self) -> Result<(), String> {
-        let Some(seg) = svc::open_segment(&self.db.conn).await.map_err(|e| e.to_string())? else {
+        let Some(seg) = svc::open_segment(&self.db.conn, self.bot().await).await.map_err(|e| e.to_string())? else {
             return Ok(());
         };
         let _ = svc::set_segment_paused(&self.db.conn, seg.id, false).await;
@@ -3151,7 +3287,7 @@ impl PersonalAgentEngine {
     /// The owner has seen the page up to row `up_to`: what of it was new to
     /// them stops counting, every page hears it.
     pub async fn mark_seen(&self, up_to: i32) -> Result<(), String> {
-        let marked = svc::mark_seen(&self.db.conn, up_to)
+        let marked = svc::mark_seen(&self.db.conn, self.bot().await, up_to)
             .await
             .map_err(|e| e.to_string())?;
         if !marked.is_empty() {
@@ -3163,7 +3299,7 @@ impl PersonalAgentEngine {
 
     /// Offer an interrupted message again, as a new message at the end.
     pub async fn resend(&self, row_id: i32) -> Result<TimelineRow, String> {
-        let row = svc::get_row(&self.db.conn, row_id)
+        let row = svc::get_row_of(&self.db.conn, self.bot().await, row_id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or("no such message")?;
@@ -3266,25 +3402,44 @@ impl PersonalAgentEngine {
         if settings.compact_command.is_some() {
             settings.compact_command_agent = effective_agent.map(|a| a.as_wire().into_owned());
         }
-        write.settings_json = Some(serde_json::to_string(&settings).map_err(|e| e.to_string())?);
+        let worker = existing.as_ref().is_some_and(|r| r.kind == BotKind::Worker);
+        if worker {
+            // The owner's language is the account's, on the primary's row.
+            settings.locale = None;
+        }
+        write.settings_json = Some(crate::models::personal_agent::merge_settings_json(
+            existing.as_ref().map(|r| r.settings.as_str()).unwrap_or("{}"),
+            &settings,
+            !worker,
+        ));
         let first_save = existing.is_none();
         let renamed = existing
             .as_ref()
             .zip(write.name.as_deref())
             .is_some_and(|(row, name)| row.name.trim() != name.trim());
-        let saved = svc::save_agent(&self.db.conn, write)
-            .await
-            .map_err(|e| e.to_string())?;
+        let saved = match (self.fixed_bot, existing.as_ref()) {
+            (Some(id), _) => svc::save_bot(&self.db.conn, id, write).await,
+            (None, Some(row)) => svc::save_bot(&self.db.conn, row.id, write).await,
+            (None, None) => svc::save_primary(&self.db.conn, write).await,
+        }
+        .map_err(|e| e.to_string())?;
         if renamed {
-            if let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await {
+            if let Ok(Some(seg)) = svc::open_segment(&self.db.conn, self.bot().await).await {
                 self.update_segment_state(seg.id, |s| s.persona_resend = true).await;
             }
         }
-        if first_save {
+        // The first save sets the working directory up — a worker's row is
+        // made before its engine first saves, so "first" is the directory's
+        // state, not the row's.
+        if first_save || !workdir::is_workdir(&self.workdir_of(&saved)) {
             let workdir = self.workdir_of(&saved);
-            workdir::ensure_initialized(&workdir, self.owner_locale(&saved, None).await)
-                .await
-                .map_err(|e| e.to_string())?;
+            workdir::ensure_bot_workdir(
+                &workdir,
+                self.owner_locale(&saved, None).await,
+                saved.kind == BotKind::Worker,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
         }
         if let (Some(old), Some(new)) = (old_config.as_ref(), new_config.as_ref()) {
             self.apply_brain_change(old, new).await;
@@ -3292,7 +3447,12 @@ impl PersonalAgentEngine {
         let saved = self.agent_row().await.unwrap_or(saved);
         let workdir = self.workdir_of(&saved);
         if let Some(agent_type) = effective_agent {
-            workdir::sync_skill(&workdir, agent_type, settings.skill_enabled);
+            workdir::sync_bot_skill(
+                &workdir,
+                agent_type,
+                settings.skill_enabled,
+                saved.kind == BotKind::Worker,
+            );
         }
         self.emit(PersonalAgentChange::Agent);
         self.emit(PersonalAgentChange::Status);
@@ -3300,7 +3460,7 @@ impl PersonalAgentEngine {
     }
 
     async fn apply_brain_change(&self, old: &AssistantAgentConfig, new: &AssistantAgentConfig) {
-        let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await else {
+        let Ok(Some(seg)) = svc::open_segment(&self.db.conn, self.bot().await).await else {
             return;
         };
         if old.agent_type != new.agent_type {
@@ -3384,7 +3544,16 @@ impl PersonalAgentEngine {
         if let Some(tag) = ui.map(str::trim).filter(|t| !t.is_empty()) {
             return super::templates::template_locale(tag);
         }
-        if let Some(locale) = settings_of(row).locale {
+        // The account's: on the primary's row, whichever assistant asks.
+        let remembered = if row.kind == BotKind::Primary {
+            settings_of(row).locale
+        } else {
+            match svc::primary_bot(&self.db.conn).await {
+                Ok(Some(p)) => settings_of(&p).locale,
+                _ => None,
+            }
+        };
+        if let Some(locale) = remembered {
             return locale;
         }
         match crate::commands::system_settings::load_system_language_settings(&self.db.conn).await {
@@ -3407,14 +3576,18 @@ impl PersonalAgentEngine {
         let row = self.agent_row().await.ok_or("configure the personal agent first")?;
         let target = match path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => PathBuf::from(p),
-            None => workdir::default_workdir(&self.data_dir),
+            None => workdir::default_workdir_of_bot(&self.data_dir, &row),
         };
         if target == self.workdir_of(&row) {
             return self.info_of(&row).ok_or_else(|| "unreadable".into());
         }
-        workdir::ensure_initialized(&target, self.owner_locale(&row, locale).await)
-            .await
-            .map_err(|e| e.to_string())?;
+        workdir::ensure_bot_workdir(
+            &target,
+            self.owner_locale(&row, locale).await,
+            row.kind == BotKind::Worker,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         let folder = crate::db::service::folder_service::ensure_personal_folder(
             &self.db.conn,
             &target.to_string_lossy(),
@@ -3425,7 +3598,7 @@ impl PersonalAgentEngine {
         svc::set_workdir(&self.db.conn, row.id, custom, Some(folder.id))
             .await
             .map_err(|e| e.to_string())?;
-        if let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await {
+        if let Ok(Some(seg)) = svc::open_segment(&self.db.conn, self.bot().await).await {
             let _ = svc::set_pending_reason(&self.db.conn, seg.id, Some(SegmentReason::Workdir)).await;
         }
         self.marker(
@@ -3445,10 +3618,13 @@ impl PersonalAgentEngine {
     /// rules are handed to the agent at the next delivery.
     pub async fn save_file(&self, name: &str, content: &str) -> Result<(), String> {
         let row = self.agent_row().await.ok_or("configure the personal agent first")?;
+        if row.kind == BotKind::Worker && name == workdir::USER_FILE {
+            return Err("the owner's profile is the primary assistant's: edit it there".into());
+        }
         let workdir = self.workdir_of(&row);
         workdir::write_file(&workdir, name, content).map_err(|e| e.to_string())?;
         if name == workdir::SOUL_FILE || name == workdir::RULES_FILE {
-            if let Ok(Some(seg)) = svc::open_segment(&self.db.conn).await {
+            if let Ok(Some(seg)) = svc::open_segment(&self.db.conn, self.bot().await).await {
                 self.update_segment_state(seg.id, |s| s.persona_resend = true).await;
             }
         }
@@ -3584,6 +3760,25 @@ enum CompactionStart {
     NoCommand,
 }
 
+/// The payload of [`PERSONAL_AGENT_CHANGED_EVENT`]: the change with the
+/// assistant it is about.
+pub fn change_payload(bot_id: i32, change: &PersonalAgentChange) -> serde_json::Value {
+    let mut v = serde_json::to_value(change).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(map) = v.as_object_mut() {
+        map.insert("bot_id".into(), bot_id.into());
+    }
+    v
+}
+
+/// A fingerprint of a text.
+pub(super) fn text_digest(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// `serde`'s snake_case name of an enum value.
 pub(super) fn enum_str<T: Serialize>(v: &T) -> String {
     serde_json::to_value(v)
@@ -3629,6 +3824,10 @@ pub(super) fn to_info(row: &agent_entity::Model, workdir: &std::path::Path) -> O
         revision: row.revision,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        kind: row.kind,
+        uid: row.uid.clone(),
+        template: row.template.clone(),
+        executor_assistant_id: row.executor_assistant_id,
     })
 }
 
@@ -3670,16 +3869,18 @@ pub async fn status_from_db(
     engine: EngineHost,
     data_dir: &std::path::Path,
 ) -> PersonalAgentStatus {
-    let segment = svc::open_segment(&db.conn)
+    // Nothing is filed under 0: an assistant not set up has no records.
+    let bot = row.map(|r| r.id).unwrap_or(0);
+    let segment = svc::open_segment(&db.conn, bot)
         .await
         .ok()
         .flatten()
         .and_then(|s| segment_info(&s));
     let settings = row.map(settings_of).unwrap_or_default();
-    let running = svc::count_active_conversation_dispatches(&db.conn)
+    let running = svc::count_active_conversation_dispatches(&db.conn, bot)
         .await
         .unwrap_or(0) as u32;
-    let queued = svc::queued_conversation_dispatches(&db.conn)
+    let queued = svc::queued_conversation_dispatches(&db.conn, bot)
         .await
         .map(|v| v.len() as u32)
         .unwrap_or(0);
@@ -3716,10 +3917,7 @@ pub async fn status_from_db(
             }),
         None => None,
     };
-    let workdir = row.map(|r| match r.workdir.as_deref() {
-        Some(p) if !p.trim().is_empty() => p.to_string(),
-        _ => workdir::default_workdir(data_dir).to_string_lossy().to_string(),
-    });
+    let workdir = row.map(|r| workdir::workdir_of_bot(data_dir, r).to_string_lossy().to_string());
     // What the next compaction would send, as far as it is known without a
     // live session: the setting, or the agent's own built-in command. A live
     // session's catalog refines it (see `snapshot`).
@@ -3742,9 +3940,9 @@ pub async fn status_from_db(
         compact_command,
         last_check: None,
         last_compaction,
-        queued_messages: svc::count_queued_owner_rows(&db.conn).await.unwrap_or(0) as u32,
-        pending_events: svc::count_pending_events(&db.conn).await.unwrap_or(0) as u32,
-        unseen: svc::count_unseen(&db.conn).await.unwrap_or(0) as u32,
+        queued_messages: svc::count_queued_owner_rows(&db.conn, bot).await.unwrap_or(0) as u32,
+        pending_events: svc::count_pending_events(&db.conn, bot).await.unwrap_or(0) as u32,
+        unseen: svc::count_unseen(&db.conn, bot).await.unwrap_or(0) as u32,
         dispatch_running: running,
         dispatch_queued: queued,
         dispatch_limit: settings.dispatch_concurrency,
@@ -3756,21 +3954,33 @@ pub async fn status_from_db(
     }
 }
 
-/// Snapshot for any process: the engine's own when it runs here, the
-/// database's otherwise.
-pub async fn snapshot_any(db: &AppDatabase, data_dir: &std::path::Path) -> PersonalAgentSnapshot {
-    if let Some(engine) = engine() {
+/// Snapshot of an assistant (`None`: the primary) for any process: the
+/// engine's own when one runs it here, the database's otherwise.
+pub async fn snapshot_any(
+    db: &AppDatabase,
+    data_dir: &std::path::Path,
+    bot: Option<i32>,
+) -> PersonalAgentSnapshot {
+    if let Some(engine) = engine_for(bot).await {
         return engine.snapshot().await;
     }
-    let row = svc::get_agent(&db.conn).await.ok().flatten();
-    let agent = row.as_ref().and_then(|r| {
-        let workdir = match r.workdir.as_deref() {
-            Some(p) if !p.trim().is_empty() => PathBuf::from(p),
-            _ => workdir::default_workdir(data_dir),
-        };
-        to_info(r, &workdir)
-    });
-    let status = status_from_db(db, row.as_ref(), EngineHost::Elsewhere, data_dir).await;
+    let row = match bot {
+        Some(id) => svc::get_bot(&db.conn, id).await,
+        None => svc::primary_bot(&db.conn).await,
+    }
+    .ok()
+    .flatten();
+    let agent = row
+        .as_ref()
+        .and_then(|r| to_info(r, &workdir::workdir_of_bot(data_dir, r)));
+    // An assistant no engine runs: elsewhere when there is an engine in
+    // another process, idle here — a worker nothing runs yet.
+    let host = if engine().is_some() {
+        EngineHost::Here
+    } else {
+        EngineHost::Elsewhere
+    };
+    let status = status_from_db(db, row.as_ref(), host, data_dir).await;
     PersonalAgentSnapshot { agent, status }
 }
 

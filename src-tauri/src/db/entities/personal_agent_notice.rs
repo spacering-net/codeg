@@ -74,6 +74,8 @@ pub struct Model {
     pub expires_at: Option<DateTimeUtc>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
+    /// The assistant it belongs to (`personal_agent.id`).
+    pub bot_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

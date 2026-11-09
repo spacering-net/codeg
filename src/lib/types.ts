@@ -1906,7 +1906,16 @@ export interface PersonalAgentInfo {
   revision: number
   created_at: string
   updated_at: string
+  /** The primary assistant, or a worker. */
+  kind: PersonalAgentBotKind
+  uid: string | null
+  /** The template a worker was made from. */
+  template: string | null
+  /** The executor profile a worker is bound to. */
+  executor_assistant_id: number | null
 }
+
+export type PersonalAgentBotKind = "primary" | "worker"
 
 export interface PersonalAgentDraft {
   name?: string
@@ -2199,14 +2208,16 @@ export interface PersonalAgentStats {
 }
 
 /** Payload for `personal-agent://changed`. Timeline rows ride along whole,
- *  and so does the step the reply in flight is on. */
-export type PersonalAgentChange =
+ *  and so does the step the reply in flight is on. `bot_id` is the assistant
+ *  it is about (0: the primary, before it is set up). */
+export type PersonalAgentChange = { bot_id?: number } & (
   | { kind: "timeline"; rows: TimelineRow[] }
   | { kind: "reply"; row_id: number; current: ReplyStep | null }
   | { kind: "status" }
   | { kind: "agent" }
   | { kind: "dispatch"; id: number }
   | { kind: "item"; id: number }
+)
 
 export const PERSONAL_AGENT_CHANGED_EVENT = "personal-agent://changed"
 

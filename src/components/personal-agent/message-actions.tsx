@@ -28,6 +28,7 @@ import { useCopiedFlag } from "@/hooks/use-copied-flag"
 import { useElapsedLabel } from "@/hooks/use-elapsed-label"
 import { personalAgentCancel } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { useBotId } from "@/contexts/personal-agent-context"
 import { cn, copyTextFromMenu, copyTextToClipboard } from "@/lib/utils"
 
 import { usePageScope } from "./shared"
@@ -93,8 +94,8 @@ function useWhen(at: string, durationMs?: number | null): string {
   return took ? t("timeTook", { time, took }) : time
 }
 
-function stopReply(): Promise<void> {
-  return personalAgentCancel().catch((e) => {
+function stopReply(botId: number | null): Promise<void> {
+  return personalAgentCancel(botId).catch((e) => {
     toast.error(toErrorMessage(e))
   })
 }
@@ -107,6 +108,7 @@ const BUTTON =
 /** Stop the turn writing this reply. */
 function StopButton() {
   const t = useTranslations("PersonalAgent.actions")
+  const botId = useBotId()
   const [busy, setBusy] = useState(false)
   return (
     <button
@@ -115,7 +117,7 @@ function StopButton() {
       disabled={busy}
       onClick={() => {
         setBusy(true)
-        void stopReply().finally(() => setBusy(false))
+        void stopReply(botId).finally(() => setBusy(false))
       }}
       title={t("stop")}
       aria-label={t("stop")}
@@ -209,6 +211,7 @@ function MenuItems({
   onQuoted: () => void
 }) {
   const t = useTranslations("PersonalAgent.actions")
+  const botId = useBotId()
   const { onQuote, readOnly } = usePageScope()
   const when = useWhen(spec.at, spec.durationMs)
   // The menu that confirmed it is gone by the time the copy lands.
@@ -229,7 +232,7 @@ function MenuItems({
         </ContextMenuItem>
       ) : null}
       {stop ? (
-        <ContextMenuItem onSelect={() => void stopReply()}>
+        <ContextMenuItem onSelect={() => void stopReply(botId)}>
           {/* The bar's filled square, at its size against the 16px icons. */}
           <Square className="size-4 scale-75 fill-current" />
           {t("stop")}

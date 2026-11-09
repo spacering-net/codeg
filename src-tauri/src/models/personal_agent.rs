@@ -44,8 +44,11 @@ fn default_true() -> bool {
     true
 }
 
-/// The personal agent's own settings, stored as JSON on its row. Every field
+/// An assistant's own settings, stored as JSON on its row. Every field
 /// defaults, so a row written by an older build still reads.
+///
+/// `locale` is the account's, not the assistant's: it lives on the primary's
+/// row only (see [`AccountSettings`]); a worker reads the primary's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersonalAgentSettings {
     /// Context occupancy, in percent, at or above which codeg compacts the
@@ -93,6 +96,63 @@ impl Default for PersonalAgentSettings {
             locale: None,
         }
     }
+}
+
+/// The keys of the settings JSON that are the account's — the same for every
+/// assistant, kept on the primary's row only: the owner's language now, and
+/// the preferences and the team's division of work as they come.
+pub const ACCOUNT_KEYS: &[&str] = &["locale", "prefs", "team"];
+
+/// The account's settings, as far as they are read in the engine: on the
+/// primary's row, next to its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<AppLocale>,
+}
+
+impl AccountSettings {
+    pub fn parse(raw: &str) -> Self {
+        serde_json::from_str(raw).unwrap_or_default()
+    }
+}
+
+/// The settings JSON to store on an assistant's row: `own` for its own keys,
+/// over what the row has. On the primary's row (`primary`), the account's
+/// keys `own` does not speak for — those another part of codeg keeps — stay
+/// as they are; a worker's row keeps none of them.
+pub fn merge_settings_json(existing: &str, own: &PersonalAgentSettings, primary: bool) -> String {
+    let mut map = match serde_json::from_str::<serde_json::Value>(existing) {
+        Ok(serde_json::Value::Object(m)) => m,
+        _ => serde_json::Map::new(),
+    };
+    let written = match serde_json::to_value(own) {
+        Ok(serde_json::Value::Object(m)) => m,
+        _ => serde_json::Map::new(),
+    };
+    // Its own keys are what `own` says — one it leaves out (an unset locale)
+    // is gone.
+    let own_keys = [
+        "auto_compact_percent",
+        "compact_command",
+        "compact_command_agent",
+        "handoff_budget_chars",
+        "dispatch_concurrency",
+        "skill_enabled",
+        "locale",
+    ];
+    for k in own_keys {
+        map.remove(k);
+    }
+    for (k, v) in written {
+        map.insert(k, v);
+    }
+    if !primary {
+        for k in ACCOUNT_KEYS {
+            map.remove(*k);
+        }
+    }
+    serde_json::Value::Object(map).to_string()
 }
 
 impl PersonalAgentSettings {
@@ -144,6 +204,13 @@ pub struct PersonalAgentInfo {
     pub revision: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// The primary assistant, or a worker.
+    pub kind: crate::db::entities::personal_agent::BotKind,
+    pub uid: Option<String>,
+    /// The template a worker was made from.
+    pub template: Option<String>,
+    /// The executor profile a worker is bound to.
+    pub executor_assistant_id: Option<i32>,
 }
 
 /// What the settings dialog saves. Absent fields stay as they are; the first

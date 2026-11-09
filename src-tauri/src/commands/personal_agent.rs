@@ -7,7 +7,9 @@
 //! saying so.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "tauri-runtime")]
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{Duration, Local, Utc};
@@ -40,18 +42,33 @@ fn elsewhere() -> AppCommandError {
     .with_i18n("errors.engineElsewhere", BTreeMap::new())
 }
 
-fn engine() -> Result<Arc<PersonalAgentEngine>, AppCommandError> {
-    pa_engine::engine().ok_or_else(elsewhere)
+/// The engine running assistant `bot_id` (`None`: the primary).
+async fn engine(bot_id: Option<i32>) -> Result<Arc<PersonalAgentEngine>, AppCommandError> {
+    if let Some(e) = pa_engine::engine_for(bot_id).await {
+        return Ok(e);
+    }
+    if pa_engine::engine().is_none() {
+        return Err(elsewhere());
+    }
+    Err(refused(
+        "this assistant has no engine running yet in this codeg process".into(),
+    ))
 }
 
 fn refused(message: String) -> AppCommandError {
     AppCommandError::invalid_input(message)
 }
 
-fn workdir_for(row: &crate::db::entities::personal_agent::Model, data_dir: &Path) -> PathBuf {
-    match row.workdir.as_deref() {
-        Some(p) if !p.trim().is_empty() => PathBuf::from(p),
-        _ => workdir::default_workdir(data_dir),
+/// The assistant a page call is about: `bot_id`, which must exist, or — when
+/// left out — the primary. 0 when the primary is not set up yet (nothing is
+/// filed under 0, so a read finds nothing).
+async fn resolve_bot(db: &AppDatabase, bot_id: Option<i32>) -> Result<i32, AppCommandError> {
+    match bot_id {
+        Some(id) => match svc::get_bot(&db.conn, id).await? {
+            Some(b) => Ok(b.id),
+            None => Err(refused(format!("no assistant #{id}"))),
+        },
+        None => Ok(svc::primary_bot(&db.conn).await?.map(|b| b.id).unwrap_or(0)),
     }
 }
 
@@ -60,8 +77,12 @@ fn workdir_for(row: &crate::db::entities::personal_agent::Model, data_dir: &Path
 pub async fn personal_agent_get_core(
     db: &AppDatabase,
     data_dir: &Path,
+    bot_id: Option<i32>,
 ) -> Result<PersonalAgentSnapshot, AppCommandError> {
-    Ok(pa_engine::snapshot_any(db, data_dir).await)
+    if let Some(id) = bot_id {
+        resolve_bot(db, Some(id)).await?;
+    }
+    Ok(pa_engine::snapshot_any(db, data_dir, bot_id).await)
 }
 
 /// A page of the timeline (`before_id`, `limit`), or — with `since_id` — every
@@ -70,14 +91,16 @@ pub async fn personal_agent_get_core(
 /// takes).
 pub async fn personal_agent_timeline_core(
     db: &AppDatabase,
+    bot_id: Option<i32>,
     before_id: Option<i32>,
     limit: Option<u32>,
     since_id: Option<i32>,
 ) -> Result<TimelinePage, AppCommandError> {
+    let bot = resolve_bot(db, bot_id).await?;
     if let Some(since) = since_id {
-        let (rows, too_far) = svc::range(&db.conn, since, before_id).await?;
+        let (rows, too_far) = svc::range(&db.conn, bot, since, before_id).await?;
         let has_older = match rows.first() {
-            Some(first) => svc::has_rows_before(&db.conn, first.id).await?,
+            Some(first) => svc::has_rows_before(&db.conn, bot, first.id).await?,
             None => true,
         };
         return Ok(TimelinePage {
@@ -87,7 +110,7 @@ pub async fn personal_agent_timeline_core(
         });
     }
     let limit = limit.unwrap_or(60).clamp(1, 500) as u64;
-    let (rows, has_older) = svc::page(&db.conn, before_id, limit).await?;
+    let (rows, has_older) = svc::page(&db.conn, bot, before_id, limit).await?;
     Ok(TimelinePage {
         rows: rows.into_iter().map(svc::to_row).collect(),
         has_older,
@@ -98,9 +121,11 @@ pub async fn personal_agent_timeline_core(
 /// Rows by id (at most 100): a quote's preview, a jump too far to load.
 pub async fn personal_agent_timeline_rows_core(
     db: &AppDatabase,
+    bot_id: Option<i32>,
     ids: Vec<i32>,
 ) -> Result<Vec<TimelineRow>, AppCommandError> {
-    Ok(svc::rows_by_ids(&db.conn, &ids)
+    let bot = resolve_bot(db, bot_id).await?;
+    Ok(svc::rows_by_ids(&db.conn, bot, &ids)
         .await?
         .into_iter()
         .map(svc::to_row)
@@ -112,11 +137,13 @@ pub async fn personal_agent_timeline_rows_core(
 /// holds.
 pub async fn personal_agent_timeline_updated_since_core(
     db: &AppDatabase,
+    bot_id: Option<i32>,
     since: Option<chrono::DateTime<Utc>>,
     after: Option<TimelineCursor>,
     min_id: Option<i32>,
 ) -> Result<TimelineChanges, AppCommandError> {
-    let (rows, next) = svc::changed_since(&db.conn, since, after, min_id.unwrap_or(0)).await?;
+    let bot = resolve_bot(db, bot_id).await?;
+    let (rows, next) = svc::changed_since(&db.conn, bot, since, after, min_id.unwrap_or(0)).await?;
     Ok(TimelineChanges {
         rows: rows.into_iter().map(svc::to_row).collect(),
         next,
@@ -125,15 +152,17 @@ pub async fn personal_agent_timeline_updated_since_core(
 
 pub async fn personal_agent_items_core(
     db: &AppDatabase,
+    bot_id: Option<i32>,
     status: Option<String>,
 ) -> Result<Vec<ItemInfo>, AppCommandError> {
+    let bot = resolve_bot(db, bot_id).await?;
     let statuses = match status.as_deref() {
         None | Some("active") => vec![ItemStatus::Open, ItemStatus::Waiting],
         Some("all") => Vec::new(),
         Some("done") => vec![ItemStatus::Done, ItemStatus::Dropped],
         Some(other) => return Err(refused(format!("unknown item filter: {other}"))),
     };
-    let items = svc::list_items(&db.conn, &statuses, 500).await?;
+    let items = svc::list_items(&db.conn, bot, &statuses, 500).await?;
     let mut out = Vec::with_capacity(items.len());
     for i in items {
         let dispatch_state = match i.dispatch_id {
@@ -161,14 +190,16 @@ pub async fn personal_agent_items_core(
 /// else the latest `limit` of `mode`.
 pub async fn personal_agent_dispatches_core(
     db: &AppDatabase,
+    bot_id: Option<i32>,
     mode: Option<DispatchMode>,
     limit: Option<u32>,
     ids: Option<Vec<i32>>,
 ) -> Result<Vec<DispatchInfo>, AppCommandError> {
+    let bot = resolve_bot(db, bot_id).await?;
     let rows = match ids {
-        Some(ids) => svc::dispatches_by_ids(&db.conn, &ids).await?,
+        Some(ids) => svc::dispatches_by_ids(&db.conn, bot, &ids).await?,
         None => {
-            svc::list_dispatches(&db.conn, &[], mode, limit.unwrap_or(100).clamp(1, 500) as u64)
+            svc::list_dispatches(&db.conn, bot, &[], mode, limit.unwrap_or(100).clamp(1, 500) as u64)
                 .await?
         }
     };
@@ -223,13 +254,16 @@ pub async fn personal_agent_dispatches_core(
 pub async fn personal_agent_files_core(
     db: &AppDatabase,
     data_dir: &Path,
+    bot_id: Option<i32>,
 ) -> Result<Vec<PersonalAgentFile>, AppCommandError> {
-    let Some(row) = svc::get_agent(&db.conn).await? else {
+    let bot = resolve_bot(db, bot_id).await?;
+    let Some(row) = svc::get_bot(&db.conn, bot).await? else {
         return Ok(Vec::new());
     };
-    let dir = workdir_for(&row, data_dir);
+    let dir = workdir::workdir_of_bot(data_dir, &row);
+    let worker = row.kind == crate::db::entities::personal_agent::BotKind::Worker;
     let mut out = Vec::new();
-    for name in workdir::EDITABLE_FILES {
+    for name in workdir::editable_files(worker) {
         let content = workdir::read_file(&dir, name).map_err(AppCommandError::io)?;
         out.push(PersonalAgentFile {
             name: name.to_string(),
@@ -249,8 +283,10 @@ pub async fn personal_agent_files_core(
 /// as its last sync.
 pub async fn personal_agent_stats_core(
     db: &AppDatabase,
+    bot_id: Option<i32>,
     days: Option<u32>,
 ) -> Result<PersonalAgentStats, AppCommandError> {
+    let bot = resolve_bot(db, bot_id).await?;
     let days = days.unwrap_or(14).clamp(1, 90) as i64;
     let today = Local::now().date_naive();
     let first = today - Duration::days(days - 1);
@@ -271,7 +307,7 @@ pub async fn personal_agent_stats_core(
             },
         );
     }
-    for r in svc::rows_since(&db.conn, since).await? {
+    for r in svc::rows_since(&db.conn, bot, since).await? {
         if let Some(day) = by_day.get_mut(&key(r.created_at)) {
             match r.kind {
                 TimelineKind::Owner => day.owner_messages += 1,
@@ -286,7 +322,7 @@ pub async fn personal_agent_stats_core(
             }
         }
     }
-    let dispatches = svc::dispatches_since(&db.conn, since).await?;
+    let dispatches = svc::dispatches_since(&db.conn, bot, since).await?;
     let mut executors: BTreeMap<i32, PersonalAgentExecutorStat> = BTreeMap::new();
     let mut dispatch_conversations: HashSet<i32> = HashSet::new();
     for d in &dispatches {
@@ -330,7 +366,7 @@ pub async fn personal_agent_stats_core(
             }
         }
     }
-    let segments = svc::list_segments(&db.conn).await?;
+    let segments = svc::list_segments(&db.conn, bot).await?;
     let own_conversations: HashSet<i32> = segments.iter().filter_map(|s| s.conversation_id).collect();
     let watched: Vec<i32> = own_conversations
         .iter()
@@ -380,7 +416,7 @@ pub async fn personal_agent_stats_core(
             segment_seq: s.seq,
         });
     }
-    for b in svc::batches_since(&db.conn, since).await? {
+    for b in svc::batches_since(&db.conn, bot, since).await? {
         let detail = b
             .detail
             .as_deref()
@@ -430,47 +466,53 @@ pub async fn personal_agent_stats_core(
 // ── actions (engine only) ───────────────────────────────────────────────────
 
 pub async fn personal_agent_save_core(
+    bot_id: Option<i32>,
     draft: PersonalAgentDraft,
 ) -> Result<PersonalAgentInfo, AppCommandError> {
-    engine()?.save(draft).await.map_err(refused)
+    engine(bot_id).await?.save(draft).await.map_err(refused)
 }
 
 pub async fn personal_agent_send_core(
+    bot_id: Option<i32>,
     text: String,
     blocks: Option<Vec<PromptInputBlock>>,
     reply_to: Option<i32>,
 ) -> Result<TimelineRow, AppCommandError> {
-    engine()?
+    engine(bot_id)
+        .await?
         .send_owner_message(text, blocks.unwrap_or_default(), reply_to)
         .await
         .map_err(refused)
 }
 
-pub async fn personal_agent_cancel_core() -> Result<(), AppCommandError> {
-    engine()?.cancel_turn().await.map_err(refused)
+pub async fn personal_agent_cancel_core(bot_id: Option<i32>) -> Result<(), AppCommandError> {
+    engine(bot_id).await?.cancel_turn().await.map_err(refused)
 }
 
-pub async fn personal_agent_compact_core() -> Result<(), AppCommandError> {
-    engine()?.compact_now().await.map_err(refused)
+pub async fn personal_agent_compact_core(bot_id: Option<i32>) -> Result<(), AppCommandError> {
+    engine(bot_id).await?.compact_now().await.map_err(refused)
 }
 
-pub async fn personal_agent_new_session_core() -> Result<(), AppCommandError> {
-    engine()?.new_session().await.map_err(refused)
+pub async fn personal_agent_new_session_core(bot_id: Option<i32>) -> Result<(), AppCommandError> {
+    engine(bot_id).await?.new_session().await.map_err(refused)
 }
 
-pub async fn personal_agent_resume_auto_compact_core() -> Result<(), AppCommandError> {
-    engine()?.resume_auto_compact().await.map_err(refused)
+pub async fn personal_agent_resume_auto_compact_core(bot_id: Option<i32>) -> Result<(), AppCommandError> {
+    engine(bot_id).await?.resume_auto_compact().await.map_err(refused)
 }
 
-pub async fn personal_agent_keepalive_core() -> Result<(), AppCommandError> {
-    if let Some(e) = pa_engine::engine() {
+pub async fn personal_agent_keepalive_core(bot_id: Option<i32>) -> Result<(), AppCommandError> {
+    if let Some(e) = pa_engine::engine_for(bot_id).await {
         e.keepalive().await;
     }
     Ok(())
 }
 
-pub async fn personal_agent_resend_core(row_id: i32) -> Result<TimelineRow, AppCommandError> {
-    engine()?.resend(row_id).await.map_err(refused)
+pub async fn personal_agent_resend_core(
+    bot_id: Option<i32>,
+    row_id: i32,
+) -> Result<TimelineRow, AppCommandError> {
+    engine(bot_id).await?.resend(row_id).await.map_err(refused)
 }
 
 /// The owner has seen the page up to row `up_to`. Not an act of the agent's,
@@ -478,12 +520,14 @@ pub async fn personal_agent_resend_core(row_id: i32) -> Result<TimelineRow, AppC
 /// running process reads it at its next snapshot.
 pub async fn personal_agent_mark_seen_core(
     db: &AppDatabase,
+    bot_id: Option<i32>,
     up_to: i32,
 ) -> Result<(), AppCommandError> {
-    match pa_engine::engine() {
+    match pa_engine::engine_for(bot_id).await {
         Some(e) => e.mark_seen(up_to).await.map_err(refused),
         None => {
-            svc::mark_seen(&db.conn, up_to).await?;
+            let bot = resolve_bot(db, bot_id).await?;
+            svc::mark_seen(&db.conn, bot, up_to).await?;
             Ok(())
         }
     }
@@ -491,58 +535,75 @@ pub async fn personal_agent_mark_seen_core(
 
 /// The owner's answer on a native card (`accept` / `dismiss`).
 pub async fn personal_agent_notice_act_core(
+    bot_id: Option<i32>,
     notice_id: i32,
     action: String,
 ) -> Result<TimelineRow, AppCommandError> {
-    engine()?
+    engine(bot_id)
+        .await?
         .act_on_notice(notice_id, &action)
         .await
         .map_err(refused)
 }
 
 pub async fn personal_agent_answer_question_core(
+    bot_id: Option<i32>,
     question_id: String,
     answer: crate::acp::question::QuestionAnswer,
 ) -> Result<(), AppCommandError> {
-    engine()?
+    engine(bot_id)
+        .await?
         .answer_question(&question_id, answer)
         .await
         .map_err(refused)
 }
 
 pub async fn personal_agent_answer_plan_core(
+    bot_id: Option<i32>,
     approval_id: String,
     answer: crate::acp::plan_approval::PlanApprovalAnswer,
 ) -> Result<(), AppCommandError> {
-    engine()?
+    engine(bot_id)
+        .await?
         .answer_plan_approval(&approval_id, answer)
         .await
         .map_err(refused)
 }
 
 pub async fn personal_agent_respond_permission_core(
+    bot_id: Option<i32>,
     request_id: String,
     option_id: String,
 ) -> Result<(), AppCommandError> {
-    engine()?
+    engine(bot_id)
+        .await?
         .respond_permission(&request_id, &option_id)
         .await
         .map_err(refused)
 }
 
-pub async fn personal_agent_file_save_core(name: String, content: String) -> Result<(), AppCommandError> {
-    engine()?.save_file(&name, &content).await.map_err(refused)
+pub async fn personal_agent_file_save_core(
+    bot_id: Option<i32>,
+    name: String,
+    content: String,
+) -> Result<(), AppCommandError> {
+    engine(bot_id).await?.save_file(&name, &content).await.map_err(refused)
 }
 
-pub async fn personal_agent_file_delete_core(name: String) -> Result<(), AppCommandError> {
-    engine()?.delete_file(&name).await.map_err(refused)
+pub async fn personal_agent_file_delete_core(
+    bot_id: Option<i32>,
+    name: String,
+) -> Result<(), AppCommandError> {
+    engine(bot_id).await?.delete_file(&name).await.map_err(refused)
 }
 
 pub async fn personal_agent_set_workdir_core(
+    bot_id: Option<i32>,
     path: Option<String>,
     locale: Option<String>,
 ) -> Result<PersonalAgentInfo, AppCommandError> {
-    engine()?
+    engine(bot_id)
+        .await?
         .set_workdir(path, locale.as_deref())
         .await
         .map_err(refused)
@@ -564,59 +625,65 @@ fn data_dir_of(app: &tauri::AppHandle) -> Result<PathBuf, AppCommandError> {
 pub async fn personal_agent_get(
     app: tauri::AppHandle,
     db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
 ) -> Result<PersonalAgentSnapshot, AppCommandError> {
-    personal_agent_get_core(&db, &data_dir_of(&app)?).await
+    personal_agent_get_core(&db, &data_dir_of(&app)?, bot_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_timeline(
     db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
     before_id: Option<i32>,
     limit: Option<u32>,
     since_id: Option<i32>,
 ) -> Result<TimelinePage, AppCommandError> {
-    personal_agent_timeline_core(&db, before_id, limit, since_id).await
+    personal_agent_timeline_core(&db, bot_id, before_id, limit, since_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_timeline_rows(
     db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
     ids: Vec<i32>,
 ) -> Result<Vec<TimelineRow>, AppCommandError> {
-    personal_agent_timeline_rows_core(&db, ids).await
+    personal_agent_timeline_rows_core(&db, bot_id, ids).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_timeline_updated_since(
     db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
     since: Option<chrono::DateTime<Utc>>,
     after: Option<TimelineCursor>,
     min_id: Option<i32>,
 ) -> Result<TimelineChanges, AppCommandError> {
-    personal_agent_timeline_updated_since_core(&db, since, after, min_id).await
+    personal_agent_timeline_updated_since_core(&db, bot_id, since, after, min_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_items(
     db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
     status: Option<String>,
 ) -> Result<Vec<ItemInfo>, AppCommandError> {
-    personal_agent_items_core(&db, status).await
+    personal_agent_items_core(&db, bot_id, status).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_dispatches(
     db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
     mode: Option<DispatchMode>,
     limit: Option<u32>,
     ids: Option<Vec<i32>>,
 ) -> Result<Vec<DispatchInfo>, AppCommandError> {
-    personal_agent_dispatches_core(&db, mode, limit, ids).await
+    personal_agent_dispatches_core(&db, bot_id, mode, limit, ids).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -624,133 +691,165 @@ pub async fn personal_agent_dispatches(
 pub async fn personal_agent_files(
     app: tauri::AppHandle,
     db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
 ) -> Result<Vec<PersonalAgentFile>, AppCommandError> {
-    personal_agent_files_core(&db, &data_dir_of(&app)?).await
+    personal_agent_files_core(&db, &data_dir_of(&app)?, bot_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_stats(
     db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
     days: Option<u32>,
 ) -> Result<PersonalAgentStats, AppCommandError> {
-    personal_agent_stats_core(&db, days).await
+    personal_agent_stats_core(&db, bot_id, days).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_save(draft: PersonalAgentDraft) -> Result<PersonalAgentInfo, AppCommandError> {
-    personal_agent_save_core(draft).await
+pub async fn personal_agent_save(
+    bot_id: Option<i32>,
+    draft: PersonalAgentDraft,
+) -> Result<PersonalAgentInfo, AppCommandError> {
+    personal_agent_save_core(bot_id, draft).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_send(
+    bot_id: Option<i32>,
     text: String,
     blocks: Option<Vec<PromptInputBlock>>,
     reply_to: Option<i32>,
 ) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_send_core(text, blocks, reply_to).await
+    personal_agent_send_core(bot_id, text, blocks, reply_to).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_cancel() -> Result<(), AppCommandError> {
-    personal_agent_cancel_core().await
+pub async fn personal_agent_cancel(
+    bot_id: Option<i32>,
+) -> Result<(), AppCommandError> {
+    personal_agent_cancel_core(bot_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_compact() -> Result<(), AppCommandError> {
-    personal_agent_compact_core().await
+pub async fn personal_agent_compact(
+    bot_id: Option<i32>,
+) -> Result<(), AppCommandError> {
+    personal_agent_compact_core(bot_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_new_session() -> Result<(), AppCommandError> {
-    personal_agent_new_session_core().await
+pub async fn personal_agent_new_session(
+    bot_id: Option<i32>,
+) -> Result<(), AppCommandError> {
+    personal_agent_new_session_core(bot_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_resume_auto_compact() -> Result<(), AppCommandError> {
-    personal_agent_resume_auto_compact_core().await
+pub async fn personal_agent_resume_auto_compact(
+    bot_id: Option<i32>,
+) -> Result<(), AppCommandError> {
+    personal_agent_resume_auto_compact_core(bot_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_keepalive() -> Result<(), AppCommandError> {
-    personal_agent_keepalive_core().await
+pub async fn personal_agent_keepalive(
+    bot_id: Option<i32>,
+) -> Result<(), AppCommandError> {
+    personal_agent_keepalive_core(bot_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_resend(row_id: i32) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_resend_core(row_id).await
+pub async fn personal_agent_resend(
+    bot_id: Option<i32>,
+    row_id: i32,
+) -> Result<TimelineRow, AppCommandError> {
+    personal_agent_resend_core(bot_id, row_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_mark_seen(
     db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
     up_to: i32,
 ) -> Result<(), AppCommandError> {
-    personal_agent_mark_seen_core(&db, up_to).await
+    personal_agent_mark_seen_core(&db, bot_id, up_to).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_notice_act(
+    bot_id: Option<i32>,
     notice_id: i32,
     action: String,
 ) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_notice_act_core(notice_id, action).await
+    personal_agent_notice_act_core(bot_id, notice_id, action).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_answer_question(
+    bot_id: Option<i32>,
     question_id: String,
     answer: crate::acp::question::QuestionAnswer,
 ) -> Result<(), AppCommandError> {
-    personal_agent_answer_question_core(question_id, answer).await
+    personal_agent_answer_question_core(bot_id, question_id, answer).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_answer_plan(
+    bot_id: Option<i32>,
     approval_id: String,
     answer: crate::acp::plan_approval::PlanApprovalAnswer,
 ) -> Result<(), AppCommandError> {
-    personal_agent_answer_plan_core(approval_id, answer).await
+    personal_agent_answer_plan_core(bot_id, approval_id, answer).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_respond_permission(
+    bot_id: Option<i32>,
     request_id: String,
     option_id: String,
 ) -> Result<(), AppCommandError> {
-    personal_agent_respond_permission_core(request_id, option_id).await
+    personal_agent_respond_permission_core(bot_id, request_id, option_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_file_save(name: String, content: String) -> Result<(), AppCommandError> {
-    personal_agent_file_save_core(name, content).await
+pub async fn personal_agent_file_save(
+    bot_id: Option<i32>,
+    name: String,
+    content: String,
+) -> Result<(), AppCommandError> {
+    personal_agent_file_save_core(bot_id, name, content).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_file_delete(name: String) -> Result<(), AppCommandError> {
-    personal_agent_file_delete_core(name).await
+pub async fn personal_agent_file_delete(
+    bot_id: Option<i32>,
+    name: String,
+) -> Result<(), AppCommandError> {
+    personal_agent_file_delete_core(bot_id, name).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_set_workdir(
+    bot_id: Option<i32>,
     path: Option<String>,
     locale: Option<String>,
 ) -> Result<PersonalAgentInfo, AppCommandError> {
-    personal_agent_set_workdir_core(path, locale).await
+    personal_agent_set_workdir_core(bot_id, path, locale).await
 }

@@ -22,6 +22,7 @@ const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 vi.mock("@/lib/api", () => api)
 vi.mock("sonner", () => ({ toast: toasts }))
 vi.mock("@/contexts/personal-agent-context", () => ({
+  useBotId: () => null,
   usePersonalAgent: () => ({
     liveReplies: new Map(),
     dispatchById: pa.dispatchById,
@@ -961,7 +962,7 @@ describe("the bubbles", () => {
     const line = container.querySelector("[data-pa-state]")!
     expect(line.textContent).toContain("Not finished")
     fireEvent.click(screen.getByRole("button", { name: /Send again/ }))
-    expect(api.personalAgentResend).toHaveBeenCalledWith(10)
+    expect(api.personalAgentResend).toHaveBeenCalledWith(10, null)
   })
 })
 

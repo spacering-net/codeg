@@ -7,6 +7,9 @@ const api = vi.hoisted(() => ({
   personalAgentMarkSeen: vi.fn(),
 }))
 vi.mock("@/lib/api", () => api)
+vi.mock("@/contexts/personal-agent-context", () => ({
+  useBotId: () => null,
+}))
 
 import { useOwnerSeen } from "./use-owner-seen"
 
@@ -87,7 +90,7 @@ describe("useOwnerSeen", () => {
     })
     rerender({ rows, watching: true, unseenCount: 2 })
     expect(api.personalAgentMarkSeen).toHaveBeenCalledTimes(1)
-    expect(api.personalAgentMarkSeen).toHaveBeenCalledWith(4)
+    expect(api.personalAgentMarkSeen).toHaveBeenCalledWith(4, null)
     expect(result.current.newFrom).toBe(3)
 
     // The marked rows come back seen: nothing left to mark, the line stays.
@@ -113,7 +116,7 @@ describe("useOwnerSeen", () => {
       unseenCount: 0,
     })
     await flush()
-    expect(api.personalAgentMarkSeen).toHaveBeenCalledWith(2)
+    expect(api.personalAgentMarkSeen).toHaveBeenCalledWith(2, null)
     expect(result.current.newFrom).toBeNull()
   })
 
@@ -130,7 +133,7 @@ describe("useOwnerSeen", () => {
     expect(api.personalAgentMarkSeen).not.toHaveBeenCalled()
     rerender({ rows: later, watching: true, unseenCount: 2 })
     expect(result.current.newFrom).toBe(3)
-    expect(api.personalAgentMarkSeen).toHaveBeenCalledWith(4)
+    expect(api.personalAgentMarkSeen).toHaveBeenCalledWith(4, null)
     act(() => result.current.clearNewFrom())
     expect(result.current.newFrom).toBeNull()
   })
@@ -141,7 +144,7 @@ describe("useOwnerSeen", () => {
       watching: true,
       unseenCount: 3,
     })
-    expect(api.personalAgentMarkSeen).toHaveBeenCalledWith(8)
+    expect(api.personalAgentMarkSeen).toHaveBeenCalledWith(8, null)
   })
 
   it("does not send the same mark twice, and tries again after a failure", async () => {
@@ -158,6 +161,6 @@ describe("useOwnerSeen", () => {
     const more = [...rows, row(3, "result")]
     rerender({ rows: more, watching: true, unseenCount: 2 })
     expect(api.personalAgentMarkSeen).toHaveBeenCalledTimes(2)
-    expect(api.personalAgentMarkSeen).toHaveBeenLastCalledWith(3)
+    expect(api.personalAgentMarkSeen).toHaveBeenLastCalledWith(3, null)
   })
 })

@@ -91,6 +91,16 @@ pub struct Model {
     /// the round, so the row itself says which send the round belongs to.
     #[sea_orm(column_type = "Text", nullable)]
     pub round_op_id: Option<String>,
+    /// The assistant that dispatched it (`personal_agent.id`).
+    pub bot_id: Option<i32>,
+    /// Where the chain it was made for started: the assistant and its
+    /// timeline row, and the thread it is on.
+    pub origin_bot_id: Option<i32>,
+    pub origin_row_id: Option<i32>,
+    pub thread_id: Option<i32>,
+    /// The input it was made for: `<kind>:<id>`.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub for_input: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

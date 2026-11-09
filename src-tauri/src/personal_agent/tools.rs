@@ -83,6 +83,8 @@ pub async fn call(parent_connection_id: &str, tool: &str, args: Value) -> ToolOu
 /// Answer a call already known to come from the personal agent.
 async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> ToolOutcome {
     let db = &engine.db;
+    // Whose records the call reads and writes: the calling assistant's only.
+    let bot = engine.bot().await;
     match tool {
         "assistant_list" => {
             let assistants = crate::db::service::assistant_service::list_live_enabled(&db.conn)
@@ -232,7 +234,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     )
                 }
             };
-            let items = svc::list_items(&db.conn, &statuses, 100).await.unwrap_or_default();
+            let items = svc::list_items(&db.conn, bot, &statuses, 100).await.unwrap_or_default();
             let mut rows = Vec::new();
             let mut lines = Vec::new();
             for i in items {
@@ -281,7 +283,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             let Some(id) = int(&args, "item_id").and_then(as_i32) else {
                 return ToolOutcome::refused("`item_id` is required");
             };
-            let Ok(Some(item)) = svc::get_item(&db.conn, id).await else {
+            let Ok(Some(item)) = svc::get_item_of(&db.conn, bot, id).await else {
                 return ToolOutcome::refused(format!("item #{id} does not exist"));
             };
             let dispatch = match item.dispatch_id {
@@ -366,7 +368,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             let on_done = string(&args, "on_done").map(|s| s.chars().take(2_000).collect::<String>());
             match int(&args, "item_id").and_then(as_i32) {
                 Some(id) => {
-                    let Ok(Some(_)) = svc::get_item(&db.conn, id).await else {
+                    let Ok(Some(_)) = svc::get_item_of(&db.conn, bot, id).await else {
                         return ToolOutcome::refused(format!("item #{id} does not exist"));
                     };
                     let updated = svc::update_item(
@@ -406,6 +408,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     };
                     match svc::create_item(
                         &db.conn,
+                        bot,
                         kind,
                         None,
                         status.unwrap_or(ItemStatus::Open),
@@ -431,7 +434,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
         "timeline_read" => {
             let limit = int(&args, "limit").unwrap_or(20).clamp(1, 100) as u64;
             let before = int(&args, "before_id").and_then(as_i32);
-            let (rows, has_older) = svc::page(&db.conn, before, limit).await.unwrap_or_default();
+            let (rows, has_older) = svc::page(&db.conn, bot, before, limit).await.unwrap_or_default();
             let mut lines = Vec::new();
             let mut out = Vec::new();
             for r in rows.into_iter().rev() {

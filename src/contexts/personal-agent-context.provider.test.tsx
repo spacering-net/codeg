@@ -114,6 +114,130 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+describe("PersonalAgentProvider, whose broadcast it is", () => {
+  /**
+   * The primary's store knows the primary's id only once its snapshot is
+   * back. A broadcast naming an assistant that lands before then may be the
+   * primary's own: what it carried is not taken as is, but everything is
+   * read again — so a card written in that gap reaches the page.
+   */
+  it("reads itself again on a broadcast it cannot place, and keeps a card written meanwhile", async () => {
+    const T1 = "2026-11-04T10:00:01Z"
+    const T2 = "2026-11-04T10:00:02Z"
+    const first = row(1, "owner", T1)
+    const card = row(2, "notice", T2)
+    let identity: ((s: PersonalAgentSnapshot) => void) | null = null
+    api.personalAgentGet.mockImplementationOnce(
+      () =>
+        new Promise<PersonalAgentSnapshot>((resolve) => {
+          identity = resolve
+        })
+    )
+    api.personalAgentGet.mockResolvedValue({
+      ...snapshot("here"),
+      agent: { id: 7 },
+    } as unknown as PersonalAgentSnapshot)
+    api.personalAgentTimeline.mockResolvedValueOnce(page([first]))
+    api.personalAgentTimeline.mockResolvedValue(page([first, card]))
+    render(
+      <PersonalAgentProvider>
+        <Probe onValue={keep} />
+      </PersonalAgentProvider>
+    )
+    await act(flush)
+    expect(ctx?.rows.map((r) => r.id)).toEqual([1])
+    // The card lands, named as assistant 7's, before the identity is known.
+    await act(async () => {
+      bus.handler?.({ bot_id: 7, kind: "timeline", rows: [card] })
+      await flush()
+    })
+    expect(api.personalAgentTimeline).toHaveBeenCalledTimes(2)
+    expect(ctx?.rows.map((r) => r.id)).toEqual([1, 2])
+    // A worker's rows are not ours; the primary's before it was set up are.
+    await act(async () => {
+      bus.handler?.({
+        bot_id: 9,
+        kind: "timeline",
+        rows: [row(3, "owner", T2)],
+      })
+      bus.handler?.({
+        bot_id: 0,
+        kind: "timeline",
+        rows: [row(4, "owner", T2)],
+      })
+      await flush()
+    })
+    expect(ctx?.rows.map((r) => r.id)).toEqual([1, 2, 4])
+    // Once the identity is known, 7's broadcasts are taken as they come and
+    // 9's still are not.
+    await act(async () => {
+      identity?.({
+        ...snapshot("here"),
+        agent: { id: 7 },
+      } as unknown as PersonalAgentSnapshot)
+      await flush()
+    })
+    const calls = api.personalAgentTimeline.mock.calls.length
+    await act(async () => {
+      bus.handler?.({
+        bot_id: 7,
+        kind: "timeline",
+        rows: [row(5, "owner", T2)],
+      })
+      bus.handler?.({
+        bot_id: 9,
+        kind: "timeline",
+        rows: [row(6, "owner", T2)],
+      })
+      await flush()
+    })
+    expect(api.personalAgentTimeline).toHaveBeenCalledTimes(calls)
+    expect(ctx?.rows.map((r) => r.id)).toEqual([1, 2, 4, 5])
+  })
+
+  it("a worker's store takes only its own and never guesses", async () => {
+    const T1 = "2026-11-04T10:00:01Z"
+    api.personalAgentGet.mockResolvedValue({
+      ...snapshot("here"),
+      agent: { id: 9 },
+    } as unknown as PersonalAgentSnapshot)
+    api.personalAgentTimeline.mockResolvedValue(page([]))
+    render(
+      <PersonalAgentProvider botId={9}>
+        <Probe onValue={keep} />
+      </PersonalAgentProvider>
+    )
+    await act(flush)
+    expect(api.personalAgentGet).toHaveBeenLastCalledWith(9)
+    expect(api.personalAgentTimeline).toHaveBeenLastCalledWith(
+      null,
+      60,
+      null,
+      9
+    )
+    await act(async () => {
+      bus.handler?.({
+        bot_id: 9,
+        kind: "timeline",
+        rows: [row(1, "owner", T1)],
+      })
+      bus.handler?.({
+        bot_id: 7,
+        kind: "timeline",
+        rows: [row(2, "owner", T1)],
+      })
+      bus.handler?.({
+        bot_id: 0,
+        kind: "timeline",
+        rows: [row(3, "owner", T1)],
+      })
+      bus.handler?.({ kind: "timeline", rows: [row(4, "owner", T1)] })
+      await flush()
+    })
+    expect(ctx?.rows.map((r) => r.id)).toEqual([1])
+  })
+})
+
 describe("PersonalAgentProvider, read-only reconciliation", () => {
   /**
    * An older reply held on the page settles at T2 while the newest page
@@ -207,6 +331,7 @@ describe("PersonalAgentProvider, read-only reconciliation", () => {
       null,
       cursor,
       1,
+      null,
     ])
   })
 })

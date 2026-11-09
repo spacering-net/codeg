@@ -71,6 +71,7 @@ vi.mock("@/contexts/acp-connections-context", () => ({
   }),
 }))
 vi.mock("@/contexts/personal-agent-context", () => ({
+  useBotId: () => null,
   usePersonalAgent: () => ({ dispatchById: h.dispatchById }),
 }))
 vi.mock("@/contexts/tasks-view-context", () => ({

@@ -101,7 +101,7 @@ impl PersonalAgentEngine {
         intent: Option<String>,
         batch_id: Option<i32>,
     ) -> Result<i32, String> {
-        let d = svc::get_dispatch(&self.db.conn, dispatch_id)
+        let d = svc::get_dispatch_of(&self.db.conn, self.bot().await, dispatch_id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("dispatch #{dispatch_id} does not exist"))?;
@@ -156,6 +156,7 @@ impl PersonalAgentEngine {
         }));
         let (notice, card) = svc::create_notice_with_row(
             &self.db.conn,
+            self.bot().await,
             NewNotice {
                 kind: NoticeKind::Proposal,
                 subject_key: None,
@@ -181,7 +182,8 @@ impl PersonalAgentEngine {
         notice_id: i32,
         action: &str,
     ) -> Result<TimelineRow, String> {
-        let notice = svc::get_notice(&self.db.conn, notice_id)
+        // Only its own cards: one of another assistant's is not here.
+        let notice = svc::get_notice_of(&self.db.conn, self.bot().await, notice_id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or("no such card")?;
@@ -391,6 +393,7 @@ impl PersonalAgentEngine {
         };
         let _ = svc::insert_event(
             &self.db.conn,
+            self.bot().await,
             "proposal",
             &format!(
                 "notice:{}:{verdict}:{}",

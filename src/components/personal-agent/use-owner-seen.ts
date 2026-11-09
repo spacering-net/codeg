@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { personalAgentMarkSeen } from "@/lib/api"
+import { useBotId } from "@/contexts/personal-agent-context"
 import type { TimelineRow } from "@/lib/types"
 
 import { isUnseen } from "./message-items"
@@ -53,15 +54,16 @@ export function useOwnerSeen({
       ? `${newestId}:${unseenRows.map((r) => r.id).join(",")}:${unseenCount > 0}`
       : null
   const lastMark = useRef<string | null>(null)
+  const botId = useBotId()
   useEffect(() => {
     if (markKey == null || newestId == null || markKey === lastMark.current)
       return
     lastMark.current = markKey
-    personalAgentMarkSeen(newestId).catch(() => {
+    personalAgentMarkSeen(newestId, botId).catch(() => {
       // Tried again on the next change.
       if (lastMark.current === markKey) lastMark.current = null
     })
-  }, [markKey, newestId])
+  }, [markKey, newestId, botId])
 
   const clearNewFrom = useCallback(() => setNewFrom(null), [])
   return { newFrom, clearNewFrom }

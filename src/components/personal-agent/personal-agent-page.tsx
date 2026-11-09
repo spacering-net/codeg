@@ -184,7 +184,7 @@ function liveRowOf(
 
 export function PersonalAgentPage() {
   const t = useTranslations("PersonalAgent")
-  const { snapshot, rows, loading } = usePersonalAgent()
+  const { botId, snapshot, rows, loading } = usePersonalAgent()
   const assistants = useAssistants()
   const isMobile = useIsMobile()
   const band = useWorkbenchBand()
@@ -236,12 +236,12 @@ export function PersonalAgentPage() {
 
   useEffect(() => {
     if (status?.engine !== "here") return
-    void personalAgentKeepalive().catch(() => {})
+    void personalAgentKeepalive(botId).catch(() => {})
     const timer = setInterval(() => {
-      void personalAgentKeepalive().catch(() => {})
+      void personalAgentKeepalive(botId).catch(() => {})
     }, KEEPALIVE_MS)
     return () => clearInterval(timer)
-  }, [status?.engine])
+  }, [status?.engine, botId])
 
   const readOnly = status?.engine !== "here"
   const agentName = agent?.name?.trim() || t("title")
@@ -411,7 +411,7 @@ export function PersonalAgentPage() {
             <AlertDialogCancel>{t("newSession.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                personalAgentNewSession()
+                personalAgentNewSession(botId)
                   .then(() => toast.message(t("newSession.queued")))
                   .catch((e) => toast.error(toErrorMessage(e)))
               }}

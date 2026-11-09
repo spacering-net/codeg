@@ -42,6 +42,13 @@ pub struct Model {
     pub requeued_from: Option<i32>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
+    /// The assistant whose queue it is in (`personal_agent.id`).
+    pub bot_id: Option<i32>,
+    /// Where the chain this input belongs to started: the assistant and its
+    /// timeline row (an owner's message, say), and the thread it is on.
+    pub origin_bot_id: Option<i32>,
+    pub origin_row_id: Option<i32>,
+    pub thread_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

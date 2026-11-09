@@ -393,6 +393,7 @@ impl PersonalAgentEngine {
             DispatchAuth::Direct => self.current_batch().await,
         };
         let new = NewDispatch {
+            bot_id: self.bot().await,
             mode,
             executor_assistant_id: snapshot.assistant_id,
             executor_snapshot_json: serde_json::to_string(&snapshot).map_err(|e| e.to_string())?,
@@ -471,6 +472,7 @@ impl PersonalAgentEngine {
         let card = self.push_row(card).await;
         let _ = svc::create_item(
             &self.db.conn,
+            self.bot().await,
             ItemKind::Dispatch,
             Some(row.id),
             ItemStatus::Open,
@@ -614,13 +616,13 @@ impl PersonalAgentEngine {
             None => crate::models::personal_agent::DEFAULT_DISPATCH_CONCURRENCY,
         };
         loop {
-            let active = svc::count_active_conversation_dispatches(&self.db.conn)
+            let active = svc::count_active_conversation_dispatches(&self.db.conn, self.bot().await)
                 .await
                 .unwrap_or(0) as u32;
             if limit > 0 && active >= limit {
                 return;
             }
-            let next = svc::queued_conversation_dispatches(&self.db.conn)
+            let next = svc::queued_conversation_dispatches(&self.db.conn, self.bot().await)
                 .await
                 .unwrap_or_default()
                 .into_iter()
@@ -681,6 +683,7 @@ impl PersonalAgentEngine {
         match svc::begin_op(
             &self.db.conn,
             NewOp {
+                bot_id: self.bot().await,
                 slot: LedgerSlot::outside(op_id.clone()),
                 kind: "followup",
                 payload: serde_json::to_value(&call).map_err(|e| e.to_string())?,
@@ -1122,6 +1125,7 @@ impl PersonalAgentEngine {
         // there, to number it and to mark it read.
         let inserted = svc::insert_event_with_row(
             &self.db.conn,
+            self.bot().await,
             NewEvent {
                 kind: "dispatch_status".into(),
                 source_key,
@@ -1258,6 +1262,7 @@ impl PersonalAgentEngine {
     pub(super) async fn poll_task_dispatches(&self) {
         let live = svc::list_dispatches(
             &self.db.conn,
+            self.bot().await,
             &[
                 DispatchState::Queued,
                 DispatchState::Running,
@@ -1289,6 +1294,7 @@ impl PersonalAgentEngine {
     pub(super) async fn reconcile_dispatches(self: &std::sync::Arc<Self>) {
         let live = svc::list_dispatches(
             &self.db.conn,
+            self.bot().await,
             &[DispatchState::Running, DispatchState::WaitingInput],
             None,
             200,
@@ -1372,6 +1378,7 @@ impl PersonalAgentEngine {
     pub(super) async fn boot_dispatches(&self) {
         let live = svc::list_dispatches(
             &self.db.conn,
+            self.bot().await,
             &[DispatchState::Running, DispatchState::WaitingInput],
             None,
             500,
@@ -1416,6 +1423,10 @@ impl PersonalAgentEngine {
         let Some(d) = found else {
             return;
         };
+        // Another assistant's dispatch is its engine's to hand over.
+        if !self.serves(d.bot_id.unwrap_or(0)).await {
+            return;
+        }
         self.state.lock().await.dispatch_conns.remove(connection_id);
         self.hand_over(&d).await;
     }
@@ -1499,7 +1510,8 @@ impl PersonalAgentEngine {
         if message.chars().count() > MAX_PROMPT_CHARS {
             return Err(format!("`message` is longer than {MAX_PROMPT_CHARS} characters"));
         }
-        let d = svc::get_dispatch(&self.db.conn, id)
+        // Only its own: another assistant's work is not this one's to steer.
+        let d = svc::get_dispatch_of(&self.db.conn, self.bot().await, id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("dispatch #{id} does not exist"))?;
@@ -1540,6 +1552,7 @@ impl PersonalAgentEngine {
         let op = match svc::begin_op(
             &self.db.conn,
             NewOp {
+                bot_id: self.bot().await,
                 slot,
                 kind: "followup",
                 payload,
@@ -1807,7 +1820,7 @@ impl PersonalAgentEngine {
             Some(row) => settings_of(&row).dispatch_concurrency,
             None => crate::models::personal_agent::DEFAULT_DISPATCH_CONCURRENCY,
         };
-        let active = svc::count_active_conversation_dispatches(&self.db.conn)
+        let active = svc::count_active_conversation_dispatches(&self.db.conn, self.bot().await)
             .await
             .unwrap_or(0) as u32;
         if limit > 0 && active >= limit {

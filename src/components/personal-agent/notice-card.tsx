@@ -22,7 +22,7 @@ import { useTranslations } from "next-intl"
 import { CircleHelp, Lightbulb, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { usePersonalAgent } from "@/contexts/personal-agent-context"
+import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentNoticeAct } from "@/lib/api"
 import type { AgentType } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -63,6 +63,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
 
 /** Answer a card; the error to show when the answer did not go through. */
 function useAnswer(noticeId: number) {
+  const botId = useBotId()
   const [busy, setBusy] = useState<"accept" | "dismiss" | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const answer = async (choice: "accept" | "dismiss") => {
@@ -70,7 +71,7 @@ function useAnswer(noticeId: number) {
     setBusy(choice)
     setFailed(null)
     try {
-      await personalAgentNoticeAct(noticeId, choice)
+      await personalAgentNoticeAct(noticeId, choice, botId)
     } catch (e) {
       setFailed(e instanceof Error ? e.message : String(e))
     } finally {

@@ -14,6 +14,7 @@ import type { TimelineRow } from "@/lib/types"
 const api = vi.hoisted(() => ({ personalAgentNoticeAct: vi.fn() }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/contexts/personal-agent-context", () => ({
+  useBotId: () => null,
   usePersonalAgent: () => ({
     liveReplies: new Map(),
     dispatchById: new Map(),
@@ -106,7 +107,7 @@ describe("NoticeCard", () => {
     expect(screen.getByText("Find out X.")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Do this" }))
     await waitFor(() =>
-      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept")
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept", null)
     )
   })
 
@@ -141,7 +142,7 @@ describe("NoticeCard", () => {
     expect(screen.getByText("Not sure it ran")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Run again" }))
     await waitFor(() =>
-      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept")
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept", null)
     )
   })
 
@@ -171,7 +172,7 @@ describe("NoticeCard", () => {
     expect(screen.getByRole("button", { name: "Look" })).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Send again" }))
     await waitFor(() =>
-      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept")
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept", null)
     )
     unmount()
     // Sent again and cut off again: still not sure, still answerable.

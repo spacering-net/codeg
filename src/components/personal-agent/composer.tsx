@@ -51,6 +51,7 @@ import { useReferenceSearch } from "@/components/chat/composer/use-reference-sea
 import { ServerFileBrowserDialog } from "@/components/shared/server-file-browser-dialog"
 import { useReducedMotion } from "@/hooks/use-chat-motion"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
+import { useBotId } from "@/contexts/personal-agent-context"
 import { personalAgentSend } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type {
@@ -158,6 +159,7 @@ export function PersonalAgentComposer({
   }, [attach.embeddedPayloadsRef])
 
   const readOnly = status.engine !== "here"
+  const botId = useBotId()
   const turn = status.turn
   const empty =
     text.trim().length === 0 &&
@@ -181,7 +183,7 @@ export function PersonalAgentComposer({
     const blocks = [...embeddedBlocks(), ...attach.imagePromptBlocks()]
     setSending(true)
     try {
-      await personalAgentSend(body, blocks, quoting)
+      await personalAgentSend(body, blocks, quoting, botId)
       editorRef.current?.clear()
       attach.clearAttachments()
       setText("")

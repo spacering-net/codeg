@@ -25,6 +25,7 @@ import {
 } from "lucide-react"
 
 import { SettingNote } from "@/components/shared/setting-card"
+import { useBotId } from "@/contexts/personal-agent-context"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -126,9 +127,10 @@ export function PersonaFiles() {
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const botId = useBotId()
   useEffect(() => {
     let cancelled = false
-    personalAgentFiles()
+    personalAgentFiles(botId)
       .then((list) => {
         if (cancelled) return
         setFiles(list)
@@ -138,7 +140,7 @@ export function PersonaFiles() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [botId])
   // The entries, titled by the index's (saved) lines: by kind, then title.
   const entries = useMemo(() => {
     if (!files) return []
@@ -175,7 +177,7 @@ export function PersonaFiles() {
     if (!current) return
     const content = drafts[active] ?? ""
     setSaving(true)
-    personalAgentFileSave(active, content)
+    personalAgentFileSave(active, content, botId)
       .then(() => {
         setFiles((list) =>
           (list ?? []).map((f) =>
@@ -192,8 +194,8 @@ export function PersonaFiles() {
     if (!isEntry) return
     const name = active
     setSaving(true)
-    personalAgentFileDelete(name)
-      .then(() => personalAgentFiles())
+    personalAgentFileDelete(name, botId)
+      .then(() => personalAgentFiles(botId))
       .then((list) => {
         // Take the files as they are now, keeping what is still being
         // written in any of them. The index lost the entry's line on disk:

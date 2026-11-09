@@ -34,6 +34,7 @@ const toasts = vi.hoisted(() => ({ message: vi.fn(), error: vi.fn() }))
 vi.mock("@/lib/api", () => api)
 vi.mock("sonner", () => ({ toast: toasts }))
 vi.mock("@/contexts/personal-agent-context", () => ({
+  useBotId: () => null,
   usePersonalAgent: () => ({
     itemVersion: 0,
     dispatchVersion: 0,

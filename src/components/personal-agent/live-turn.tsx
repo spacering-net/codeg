@@ -20,6 +20,7 @@ import { PermissionDialog } from "@/components/chat/permission-dialog"
 import { PlanApprovalCard } from "@/components/chat/plan-approval-card"
 import { useConnectionStateById } from "@/components/message/live-transcript-view"
 import { useAcpActions } from "@/contexts/acp-connections-context"
+import { useBotId } from "@/contexts/personal-agent-context"
 import {
   personalAgentAnswerPlan,
   personalAgentAnswerQuestion,
@@ -58,6 +59,7 @@ export function BlockingPrompts({
   agentType: AgentType
 }) {
   const conn = useConnectionStateById(connectionId)
+  const botId = useBotId()
   if (!conn) return null
   const fail = (error: unknown) => toast.error(toErrorMessage(error))
   return (
@@ -67,7 +69,9 @@ export function BlockingPrompts({
           permission={conn.pendingPermission}
           agentType={agentType}
           onRespond={(requestId, optionId) => {
-            personalAgentRespondPermission(requestId, optionId).catch(fail)
+            personalAgentRespondPermission(requestId, optionId, botId).catch(
+              fail
+            )
           }}
         />
       ) : null}
@@ -75,7 +79,7 @@ export function BlockingPrompts({
         <AskQuestionCard
           question={conn.pendingAskQuestion}
           onAnswer={(questionId, answer) =>
-            personalAgentAnswerQuestion(questionId, answer)
+            personalAgentAnswerQuestion(questionId, answer, botId)
           }
         />
       ) : null}
@@ -83,7 +87,7 @@ export function BlockingPrompts({
         <PlanApprovalCard
           approval={conn.pendingPlanApproval}
           onAnswer={(approvalId, answer) =>
-            personalAgentAnswerPlan(approvalId, answer)
+            personalAgentAnswerPlan(approvalId, answer, botId)
           }
         />
       ) : null}

@@ -18,6 +18,9 @@ const api = vi.hoisted(() => ({
 }))
 const toasts = vi.hoisted(() => ({ message: vi.fn(), error: vi.fn() }))
 vi.mock("@/lib/api", () => api)
+vi.mock("@/contexts/personal-agent-context", () => ({
+  useBotId: () => null,
+}))
 vi.mock("sonner", () => ({ toast: toasts }))
 
 import { entryMeta, PersonaFiles, withoutEntryLine } from "./persona-files"
@@ -173,7 +176,8 @@ describe("PersonaFiles", () => {
     await waitFor(() =>
       expect(api.personalAgentFileSave).toHaveBeenCalledWith(
         "memory/tea.md",
-        "# Likes tea\n\nOolong."
+        "# Likes tea\n\nOolong.",
+        null
       )
     )
   })
@@ -196,7 +200,8 @@ describe("PersonaFiles", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }))
     await waitFor(() =>
       expect(api.personalAgentFileDelete).toHaveBeenCalledWith(
-        "memory/release-days.md"
+        "memory/release-days.md",
+        null
       )
     )
     await waitFor(() =>
@@ -238,7 +243,7 @@ describe("PersonaFiles", () => {
     )
     fireEvent.click(screen.getByRole("button", { name: "Delete" }))
     await waitFor(() =>
-      expect(api.personalAgentFileDelete).toHaveBeenCalledWith(entry)
+      expect(api.personalAgentFileDelete).toHaveBeenCalledWith(entry, null)
     )
     // The index opens with the edit kept, only the entry's line gone.
     await waitFor(() =>

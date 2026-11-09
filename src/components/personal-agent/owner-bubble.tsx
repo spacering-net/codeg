@@ -16,6 +16,7 @@ import { toast } from "sonner"
 
 import { personalAgentResend } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { useBotId } from "@/contexts/personal-agent-context"
 import { cn } from "@/lib/utils"
 
 import type { MessageItem } from "./message-items"
@@ -35,6 +36,7 @@ export function OwnerBubble({ item }: { item: OwnerItem }) {
   const t = useTranslations("PersonalAgent.owner")
   const { row, tail } = item
   const { readOnly } = usePageScope()
+  const botId = useBotId()
   const [busy, setBusy] = useState(false)
   const resentAs = num(row.data, "resent_as")
   const images = Array.isArray(row.data?.blocks)
@@ -70,7 +72,7 @@ export function OwnerBubble({ item }: { item: OwnerItem }) {
                 disabled={busy}
                 onClick={() => {
                   setBusy(true)
-                  personalAgentResend(row.id)
+                  personalAgentResend(row.id, botId)
                     .catch((e) => toast.error(toErrorMessage(e)))
                     .finally(() => setBusy(false))
                 }}

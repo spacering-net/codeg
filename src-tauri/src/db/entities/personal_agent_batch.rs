@@ -88,6 +88,8 @@ pub struct Model {
     /// A delivery's trigger; `None` for a compaction (and every batch from
     /// before triggers were recorded).
     pub trigger: Option<BatchTrigger>,
+    /// The assistant it belongs to (`personal_agent.id`).
+    pub bot_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

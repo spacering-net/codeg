@@ -134,6 +134,41 @@ pub fn default_workdir(data_dir: &Path) -> PathBuf {
     data_dir.join("personal-agent")
 }
 
+/// Where workers' working directories go by default, one per uid — beside
+/// the primary's, not inside it: each is a git repository of its own, and
+/// none commits into another's history.
+pub const BOTS_DIR: &str = "personal-agent-bots";
+
+/// An assistant's default working directory: the primary's
+/// `<data dir>/personal-agent`, a worker's `<data dir>/personal-agent-bots/<uid>`.
+pub fn default_workdir_of_bot(data_dir: &Path, row: &crate::db::entities::personal_agent::Model) -> PathBuf {
+    use crate::db::entities::personal_agent::BotKind;
+    match (row.kind, row.uid.as_deref()) {
+        (BotKind::Worker, Some(uid)) if !uid.trim().is_empty() => data_dir.join(BOTS_DIR).join(uid),
+        (BotKind::Worker, _) => data_dir.join(BOTS_DIR).join(format!("bot-{}", row.id)),
+        (BotKind::Primary, _) => default_workdir(data_dir),
+    }
+}
+
+/// An assistant's working directory in effect: the one the owner picked, else
+/// its default.
+pub fn workdir_of_bot(data_dir: &Path, row: &crate::db::entities::personal_agent::Model) -> PathBuf {
+    match row.workdir.as_deref() {
+        Some(p) if !p.trim().is_empty() => PathBuf::from(p),
+        _ => default_workdir_of_bot(data_dir, row),
+    }
+}
+
+/// The files the owner may edit in an assistant's directory. A worker has no
+/// `USER.md`: the facts about the owner are the primary's, one copy only.
+pub fn editable_files(worker: bool) -> &'static [&'static str] {
+    if worker {
+        &[SOUL_FILE, RULES_FILE, MEMORY_FILE]
+    } else {
+        EDITABLE_FILES
+    }
+}
+
 /// Why a directory cannot be a working directory.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkdirError {
@@ -156,6 +191,16 @@ pub fn is_workdir(path: &Path) -> bool {
 /// `locale`, see [`super::templates`]) and the marker, and put it under git.
 /// A directory that already carries the marker is left exactly as it is.
 pub async fn ensure_initialized(path: &Path, locale: AppLocale) -> Result<bool, WorkdirError> {
+    ensure_bot_workdir(path, locale, false).await
+}
+
+/// [`ensure_initialized`] for an assistant: a worker's directory gets no
+/// `USER.md` (it reads the primary's).
+pub async fn ensure_bot_workdir(
+    path: &Path,
+    locale: AppLocale,
+    worker: bool,
+) -> Result<bool, WorkdirError> {
     if !path.is_absolute() {
         return Err(WorkdirError::NotAbsolute);
     }
@@ -176,6 +221,9 @@ pub async fn ensure_initialized(path: &Path, locale: AppLocale) -> Result<bool, 
         (USER_FILE, user),
         (MEMORY_FILE, memory),
     ] {
+        if worker && name == USER_FILE {
+            continue;
+        }
         std::fs::write(path.join(name), text)?;
     }
     std::fs::write(path.join("log").join(".gitkeep"), "")?;
@@ -390,6 +438,17 @@ pub fn persona_digest(path: &Path, agent_name: &str) -> String {
 /// directory on purpose: a global skill would reach every session of that
 /// agent, not just the personal agent's. Best-effort.
 pub fn sync_skill(path: &Path, agent_type: crate::models::AgentType, enabled: bool) {
+    sync_bot_skill(path, agent_type, enabled, false)
+}
+
+/// [`sync_skill`] for an assistant: a worker's tells it that the facts about
+/// the owner are the primary's.
+pub fn sync_bot_skill(
+    path: &Path,
+    agent_type: crate::models::AgentType,
+    enabled: bool,
+    worker: bool,
+) {
     let dir = match crate::commands::acp::preferred_scope_skill_dir(
         agent_type,
         crate::acp::types::AgentSkillScope::Project,
@@ -402,7 +461,7 @@ pub fn sync_skill(path: &Path, agent_type: crate::models::AgentType, enabled: bo
     };
     if enabled {
         if let Err(e) = std::fs::create_dir_all(&dir)
-            .and_then(|_| std::fs::write(dir.join("SKILL.md"), SKILL_MD))
+            .and_then(|_| std::fs::write(dir.join("SKILL.md"), skill_md(worker).as_bytes()))
         {
             tracing::warn!("[personal_agent] skill install failed: {e}");
         }
@@ -410,6 +469,21 @@ pub fn sync_skill(path: &Path, agent_type: crate::models::AgentType, enabled: bo
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// The built-in skill, as an assistant gets it: a worker's says where the
+/// facts about the owner are.
+pub fn skill_md(worker: bool) -> std::borrow::Cow<'static, str> {
+    if !worker {
+        return std::borrow::Cow::Borrowed(SKILL_MD);
+    }
+    std::borrow::Cow::Owned(SKILL_MD.replace(
+        "- `USER.md`: who the owner is — role, projects, preferences. Keep it current\n  and short; it is loaded whole.",
+        WORKER_USER_NOTE,
+    ))
+}
+
+/// What a worker's skill says in place of keeping `USER.md`.
+pub const WORKER_USER_NOTE: &str = "- The owner's profile (who they are — role, projects, preferences) is kept\n  by the owner's primary assistant, and you get it at the start of each\n  session and whenever it changes. You have no `USER.md`: do not write facts\n  about the owner into your own memory; leave them to the primary assistant.";
 
 /// The built-in skill: how the personal agent works with codeg.
 pub const SKILL_MD: &str = r#"---

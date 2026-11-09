@@ -20,6 +20,7 @@ import { toast } from "sonner"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentResend } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { useBotId } from "@/contexts/personal-agent-context"
 import { cn } from "@/lib/utils"
 
 import { DispatchAttachments } from "./dispatch-attachments"
@@ -96,6 +97,7 @@ function Ending({ ending }: { ending: ReplyEnding }) {
 
 function Resend({ ids }: { ids: number[] }) {
   const t = useTranslations("PersonalAgent.reply")
+  const botId = useBotId()
   const [busy, setBusy] = useState(false)
   return (
     <button
@@ -109,7 +111,7 @@ function Resend({ ids }: { ids: number[] }) {
         setBusy(true)
         try {
           // One after another, so they queue in their own order.
-          for (const id of ids) await personalAgentResend(id)
+          for (const id of ids) await personalAgentResend(id, botId)
         } catch (e) {
           toast.error(toErrorMessage(e))
         } finally {

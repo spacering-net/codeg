@@ -589,6 +589,7 @@ impl PersonalAgentEngine {
         if tell {
             let _ = svc::insert_event(
                 &self.db.conn,
+                self.bot().await,
                 "ledger",
                 &format!("ledger:{op_id}:arrived"),
                 None,
@@ -665,6 +666,7 @@ impl PersonalAgentEngine {
         }));
         let made = svc::create_notice_with_row(
             &self.db.conn,
+            self.bot().await,
             NewNotice {
                 kind: NoticeKind::Uncertain,
                 subject_key: Some(format!("op:{op_id}")),
@@ -700,6 +702,7 @@ impl PersonalAgentEngine {
         // The assistant hears of it with its next delivery.
         let _ = svc::insert_event(
             &self.db.conn,
+            self.bot().await,
             "ledger",
             &format!("ledger:{op_id}:unknown"),
             None,
@@ -717,7 +720,7 @@ impl PersonalAgentEngine {
     /// After a restart: every operation still prepared is judged by its
     /// evidence, and every card left acting settles as what it ran did.
     pub(super) async fn boot_ledger(&self) {
-        let prepared = svc::ops_in_states(&self.db.conn, &[ActionState::Prepared])
+        let prepared = svc::ops_in_states(&self.db.conn, self.bot().await, &[ActionState::Prepared])
             .await
             .unwrap_or_default();
         for op in prepared {
@@ -733,6 +736,7 @@ impl PersonalAgentEngine {
                     if let Some(call) = parse::<FollowupCall>(op.payload.as_deref()) {
                         let _ = svc::insert_event(
                             &self.db.conn,
+                            self.bot().await,
                             "ledger",
                             &format!("ledger:{op_id}:not_sent"),
                             None,
@@ -749,7 +753,7 @@ impl PersonalAgentEngine {
                 }
             }
         }
-        let acting = svc::notices_in_state(&self.db.conn, NoticeState::Acting)
+        let acting = svc::notices_in_state(&self.db.conn, self.bot().await, NoticeState::Acting)
             .await
             .unwrap_or_default();
         for card in acting {

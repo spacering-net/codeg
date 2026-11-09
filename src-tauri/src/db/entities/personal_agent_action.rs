@@ -80,6 +80,8 @@ pub struct Model {
     /// Why it stands as it does, in words.
     #[sea_orm(column_type = "Text", nullable)]
     pub detail: Option<String>,
+    /// The assistant it belongs to (`personal_agent.id`).
+    pub bot_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

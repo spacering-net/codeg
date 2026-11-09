@@ -12,6 +12,9 @@ const api = vi.hoisted(() => ({
   personalAgentCancel: vi.fn(),
 }))
 vi.mock("@/lib/api", () => api)
+vi.mock("@/contexts/personal-agent-context", () => ({
+  useBotId: () => null,
+}))
 
 // The editor and the attachment plumbing are the conversation box's own,
 // tested there: a plain text field stands in for the editor.
@@ -147,6 +150,7 @@ describe("PersonalAgentComposer", () => {
     expect(api.personalAgentSend).toHaveBeenCalledWith(
       "one more thing",
       [],
+      null,
       null
     )
     expect(onSent).toHaveBeenCalledTimes(1)

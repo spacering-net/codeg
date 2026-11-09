@@ -1,6 +1,12 @@
-//! Storage of the personal agent: its row, its session segments, the batches
-//! its engine sent, its timeline, its event queue, its open matters and its
-//! dispatches.
+//! Storage of the personal agent's assistants: their rows, and each one's
+//! session segments, the batches its engine sent, its timeline, its event
+//! queue, its open matters and its dispatches.
+//!
+//! Every table of an assistant's records carries `bot_id`: every write sets
+//! it, and every read that is not by a row's own id filters on it — one
+//! assistant never sees another's rows. A read by id from outside (a page, a
+//! tool call naming a row) goes through the `_of` variant, which checks the
+//! row is the asking assistant's.
 //!
 //! Every write here is a single statement or an insert-first transaction, for
 //! the reason `assistant_service` gives: under WAL a read-then-write
@@ -26,7 +32,7 @@ use crate::db::entities::personal_agent_notice::{
 };
 use crate::db::entities::personal_agent_segment::{self as segment, SegmentReason};
 use crate::db::entities::personal_agent_timeline::{self as timeline, OwnerStatus, TimelineKind};
-use crate::db::entities::personal_agent as agent;
+use crate::db::entities::personal_agent::{self as agent, BotKind};
 use crate::db::error::DbError;
 use crate::models::personal_agent::{TimelineCursor, TimelineRow};
 
@@ -39,11 +45,114 @@ const BATCH_PULL_MAX: u64 = 500;
 
 // ── the agent row ───────────────────────────────────────────────────────────
 
-pub async fn get_agent(conn: &DatabaseConnection) -> Result<Option<agent::Model>, DbError> {
+/// The primary assistant — the personal agent there was first — when it is
+/// set up.
+pub async fn primary_bot(conn: &DatabaseConnection) -> Result<Option<agent::Model>, DbError> {
     Ok(agent::Entity::find()
+        .filter(agent::Column::Kind.eq(BotKind::Primary))
+        .filter(agent::Column::DeletedAt.is_null())
         .order_by_asc(agent::Column::Id)
         .one(conn)
         .await?)
+}
+
+/// An assistant that is not deleted.
+pub async fn get_bot(conn: &DatabaseConnection, id: i32) -> Result<Option<agent::Model>, DbError> {
+    Ok(agent::Entity::find_by_id(id)
+        .filter(agent::Column::DeletedAt.is_null())
+        .one(conn)
+        .await?)
+}
+
+/// Every assistant not deleted: the primary first, then the roster's order.
+pub async fn list_bots(conn: &DatabaseConnection) -> Result<Vec<agent::Model>, DbError> {
+    let mut bots = agent::Entity::find()
+        .filter(agent::Column::DeletedAt.is_null())
+        .order_by_asc(agent::Column::SortOrder)
+        .order_by_asc(agent::Column::Id)
+        .all(conn)
+        .await?;
+    bots.sort_by_key(|b| b.kind != BotKind::Primary);
+    Ok(bots)
+}
+
+/// A worker to make: its identity and brain, the profile it is bound to.
+#[derive(Debug, Clone)]
+pub struct NewWorker {
+    pub name: String,
+    pub avatar_json: String,
+    pub agent_type: String,
+    pub agent_options_json: String,
+    pub label_snapshot_json: String,
+    pub settings_json: String,
+    pub template: Option<String>,
+    pub executor_assistant_id: Option<i32>,
+}
+
+/// Make a worker, with a fresh uid, last in the roster.
+pub async fn create_worker(
+    conn: &DatabaseConnection,
+    new: NewWorker,
+) -> Result<agent::Model, DbError> {
+    let now = Utc::now();
+    let last = agent::Entity::find()
+        .filter(agent::Column::DeletedAt.is_null())
+        .order_by_desc(agent::Column::SortOrder)
+        .one(conn)
+        .await?
+        .map(|b| b.sort_order)
+        .unwrap_or(0);
+    let row = agent::ActiveModel {
+        id: NotSet,
+        name: Set(new.name),
+        avatar: Set(new.avatar_json),
+        agent_type: Set(new.agent_type),
+        agent_options: Set(new.agent_options_json),
+        label_snapshot: Set(new.label_snapshot_json),
+        settings: Set(new.settings_json),
+        workdir: Set(None),
+        folder_id: Set(None),
+        revision: Set(1),
+        created_at: Set(now),
+        updated_at: Set(now),
+        kind: Set(BotKind::Worker),
+        uid: Set(Some(new_bot_uid())),
+        template: Set(new.template),
+        executor_assistant_id: Set(new.executor_assistant_id),
+        sort_order: Set(last + 1),
+        pinned_at: Set(None),
+        section: Set(None),
+        hidden: Set(false),
+        muted: Set(false),
+        unread_mark: Set(false),
+        notify: Set(true),
+        deleted_at: Set(None),
+    };
+    Ok(row.insert(conn).await?)
+}
+
+/// A stable id naming an assistant's directory: 32 hex digits.
+pub fn new_bot_uid() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Soft-delete a worker. The primary is never deleted. False when there was
+/// no such worker left.
+pub async fn delete_worker(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError> {
+    let now = Utc::now();
+    let res = agent::Entity::update_many()
+        .col_expr(agent::Column::DeletedAt, Expr::value(now))
+        .col_expr(agent::Column::UpdatedAt, Expr::value(now))
+        .col_expr(
+            agent::Column::Revision,
+            Expr::col(agent::Column::Revision).add(1),
+        )
+        .filter(agent::Column::Id.eq(id))
+        .filter(agent::Column::Kind.eq(BotKind::Worker))
+        .filter(agent::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
 }
 
 /// The columns a save writes. `None` leaves a column as it is (an update) —
@@ -58,73 +167,101 @@ pub struct AgentWrite {
     pub settings_json: Option<String>,
 }
 
-/// Insert the row, or update the one that exists. Returns the row as stored.
-pub async fn save_agent(
+/// Insert the primary assistant's row, or update the one that exists.
+/// Returns the row as stored. (A second primary is refused by the database:
+/// one undeleted primary only.)
+pub async fn save_primary(
+    conn: &DatabaseConnection,
+    write: AgentWrite,
+) -> Result<agent::Model, DbError> {
+    match primary_bot(conn).await? {
+        Some(existing) => save_bot(conn, existing.id, write).await,
+        None => insert_primary(conn, write).await,
+    }
+}
+
+async fn insert_primary(
     conn: &DatabaseConnection,
     write: AgentWrite,
 ) -> Result<agent::Model, DbError> {
     let now = Utc::now();
-    match get_agent(conn).await? {
-        None => {
-            let (Some(agent_type), Some(options), Some(labels)) = (
-                write.agent_type,
-                write.agent_options_json,
-                write.label_snapshot_json,
-            ) else {
-                return Err(DbError::Validation(
-                    "the personal agent needs an agent to run on".into(),
-                ));
-            };
-            let row = agent::ActiveModel {
-                id: NotSet,
-                name: Set(write.name.unwrap_or_default()),
-                avatar: Set(write
-                    .avatar_json
-                    .unwrap_or_else(|| r#"{"kind":"emoji","emoji":"🧭","color":"violet"}"#.into())),
-                agent_type: Set(agent_type),
-                agent_options: Set(options),
-                label_snapshot: Set(labels),
-                settings: Set(write.settings_json.unwrap_or_else(|| "{}".into())),
-                workdir: Set(None),
-                folder_id: Set(None),
-                revision: Set(1),
-                created_at: Set(now),
-                updated_at: Set(now),
-            };
-            Ok(row.insert(conn).await?)
-        }
-        Some(existing) => {
-            let mut update = agent::Entity::update_many()
-                .col_expr(agent::Column::UpdatedAt, Expr::value(now))
-                .col_expr(
-                    agent::Column::Revision,
-                    Expr::col(agent::Column::Revision).add(1),
-                )
-                .filter(agent::Column::Id.eq(existing.id));
-            if let Some(v) = write.name {
-                update = update.col_expr(agent::Column::Name, Expr::value(v));
-            }
-            if let Some(v) = write.avatar_json {
-                update = update.col_expr(agent::Column::Avatar, Expr::value(v));
-            }
-            if let Some(v) = write.agent_type {
-                update = update.col_expr(agent::Column::AgentType, Expr::value(v));
-            }
-            if let Some(v) = write.agent_options_json {
-                update = update.col_expr(agent::Column::AgentOptions, Expr::value(v));
-            }
-            if let Some(v) = write.label_snapshot_json {
-                update = update.col_expr(agent::Column::LabelSnapshot, Expr::value(v));
-            }
-            if let Some(v) = write.settings_json {
-                update = update.col_expr(agent::Column::Settings, Expr::value(v));
-            }
-            update.exec(conn).await?;
-            get_agent(conn)
-                .await?
-                .ok_or_else(|| DbError::NotFound("personal agent".into()))
-        }
+    let (Some(agent_type), Some(options), Some(labels)) = (
+        write.agent_type,
+        write.agent_options_json,
+        write.label_snapshot_json,
+    ) else {
+        return Err(DbError::Validation(
+            "the personal agent needs an agent to run on".into(),
+        ));
+    };
+    let row = agent::ActiveModel {
+        id: NotSet,
+        name: Set(write.name.unwrap_or_default()),
+        avatar: Set(write
+            .avatar_json
+            .unwrap_or_else(|| r#"{"kind":"emoji","emoji":"🧭","color":"violet"}"#.into())),
+        agent_type: Set(agent_type),
+        agent_options: Set(options),
+        label_snapshot: Set(labels),
+        settings: Set(write.settings_json.unwrap_or_else(|| "{}".into())),
+        workdir: Set(None),
+        folder_id: Set(None),
+        revision: Set(1),
+        created_at: Set(now),
+        updated_at: Set(now),
+        kind: Set(BotKind::Primary),
+        uid: Set(Some(new_bot_uid())),
+        template: Set(None),
+        executor_assistant_id: Set(None),
+        sort_order: Set(0),
+        pinned_at: Set(None),
+        section: Set(None),
+        hidden: Set(false),
+        muted: Set(false),
+        unread_mark: Set(false),
+        notify: Set(true),
+        deleted_at: Set(None),
+    };
+    Ok(row.insert(conn).await?)
+}
+
+/// Update an assistant's row. Returns it as stored.
+pub async fn save_bot(
+    conn: &DatabaseConnection,
+    id: i32,
+    write: AgentWrite,
+) -> Result<agent::Model, DbError> {
+    let now = Utc::now();
+    let mut update = agent::Entity::update_many()
+        .col_expr(agent::Column::UpdatedAt, Expr::value(now))
+        .col_expr(
+            agent::Column::Revision,
+            Expr::col(agent::Column::Revision).add(1),
+        )
+        .filter(agent::Column::Id.eq(id))
+        .filter(agent::Column::DeletedAt.is_null());
+    if let Some(v) = write.name {
+        update = update.col_expr(agent::Column::Name, Expr::value(v));
     }
+    if let Some(v) = write.avatar_json {
+        update = update.col_expr(agent::Column::Avatar, Expr::value(v));
+    }
+    if let Some(v) = write.agent_type {
+        update = update.col_expr(agent::Column::AgentType, Expr::value(v));
+    }
+    if let Some(v) = write.agent_options_json {
+        update = update.col_expr(agent::Column::AgentOptions, Expr::value(v));
+    }
+    if let Some(v) = write.label_snapshot_json {
+        update = update.col_expr(agent::Column::LabelSnapshot, Expr::value(v));
+    }
+    if let Some(v) = write.settings_json {
+        update = update.col_expr(agent::Column::Settings, Expr::value(v));
+    }
+    update.exec(conn).await?;
+    get_bot(conn, id)
+        .await?
+        .ok_or_else(|| DbError::NotFound("personal agent".into()))
 }
 
 /// Point the agent at a working directory and the hidden folder backing it.
@@ -152,8 +289,12 @@ pub async fn set_workdir(
 // ── segments ────────────────────────────────────────────────────────────────
 
 /// The segment that is open, if the agent has started.
-pub async fn open_segment(conn: &DatabaseConnection) -> Result<Option<segment::Model>, DbError> {
+pub async fn open_segment(
+    conn: &DatabaseConnection,
+    bot: i32,
+) -> Result<Option<segment::Model>, DbError> {
     Ok(segment::Entity::find()
+        .filter(segment::Column::BotId.eq(bot))
         .filter(segment::Column::EndedAt.is_null())
         .order_by_desc(segment::Column::Id)
         .one(conn)
@@ -167,8 +308,12 @@ pub async fn get_segment(
     Ok(segment::Entity::find_by_id(id).one(conn).await?)
 }
 
-pub async fn list_segments(conn: &DatabaseConnection) -> Result<Vec<segment::Model>, DbError> {
+pub async fn list_segments(
+    conn: &DatabaseConnection,
+    bot: i32,
+) -> Result<Vec<segment::Model>, DbError> {
     Ok(segment::Entity::find()
+        .filter(segment::Column::BotId.eq(bot))
         .order_by_asc(segment::Column::Id)
         .all(conn)
         .await?)
@@ -177,11 +322,14 @@ pub async fn list_segments(conn: &DatabaseConnection) -> Result<Vec<segment::Mod
 /// Start a new segment. The caller has ended the previous one.
 pub async fn create_segment(
     conn: &DatabaseConnection,
+    bot: i32,
     agent_type: &str,
     agent_options_json: String,
     reason: SegmentReason,
 ) -> Result<segment::Model, DbError> {
+    require_bot(bot)?;
     let seq = segment::Entity::find()
+        .filter(segment::Column::BotId.eq(bot))
         .order_by_desc(segment::Column::Seq)
         .one(conn)
         .await?
@@ -208,6 +356,7 @@ pub async fn create_segment(
         auto_compact_paused: Set(false),
         persona_digest: Set(None),
         state: Set("{}".to_string()),
+        bot_id: Set(Some(bot)),
     };
     Ok(row.insert(conn).await?)
 }
@@ -353,21 +502,24 @@ pub async fn bump_compactions(
 
 pub async fn create_batch(
     conn: &DatabaseConnection,
+    bot: i32,
     segment_id: i32,
     kind: BatchKind,
     detail: Option<serde_json::Value>,
 ) -> Result<batch::Model, DbError> {
-    create_batch_with(conn, segment_id, kind, detail, None).await
+    create_batch_with(conn, bot, segment_id, kind, detail, None).await
 }
 
 /// A batch with its trigger (recorded only).
 pub async fn create_batch_with(
     conn: &DatabaseConnection,
+    bot: i32,
     segment_id: i32,
     kind: BatchKind,
     detail: Option<serde_json::Value>,
     trigger: Option<BatchTrigger>,
 ) -> Result<batch::Model, DbError> {
+    require_bot(bot)?;
     let row = batch::ActiveModel {
         id: NotSet,
         segment_id: Set(segment_id),
@@ -379,6 +531,7 @@ pub async fn create_batch_with(
         started_at: Set(Utc::now()),
         ended_at: Set(None),
         trigger: Set(trigger),
+        bot_id: Set(Some(bot)),
     };
     Ok(row.insert(conn).await?)
 }
@@ -422,8 +575,12 @@ pub async fn last_compaction(
         .await?)
 }
 
-pub async fn running_batches(conn: &DatabaseConnection) -> Result<Vec<batch::Model>, DbError> {
+pub async fn running_batches(
+    conn: &DatabaseConnection,
+    bot: i32,
+) -> Result<Vec<batch::Model>, DbError> {
     Ok(batch::Entity::find()
+        .filter(batch::Column::BotId.eq(bot))
         .filter(batch::Column::Status.eq(BatchStatus::Running))
         .order_by_asc(batch::Column::Id)
         .all(conn)
@@ -432,9 +589,11 @@ pub async fn running_batches(conn: &DatabaseConnection) -> Result<Vec<batch::Mod
 
 pub async fn batches_since(
     conn: &DatabaseConnection,
+    bot: i32,
     since: DateTime<Utc>,
 ) -> Result<Vec<batch::Model>, DbError> {
     Ok(batch::Entity::find()
+        .filter(batch::Column::BotId.eq(bot))
         .filter(batch::Column::StartedAt.gte(since))
         .order_by_asc(batch::Column::Id)
         .all(conn)
@@ -525,7 +684,7 @@ impl NewRow {
         }
     }
 
-    fn into_active(self, now: DateTime<Utc>) -> timeline::ActiveModel {
+    fn into_active(self, bot: i32, now: DateTime<Utc>) -> timeline::ActiveModel {
         timeline::ActiveModel {
             id: NotSet,
             segment_id: Set(self.segment_id),
@@ -542,16 +701,46 @@ impl NewRow {
             seen_at: Set(None),
             created_at: Set(now),
             updated_at: Set(now),
+            bot_id: Set(Some(bot)),
         }
     }
 }
 
-pub async fn insert_row(conn: &DatabaseConnection, row: NewRow) -> Result<timeline::Model, DbError> {
-    Ok(row.into_active(Utc::now()).insert(conn).await?)
+pub async fn insert_row(
+    conn: &DatabaseConnection,
+    bot: i32,
+    row: NewRow,
+) -> Result<timeline::Model, DbError> {
+    require_bot(bot)?;
+    Ok(row.into_active(bot, Utc::now()).insert(conn).await?)
 }
 
 pub async fn get_row(conn: &DatabaseConnection, id: i32) -> Result<Option<timeline::Model>, DbError> {
     Ok(timeline::Entity::find_by_id(id).one(conn).await?)
+}
+
+/// A row of this assistant's, by id: `None` for one of another's.
+pub async fn get_row_of(
+    conn: &DatabaseConnection,
+    bot: i32,
+    id: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find_by_id(id)
+        .filter(timeline::Column::BotId.eq(bot))
+        .one(conn)
+        .await?)
+}
+
+/// A write of an assistant's records needs the assistant: a row with no
+/// owner would belong to no one's timeline.
+fn require_bot(bot: i32) -> Result<(), DbError> {
+    if bot > 0 {
+        Ok(())
+    } else {
+        Err(DbError::Validation(
+            "the personal agent is not set up yet".into(),
+        ))
+    }
 }
 
 /// Only a reply row still running: a checkpoint landing after the turn was
@@ -653,8 +842,13 @@ pub async fn latest_followup_row(
 }
 
 /// Whether any row is older than `id`.
-pub async fn has_rows_before(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError> {
+pub async fn has_rows_before(
+    conn: &DatabaseConnection,
+    bot: i32,
+    id: i32,
+) -> Result<bool, DbError> {
     Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Id.lt(id))
         .one(conn)
         .await?
@@ -664,6 +858,7 @@ pub async fn has_rows_before(conn: &DatabaseConnection, id: i32) -> Result<bool,
 /// Rows by id (at most 100), id order.
 pub async fn rows_by_ids(
     conn: &DatabaseConnection,
+    bot: i32,
     ids: &[i32],
 ) -> Result<Vec<timeline::Model>, DbError> {
     if ids.is_empty() {
@@ -671,6 +866,7 @@ pub async fn rows_by_ids(
     }
     let ids: Vec<i32> = ids.iter().copied().take(100).collect();
     Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Id.is_in(ids))
         .order_by_asc(timeline::Column::Id)
         .all(conn)
@@ -681,10 +877,12 @@ pub async fn rows_by_ids(
 /// or, when that is more than [`RANGE_ROWS_MAX`] rows, none and `true`.
 pub async fn range(
     conn: &DatabaseConnection,
+    bot: i32,
     since_id: i32,
     before_id: Option<i32>,
 ) -> Result<(Vec<timeline::Model>, bool), DbError> {
     let mut query = timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Id.gte(since_id))
         .order_by_asc(timeline::Column::Id);
     if let Some(before) = before_id {
@@ -695,7 +893,7 @@ pub async fn range(
         return Ok((Vec::new(), true));
     }
     // The turn the first row belongs to starts where it is drawn.
-    Ok((pull_back_to_turn_start(conn, rows).await?, false))
+    Ok((pull_back_to_turn_start(conn, bot, rows).await?, false))
 }
 
 /// Rows changed since a moment, `(updated_at, id)` order, from `min_id` up:
@@ -705,23 +903,27 @@ pub async fn range(
 /// from when more changed than [`CHANGED_ROWS_MAX`].
 pub async fn changed_since(
     conn: &DatabaseConnection,
+    bot: i32,
     since: Option<DateTime<Utc>>,
     after: Option<TimelineCursor>,
     min_id: i32,
 ) -> Result<(Vec<timeline::Model>, Option<TimelineCursor>), DbError> {
-    changed_since_limited(conn, since, after, min_id, CHANGED_ROWS_MAX).await
+    changed_since_limited(conn, bot, since, after, min_id, CHANGED_ROWS_MAX).await
 }
 
 /// [`changed_since`], `limit` rows at a time.
 pub async fn changed_since_limited(
     conn: &DatabaseConnection,
+    bot: i32,
     since: Option<DateTime<Utc>>,
     after: Option<TimelineCursor>,
     min_id: i32,
     limit: u64,
 ) -> Result<(Vec<timeline::Model>, Option<TimelineCursor>), DbError> {
     use sea_orm::Condition;
-    let mut query = timeline::Entity::find().filter(timeline::Column::Id.gte(min_id));
+    let mut query = timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
+        .filter(timeline::Column::Id.gte(min_id));
     if let Some(cursor) = after {
         query = query.filter(
             Condition::any()
@@ -757,6 +959,7 @@ pub async fn changed_since_limited(
 /// Returns the rows changed.
 pub async fn set_result_rows_read(
     conn: &DatabaseConnection,
+    bot: i32,
     event_ids: &[i32],
     read_at: Option<DateTime<Utc>>,
 ) -> Result<Vec<timeline::Model>, DbError> {
@@ -766,11 +969,13 @@ pub async fn set_result_rows_read(
     timeline::Entity::update_many()
         .col_expr(timeline::Column::ReadAt, Expr::value(read_at))
         .col_expr(timeline::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Kind.eq(TimelineKind::Result))
         .filter(timeline::Column::EventId.is_in(event_ids.to_vec()))
         .exec(conn)
         .await?;
     Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Kind.eq(TimelineKind::Result))
         .filter(timeline::Column::EventId.is_in(event_ids.to_vec()))
         .order_by_asc(timeline::Column::Id)
@@ -816,8 +1021,12 @@ pub async fn update_row_data(
 }
 
 /// The owner's messages waiting for a delivery, oldest first.
-pub async fn queued_owner_rows(conn: &DatabaseConnection) -> Result<Vec<timeline::Model>, DbError> {
+pub async fn queued_owner_rows(
+    conn: &DatabaseConnection,
+    bot: i32,
+) -> Result<Vec<timeline::Model>, DbError> {
     Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Kind.eq(TimelineKind::Owner))
         .filter(timeline::Column::Status.eq(OwnerStatus::Queued))
         .order_by_asc(timeline::Column::Id)
@@ -825,8 +1034,9 @@ pub async fn queued_owner_rows(conn: &DatabaseConnection) -> Result<Vec<timeline
         .await?)
 }
 
-pub async fn count_queued_owner_rows(conn: &DatabaseConnection) -> Result<u64, DbError> {
+pub async fn count_queued_owner_rows(conn: &DatabaseConnection, bot: i32) -> Result<u64, DbError> {
     Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Kind.eq(TimelineKind::Owner))
         .filter(timeline::Column::Status.eq(OwnerStatus::Queued))
         .count(conn)
@@ -854,8 +1064,9 @@ fn unseen_by_owner() -> Condition {
         )
 }
 
-pub async fn count_unseen(conn: &DatabaseConnection) -> Result<u64, DbError> {
+pub async fn count_unseen(conn: &DatabaseConnection, bot: i32) -> Result<u64, DbError> {
     Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(unseen_by_owner())
         .count(conn)
         .await?)
@@ -866,12 +1077,14 @@ pub async fn count_unseen(conn: &DatabaseConnection) -> Result<u64, DbError> {
 /// of it). Returns the rows marked.
 pub async fn mark_seen(
     conn: &DatabaseConnection,
+    bot: i32,
     up_to: i32,
 ) -> Result<Vec<timeline::Model>, DbError> {
     let now = Utc::now();
     let res = timeline::Entity::update_many()
         .col_expr(timeline::Column::SeenAt, Expr::value(now))
         .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Id.lte(up_to))
         .filter(unseen_by_owner())
         .exec(conn)
@@ -880,6 +1093,7 @@ pub async fn mark_seen(
         return Ok(Vec::new());
     }
     Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Id.lte(up_to))
         .filter(timeline::Column::SeenAt.eq(now))
         .order_by_asc(timeline::Column::Id)
@@ -964,10 +1178,13 @@ pub async fn owner_rows_of_batch(
 /// whole.
 pub async fn page(
     conn: &DatabaseConnection,
+    bot: i32,
     before_id: Option<i32>,
     limit: u64,
 ) -> Result<(Vec<timeline::Model>, bool), DbError> {
-    let mut query = timeline::Entity::find().order_by_desc(timeline::Column::Id);
+    let mut query = timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
+        .order_by_desc(timeline::Column::Id);
     if let Some(before) = before_id {
         query = query.filter(timeline::Column::Id.lt(before));
     }
@@ -978,9 +1195,9 @@ pub async fn page(
     if !has_older {
         return Ok((rows, false));
     }
-    let rows = pull_back_to_turn_start(conn, rows).await?;
+    let rows = pull_back_to_turn_start(conn, bot, rows).await?;
     let has_older = match rows.first() {
-        Some(first) => has_rows_before(conn, first.id).await?,
+        Some(first) => has_rows_before(conn, bot, first.id).await?,
         None => false,
     };
     Ok((rows, has_older))
@@ -992,6 +1209,7 @@ pub async fn page(
 /// after it.
 async fn pull_back_to_turn_start(
     conn: &DatabaseConnection,
+    bot: i32,
     rows: Vec<timeline::Model>,
 ) -> Result<Vec<timeline::Model>, DbError> {
     let Some(first) = rows.first().map(|r| r.id) else {
@@ -1008,6 +1226,7 @@ async fn pull_back_to_turn_start(
         return Ok(rows);
     }
     let anchor = timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::BatchId.is_in(batches))
         .filter(timeline::Column::Kind.ne(TimelineKind::Owner))
         .filter(timeline::Column::Id.lt(first))
@@ -1018,6 +1237,7 @@ async fn pull_back_to_turn_start(
         return Ok(rows);
     };
     let mut pulled = timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Id.gte(anchor.id))
         .filter(timeline::Column::Id.lt(first))
         .order_by_desc(timeline::Column::Id)
@@ -1032,10 +1252,12 @@ async fn pull_back_to_turn_start(
 /// The newest `limit` rows of the given kinds, oldest first.
 pub async fn recent_rows(
     conn: &DatabaseConnection,
+    bot: i32,
     kinds: &[TimelineKind],
     limit: u64,
 ) -> Result<Vec<timeline::Model>, DbError> {
     let mut rows = timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Kind.is_in(kinds.to_vec()))
         .order_by_desc(timeline::Column::Id)
         .limit(limit)
@@ -1047,10 +1269,12 @@ pub async fn recent_rows(
 
 pub async fn row_by_ref(
     conn: &DatabaseConnection,
+    bot: i32,
     kind: TimelineKind,
     ref_id: &str,
 ) -> Result<Option<timeline::Model>, DbError> {
     Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::Kind.eq(kind))
         .filter(timeline::Column::RefId.eq(ref_id))
         .order_by_desc(timeline::Column::Id)
@@ -1060,9 +1284,11 @@ pub async fn row_by_ref(
 
 pub async fn rows_since(
     conn: &DatabaseConnection,
+    bot: i32,
     since: DateTime<Utc>,
 ) -> Result<Vec<timeline::Model>, DbError> {
     Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
         .filter(timeline::Column::CreatedAt.gte(since))
         .order_by_asc(timeline::Column::Id)
         .all(conn)
@@ -1076,6 +1302,7 @@ pub async fn rows_since(
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_event(
     conn: &DatabaseConnection,
+    bot: i32,
     kind: &str,
     source_key: &str,
     coalesce_key: Option<String>,
@@ -1083,6 +1310,9 @@ pub async fn insert_event(
     payload: Option<serde_json::Value>,
     wake: bool,
 ) -> Result<bool, DbError> {
+    require_bot(bot)?;
+    let source_key = scoped_source_key(conn, bot, source_key).await?;
+    let source_key = source_key.as_str();
     let exists = event::Entity::find()
         .filter(event::Column::SourceKey.eq(source_key))
         .count(conn)
@@ -1106,6 +1336,10 @@ pub async fn insert_event(
         requeued_from: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
+        bot_id: Set(Some(bot)),
+        origin_bot_id: Set(None),
+        origin_row_id: Set(None),
+        thread_id: Set(None),
     };
     match row.insert(conn).await {
         Ok(_) => Ok(true),
@@ -1118,8 +1352,31 @@ pub async fn insert_event(
     }
 }
 
-pub async fn pending_events(conn: &DatabaseConnection) -> Result<Vec<event::Model>, DbError> {
+/// An event's `source_key` as stored: unique across the table, so a worker's
+/// carry `bot<id>:` in front — the same dispatch's news reaching two
+/// assistants never collides. The primary's keys are as they always were.
+pub async fn scoped_source_key(
+    conn: &DatabaseConnection,
+    bot: i32,
+    key: &str,
+) -> Result<String, DbError> {
+    let primary = agent::Entity::find_by_id(bot)
+        .one(conn)
+        .await?
+        .is_none_or(|b| b.kind == BotKind::Primary);
+    Ok(if primary {
+        key.to_string()
+    } else {
+        format!("bot{bot}:{key}")
+    })
+}
+
+pub async fn pending_events(
+    conn: &DatabaseConnection,
+    bot: i32,
+) -> Result<Vec<event::Model>, DbError> {
     Ok(event::Entity::find()
+        .filter(event::Column::BotId.eq(bot))
         .filter(event::Column::State.eq(EventState::Pending))
         .order_by_asc(event::Column::Id)
         .all(conn)
@@ -1231,10 +1488,13 @@ pub async fn revert_batch_events(conn: &DatabaseConnection, batch_id: i32) -> Re
 /// recorded already — a repeated arrival is the same event.
 pub async fn insert_event_with_row(
     conn: &DatabaseConnection,
+    bot: i32,
     event: NewEvent,
     mut row: NewRow,
 ) -> Result<Option<(event::Model, timeline::Model)>, DbError> {
     use sea_orm::TransactionTrait;
+    require_bot(bot)?;
+    let source_key = scoped_source_key(conn, bot, &event.source_key).await?;
     let now = Utc::now();
     let txn = conn.begin().await?;
     // Insert first: the unique index decides a repeat, and a transaction
@@ -1242,7 +1502,7 @@ pub async fn insert_event_with_row(
     let inserted = event::ActiveModel {
         id: NotSet,
         kind: Set(event.kind),
-        source_key: Set(event.source_key),
+        source_key: Set(source_key),
         coalesce_key: Set(event.coalesce_key),
         summary: Set(event.summary),
         payload: Set(event.payload.map(|p| p.to_string())),
@@ -1253,6 +1513,10 @@ pub async fn insert_event_with_row(
         requeued_from: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
+        bot_id: Set(Some(bot)),
+        origin_bot_id: Set(None),
+        origin_row_id: Set(None),
+        thread_id: Set(None),
     }
     .insert(&txn)
     .await;
@@ -1268,7 +1532,7 @@ pub async fn insert_event_with_row(
         }
     };
     row.event_id = Some(ev.id);
-    let card = row.into_active(now).insert(&txn).await?;
+    let card = row.into_active(bot, now).insert(&txn).await?;
     txn.commit().await?;
     Ok(Some((ev, card)))
 }
@@ -1284,8 +1548,9 @@ pub struct NewEvent {
     pub wake: bool,
 }
 
-pub async fn count_pending_events(conn: &DatabaseConnection) -> Result<u64, DbError> {
+pub async fn count_pending_events(conn: &DatabaseConnection, bot: i32) -> Result<u64, DbError> {
     Ok(event::Entity::find()
+        .filter(event::Column::BotId.eq(bot))
         .filter(event::Column::State.eq(EventState::Pending))
         .count(conn)
         .await?)
@@ -1296,6 +1561,7 @@ pub async fn count_pending_events(conn: &DatabaseConnection) -> Result<u64, DbEr
 #[allow(clippy::too_many_arguments)]
 pub async fn create_item(
     conn: &DatabaseConnection,
+    bot: i32,
     kind: ItemKind,
     dispatch_id: Option<i32>,
     status: ItemStatus,
@@ -1304,6 +1570,7 @@ pub async fn create_item(
     on_done: Option<String>,
     origin_timeline_id: Option<i32>,
 ) -> Result<item::Model, DbError> {
+    require_bot(bot)?;
     let now = Utc::now();
     let row = item::ActiveModel {
         id: NotSet,
@@ -1316,12 +1583,25 @@ pub async fn create_item(
         origin_timeline_id: Set(origin_timeline_id),
         created_at: Set(now),
         updated_at: Set(now),
+        bot_id: Set(Some(bot)),
     };
     Ok(row.insert(conn).await?)
 }
 
 pub async fn get_item(conn: &DatabaseConnection, id: i32) -> Result<Option<item::Model>, DbError> {
     Ok(item::Entity::find_by_id(id).one(conn).await?)
+}
+
+/// A matter of this assistant's, by id: `None` for one of another's.
+pub async fn get_item_of(
+    conn: &DatabaseConnection,
+    bot: i32,
+    id: i32,
+) -> Result<Option<item::Model>, DbError> {
+    Ok(item::Entity::find_by_id(id)
+        .filter(item::Column::BotId.eq(bot))
+        .one(conn)
+        .await?)
 }
 
 pub async fn item_of_dispatch(
@@ -1371,10 +1651,13 @@ pub async fn update_item(
 /// Items in the given statuses (all of them when empty), newest first.
 pub async fn list_items(
     conn: &DatabaseConnection,
+    bot: i32,
     statuses: &[ItemStatus],
     limit: u64,
 ) -> Result<Vec<item::Model>, DbError> {
-    let mut query = item::Entity::find().order_by_desc(item::Column::Id);
+    let mut query = item::Entity::find()
+        .filter(item::Column::BotId.eq(bot))
+        .order_by_desc(item::Column::Id);
     if !statuses.is_empty() {
         query = query.filter(item::Column::Status.is_in(statuses.to_vec()));
     }
@@ -1385,6 +1668,8 @@ pub async fn list_items(
 
 #[derive(Debug, Clone)]
 pub struct NewDispatch {
+    /// The assistant dispatching it.
+    pub bot_id: i32,
     pub mode: DispatchMode,
     pub executor_assistant_id: i32,
     pub executor_snapshot_json: String,
@@ -1400,6 +1685,7 @@ pub async fn create_dispatch(
     conn: &DatabaseConnection,
     new: NewDispatch,
 ) -> Result<dispatch::Model, DbError> {
+    require_bot(new.bot_id)?;
     Ok(dispatch_active(new).insert(conn).await?)
 }
 
@@ -1407,6 +1693,11 @@ fn dispatch_active(new: NewDispatch) -> dispatch::ActiveModel {
     let now = Utc::now();
     dispatch::ActiveModel {
         id: NotSet,
+        bot_id: Set(Some(new.bot_id)),
+        origin_bot_id: Set(None),
+        origin_row_id: Set(None),
+        thread_id: Set(None),
+        for_input: Set(None),
         mode: Set(new.mode),
         executor_assistant_id: Set(new.executor_assistant_id),
         executor_snapshot: Set(new.executor_snapshot_json),
@@ -1516,11 +1807,14 @@ pub async fn create_dispatch_ledgered(
     card: Option<CardSettle>,
 ) -> Result<Ledgered<dispatch::Model>, DbError> {
     use sea_orm::TransactionTrait;
+    require_bot(new.bot_id)?;
+    let bot = new.bot_id;
     let now = Utc::now();
     let txn = conn.begin().await?;
     let made = dispatch_active(new).insert(&txn).await?;
     let entry = action::ActiveModel {
         id: NotSet,
+        bot_id: Set(Some(bot)),
         batch_id: Set(slot.batch_id),
         key: Set(slot.key.clone()),
         kind: Set("dispatch".into()),
@@ -1599,6 +1893,7 @@ pub async fn ledger_entries(
 }
 
 pub async fn get_op(conn: &DatabaseConnection, op_id: &str) -> Result<Option<action::Model>, DbError> {
+    // An operation id is unique across all assistants.
     Ok(action::Entity::find()
         .filter(action::Column::OpId.eq(op_id))
         .one(conn)
@@ -1608,6 +1903,8 @@ pub async fn get_op(conn: &DatabaseConnection, op_id: &str) -> Result<Option<act
 /// An operation to record before it runs.
 #[derive(Debug, Clone)]
 pub struct NewOp {
+    /// The assistant acting.
+    pub bot_id: i32,
     pub slot: LedgerSlot,
     pub kind: &'static str,
     pub payload: serde_json::Value,
@@ -1619,9 +1916,11 @@ pub struct NewOp {
 /// its slot is taken — the same call in the same batch, or the same
 /// operation id.
 pub async fn begin_op(conn: &DatabaseConnection, new: NewOp) -> Result<Ledgered<action::Model>, DbError> {
+    require_bot(new.bot_id)?;
     let now = Utc::now();
     let inserted = action::ActiveModel {
         id: NotSet,
+        bot_id: Set(Some(new.bot_id)),
         batch_id: Set(new.slot.batch_id),
         key: Set(new.slot.key.clone()),
         kind: Set(new.kind.to_string()),
@@ -1788,9 +2087,11 @@ pub async fn op_set_notice(conn: &DatabaseConnection, op_id: &str, notice_id: i3
 /// Operations in these states, oldest first.
 pub async fn ops_in_states(
     conn: &DatabaseConnection,
+    bot: i32,
     states: &[ActionState],
 ) -> Result<Vec<action::Model>, DbError> {
     Ok(action::Entity::find()
+        .filter(action::Column::BotId.eq(bot))
         .filter(action::Column::State.is_in(states.to_vec()))
         .filter(action::Column::OpId.is_not_null())
         .order_by_asc(action::Column::Id)
@@ -1824,14 +2125,17 @@ pub struct NewNotice {
 /// row's).
 pub async fn create_notice_with_row(
     conn: &DatabaseConnection,
+    bot: i32,
     new: NewNotice,
     mut row: NewRow,
 ) -> Result<(notice::Model, timeline::Model), DbError> {
     use sea_orm::TransactionTrait;
+    require_bot(bot)?;
     let now = Utc::now();
     let txn = conn.begin().await?;
     let made = notice::ActiveModel {
         id: NotSet,
+        bot_id: Set(Some(bot)),
         kind: Set(new.kind),
         subject_key: Set(new.subject_key),
         level: Set(new.level),
@@ -1848,7 +2152,7 @@ pub async fn create_notice_with_row(
     .insert(&txn)
     .await?;
     row.ref_id = Some(made.id.to_string());
-    let card = row.into_active(now).insert(&txn).await?;
+    let card = row.into_active(bot, now).insert(&txn).await?;
     notice::Entity::update_many()
         .col_expr(notice::Column::TimelineId, Expr::value(card.id))
         .filter(notice::Column::Id.eq(made.id))
@@ -1864,6 +2168,18 @@ pub async fn create_notice_with_row(
 
 pub async fn get_notice(conn: &DatabaseConnection, id: i32) -> Result<Option<notice::Model>, DbError> {
     Ok(notice::Entity::find_by_id(id).one(conn).await?)
+}
+
+/// A card of this assistant's, by id: `None` for one of another's.
+pub async fn get_notice_of(
+    conn: &DatabaseConnection,
+    bot: i32,
+    id: i32,
+) -> Result<Option<notice::Model>, DbError> {
+    Ok(notice::Entity::find_by_id(id)
+        .filter(notice::Column::BotId.eq(bot))
+        .one(conn)
+        .await?)
 }
 
 /// Move a notice from one of `from` to `to`. False when it was in none of
@@ -1889,9 +2205,11 @@ pub async fn move_notice(
 
 pub async fn notices_in_state(
     conn: &DatabaseConnection,
+    bot: i32,
     state: NoticeState,
 ) -> Result<Vec<notice::Model>, DbError> {
     Ok(notice::Entity::find()
+        .filter(notice::Column::BotId.eq(bot))
         .filter(notice::Column::State.eq(state))
         .order_by_asc(notice::Column::Id)
         .all(conn)
@@ -1903,6 +2221,18 @@ pub async fn get_dispatch(
     id: i32,
 ) -> Result<Option<dispatch::Model>, DbError> {
     Ok(dispatch::Entity::find_by_id(id).one(conn).await?)
+}
+
+/// A dispatch of this assistant's, by id: `None` for one of another's.
+pub async fn get_dispatch_of(
+    conn: &DatabaseConnection,
+    bot: i32,
+    id: i32,
+) -> Result<Option<dispatch::Model>, DbError> {
+    Ok(dispatch::Entity::find_by_id(id)
+        .filter(dispatch::Column::BotId.eq(bot))
+        .one(conn)
+        .await?)
 }
 
 /// The fields an update may change; `None` leaves one alone.
@@ -1993,11 +2323,14 @@ pub async fn update_dispatch(
 /// Dispatches in the given states (all of them when empty), newest first.
 pub async fn list_dispatches(
     conn: &DatabaseConnection,
+    bot: i32,
     states: &[DispatchState],
     mode: Option<DispatchMode>,
     limit: u64,
 ) -> Result<Vec<dispatch::Model>, DbError> {
-    let mut query = dispatch::Entity::find().order_by_desc(dispatch::Column::Id);
+    let mut query = dispatch::Entity::find()
+        .filter(dispatch::Column::BotId.eq(bot))
+        .order_by_desc(dispatch::Column::Id);
     if !states.is_empty() {
         query = query.filter(dispatch::Column::State.is_in(states.to_vec()));
     }
@@ -2010,12 +2343,14 @@ pub async fn list_dispatches(
 /// Dispatches by id, newest first.
 pub async fn dispatches_by_ids(
     conn: &DatabaseConnection,
+    bot: i32,
     ids: &[i32],
 ) -> Result<Vec<dispatch::Model>, DbError> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
     Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::BotId.eq(bot))
         .filter(dispatch::Column::Id.is_in(ids.iter().copied().take(500).collect::<Vec<_>>()))
         .order_by_desc(dispatch::Column::Id)
         .all(conn)
@@ -2025,9 +2360,11 @@ pub async fn dispatches_by_ids(
 /// Dispatches created since `since`, oldest first.
 pub async fn dispatches_since(
     conn: &DatabaseConnection,
+    bot: i32,
     since: DateTime<Utc>,
 ) -> Result<Vec<dispatch::Model>, DbError> {
     Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::BotId.eq(bot))
         .filter(dispatch::Column::CreatedAt.gte(since))
         .order_by_asc(dispatch::Column::Id)
         .all(conn)
@@ -2045,7 +2382,8 @@ pub async fn dispatches_of_batch(
         .await?)
 }
 
-/// The dispatch that owns a conversation, when one does.
+/// The dispatch that owns a conversation, when one does — whichever
+/// assistant's it is (its `bot_id` says whom its news is for).
 pub async fn dispatch_by_conversation(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -2069,8 +2407,12 @@ pub async fn dispatch_by_connection(
 }
 
 /// Conversation dispatches holding a slot: running or blocked on input.
-pub async fn count_active_conversation_dispatches(conn: &DatabaseConnection) -> Result<u64, DbError> {
+pub async fn count_active_conversation_dispatches(
+    conn: &DatabaseConnection,
+    bot: i32,
+) -> Result<u64, DbError> {
     Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::BotId.eq(bot))
         .filter(dispatch::Column::Mode.is_in([DispatchMode::Chat, DispatchMode::Session]))
         .filter(dispatch::Column::State.is_in([DispatchState::Running, DispatchState::WaitingInput]))
         .count(conn)
@@ -2081,8 +2423,10 @@ pub async fn count_active_conversation_dispatches(conn: &DatabaseConnection) -> 
 /// waiting (a queued follow-up waits from when it was asked for).
 pub async fn queued_conversation_dispatches(
     conn: &DatabaseConnection,
+    bot: i32,
 ) -> Result<Vec<dispatch::Model>, DbError> {
     Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::BotId.eq(bot))
         .filter(dispatch::Column::Mode.is_in([DispatchMode::Chat, DispatchMode::Session]))
         .filter(dispatch::Column::State.eq(DispatchState::Queued))
         .order_by_asc(dispatch::Column::UpdatedAt)

@@ -130,7 +130,7 @@ async fn a_compact_command_is_cleared_when_the_agent_type_changes() {
 async fn switching_the_brain_marks_the_open_segment_for_replacement() {
     let (engine, _tmp) = configured().await;
     let config = serde_json::to_string(&brain(AgentType::ClaudeCode)).unwrap();
-    let seg = svc::create_segment(&engine.db.conn, "claude_code", config, SegmentReason::First)
+    let seg = svc::create_segment(&engine.db.conn, engine.bot().await, "claude_code", config, SegmentReason::First)
         .await
         .unwrap();
     engine
@@ -149,12 +149,13 @@ async fn switching_the_brain_marks_the_open_segment_for_replacement() {
 async fn an_interrupted_delivery_offers_its_messages_again_and_puts_events_back_once() {
     let (engine, _tmp) = configured().await;
     let config = serde_json::to_string(&brain(AgentType::ClaudeCode)).unwrap();
-    let seg = svc::create_segment(&engine.db.conn, "claude_code", config, SegmentReason::First)
+    let seg = svc::create_segment(&engine.db.conn, engine.bot().await, "claude_code", config, SegmentReason::First)
         .await
         .unwrap();
     let owner = engine.send_owner_message("hello".into(), Vec::new(), None).await.unwrap();
     assert!(svc::insert_event(
         &engine.db.conn,
+        engine.bot().await,
         "dispatch_status",
         "dispatch:1:0:review:task",
         Some("dispatch:1".into()),
@@ -164,7 +165,7 @@ async fn an_interrupted_delivery_offers_its_messages_again_and_puts_events_back_
     )
     .await
     .unwrap());
-    let batch = svc::create_batch(&engine.db.conn, seg.id, BatchKind::Delivery, None)
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg.id, BatchKind::Delivery, None)
         .await
         .unwrap();
     svc::move_owner_rows(
@@ -178,7 +179,7 @@ async fn an_interrupted_delivery_offers_its_messages_again_and_puts_events_back_
     )
     .await
     .unwrap();
-    let events = svc::pending_events(&engine.db.conn).await.unwrap();
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     svc::mark_events_delivered(
         &engine.db.conn,
         &events.iter().map(|e| e.id).collect::<Vec<_>>(),
@@ -191,36 +192,36 @@ async fn an_interrupted_delivery_offers_its_messages_again_and_puts_events_back_
 
     let row = svc::get_row(&engine.db.conn, owner.id).await.unwrap().unwrap();
     assert_eq!(row.status, Some(OwnerStatus::Interrupted));
-    let pending = svc::pending_events(&engine.db.conn).await.unwrap();
+    let pending = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert_eq!(pending.len(), 1, "put back once");
     assert_eq!(pending[0].requeues, 1);
 
     // The same event interrupted a second time is not put back again.
-    let batch2 = svc::create_batch(&engine.db.conn, seg.id, BatchKind::Delivery, None)
+    let batch2 = svc::create_batch(&engine.db.conn, engine.bot().await, seg.id, BatchKind::Delivery, None)
         .await
         .unwrap();
     svc::mark_events_delivered(&engine.db.conn, &[pending[0].id], batch2.id)
         .await
         .unwrap();
     svc::requeue_batch_events(&engine.db.conn, batch2.id).await.unwrap();
-    assert!(svc::pending_events(&engine.db.conn).await.unwrap().is_empty());
+    assert!(svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn an_interrupted_compaction_leaves_the_messages_queued() {
     let (engine, _tmp) = configured().await;
     let config = serde_json::to_string(&brain(AgentType::ClaudeCode)).unwrap();
-    let seg = svc::create_segment(&engine.db.conn, "claude_code", config, SegmentReason::First)
+    let seg = svc::create_segment(&engine.db.conn, engine.bot().await, "claude_code", config, SegmentReason::First)
         .await
         .unwrap();
     let owner = engine.send_owner_message("hello".into(), Vec::new(), None).await.unwrap();
-    svc::create_batch(&engine.db.conn, seg.id, BatchKind::Compaction, None)
+    svc::create_batch(&engine.db.conn, engine.bot().await, seg.id, BatchKind::Compaction, None)
         .await
         .unwrap();
     engine.boot_for_test().await;
     let row = svc::get_row(&engine.db.conn, owner.id).await.unwrap().unwrap();
     assert_eq!(row.status, Some(OwnerStatus::Queued));
-    assert!(svc::running_batches(&engine.db.conn).await.unwrap().is_empty());
+    assert!(svc::running_batches(&engine.db.conn, engine.bot().await).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -337,7 +338,7 @@ async fn a_dispatch_is_recorded_with_its_card_and_ledger_entry() {
     assert_eq!(snapshot.instructions, "Cite lines.");
     let item = svc::item_of_dispatch(&engine.db.conn, d.id).await.unwrap().unwrap();
     assert_eq!(item.on_done.as_deref(), Some("remind the owner"));
-    let (rows, _) = svc::page(&engine.db.conn, None, 50).await.unwrap();
+    let (rows, _) = svc::page(&engine.db.conn, engine.bot().await, None, 50).await.unwrap();
     assert!(rows
         .iter()
         .any(|r| r.kind == TimelineKind::Dispatch && r.dispatch_id == Some(d.id)));
@@ -350,6 +351,7 @@ async fn the_owner_writing_in_a_dispatched_conversation_takes_it_over() {
     let d = svc::create_dispatch(
         &engine.db.conn,
         NewDispatch {
+            bot_id: engine.bot().await,
             mode: DispatchMode::Session,
             executor_assistant_id: coder,
             executor_snapshot_json: "{}".into(),
@@ -383,7 +385,7 @@ async fn the_owner_writing_in_a_dispatched_conversation_takes_it_over() {
     let err = engine.followup(d.id, "more".into(), None).await.unwrap_err();
     assert!(err.contains("took this conversation over"), "{err}");
     // The handover rides along as information, without waking the agent.
-    let events = svc::pending_events(&engine.db.conn).await.unwrap();
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert_eq!(events.len(), 1);
     assert!(!events[0].wake);
     assert_eq!(events[0].state, EventState::Pending);
@@ -399,7 +401,7 @@ async fn a_tool_call_from_another_connection_is_refused() {
 async fn an_option_change_within_the_agent_records_a_marker_and_no_switch() {
     let (engine, _tmp) = configured().await;
     let config = serde_json::to_string(&brain(AgentType::ClaudeCode)).unwrap();
-    let seg = svc::create_segment(&engine.db.conn, "claude_code", config, SegmentReason::First)
+    let seg = svc::create_segment(&engine.db.conn, engine.bot().await, "claude_code", config, SegmentReason::First)
         .await
         .unwrap();
     let mut next = brain(AgentType::ClaudeCode);
@@ -419,7 +421,7 @@ async fn an_option_change_within_the_agent_records_a_marker_and_no_switch() {
         .unwrap();
     let seg = svc::get_segment(&engine.db.conn, seg.id).await.unwrap().unwrap();
     assert_eq!(seg.pending_reason, None);
-    let (rows, _) = svc::page(&engine.db.conn, None, 50).await.unwrap();
+    let (rows, _) = svc::page(&engine.db.conn, engine.bot().await, None, 50).await.unwrap();
     let marker = rows
         .iter()
         .find(|r| r.kind == TimelineKind::Marker)
@@ -431,17 +433,17 @@ async fn an_option_change_within_the_agent_records_a_marker_and_no_switch() {
 async fn timeline_rows_page_newest_last() {
     let (engine, _tmp) = configured().await;
     for i in 0..5 {
-        svc::insert_row(&engine.db.conn, NewRow::new(TimelineKind::Reply, format!("r{i}")))
+        svc::insert_row(&engine.db.conn, engine.bot().await, NewRow::new(TimelineKind::Reply, format!("r{i}")))
             .await
             .unwrap();
     }
-    let (rows, has_older) = svc::page(&engine.db.conn, None, 3).await.unwrap();
+    let (rows, has_older) = svc::page(&engine.db.conn, engine.bot().await, None, 3).await.unwrap();
     assert!(has_older);
     assert_eq!(
         rows.iter().map(|r| r.body.as_str()).collect::<Vec<_>>(),
         ["r2", "r3", "r4"]
     );
-    let (older, has_older) = svc::page(&engine.db.conn, Some(rows[0].id), 3).await.unwrap();
+    let (older, has_older) = svc::page(&engine.db.conn, engine.bot().await, Some(rows[0].id), 3).await.unwrap();
     assert!(!has_older);
     assert_eq!(
         older.iter().map(|r| r.body.as_str()).collect::<Vec<_>>(),
@@ -453,7 +455,7 @@ async fn timeline_rows_page_newest_last() {
 
 async fn open_segment(engine: &PersonalAgentEngine) -> i32 {
     let config = serde_json::to_string(&brain(AgentType::ClaudeCode)).unwrap();
-    svc::create_segment(&engine.db.conn, "claude_code", config, SegmentReason::First)
+    svc::create_segment(&engine.db.conn, engine.bot().await, "claude_code", config, SegmentReason::First)
         .await
         .unwrap()
         .id
@@ -492,6 +494,7 @@ async fn session_dispatch(engine: &PersonalAgentEngine, state: DispatchState, co
     let d = svc::create_dispatch(
         &engine.db.conn,
         NewDispatch {
+            bot_id: engine.bot().await,
             mode: DispatchMode::Session,
             executor_assistant_id: coder,
             executor_snapshot_json: "{}".into(),
@@ -526,7 +529,7 @@ async fn dispatch_state(engine: &PersonalAgentEngine, id: i32) -> crate::db::ent
 }
 
 async fn compaction_markers(engine: &PersonalAgentEngine) -> Vec<serde_json::Value> {
-    let (rows, _) = svc::page(&engine.db.conn, None, 200).await.unwrap();
+    let (rows, _) = svc::page(&engine.db.conn, engine.bot().await, None, 200).await.unwrap();
     rows.into_iter()
         .filter(|r| r.kind == TimelineKind::Marker)
         .filter_map(|r| r.data)
@@ -541,6 +544,7 @@ async fn a_put_back_event_lists_what_the_interrupted_turn_dispatched() {
     let seg = open_segment(&engine).await;
     assert!(svc::insert_event(
         &engine.db.conn,
+        engine.bot().await,
         "dispatch_status",
         "dispatch:9:0:completed:turn",
         Some("dispatch:9".into()),
@@ -550,10 +554,10 @@ async fn a_put_back_event_lists_what_the_interrupted_turn_dispatched() {
     )
     .await
     .unwrap());
-    let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
         .await
         .unwrap();
-    let events = svc::pending_events(&engine.db.conn).await.unwrap();
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     svc::mark_events_delivered(
         &engine.db.conn,
         &events.iter().map(|e| e.id).collect::<Vec<_>>(),
@@ -566,6 +570,7 @@ async fn a_put_back_event_lists_what_the_interrupted_turn_dispatched() {
     svc::create_dispatch(
         &engine.db.conn,
         NewDispatch {
+            bot_id: engine.bot().await,
             mode: DispatchMode::Chat,
             executor_assistant_id: coder,
             executor_snapshot_json: "{}".into(),
@@ -582,7 +587,7 @@ async fn a_put_back_event_lists_what_the_interrupted_turn_dispatched() {
 
     engine.boot_for_test().await;
 
-    let pending = svc::pending_events(&engine.db.conn).await.unwrap();
+    let pending = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].requeued_from, Some(batch.id));
     let note = engine.interrupted_note(&pending, &[]).await.expect("a note");
@@ -636,7 +641,7 @@ async fn an_executor_turn_that_did_not_end_normally_fails_the_dispatch() {
     let d = dispatch_state(&engine, id).await;
     assert_eq!(d.state, DispatchState::Failed);
     assert!(d.error.as_deref().unwrap_or("").contains("auth_required"), "{:?}", d.error);
-    let events = svc::pending_events(&engine.db.conn).await.unwrap();
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert!(events.iter().any(|e| e.summary.contains("failed") && e.summary.contains("auth_required")));
 }
 
@@ -658,6 +663,7 @@ async fn a_follow_up_waits_for_a_free_session_slot() {
     let b = session_dispatch(&engine, DispatchState::Running, "conn-b").await;
     let item = svc::create_item(
         &engine.db.conn,
+        engine.bot().await,
         ItemKind::Dispatch,
         Some(a),
         ItemStatus::Done,
@@ -703,7 +709,7 @@ async fn a_follow_up_waits_for_a_free_session_slot() {
             .filter(|e| e.summary.contains(&format!("Dispatch #{a}")) && e.summary.contains("failed"))
             .count()
     };
-    assert_eq!(failures(&svc::pending_events(&engine.db.conn).await.unwrap()), 1);
+    assert_eq!(failures(&svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap()), 1);
 
     // Another follow-up waits and fails the same way: it is news again, not a
     // duplicate of the first.
@@ -733,7 +739,7 @@ async fn a_follow_up_waits_for_a_free_session_slot() {
     .unwrap();
     engine.start_queued().await;
     assert_eq!(dispatch_state(&engine, a).await.state, DispatchState::Failed);
-    assert_eq!(failures(&svc::pending_events(&engine.db.conn).await.unwrap()), 2);
+    assert_eq!(failures(&svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap()), 2);
 }
 
 #[tokio::test]
@@ -743,7 +749,7 @@ async fn a_dispatch_interrupted_by_restarts_in_two_rounds_reports_both() {
     engine.boot_for_test().await;
     assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Interrupted);
     // The card says what cut it off, for the page to word in its language.
-    let (rows, _) = svc::page(&engine.db.conn, None, 100).await.unwrap();
+    let (rows, _) = svc::page(&engine.db.conn, engine.bot().await, None, 100).await.unwrap();
     let card = rows
         .iter()
         .find(|r| r.kind == TimelineKind::Result && r.dispatch_id == Some(id))
@@ -763,7 +769,7 @@ async fn a_dispatch_interrupted_by_restarts_in_two_rounds_reports_both() {
     .await
     .unwrap();
     engine.boot_for_test().await;
-    let interrupted = svc::pending_events(&engine.db.conn)
+    let interrupted = svc::pending_events(&engine.db.conn, engine.bot().await)
         .await
         .unwrap()
         .into_iter()
@@ -777,7 +783,7 @@ async fn a_compaction_the_agent_reports_failed_counts_as_failed_and_two_pause() 
     let (engine, _tmp) = configured().await;
     let seg = open_segment(&engine).await;
     for round in 0..2u64 {
-        let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Compaction, None)
+        let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Compaction, None)
             .await
             .unwrap();
         engine
@@ -803,7 +809,7 @@ async fn a_compaction_the_agent_reports_failed_counts_as_failed_and_two_pause() 
 async fn a_forced_compaction_that_stops_abnormally_starts_a_new_segment_next() {
     let (engine, _tmp) = configured().await;
     let seg = open_segment(&engine).await;
-    let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Compaction, None)
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Compaction, None)
         .await
         .unwrap();
     engine
@@ -829,7 +835,7 @@ async fn an_agent_compaction_during_a_delivery_keeps_the_state_card_owed() {
     svc::set_segment_state(&engine.db.conn, seg, owed).await.unwrap();
 
     // The delivery carries the state card, and the agent compacts mid-turn.
-    let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
         .await
         .unwrap();
     engine
@@ -842,7 +848,7 @@ async fn an_agent_compaction_during_a_delivery_keeps_the_state_card_owed() {
     assert_eq!(row.compactions_agent, 1);
 
     // The next delivery carries it with no compaction: settled.
-    let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
         .await
         .unwrap();
     engine
@@ -859,6 +865,7 @@ async fn a_completion_event_carries_the_plan_as_it_stands_now() {
     let id = session_dispatch(&engine, DispatchState::Running, "conn-3").await;
     let item = svc::create_item(
         &engine.db.conn,
+        engine.bot().await,
         ItemKind::Dispatch,
         Some(id),
         ItemStatus::Open,
@@ -878,7 +885,7 @@ async fn a_completion_event_carries_the_plan_as_it_stands_now() {
     )
     .await;
     assert!(out.ok, "{}", out.text);
-    let events = svc::pending_events(&engine.db.conn).await.unwrap();
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     let lines = engine.event_lines(&events).await;
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].on_done.as_deref(), Some("only summarize"));
@@ -913,10 +920,10 @@ async fn a_dispatch_waiting_on_a_permission_says_so_and_runs_on_once_answered() 
         )
         .await;
     assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::WaitingInput);
-    let events = svc::pending_events(&engine.db.conn).await.unwrap();
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert_eq!(events.len(), 1);
     assert!(events[0].wake, "the agent is told the executor waits");
-    let (rows, _) = svc::page(&engine.db.conn, None, 50).await.unwrap();
+    let (rows, _) = svc::page(&engine.db.conn, engine.bot().await, None, 50).await.unwrap();
     assert!(rows
         .iter()
         .any(|r| r.kind == TimelineKind::Result && r.dispatch_id == Some(id)));
@@ -992,7 +999,7 @@ async fn the_owner_deletes_an_entry_with_its_index_line() {
         )
         .await
         .unwrap();
-    let listed = crate::commands::personal_agent::personal_agent_files_core(&engine.db, tmp.path())
+    let listed = crate::commands::personal_agent::personal_agent_files_core(&engine.db, tmp.path(), None)
         .await
         .unwrap();
     // The fixed files, then the entries; no second index.
@@ -1298,9 +1305,9 @@ async fn only_the_completion_of_its_own_prompt_settles_a_delivery() {
     emit(&engine, &state, "pa-2", text("Hi there."), true).await;
     emit(&engine, &state, "pa-2", turn_complete("end_turn"), true).await;
     assert!(!engine.turn_in_flight_for_test().await);
-    let batch = svc::running_batches(&engine.db.conn).await.unwrap();
+    let batch = svc::running_batches(&engine.db.conn, engine.bot().await).await.unwrap();
     assert!(batch.is_empty());
-    let rows = svc::page(&engine.db.conn, None, 50).await.unwrap().0;
+    let rows = svc::page(&engine.db.conn, engine.bot().await, None, 50).await.unwrap().0;
     let reply = rows
         .iter()
         .find(|r| r.kind == TimelineKind::Reply)
@@ -1333,7 +1340,7 @@ async fn turns_after_the_end_never_reach_the_settled_reply() {
     engine
         .feed_for_test("pa-3", end, turn_complete("end_turn"))
         .await;
-    let rows = svc::page(&engine.db.conn, None, 50).await.unwrap().0;
+    let rows = svc::page(&engine.db.conn, engine.bot().await, None, 50).await.unwrap().0;
     let reply = rows.iter().find(|r| r.kind == TimelineKind::Reply).unwrap();
     assert_eq!(reply.body, "All green.");
 }
@@ -1360,7 +1367,7 @@ async fn the_liveness_check_settles_a_missed_end_from_the_sealed_reply() {
     engine.backdate_turn_for_test(10).await;
     engine.liveness_for_test().await;
     assert!(!engine.turn_in_flight_for_test().await);
-    let rows = svc::page(&engine.db.conn, None, 50).await.unwrap().0;
+    let rows = svc::page(&engine.db.conn, engine.bot().await, None, 50).await.unwrap().0;
     let reply = rows.iter().find(|r| r.kind == TimelineKind::Reply).unwrap();
     assert_eq!(reply.body, "Done: all tests pass.");
     assert_eq!(data_of(reply)["state"], "done");
@@ -1382,7 +1389,7 @@ async fn a_stopped_reply_keeps_what_it_wrote() {
     start_prompt(&state, Some(&token)).await;
     emit(&engine, &state, "pa-5", text("First half of"), true).await;
     emit(&engine, &state, "pa-5", turn_complete("cancelled"), true).await;
-    let rows = svc::page(&engine.db.conn, None, 50).await.unwrap().0;
+    let rows = svc::page(&engine.db.conn, engine.bot().await, None, 50).await.unwrap().0;
     let reply = rows.iter().find(|r| r.kind == TimelineKind::Reply).unwrap();
     assert_eq!(reply.body, "First half of");
     assert_eq!(data_of(reply)["state"], "canceled");
@@ -1442,7 +1449,7 @@ async fn an_owner_quote_rides_in_the_delivery() {
     let running = {
         let mut r = NewRow::new(TimelineKind::Reply, "");
         r.data = Some(serde_json::json!({ "state": "running" }));
-        svc::insert_row(&engine.db.conn, r).await.unwrap()
+        svc::insert_row(&engine.db.conn, engine.bot().await, r).await.unwrap()
     };
     assert!(engine
         .send_owner_message("this?".into(), Vec::new(), Some(running.id))
@@ -1500,7 +1507,7 @@ async fn a_send_that_fails_voids_the_reply_and_leaves_the_message_unread() {
     let row = svc::get_row(&engine.db.conn, owner.id).await.unwrap().unwrap();
     assert_eq!(row.status, Some(OwnerStatus::Queued));
     assert!(row.read_at.is_none());
-    let rows = svc::page(&engine.db.conn, None, 50).await.unwrap().0;
+    let rows = svc::page(&engine.db.conn, engine.bot().await, None, 50).await.unwrap().0;
     let reply = rows.iter().find(|r| r.kind == TimelineKind::Reply).unwrap();
     assert!(svc::is_discarded(reply));
 }
@@ -1512,7 +1519,7 @@ async fn a_send_that_fails_voids_the_reply_and_leaves_the_message_unread() {
 async fn a_result_card_is_quoted_numbered_and_read() {
     let (engine, _tmp) = configured().await;
     let seg = open_segment(&engine).await;
-    let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
         .await
         .unwrap();
     let reply_id = engine
@@ -1535,14 +1542,14 @@ async fn a_result_card_is_quoted_numbered_and_read() {
     assert!(!engine.turn_in_flight_for_test().await);
     let d = dispatch_state(&engine, id).await;
     engine.record_progress(&d, Some("it works".into()), None, "turn").await;
-    let rows = svc::page(&engine.db.conn, None, 100).await.unwrap().0;
+    let rows = svc::page(&engine.db.conn, engine.bot().await, None, 100).await.unwrap().0;
     let card = rows
         .iter()
         .find(|r| r.kind == TimelineKind::Result)
         .expect("the result card");
     assert_eq!(card.reply_to, Some(reply_id));
     assert!(card.read_at.is_none(), "unread until handed over");
-    let event = svc::pending_events(&engine.db.conn).await.unwrap();
+    let event = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert_eq!(card.event_id, Some(event[0].id));
 
     let (mut rx, state) = live_connection(&engine, seg, "pa-9b").await;
@@ -1556,7 +1563,7 @@ async fn a_result_card_is_quoted_numbered_and_read() {
     emit(&engine, &state, "pa-9b", turn_complete("end_turn"), true).await;
     let event_batch = svc::get_row(&engine.db.conn, card.id).await.unwrap().unwrap();
     let _ = event_batch;
-    let replies: Vec<_> = svc::page(&engine.db.conn, None, 100)
+    let replies: Vec<_> = svc::page(&engine.db.conn, engine.bot().await, None, 100)
         .await
         .unwrap()
         .0
@@ -1579,10 +1586,10 @@ async fn an_interrupted_delivery_unreads_exactly_what_it_puts_back() {
         let d = dispatch_state(&engine, id).await;
         engine.record_progress(&d, None, None, "turn").await;
     }
-    let events = svc::pending_events(&engine.db.conn).await.unwrap();
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert_eq!(events.len(), 2);
     // The second was put back once before.
-    let earlier = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+    let earlier = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
         .await
         .unwrap();
     svc::mark_events_delivered(&engine.db.conn, &[events[1].id], earlier.id)
@@ -1590,7 +1597,7 @@ async fn an_interrupted_delivery_unreads_exactly_what_it_puts_back() {
         .unwrap();
     svc::requeue_batch_events(&engine.db.conn, earlier.id).await.unwrap();
 
-    let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
         .await
         .unwrap();
     let ids: Vec<i32> = events.iter().map(|e| e.id).collect();
@@ -1598,7 +1605,7 @@ async fn an_interrupted_delivery_unreads_exactly_what_it_puts_back() {
         .await
         .unwrap();
     assert_eq!(taken.len(), 2);
-    svc::set_result_rows_read(&engine.db.conn, &taken, Some(chrono::Utc::now()))
+    svc::set_result_rows_read(&engine.db.conn, engine.bot().await, &taken, Some(chrono::Utc::now()))
         .await
         .unwrap();
     let mut r = NewRow::new(TimelineKind::Reply, "");
@@ -1608,7 +1615,7 @@ async fn an_interrupted_delivery_unreads_exactly_what_it_puts_back() {
         "last_text": { "n": 2, "text": "Half an answ" },
         "step_count": 2,
     }));
-    let reply = svc::insert_row(&engine.db.conn, r).await.unwrap();
+    let reply = svc::insert_row(&engine.db.conn, engine.bot().await, r).await.unwrap();
 
     engine.boot_for_test().await;
 
@@ -1631,7 +1638,7 @@ async fn a_follow_up_belongs_to_the_turn_that_asked_for_it() {
     let (engine, _tmp) = configured().await;
     let seg = open_segment(&engine).await;
     let id = session_dispatch(&engine, DispatchState::Completed, "conn-12").await;
-    let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
         .await
         .unwrap();
     let reply_id = engine
@@ -1639,7 +1646,7 @@ async fn a_follow_up_belongs_to_the_turn_that_asked_for_it() {
         .await;
     // Its conversation is gone: the follow-up cannot be sent.
     assert!(engine.followup(id, "dig deeper".into(), None).await.is_err());
-    let rows = svc::page(&engine.db.conn, None, 100).await.unwrap().0;
+    let rows = svc::page(&engine.db.conn, engine.bot().await, None, 100).await.unwrap().0;
     let card = rows
         .iter()
         .find(|r| r.kind == TimelineKind::Dispatch && data_of(r)["followup"] == true)
@@ -1649,7 +1656,7 @@ async fn a_follow_up_belongs_to_the_turn_that_asked_for_it() {
     assert_eq!(dispatch_state(&engine, id).await.source_batch_id, Some(batch.id));
     let d = dispatch_state(&engine, id).await;
     engine.record_progress(&d, None, Some("x".into()), "followup").await;
-    let rows = svc::page(&engine.db.conn, None, 100).await.unwrap().0;
+    let rows = svc::page(&engine.db.conn, engine.bot().await, None, 100).await.unwrap().0;
     let result = rows.iter().find(|r| r.kind == TimelineKind::Result).unwrap();
     assert_eq!(result.reply_to, Some(reply_id));
 }
@@ -1660,15 +1667,16 @@ async fn a_follow_up_belongs_to_the_turn_that_asked_for_it() {
 async fn a_page_never_cuts_a_turn() {
     let (engine, _tmp) = configured().await;
     let seg = open_segment(&engine).await;
-    let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
         .await
         .unwrap();
+    let bot = engine.bot().await;
     let insert = |kind: TimelineKind, batch: Option<i32>, body: &'static str| {
         let conn = engine.db.conn.clone();
         async move {
             let mut r = NewRow::new(kind, body);
             r.batch_id = batch;
-            svc::insert_row(&conn, r).await.unwrap().id
+            svc::insert_row(&conn, bot, r).await.unwrap().id
         }
     };
     insert(TimelineKind::Owner, None, "older").await;
@@ -1676,11 +1684,11 @@ async fn a_page_never_cuts_a_turn() {
     insert(TimelineKind::Dispatch, Some(batch.id), "task a").await;
     insert(TimelineKind::Dispatch, Some(batch.id), "task b").await;
     insert(TimelineKind::Owner, None, "next").await;
-    let (rows, has_older) = svc::page(&engine.db.conn, None, 2).await.unwrap();
+    let (rows, has_older) = svc::page(&engine.db.conn, engine.bot().await, None, 2).await.unwrap();
     assert_eq!(rows.first().map(|r| r.id), Some(reply), "pulled back to the reply");
     assert_eq!(rows.len(), 4);
     assert!(has_older);
-    let (older, has_older) = svc::page(&engine.db.conn, Some(reply), 10).await.unwrap();
+    let (older, has_older) = svc::page(&engine.db.conn, engine.bot().await, Some(reply), 10).await.unwrap();
     assert_eq!(older.len(), 1);
     assert!(!has_older);
 }
@@ -1714,19 +1722,19 @@ async fn changed_rows_are_read_on_past_a_shared_instant() {
     .unwrap();
     let since = chrono::Utc::now() - chrono::Duration::hours(1);
     let mut seen = Vec::new();
-    let (rows, mut next) = svc::changed_since_limited(&engine.db.conn, Some(since), None, 0, 2)
+    let (rows, mut next) = svc::changed_since_limited(&engine.db.conn, engine.bot().await, Some(since), None, 0, 2)
         .await
         .unwrap();
     seen.extend(rows.into_iter().map(|r| r.id));
     while let Some(cursor) = next {
-        let (rows, more) = svc::changed_since_limited(&engine.db.conn, None, Some(cursor), 0, 2)
+        let (rows, more) = svc::changed_since_limited(&engine.db.conn, engine.bot().await, None, Some(cursor), 0, 2)
             .await
             .unwrap();
         seen.extend(rows.into_iter().map(|r| r.id));
         next = more;
     }
     assert_eq!(seen, ids);
-    let (from_third, _) = svc::changed_since(&engine.db.conn, Some(since), None, ids[2])
+    let (from_third, _) = svc::changed_since(&engine.db.conn, engine.bot().await, Some(since), None, ids[2])
         .await
         .unwrap();
     assert_eq!(from_third.len(), 3);
@@ -1740,14 +1748,14 @@ async fn unwritten_replies_are_left_out_of_what_is_read_back() {
     for state in ["running", "discarded"] {
         let mut r = NewRow::new(TimelineKind::Reply, "");
         r.data = Some(serde_json::json!({ "state": state }));
-        svc::insert_row(&engine.db.conn, r).await.unwrap();
+        svc::insert_row(&engine.db.conn, engine.bot().await, r).await.unwrap();
     }
-    svc::insert_row(&engine.db.conn, NewRow::new(TimelineKind::Reply, "phase one"))
+    svc::insert_row(&engine.db.conn, engine.bot().await, NewRow::new(TimelineKind::Reply, "phase one"))
         .await
         .unwrap();
     let out = super::tools::timeline_read_for_test(&engine).await;
     assert_eq!(out.matches("you:").count(), 1, "{out}");
-    let stats = crate::commands::personal_agent::personal_agent_stats_core(&engine.db, Some(1))
+    let stats = crate::commands::personal_agent::personal_agent_stats_core(&engine.db, None, Some(1))
         .await
         .unwrap();
     assert_eq!(stats.days.iter().map(|d| d.replies).sum::<u32>(), 1);
@@ -1761,6 +1769,7 @@ async fn unwritten_replies_are_left_out_of_what_is_read_back() {
 async fn the_owner_sees_settled_replies_and_cards_up_to_a_row() {
     let (engine, _tmp) = configured().await;
     let conn = &engine.db.conn;
+    let bot = engine.bot().await;
     let reply = |state: &str| {
         let mut r = NewRow::new(TimelineKind::Reply, "words");
         r.data = Some(serde_json::json!({ "state": state }));
@@ -1770,25 +1779,25 @@ async fn the_owner_sees_settled_replies_and_cards_up_to_a_row() {
         .send_owner_message("hi".into(), Vec::new(), None)
         .await
         .unwrap();
-    let done = svc::insert_row(conn, reply("done")).await.unwrap();
-    let card = svc::insert_row(conn, NewRow::new(TimelineKind::Result, "news"))
+    let done = svc::insert_row(conn, bot, reply("done")).await.unwrap();
+    let card = svc::insert_row(conn, bot, NewRow::new(TimelineKind::Result, "news"))
         .await
         .unwrap();
-    let running = svc::insert_row(conn, reply("running")).await.unwrap();
-    svc::insert_row(conn, reply("discarded")).await.unwrap();
-    let after = svc::insert_row(conn, reply("canceled")).await.unwrap();
-    assert_eq!(svc::count_unseen(conn).await.unwrap(), 3);
+    let running = svc::insert_row(conn, bot, reply("running")).await.unwrap();
+    svc::insert_row(conn, bot, reply("discarded")).await.unwrap();
+    let after = svc::insert_row(conn, bot, reply("canceled")).await.unwrap();
+    assert_eq!(svc::count_unseen(conn, bot).await.unwrap(), 3);
     assert_eq!(engine.snapshot().await.status.unseen, 3);
 
-    let marked = svc::mark_seen(conn, running.id).await.unwrap();
+    let marked = svc::mark_seen(conn, bot, running.id).await.unwrap();
     assert_eq!(
         marked.iter().map(|m| m.id).collect::<Vec<_>>(),
         vec![done.id, card.id],
         "up to the row named, and not the running reply"
     );
     assert!(marked.iter().all(|m| m.seen_at.is_some()));
-    assert_eq!(svc::count_unseen(conn).await.unwrap(), 1, "the later reply");
-    assert!(svc::mark_seen(conn, running.id).await.unwrap().is_empty());
+    assert_eq!(svc::count_unseen(conn, bot).await.unwrap(), 1, "the later reply");
+    assert!(svc::mark_seen(conn, bot, running.id).await.unwrap().is_empty());
     let own = svc::get_row(conn, owner.id).await.unwrap().unwrap();
     assert!(own.seen_at.is_none(), "the owner's own message is not marked");
 
@@ -1801,13 +1810,13 @@ async fn the_owner_sees_settled_replies_and_cards_up_to_a_row() {
     )
     .await
     .unwrap();
-    assert_eq!(svc::count_unseen(conn).await.unwrap(), 2, "settled: new");
+    assert_eq!(svc::count_unseen(conn, bot).await.unwrap(), 2, "settled: new");
 
     // A read-only page marks straight in the database.
-    crate::commands::personal_agent::personal_agent_mark_seen_core(&engine.db, after.id)
+    crate::commands::personal_agent::personal_agent_mark_seen_core(&engine.db, None, after.id)
         .await
         .unwrap();
-    assert_eq!(svc::count_unseen(conn).await.unwrap(), 0);
+    assert_eq!(svc::count_unseen(conn, bot).await.unwrap(), 0);
     engine.mark_seen(after.id).await.unwrap();
     assert_eq!(engine.snapshot().await.status.unseen, 0);
 }
@@ -1907,7 +1916,7 @@ use serde_json::json;
 /// A delivery of the owner's on record on `conn`.
 async fn owner_turn(engine: &PersonalAgentEngine, conn: &str) -> (i32, i32) {
     let seg = open_segment(engine).await;
-    let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
         .await
         .unwrap();
     engine
@@ -1921,6 +1930,7 @@ async fn event_turn(engine: &PersonalAgentEngine, conn: &str) -> (i32, i32) {
     let seg = open_segment(engine).await;
     let batch = svc::create_batch_with(
         &engine.db.conn,
+        engine.bot().await,
         seg,
         BatchKind::Delivery,
         None,
@@ -1939,7 +1949,7 @@ async fn call(engine: &Arc<PersonalAgentEngine>, tool: &str, args: serde_json::V
 }
 
 async fn notice_rows(engine: &PersonalAgentEngine) -> Vec<crate::db::entities::personal_agent_timeline::Model> {
-    svc::page(&engine.db.conn, None, 200)
+    svc::page(&engine.db.conn, engine.bot().await, None, 200)
         .await
         .unwrap()
         .0
@@ -1953,7 +1963,7 @@ fn notice_id_of(row: &crate::db::entities::personal_agent_timeline::Model) -> i3
 }
 
 async fn all_dispatches(engine: &PersonalAgentEngine) -> Vec<crate::db::entities::personal_agent_dispatch::Model> {
-    svc::list_dispatches(&engine.db.conn, &[], None, 100).await.unwrap()
+    svc::list_dispatches(&engine.db.conn, engine.bot().await, &[], None, 100).await.unwrap()
 }
 
 /// A session dispatch in `state` whose project and conversation are real and
@@ -1974,6 +1984,7 @@ async fn live_session_dispatch(
     let d = svc::create_dispatch(
         &engine.db.conn,
         NewDispatch {
+            bot_id: engine.bot().await,
             mode: DispatchMode::Session,
             executor_assistant_id: coder,
             executor_snapshot_json: "{}".into(),
@@ -2123,14 +2134,14 @@ async fn an_event_turn_answers_nothing_for_the_brain_and_switches_no_mode() {
     let seg = open_segment(&engine).await;
     let (mut rx, _state) = live_connection(&engine, seg, "pa-1").await;
     event_turn(&engine, "pa-1").await;
-    let open = svc::open_segment(&engine.db.conn).await.unwrap().unwrap();
+    let open = svc::open_segment(&engine.db.conn, engine.bot().await).await.unwrap().unwrap();
     engine.state.lock().await.connection_segment = Some(open.id);
     engine.feed_for_test("pa-1", 1, permission("p1")).await;
     assert!(
         rx.try_recv().is_err(),
         "codeg neither answers the request nor switches the mode"
     );
-    let card = svc::row_by_ref(&engine.db.conn, TimelineKind::Permission, "p1")
+    let card = svc::row_by_ref(&engine.db.conn, engine.bot().await, TimelineKind::Permission, "p1")
         .await
         .unwrap()
         .expect("the request waits on the page for the owner");
@@ -2175,18 +2186,18 @@ async fn any_brain_is_woken_by_an_event() {
         .await
         .expect("save");
     let config = serde_json::to_string(&brain(AgentType::OpenCode)).unwrap();
-    let seg = svc::create_segment(&engine.db.conn, "open_code", config, SegmentReason::First)
+    let seg = svc::create_segment(&engine.db.conn, engine.bot().await, "open_code", config, SegmentReason::First)
         .await
         .unwrap()
         .id;
     let (mut rx, _state) = live_connection(&engine, seg, "pa-oc").await;
-    svc::insert_event(&engine.db.conn, "system", "k-w1", None, "news".into(), None, true)
+    svc::insert_event(&engine.db.conn, engine.bot().await, "system", "k-w1", None, "news".into(), None, true)
         .await
         .unwrap();
     engine.pump().await;
     let (prompt, _) = take_prompt(&mut rx);
     assert!(prompt.contains("news"), "{prompt}");
-    let batch = svc::running_batches(&engine.db.conn).await.unwrap().remove(0);
+    let batch = svc::running_batches(&engine.db.conn, engine.bot().await).await.unwrap().remove(0);
     assert_eq!(batch.trigger, Some(BatchTrigger::Event), "recorded, nothing more");
 }
 
@@ -2200,6 +2211,7 @@ async fn an_event_turn_dispatches_and_follows_up_directly() {
     let (other, mut rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-5", DispatchState::Completed).await;
     let item = svc::create_item(
         &engine.db.conn,
+        engine.bot().await,
         ItemKind::Reminder,
         None,
         ItemStatus::Open,
@@ -2295,6 +2307,7 @@ async fn a_message_resent_twice_still_finds_what_its_first_turn_dispatched() {
     // B re-delivers A and finds the dispatch, making none of its own.
     let b = svc::create_batch(
         &engine.db.conn,
+        engine.bot().await,
         seg,
         BatchKind::Delivery,
         Some(json!({ "ledger_from": engine.ledger_ancestry_for_test(&[a]).await })),
@@ -2309,7 +2322,7 @@ async fn a_message_resent_twice_still_finds_what_its_first_turn_dispatched() {
         v.sort_unstable();
         v
     });
-    let c = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+    let c = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
         .await
         .unwrap()
         .id;
@@ -2337,7 +2350,7 @@ async fn a_delivery_records_its_trigger() {
     engine.pump().await;
     let (prompt, _token) = take_prompt(&mut rx);
     assert!(!prompt.contains("unattended"), "{prompt}");
-    let batch = svc::running_batches(&engine.db.conn).await.unwrap().remove(0);
+    let batch = svc::running_batches(&engine.db.conn, engine.bot().await).await.unwrap().remove(0);
     assert_eq!(batch.trigger, Some(BatchTrigger::Event));
 }
 
@@ -2391,6 +2404,7 @@ async fn a_follow_up_cut_off_before_its_claim_is_sent_once_after_a_restart() {
     svc::begin_op(
         &engine.db.conn,
         svc::NewOp {
+            bot_id: engine.bot().await,
             slot: svc::LedgerSlot::in_batch(batch, key, op_id.clone()),
             kind: "followup",
             payload: json!({ "dispatch_id": id, "message": "go on" }),
@@ -2437,7 +2451,7 @@ async fn a_follow_up_claimed_but_never_attempted_puts_its_round_back() {
     assert_eq!(d.round_op_id, None);
     assert_eq!(d.connection_id, None);
     // Not reported as an interrupted round either.
-    let events = svc::pending_events(&again.db.conn).await.unwrap();
+    let events = svc::pending_events(&again.db.conn, again.bot().await).await.unwrap();
     assert!(
         !events.iter().any(|e| e.summary.contains("interrupted")),
         "{:?}",
@@ -2483,7 +2497,7 @@ async fn an_attempted_unconfirmed_follow_up_is_unknown_after_a_restart() {
     assert_eq!(card.state, NoticeState::Open);
     assert_eq!(entry.notice_id, Some(card.id));
     assert_eq!(data_of(&cards[0])["display"]["message"], "deeper");
-    let told = svc::pending_events(&again.db.conn).await.unwrap();
+    let told = svc::pending_events(&again.db.conn, again.bot().await).await.unwrap();
     assert!(told.iter().any(|e| e.kind == "ledger" && !e.wake && e.summary.contains("cannot tell")));
     // The re-delivered call does not send it again.
     let (_, redelivery) = owner_turn(&again, "pa-10").await;
@@ -2754,6 +2768,7 @@ async fn a_task_follow_up_is_settled_by_the_claim_record() {
     let d = svc::create_dispatch(
         &engine.db.conn,
         NewDispatch {
+            bot_id: engine.bot().await,
             mode: DispatchMode::Task,
             executor_assistant_id: coder,
             executor_snapshot_json: "{}".into(),
@@ -2779,12 +2794,14 @@ async fn a_task_follow_up_is_settled_by_the_claim_record() {
     )
     .await
     .unwrap();
+    let bot = engine.bot().await;
     let begin = |op_id: String| {
         let conn = engine.db.conn.clone();
         async move {
             svc::begin_op(
                 &conn,
                 svc::NewOp {
+                    bot_id: bot,
                     slot: svc::LedgerSlot::outside(op_id),
                     kind: "followup",
                     payload: json!({ "dispatch_id": d.id, "message": "revise", "intent": "revise" }),
@@ -2886,7 +2903,7 @@ async fn a_proposal_card_runs_exactly_what_it_shows() {
         NoticeState::Acted
     );
     assert!(engine.act_on_notice(card, "dismiss").await.is_err());
-    let told = svc::pending_events(&engine.db.conn).await.unwrap();
+    let told = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert!(told.iter().any(|e| e.kind == "proposal" && !e.wake && e.summary.contains("approved")));
 
     let other = engine.propose_dispatch(&valid, None, None).await.unwrap();
@@ -3033,7 +3050,7 @@ async fn a_late_confirmation_beats_an_unknown_verdict() {
         .await;
     let cards = notice_rows(&engine).await;
     assert!(cards.iter().all(|c| data_of(c)["state"] == "resolved"), "{cards:?}");
-    let told = svc::pending_events(&engine.db.conn).await.unwrap();
+    let told = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert!(!told.iter().any(|e| e.summary.contains("cannot tell")));
     assert_eq!(op(&engine, &op_id).await.state, ActionState::Committed);
 }
@@ -3094,4 +3111,389 @@ async fn an_uncertain_card_cut_off_again_can_be_let_be() {
     let (engine, card, _id, _conversation, _repo, _dir) = an_uncertain_card_cut_off_twice(&tmp).await;
     let row = engine.act_on_notice(card, "dismiss").await.unwrap();
     assert_eq!(row.data.as_ref().unwrap()["state"], "dismissed");
+}
+
+// ── 1.2: more than one assistant ─────────────────────────────────────────────
+
+use crate::db::entities::personal_agent::{self as bot_entity, BotKind};
+use crate::db::entities::personal_agent_event as event_entity;
+
+/// A worker assistant with an engine of its own on `engine`'s database.
+async fn worker(
+    engine: &PersonalAgentEngine,
+    tmp: &tempfile::TempDir,
+    name: &str,
+) -> Arc<PersonalAgentEngine> {
+    let brain = brain(AgentType::ClaudeCode);
+    let row = svc::create_worker(
+        &engine.db.conn,
+        svc::NewWorker {
+            name: name.into(),
+            avatar_json: r#"{"kind":"emoji","emoji":"🔧","color":"blue"}"#.into(),
+            agent_type: brain.agent_type.as_wire().into_owned(),
+            agent_options_json: "{}".into(),
+            label_snapshot_json: serde_json::to_string(&brain.label_snapshot).unwrap(),
+            settings_json: "{}".into(),
+            template: Some("dev".into()),
+            executor_assistant_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(row.kind, BotKind::Worker);
+    let worker = PersonalAgentEngine::new_for_bot_test(
+        crate::db::AppDatabase {
+            conn: engine.db.conn.clone(),
+        },
+        tmp.path().to_path_buf(),
+        Some(row.id),
+    );
+    // The first save sets its working directory up, as the primary's does.
+    worker
+        .save(PersonalAgentDraft {
+            agent_config: Some(brain),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    worker
+}
+
+#[tokio::test]
+async fn a_new_database_has_no_assistant_and_then_one_primary() {
+    let (engine, _tmp) = engine().await;
+    assert!(svc::primary_bot(&engine.db.conn).await.unwrap().is_none());
+    assert!(svc::list_bots(&engine.db.conn).await.unwrap().is_empty());
+    assert_eq!(engine.bot().await, 0, "nothing is filed before it is set up");
+    engine
+        .save(PersonalAgentDraft {
+            agent_config: Some(brain(AgentType::ClaudeCode)),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let bots = svc::list_bots(&engine.db.conn).await.unwrap();
+    assert_eq!(bots.len(), 1);
+    assert_eq!(bots[0].kind, BotKind::Primary);
+    let uid = bots[0].uid.as_deref().expect("a uid");
+    assert_eq!(uid.len(), 32);
+    assert!(uid.chars().all(|c| c.is_ascii_hexdigit()));
+    assert_eq!(engine.bot().await, bots[0].id);
+    assert!(engine.serves(bots[0].id).await);
+    assert!(!engine.serves(bots[0].id + 1).await);
+}
+
+#[tokio::test]
+async fn a_second_primary_is_refused_by_the_database() {
+    use sea_orm::{ActiveModelTrait, ActiveValue::NotSet, Set};
+    let (engine, _tmp) = configured().await;
+    let now = chrono::Utc::now();
+    let again = bot_entity::ActiveModel {
+        id: NotSet,
+        name: Set("Two".into()),
+        avatar: Set("{}".into()),
+        agent_type: Set("claude_code".into()),
+        agent_options: Set("{}".into()),
+        label_snapshot: Set("{}".into()),
+        settings: Set("{}".into()),
+        workdir: Set(None),
+        folder_id: Set(None),
+        revision: Set(1),
+        created_at: Set(now),
+        updated_at: Set(now),
+        kind: Set(BotKind::Primary),
+        uid: Set(Some(svc::new_bot_uid())),
+        template: Set(None),
+        executor_assistant_id: Set(None),
+        sort_order: Set(0),
+        pinned_at: Set(None),
+        section: Set(None),
+        hidden: Set(false),
+        muted: Set(false),
+        unread_mark: Set(false),
+        notify: Set(true),
+        deleted_at: Set(None),
+    }
+    .insert(&engine.db.conn)
+    .await;
+    let err = again.expect_err("one undeleted primary only");
+    assert!(
+        matches!(err.sql_err(), Some(sea_orm::SqlErr::UniqueConstraintViolation(_))),
+        "{err}"
+    );
+    // A deleted one does not count against it: the live primary stays.
+    assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn two_workers_keep_their_records_apart() {
+    let (primary, tmp) = configured().await;
+    let a = worker(&primary, &tmp, "Dev").await;
+    let b = worker(&primary, &tmp, "Review").await;
+    let (pa, ba) = (a.bot().await, b.bot().await);
+    assert_ne!(pa, ba);
+    assert_ne!(pa, primary.bot().await);
+    assert_eq!(svc::list_bots(&primary.db.conn).await.unwrap().len(), 3);
+
+    let ra = a.send_owner_message("a's job".into(), Vec::new(), None).await.unwrap();
+    let rb = b.send_owner_message("b's job".into(), Vec::new(), None).await.unwrap();
+    // The same news reaching both: each keeps its own event.
+    for e in [&a, &b] {
+        assert!(svc::insert_event(
+            &e.db.conn,
+            e.bot().await,
+            "dispatch_status",
+            "dispatch:7:1:completed:turn",
+            None,
+            "done".into(),
+            None,
+            true,
+        )
+        .await
+        .unwrap());
+        svc::create_item(
+            &e.db.conn,
+            e.bot().await,
+            ItemKind::Reminder,
+            None,
+            ItemStatus::Open,
+            None,
+            "remember".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    let coder = role_assistant(&primary, "Coder", true).await;
+    svc::create_dispatch(
+        &a.db.conn,
+        NewDispatch {
+            bot_id: pa,
+            mode: DispatchMode::Chat,
+            executor_assistant_id: coder,
+            executor_snapshot_json: "{}".into(),
+            folder_id: None,
+            deliverable: None,
+            title: "a's dispatch".into(),
+            prompt: "do".into(),
+            origin_batch_id: None,
+            on_done: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Each reads only its own.
+    let (rows_a, _) = svc::page(&a.db.conn, pa, None, 50).await.unwrap();
+    let (rows_b, _) = svc::page(&b.db.conn, ba, None, 50).await.unwrap();
+    assert_eq!(rows_a.iter().map(|r| r.id).collect::<Vec<_>>(), vec![ra.id]);
+    assert_eq!(rows_b.iter().map(|r| r.id).collect::<Vec<_>>(), vec![rb.id]);
+    assert!(svc::get_row_of(&a.db.conn, pa, rb.id).await.unwrap().is_none());
+    assert!(svc::get_row_of(&a.db.conn, pa, ra.id).await.unwrap().is_some());
+    assert_eq!(svc::pending_events(&a.db.conn, pa).await.unwrap().len(), 1);
+    assert_eq!(svc::pending_events(&b.db.conn, ba).await.unwrap().len(), 1);
+    assert_eq!(svc::list_items(&a.db.conn, pa, &[], 10).await.unwrap().len(), 1);
+    assert_eq!(svc::list_dispatches(&a.db.conn, pa, &[], None, 10).await.unwrap().len(), 1);
+    assert_eq!(svc::list_dispatches(&b.db.conn, ba, &[], None, 10).await.unwrap().len(), 0);
+    assert_eq!(svc::queued_owner_rows(&a.db.conn, pa).await.unwrap().len(), 1);
+    // Each one's status counts its own; the primary's counts none of theirs.
+    assert_eq!(a.snapshot().await.status.queued_messages, 1);
+    assert_eq!(b.snapshot().await.status.pending_events, 1);
+    let p = primary.snapshot().await.status;
+    assert_eq!((p.queued_messages, p.pending_events), (0, 0));
+    let (rows_p, _) = svc::page(&primary.db.conn, primary.bot().await, None, 50).await.unwrap();
+    assert!(rows_p.is_empty());
+    // Nor does a worker steer the other's work.
+    let foreign = svc::list_dispatches(&a.db.conn, pa, &[], None, 10).await.unwrap()[0].id;
+    let err = b
+        .followup_call(foreign, "go on".into(), None, super::dispatch::FollowupAuth::Direct)
+        .await
+        .expect_err("another assistant's dispatch");
+    assert!(err.contains("does not exist"), "{err}");
+}
+
+#[tokio::test]
+async fn a_workers_event_keys_carry_its_prefix() {
+    let (primary, tmp) = configured().await;
+    let w = worker(&primary, &tmp, "Dev").await;
+    let wb = w.bot().await;
+    let key = "dispatch:3:0:completed:turn";
+    assert!(svc::insert_event(&primary.db.conn, primary.bot().await, "dispatch_status", key, None, "x".into(), None, true)
+        .await
+        .unwrap());
+    assert!(svc::insert_event(&w.db.conn, wb, "dispatch_status", key, None, "x".into(), None, true)
+        .await
+        .unwrap());
+    // The same key again on the worker is the same event.
+    assert!(!svc::insert_event(&w.db.conn, wb, "dispatch_status", key, None, "x".into(), None, true)
+        .await
+        .unwrap());
+    use sea_orm::EntityTrait;
+    let mut keys: Vec<String> = event_entity::Entity::find()
+        .all(&primary.db.conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.source_key)
+        .collect();
+    keys.sort();
+    assert_eq!(keys, vec![format!("bot{wb}:{key}"), key.to_string()]);
+}
+
+#[tokio::test]
+async fn workers_have_their_own_git_repositories_and_no_owner_file() {
+    let (primary, tmp) = configured().await;
+    let w = worker(&primary, &tmp, "Dev").await;
+    let row = w.agent_row().await.unwrap();
+    let dir = tmp
+        .path()
+        .join(workdir::BOTS_DIR)
+        .join(row.uid.as_deref().unwrap());
+    assert_eq!(w.workdir_of(&row), dir);
+    assert!(workdir::is_workdir(&dir));
+    assert!(dir.join(".git").is_dir(), "its own repository");
+    assert!(dir.join(workdir::SOUL_FILE).is_file());
+    assert!(!dir.join(workdir::USER_FILE).exists(), "the owner's facts are the primary's");
+    let primary_dir = tmp.path().join("personal-agent");
+    assert!(primary_dir.join(workdir::USER_FILE).is_file());
+    assert!(!dir.starts_with(&primary_dir), "not inside the primary's history");
+    assert_eq!(workdir::editable_files(true).len(), 3);
+    assert!(!workdir::editable_files(true).contains(&workdir::USER_FILE));
+    assert!(workdir::skill_md(true).contains("primary assistant"));
+    assert!(!workdir::skill_md(false).contains("You have no `USER.md`"));
+}
+
+#[tokio::test]
+async fn a_worker_is_given_the_primarys_owner_profile_and_cannot_write_it() {
+    let (primary, tmp) = configured().await;
+    let w = worker(&primary, &tmp, "Dev").await;
+    primary
+        .save_file(workdir::USER_FILE, "# The owner\n\nAda, Rust, UTC+8.\n")
+        .await
+        .unwrap();
+    let prow = primary.agent_row().await.unwrap();
+    let wrow = w.agent_row().await.unwrap();
+    assert!(primary.owner_profile(&prow).await.is_none(), "the primary keeps its own");
+    let given = w.owner_profile(&wrow).await.expect("a worker is given it");
+    assert!(given.contains("Ada, Rust, UTC+8."));
+    let err = w
+        .save_file(workdir::USER_FILE, "mine")
+        .await
+        .expect_err("not a worker's to write");
+    assert!(err.contains("primary"), "{err}");
+    // How it reaches the brain.
+    let update = super::cards::owner_update(&given);
+    assert!(update.contains("<codeg-owner>") && update.contains("Ada, Rust, UTC+8."));
+    let id = super::cards::Identity {
+        name: "Dev",
+        soul: "terse",
+        rules: "careful",
+        user: &given,
+        memory: "",
+        worker: true,
+    };
+    let state = super::cards::state_card(&id, &[]);
+    assert!(state.contains("kept by the primary assistant"));
+    assert!(state.contains("<codeg-owner>"));
+}
+
+#[tokio::test]
+async fn page_calls_without_an_assistant_read_the_primary() {
+    use crate::commands::personal_agent as page;
+    let (primary, tmp) = configured().await;
+    let w = worker(&primary, &tmp, "Dev").await;
+    let pr = primary.send_owner_message("for the primary".into(), Vec::new(), None).await.unwrap();
+    let wr = w.send_owner_message("for the worker".into(), Vec::new(), None).await.unwrap();
+    let none = page::personal_agent_timeline_core(&primary.db, None, None, None, None).await.unwrap();
+    assert_eq!(none.rows.iter().map(|r| r.id).collect::<Vec<_>>(), vec![pr.id]);
+    let some = page::personal_agent_timeline_core(&primary.db, Some(w.bot().await), None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(some.rows.iter().map(|r| r.id).collect::<Vec<_>>(), vec![wr.id]);
+    assert!(page::personal_agent_timeline_core(&primary.db, Some(9999), None, None, None)
+        .await
+        .is_err());
+    let files = page::personal_agent_files_core(&primary.db, tmp.path(), Some(w.bot().await))
+        .await
+        .unwrap();
+    assert!(files.iter().all(|f| f.name != workdir::USER_FILE));
+    let files = page::personal_agent_files_core(&primary.db, tmp.path(), None).await.unwrap();
+    assert!(files.iter().any(|f| f.name == workdir::USER_FILE));
+}
+
+#[tokio::test]
+async fn the_owners_language_lives_on_the_primarys_row_only() {
+    let (primary, tmp) = configured().await;
+    let w = worker(&primary, &tmp, "Dev").await;
+    w.save(PersonalAgentDraft {
+        settings: Some(PersonalAgentSettings {
+            auto_compact_percent: 70,
+            ..Default::default()
+        }),
+        locale: Some("ja".into()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let wrow = w.agent_row().await.unwrap();
+    let json: serde_json::Value = serde_json::from_str(&wrow.settings).unwrap();
+    assert_eq!(json["auto_compact_percent"], 70);
+    assert!(json.get("locale").is_none(), "{json}");
+    let prow = primary.agent_row().await.unwrap();
+    let json: serde_json::Value = serde_json::from_str(&prow.settings).unwrap();
+    assert_eq!(json["locale"], "en", "the primary keeps the account's");
+    // The primary's row keeps account keys another part of codeg writes.
+    let merged = crate::models::personal_agent::merge_settings_json(
+        r#"{"prefs":{"tone":"short"},"auto_compact_percent":10}"#,
+        &PersonalAgentSettings::default(),
+        true,
+    );
+    let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+    assert_eq!(v["prefs"]["tone"], "short");
+    assert_eq!(v["auto_compact_percent"], 50);
+    let v: serde_json::Value = serde_json::from_str(&crate::models::personal_agent::merge_settings_json(
+        r#"{"prefs":{"tone":"short"}}"#,
+        &PersonalAgentSettings::default(),
+        false,
+    ))
+    .unwrap();
+    assert!(v.get("prefs").is_none(), "a worker's row carries no account keys");
+}
+
+/// The bots migration on a database as the ledger build left it: the one
+/// personal agent becomes the primary, its records are filed under it.
+#[tokio::test]
+async fn upgrading_files_the_existing_records_under_the_primary() {
+    use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
+    use sea_orm_migration::MigratorTrait;
+    let conn = Database::connect("sqlite::memory:").await.unwrap();
+    let all = crate::db::migration::Migrator::migrations().len();
+    crate::db::migration::Migrator::up(&conn, Some((all - 1) as u32)).await.unwrap();
+    for sql in [
+        "INSERT INTO personal_agent (name, avatar, agent_type, agent_options, label_snapshot, settings, revision, created_at, updated_at) \
+         VALUES ('Nova', '{}', 'claude_code', '{}', '{}', '{}', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
+        "INSERT INTO personal_agent_segment (seq, agent_type, agent_options, start_reason, started_at, compactions_auto, compactions_manual, compactions_agent, auto_compact_paused, state) \
+         VALUES (1, 'claude_code', '{}', 'first', '2026-11-01T00:00:00Z', 0, 0, 0, 0, '{}')",
+        "INSERT INTO personal_agent_timeline (kind, body, created_at, updated_at) VALUES ('owner', 'hi', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
+        "INSERT INTO personal_agent_event (kind, source_key, summary, wake, state, requeues, created_at, updated_at) \
+         VALUES ('dispatch_status', 'dispatch:1:0:completed:turn', 'done', 1, 'pending', 0, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
+    ] {
+        conn.execute(Statement::from_string(DbBackend::Sqlite, sql.to_owned()))
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    crate::db::migration::Migrator::up(&conn, None).await.unwrap();
+    let db = crate::db::AppDatabase { conn };
+    let primary = svc::primary_bot(&db.conn).await.unwrap().expect("the one row is the primary");
+    assert_eq!(primary.name, "Nova");
+    assert!(primary.uid.as_deref().is_some_and(|u| u.len() == 32));
+    assert!(svc::open_segment(&db.conn, primary.id).await.unwrap().is_some());
+    assert_eq!(svc::page(&db.conn, primary.id, None, 10).await.unwrap().0.len(), 1);
+    assert_eq!(svc::pending_events(&db.conn, primary.id).await.unwrap().len(), 1);
+    // Keys stay as they were: the primary's carry no prefix.
+    assert_eq!(
+        svc::scoped_source_key(&db.conn, primary.id, "k").await.unwrap(),
+        "k"
+    );
 }

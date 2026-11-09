@@ -67,6 +67,8 @@ pub struct Model {
     /// JSON `SegmentState`.
     #[sea_orm(column_type = "Text")]
     pub state: String,
+    /// The assistant it belongs to (`personal_agent.id`).
+    pub bot_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
