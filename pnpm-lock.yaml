@@ -9,6 +9,7 @@ overrides:
   ansi-to-react>linkify-it: ^5.0.2
 
 patchedDependencies:
+  '@tauri-apps/api@2.12.4': cb5d7a9395e8e570985347e12bb9ec386e8ac4e2981f4cc5d9d3351452b5e2ce
   overlayscrollbars@2.15.1: d31b0912d157c6838f7cea20573a5917730580b13fceaa2c7c53b4856f605328
 
 importers:
@@ -65,7 +66,7 @@ importers:
         version: 1.0.3(react@19.2.4)
       '@tauri-apps/api':
         specifier: ^2.12.4
-        version: 2.12.4
+        version: 2.12.4(patch_hash=cb5d7a9395e8e570985347e12bb9ec386e8ac4e2981f4cc5d9d3351452b5e2ce)
       '@tauri-apps/plugin-dialog':
         specifier: ^2.8.3
         version: 2.8.3
@@ -9413,7 +9414,7 @@ snapshots:
       postcss: 8.5.30
       tailwindcss: 4.1.18
 
-  '@tauri-apps/api@2.12.4': {}
+  '@tauri-apps/api@2.12.4(patch_hash=cb5d7a9395e8e570985347e12bb9ec386e8ac4e2981f4cc5d9d3351452b5e2ce)': {}
 
   '@tauri-apps/cli-darwin-arm64@2.12.3':
     optional: true
@@ -9464,23 +9465,23 @@ snapshots:
 
   '@tauri-apps/plugin-dialog@2.8.3':
     dependencies:
-      '@tauri-apps/api': 2.12.4
+      '@tauri-apps/api': 2.12.4(patch_hash=cb5d7a9395e8e570985347e12bb9ec386e8ac4e2981f4cc5d9d3351452b5e2ce)
 
   '@tauri-apps/plugin-opener@2.7.2':
     dependencies:
-      '@tauri-apps/api': 2.12.4
+      '@tauri-apps/api': 2.12.4(patch_hash=cb5d7a9395e8e570985347e12bb9ec386e8ac4e2981f4cc5d9d3351452b5e2ce)
 
   '@tauri-apps/plugin-process@2.4.0':
     dependencies:
-      '@tauri-apps/api': 2.12.4
+      '@tauri-apps/api': 2.12.4(patch_hash=cb5d7a9395e8e570985347e12bb9ec386e8ac4e2981f4cc5d9d3351452b5e2ce)
 
   '@tauri-apps/plugin-updater@2.14.0':
     dependencies:
-      '@tauri-apps/api': 2.12.4
+      '@tauri-apps/api': 2.12.4(patch_hash=cb5d7a9395e8e570985347e12bb9ec386e8ac4e2981f4cc5d9d3351452b5e2ce)
 
   '@tauri-apps/plugin-window-state@2.5.0':
     dependencies:
-      '@tauri-apps/api': 2.12.4
+      '@tauri-apps/api': 2.12.4(patch_hash=cb5d7a9395e8e570985347e12bb9ec386e8ac4e2981f4cc5d9d3351452b5e2ce)
 
   '@testing-library/dom@10.4.1':
     dependencies:
