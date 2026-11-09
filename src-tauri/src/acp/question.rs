@@ -2159,7 +2159,7 @@ mod tests {
 
     #[test]
     fn minimax_free_text_without_choices_uses_main_field() {
-        let raw = json!({"mode":"form", "message":"Question", "requestedSchema":{"type":"object","properties":{
+        let raw = json!({"mode":"form", "sessionId":"session-1", "message":"Question", "requestedSchema":{"type":"object","properties":{
             "name":{"type":"string","title":"Your name?","description":"Full name"}
         }}});
         let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::MiniMax).unwrap());
