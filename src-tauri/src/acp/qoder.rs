@@ -6,11 +6,13 @@
 //! PowerShell's command-line parser strips the embedded quotes of a JSON
 //! argument before the CLI ever sees it: `--settings {"mcp":{"lazyLoad":false}}`
 //! arrives as `{mcp:{lazyLoad:false}}`, and qodercli exits with `config_error`
-//! ~1s into the handshake (reproduced on a live 1.1.84). An npm-installed CLI
-//! has the same fragility two layers deeper, and both wrappers also restart
-//! Node for every launch. Resolving to the real entry — the native
-//! `qodercli.exe`, or Node running the npm package's JavaScript entry — lets
-//! argv reach the CLI as separate arguments, unquoted and unreparsed.
+//! ~1s into the handshake (reproduced on a live 1.1.84). The dispatcher can
+//! also hand the launch to an npm `qodercli.cmd` it finds on PATH, which puts
+//! the same PowerShell hop in front of an npm-installed CLI, and npm's own
+//! `qoder.cmd` starts Node twice per launch (the package's dispatcher script,
+//! then the CLI). Resolving to the real entry — the native `qodercli.exe`, or
+//! Node running the npm package's JavaScript entry — lets argv reach the CLI
+//! as separate arguments, unquoted and unreparsed.
 //!
 //! The resolution deliberately starts from the installation
 //! `commands::acp::resolve_npx_command_for` already picked (PATH, then

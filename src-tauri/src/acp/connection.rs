@@ -2154,7 +2154,8 @@ fn agent_debug_callback(
 /// 1.1.30 and 1.1.64 open sessions with this one as without it.
 pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
-/// The settings value for Qoder's `--settings`, inline as JSON everywhere.
+/// The arguments codeg adds after an npx agent's registry `args`: for Qoder,
+/// `--settings` with its value inline as JSON on every platform.
 ///
 /// Inline JSON survives a launch only when argv reaches the CLI verbatim. On
 /// Windows that means not going through the cmd wrappers `qoder` resolves to:

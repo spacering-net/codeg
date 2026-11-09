@@ -972,6 +972,10 @@ struct AgentDiag {
     /// (NOT `resolve_npx`) is what the verdict uses for non-npx agents, so a
     /// working cached-binary / uvx agent is not misreported as node-missing.
     launchable: Option<String>,
+    /// Windows Qoder only: the program codeg starts behind the launcher
+    /// `launchable` names (see [`crate::acp::qoder`]), or why it could not be
+    /// found. Resolved with the app's env; connect applies the agent's own.
+    direct_launch: Option<Result<String, String>>,
     /// `resolve_npx_command(cmd)` — the resolution the new-session page gates on
     /// (npx agents only; `None` for binary/uvx).
     resolve_npx: Option<String>,
@@ -1190,14 +1194,14 @@ async fn collect_agent_diag(
                 .map(|p| p.to_string_lossy().to_string());
             diag.launchable = resolve_npx.clone();
             // Qoder on Windows launches the program behind its wrapper (see
-            // `acp::qoder`), so the report names that program and, for an npm
-            // install, its entry; `resolve_npx` keeps naming the wrapper the
-            // lookup found.
+            // `acp::qoder`), so the report adds that program and, for an npm
+            // install, its entry, or why it could not be found, next to the
+            // wrapper the new-session page gates on.
             if cfg!(windows) && agent_type == AgentType::Qoder {
-                diag.launchable = resolve_npx.as_ref().and_then(|p| {
+                diag.direct_launch = resolve_npx.as_ref().map(|p| {
                     crate::acp::qoder::resolve_launch(Path::new(p), &BTreeMap::new())
-                        .ok()
-                        .map(|l| l.describe())
+                        .map(|launch| launch.describe())
+                        .map_err(|error| error.to_string())
                 });
             }
             diag.resolve_npx = resolve_npx;
@@ -1543,6 +1547,16 @@ fn compute_verdict(inp: &DiagInputs) -> DiagnosticsVerdict {
         );
     }
 
+    // Windows Qoder: the launcher resolves, but connect starts the CLI behind
+    // it, and that could not be found (the reason is in the agent section).
+    if matches!(agent.direct_launch, Some(Err(_))) {
+        return diag_verdict(
+            DiagLevel::Fail,
+            "installed_but_unresolved",
+            "The agent is recorded as installed, but the app cannot locate its executable.",
+        );
+    }
+
     diag_verdict(
         DiagLevel::Ok,
         "ok",
@@ -1639,6 +1653,22 @@ fn build_report(
             if a.launchable.is_some() { DiagLevel::Ok } else { DiagLevel::Fail },
             (a.distribution == "npx").then_some("this is exactly what the new-session page checks"),
         )];
+        if let Some(direct) = &a.direct_launch {
+            checks.push(match direct {
+                Ok(program) => diag_check(
+                    "program behind the launcher",
+                    program,
+                    DiagLevel::Ok,
+                    Some("what connect starts on Windows, instead of the launcher"),
+                ),
+                Err(reason) => diag_check(
+                    "program behind the launcher",
+                    reason,
+                    DiagLevel::Fail,
+                    Some("connect cannot start the CLI behind the launcher"),
+                ),
+            });
+        }
         if let Some(p) = &a.package {
             checks.push(diag_check("package", p, DiagLevel::Info, None));
         }
