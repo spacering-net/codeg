@@ -7105,7 +7105,8 @@ pub(crate) fn claude_raw_sdk_session_meta(
 ///   OpenCode's `question` and MiniMax's `ask_user`) use `elicitation/create`
 ///   (handled by `handle_elicitation_request`). Without it codex silently answers `{}`,
 ///   DeepSeek falls back to permission buttons, Qoder withholds the tool from
-///   the model, and OpenCode tells the model the question could not be shown.
+///   the model, OpenCode tells the model the question could not be shown, and
+///   MiniMax dismisses every `ask_user` questionnaire unseen.
 ///   NOTE this reroutes codex's WHOLE form-elicitation surface — MCP
 ///   tool-call approvals and MCP-server forms included — so the handler must
 ///   cover every shape (`classify_elicitation`). URL elicitation is
@@ -7173,9 +7174,14 @@ fn build_client_capabilities(
     // answer, so the user never sees the question. Its only other form, the
     // web-search provider choice, is declined unshown
     // (`handle_elicitation_request`). Agents without the bit fall back to their
-    // own `request_permission` button path. MiniMax Code routes `ask_user`
-    // questionnaires through forms too; its permission fallback only handles
-    // the first single-select step without a free-text answer.
+    // own `request_permission` button path. MiniMax Code (`mcode acp`, same
+    // code in 0.7.2 and main) puts its `ask_user` questionnaire to the client
+    // as one form, a field per step plus an `<id>__other` text companion
+    // (`packages/tui/src/acp/interactions.ts`). Its permission fallback answers
+    // only a first step that allows no typed answer, and `ask_user` allows one
+    // on every step, so without the bit each questionnaire is dismissed unseen
+    // and the turn ends on the tool's "waiting for the local user" result
+    // (#1110). Questionnaires are its only form.
     if matches!(
         agent_type,
         AgentType::Codex
@@ -50272,22 +50278,26 @@ mod tests {
             serde_json::json!({
                 "mode": "form",
                 "sessionId": "s1",
-                "message": "已有正文",
+                // MiniMax's wire shape for one `ask_user` step (header is
+                // never sent; every step with options gets an Other field).
+                "message": "MiniMax Code needs your input",
                 "requestedSchema": {
                     "type": "object",
                     "properties": {
                         "overwrite": {
                             "type": "string",
                             "title": "现有文档都有正文，新版精读如何写入？",
-                            "description": "已有正文",
                             "oneOf": [
-                                {"const": "replace", "title": "覆盖为新版精读"},
+                                {"const": "replace", "title": "覆盖为新版精读", "description": "先导出备份旧文到本地，再全文替换"},
                                 {"const": "append", "title": "保留旧正文，追加在文末"}
                             ]
                         },
-                        "overwrite__other": {"type": "string", "title": "现有文档都有正文，新版精读如何写入？ — Other"}
-                    },
-                    "required": []
+                        "overwrite__other": {
+                            "type": "string",
+                            "title": "现有文档都有正文，新版精读如何写入？ — Other",
+                            "description": "Others..."
+                        }
+                    }
                 }
             }),
         )
