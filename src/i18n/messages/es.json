@@ -3373,6 +3373,7 @@
           "sessionLoadResourceNotFound": "Error al cargar la sesión de {agent}. Recarga para reintentar o inicia una nueva conversación.",
           "sessionLoadUnavailable": "{agent} no pudo restaurar esta sesión; es posible que haya finalizado o que el agente se haya detenido. Recarga para reintentar o inicia una nueva conversación.",
           "sessionLoadBusy": "Esta sesión está abierta en otro lugar. Si la tiene abierta otro cliente de {agent} (la app, la CLI o una extensión del IDE), ciérrala allí o sal de ese cliente y vuelve a cargar. Si acabas de bifurcarla, vuelve a cargar en un minuto.",
+          "sessionLoadProviderMismatch": "Esta conversación se inició con un proveedor de modelos distinto del que usa ahora {agent}, y {agent} solo continúa una conversación con su propio proveedor. Vuelve a ese proveedor en la configuración de {agent} y recarga, o inicia una conversación nueva. ({detail})",
           "sessionArchived": "La sesión anterior fue archivada por {agent}. Ejecuta {command} en una terminal para restaurarla y recargarla, o inicia una conversación nueva.",
           "turnFailedRefusal": "{agent} rechazó continuar este turno. Suele indicar un error de backend o pasarela. Revisa los registros del agente.",
           "turnFailedMaxTokens": "{agent} alcanzó el límite máximo de tokens para este turno.",

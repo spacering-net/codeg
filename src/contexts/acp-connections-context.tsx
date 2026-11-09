@@ -6260,6 +6260,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 return t("backendErrors.sessionLoadBusy", {
                   agent: agentLabel,
                 })
+              // codex keeps a conversation on the model provider it started
+              // with. codeg's own Codex settings move the provider between the
+              // ChatGPT login and a custom endpoint, so this is what reopening
+              // an older conversation after such a switch meets. The fix is to
+              // switch back, so the message says that, and quotes codex's
+              // sentence, which names both providers.
+              case "provider_mismatch":
+                return t("backendErrors.sessionLoadProviderMismatch", {
+                  agent: agentLabel,
+                  detail: e.message,
+                })
               case "session_archived":
                 return recoveryCommand
                   ? t("backendErrors.sessionArchived", {

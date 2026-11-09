@@ -465,7 +465,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 /// for when the installed copy's own package.json cannot be read. A runtime
 /// resolved to this value is marked unconfirmed (`codex_runtime`), so it never
 /// counts as the version a catalog was checked against. Move it with the pin.
-pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.165.0";
+pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.166.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
@@ -4449,9 +4449,100 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // are integers, and its resource links carry no `size`. The v2
             // command discriminator and initialize rules do not apply to
             // codeg's v1 connection.
+            //
+            // 2.6.0 moves `@openai/codex` ^0.165.0 → **^0.166.0** (a fresh
+            // install resolves 0.166.0) and the inline
+            // `@agentclientprotocol/sdk` ~2.1.0 → ~2.4.0. `engines` is still
+            // absent, and the 20.3.0 floor stands: live on 20.3.0 a session
+            // runs a plain, a shell and an async-question turn. Under codeg's
+            // exact `clientCapabilities` the 33-scenario harness replays byte
+            // for byte as on 2.5.0, bar `initialize`, which adds
+            // `sessionCapabilities.title` (and the version). codex 0.166.0's
+            // bundled catalog is byte for byte 0.165.0's, so the offline
+            // snapshot stands; `CODEX_NESTED_VERSION_FALLBACK` moves.
+            //
+            // (ww) **#707 asks codex's async questions as forms.** codex
+            // 0.166 gives a model whose catalog entry lists
+            // `send_user_message_async` (every GPT-6 model, the default GPT-6.1
+            // Sol among them) a `request_user_input_async` tool, on unless
+            // `[tools].experimental_request_user_input` is off, in every mode:
+            // it asks and the turn goes on. Measured live, the adapter streams
+            // the questions as an `agent_message_chunk` whose `messageId` is
+            // the call id, then sends a session-scoped `elicitation/create`
+            // naming no `toolCallId`, with `_meta.codex.delivery: "async"` and
+            // a `message` saying codex keeps working. It does not wait for the
+            // answer. An accepted one is steered into the asking turn as a
+            // `<send_user_message_question_reply>` envelope and not echoed;
+            // a decline sends nothing; the turn's end sends `$/cancel_request`
+            // for the form (codeg closes the card); an answer after that is
+            // dropped with a "Answer not sent" warning notice. codeg asks it on
+            // the usual question card, which gives way to the next question on
+            // the connection (`register_yielding_question`), so a blocking ask
+            // the model makes meanwhile is not refused unseen, and shows the
+            // answered card once answered, as for Plan mode's
+            // `request_user_input`. The rollout records the call, an
+            // `item_completed` AgentMessage with `delivery: "async"`, the
+            // output `{"accepted":true}` and the envelope as a user message;
+            // `parsers::codex_async_questions` folds them into the same card.
+            //
+            // (xx) **codex 0.166 binds a thread to its model provider**
+            // (openai/codex#57840): resume and input are refused until the
+            // configured provider is the thread's own again. codeg's Codex
+            // settings move root `model_provider` between `openai` (the ChatGPT
+            // login) and `codeg` (a custom endpoint), so every conversation
+            // started on the other side meets it. Measured live, `session/load`
+            // and `session/resume` both answer -32603 with codex's sentence in
+            // `data.details` ("This chat uses fake, but your current provider
+            // is fake2. Switch to fake to continue."), which went down the
+            // `session/new` fallback and rebound the row to an empty session.
+            // It is the `provider_mismatch` banner now
+            // (`codex_thread_provider_refused`). #733 starts the app-server
+            // with `-c model_provider=…` from a `providers/set` gateway,
+            // `MODEL_PROVIDER` or `CODEX_CONFIG.model_provider`; codeg sets
+            // none of them, so config.toml still decides.
+            //
+            // (yy) #395 offers the allowed user-defined permission profiles
+            // (`[permissions.<id>]`) as extra modes, `permission-profile:<id>`,
+            // and the `mode` option then groups its values ("Sandbox Modes" /
+            // "Permission Profiles"), which codeg reads like any grouped
+            // select. The active custom profile (`default_permissions`) is the
+            // mode a session opens in, measured live; turns then send it as
+            // `turn/start.permissions` instead of a legacy sandbox policy. codeg
+            // already sets no `INITIAL_AGENT_MODE` when `default_permissions`
+            // is set (`codex_initial_agent_mode`), so that profile now governs
+            // codeg's sessions where the `agent` preset used to. A built-in
+            // active profile (`:read-only`, …) still opens in `agent`.
+            //
+            // (zz) Inert or not adopted. #727 adds the standard
+            // `session/set_title`, which codeg does not send (a rename stays
+            // codeg's own); its `stopWaitingOnCancel` stops waiting on a
+            // cancelled permission request, whose card codeg already retires
+            // on `$/cancel_request`. #740 predicts the next prompt with
+            // `thread/sample` on the session's own thread (the session's model,
+            // effort `high`), none in plan mode or after a turn that did not
+            // complete; `CODEX_ACP_PROMPT_SUGGESTIONS=false` still turns it off
+            // (`apply_codex_prompt_suggestion_policy`). #735 titles a command
+            // approval with the command, which codeg already got for an
+            // approval after the command started (measured the same on 2.5.0);
+            // its card heading is `_meta.jetbrains.air.permission.title` ("Run
+            // command?"), unchanged. #715 sends a complete
+            // `config_option_update` before each setter response, which codeg
+            // applies like any other. #711 stops a session's background
+            // processes on `session/close`. #713, #716–#718 and #722 shape ACP
+            // v2 or non-AIR clients; #714, #720 and #723 fix startup, login and
+            // interrupt races; #728, #731 and #733's restarts follow
+            // `providers/set`, which codeg never sends. codex 0.166 itself:
+            // `[model_providers.openai]` may set `model_catalog_url` to a
+            // ChatGPT host only (any other host fails the whole config); codeg
+            // only reads that key, on its own provider's table
+            // (`active_provider_has_catalog_url`). `gcp` gains `project_id`,
+            // `location` and `credential_file`. The new
+            // `policyCapacityUnavailable` error code falls to the adapter's
+            // `provider_error`, so codeg shows a `service` failure offering
+            // Retry.
             distribution: AgentDistribution::Npx {
-                version: "2.5.0",
-                package: "@agentclientprotocol/codex-acp@2.5.0",
+                version: "2.6.0",
+                package: "@agentclientprotocol/codex-acp@2.6.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -8171,8 +8262,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.5.0",
-            "@agentclientprotocol/codex-acp@2.5.0",
+            "2.6.0",
+            "@agentclientprotocol/codex-acp@2.6.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));

@@ -3373,6 +3373,7 @@
           "sessionLoadResourceNotFound": "{agent} 会话加载失败，可重新加载重试，或开始新会话。",
           "sessionLoadUnavailable": "{agent} 无法恢复此会话，它可能已结束或 agent 已停止。可重新加载重试，或开始新会话。",
           "sessionLoadBusy": "这个会话正在别处打开。如果是另一个 {agent} 客户端（桌面应用、CLI 或 IDE 扩展）开着它，先在那边关闭它或退出那个客户端，再重新加载；如果刚从它分叉过，约一分钟后重新加载即可。",
+          "sessionLoadProviderMismatch": "这个会话是用另一个模型供应商开始的，与 {agent} 现在使用的不同，而 {agent} 只会在原来的供应商上继续会话。请在 {agent} 设置里切回那个供应商后重新加载，或者开始新会话。（{detail}）",
           "sessionArchived": "原会话已在 {agent} 侧归档，可在终端运行 {command} 找回历史后重载，或直接开始新会话。",
           "turnFailedRefusal": "{agent} 拒绝继续本轮回复，通常意味着后端或网关出错，请检查代理日志。",
           "turnFailedMaxTokens": "{agent} 已达到本轮回复的最大 Token 限制。",

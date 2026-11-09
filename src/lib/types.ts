@@ -3281,7 +3281,13 @@ export type AcpEvent =
       message: string
       /**
        * Stable backend identifier: `"resource_not_found"`,
-       * `"session_unavailable"`, `"session_archived"`, or `"session_busy"`.
+       * `"session_unavailable"`, `"session_archived"`, `"session_busy"`, or
+       * `"provider_mismatch"`.
+       *
+       * `"provider_mismatch"` does not mean gone either: codex (0.166+) keeps a
+       * conversation on the model provider it started with and refuses it under
+       * any other, and switching back opens it. `message` is then codex's own
+       * sentence, which names both providers.
        *
        * The first three mean the session is gone. `"session_busy"` does not —
        * another live holder has it open (another Codex client — the app, the

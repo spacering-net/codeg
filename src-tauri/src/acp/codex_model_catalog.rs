@@ -155,6 +155,9 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
 /// and every enum set above behaves as on 0.164.0, and both the 0.164.0 and
 /// the 0.165.0 snapshot load whole. Its new keys are nested — see
 /// [`model_messages_override_is_safe`].
+///
+/// 0.166.0 (codex-acp 2.6.0 moves `@openai/codex` ^0.165.0 → ^0.166.0) ships
+/// a bundled catalog byte for byte 0.165.0's, so the snapshot is unchanged.
 const BOOL_FIELDS: &[&str] = &[
     "use_responses_lite",
     "supported_in_api",

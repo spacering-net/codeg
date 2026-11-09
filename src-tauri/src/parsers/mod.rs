@@ -7,6 +7,7 @@ pub mod codebuddy;
 pub mod codex;
 pub mod codex_code_mode;
 mod codex_desktop_attachments;
+mod codex_async_questions;
 mod codex_file_citations;
 pub mod cursor;
 pub mod deepseek;

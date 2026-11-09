@@ -988,7 +988,7 @@ mod adapter_tests {
     #[test]
     fn codex_adapter_info_uses_codex_home() {
         let info = info_for(AgentType::Codex, None, true);
-        assert_eq!(info.adapter_package, "@agentclientprotocol/codex-acp@2.5.0");
+        assert_eq!(info.adapter_package, "@agentclientprotocol/codex-acp@2.6.0");
         assert_eq!(info.adapter_cmd, "codex-acp");
         assert!(info.adapter_installed);
         assert_eq!(info.native_cmd, "codex");

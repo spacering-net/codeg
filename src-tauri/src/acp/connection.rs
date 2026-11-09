@@ -9848,12 +9848,20 @@ async fn run_connection(
                             tracing::warn!(
                                 "[ACP] session/load failed ({err_str}); surfacing as session_load_failed={code}"
                             );
+                            // A provider refusal carries codex's own sentence
+                            // in `details`, which names both providers; the
+                            // banner quotes that rather than the error dump.
+                            let message = if code == "provider_mismatch" {
+                                error_details_text(&e).unwrap_or(err_str)
+                            } else {
+                                err_str
+                            };
                             emit_with_state(
                                 &state,
                                 &emitter_clone,
                                 AcpEvent::SessionLoadFailed {
                                     session_id: sid.clone(),
-                                    message: err_str,
+                                    message,
                                     code: code.to_string(),
                                 },
                             )
@@ -11199,10 +11207,19 @@ async fn handle_elicitation_request(
             // register_question consumes the specs; `questions` keeps its copy
             // to correlate the answer back to each field when building the
             // response.
-            let Some(registered) = question_access
-                .register_question(connection_id, questions.specs.clone())
-                .await
-            else {
+            // codex's async question (codex-acp 2.6.0) did not stop the turn,
+            // so it must not stop the next question either: it gives way to
+            // one the agent asks while it is still open.
+            let registered = if questions.async_delivery {
+                question_access
+                    .register_yielding_question(connection_id, questions.specs.clone())
+                    .await
+            } else {
+                question_access
+                    .register_question(connection_id, questions.specs.clone())
+                    .await
+            };
+            let Some(registered) = registered else {
                 // Connection gone, or an ask is already pending on this connection.
                 let _ = responder.respond(unanswered());
                 return;
@@ -11224,6 +11241,16 @@ async fn handle_elicitation_request(
             let cancellation = responder.cancellation();
             let withdraw_access = Arc::clone(question_access);
             let withdraw_conn = connection_id.to_string();
+            // The id of the answered card synthesized below. An async question's
+            // form names no call (codex records it as a `request_user_input_async`
+            // call the stream never shows), so its card gets an id of its own;
+            // a reload renders the same card from the rollout
+            // (`parsers::codex_async_questions`).
+            let card_id = questions.tool_call_id.clone().or_else(|| {
+                questions
+                    .async_delivery
+                    .then(|| format!("codex-async-question-{}", registered.question_id))
+            });
             let question_id = registered.question_id;
             let answer_rx = registered.answer_rx;
             tokio::spawn(async move {
@@ -11257,11 +11284,7 @@ async fn handle_elicitation_request(
                         // (`codex.rs`, same id) replaces rather than duplicates it.
                         // Not for an agent that streams the ask itself (Qoder; see
                         // `synthesizes_answer_card`).
-                        if let Some(tool_call_id) = questions
-                            .tool_call_id
-                            .clone()
-                            .filter(|_| synthesizes_answer_card)
-                        {
+                        if let Some(tool_call_id) = card_id.filter(|_| synthesizes_answer_card) {
                             emit_with_state(
                                 &card_state,
                                 &card_emitter,
@@ -11308,8 +11331,10 @@ async fn handle_elicitation_request(
                         }
                         response
                     }
-                    // Sender dropped: canceled or the connection tore down.
-                    // Decline so codex proceeds with its own judgment.
+                    // Sender dropped: canceled, the connection tore down, or an
+                    // async question gave way to a newer one. Decline so codex
+                    // proceeds with its own judgment (for an async question
+                    // codex-acp then sends nothing at all).
                     Some(Err(_)) => crate::acp::question::elicitation_decline_response(),
                 };
                 let _ = responder.respond(serde_json::to_value(response).unwrap_or_default());
@@ -13796,10 +13821,55 @@ fn classify_session_load_failure(
     if message.contains("This session is in use by another") {
         return Some("session_busy");
     }
+    if codex_thread_provider_refused(message) {
+        return Some("provider_mismatch");
+    }
     if SESSION_GONE_MARKERS.iter().any(|s| message.contains(s)) {
         return Some("session_unavailable");
     }
     None
+}
+
+/// The agent's own words for an error: `data.details` (where codex-acp and the
+/// ACP SDK put the text of an internal error), when it is a non-blank string.
+fn error_details_text(e: &agent_client_protocol::Error) -> Option<String> {
+    e.data
+        .as_ref()?
+        .get("details")?
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Whether codex refused to open a thread because the model provider it was
+/// started with is not the one codex is configured with now.
+///
+/// codex 0.166 (openai/codex#57840, shipped with codex-acp 2.6.0) keeps a
+/// thread bound to its provider: `thread/resume` and every later input fail
+/// until the configured provider is that one again. codeg's own Codex settings
+/// switch the root `model_provider` between `openai` (the ChatGPT login) and
+/// `codeg` (a custom endpoint), so every conversation started on the other side
+/// meets this. codex types the refusal as `ModelProviderError` in the JSON-RPC
+/// `data`, but codex-acp passes `thread/resume` errors on as a bare -32603 with
+/// only the text in `data.details`, so the text is all there is to match. These
+/// are the four `Display` sentences of `ModelProviderError` (rust-v0.166.0):
+///
+/// * "This chat uses {p}, but your current provider is {q}. Switch to {p} to continue."
+/// * "This chat uses model provider “{p}”, which is no longer configured. …"
+/// * "This chat uses model provider “{p}”, but your organization requires “{q}”. …"
+/// * "This chat’s model provider settings no longer match your organization’s
+///   requirements. …"
+///
+/// The session is intact: switching the provider back opens it, which is why
+/// this must not fall through to `session/new`. That would rebind the row to an
+/// empty session on the new provider and drop the only pointer to the history.
+fn codex_thread_provider_refused(message: &str) -> bool {
+    (message.contains("This chat uses ")
+        && (message.contains(", but your current provider is ")
+            || message.contains("which is no longer configured")
+            || message.contains("but your organization requires")))
+        || message.contains("This chat\u{2019}s model provider settings no longer match")
 }
 
 /// [`classify_session_load_failure`] for the error itself: the structured
@@ -14142,7 +14212,9 @@ async fn defer_to_connection_report(
 /// loses nothing; a busy session is still there, and starting over would replace
 /// a live history with an empty session for a lock that clears on its own.
 fn recovers_load_failure_locally(agent_type: AgentType, classified: Option<&'static str>) -> bool {
-    if classified == Some("session_busy") {
+    // Both leave the session intact, and the banner's Reload opens it once the
+    // holder lets go (busy) or the provider is switched back (provider_mismatch).
+    if matches!(classified, Some("session_busy" | "provider_mismatch")) {
         return false;
     }
     classified.is_some() && transcript_dir_for(agent_type).is_some()
@@ -30545,6 +30617,56 @@ mod tests {
     /// a thread the first still held. 2.1.0 (#564) types it; the verdict must
     /// come from that type, because the raw text it still carries in `details`
     /// is codex's wording and carries no stability promise.
+    /// codex 0.166 refuses to resume a thread whose provider is not the
+    /// configured one, and codex-acp 2.6.0 forwards the refusal as a bare
+    /// -32603 with codex's sentence in `details` (measured live: a thread made
+    /// on provider `fake`, reopened after config.toml moved to `fake2`, answers
+    /// both `session/load` and `session/resume` this way).
+    #[test]
+    fn classify_load_error_reads_codex_provider_refusals() {
+        let error = |details: &str| -> agent_client_protocol::Error {
+            serde_json::from_value(serde_json::json!({
+                "code": -32603,
+                "message": "Internal error",
+                "data": { "details": details }
+            }))
+            .expect("an ACP error body")
+        };
+        for details in [
+            "This chat uses fake, but your current provider is fake2. Switch to fake to continue.",
+            "This chat uses model provider \u{201c}codeg\u{201d}, which is no longer configured. \
+             Restore this provider\u{2019}s configuration to continue.",
+            "This chat uses model provider \u{201c}openai\u{201d}, but your organization requires \
+             \u{201c}azure\u{201d}. Contact your administrator or start a new chat using the \
+             required provider.",
+            "This chat\u{2019}s model provider settings no longer match your organization\u{2019}s \
+             requirements. Contact your administrator or start a new chat using the current \
+             provider settings.",
+        ] {
+            assert_eq!(
+                classify_session_load_error(&error(details)),
+                Some("provider_mismatch"),
+                "{details}"
+            );
+        }
+        // Nothing else reads as one: a chat that merely mentions a provider.
+        assert_eq!(
+            classify_session_load_error(&error("This chat uses a lot of tokens")),
+            None
+        );
+        // The banner quotes codex's sentence, not the error dump.
+        assert_eq!(
+            error_details_text(&error(" This chat uses a, but your current provider is b. ")).as_deref(),
+            Some("This chat uses a, but your current provider is b.")
+        );
+        // Kept, never recovered locally, like a busy session.
+        let custom = AgentType::custom("glm-acp-agent").expect("valid id");
+        assert!(!recovers_load_failure_locally(
+            custom,
+            Some("provider_mismatch")
+        ));
+    }
+
     #[test]
     fn classify_load_error_reads_codex_thread_active_writer_reason() {
         let error = |body: serde_json::Value| -> agent_client_protocol::Error {

@@ -713,7 +713,9 @@ pub enum AcpEvent {
         /// Stable machine-readable identifier: `"resource_not_found"` for
         /// JSON-RPC -32002, `"session_busy"` for codex-acp's typed
         /// `data.reason: "thread_active_writer"` (2.1.0+; matched on the wire
-        /// message before that), or `"session_unavailable"` /
+        /// message before that), `"provider_mismatch"` for codex 0.166's
+        /// refusal of a thread bound to another model provider (`message` is
+        /// then codex's own sentence), or `"session_unavailable"` /
         /// `"session_archived"` matched on the wire message. See
         /// `classify_session_load_error`.
         code: String,

@@ -3373,6 +3373,7 @@
           "sessionLoadResourceNotFound": "{agent} session failed to load. Reload to retry, or start a new conversation.",
           "sessionLoadUnavailable": "{agent} couldn't restore this session — it may have ended or the agent stopped. Reload to retry, or start a new conversation.",
           "sessionLoadBusy": "This session is open elsewhere. If another {agent} client (the app, the CLI or an IDE extension) has it, close it there or quit that client, then reload. If you just forked it, reload in about a minute.",
+          "sessionLoadProviderMismatch": "This conversation was started with a different model provider than the one {agent} uses now, and {agent} only continues a conversation on its own provider. Switch back to that provider in {agent}'s settings and reload, or start a new conversation. ({detail})",
           "sessionArchived": "The previous session was archived on the {agent} side. Run {command} in a terminal to restore it and reload, or start a new conversation.",
           "turnFailedRefusal": "{agent} refused to continue this turn. This often indicates a backend or gateway error — check the agent's logs.",
           "turnFailedMaxTokens": "{agent} reached the maximum token limit for this turn.",

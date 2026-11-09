@@ -3373,6 +3373,7 @@
           "sessionLoadResourceNotFound": "{agent} 세션 불러오기에 실패했습니다. 다시 불러와 재시도하거나 새 대화를 시작하세요.",
           "sessionLoadUnavailable": "{agent}에서 이 세션을 복원할 수 없습니다. 세션이 종료되었거나 에이전트가 중지되었을 수 있습니다. 다시 불러와 재시도하거나 새 대화를 시작하세요.",
           "sessionLoadBusy": "이 세션이 다른 곳에서 열려 있습니다. 다른 {agent} 클라이언트(데스크톱 앱, CLI 또는 IDE 확장 프로그램)에서 열려 있다면 그쪽에서 닫거나 해당 클라이언트를 종료한 뒤 다시 불러오세요. 방금 이 세션에서 분기했다면 1분쯤 뒤에 다시 불러오세요.",
+          "sessionLoadProviderMismatch": "이 대화는 {agent}가 지금 쓰는 것과 다른 모델 공급자로 시작되었고, {agent}는 대화를 원래 공급자에서만 이어 갑니다. {agent} 설정에서 그 공급자로 되돌린 뒤 다시 불러오거나 새 대화를 시작하세요. ({detail})",
           "sessionArchived": "이전 세션은 {agent} 측에서 보관되었습니다. 터미널에서 {command}을(를) 실행해 복원한 뒤 다시 불러오거나 새 대화를 시작하세요.",
           "turnFailedRefusal": "{agent}이(가) 이번 턴을 계속하지 않았습니다. 백엔드나 게이트웨이 오류일 수 있습니다. 에이전트 로그를 확인하세요.",
           "turnFailedMaxTokens": "{agent}이(가) 이번 턴의 최대 토큰 한도에 도달했습니다.",

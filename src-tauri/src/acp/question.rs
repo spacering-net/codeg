@@ -170,6 +170,24 @@ pub trait SessionQuestionAccess: Send + Sync {
         questions: Vec<QuestionSpec>,
     ) -> Option<RegisteredQuestion>;
 
+    /// [`Self::register_question`] for a question the agent did not stop for
+    /// (codex's `request_user_input_async`): it gives way to the next question
+    /// asked on the connection instead of making that one wait. A connection
+    /// holds one question at a time, and the agent keeps working while this one
+    /// is open, so it may well ask something it DOES wait for (a Plan-mode
+    /// `request_user_input`, an MCP form, codeg's ask tool), which would
+    /// otherwise be refused unseen. The yielding question is withdrawn as if
+    /// cancelled: its card closes and its receiver resolves to an error.
+    ///
+    /// The default registers an ordinary question, for stubs.
+    async fn register_yielding_question(
+        &self,
+        parent_connection_id: &str,
+        questions: Vec<QuestionSpec>,
+    ) -> Option<RegisteredQuestion> {
+        self.register_question(parent_connection_id, questions).await
+    }
+
     /// Cancel a pending question — the companion's tool call was canceled
     /// (peer-close) or the connection is tearing down. Removes it and clears
     /// the card on every client. No-op if it was already answered / gone.
@@ -956,6 +974,13 @@ pub struct ElicitationQuestions {
     /// `codex.rs` from the same id) are one card. `None` when the wire carried
     /// no session scope tool_call_id.
     pub tool_call_id: Option<String>,
+    /// codex's `request_user_input_async` (codex-acp 2.6.0, #707): the agent
+    /// asked without waiting, and its turn goes on while the form is open.
+    /// codex-acp cancels the form when that turn ends, steers an accepted
+    /// answer into it, and sends nothing for a decline. The form carries no
+    /// `toolCallId`. Read from `_meta.codex.delivery == "async"` for a codex
+    /// peer only (see [`ElicitationPeer`]).
+    pub async_delivery: bool,
 }
 
 /// One selectable option of an approval-style elicitation, shaped for the
@@ -1471,6 +1496,11 @@ pub fn classify_elicitation(
     // ONLY as this elicitation, never as a stream tool_call. (Qoder streams its
     // ask as a tool_call of its own, so the handler synthesizes no card there.)
     questions.tool_call_id = tool_call_id;
+    questions.async_delivery = matches!(peer, ElicitationPeer::Codex(_))
+        && raw
+            .pointer("/_meta/codex/delivery")
+            .and_then(Value::as_str)
+            == Some("async");
     Ok(ElicitationPlan::Questions(questions))
 }
 
@@ -1731,6 +1761,7 @@ fn parse_form_questions(
         specs,
         fields,
         tool_call_id: None,
+        async_delivery: false,
     }
 }
 
@@ -2009,6 +2040,58 @@ mod tests {
             ElicitationPlan::Questions(q) => q,
             ElicitationPlan::Approval(_) => panic!("expected a questions plan"),
         }
+    }
+
+    /// codex-acp 2.6.0's form for `request_user_input_async`, as sent live to
+    /// codeg's exact capabilities: no `toolCallId`, the question in `title`,
+    /// a note companion for the choice question, and `_meta.codex.delivery`.
+    fn codex_async_question_form() -> Value {
+        serde_json::json!({
+            "sessionId": "01a1c054-1e88-74a2-9366-9d88d7b1fb66",
+            "mode": "form",
+            "message": "Codex keeps working while you answer. An answer sent after it finishes is not delivered.",
+            "requestedSchema": {"type": "object", "properties": {
+                "question_0": {"title": "Which environment should I deploy to?",
+                    "_meta": {"codex": {"isOther": true, "isSecret": false}}, "type": "string",
+                    "oneOf": [{"const": "Staging", "title": "Staging"}, {"const": "Production", "title": "Production"}]},
+                "question_0_note": {"type": "string", "title": "Additional answer or note",
+                    "_meta": {"codex": {"questionId": "question_0", "role": "user_note", "isSecret": false},
+                        "_askUserQuestionCustomAnswer": true,
+                        "jetbrains": {"air": {"version": 1, "customAnswer": true}}}},
+                "question_1": {"title": "Anything else I should know?",
+                    "_meta": {"codex": {"isOther": false, "isSecret": false}}, "type": "string"}
+            }},
+            "_meta": {"codex": {"delivery": "async"}}
+        })
+    }
+
+    #[test]
+    fn codex_async_question_form_is_marked_async_for_codex_only() {
+        let raw = codex_async_question_form();
+        let q = expect_questions(
+            classify_elicitation(
+                &raw,
+                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
+            )
+            .unwrap(),
+        );
+        assert!(q.async_delivery);
+        assert!(q.tool_call_id.is_none());
+        let asked: Vec<&str> = q.specs.iter().map(|s| s.question.as_str()).collect();
+        assert_eq!(
+            asked,
+            ["Which environment should I deploy to?", "Anything else I should know?"]
+        );
+        // `_meta` is an open namespace: another speaker's `codex` block decides nothing.
+        let other = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+        assert!(!other.async_delivery);
+        // A blocking `request_user_input` form is not async.
+        let mut blocking = raw.clone();
+        blocking["_meta"] = serde_json::json!({"codex": {"autoResolutionMs": 60000}});
+        let q = expect_questions(
+            classify_elicitation(&blocking, ElicitationPeer::Codex(None)).unwrap(),
+        );
+        assert!(!q.async_delivery);
     }
 
     fn expect_approval(plan: ElicitationPlan) -> ElicitationApproval {
@@ -3222,6 +3305,7 @@ mod tests {
             specs: vec![],
             fields: vec![],
             tool_call_id: None,
+            async_delivery: false,
         };
         let v = serde_json::to_value(build_elicitation_response(&empty, &outcome)).unwrap();
         assert_eq!(v["action"], "decline");
