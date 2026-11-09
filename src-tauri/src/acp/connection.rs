@@ -7099,11 +7099,11 @@ pub(crate) fn claude_raw_sdk_session_meta(
 ///   process, where the agent's own OS sandbox and permission rules already
 ///   apply (#436). Withholding one without the other buys nothing: the agent
 ///   just reaches the same file through the channel it kept.
-/// - Codex, DeepSeek, Qoder and OpenCode only: form elicitation, so their
+/// - Codex, DeepSeek, Qoder, OpenCode and MiniMax only: form elicitation, so their
 ///   native questions (codex's Plan-mode `request_user_input`, DeepSeek's
 ///   `ask_user_question` and plan review, Qoder's `AskUserQuestion`,
-///   OpenCode's `question`) are delivered as `elicitation/create` (handled by
-///   `handle_elicitation_request`). Without it codex silently answers `{}`,
+///   OpenCode's `question` and MiniMax's `ask_user`) use `elicitation/create`
+///   (handled by `handle_elicitation_request`). Without it codex silently answers `{}`,
 ///   DeepSeek falls back to permission buttons, Qoder withholds the tool from
 ///   the model, and OpenCode tells the model the question could not be shown.
 ///   NOTE this reroutes codex's WHOLE form-elicitation surface — MCP
@@ -7173,10 +7173,16 @@ fn build_client_capabilities(
     // answer, so the user never sees the question. Its only other form, the
     // web-search provider choice, is declined unshown
     // (`handle_elicitation_request`). Agents without the bit fall back to their
-    // own `request_permission` button path.
+    // own `request_permission` button path. MiniMax Code routes `ask_user`
+    // questionnaires through forms too; its permission fallback only handles
+    // the first single-select step without a free-text answer.
     if matches!(
         agent_type,
-        AgentType::Codex | AgentType::DeepSeek | AgentType::Qoder | AgentType::OpenCode
+        AgentType::Codex
+            | AgentType::DeepSeek
+            | AgentType::Qoder
+            | AgentType::OpenCode
+            | AgentType::MiniMaxCode
     ) {
         client_capabilities = client_capabilities
             .elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()));
@@ -11079,6 +11085,7 @@ async fn handle_elicitation_request(
                 crate::acp::question::ElicitationPeer::Codex(s.codex_user_input_shape)
             }
             AgentType::OpenCode => crate::acp::question::ElicitationPeer::OpenCode,
+            AgentType::MiniMaxCode => crate::acp::question::ElicitationPeer::MiniMax,
             _ => crate::acp::question::ElicitationPeer::Other,
         };
         // Qoder announces its AskUserQuestion as a stream `tool_call` under
@@ -32501,6 +32508,12 @@ mod tests {
         assert!(opencode["session"]["compaction"].is_object(), "{opencode}");
         assert!(opencode["session"].get("notices").is_none(), "{opencode}");
 
+        // MiniMax: native ask_user questionnaires use the form bridge, not
+        // the limited permission-button fallback. URL forms stay disabled.
+        let minimax = caps_of(AgentType::MiniMaxCode);
+        assert!(minimax["elicitation"]["form"].is_object(), "{minimax}");
+        assert!(minimax["elicitation"].get("url").is_none());
+
         // Cursor: parameterized model picker only (no elicitation / AIR).
         let cursor = caps_of(AgentType::Cursor);
         assert_eq!(
@@ -50247,6 +50260,41 @@ mod tests {
                 .any(|e| matches!(e, AcpEvent::ToolCall { .. })),
             "{events:?}"
         );
+    }
+
+    /// MiniMax's native ask_user is scoped to the session. Reply with option
+    /// IDs rather than their display labels so the runtime resumes the pending
+    /// questionnaire (not a new user prompt).
+    #[tokio::test]
+    async fn a_minimax_ask_returns_option_ids_without_a_synthesized_card() {
+        let (reply, events, _) = answer_form_elicitation(
+            AgentType::MiniMaxCode,
+            serde_json::json!({
+                "mode": "form",
+                "sessionId": "s1",
+                "message": "已有正文",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "overwrite": {
+                            "type": "string",
+                            "title": "现有文档都有正文，新版精读如何写入？",
+                            "description": "已有正文",
+                            "oneOf": [
+                                {"const": "replace", "title": "覆盖为新版精读"},
+                                {"const": "append", "title": "保留旧正文，追加在文末"}
+                            ]
+                        },
+                        "overwrite__other": {"type": "string", "title": "现有文档都有正文，新版精读如何写入？ — Other"}
+                    },
+                    "required": []
+                }
+            }),
+        )
+        .await;
+        assert_eq!(reply["action"], "accept", "{reply}");
+        assert_eq!(reply["content"], serde_json::json!({"overwrite": "replace"}));
+        assert!(!events.iter().any(|e| matches!(e, AcpEvent::ToolCall { .. })));
     }
 
     /// codex never streams `request_user_input`, so it keeps the card.
