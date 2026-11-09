@@ -48,6 +48,16 @@ const ASSISTANT_BRIEF_FRAME_VERSION: u8 = 1;
 const ASSISTANT_BRIEF_LINE_PREFIX: &str = "Codeg assistant profile (authoritative): ";
 const MAX_ASSISTANT_BRIEF_FRAME_BYTES: usize = 256 * 1024;
 
+/// The operation frame: the ledger id of a send the personal agent makes into a
+/// dispatched conversation, appended to that prompt so the agent's OWN record
+/// of it can later prove the message arrived (`personal_agent::ledger`). It
+/// carries nothing but the id.
+const OPERATION_FRAME_KIND: &str = "codeg_internal_operation";
+const OPERATION_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_operation\"";
+const OPERATION_FRAME_VERSION: u8 = 1;
+const OPERATION_LINE_PREFIX: &str = "Codeg operation reference (internal): ";
+const MAX_OPERATION_ID_CHARS: usize = 64;
+
 /// Largest frame of any kind: the window the separated scan looks for a closing
 /// separator in.
 const MAX_INTERNAL_FRAME_BYTES: usize = MAX_ASSISTANT_BRIEF_FRAME_BYTES;
@@ -467,6 +477,80 @@ fn parse_assistant_brief_body(candidate: &str) -> Option<AssistantProfile> {
     Some(profile)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OperationRef {
+    op_id: String,
+}
+
+/// An operation id the frame can carry: ASCII letters, digits and `-`, so it
+/// reads back verbatim from any record, JSON-escaped or not.
+fn is_operation_id(op_id: &str) -> bool {
+    !op_id.is_empty()
+        && op_id.len() <= MAX_OPERATION_ID_CHARS
+        && op_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// Render the frame naming the ledger operation `op_id` (see
+/// [`OPERATION_FRAME_KIND`]); `None` for an id it cannot carry.
+pub(crate) fn render_operation_frame(op_id: &str) -> Option<String> {
+    if !is_operation_id(op_id) {
+        return None;
+    }
+    let descriptor = FrameDescriptor::fresh(OPERATION_FRAME_KIND, OPERATION_FRAME_VERSION);
+    let body = render_operation_body(
+        &descriptor,
+        &OperationRef {
+            op_id: op_id.to_string(),
+        },
+    );
+    Some(format!("{ROUTE_FRAME_SEPARATOR}{body}{ROUTE_FRAME_SEPARATOR}"))
+}
+
+/// Exactly three newline-terminated lines; editing the wording orphans every
+/// frame already in a transcript, so it must bump [`OPERATION_FRAME_VERSION`].
+fn render_operation_body(descriptor: &FrameDescriptor, op: &OperationRef) -> String {
+    let descriptor =
+        serde_json::to_string(descriptor).expect("frame descriptor is serializable");
+    let op = serde_json::to_string(op).expect("operation reference is serializable");
+    format!(
+        "{descriptor}\n\
+{OPERATION_LINE_PREFIX}{op}\n\
+This line only identifies the message for Codeg's own records; it asks nothing \
+of you.\n"
+    )
+}
+
+fn parse_operation_body(candidate: &str) -> Option<String> {
+    if candidate.len() > MAX_ROUTE_FRAME_BYTES {
+        return None;
+    }
+    let (descriptor_line, remainder) = candidate.split_once('\n')?;
+    let descriptor: FrameDescriptor = serde_json::from_str(descriptor_line).ok()?;
+    let op_json = remainder.lines().next()?.strip_prefix(OPERATION_LINE_PREFIX)?;
+    let op: OperationRef = serde_json::from_str(op_json).ok()?;
+    if !descriptor.is(OPERATION_FRAME_KIND, OPERATION_FRAME_VERSION)
+        || !is_operation_id(&op.op_id)
+        || render_operation_body(&descriptor, &op) != candidate
+    {
+        return None;
+    }
+    Some(op.op_id)
+}
+
+/// The operation ids of every operation frame in `text`, in order — read
+/// before anything strips the frames.
+pub(crate) fn operation_ids_in(text: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for (start, end) in internal_frame_spans(text) {
+        let body = text[start..end].trim_matches(ROUTE_FRAME_SEPARATOR);
+        if let Some(id) = parse_operation_body(body) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
 /// Every kind of internal frame codeg appends to an agent-bound prompt.
 ///
 /// They share the envelope — the reserved separator around a body of exactly
@@ -479,12 +563,14 @@ enum FrameKind {
     AgentRoutes,
     AssistantRoutes,
     AssistantBrief,
+    Operation,
 }
 
-const FRAME_KINDS: [FrameKind; 3] = [
+const FRAME_KINDS: [FrameKind; 4] = [
     FrameKind::AgentRoutes,
     FrameKind::AssistantRoutes,
     FrameKind::AssistantBrief,
+    FrameKind::Operation,
 ];
 
 impl FrameKind {
@@ -495,12 +581,15 @@ impl FrameKind {
             FrameKind::AgentRoutes => ROUTE_FRAME_BODY_PREFIX,
             FrameKind::AssistantRoutes => ASSISTANT_ROUTE_FRAME_BODY_PREFIX,
             FrameKind::AssistantBrief => ASSISTANT_BRIEF_FRAME_BODY_PREFIX,
+            FrameKind::Operation => OPERATION_FRAME_BODY_PREFIX,
         }
     }
 
     fn max_bytes(self) -> usize {
         match self {
-            FrameKind::AgentRoutes | FrameKind::AssistantRoutes => MAX_ROUTE_FRAME_BYTES,
+            FrameKind::AgentRoutes | FrameKind::AssistantRoutes | FrameKind::Operation => {
+                MAX_ROUTE_FRAME_BYTES
+            }
             FrameKind::AssistantBrief => MAX_ASSISTANT_BRIEF_FRAME_BYTES,
         }
     }
@@ -512,6 +601,7 @@ impl FrameKind {
             FrameKind::AgentRoutes => parse_internal_agent_routes_body(body).is_some(),
             FrameKind::AssistantRoutes => parse_assistant_routes_body(body).is_some(),
             FrameKind::AssistantBrief => parse_assistant_brief_body(body).is_some(),
+            FrameKind::Operation => parse_operation_body(body).is_some(),
         }
     }
 }
@@ -867,6 +957,36 @@ mod tests {
             PromptInputBlock::Text { text } => text,
             _ => panic!("expected text block"),
         }
+    }
+
+    /// The operation frame: its id reads back before any strip, the frame is
+    /// stripped from every display, separators or not, and nothing but a
+    /// byte-exact frame of the current renderer counts.
+    #[test]
+    fn the_operation_frame_reads_back_and_strips_like_every_frame() {
+        let frame = render_operation_frame("pa-0123abc").unwrap();
+        let sent = format!("look at the tests{frame}");
+        assert_eq!(operation_ids_in(&sent), vec!["pa-0123abc".to_string()]);
+        assert_eq!(strip_internal_frames(&sent), "look at the tests");
+        assert!(contains_internal_frames(&sent));
+        // Stored without its separators (Antigravity's rewrite): still found,
+        // still stripped.
+        let bare = sent.replace(ROUTE_FRAME_SEPARATOR, " ");
+        assert_eq!(operation_ids_in(&bare), vec!["pa-0123abc".to_string()]);
+        assert_eq!(strip_internal_frames(&bare).trim(), "look at the tests");
+        // A title capped inside it is cut at the frame.
+        let mut title: String = sent.chars().take(40).collect();
+        cut_at_route_frame_marker(&mut title);
+        assert_eq!(title, "look at the tests");
+        // Reworded: not a frame of the current renderer, left alone.
+        let forged = sent.replace("asks nothing", "asks everything");
+        assert!(operation_ids_in(&forged).is_empty());
+        assert_eq!(strip_internal_frames(&forged), forged);
+        // Ids the frame cannot carry verbatim are refused outright.
+        assert!(render_operation_frame("").is_none());
+        assert!(render_operation_frame("pa_1").is_none());
+        assert!(render_operation_frame("pa 1").is_none());
+        assert!(render_operation_frame(&"a".repeat(65)).is_none());
     }
 
     #[test]

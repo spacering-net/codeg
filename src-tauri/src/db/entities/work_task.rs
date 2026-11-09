@@ -149,8 +149,8 @@ pub struct Model {
     pub delivery: Option<String>,
     /// The personal-agent dispatch that created this task; NULL otherwise.
     /// Set once at creation by the dispatcher, never by the public
-    /// create/update DTO paths. Such a task never auto-merges: its prompt was
-    /// written by an agent, the reason forge-sourced tasks are excluded.
+    /// create/update DTO paths. Such a task lands as the board's settings
+    /// say, like any other.
     pub personal_agent_dispatch_id: Option<i32>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,

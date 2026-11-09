@@ -51,8 +51,8 @@ type EventItem = Extract<MessageItem, { kind: "event" }>
 const OWN_NOTES = new Set(["boot", "lost", "gone"])
 
 /** The result, as the message's text, cut at six of its lines until asked
- *  for all. */
-function Result({ text }: { text: string }) {
+ *  for all. A proposal card shows its prompt the same way. */
+export function CollapsedText({ text }: { text: string }) {
   const t = useTranslations("PersonalAgent.event")
   const { contentRef, contentId, isOverflowing, expanded, toggle } =
     useCollapsibleOverflow<HTMLDivElement>(text)
@@ -174,7 +174,7 @@ export function EventCard({ item }: { item: EventItem }) {
             {note}
           </p>
         ) : null}
-        {excerpt ? <Result text={excerpt} /> : null}
+        {excerpt ? <CollapsedText text={excerpt} /> : null}
       </div>
     </MessageRow>
   )

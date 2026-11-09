@@ -871,6 +871,22 @@ fn resolve_codex_home_dir_from(
 }
 
 impl AgentParser for CodexParser {
+    /// Every rollout Codex wrote for the thread, read raw (a revert moves a
+    /// thread onto a new rollout and leaves the old one in place).
+    fn own_record_contains(&self, conversation_id: &str, needle: &str) -> Option<bool> {
+        let mut found_any = false;
+        for path in self.rollout_paths() {
+            if RolloutFileName::parse(&path).is_none_or(|name| name.thread_id != conversation_id) {
+                continue;
+            }
+            found_any = true;
+            if super::file_lines_contain(&path, needle) == Some(true) {
+                return Some(true);
+            }
+        }
+        found_any.then_some(false)
+    }
+
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
         let mut conversations = Vec::new();
 

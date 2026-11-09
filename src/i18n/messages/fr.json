@@ -8072,6 +8072,36 @@
       "emptyHint": "Le travail confié, les rappels et les questions pour vous apparaissent ici.",
       "noneOpen": "Rien en cours pour l'instant.",
       "origin": "Aller au message d'origine"
+    },
+    "notice": {
+      "open": "Proposition · en attente de vous",
+      "acted": "Fait comme proposé",
+      "dismissed": "Non retenue",
+      "acting": "En cours…",
+      "unknown": "Impossible de savoir si c'est fait",
+      "unknownHint": "codeg a été interrompu en plein travail et ne peut pas savoir si cela a pris effet. Rien n'a été refait de lui-même.",
+      "followupOf": "Poursuivre « {title} »",
+      "intent": {
+        "revise": "Renvoyer pour corrections",
+        "continue": "Continuer",
+        "question": "Poser une question",
+        "verify": "Auto-vérification"
+      },
+      "accept": "Faire ceci",
+      "dismiss": "Pas maintenant",
+      "again": "Refaire",
+      "failed": "Impossible d'exécuter : {error}",
+      "uncertain": {
+        "open": "Impossible de savoir si cela est arrivé",
+        "hint": "codeg a été interrompu pendant l'envoi de cette relance et ne peut pas savoir si l'exécutant l'a reçue. Elle n'a pas été renvoyée.",
+        "look": "Voir",
+        "again": "Renvoyer",
+        "dismiss": "Laisser tel quel",
+        "acting": "Renvoi en cours…",
+        "acted": "Renvoyé",
+        "dismissed": "Laissé tel quel",
+        "resolved": "C'est bien arrivé"
+      }
     }
   }
 }

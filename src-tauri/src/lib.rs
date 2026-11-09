@@ -1901,6 +1901,7 @@ mod tauri_app {
                 crate::commands::personal_agent::personal_agent_keepalive,
                 crate::commands::personal_agent::personal_agent_resend,
                 crate::commands::personal_agent::personal_agent_mark_seen,
+                crate::commands::personal_agent::personal_agent_notice_act,
                 crate::commands::personal_agent::personal_agent_answer_question,
                 crate::commands::personal_agent::personal_agent_answer_plan,
                 crate::commands::personal_agent::personal_agent_respond_permission,

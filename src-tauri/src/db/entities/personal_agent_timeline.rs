@@ -29,6 +29,10 @@ pub enum TimelineKind {
     /// Segment boundaries, option changes, reconnects, compactions.
     #[sea_orm(string_value = "marker")]
     Marker,
+    /// A native card codeg wrote itself — a proposal waiting for the owner,
+    /// say; its state is a `personal_agent_notice` row (`ref_id`).
+    #[sea_orm(string_value = "notice")]
+    Notice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

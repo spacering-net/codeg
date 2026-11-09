@@ -225,6 +225,21 @@ pub async fn personal_agent_mark_seen(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NoticeActParams {
+    pub notice_id: i32,
+    pub action: String,
+}
+
+pub async fn personal_agent_notice_act(
+    Json(params): Json<NoticeActParams>,
+) -> Result<Json<TimelineRow>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_notice_act_core(params.notice_id, params.action).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AnswerQuestionParams {
     pub question_id: String,
     pub answer: crate::acp::question::QuestionAnswer,

@@ -8072,6 +8072,36 @@
       "emptyHint": "派出去的工作、提醒和要問你的事會出現在這裡。",
       "noneOpen": "目前沒有進行中的事項。",
       "origin": "跳到來源訊息"
+    },
+    "notice": {
+      "open": "提議 · 等你確認",
+      "acted": "已照這個提議做了",
+      "dismissed": "沒有採用這個提議",
+      "acting": "正在執行…",
+      "unknown": "不知道執行了沒有",
+      "unknownHint": "執行到一半被打斷了，codeg 不知道做成沒有；沒有自動再做。",
+      "followupOf": "繼續「{title}」",
+      "intent": {
+        "revise": "退回修改",
+        "continue": "接著做",
+        "question": "追問",
+        "verify": "自我檢查"
+      },
+      "accept": "照這個做",
+      "dismiss": "不用",
+      "again": "再執行一次",
+      "failed": "無法執行：{error}",
+      "uncertain": {
+        "open": "這一步不知道做成沒有",
+        "hint": "傳送這條續作時被打斷了，codeg 不知道執行者收到沒有；沒有自動重送。",
+        "look": "查看",
+        "again": "再送一次",
+        "dismiss": "不用",
+        "acting": "正在重送…",
+        "acted": "已重送",
+        "dismissed": "不再處理",
+        "resolved": "確認已送達"
+      }
     }
   }
 }

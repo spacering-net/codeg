@@ -8072,6 +8072,36 @@
       "emptyHint": "Aquí aparecen el trabajo que asigna, los recordatorios y las preguntas para ti.",
       "noneOpen": "Ahora no hay nada pendiente.",
       "origin": "Ir al mensaje de origen"
+    },
+    "notice": {
+      "open": "Propuesta · esperando tu respuesta",
+      "acted": "Hecho como se propuso",
+      "dismissed": "No se aceptó",
+      "acting": "En marcha…",
+      "unknown": "No se sabe si se hizo",
+      "unknownHint": "codeg se interrumpió mientras lo hacía, así que no puede saber si tuvo efecto. No se ha vuelto a hacer por su cuenta.",
+      "followupOf": "Continuar «{title}»",
+      "intent": {
+        "revise": "Devolver para cambios",
+        "continue": "Seguir",
+        "question": "Preguntar",
+        "verify": "Autocomprobación"
+      },
+      "accept": "Hazlo así",
+      "dismiss": "Ahora no",
+      "again": "Hacerlo otra vez",
+      "failed": "No se pudo ejecutar: {error}",
+      "uncertain": {
+        "open": "No se sabe si esto llegó",
+        "hint": "codeg se interrumpió mientras enviaba este seguimiento, así que no puede saber si el ejecutor lo recibió. No se ha vuelto a enviar.",
+        "look": "Ver",
+        "again": "Enviar otra vez",
+        "dismiss": "Dejarlo así",
+        "acting": "Enviando otra vez…",
+        "acted": "Enviado otra vez",
+        "dismissed": "Se dejó así",
+        "resolved": "Sí llegó"
+      }
     }
   }
 }

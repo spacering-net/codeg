@@ -1346,6 +1346,13 @@ pub enum ConnectionCommand {
         /// reason as `internal_suffix`: it can only ride the prompt it was
         /// meant for. `None` for every other prompt.
         reply_token: Option<String>,
+        /// The sender needs proof this prompt reached the agent (the personal
+        /// agent's follow-ups into a dispatched conversation): the loop asks
+        /// the receipt before writing the request — and writes nothing when
+        /// it refuses — and tells it when the agent answered this very
+        /// request (see [`crate::acp::prompt_receipt`]). Rides the command for
+        /// the same reason as `internal_suffix`. `None` for every other prompt.
+        receipt: Option<crate::acp::prompt_receipt::PromptReceipt>,
     },
     SetMode {
         mode_id: String,
@@ -14198,6 +14205,20 @@ fn is_agent_output_update(agent_type: AgentType, update: &SessionUpdate) -> bool
     )
 }
 
+/// Whether `update` is the agent echoing back a prompt that carried the
+/// operation frame of `op_id`.
+fn echoes_operation(update: &SessionUpdate, op_id: &str) -> bool {
+    match update {
+        SessionUpdate::UserMessageChunk(ContentChunk {
+            content: ContentBlock::Text(text),
+            ..
+        }) => crate::acp::agent_mentions::operation_ids_in(&text.text)
+            .iter()
+            .any(|id| id == op_id),
+        _ => false,
+    }
+}
+
 /// Handle one typed `SessionNotification` inside an active turn.
 ///
 /// Extracted from the `if_notification` closure it is called from, and
@@ -14780,6 +14801,7 @@ async fn run_conversation_loop(
                 user_message,
                 internal_suffix,
                 reply_token,
+                receipt,
             }) => {
                 // Fingerprint the outgoing prompt for the background watcher's
                 // foreground/out-of-turn classifier BEFORE the blocks are
@@ -14929,6 +14951,52 @@ async fn run_conversation_loop(
                 // its reply says whether Remote Control is on.
                 cb_state.claude_remote_control = remote_control_command(agent_type, &prompt_blocks);
                 let turn_started_at_ms = crate::acp_transcript::now_epoch_ms();
+                // A sender that must be able to prove later whether this went
+                // out records "about to write it" now; refused, the request is
+                // never written and the turn ends here — as a rejected one,
+                // so every consumer settles it the way they settle a prompt
+                // the agent refused.
+                if let Some(receipt) = receipt.as_ref() {
+                    if let Err(why) = receipt.attempted().await {
+                        tracing::warn!(
+                            "[ACP][{conn_id}] a prompt was not written: its sender withdrew it ({why})"
+                        );
+                        emit_with_state(
+                            state,
+                            emitter,
+                            AcpEvent::Error {
+                                message: format!("The message was not sent: {why}"),
+                                agent_type: agent_type.to_string(),
+                                code: None,
+                                details: None,
+                                terminal: false,
+                            },
+                        )
+                        .await;
+                        record_turn_end(
+                            agent_type,
+                            &sid.0,
+                            "rejected",
+                            turn_started_at_ms,
+                            current_session_model_id(state).await,
+                            None,
+                            None,
+                        )
+                        .await;
+                        drain_permissions_then_emit(
+                            perms,
+                            state,
+                            emitter,
+                            AcpEvent::TurnComplete {
+                                session_id: sid.0.to_string(),
+                                stop_reason: "rejected".into(),
+                                agent_type: agent_type.to_string(),
+                            },
+                        )
+                        .await;
+                        continue;
+                    }
+                }
                 let prompt_request = PromptRequest::new(sid.clone(), prompt_blocks);
                 // Snapshot the stderr write position BEFORE the request is
                 // dispatched. An agent that fails the moment the prompt lands
@@ -15179,6 +15247,18 @@ async fn run_conversation_loop(
                             } else if let Err(e) = MatchDispatch::new(dispatch)
                                 .if_notification(
                                     async |notif: SessionNotification| {
+                                        // The agent echoing this prompt back
+                                        // with its operation frame is proof
+                                        // it got it.
+                                        if let Some(receipt) = receipt.as_ref() {
+                                            if echoes_operation(&notif.update, &receipt.op_id) {
+                                                receipt
+                                                    .received(
+                                                        crate::acp::prompt_receipt::ReceiptVia::UserMessageEcho,
+                                                    )
+                                                    .await;
+                                            }
+                                        }
                                         // Body lives in a named `-> ()`
                                         // function so this closure is
                                         // infallible by construction —
@@ -15253,6 +15333,27 @@ async fn run_conversation_loop(
                             // agent's OWN words, because they are the actionable
                             // part ("The command \"/mcp\" is not supported in
                             // this mode.") and codeg has no vocabulary for them.
+                            // The agent's own answer to THIS request: proof
+                            // it got the prompt, whichever way it answered.
+                            if let Some(receipt) = receipt.as_ref() {
+                                match &prompt_result {
+                                    Ok(_) => {
+                                        receipt
+                                            .received(
+                                                crate::acp::prompt_receipt::ReceiptVia::PromptResponse,
+                                            )
+                                            .await
+                                    }
+                                    Err(e) if !lost_the_connection(e) => {
+                                        receipt
+                                            .received(
+                                                crate::acp::prompt_receipt::ReceiptVia::PromptRejected,
+                                            )
+                                            .await
+                                    }
+                                    Err(_) => {}
+                                }
+                            }
                             let response = match prompt_result {
                                 Ok(response) => response,
                                 Err(e) if !prompt_rejection_is_terminal(&e) => {
@@ -15874,10 +15975,20 @@ async fn run_conversation_loop(
                                         });
                                         answered
                                     });
+                                    let receipt = receipt.clone();
                                     tokio::spawn(async move {
-                                        let _ = prompt_response.await;
+                                        let answer = prompt_response.await;
                                         if let Some(answered) = answered {
                                             let _ = answered.send(tokio::time::Instant::now());
+                                        }
+                                        // The cancelled turn's answer is still
+                                        // the agent's answer to this request.
+                                        if let (Ok(_), Some(receipt)) = (answer, receipt) {
+                                            receipt
+                                                .received(
+                                                    crate::acp::prompt_receipt::ReceiptVia::PromptResponse,
+                                                )
+                                                .await;
                                         }
                                     });
                                     break;
@@ -35893,9 +36004,43 @@ mod tests {
                     user_message: None,
                     internal_suffix: Vec::new(),
                     reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the connection is running");
+        }
+
+        /// As [`Self::prompt`], with a receipt riding the prompt.
+        async fn prompt_with_receipt(
+            &self,
+            text: &str,
+            receipt: crate::acp::prompt_receipt::PromptReceipt,
+        ) {
+            self.state.write().await.turn_in_flight = true;
+            self.cmd_tx
+                .send(ConnectionCommand::Prompt {
+                    blocks: vec![PromptInputBlock::Text { text: text.into() }],
+                    user_message: None,
+                    internal_suffix: Vec::new(),
+                    reply_token: None,
+                    receipt: Some(receipt),
+                })
+                .await
+                .expect("the connection is running");
+        }
+
+        /// Wait for the turn in flight to end; its stop reason.
+        async fn turn_ended_as(&mut self) -> String {
+            loop {
+                let envelope =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), self.events.recv())
+                        .await
+                        .expect("the turn ends")
+                        .expect("event stream");
+                if let AcpEvent::TurnComplete { stop_reason, .. } = &envelope.payload {
+                    return stop_reason.clone();
+                }
+            }
         }
 
         /// Wait for the turn in flight to end.
@@ -36001,6 +36146,107 @@ mod tests {
         // The agent reports the prompt before it answers, so let the answer
         // reach codeg before letting go (see `HandshakeAgent::closed`).
         run.turn_completed().await;
+        run.cmd_tx
+            .send(ConnectionCommand::Disconnect)
+            .await
+            .expect("the connection is running");
+        let (ended, _) = run.ended().await;
+        assert!(ended.is_ok(), "{ended:?}");
+        agent.closed().await;
+    }
+
+    /// A receipt that records what the connection told it, refusing the send
+    /// when `refuse`.
+    struct RecordingReceipt {
+        refuse: bool,
+        log: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::acp::prompt_receipt::PromptReceiptSink for RecordingReceipt {
+        async fn attempted(&self, op_id: &str) -> Result<(), String> {
+            self.log.lock().unwrap().push(format!("attempted {op_id}"));
+            if self.refuse {
+                Err("withdrawn".into())
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn received(&self, op_id: &str, via: crate::acp::prompt_receipt::ReceiptVia) {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("received {op_id} {}", via.as_str()));
+        }
+    }
+
+    fn recording_receipt(
+        refuse: bool,
+    ) -> (Arc<RecordingReceipt>, crate::acp::prompt_receipt::PromptReceipt) {
+        let sink = Arc::new(RecordingReceipt {
+            refuse,
+            log: std::sync::Mutex::new(Vec::new()),
+        });
+        let receipt = crate::acp::prompt_receipt::PromptReceipt {
+            op_id: "pa-op-1".into(),
+            sink: sink.clone(),
+        };
+        (sink, receipt)
+    }
+
+    /// A prompt carrying a receipt: the receipt hears "about to write it"
+    /// before the agent gets the request, and "the agent answered" from the
+    /// agent's own response to it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_receipt_hears_the_send_attempted_and_then_answered() {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(agent_end, HandshakeScript::default());
+        let mut run = HandshakeRun::start(client_end).await;
+        assert_eq!(agent.next_request().await, "initialize");
+        assert_eq!(agent.next_request().await, "session/new");
+        agent.open_session.notify_one();
+        let (sink, receipt) = recording_receipt(false);
+        run.prompt_with_receipt("hello", receipt).await;
+        assert_eq!(agent.next_request().await, "session/prompt: hello");
+        // The scripted agent answers with nothing said: codeg reads that as
+        // an empty turn — the agent's answer all the same.
+        assert_eq!(run.turn_ended_as().await, "empty");
+        assert_eq!(
+            *sink.log.lock().unwrap(),
+            vec![
+                "attempted pa-op-1".to_string(),
+                "received pa-op-1 prompt_response".to_string()
+            ]
+        );
+        run.cmd_tx
+            .send(ConnectionCommand::Disconnect)
+            .await
+            .expect("the connection is running");
+        let (ended, _) = run.ended().await;
+        assert!(ended.is_ok(), "{ended:?}");
+        agent.closed().await;
+    }
+
+    /// A receipt that refuses keeps the request from ever being written: the
+    /// turn ends as rejected, and the next prompt is the next thing the agent
+    /// sees.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refusing_receipt_keeps_the_request_from_being_written() {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(agent_end, HandshakeScript::default());
+        let mut run = HandshakeRun::start(client_end).await;
+        assert_eq!(agent.next_request().await, "initialize");
+        assert_eq!(agent.next_request().await, "session/new");
+        agent.open_session.notify_one();
+        let (sink, receipt) = recording_receipt(true);
+        run.prompt_with_receipt("never", receipt).await;
+        assert_eq!(run.turn_ended_as().await, "rejected");
+        assert!(!run.state.read().await.turn_in_flight, "the gate is clear");
+        run.prompt("next").await;
+        assert_eq!(agent.next_request().await, "session/prompt: next");
+        run.turn_completed().await;
+        assert_eq!(*sink.log.lock().unwrap(), vec!["attempted pa-op-1".to_string()]);
         run.cmd_tx
             .send(ConnectionCommand::Disconnect)
             .await
@@ -45697,6 +45943,7 @@ mod tests {
                     user_message: None,
                     internal_suffix: Vec::new(),
                     reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -46863,6 +47110,7 @@ mod tests {
                     user_message: None,
                     internal_suffix: Vec::new(),
                     reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -47117,6 +47365,7 @@ mod tests {
                     user_message: None,
                     internal_suffix: Vec::new(),
                     reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -47502,6 +47751,7 @@ mod tests {
                     user_message: None,
                     internal_suffix: Vec::new(),
                     reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -48257,6 +48507,7 @@ mod tests {
                     user_message: None,
                     internal_suffix: Vec::new(),
                     reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -48569,6 +48820,7 @@ mod tests {
                         user_message: None,
                         internal_suffix: Vec::new(),
                         reply_token: None,
+                        receipt: None,
                     })
                     .await
                     .expect("the loop is running");
@@ -48692,6 +48944,7 @@ mod tests {
             user_message: None,
             internal_suffix: Vec::new(),
             reply_token: None,
+            receipt: None,
         }
     }
 

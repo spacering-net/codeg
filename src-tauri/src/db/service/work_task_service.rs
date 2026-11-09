@@ -505,8 +505,9 @@ pub async fn create(
 }
 
 /// Create a task on behalf of a personal-agent dispatch. The ONLY path that
-/// writes `personal_agent_dispatch_id`, in the same insert as the row itself:
-/// a task that existed for a moment without it could be auto-merged.
+/// writes `personal_agent_dispatch_id`, in the same insert as the row itself,
+/// so the task is the dispatch's from its first moment. It lands as the
+/// board's settings say, like any other task.
 pub async fn create_for_personal_agent(
     conn: &DatabaseConnection,
     draft: WorkTaskDraft,
@@ -960,6 +961,36 @@ pub async fn claim_for_run_with_action(
     allow_duplicate_source: bool,
 ) -> Result<Option<i32>, DbError> {
     claim_inner(conn, id, from, actor, action, false, allow_duplicate_source).await
+}
+
+/// The `user_action` event a claim wrote for ledger operation `op_id` (the
+/// personal agent's, carried in the action's payload), with the generation
+/// that claim started. The event commits in the claim's own transaction, so
+/// finding it proves the claim happened — and not finding it, that it did
+/// not: a task whose status or generation moved without it was moved by
+/// someone else.
+pub async fn user_action_by_op(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    op_id: &str,
+) -> Result<Option<i32>, DbError> {
+    let candidates = work_task_event::Entity::find()
+        .filter(work_task_event::Column::TaskId.eq(task_id))
+        .filter(work_task_event::Column::Kind.eq("user_action"))
+        .filter(work_task_event::Column::Payload.contains(op_id))
+        .order_by_desc(work_task_event::Column::Id)
+        .all(conn)
+        .await?;
+    Ok(candidates.into_iter().find_map(|e| {
+        let payload: serde_json::Value = serde_json::from_str(e.payload.as_deref()?).ok()?;
+        (payload.get("op_id").and_then(|v| v.as_str()) == Some(op_id)).then(|| {
+            payload
+                .get("run_seq")
+                .and_then(|v| v.as_i64())
+                .and_then(|v| i32::try_from(v).ok())
+                .unwrap_or_default()
+        })
+    }))
 }
 
 /// Shared body of every user-driven claim. `only_unplanned` narrows the CAS to
@@ -2002,10 +2033,6 @@ pub async fn begin_merge(
         // Authoritative here for the same reason — the sweep's snapshot cannot
         // see a deferral made while it waited for the folder lock.
         update = update.filter(work_task::Column::DeferredAt.is_null());
-        // A personal-agent dispatch never lands unattended (see
-        // `auto_merge_candidate`); the column is written once at creation, so
-        // this only backs the sweep's predicate up.
-        update = update.filter(work_task::Column::PersonalAgentDispatchId.is_null());
     }
     // A dispatch OF a queued merge also binds to that exact intent: run_seq
     // alone cannot tell "the merge the pump picked up" from "the one the user

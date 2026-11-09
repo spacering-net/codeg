@@ -869,6 +869,22 @@ impl TaskEngine {
         attachments: Vec<serde_json::Value>,
         allow_duplicate_source: bool,
     ) -> Result<(), String> {
+        self.retry_with_op(task_id, note, attachments, allow_duplicate_source, None)
+            .await
+    }
+
+    /// [`Self::retry`] for the personal agent's ledger: `op_id` rides in the
+    /// claim's `user_action`, written in the claim's own transaction, so
+    /// that record alone tells whether this retry took effect
+    /// ([`work_task_service::user_action_by_op`]).
+    pub async fn retry_with_op(
+        self: &Arc<Self>,
+        task_id: i32,
+        note: Option<String>,
+        attachments: Vec<serde_json::Value>,
+        allow_duplicate_source: bool,
+        op_id: Option<String>,
+    ) -> Result<(), String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -876,14 +892,22 @@ impl TaskEngine {
         let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
         // An attachment is an instruction on its own: a screenshot with no
         // sentence still has to reach the retry prompt, so the action is
-        // recorded whenever EITHER part is present.
-        let action = (note.is_some() || !attachments.is_empty()).then(|| {
-            serde_json::json!({
+        // recorded whenever EITHER part is present. An operation id with
+        // neither rides an action the instruction scan passes over, so it
+        // never replays as an empty note.
+        let action = if note.is_some() || !attachments.is_empty() {
+            let mut action = serde_json::json!({
                 "action": "retry",
                 "note": note.unwrap_or_default(),
                 "blocks": attachments,
-            })
-        });
+            });
+            if let (Some(op), Some(map)) = (op_id, action.as_object_mut()) {
+                map.insert("op_id".into(), op.into());
+            }
+            Some(action)
+        } else {
+            op_id.map(|op| serde_json::json!({ "action": "agent_op", "op_id": op }))
+        };
         match work_task_service::claim_for_run_with_action(
             &self.db.conn,
             task_id,
@@ -917,21 +941,39 @@ impl TaskEngine {
         feedback: String,
         attachments: Vec<serde_json::Value>,
     ) -> Result<(), String> {
+        self.return_task_with_op(task_id, intent, feedback, attachments, None)
+            .await
+    }
+
+    /// [`Self::return_task`] with the personal agent's ledger operation in
+    /// the claim's `user_action` (see [`Self::retry_with_op`]).
+    pub async fn return_task_with_op(
+        self: &Arc<Self>,
+        task_id: i32,
+        intent: FollowUpIntent,
+        feedback: String,
+        attachments: Vec<serde_json::Value>,
+        op_id: Option<String>,
+    ) -> Result<(), String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
         self.preflight_folder(task.folder_id).await?;
+        let mut action = serde_json::json!({
+            "action": "return",
+            "intent": intent.as_str(),
+            "feedback": feedback,
+            "blocks": attachments,
+        });
+        if let (Some(op), Some(map)) = (op_id, action.as_object_mut()) {
+            map.insert("op_id".into(), op.into());
+        }
         let Some(_) = work_task_service::claim_for_run_with_action(
             &self.db.conn,
             task_id,
             WorkTaskStatus::Review,
             "user",
-            Some(serde_json::json!({
-                "action": "return",
-                "intent": intent.as_str(),
-                "feedback": feedback,
-                "blocks": attachments,
-            })),
+            Some(action),
             false,
         )
         .await
@@ -6678,12 +6720,6 @@ fn auto_merge_candidate(
     if task.source_kind.is_some() {
         return false;
     }
-    // Dispatched by the personal agent: its prompt was written by an agent,
-    // not by the user, so it gets the forge rule for the same reason. Hard,
-    // not a setting; the user's own merge click is unaffected.
-    if task.personal_agent_dispatch_id.is_some() {
-        return false;
-    }
     // Delivered to a pull request it stayed in review after: its user chose
     // to land it THROUGH that pull request, and a local landing behind its
     // back would leave the pull request open on work that is already in the
@@ -8459,12 +8495,13 @@ mod tests {
         task.source_kind = None;
         assert!(auto_merge_candidate(&task, &settings));
 
-        // A task the personal agent dispatched: same red line, same
-        // flip-only-this-field proof.
+        // A task the personal agent dispatched lands as the board's settings
+        // say, like the user's own: with every other gate met it IS a
+        // candidate.
         task.personal_agent_dispatch_id = Some(7);
         assert!(
-            !auto_merge_candidate(&task, &settings),
-            "personal-agent dispatched tasks must never be unattended-merge candidates"
+            auto_merge_candidate(&task, &settings),
+            "a personal-agent dispatched task follows the folder's auto-merge setting"
         );
         task.personal_agent_dispatch_id = None;
         assert!(auto_merge_candidate(&task, &settings));

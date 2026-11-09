@@ -446,6 +446,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_mark_seen),
         )
         .route(
+            "/personal_agent_notice_act",
+            post(handlers::personal_agent::personal_agent_notice_act),
+        )
+        .route(
             "/personal_agent_answer_question",
             post(handlers::personal_agent::personal_agent_answer_question),
         )

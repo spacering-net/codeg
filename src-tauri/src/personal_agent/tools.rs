@@ -14,7 +14,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::dispatch::{executor_of, DispatchRequest};
+use super::dispatch::{executor_of, DispatchAuth, DispatchRequest, FollowupAuth};
 use super::engine::{engine, enum_str, PersonalAgentEngine};
 use crate::db::entities::folder::FolderKind;
 use crate::db::entities::personal_agent_dispatch::DispatchMode;
@@ -186,18 +186,18 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 report: report || (mode != DispatchMode::Task && args.get("deliverable").is_some()),
                 on_done: string(&args, "on_done"),
             };
-            match engine.dispatch(req).await {
-                Ok(d) => ToolOutcome::ok(
-                    format!(
-                        "Dispatched #{} \"{}\" as a {} to {}. It runs on its own; its progress comes \
-                         back to you as events, and the owner already sees a card for it.",
-                        d.id,
-                        d.title,
-                        enum_str(&d.mode),
-                        executor_of(&d).name
-                    ),
-                    json!({ "dispatch_id": d.id, "state": d.state }),
-                ),
+            let valid = match engine.validate_dispatch(&req).await {
+                Ok(v) => v,
+                Err(e) => return ToolOutcome::refused(e),
+            };
+            // In a delivery the ledger keeps a re-delivered turn from making
+            // the same dispatch twice; it decides nothing else.
+            let auth = match engine.ledger_batch().await {
+                Some((batch_id, scope)) => DispatchAuth::Ledgered { batch_id, scope },
+                None => DispatchAuth::Direct,
+            };
+            match engine.record_dispatch(valid, auth).await {
+                Ok(made) => dispatched(&made.dispatch, made.earlier),
                 Err(e) => ToolOutcome::refused(e),
             }
         }
@@ -206,7 +206,14 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 return ToolOutcome::refused("`dispatch_id` is required");
             };
             let message = string(&args, "message").unwrap_or_default();
-            match engine.followup(id, message, string(&args, "intent")).await {
+            let auth = match engine.ledger_batch().await {
+                Some((batch_id, scope)) => FollowupAuth::Ledgered { batch_id, scope },
+                None => FollowupAuth::Direct,
+            };
+            match engine
+                .followup_call(id, message, string(&args, "intent"), auth)
+                .await
+            {
                 Ok(text) => ToolOutcome::ok(text, json!({ "dispatch_id": id })),
                 Err(e) => ToolOutcome::refused(e),
             }
@@ -470,6 +477,31 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
     }
 }
 
+/// What a dispatch call answers: the new dispatch, or — the call repeating
+/// one a re-delivered turn already made — the dispatch it made then.
+fn dispatched(d: &crate::db::entities::personal_agent_dispatch::Model, earlier: bool) -> ToolOutcome {
+    let text = if earlier {
+        format!(
+            "Already dispatched: the turn this delivery repeats made this same dispatch, #{} \
+             \"{}\" ({}, {}); nothing new was started.",
+            d.id,
+            d.title,
+            enum_str(&d.mode),
+            enum_str(&d.state)
+        )
+    } else {
+        format!(
+            "Dispatched #{} \"{}\" as a {} to {}. It runs on its own; its progress comes back to \
+             you as events, and the owner already sees a card for it.",
+            d.id,
+            d.title,
+            enum_str(&d.mode),
+            executor_of(d).name
+        )
+    };
+    ToolOutcome::ok(text, json!({ "dispatch_id": d.id, "state": d.state, "earlier": earlier }))
+}
+
 /// Tests: `timeline_read` as the agent would call it.
 #[cfg(test)]
 pub(crate) async fn timeline_read_for_test(engine: &Arc<PersonalAgentEngine>) -> String {
@@ -480,4 +512,10 @@ pub(crate) async fn timeline_read_for_test(engine: &Arc<PersonalAgentEngine>) ->
 #[cfg(test)]
 pub(crate) async fn item_update_for_test(engine: &Arc<PersonalAgentEngine>, args: Value) -> ToolOutcome {
     answer(engine, "item_update", args).await
+}
+
+/// Tests: any tool as the agent would call it.
+#[cfg(test)]
+pub(crate) async fn call_for_test(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> ToolOutcome {
+    answer(engine, tool, args).await
 }

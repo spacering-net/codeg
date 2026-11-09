@@ -47,7 +47,7 @@ use crate::acp::reply_turn::{ReplySnapshot, ReplyStep};
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope, PromptInputBlock};
 use crate::acp::InternalEventBus;
 use crate::db::entities::personal_agent as agent_entity;
-use crate::db::entities::personal_agent_batch::{BatchKind, BatchStatus};
+use crate::db::entities::personal_agent_batch::{BatchKind, BatchStatus, BatchTrigger};
 use crate::db::entities::personal_agent_item::ItemStatus;
 use crate::db::entities::personal_agent_segment::{self as segment_entity, SegmentReason};
 use crate::db::entities::personal_agent_timeline::{OwnerStatus, TimelineKind};
@@ -182,6 +182,9 @@ struct ActiveTurn {
     /// For a delivery of one event and no message: the event's result card,
     /// which the reply quotes unless it names another row itself.
     auto_quote: Option<i32>,
+    /// For a delivery: the batches whose ledger entries count as its own —
+    /// itself, and those it re-delivers what they carried of.
+    ledger_scope: Vec<i32>,
 }
 
 /// How a turn ended.
@@ -296,6 +299,9 @@ pub(super) struct EngineState {
     seen_compactions: HashSet<String>,
     /// Dispatched conversations, by `connection_id`.
     pub(super) dispatch_conns: HashMap<String, DispatchConn>,
+    /// Ledger operations running in this process: a follow-up being sent,
+    /// until the executor confirms it or its round ends (`ledger`).
+    pub(super) live_ops: HashSet<String>,
 }
 
 pub struct PersonalAgentEngine {
@@ -420,6 +426,7 @@ impl PersonalAgentEngine {
             reply_row_id: None,
             reply_token: None,
             auto_quote: None,
+            ledger_scope: vec![batch_id],
         });
     }
 
@@ -460,8 +467,34 @@ impl PersonalAgentEngine {
             reply_row_id: Some(row.id),
             reply_token: Some(token.to_string()),
             auto_quote: None,
+            ledger_scope: vec![batch_id],
         });
         row.id
+    }
+
+    /// Apply a change of the brain's options as saving it would.
+    #[cfg(test)]
+    pub(crate) async fn apply_brain_change_for_test(
+        &self,
+        old: &AssistantAgentConfig,
+        new: &AssistantAgentConfig,
+    ) {
+        self.apply_brain_change(old, new).await;
+    }
+
+    /// The batches a delivery re-delivering `direct` inherits the ledger of.
+    #[cfg(test)]
+    pub(crate) async fn ledger_ancestry_for_test(&self, direct: &[i32]) -> Vec<i32> {
+        self.ledger_ancestry(direct).await
+    }
+
+    /// Make the turn in flight's ledger cover `scope` — a delivery that
+    /// re-delivers those batches, say.
+    #[cfg(test)]
+    pub(crate) async fn set_ledger_scope_for_test(&self, scope: Vec<i32>) {
+        if let Some(t) = self.state.lock().await.turn.as_mut() {
+            t.ledger_scope = scope;
+        }
     }
 
     /// Run one liveness check, as the tick does.
@@ -633,6 +666,9 @@ impl PersonalAgentEngine {
                     .await;
             }
         }
+        // The ledger first: a send that never went out puts its round back
+        // before the dispatches still running are marked interrupted.
+        self.boot_ledger().await;
         self.boot_dispatches().await;
     }
 
@@ -1996,6 +2032,7 @@ impl PersonalAgentEngine {
                 reply_row_id: None,
                 reply_token: None,
                 auto_quote: None,
+                ledger_scope: Vec::new(),
             });
             st.last_check = Some(CompactCheck {
                 at: Utc::now(),
@@ -2132,14 +2169,16 @@ impl PersonalAgentEngine {
     pub(super) async fn interrupted_note(
         &self,
         events: &[crate::db::entities::personal_agent_event::Model],
+        resent_from: &[i32],
     ) -> Option<String> {
-        if !events.iter().any(|e| e.requeues > 0) {
+        if !events.iter().any(|e| e.requeues > 0) && resent_from.is_empty() {
             return None;
         }
         let mut batches: Vec<i32> = events
             .iter()
             .filter(|e| e.requeues > 0)
             .filter_map(|e| e.requeued_from)
+            .chain(resent_from.iter().copied())
             .collect();
         batches.sort_unstable();
         batches.dedup();
@@ -2150,6 +2189,37 @@ impl PersonalAgentEngine {
             }
         }
         Some(cards::interrupted_note(&dispatched))
+    }
+
+    /// The batches whose ledger a delivery re-delivering `direct` inherits:
+    /// those, and what each of them re-delivered, all the way back.
+    async fn ledger_ancestry(&self, direct: &[i32]) -> Vec<i32> {
+        /// Enough for any chain of resends a person makes; a bound all the
+        /// same.
+        const MAX: usize = 64;
+        let mut seen: Vec<i32> = Vec::new();
+        let mut queue: std::collections::VecDeque<i32> = direct.iter().copied().collect();
+        while let Some(b) = queue.pop_front() {
+            if seen.contains(&b) {
+                continue;
+            }
+            if seen.len() >= MAX {
+                break;
+            }
+            seen.push(b);
+            let earlier = svc::get_batch(&self.db.conn, b)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|batch| batch.detail)
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+                .and_then(|d| d.get("ledger_from").cloned())
+                .and_then(|v| serde_json::from_value::<Vec<i32>>(v).ok())
+                .unwrap_or_default();
+            queue.extend(earlier);
+        }
+        seen.sort_unstable();
+        seen
     }
 
     /// Build and send one delivery.
@@ -2203,9 +2273,34 @@ impl PersonalAgentEngine {
                 carried.persona = true;
             }
         }
-        if let Some(note) = self.interrupted_note(&events).await {
+        // What this delivery re-delivers: events an interrupted turn had
+        // been handed, messages the owner sent again after one. Their
+        // batches' ledger entries count as this one's.
+        let mut resent_from_batches = Vec::new();
+        for o in &owners {
+            let from = o
+                .data
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                .and_then(|d| d.get("resent_from").and_then(|v| v.as_i64()))
+                .and_then(|id| i32::try_from(id).ok());
+            if let Some(from) = from {
+                if let Ok(Some(old)) = svc::get_row(&self.db.conn, from).await {
+                    if let Some(b) = old.batch_id {
+                        resent_from_batches.push(b);
+                    }
+                }
+            }
+        }
+        if let Some(note) = self.interrupted_note(&events, &resent_from_batches).await {
             cards_text.push(note);
         }
+        // What started it — recorded only, for the status and statistics.
+        let trigger = if owners.is_empty() {
+            BatchTrigger::Event
+        } else {
+            BatchTrigger::Owner
+        };
         let event_lines = self.event_lines(&events).await;
         let events_text = cards::events_block(&event_lines);
         let mut owner_lines = Vec::with_capacity(owners.len());
@@ -2245,7 +2340,15 @@ impl PersonalAgentEngine {
         let reading = self
             .context_reading(&session.conn_id, session.segment.conversation_id)
             .await;
-        let batch = svc::create_batch(
+        let direct: Vec<i32> = events
+            .iter()
+            .filter_map(|e| e.requeued_from)
+            .chain(resent_from_batches.iter().copied())
+            .collect();
+        // What those batches re-delivered in turn counts too: a message
+        // resent twice must still find what its first turn made.
+        let ledger_from = self.ledger_ancestry(&direct).await;
+        let batch = svc::create_batch_with(
             &self.db.conn,
             session.segment.id,
             BatchKind::Delivery,
@@ -2256,10 +2359,14 @@ impl PersonalAgentEngine {
                 "state_card": carried.state_card,
                 "persona": carried.persona,
                 "usage_before": reading.map(|r| r.percent),
+                "ledger_from": ledger_from,
             })),
+            Some(trigger),
         )
         .await
         .map_err(|e| e.to_string())?;
+        let mut ledger_scope = vec![batch.id];
+        ledger_scope.extend(ledger_from.iter().copied());
         let owner_ids: Vec<i32> = owners.iter().map(|o| o.id).collect();
         let event_ids: Vec<i32> = events.iter().map(|e| e.id).collect();
         // The assistant starts on them now: read.
@@ -2311,6 +2418,7 @@ impl PersonalAgentEngine {
                 reply_row_id: reply.as_ref().map(|r| r.id),
                 reply_token: reply.as_ref().map(|_| token.clone()),
                 auto_quote,
+                ledger_scope,
             });
             st.last_error = None;
         }
@@ -2920,6 +3028,18 @@ impl PersonalAgentEngine {
         blocks: Vec<PromptInputBlock>,
         reply_to: Option<i32>,
     ) -> Result<TimelineRow, String> {
+        self.queue_owner_message(text, blocks, reply_to, None).await
+    }
+
+    /// Queue an owner message; `resent_from` is the interrupted message it
+    /// sends again, whose turn's ledger the delivery inherits.
+    async fn queue_owner_message(
+        &self,
+        text: String,
+        blocks: Vec<PromptInputBlock>,
+        reply_to: Option<i32>,
+        resent_from: Option<i32>,
+    ) -> Result<TimelineRow, String> {
         if self.agent_row().await.is_none() {
             return Err("configure the personal agent first".into());
         }
@@ -2939,8 +3059,15 @@ impl PersonalAgentEngine {
         let mut row = NewRow::new(TimelineKind::Owner, text);
         row.status = Some(OwnerStatus::Queued);
         row.reply_to = reply_to;
+        let mut data = serde_json::Map::new();
         if !blocks.is_empty() {
-            row.data = Some(serde_json::json!({ "blocks": blocks }));
+            data.insert("blocks".into(), serde_json::json!(blocks));
+        }
+        if let Some(from) = resent_from {
+            data.insert("resent_from".into(), from.into());
+        }
+        if !data.is_empty() {
+            row.data = Some(serde_json::Value::Object(data));
         }
         let row = self.push_row(row).await.ok_or("could not record the message")?;
         self.emit(PersonalAgentChange::Status);
@@ -3059,7 +3186,7 @@ impl PersonalAgentEngine {
             None => None,
         };
         let new = self
-            .send_owner_message(row.body.clone(), blocks, reply_to)
+            .queue_owner_message(row.body.clone(), blocks, reply_to, Some(row.id))
             .await?;
         let mut data = row
             .data
@@ -3360,6 +3487,19 @@ impl PersonalAgentEngine {
             .as_ref()
             .filter(|t| t.kind == BatchKind::Delivery)
             .map(|t| t.batch_id)
+    }
+
+    /// The delivery a tool call made now belongs to, and the batches its
+    /// ledger lookups cover; `None` outside a delivery (a compaction carries
+    /// nobody's call, and a call that came late finds no turn).
+    pub(super) async fn ledger_batch(&self) -> Option<(i32, Vec<i32>)> {
+        self.state
+            .lock()
+            .await
+            .turn
+            .as_ref()
+            .filter(|t| t.kind == BatchKind::Delivery)
+            .map(|t| (t.batch_id, t.ledger_scope.clone()))
     }
 
     // ── status ──────────────────────────────────────────────────────────────

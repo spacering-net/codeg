@@ -52,6 +52,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { EventCard } from "./event-card"
+import { NoticeCard } from "./notice-card"
 import { BlockingPrompts } from "./live-turn"
 import { useMessageTime } from "./message-actions"
 import {
@@ -163,6 +164,8 @@ function Item({ item }: { item: MessageItem }) {
       return <ReplyBubble item={item} />
     case "event":
       return <EventCard item={item} />
+    case "notice":
+      return <NoticeCard item={item} />
   }
 }
 

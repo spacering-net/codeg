@@ -26,6 +26,8 @@ pub mod cards;
 pub mod compaction;
 pub mod dispatch;
 pub mod engine;
+pub mod ledger;
+pub mod notices;
 pub mod templates;
 pub mod tools;
 pub mod workdir;

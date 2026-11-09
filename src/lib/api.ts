@@ -2582,6 +2582,17 @@ export async function personalAgentMarkSeen(upTo: number): Promise<void> {
   return getTransport().call("personal_agent_mark_seen", { upTo })
 }
 
+/** The owner's answer on a native card: `accept` runs what it holds as the
+ *  card shows it (a proposal; an uncertain step, again), `dismiss` closes it.
+ *  Resolves to the card's row as it now stands — `acting` while what it runs
+ *  is still on its way. */
+export async function personalAgentNoticeAct(
+  noticeId: number,
+  action: "accept" | "dismiss"
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_notice_act", { noticeId, action })
+}
+
 export async function personalAgentAnswerQuestion(
   questionId: string,
   answer: QuestionAnswer

@@ -46,6 +46,7 @@ pub(crate) mod opencode_skills;
 pub mod plan_approval;
 pub mod preflight;
 pub mod prompt_hydration;
+pub mod prompt_receipt;
 pub mod provider_models;
 pub mod question;
 pub mod registry;

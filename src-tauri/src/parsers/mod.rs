@@ -24,7 +24,7 @@ mod summary_cache;
 mod trae_usage;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub use agent_env::{AgentEnv, AgentEnvs};
@@ -386,6 +386,37 @@ pub enum ParseError {
 pub trait AgentParser {
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError>;
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError>;
+
+    /// Whether the AGENT'S OWN record of `conversation_id` holds `needle`
+    /// verbatim — read raw, before anything strips codeg's internal frames
+    /// out of it. The personal agent's ledger asks it for a send's operation
+    /// id: found, the agent received that prompt (`personal_agent::ledger`).
+    ///
+    /// `None` when there is no such record to ask: the parser reads codeg's
+    /// own transcript (written before the prompt went out, so it proves
+    /// nothing), or the session's file cannot be found. Only parsers over a
+    /// store the agent writes itself answer.
+    fn own_record_contains(&self, _conversation_id: &str, _needle: &str) -> Option<bool> {
+        None
+    }
+}
+
+/// Whether the file at `path` holds `needle` on one of its lines, read line by
+/// line so a long transcript is never held whole. `None` when it cannot be
+/// read.
+pub(crate) fn file_lines_contain(path: &Path, needle: &str) -> Option<bool> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    for line in std::io::BufReader::new(file).split(b'\n') {
+        let line = line.ok()?;
+        if line
+            .windows(needle.len().max(1))
+            .any(|w| w == needle.as_bytes())
+        {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 /// The ONE place a history parser is constructed.
@@ -480,6 +511,12 @@ pub(crate) fn sanitized(inner: impl AgentParser + 'static) -> Box<dyn AgentParse
 struct RouteSanitized(Box<dyn AgentParser>);
 
 impl AgentParser for RouteSanitized {
+    // Raw on purpose: the operation frame this is asked for is exactly what
+    // the sanitizing below removes.
+    fn own_record_contains(&self, conversation_id: &str, needle: &str) -> Option<bool> {
+        self.0.own_record_contains(conversation_id, needle)
+    }
+
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
         let mut summaries = self.0.list_conversations()?;
         for summary in &mut summaries {
@@ -1833,6 +1870,55 @@ mod route_sanitizer_tests {
     use crate::models::{
         AgentType, ContentBlock, ConversationDetail, ConversationSummary, MessageTurn, TurnRole,
     };
+
+    /// The ledger's question — did the agent get this prompt? — is answered
+    /// from the agent's OWN record only, read raw so the operation frame the
+    /// display strips still counts; codeg's own transcript never answers.
+    #[test]
+    fn only_the_agents_own_record_says_whether_it_got_a_prompt() {
+        use super::AgentEnv;
+        use crate::models::AgentType;
+        let dir = tempfile::tempdir().unwrap();
+        let frame = crate::acp::agent_mentions::render_operation_frame("pa-abc123").unwrap();
+        let line = serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": [{ "type": "text", "text": format!("go on{frame}") }] }
+        });
+        // Claude Code: <projects>/<project>/<session>.jsonl.
+        let projects = dir.path().join("projects");
+        std::fs::create_dir_all(projects.join("-repo")).unwrap();
+        std::fs::write(projects.join("-repo").join("s-1.jsonl"), format!("{line}\n")).unwrap();
+        let claude = super::sanitized(super::claude::ClaudeParser::with_base_dir(projects));
+        assert_eq!(claude.own_record_contains("s-1", "pa-abc123"), Some(true));
+        assert_eq!(claude.own_record_contains("s-1", "pa-other"), Some(false));
+        assert_eq!(claude.own_record_contains("s-missing", "pa-abc123"), None);
+        // Codex: every rollout of the thread, a revert's new file included.
+        let day = dir.path().join("sessions").join("2026").join("11").join("07");
+        std::fs::create_dir_all(&day).unwrap();
+        let thread = "0199a1b2-0000-7000-8000-000000000001";
+        std::fs::write(
+            day.join(format!("rollout-2026-11-07T10-00-00-{thread}.jsonl")),
+            "{\"type\":\"session_meta\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            day.join(format!(
+                "rollout-2026-11-07T11-00-00-{thread}_0199a1b2-0000-7000-8000-000000000002.jsonl"
+            )),
+            format!("{line}\n"),
+        )
+        .unwrap();
+        let codex = super::sanitized(super::codex::CodexParser::with_base_dir(dir.path().join("sessions")));
+        assert_eq!(codex.own_record_contains(thread, "pa-abc123"), Some(true));
+        assert_eq!(codex.own_record_contains(thread, "pa-other"), Some(false));
+        assert_eq!(
+            codex.own_record_contains("0199a1b2-0000-7000-8000-00000000000f", "pa-abc123"),
+            None
+        );
+        // codeg's own transcript of an agent without a store of its own.
+        let native = super::build_agent_parser(AgentType::ZCode, &AgentEnv::inherited());
+        assert_eq!(native.own_record_contains("s-1", "pa-abc123"), None);
+    }
 
     /// The exact bytes `append_agent_routes` puts on the wire — the same thing
     /// every MCP-capable agent then persists into its own transcript.

@@ -44,6 +44,8 @@ function shape(items: MessageItem[]): string[] {
         return `owner:${i.row.id}`
       case "event":
         return `event:${i.row.id}`
+      case "notice":
+        return `notice:${i.row.id}`
       case "reply":
         return `reply:${i.anchor.id}[${i.attached.map((a) => a.id).join(",")}]${i.row ? "" : "!"}`
     }
@@ -51,6 +53,25 @@ function shape(items: MessageItem[]): string[] {
 }
 
 describe("buildMessageItems", () => {
+  it("draws a native card on its own, on the assistants' side, as new", () => {
+    const items = buildMessageItems([
+      row(1, "owner", { batch_id: 7, status: "answered" }),
+      row(2, "reply", { batch_id: 7, data: { state: "done" } }),
+      row(3, "notice", {
+        batch_id: 8,
+        ref_id: "4",
+        data: { notice: "proposal", state: "open" },
+      }),
+    ])
+    expect(shape(items)).toEqual(["time", "owner:1", "reply:2[]", "notice:3"])
+    const notice = items[3]
+    expect(notice.kind === "notice" && notice.gap).toBe("near")
+    expect(isUnseen(row(3, "notice"))).toBe(true)
+    expect(
+      isUnseen(row(3, "notice", { seen_at: "2026-11-07T00:00:00Z" }))
+    ).toBe(false)
+  })
+
   it("folds a turn's cards into its reply and leaves markers out", () => {
     const items = buildMessageItems([
       row(1, "owner", { batch_id: 7, status: "answered" }),

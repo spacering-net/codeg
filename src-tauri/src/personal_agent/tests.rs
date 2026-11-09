@@ -585,7 +585,7 @@ async fn a_put_back_event_lists_what_the_interrupted_turn_dispatched() {
     let pending = svc::pending_events(&engine.db.conn).await.unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].requeued_from, Some(batch.id));
-    let note = engine.interrupted_note(&pending).await.expect("a note");
+    let note = engine.interrupted_note(&pending, &[]).await.expect("a note");
     assert!(note.contains("Fix the login"), "{note}");
     assert!(!note.contains("dispatched nothing"), "{note}");
 }
@@ -1894,4 +1894,1204 @@ async fn a_dropped_sealing_completion_still_settles_with_its_stop_reason() {
     let reply = reply_of(&engine, batch).await;
     assert_eq!(reply.body, "Partial");
     assert_eq!(data_of(&reply)["state"], "canceled");
+}
+
+// ── proactive 1.1: every turn as its settings say; the ledger; the cards ──
+
+use crate::acp::prompt_receipt::{PromptReceipt, ReceiptVia};
+use crate::db::entities::personal_agent_action::{self as action_entity, ActionState};
+use crate::db::entities::personal_agent_batch::BatchTrigger;
+use crate::db::entities::personal_agent_notice::{NoticeKind, NoticeState};
+use serde_json::json;
+
+/// A delivery of the owner's on record on `conn`.
+async fn owner_turn(engine: &PersonalAgentEngine, conn: &str) -> (i32, i32) {
+    let seg = open_segment(engine).await;
+    let batch = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap();
+    engine
+        .begin_turn_for_test(conn, seg, batch.id, BatchKind::Delivery, false, false)
+        .await;
+    (seg, batch.id)
+}
+
+/// A delivery with no message of the owner's (events only) on `conn`.
+async fn event_turn(engine: &PersonalAgentEngine, conn: &str) -> (i32, i32) {
+    let seg = open_segment(engine).await;
+    let batch = svc::create_batch_with(
+        &engine.db.conn,
+        seg,
+        BatchKind::Delivery,
+        None,
+        Some(BatchTrigger::Event),
+    )
+    .await
+    .unwrap();
+    engine
+        .begin_turn_for_test(conn, seg, batch.id, BatchKind::Delivery, false, false)
+        .await;
+    (seg, batch.id)
+}
+
+async fn call(engine: &Arc<PersonalAgentEngine>, tool: &str, args: serde_json::Value) -> super::tools::ToolOutcome {
+    super::tools::call_for_test(engine, tool, args).await
+}
+
+async fn notice_rows(engine: &PersonalAgentEngine) -> Vec<crate::db::entities::personal_agent_timeline::Model> {
+    svc::page(&engine.db.conn, None, 200)
+        .await
+        .unwrap()
+        .0
+        .into_iter()
+        .filter(|r| r.kind == TimelineKind::Notice)
+        .collect()
+}
+
+fn notice_id_of(row: &crate::db::entities::personal_agent_timeline::Model) -> i32 {
+    row.ref_id.as_deref().unwrap().parse().unwrap()
+}
+
+async fn all_dispatches(engine: &PersonalAgentEngine) -> Vec<crate::db::entities::personal_agent_dispatch::Model> {
+    svc::list_dispatches(&engine.db.conn, &[], None, 100).await.unwrap()
+}
+
+/// A session dispatch in `state` whose project and conversation are real and
+/// whose connection `conn` is live: what its follow-ups send can be read
+/// back from the channel.
+async fn live_session_dispatch(
+    engine: &PersonalAgentEngine,
+    tmp: &tempfile::TempDir,
+    conn: &str,
+    state: DispatchState,
+) -> (i32, tokio::sync::mpsc::Receiver<ConnectionCommand>, State, i32) {
+    let repo = tmp.path().join(format!("repo-{conn}"));
+    std::fs::create_dir_all(&repo).unwrap();
+    let folder = crate::db::test_helpers::seed_folder(&engine.db, &repo.to_string_lossy()).await;
+    let conversation =
+        crate::db::test_helpers::seed_conversation(&engine.db, folder, AgentType::ClaudeCode).await;
+    let coder = role_assistant(engine, &format!("Coder on {conn}"), true).await;
+    let d = svc::create_dispatch(
+        &engine.db.conn,
+        NewDispatch {
+            mode: DispatchMode::Session,
+            executor_assistant_id: coder,
+            executor_snapshot_json: "{}".into(),
+            folder_id: Some(folder),
+            deliverable: None,
+            title: "Investigate".into(),
+            prompt: "Look".into(),
+            origin_batch_id: None,
+            on_done: None,
+        },
+    )
+    .await
+    .unwrap();
+    svc::update_dispatch(
+        &engine.db.conn,
+        d.id,
+        None,
+        DispatchWrite {
+            state: Some(state),
+            conversation_id: Some(conversation),
+            connection_id: Some(Some(conn.into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (rx, st) = dispatch_connection(engine, conn, &repo, conversation).await;
+    (d.id, rx, st, conversation)
+}
+
+/// A live connection of a dispatched conversation.
+async fn dispatch_connection(
+    engine: &PersonalAgentEngine,
+    conn: &str,
+    repo: &std::path::Path,
+    conversation: i32,
+) -> (tokio::sync::mpsc::Receiver<ConnectionCommand>, State) {
+    let rx = engine
+        .manager
+        .insert_test_connection_live(conn, AgentType::ClaudeCode, Some(repo.to_path_buf()), EventEmitter::Noop)
+        .await;
+    let st = engine.manager.get_state(conn).await.unwrap();
+    st.write().await.conversation_id = Some(conversation);
+    (rx, st)
+}
+
+/// The follow-up the engine sent: its text, the internal suffix, its message
+/// id and its receipt.
+fn take_followup(
+    rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>,
+) -> (String, String, Option<String>, PromptReceipt) {
+    loop {
+        match rx.try_recv() {
+            Ok(ConnectionCommand::Prompt {
+                blocks,
+                user_message,
+                internal_suffix,
+                receipt,
+                ..
+            }) => {
+                let join = |blocks: &[crate::acp::types::PromptInputBlock]| {
+                    blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            crate::acp::types::PromptInputBlock::Text { text } => Some(text.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                return (
+                    join(&blocks),
+                    join(&internal_suffix),
+                    user_message.map(|(id, _)| id),
+                    receipt.expect("a follow-up carries a receipt"),
+                );
+            }
+            Ok(_) => continue,
+            Err(_) => panic!("a follow-up was sent"),
+        }
+    }
+}
+
+fn no_prompt(rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>) -> bool {
+    loop {
+        match rx.try_recv() {
+            Ok(ConnectionCommand::Prompt { .. }) => return false,
+            Ok(_) => continue,
+            Err(_) => return true,
+        }
+    }
+}
+
+/// The operation that claimed the dispatch's current round.
+async fn round_op(engine: &PersonalAgentEngine, dispatch_id: i32) -> action_entity::Model {
+    let op_id = dispatch_state(engine, dispatch_id)
+        .await
+        .round_op_id
+        .expect("the round is an operation's");
+    svc::get_op(&engine.db.conn, &op_id).await.unwrap().unwrap()
+}
+
+async fn op(engine: &PersonalAgentEngine, op_id: &str) -> action_entity::Model {
+    svc::get_op(&engine.db.conn, op_id).await.unwrap().unwrap()
+}
+
+/// What a restart sees: a fresh engine on the same database, booted.
+async fn restarted(engine: &PersonalAgentEngine, tmp: &tempfile::TempDir) -> Arc<PersonalAgentEngine> {
+    let again = PersonalAgentEngine::new_for_test(
+        crate::db::AppDatabase {
+            conn: engine.db.conn.clone(),
+        },
+        tmp.path().to_path_buf(),
+    );
+    again.boot_for_test().await;
+    again
+}
+
+fn permission(request_id: &str) -> AcpEvent {
+    AcpEvent::PermissionRequest {
+        request_id: request_id.into(),
+        tool_call: json!({ "kind": "execute", "title": "Bash", "rawInput": { "command": "rm -rf build" } }),
+        options: vec![
+            crate::acp::types::PermissionOptionInfo {
+                option_id: "once".into(),
+                name: "Allow".into(),
+                kind: "allow_once".into(),
+                meta: None,
+            },
+            crate::acp::types::PermissionOptionInfo {
+                option_id: "no".into(),
+                name: "Reject".into(),
+                kind: "reject_once".into(),
+                meta: None,
+            },
+        ],
+        queued: 0,
+    }
+}
+
+/// ① ② A turn no one typed changes nothing about the brain: its permission
+/// request waits for the owner, no mode is switched, and a mode the owner
+/// picks meanwhile goes through at once.
+#[tokio::test]
+async fn an_event_turn_answers_nothing_for_the_brain_and_switches_no_mode() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, _state) = live_connection(&engine, seg, "pa-1").await;
+    event_turn(&engine, "pa-1").await;
+    let open = svc::open_segment(&engine.db.conn).await.unwrap().unwrap();
+    engine.state.lock().await.connection_segment = Some(open.id);
+    engine.feed_for_test("pa-1", 1, permission("p1")).await;
+    assert!(
+        rx.try_recv().is_err(),
+        "codeg neither answers the request nor switches the mode"
+    );
+    let card = svc::row_by_ref(&engine.db.conn, TimelineKind::Permission, "p1")
+        .await
+        .unwrap()
+        .expect("the request waits on the page for the owner");
+    assert_eq!(card.kind, TimelineKind::Permission);
+    // The owner switches the brain's mode while the event turn runs: it
+    // goes through now, by either channel.
+    let old = brain(AgentType::ClaudeCode);
+    let mut new = old.clone();
+    new.agent_options.mode_id = Some("bypassPermissions".into());
+    new.agent_options
+        .config_values
+        .insert("mode".into(), "acceptEdits".into());
+    engine.apply_brain_change_for_test(&old, &new).await;
+    let mut set = Vec::new();
+    while let Ok(cmd) = rx.try_recv() {
+        match cmd {
+            ConnectionCommand::SetMode { mode_id, .. } => set.push(("mode_id".to_string(), mode_id)),
+            ConnectionCommand::SetConfigOption { config_id, value_id, .. } => set.push((config_id, value_id)),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        set,
+        vec![
+            ("mode_id".to_string(), "bypassPermissions".to_string()),
+            ("mode".to_string(), "acceptEdits".to_string()),
+        ]
+    );
+}
+
+/// ④ The brain's agent type decides nothing: an OpenCode brain is woken by
+/// an event like any other.
+#[tokio::test]
+async fn any_brain_is_woken_by_an_event() {
+    let (engine, _tmp) = engine().await;
+    engine
+        .save(PersonalAgentDraft {
+            agent_config: Some(brain(AgentType::OpenCode)),
+            locale: Some("en".into()),
+            ..Default::default()
+        })
+        .await
+        .expect("save");
+    let config = serde_json::to_string(&brain(AgentType::OpenCode)).unwrap();
+    let seg = svc::create_segment(&engine.db.conn, "open_code", config, SegmentReason::First)
+        .await
+        .unwrap()
+        .id;
+    let (mut rx, _state) = live_connection(&engine, seg, "pa-oc").await;
+    svc::insert_event(&engine.db.conn, "system", "k-w1", None, "news".into(), None, true)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (prompt, _) = take_prompt(&mut rx);
+    assert!(prompt.contains("news"), "{prompt}");
+    let batch = svc::running_batches(&engine.db.conn).await.unwrap().remove(0);
+    assert_eq!(batch.trigger, Some(BatchTrigger::Event), "recorded, nothing more");
+}
+
+/// ⑤ In a turn no one typed, the agent's tools do what they do in the
+/// owner's: a dispatch is made, any dispatch is followed up, any matter
+/// changes.
+#[tokio::test]
+async fn an_event_turn_dispatches_and_follows_up_directly() {
+    let (engine, tmp) = configured().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let (other, mut rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-5", DispatchState::Completed).await;
+    let item = svc::create_item(
+        &engine.db.conn,
+        ItemKind::Reminder,
+        None,
+        ItemStatus::Open,
+        None,
+        "Remember the release".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    event_turn(&engine, "pa-5").await;
+    let made = call(
+        &engine,
+        "dispatch",
+        json!({ "mode": "chat", "assistant_id": coder, "title": "Research X", "prompt": "Find out X." }),
+    )
+    .await;
+    assert!(made.ok, "{}", made.text);
+    assert_eq!(made.data["earlier"], json!(false));
+    assert!(made.data.get("proposed").is_none());
+    assert!(notice_rows(&engine).await.is_empty(), "no proposal card");
+    let sent = call(
+        &engine,
+        "dispatch_followup",
+        json!({ "dispatch_id": other, "message": "and check the tests" }),
+    )
+    .await;
+    assert!(sent.ok, "{}", sent.text);
+    let (text, _, _, _) = take_followup(&mut rx);
+    assert_eq!(text, "and check the tests");
+    let changed = super::tools::item_update_for_test(
+        &engine,
+        json!({ "item_id": item.id, "status": "done" }),
+    )
+    .await;
+    assert!(changed.ok, "{}", changed.text);
+}
+
+/// ⑥ A setting the first build stored is read past.
+#[test]
+fn old_settings_with_an_unattended_mode_still_read() {
+    let raw = r#"{"dispatch_concurrency":2,"unattended_mode":"default"}"#;
+    let s: PersonalAgentSettings = serde_json::from_str(raw).unwrap();
+    assert_eq!(s.dispatch_concurrency, 2);
+    assert!(!serde_json::to_string(&s).unwrap().contains("unattended"));
+}
+
+/// The ledger hands a re-delivered batch its dispatch back; a delivery of
+/// its own makes one of its own.
+#[tokio::test]
+async fn the_ledger_hands_a_redelivered_batch_its_dispatch_back() {
+    let (engine, _tmp) = configured().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let (_, first_batch) = owner_turn(&engine, "pa-l1").await;
+    let args = json!({ "mode": "chat", "assistant_id": coder, "title": "Fix the bug", "prompt": "Do it." });
+    let a = call(&engine, "dispatch", args.clone()).await;
+    assert!(a.ok, "{}", a.text);
+    assert_eq!(a.data["earlier"], json!(false));
+    // The same call again in the same batch, worded afresh: nothing new.
+    let b = call(
+        &engine,
+        "dispatch",
+        json!({ "mode": "chat", "assistant_id": coder, "title": "fix  the BUG", "prompt": "Worded afresh." }),
+    )
+    .await;
+    assert_eq!(b.data["earlier"], json!(true), "{}", b.text);
+    assert_eq!(b.data["dispatch_id"], a.data["dispatch_id"]);
+    // A delivery that re-delivers the first one: the same.
+    let (_, redelivery) = owner_turn(&engine, "pa-l1").await;
+    engine
+        .set_ledger_scope_for_test(vec![redelivery, first_batch])
+        .await;
+    let c = call(&engine, "dispatch", args.clone()).await;
+    assert_eq!(c.data["earlier"], json!(true), "{}", c.text);
+    assert_eq!(all_dispatches(&engine).await.len(), 1);
+    // A delivery of its own: a dispatch of its own.
+    owner_turn(&engine, "pa-l1").await;
+    let d = call(&engine, "dispatch", args).await;
+    assert_eq!(d.data["earlier"], json!(false), "{}", d.text);
+    assert_eq!(all_dispatches(&engine).await.len(), 2);
+}
+
+#[tokio::test]
+async fn a_message_resent_twice_still_finds_what_its_first_turn_dispatched() {
+    let (engine, _tmp) = configured().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let seg = open_segment(&engine).await;
+    let args = json!({ "mode": "chat", "assistant_id": coder, "title": "Fix it", "prompt": "Do it." });
+    // A: dispatches, then is interrupted.
+    let (_, a) = owner_turn(&engine, "pa-r").await;
+    let first = call(&engine, "dispatch", args.clone()).await;
+    assert_eq!(first.data["earlier"], json!(false), "{}", first.text);
+    // B re-delivers A and finds the dispatch, making none of its own.
+    let b = svc::create_batch(
+        &engine.db.conn,
+        seg,
+        BatchKind::Delivery,
+        Some(json!({ "ledger_from": engine.ledger_ancestry_for_test(&[a]).await })),
+    )
+    .await
+    .unwrap()
+    .id;
+    // C re-delivers B only — and still inherits A.
+    let scope_c = engine.ledger_ancestry_for_test(&[b]).await;
+    assert_eq!(scope_c, {
+        let mut v = vec![a, b];
+        v.sort_unstable();
+        v
+    });
+    let c = svc::create_batch(&engine.db.conn, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap()
+        .id;
+    engine
+        .begin_turn_for_test("pa-r", seg, c, BatchKind::Delivery, false, false)
+        .await;
+    let mut scope = vec![c];
+    scope.extend(scope_c);
+    engine.set_ledger_scope_for_test(scope).await;
+    let again = call(&engine, "dispatch", args).await;
+    assert_eq!(again.data["earlier"], json!(true), "{}", again.text);
+    assert_eq!(again.data["dispatch_id"], first.data["dispatch_id"]);
+    assert_eq!(all_dispatches(&engine).await.len(), 1);
+}
+
+/// A delivery records what started it, and that is all it does.
+#[tokio::test]
+async fn a_delivery_records_its_trigger() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let id = session_dispatch(&engine, DispatchState::Running, "conn-s1").await;
+    engine.open_round("conn-s1", id).await;
+    engine.feed_for_test("conn-s1", 1, turn_complete("end_turn")).await;
+    let (mut rx, _state) = live_connection(&engine, seg, "pa-s").await;
+    engine.pump().await;
+    let (prompt, _token) = take_prompt(&mut rx);
+    assert!(!prompt.contains("unattended"), "{prompt}");
+    let batch = svc::running_batches(&engine.db.conn).await.unwrap().remove(0);
+    assert_eq!(batch.trigger, Some(BatchTrigger::Event));
+}
+
+/// A follow-up into a conversation goes out in three marks: claimed with
+/// its operation, marked attempted right before the request is written,
+/// committed by the executor's own answer — straight through the receipt,
+/// not the bus (⑰). It carries its id as the message id and in an
+/// operation frame.
+#[tokio::test]
+async fn a_follow_up_goes_out_in_three_marks() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-1", DispatchState::Completed).await;
+    owner_turn(&engine, "pa-1").await;
+    let out = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "and the tests" })).await;
+    assert!(out.ok, "{}", out.text);
+    let d = dispatch_state(&engine, id).await;
+    assert_eq!(d.state, DispatchState::Running);
+    let entry = round_op(&engine, id).await;
+    let op_id = entry.op_id.clone().unwrap();
+    assert_eq!(entry.state, ActionState::Prepared);
+    assert!(entry.attempted_at.is_none());
+    let (text, suffix, message_id, receipt) = take_followup(&mut rx);
+    assert_eq!(text, "and the tests");
+    assert_eq!(message_id.as_deref(), Some(op_id.as_str()));
+    assert_eq!(receipt.op_id, op_id);
+    assert_eq!(crate::acp::agent_mentions::operation_ids_in(&suffix), vec![op_id.clone()]);
+    assert_eq!(
+        crate::acp::agent_mentions::strip_internal_frames(&suffix).trim(),
+        "",
+        "the frame is stripped from every display"
+    );
+    receipt.attempted().await.expect("written");
+    assert!(op(&engine, &op_id).await.attempted_at.is_some());
+    receipt.received(ReceiptVia::PromptResponse).await;
+    let done = op(&engine, &op_id).await;
+    assert_eq!(done.state, ActionState::Committed);
+    assert!(done.observed.unwrap().contains("prompt_response"));
+}
+
+/// ⑧ Written prepared, cut off before the claim: after a restart the
+/// re-delivered call sends it, once.
+#[tokio::test]
+async fn a_follow_up_cut_off_before_its_claim_is_sent_once_after_a_restart() {
+    let (engine, tmp) = configured().await;
+    let (id, _rx, _st, conversation) =
+        live_session_dispatch(&engine, &tmp, "x-8", DispatchState::Completed).await;
+    let (_, batch) = owner_turn(&engine, "pa-8").await;
+    // Only the intent made it to disk.
+    let key = super::ledger::followup_key(id, None);
+    let op_id = super::ledger::fresh_op_id();
+    svc::begin_op(
+        &engine.db.conn,
+        svc::NewOp {
+            slot: svc::LedgerSlot::in_batch(batch, key, op_id.clone()),
+            kind: "followup",
+            payload: json!({ "dispatch_id": id, "message": "go on" }),
+            target: None,
+            notice_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    let again = restarted(&engine, &tmp).await;
+    assert_eq!(op(&again, &op_id).await.state, ActionState::NotExecuted);
+    assert_eq!(dispatch_state(&again, id).await.state, DispatchState::Completed);
+    // The interrupted batch is delivered again: the call sends it now.
+    let repo = tmp.path().join("repo-x-8");
+    // The dispatch still names its connection, live again in the new process.
+    let (mut rx, _st) = dispatch_connection(&again, "x-8", &repo, conversation).await;
+    let (_, redelivery) = owner_turn(&again, "pa-8").await;
+    again.set_ledger_scope_for_test(vec![redelivery, batch]).await;
+    let out = call(&again, "dispatch_followup", json!({ "dispatch_id": id, "message": "go on" })).await;
+    assert!(out.ok, "{}", out.text);
+    let (text, _, _, _) = take_followup(&mut rx);
+    assert_eq!(text, "go on");
+    assert!(no_prompt(&mut rx), "sent once");
+}
+
+/// ⑨ ⑫(acceptance) Claimed (running) but never attempted when codeg died:
+/// not sent — the round is put back as it was, the message stays in the
+/// ledger, the dispatch does not read as running or interrupted.
+#[tokio::test]
+async fn a_follow_up_claimed_but_never_attempted_puts_its_round_back() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-9", DispatchState::Completed).await;
+    owner_turn(&engine, "pa-9").await;
+    let out = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "deeper" })).await;
+    assert!(out.ok, "{}", out.text);
+    let op_id = round_op(&engine, id).await.op_id.unwrap();
+    let _ = take_followup(&mut rx); // queued to the connection, never attempted
+    let again = restarted(&engine, &tmp).await;
+    let entry = op(&again, &op_id).await;
+    assert_eq!(entry.state, ActionState::NotExecuted);
+    assert!(entry.payload.unwrap().contains("deeper"), "the message is kept");
+    let d = dispatch_state(&again, id).await;
+    assert_eq!(d.state, DispatchState::Completed, "back as it was");
+    assert_eq!(d.round_op_id, None);
+    assert_eq!(d.connection_id, None);
+    // Not reported as an interrupted round either.
+    let events = svc::pending_events(&again.db.conn).await.unwrap();
+    assert!(
+        !events.iter().any(|e| e.summary.contains("interrupted")),
+        "{:?}",
+        events.iter().map(|e| &e.summary).collect::<Vec<_>>()
+    );
+}
+
+/// ⑩ ⑪ ⑯ Attempted, never confirmed, no record of the agent's to ask:
+/// unknown — never sent again on its own, never taken as sent; a card for
+/// the owner, a word for the agent. A later claim of the round changes
+/// nothing about it.
+#[tokio::test]
+async fn an_attempted_unconfirmed_follow_up_is_unknown_after_a_restart() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-10", DispatchState::Completed).await;
+    let (_, batch) = owner_turn(&engine, "pa-10").await;
+    let out = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "deeper" })).await;
+    assert!(out.ok, "{}", out.text);
+    let op_id = round_op(&engine, id).await.op_id.unwrap();
+    let (_, _, _, receipt) = take_followup(&mut rx);
+    receipt.attempted().await.unwrap();
+    // ⑯: a later round took the row meanwhile.
+    svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite {
+            round_op_id: Some(Some("pa-later".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let again = restarted(&engine, &tmp).await;
+    let entry = op(&again, &op_id).await;
+    assert_eq!(entry.state, ActionState::Unknown);
+    let d = dispatch_state(&again, id).await;
+    assert_eq!(d.round_op_id.as_deref(), Some("pa-later"), "the later round is left alone");
+    let cards = notice_rows(&again).await;
+    assert_eq!(cards.len(), 1);
+    let card = svc::get_notice(&again.db.conn, notice_id_of(&cards[0])).await.unwrap().unwrap();
+    assert_eq!(card.kind, NoticeKind::Uncertain);
+    assert_eq!(card.state, NoticeState::Open);
+    assert_eq!(entry.notice_id, Some(card.id));
+    assert_eq!(data_of(&cards[0])["display"]["message"], "deeper");
+    let told = svc::pending_events(&again.db.conn).await.unwrap();
+    assert!(told.iter().any(|e| e.kind == "ledger" && !e.wake && e.summary.contains("cannot tell")));
+    // The re-delivered call does not send it again.
+    let (_, redelivery) = owner_turn(&again, "pa-10").await;
+    again.set_ledger_scope_for_test(vec![redelivery, batch]).await;
+    let out = call(&again, "dispatch_followup", json!({ "dispatch_id": id, "message": "deeper" })).await;
+    assert!(out.ok, "{}", out.text);
+    assert!(out.text.contains("cannot tell"), "{}", out.text);
+    // [Do it again] sends it — under the card's own operation.
+    let repo = tmp.path().join("repo-x-10");
+    let conversation = d.conversation_id.unwrap();
+    svc::update_dispatch(
+        &again.db.conn,
+        id,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Interrupted),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (mut rx2, _st2) = dispatch_connection(&again, "x-10b", &repo, conversation).await;
+    let row = again.act_on_notice(card.id, "accept").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "acting");
+    let (text, _, _, receipt) = take_followup(&mut rx2);
+    assert_eq!(text, "deeper");
+    assert_eq!(receipt.op_id, super::ledger::card_op_id(card.id, 1));
+    receipt.attempted().await.unwrap();
+    receipt.received(ReceiptVia::PromptResponse).await;
+    let card = svc::get_notice(&again.db.conn, card.id).await.unwrap().unwrap();
+    assert_eq!(card.state, NoticeState::Acted);
+}
+
+/// ⑪ ⑫ The agent's OWN record names the operation: it arrived, though the
+/// parsers strip the frame from every display. ⑬ codeg's own copy of a
+/// prompt proves nothing.
+#[tokio::test]
+async fn the_agents_own_record_proves_a_send_and_codegs_own_copy_does_not() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, _st, conversation) =
+        live_session_dispatch(&engine, &tmp, "x-11", DispatchState::Completed).await;
+    owner_turn(&engine, "pa-11").await;
+    let out = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "deeper" })).await;
+    assert!(out.ok, "{}", out.text);
+    let op_id = round_op(&engine, id).await.op_id.unwrap();
+    let (_, suffix, _, receipt) = take_followup(&mut rx);
+    receipt.attempted().await.unwrap();
+    // Claude Code wrote the prompt, frame and all, into its own session
+    // file (under a config dir of the test's own, never the real home).
+    let claude = tmp.path().join("claude-home");
+    let project = claude.join("projects").join("-repo");
+    std::fs::create_dir_all(&project).unwrap();
+    let session = "0b5e2f4a-1111-4222-8333-444455556666";
+    let line = json!({
+        "type": "user",
+        "message": { "role": "user", "content": [{ "type": "text", "text": format!("deeper{suffix}") }] }
+    });
+    std::fs::write(project.join(format!("{session}.jsonl")), format!("{line}\n")).unwrap();
+    crate::db::service::conversation_service::bind_external_id(&engine.db.conn, conversation, session, &[])
+        .await
+        .unwrap();
+    crate::db::service::agent_setting_service::ensure_defaults(
+        &engine.db.conn,
+        &[crate::db::service::agent_setting_service::AgentDefaultInput {
+            agent_type: AgentType::ClaudeCode,
+            registry_id: "claude-code".into(),
+            default_sort_order: 0,
+        }],
+    )
+    .await
+    .unwrap();
+    crate::db::service::agent_setting_service::update(
+        &engine.db.conn,
+        AgentType::ClaudeCode,
+        crate::db::service::agent_setting_service::AgentSettingsUpdate {
+            enabled: true,
+            env_json: Some(json!({ "CLAUDE_CONFIG_DIR": claude }).to_string()),
+            model_provider_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    let again = restarted(&engine, &tmp).await;
+    let entry = op(&again, &op_id).await;
+    assert_eq!(entry.state, ActionState::Committed, "{:?}", entry.detail);
+    assert!(entry.observed.unwrap().contains("own_record"));
+    assert!(notice_rows(&again).await.is_empty(), "nothing to ask the owner");
+    // codeg's own transcript of a custom agent answers nothing.
+    let env = crate::db::service::agent_setting_service::load_agent_env(&again.db.conn, AgentType::ZCode).await;
+    assert_eq!(
+        crate::parsers::build_agent_parser(AgentType::ZCode, &env).own_record_contains(session, &op_id),
+        None
+    );
+}
+
+/// ⑭ The owner writes in the conversation while the agent's follow-up is on
+/// its way: taking over wins. Not yet attempted: not sent at all — the
+/// connection is refused it. Already going out: unknown, and the owner
+/// hears; the executor's answer later settles it as sent.
+#[tokio::test]
+async fn the_owner_taking_over_wins_over_a_follow_up_on_its_way() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, _st, conversation) =
+        live_session_dispatch(&engine, &tmp, "x-14", DispatchState::Completed).await;
+    owner_turn(&engine, "pa-14").await;
+    call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "one" })).await;
+    let op_id = round_op(&engine, id).await.op_id.unwrap();
+    let (_, _, _, receipt) = take_followup(&mut rx);
+    engine.handover("x-14", Some(conversation)).await;
+    assert_eq!(op(&engine, &op_id).await.state, ActionState::NotExecuted);
+    assert!(receipt.attempted().await.is_err(), "the request is never written");
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::HandedOver);
+
+    // Already going out.
+    let (id2, mut rx2, _st2, conversation2) =
+        live_session_dispatch(&engine, &tmp, "x-14b", DispatchState::Completed).await;
+    call(&engine, "dispatch_followup", json!({ "dispatch_id": id2, "message": "two" })).await;
+    let op2 = round_op(&engine, id2).await.op_id.unwrap();
+    let (_, _, _, receipt2) = take_followup(&mut rx2);
+    receipt2.attempted().await.unwrap();
+    engine.handover("x-14b", Some(conversation2)).await;
+    assert_eq!(op(&engine, &op2).await.state, ActionState::Unknown);
+    let card = notice_rows(&engine).await.pop().expect("the owner hears");
+    // The executor answers after all: sent, and the card asks nothing more.
+    receipt2.received(ReceiptVia::PromptResponse).await;
+    assert_eq!(op(&engine, &op2).await.state, ActionState::Committed);
+    let notice = svc::get_notice(&engine.db.conn, notice_id_of(&card)).await.unwrap().unwrap();
+    assert_eq!(notice.state, NoticeState::Expired);
+}
+
+/// ⑮ Output of the previous turn landing while this send waits proves
+/// nothing: the connection goes away, the send is not taken as sent.
+#[tokio::test]
+async fn late_output_never_confirms_a_send() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, st, _) = live_session_dispatch(&engine, &tmp, "x-15", DispatchState::Completed).await;
+    owner_turn(&engine, "pa-15").await;
+    call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "next" })).await;
+    let op_id = round_op(&engine, id).await.op_id.unwrap();
+    let (_, _, _, receipt) = take_followup(&mut rx);
+    receipt.attempted().await.unwrap();
+    // A straggler of the turn before, text and tool call alike.
+    emit(&engine, &st, "x-15", text("late words"), true).await;
+    emit(&engine, &st, "x-15", tool("late-call", "Read"), true).await;
+    assert_eq!(op(&engine, &op_id).await.state, ActionState::Prepared);
+    // Then the connection is gone.
+    let _ = engine.manager.disconnect("x-15").await;
+    engine.reconcile_dispatches().await;
+    let entry = op(&engine, &op_id).await;
+    assert_eq!(entry.state, ActionState::Unknown);
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Failed);
+}
+
+/// ⑳ A follow-up refused before anything went out is not executed: the same
+/// call in the same batch sends it once things allow — one entry, rearmed.
+#[tokio::test]
+async fn a_follow_up_that_provably_did_nothing_can_be_made_again() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, st, _) = live_session_dispatch(&engine, &tmp, "x-20", DispatchState::Completed).await;
+    let (_, batch) = owner_turn(&engine, "pa-20").await;
+    st.write().await.turn_in_flight = true;
+    let busy = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "again" })).await;
+    assert!(!busy.ok, "{}", busy.text);
+    let key = super::ledger::followup_key(id, None);
+    let entries = svc::ledger_entries(&engine.db.conn, &[batch], &key).await.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].state, ActionState::NotExecuted);
+    st.write().await.turn_in_flight = false;
+    let sent = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "again" })).await;
+    assert!(sent.ok, "{}", sent.text);
+    let (text, _, _, receipt) = take_followup(&mut rx);
+    assert_eq!(text, "again");
+    // The same entry runs again, under a new operation id: a send of the old
+    // one still on its way would find nothing to mark.
+    let now = svc::ledger_entries(&engine.db.conn, &[batch], &key).await.unwrap();
+    assert_eq!(now.len(), 1);
+    assert_eq!(now[0].id, entries[0].id);
+    assert_eq!(now[0].op_id.as_deref(), Some(receipt.op_id.as_str()));
+    let old = entries[0].op_id.clone().unwrap();
+    assert_ne!(receipt.op_id, old);
+    assert!(svc::get_op(&engine.db.conn, &old).await.unwrap().is_none());
+    assert!(!svc::op_attempted(&engine.db.conn, &old).await.unwrap());
+}
+
+/// A follow-up waiting for a slot keeps its message in the ledger: claimed
+/// off the queue and cut off before it went out, it goes back in the queue,
+/// still its operation's.
+#[tokio::test]
+async fn a_queued_follow_up_is_never_lost_to_its_claim() {
+    let (engine, tmp) = configured().await;
+    let settings = PersonalAgentSettings {
+        dispatch_concurrency: 1,
+        ..Default::default()
+    };
+    engine
+        .save(PersonalAgentDraft {
+            settings: Some(settings),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (id, mut rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-q", DispatchState::Completed).await;
+    let busy = session_dispatch(&engine, DispatchState::Running, "x-q-busy").await;
+    owner_turn(&engine, "pa-q").await;
+    let out = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "queued words" })).await;
+    assert!(out.text.contains("slots are busy"), "{}", out.text);
+    let entry = round_op(&engine, id).await;
+    let op_id = entry.op_id.clone().unwrap();
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Queued);
+    // The slot frees: claimed off the queue and handed to the connection —
+    // then codeg dies before it was attempted.
+    svc::update_dispatch(
+        &engine.db.conn,
+        busy,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Completed),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    engine.start_queued().await;
+    let (text, _, _, receipt) = take_followup(&mut rx);
+    assert_eq!(text, "queued words");
+    assert_eq!(receipt.op_id, op_id);
+    let d = dispatch_state(&engine, id).await;
+    assert_eq!(d.state, DispatchState::Running);
+    assert_eq!(d.followup, None);
+    let again = restarted(&engine, &tmp).await;
+    let d = dispatch_state(&again, id).await;
+    assert_eq!(d.state, DispatchState::Queued, "back in the queue");
+    assert_eq!(d.followup.as_deref(), Some("queued words"));
+    assert_eq!(d.round_op_id.as_deref(), Some(op_id.as_str()));
+    assert_eq!(op(&again, &op_id).await.state, ActionState::Prepared);
+}
+
+/// ⑱ ⑲ A task follow-up is proven by the board's own claim record alone:
+/// found, it took effect; not found, it did nothing — even when the task
+/// moved, because someone else moved it.
+#[tokio::test]
+async fn a_task_follow_up_is_settled_by_the_claim_record() {
+    use crate::db::entities::work_task::{self as work_task, WorkTaskStatus};
+    use crate::db::service::work_task_service;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let (engine, tmp) = configured().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let folder = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("board").to_string_lossy()).await;
+    let task = work_task_service::create(
+        &engine.db.conn,
+        crate::models::WorkTaskDraft {
+            folder_id: folder,
+            title: "Fix".into(),
+            config: json!({ "display_text": "fix", "prompt_blocks": [{ "type": "text", "text": "fix" }] }),
+        },
+    )
+    .await
+    .unwrap();
+    let to_review = || async {
+        work_task::Entity::update_many()
+            .col_expr(work_task::Column::Status, sea_orm::sea_query::Expr::value("review"))
+            .filter(work_task::Column::Id.eq(task.id))
+            .exec(&engine.db.conn)
+            .await
+            .unwrap();
+    };
+    to_review().await;
+    let d = svc::create_dispatch(
+        &engine.db.conn,
+        NewDispatch {
+            mode: DispatchMode::Task,
+            executor_assistant_id: coder,
+            executor_snapshot_json: "{}".into(),
+            folder_id: Some(folder),
+            deliverable: Some("change".into()),
+            title: "Fix".into(),
+            prompt: "fix".into(),
+            origin_batch_id: None,
+            on_done: None,
+        },
+    )
+    .await
+    .unwrap();
+    svc::update_dispatch(
+        &engine.db.conn,
+        d.id,
+        None,
+        DispatchWrite {
+            work_task_id: Some(task.id),
+            state: Some(DispatchState::Review),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let begin = |op_id: String| {
+        let conn = engine.db.conn.clone();
+        async move {
+            svc::begin_op(
+                &conn,
+                svc::NewOp {
+                    slot: svc::LedgerSlot::outside(op_id),
+                    kind: "followup",
+                    payload: json!({ "dispatch_id": d.id, "message": "revise", "intent": "revise" }),
+                    target: None,
+                    notice_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+    };
+    // ⑱ The agent's claim committed with its op in the user_action.
+    let mine = super::ledger::fresh_op_id();
+    begin(mine.clone()).await;
+    work_task_service::claim_for_run_with_action(
+        &engine.db.conn,
+        task.id,
+        WorkTaskStatus::Review,
+        "user",
+        Some(json!({ "action": "return", "intent": "revise", "feedback": "revise", "op_id": mine })),
+        false,
+    )
+    .await
+    .unwrap()
+    .expect("claimed");
+    let entry = op(&engine, &mine).await;
+    assert_eq!(engine.resolve_op(&entry).await, super::ledger::OpOutcome::Committed);
+    assert!(op(&engine, &mine).await.observed.unwrap().contains("user_action"));
+    // ⑲ The owner returned it first, by hand: the agent's has no record.
+    to_review().await;
+    let theirs = super::ledger::fresh_op_id();
+    begin(theirs.clone()).await;
+    work_task_service::claim_for_run_with_action(
+        &engine.db.conn,
+        task.id,
+        WorkTaskStatus::Review,
+        "user",
+        Some(json!({ "action": "return", "intent": "revise", "feedback": "mine, by hand" })),
+        false,
+    )
+    .await
+    .unwrap()
+    .expect("the owner's claim");
+    let entry = op(&engine, &theirs).await;
+    assert!(matches!(
+        engine.resolve_op(&entry).await,
+        super::ledger::OpOutcome::NotExecuted(_)
+    ));
+    // ...and the claim itself loses for whoever comes second.
+    let lost = work_task_service::claim_for_run_with_action(
+        &engine.db.conn,
+        task.id,
+        WorkTaskStatus::Review,
+        "user",
+        None,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(lost.is_none());
+}
+
+/// A proposal card runs exactly what it shows, in one transaction with the
+/// card; [Not now] runs nothing; the first answer wins (㉒), and the agent
+/// hears how it went.
+#[tokio::test]
+async fn a_proposal_card_runs_exactly_what_it_shows() {
+    let (engine, _tmp) = configured().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let valid = engine
+        .validate_dispatch(&DispatchRequest {
+            mode: DispatchMode::Chat,
+            assistant_id: coder,
+            title: "Research X".into(),
+            prompt: "Find out X.".into(),
+            project_id: None,
+            report: false,
+            on_done: None,
+        })
+        .await
+        .unwrap();
+    let card = engine.propose_dispatch(&valid, None, None).await.unwrap();
+    let rows = notice_rows(&engine).await;
+    assert_eq!(data_of(&rows[0])["display"]["prompt"], "Find out X.");
+    // ㉒ Two windows click at once: one runs it.
+    let (a, b) = tokio::join!(engine.act_on_notice(card, "accept"), engine.act_on_notice(card, "accept"));
+    assert!(a.is_ok() != b.is_ok(), "{a:?} {b:?}");
+    let won = a.or(b).unwrap();
+    assert_eq!(won.data.as_ref().unwrap()["state"], "acted");
+    let made = all_dispatches(&engine).await;
+    assert_eq!(made.len(), 1);
+    assert_eq!(made[0].prompt, "Find out X.");
+    assert_eq!(won.data.as_ref().unwrap()["result"]["dispatch_id"], json!(made[0].id));
+    let entry = op(&engine, &super::ledger::card_op_id(card, 1)).await;
+    assert_eq!(entry.state, ActionState::Committed);
+    assert_eq!(entry.notice_id, Some(card));
+    assert_eq!(
+        svc::get_notice(&engine.db.conn, card).await.unwrap().unwrap().state,
+        NoticeState::Acted
+    );
+    assert!(engine.act_on_notice(card, "dismiss").await.is_err());
+    let told = svc::pending_events(&engine.db.conn).await.unwrap();
+    assert!(told.iter().any(|e| e.kind == "proposal" && !e.wake && e.summary.contains("approved")));
+
+    let other = engine.propose_dispatch(&valid, None, None).await.unwrap();
+    let row = engine.act_on_notice(other, "dismiss").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "dismissed");
+    assert_eq!(all_dispatches(&engine).await.len(), 1);
+    assert!(engine.act_on_notice(other, "accept").await.is_err());
+}
+
+/// ㉑ A card clicked and cut off before what it runs is done never reads
+/// as done: a restart puts it back or settles it by its entry.
+#[tokio::test]
+async fn a_card_cut_off_mid_run_is_settled_by_its_entry_after_a_restart() {
+    let (engine, tmp) = configured().await;
+    // Taken (acting), nothing ran yet.
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let valid = engine
+        .validate_dispatch(&DispatchRequest {
+            mode: DispatchMode::Chat,
+            assistant_id: coder,
+            title: "T".into(),
+            prompt: "P".into(),
+            project_id: None,
+            report: false,
+            on_done: None,
+        })
+        .await
+        .unwrap();
+    let taken = engine.propose_dispatch(&valid, None, None).await.unwrap();
+    assert!(svc::move_notice(&engine.db.conn, taken, &[NoticeState::Open], NoticeState::Acting)
+        .await
+        .unwrap());
+    // A follow-up card whose send was claimed, never attempted.
+    let (id, mut rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-21", DispatchState::Completed).await;
+    let follow = engine
+        .propose_followup(id, "look again".into(), None, None)
+        .await
+        .unwrap();
+    let row = engine.act_on_notice(follow, "accept").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "acting");
+    let _ = take_followup(&mut rx);
+    let again = restarted(&engine, &tmp).await;
+    let taken = svc::get_notice(&again.db.conn, taken).await.unwrap().unwrap();
+    assert_eq!(taken.state, NoticeState::Open, "nothing ran: it can be clicked again");
+    assert!(all_dispatches(&again).await.iter().all(|d| d.id == id));
+    let follow = svc::get_notice(&again.db.conn, follow).await.unwrap().unwrap();
+    assert_eq!(follow.state, NoticeState::Open);
+    let row = svc::get_row(&again.db.conn, follow.timeline_id.unwrap()).await.unwrap().unwrap();
+    assert_eq!(data_of(&row)["state"], "open");
+    assert_eq!(dispatch_state(&again, id).await.state, DispatchState::Completed);
+}
+
+/// Review: the owner takes over with a moment-old view of the dispatch. The
+/// send withdrawn is the one holding the round once it is handed over — not
+/// whatever the stale view named.
+#[tokio::test]
+async fn taking_over_withdraws_the_send_that_holds_the_round_now() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-h", DispatchState::Completed).await;
+    // Read before the follow-up claims the round.
+    let stale = dispatch_state(&engine, id).await;
+    owner_turn(&engine, "pa-h").await;
+    call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "B" })).await;
+    let b = round_op(&engine, id).await.op_id.unwrap();
+    let (_, _, _, receipt) = take_followup(&mut rx);
+    engine.hand_over(&stale).await;
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::HandedOver);
+    assert_eq!(op(&engine, &b).await.state, ActionState::NotExecuted);
+    assert!(receipt.attempted().await.is_err(), "B is never written");
+}
+
+/// Review: the same follow-up made again in the same batch, worded anew,
+/// runs under its entry with the NEW words — so what a restart puts back in
+/// the queue is the call that ran, not the one that did nothing.
+#[tokio::test]
+async fn a_rearmed_follow_up_keeps_the_call_it_runs_now() {
+    let (engine, tmp) = configured().await;
+    engine
+        .save(PersonalAgentDraft {
+            settings: Some(PersonalAgentSettings {
+                dispatch_concurrency: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (id, mut rx, st, _) = live_session_dispatch(&engine, &tmp, "x-r", DispatchState::Completed).await;
+    owner_turn(&engine, "pa-r2").await;
+    // The first try finds the conversation busy: it did nothing.
+    st.write().await.turn_in_flight = true;
+    let first = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "first words" })).await;
+    assert!(!first.ok, "{}", first.text);
+    st.write().await.turn_in_flight = false;
+    // The slots fill up; the second try, worded anew, waits for one.
+    let busy = session_dispatch(&engine, DispatchState::Running, "x-r-busy").await;
+    let second = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "second words" })).await;
+    assert!(second.text.contains("slots are busy"), "{}", second.text);
+    let entry = round_op(&engine, id).await;
+    assert!(entry.payload.as_deref().unwrap().contains("second words"));
+    // Claimed off the queue, then codeg dies before it went out.
+    svc::update_dispatch(
+        &engine.db.conn,
+        busy,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Completed),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    engine.start_queued().await;
+    let (text, _, _, _) = take_followup(&mut rx);
+    assert_eq!(text, "second words");
+    let again = restarted(&engine, &tmp).await;
+    let d = dispatch_state(&again, id).await;
+    assert_eq!(d.state, DispatchState::Queued);
+    assert_eq!(d.followup.as_deref(), Some("second words"), "never the words that did nothing");
+}
+
+/// Review: a confirmation that lands while codeg settles a send as unknown
+/// wins, whichever comes first — no card asks about a send that arrived.
+#[tokio::test]
+async fn a_late_confirmation_beats_an_unknown_verdict() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-l", DispatchState::Completed).await;
+    owner_turn(&engine, "pa-l").await;
+    call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "go" })).await;
+    let op_id = round_op(&engine, id).await.op_id.unwrap();
+    let (_, _, _, receipt) = take_followup(&mut rx);
+    receipt.attempted().await.unwrap();
+    receipt.received(ReceiptVia::PromptResponse).await;
+    // The unknown verdict comes second: it finds the confirmation.
+    assert_eq!(
+        engine.settle_unknown_op(&op_id, "cut off").await,
+        super::ledger::OpOutcome::Committed
+    );
+    // An unknown verdict taken a moment before the confirmation: the card it
+    // raises sees the confirmation and closes at once, telling the agent
+    // nothing.
+    engine
+        .after_op(&op_id, &super::ledger::OpOutcome::Unknown("cut off".into()))
+        .await;
+    let cards = notice_rows(&engine).await;
+    assert!(cards.iter().all(|c| data_of(c)["state"] == "resolved"), "{cards:?}");
+    let told = svc::pending_events(&engine.db.conn).await.unwrap();
+    assert!(!told.iter().any(|e| e.summary.contains("cannot tell")));
+    assert_eq!(op(&engine, &op_id).await.state, ActionState::Committed);
+}
+
+/// An uncertain card whose own send was cut off again: (engine, card id,
+/// dispatch id, conversation, repo, the first engine's directory).
+async fn an_uncertain_card_cut_off_twice(
+    tmp: &tempfile::TempDir,
+) -> (
+    Arc<PersonalAgentEngine>,
+    i32,
+    i32,
+    i32,
+    std::path::PathBuf,
+    tempfile::TempDir,
+) {
+    let (engine, engine_dir) = configured().await;
+    let (id, mut rx, _st, conversation) =
+        live_session_dispatch(&engine, tmp, "x-u", DispatchState::Completed).await;
+    owner_turn(&engine, "pa-u").await;
+    call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "deeper" })).await;
+    let (_, _, _, receipt) = take_followup(&mut rx);
+    receipt.attempted().await.unwrap();
+    let again = restarted(&engine, tmp).await;
+    let card = notice_id_of(&notice_rows(&again).await[0]);
+    // [Send again]: it goes out, and its connection goes away unconfirmed.
+    let repo = tmp.path().join("repo-x-u");
+    let (mut rx2, _st2) = dispatch_connection(&again, "x-u", &repo, conversation).await;
+    again.act_on_notice(card, "accept").await.unwrap();
+    let (_, _, _, receipt2) = take_followup(&mut rx2);
+    receipt2.attempted().await.unwrap();
+    let _ = again.manager.disconnect("x-u").await;
+    again.reconcile_dispatches().await;
+    assert_eq!(
+        svc::get_notice(&again.db.conn, card).await.unwrap().unwrap().state,
+        NoticeState::Unknown
+    );
+    (again, card, id, conversation, repo, engine_dir)
+}
+
+/// Review: cut off a second time, the card can still be sent again…
+#[tokio::test]
+async fn an_uncertain_card_cut_off_again_can_be_sent_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (engine, card, _id, conversation, repo, _dir) = an_uncertain_card_cut_off_twice(&tmp).await;
+    let (mut rx, _st) = dispatch_connection(&engine, "x-u3", &repo, conversation).await;
+    let row = engine.act_on_notice(card, "accept").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "acting");
+    let (text, _, _, receipt) = take_followup(&mut rx);
+    assert_eq!(text, "deeper");
+    assert_eq!(receipt.op_id, super::ledger::card_op_id(card, 2));
+}
+
+/// …or let be.
+#[tokio::test]
+async fn an_uncertain_card_cut_off_again_can_be_let_be() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (engine, card, _id, _conversation, _repo, _dir) = an_uncertain_card_cut_off_twice(&tmp).await;
+    let row = engine.act_on_notice(card, "dismiss").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "dismissed");
 }

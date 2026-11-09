@@ -1681,6 +1681,12 @@ fn resolve_claude_config_dir_from(
 }
 
 impl AgentParser for ClaudeParser {
+    /// Claude Code's own `<session>.jsonl`, read raw.
+    fn own_record_contains(&self, conversation_id: &str, needle: &str) -> Option<bool> {
+        let path = find_session_file_in(&self.base_dir, conversation_id)?;
+        super::file_lines_contain(&path, needle)
+    }
+
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
         let mut conversations = Vec::new();
 

@@ -489,6 +489,17 @@ pub async fn personal_agent_mark_seen_core(
     }
 }
 
+/// The owner's answer on a native card (`accept` / `dismiss`).
+pub async fn personal_agent_notice_act_core(
+    notice_id: i32,
+    action: String,
+) -> Result<TimelineRow, AppCommandError> {
+    engine()?
+        .act_on_notice(notice_id, &action)
+        .await
+        .map_err(refused)
+}
+
 pub async fn personal_agent_answer_question_core(
     question_id: String,
     answer: crate::acp::question::QuestionAnswer,
@@ -685,6 +696,15 @@ pub async fn personal_agent_mark_seen(
     up_to: i32,
 ) -> Result<(), AppCommandError> {
     personal_agent_mark_seen_core(&db, up_to).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_notice_act(
+    notice_id: i32,
+    action: String,
+) -> Result<TimelineRow, AppCommandError> {
+    personal_agent_notice_act_core(notice_id, action).await
 }
 
 #[cfg(feature = "tauri-runtime")]

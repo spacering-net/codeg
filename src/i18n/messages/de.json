@@ -8072,6 +8072,36 @@
       "emptyHint": "Hier erscheinen vergebene Arbeit, Erinnerungen und Fragen an dich.",
       "noneOpen": "Gerade ist nichts offen.",
       "origin": "Zur Ursprungsnachricht"
+    },
+    "notice": {
+      "open": "Vorschlag · wartet auf dich",
+      "acted": "Wie vorgeschlagen erledigt",
+      "dismissed": "Nicht übernommen",
+      "acting": "Läuft …",
+      "unknown": "Unklar, ob es lief",
+      "unknownHint": "codeg wurde mittendrin unterbrochen und kann nicht sagen, ob es gewirkt hat. Es wurde nicht von selbst wiederholt.",
+      "followupOf": "„{title}“ fortsetzen",
+      "intent": {
+        "revise": "Zur Überarbeitung zurück",
+        "continue": "Weitermachen",
+        "question": "Nachfragen",
+        "verify": "Selbst prüfen"
+      },
+      "accept": "So machen",
+      "dismiss": "Nicht jetzt",
+      "again": "Noch einmal ausführen",
+      "failed": "Konnte nicht ausgeführt werden: {error}",
+      "uncertain": {
+        "open": "Unklar, ob das angekommen ist",
+        "hint": "codeg wurde beim Senden dieser Nachfrage unterbrochen und kann nicht sagen, ob der Ausführende sie bekommen hat. Sie wurde nicht erneut gesendet.",
+        "look": "Ansehen",
+        "again": "Erneut senden",
+        "dismiss": "So lassen",
+        "acting": "Wird erneut gesendet …",
+        "acted": "Erneut gesendet",
+        "dismissed": "So belassen",
+        "resolved": "Ist angekommen"
+      }
     }
   }
 }

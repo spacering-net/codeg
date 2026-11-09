@@ -8072,6 +8072,36 @@
       "emptyHint": "O trabalho atribuído, lembretes e perguntas para você aparecem aqui.",
       "noneOpen": "Nada em aberto agora.",
       "origin": "Ir para a mensagem de origem"
+    },
+    "notice": {
+      "open": "Proposta · aguardando você",
+      "acted": "Feito conforme proposto",
+      "dismissed": "Não aceita",
+      "acting": "Em andamento…",
+      "unknown": "Não dá para saber se foi feito",
+      "unknownHint": "O codeg foi interrompido no meio e não consegue saber se teve efeito. Nada foi refeito por conta própria.",
+      "followupOf": "Continuar “{title}”",
+      "intent": {
+        "revise": "Devolver para ajustes",
+        "continue": "Seguir em frente",
+        "question": "Fazer uma pergunta",
+        "verify": "Autoverificação"
+      },
+      "accept": "Fazer assim",
+      "dismiss": "Agora não",
+      "again": "Fazer de novo",
+      "failed": "Não foi possível executar: {error}",
+      "uncertain": {
+        "open": "Não dá para saber se isto chegou",
+        "hint": "O codeg foi interrompido ao enviar este acompanhamento e não consegue saber se o executor o recebeu. Não foi reenviado.",
+        "look": "Ver",
+        "again": "Enviar de novo",
+        "dismiss": "Deixar assim",
+        "acting": "Enviando de novo…",
+        "acted": "Enviado de novo",
+        "dismissed": "Deixado assim",
+        "resolved": "Chegou, sim"
+      }
     }
   }
 }

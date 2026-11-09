@@ -5,8 +5,9 @@
 //! what was dispatched:
 //!
 //! - **task**: a kanban task in the target project, run by the work-task
-//!   engine in its own worktree. Never auto-merged
-//!   (`work_task.personal_agent_dispatch_id`); the owner reviews it.
+//!   engine in its own worktree. It lands as the board's settings say:
+//!   merged on its own when the project has auto-merge on, by the owner
+//!   otherwise — like any other task.
 //! - **chat**: a chat-mode conversation in a scratch directory.
 //! - **session**: a conversation in the project's current checkout.
 //!
@@ -28,9 +29,11 @@ use crate::db::entities::personal_agent_dispatch::{self as dispatch_entity, Disp
 use crate::db::entities::personal_agent_item::{ItemKind, ItemStatus, WaitsFor};
 use crate::db::entities::personal_agent_timeline::TimelineKind;
 use crate::db::entities::work_task::WorkTaskStatus;
+use super::ledger::{self, FollowupCall, OpOutcome, SendTarget};
+use crate::db::entities::personal_agent_action::{self as action_entity, ActionState};
 use crate::db::service::personal_agent_service as svc;
 use crate::db::service::personal_agent_service::{
-    DispatchWrite, ItemWrite, NewDispatch, NewEvent, NewRow,
+    CardSettle, DispatchWrite, ItemWrite, LedgerSlot, Ledgered, NewDispatch, NewEvent, NewOp, NewRow,
 };
 use crate::models::personal_agent::{DispatchExecutorSnapshot, PersonalAgentChange};
 use crate::models::{AgentType, AssistantRunSnapshot, FollowUpIntent, WorkTaskConfig, WorkTaskDraft};
@@ -42,8 +45,8 @@ pub const MAX_TITLE_CHARS: usize = 120;
 /// Longest prompt or follow-up message.
 pub const MAX_PROMPT_CHARS: usize = 20_000;
 
-/// A dispatch as the tool asked for it.
-#[derive(Debug, Clone)]
+/// A dispatch as the tool asked for it — and as a proposal card keeps it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DispatchRequest {
     pub mode: DispatchMode,
     pub assistant_id: i32,
@@ -52,6 +55,69 @@ pub struct DispatchRequest {
     pub project_id: Option<i32>,
     pub report: bool,
     pub on_done: Option<String>,
+}
+
+/// A dispatch checked against the roster and the projects, ready to record.
+#[derive(Debug, Clone)]
+pub struct ValidDispatch {
+    pub mode: DispatchMode,
+    pub snapshot: DispatchExecutorSnapshot,
+    pub folder_id: Option<i32>,
+    pub title: String,
+    pub prompt: String,
+    pub report: bool,
+    pub on_done: Option<String>,
+}
+
+impl ValidDispatch {
+    /// The request it was checked from, as a proposal card keeps it.
+    pub fn to_request(&self) -> DispatchRequest {
+        DispatchRequest {
+            mode: self.mode,
+            assistant_id: self.snapshot.assistant_id,
+            title: self.title.clone(),
+            prompt: self.prompt.clone(),
+            project_id: self.folder_id,
+            report: self.report,
+            on_done: self.on_done.clone(),
+        }
+    }
+}
+
+/// How a dispatch is recorded in the ledger (`ledger`). Nothing here
+/// decides whether it may run — every one does.
+#[derive(Debug, Clone)]
+pub enum DispatchAuth {
+    /// A delivery's tool call: one per batch and key, across the batches it
+    /// re-delivers (`scope`).
+    Ledgered { batch_id: i32, scope: Vec<i32> },
+    /// The owner said so on card `notice_id`: the card settles in the same
+    /// transaction.
+    Card { notice_id: i32 },
+    /// Outside any delivery and any card (a call that came late, tests).
+    Direct,
+}
+
+/// What recording a dispatch came to.
+#[derive(Debug, Clone)]
+pub struct DispatchMade {
+    pub dispatch: dispatch_entity::Model,
+    /// The same call was made before (a re-delivered batch): this is the
+    /// dispatch it made then, and nothing new runs.
+    pub earlier: bool,
+}
+
+/// How a follow-up is recorded in the ledger. Like [`DispatchAuth`], it
+/// never decides whether the follow-up may run.
+#[derive(Debug, Clone)]
+pub enum FollowupAuth {
+    /// A delivery's tool call: one per batch and key, across the batches it
+    /// re-delivers (`scope`).
+    Ledgered { batch_id: i32, scope: Vec<i32> },
+    /// The owner said so on card `notice_id`; `op_id` is that run's.
+    Card { notice_id: i32, op_id: String },
+    /// Outside any delivery and any card.
+    Direct,
 }
 
 /// The states in which a dispatch still holds or waits for its executor.
@@ -124,6 +190,28 @@ impl RoundEnd {
     }
 }
 
+/// What the ledger already holds for a follow-up a delivery makes again.
+enum Earlier {
+    /// Nothing: run it.
+    None,
+    /// Settled one way or another: this is the answer, and nothing runs.
+    Settled(String),
+    /// This batch's own entry certainly never ran: it runs now, again.
+    Rearmed(Box<action_entity::Model>),
+}
+
+/// A board claim that lost: the task moved meanwhile (the owner returned or
+/// retried it themselves, say) and this follow-up did nothing.
+fn moved_meanwhile(task_id: i32, e: String) -> String {
+    if e.starts_with("task is not in") {
+        format!(
+            "task #{task_id} changed meanwhile — someone else returned, retried or moved it —              so this follow-up did nothing; check item_read"
+        )
+    } else {
+        e
+    }
+}
+
 fn cut(text: &str, max: usize) -> String {
     let t = text.trim();
     if t.chars().count() <= max {
@@ -174,11 +262,20 @@ impl PersonalAgentEngine {
     // ── dispatch ────────────────────────────────────────────────────────────
 
     /// Validate a dispatch, record it, and set it going. Returns at once: the
-    /// work itself starts in the background.
+    /// work itself starts in the background. Outside the ledger: an agent's
+    /// tool call records through [`Self::record_dispatch`].
     pub async fn dispatch(
         self: &std::sync::Arc<Self>,
         req: DispatchRequest,
     ) -> Result<dispatch_entity::Model, String> {
+        let valid = self.validate_dispatch(&req).await?;
+        Ok(self.record_dispatch(valid, DispatchAuth::Direct).await?.dispatch)
+    }
+
+    /// Check a dispatch against the roster and the projects: the executor is
+    /// an enabled role assistant, the mode and project fit, the texts are in
+    /// bounds. Data checks only — nothing about who asked or when.
+    pub async fn validate_dispatch(&self, req: &DispatchRequest) -> Result<ValidDispatch, String> {
         let title = cut(&req.title, MAX_TITLE_CHARS);
         if title.is_empty() {
             return Err("`title` is required".into());
@@ -242,26 +339,121 @@ impl PersonalAgentEngine {
             .as_deref()
             .map(|s| cut(s, 2_000))
             .filter(|s| !s.is_empty());
-        let row = svc::create_dispatch(
-            &self.db.conn,
-            NewDispatch {
-                mode: req.mode,
-                executor_assistant_id: assistant.id,
-                executor_snapshot_json: serde_json::to_string(&snapshot).map_err(|e| e.to_string())?,
-                folder_id,
-                deliverable: if req.mode == DispatchMode::Task {
-                    Some(if req.report { "report" } else { "change" }.to_string())
-                } else {
-                    None
-                },
-                title: title.clone(),
-                prompt: prompt.clone(),
-                origin_batch_id: self.current_batch().await,
-                on_done: on_done.clone(),
+        Ok(ValidDispatch {
+            mode: req.mode,
+            snapshot,
+            folder_id,
+            title,
+            prompt,
+            report: req.report,
+            on_done,
+        })
+    }
+
+    /// Record a checked dispatch and set it going. A call the ledger already
+    /// holds (a re-delivered batch, a second click) records nothing and gets
+    /// back the dispatch it made before. A card's dispatch settles the card
+    /// in the same transaction.
+    pub async fn record_dispatch(
+        self: &std::sync::Arc<Self>,
+        v: ValidDispatch,
+        auth: DispatchAuth,
+    ) -> Result<DispatchMade, String> {
+        let ValidDispatch {
+            mode,
+            snapshot,
+            folder_id,
+            title,
+            prompt,
+            report,
+            on_done,
+        } = v;
+        let request = DispatchRequest {
+            mode,
+            assistant_id: snapshot.assistant_id,
+            title: title.clone(),
+            prompt: prompt.clone(),
+            project_id: folder_id,
+            report,
+            on_done: on_done.clone(),
+        };
+        let key = ledger::dispatch_key(snapshot.assistant_id, mode, folder_id, &title);
+        // A repeat costs nothing to find before anything is written.
+        if let DispatchAuth::Ledgered { scope, .. } = &auth {
+            let earlier = svc::ledger_entries(&self.db.conn, scope, &key)
+                .await
+                .map_err(|e| e.to_string())?;
+            if let Some(entry) = earlier.iter().find(|e| e.state == ActionState::Committed) {
+                return self.earlier_dispatch(entry).await;
+            }
+        }
+        let origin_batch_id = match &auth {
+            DispatchAuth::Ledgered { batch_id, .. } => Some(*batch_id),
+            DispatchAuth::Card { .. } => None,
+            DispatchAuth::Direct => self.current_batch().await,
+        };
+        let new = NewDispatch {
+            mode,
+            executor_assistant_id: snapshot.assistant_id,
+            executor_snapshot_json: serde_json::to_string(&snapshot).map_err(|e| e.to_string())?,
+            folder_id,
+            deliverable: if mode == DispatchMode::Task {
+                Some(if report { "report" } else { "change" }.to_string())
+            } else {
+                None
             },
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+            title: title.clone(),
+            prompt: prompt.clone(),
+            origin_batch_id,
+            on_done: on_done.clone(),
+        };
+        let payload = serde_json::to_value(&request).ok();
+        let row = match &auth {
+            DispatchAuth::Ledgered { batch_id, .. } => {
+                let slot = LedgerSlot::in_batch(*batch_id, key, ledger::fresh_op_id());
+                match svc::create_dispatch_ledgered(&self.db.conn, new, &slot, payload, None)
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    Ledgered::New(row) => row,
+                    Ledgered::Earlier(earlier) => return self.earlier_dispatch(&earlier).await,
+                }
+            }
+            DispatchAuth::Card { notice_id } => {
+                let notice = svc::get_notice(&self.db.conn, *notice_id)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or("no such card")?;
+                let row_id = notice.timeline_id.ok_or("the card's row is missing")?;
+                let row_data = svc::get_row(&self.db.conn, row_id)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .and_then(|r| r.data)
+                    .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let slot = LedgerSlot::outside(ledger::card_op_id(*notice_id, 1));
+                let card = CardSettle {
+                    notice_id: *notice_id,
+                    row_id,
+                    row_data,
+                };
+                match svc::create_dispatch_ledgered(&self.db.conn, new, &slot, payload, Some(card))
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    Ledgered::New(row) => {
+                        if let Ok(Some(r)) = svc::get_row(&self.db.conn, row_id).await {
+                            self.emit_rows(vec![svc::to_row(r)]);
+                        }
+                        row
+                    }
+                    Ledgered::Earlier(earlier) => return self.earlier_dispatch(&earlier).await,
+                }
+            }
+            DispatchAuth::Direct => svc::create_dispatch(&self.db.conn, new)
+                .await
+                .map_err(|e| e.to_string())?,
+        };
         // The card, then the ledger entry pointing back at it.
         let mut card = NewRow::new(TimelineKind::Dispatch, title.clone());
         card.dispatch_id = Some(row.id);
@@ -294,7 +486,27 @@ impl PersonalAgentEngine {
         tokio::spawn(async move {
             engine.start_dispatch(id).await;
         });
-        Ok(row)
+        Ok(DispatchMade {
+            dispatch: row,
+            earlier: false,
+        })
+    }
+
+    /// The dispatch an earlier, identical call made.
+    async fn earlier_dispatch(&self, entry: &action_entity::Model) -> Result<DispatchMade, String> {
+        let id = entry
+            .ref_id
+            .as_deref()
+            .and_then(|r| r.parse::<i32>().ok())
+            .ok_or("an earlier identical call is on record, but what it made is not")?;
+        let dispatch = svc::get_dispatch(&self.db.conn, id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("dispatch #{id} of an earlier identical call is gone"))?;
+        Ok(DispatchMade {
+            dispatch,
+            earlier: true,
+        })
     }
 
     /// Start a recorded dispatch: a task right away (the board has its own
@@ -417,7 +629,17 @@ impl PersonalAgentEngine {
                 return;
             };
             if let Some(message) = d.followup.clone() {
-                if let Err(e) = self.send_followup(&d, message, &[DispatchState::Queued]).await {
+                let op_id = match self.queued_op(&d, &message).await {
+                    Ok(op_id) => op_id,
+                    Err(e) => {
+                        self.fail_followup_card(d.id, None, &e).await;
+                        self.fail_dispatch(&d, &e).await;
+                        continue;
+                    }
+                };
+                self.set_live(&op_id, true).await;
+                if let Err(e) = self.send_followup(&d, message, &[DispatchState::Queued], &op_id).await {
+                    self.set_live(&op_id, false).await;
                     self.fail_followup_card(d.id, None, &e).await;
                     // Claimed and then not sent: it failed as a round. Not
                     // claimed: it never left the queue.
@@ -427,10 +649,50 @@ impl PersonalAgentEngine {
                         }
                         _ => self.fail_dispatch(&d, &e).await,
                     }
+                    // Its entry settles by what the dispatch came to.
+                    if let Ok(Some(op)) = svc::get_op(&self.db.conn, &op_id).await {
+                        let outcome = self.resolve_op(&op).await;
+                        self.after_op(&op_id, &outcome).await;
+                    }
                 }
             } else if let Err(e) = self.start_conversation_dispatch(&d).await {
                 self.fail_dispatch(&d, &e).await;
             }
+        }
+    }
+
+    /// The ledger operation a queued follow-up is: the one its round was
+    /// queued for, or — for one queued before the ledger kept them — a new
+    /// one, so its send is proven like any other.
+    async fn queued_op(&self, d: &dispatch_entity::Model, message: &str) -> Result<String, String> {
+        if let Some(op_id) = d.round_op_id.as_deref() {
+            if let Ok(Some(op)) = svc::get_op(&self.db.conn, op_id).await {
+                if op.state == ActionState::Prepared {
+                    return Ok(op_id.to_string());
+                }
+            }
+        }
+        let op_id = ledger::fresh_op_id();
+        let call = FollowupCall {
+            dispatch_id: d.id,
+            message: message.to_string(),
+            intent: None,
+        };
+        match svc::begin_op(
+            &self.db.conn,
+            NewOp {
+                slot: LedgerSlot::outside(op_id.clone()),
+                kind: "followup",
+                payload: serde_json::to_value(&call).map_err(|e| e.to_string())?,
+                target: None,
+                notice_id: None,
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        {
+            Ledgered::New(_) => Ok(op_id),
+            Ledgered::Earlier(_) => Err("the queued follow-up's record collided".into()),
         }
     }
 
@@ -690,6 +952,13 @@ impl PersonalAgentEngine {
 
     /// A dispatched conversation's round ended.
     async fn settle_conversation_turn(self: &std::sync::Arc<Self>, id: i32, conn_id: &str, end: RoundEnd) {
+        // The send that claimed this round, read before anything can claim
+        // the next one.
+        let round_op = svc::get_dispatch(&self.db.conn, id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|d| d.round_op_id);
         let excerpt = match self.manager.get_state(conn_id).await {
             Some(state) => state.read().await.last_assistant_text.clone(),
             None => None,
@@ -712,6 +981,9 @@ impl PersonalAgentEngine {
         {
             self.record_progress(&updated, excerpt, error, "turn").await;
         }
+        if let Some(op_id) = round_op {
+            self.settle_ended_round(&op_id).await;
+        }
         // The slot is free: the next queued one may start.
         self.kick_queue();
     }
@@ -719,6 +991,11 @@ impl PersonalAgentEngine {
     /// A dispatched conversation's connection went away mid-turn.
     async fn settle_lost_connection(self: &std::sync::Arc<Self>, id: i32, conn_id: &str) {
         self.state.lock().await.dispatch_conns.remove(conn_id);
+        let round_op = svc::get_dispatch(&self.db.conn, id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|d| d.round_op_id);
         if let Ok(Some(updated)) = svc::update_dispatch(
             &self.db.conn,
             id,
@@ -745,6 +1022,10 @@ impl PersonalAgentEngine {
             },
         )
         .await;
+        // Sent and never confirmed: nothing will confirm it now.
+        if let Some(op_id) = round_op {
+            self.settle_ended_round(&op_id).await;
+        }
         self.kick_queue();
     }
 
@@ -1135,11 +1416,19 @@ impl PersonalAgentEngine {
         let Some(d) = found else {
             return;
         };
+        self.state.lock().await.dispatch_conns.remove(connection_id);
+        self.hand_over(&d).await;
+    }
+
+    /// Hand dispatch `d` over to the owner. `d` may be a moment old: the
+    /// send withdrawn is the one that holds the round once the dispatch is
+    /// handed over — nothing can claim it after that (a claim needs a
+    /// finished or queued dispatch), so that is the last one there is.
+    pub(super) async fn hand_over(&self, d: &dispatch_entity::Model) {
         if d.mode == DispatchMode::Task || d.state == DispatchState::HandedOver {
             return;
         }
-        self.state.lock().await.dispatch_conns.remove(connection_id);
-        if let Ok(Some(updated)) = svc::update_dispatch(
+        let Ok(Some(updated)) = svc::update_dispatch(
             &self.db.conn,
             d.id,
             None,
@@ -1149,19 +1438,59 @@ impl PersonalAgentEngine {
             },
         )
         .await
-        {
-            self.record_progress(&updated, None, None, "handover").await;
+        else {
+            return;
+        };
+        self.record_progress(&updated, None, None, "handover").await;
+        // The owner wrote in it, and that wins: the agent's send that has not
+        // started going out does not go out at all (the connection is refused
+        // it). One already going out cannot be called back — whether it
+        // reached the executor is unknown until the executor's own answer
+        // says so, and the owner hears of it.
+        if let Some(op_id) = updated.round_op_id.as_deref() {
+            let why = "the owner took the conversation over";
+            if svc::op_unattempted_to_not_executed(&self.db.conn, op_id, why)
+                .await
+                .unwrap_or(false)
+            {
+                self.set_live(op_id, false).await;
+                self.after_op(op_id, &OpOutcome::NotExecuted(why.into())).await;
+            } else if let Ok(Some(op)) = svc::get_op(&self.db.conn, op_id).await {
+                if op.state == ActionState::Prepared {
+                    self.set_live(op_id, false).await;
+                    let outcome = self
+                        .settle_unknown_op(op_id, "the owner took the conversation over while it was going out")
+                        .await;
+                    self.after_op(op_id, &outcome).await;
+                }
+            }
         }
     }
 
     // ── follow-ups ──────────────────────────────────────────────────────────
 
-    /// Continue a dispatch. Returns a sentence for the agent.
+    /// Continue a dispatch, outside the ledger's batches (a call that came
+    /// late, tests). Returns a sentence for the agent.
     pub async fn followup(
         self: &std::sync::Arc<Self>,
         id: i32,
         message: String,
         intent: Option<String>,
+    ) -> Result<String, String> {
+        self.followup_call(id, message, intent, FollowupAuth::Direct)
+            .await
+    }
+
+    /// Continue a dispatch, as `auth` records it. Every follow-up is an
+    /// operation in the ledger first (`prepared`, with the call in full), so
+    /// a re-delivered batch finds it and a restart can tell whether it took
+    /// effect (`ledger`). Returns a sentence for the agent.
+    pub async fn followup_call(
+        self: &std::sync::Arc<Self>,
+        id: i32,
+        message: String,
+        intent: Option<String>,
+        auth: FollowupAuth,
     ) -> Result<String, String> {
         let message = message.trim().to_string();
         if message.is_empty() {
@@ -1174,15 +1503,165 @@ impl PersonalAgentEngine {
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("dispatch #{id} does not exist"))?;
-        match d.mode {
-            DispatchMode::Task => self.followup_task(&d, message, intent).await,
-            _ => {
-                if intent.is_some() {
-                    return Err("`intent` applies to task dispatches only".into());
+        if d.mode != DispatchMode::Task && intent.is_some() {
+            return Err("`intent` applies to task dispatches only".into());
+        }
+        let call = FollowupCall {
+            dispatch_id: id,
+            message: message.clone(),
+            intent: intent.clone(),
+        };
+        let payload = serde_json::to_value(&call).map_err(|e| e.to_string())?;
+        let target = serde_json::to_value(SendTarget {
+            dispatch_id: id,
+            task_id: d.work_task_id,
+            conversation_id: d.conversation_id,
+            ..Default::default()
+        })
+        .map_err(|e| e.to_string())?;
+        let (slot, notice_id) = match auth {
+            FollowupAuth::Ledgered { batch_id, scope } => {
+                let key = ledger::followup_key(id, intent.as_deref());
+                match self
+                    .earlier_followup(&scope, &key, batch_id, id, payload.clone(), target.clone())
+                    .await?
+                {
+                    Earlier::Settled(text) => return Ok(text),
+                    Earlier::Rearmed(op) => {
+                        return self.run_followup(&d, call, *op).await;
+                    }
+                    Earlier::None => {}
                 }
-                self.followup_conversation(&d, message).await
+                (LedgerSlot::in_batch(batch_id, key, ledger::fresh_op_id()), None)
+            }
+            FollowupAuth::Card { notice_id, op_id } => (LedgerSlot::outside(op_id), Some(notice_id)),
+            FollowupAuth::Direct => (LedgerSlot::outside(ledger::fresh_op_id()), None),
+        };
+        let op = match svc::begin_op(
+            &self.db.conn,
+            NewOp {
+                slot,
+                kind: "followup",
+                payload,
+                target: Some(target),
+                notice_id,
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        {
+            Ledgered::New(op) => op,
+            Ledgered::Earlier(_) => {
+                return Err("this follow-up is on record already; check item_read".into())
+            }
+        };
+        self.run_followup(&d, call, op).await
+    }
+
+    /// What the ledger already holds for this follow-up in the batches a
+    /// delivery covers. Committed: not sent again. Running or waiting: not
+    /// sent again. Unknown: not sent again — the owner decides. Certainly not
+    /// sent: sent now, under the current batch's entry when it has one.
+    async fn earlier_followup(
+        &self,
+        scope: &[i32],
+        key: &str,
+        batch_id: i32,
+        id: i32,
+        payload: serde_json::Value,
+        target: serde_json::Value,
+    ) -> Result<Earlier, String> {
+        let entries = svc::ledger_entries(&self.db.conn, scope, key)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut own_not_sent: Option<action_entity::Model> = None;
+        for entry in entries {
+            let outcome = if entry.state == ActionState::Prepared {
+                let outcome = self.resolve_op(&entry).await;
+                if let Some(op_id) = entry.op_id.as_deref() {
+                    self.after_op(op_id, &outcome).await;
+                }
+                outcome
+            } else {
+                self.resolve_op(&entry).await
+            };
+            match outcome {
+                OpOutcome::Committed => {
+                    return Ok(Earlier::Settled(format!(
+                        "Not sent again: this follow-up of dispatch #{id} already reached it in \
+                         the turn this delivery repeats. Check its state with item_read before \
+                         anything else."
+                    )))
+                }
+                OpOutcome::Pending => {
+                    return Ok(Earlier::Settled(format!(
+                        "Not sent again: this follow-up of dispatch #{id} from the turn this \
+                         delivery repeats is still on its way (being sent, or waiting for a \
+                         session slot); its result comes back as an event."
+                    )))
+                }
+                OpOutcome::Unknown(_) => {
+                    return Ok(Earlier::Settled(format!(
+                        "Not sent again: codeg cannot tell whether this follow-up of dispatch \
+                         #{id} reached it in the turn this delivery repeats — it was cut off \
+                         mid-send. The owner has a card to look, send it again, or let it be."
+                    )))
+                }
+                OpOutcome::NotExecuted(_) => {
+                    if entry.batch_id == batch_id {
+                        own_not_sent = Some(entry);
+                    }
+                }
             }
         }
+        // Certainly never sent: this batch's own entry runs again, under a
+        // new operation id (a send of the old one still queued somewhere
+        // finds nothing to mark, and is never written) and with THIS call in
+        // full — what a restart puts back in the queue is what goes out now.
+        if let Some(entry) = own_not_sent {
+            if let Some(op_id) = entry.op_id.clone() {
+                let fresh = ledger::fresh_op_id();
+                if svc::op_rearm(&self.db.conn, &op_id, &fresh, payload, target)
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    if let Ok(Some(op)) = svc::get_op(&self.db.conn, &fresh).await {
+                        return Ok(Earlier::Rearmed(Box::new(op)));
+                    }
+                }
+            }
+            return Err("this follow-up is being retried already; check item_read".into());
+        }
+        Ok(Earlier::None)
+    }
+
+    /// Run a follow-up recorded as `op`, and settle its entry by the
+    /// receiving side's evidence.
+    async fn run_followup(
+        self: &std::sync::Arc<Self>,
+        d: &dispatch_entity::Model,
+        call: FollowupCall,
+        op: action_entity::Model,
+    ) -> Result<String, String> {
+        let op_id = op.op_id.clone().ok_or("the follow-up's record has no id")?;
+        self.set_live(&op_id, true).await;
+        let out = match d.mode {
+            DispatchMode::Task => self.followup_task(d, call.message, call.intent, &op_id).await,
+            _ => self.followup_conversation(d, call.message, &op_id).await,
+        };
+        match &out {
+            // A conversation's send stays live until the executor confirms
+            // it or its round ends; a task's claim is settled already.
+            Ok(_) if d.mode != DispatchMode::Task => {}
+            _ => {
+                self.set_live(&op_id, false).await;
+                if let Ok(Some(now)) = svc::get_op(&self.db.conn, &op_id).await {
+                    let outcome = self.resolve_op(&now).await;
+                    self.after_op(&op_id, &outcome).await;
+                }
+            }
+        }
+        out
     }
 
     /// A follow-up about to go out (or to wait for a slot): it shows in the
@@ -1248,11 +1727,14 @@ impl PersonalAgentEngine {
         }
     }
 
+    /// A task follow-up: through the board's claim, which writes `op_id` in
+    /// its `user_action` (the entry is settled from that record alone).
     async fn followup_task(
         &self,
         d: &dispatch_entity::Model,
         message: String,
         intent: Option<String>,
+        op_id: &str,
     ) -> Result<String, String> {
         let task_id = d.work_task_id.ok_or("this dispatch has no task yet")?;
         let engine = crate::work_task::engine().ok_or("the task engine is not running")?;
@@ -1263,7 +1745,11 @@ impl PersonalAgentEngine {
             WorkTaskStatus::Review => {
                 let intent = FollowUpIntent::from_wire(intent.as_deref())?;
                 let card = self.record_followup(d, &message).await;
-                if let Err(e) = engine.return_task(task_id, intent, message, Vec::new()).await {
+                if let Err(e) = engine
+                    .return_task_with_op(task_id, intent, message, Vec::new(), Some(op_id.to_string()))
+                    .await
+                {
+                    let e = moved_meanwhile(task_id, e);
                     self.fail_followup_card(d.id, card, &e).await;
                     return Err(e);
                 }
@@ -1278,7 +1764,11 @@ impl PersonalAgentEngine {
                     return Err("a failed task is retried; `intent` applies to a task in review".into());
                 }
                 let card = self.record_followup(d, &message).await;
-                if let Err(e) = engine.retry(task_id, Some(message), Vec::new(), false).await {
+                if let Err(e) = engine
+                    .retry_with_op(task_id, Some(message), Vec::new(), false, Some(op_id.to_string()))
+                    .await
+                {
+                    let e = moved_meanwhile(task_id, e);
                     self.fail_followup_card(d.id, card, &e).await;
                     return Err(e);
                 }
@@ -1296,6 +1786,7 @@ impl PersonalAgentEngine {
         self: &std::sync::Arc<Self>,
         d: &dispatch_entity::Model,
         message: String,
+        op_id: &str,
     ) -> Result<String, String> {
         match d.state {
             DispatchState::HandedOver => {
@@ -1320,6 +1811,10 @@ impl PersonalAgentEngine {
             .await
             .unwrap_or(0) as u32;
         if limit > 0 && active >= limit {
+            // Waiting for a slot: the round is this operation's, and its
+            // message is the entry's — kept there until it is sent, whatever
+            // happens to the dispatch row in between.
+            self.write_send_target(op_id, d, DispatchState::Queued, true).await?;
             let Some(_) = svc::update_dispatch(
                 &self.db.conn,
                 d.id,
@@ -1329,6 +1824,7 @@ impl PersonalAgentEngine {
                     result_excerpt: Some(None),
                     error: Some(None),
                     followup: Some(Some(message.clone())),
+                    round_op_id: Some(Some(op_id.to_string())),
                     ..Default::default()
                 },
             )
@@ -1350,11 +1846,36 @@ impl PersonalAgentEngine {
             ));
         }
         let card = self.record_followup(d, &message).await;
-        let sent = self.send_followup(d, message, FOLLOWUP_FROM).await;
+        let sent = self.send_followup(d, message, FOLLOWUP_FROM, op_id).await;
         if let Err(e) = &sent {
             self.fail_followup_card(d.id, card, e).await;
         }
         sent
+    }
+
+    /// Write what a conversation send claims — before the claim, so a round
+    /// that never went out can be put back exactly as it was.
+    async fn write_send_target(
+        &self,
+        op_id: &str,
+        d: &dispatch_entity::Model,
+        claimed_from: DispatchState,
+        queued: bool,
+    ) -> Result<(), String> {
+        let target = SendTarget {
+            dispatch_id: d.id,
+            task_id: d.work_task_id,
+            conversation_id: d.conversation_id,
+            claimed_from: Some(claimed_from),
+            queued,
+        };
+        svc::op_set_target(
+            &self.db.conn,
+            op_id,
+            serde_json::to_value(target).map_err(|e| e.to_string())?,
+        )
+        .await
+        .map_err(|e| e.to_string())
     }
 
     /// Send a follow-up round into a dispatch's conversation, on its live
@@ -1362,11 +1883,19 @@ impl PersonalAgentEngine {
     /// dispatch from one of `from` (the finished states for a follow-up sent
     /// at once, `queued` for one that waited for a slot). Called under the
     /// dispatch lock, so the slot it takes is the one that was counted.
+    ///
+    /// The send is ledger operation `op_id`, in three marks (`ledger`): the
+    /// claim writes it onto the dispatch (`round_op_id`); the connection has
+    /// it marked attempted right before writing the request — and writes
+    /// nothing when that fails; the executor's own answer to the request
+    /// commits it. The message carries the id twice: as its message id, and
+    /// in an operation frame stripped from every display.
     async fn send_followup(
-        &self,
+        self: &std::sync::Arc<Self>,
         d: &dispatch_entity::Model,
         message: String,
         from: &[DispatchState],
+        op_id: &str,
     ) -> Result<String, String> {
         let conversation_id = d.conversation_id.ok_or("this dispatch never started a conversation")?;
         let executor = executor_of(d);
@@ -1376,6 +1905,8 @@ impl PersonalAgentEngine {
         let folder = crate::commands::folders::get_folder_core(&self.db, summary.folder_id)
             .await
             .map_err(|e| e.to_string())?;
+        let frame = crate::acp::agent_mentions::render_operation_frame(op_id)
+            .ok_or("the follow-up's id cannot ride the prompt")?;
         // A live, idle connection on it, or a resumed one.
         let mut conn_id = match d.connection_id.clone() {
             Some(c) => Some(c),
@@ -1426,9 +1957,13 @@ impl PersonalAgentEngine {
                     .map_err(|e| e.to_string())?
             }
         };
-        // Claim the round before sending, with the connection it runs on: a
-        // handover racing it wins.
-        let Some(_) = svc::update_dispatch(
+        let queued = from == [DispatchState::Queued];
+        let claimed_from = if queued { DispatchState::Queued } else { d.state };
+        self.write_send_target(op_id, d, claimed_from, queued).await?;
+        // Claim the round before sending, with the connection it runs on and
+        // the operation it is: a handover racing it wins. A queued round is
+        // this operation's already — and only then is it claimed.
+        let Some(claimed) = svc::update_dispatch(
             &self.db.conn,
             d.id,
             Some(from),
@@ -1438,6 +1973,8 @@ impl PersonalAgentEngine {
                 result_excerpt: Some(None),
                 error: Some(None),
                 followup: Some(None),
+                round_op_id: Some(Some(op_id.to_string())),
+                expect_round_op: if queued { d.round_op_id.clone() } else { None },
                 ..Default::default()
             },
         )
@@ -1447,28 +1984,36 @@ impl PersonalAgentEngine {
             return Err("the dispatch changed state meanwhile; check item_list".into());
         };
         self.open_round(&conn_id, d.id).await;
+        let receipt = crate::acp::prompt_receipt::PromptReceipt {
+            op_id: op_id.to_string(),
+            sink: self.clone(),
+        };
         let sent = self
             .manager
-            .send_prompt_linked_with_message_id(
+            .send_prompt_with_receipt(
                 &self.db,
                 &conn_id,
                 vec![PromptInputBlock::Text { text: message }],
                 Some(summary.folder_id),
                 Some(conversation_id),
-                None,
-                None,
+                Some(op_id.to_string()),
+                vec![PromptInputBlock::Text { text: frame }],
+                receipt,
             )
             .await;
         if let Err(e) = sent {
             self.state.lock().await.dispatch_conns.remove(&conn_id);
+            // Never handed to the connection: certainly not sent.
+            let _ = svc::op_unattempted_to_not_executed(&self.db.conn, op_id, &e.to_string()).await;
             let _ = svc::update_dispatch(
                 &self.db.conn,
-                d.id,
+                claimed.id,
                 Some(&[DispatchState::Running]),
                 DispatchWrite {
                     state: Some(DispatchState::Failed),
                     error: Some(Some(e.to_string())),
                     bump_turns: true,
+                    expect_round_op: Some(op_id.to_string()),
                     ..Default::default()
                 },
             )

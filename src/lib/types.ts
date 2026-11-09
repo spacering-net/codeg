@@ -1933,6 +1933,9 @@ export type TimelineKind =
   | "dispatch"
   | "result"
   | "marker"
+  /** A native card codeg wrote itself — a proposal waiting for the owner, a
+   *  step whose outcome it cannot tell. */
+  | "notice"
 
 export type OwnerStatus = "queued" | "delivered" | "answered" | "interrupted"
 
@@ -2409,8 +2412,8 @@ export interface WorkTask {
    *  a task is first delivered, and always on a forge-sourced task — that
    *  one's pull request is `source_meta.result_pr`. */
   delivery?: WorkTaskDelivery | null
-  /** The personal-agent dispatch that created this task, when one did. Such a
-   *  task never auto-merges. */
+  /** The personal-agent dispatch that created this task, when one did. It
+   *  lands as the board's settings say, like any other task. */
   personal_agent_dispatch_id?: number | null
   /** Latest agent_progress milestone OF THIS GENERATION — present on live
    *  (preparing/running/awaiting/merging) rows only. Scoped by run_seq, so a

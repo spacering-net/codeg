@@ -391,8 +391,8 @@ export function ScheduleChip({ task }: { task: WorkTask }) {
 
 /**
  * A task the personal agent dispatched: who handed it out, and which role
- * assistant runs it. Never auto-merged — the board's own merge click is the
- * owner's.
+ * assistant runs it. It lands as the board's settings say, like any other
+ * task.
  */
 export function PersonalAgentChip({ task }: { task: WorkTask }) {
   const t = useTranslations("Tasks")

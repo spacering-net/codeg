@@ -8072,6 +8072,36 @@
       "emptyHint": "Work it hands out, reminders and questions for you show up here.",
       "noneOpen": "Nothing open right now.",
       "origin": "Show the message it came from"
+    },
+    "notice": {
+      "open": "Proposal · waiting for you",
+      "acted": "Done as proposed",
+      "dismissed": "Not taken up",
+      "acting": "Running…",
+      "unknown": "Not sure it ran",
+      "unknownHint": "codeg was cut off while running this, so it cannot tell whether it took effect. Nothing was run again on its own.",
+      "followupOf": "Continue “{title}”",
+      "intent": {
+        "revise": "Send back for changes",
+        "continue": "Carry on",
+        "question": "Ask a question",
+        "verify": "Self-check"
+      },
+      "accept": "Do this",
+      "dismiss": "Not now",
+      "again": "Run again",
+      "failed": "Could not run: {error}",
+      "uncertain": {
+        "open": "Not sure this went through",
+        "hint": "codeg was cut off while sending this follow-up, so it cannot tell whether the executor got it. It was not sent again.",
+        "look": "Look",
+        "again": "Send again",
+        "dismiss": "Let it be",
+        "acting": "Sending again…",
+        "acted": "Sent again",
+        "dismissed": "Left as it was",
+        "resolved": "It did go through"
+      }
     }
   }
 }

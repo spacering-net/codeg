@@ -16,10 +16,14 @@ use sea_orm::{
     EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
 };
 
-use crate::db::entities::personal_agent_batch::{self as batch, BatchKind, BatchStatus};
+use crate::db::entities::personal_agent_action::{self as action, ActionState};
+use crate::db::entities::personal_agent_batch::{self as batch, BatchKind, BatchStatus, BatchTrigger};
 use crate::db::entities::personal_agent_dispatch::{self as dispatch, DispatchMode, DispatchState};
 use crate::db::entities::personal_agent_event::{self as event, EventState};
 use crate::db::entities::personal_agent_item::{self as item, ItemKind, ItemStatus, WaitsFor};
+use crate::db::entities::personal_agent_notice::{
+    self as notice, NoticeKind, NoticeLevel, NoticeState,
+};
 use crate::db::entities::personal_agent_segment::{self as segment, SegmentReason};
 use crate::db::entities::personal_agent_timeline::{self as timeline, OwnerStatus, TimelineKind};
 use crate::db::entities::personal_agent as agent;
@@ -353,6 +357,17 @@ pub async fn create_batch(
     kind: BatchKind,
     detail: Option<serde_json::Value>,
 ) -> Result<batch::Model, DbError> {
+    create_batch_with(conn, segment_id, kind, detail, None).await
+}
+
+/// A batch with its trigger (recorded only).
+pub async fn create_batch_with(
+    conn: &DatabaseConnection,
+    segment_id: i32,
+    kind: BatchKind,
+    detail: Option<serde_json::Value>,
+    trigger: Option<BatchTrigger>,
+) -> Result<batch::Model, DbError> {
     let row = batch::ActiveModel {
         id: NotSet,
         segment_id: Set(segment_id),
@@ -363,8 +378,13 @@ pub async fn create_batch(
         error: Set(None),
         started_at: Set(Utc::now()),
         ended_at: Set(None),
+        trigger: Set(trigger),
     };
     Ok(row.insert(conn).await?)
+}
+
+pub async fn get_batch(conn: &DatabaseConnection, id: i32) -> Result<Option<batch::Model>, DbError> {
+    Ok(batch::Entity::find_by_id(id).one(conn).await?)
 }
 
 /// Settle a running batch. Returns false when it was already settled.
@@ -813,15 +833,16 @@ pub async fn count_queued_owner_rows(conn: &DatabaseConnection) -> Result<u64, D
         .await?)
 }
 
-/// What the owner has not seen: a result card, or a reply that settled
-/// (one still running is neither counted nor marked, so a turn the owner
-/// left before it ended is new once it does).
+/// What the owner has not seen: a result card, a native card, or a reply
+/// that settled (one still running is neither counted nor marked, so a turn
+/// the owner left before it ended is new once it does).
 fn unseen_by_owner() -> Condition {
     Condition::all()
         .add(timeline::Column::SeenAt.is_null())
         .add(
             Condition::any()
                 .add(timeline::Column::Kind.eq(TimelineKind::Result))
+                .add(timeline::Column::Kind.eq(TimelineKind::Notice))
                 .add(
                     Condition::all()
                         .add(timeline::Column::Kind.eq(TimelineKind::Reply))
@@ -1379,8 +1400,12 @@ pub async fn create_dispatch(
     conn: &DatabaseConnection,
     new: NewDispatch,
 ) -> Result<dispatch::Model, DbError> {
+    Ok(dispatch_active(new).insert(conn).await?)
+}
+
+fn dispatch_active(new: NewDispatch) -> dispatch::ActiveModel {
     let now = Utc::now();
-    let row = dispatch::ActiveModel {
+    dispatch::ActiveModel {
         id: NotSet,
         mode: Set(new.mode),
         executor_assistant_id: Set(new.executor_assistant_id),
@@ -1403,8 +1428,474 @@ pub async fn create_dispatch(
         created_at: Set(now),
         updated_at: Set(now),
         finished_at: Set(None),
+        round_op_id: Set(None),
+    }
+}
+
+/// What a ledgered write came to.
+#[derive(Debug, Clone)]
+pub enum Ledgered<T> {
+    /// It ran now.
+    New(T),
+    /// The same call is on record already — in this batch, one it
+    /// re-delivers, or under this operation id: here is its entry.
+    Earlier(Box<action::Model>),
+}
+
+/// Where a ledger entry goes. A call made in a delivery: its batch and the
+/// call's key. One made outside any (a card the owner clicked): batch 0,
+/// keyed by its operation id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerSlot {
+    pub batch_id: i32,
+    pub key: String,
+    pub op_id: String,
+}
+
+impl LedgerSlot {
+    pub fn in_batch(batch_id: i32, key: String, op_id: String) -> Self {
+        Self {
+            batch_id,
+            key,
+            op_id,
+        }
+    }
+
+    pub fn outside(op_id: String) -> Self {
+        Self {
+            batch_id: 0,
+            key: op_id.clone(),
+            op_id,
+        }
+    }
+}
+
+/// A card settled in the same transaction as what it runs: its notice goes
+/// from acting to acted, its timeline row takes `row_data` with the state
+/// and the dispatch made written in.
+#[derive(Debug, Clone)]
+pub struct CardSettle {
+    pub notice_id: i32,
+    pub row_id: i32,
+    pub row_data: serde_json::Value,
+}
+
+fn is_unique_violation(e: &sea_orm::DbErr) -> bool {
+    matches!(
+        e.sql_err(),
+        Some(sea_orm::SqlErr::UniqueConstraintViolation(_))
+    )
+}
+
+/// The entry an insert into `slot` collided with.
+async fn colliding_entry(
+    conn: &DatabaseConnection,
+    slot: &LedgerSlot,
+) -> Result<action::Model, DbError> {
+    if let Some(e) = get_op(conn, &slot.op_id).await? {
+        return Ok(e);
+    }
+    action::Entity::find()
+        .filter(action::Column::BatchId.eq(slot.batch_id))
+        .filter(action::Column::Key.eq(slot.key.clone()))
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::NotFound("ledger entry".into()))
+}
+
+/// Record a dispatch together with its ledger entry — and, for one a card
+/// runs, the card's settling — in one transaction: the entry is committed
+/// with the dispatch it made, or none of it exists. An insert that collides
+/// with an entry on record (same batch and key, or same operation) makes
+/// nothing and hands that entry back.
+pub async fn create_dispatch_ledgered(
+    conn: &DatabaseConnection,
+    new: NewDispatch,
+    slot: &LedgerSlot,
+    payload: Option<serde_json::Value>,
+    card: Option<CardSettle>,
+) -> Result<Ledgered<dispatch::Model>, DbError> {
+    use sea_orm::TransactionTrait;
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let made = dispatch_active(new).insert(&txn).await?;
+    let entry = action::ActiveModel {
+        id: NotSet,
+        batch_id: Set(slot.batch_id),
+        key: Set(slot.key.clone()),
+        kind: Set("dispatch".into()),
+        state: Set(ActionState::Committed),
+        ref_id: Set(Some(made.id.to_string())),
+        created_at: Set(now),
+        updated_at: Set(now),
+        op_id: Set(Some(slot.op_id.clone())),
+        payload: Set(payload.map(|p| p.to_string())),
+        observed: Set(None),
+        target: Set(None),
+        notice_id: Set(card.as_ref().map(|c| c.notice_id)),
+        attempted_at: Set(None),
+        detail: Set(None),
+    }
+    .insert(&txn)
+    .await;
+    match entry {
+        Ok(_) => {}
+        Err(e) if is_unique_violation(&e) => {
+            txn.rollback().await?;
+            return Ok(Ledgered::Earlier(Box::new(colliding_entry(conn, slot).await?)));
+        }
+        Err(e) => {
+            let _ = txn.rollback().await;
+            return Err(e.into());
+        }
+    }
+    if let Some(card) = card {
+        let moved = notice::Entity::update_many()
+            .col_expr(notice::Column::State, Expr::value(NoticeState::Acted))
+            .col_expr(notice::Column::ActedAt, Expr::value(now))
+            .col_expr(notice::Column::UpdatedAt, Expr::value(now))
+            .filter(notice::Column::Id.eq(card.notice_id))
+            .filter(notice::Column::State.eq(NoticeState::Acting))
+            .exec(&txn)
+            .await?;
+        if moved.rows_affected != 1 {
+            txn.rollback().await?;
+            return Err(DbError::Conflict("the card is not being acted on".into()));
+        }
+        let mut data = card.row_data;
+        if let Some(map) = data.as_object_mut() {
+            map.insert("state".into(), "acted".into());
+            map.insert("result".into(), serde_json::json!({ "dispatch_id": made.id }));
+            map.insert("error".into(), serde_json::Value::Null);
+        }
+        timeline::Entity::update_many()
+            .col_expr(timeline::Column::Data, Expr::value(data.to_string()))
+            .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
+            .filter(timeline::Column::Id.eq(card.row_id))
+            .exec(&txn)
+            .await?;
+    }
+    txn.commit().await?;
+    Ok(Ledgered::New(made))
+}
+
+// ── the ledger ──────────────────────────────────────────────────────────────
+
+/// Every entry for `key` in these batches, oldest first.
+pub async fn ledger_entries(
+    conn: &DatabaseConnection,
+    scope: &[i32],
+    key: &str,
+) -> Result<Vec<action::Model>, DbError> {
+    if scope.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(action::Entity::find()
+        .filter(action::Column::BatchId.is_in(scope.to_vec()))
+        .filter(action::Column::Key.eq(key))
+        .order_by_asc(action::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+pub async fn get_op(conn: &DatabaseConnection, op_id: &str) -> Result<Option<action::Model>, DbError> {
+    Ok(action::Entity::find()
+        .filter(action::Column::OpId.eq(op_id))
+        .one(conn)
+        .await?)
+}
+
+/// An operation to record before it runs.
+#[derive(Debug, Clone)]
+pub struct NewOp {
+    pub slot: LedgerSlot,
+    pub kind: &'static str,
+    pub payload: serde_json::Value,
+    pub target: Option<serde_json::Value>,
+    pub notice_id: Option<i32>,
+}
+
+/// Write an operation's intent (`prepared`) before it runs. `Earlier` when
+/// its slot is taken — the same call in the same batch, or the same
+/// operation id.
+pub async fn begin_op(conn: &DatabaseConnection, new: NewOp) -> Result<Ledgered<action::Model>, DbError> {
+    let now = Utc::now();
+    let inserted = action::ActiveModel {
+        id: NotSet,
+        batch_id: Set(new.slot.batch_id),
+        key: Set(new.slot.key.clone()),
+        kind: Set(new.kind.to_string()),
+        state: Set(ActionState::Prepared),
+        ref_id: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        op_id: Set(Some(new.slot.op_id.clone())),
+        payload: Set(Some(new.payload.to_string())),
+        observed: Set(None),
+        target: Set(new.target.map(|t| t.to_string())),
+        notice_id: Set(new.notice_id),
+        attempted_at: Set(None),
+        detail: Set(None),
+    }
+    .insert(conn)
+    .await;
+    match inserted {
+        Ok(e) => Ok(Ledgered::New(e)),
+        Err(e) if is_unique_violation(&e) => {
+            Ok(Ledgered::Earlier(Box::new(colliding_entry(conn, &new.slot).await?)))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// A send is about to be written to the agent: mark it, so that an entry
+/// without the mark was certainly never sent. False — and the send must not
+/// go out — unless the entry is still a prepared, unattempted one.
+pub async fn op_attempted(conn: &DatabaseConnection, op_id: &str) -> Result<bool, DbError> {
+    let now = Utc::now();
+    let res = action::Entity::update_many()
+        .col_expr(action::Column::AttemptedAt, Expr::value(now))
+        .col_expr(action::Column::UpdatedAt, Expr::value(now))
+        .filter(action::Column::OpId.eq(op_id))
+        .filter(action::Column::State.eq(ActionState::Prepared))
+        .filter(action::Column::AttemptedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+/// The receiving side confirmed the operation (`observed`: how): committed.
+/// From prepared, or from unknown — the confirmation can come after codeg
+/// gave up waiting for it.
+pub async fn op_received(
+    conn: &DatabaseConnection,
+    op_id: &str,
+    observed: serde_json::Value,
+) -> Result<bool, DbError> {
+    let res = action::Entity::update_many()
+        .col_expr(action::Column::State, Expr::value(ActionState::Committed))
+        .col_expr(action::Column::Observed, Expr::value(observed.to_string()))
+        .col_expr(action::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(action::Column::OpId.eq(op_id))
+        .filter(action::Column::State.is_in([ActionState::Prepared, ActionState::Unknown]))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+/// Move an operation from one of `from` to `to`, with what it made, why,
+/// and the evidence. False when it was not in `from` any more.
+pub async fn op_settle(
+    conn: &DatabaseConnection,
+    op_id: &str,
+    from: &[ActionState],
+    to: ActionState,
+    ref_id: Option<String>,
+    detail: Option<String>,
+    observed: Option<serde_json::Value>,
+) -> Result<bool, DbError> {
+    let mut update = action::Entity::update_many()
+        .col_expr(action::Column::State, Expr::value(to))
+        .col_expr(action::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(action::Column::OpId.eq(op_id))
+        .filter(action::Column::State.is_in(from.to_vec()));
+    if let Some(r) = ref_id {
+        update = update.col_expr(action::Column::RefId, Expr::value(r));
+    }
+    if let Some(d) = detail {
+        update = update.col_expr(action::Column::Detail, Expr::value(d));
+    }
+    if let Some(o) = observed {
+        update = update.col_expr(action::Column::Observed, Expr::value(o.to_string()));
+    }
+    Ok(update.exec(conn).await?.rows_affected == 1)
+}
+
+/// A prepared operation that never reached the point of being sent:
+/// `not_executed`. The same test as [`op_attempted`]'s, so of the two racing
+/// for one entry exactly one wins — a send this refuses is never written.
+pub async fn op_unattempted_to_not_executed(
+    conn: &DatabaseConnection,
+    op_id: &str,
+    detail: &str,
+) -> Result<bool, DbError> {
+    let res = action::Entity::update_many()
+        .col_expr(action::Column::State, Expr::value(ActionState::NotExecuted))
+        .col_expr(action::Column::Detail, Expr::value(detail.to_string()))
+        .col_expr(action::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(action::Column::OpId.eq(op_id))
+        .filter(action::Column::State.eq(ActionState::Prepared))
+        .filter(action::Column::AttemptedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+/// Back to prepared, unattempted, under a NEW operation id: an operation that
+/// certainly did not run is run again — and a send of the old id still on
+/// its way somewhere finds no entry to mark, so it is never written.
+pub async fn op_rearm(
+    conn: &DatabaseConnection,
+    op_id: &str,
+    new_op_id: &str,
+    payload: serde_json::Value,
+    target: serde_json::Value,
+) -> Result<bool, DbError> {
+    let res = action::Entity::update_many()
+        .col_expr(action::Column::OpId, Expr::value(new_op_id.to_string()))
+        .col_expr(action::Column::Payload, Expr::value(payload.to_string()))
+        .col_expr(action::Column::Target, Expr::value(target.to_string()))
+        .col_expr(action::Column::Observed, Expr::value(Option::<String>::None))
+        .col_expr(action::Column::RefId, Expr::value(Option::<String>::None))
+        .col_expr(action::Column::State, Expr::value(ActionState::Prepared))
+        .col_expr(
+            action::Column::AttemptedAt,
+            Expr::value(Option::<DateTime<Utc>>::None),
+        )
+        .col_expr(action::Column::Detail, Expr::value(Option::<String>::None))
+        .col_expr(action::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(action::Column::OpId.eq(op_id))
+        .filter(action::Column::State.is_in([ActionState::NotExecuted, ActionState::Failed]))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+pub async fn op_set_target(
+    conn: &DatabaseConnection,
+    op_id: &str,
+    target: serde_json::Value,
+) -> Result<(), DbError> {
+    action::Entity::update_many()
+        .col_expr(action::Column::Target, Expr::value(target.to_string()))
+        .col_expr(action::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(action::Column::OpId.eq(op_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+pub async fn op_set_notice(conn: &DatabaseConnection, op_id: &str, notice_id: i32) -> Result<(), DbError> {
+    action::Entity::update_many()
+        .col_expr(action::Column::NoticeId, Expr::value(notice_id))
+        .col_expr(action::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(action::Column::OpId.eq(op_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Operations in these states, oldest first.
+pub async fn ops_in_states(
+    conn: &DatabaseConnection,
+    states: &[ActionState],
+) -> Result<Vec<action::Model>, DbError> {
+    Ok(action::Entity::find()
+        .filter(action::Column::State.is_in(states.to_vec()))
+        .filter(action::Column::OpId.is_not_null())
+        .order_by_asc(action::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// The operations a card ran, oldest first.
+pub async fn ops_of_notice(conn: &DatabaseConnection, notice_id: i32) -> Result<Vec<action::Model>, DbError> {
+    Ok(action::Entity::find()
+        .filter(action::Column::NoticeId.eq(notice_id))
+        .order_by_asc(action::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+// ── notices ─────────────────────────────────────────────────────────────────
+
+/// A native card to raise.
+#[derive(Debug, Clone)]
+pub struct NewNotice {
+    pub kind: NoticeKind,
+    pub subject_key: Option<String>,
+    pub level: NoticeLevel,
+    pub batch_id: Option<i32>,
+    pub payload: serde_json::Value,
+}
+
+/// Raise a native card: its state and its timeline row, in one transaction
+/// (the row's `ref_id` is the notice's id, the notice's `timeline_id` the
+/// row's).
+pub async fn create_notice_with_row(
+    conn: &DatabaseConnection,
+    new: NewNotice,
+    mut row: NewRow,
+) -> Result<(notice::Model, timeline::Model), DbError> {
+    use sea_orm::TransactionTrait;
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let made = notice::ActiveModel {
+        id: NotSet,
+        kind: Set(new.kind),
+        subject_key: Set(new.subject_key),
+        level: Set(new.level),
+        state: Set(NoticeState::Open),
+        timeline_id: Set(None),
+        batch_id: Set(new.batch_id),
+        payload: Set(new.payload.to_string()),
+        notified_at: Set(None),
+        acted_at: Set(None),
+        expires_at: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(&txn)
+    .await?;
+    row.ref_id = Some(made.id.to_string());
+    let card = row.into_active(now).insert(&txn).await?;
+    notice::Entity::update_many()
+        .col_expr(notice::Column::TimelineId, Expr::value(card.id))
+        .filter(notice::Column::Id.eq(made.id))
+        .exec(&txn)
+        .await?;
+    txn.commit().await?;
+    let made = notice::Model {
+        timeline_id: Some(card.id),
+        ..made
     };
-    Ok(row.insert(conn).await?)
+    Ok((made, card))
+}
+
+pub async fn get_notice(conn: &DatabaseConnection, id: i32) -> Result<Option<notice::Model>, DbError> {
+    Ok(notice::Entity::find_by_id(id).one(conn).await?)
+}
+
+/// Move a notice from one of `from` to `to`. False when it was in none of
+/// them any more: of two answers to one card, the first wins.
+pub async fn move_notice(
+    conn: &DatabaseConnection,
+    id: i32,
+    from: &[NoticeState],
+    to: NoticeState,
+) -> Result<bool, DbError> {
+    let now = Utc::now();
+    let acted_at: Option<DateTime<Utc>> = (to != NoticeState::Open).then_some(now);
+    let res = notice::Entity::update_many()
+        .col_expr(notice::Column::State, Expr::value(to))
+        .col_expr(notice::Column::ActedAt, Expr::value(acted_at))
+        .col_expr(notice::Column::UpdatedAt, Expr::value(now))
+        .filter(notice::Column::Id.eq(id))
+        .filter(notice::Column::State.is_in(from.to_vec()))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+pub async fn notices_in_state(
+    conn: &DatabaseConnection,
+    state: NoticeState,
+) -> Result<Vec<notice::Model>, DbError> {
+    Ok(notice::Entity::find()
+        .filter(notice::Column::State.eq(state))
+        .order_by_asc(notice::Column::Id)
+        .all(conn)
+        .await?)
 }
 
 pub async fn get_dispatch(
@@ -1426,6 +1917,10 @@ pub struct DispatchWrite {
     pub followup: Option<Option<String>>,
     pub source_batch_id: Option<Option<i32>>,
     pub bump_turns: bool,
+    /// The operation claiming this round (`round_op_id`), or none.
+    pub round_op_id: Option<Option<String>>,
+    /// Only while the round is this operation's.
+    pub expect_round_op: Option<String>,
 }
 
 /// Update a dispatch. With `expect`, only while it is in one of those states
@@ -1443,6 +1938,12 @@ pub async fn update_dispatch(
         .filter(dispatch::Column::Id.eq(id));
     if let Some(states) = expect {
         update = update.filter(dispatch::Column::State.is_in(states.to_vec()));
+    }
+    if let Some(op) = write.expect_round_op {
+        update = update.filter(dispatch::Column::RoundOpId.eq(op));
+    }
+    if let Some(v) = write.round_op_id {
+        update = update.col_expr(dispatch::Column::RoundOpId, Expr::value(v));
     }
     if let Some(state) = write.state {
         update = update.col_expr(dispatch::Column::State, Expr::value(state));

@@ -86,6 +86,11 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub finished_at: Option<DateTimeUtc>,
+    /// The ledger operation (`personal_agent_action.op_id`) that claimed the
+    /// current round: a follow-up writes it in the same update that claims
+    /// the round, so the row itself says which send the round belongs to.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub round_op_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

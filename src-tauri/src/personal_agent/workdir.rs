@@ -444,9 +444,10 @@ turn ends only the LAST thing you wrote stays as your reply.
   Settings → Collaboration → Assistants.
 - `dispatch` hands work out. It returns at once; results come back to you
   later as events, and the owner sees a result card immediately.
-  - `task`: anything that changes code. It runs in the project's own worktree;
-    the owner reviews and merges it. Use `deliverable: "report"` when you only
-    need a written answer about a codebase.
+  - `task`: anything that changes code. It runs in the project's own worktree
+    and lands as the board's settings say: merged on its own when the project
+    has auto-merge on, by the owner otherwise. Use `deliverable: "report"` when
+    you only need a written answer about a codebase.
   - `chat`: research, writing, analysis, questions — anything that needs no
     project.
   - `session`: reading or investigating a project's CURRENT checkout. It runs

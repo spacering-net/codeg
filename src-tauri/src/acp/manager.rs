@@ -1188,6 +1188,7 @@ impl ConnectionManager {
         user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)>,
         internal_suffix: Vec<PromptInputBlock>,
         reply_token: Option<String>,
+        receipt: Option<crate::acp::prompt_receipt::PromptReceipt>,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
         // prompt produces no turn — and thus no `TurnComplete` to clear the gate
@@ -1250,6 +1251,7 @@ impl ConnectionManager {
             user_message,
             internal_suffix,
             reply_token,
+            receipt,
         });
         Ok(())
     }
@@ -1275,7 +1277,7 @@ impl ConnectionManager {
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        self.send_prompt_inner(conn_id, blocks, None, Vec::new(), None)
+        self.send_prompt_inner(conn_id, blocks, None, Vec::new(), None, None)
             .await
     }
 
@@ -1347,6 +1349,7 @@ impl ConnectionManager {
             client_message_id,
             Vec::new(),
             None,
+            None,
         )
         .await
     }
@@ -1373,6 +1376,38 @@ impl ConnectionManager {
             None,
             Vec::new(),
             reply_token,
+            None,
+        )
+        .await
+    }
+
+    /// The personal agent's follow-up into a dispatched conversation: as
+    /// [`Self::send_prompt_linked_with_message_id`], with `internal_suffix`
+    /// (the prompt's operation frame) and the `receipt` that proves — or
+    /// refuses — the send (see [`crate::acp::prompt_receipt`]).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_prompt_with_receipt(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        client_message_id: Option<String>,
+        internal_suffix: Vec<PromptInputBlock>,
+        receipt: crate::acp::prompt_receipt::PromptReceipt,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            None,
+            client_message_id,
+            internal_suffix,
+            None,
+            Some(receipt),
         )
         .await
     }
@@ -1403,6 +1438,7 @@ impl ConnectionManager {
             None,
             internal_suffix,
             None,
+            None,
         )
         .await
     }
@@ -1419,6 +1455,7 @@ impl ConnectionManager {
         client_message_id: Option<String>,
         internal_suffix: Vec<PromptInputBlock>,
         reply_token: Option<String>,
+        receipt: Option<crate::acp::prompt_receipt::PromptReceipt>,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -1866,7 +1903,14 @@ impl ConnectionManager {
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
         match self
-            .send_prompt_inner(conn_id, blocks, user_message, internal_suffix, reply_token)
+            .send_prompt_inner(
+                conn_id,
+                blocks,
+                user_message,
+                internal_suffix,
+                reply_token,
+                receipt,
+            )
             .await
         {
             Ok(()) => {
@@ -7100,6 +7144,7 @@ mod tests {
                 user_message: None,
                 internal_suffix: Vec::new(),
                 reply_token: None,
+                receipt: None,
             })
             .await
             .unwrap();
@@ -7113,6 +7158,7 @@ mod tests {
             }],
             None,
             Vec::new(),
+            None,
             None,
         );
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;

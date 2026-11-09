@@ -61,6 +61,9 @@ export type MessageItem =
       owners: TimelineRow[]
     })
   | (ItemBase & { kind: "event"; row: TimelineRow })
+  /** A native card codeg wrote itself (a proposal): on the assistants'
+   *  side, standing alone. */
+  | (ItemBase & { kind: "notice"; row: TimelineRow })
 
 /** A reply row's `data.state`; `null` on a phase-one row, which has none. */
 export function replyState(row: TimelineRow): string | null {
@@ -73,11 +76,11 @@ export function isDiscarded(row: TimelineRow): boolean {
   return row.kind === "reply" && replyState(row) === "discarded"
 }
 
-/** New to the owner, as the server counts it: a result card, or a reply
- *  once it settled, that they have not seen. */
+/** New to the owner, as the server counts it: a result card, a native card,
+ *  or a reply once it settled, that they have not seen. */
 export function isUnseen(row: TimelineRow): boolean {
   if (row.seen_at != null) return false
-  if (row.kind === "result") return true
+  if (row.kind === "result" || row.kind === "notice") return true
   if (row.kind !== "reply") return false
   const state = replyState(row)
   return state !== "running" && state !== "discarded"
@@ -146,6 +149,15 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
       item = {
         kind: "event",
         key: `e${r.id}`,
+        gap: "side",
+        tail: false,
+        quotesPrevious: false,
+        row: r,
+      }
+    } else if (r.kind === "notice") {
+      item = {
+        kind: "notice",
+        key: `n${r.id}`,
         gap: "side",
         tail: false,
         quotesPrevious: false,
