@@ -4097,7 +4097,8 @@
           "allowAlways": "sempre permitido",
           "rejected": "recusado",
           "viaChatChannel": "por um canal de chat",
-          "byPolicy": "pela política de permissões da execução"
+          "byPolicy": "pela política de permissões da execução",
+          "byAutoApprove": "automaticamente, por CODEG_AUTO_APPROVE"
         }
       },
       "messageNav": {

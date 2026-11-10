@@ -4097,7 +4097,8 @@
           "allowAlways": "항상 허용",
           "rejected": "거부됨",
           "viaChatChannel": "채팅 채널에서",
-          "byPolicy": "실행 권한 정책에 따름"
+          "byPolicy": "실행 권한 정책에 따름",
+          "byAutoApprove": "CODEG_AUTO_APPROVE에 의한 자동 승인"
         }
       },
       "messageNav": {

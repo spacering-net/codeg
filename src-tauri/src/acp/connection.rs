@@ -3573,10 +3573,19 @@ async fn admit_permission(
     // rule into the user's own agent settings (see
     // [`PermissionOptionInfo::allow_once_in`]). A request offering no such
     // option falls through to the card exactly as before.
-    if crate::acp::auto_approve_enabled() {
-        if let Some(option_id) =
-            PermissionOptionInfo::allow_once_in(&card.options).map(|o| o.option_id.clone())
-        {
+    //
+    // A `cli_run` connection is NEVER auto-approved. That tag marks a headless
+    // `codeg-cli` run — its root connection, or a delegation child that
+    // inherited it at spawn — and its `--permissions` policy is authoritative
+    // there: `deny`, `reads`, `fail` and `wait` all mean something that
+    // answering `allow_once` here would silently overrule, along with the
+    // run's own permission reporting. Those connections keep the card/event
+    // path, which is what applies their policy.
+    if let Some(option_id) = crate::acp::auto_approve_option(
+        crate::acp::auto_approve_enabled(),
+        state.read().await.cli_run.is_some(),
+        &card.options,
+    ) {
             let scope = permission_log_scope(state).await;
             tracing::info!(
                 "[ACP] permission {} auto-approved {scope} (option={option_id}, CODEG_AUTO_APPROVE)",
@@ -3589,6 +3598,34 @@ async fn admit_permission(
             let name = PermissionOptionInfo::allow_once_in(&card.options)
                 .map(|o| o.name.clone())
                 .unwrap_or_default();
+            // The agent may have withdrawn the request while the `state` read
+            // above was waiting (or before it ever got here). Answering
+            // `allow_once` then would grant a call the agent already cancelled,
+            // and the `ToolApproval` record would claim a decision nobody made.
+            // Answer the withdrawal instead, and record nothing — exactly what
+            // `watch_permission_withdrawal` does for a card.
+            if reply.cancellation().is_cancelled() {
+                tracing::info!(
+                    "[ACP] permission {} withdrawn before auto-approval {scope}",
+                    card.request_id
+                );
+                match reply {
+                    PermissionReply::Acp(responder) => {
+                        let _ = responder.respond(RequestPermissionResponse::new(
+                            RequestPermissionOutcome::Cancelled,
+                        ));
+                    }
+                    PermissionReply::CodexElicitation { responder, .. } => {
+                        let _ = responder.respond(
+                            serde_json::to_value(
+                                crate::acp::question::elicitation_cancel_response(),
+                            )
+                            .unwrap_or_default(),
+                        );
+                    }
+                }
+                return;
+            }
             // Answer the way a user's click does — `respond_selected` is the
             // same responder tail a card runs — but without parking the reply
             // in the queue first: nothing will ever promote or withdraw it.
@@ -3625,7 +3662,6 @@ async fn admit_permission(
                 .await;
             }
             return;
-        }
     }
     let cancellation = reply.cancellation();
     let (settled_tx, settled_rx) = oneshot::channel();

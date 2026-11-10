@@ -4097,7 +4097,8 @@
           "allowAlways": "总是允许",
           "rejected": "已拒绝",
           "viaChatChannel": "来自聊天频道",
-          "byPolicy": "由运行的权限策略决定"
+          "byPolicy": "由运行的权限策略决定",
+          "byAutoApprove": "由 CODEG_AUTO_APPROVE 自动批准"
         }
       },
       "messageNav": {

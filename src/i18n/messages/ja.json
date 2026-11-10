@@ -4097,7 +4097,8 @@
           "allowAlways": "常に許可",
           "rejected": "拒否",
           "viaChatChannel": "チャットチャネル経由",
-          "byPolicy": "実行の権限ポリシーによる"
+          "byPolicy": "実行の権限ポリシーによる",
+          "byAutoApprove": "CODEG_AUTO_APPROVE による自動承認"
         }
       },
       "messageNav": {

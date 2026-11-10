@@ -118,12 +118,19 @@ pub fn continued_session_ids(agent_type: crate::models::AgentType, session_id: &
 /// hard-coded allow-once / reject-once pair in its `approval/request` handler,
 /// so a write tool call parked forever and its parent delegation waited on it.
 pub fn auto_approve_enabled() -> bool {
+    parse_auto_approve(std::env::var(crate::acp::AUTO_APPROVE_ENV).ok().as_deref())
+}
+
+/// The flag's whole reading of its value, split out so it is testable without
+/// touching the process env (which is shared by every test in the binary).
+///
+/// `None` (unset) and any unrecognized string keep the card flow. Accepting
+/// `1`/`true`/`yes` in any case is deliberate: the var is set by hand, in a
+/// shell or an OS environment dialog, and a `TRUE` that silently did nothing
+/// would be worse than the extra leniency.
+fn parse_auto_approve(raw: Option<&str>) -> bool {
     matches!(
-        std::env::var(crate::acp::AUTO_APPROVE_ENV)
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
+        raw.unwrap_or_default().trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes"
     )
 }
@@ -134,3 +141,147 @@ pub const AUTO_APPROVE_ENV: &str = "CODEG_AUTO_APPROVE";
 /// The [`crate::acp::types::ToolApprovalInfo::origin`] an auto-approved
 /// permission records.
 pub const AUTO_APPROVE_ORIGIN: &str = "auto_approve";
+
+/// The whole "should this card be auto-approved?" decision, split out so its
+/// every branch is unit-testable without a live ACP connection.
+///
+/// `None` means "leave it on the card path"; `Some(id)` means "answer with this
+/// option". Three gates, in the order the caller checks them:
+///
+/// 1. the flag must be on;
+/// 2. the connection must NOT carry a `cli_run` tag — that tag marks a
+///    headless `codeg-cli` run (or a delegation child that inherited it) whose
+///    `--permissions` policy is authoritative, and answering here would
+///    overrule `deny` / `reads` / `fail` / `wait`;
+/// 3. the request must actually offer an `allow_once` option. Rejection
+///    deliberately comes first in some adapters (claude-agent-acp 0.91.0
+///    leads with it for `defaultToNo` calls), so this is a kind lookup, never
+///    a positional one. `allow_always` alone is NOT enough: picking it would
+///    write a standing rule into the user's own agent settings.
+pub fn auto_approve_option(
+    enabled: bool,
+    cli_run_tagged: bool,
+    options: &[crate::acp::types::PermissionOptionInfo],
+) -> Option<String> {
+    if !enabled || cli_run_tagged {
+        return None;
+    }
+    crate::acp::types::PermissionOptionInfo::allow_once_in(options)
+        .map(|o| o.option_id.clone())
+}
+
+#[cfg(test)]
+mod auto_approve_flag_tests {
+    use super::{auto_approve_option, parse_auto_approve, AUTO_APPROVE_ORIGIN};
+    use crate::acp::types::PermissionOptionInfo;
+
+    fn opt(id: &str, kind: &str) -> PermissionOptionInfo {
+        PermissionOptionInfo {
+            option_id: id.to_string(),
+            name: id.to_string(),
+            kind: kind.to_string(),
+            meta: None,
+        }
+    }
+
+    /// The enabled spellings. Case and surrounding whitespace are irrelevant
+    /// because the value is typed by hand into a shell or an OS env dialog.
+    #[test]
+    fn recognises_the_enabled_spellings() {
+        for raw in ["1", "true", "TRUE", "yes", " Yes ", "\ttrue\n"] {
+            assert!(parse_auto_approve(Some(raw)), "{raw:?} must enable it");
+        }
+    }
+
+    /// Everything else keeps the card flow. Unset is the important one: a
+    /// machine that never set the variable must behave exactly as before, and
+    /// an empty value is how a shell writes "set but blank".
+    #[test]
+    fn everything_else_leaves_the_card_flow_alone() {
+        for raw in [None, Some(""), Some("   "), Some("0"), Some("false"), Some("no"), Some("on")] {
+            assert!(
+                !parse_auto_approve(raw),
+                "{raw:?} must NOT enable auto-approval"
+            );
+        }
+    }
+
+    /// The origin string is a wire value the frontend's ApprovalChip matches on
+    /// (`src/components/message/activity/approval-chip.tsx`). Changing it here
+    /// without changing that file would silently render an unattended approval
+    /// as a person's click.
+    #[test]
+    fn origin_is_the_string_the_frontend_expects() {
+        assert_eq!(AUTO_APPROVE_ORIGIN, "auto_approve");
+    }
+
+    /// Regression for the review's "Preserve CLI permission policies" finding:
+    /// a `cli_run` connection (a headless `codeg-cli` run, or a delegation
+    /// child that inherited its tag) must keep the card path so its
+    /// `--permissions` policy stays authoritative.
+    #[test]
+    fn cli_run_tagged_connection_is_never_auto_approved() {
+        let opts = vec![opt("allow", "allow_once"), opt("deny", "reject_once")];
+        assert_eq!(
+            auto_approve_option(true, true, &opts),
+            None,
+            "the run's permission ceiling must win over CODEG_AUTO_APPROVE"
+        );
+    }
+
+    /// The flag off is the default state of every machine that never set it.
+    #[test]
+    fn disabled_flag_keeps_the_card_path() {
+        let opts = vec![opt("allow", "allow_once")];
+        assert_eq!(auto_approve_option(false, false, &opts), None);
+    }
+
+    /// claude-agent-acp 0.91.0 leads with the rejection for `defaultToNo`
+    /// calls. Selection is by kind, never by position.
+    #[test]
+    fn chooses_allow_once_even_when_rejection_comes_first() {
+        let opts = vec![
+            opt("reject-1", "reject_once"),
+            opt("allow-1", "allow_once"),
+        ];
+        assert_eq!(
+            auto_approve_option(true, false, &opts),
+            Some("allow-1".to_string())
+        );
+    }
+
+    /// `allow_always` alone must NOT be auto-picked: it would write a standing
+    /// rule into the user's own agent settings. Fall through to the card.
+    #[test]
+    fn only_allow_always_available_falls_through_to_the_card() {
+        let opts = vec![
+            opt("always", "allow_always"),
+            opt("reject", "reject_once"),
+        ];
+        assert_eq!(auto_approve_option(true, false, &opts), None);
+    }
+
+    /// An empty option list, and a list with no allow-kind at all, are both
+    /// ordinary card cases — no panic, no approval invented.
+    #[test]
+    fn no_usable_option_falls_through_to_the_card() {
+        assert_eq!(auto_approve_option(true, false, &[]), None);
+        assert_eq!(
+            auto_approve_option(true, false, &[opt("reject", "reject_once")]),
+            None
+        );
+    }
+
+    /// The happy path, once, to pin the returned id rather than just Some(_).
+    #[test]
+    fn enabled_non_cli_request_with_allow_once_is_answered() {
+        let opts = vec![
+            opt("allow-1", "allow_once"),
+            opt("reject-1", "reject_once"),
+        ];
+        assert_eq!(
+            auto_approve_option(true, false, &opts),
+            Some("allow-1".to_string())
+        );
+    }
+}

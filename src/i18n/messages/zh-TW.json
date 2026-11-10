@@ -4097,7 +4097,8 @@
           "allowAlways": "一律允許",
           "rejected": "已拒絕",
           "viaChatChannel": "來自聊天頻道",
-          "byPolicy": "由執行的權限原則決定"
+          "byPolicy": "由執行的權限原則決定",
+          "byAutoApprove": "由 CODEG_AUTO_APPROVE 自動核准"
         }
       },
       "messageNav": {
