@@ -106,19 +106,29 @@ fn schedule_cursor_model_backfill(conn: &sea_orm::DatabaseConnection, emitter: &
         }
         state.running = true;
     }
+    // Clears `running` when the pass ends however it ends: an `Err`, a panic
+    // that unwinds the task, or the task being dropped. A flag left set would
+    // stop every later backfill for the life of the process.
+    struct RunningGuard;
+    impl Drop for RunningGuard {
+        fn drop(&mut self) {
+            cursor_model_backfill_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .running = false;
+        }
+    }
+    let guard = RunningGuard;
     let conn = conn.clone();
     let emitter = emitter.clone();
     tokio::spawn(async move {
+        let _guard = guard;
         if let Err(error) = backfill_cursor_models(&conn, &emitter).await {
             tracing::warn!(
                 error = %error,
                 "conversation list: failed to backfill Cursor session models; continuing"
             );
         }
-        cursor_model_backfill_state()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .running = false;
     });
 }
 

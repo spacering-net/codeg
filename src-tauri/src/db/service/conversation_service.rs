@@ -354,6 +354,13 @@ pub async fn cursor_sessions_missing_model(
 /// the previous session's model on the replacement (and later backfills would
 /// then skip it). Matching the external id in the same UPDATE turns that race
 /// into a no-op.
+///
+/// The same UPDATE also requires a live folder and a non-loop row, the filter
+/// [`cursor_sessions_missing_model`] selects with. Both callers broadcast an
+/// upsert when this returns `true`, and the client inserts any upserted row it
+/// does not have. A folder soft-deleted while the store was read, or a loop
+/// conversation finishing a Cursor turn, must not come back into another
+/// client's workspace list that way.
 pub async fn seed_model_if_empty_for_session(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -371,6 +378,16 @@ pub async fn seed_model_if_empty_for_session(
         .filter(conversation::Column::DeletedAt.is_null())
         .filter(conversation::Column::ExternalId.eq(external_id))
         .filter(conversation::Column::AgentType.eq(AgentType::Cursor.as_wire().into_owned()))
+        .filter(conversation::Column::Kind.ne(ConversationKind::Loop))
+        .filter(
+            conversation::Column::FolderId.in_subquery(
+                sea_orm::sea_query::Query::select()
+                    .column(folder::Column::Id)
+                    .from(folder::Entity)
+                    .and_where(folder::Column::DeletedAt.is_null())
+                    .to_owned(),
+            ),
+        )
         .filter(
             sea_orm::Condition::any()
                 .add(conversation::Column::Model.is_null())
@@ -1909,6 +1926,78 @@ mod tests {
             "a deleted conversation is not something an open can resurrect a \
              column on"
         );
+    }
+
+    #[tokio::test]
+    async fn seed_model_for_session_skips_rows_the_workspace_list_hides() {
+        let db = fresh_in_memory_db().await;
+        let live_folder = seed_folder(&db, "/tmp/codeg-seed-model-live").await;
+        let dead_folder = seed_folder(&db, "/tmp/codeg-seed-model-dead").await;
+        let cursor_row = |folder_id: i32, session: &'static str| {
+            let conn = db.conn.clone();
+            async move {
+                let row = create(&conn, folder_id, AgentType::Cursor, None, None)
+                    .await
+                    .expect("create");
+                bind_external_id(&conn, row.id, session, &[])
+                    .await
+                    .expect("bind");
+                row.id
+            }
+        };
+
+        let visible = cursor_row(live_folder, "cursor-visible").await;
+        let in_dead_folder = cursor_row(dead_folder, "cursor-dead-folder").await;
+        let loop_row = cursor_row(live_folder, "cursor-loop").await;
+        let mut active: conversation::ActiveModel = conversation::Entity::find_by_id(loop_row)
+            .one(&db.conn)
+            .await
+            .expect("query loop row")
+            .expect("loop row exists")
+            .into();
+        active.kind = Set(ConversationKind::Loop);
+        active.update(&db.conn).await.expect("flip kind");
+        // Soft-deleted after the row was picked, as if during the store read.
+        crate::db::service::folder_service::soft_delete_folder(&db.conn, dead_folder)
+            .await
+            .expect("soft delete folder");
+
+        assert!(
+            seed_model_if_empty_for_session(&db.conn, visible, "cursor-visible", "grok-4.7-high")
+                .await
+                .expect("seed visible"),
+            "a live row is seeded"
+        );
+        assert!(
+            !seed_model_if_empty_for_session(
+                &db.conn,
+                in_dead_folder,
+                "cursor-dead-folder",
+                "grok-4.7-high"
+            )
+            .await
+            .expect("seed dead folder"),
+            "a row in a soft-deleted folder is not seeded, so no upsert brings it back"
+        );
+        assert!(
+            !seed_model_if_empty_for_session(&db.conn, loop_row, "cursor-loop", "grok-4.7-high")
+                .await
+                .expect("seed loop"),
+            "a loop row is not seeded, so no upsert puts it in the workspace list"
+        );
+        for (id, expected) in [
+            (visible, Some("grok-4.7-high")),
+            (in_dead_folder, None),
+            (loop_row, None),
+        ] {
+            let model = conversation::Entity::find_by_id(id)
+                .one(&db.conn)
+                .await
+                .expect("query")
+                .expect("row")
+                .model;
+            assert_eq!(model.as_deref(), expected, "row {id}");
+        }
     }
 
     #[tokio::test]
