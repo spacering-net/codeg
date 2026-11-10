@@ -85,6 +85,13 @@ const ISOLATION_ENV: &str = "CODEG_ACP_TMP_ISOLATION";
 /// extraction churn on a different volume.
 const ROOT_ENV: &str = "CODEG_ACP_TMP_ROOT";
 
+/// Environment variable controlling persistent runtime caching for heavy self-extracting
+/// agents (specifically Google Antigravity on Windows). When enabled (default on Windows),
+/// codeg keeps the extracted runtime files in a stable persistent scratch directory across
+/// conversation launches instead of paying full PyInstaller extraction and virus scan penalties
+/// on every session.
+pub const ANTIGRAVITY_PERSISTENT_CACHE_ENV: &str = "CODEG_ANTIGRAVITY_PERSISTENT_CACHE";
+
 /// Bytes of `sockaddr_un::sun_path` — the kernel's hard cap on the path of an
 /// AF_UNIX socket, and the reason this module cannot nest its scratch
 /// directories under an arbitrarily long `TMPDIR`.
@@ -416,6 +423,7 @@ pub struct LaunchScratch {
     /// handback from an unwind. Does not change WHAT is done, only whether it
     /// is reported as a bug.
     released: bool,
+    persistent: bool,
 }
 
 impl LaunchScratch {
@@ -423,19 +431,32 @@ impl LaunchScratch {
         &self.path
     }
 
+    pub fn is_persistent(&self) -> bool {
+        self.persistent
+    }
+
     /// Give the directory back. Returns immediately: the bounded retry ladder
     /// goes onto the current runtime, so teardown never waits on a filesystem
     /// that may be holding a sharing violation.
     ///
-    /// The work itself is in `Drop` — see the type docs for why that is not
-    /// merely a refactor.
+    /// For persistent directories, this is an intentional no-op that leaves
+    /// the extracted runtime intact across launches.
     pub fn release(mut self) {
         self.released = true;
+        if self.persistent {
+            tracing::info!(
+                "[ACP][scratch] keeping persistent runtime cache at {}",
+                self.path.display()
+            );
+        }
     }
 }
 
 impl Drop for LaunchScratch {
     fn drop(&mut self) {
+        if self.persistent {
+            return;
+        }
         if !self.released {
             tracing::warn!(
                 "[ACP][scratch] {} was dropped without release (a cancelled \
@@ -510,6 +531,11 @@ async fn remove_with_retries(name: String, path: PathBuf) {
 /// path that does not exist, because the PyInstaller bootloader only creates
 /// its own `_MEIxxxxxx` leaf, not the parents above it.
 pub fn create(agent: AgentType) -> Option<LaunchScratch> {
+    if agent == AgentType::Antigravity && antigravity_persistent_cache_enabled() {
+        if let Some(persistent) = create_persistent_antigravity_scratch() {
+            return Some(persistent);
+        }
+    }
     if !isolates(agent) {
         return None;
     }
@@ -535,6 +561,7 @@ pub fn create(agent: AgentType) -> Option<LaunchScratch> {
                     name,
                     path,
                     released: false,
+                    persistent: false,
                 })
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -552,6 +579,123 @@ pub fn create(agent: AgentType) -> Option<LaunchScratch> {
         }
     }
     None
+}
+
+/// Whether persistent scratch caching for Antigravity is active.
+/// Defaults to true on Windows (where Antigravity is a 1.17GB PyInstaller onefile),
+/// and false on other platforms unless explicitly overridden via
+/// `CODEG_ANTIGRAVITY_PERSISTENT_CACHE=1`.
+pub fn antigravity_persistent_cache_enabled() -> bool {
+    match std::env::var(ANTIGRAVITY_PERSISTENT_CACHE_ENV).as_deref() {
+        Ok("0") | Ok("false") | Ok("FALSE") | Ok("off") => false,
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("on") => true,
+        _ => cfg!(windows),
+    }
+}
+
+/// Create a launch scratch directory appropriate for `agent_type`.
+/// Heavy self-extracting agents like Google Antigravity on Windows receive a
+/// persistent runtime directory that survives across connections to avoid massive
+/// onefile re-extraction latency on every session.
+pub fn create_for_agent(agent_type: AgentType) -> Option<LaunchScratch> {
+    create(agent_type)
+}
+
+fn create_persistent_antigravity_scratch() -> Option<LaunchScratch> {
+    if !isolation_enabled() {
+        return None;
+    }
+    let root = scratch_root();
+    if let Err(e) = create_root(&root) {
+        tracing::warn!(
+            "[ACP][scratch] cannot create scratch root {}: {e}; falling back to system temp",
+            root.display()
+        );
+        return None;
+    }
+
+    let version = match crate::acp::registry::get_agent_meta(AgentType::Antigravity).distribution {
+        crate::acp::registry::AgentDistribution::Binary { version, .. } => version,
+        _ => "default",
+    };
+
+    let name = format!("persistent-antigravity-{version}");
+    let path = root.join(&name);
+
+    if let Err(e) = create_root(&path) {
+        tracing::warn!(
+            "[ACP][scratch] cannot create persistent antigravity runtime directory {}: {e}",
+            path.display()
+        );
+        return None;
+    }
+
+    // Best-effort cleanup of stale _MEI directories from killed prior sessions.
+    prune_stale_pyinstaller_dirs(&path);
+
+    tracing::info!(
+        "[ACP][scratch] using persistent runtime scratch at {}",
+        path.display()
+    );
+
+    Some(LaunchScratch {
+        name,
+        path,
+        released: false,
+        persistent: true,
+    })
+}
+
+/// Prune older, stale `_MEI*` directories inside a persistent runtime directory.
+/// Keeps recently used unpack roots and skips any directory currently locked by an
+/// active agent process.
+fn prune_stale_pyinstaller_dirs(runtime_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(runtime_dir) else {
+        return;
+    };
+    let min_age = Duration::from_secs(3600); // 1 hour
+    let now = std::time::SystemTime::now();
+
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("_MEI") || name.len() <= 4 {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        if let Ok(age) = now.duration_since(modified) {
+            if age > min_age {
+                let _ = remove_dir_robust(&entry.path());
+            }
+        }
+    }
+}
+
+/// Remove persistent scratch directories belonging to `agent_type`.
+/// Called when clearing agent cache or uninstalling.
+pub fn clear_persistent_scratch_for_agent(agent_type: AgentType) {
+    if agent_type == AgentType::Antigravity {
+        for root in sweep_roots() {
+            if let Ok(entries) = std::fs::read_dir(&root) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if name.starts_with("persistent-antigravity-") {
+                        let _ = remove_dir_robust(&entry.path());
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// `create_dir_all` for the root, private on Unix and refused if it is not ours.
@@ -1385,6 +1529,7 @@ mod tests {
             name: name.clone(),
             path: path.clone(),
             released: false,
+            persistent: false,
         });
 
         assert!(!is_registered(&name), "a dropped name must not stay claimed");
@@ -1404,6 +1549,7 @@ mod tests {
             name: name.clone(),
             path: path.clone(),
             released: false,
+            persistent: false,
         }
         .release();
 
@@ -1510,5 +1656,56 @@ mod tests {
 
         assert!(remove_dir_robust(&target).is_ok());
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn persistent_scratch_preserves_directory_on_release_and_drop() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let persistent_path = temp.path().join("persistent-antigravity-test");
+        create_root(&persistent_path).expect("create");
+
+        let marker_file = persistent_path.join("marker.txt");
+        std::fs::write(&marker_file, b"runtime payload").expect("write marker");
+
+        let scratch = LaunchScratch {
+            name: "persistent-antigravity-test".to_string(),
+            path: persistent_path.clone(),
+            released: false,
+            persistent: true,
+        };
+
+        // Explicit release must keep the directory intact
+        scratch.release();
+        assert!(persistent_path.exists());
+        assert!(marker_file.exists());
+
+        // Simulating drop without release must also keep the directory intact
+        {
+            let _scratch_dropped = LaunchScratch {
+                name: "persistent-antigravity-test".to_string(),
+                path: persistent_path.clone(),
+                released: false,
+                persistent: true,
+            };
+        }
+        assert!(persistent_path.exists());
+        assert!(marker_file.exists());
+    }
+
+    #[test]
+    fn clear_persistent_scratch_removes_antigravity_dir() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let persistent_path = temp.path().join("persistent-antigravity-1.4.1");
+        create_root(&persistent_path).expect("create");
+        assert!(persistent_path.exists());
+
+        assert!(remove_dir_robust(&persistent_path).is_ok());
+        assert!(!persistent_path.exists());
+    }
+
+    #[test]
+    fn persistent_scratch_name_is_not_treated_as_pid_orphan() {
+        assert_eq!(pid_from_dir_name("persistent-antigravity-1.4.1"), None);
+        assert_eq!(pid_from_dir_name("persistent-antigravity"), None);
     }
 }

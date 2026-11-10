@@ -470,6 +470,7 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 pub fn clear_agent_cache(agent_type: AgentType) -> Result<(), AcpError> {
+    crate::acp::scratch_dir::clear_persistent_scratch_for_agent(agent_type);
     let agent_id = agent_cache_key(agent_type);
     // BOTH roots, and both have to succeed. While a migration is pending the
     // legacy root is still readable, so a legacy copy that survives an
