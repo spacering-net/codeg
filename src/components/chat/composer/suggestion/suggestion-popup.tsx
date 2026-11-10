@@ -2,6 +2,7 @@
 
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -179,8 +180,13 @@ export const SuggestionPopup = forwardRef<
     kinds: readonly ReferenceKind[]
     groups: SuggestionGroup[]
   }>({ query: null, kinds: [], groups: [] })
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  // The tab the user explicitly chose (via Tab/click), or null to auto-follow
+  const [selection, setSelection] = useState<{
+    query: string
+    kind: ReferenceKind
+    id: string
+    index: number
+  } | null>(null)
+  // The tab the user explicitly chose or navigated, or null to auto-follow
   // the first non-empty tab. Pinning survives subsequent keystrokes within this
   // open session; reopening the panel remounts and resets it to null.
   const [pinnedTab, setPinnedTab] = useState<ReferenceKind | null>(null)
@@ -207,18 +213,33 @@ export const SuggestionPopup = forwardRef<
   useEffect(() => {
     const abort = new AbortController()
     let active = true
+    let published = false
+    const publish = (groups: SuggestionGroup[]) => {
+      if (!active || abort.signal.aborted) return
+      const kinds = tabOrder.filter(
+        (kind) => !groups.some((group) => group.kind === kind && group.loading)
+      )
+      setResult({ query: state.query, kinds, groups })
+      // A late file result must not reset navigation within a ready group.
+      const firstPublication = !published
+      setSelection((current) => {
+        if (firstPublication || current?.query !== state.query) return null
+        const group = groups.find(({ kind }) => kind === current.kind)
+        if (!group || group.loading) return current
+        const found = group.items.findIndex(
+          ({ reference }) => reference.id === current.id
+        )
+        const index =
+          found >= 0 ? found : Math.min(current.index, group.items.length - 1)
+        const chosen = group.items[index]
+        return chosen ? { ...current, index, id: chosen.reference.id } : null
+      })
+      published = true
+    }
     const timer = setTimeout(() => {
-      Promise.resolve(search(state.query, abort.signal, tabOrder))
-        .then((groups) => {
-          if (!active || abort.signal.aborted) return
-          setResult({ query: state.query, kinds: tabOrder, groups })
-          setSelectedIndex(0)
-        })
-        .catch(() => {
-          if (!active || abort.signal.aborted) return
-          setResult({ query: state.query, kinds: tabOrder, groups: [] })
-          setSelectedIndex(0)
-        })
+      Promise.resolve(search(state.query, abort.signal, tabOrder, publish))
+        .then(publish)
+        .catch(() => publish([]))
     }, FETCH_DEBOUNCE_MS)
     return () => {
       active = false
@@ -256,6 +277,31 @@ export const SuggestionPopup = forwardRef<
   const flat = useMemo(
     () => (stale || !activeGroup ? [] : activeGroup.items),
     [stale, activeGroup]
+  )
+  const currentSelection =
+    selection?.query === state.query && selection.kind === activeTab
+      ? selection
+      : null
+  const foundIndex = currentSelection
+    ? flat.findIndex(({ reference }) => reference.id === currentSelection.id)
+    : -1
+  const selectedIndex =
+    foundIndex >= 0
+      ? foundIndex
+      : Math.min(currentSelection?.index ?? 0, Math.max(0, flat.length - 1))
+  const selectIndex = useCallback(
+    (index: number) => {
+      const item = flat[index]
+      if (!item) return
+      setPinnedTab(activeTab)
+      setSelection({
+        query: state.query,
+        kind: activeTab,
+        id: item.reference.id,
+        index,
+      })
+    },
+    [flat, activeTab, state.query]
   )
 
   // Scroll the active option into view (scoped to options so it never targets
@@ -422,14 +468,12 @@ export const SuggestionPopup = forwardRef<
         switch (event.key) {
           case "ArrowDown":
             if (flat.length > 0) {
-              setSelectedIndex((index) => (index + 1) % flat.length)
+              selectIndex((selectedIndex + 1) % flat.length)
             }
             return true
           case "ArrowUp":
             if (flat.length > 0) {
-              setSelectedIndex(
-                (index) => (index - 1 + flat.length) % flat.length
-              )
+              selectIndex((selectedIndex - 1 + flat.length) % flat.length)
             }
             return true
           case "Tab": {
@@ -440,7 +484,7 @@ export const SuggestionPopup = forwardRef<
             setPinnedTab(
               tabOrder[(at + dir + tabOrder.length) % tabOrder.length]
             )
-            setSelectedIndex(0)
+            setSelection(null)
             return true
           }
           case "Enter": {
@@ -468,7 +512,16 @@ export const SuggestionPopup = forwardRef<
         }
       },
     }),
-    [flat, selectedIndex, activeTab, tabOrder, onSelect, onClose, state.range]
+    [
+      flat,
+      selectedIndex,
+      selectIndex,
+      activeTab,
+      tabOrder,
+      onSelect,
+      onClose,
+      state.range,
+    ]
   )
 
   const activeLabel = tabLabels[activeTab]
@@ -552,7 +605,7 @@ export const SuggestionPopup = forwardRef<
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
                   setPinnedTab(kind)
-                  setSelectedIndex(0)
+                  setSelection(null)
                 }}
                 className={cn(
                   "flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium",
@@ -617,7 +670,7 @@ export const SuggestionPopup = forwardRef<
                       event.preventDefault()
                       onSelect(item.reference, state.range)
                     }}
-                    onMouseEnter={() => setSelectedIndex(index)}
+                    onMouseEnter={() => selectIndex(index)}
                   >
                     <ReferenceIcon data={item.reference} variant="option" />
                     {/* Label at its content width (shrinking + truncating only
