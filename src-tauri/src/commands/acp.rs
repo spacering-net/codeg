@@ -199,6 +199,11 @@ pub(crate) fn apply_custom_version_to_url(
 /// [`resolve_npx_command_for`]: PATH, then `~/.local/bin`, then the current npm
 /// global prefix, then the agent vendor's own native install. The fallbacks
 /// handle GUI environments that don't inherit the user's shell PATH.
+///
+/// Qoder on Windows resolves further at launch (see [`crate::acp::qoder`]): a
+/// wrapper whose target the user overrode through Agent Settings env, or one
+/// whose CLI went missing, passes this command-existence gate and reports the
+/// specific problem at connect rather than reading as "not installed" here.
 pub(crate) async fn is_cmd_available(agent_type: AgentType, cmd: &str) -> bool {
     resolve_npx_command_for(agent_type, cmd).await.is_some()
 }
@@ -836,6 +841,11 @@ async fn detect_local_version(agent_type: AgentType) -> Option<String> {
     match meta.distribution {
         registry::AgentDistribution::Npx { cmd, package, .. } => {
             let resolved = resolve_npx_command_for(agent_type, cmd).await?;
+            // A Windows Qoder dispatcher can select a native install even
+            // when a different Qoder version exists in the npm global prefix.
+            if cfg!(windows) && agent_type == AgentType::Qoder {
+                return system_probed_version(agent_type, &resolved, Some(package)).await;
+            }
             // Try `npm list -g <package_name> --json` to get the real installed version.
             let pkg_name = package_name_from_spec(package);
             let mut version = detect_npm_global_version(&pkg_name).await;
@@ -962,6 +972,10 @@ struct AgentDiag {
     /// (NOT `resolve_npx`) is what the verdict uses for non-npx agents, so a
     /// working cached-binary / uvx agent is not misreported as node-missing.
     launchable: Option<String>,
+    /// Windows Qoder only: the program codeg starts behind the launcher
+    /// `launchable` names (see [`crate::acp::qoder`]), or why it could not be
+    /// found. Resolved with the app's env; connect applies the agent's own.
+    direct_launch: Option<Result<String, String>>,
     /// `resolve_npx_command(cmd)` — the resolution the new-session page gates on
     /// (npx agents only; `None` for binary/uvx).
     resolve_npx: Option<String>,
@@ -971,8 +985,9 @@ struct AgentDiag {
     user_prefix_bin: Option<String>,
     /// Homebrew global bin (`/opt/homebrew/bin/<cmd>` etc.) when it exists (macOS).
     homebrew_bin: Option<String>,
-    /// Version seen by `detect_npm_global_version` (covers BOTH prefixes).
+    /// Version of the selected CLI for Windows Qoder; npm globals otherwise.
     detected_version: Option<String>,
+    direct_version_probe: bool,
     /// `agent_setting.installed_version` recorded in the DB.
     db_version: Option<String>,
     /// Set only for ACP *adapter* agents (Claude Code, Codex): the vendor CLI
@@ -1172,11 +1187,23 @@ async fn collect_agent_diag(
             diag.distribution = "npx";
             diag.package = Some(package.to_string());
             diag.node_required = node_required.map(str::to_string);
+            diag.direct_version_probe = cfg!(windows) && agent_type == AgentType::Qoder;
 
             let resolve_npx = resolve_npx_command_for(agent_type, cmd)
                 .await
                 .map(|p| p.to_string_lossy().to_string());
             diag.launchable = resolve_npx.clone();
+            // Qoder on Windows launches the program behind its wrapper (see
+            // `acp::qoder`), so the report adds that program and, for an npm
+            // install, its entry, or why it could not be found, next to the
+            // wrapper the new-session page gates on.
+            if cfg!(windows) && agent_type == AgentType::Qoder {
+                diag.direct_launch = resolve_npx.as_ref().map(|p| {
+                    crate::acp::qoder::resolve_launch(Path::new(p), &BTreeMap::new())
+                        .map(|launch| launch.describe())
+                        .map_err(|error| error.to_string())
+                });
+            }
             diag.resolve_npx = resolve_npx;
 
             diag.system_prefix_bin = npm_prefix_g.and_then(|p| {
@@ -1199,7 +1226,19 @@ async fn collect_agent_diag(
             // is killed on drop via `npm_list_version`'s `kill_on_drop`).
             diag.detected_version = tokio::time::timeout(
                 DIAG_PROBE_TIMEOUT,
-                detect_npm_global_version(&package_name_from_spec(package)),
+                async {
+                    if diag.direct_version_probe {
+                        match diag.resolve_npx.as_deref() {
+                            Some(path) => {
+                                system_probed_version(agent_type, Path::new(path), Some(package))
+                                    .await
+                            }
+                            None => None,
+                        }
+                    } else {
+                        detect_npm_global_version(&package_name_from_spec(package)).await
+                    }
+                },
             )
             .await
             .ok()
@@ -1508,6 +1547,16 @@ fn compute_verdict(inp: &DiagInputs) -> DiagnosticsVerdict {
         );
     }
 
+    // Windows Qoder: the launcher resolves, but connect starts the CLI behind
+    // it, and that could not be found (the reason is in the agent section).
+    if matches!(agent.direct_launch, Some(Err(_))) {
+        return diag_verdict(
+            DiagLevel::Fail,
+            "installed_but_unresolved",
+            "The agent is recorded as installed, but the app cannot locate its executable.",
+        );
+    }
+
     diag_verdict(
         DiagLevel::Ok,
         "ok",
@@ -1604,6 +1653,22 @@ fn build_report(
             if a.launchable.is_some() { DiagLevel::Ok } else { DiagLevel::Fail },
             (a.distribution == "npx").then_some("this is exactly what the new-session page checks"),
         )];
+        if let Some(direct) = &a.direct_launch {
+            checks.push(match direct {
+                Ok(program) => diag_check(
+                    "program behind the launcher",
+                    program,
+                    DiagLevel::Ok,
+                    Some("what connect starts on Windows, instead of the launcher"),
+                ),
+                Err(reason) => diag_check(
+                    "program behind the launcher",
+                    reason,
+                    DiagLevel::Fail,
+                    Some("connect cannot start the CLI behind the launcher"),
+                ),
+            });
+        }
         if let Some(p) = &a.package {
             checks.push(diag_check("package", p, DiagLevel::Info, None));
         }
@@ -1630,10 +1695,18 @@ fn build_report(
                 ));
             }
             checks.push(diag_check(
-                "detect_npm_global_version",
+                if a.direct_version_probe {
+                    "selected CLI --version"
+                } else {
+                    "detect_npm_global_version"
+                },
                 a.detected_version.as_deref().unwrap_or("none"),
                 DiagLevel::Info,
-                Some("covers both prefixes — what the Settings badge uses"),
+                Some(if a.direct_version_probe {
+                    "probes the selected direct launch"
+                } else {
+                    "covers both prefixes — what the Settings badge uses"
+                }),
             ));
         }
         // Adapter agents: show the vendor CLI next to the adapter it is NOT.
@@ -2244,6 +2317,53 @@ fn probe_cache_key(
 static SYSTEM_PROBE_CACHE: std::sync::Mutex<Option<HashMap<ProbeCacheKey, ProbeCacheEntry>>> =
     std::sync::Mutex::new(None);
 
+#[derive(PartialEq, Eq, Hash)]
+struct DirectProbeKey {
+    program: PathBuf,
+    args: Vec<String>,
+}
+
+struct DirectProbeEntry {
+    /// Both the native runtime and its script can change independently.
+    files: Vec<(std::time::SystemTime, u64)>,
+    version: Option<String>,
+}
+
+static DIRECT_PROBE_CACHE: std::sync::Mutex<Option<HashMap<DirectProbeKey, DirectProbeEntry>>> =
+    std::sync::Mutex::new(None);
+
+async fn qoder_probed_version(launch: &crate::acp::qoder::QoderWindowsLaunch) -> Option<String> {
+    let key = DirectProbeKey {
+        program: launch.program.clone(),
+        args: launch.version_probe_args(),
+    };
+    let files = std::iter::once(launch.program.as_path())
+        .chain(launch.prefix_args.iter().map(Path::new))
+        .map(|path| {
+            let metadata = std::fs::metadata(path).ok()?;
+            Some((metadata.modified().ok()?, metadata.len()))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if let Ok(cache) = DIRECT_PROBE_CACHE.lock() {
+        if let Some(entry) = cache.as_ref().and_then(|map| map.get(&key)) {
+            if entry.files == files {
+                return entry.version.clone();
+            }
+        }
+    }
+    let version = probe_cli_version_token(&launch.program, &key.args).await;
+    if let Ok(mut cache) = DIRECT_PROBE_CACHE.lock() {
+        cache.get_or_insert_with(HashMap::new).insert(
+            key,
+            DirectProbeEntry {
+                files,
+                version: version.clone(),
+            },
+        );
+    }
+    version
+}
+
 /// First version-looking token in probe output: starts with a digit (a leading
 /// `v` is tolerated and stripped), is dotted, and is drawn from the semver /
 /// calendar-version alphabet. Whitespace tokens are additionally split on `/`
@@ -2313,6 +2433,20 @@ pub(crate) async fn system_probed_version(
     let declared_probe = agent_type
         .custom_id()
         .and_then(crate::acp::custom_registry::version_probe_of);
+    // Qoder on Windows runs the program behind its launcher, so the version is
+    // read from that exact program — resolved by the same steps the connect
+    // takes — and from nothing else: probing the wrapper or the global npm
+    // package can report an installation the launch will not start. A
+    // resolution that fails here has no version to report; the connect surfaces
+    // its specific error. The probe sees the process environment, so a
+    // per-agent `QODER_CLI_BIN` override shifts the launch only, and the
+    // recorded version stays the default installation's.
+    if cfg!(windows) && agent_type == AgentType::Qoder {
+        let Ok(launch) = crate::acp::qoder::resolve_launch(resolved_bin, &BTreeMap::new()) else {
+            return None;
+        };
+        return qoder_probed_version(&launch).await;
+    }
     system_probed_version_with(declared_probe, resolved_bin, npm_package).await
 }
 
@@ -16147,6 +16281,114 @@ mod tests {
         let version =
             system_probed_version(AgentType::Custom("probe-e2e-test"), &bin, None).await;
         assert_eq!(version.as_deref(), Some("1.2.3"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn qoder_version_cache_distinguishes_entries_and_refreshes_after_a_change() {
+        use crate::acp::qoder::{QoderInstallKind, QoderWindowsLaunch};
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("version.sh");
+        std::fs::write(
+            &entry,
+            "printf x >> \"${0%/*}/probes\"\nprintf '1.2.3\\n'\n",
+        )
+        .unwrap();
+        let mut launch = QoderWindowsLaunch {
+            program: PathBuf::from("/bin/sh"),
+            prefix_args: vec![entry.clone().into_os_string()],
+            kind: QoderInstallKind::NpmPackage,
+        };
+        for _ in 0..2 {
+            assert_eq!(qoder_probed_version(&launch).await.as_deref(), Some("1.2.3"));
+        }
+        assert_eq!(std::fs::read(dir.path().join("probes")).unwrap(), b"x");
+        // A different file length makes invalidation deterministic even on a
+        // filesystem with coarse timestamps.
+        std::fs::write(
+            &entry,
+            "printf x >> \"${0%/*}/probes\"\nprintf '10.20.30\\n'\n",
+        )
+        .unwrap();
+        assert_eq!(qoder_probed_version(&launch).await.as_deref(), Some("10.20.30"));
+        assert_eq!(std::fs::read(dir.path().join("probes")).unwrap(), b"xx");
+        let other = dir.path().join("other.sh");
+        std::fs::write(&other, "printf '4.5.6\\n'\n").unwrap();
+        launch.prefix_args = vec![other.into_os_string()];
+        assert_eq!(qoder_probed_version(&launch).await.as_deref(), Some("4.5.6"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn qoder_version_cache_also_caches_failed_probes() {
+        use crate::acp::qoder::{QoderInstallKind, QoderWindowsLaunch};
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("failing.sh");
+        std::fs::write(&entry, "printf x >> \"${0%/*}/probes\"\nexit 1\n").unwrap();
+        let launch = QoderWindowsLaunch {
+            program: PathBuf::from("/bin/sh"),
+            prefix_args: vec![entry.into_os_string()],
+            kind: QoderInstallKind::NpmPackage,
+        };
+        for _ in 0..2 {
+            assert_eq!(qoder_probed_version(&launch).await, None);
+        }
+        assert_eq!(std::fs::read(dir.path().join("probes")).unwrap(), b"x");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn qoder_detection_and_diagnostics_probe_the_selected_cli_before_npm() {
+        let node = resolve_command_on_path("node").expect("the fixture needs a real node");
+        let output = crate::process::tokio_command(&node)
+            .arg("--version")
+            .output()
+            .await
+            .unwrap();
+        let expected = extract_version_token(&String::from_utf8_lossy(&output.stdout)).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("qoder.cmd"),
+            "@echo off\r\nset \"DISPATCHER=%~dp0qoder-dispatcher.ps1\"\r\npowershell.exe -File \"%DISPATCHER%\" -- %*\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("npm.cmd"),
+            "@echo off\r\necho {\"dependencies\":{\"@qoder-ai/qodercli\":{\"version\":\"0.0.1\"}}}\r\n",
+        )
+        .unwrap();
+        let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+        let test_path = std::env::join_paths(
+            std::iter::once(root.path().to_path_buf())
+                .chain(std::env::split_paths(&inherited_path)),
+        )
+        .unwrap();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        // A real native executable answers --version, while the competing npm
+        // metadata deliberately describes a different version. The dispatcher
+        // selects the executable through its supported override.
+        temp_env::async_with_vars(
+            [
+                ("PATH", Some(test_path.as_os_str())),
+                ("QODER_CLI_BIN", Some(node.as_os_str())),
+            ],
+            async {
+                assert_eq!(
+                    detect_npm_global_version("@qoder-ai/qodercli")
+                        .await
+                        .as_deref(),
+                    Some("0.0.1")
+                );
+                assert_eq!(
+                    detect_local_version(AgentType::Qoder).await.as_deref(),
+                    Some(expected.as_str())
+                );
+                let diag = collect_agent_diag(&db, AgentType::Qoder, None).await;
+                assert_eq!(diag.detected_version.as_deref(), Some(expected.as_str()));
+                assert!(diag.direct_version_probe);
+            },
+        )
+        .await;
     }
 
     #[cfg(unix)]

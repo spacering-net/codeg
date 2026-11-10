@@ -7267,7 +7267,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `mcp_call`, a call that names no tool codeg can see. So codeg
             // launches Qoder with `--settings '{"mcp":{"lazyLoad":false}}'`
             // (`QODER_LAUNCH_SETTINGS` in `acp::connection`), which brings back
-            // `lazy=false` and 1.1.83's transcript. An option `qoder --acp` does
+            // `lazy=false` and 1.1.83's transcript. On Windows the launch first
+            // resolves past the cmd wrappers `qoder` points at — they strip
+            // inline JSON's quotes on the way to the CLI — and spawns the real
+            // CLI directly (see `acp::qoder`). An option `qoder --acp` does
             // not know makes it exit, but each release tried from 1.1.0 to 1.1.86
             // (1.1.0, 1.1.30, 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84,
             // 1.1.86) takes the flag, and 1.1.30 and 1.1.64 open sessions with
