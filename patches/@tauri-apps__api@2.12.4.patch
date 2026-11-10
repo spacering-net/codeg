@@ -1,0 +1,164 @@
+diff --git a/event.cjs b/event.cjs
+index b53f3497d826d26e6182e28781b519e6e14f39c8..c926acf081427b7c79bcf170c0028a18fceda786 100644
+--- a/event.cjs
++++ b/event.cjs
+@@ -99,7 +99,13 @@ exports.TauriEvent = void 0;
+  * @returns
+  */
+ async function _unlisten(event, eventId) {
+-    window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener(event, eventId);
++    try {
++        window.__TAURI_EVENT_PLUGIN_INTERNALS__?.unregisterListener(event, eventId);
++    }
++    catch {
++        // Native registration can complete before its JavaScript registry eval.
++        // The captured callback has already been released by _listen.
++    }
+     await core.invoke('plugin:event|unlisten', {
+         event,
+         eventId
+@@ -134,17 +140,44 @@ async function _unlisten(event, eventId) {
+  * @since 1.0.0
+  */
+ async function listen(event, handler, options) {
++    return _listen(event, handler, options, false);
++}
++async function _listen(event, handler, options, onlyOnce) {
+     var _a;
+     const target = typeof (options === null || options === void 0 ? void 0 : options.target) === 'string'
+         ? { kind: 'AnyLabel', label: options.target }
+         : ((_a = options === null || options === void 0 ? void 0 : options.target) !== null && _a !== void 0 ? _a : { kind: 'Any' });
+-    return core.invoke('plugin:event|listen', {
+-        event,
+-        target,
+-        handler: core.transformCallback(handler)
+-    }).then((eventId) => {
+-        return async () => _unlisten(event, eventId);
++    let disposed = false;
++    const releaseCallback = () => {
++        window.__TAURI_INTERNALS__.unregisterCallback?.(handlerId);
++    };
++    const cleanup = async (eventId) => {
++        if (disposed)
++            return;
++        disposed = true;
++        releaseCallback();
++        await _unlisten(event, eventId);
++    };
++    const handlerId = core.transformCallback((eventData) => {
++        if (disposed)
++            return;
++        if (onlyOnce)
++            void cleanup(eventData.id).catch(() => { });
++        handler(eventData);
+     });
++    try {
++        const eventId = await core.invoke('plugin:event|listen', {
++            event,
++            target,
++            handler: handlerId
++        });
++        return async () => cleanup(eventId);
++    }
++    catch (error) {
++        disposed = true;
++        releaseCallback();
++        throw error;
++    }
+ }
+ /**
+  * Listens once to an emitted event to any {@link EventTarget|target}.
+@@ -177,10 +210,7 @@ async function listen(event, handler, options) {
+  * @since 1.0.0
+  */
+ async function once(event, handler, options) {
+-    return listen(event, (eventData) => {
+-        void _unlisten(event, eventData.id);
+-        handler(eventData);
+-    }, options);
++    return _listen(event, handler, options, true);
+ }
+ /**
+  * Emits an event to all {@link EventTarget|targets}.
+diff --git a/event.js b/event.js
+index 1e03752962d8cb5edad90d59732e486e187bee5b..3a3ebc94e4d5a58a95f1529a031615d162946f03 100644
+--- a/event.js
++++ b/event.js
+@@ -97,7 +97,13 @@ var TauriEvent;
+  * @returns
+  */
+ async function _unlisten(event, eventId) {
+-    window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener(event, eventId);
++    try {
++        window.__TAURI_EVENT_PLUGIN_INTERNALS__?.unregisterListener(event, eventId);
++    }
++    catch {
++        // Native registration can complete before its JavaScript registry eval.
++        // The captured callback has already been released by _listen.
++    }
+     await invoke('plugin:event|unlisten', {
+         event,
+         eventId
+@@ -132,17 +138,44 @@ async function _unlisten(event, eventId) {
+  * @since 1.0.0
+  */
+ async function listen(event, handler, options) {
++    return _listen(event, handler, options, false);
++}
++async function _listen(event, handler, options, onlyOnce) {
+     var _a;
+     const target = typeof (options === null || options === void 0 ? void 0 : options.target) === 'string'
+         ? { kind: 'AnyLabel', label: options.target }
+         : ((_a = options === null || options === void 0 ? void 0 : options.target) !== null && _a !== void 0 ? _a : { kind: 'Any' });
+-    return invoke('plugin:event|listen', {
+-        event,
+-        target,
+-        handler: transformCallback(handler)
+-    }).then((eventId) => {
+-        return async () => _unlisten(event, eventId);
++    let disposed = false;
++    const releaseCallback = () => {
++        window.__TAURI_INTERNALS__.unregisterCallback?.(handlerId);
++    };
++    const cleanup = async (eventId) => {
++        if (disposed)
++            return;
++        disposed = true;
++        releaseCallback();
++        await _unlisten(event, eventId);
++    };
++    const handlerId = transformCallback((eventData) => {
++        if (disposed)
++            return;
++        if (onlyOnce)
++            void cleanup(eventData.id).catch(() => { });
++        handler(eventData);
+     });
++    try {
++        const eventId = await invoke('plugin:event|listen', {
++            event,
++            target,
++            handler: handlerId
++        });
++        return async () => cleanup(eventId);
++    }
++    catch (error) {
++        disposed = true;
++        releaseCallback();
++        throw error;
++    }
+ }
+ /**
+  * Listens once to an emitted event to any {@link EventTarget|target}.
+@@ -175,10 +208,7 @@ async function listen(event, handler, options) {
+  * @since 1.0.0
+  */
+ async function once(event, handler, options) {
+-    return listen(event, (eventData) => {
+-        void _unlisten(event, eventData.id);
+-        handler(eventData);
+-    }, options);
++    return _listen(event, handler, options, true);
+ }
+ /**
+  * Emits an event to all {@link EventTarget|targets}.
