@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Info,
   ChevronRight,
+  MessagesSquare,
   SquareTerminal,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -384,13 +385,11 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       "rounded-full",
                       "pr-[0.25rem]"
                     )}
-                    // Parents reserve room for both the persistent chevron and
-                    // their agent icon. Leaves keep the existing rail spacing.
+                    // Keep agent icons and titles aligned for parents and leaves.
+                    // The child chevron occupies the gutter before the rail.
                     style={{
                       paddingLeft:
-                        hasChildren && onToggleExpand
-                          ? "calc(var(--conv-rail-axis, 0.875rem) + 1.875rem)"
-                          : "calc(var(--conv-rail-axis, 0.875rem) + 0.875rem)",
+                        "calc(var(--conv-rail-axis, 0.875rem) + 0.875rem)",
                     }}
                   >
                     {/* Ancestor guide rails (depth ≥ 1): keep each parent's vertical
@@ -415,10 +414,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     <div
                       className="pointer-events-none absolute top-1/2 z-10 flex items-center justify-center"
                       style={{
-                        left:
-                          hasChildren && onToggleExpand
-                            ? "calc(var(--conv-rail-axis, 0.875rem) + 1rem)"
-                            : "var(--conv-rail-axis, 0.875rem)",
+                        left: "var(--conv-rail-axis, 0.875rem)",
                         width: "0.875rem",
                         height: "0.875rem",
                         transform: "translate(-50%, -50%)",
@@ -457,18 +453,6 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       {formatConversationTitle(conversation.title) ||
                         t("untitledConversation")}
                     </span>
-                    {hasChildren && conversation.child_count > 0 && (
-                      <span
-                        className="relative -ml-1 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded bg-sidebar-accent px-1 text-[0.625rem] font-medium text-muted-foreground tabular-nums"
-                        title={
-                          expanded
-                            ? t("collapseSubsessions")
-                            : t("expandSubsessions")
-                        }
-                      >
-                        {conversation.child_count}
-                      </span>
-                    )}
                     {/* Inline, inside the row's fixed 2rem height: the list's
                     virtualizer and rail geometry assume one line per row. The
                     full set of tags is in the hover bubble. Capped so the
@@ -502,8 +486,8 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     the hover bubble names the original path instead. */}
                   </button>
 
-                  {/* Keep the child toggle visible at the rail axis, alongside
-                  the agent icon. It is a sibling of the row button so expanding
+                  {/* Keep the child toggle visible in the gutter before the
+                  agent icon. It is a sibling of the row button so expanding
                   a subtree never selects the conversation. */}
                   {hasChildren && onToggleExpand && (
                     <button
@@ -525,8 +509,8 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       }
                       className="absolute top-0 bottom-0 z-20 flex cursor-pointer items-center justify-center rounded-sm text-sidebar-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
                       style={{
-                        left: "var(--conv-rail-axis, 0.875rem)",
-                        width: "0.875rem",
+                        left: "calc(var(--conv-rail-axis, 0.875rem) - 0.75rem)",
+                        width: "0.75rem",
                         transform: "translateX(-50%)",
                       }}
                     >
@@ -540,6 +524,41 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       />
                     </button>
                   )}
+
+                  {hasChildren &&
+                    onToggleExpand &&
+                    conversation.child_count > 0 && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onToggleExpand(conversation.id)
+                        }}
+                        aria-label={`${
+                          expanded
+                            ? t("collapseSubsessions")
+                            : t("expandSubsessions")
+                        } (${conversation.child_count})`}
+                        aria-expanded={expanded}
+                        title={
+                          expanded
+                            ? t("collapseSubsessions")
+                            : t("expandSubsessions")
+                        }
+                        className={cn(
+                          "mr-1 inline-flex h-5 shrink-0 cursor-pointer items-center gap-1 rounded-full border border-sidebar-foreground/15 px-1.5 text-[0.6875rem] font-semibold text-sidebar-foreground outline-none transition-colors",
+                          "hover:bg-sidebar-foreground/15 focus-visible:ring-2 focus-visible:ring-ring",
+                          expanded
+                            ? "bg-sidebar-foreground/12"
+                            : "bg-sidebar-foreground/6"
+                        )}
+                      >
+                        <MessagesSquare className="h-3 w-3" aria-hidden />
+                        <span className="tabular-nums">
+                          {conversation.child_count}
+                        </span>
+                      </button>
+                    )}
 
                   {/* Right slot: sizes to its content — the time / status badge
                   normally, the two quick-action buttons (pin, done) on hover —

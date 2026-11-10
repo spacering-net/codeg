@@ -530,12 +530,12 @@ describe("SidebarConversationCard sub-session chevron", () => {
     expect(queryByLabelText("Expand sub-conversations")).toBeNull()
   })
 
-  it("keeps the chevron on the rail axis", () => {
+  it("anchors the chevron to the rail gutter", () => {
     const { getByLabelText } = renderCard(conv(2), {
       hasChildren: true,
       expanded: false,
     })
-    // The chevron stays on the rail axis, separate from the agent icon
+    // The chevron stays in the rail gutter, separate from the agent icon
     // and the right-hand time/action slot.
     const chevron = getByLabelText("Expand sub-conversations")
     expect(chevron.style.left).toContain("--conv-rail-axis")
