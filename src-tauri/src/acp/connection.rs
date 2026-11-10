@@ -21261,12 +21261,17 @@ pub(crate) fn grok_failed_compaction_meta(update: &serde_json::Value) -> serde_j
 ///   (`meta.grokSubagentProgress`) so the running Agent card can show a live
 ///   "N tools · M turns · ctx%" line. Replacing the block's meta is safe for
 ///   this call: its classification rides `rawInput.subagent_type`, not meta.
-///   GATED on `turn_active`: after `TurnComplete` the frontend diverts wire
-///   tool updates out of the transcript anyway, while the backend
-///   `SessionState` apply arm would lazily RECREATE `live_message` for the
-///   update — resurrecting a ghost pending card into every later
-///   snapshot/attach. An out-of-turn tick is therefore dropped whole (the
-///   `subagent_finished` settle below is the out-of-turn-safe channel).
+///   Only while the card is in the live message (its launching turn is the
+///   one Prompting): after `TurnComplete` the frontend diverts wire tool
+///   updates out of the transcript anyway, while the backend `SessionState`
+///   apply arm would lazily RECREATE `live_message` for the update —
+///   resurrecting a ghost pending card into every later snapshot/attach. Any
+///   other tick for a BACKGROUND child — and that is nearly all of them, since
+///   grok 1.0.77 measured: the launch returns at once, the turn answers, and
+///   the child's ticks (about every 10 s) all land after `TurnComplete` — goes
+///   out as `BackgroundTaskProgress` instead, which the frontend patches onto
+///   the promoted card in memory. A blocking child's tick out of its turn is
+///   dropped (its turn was cancelled; no card takes it).
 /// * `subagent_finished` for a spawn whose CALL already settled (= a
 ///   BACKGROUND child; the launch ack was its final wire output) settles via
 ///   the same `BackgroundActivity` channel Claude's async sub-agents use: the
@@ -21414,14 +21419,17 @@ fn map_grok_subagent_notification_inner(
             Some(events)
         }
         "subagent_progress" => {
-            if !turn_active {
-                return None;
-            }
             let call_id = cb_state.grok_subagent_to_call.get(subagent_id)?.clone();
-            // Launch-turn-specific gate on top of Prompting: a tick for a
-            // PRIOR turn's background child must not be appended into the
-            // CURRENT turn's live message (see `grok_progress_eligible`).
-            if !cb_state.grok_progress_eligible.contains(&call_id) {
+            // The card is still in the live message only while its launching
+            // turn runs: Prompting, plus the launch-turn-specific gate (a tick
+            // for a PRIOR turn's background child must not be appended into
+            // the CURRENT turn's live message, see `grok_progress_eligible`).
+            let card_is_live = turn_active && cb_state.grok_progress_eligible.contains(&call_id);
+            // Otherwise only a background child's card can still take a tick —
+            // its launch call settled with the ack and the card sits in
+            // promoted history. A blocking spawn's tick out of its turn (the
+            // turn was cancelled) has no card to land on.
+            if !card_is_live && !cb_state.grok_settled_spawn_ids.contains(&call_id) {
                 return None;
             }
             let mut progress = serde_json::Map::new();
@@ -21443,6 +21451,22 @@ fn map_grok_subagent_notification_inner(
             // block's meta wholesale, so a progress-only payload would drop the
             // "open the child's session" affordance mid-run.
             let child_session_id = cb_state.grok_call_child_session.get(&call_id).cloned();
+            let meta = grok_subagent_meta(
+                subagent_id,
+                child_session_id.as_deref(),
+                Some(serde_json::Value::Object(progress)),
+            );
+            if !card_is_live {
+                // Out of the launching turn: the frontend patches the promoted
+                // card in memory (see `AcpEvent::BackgroundTaskProgress`).
+                let session_id = params.get("sessionId").and_then(|v| v.as_str())?;
+                return Some(vec![AcpEvent::BackgroundTaskProgress {
+                    session_id: session_id.to_string(),
+                    tool_use_id: call_id,
+                    task_id: subagent_id.to_string(),
+                    meta,
+                }]);
+            }
             Some(vec![AcpEvent::ToolCallUpdate {
                 tool_call_id: call_id,
                 title: None,
@@ -21452,11 +21476,7 @@ fn map_grok_subagent_notification_inner(
                 raw_output: None,
                 raw_output_append: None,
                 locations: None,
-                meta: Some(grok_subagent_meta(
-                    subagent_id,
-                    child_session_id.as_deref(),
-                    Some(serde_json::Value::Object(progress)),
-                )),
+                meta: Some(meta),
                 images: None,
             }])
         }
@@ -33916,23 +33936,51 @@ mod tests {
             "context_usage_pct": 12.5,
             "tools_used": ["read_file"]
         }));
-        // Out-of-turn tick: dropped whole. A post-TurnComplete ToolCallUpdate
-        // would resurrect a ghost `live_message` in the SessionState snapshot
-        // (the apply arm lazily creates it), while the frontend diverts it out
-        // of the transcript anyway.
-        assert!(
-            map_grok_subagent_notification(&progress, AgentType::Grok, false, &mut cb).is_empty(),
-            "progress must not emit outside an active turn"
+        // Out-of-turn tick (grok's usual timing for a background child: the
+        // launch returns at once and the turn answers): NOT a ToolCallUpdate —
+        // after TurnComplete that would resurrect a ghost `live_message` in
+        // the SessionState snapshot (the apply arm lazily creates it), while
+        // the frontend diverts it out of the transcript anyway — but the
+        // out-of-turn-safe BackgroundTaskProgress the frontend patches onto
+        // the promoted launch card.
+        let assert_background_tick = |events: Vec<AcpEvent>, why: &str| match events.as_slice() {
+            [AcpEvent::BackgroundTaskProgress {
+                session_id,
+                tool_use_id,
+                task_id,
+                meta,
+            }] => {
+                assert_eq!(session_id, "sess-1", "{why}");
+                assert_eq!(tool_use_id, "call-1", "{why}");
+                assert_eq!(task_id, "sub-1", "{why}");
+                assert_eq!(
+                    meta.pointer("/grokSubagentProgress/toolCallCount")
+                        .and_then(|v| v.as_u64()),
+                    Some(7),
+                    "{why}"
+                );
+                assert_eq!(
+                    meta.pointer("/grokSubagentSession/childSessionId")
+                        .and_then(|v| v.as_str()),
+                    Some("sub-1"),
+                    "{why}"
+                );
+            }
+            other => panic!("{why}: expected one BackgroundTaskProgress, got {other:?}"),
+        };
+        assert_background_tick(
+            map_grok_subagent_notification(&progress, AgentType::Grok, false, &mut cb),
+            "a tick outside any turn",
         );
         // Cross-turn tick: the launch turn ended and a LATER turn is Prompting
-        // (turn_active=true) — the per-turn eligibility clear must still drop
-        // it, or the old tool id would be appended into the NEW turn's live
-        // message as a ghost card.
+        // (turn_active=true) — the per-turn eligibility clear must still keep
+        // it off the wire-update path, or the old tool id would be appended
+        // into the NEW turn's live message as a ghost card.
         let eligibility_backup = cb.grok_progress_eligible.clone();
         cb.grok_progress_eligible.clear();
-        assert!(
-            map_grok_subagent_notification(&progress, AgentType::Grok, true, &mut cb).is_empty(),
-            "a prior turn's background child must not tick into a later turn"
+        assert_background_tick(
+            map_grok_subagent_notification(&progress, AgentType::Grok, true, &mut cb),
+            "a prior turn's background child ticking during a later turn",
         );
         cb.grok_progress_eligible = eligibility_backup;
         match map_grok_subagent_notification(&progress, AgentType::Grok, true, &mut cb).as_slice() {
@@ -34000,6 +34048,12 @@ mod tests {
         // Lifecycle over: a duplicate finished no longer routes anywhere.
         assert!(map_grok_subagent_notification(&finished, AgentType::Grok, false, &mut cb)
             .is_empty());
+        // Nor does a straggling tick: it must not paint progress back onto a
+        // card that has already settled.
+        assert!(
+            map_grok_subagent_notification(&progress, AgentType::Grok, false, &mut cb).is_empty(),
+            "a tick after the finish has no card to update"
+        );
     }
 
     /// A BLOCKING spawn (call not yet settled when the child finishes) must NOT
@@ -34034,6 +34088,19 @@ mod tests {
             }
             other => panic!("expected one ToolCallUpdate, got {other:?}"),
         }
+        // A blocking child's tick outside its launch turn (the turn was
+        // cancelled under it) has no card to land on: its call never settled
+        // into history as a background launch, so nothing is emitted at all.
+        let progress = grok_subagent_notif(serde_json::json!({
+            "sessionUpdate": "subagent_progress",
+            "subagent_id": "sub-1",
+            "duration_ms": 1000,
+            "tool_call_count": 1
+        }));
+        assert!(
+            map_grok_subagent_notification(&progress, AgentType::Grok, false, &mut cb).is_empty(),
+            "a blocking child's out-of-turn tick is dropped"
+        );
         let finished = grok_subagent_notif(serde_json::json!({
             "sessionUpdate": "subagent_finished",
             "subagent_id": "sub-1",

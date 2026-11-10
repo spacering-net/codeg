@@ -5563,6 +5563,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           }
           break
         }
+        case "background_task_progress": {
+          // A background sub-agent reporting while it runs, after its launch
+          // turn ended: patch the launch card in memory (resolved like a
+          // settle; an unopened conversation has no card to patch).
+          const conversationId = getConversationIdByExternalIdFromStore(
+            e.session_id
+          )
+          if (conversationId != null) {
+            useConversationRuntimeStore
+              .getState()
+              .actions.applyBackgroundTaskProgress(
+                conversationId,
+                e.tool_use_id,
+                e.meta
+              )
+          }
+          break
+        }
         case "permission_request":
           flushStreamingQueue(contextKey)
           flushPendingToolCallUpdates()

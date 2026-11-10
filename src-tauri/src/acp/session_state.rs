@@ -1839,6 +1839,12 @@ impl SessionState {
                 self.background_outstanding = *outstanding;
                 self.background_activity_at = Some(Utc::now());
             }
+            AcpEvent::BackgroundTaskProgress { .. } => {
+                // The card patch is frontend-only. The tick itself is the agent
+                // saying a background child is alive right now, so it refreshes
+                // the keep-alive clock the outstanding count is bounded by.
+                self.background_activity_at = Some(Utc::now());
+            }
             AcpEvent::SessionFailure { record } => {
                 // Monotonic per-id merge — the SAME rule the frontend reducer
                 // applies, so a replayed/out-of-order upsert (claude re-sends

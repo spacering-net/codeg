@@ -3347,6 +3347,19 @@ export type AcpEvent =
       watermark: number
     }
   /**
+   * A live progress tick for a background sub-agent whose launch card has left
+   * the live message (Grok: its launching turn ended, or a later turn runs).
+   * `meta` is merged into the launch card's own `meta` in memory, the way a
+   * settle rewrites its lifecycle marker; nothing is persisted.
+   */
+  | {
+      type: "background_task_progress"
+      session_id: string
+      tool_use_id: string
+      task_id: string
+      meta: Record<string, unknown>
+    }
+  /**
    * A `delegate_to_agent` MCP tool call from the parent agent has spawned a
    * child sub-session and the child's prompt is in flight. Emitted as soon as
    * the broker registers the pending call. Frontend uses this to build the

@@ -778,6 +778,27 @@ pub enum AcpEvent {
         /// race without cross-namespace id dedup.
         watermark: u64,
     },
+    /// A live progress tick for a background sub-agent whose launch card has
+    /// already left the live message: its launching turn ended (the usual case
+    /// — a background launch returns at once and the turn answers), or a later
+    /// turn is running. A `ToolCallUpdate` cannot reach that card, since the
+    /// frontend diverts out-of-turn wire updates and `SessionState` would
+    /// recreate a ghost live message for one. The frontend merges `meta` into
+    /// the launch card's own `meta` in memory, the way a settle rewrites its
+    /// lifecycle marker. Nothing is persisted: the tick is the only record.
+    ///
+    /// Grok only (`subagent_progress`): its background children report while
+    /// they run, and almost always after the parent's turn has ended.
+    BackgroundTaskProgress {
+        session_id: String,
+        /// The launching tool call — the card to update.
+        tool_use_id: String,
+        /// The sub-agent's own id.
+        task_id: String,
+        /// Keys to merge into the card's `meta` (for Grok,
+        /// `grokSubagentSession` + `grokSubagentProgress`).
+        meta: serde_json::Value,
+    },
     /// A `delegate_to_agent` MCP tool call from the parent agent has spawned a
     /// child sub-session and the child's prompt is in flight. Emitted as soon
     /// as the broker registers the pending call. The frontend uses this to
