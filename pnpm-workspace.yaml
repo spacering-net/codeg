@@ -35,4 +35,4 @@ minimumReleaseAgeExclude:
   - '@tauri-apps/plugin-updater@2.14.0'
 
 patchedDependencies:
-  streamdown@2.7.0: patches/streamdown@2.7.0.patch
+  streamdown@2.7.1: patches/streamdown@2.7.1.patch

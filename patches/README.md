@@ -1,4 +1,4 @@
-# Streamdown 2.7.0 highlighting lifecycle
+# Streamdown 2.7.1 highlighting lifecycle
 
 The `HighlightedCodeBlockBody` effect now supplies an optional `AbortSignal`
 to its highlighter plugin and aborts it on a code/language/theme change or
