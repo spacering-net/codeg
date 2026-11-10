@@ -22,7 +22,9 @@ import {
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
 import { popClosedTab } from "@/lib/closed-tab-stack"
+import { isAssistantsPageCurrent } from "@/lib/assistants-page"
 import {
+  assistantShortcutFromEvent,
   matchShortcutEvent,
   numberedTabIndexFromEvent,
   pickNumberedTabId,
@@ -257,6 +259,15 @@ export function WorkspaceChromeController() {
       // mod+shift+tab working at every width — and, crucially, keeps
       // preventDefault firing so mod+w never falls through to closing the OS
       // window. Routing mirrors the old split: conversation pane vs files pane.
+      // On the assistants page its own keys switch assistants on these
+      // chords (`useAssistantShortcuts`); the tabs are under the page there.
+      if (
+        isAssistantsPageCurrent() &&
+        assistantShortcutFromEvent(e, shortcuts) !== null
+      ) {
+        return
+      }
+
       const { conversation: conversationPaneActive, files: filesPaneActive } =
         tabShortcutTarget(
           mode,

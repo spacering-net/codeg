@@ -2213,6 +2213,8 @@ export interface PersonalAgentTurnInfo {
   kind: "delivery" | "compaction"
   started_at: string
   compaction_initiator: CompactInitiator | null
+  /** It carries the owner's messages (else it gives way when they write). */
+  for_owner?: boolean
 }
 
 export interface PersonalAgentStatus {
@@ -2329,6 +2331,151 @@ export interface PersonalAgentBotSummary {
   executor_assistant_id: number | null
   created_at: string
 }
+
+/** A document an assistant wrote in its working directory. */
+export interface PersonalAgentOutputDoc {
+  /** Relative to the working directory. */
+  path: string
+  modified_at: string
+  size: number
+}
+
+/** How the owner arranged an assistant on the roster (4.14). */
+export interface RosterFlags {
+  sort_order: number
+  pinned_at: string | null
+  section: string | null
+  hidden: boolean
+  muted: boolean
+  unread_mark: boolean
+  notify: boolean
+}
+
+/** What the owner does to an assistant on the roster. */
+export type RosterAct =
+  | { act: "pin" }
+  | { act: "unpin" }
+  | { act: "section"; name: string | null }
+  | { act: "hide" }
+  | { act: "show" }
+  | { act: "mute" }
+  | { act: "unmute" }
+  | { act: "mark_unread" }
+  | { act: "mark_read" }
+  | { act: "order"; ids: number[] }
+  | { act: "notify"; on: boolean }
+
+/** Whether an assistant works now (8.3). */
+export type BotWorkState = "busy" | "idle" | "done"
+/** What it wants of the owner (8.3). */
+export type BotAttention = "needs_you" | "unread" | "none"
+/** The face the backend computes; `stuck` is the page's own (waiting on
+ *  the owner past two minutes). */
+export type BotFaceState =
+  | "idle"
+  | "thinking"
+  | "working"
+  | "waiting"
+  | "done"
+  | "failed"
+  | "sleeping"
+/** A face as drawn: the backend's, or `stuck`. */
+export type BotLook = BotFaceState | "stuck"
+
+/** The first of what waits on the owner, and how many. */
+export interface BotNeedsYou {
+  kind:
+    | "question"
+    | "permission"
+    | "plan"
+    | "confirm"
+    | "uncertain"
+    | "loop"
+    | "choice"
+    | "changed"
+    | "input"
+    | string
+  text: string
+  since: string
+  row_id: number | null
+  count: number
+}
+
+/** One step in a short line (8.4): being done, or done. */
+export interface StepLine {
+  n: number
+  kind: string
+  target?: string
+  status?: string
+  awaiting?: boolean
+  started_at: string
+  added?: number
+  removed?: number
+  passed?: number
+  failed?: number
+  exit_code?: number
+  hits?: number
+  dispatch_id?: number
+}
+
+export interface BotActivity {
+  step: StepLine
+  /** The handed-out work it is from (its brain at rest). */
+  work?: { dispatch_id: number; title: string }
+  /** The brain's turn: picks the wording that rotates. */
+  turn?: number
+}
+
+export interface BotHandWork {
+  dispatch_id: number
+  title: string
+  mode: DispatchMode
+  state: DispatchState
+  work_task_id: number | null
+  conversation_id: number | null
+}
+
+export interface BotAwaitedReply {
+  message_id: number
+  to_bot_id: number
+  to_name: string
+}
+
+/** One assistant's live state (8.3). */
+export interface BotLive {
+  bot_id: number
+  work: BotWorkState
+  attention: BotAttention
+  needs: BotNeedsYou | null
+  unread: number
+  activity: BotActivity | null
+  /** This process can tell the activity (it runs the assistants). */
+  activity_known: boolean
+  work_on_hand: BotHandWork[]
+  awaiting: BotAwaitedReply[]
+  /** Its face at rest. */
+  face: BotFaceState
+  /** A turn or a piece of work just done (or failed), over `face` till
+   *  `until`. */
+  flash: { face: BotFaceState; until: string } | null
+  connected: boolean
+  last_line: { text: string; at: string } | null
+  last_activity_at: string | null
+  updated_at: string
+  /** A busy state not renewed by then is stale. */
+  expires_at: string | null
+}
+
+/** An assistant on the roster. */
+export interface RosterEntry extends PersonalAgentBotSummary {
+  roster: RosterFlags
+  live: BotLive
+}
+
+/** Payload of `personal-agent://bots`. */
+export type BotsChange =
+  | { kind: "live"; bot_id: number; live: BotLive }
+  | { kind: "roster" }
 
 /** Where a value codeg picked for the owner came from (10.5). */
 export type PickedFrom = "given" | "other_config" | "agent"

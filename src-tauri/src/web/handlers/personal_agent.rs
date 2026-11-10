@@ -145,6 +145,33 @@ pub async fn personal_agent_files(
     Ok(Json(pa::personal_agent_files_core(&state.db, &state.data_dir, params.bot_id).await?))
 }
 
+pub async fn personal_agent_outputs(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<BotParams>,
+) -> Result<Json<Vec<crate::personal_agent::workdir::OutputDoc>>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_outputs_core(&state.db, &state.data_dir, params.bot_id).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputReadParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub path: String,
+}
+
+pub async fn personal_agent_output_read(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<OutputReadParams>,
+) -> Result<Json<String>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_output_read_core(&state.db, &state.data_dir, params.bot_id, params.path)
+            .await?,
+    ))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsParams {
@@ -207,8 +234,50 @@ pub async fn personal_agent_cancel(
 
 pub async fn personal_agent_bots(
     Extension(state): Extension<Arc<AppState>>,
-) -> Result<Json<Vec<crate::models::personal_agent::BotSummary>>, AppCommandError> {
+) -> Result<Json<Vec<crate::models::personal_agent_roster::RosterEntry>>, AppCommandError> {
     Ok(Json(pa::personal_agent_bots_core(&state.db).await?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RosterActParams {
+    pub bot_id: i32,
+    pub act: crate::models::personal_agent_roster::RosterAct,
+}
+
+pub async fn personal_agent_roster_act(
+    Json(params): Json<RosterActParams>,
+) -> Result<Json<()>, AppCommandError> {
+    pa::personal_agent_roster_act_core(params.bot_id, params.act).await?;
+    Ok(Json(()))
+}
+
+pub async fn personal_agent_turn_steps(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<BotParams>,
+) -> Result<Json<Vec<crate::models::personal_agent_roster::StepLine>>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_turn_steps_core(&state.db, params.bot_id).await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemActParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub item_id: i32,
+    pub act: String,
+}
+
+pub async fn personal_agent_item_act(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ItemActParams>,
+) -> Result<Json<crate::models::personal_agent::ItemInfo>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_item_act_core(&state.db, params.bot_id, params.item_id, params.act)
+            .await?,
+    ))
 }
 
 pub async fn personal_agent_executors(

@@ -18,12 +18,12 @@ import { toast } from "sonner"
 import {
   BookOpen,
   FileText,
-  Loader2,
   ScrollText,
   UserRound,
   type LucideIcon,
 } from "lucide-react"
 
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { SettingNote } from "@/components/shared/setting-card"
 import { useBotId } from "@/contexts/personal-agent-context"
 import { Button } from "@/components/ui/button"
@@ -166,7 +166,10 @@ export function PersonaFiles({
   }
   if (!files) {
     return (
-      <Loader2 className="mx-auto my-8 size-4 animate-spin text-muted-foreground" />
+      <SyncedSpinner
+        small
+        className="mx-auto my-8 size-4 text-muted-foreground"
+      />
     )
   }
   const current = files.find((f) => f.name === active) ?? null
@@ -370,9 +373,7 @@ export function PersonaFiles({
                 disabled={!dirty || saving}
                 onClick={save}
               >
-                {saving ? (
-                  <Loader2 className="animate-spin" aria-hidden />
-                ) : null}
+                {saving ? <SyncedSpinner small /> : null}
                 {t("saveFile")}
               </Button>
             )}

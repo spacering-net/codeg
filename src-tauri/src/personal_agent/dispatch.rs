@@ -1159,6 +1159,14 @@ impl PersonalAgentEngine {
         note: Option<String>,
         cause: &str,
     ) {
+        use crate::models::personal_agent_roster::FaceState;
+        match d.state {
+            DispatchState::Completed => self.flash_face(FaceState::Done).await,
+            DispatchState::Failed | DispatchState::Interrupted => {
+                self.flash_face(FaceState::Failed).await
+            }
+            _ => {}
+        }
         let executor = executor_of(d);
         let round = match d.mode {
             DispatchMode::Task => match d.work_task_id {

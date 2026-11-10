@@ -20,6 +20,12 @@
  * it; one older than what is loaded is loaded first, and one too far back to
  * load opens as a preview instead. Each jump is numbered, so a slow load
  * answering after a newer jump never moves the page.
+ *
+ * Two pills float over it (10.7): "N items need you" while cards in it wait
+ * for the owner (a click scrolls to the first), and "New messages" while the
+ * reader is up the page and something came in under them (a click goes to
+ * the bottom). A message that comes in while the page is open rises into
+ * place; what was there, or is loaded from further back, does not.
  */
 
 import {
@@ -31,9 +37,10 @@ import {
   useState,
 } from "react"
 import { useTranslations } from "next-intl"
-import { Loader2 } from "lucide-react"
+import { ArrowDown, BellRing } from "lucide-react"
 import { toast } from "sonner"
 
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Button } from "@/components/ui/button"
@@ -49,6 +56,7 @@ import {
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useReducedMotion } from "@/hooks/use-chat-motion"
 import { toErrorMessage } from "@/lib/app-error"
+import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { EventCard } from "./event-card"
@@ -156,6 +164,82 @@ function TimeLine({ at }: { at: string }) {
   )
 }
 
+/** The row an item stands at, for one drawn as a row. */
+function rowIdOf(item: MessageItem): number | null {
+  if (item.kind === "time") return null
+  if (item.kind === "reply") return item.anchor.id
+  return item.row.id
+}
+
+/** A card waiting for the owner: a question or permission request still
+ *  pending, a native card still open that asks them (a confirmation, a step
+ *  not known to have happened, a loop stopped, the opening choice, a change
+ *  shown first — not a suggestion). */
+export function waitsForOwner(row: TimelineRow): boolean {
+  const data = row.data
+  if (row.kind === "question" || row.kind === "permission") {
+    return data?.state === "pending"
+  }
+  if (row.kind !== "notice" || data?.state !== "open") return false
+  if (data?.why === "suggest") return false
+  const kind = data?.notice
+  return (
+    kind === "proposal" ||
+    kind === "uncertain" ||
+    kind === "loop" ||
+    kind === "choice" ||
+    kind === "changed"
+  )
+}
+
+/** Where each card waiting for the owner is drawn, in order: a reply's
+ *  question is in its bubble. */
+export function ownerWaitTargets(items: readonly MessageItem[]): number[] {
+  const out: number[] = []
+  for (const item of items) {
+    if (item.kind === "reply") {
+      if (item.attached.some(waitsForOwner)) out.push(item.anchor.id)
+    } else if (
+      (item.kind === "notice" || item.kind === "mirror") &&
+      waitsForOwner(item.row)
+    ) {
+      out.push(item.row.id)
+    }
+  }
+  return out
+}
+
+/** A pill over the list: in and out by the motion tokens. */
+function Pill({
+  shown,
+  className,
+  onClick,
+  children,
+  ...rest
+}: {
+  shown: boolean
+  className?: string
+  onClick: () => void
+  children: React.ReactNode
+} & Record<`data-${string}`, string | boolean>) {
+  return (
+    <button
+      type="button"
+      {...rest}
+      data-state={shown ? "open" : "closed"}
+      aria-hidden={!shown || undefined}
+      tabIndex={shown ? 0 : -1}
+      onClick={onClick}
+      className={cn(
+        "motion-pill pointer-events-auto absolute start-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-background/95 px-3 py-1 text-xs shadow-md backdrop-blur transition-colors hover:bg-muted rtl:translate-x-1/2",
+        className
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
 function Item({ item }: { item: MessageItem }) {
   switch (item.kind) {
     case "time":
@@ -241,8 +325,10 @@ export function MessageList({
   sentRef: React.RefObject<(() => void) | null>
 }) {
   const t = useTranslations("PersonalAgent.timeline")
+  const tp = useTranslations("PersonalAgent.pills")
   const scope = usePageScope()
-  const { rows, hasOlder, loadOlder, loadSince, snapshot } = usePersonalAgent()
+  const { botId, rows, hasOlder, loadOlder, loadSince, snapshot } =
+    usePersonalAgent()
   const reduced = useReducedMotion()
   const items = useMemo(() => buildMessageItems(rows), [rows])
   const drawn = useMemo(() => drawnRowIds(items), [items])
@@ -298,11 +384,15 @@ export function MessageList({
   const flash = useCallback(
     (el: HTMLElement) => {
       const cls = reduced ? "pa-flash-static" : "pa-flash"
-      el.classList.remove("pa-flash", "pa-flash-static")
+      el.classList.remove("pa-flash", "pa-flash-static", "motion-jump-ring")
       // Restart the animation on a second jump to the same row.
       void el.offsetWidth
-      el.classList.add(cls)
-      window.setTimeout(() => el.classList.remove(cls), FLASH_MS + 100)
+      // The highlight, and a ring flashing once round it (10.7).
+      el.classList.add(cls, "motion-jump-ring")
+      window.setTimeout(
+        () => el.classList.remove(cls, "motion-jump-ring"),
+        FLASH_MS + 100
+      )
     },
     [reduced]
   )
@@ -390,6 +480,44 @@ export function MessageList({
     sentRef.current = toBottom
   }, [sentRef, toBottom])
   const newLineAt = newFrom != null ? newLineIndex(items, newFrom) : -1
+
+  // ── what rises into place, and the pills ────────────────────────────────
+  const lastId = useMemo(() => {
+    let max = 0
+    for (const item of items) max = Math.max(max, rowIdOf(item) ?? 0)
+    return max
+  }, [items])
+  // Rows past the last one held when the page showed this assistant came
+  // in while it was open — by their item, so one that was there and only
+  // moved (a reply's bubble taking its own row) does not.
+  const [enterFrom, setEnterFrom] = useState<{
+    bot: number | null
+    id: number
+    keys: ReadonlySet<string>
+  } | null>(null)
+  if (scrollReady && (enterFrom == null || enterFrom.bot !== botId)) {
+    setEnterFrom({
+      bot: botId,
+      id: lastId,
+      keys: new Set(items.map((i) => i.key)),
+    })
+  }
+  const enters = (item: MessageItem) => {
+    const id = rowIdOf(item)
+    return (
+      enterFrom != null &&
+      enterFrom.bot === botId &&
+      !enterFrom.keys.has(item.key) &&
+      id != null &&
+      id > enterFrom.id
+    )
+  }
+  // Up the page when something came in under the reader.
+  const [leftAt, setLeftAt] = useState<number | null>(null)
+  if (bottomed && leftAt != null) setLeftAt(null)
+  else if (!bottomed && leftAt == null) setLeftAt(lastId)
+  const newBelow = leftAt != null && lastId > leftAt
+  const waits = useMemo(() => ownerWaitTargets(items), [items])
   // The message right above the "new messages" line is the last before a
   // line, as one above a time line is: it closes its run with a round
   // corner, and shows its actions on hover.
@@ -416,74 +544,103 @@ export function MessageList({
 
   return (
     <>
-      <ScrollArea
-        className="min-h-0 flex-1"
-        onViewportRef={onViewport}
-        defer={false}
-      >
-        <div
-          ref={contentRef}
-          className={cn(
-            // The bottom keeps room for the last message's actions, which
-            // float under it.
-            "ws-msg-scope mx-auto flex w-full chat-content-w flex-col px-4 pt-4 pb-8",
-            // Drawn once the viewport is there to put it at the bottom: no
-            // flash of the oldest messages first.
-            !scrollReady && "invisible"
-          )}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <Pill
+          shown={waits.length > 0 && scrollReady}
+          className="top-2"
+          onClick={() => {
+            const first = waits[0]
+            if (first != null) jumpTo(first)
+          }}
+          data-pa-pill="attention"
         >
-          {hasOlder ? (
-            <div className="flex justify-center pb-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-xs text-muted-foreground"
-                disabled={loadingOlder}
-                onClick={() => {
-                  const el = scrollRef.current
-                  const before = el?.scrollHeight ?? 0
-                  setLoadingOlder(true)
-                  loadOlder()
-                    .then(() => {
-                      // Keep the reader where they were.
-                      requestAnimationFrame(() => {
-                        if (el) el.scrollTop += el.scrollHeight - before
+          <BellRing className="size-3.5 text-orange-500" aria-hidden />
+          {tp("attention", { count: waits.length })}
+        </Pill>
+        <Pill
+          shown={newBelow && scrollReady}
+          className="bottom-3"
+          onClick={toBottom}
+          data-pa-pill="new"
+        >
+          <ArrowDown className="size-3.5" aria-hidden />
+          {tp("newMessages")}
+        </Pill>
+        <ScrollArea
+          className="min-h-0 flex-1"
+          onViewportRef={onViewport}
+          defer={false}
+        >
+          <div
+            ref={contentRef}
+            className={cn(
+              // The bottom keeps room for the last message's actions, which
+              // float under it.
+              "ws-msg-scope mx-auto flex w-full chat-content-w flex-col px-4 pt-4 pb-8",
+              // Drawn once the viewport is there to put it at the bottom: no
+              // flash of the oldest messages first.
+              !scrollReady && "invisible"
+            )}
+          >
+            {hasOlder ? (
+              <div className="flex justify-center pb-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-muted-foreground"
+                  disabled={loadingOlder}
+                  onClick={() => {
+                    const el = scrollRef.current
+                    const before = el?.scrollHeight ?? 0
+                    setLoadingOlder(true)
+                    loadOlder()
+                      .then(() => {
+                        // Keep the reader where they were.
+                        requestAnimationFrame(() => {
+                          if (el) el.scrollTop += el.scrollHeight - before
+                        })
                       })
-                    })
-                    .catch((e) => toast.error(toErrorMessage(e)))
-                    .finally(() => setLoadingOlder(false))
-                }}
-              >
-                {loadingOlder ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : null}
-                {t("loadOlder")}
-              </Button>
-            </div>
-          ) : null}
-          {items.length === 0 ? (
-            <p className="py-16 text-center text-sm text-muted-foreground">
-              {t("empty")}
-            </p>
-          ) : null}
-          {placed.map((item, i) => (
-            <Fragment key={item.key}>
-              {i === newLineAt ? <NewLine /> : null}
-              <Item item={item} />
-            </Fragment>
-          ))}
-          {orphanPrompt ? (
-            // On the replies' line (they carry no avatar) and no wider;
-            // under the room the last message's actions float in.
-            <div className="mt-8 flex max-w-[88%] flex-col gap-2 empty:hidden">
-              <BlockingPrompts
-                connectionId={scope.connectionId!}
-                agentType={scope.agentType!}
-              />
-            </div>
-          ) : null}
-        </div>
-      </ScrollArea>
+                      .catch((e) => toast.error(toErrorMessage(e)))
+                      .finally(() => setLoadingOlder(false))
+                  }}
+                >
+                  {loadingOlder ? (
+                    <SyncedSpinner small className="size-3" />
+                  ) : null}
+                  {t("loadOlder")}
+                </Button>
+              </div>
+            ) : null}
+            {items.length === 0 ? (
+              <p className="py-16 text-center text-sm text-muted-foreground">
+                {t("empty")}
+              </p>
+            ) : null}
+            {placed.map((item, i) => (
+              <Fragment key={item.key}>
+                {i === newLineAt ? <NewLine /> : null}
+                {enters(item) ? (
+                  <div className="motion-message-enter">
+                    <Item item={item} />
+                  </div>
+                ) : (
+                  <Item item={item} />
+                )}
+              </Fragment>
+            ))}
+            {orphanPrompt ? (
+              // On the replies' line (they carry no avatar) and no wider;
+              // under the room the last message's actions float in.
+              <div className="mt-8 flex max-w-[88%] flex-col gap-2 empty:hidden">
+                <BlockingPrompts
+                  connectionId={scope.connectionId!}
+                  agentType={scope.agentType!}
+                />
+              </div>
+            ) : null}
+          </div>
+        </ScrollArea>
+      </div>
       <PreviewDialog
         rowId={preview}
         onOpenChange={(open) => {

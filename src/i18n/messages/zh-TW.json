@@ -250,6 +250,12 @@
         "appliedToast": "桌布已套用",
         "credit": "圖片來源 wallhaven.cc · 僅 SFW 內容"
       }
+    },
+    "paAccent": {
+      "title": "助手強調色",
+      "description": "助手對話中，你的對話泡泡、卡片強調邊框與卡片按鈕所用的顏色。",
+      "default": "預設",
+      "bot": "跟隨助手顏色"
     }
   },
   "SystemSettings": {
@@ -564,6 +570,54 @@
       "zoom_reset": {
         "title": "重設縮放",
         "description": "把視窗縮放恢復為 100%"
+      },
+      "switch_assistant_1": {
+        "title": "切換到第 1 個助手",
+        "description": "在助手頁：開啟名單上第 1 個助手（1 是主助手）"
+      },
+      "switch_assistant_2": {
+        "title": "切換到第 2 個助手",
+        "description": "在助手頁：開啟名單上第 2 個助手（1 是主助手）"
+      },
+      "switch_assistant_3": {
+        "title": "切換到第 3 個助手",
+        "description": "在助手頁：開啟名單上第 3 個助手（1 是主助手）"
+      },
+      "switch_assistant_4": {
+        "title": "切換到第 4 個助手",
+        "description": "在助手頁：開啟名單上第 4 個助手（1 是主助手）"
+      },
+      "switch_assistant_5": {
+        "title": "切換到第 5 個助手",
+        "description": "在助手頁：開啟名單上第 5 個助手（1 是主助手）"
+      },
+      "switch_assistant_6": {
+        "title": "切換到第 6 個助手",
+        "description": "在助手頁：開啟名單上第 6 個助手（1 是主助手）"
+      },
+      "switch_assistant_7": {
+        "title": "切換到第 7 個助手",
+        "description": "在助手頁：開啟名單上第 7 個助手（1 是主助手）"
+      },
+      "switch_assistant_8": {
+        "title": "切換到第 8 個助手",
+        "description": "在助手頁：開啟名單上第 8 個助手（1 是主助手）"
+      },
+      "switch_assistant_9": {
+        "title": "切換到第 9 個助手",
+        "description": "在助手頁：開啟名單上第 9 個助手（1 是主助手）"
+      },
+      "prev_assistant": {
+        "title": "上一個助手",
+        "description": "在助手頁：開啟名單上的上一個助手"
+      },
+      "next_assistant": {
+        "title": "下一個助手",
+        "description": "在助手頁：開啟名單上的下一個助手"
+      },
+      "cycle_assistant": {
+        "title": "循環切換助手",
+        "description": "在助手頁：依最近開啟的順序切換助手"
       }
     }
   },
@@ -7734,11 +7788,6 @@
     },
     "aux": {
       "title": "助理面板",
-      "tab": {
-        "work": "事項",
-        "status": "狀態",
-        "stats": "數據"
-      },
       "waiting": "{count} 件等你處理"
     },
     "status": {
@@ -8133,7 +8182,8 @@
       "unfinished": "未處理完",
       "resend": "重新傳送",
       "resent": "已重新傳送",
-      "merged": "已併入進行中的回覆"
+      "merged": "已併入進行中的回覆",
+      "received": "已收到"
     },
     "quote": {
       "you": "你",
@@ -8254,10 +8304,6 @@
       "workdirChanged": "工作目錄換到了 {path}"
     },
     "matters": {
-      "ended": "已結束",
-      "showAll": "查看全部 {count} 件",
-      "emptyTitle": "沒有進行中的事項",
-      "emptyHint": "派出去的工作、提醒和要問你的事會出現在這裡。",
       "noneOpen": "目前沒有進行中的事項。",
       "origin": "跳到來源訊息"
     },
@@ -8418,7 +8464,39 @@
       "roster": {
         "title": "助手",
         "add": "新增工作助手",
-        "addShort": "新增"
+        "search": "搜尋助手",
+        "noMatch": "沒有符合的助手",
+        "pinned": "置頂",
+        "others": "其他",
+        "hiddenCount": "已隱藏 {count} 個",
+        "hideHidden": "收合",
+        "muted": "已靜音",
+        "handWork": "手上的工作",
+        "awaiting": "在等回覆",
+        "nothing": "手上沒有工作",
+        "groupName": "群組名稱",
+        "newGroupTitle": "新群組",
+        "newGroupSave": "移過去",
+        "collapse": "收合 {name}",
+        "expand": "展開 {name}",
+        "menu": {
+          "pin": "置頂",
+          "unpin": "取消置頂",
+          "moveTo": "移到群組",
+          "newGroup": "新群組…",
+          "noGroup": "不分群組",
+          "hide": "隱藏",
+          "show": "取消隱藏",
+          "mute": "靜音",
+          "unmute": "取消靜音",
+          "markUnread": "標為未讀",
+          "markRead": "標為已讀",
+          "notifyOn": "通知我",
+          "copy": "複製…",
+          "stopAll": "全部停下",
+          "delete": "刪除…",
+          "open": "開啟"
+        }
       },
       "choice": {
         "other": "其他",
@@ -8481,6 +8559,151 @@
         "workdirCustom": "這個目錄是你選的，codeg 不會動它。",
         "cancel": "取消",
         "confirm": "刪除"
+      }
+    },
+    "face": {
+      "idle": "閒著",
+      "thinking": "在想",
+      "working": "在忙",
+      "waiting": "等你",
+      "stuck": "等你好一陣子了",
+      "done": "剛做完",
+      "failed": "出了問題",
+      "sleeping": "在睡覺",
+      "unread": "有未讀",
+      "stale": "暫時無法取得狀態",
+      "label": "{name}，{state}",
+      "labelUnread": "{name}，{state}，有未讀"
+    },
+    "activity": {
+      "think0": "正在仔細想",
+      "think1": "正在琢磨",
+      "think2": "正在理清思路",
+      "work0": "正在推進",
+      "work1": "正在處理",
+      "work2": "正在搞定",
+      "work3": "正在一步步推進",
+      "work4": "正在收尾",
+      "reply": "正在寫回覆",
+      "read": "正在讀 {target}",
+      "readSome": "正在讀檔案",
+      "edit": "正在改 {target}",
+      "editSome": "正在改檔案",
+      "search": "正在找「{target}」",
+      "searchSome": "正在搜尋",
+      "fetch": "正在查資料",
+      "execute": "正在跑幾個命令",
+      "test": "正在跑測試",
+      "wait": "正在等結果",
+      "commit": "正在提交",
+      "plan": "正在擬計畫",
+      "compact": "正在整理上下文",
+      "dispatch": "正在交給 {target}",
+      "dispatchSome": "正在派工",
+      "followup": "正在跟進 #{id}",
+      "followupSome": "正在跟進",
+      "message": "正在問 {target}",
+      "messageSome": "正在問其他助手",
+      "awaitingReply": "等 {name} 回覆",
+      "needsAnswer": "需要你回答",
+      "needsApproval": "需要你核准",
+      "workPrefix": "#{id} {title}：{activity}"
+    },
+    "did": {
+      "edit": "改了 {target} +{added} −{removed}",
+      "editPlain": "改了 {target}",
+      "editSome": "改了檔案",
+      "test": "跑完測試，{passed} 項通過",
+      "testFailed": "跑完測試，{passed} 項通過，{failed} 項失敗",
+      "testExit": "跑完測試，結束代碼 {code}",
+      "testBad": "跑完測試，沒通過",
+      "testPlain": "跑完測試",
+      "execute": "跑了 {target}",
+      "executeExit": "跑了 {target}，結束代碼 {code}",
+      "executeBad": "跑了 {target}，失敗了",
+      "executeSome": "跑了一個命令",
+      "executeSomeBad": "跑了一個命令，失敗了",
+      "read": "讀了 {target}",
+      "readSome": "讀了檔案",
+      "search": "找了「{target}」",
+      "searchHits": "找了「{target}」，{hits} 筆結果",
+      "searchSome": "搜尋了一下",
+      "commit": "提交了：{target}",
+      "commitPlain": "提交了",
+      "dispatch": "交給了 {target}：#{id}",
+      "dispatchPlain": "派出了 #{id}",
+      "dispatchSome": "派出了工作",
+      "followup": "跟進了 #{id}",
+      "followupSome": "跟進了",
+      "message": "已傳訊息給 {target}",
+      "messageSome": "傳了訊息",
+      "think": "想了想",
+      "reply": "寫了回覆",
+      "plan": "擬了計畫",
+      "compact": "整理了上下文",
+      "fetch": "查了資料",
+      "question": "問了你：{target}",
+      "questionSome": "問了你",
+      "other": "{target}",
+      "otherPlain": "做了一步"
+    },
+    "needs": {
+      "answer": "需要你回答：{text}",
+      "approval": "需要你核准：{text}",
+      "you": "需要你處理：{text}",
+      "answerPlain": "需要你回答",
+      "approvalPlain": "需要你核准",
+      "youPlain": "需要你處理"
+    },
+    "statusLine": {
+      "steps": "這一回合的步驟",
+      "loading": "正在讀取步驟…",
+      "empty": "還沒有步驟",
+      "fold": "收合步驟",
+      "openWork": "開啟這項工作"
+    },
+    "sending": {
+      "waking": "正在喚醒 {name}…",
+      "afterTurn": "等這一回合結束",
+      "yielding": "正在讓位"
+    },
+    "pills": {
+      "attention": "{count} 項需要你留意",
+      "newMessages": "新訊息"
+    },
+    "detail": {
+      "title": "詳情",
+      "open": "顯示詳情",
+      "close": "收合詳情",
+      "tabs": {
+        "details": "詳情",
+        "output": "產出",
+        "workspace": "工作區"
+      },
+      "sections": {
+        "status": "狀態",
+        "matters": "事項",
+        "data": "資料"
+      },
+      "notify": "通知我",
+      "notifyHint": "做完事情或在等你時通知你",
+      "settings": "設定",
+      "item": {
+        "done": "完成",
+        "later": "稍後",
+        "drop": "放棄"
+      },
+      "output": {
+        "all": "全部",
+        "tasks": "任務",
+        "reports": "報告",
+        "docs": "文件",
+        "empty": "還沒有產出",
+        "docEdited": "{when} 改過"
+      },
+      "workspace": {
+        "empty": "目前沒有在跑的工作",
+        "open": "開啟"
       }
     }
   }

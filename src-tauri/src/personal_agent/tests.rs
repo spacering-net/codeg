@@ -5798,3 +5798,290 @@ async fn a_hand_over_and_a_round_opening_take_turns_on_the_route() {
     assert!(route.is_some_and(|c| c.round_since.is_some()), "the primary routes it with its round open: {route:?}");
     assert!(!worker.owns_connection("c-race").await);
 }
+
+// ── 1.7: the roster, its order and each assistant's live state ──────────────
+
+use crate::db::entities::personal_agent_notice::NoticeLevel;
+use crate::models::personal_agent_roster::{Attention, FaceState, RosterAct, WorkState};
+
+async fn primary_row(host: &EngineHost) -> crate::db::entities::personal_agent::Model {
+    svc::primary_bot(&host.primary().db.conn).await.unwrap().unwrap()
+}
+
+async fn card(engine: &PersonalAgentEngine, kind: NoticeKind, payload: serde_json::Value, body: &str) -> i32 {
+    svc::create_notice_with_row(
+        &engine.db.conn,
+        engine.bot().await,
+        svc::NewNotice {
+            kind,
+            subject_key: None,
+            level: NoticeLevel::Normal,
+            batch_id: None,
+            payload,
+        },
+        NewRow::new(TimelineKind::Notice, body),
+    )
+    .await
+    .unwrap()
+    .1
+    .id
+}
+
+#[tokio::test]
+async fn the_live_state_says_what_waits_on_the_owner_and_what_is_unseen() {
+    let (host, _w, _tmp) = hosted().await;
+    let engine = host.primary();
+    let conn = &engine.db.conn;
+    let bot = engine.bot().await;
+    // Nothing yet, and no session: asleep, all done.
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert_eq!((live.work, live.attention, live.face), (WorkState::Done, Attention::None, FaceState::Sleeping));
+    assert!(live.activity_known);
+    assert_eq!(live.expires_at, None);
+
+    // Its brain asks for a permission: waiting on the owner, with what.
+    let mut row = NewRow::new(TimelineKind::Permission, "rm -rf build\n(more)");
+    row.ref_id = Some("p1".into());
+    row.data = Some(serde_json::json!({ "state": "pending" }));
+    let asked = svc::insert_row(conn, bot, row).await.unwrap().id;
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert_eq!(live.attention, Attention::NeedsYou);
+    assert_eq!(live.face, FaceState::Waiting, "waiting on the owner outranks asleep");
+    let needs = live.needs.unwrap();
+    assert_eq!((needs.kind.as_str(), needs.text.as_str(), needs.row_id, needs.count), ("permission", "rm -rf build", Some(asked), 1));
+
+    // A confirmation counts, a suggestion does not.
+    card(&engine, NoticeKind::Proposal, serde_json::json!({ "why": "suggest" }), "Make a cleaner?").await;
+    assert_eq!(host.live_of(&primary_row(&host).await).await.needs.unwrap().count, 1);
+    card(&engine, NoticeKind::Proposal, serde_json::json!({ "why": "confirm" }), "Dispatch #3?").await;
+    let needs = host.live_of(&primary_row(&host).await).await.needs.unwrap();
+    assert_eq!((needs.kind.as_str(), needs.count), ("permission", 2), "the oldest first, all counted");
+
+    // Answered and confirmed: what it said and the owner has not seen.
+    svc::update_row_data(conn, asked, None, Some(serde_json::json!({ "state": "answered" }))).await.unwrap();
+    for n in svc::notices_in_state(conn, bot, NoticeState::Open).await.unwrap() {
+        crate::db::entities::personal_agent_notice::Entity::update_many()
+            .col_expr(
+                crate::db::entities::personal_agent_notice::Column::State,
+                sea_orm::sea_query::Expr::value(crate::db::entities::personal_agent_notice::NoticeState::Acted),
+            )
+            .filter(crate::db::entities::personal_agent_notice::Column::Id.eq(n.id))
+            .exec(conn)
+            .await
+            .unwrap();
+    }
+    let mut reply = NewRow::new(TimelineKind::Reply, "All set [[quote:#1]].\nThe rest.");
+    reply.data = Some(serde_json::json!({ "state": "done" }));
+    svc::insert_row(conn, bot, reply).await.unwrap();
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert_eq!(live.attention, Attention::Unread);
+    assert!(live.unread >= 1);
+    assert_eq!(live.last_line.unwrap().text, "All set .");
+    assert!(live.last_activity_at.is_some());
+
+    // The owner's own unread mark counts as unread too.
+    let (h2, w, _t2) = hosted().await;
+    h2.roster_act(w, RosterAct::MarkUnread).await.unwrap();
+    let worker = svc::get_bot(&h2.primary().db.conn, w).await.unwrap().unwrap();
+    assert_eq!(h2.live_of(&worker).await.attention, Attention::Unread);
+}
+
+#[tokio::test]
+async fn running_work_is_busy_for_a_while_and_a_face_says_how_it_ended() {
+    let (host, _w, _tmp) = hosted().await;
+    let engine = host.primary();
+    let id = session_dispatch(&engine, DispatchState::Running, "c-live").await;
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert_eq!((live.work, live.face), (WorkState::Busy, FaceState::Working));
+    let ttl = live.expires_at.unwrap() - live.updated_at;
+    assert_eq!(ttl.num_seconds(), 30, "a busy state goes stale unless renewed");
+    assert_eq!(live.work_on_hand.len(), 1);
+    assert_eq!(live.work_on_hand[0].dispatch_id, id);
+
+    // Waiting on the owner's input: in hand still, not running.
+    svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::WaitingInput),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert_eq!((live.work, live.attention), (WorkState::Idle, Attention::NeedsYou));
+    assert_eq!(live.needs.unwrap().kind, "input");
+    assert_eq!(live.expires_at, None);
+
+    // It ended: the face says so for a few seconds, whatever else is true.
+    let ended = svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Completed),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    engine.record_progress(&ended, None, None, "test").await;
+    let live = host.live_of(&primary_row(&host).await).await;
+    let flash = live.flash.unwrap();
+    assert_eq!((flash.face, live.face), (FaceState::Done, FaceState::Sleeping), "over its face at rest");
+    let left = flash.until - live.updated_at;
+    assert!(left.num_seconds() <= 8 && left.num_seconds() >= 7, "{left}");
+    host.live.flash(engine.bot().await, FaceState::Failed);
+    assert_eq!(host.live_of(&primary_row(&host).await).await.flash.unwrap().face, FaceState::Failed);
+}
+
+#[tokio::test]
+async fn the_owner_arranges_the_roster() {
+    let (host, w, _tmp) = hosted().await;
+    let conn = host.primary().db.conn.clone();
+    let w2 = worker_row(&host.primary(), "Reviewer").await;
+    let primary = primary_row(&host).await.id;
+    // The primary stays on top.
+    for act in [RosterAct::Pin, RosterAct::Hide, RosterAct::Section { name: Some("x".into()) }] {
+        assert!(host.roster_act(primary, act).await.unwrap_err().contains("always on top"));
+    }
+    host.roster_act(primary, RosterAct::Mute).await.unwrap();
+    assert!(svc::get_bot(&conn, primary).await.unwrap().unwrap().muted);
+    // Pinned in the order pinned, and reordered.
+    host.roster_act(w2, RosterAct::Pin).await.unwrap();
+    host.roster_act(w, RosterAct::Pin).await.unwrap();
+    let order = |b: &crate::db::entities::personal_agent::Model| (b.pinned_at.is_some(), b.sort_order);
+    let a = svc::get_bot(&conn, w2).await.unwrap().unwrap();
+    let b = svc::get_bot(&conn, w).await.unwrap().unwrap();
+    assert!(order(&a) < order(&b));
+    host.roster_act(w, RosterAct::Order { ids: vec![w, w2] }).await.unwrap();
+    let a = svc::get_bot(&conn, w2).await.unwrap().unwrap();
+    let b = svc::get_bot(&conn, w).await.unwrap().unwrap();
+    assert!(b.sort_order < a.sort_order);
+    // A group's name is tidied; none takes it out.
+    host.roster_act(w, RosterAct::Section { name: Some("  my   app ".into()) }).await.unwrap();
+    assert_eq!(svc::get_bot(&conn, w).await.unwrap().unwrap().section.as_deref(), Some("my app"));
+    host.roster_act(w, RosterAct::Section { name: Some("   ".into()) }).await.unwrap();
+    assert_eq!(svc::get_bot(&conn, w).await.unwrap().unwrap().section, None);
+    // Hidden, then shown; unread marked, then read; notifications off.
+    let revision = svc::get_bot(&conn, w).await.unwrap().unwrap().revision;
+    host.roster_act(w, RosterAct::Hide).await.unwrap();
+    host.roster_act(w, RosterAct::MarkUnread).await.unwrap();
+    host.roster_act(w, RosterAct::Notify { on: false }).await.unwrap();
+    let row = svc::get_bot(&conn, w).await.unwrap().unwrap();
+    assert!(row.hidden && row.unread_mark && !row.notify);
+    assert_eq!(row.revision, revision, "not a setting: a settings view open on it is not told it changed");
+    host.roster_act(w, RosterAct::Show).await.unwrap();
+    host.roster_act(w, RosterAct::MarkRead).await.unwrap();
+    let row = svc::get_bot(&conn, w).await.unwrap().unwrap();
+    assert!(!row.hidden && !row.unread_mark);
+    // The act is read as the page sends it.
+    let act: RosterAct = serde_json::from_value(serde_json::json!({ "act": "section", "name": "codeg" })).unwrap();
+    assert_eq!(act, RosterAct::Section { name: Some("codeg".into()) });
+}
+
+#[tokio::test]
+async fn the_owner_settles_a_matter_from_the_panel() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let item = svc::create_item(
+        &engine.db.conn,
+        bot,
+        ItemKind::Followup,
+        None,
+        ItemStatus::Open,
+        Some(WaitsFor::Owner),
+        "Check the build".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let later = engine.settle_item(item.id, "later").await.unwrap();
+    assert_eq!((later.status, later.waits_for), (ItemStatus::Open, Some(WaitsFor::Time)));
+    let done = engine.settle_item(item.id, "done").await.unwrap();
+    assert_eq!(done.status, ItemStatus::Done);
+    assert!(engine.settle_item(item.id, "drop").await.unwrap_err().contains("already settled"));
+    assert!(engine.settle_item(999, "done").await.is_err());
+    // Handed-out work ends with the work.
+    let d = session_dispatch(&engine, DispatchState::Running, "c-item").await;
+    let i = svc::create_item(
+        &engine.db.conn,
+        bot,
+        ItemKind::Dispatch,
+        Some(d),
+        ItemStatus::Waiting,
+        Some(WaitsFor::Agent),
+        "Investigate".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(engine.settle_item(i.id, "done").await.unwrap_err().contains("handed-out work"));
+}
+
+#[test]
+fn the_output_is_what_it_wrote_not_its_persona_its_memory_or_its_log() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join(workdir::SOUL_FILE), "soul").unwrap();
+    std::fs::create_dir_all(dir.join("log")).unwrap();
+    std::fs::write(dir.join("log/2026-11-10.md"), "log").unwrap();
+    std::fs::create_dir_all(dir.join("memory")).unwrap();
+    std::fs::write(dir.join("memory/a.md"), "m").unwrap();
+    std::fs::write(dir.join(".hidden"), "h").unwrap();
+    std::fs::create_dir_all(dir.join("reports")).unwrap();
+    std::fs::write(dir.join("reports/weekly.md"), "# Weekly").unwrap();
+    std::fs::write(dir.join("notes.txt"), "notes").unwrap();
+    #[cfg(unix)]
+    {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "s").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret"), dir.join("link.md")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.join("linked")).unwrap();
+        assert_eq!(workdir::read_output(dir, "link.md"), None, "a link is not followed");
+        assert_eq!(workdir::read_output(dir, "linked/secret"), None);
+        // A name with a backslash is no path through the link to the side
+        // of it (review round 1).
+        std::fs::write(dir.join("linked\\secret"), "x").unwrap();
+        assert_eq!(workdir::read_output(dir, "linked/secret"), None);
+        assert!(workdir::list_outputs(dir).iter().all(|d| !d.path.starts_with("linked")));
+    }
+    let paths: Vec<String> = workdir::list_outputs(dir).into_iter().map(|d| d.path).collect();
+    let mut sorted = paths.clone();
+    sorted.sort();
+    assert_eq!(sorted, ["notes.txt", "reports/weekly.md"]);
+    assert_eq!(workdir::read_output(dir, "reports/weekly.md").as_deref(), Some("# Weekly"));
+    for not_one in ["SOUL.md", "log/2026-11-10.md", "../x", "memory/a.md", ".hidden", "/etc/passwd"] {
+        assert_eq!(workdir::read_output(dir, not_one), None, "{not_one}");
+    }
+}
+
+#[tokio::test]
+async fn an_assistants_state_is_pushed_one_computation_at_a_time_and_after_its_last_change() {
+    let (host, w, _tmp) = hosted().await;
+    host.live.set_enabled(true);
+    // A burst of changes, some while a push is being computed.
+    for i in 0..40 {
+        host.touch(w);
+        if i % 7 == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        } else {
+            tokio::task::yield_now().await;
+        }
+    }
+    let last_touch = std::time::Instant::now();
+    tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    let (pushes, most) = host.live.test_counts();
+    assert_eq!(most, 1, "never two computations of one assistant at once");
+    assert!((1..=8).contains(&pushes), "throttled to the gap: {pushes} pushes");
+    // The last change was pushed: nothing scheduled, nothing dirty.
+    let settled = host.live.test_settled(w);
+    assert!(settled, "nothing left pending after the burst");
+    assert!(last_touch.elapsed() >= std::time::Duration::from_millis(900));
+}
+

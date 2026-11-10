@@ -34,9 +34,10 @@ import {
   useState,
 } from "react"
 import { useTranslations } from "next-intl"
-import { ArrowUp, Loader2 } from "lucide-react"
+import { ArrowUp } from "lucide-react"
 import { toast } from "sonner"
 
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
 import {
@@ -419,7 +420,7 @@ export function PersonalAgentComposer({
                   aria-label={turn ? t("queue") : t("send")}
                 >
                   {sending ? (
-                    <Loader2 className="size-4 animate-spin" />
+                    <SyncedSpinner small className="size-4" />
                   ) : (
                     <ArrowUp className="size-4" />
                   )}

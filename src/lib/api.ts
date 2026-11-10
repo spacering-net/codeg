@@ -40,7 +40,10 @@ import type {
   PersonalAgentInfo,
   PersonalAgentSnapshot,
   PersonalAgentApplied,
-  PersonalAgentBotSummary,
+  PersonalAgentOutputDoc,
+  RosterAct,
+  RosterEntry,
+  StepLine,
   BotCreateDraft,
   BotDeleteOptions,
   BotImpact,
@@ -2602,8 +2605,50 @@ export async function personalAgentSettingsPatch(
 }
 
 /** The owner's assistants, primary first. */
-export async function personalAgentBots(): Promise<PersonalAgentBotSummary[]> {
+/** The roster: every assistant with how the owner arranged it and its
+ *  live state (8.3). */
+export async function personalAgentBots(): Promise<RosterEntry[]> {
   return getTransport().call("personal_agent_bots", {})
+}
+
+/** The documents an assistant wrote in its working directory, newest
+ *  first. */
+export async function personalAgentOutputs(
+  botId?: number | null
+): Promise<PersonalAgentOutputDoc[]> {
+  return getTransport().call("personal_agent_outputs", { botId })
+}
+
+/** One of those documents, as text. */
+export async function personalAgentOutputRead(
+  botId: number | null | undefined,
+  path: string
+): Promise<string> {
+  return getTransport().call("personal_agent_output_read", { botId, path })
+}
+
+/** Arrange an assistant on the roster (4.14). */
+export async function personalAgentRosterAct(
+  botId: number,
+  act: RosterAct
+): Promise<void> {
+  return getTransport().call("personal_agent_roster_act", { botId, act })
+}
+
+/** The steps the brain's turn in flight went through. */
+export async function personalAgentTurnSteps(
+  botId?: number | null
+): Promise<StepLine[]> {
+  return getTransport().call("personal_agent_turn_steps", { botId })
+}
+
+/** Settle one of an assistant's open matters: done, dropped, or later. */
+export async function personalAgentItemAct(
+  botId: number | null | undefined,
+  itemId: number,
+  act: "done" | "drop" | "later"
+): Promise<ItemInfo> {
+  return getTransport().call("personal_agent_item_act", { botId, itemId, act })
 }
 
 /** The work assistants' templates, in `locale`. */

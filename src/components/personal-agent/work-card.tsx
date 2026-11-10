@@ -35,6 +35,7 @@ import {
 } from "lucide-react"
 
 import type { AgentType, DispatchState } from "@/lib/types"
+import { useSyncedSpin } from "@/lib/motion/synced-spin"
 import { cn } from "@/lib/utils"
 
 import { ExecutorAvatar, INSET_HOVER, INSET_SURFACE } from "./shared"
@@ -172,6 +173,8 @@ export function WorkPill({
   onOpen: (() => void) | null
 }) {
   const t = useTranslations("PersonalAgent")
+  // Tailwind's spin is a second a turn.
+  const spin = useSyncedSpin(1000)
   const Icon = notSent
     ? TriangleAlert
     : state
@@ -214,6 +217,8 @@ export function WorkPill({
               notSent ? iconTone("failed") : iconTone(state),
               state === "running" && !notSent && "motion-safe:animate-spin"
             )}
+            // Every running one on the screen turns on one phase (10.8).
+            style={spin}
           />
         </span>
         {word ? <span className="sr-only">{word}</span> : null}

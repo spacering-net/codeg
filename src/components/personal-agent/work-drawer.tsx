@@ -21,8 +21,9 @@
 
 import { useEffect, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
-import { ArrowUpRight, Loader2 } from "lucide-react"
+import { ArrowUpRight } from "lucide-react"
 
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { SubAgentSessionDialog } from "@/components/message/sub-agent-session-dialog"
 import { StatusChip } from "@/components/tasks/task-card"
 import { TaskTranscriptDialog } from "@/components/tasks/task-transcript-dialog"
@@ -91,7 +92,7 @@ function NoTaskSession({
       </div>
       <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
         {pending ? (
-          <Loader2 className="size-5 animate-spin" aria-hidden />
+          <SyncedSpinner small className="size-5" />
         ) : task ? (
           t("taskNotStarted")
         ) : (

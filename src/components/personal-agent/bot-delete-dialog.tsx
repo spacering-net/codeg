@@ -10,7 +10,6 @@
 
 import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
-import { Loader2 } from "lucide-react"
 
 import {
   AlertDialog,
@@ -21,6 +20,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
@@ -185,7 +185,10 @@ export function BotDeleteDialog({
             </Label>
           </div>
         ) : error ? null : (
-          <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />
+          <SyncedSpinner
+            small
+            className="mx-auto size-4 text-muted-foreground"
+          />
         )}
         {error ? (
           <p role="alert" className="text-xs break-words text-destructive">
@@ -200,7 +203,7 @@ export function BotDeleteDialog({
             onClick={() => void confirm()}
             data-pa-delete-confirm
           >
-            {busy ? <Loader2 className="animate-spin" aria-hidden /> : null}
+            {busy ? <SyncedSpinner small /> : null}
             {t("confirm")}
           </Button>
         </AlertDialogFooter>

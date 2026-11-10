@@ -250,6 +250,12 @@
         "appliedToast": "壁紙を適用しました",
         "credit": "画像提供 wallhaven.cc · SFW のみ"
       }
+    },
+    "paAccent": {
+      "title": "アシスタントのアクセントカラー",
+      "description": "アシスタントとの会話で、あなたの吹き出し、カードの縁取り、カードのボタンに使う色です。",
+      "default": "デフォルト",
+      "bot": "アシスタントの色に合わせる"
     }
   },
   "SystemSettings": {
@@ -564,6 +570,54 @@
       "zoom_reset": {
         "title": "ズームをリセット",
         "description": "ウィンドウのズームを 100% に戻します"
+      },
+      "switch_assistant_1": {
+        "title": "アシスタント 1 に切り替え",
+        "description": "アシスタントページで：一覧の 1 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_2": {
+        "title": "アシスタント 2 に切り替え",
+        "description": "アシスタントページで：一覧の 2 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_3": {
+        "title": "アシスタント 3 に切り替え",
+        "description": "アシスタントページで：一覧の 3 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_4": {
+        "title": "アシスタント 4 に切り替え",
+        "description": "アシスタントページで：一覧の 4 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_5": {
+        "title": "アシスタント 5 に切り替え",
+        "description": "アシスタントページで：一覧の 5 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_6": {
+        "title": "アシスタント 6 に切り替え",
+        "description": "アシスタントページで：一覧の 6 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_7": {
+        "title": "アシスタント 7 に切り替え",
+        "description": "アシスタントページで：一覧の 7 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_8": {
+        "title": "アシスタント 8 に切り替え",
+        "description": "アシスタントページで：一覧の 8 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_9": {
+        "title": "アシスタント 9 に切り替え",
+        "description": "アシスタントページで：一覧の 9 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "prev_assistant": {
+        "title": "前のアシスタント",
+        "description": "アシスタントページで：一覧でひとつ上のアシスタントを開く"
+      },
+      "next_assistant": {
+        "title": "次のアシスタント",
+        "description": "アシスタントページで：一覧でひとつ下のアシスタントを開く"
+      },
+      "cycle_assistant": {
+        "title": "アシスタントを順に切り替え",
+        "description": "アシスタントページで：最近開いたアシスタントの間で切り替える"
       }
     }
   },
@@ -7734,11 +7788,6 @@
     },
     "aux": {
       "title": "アシスタントパネル",
-      "tab": {
-        "work": "やること",
-        "status": "状態",
-        "stats": "統計"
-      },
       "waiting": "{count} 件があなたの対応待ち"
     },
     "status": {
@@ -8133,7 +8182,8 @@
       "unfinished": "未完了",
       "resend": "再送信",
       "resent": "再送信済み",
-      "merged": "進行中の返信に取り込まれました"
+      "merged": "進行中の返信に取り込まれました",
+      "received": "受け取り済み"
     },
     "quote": {
       "you": "あなた",
@@ -8254,10 +8304,6 @@
       "workdirChanged": "作業ディレクトリを {path} に移しました"
     },
     "matters": {
-      "ended": "終了",
-      "showAll": "すべて表示（{count} 件）",
-      "emptyTitle": "進行中のものはありません",
-      "emptyHint": "依頼した仕事、リマインダー、あなたへの質問がここに表示されます。",
       "noneOpen": "現在進行中のものはありません。",
       "origin": "元のメッセージへ移動"
     },
@@ -8418,7 +8464,39 @@
       "roster": {
         "title": "アシスタント",
         "add": "新しい作業アシスタント",
-        "addShort": "新規"
+        "search": "アシスタントを検索",
+        "noMatch": "一致するアシスタントはいません",
+        "pinned": "ピン留め",
+        "others": "その他",
+        "hiddenCount": "非表示 {count} 人",
+        "hideHidden": "折りたたむ",
+        "muted": "ミュート中",
+        "handWork": "手持ちの作業",
+        "awaiting": "返信待ち",
+        "nothing": "手持ちの作業はありません",
+        "groupName": "グループ名",
+        "newGroupTitle": "新しいグループ",
+        "newGroupSave": "移動",
+        "collapse": "{name} を折りたたむ",
+        "expand": "{name} を展開",
+        "menu": {
+          "pin": "ピン留め",
+          "unpin": "ピン留めを解除",
+          "moveTo": "グループに移動",
+          "newGroup": "新しいグループ…",
+          "noGroup": "グループなし",
+          "hide": "非表示にする",
+          "show": "表示する",
+          "mute": "ミュート",
+          "unmute": "ミュートを解除",
+          "markUnread": "未読にする",
+          "markRead": "既読にする",
+          "notifyOn": "通知する",
+          "copy": "複製…",
+          "stopAll": "すべて停止",
+          "delete": "削除…",
+          "open": "開く"
+        }
       },
       "choice": {
         "other": "その他",
@@ -8481,6 +8559,151 @@
         "workdirCustom": "このディレクトリはあなたが選んだものなので、codeg は手を付けません。",
         "cancel": "キャンセル",
         "confirm": "削除"
+      }
+    },
+    "face": {
+      "idle": "待機中",
+      "thinking": "考え中",
+      "working": "作業中",
+      "waiting": "あなた待ち",
+      "stuck": "しばらくあなた待ち",
+      "done": "完了したばかり",
+      "failed": "問題が発生",
+      "sleeping": "おやすみ中",
+      "unread": "未読あり",
+      "stale": "今は状態を取得できません",
+      "label": "{name}、{state}",
+      "labelUnread": "{name}、{state}、未読あり"
+    },
+    "activity": {
+      "think0": "じっくり考え中",
+      "think1": "あれこれ思案中",
+      "think2": "進め方を検討中",
+      "work0": "進行中",
+      "work1": "作業中",
+      "work2": "処理中",
+      "work3": "少しずつ前進中",
+      "work4": "仕上げ中",
+      "reply": "返信を作成中",
+      "read": "{target} を読み込み中",
+      "readSome": "ファイルを読み込み中",
+      "edit": "{target} を編集中",
+      "editSome": "ファイルを編集中",
+      "search": "「{target}」を検索中",
+      "searchSome": "検索中",
+      "fetch": "下調べ中",
+      "execute": "コマンドをいくつか実行中",
+      "test": "テストを実行中",
+      "wait": "結果を待機中",
+      "commit": "コミット中",
+      "plan": "計画を作成中",
+      "compact": "コンテキストを整理中",
+      "dispatch": "{target} に依頼中",
+      "dispatchSome": "作業を依頼中",
+      "followup": "#{id} をフォローアップ中",
+      "followupSome": "フォローアップ中",
+      "message": "{target} に質問中",
+      "messageSome": "ほかのアシスタントに質問中",
+      "awaitingReply": "{name} の返信待ち",
+      "needsAnswer": "あなたの回答が必要",
+      "needsApproval": "あなたの承認が必要",
+      "workPrefix": "#{id} {title}：{activity}"
+    },
+    "did": {
+      "edit": "{target} を編集しました +{added} −{removed}",
+      "editPlain": "{target} を編集しました",
+      "editSome": "ファイルを編集しました",
+      "test": "テストを実行しました（{passed} 件成功）",
+      "testFailed": "テストを実行しました（{passed} 件成功、{failed} 件失敗）",
+      "testExit": "テストを実行しました（終了コード {code}）",
+      "testBad": "テストを実行しましたが、通りませんでした",
+      "testPlain": "テストを実行しました",
+      "execute": "{target} を実行しました",
+      "executeExit": "{target} を実行しました（終了コード {code}）",
+      "executeBad": "{target} を実行しましたが、失敗しました",
+      "executeSome": "コマンドを実行しました",
+      "executeSomeBad": "コマンドを実行しましたが、失敗しました",
+      "read": "{target} を読みました",
+      "readSome": "ファイルを読みました",
+      "search": "「{target}」を検索しました",
+      "searchHits": "「{target}」を検索しました（{hits} 件）",
+      "searchSome": "検索しました",
+      "commit": "コミットしました：{target}",
+      "commitPlain": "コミットしました",
+      "dispatch": "{target} に依頼しました：#{id}",
+      "dispatchPlain": "#{id} を依頼しました",
+      "dispatchSome": "作業を依頼しました",
+      "followup": "#{id} をフォローアップしました",
+      "followupSome": "フォローアップしました",
+      "message": "{target} にメッセージを送りました",
+      "messageSome": "メッセージを送りました",
+      "think": "少し考えました",
+      "reply": "返信を書きました",
+      "plan": "計画を立てました",
+      "compact": "コンテキストを整理しました",
+      "fetch": "下調べしました",
+      "question": "あなたに質問しました：{target}",
+      "questionSome": "あなたに質問しました",
+      "other": "{target}",
+      "otherPlain": "1 ステップ進めました"
+    },
+    "needs": {
+      "answer": "あなたの回答が必要：{text}",
+      "approval": "あなたの承認が必要：{text}",
+      "you": "あなたの対応が必要：{text}",
+      "answerPlain": "あなたの回答が必要",
+      "approvalPlain": "あなたの承認が必要",
+      "youPlain": "あなたの対応が必要"
+    },
+    "statusLine": {
+      "steps": "このターンのステップ",
+      "loading": "ステップを読み込み中…",
+      "empty": "まだステップはありません",
+      "fold": "ステップを折りたたむ",
+      "openWork": "この作業を開く"
+    },
+    "sending": {
+      "waking": "{name} を起こしています…",
+      "afterTurn": "このターンの終了を待っています",
+      "yielding": "道を譲っています"
+    },
+    "pills": {
+      "attention": "{count} 件があなたの対応待ち",
+      "newMessages": "新着メッセージ"
+    },
+    "detail": {
+      "title": "詳細",
+      "open": "詳細を表示",
+      "close": "詳細を隠す",
+      "tabs": {
+        "details": "詳細",
+        "output": "成果物",
+        "workspace": "ワークスペース"
+      },
+      "sections": {
+        "status": "状態",
+        "matters": "事項",
+        "data": "データ"
+      },
+      "notify": "通知する",
+      "notifyHint": "何かを終えたときや、あなたを待っているときに通知します",
+      "settings": "設定",
+      "item": {
+        "done": "完了",
+        "later": "後で",
+        "drop": "やめる"
+      },
+      "output": {
+        "all": "すべて",
+        "tasks": "タスク",
+        "reports": "レポート",
+        "docs": "ドキュメント",
+        "empty": "まだ成果物はありません",
+        "docEdited": "{when} に編集"
+      },
+      "workspace": {
+        "empty": "今は実行中のものはありません",
+        "open": "開く"
       }
     }
   }

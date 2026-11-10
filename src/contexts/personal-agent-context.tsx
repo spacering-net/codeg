@@ -65,6 +65,10 @@ interface PersonalAgentContextValue {
   needsOwner: boolean
   /** The step each reply in flight is on, as last pushed, by reply row id. */
   liveReplies: ReadonlyMap<number, ReplyStep | null>
+  /** The last text each reply in flight wrote, by reply row id: its bubble
+   *  keeps it while the turn goes on with other steps (they are the status
+   *  line's, 10.7). */
+  liveTexts?: ReadonlyMap<number, { n: number; text: string }>
   /** The dispatches the cards on the page point at, by id. */
   dispatchById: ReadonlyMap<number, DispatchInfo>
   /** Rows quoted from outside what is held, by id; `null` when it does not
@@ -227,6 +231,15 @@ function usePersonalAgentStore(
   const [liveReplies, setLiveReplies] = useState<
     ReadonlyMap<number, ReplyStep | null>
   >(() => new Map())
+  const [liveTexts, setLiveTexts] = useState<
+    ReadonlyMap<number, { n: number; text: string }>
+  >(() => new Map())
+  const keepText = useCallback((rowId: number, step: ReplyStep | null) => {
+    if (step?.t !== "text") return
+    setLiveTexts((held) =>
+      new Map(held).set(rowId, { n: step.n, text: step.text })
+    )
+  }, [])
   const [dispatchById, setDispatchById] = useState<
     ReadonlyMap<number, DispatchInfo>
   >(() => new Map())
@@ -265,11 +278,12 @@ function usePersonalAgentStore(
             ? held
             : new Map(held).set(live.row_id, live.current)
         )
+        keepText(live.row_id, live.current)
       }
     } catch {
       // keep the last good one; the next nudge recovers
     }
-  }, [botId])
+  }, [botId, keepText])
 
   /** The newest page, merged over what is held (older pages stay). */
   const refreshTimeline = useCallback(async () => {
@@ -432,6 +446,7 @@ function usePersonalAgentStore(
             setLiveReplies((held) =>
               new Map(held).set(change.row_id, change.current)
             )
+            keepText(change.row_id, change.current)
             break
           case "status":
           case "agent":
@@ -464,7 +479,7 @@ function usePersonalAgentStore(
       if (statusTimer.current) clearTimeout(statusTimer.current)
       if (quoteTimer.current) clearTimeout(quoteTimer.current)
     }
-  }, [refresh, nudgeStatus, merge, fetchDispatches, botId])
+  }, [refresh, nudgeStatus, merge, fetchDispatches, botId, keepText])
 
   // Read-only elsewhere: poll, since the running process's broadcasts stay
   // in that process. The newest page brings new rows; the changed rows bring
@@ -553,6 +568,7 @@ function usePersonalAgentStore(
       itemVersion,
       needsOwner,
       liveReplies,
+      liveTexts,
       dispatchById,
       quoted,
       requestQuoted,
@@ -570,6 +586,7 @@ function usePersonalAgentStore(
       itemVersion,
       needsOwner,
       liveReplies,
+      liveTexts,
       dispatchById,
       quoted,
       requestQuoted,

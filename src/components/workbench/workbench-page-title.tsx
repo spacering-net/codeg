@@ -19,7 +19,8 @@ interface WorkbenchPageTitleProps {
   /** Further breadcrumb segments after the title. */
   trail?: ReactNode
   /** Who the page is, drawn just before its title: the personal agent's
-   *  avatar. Not a route glyph (see below). */
+   *  avatar. Not a route glyph (see below). With an empty `title`, it is
+   *  the title (the assistants page's capsule of face and name). */
   leading?: ReactNode
 }
 
@@ -82,11 +83,11 @@ export function WorkbenchPageTitle({
         >
           {title}
         </button>
-      ) : (
+      ) : title ? (
         <h1 className="min-w-0 truncate pl-1 text-[0.8125rem] font-semibold leading-none">
           {title}
         </h1>
-      )}
+      ) : null}
       {trail}
     </div>
   )

@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
-import { ArrowLeftRight, Loader2 } from "lucide-react"
+import { ArrowLeftRight } from "lucide-react"
 
 import {
   Dialog,
@@ -19,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentThread } from "@/lib/api"
@@ -130,7 +131,7 @@ function SheetBody({ row }: { row: TimelineRow }) {
         </p>
       ) : view == null ? (
         <div className="flex h-24 items-center justify-center text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" aria-hidden />
+          <SyncedSpinner small className="size-4" />
         </div>
       ) : (
         <ScrollArea className="max-h-[60vh]">

@@ -28,7 +28,12 @@ import { BlockingPrompts } from "./live-turn"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
-import { replyView, type AnsweredLine, type ReplyEnding } from "./reply-view"
+import {
+  replyView,
+  type AnsweredLine,
+  type ReplyEnding,
+  type SlotView,
+} from "./reply-view"
 import { AGENT_SURFACE, INSET_HOVER, usePageScope } from "./shared"
 import { StepSlot } from "./step-slot"
 
@@ -165,7 +170,7 @@ function RequestInputs({ rows }: { rows: ReplyItem["attached"] }) {
 
 export function ReplyBubble({ item }: { item: ReplyItem }) {
   const scope = usePageScope()
-  const { liveReplies } = usePersonalAgent()
+  const { liveReplies, liveTexts } = usePersonalAgent()
   const row = item.row
   const live =
     row && liveReplies.has(row.id) ? liveReplies.get(row.id) : undefined
@@ -180,6 +185,31 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
     [row, live, item.attached, item.owners]
   )
   const liveTurn = view.running && row != null && row.id === scope.liveRowId
+  // While the turn runs, the bubble holds only what it wrote: the other
+  // steps are the status line's (10.7). Its last text stays while it goes on
+  // with them; with none yet, there is no bubble at all — unless the turn
+  // asks the owner something here.
+  const said = row ? liveTexts?.get(row.id) : undefined
+  const slot: SlotView | null =
+    view.running && view.slot?.kind !== "text"
+      ? said
+        ? { kind: "text", key: `t${said.n}`, text: said.text, streaming: true }
+        : null
+      : view.slot
+  const asks = item.attached.some(
+    (r) =>
+      (r.kind === "question" || r.kind === "permission") &&
+      r.data?.state === "pending"
+  )
+  if (
+    view.running &&
+    slot == null &&
+    !asks &&
+    view.answered.length === 0 &&
+    view.dispatches.length === 0
+  ) {
+    return null
+  }
   const copyText =
     !view.running && view.slot?.kind === "text" ? view.slot.text : null
   return (
@@ -209,9 +239,7 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
         {row?.reply_to != null && !item.quotesPrevious ? (
           <QuoteBar targetId={row.reply_to} tone="light" className="mb-2" />
         ) : null}
-        {view.slot ? (
-          <StepSlot view={view.slot} running={view.running} />
-        ) : null}
+        {slot ? <StepSlot view={slot} running={view.running} /> : null}
         {liveTurn &&
         !scope.readOnly &&
         scope.connectionId &&

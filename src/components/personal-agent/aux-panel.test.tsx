@@ -25,6 +25,11 @@ const api = vi.hoisted(() => ({
   personalAgentDispatches: vi.fn(),
   personalAgentStats: vi.fn(),
   personalAgentResumeAutoCompact: vi.fn(),
+  personalAgentItemAct: vi.fn(async () => ({})),
+  personalAgentOutputs: vi.fn(),
+  personalAgentOutputRead: vi.fn(),
+  personalAgentRosterAct: vi.fn(async () => {}),
+  personalAgentBots: vi.fn(),
 }))
 const pa = vi.hoisted(() => ({
   snapshot: null as unknown,
@@ -32,10 +37,45 @@ const pa = vi.hoisted(() => ({
 }))
 const toasts = vi.hoisted(() => ({ message: vi.fn(), error: vi.fn() }))
 vi.mock("@/lib/api", () => api)
+vi.mock("@/lib/platform", () => ({
+  subscribe: () => Promise.resolve(() => {}),
+  onTransportReconnect: () => () => {},
+}))
 vi.mock("sonner", () => ({ toast: toasts }))
+vi.mock("@/components/message/live-transcript-view", () => ({
+  LiveTranscriptView: ({
+    conversationId,
+    connectionId,
+  }: {
+    conversationId: number
+    connectionId: string | null
+  }) => (
+    <div
+      data-live-transcript={conversationId}
+      data-connection={connectionId ?? ""}
+    />
+  ),
+}))
+const acp = vi.hoisted(() => ({
+  attachDelegationChild: vi.fn(),
+  detachDelegationChild: vi.fn(),
+}))
+vi.mock("@/contexts/acp-connections-context", () => ({
+  useAcpActions: () => acp,
+}))
+const board = vi.hoisted(() => ({ tasks: [] as unknown[] }))
+vi.mock("@/contexts/tasks-view-context", () => ({
+  useTasksView: () => ({ tasks: board.tasks, loading: false }),
+}))
+vi.mock("@/components/tasks/task-transcript-dialog", () => ({
+  TaskTranscriptView: ({ task }: { task: { id: number } }) => (
+    <div data-task-preview={task.id} />
+  ),
+}))
 vi.mock("@/contexts/personal-agent-context", () => ({
   useBotId: () => null,
   usePersonalAgent: () => ({
+    botId: null,
     itemVersion: 0,
     dispatchVersion: 0,
     dispatchById: new Map(),
@@ -56,6 +96,8 @@ vi.mock("@/components/token-usage/charts", () => ({
   TrendChart: ({ label }: { label: string }) => <div data-chart={label} />,
   RankedBars: () => <div data-chart="ranked" />,
 }))
+
+import { __resetRosterForTests } from "@/stores/personal-agent-roster-store"
 
 import { PersonalAgentAuxPanel } from "./aux-panel"
 import { PageScopeContext, type PageScope } from "./shared"
@@ -239,13 +281,37 @@ const FIRST_UI_STATE = usePersonalAgentUi.getState()
 beforeEach(() => {
   pa.snapshot = snapshot()
   pa.rows = []
+  __resetRosterForTests()
   usePersonalAgentUi.setState({
     auxOpen: true,
-    auxTab: "work",
+    auxTab: "details",
     auxFolds: {},
     work: null,
     workOpen: false,
   })
+  api.personalAgentBots.mockResolvedValue([
+    {
+      id: 1,
+      kind: "primary",
+      uid: "u1",
+      name: "Nova",
+      avatar: { kind: "emoji", emoji: "🧭", color: "violet" },
+      template: null,
+      executor_assistant_id: null,
+      created_at: "2026-11-01T00:00:00Z",
+      roster: {
+        sort_order: 0,
+        pinned_at: null,
+        section: null,
+        hidden: false,
+        muted: false,
+        unread_mark: false,
+        notify: true,
+      },
+      live: null,
+    },
+  ])
+  api.personalAgentOutputs.mockResolvedValue([])
   api.personalAgentItems.mockResolvedValue([])
   api.personalAgentDispatches.mockResolvedValue([])
   api.personalAgentStats.mockResolvedValue({
@@ -262,41 +328,43 @@ afterEach(() => {
 })
 
 describe("the panel", () => {
-  it("opens on the status tab", () => {
-    expect(FIRST_UI_STATE.auxTab).toBe("status")
+  it("opens on the details tab", () => {
+    expect(FIRST_UI_STATE.auxTab).toBe("details")
     expect(FIRST_UI_STATE.auxOpen).toBe(true)
   })
 
   it("names the open tab over it and lists the tabs down its edge", async () => {
     draw()
-    expect(screen.getByRole("heading", { name: "Work" })).toBeTruthy()
+    expect(
+      screen.getByRole("heading", { name: "Details", level: 2 })
+    ).toBeTruthy()
     const rail = screen.getByRole("tablist", { name: "Assistant panel" })
     const tabs = within(rail).getAllByRole("tab")
     expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
-      "Status",
-      "Work",
-      "Stats",
+      "Details",
+      "Output",
+      "Workspace",
     ])
-    // A gauge, a clipboard (not the task board's checklist), a pie.
+    // A gauge, a parcel, a screen.
     expect(
       tabs.map((tab) => tab.querySelector("svg")!.getAttribute("class"))
     ).toEqual([
       expect.stringContaining("lucide-circle-gauge"),
-      expect.stringContaining("lucide-clipboard-list"),
-      expect.stringContaining("lucide-chart-pie"),
+      expect.stringContaining("lucide-package"),
+      expect.stringContaining("lucide-monitor"),
     ])
     expect(rail.getAttribute("aria-orientation")).toBe("vertical")
     // Another tab: its name over it.
-    fireEvent.mouseDown(within(rail).getByRole("tab", { name: "Stats" }), {
+    fireEvent.mouseDown(within(rail).getByRole("tab", { name: "Output" }), {
       button: 0,
     })
-    expect(usePersonalAgentUi.getState().auxTab).toBe("stats")
-    expect(await screen.findByRole("heading", { name: "Stats" })).toBeTruthy()
+    expect(usePersonalAgentUi.getState().auxTab).toBe("output")
+    expect(await screen.findByRole("heading", { name: "Output" })).toBeTruthy()
   })
 
   it("keeps the window's corner buttons clear when its strip is in the top band", () => {
     const { unmount } = draw({ reserve: 132 })
-    const heading = screen.getByRole("heading", { name: "Work" })
+    const heading = screen.getByRole("heading", { name: "Details", level: 2 })
     // The strip is the window's top edge there: its name and its empty rest
     // move the window, and its end is the corner buttons' slot.
     expect(heading.hasAttribute("data-tauri-drag-region")).toBe(true)
@@ -311,14 +379,17 @@ describe("the panel", () => {
     unmount()
     // Under the band (no slot to keep): its own end padding instead.
     draw()
-    const plain = screen.getByRole("heading", { name: "Work" }).parentElement!
+    const plain = screen.getByRole("heading", {
+      name: "Details",
+      level: 2,
+    }).parentElement!
     expect(plain.querySelector(".chrome-reserve")).toBeNull()
     expect(plain.className).toContain("pe-3")
   })
 
   it("hides itself on a click of the tab already open, as the workspace's does", () => {
     draw()
-    const tab = screen.getByRole("tab", { name: "Work" })
+    const tab = screen.getByRole("tab", { name: "Details" })
     // jsdom's `fireEvent.pointerDown` leaves `button` out: a MouseEvent of
     // the pointer's type carries it.
     const press = (target: Element) =>
@@ -328,12 +399,12 @@ describe("the panel", () => {
         )
       })
     // Another tab first: a click on it only opens it.
-    const stats = screen.getByRole("tab", { name: "Stats" })
-    press(stats)
-    fireEvent.mouseDown(stats, { button: 0 })
-    fireEvent.click(stats, { detail: 1 })
+    const output = screen.getByRole("tab", { name: "Output" })
+    press(output)
+    fireEvent.mouseDown(output, { button: 0 })
+    fireEvent.click(output, { detail: 1 })
     expect(usePersonalAgentUi.getState()).toMatchObject({
-      auxTab: "stats",
+      auxTab: "output",
       auxOpen: true,
     })
     press(tab)
@@ -363,15 +434,17 @@ describe("the panel", () => {
         within(list)
           .getAllByRole("tab")
           .map((tab) => tab.textContent)
-      ).toEqual(["Status", "Work1", "Stats"])
+      ).toEqual(["Details1", "Output", "Workspace"])
     )
     // No strip over it: the drawer has its own title.
-    expect(screen.queryByRole("heading", { name: "Work" })).toBeNull()
+    expect(
+      screen.queryByRole("heading", { name: "Details", level: 2 })
+    ).toBeNull()
   })
 })
 
-describe("the work tab", () => {
-  it("groups what is open by whom it waits on, each piece once, then what ended, folded", async () => {
+describe("the details' matters", () => {
+  it("groups what is open by whom it waits on, each piece once; what ended is output", async () => {
     api.personalAgentDispatches.mockResolvedValue([
       dispatch({ id: 1, title: "Review the login fix", state: "review" }),
       dispatch({ id: 2, title: "Run the build", state: "running" }),
@@ -421,7 +494,7 @@ describe("the work tab", () => {
     const groups = [...container.querySelectorAll("[data-pa-group]")].map((g) =>
       g.getAttribute("data-pa-group")
     )
-    expect(groups).toEqual(["owner", "external", "agent", "time", "ended"])
+    expect(groups).toEqual(["owner", "external", "agent", "time"])
     const group = (g: string) =>
       container.querySelector<HTMLElement>(`[data-pa-group='${g}']`)!
     expect(
@@ -433,31 +506,35 @@ describe("the work tab", () => {
     expect(group("external").textContent).toContain("When done: tell the owner")
     expect(group("agent").textContent).toContain("Fix the flaky test")
     expect(group("time").textContent).toContain("Look at the merge request")
-    // What ended starts folded, with its count; it opens.
-    const ended = within(group("ended")).getByRole("button", { name: /Ended/ })
-    expect(ended.getAttribute("aria-expanded")).toBe("false")
-    expect(ended.textContent).toContain("1")
-    // Its chevron's stroke on the cards' edge, as the other tabs have it.
-    expect(ended.querySelector("svg")!.getAttribute("class")).toContain(
-      "-ms-[3px]"
-    )
-    expect(group("ended").textContent).not.toContain("Write the notes")
-    fireEvent.click(ended)
-    expect(group("ended").textContent).toContain("Write the notes")
-    // Each piece of work once.
+    // A section's chevron's stroke on the cards' edge, as the other
+    // sections have it.
+    expect(
+      within(group("owner"))
+        .getByRole("button", { name: /Waiting/ })
+        .querySelector("svg")!
+        .getAttribute("class")
+    ).toContain("-ms-[3px]")
+    // Each piece of work once; what ended is not among them.
     for (const title of [
       "Review the login fix",
       "Run the build",
-      "Write the notes",
       "Fix the flaky test",
       "Queue the deploy",
     ]) {
       expect(screen.getAllByText(title)).toHaveLength(1)
     }
+    expect(screen.queryByText("Write the notes")).toBeNull()
     // The rail counts what waits on the owner, and says it.
-    const tab = screen.getByRole("tab", { name: /Work/ })
+    const tab = screen.getByRole("tab", { name: /Details/ })
     expect(tab.textContent).toBe("1")
-    expect(tab.getAttribute("aria-label")).toBe("Work · 1 thing waits for you")
+    expect(tab.getAttribute("aria-label")).toBe(
+      "Details · 1 thing waits for you"
+    )
+    // What ended is the output.
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Output" }), {
+      button: 0,
+    })
+    expect(await screen.findByText("Write the notes")).toBeTruthy()
   })
 
   it("opens a piece of work in the drawer, and goes to where a reminder came from", async () => {
@@ -492,16 +569,183 @@ describe("the work tab", () => {
 
   it("says when nothing is open", async () => {
     draw()
-    expect(await screen.findByText("Nothing open")).toBeTruthy()
+    expect(await screen.findByText("Nothing open right now.")).toBeTruthy()
     expect(
-      screen.getByRole("tab", { name: /Work/ }).getAttribute("aria-label")
-    ).toBe("Work")
+      screen.getByRole("tab", { name: /Details/ }).getAttribute("aria-label")
+    ).toBe("Details")
+  })
+
+  it("settles a matter from its card: done, later, dropped", async () => {
+    api.personalAgentItems.mockResolvedValue([
+      item({
+        id: 11,
+        kind: "question",
+        waits_for: "owner",
+        summary: "Which branch?",
+      }),
+      item({
+        id: 15,
+        kind: "reminder",
+        waits_for: "time",
+        summary: "Look at the merge request at 10",
+      }),
+    ])
+    const { container } = draw()
+    await screen.findByText("Which branch?")
+    const question = container.querySelector<HTMLElement>(
+      "[data-pa-group='owner']"
+    )!
+    fireEvent.click(within(question).getByRole("button", { name: "Later" }))
+    expect(api.personalAgentItemAct).toHaveBeenCalledWith(null, 11, "later")
+    const done = within(question).getByRole("button", { name: "Done" })
+    await waitFor(() => expect(done.hasAttribute("disabled")).toBe(false))
+    fireEvent.click(done)
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 11, "done")
+    // One already waiting on time has no "later".
+    const reminder = container.querySelector<HTMLElement>(
+      "[data-pa-group='time']"
+    )!
+    expect(within(reminder).queryByRole("button", { name: "Later" })).toBeNull()
+    fireEvent.click(within(reminder).getByRole("button", { name: "Drop" }))
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 15, "drop")
+  })
+
+  it("ends with the switch to be told and the way to its settings", async () => {
+    draw()
+    const toggle = await screen.findByRole("switch")
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false))
+    expect(toggle.getAttribute("aria-checked")).toBe("true")
+    fireEvent.click(toggle)
+    expect(api.personalAgentRosterAct).toHaveBeenCalledWith(1, {
+      act: "notify",
+      on: false,
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    expect(usePersonalAgentUi.getState().settings).toEqual({
+      page: "identity",
+      bot: null,
+    })
   })
 })
 
-describe("the status tab", () => {
+describe("the output tab", () => {
+  it("lists what it made, newest first, by kind, and opens a document", async () => {
+    usePersonalAgentUi.setState({ auxTab: "output" })
+    api.personalAgentDispatches.mockResolvedValue([
+      dispatch({
+        id: 3,
+        title: "Ship the page",
+        state: "completed",
+        finished_at: "2026-11-04T11:00:00Z",
+      }),
+      dispatch({
+        id: 4,
+        mode: "chat",
+        title: "Look into the logs",
+        state: "completed",
+        finished_at: "2026-11-04T09:30:00Z",
+      }),
+    ])
+    api.personalAgentOutputs.mockResolvedValue([
+      { path: "notes/weekly.md", modified_at: "2026-11-04T12:00:00Z", size: 9 },
+    ])
+    api.personalAgentOutputRead.mockResolvedValue("# Weekly")
+    draw()
+    await screen.findByText("notes/weekly.md")
+    const titles = () =>
+      [
+        ...screen
+          .getByRole("tabpanel")
+          .querySelectorAll(".text-\\[0\\.8125rem\\]"),
+      ]
+        .map((el) => el.textContent)
+        .filter(Boolean)
+    expect(titles()).toEqual([
+      "notes/weekly.md",
+      "Ship the page",
+      "Look into the logs",
+    ])
+    fireEvent.click(screen.getByRole("button", { name: "Tasks" }))
+    expect(titles()).toEqual(["Ship the page"])
+    fireEvent.click(screen.getByRole("button", { name: "Reports" }))
+    expect(titles()).toEqual(["Look into the logs"])
+    fireEvent.click(screen.getByRole("button", { name: "Documents" }))
+    fireEvent.click(screen.getByText("notes/weekly.md").closest("button")!)
+    expect(api.personalAgentOutputRead).toHaveBeenCalledWith(
+      null,
+      "notes/weekly.md"
+    )
+    expect(await screen.findByRole("heading", { name: "Weekly" })).toBeTruthy()
+  })
+})
+
+describe("the workspace tab", () => {
+  it("follows each piece of work live, a task's from the board, and stands aside while the drawer shows one", async () => {
+    usePersonalAgentUi.setState({ auxTab: "workspace" })
+    board.tasks = [{ id: 7, conversation_id: 70, status: "running" }]
+    api.personalAgentDispatches.mockResolvedValue([
+      dispatch({
+        id: 2,
+        mode: "session",
+        title: "Look at the checkout",
+        state: "running",
+        conversation_id: 31,
+        connection_id: "c-31",
+        work_task_id: null,
+      }),
+      dispatch({ id: 3, title: "Fix the bug", state: "running" }),
+    ])
+    const { unmount } = draw()
+    await screen.findByText("#2 Look at the checkout")
+    // The session's connection attached, hydrated, for the preview.
+    expect(acp.attachDelegationChild).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: "c-31", hydrate: true })
+    )
+    expect(
+      document
+        .querySelector("[data-live-transcript='31']")
+        ?.getAttribute("data-connection")
+    ).toBe("c-31")
+    // The task's session, from the board.
+    expect(document.querySelector("[data-task-preview='7']")).toBeTruthy()
+    // The drawer opens one: the previews stand aside, and let go.
+    act(() => usePersonalAgentUi.setState({ workOpen: true }))
+    expect(document.querySelector("[data-pa-workspace-preview]")).toBeNull()
+    expect(acp.detachDelegationChild).toHaveBeenCalledWith("c-31")
+    unmount()
+    board.tasks = []
+  })
+
+  it("shows the work running now, and sleeps when none is", async () => {
+    usePersonalAgentUi.setState({ auxTab: "workspace" })
+    const { unmount } = draw()
+    expect(await screen.findByText("Nothing running right now")).toBeTruthy()
+    expect(
+      document
+        .querySelector("[data-pa-workspace-empty] [data-bot-look]")
+        ?.getAttribute("data-bot-look")
+    ).toBe("sleeping")
+    unmount()
+    api.personalAgentDispatches.mockResolvedValue([
+      dispatch({
+        id: 2,
+        mode: "session",
+        title: "Run the build",
+        state: "running",
+        conversation_id: 31,
+        work_task_id: null,
+      }),
+    ])
+    draw()
+    const card = await screen.findByText("#2 Run the build")
+    expect(
+      card.closest("section")!.querySelector("[data-live-transcript='31']")
+    ).toBeTruthy()
+  })
+})
+
+describe("the details' status", () => {
   it("shows who it is and what it runs on as a card, then how full its context is", async () => {
-    usePersonalAgentUi.setState({ auxTab: "status" })
     draw()
     expect(screen.getByText("Nova")).toBeTruthy()
     expect(screen.getByText("Idle")).toBeTruthy()
@@ -539,7 +783,6 @@ describe("the status tab", () => {
   })
 
   it("lines its sections up with the card, the run log in words and times", () => {
-    usePersonalAgentUi.setState({ auxTab: "status" })
     pa.rows = [
       marker(1, {
         marker: "segment_start",
@@ -577,12 +820,11 @@ describe("the status tab", () => {
   })
 
   it("keeps a section folded or open across a switch of tabs", async () => {
-    usePersonalAgentUi.setState({ auxTab: "status" })
     draw()
     fireEvent.click(screen.getByRole("button", { name: /Context/ }))
     expect(screen.queryByRole("meter")).toBeNull()
-    act(() => usePersonalAgentUi.setState({ auxTab: "work" }))
-    act(() => usePersonalAgentUi.setState({ auxTab: "status" }))
+    act(() => usePersonalAgentUi.setState({ auxTab: "output" }))
+    act(() => usePersonalAgentUi.setState({ auxTab: "details" }))
     expect(
       screen
         .getByRole("button", { name: /Context/ })
@@ -592,9 +834,8 @@ describe("the status tab", () => {
   })
 })
 
-describe("the stats tab", () => {
+describe("the details' data", () => {
   it("leads with the figures of the last two weeks", async () => {
-    usePersonalAgentUi.setState({ auxTab: "stats" })
     const day = (date: string, n: number) => ({
       date,
       owner_messages: n,

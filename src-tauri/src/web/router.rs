@@ -430,6 +430,26 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_bots),
         )
         .route(
+            "/personal_agent_outputs",
+            post(handlers::personal_agent::personal_agent_outputs),
+        )
+        .route(
+            "/personal_agent_output_read",
+            post(handlers::personal_agent::personal_agent_output_read),
+        )
+        .route(
+            "/personal_agent_roster_act",
+            post(handlers::personal_agent::personal_agent_roster_act),
+        )
+        .route(
+            "/personal_agent_turn_steps",
+            post(handlers::personal_agent::personal_agent_turn_steps),
+        )
+        .route(
+            "/personal_agent_item_act",
+            post(handlers::personal_agent::personal_agent_item_act),
+        )
+        .route(
             "/personal_agent_executors",
             post(handlers::personal_agent::personal_agent_executors),
         )

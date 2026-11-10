@@ -511,6 +511,9 @@ pub struct TurnInfo {
     pub kind: BatchKind,
     pub started_at: DateTime<Utc>,
     pub compaction_initiator: Option<CompactInitiator>,
+    /// It carries messages of the owner's (else it is about events only,
+    /// and gives way when the owner writes: 4.7).
+    pub for_owner: bool,
 }
 
 /// Where the engine runs, as seen from this process.

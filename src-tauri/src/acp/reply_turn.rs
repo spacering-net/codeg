@@ -18,8 +18,16 @@
 //! Quote markers (`[[quote:#ID]]`, the agent naming the timeline row it
 //! answers) are collected from every text run and never shown: a run made only
 //! of markers and whitespace is not a step.
+//!
+//! Besides the slot, a turn keeps the last [`MAX_HISTORY`] steps it went
+//! through, each with what its call was given and the tail of what it gave
+//! back ([`StepRaw`]): the page's status line lists them, one short line
+//! each (8.4), and the roster says what an assistant is doing from the one
+//! it is on.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+use chrono::{DateTime, Utc};
 use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +40,14 @@ use crate::acp::types::{AcpEvent, PlanEntryInfo};
 const MAX_REPLY_TURNS: usize = 32;
 /// Longest one-line title kept for a step.
 const MAX_TITLE_CHARS: usize = 200;
+/// Steps of a turn kept for its list.
+pub const MAX_HISTORY: usize = 100;
+/// A call's input is kept (parsed) only up to this size: enough for an edit's
+/// old and new text, not for a whole generated file.
+const MAX_INPUT_BYTES: usize = 256 * 1024;
+/// The tail of a call's output kept: where a test run's summary and an exit
+/// code are.
+const MAX_OUTPUT_CHARS: usize = 4000;
 
 static QUOTE_MARKER: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?i)\[\[quote:#?(\d+)\]\]").expect("valid regex"));
@@ -109,6 +125,49 @@ struct ToolStep {
     kind: String,
     title: String,
     status: Option<String>,
+    started_at: DateTime<Utc>,
+    /// The call's input, parsed (`None`: none, not JSON, or too big).
+    input: Option<serde_json::Value>,
+    /// The first file location the call reported.
+    path: Option<String>,
+    /// The tail of its output.
+    output: Option<String>,
+}
+
+/// One step of a turn's list, as the agent reported it: what the page turns
+/// into a short line (`personal_agent::activity`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepRaw {
+    pub n: u32,
+    /// `text`, `think`, `plan`, ACP's tool kind, or `compact` / `question`.
+    pub kind: String,
+    pub title: String,
+    pub status: Option<String>,
+    /// Waiting on the owner: a permission, a question, a plan approval.
+    pub awaiting: bool,
+    pub started_at: DateTime<Utc>,
+    pub input: Option<serde_json::Value>,
+    pub path: Option<String>,
+    pub output: Option<String>,
+}
+
+/// A step in a turn's list: the tool calls by id (their details live in
+/// `tools` and keep updating), the rest as they were.
+#[derive(Debug, Clone)]
+enum Past {
+    Text,
+    Think,
+    Plan(String),
+    Tool(String),
+    /// A wait not tied to a call of the main thread.
+    Wait { kind: String, title: String },
+}
+
+#[derive(Debug, Clone)]
+struct PastStep {
+    n: u32,
+    at: DateTime<Utc>,
+    step: Past,
 }
 
 /// Something the turn waits on the owner for. Pinned to the slot until it is
@@ -144,6 +203,8 @@ struct ReplyTurn {
     awaiting: Vec<Awaiting>,
     /// Markers of the runs already closed.
     quotes: Vec<i64>,
+    /// The last steps, oldest first.
+    history: VecDeque<PastStep>,
 }
 
 impl ReplyTurn {
@@ -163,15 +224,34 @@ impl ReplyTurn {
             children: HashSet::new(),
             awaiting: Vec::new(),
             quotes: Vec::new(),
+            history: VecDeque::new(),
         }
+    }
+
+    fn remember(&mut self, n: u32, step: Past) {
+        if self.history.len() >= MAX_HISTORY {
+            self.history.pop_front();
+        }
+        self.history.push_back(PastStep {
+            n,
+            at: Utc::now(),
+            step,
+        });
     }
 
     /// A new step in the slot, ending the text run.
     fn open_step(&mut self, slot: Slot) -> u32 {
         self.close_run();
         self.steps += 1;
-        self.slot = Some(slot);
+        self.slot = Some(slot.clone());
         self.slot_n = self.steps;
+        let past = match slot {
+            Slot::Text => Past::Text,
+            Slot::Think => Past::Think,
+            Slot::Plan => Past::Plan(String::new()),
+            Slot::Tool(id) => Past::Tool(id),
+        };
+        self.remember(self.steps, past);
         self.steps
     }
 
@@ -199,6 +279,7 @@ impl ReplyTurn {
             self.run_n = Some(self.steps);
             self.slot = Some(Slot::Text);
             self.slot_n = self.steps;
+            self.remember(self.steps, Past::Text);
         }
     }
 
@@ -214,6 +295,10 @@ impl ReplyTurn {
             self.open_step(Slot::Plan);
         }
         self.plan_title = plan_title(entries);
+        let (n, title) = (self.slot_n, self.plan_title.clone());
+        if let Some(p) = self.history.iter_mut().rev().find(|p| p.n == n) {
+            p.step = Past::Plan(title);
+        }
     }
 
     fn tool(
@@ -223,6 +308,19 @@ impl ReplyTurn {
         title: Option<&str>,
         status: Option<&str>,
         meta: Option<&serde_json::Value>,
+    ) {
+        self.tool_with(id, kind, title, status, meta, &CallData::default());
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn tool_with(
+        &mut self,
+        id: &str,
+        kind: Option<&str>,
+        title: Option<&str>,
+        status: Option<&str>,
+        meta: Option<&serde_json::Value>,
+        data: &CallData<'_>,
     ) {
         if id.is_empty() || self.children.contains(id) {
             return;
@@ -249,24 +347,28 @@ impl ReplyTurn {
                 if let Some(s) = status {
                     t.status = Some(s.to_string());
                 }
+                data.apply(t);
             }
             // Never seen: a step of its own, `ToolCallUpdate`-only calls (a
             // compaction) included.
             None => {
                 let n = self.open_step(Slot::Tool(id.to_string()));
-                self.tools.insert(
-                    id.to_string(),
-                    ToolStep {
-                        n,
-                        kind: if compact {
-                            "compact".to_string()
-                        } else {
-                            kind.filter(|k| !k.is_empty()).unwrap_or("other").to_string()
-                        },
-                        title: title.unwrap_or_default(),
-                        status: status.map(str::to_string),
+                let mut step = ToolStep {
+                    n,
+                    kind: if compact {
+                        "compact".to_string()
+                    } else {
+                        kind.filter(|k| !k.is_empty()).unwrap_or("other").to_string()
                     },
-                );
+                    title: title.unwrap_or_default(),
+                    status: status.map(str::to_string),
+                    started_at: Utc::now(),
+                    input: None,
+                    path: None,
+                    output: None,
+                };
+                data.apply(&mut step);
+                self.tools.insert(id.to_string(), step);
             }
         }
     }
@@ -300,6 +402,13 @@ impl ReplyTurn {
             // A sub-agent's call, or none named: shown for the wait only.
             _ => {
                 self.steps += 1;
+                self.remember(
+                    self.steps,
+                    Past::Wait {
+                        kind: kind.to_string(),
+                        title: title.clone(),
+                    },
+                );
                 Awaiting {
                     key,
                     n: self.steps,
@@ -395,6 +504,134 @@ impl ReplyTurn {
             quotes,
         }
     }
+
+    fn raw_of_tool(&self, id: &str, at: DateTime<Utc>) -> Option<StepRaw> {
+        let t = self.tools.get(id)?;
+        Some(StepRaw {
+            n: t.n,
+            kind: t.kind.clone(),
+            title: t.title.clone(),
+            status: t.status.clone(),
+            awaiting: self.awaiting.iter().any(|a| a.tool_id.as_deref() == Some(id)),
+            started_at: t.started_at.min(at),
+            input: t.input.clone(),
+            path: t.path.clone(),
+            output: t.output.clone(),
+        })
+    }
+
+    fn raw_of(&self, p: &PastStep) -> Option<StepRaw> {
+        let plain = |kind: &str, title: String| StepRaw {
+            n: p.n,
+            kind: kind.to_string(),
+            title,
+            status: None,
+            awaiting: false,
+            started_at: p.at,
+            input: None,
+            path: None,
+            output: None,
+        };
+        match &p.step {
+            Past::Text => Some(plain("text", String::new())),
+            Past::Think => Some(plain("think", String::new())),
+            Past::Plan(title) => Some(plain("plan", title.clone())),
+            Past::Tool(id) => self.raw_of_tool(id, p.at),
+            Past::Wait { kind, title } => Some(StepRaw {
+                awaiting: self.awaiting.iter().any(|a| a.n == p.n),
+                ..plain(kind, title.clone())
+            }),
+        }
+    }
+
+    /// The steps kept, oldest first.
+    fn steps_raw(&self) -> Vec<StepRaw> {
+        self.history.iter().filter_map(|p| self.raw_of(p)).collect()
+    }
+
+    /// The step the turn is on now, with its call's details.
+    fn current_raw(&self) -> Option<StepRaw> {
+        if let Some(a) = self.awaiting.last() {
+            let mut raw = a
+                .tool_id
+                .as_deref()
+                .and_then(|id| self.raw_of_tool(id, Utc::now()))
+                .unwrap_or_else(|| StepRaw {
+                    n: a.n,
+                    kind: a.kind.clone(),
+                    title: a.title.clone(),
+                    status: None,
+                    awaiting: true,
+                    started_at: Utc::now(),
+                    input: None,
+                    path: None,
+                    output: None,
+                });
+            raw.awaiting = true;
+            return Some(raw);
+        }
+        let n = self.slot_n;
+        self.history
+            .iter()
+            .rev()
+            .find(|p| p.n == n)
+            .and_then(|p| self.raw_of(p))
+    }
+}
+
+/// What a tool call event says beyond its kind, title and status.
+#[derive(Default)]
+struct CallData<'a> {
+    raw_input: Option<&'a str>,
+    raw_output: Option<&'a str>,
+    output_append: bool,
+    content: Option<&'a str>,
+    locations: Option<&'a serde_json::Value>,
+}
+
+impl CallData<'_> {
+    fn apply(&self, t: &mut ToolStep) {
+        if let Some(raw) = self.raw_input.filter(|r| !r.trim().is_empty()) {
+            t.input = if raw.len() <= MAX_INPUT_BYTES {
+                serde_json::from_str(raw).ok()
+            } else {
+                None
+            };
+        }
+        if let Some(path) = self.locations.and_then(first_location) {
+            t.path = Some(path);
+        }
+        match (self.raw_output, self.content) {
+            (Some(out), _) if self.output_append => {
+                let mut joined = t.output.take().unwrap_or_default();
+                joined.push_str(out);
+                t.output = Some(tail(&joined, MAX_OUTPUT_CHARS));
+            }
+            (Some(out), _) if !out.is_empty() => t.output = Some(tail(out, MAX_OUTPUT_CHARS)),
+            (_, Some(content)) if !content.is_empty() && t.output.is_none() => {
+                t.output = Some(tail(content, MAX_OUTPUT_CHARS));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn first_location(v: &serde_json::Value) -> Option<String> {
+    v.as_array()?
+        .iter()
+        .find_map(|l| l.get("path").and_then(|p| p.as_str()))
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+}
+
+/// The last `max` chars of `s`.
+fn tail(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        s.to_string()
+    } else {
+        s.chars().skip(n - max).collect()
+    }
 }
 
 /// The reply turns of one connection (see the module docs).
@@ -455,26 +692,49 @@ impl ReplyTurns {
                 kind,
                 status,
                 meta,
+                content,
+                raw_input,
+                raw_output,
+                locations,
                 ..
-            } => turn.tool(
+            } => turn.tool_with(
                 tool_call_id,
                 Some(kind),
                 Some(title),
                 Some(status),
                 meta.as_ref(),
+                &CallData {
+                    raw_input: raw_input.as_deref(),
+                    raw_output: raw_output.as_deref(),
+                    output_append: false,
+                    content: content.as_deref(),
+                    locations: locations.as_ref(),
+                },
             ),
             AcpEvent::ToolCallUpdate {
                 tool_call_id,
                 title,
                 status,
                 meta,
+                content,
+                raw_input,
+                raw_output,
+                raw_output_append,
+                locations,
                 ..
-            } => turn.tool(
+            } => turn.tool_with(
                 tool_call_id,
                 None,
                 title.as_deref(),
                 status.as_deref(),
                 meta.as_ref(),
+                &CallData {
+                    raw_input: raw_input.as_deref(),
+                    raw_output: raw_output.as_deref(),
+                    output_append: raw_output_append.unwrap_or(false),
+                    content: content.as_deref(),
+                    locations: locations.as_ref(),
+                },
             ),
             AcpEvent::PlanUpdate { entries } => turn.plan(entries),
             AcpEvent::PermissionRequest {
@@ -544,6 +804,24 @@ impl ReplyTurns {
             .iter()
             .find(|t| t.token == token)
             .map(ReplyTurn::snapshot)
+    }
+
+    /// The steps turn `token` went through (the last [`MAX_HISTORY`]),
+    /// oldest first.
+    pub fn steps(&self, token: &str) -> Vec<StepRaw> {
+        self.turns
+            .iter()
+            .find(|t| t.token == token)
+            .map(ReplyTurn::steps_raw)
+            .unwrap_or_default()
+    }
+
+    /// The step turn `token` is on now, with its call's details.
+    pub fn current_step(&self, token: &str) -> Option<StepRaw> {
+        self.turns
+            .iter()
+            .find(|t| t.token == token)
+            .and_then(ReplyTurn::current_raw)
     }
 
     /// The engine settled the turn: forget it.
@@ -1058,5 +1336,87 @@ mod tests {
         assert_eq!(display_text("a [b] c"), "a [b] c");
         assert_eq!(display_text("see [[other]]"), "see [[other]]");
         assert_eq!(quote_ids("[[quote:#1]] [[quote:22]] [[Quote:#x]]"), vec![1, 22]);
+    }
+
+    fn full_tool(id: &str, kind: &str, title: &str, input: &str) -> AcpEvent {
+        AcpEvent::ToolCall {
+            tool_call_id: id.into(),
+            title: title.into(),
+            kind: kind.into(),
+            status: "in_progress".into(),
+            content: None,
+            raw_input: Some(input.into()),
+            raw_output: None,
+            locations: Some(serde_json::json!([{ "path": "/w/src/parser.rs" }])),
+            meta: None,
+            images: None,
+        }
+    }
+
+    fn output(id: &str, out: &str, append: bool) -> AcpEvent {
+        AcpEvent::ToolCallUpdate {
+            tool_call_id: id.into(),
+            title: None,
+            status: Some("completed".into()),
+            content: None,
+            raw_input: None,
+            raw_output: Some(out.into()),
+            raw_output_append: append.then_some(true),
+            locations: None,
+            meta: None,
+            images: None,
+        }
+    }
+
+    #[test]
+    fn a_turn_lists_its_steps_with_what_each_call_was_given_and_gave_back() {
+        let mut turns = ReplyTurns::default();
+        turns.open("tok".into());
+        turns.apply(&think("hmm"), 1, true);
+        turns.apply(&full_tool("e1", "edit", "Edit parser.rs", r#"{"file_path":"/w/src/parser.rs","old_string":"a","new_string":"b"}"#), 2, true);
+        turns.apply(&output("e1", "ok", false), 3, true);
+        turns.apply(&full_tool("x1", "execute", "cargo test", r#"{"command":"cargo test"}"#), 4, true);
+        turns.apply(&output("x1", "running 2 tests\n", true), 5, true);
+        turns.apply(&output("x1", "test result: ok. 2 passed", true), 6, true);
+        turns.apply(&text("Done."), 7, true);
+        let steps = turns.steps("tok");
+        let kinds: Vec<&str> = steps.iter().map(|s| s.kind.as_str()).collect();
+        assert_eq!(kinds, ["think", "edit", "execute", "text"]);
+        let edit = &steps[1];
+        assert_eq!(edit.path.as_deref(), Some("/w/src/parser.rs"));
+        assert_eq!(edit.input.as_ref().unwrap()["new_string"], "b");
+        assert_eq!(edit.status.as_deref(), Some("completed"));
+        assert_eq!(
+            steps[2].output.as_deref(),
+            Some("running 2 tests\ntest result: ok. 2 passed")
+        );
+        // The step it is on now carries the same details.
+        assert_eq!(turns.current_step("tok").unwrap().kind, "text");
+    }
+
+    #[test]
+    fn a_turn_keeps_its_last_hundred_steps() {
+        let mut turns = ReplyTurns::default();
+        turns.open("tok".into());
+        for i in 0..(MAX_HISTORY + 20) {
+            turns.apply(&tool(&format!("t{i}"), "Read", "in_progress"), i as u64, true);
+        }
+        let steps = turns.steps("tok");
+        assert_eq!(steps.len(), MAX_HISTORY);
+        assert_eq!(steps.first().unwrap().n, 21);
+        assert_eq!(steps.last().unwrap().n, (MAX_HISTORY + 20) as u32);
+    }
+
+    #[test]
+    fn the_step_waiting_on_the_owner_is_the_current_one() {
+        let mut turns = ReplyTurns::default();
+        turns.open("tok".into());
+        turns.apply(&full_tool("x1", "execute", "rm -rf build", r#"{"command":"rm -rf build"}"#), 1, true);
+        turns.apply(&text("Meanwhile…"), 2, true);
+        turns.apply(&permission("p1", "x1", "rm -rf build"), 3, true);
+        let current = turns.current_step("tok").unwrap();
+        assert!(current.awaiting);
+        assert_eq!(current.kind, "execute");
+        assert_eq!(current.input.unwrap()["command"], "rm -rf build");
     }
 }

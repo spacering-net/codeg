@@ -16,7 +16,7 @@
 
 import { useRef, useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { Check, Copy, Loader2, Reply, Square, TextSelect } from "lucide-react"
+import { Check, Copy, Reply, Square, TextSelect } from "lucide-react"
 import { toast } from "sonner"
 
 import {
@@ -24,6 +24,7 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
 } from "@/components/ui/context-menu"
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { useCopiedFlag } from "@/hooks/use-copied-flag"
 import { useElapsedLabel } from "@/hooks/use-elapsed-label"
 import { personalAgentCancel } from "@/lib/api"
@@ -105,8 +106,9 @@ function stopReply(botId: number | null): Promise<void> {
 const BUTTON =
   "inline-flex size-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 
-/** Stop the turn writing this reply. */
-function StopButton() {
+/** Stop the turn writing this reply (the status line has one too, for a
+ *  turn that has not written yet). */
+export function StopButton() {
   const t = useTranslations("PersonalAgent.actions")
   const botId = useBotId()
   const [busy, setBusy] = useState(false)
@@ -123,7 +125,7 @@ function StopButton() {
       aria-label={t("stop")}
     >
       {busy ? (
-        <Loader2 className="size-3.5 animate-spin" />
+        <SyncedSpinner small className="size-3.5" />
       ) : (
         <Square className="size-3 fill-current" />
       )}

@@ -67,6 +67,8 @@ import { personalAgentKeepalive, personalAgentNewSession } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { TimelineRow } from "@/lib/types"
 import { useAssistants } from "@/stores/assistants-store"
+import { usePaAccent } from "@/lib/personal-agent-accent"
+import { useBotLive } from "@/stores/personal-agent-roster-store"
 import {
   PERSONAL_AGENT_EVENTS,
   usePersonalAgentUi,
@@ -82,6 +84,9 @@ import { replyState } from "./message-items"
 import { SettingsView } from "./settings/settings-view"
 import { PageScopeContext, useStatusWord, type PageScope } from "./shared"
 import { PersonalAgentWorkDrawer } from "./work-drawer"
+import { StatusLine } from "./status-line"
+import { useAssistantShortcuts } from "./use-assistant-shortcuts"
+import { viewOf } from "./roster-order"
 
 export { PersonalAgentChromeActions } from "./chrome-actions"
 
@@ -90,8 +95,9 @@ export { PersonalAgentChromeActions } from "./chrome-actions"
  *  a resume. */
 const KEEPALIVE_MS = 30_000
 
-/** The size of the agent's avatar in the title, in px at 100% zoom. */
-const TITLE_AVATAR_SIZE = 24
+/** The size of the agent's avatar in the title's capsule, in px at 100%
+ *  zoom (10.6). */
+const TITLE_AVATAR_SIZE = 18
 
 export function PersonalAgentPageTitle() {
   const t = useTranslations("PersonalAgent")
@@ -100,25 +106,43 @@ export function PersonalAgentPageTitle() {
   const word = useStatusWord()
   const agent = snapshot?.agent ?? null
   const title = agent?.name?.trim() || t("title")
+  const live = useBotLive(agent?.id ?? null)
+  const now = useNowTick(live?.work === "busy" || live?.flash != null)
+  const view = viewOf(live, now)
   return (
     <WorkbenchPageTitle
-      title={title}
-      // The messages carry no avatar of the agent's own: it is here, once.
+      title=""
+      // The messages carry no avatar of the agent's own: it is here, once,
+      // with its name, as a capsule that opens its details.
       leading={
         agent ? (
-          <BotAvatar
-            avatar={agent.avatar}
-            name={title}
-            size={TITLE_AVATAR_SIZE}
-          />
-        ) : null
+          <button
+            type="button"
+            data-pa-title-capsule
+            onClick={() => showAux("details")}
+            title={t("detail.open")}
+            className="flex min-w-0 items-center gap-1.5 rounded-full border border-border/70 bg-background/60 py-0.5 ps-1 pe-2.5 text-[0.8125rem] font-semibold transition-colors hover:bg-foreground/10"
+          >
+            <BotAvatar
+              avatar={agent.avatar}
+              name={title}
+              size={TITLE_AVATAR_SIZE}
+              look={view.look}
+            />
+            <span className="min-w-0 truncate">{title}</span>
+          </button>
+        ) : (
+          <span className="truncate text-[0.8125rem] font-semibold">
+            {title}
+          </span>
+        )
       }
       trail={
         word ? (
           <button
             type="button"
             className="ms-1 shrink-0 rounded-md px-1.5 py-0.5 text-xs leading-none text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-            onClick={() => showAux("status")}
+            onClick={() => showAux("details")}
             title={t("statusWord.open")}
             aria-live="polite"
           >
@@ -128,6 +152,17 @@ export function PersonalAgentPageTitle() {
       }
     />
   )
+}
+
+/** The clock, each second while `on`. */
+function useNowTick(on: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!on) return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [on])
+  return now
 }
 
 /** The window's top band, when the page draws it (the desktop): the left
@@ -177,6 +212,8 @@ function liveRowOf(
 
 export function PersonalAgentPage() {
   const t = useTranslations("PersonalAgent")
+  // ⌘1–9, ⌥↑/⌥↓, Ctrl+Tab switch assistants while this page is current.
+  useAssistantShortcuts()
   const { botId, snapshot, rows, loading } = usePersonalAgent()
   const assistants = useAssistants()
   const isMobile = useIsMobile()
@@ -229,6 +266,13 @@ export function PersonalAgentPage() {
 
   const readOnly = status?.engine !== "here"
   const agentName = agent?.name?.trim() || t("title")
+  // "Follow the assistant's colour": its conversation takes its face's
+  // colour for the theme's (10.7).
+  const [accent] = usePaAccent()
+  const accentColor =
+    accent === "bot" && agent?.avatar?.kind === "face"
+      ? agent.avatar.color
+      : null
   const liveRowId = liveRowOf(rows, status?.live_reply?.row_id ?? null)
   const rowsById = useMemo(() => {
     const m = new Map<number, TimelineRow>()
@@ -319,7 +363,10 @@ export function PersonalAgentPage() {
         {isMobile ? null : (
           <PersonalAgentRoster compact={false} readOnly={readOnly} />
         )}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div
+          className="flex min-w-0 flex-1 flex-col"
+          data-pa-accent={accentColor ?? undefined}
+        >
           {isMobile ? (
             <PersonalAgentRoster compact readOnly={readOnly} />
           ) : null}
@@ -347,6 +394,7 @@ export function PersonalAgentPage() {
             </div>
           ) : null}
           <MessageList jumpRef={jumpRef} sentRef={sentRef} />
+          <StatusLine botId={agent.id} name={agentName} />
           <PersonalAgentComposer
             agent={agent}
             agentName={agentName}

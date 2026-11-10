@@ -50,9 +50,9 @@ struct Running {
 }
 
 pub struct EngineHost {
-    db: AppDatabase,
+    pub(super) db: AppDatabase,
     manager: ConnectionManager,
-    emitter: EventEmitter,
+    pub(super) emitter: EventEmitter,
     bus: Arc<InternalEventBus>,
     data_dir: PathBuf,
     primary: Arc<PersonalAgentEngine>,
@@ -63,6 +63,8 @@ pub struct EngineHost {
     running: AtomicBool,
     /// Itself, handed to each engine it makes.
     me: std::sync::Weak<EngineHost>,
+    /// The assistants' live states pushed to the pages (`live`).
+    pub(super) live: super::live::LiveHub,
 }
 
 /// Build the host and publish it. Call ONLY where the work-task engine was
@@ -90,6 +92,16 @@ pub async fn run(host: Arc<EngineHost>) {
     // boot; a task dispatched before that ran would be failed with them.
     crate::work_task::wait_boot_reconciled(Duration::from_secs(60)).await;
     host.start().await;
+    // A busy assistant's state is pushed again now and then, changed or
+    // not: a page that stops hearing it lets it go stale (8.3).
+    let ticker = host.clone();
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(super::live::BUSY_REPUSH);
+        loop {
+            every.tick().await;
+            ticker.repush_busy();
+        }
+    });
 
     loop {
         match rx.recv().await {
@@ -136,6 +148,7 @@ impl EngineHost {
                 workers: Mutex::new(HashMap::new()),
                 running: AtomicBool::new(false),
                 me: me.clone(),
+                live: super::live::LiveHub::new(true),
             }
         })
     }
@@ -155,6 +168,8 @@ impl EngineHost {
             data_dir,
         );
         host.running.store(true, Ordering::SeqCst);
+        // Tests read the live states themselves.
+        host.live.set_enabled(false);
         host
     }
 
@@ -206,11 +221,17 @@ impl EngineHost {
     /// Hand one bus event to the engine whose connection it is about: an
     /// assistant's own session or a conversation it dispatched. Nobody's
     /// goes nowhere.
-    pub async fn route(&self, env: &crate::acp::types::EventEnvelope) {
+    pub async fn route(self: &Arc<Self>, env: &crate::acp::types::EventEnvelope) {
         for engine in self.engines().await {
             if engine.owns_connection(&env.connection_id).await {
                 engine.on_event(env).await;
+                // Its session or its work moved: its live state may have.
+                self.touch(engine.bot().await);
             }
+        }
+        // A task it handed out runs on a connection no engine routes.
+        if let Some(bot) = self.live.task_conn_owner(&env.connection_id) {
+            self.touch(bot);
         }
     }
 

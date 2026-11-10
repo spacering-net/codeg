@@ -13,7 +13,6 @@ import { toast } from "sonner"
 
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import {
-  personalAgentBots,
   personalAgentExecutors,
   personalAgentGet,
   personalAgentSettingsPatch,
@@ -30,6 +29,7 @@ import {
   type PersonalAgentSnapshot,
 } from "@/lib/types"
 import { useAssistantsStore } from "@/stores/assistants-store"
+import { useRoster } from "@/stores/personal-agent-roster-store"
 
 /** Call `onChange` whenever the engine says an assistant changed. */
 function usePersonalAgentChanges(
@@ -111,19 +111,10 @@ export function useTargetSnapshot(bot: number | null): {
   return { snapshot, failed: mine?.failed ?? false, reload }
 }
 
-/** The owner's assistants, read again whenever one changes. */
+/** The owner's assistants, kept up to date: the roster's (one read and one
+ *  subscription for the whole window). */
 export function useBots(): PersonalAgentBotSummary[] | null {
-  const [bots, setBots] = useState<PersonalAgentBotSummary[] | null>(null)
-  const load = useCallback(() => {
-    personalAgentBots()
-      .then(setBots)
-      .catch(() => {})
-  }, [])
-  useEffect(load, [load])
-  usePersonalAgentChanges((c) => {
-    if (c.kind === "agent") load()
-  })
-  return bots
+  return useRoster()
 }
 
 /** The executor configs as the assistants use them, by id; read again when

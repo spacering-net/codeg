@@ -751,11 +751,18 @@ impl PersonalAgentEngine {
     /// Broadcast a change, naming the assistant it is about (`bot_id`; 0 is
     /// the primary before it is set up), so a page shows only its own.
     pub(super) fn emit(&self, change: PersonalAgentChange) {
+        let bot = self.bot_now();
         emit_event(
             &self.emitter,
             PERSONAL_AGENT_CHANGED_EVENT,
-            change_payload(self.bot_now(), &change),
+            change_payload(bot, &change),
         );
+        self.touch_live(bot);
+    }
+
+    /// The owner settled one of its matters from the page.
+    pub fn emit_item(&self, id: i32) {
+        self.emit(PersonalAgentChange::Item { id });
     }
 
     pub(super) fn emit_rows(&self, rows: Vec<TimelineRow>) {
@@ -3126,6 +3133,13 @@ impl PersonalAgentEngine {
         } else {
             "error"
         };
+        // The face says how it went for a few seconds (10.6): a stop the
+        // owner asked for, or one to give way to them, is neither.
+        if interrupted && !preempted {
+            self.flash_face(crate::models::personal_agent_roster::FaceState::Failed).await;
+        } else if !canceled {
+            self.flash_face(crate::models::personal_agent_roster::FaceState::Done).await;
+        }
 
         // The reply settles in place: the page saw it stream there. Pushed
         // once more as it stood, then the row with its body.
@@ -4193,6 +4207,7 @@ impl PersonalAgentEngine {
             kind: t.kind,
             started_at: t.started_at,
             compaction_initiator: t.compaction.as_ref().map(|c| c.initiator),
+            for_owner: !t.owner_row_ids.is_empty(),
         });
         status.last_check = last_check;
         status.last_error = last_error;
@@ -4228,6 +4243,27 @@ impl PersonalAgentEngine {
             status,
             account,
         }
+    }
+}
+
+/// The turn in flight, as the live state reads it (`live`).
+pub(super) struct TurnView {
+    pub(super) batch_id: i32,
+    pub(super) compaction: bool,
+    pub(super) conn_id: String,
+    /// The tag the connection builds the reply under.
+    pub(super) token: Option<String>,
+}
+
+impl PersonalAgentEngine {
+    pub(super) async fn turn_view(&self) -> Option<TurnView> {
+        let st = self.state.lock().await;
+        st.turn.as_ref().map(|t| TurnView {
+            batch_id: t.batch_id,
+            compaction: t.kind == BatchKind::Compaction,
+            conn_id: t.conn_id.clone(),
+            token: t.reply_token.clone(),
+        })
     }
 }
 

@@ -31,12 +31,12 @@ import {
   CircleHelp,
   Lightbulb,
   UserPlus,
-  Loader2,
   OctagonX,
   Repeat,
   SlidersHorizontal,
 } from "lucide-react"
 
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { Button } from "@/components/ui/button"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentNoticeAct } from "@/lib/api"
@@ -240,7 +240,7 @@ function ActionCard({
       >
         <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
           {state === "acting" ? (
-            <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden />
+            <SyncedSpinner small className="size-3.5 shrink-0" />
           ) : (
             <Icon className="size-3.5 shrink-0" aria-hidden />
           )}
@@ -298,7 +298,7 @@ function ActionCard({
               onClick={() => void answer("accept")}
             >
               {busy === "accept" ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                <SyncedSpinner small className="size-3.5" />
               ) : null}
               {uncertain
                 ? t("uncertain.again")
@@ -454,7 +454,7 @@ function LoopCard({ item }: { item: NoticeItem }) {
               onClick={() => void answer("accept")}
             >
               {busy === "accept" ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                <SyncedSpinner small className="size-3.5" />
               ) : null}
               {t("goOn")}
             </Button>
@@ -579,7 +579,7 @@ function StoppedCard({ item }: { item: NoticeItem }) {
                     onClick={() => void answer(`stop:${h.id}`)}
                   >
                     {busy === `stop:${h.id}` ? (
-                      <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                      <SyncedSpinner small className="size-3.5" />
                     ) : null}
                     {t("stopToo", { name: botName(h.to) })}
                   </Button>
@@ -778,7 +778,7 @@ function ChangedCard({ item }: { item: NoticeItem }) {
                 onClick={() => void answer("accept")}
               >
                 {busy === "accept" ? (
-                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                  <SyncedSpinner small className="size-3.5" />
                 ) : null}
                 {t("accept")}
               </Button>
@@ -799,7 +799,7 @@ function ChangedCard({ item }: { item: NoticeItem }) {
               onClick={() => void answer("undo")}
             >
               {busy === "undo" ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                <SyncedSpinner small className="size-3.5" />
               ) : null}
               {t("undo")}
             </Button>
@@ -952,10 +952,7 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
                         data-pa-undo-bot={b.bot_id}
                       >
                         {busy === `undo:${b.bot_id}` ? (
-                          <Loader2
-                            className="size-3 animate-spin"
-                            aria-hidden
-                          />
+                          <SyncedSpinner small className="size-3" />
                         ) : null}
                         {t("undoOne")}
                       </Button>
@@ -990,7 +987,7 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
               onClick={() => void answer("accept")}
             >
               {busy === "accept" ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                <SyncedSpinner small className="size-3.5" />
               ) : null}
               {t("accept")}
             </Button>
@@ -1012,7 +1009,7 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
             data-pa-undo-bots
           >
             {busy === "undo" ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              <SyncedSpinner small className="size-3.5" />
             ) : null}
             {bots.length > 1 ? t("undoAll") : t("undo")}
           </Button>

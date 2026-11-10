@@ -11,6 +11,7 @@ pub mod model_provider;
 pub mod personal_agent;
 pub mod personal_agent_bots;
 pub mod personal_agent_prefs;
+pub mod personal_agent_roster;
 pub mod pet;
 pub mod quick_message;
 pub mod remote_workspace_connection;

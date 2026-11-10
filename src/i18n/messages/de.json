@@ -250,6 +250,12 @@
         "appliedToast": "Hintergrund angewendet",
         "credit": "Bilder von wallhaven.cc · nur SFW"
       }
+    },
+    "paAccent": {
+      "title": "Akzentfarbe der Assistenten",
+      "description": "Die Farbe deiner Sprechblasen, der Kartenränder und der Kartenschaltflächen im Gespräch mit einem Assistenten.",
+      "default": "Standard",
+      "bot": "Farbe des Assistenten übernehmen"
     }
   },
   "SystemSettings": {
@@ -564,6 +570,54 @@
       "zoom_reset": {
         "title": "Zoom zurücksetzen",
         "description": "Fensterzoom auf 100% zurücksetzen"
+      },
+      "switch_assistant_1": {
+        "title": "Zu Assistent 1 wechseln",
+        "description": "Auf der Assistentenseite: Assistent 1 der Liste öffnen (1 ist der Hauptassistent)"
+      },
+      "switch_assistant_2": {
+        "title": "Zu Assistent 2 wechseln",
+        "description": "Auf der Assistentenseite: Assistent 2 der Liste öffnen (1 ist der Hauptassistent)"
+      },
+      "switch_assistant_3": {
+        "title": "Zu Assistent 3 wechseln",
+        "description": "Auf der Assistentenseite: Assistent 3 der Liste öffnen (1 ist der Hauptassistent)"
+      },
+      "switch_assistant_4": {
+        "title": "Zu Assistent 4 wechseln",
+        "description": "Auf der Assistentenseite: Assistent 4 der Liste öffnen (1 ist der Hauptassistent)"
+      },
+      "switch_assistant_5": {
+        "title": "Zu Assistent 5 wechseln",
+        "description": "Auf der Assistentenseite: Assistent 5 der Liste öffnen (1 ist der Hauptassistent)"
+      },
+      "switch_assistant_6": {
+        "title": "Zu Assistent 6 wechseln",
+        "description": "Auf der Assistentenseite: Assistent 6 der Liste öffnen (1 ist der Hauptassistent)"
+      },
+      "switch_assistant_7": {
+        "title": "Zu Assistent 7 wechseln",
+        "description": "Auf der Assistentenseite: Assistent 7 der Liste öffnen (1 ist der Hauptassistent)"
+      },
+      "switch_assistant_8": {
+        "title": "Zu Assistent 8 wechseln",
+        "description": "Auf der Assistentenseite: Assistent 8 der Liste öffnen (1 ist der Hauptassistent)"
+      },
+      "switch_assistant_9": {
+        "title": "Zu Assistent 9 wechseln",
+        "description": "Auf der Assistentenseite: Assistent 9 der Liste öffnen (1 ist der Hauptassistent)"
+      },
+      "prev_assistant": {
+        "title": "Vorheriger Assistent",
+        "description": "Auf der Assistentenseite: den Assistenten darüber in der Liste öffnen"
+      },
+      "next_assistant": {
+        "title": "Nächster Assistent",
+        "description": "Auf der Assistentenseite: den Assistenten darunter in der Liste öffnen"
+      },
+      "cycle_assistant": {
+        "title": "Assistenten durchschalten",
+        "description": "Auf der Assistentenseite: zwischen den zuletzt geöffneten Assistenten wechseln"
       }
     }
   },
@@ -7734,11 +7788,6 @@
     },
     "aux": {
       "title": "Assistentenbereich",
-      "tab": {
-        "work": "Arbeit",
-        "status": "Status",
-        "stats": "Zahlen"
-      },
       "waiting": "{count, plural, one {# Sache wartet auf dich} other {# Sachen warten auf dich}}"
     },
     "status": {
@@ -8133,7 +8182,8 @@
       "unfinished": "Nicht fertig",
       "resend": "Erneut senden",
       "resent": "Erneut gesendet",
-      "merged": "In die laufende Antwort aufgenommen"
+      "merged": "In die laufende Antwort aufgenommen",
+      "received": "Erhalten"
     },
     "quote": {
       "you": "Du",
@@ -8254,10 +8304,6 @@
       "workdirChanged": "Das Arbeitsverzeichnis wurde nach {path} verschoben"
     },
     "matters": {
-      "ended": "Beendet",
-      "showAll": "Alle {count} anzeigen",
-      "emptyTitle": "Nichts offen",
-      "emptyHint": "Hier erscheinen vergebene Arbeit, Erinnerungen und Fragen an dich.",
       "noneOpen": "Gerade ist nichts offen.",
       "origin": "Zur Ursprungsnachricht"
     },
@@ -8418,7 +8464,39 @@
       "roster": {
         "title": "Assistenten",
         "add": "Neuer Arbeitsassistent",
-        "addShort": "Neu"
+        "search": "Assistenten suchen",
+        "noMatch": "Kein Assistent passt",
+        "pinned": "Angeheftet",
+        "others": "Weitere",
+        "hiddenCount": "{count, plural, one {# ausgeblendet} other {# ausgeblendet}}",
+        "hideHidden": "Einklappen",
+        "muted": "Stummgeschaltet",
+        "handWork": "In Arbeit",
+        "awaiting": "Wartet auf Antworten",
+        "nothing": "Nichts in Arbeit",
+        "groupName": "Gruppenname",
+        "newGroupTitle": "Neue Gruppe",
+        "newGroupSave": "Verschieben",
+        "collapse": "{name} einklappen",
+        "expand": "{name} ausklappen",
+        "menu": {
+          "pin": "Anheften",
+          "unpin": "Loslösen",
+          "moveTo": "In Gruppe verschieben",
+          "newGroup": "Neue Gruppe…",
+          "noGroup": "Keine Gruppe",
+          "hide": "Ausblenden",
+          "show": "Einblenden",
+          "mute": "Stummschalten",
+          "unmute": "Stummschaltung aufheben",
+          "markUnread": "Als ungelesen markieren",
+          "markRead": "Als gelesen markieren",
+          "notifyOn": "Benachrichtigen",
+          "copy": "Duplizieren…",
+          "stopAll": "Alles anhalten",
+          "delete": "Löschen…",
+          "open": "Öffnen"
+        }
       },
       "choice": {
         "other": "Andere",
@@ -8481,6 +8559,151 @@
         "workdirCustom": "Dieses Verzeichnis hast du gewählt, daher lässt codeg es unangetastet.",
         "cancel": "Abbrechen",
         "confirm": "Löschen"
+      }
+    },
+    "face": {
+      "idle": "nichts zu tun",
+      "thinking": "denkt nach",
+      "working": "arbeitet",
+      "waiting": "wartet auf dich",
+      "stuck": "wartet schon länger auf dich",
+      "done": "gerade fertig",
+      "failed": "etwas ist schiefgegangen",
+      "sleeping": "schläft",
+      "unread": "ungelesene Nachrichten",
+      "stale": "Status gerade nicht verfügbar",
+      "label": "{name}, {state}",
+      "labelUnread": "{name}, {state}, ungelesene Nachrichten"
+    },
+    "activity": {
+      "think0": "Denkt gründlich nach",
+      "think1": "Lässt es sich durch den Kopf gehen",
+      "think2": "Sucht den richtigen Ansatz",
+      "work0": "Bringt es voran",
+      "work1": "Arbeitet daran",
+      "work2": "Erledigt es",
+      "work3": "Kommt Stück für Stück voran",
+      "work4": "Legt letzte Hand an",
+      "reply": "Schreibt eine Antwort",
+      "read": "Liest {target}",
+      "readSome": "Liest Dateien",
+      "edit": "Bearbeitet {target}",
+      "editSome": "Bearbeitet Dateien",
+      "search": "Sucht nach „{target}“",
+      "searchSome": "Sucht",
+      "fetch": "Liest sich ein",
+      "execute": "Führt ein paar Befehle aus",
+      "test": "Führt die Tests aus",
+      "wait": "Wartet auf das Ergebnis",
+      "commit": "Erstellt einen Commit",
+      "plan": "Entwirft einen Plan",
+      "compact": "Räumt seinen Kontext auf",
+      "dispatch": "Vergibt es an {target}",
+      "dispatchSome": "Vergibt Arbeit",
+      "followup": "Hakt bei #{id} nach",
+      "followupSome": "Hakt nach",
+      "message": "Fragt {target}",
+      "messageSome": "Fragt einen anderen Assistenten",
+      "awaitingReply": "Wartet auf die Antwort von {name}",
+      "needsAnswer": "Braucht deine Antwort",
+      "needsApproval": "Braucht deine Freigabe",
+      "workPrefix": "#{id} {title}: {activity}"
+    },
+    "did": {
+      "edit": "{target} bearbeitet +{added} −{removed}",
+      "editPlain": "{target} bearbeitet",
+      "editSome": "Dateien bearbeitet",
+      "test": "Tests ausgeführt, {passed} bestanden",
+      "testFailed": "Tests ausgeführt, {passed} bestanden, {failed} fehlgeschlagen",
+      "testExit": "Tests ausgeführt, Exit-Code {code}",
+      "testBad": "Tests ausgeführt, nicht bestanden",
+      "testPlain": "Tests ausgeführt",
+      "execute": "{target} ausgeführt",
+      "executeExit": "{target} ausgeführt, Exit-Code {code}",
+      "executeBad": "{target} ausgeführt, fehlgeschlagen",
+      "executeSome": "Einen Befehl ausgeführt",
+      "executeSomeBad": "Einen Befehl ausgeführt, fehlgeschlagen",
+      "read": "{target} gelesen",
+      "readSome": "Dateien gelesen",
+      "search": "Nach „{target}“ gesucht",
+      "searchHits": "Nach „{target}“ gesucht, {hits} Treffer",
+      "searchSome": "Gesucht",
+      "commit": "Commit erstellt: {target}",
+      "commitPlain": "Commit erstellt",
+      "dispatch": "An {target} vergeben: #{id}",
+      "dispatchPlain": "#{id} vergeben",
+      "dispatchSome": "Arbeit vergeben",
+      "followup": "Bei #{id} nachgehakt",
+      "followupSome": "Nachgehakt",
+      "message": "Nachricht an {target} gesendet",
+      "messageSome": "Eine Nachricht gesendet",
+      "think": "Nachgedacht",
+      "reply": "Antwort geschrieben",
+      "plan": "Plan entworfen",
+      "compact": "Kontext aufgeräumt",
+      "fetch": "Sich eingelesen",
+      "question": "Hat dich gefragt: {target}",
+      "questionSome": "Hat dich gefragt",
+      "other": "{target}",
+      "otherPlain": "Einen Schritt gemacht"
+    },
+    "needs": {
+      "answer": "Braucht deine Antwort: {text}",
+      "approval": "Braucht deine Freigabe: {text}",
+      "you": "Braucht dich: {text}",
+      "answerPlain": "Braucht deine Antwort",
+      "approvalPlain": "Braucht deine Freigabe",
+      "youPlain": "Braucht dich"
+    },
+    "statusLine": {
+      "steps": "Schritte dieser Runde",
+      "loading": "Schritte werden geladen…",
+      "empty": "Noch keine Schritte",
+      "fold": "Schritte ausblenden",
+      "openWork": "Arbeit öffnen"
+    },
+    "sending": {
+      "waking": "{name} wird geweckt…",
+      "afterTurn": "Wartet, bis diese Runde fertig ist",
+      "yielding": "Macht Platz"
+    },
+    "pills": {
+      "attention": "{count, plural, one {# Sache braucht dich} other {# Sachen brauchen dich}}",
+      "newMessages": "Neue Nachrichten"
+    },
+    "detail": {
+      "title": "Details",
+      "open": "Details anzeigen",
+      "close": "Details ausblenden",
+      "tabs": {
+        "details": "Details",
+        "output": "Ergebnisse",
+        "workspace": "Arbeitsbereich"
+      },
+      "sections": {
+        "status": "Status",
+        "matters": "Offene Punkte",
+        "data": "Daten"
+      },
+      "notify": "Benachrichtigen",
+      "notifyHint": "Wenn er etwas abschließt oder auf dich wartet",
+      "settings": "Einstellungen",
+      "item": {
+        "done": "Erledigt",
+        "later": "Später",
+        "drop": "Verwerfen"
+      },
+      "output": {
+        "all": "Alle",
+        "tasks": "Aufgaben",
+        "reports": "Berichte",
+        "docs": "Dokumente",
+        "empty": "Noch nichts erstellt",
+        "docEdited": "Bearbeitet {when}"
+      },
+      "workspace": {
+        "empty": "Gerade läuft nichts",
+        "open": "Öffnen"
       }
     }
   }

@@ -19,12 +19,12 @@ import { useTranslations } from "next-intl"
 import {
   ChevronDown,
   ChevronRight,
-  Loader2,
   MessageSquareDashed,
   Repeat2,
   Send,
 } from "lucide-react"
 
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -168,7 +168,7 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
                 </span>
                 <span className="min-w-0 flex-1 break-words">{o.label}</span>
                 {busy === o.key ? (
-                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                  <SyncedSpinner small className="size-3.5" />
                 ) : null}
               </button>
               {choosingProject === o.key ? (
@@ -420,7 +420,7 @@ function StarterFoot({
                   data-pa-change-role
                 >
                   {switching ? (
-                    <Loader2 className="animate-spin" aria-hidden />
+                    <SyncedSpinner small />
                   ) : (
                     <Repeat2 aria-hidden />
                   )}

@@ -169,21 +169,28 @@ pub async fn personal_agent_items_core(
             Some(id) => svc::get_dispatch(&db.conn, id).await?.map(|d| d.state),
             None => None,
         };
-        out.push(ItemInfo {
-            id: i.id,
-            kind: i.kind,
-            dispatch_id: i.dispatch_id,
-            status: i.status,
-            waits_for: i.waits_for,
-            summary: i.summary,
-            on_done: i.on_done,
-            origin_timeline_id: i.origin_timeline_id,
-            created_at: i.created_at,
-            updated_at: i.updated_at,
-            dispatch_state,
-        });
+        out.push(item_info(i, dispatch_state));
     }
     Ok(out)
+}
+
+fn item_info(
+    i: crate::db::entities::personal_agent_item::Model,
+    dispatch_state: Option<DispatchState>,
+) -> ItemInfo {
+    ItemInfo {
+        id: i.id,
+        kind: i.kind,
+        dispatch_id: i.dispatch_id,
+        status: i.status,
+        waits_for: i.waits_for,
+        summary: i.summary,
+        on_done: i.on_done,
+        origin_timeline_id: i.origin_timeline_id,
+        created_at: i.created_at,
+        updated_at: i.updated_at,
+        dispatch_state,
+    }
 }
 
 /// Dispatches, newest first: by `ids` when given (the cards a page shows),
@@ -276,6 +283,43 @@ pub async fn personal_agent_files_core(
         out.push(PersonalAgentFile { name, content, exists: true });
     }
     Ok(out)
+}
+
+/// The documents an assistant wrote in its working directory, newest
+/// first (the panel's "Output").
+pub async fn personal_agent_outputs_core(
+    db: &AppDatabase,
+    data_dir: &Path,
+    bot_id: Option<i32>,
+) -> Result<Vec<workdir::OutputDoc>, AppCommandError> {
+    let bot = resolve_bot(db, bot_id).await?;
+    let Some(row) = svc::get_bot(&db.conn, bot).await? else {
+        return Ok(Vec::new());
+    };
+    let dir = workdir::workdir_of_bot(data_dir, &row);
+    Ok(tokio::task::spawn_blocking(move || workdir::list_outputs(&dir))
+        .await
+        .unwrap_or_default())
+}
+
+/// One of those documents, as text.
+pub async fn personal_agent_output_read_core(
+    db: &AppDatabase,
+    data_dir: &Path,
+    bot_id: Option<i32>,
+    path: String,
+) -> Result<String, AppCommandError> {
+    let bot = resolve_bot(db, bot_id).await?;
+    let row = svc::get_bot(&db.conn, bot)
+        .await?
+        .ok_or_else(|| refused("no such assistant".into()))?;
+    let dir = workdir::workdir_of_bot(data_dir, &row);
+    let shown = path.clone();
+    tokio::task::spawn_blocking(move || workdir::read_output(&dir, &path))
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| refused(format!("{shown} is not a document of this assistant that can be shown")))
 }
 
 /// The data tab: daily counts, executors, the context-usage curve. Token
@@ -463,16 +507,68 @@ pub async fn personal_agent_stats_core(
     })
 }
 
-/// The owner's assistants, primary first: what the settings' list of work
-/// assistants and the division read. Read-only.
+/// The roster: the owner's assistants, primary first, each with how the
+/// owner arranged it and its live state (8.3) — what the roster, the
+/// settings' list of work assistants and the division read. Read-only; the
+/// live states change on `personal-agent://bots`.
 pub async fn personal_agent_bots_core(
     db: &AppDatabase,
-) -> Result<Vec<crate::models::personal_agent::BotSummary>, AppCommandError> {
-    Ok(svc::list_bots(&db.conn)
-        .await?
-        .into_iter()
-        .map(|b| bot_summary(&b))
-        .collect())
+) -> Result<Vec<crate::models::personal_agent_roster::RosterEntry>, AppCommandError> {
+    use crate::personal_agent::live;
+    let host = crate::personal_agent::host::host();
+    let mut out = Vec::new();
+    for row in svc::list_bots(&db.conn).await? {
+        let state = match &host {
+            Some(h) => h.live_of(&row).await,
+            None => live::live_from_db(db, &row).await,
+        };
+        out.push(crate::models::personal_agent_roster::RosterEntry {
+            bot: bot_summary(&row),
+            roster: live::roster_flags(&row),
+            live: state,
+        });
+    }
+    Ok(out)
+}
+
+/// The owner arranges an assistant on the roster (4.14): pin, group, hide,
+/// mute, mark unread, order the pinned ones, notifications on or off.
+pub async fn personal_agent_roster_act_core(
+    bot_id: i32,
+    act: crate::models::personal_agent_roster::RosterAct,
+) -> Result<(), AppCommandError> {
+    let host = crate::personal_agent::host::host().ok_or_else(elsewhere)?;
+    host.roster_act(bot_id, act).await.map_err(refused)
+}
+
+/// The steps the brain's turn in flight went through, one short line each
+/// (the status line's list, 10.7). None when no turn runs here.
+pub async fn personal_agent_turn_steps_core(
+    db: &AppDatabase,
+    bot_id: Option<i32>,
+) -> Result<Vec<crate::models::personal_agent_roster::StepLine>, AppCommandError> {
+    if let Some(id) = bot_id {
+        resolve_bot(db, Some(id)).await?;
+    }
+    Ok(crate::personal_agent::live::turn_steps(db, bot_id).await)
+}
+
+/// The owner settles one of an assistant's open matters on the panel:
+/// done, dropped, or later (it waits on time). Handed-out work ends with the
+/// work itself.
+pub async fn personal_agent_item_act_core(
+    db: &AppDatabase,
+    bot_id: Option<i32>,
+    item_id: i32,
+    act: String,
+) -> Result<ItemInfo, AppCommandError> {
+    let engine = engine(bot_id).await?;
+    let item = engine.settle_item(item_id, &act).await.map_err(refused)?;
+    let dispatch_state = match item.dispatch_id {
+        Some(id) => svc::get_dispatch(&db.conn, id).await?.map(|d| d.state),
+        None => None,
+    };
+    Ok(item_info(item, dispatch_state))
 }
 
 fn bot_summary(
@@ -974,8 +1070,58 @@ pub async fn personal_agent_choice_answer_core(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_bots(
     db: State<'_, AppDatabase>,
-) -> Result<Vec<crate::models::personal_agent::BotSummary>, AppCommandError> {
+) -> Result<Vec<crate::models::personal_agent_roster::RosterEntry>, AppCommandError> {
     personal_agent_bots_core(&db).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_outputs(
+    app: tauri::AppHandle,
+    db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
+) -> Result<Vec<workdir::OutputDoc>, AppCommandError> {
+    personal_agent_outputs_core(&db, &data_dir_of(&app)?, bot_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_output_read(
+    app: tauri::AppHandle,
+    db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
+    path: String,
+) -> Result<String, AppCommandError> {
+    personal_agent_output_read_core(&db, &data_dir_of(&app)?, bot_id, path).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_roster_act(
+    bot_id: i32,
+    act: crate::models::personal_agent_roster::RosterAct,
+) -> Result<(), AppCommandError> {
+    personal_agent_roster_act_core(bot_id, act).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_turn_steps(
+    db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
+) -> Result<Vec<crate::models::personal_agent_roster::StepLine>, AppCommandError> {
+    personal_agent_turn_steps_core(&db, bot_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_item_act(
+    db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
+    item_id: i32,
+    act: String,
+) -> Result<ItemInfo, AppCommandError> {
+    personal_agent_item_act_core(&db, bot_id, item_id, act).await
 }
 
 #[cfg(feature = "tauri-runtime")]

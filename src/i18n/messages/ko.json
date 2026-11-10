@@ -250,6 +250,12 @@
         "appliedToast": "배경화면이 적용되었습니다",
         "credit": "이미지 제공 wallhaven.cc · SFW만 표시"
       }
+    },
+    "paAccent": {
+      "title": "어시스턴트 강조 색상",
+      "description": "어시스턴트와의 대화에서 내 말풍선, 카드 테두리, 카드 버튼에 쓰이는 색상입니다.",
+      "default": "기본값",
+      "bot": "어시스턴트 색상 따르기"
     }
   },
   "SystemSettings": {
@@ -564,6 +570,54 @@
       "zoom_reset": {
         "title": "확대/축소 초기화",
         "description": "창 확대/축소를 100%로 되돌립니다"
+      },
+      "switch_assistant_1": {
+        "title": "1번 어시스턴트로 이동",
+        "description": "어시스턴트 페이지에서: 목록의 1번째 어시스턴트 열기(1은 메인 어시스턴트)"
+      },
+      "switch_assistant_2": {
+        "title": "2번 어시스턴트로 이동",
+        "description": "어시스턴트 페이지에서: 목록의 2번째 어시스턴트 열기(1은 메인 어시스턴트)"
+      },
+      "switch_assistant_3": {
+        "title": "3번 어시스턴트로 이동",
+        "description": "어시스턴트 페이지에서: 목록의 3번째 어시스턴트 열기(1은 메인 어시스턴트)"
+      },
+      "switch_assistant_4": {
+        "title": "4번 어시스턴트로 이동",
+        "description": "어시스턴트 페이지에서: 목록의 4번째 어시스턴트 열기(1은 메인 어시스턴트)"
+      },
+      "switch_assistant_5": {
+        "title": "5번 어시스턴트로 이동",
+        "description": "어시스턴트 페이지에서: 목록의 5번째 어시스턴트 열기(1은 메인 어시스턴트)"
+      },
+      "switch_assistant_6": {
+        "title": "6번 어시스턴트로 이동",
+        "description": "어시스턴트 페이지에서: 목록의 6번째 어시스턴트 열기(1은 메인 어시스턴트)"
+      },
+      "switch_assistant_7": {
+        "title": "7번 어시스턴트로 이동",
+        "description": "어시스턴트 페이지에서: 목록의 7번째 어시스턴트 열기(1은 메인 어시스턴트)"
+      },
+      "switch_assistant_8": {
+        "title": "8번 어시스턴트로 이동",
+        "description": "어시스턴트 페이지에서: 목록의 8번째 어시스턴트 열기(1은 메인 어시스턴트)"
+      },
+      "switch_assistant_9": {
+        "title": "9번 어시스턴트로 이동",
+        "description": "어시스턴트 페이지에서: 목록의 9번째 어시스턴트 열기(1은 메인 어시스턴트)"
+      },
+      "prev_assistant": {
+        "title": "이전 어시스턴트",
+        "description": "어시스턴트 페이지에서: 목록에서 위쪽 어시스턴트 열기"
+      },
+      "next_assistant": {
+        "title": "다음 어시스턴트",
+        "description": "어시스턴트 페이지에서: 목록에서 아래쪽 어시스턴트 열기"
+      },
+      "cycle_assistant": {
+        "title": "어시스턴트 순환 전환",
+        "description": "어시스턴트 페이지에서: 최근에 연 어시스턴트 사이를 전환"
       }
     }
   },
@@ -7734,11 +7788,6 @@
     },
     "aux": {
       "title": "어시스턴트 패널",
-      "tab": {
-        "work": "할 일",
-        "status": "상태",
-        "stats": "통계"
-      },
       "waiting": "{count}건이 내 응답 대기 중"
     },
     "status": {
@@ -8133,7 +8182,8 @@
       "unfinished": "처리 미완료",
       "resend": "다시 보내기",
       "resent": "다시 보냄",
-      "merged": "진행 중인 답장에 합쳐졌습니다"
+      "merged": "진행 중인 답장에 합쳐졌습니다",
+      "received": "받음"
     },
     "quote": {
       "you": "나",
@@ -8254,10 +8304,6 @@
       "workdirChanged": "작업 디렉터리를 {path}(으)로 옮겼습니다"
     },
     "matters": {
-      "ended": "종료됨",
-      "showAll": "{count}건 모두 보기",
-      "emptyTitle": "진행 중인 일이 없습니다",
-      "emptyHint": "배정한 일, 리마인더, 나에게 묻는 질문이 여기에 표시됩니다.",
       "noneOpen": "지금 진행 중인 일이 없습니다.",
       "origin": "원래 메시지로 이동"
     },
@@ -8418,7 +8464,39 @@
       "roster": {
         "title": "어시스턴트",
         "add": "새 작업 어시스턴트",
-        "addShort": "새로 만들기"
+        "search": "어시스턴트 검색",
+        "noMatch": "일치하는 어시스턴트 없음",
+        "pinned": "고정됨",
+        "others": "기타",
+        "hiddenCount": "{count}명 숨김",
+        "hideHidden": "접기",
+        "muted": "음소거됨",
+        "handWork": "맡은 일",
+        "awaiting": "답장 대기 중",
+        "nothing": "맡은 일 없음",
+        "groupName": "그룹 이름",
+        "newGroupTitle": "새 그룹",
+        "newGroupSave": "이동",
+        "collapse": "{name} 접기",
+        "expand": "{name} 펼치기",
+        "menu": {
+          "pin": "고정",
+          "unpin": "고정 해제",
+          "moveTo": "그룹으로 이동",
+          "newGroup": "새 그룹…",
+          "noGroup": "그룹 없음",
+          "hide": "숨기기",
+          "show": "표시",
+          "mute": "음소거",
+          "unmute": "음소거 해제",
+          "markUnread": "읽지 않음으로 표시",
+          "markRead": "읽음으로 표시",
+          "notifyOn": "알림 받기",
+          "copy": "복제…",
+          "stopAll": "모두 멈추기",
+          "delete": "삭제…",
+          "open": "열기"
+        }
       },
       "choice": {
         "other": "기타",
@@ -8481,6 +8559,151 @@
         "workdirCustom": "직접 고른 디렉터리이므로 codeg는 건드리지 않습니다.",
         "cancel": "취소",
         "confirm": "삭제"
+      }
+    },
+    "face": {
+      "idle": "대기 중",
+      "thinking": "생각 중",
+      "working": "작업 중",
+      "waiting": "내 응답 대기 중",
+      "stuck": "한참째 내 응답 대기 중",
+      "done": "방금 끝남",
+      "failed": "문제 발생",
+      "sleeping": "자는 중",
+      "unread": "읽지 않은 메시지 있음",
+      "stale": "지금은 상태를 알 수 없음",
+      "label": "{name}, {state}",
+      "labelUnread": "{name}, {state}, 읽지 않은 메시지 있음"
+    },
+    "activity": {
+      "think0": "곰곰이 생각하는 중",
+      "think1": "이리저리 궁리하는 중",
+      "think2": "접근 방법 구상 중",
+      "work0": "일을 진행하는 중",
+      "work1": "작업하는 중",
+      "work2": "처리하는 중",
+      "work3": "조금씩 나아가는 중",
+      "work4": "마무리하는 중",
+      "reply": "답장 쓰는 중",
+      "read": "{target} 읽는 중",
+      "readSome": "파일 읽는 중",
+      "edit": "{target} 수정 중",
+      "editSome": "파일 수정 중",
+      "search": "“{target}” 검색 중",
+      "searchSome": "검색 중",
+      "fetch": "자료 찾아보는 중",
+      "execute": "명령 몇 개 실행 중",
+      "test": "테스트 실행 중",
+      "wait": "결과 기다리는 중",
+      "commit": "커밋 중",
+      "plan": "계획 세우는 중",
+      "compact": "컨텍스트 정리 중",
+      "dispatch": "{target}에게 맡기는 중",
+      "dispatchSome": "일을 맡기는 중",
+      "followup": "#{id} 후속 확인 중",
+      "followupSome": "후속 확인 중",
+      "message": "{target}에게 묻는 중",
+      "messageSome": "다른 어시스턴트에게 묻는 중",
+      "awaitingReply": "{name}의 답장 기다리는 중",
+      "needsAnswer": "내 답변 필요",
+      "needsApproval": "내 승인 필요",
+      "workPrefix": "#{id} {title}: {activity}"
+    },
+    "did": {
+      "edit": "{target} 수정함 +{added} −{removed}",
+      "editPlain": "{target} 수정함",
+      "editSome": "파일 수정함",
+      "test": "테스트 실행함, {passed}개 통과",
+      "testFailed": "테스트 실행함, {passed}개 통과, {failed}개 실패",
+      "testExit": "테스트 실행함, 종료 코드 {code}",
+      "testBad": "테스트 실행함, 통과하지 못함",
+      "testPlain": "테스트 실행함",
+      "execute": "{target} 실행함",
+      "executeExit": "{target} 실행함, 종료 코드 {code}",
+      "executeBad": "{target} 실행함, 실패",
+      "executeSome": "명령 실행함",
+      "executeSomeBad": "명령 실행함, 실패",
+      "read": "{target} 읽음",
+      "readSome": "파일 읽음",
+      "search": "“{target}” 검색함",
+      "searchHits": "“{target}” 검색함, {hits}건 찾음",
+      "searchSome": "검색함",
+      "commit": "커밋함: {target}",
+      "commitPlain": "커밋함",
+      "dispatch": "{target}에게 맡김: #{id}",
+      "dispatchPlain": "#{id} 맡김",
+      "dispatchSome": "일을 맡김",
+      "followup": "#{id} 후속 확인함",
+      "followupSome": "후속 확인함",
+      "message": "{target}에게 메시지 보냄",
+      "messageSome": "메시지 보냄",
+      "think": "곰곰이 생각함",
+      "reply": "답장 씀",
+      "plan": "계획 세움",
+      "compact": "컨텍스트 정리함",
+      "fetch": "자료 찾아봄",
+      "question": "나에게 질문함: {target}",
+      "questionSome": "나에게 질문함",
+      "other": "{target}",
+      "otherPlain": "한 단계 진행함"
+    },
+    "needs": {
+      "answer": "내 답변 필요: {text}",
+      "approval": "내 승인 필요: {text}",
+      "you": "내 확인 필요: {text}",
+      "answerPlain": "내 답변 필요",
+      "approvalPlain": "내 승인 필요",
+      "youPlain": "내 확인 필요"
+    },
+    "statusLine": {
+      "steps": "이번 턴의 단계",
+      "loading": "단계 불러오는 중…",
+      "empty": "아직 단계 없음",
+      "fold": "단계 접기",
+      "openWork": "작업 열기"
+    },
+    "sending": {
+      "waking": "{name} 깨우는 중…",
+      "afterTurn": "이번 턴이 끝나기를 기다리는 중",
+      "yielding": "자리를 내주는 중"
+    },
+    "pills": {
+      "attention": "{count}건이 내 확인 대기 중",
+      "newMessages": "새 메시지"
+    },
+    "detail": {
+      "title": "세부 정보",
+      "open": "세부 정보 보기",
+      "close": "세부 정보 숨기기",
+      "tabs": {
+        "details": "세부 정보",
+        "output": "산출물",
+        "workspace": "작업 공간"
+      },
+      "sections": {
+        "status": "상태",
+        "matters": "진행 중인 일",
+        "data": "데이터"
+      },
+      "notify": "알림 받기",
+      "notifyHint": "일을 끝냈거나 내 응답을 기다릴 때",
+      "settings": "설정",
+      "item": {
+        "done": "완료",
+        "later": "나중에",
+        "drop": "그만두기"
+      },
+      "output": {
+        "all": "전체",
+        "tasks": "작업",
+        "reports": "보고서",
+        "docs": "문서",
+        "empty": "아직 산출물 없음",
+        "docEdited": "{when} 수정"
+      },
+      "workspace": {
+        "empty": "지금 실행 중인 것 없음",
+        "open": "열기"
       }
     }
   }

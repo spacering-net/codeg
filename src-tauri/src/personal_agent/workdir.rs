@@ -169,6 +169,123 @@ pub fn editable_files(worker: bool) -> &'static [&'static str] {
     }
 }
 
+/// The run log's folder, which is the engine's and no output.
+pub const LOG_DIR: &str = "log";
+/// Folders an output listing goes down at most.
+const OUTPUT_DEPTH: usize = 3;
+/// Documents an output listing returns at most (the newest).
+pub const OUTPUTS_MAX: usize = 100;
+
+/// A document an assistant wrote in its working directory (10.1 "Output").
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OutputDoc {
+    /// Relative to the working directory, `/`-separated.
+    pub path: String,
+    pub modified_at: chrono::DateTime<chrono::Utc>,
+    pub size: u64,
+}
+
+/// The documents in working directory `dir`, newest first: everything but
+/// its persona and memory (they have their own place), the run log, and
+/// hidden files and folders.
+pub fn list_outputs(dir: &Path) -> Vec<OutputDoc> {
+    let mut out: Vec<OutputDoc> = walk_outputs(dir).into_iter().map(|(doc, _)| doc).collect();
+    out.sort_by(|a, b| b.modified_at.cmp(&a.modified_at).then_with(|| a.path.cmp(&b.path)));
+    out.truncate(OUTPUTS_MAX);
+    out
+}
+
+/// Every document under `dir` with the real path it was found at. A name
+/// is one path part as it is on the disk: the relative path joins the parts
+/// with `/`, and one holding a `/` or a `\` (no separator on this system,
+/// or a name that could pass for a path elsewhere) is left out, so a path
+/// read back names exactly one file.
+fn walk_outputs(dir: &Path) -> Vec<(OutputDoc, PathBuf)> {
+    fn walk(at: &Path, prefix: &[String], out: &mut Vec<(OutputDoc, PathBuf)>) {
+        let Ok(entries) = std::fs::read_dir(at) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if name.starts_with('.') || name.contains('/') || name.contains('\\') {
+                continue;
+            }
+            // A link is not followed: it could point anywhere on the disk.
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            let depth = prefix.len();
+            if kind.is_dir() {
+                if depth == 0 && (name == LOG_DIR || name == MEMORY_DIR) {
+                    continue;
+                }
+                if depth + 1 < OUTPUT_DEPTH {
+                    let mut next = prefix.to_vec();
+                    next.push(name);
+                    walk(&path, &next, out);
+                }
+                continue;
+            }
+            if !kind.is_file() || (depth == 0 && EDITABLE_FILES.contains(&name.as_str())) {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let modified_at = meta
+                .modified()
+                .ok()
+                .map(chrono::DateTime::<chrono::Utc>::from)
+                .unwrap_or_else(chrono::Utc::now);
+            let mut parts = prefix.to_vec();
+            parts.push(name);
+            out.push((
+                OutputDoc {
+                    path: parts.join("/"),
+                    modified_at,
+                    size: meta.len(),
+                },
+                path,
+            ));
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, &[], &mut out);
+    out
+}
+
+/// One of the documents [`list_outputs`] lists, as text: `None` when it is
+/// not one of them (outside the directory, hidden, a link, the persona, the
+/// log), too big, or not text. Read from the path the listing found it at,
+/// after checking again that nothing on the way there became a link and
+/// that it resolves inside the directory.
+pub fn read_output(dir: &Path, rel: &str) -> Option<String> {
+    let (_, path) = walk_outputs(dir).into_iter().find(|(d, _)| d.path == rel)?;
+    let mut at = dir.to_path_buf();
+    for part in path.strip_prefix(dir).ok()?.components() {
+        at.push(part);
+        if std::fs::symlink_metadata(&at).ok()?.file_type().is_symlink() {
+            return None;
+        }
+    }
+    let root = std::fs::canonicalize(dir).ok()?;
+    if !std::fs::canonicalize(&path).ok()?.starts_with(&root) {
+        return None;
+    }
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() as usize > MAX_FILE_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
 /// Why a directory cannot be a working directory.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkdirError {

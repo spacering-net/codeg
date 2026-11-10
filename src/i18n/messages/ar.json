@@ -250,6 +250,12 @@
         "appliedToast": "تم تطبيق الخلفية",
         "credit": "الصور من wallhaven.cc · محتوى آمن فقط"
       }
+    },
+    "paAccent": {
+      "title": "لون تمييز المساعدين",
+      "description": "لون فقاعاتك وحواف البطاقات وأزرارها في محادثة المساعد.",
+      "default": "افتراضي",
+      "bot": "اتباع لون المساعد"
     }
   },
   "SystemSettings": {
@@ -564,6 +570,54 @@
       "zoom_reset": {
         "title": "إعادة ضبط التكبير",
         "description": "أعد تكبير النافذة إلى 100%"
+      },
+      "switch_assistant_1": {
+        "title": "التبديل إلى المساعد 1",
+        "description": "في صفحة المساعدين: فتح المساعد رقم 1 في القائمة (1 هو المساعد الرئيسي)"
+      },
+      "switch_assistant_2": {
+        "title": "التبديل إلى المساعد 2",
+        "description": "في صفحة المساعدين: فتح المساعد رقم 2 في القائمة (1 هو المساعد الرئيسي)"
+      },
+      "switch_assistant_3": {
+        "title": "التبديل إلى المساعد 3",
+        "description": "في صفحة المساعدين: فتح المساعد رقم 3 في القائمة (1 هو المساعد الرئيسي)"
+      },
+      "switch_assistant_4": {
+        "title": "التبديل إلى المساعد 4",
+        "description": "في صفحة المساعدين: فتح المساعد رقم 4 في القائمة (1 هو المساعد الرئيسي)"
+      },
+      "switch_assistant_5": {
+        "title": "التبديل إلى المساعد 5",
+        "description": "في صفحة المساعدين: فتح المساعد رقم 5 في القائمة (1 هو المساعد الرئيسي)"
+      },
+      "switch_assistant_6": {
+        "title": "التبديل إلى المساعد 6",
+        "description": "في صفحة المساعدين: فتح المساعد رقم 6 في القائمة (1 هو المساعد الرئيسي)"
+      },
+      "switch_assistant_7": {
+        "title": "التبديل إلى المساعد 7",
+        "description": "في صفحة المساعدين: فتح المساعد رقم 7 في القائمة (1 هو المساعد الرئيسي)"
+      },
+      "switch_assistant_8": {
+        "title": "التبديل إلى المساعد 8",
+        "description": "في صفحة المساعدين: فتح المساعد رقم 8 في القائمة (1 هو المساعد الرئيسي)"
+      },
+      "switch_assistant_9": {
+        "title": "التبديل إلى المساعد 9",
+        "description": "في صفحة المساعدين: فتح المساعد رقم 9 في القائمة (1 هو المساعد الرئيسي)"
+      },
+      "prev_assistant": {
+        "title": "المساعد السابق",
+        "description": "في صفحة المساعدين: فتح المساعد الذي فوقه في القائمة"
+      },
+      "next_assistant": {
+        "title": "المساعد التالي",
+        "description": "في صفحة المساعدين: فتح المساعد الذي تحته في القائمة"
+      },
+      "cycle_assistant": {
+        "title": "التنقّل بين المساعدين",
+        "description": "في صفحة المساعدين: التبديل بين المساعدين الذين فُتحوا مؤخرًا"
       }
     }
   },
@@ -7734,11 +7788,6 @@
     },
     "aux": {
       "title": "لوحة المساعد",
-      "tab": {
-        "work": "العمل",
-        "status": "الحالة",
-        "stats": "الإحصاءات"
-      },
       "waiting": "{count, plural, zero {لا شيء بانتظارك} one {عنصر واحد بانتظارك} two {عنصران بانتظارك} few {# عناصر بانتظارك} many {# عنصرًا بانتظارك} other {# عنصر بانتظارك}}"
     },
     "status": {
@@ -8133,7 +8182,8 @@
       "unfinished": "لم تكتمل",
       "resend": "إرسال مجددًا",
       "resent": "أُرسلت مجددًا",
-      "merged": "أُدمجت في الرد الجاري"
+      "merged": "أُدمجت في الرد الجاري",
+      "received": "وصلت"
     },
     "quote": {
       "you": "أنت",
@@ -8254,10 +8304,6 @@
       "workdirChanged": "نُقل مجلد العمل إلى {path}"
     },
     "matters": {
-      "ended": "منتهية",
-      "showAll": "عرض الكل ({count})",
-      "emptyTitle": "لا شيء مفتوح",
-      "emptyHint": "يظهر هنا العمل الذي يُسنده والتذكيرات والأسئلة الموجهة إليك.",
       "noneOpen": "لا شيء مفتوح الآن.",
       "origin": "الانتقال إلى الرسالة الأصلية"
     },
@@ -8418,7 +8464,39 @@
       "roster": {
         "title": "المساعدون",
         "add": "مساعد عمل جديد",
-        "addShort": "جديد"
+        "search": "البحث في المساعدين",
+        "noMatch": "لا يوجد مساعد مطابق",
+        "pinned": "المثبّتون",
+        "others": "الآخرون",
+        "hiddenCount": "{count, plural, zero {لا مساعدين مخفيين} one {مساعد واحد مخفي} two {مساعدان مخفيان} few {# مساعدين مخفيين} many {# مساعدًا مخفيًا} other {# مساعد مخفي}}",
+        "hideHidden": "إخفاؤهم",
+        "muted": "مكتوم",
+        "handWork": "بين يديه",
+        "awaiting": "بانتظار الردود",
+        "nothing": "لا شيء بين يديه",
+        "groupName": "اسم المجموعة",
+        "newGroupTitle": "مجموعة جديدة",
+        "newGroupSave": "نقل",
+        "collapse": "طيّ {name}",
+        "expand": "توسيع {name}",
+        "menu": {
+          "pin": "تثبيت",
+          "unpin": "إلغاء التثبيت",
+          "moveTo": "نقل إلى مجموعة",
+          "newGroup": "مجموعة جديدة…",
+          "noGroup": "بلا مجموعة",
+          "hide": "إخفاء",
+          "show": "إظهار",
+          "mute": "كتم",
+          "unmute": "إلغاء الكتم",
+          "markUnread": "تعليم كغير مقروء",
+          "markRead": "تعليم كمقروء",
+          "notifyOn": "أعلِمني",
+          "copy": "إنشاء نسخة…",
+          "stopAll": "إيقاف كل شيء",
+          "delete": "حذف…",
+          "open": "فتح"
+        }
       },
       "choice": {
         "other": "غير ذلك",
@@ -8481,6 +8559,151 @@
         "workdirCustom": "أنت اخترت هذا المجلد، لذا لن يمسّه codeg.",
         "cancel": "إلغاء",
         "confirm": "حذف"
+      }
+    },
+    "face": {
+      "idle": "متفرّغ",
+      "thinking": "يفكر",
+      "working": "يعمل",
+      "waiting": "بانتظارك",
+      "stuck": "بانتظارك منذ مدة",
+      "done": "انتهى للتو",
+      "failed": "حدثت مشكلة",
+      "sleeping": "نائم",
+      "unread": "رسائل غير مقروءة",
+      "stale": "الحالة غير متاحة حاليًا",
+      "label": "{name}، {state}",
+      "labelUnread": "{name}، {state}، رسائل غير مقروءة"
+    },
+    "activity": {
+      "think0": "يفكر مليًّا",
+      "think1": "يقلّب الأمر",
+      "think2": "يرسم طريقة الحل",
+      "work0": "يدفع العمل قُدمًا",
+      "work1": "يعمل على الأمر",
+      "work2": "يُنجز المهمة",
+      "work3": "يتقدّم خطوة بخطوة",
+      "work4": "يضع اللمسات الأخيرة",
+      "reply": "يكتب ردًا",
+      "read": "يقرأ {target}",
+      "readSome": "يقرأ ملفات",
+      "edit": "يعدّل {target}",
+      "editSome": "يعدّل ملفات",
+      "search": "يبحث عن «{target}»",
+      "searchSome": "يبحث",
+      "fetch": "يطّلع على المراجع",
+      "execute": "ينفّذ بعض الأوامر",
+      "test": "يشغّل الاختبارات",
+      "wait": "ينتظر النتيجة",
+      "commit": "يُنشئ التزامًا",
+      "plan": "يضع خطة",
+      "compact": "يرتّب سياقه",
+      "dispatch": "يُسنده إلى {target}",
+      "dispatchSome": "يُسند عملًا",
+      "followup": "يتابع ⁦#{id}⁩",
+      "followupSome": "يتابع",
+      "message": "يسأل {target}",
+      "messageSome": "يسأل مساعدًا آخر",
+      "awaitingReply": "ينتظر ردّ {name}",
+      "needsAnswer": "يحتاج إلى إجابتك",
+      "needsApproval": "يحتاج إلى موافقتك",
+      "workPrefix": "⁦#{id}⁩ {title}: {activity}"
+    },
+    "did": {
+      "edit": "عدّل {target} ⁦+{added} −{removed}⁩",
+      "editPlain": "عدّل {target}",
+      "editSome": "عدّل ملفات",
+      "test": "شغّل الاختبارات، ونجح منها {passed}",
+      "testFailed": "شغّل الاختبارات، ونجح منها {passed} وفشل {failed}",
+      "testExit": "شغّل الاختبارات، رمز الخروج {code}",
+      "testBad": "شغّل الاختبارات، ولم تنجح",
+      "testPlain": "شغّل الاختبارات",
+      "execute": "نفّذ {target}",
+      "executeExit": "نفّذ {target}، رمز الخروج {code}",
+      "executeBad": "نفّذ {target}، وفشل",
+      "executeSome": "نفّذ أمرًا",
+      "executeSomeBad": "نفّذ أمرًا، وفشل",
+      "read": "قرأ {target}",
+      "readSome": "قرأ ملفات",
+      "search": "بحث عن «{target}»",
+      "searchHits": "بحث عن «{target}»، النتائج: {hits}",
+      "searchSome": "بحث",
+      "commit": "أنشأ التزامًا: {target}",
+      "commitPlain": "أنشأ التزامًا",
+      "dispatch": "أسنده إلى {target}: ⁦#{id}⁩",
+      "dispatchPlain": "أسند ⁦#{id}⁩",
+      "dispatchSome": "أسند عملًا",
+      "followup": "تابع ⁦#{id}⁩",
+      "followupSome": "تابع",
+      "message": "أرسل رسالة إلى {target}",
+      "messageSome": "أرسل رسالة",
+      "think": "فكّر في الأمر",
+      "reply": "كتب ردًا",
+      "plan": "وضع خطة",
+      "compact": "رتّب سياقه",
+      "fetch": "اطّلع على المراجع",
+      "question": "سألك: {target}",
+      "questionSome": "سألك",
+      "other": "{target}",
+      "otherPlain": "أنجز خطوة"
+    },
+    "needs": {
+      "answer": "يحتاج إلى إجابتك: {text}",
+      "approval": "يحتاج إلى موافقتك: {text}",
+      "you": "يحتاج إليك: {text}",
+      "answerPlain": "يحتاج إلى إجابتك",
+      "approvalPlain": "يحتاج إلى موافقتك",
+      "youPlain": "يحتاج إليك"
+    },
+    "statusLine": {
+      "steps": "خطوات هذه الجولة",
+      "loading": "جارٍ تحميل الخطوات…",
+      "empty": "لا خطوات بعد",
+      "fold": "إخفاء الخطوات",
+      "openWork": "فتح العمل"
+    },
+    "sending": {
+      "waking": "جارٍ إيقاظ {name}…",
+      "afterTurn": "بانتظار انتهاء هذه الجولة",
+      "yielding": "يُفسح المجال"
+    },
+    "pills": {
+      "attention": "{count, plural, zero {لا عناصر بحاجة إليك} one {عنصر واحد بحاجة إليك} two {عنصران بحاجة إليك} few {# عناصر بحاجة إليك} many {# عنصرًا بحاجة إليك} other {# عنصر بحاجة إليك}}",
+      "newMessages": "رسائل جديدة"
+    },
+    "detail": {
+      "title": "التفاصيل",
+      "open": "إظهار التفاصيل",
+      "close": "إخفاء التفاصيل",
+      "tabs": {
+        "details": "التفاصيل",
+        "output": "المخرجات",
+        "workspace": "مساحة العمل"
+      },
+      "sections": {
+        "status": "الحالة",
+        "matters": "الأمور المفتوحة",
+        "data": "البيانات"
+      },
+      "notify": "أعلِمني",
+      "notifyHint": "عندما يُنهي أمرًا أو ينتظرك",
+      "settings": "الإعدادات",
+      "item": {
+        "done": "تم",
+        "later": "لاحقًا",
+        "drop": "إسقاط"
+      },
+      "output": {
+        "all": "الكل",
+        "tasks": "المهام",
+        "reports": "التقارير",
+        "docs": "المستندات",
+        "empty": "لم يُنتج شيئًا بعد",
+        "docEdited": "عُدّل {when}"
+      },
+      "workspace": {
+        "empty": "لا شيء قيد التشغيل الآن",
+        "open": "فتح"
       }
     }
   }

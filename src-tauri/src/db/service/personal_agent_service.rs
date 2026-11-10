@@ -276,6 +276,63 @@ pub async fn patch_settings(
     Ok(agent::Entity::find_by_id(id).one(conn).await?)
 }
 
+/// A change to how an assistant sits on the roster (4.14). Not a setting:
+/// neither the revision nor `updated_at` moves, so a settings view open on
+/// it is not told someone else changed it.
+#[derive(Debug, Clone, Default)]
+pub struct RosterWrite {
+    pub pinned_at: Option<Option<DateTime<Utc>>>,
+    pub section: Option<Option<String>>,
+    pub hidden: Option<bool>,
+    pub muted: Option<bool>,
+    pub unread_mark: Option<bool>,
+    pub notify: Option<bool>,
+    pub sort_order: Option<i32>,
+}
+
+pub async fn set_roster(
+    conn: &DatabaseConnection,
+    id: i32,
+    write: RosterWrite,
+) -> Result<Option<agent::Model>, DbError> {
+    let mut update = agent::Entity::update_many()
+        .filter(agent::Column::Id.eq(id))
+        .filter(agent::Column::DeletedAt.is_null());
+    let mut any = false;
+    if let Some(v) = write.pinned_at {
+        update = update.col_expr(agent::Column::PinnedAt, Expr::value(v));
+        any = true;
+    }
+    if let Some(v) = write.section {
+        update = update.col_expr(agent::Column::Section, Expr::value(v));
+        any = true;
+    }
+    if let Some(v) = write.hidden {
+        update = update.col_expr(agent::Column::Hidden, Expr::value(v));
+        any = true;
+    }
+    if let Some(v) = write.muted {
+        update = update.col_expr(agent::Column::Muted, Expr::value(v));
+        any = true;
+    }
+    if let Some(v) = write.unread_mark {
+        update = update.col_expr(agent::Column::UnreadMark, Expr::value(v));
+        any = true;
+    }
+    if let Some(v) = write.notify {
+        update = update.col_expr(agent::Column::Notify, Expr::value(v));
+        any = true;
+    }
+    if let Some(v) = write.sort_order {
+        update = update.col_expr(agent::Column::SortOrder, Expr::value(v));
+        any = true;
+    }
+    if any {
+        update.exec(conn).await?;
+    }
+    get_bot(conn, id).await
+}
+
 /// Insert the primary assistant's row, or update the one that exists.
 /// Returns the row as stored. (A second primary is refused by the database:
 /// one undeleted primary only.)
@@ -1415,6 +1472,55 @@ pub async fn recent_rows(
         .await?;
     rows.reverse();
     Ok(rows)
+}
+
+/// The newest row of an assistant's timeline: when anything last happened
+/// in its conversation.
+pub async fn latest_row(
+    conn: &DatabaseConnection,
+    bot: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
+        .order_by_desc(timeline::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// The questions and permission requests in an assistant's conversation
+/// still waiting for the owner (its own brain's and those shown for
+/// another), oldest first.
+pub async fn pending_prompt_rows(
+    conn: &DatabaseConnection,
+    bot: i32,
+) -> Result<Vec<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
+        .filter(
+            timeline::Column::Kind.is_in([TimelineKind::Question, TimelineKind::Permission]),
+        )
+        .filter(Expr::cust("json_extract(data, '$.state') = 'pending'"))
+        .order_by_asc(timeline::Column::Id)
+        .limit(50)
+        .all(conn)
+        .await?)
+}
+
+/// The last reply with words in it that an assistant finished.
+pub async fn last_said(
+    conn: &DatabaseConnection,
+    bot: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
+        .filter(timeline::Column::Kind.eq(TimelineKind::Reply))
+        .filter(Expr::cust("trim(body) <> ''"))
+        .filter(Expr::cust(
+            "COALESCE(json_extract(data, '$.state'), '') NOT IN ('running', 'discarded')",
+        ))
+        .order_by_desc(timeline::Column::Id)
+        .one(conn)
+        .await?)
 }
 
 pub async fn row_by_ref(

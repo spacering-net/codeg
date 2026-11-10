@@ -495,6 +495,7 @@ impl PersonalAgentEngine {
             super::engine::PERSONAL_AGENT_CHANGED_EVENT,
             super::engine::change_payload(bot, &change),
         );
+        self.touch_live(bot);
     }
 
     /// The engine of assistant `bot` in this process, made if need be.

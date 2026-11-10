@@ -12,8 +12,8 @@
 
 import { useMemo, useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { Loader2 } from "lucide-react"
 
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import type { AssistantPrefill } from "@/components/settings/assistant-editor-dialog"
 import { AssistantEditorDialog } from "@/components/settings/assistant-editor-dialog"
 import { Button } from "@/components/ui/button"
@@ -210,7 +210,7 @@ function NewBotBody({
             disabled={!trimmed || busy}
             data-pa-new-bot-create
           >
-            {busy ? <Loader2 className="animate-spin" aria-hidden /> : null}
+            {busy ? <SyncedSpinner small /> : null}
             {t("create")}
           </Button>
         </DialogFooter>

@@ -563,7 +563,15 @@ describe("the bubbles", () => {
 
   it("stops a reply while it is written, from its actions or its menu", async () => {
     const item = itemOf(
-      [row(4, "reply", { batch_id: 7, data: { state: "running" } })],
+      [
+        row(4, "reply", {
+          batch_id: 7,
+          data: {
+            state: "running",
+            current: { t: "text", n: 1, text: "Looking at it." },
+          },
+        }),
+      ],
       "reply"
     ) as Extract<MessageItem, { kind: "reply" }>
     const { container } = draw(<ReplyBubble item={item} />, { liveRowId: 4 })

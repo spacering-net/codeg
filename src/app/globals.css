@@ -4238,6 +4238,122 @@ div.monaco-diff-editor.side-by-side .editor.modified {
    it with more of the primary: a deeper tint of the same hue. Over a
    workspace background image it turns translucent like the conversation's
    message surfaces (`ws-msg-*`), with their hairline ring. */
+/* The assistants page with "follow the assistant's colour" on (10.7): its
+   conversation takes the assistant's colour for the theme's — the owner's
+   bubbles, the cards' accent edges and buttons. Each colour once for the
+   light theme and once for the dark. The unread dot keeps its blue (it is
+   not the theme's colour). */
+[data-pa-accent="black"] {
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.205 0 0);
+}
+.dark [data-pa-accent="black"] {
+  --primary: oklch(0.87 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.87 0 0);
+}
+[data-pa-accent="brown"] {
+  --primary: oklch(0.473 0.137 46.201);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.473 0.137 46.201);
+}
+.dark [data-pa-accent="brown"] {
+  --primary: oklch(0.666 0.179 58.318);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.666 0.179 58.318);
+}
+[data-pa-accent="red"] {
+  --primary: oklch(0.577 0.245 27.325);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.577 0.245 27.325);
+}
+.dark [data-pa-accent="red"] {
+  --primary: oklch(0.704 0.191 22.216);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.704 0.191 22.216);
+}
+[data-pa-accent="orange"] {
+  --primary: oklch(0.646 0.222 41.116);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.646 0.222 41.116);
+}
+.dark [data-pa-accent="orange"] {
+  --primary: oklch(0.75 0.183 55.934);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.75 0.183 55.934);
+}
+[data-pa-accent="yellow"] {
+  --primary: oklch(0.795 0.184 86.047);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.795 0.184 86.047);
+}
+.dark [data-pa-accent="yellow"] {
+  --primary: oklch(0.905 0.182 98.111);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.905 0.182 98.111);
+}
+[data-pa-accent="green"] {
+  --primary: oklch(0.627 0.194 149.214);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.627 0.194 149.214);
+}
+.dark [data-pa-accent="green"] {
+  --primary: oklch(0.792 0.209 151.711);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.792 0.209 151.711);
+}
+[data-pa-accent="teal"] {
+  --primary: oklch(0.6 0.118 184.704);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.6 0.118 184.704);
+}
+.dark [data-pa-accent="teal"] {
+  --primary: oklch(0.777 0.152 181.912);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.777 0.152 181.912);
+}
+[data-pa-accent="blue"] {
+  --primary: oklch(0.546 0.245 262.881);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.546 0.245 262.881);
+}
+.dark [data-pa-accent="blue"] {
+  --primary: oklch(0.707 0.165 254.624);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.707 0.165 254.624);
+}
+[data-pa-accent="purple"] {
+  --primary: oklch(0.541 0.281 293.009);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.541 0.281 293.009);
+}
+.dark [data-pa-accent="purple"] {
+  --primary: oklch(0.702 0.183 293.541);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.702 0.183 293.541);
+}
+[data-pa-accent="magenta"] {
+  --primary: oklch(0.591 0.293 322.896);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.591 0.293 322.896);
+}
+.dark [data-pa-accent="magenta"] {
+  --primary: oklch(0.74 0.238 322.16);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.74 0.238 322.16);
+}
+[data-pa-accent="gray"] {
+  --primary: oklch(0.446 0.043 257.281);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.446 0.043 257.281);
+}
+.dark [data-pa-accent="gray"] {
+  --primary: oklch(0.704 0.04 256.788);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.704 0.04 256.788);
+}
+
 .pa-owner-bubble {
   --pa-inset: color-mix(in oklab, var(--primary) 6%, transparent);
   --pa-inset-hover: color-mix(in oklab, var(--primary) 10%, transparent);
@@ -4455,4 +4571,487 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Motion tokens (10.8) ───────────────────────────────────────────────────
+   One place for how things move; components use the variables and the
+   `motion-*` classes below, never numbers of their own. The springs are
+   solved once and committed as `linear()` curves
+   (`src/lib/motion/spring.ts`, `node --no-warnings
+   scripts/gen-spring-linear.mjs`); its test checks these strings. A webview
+   without `linear()` gets the entrance curve instead. Under reduced motion
+   (the one block at the end of this section) movement becomes fades, loops
+   stop, spinners pulse and the faces rest. */
+:root {
+  --motion-feedback: 120ms;
+  --motion-hover: 140ms;
+  --motion-enter: 160ms;
+  --motion-expand: 200ms;
+  --motion-row: 240ms;
+  --motion-card: 240ms;
+  --motion-crossfade: 260ms;
+  --motion-card-collapse: 300ms;
+  --motion-widget: 320ms;
+  --motion-stagger: 380ms;
+  --motion-pop: 500ms;
+
+  --motion-spin-small: 700ms;
+  --motion-spin: 1200ms;
+  --motion-bounce: 1400ms;
+  --motion-breathe: 2400ms;
+  --motion-shimmer: 1.6s;
+
+  --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --motion-ease-emphasis: cubic-bezier(0.23, 1, 0.32, 1);
+
+  /* The springs' durations: their shapes below are played in these. */
+  --motion-spring-fast-duration: 300ms;
+  --motion-spring-pop-duration: 500ms;
+  --motion-spring-fast: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-spring-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    /* mass 1, stiffness 175, damping 26 */
+    --motion-spring-fast: linear(
+      0,
+      0.021,
+      0.072,
+      0.141,
+      0.219,
+      0.3,
+      0.38,
+      0.456,
+      0.526,
+      0.59,
+      0.648,
+      0.699,
+      0.744,
+      0.783,
+      0.817,
+      0.846,
+      0.871,
+      0.892,
+      0.91,
+      0.925,
+      0.938,
+      0.949,
+      0.958,
+      0.965,
+      0.971,
+      0.976,
+      0.981,
+      0.984,
+      0.987,
+      0.99,
+      0.991,
+      0.993,
+      0.994,
+      0.995,
+      0.996,
+      0.997,
+      0.998,
+      0.998,
+      0.998,
+      0.999,
+      1
+    );
+    /* mass 1, stiffness 300, damping 21.8: about 7.8 % overshoot */
+    --motion-spring-pop: linear(
+      0,
+      0.019,
+      0.071,
+      0.145,
+      0.235,
+      0.332,
+      0.432,
+      0.531,
+      0.624,
+      0.71,
+      0.787,
+      0.855,
+      0.912,
+      0.96,
+      0.998,
+      1.028,
+      1.049,
+      1.064,
+      1.074,
+      1.078,
+      1.078,
+      1.076,
+      1.071,
+      1.065,
+      1.057,
+      1.049,
+      1.042,
+      1.034,
+      1.027,
+      1.02,
+      1.015,
+      1.01,
+      1.005,
+      1.002,
+      0.999,
+      0.997,
+      0.996,
+      0.995,
+      0.994,
+      0.994,
+      0.994,
+      0.994,
+      0.995,
+      0.995,
+      0.996,
+      0.996,
+      0.997,
+      0.998,
+      0.998,
+      0.999,
+      1
+    );
+  }
+}
+
+/* A new message: up 12px into place over 240ms while it grows from 0.985
+   over 320ms (`translate` and `scale` are separate properties, so the two
+   run side by side). Put on as it mounts; filled backwards only. */
+.motion-message-enter {
+  animation:
+    motion-rise var(--motion-row) var(--motion-ease-enter) backwards,
+    motion-grow var(--motion-widget) var(--motion-ease-enter) backwards;
+}
+
+@keyframes motion-rise {
+  from {
+    opacity: 0;
+    translate: 0 12px;
+  }
+}
+
+@keyframes motion-grow {
+  from {
+    scale: 0.985;
+  }
+}
+
+@keyframes motion-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A row that opens from no height and shuts to none (roster rows, task rows,
+   the panel's lists), on a grid track so nothing reads layout: the wrapper
+   gets `motion-rows`, its one child is clipped while it moves.
+   `data-state="closed"` shuts it (keep it mounted for `--motion-row`, then
+   remove it); `motion-rows-enter` opens it as it mounts. */
+.motion-rows {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows var(--motion-row) var(--motion-spring-fast),
+    opacity var(--motion-row) var(--motion-ease-standard);
+}
+
+.motion-rows > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.motion-rows[data-state="closed"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.motion-rows-enter {
+  animation: motion-rows-open var(--motion-row) var(--motion-spring-fast)
+    backwards;
+}
+
+@keyframes motion-rows-open {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+/* A hint pill over the timeline ("N need you", "New messages"): in and out
+   over 200ms on the standard curve. `motion-pill` as it mounts;
+   `data-state="closed"` to see it out before removing it. */
+.motion-pill {
+  animation: motion-pill-in var(--motion-expand) var(--motion-ease-standard)
+    backwards;
+  transition:
+    opacity var(--motion-expand) var(--motion-ease-standard),
+    translate var(--motion-expand) var(--motion-ease-standard);
+}
+
+.motion-pill[data-state="closed"] {
+  opacity: 0;
+  translate: 0 6px;
+  pointer-events: none;
+}
+
+@keyframes motion-pill-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+
+/* A reaction popping on (the 👍 on the owner's message): from nothing to its
+   size over 500ms on the pop spring, a little past it and back. */
+.motion-pop {
+  animation: motion-pop var(--motion-spring-pop-duration)
+    var(--motion-spring-pop) backwards;
+}
+
+@keyframes motion-pop {
+  from {
+    scale: 0;
+  }
+}
+
+/* The message a jump lands on: a ring flashes round it once. */
+.motion-jump-ring {
+  animation: motion-jump-ring 1200ms var(--motion-ease-standard);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+@keyframes motion-jump-ring {
+  15%,
+  55% {
+    outline-color: var(--ring);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+/* Spinners on one phase across the screen: each mounts with
+   `animation-delay: -(now mod period)` (`useSyncedSpin`, `SyncedSpinner`),
+   so every one is at the same angle. */
+.motion-spin {
+  animation: motion-spin var(--motion-spin) linear infinite;
+}
+
+.motion-spin-small {
+  animation: motion-spin var(--motion-spin-small) linear infinite;
+}
+
+@keyframes motion-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+@keyframes motion-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* A loading skeleton whose sheen is one light across the screen: the
+   gradient is fixed to the viewport, so every block shows a slice of it. */
+.motion-skeleton {
+  background-color: var(--muted);
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in oklab, var(--foreground) 6%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 200vw 100%;
+  background-attachment: fixed;
+  animation: motion-skeleton var(--motion-shimmer) linear infinite;
+}
+
+@keyframes motion-skeleton {
+  from {
+    background-position: 100vw 0;
+  }
+  to {
+    background-position: -100vw 0;
+  }
+}
+
+/* ── An assistant's face (10.6, `bot-avatar.tsx`) ───────────────────────────
+   The body (`.pa-face-body`: the shape and its eyes) bobs, breathes or hops
+   with the look; the eyes look about (`.pa-face-gaze`, a glance is an inline
+   transform) and blink (`.pa-face-lids`, `data-blink` on the face). All in
+   the SVG's own units (a 100 × 100 box). The dot's ring is the background
+   it sits on: a parent drawing it on another colour sets `--pa-dot-ring`. */
+.pa-face {
+  --pa-dot-ring: var(--background);
+}
+
+.pa-face-body {
+  transform-box: view-box;
+  transform-origin: 50px 94px;
+}
+
+.pa-face-gaze {
+  transform-box: view-box;
+  transition: transform var(--motion-enter) var(--motion-ease-standard);
+}
+
+.pa-face-lids {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 70ms var(--motion-ease-standard);
+}
+
+.pa-face[data-blink] .pa-face-lids {
+  transform: scaleY(0.1);
+}
+
+.pa-face[data-bot-look="working"] .pa-face-body {
+  animation: pa-face-bob var(--motion-bounce) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="waiting"] .pa-face-body {
+  animation: pa-face-breathe var(--motion-breathe) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="stuck"] .pa-face-body {
+  animation: pa-face-breathe calc(var(--motion-breathe) * 1.5) ease-in-out
+    infinite;
+}
+
+.pa-face[data-bot-look="sleeping"] .pa-face-body {
+  animation: pa-face-sleep var(--motion-breathe) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="done"] .pa-face-body {
+  animation: pa-face-hop var(--motion-spring-pop-duration)
+    var(--motion-ease-enter) 2;
+}
+
+.pa-face[data-bot-look="thinking"] .pa-face-gaze {
+  animation: pa-face-wander 4.2s ease-in-out infinite alternate;
+}
+
+.pa-face-z {
+  opacity: 0;
+  transform-box: fill-box;
+  animation: pa-face-z calc(var(--motion-breathe) * 1.25) ease-out infinite;
+}
+
+/* Waiting or working with a picture, an emoji or a monogram for a face: a
+   ring round it says so. */
+.pa-face-ring {
+  animation: pa-face-ring var(--motion-bounce) ease-in-out infinite;
+}
+
+@keyframes pa-face-bob {
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes pa-face-breathe {
+  50% {
+    transform: scale(1.02);
+  }
+}
+
+@keyframes pa-face-sleep {
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+@keyframes pa-face-hop {
+  40% {
+    transform: translateY(-8px);
+  }
+  70% {
+    transform: translateY(0);
+  }
+  85% {
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes pa-face-wander {
+  0% {
+    transform: translate(-3px, 0);
+  }
+  50% {
+    transform: translate(1px, -2px);
+  }
+  100% {
+    transform: translate(3px, 0);
+  }
+}
+
+@keyframes pa-face-z {
+  0% {
+    opacity: 0;
+    transform: translate(0, 4px) scale(0.7);
+  }
+  25% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(6px, -16px) scale(1.1);
+  }
+}
+
+@keyframes pa-face-ring {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Reduced motion, for everything of this section: movement becomes a fade,
+   loops stop, spinners pulse, the faces rest in each look's still pose (the
+   Zs stay, still) and the fast spring plays in 120ms. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-spring-fast-duration: 120ms;
+  }
+
+  .motion-message-enter,
+  .motion-pop,
+  .motion-pill {
+    animation: motion-fade var(--motion-enter) var(--motion-ease-standard)
+      backwards;
+  }
+
+  .motion-pill,
+  .motion-pill[data-state="closed"] {
+    translate: none;
+  }
+
+  .motion-rows,
+  .motion-rows-enter {
+    animation: none;
+    transition: opacity var(--motion-enter) var(--motion-ease-standard);
+  }
+
+  .motion-spin,
+  .motion-spin-small {
+    animation: motion-pulse var(--motion-spin) ease-in-out infinite;
+  }
+
+  .motion-skeleton {
+    animation: none;
+  }
+
+  .pa-face *,
+  .pa-face-ring {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .pa-face-z {
+    opacity: 0.7;
+  }
 }

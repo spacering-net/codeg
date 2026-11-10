@@ -43,6 +43,7 @@ import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { getFolderConversation, workTaskEvents } from "@/lib/api"
 import { FOLLOW_UP_SCENARIOS } from "@/lib/task-follow-up"
+import { cn } from "@/lib/utils"
 import {
   extractRounds,
   firstTextOfParts,
@@ -125,9 +126,12 @@ export function TaskTranscriptDialog({
 function TaskAgentResolver({
   task,
   headerActions,
+  bare = false,
 }: {
   task: WorkTask
   headerActions?: ReactNode
+  /** The transcript alone, no header (a preview inside another card). */
+  bare?: boolean
 }) {
   const folders = useAppWorkspaceStore((s) => s.folders)
   const override = task.config?.agent_type ?? null
@@ -167,18 +171,31 @@ function TaskAgentResolver({
       task={task}
       agentType={resolved}
       headerActions={headerActions}
+      bare={bare}
     />
   )
+}
+
+/**
+ * A task's session, live while it runs, for a host of its own: the agent
+ * resolved, the connection attached forward only and detached on unmount,
+ * as the dialog does — the transcript alone (the assistants page's
+ * workspace previews). Needs `task.conversation_id`.
+ */
+export function TaskTranscriptView({ task }: { task: WorkTask }) {
+  return <TaskAgentResolver task={task} bare />
 }
 
 function TaskTranscriptBody({
   task,
   agentType,
   headerActions,
+  bare = false,
 }: {
   task: WorkTask
   agentType: AgentType
   headerActions?: ReactNode
+  bare?: boolean
 }) {
   const t = useTranslations("Tasks")
   const { attachDelegationChild, detachDelegationChild } = useAcpActions()
@@ -305,7 +322,12 @@ function TaskTranscriptBody({
     <div className="flex h-full min-h-0 flex-col">
       {/* Aligned with the transcript's own 16px row inset below, as in the
           delegation viewer. `pr-12` clears the close button. */}
-      <div className="flex items-center gap-3 border-b border-border px-4 py-2.5 pr-12">
+      <div
+        className={cn(
+          "flex items-center gap-3 border-b border-border px-4 py-2.5 pr-12",
+          bare && "hidden"
+        )}
+      >
         <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-foreground">
           <AgentIcon agentType={agentType} className="h-4 w-4" />
         </span>

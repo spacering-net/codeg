@@ -35,6 +35,7 @@ import {
   CHAT_CONTENT_MIN,
   chatContentWidthCeiling,
 } from "@/lib/chat-content-width"
+import { usePaAccent, type PaAccent } from "@/lib/personal-agent-accent"
 import { cn } from "@/lib/utils"
 import {
   DEFAULT_ZOOM_LEVEL,
@@ -70,6 +71,7 @@ export function AppearanceSettings() {
     useWelcomeQuickActions()
   const { chatAnimations, setChatAnimations } = useChatAnimationsSetting()
   const { chatContentWidth, setChatContentWidth } = useChatContentWidth()
+  const [paAccent, setPaAccent] = usePaAccent()
   const [screenWidth] = useState(readScreenWidth)
   // 宽度以 100% 缩放下的 px 计（随缩放一起放大），所以同一块屏幕在高缩放下能放下
   // 的宽度更小。
@@ -197,6 +199,32 @@ export function AppearanceSettings() {
               color: t(`themeColor.options.${themeColor}`),
             })}
           </p>
+        </section>
+
+        {/* ===== The assistants page's accent (10.7) ===== */}
+        <section
+          className="rounded-xl border bg-card p-4 space-y-4"
+          data-pa-accent-setting
+        >
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">{t("paAccent.title")}</h2>
+          </div>
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("paAccent.description")}
+          </p>
+          <Select
+            value={paAccent}
+            onValueChange={(v) => setPaAccent(v as PaAccent)}
+          >
+            <SelectTrigger className="w-56" aria-label={t("paAccent.title")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              <SelectItem value="default">{t("paAccent.default")}</SelectItem>
+              <SelectItem value="bot">{t("paAccent.bot")}</SelectItem>
+            </SelectContent>
+          </Select>
         </section>
 
         {/* ===== Custom style (token overrides + free-form CSS) ===== */}

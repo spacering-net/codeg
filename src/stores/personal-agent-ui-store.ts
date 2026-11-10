@@ -13,9 +13,10 @@ import type { AgentType, DispatchMode, DispatchState } from "@/lib/types"
  * reads them back.
  */
 
-/** The side panel's tabs: the agent's status (the one it opens on), the
- *  work (what is open, what ended), and its numbers. */
-export type AuxTab = "status" | "work" | "stats"
+/** The side panel's tabs (10.1): the details (its status, its open
+ *  matters, its numbers — the one it opens on), what it made, and the work
+ *  running now. */
+export type AuxTab = "details" | "output" | "workspace"
 
 /** Window events the chrome sends the page. */
 export const PERSONAL_AGENT_EVENTS = {
@@ -99,7 +100,7 @@ interface PersonalAgentUiState {
 
 export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   auxOpen: true,
-  auxTab: "status",
+  auxTab: "details",
   setAuxOpen: (auxOpen) => set({ auxOpen }),
   toggleAux: () => set((s) => ({ auxOpen: !s.auxOpen })),
   showAux: (auxTab) => set({ auxOpen: true, auxTab }),

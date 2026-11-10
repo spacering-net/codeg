@@ -5,18 +5,26 @@
  * panel is (`layout/aux-panel.tsx`): the open tab's name in a strip across
  * the top, its content under it, and the tabs as an icon rail down the
  * panel's end edge — on a narrow screen's drawer, a row of tabs under a
- * line. Three tabs, the first open by default:
- * - Status, as Session Details shows a conversation: the agent as a card —
- *   who it is, what it runs on, its session, its working directory — then
- *   folding sections: its context, the run log, the details.
- * - Work, as the workspace's task tab shows a board: sections by whom each
- *   piece waits on — the owner first, then the work still moving, what the
- *   agent has to pick up, what comes later — each piece once, as a card, and
- *   the work that ended, folded. A piece of handed-out work opens its
- *   session in the drawer; a reminder, a follow-up or a question jumps to
- *   the message it came from. The rail counts what waits on the owner.
- * - Stats: the last two weeks in four figures, then the charts, each a
- *   folding section.
+ * line. Three tabs (10.1), the first open by default:
+ * - Details, one page of sections:
+ *   - its status first, as Session Details shows a conversation: the agent
+ *     as a card — who it is, what it runs on, its session, its working
+ *     directory — then folding sections: its context, the run log, the
+ *     details;
+ *   - its open matters, as the workspace's task tab shows a board: sections
+ *     by whom each piece waits on — the owner first, then the work still
+ *     moving, what the agent has to pick up, what comes later — each piece
+ *     once, as a card. A piece of handed-out work opens its session in the
+ *     drawer; a reminder, a follow-up or a question jumps to the message it
+ *     came from, and the owner can settle it there: done, later, dropped;
+ *   - its numbers: the last two weeks in four figures, then the charts;
+ *   - "Notify me", and the way to its settings.
+ *   The rail counts what waits on the owner.
+ * - Output: what it made, newest first — the work that ended (tasks, the
+ *   reports of the rest) and the documents it wrote in its working
+ *   directory — filtered by kind.
+ * - Workspace: the work running now, each as a small live view of its
+ *   session; asleep when nothing runs.
  *
  * On the desktop the panel reaches the window's top edge, its strip in the
  * band the page's title is in, as the workspace's panel has it: the strip
@@ -31,14 +39,14 @@ import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import {
   Bell,
-  ChartPie,
   ChevronDown,
   CircleGauge,
-  ClipboardList,
+  FileText,
   Forward,
   ListTodo,
-  Loader2,
   MessageCircleQuestionMark,
+  Monitor,
+  Package,
   Play,
   Settings2,
   SquareArrowOutUpRight,
@@ -47,6 +55,7 @@ import {
 import { Tabs as TabsPrimitive } from "radix-ui"
 import { toast } from "sonner"
 
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { AgentIcon } from "@/components/agent-icon"
 import {
   CopyPropertyButton,
@@ -65,16 +74,32 @@ import {
   type RankedDatum,
   type TrendDatum,
 } from "@/components/token-usage/charts"
+import { MessageResponse } from "@/components/ai-elements/message"
+import { LiveTranscriptView } from "@/components/message/live-transcript-view"
+import { TaskTranscriptView } from "@/components/tasks/task-transcript-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
+import { useTasksView } from "@/contexts/tasks-view-context"
 import { useTabReselect } from "@/hooks/use-tab-reselect"
 import {
   personalAgentDispatches,
+  personalAgentItemAct,
   personalAgentItems,
+  personalAgentOutputRead,
+  personalAgentOutputs,
   personalAgentResumeAutoCompact,
+  personalAgentRosterAct,
   personalAgentStats,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -84,12 +109,17 @@ import type {
   DispatchState,
   ItemInfo,
   ItemKind,
+  PersonalAgentOutputDoc,
   PersonalAgentSnapshot,
   PersonalAgentStats,
   TimelineRow,
   WaitsFor,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import {
+  usePersonalAgentRoster,
+  useRoster,
+} from "@/stores/personal-agent-roster-store"
 import {
   PERSONAL_AGENT_EVENTS,
   usePersonalAgentUi,
@@ -118,8 +148,6 @@ const CARD_AVATAR_SIZE = 18
 /** The agent's avatar on the status tab's card, in px at 100% zoom: a head
  *  taller than the two lines beside it. */
 const IDENTITY_AVATAR_SIZE = 40
-/** Ended work shown before "show all". */
-const ENDED_SHOWN = 5
 /** The dispatches the work tab reads: enough for the ended list. */
 const DISPATCH_PAGE = 200
 /** Days the stats tab covers. */
@@ -127,15 +155,14 @@ const STATS_DAYS = 14
 /** The panel's charts, in px: shorter than the token dashboard's. */
 const CHART_HEIGHT = 148
 
-const TABS: readonly AuxTab[] = ["status", "work", "stats"]
+const TABS: readonly AuxTab[] = ["details", "output", "workspace"]
 
-/** A gauge for how the agent is, a clipboard for the matters it keeps (not
- *  the task board's checklist: these are not only tasks), a pie for its
- *  numbers. */
+/** A gauge for how the agent is, a parcel for what it made, a screen for
+ *  the work running. */
 const TAB_ICON: Record<AuxTab, LucideIcon> = {
-  status: CircleGauge,
-  work: ClipboardList,
-  stats: ChartPie,
+  details: CircleGauge,
+  output: Package,
+  workspace: Monitor,
 }
 
 /** Work that has not ended. */
@@ -303,11 +330,12 @@ export function PersonalAgentAuxPanel({
   const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
   const work = useWork()
   const waiting = work?.open.filter((m) => m.group === "owner").length ?? 0
-  const label = (value: AuxTab) => t(`tab.${value}`)
+  const tabs = useTranslations("PersonalAgent.detail.tabs")
+  const label = (value: AuxTab) => tabs(value)
   // The tab's name for a pointer and a screen reader, with what waits on
   // the owner when there is any.
   const fullName = (value: AuxTab) =>
-    value === "work" && waiting > 0
+    value === "details" && waiting > 0
       ? `${label(value)} · ${t("waiting", { count: waiting })}`
       : label(value)
   // A click on the tab already showing hides the panel, as the workspace's
@@ -316,14 +344,14 @@ export function PersonalAgentAuxPanel({
 
   const panels = (
     <>
-      <TabsContent value="status" className="mt-0 min-h-0 flex-1">
-        <StatusTab snapshot={snapshot} />
+      <TabsContent value="details" className="mt-0 min-h-0 flex-1">
+        <DetailsTab snapshot={snapshot} work={work} inDrawer={inDrawer} />
       </TabsContent>
-      <TabsContent value="work" className="mt-0 min-h-0 flex-1">
-        <WorkTab work={work} inDrawer={inDrawer} />
+      <TabsContent value="output" className="mt-0 min-h-0 flex-1">
+        <OutputTab work={work} />
       </TabsContent>
-      <TabsContent value="stats" className="mt-0 min-h-0 flex-1">
-        <StatsTab />
+      <TabsContent value="workspace" className="mt-0 min-h-0 flex-1">
+        <WorkspaceTab work={work} />
       </TabsContent>
     </>
   )
@@ -354,7 +382,7 @@ export function PersonalAgentAuxPanel({
                   value={value}
                   label={label(value)}
                   name={fullName(value)}
-                  waiting={value === "work" ? waiting : 0}
+                  waiting={value === "details" ? waiting : 0}
                   selected={value === tab}
                   onReselect={close}
                 />
@@ -400,7 +428,7 @@ export function PersonalAgentAuxPanel({
                       key={value}
                       value={value}
                       name={fullName(value)}
-                      waiting={value === "work" ? waiting : 0}
+                      waiting={value === "details" ? waiting : 0}
                       selected={value === tab}
                       onReselect={close}
                     />
@@ -587,6 +615,7 @@ function WorkCard({
   notes = [],
   onOpen,
   openLabel,
+  actions,
 }: {
   mark: ReactNode
   title: string
@@ -595,6 +624,8 @@ function WorkCard({
   notes?: string[]
   onOpen?: (() => void) | null
   openLabel?: string
+  /** Buttons under it, apart from what opening it does. */
+  actions?: ReactNode
 }) {
   const body = (
     <>
@@ -626,6 +657,25 @@ function WorkCard({
   // all but vanishing white on white.
   const shape =
     "flex w-full min-w-0 flex-col rounded-xl border border-foreground/15 bg-card ws-msg-card p-3 text-start"
+  if (actions) {
+    return (
+      <div className={shape}>
+        {onOpen ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            title={openLabel}
+            className="flex min-w-0 flex-col text-start outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {body}
+          </button>
+        ) : (
+          body
+        )}
+        <div className="mt-2 flex flex-wrap gap-1">{actions}</div>
+      </div>
+    )
+  }
   if (!onOpen) return <div className={shape}>{body}</div>
   return (
     <button
@@ -700,11 +750,55 @@ function ItemCard({
   now: number
 }) {
   const t = useTranslations("PersonalAgent")
-  const { jumpTo } = usePageScope()
+  const td = useTranslations("PersonalAgent.detail.item")
+  const { jumpTo, readOnly } = usePageScope()
+  const { botId } = usePersonalAgent()
   const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
+  const [acting, setActing] = useState(false)
   const Icon =
     item.kind === "dispatch" ? ListTodo : (KIND_ICON[item.kind] ?? ListTodo)
   const origin = item.origin_timeline_id
+  const settle = (act: "done" | "drop" | "later") => {
+    setActing(true)
+    personalAgentItemAct(botId, item.id, act)
+      .catch((e) => toast.error(toErrorMessage(e)))
+      .finally(() => setActing(false))
+  }
+  const actions =
+    readOnly || item.kind === "dispatch" ? null : (
+      <>
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={acting}
+          onClick={() => settle("done")}
+          data-pa-item-act="done"
+        >
+          {td("done")}
+        </Button>
+        {item.waits_for !== "time" ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={acting}
+            onClick={() => settle("later")}
+            data-pa-item-act="later"
+          >
+            {td("later")}
+          </Button>
+        ) : null}
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={acting}
+          className="text-muted-foreground"
+          onClick={() => settle("drop")}
+          data-pa-item-act="drop"
+        >
+          {td("drop")}
+        </Button>
+      </>
+    )
   return (
     <WorkCard
       mark={
@@ -727,6 +821,7 @@ function ItemCard({
           : null
       }
       openLabel={origin != null ? t("matters.origin") : undefined}
+      actions={actions}
     />
   )
 }
@@ -772,7 +867,8 @@ function WorkSkeleton() {
   )
 }
 
-function WorkTab({
+/** The open matters, by whom each waits on: the details' second section. */
+function WorkBody({
   work,
   inDrawer,
 }: {
@@ -781,67 +877,34 @@ function WorkTab({
 }) {
   const t = useTranslations("PersonalAgent")
   const now = useNow()
-  const [allEnded, setAllEnded] = useState(false)
   if (work == null) return <WorkSkeleton />
-  const { open, ended } = work
-  if (open.length === 0 && ended.length === 0) {
+  const { open } = work
+  if (open.length === 0) {
     return (
-      <EmptyState
-        icon={TAB_ICON.work}
-        title={t("matters.emptyTitle")}
-        hint={t("matters.emptyHint")}
-      />
+      <p className="text-xs leading-5 text-muted-foreground">
+        {t("matters.noneOpen")}
+      </p>
     )
   }
-  const shownEnded = allEnded ? ended : ended.slice(0, ENDED_SHOWN)
   return (
-    <ScrollArea className="h-full">
-      <div className="flex flex-col gap-3 p-3">
-        {open.length === 0 ? (
-          <p className="text-xs leading-5 text-muted-foreground">
-            {t("matters.noneOpen")}
-          </p>
-        ) : null}
-        {GROUPS.map((g) => {
-          const list = open.filter((m) => m.group === g)
-          if (list.length === 0) return null
-          return (
-            <WorkSection
-              key={g}
-              group={g}
-              label={t(`items.waits.${g}`)}
-              count={list.length}
-            >
-              {list.map((m) => (
-                <MatterCard key={m.key} m={m} inDrawer={inDrawer} now={now} />
-              ))}
-            </WorkSection>
-          )
-        })}
-        {ended.length > 0 ? (
+    <div className="flex flex-col gap-3">
+      {GROUPS.map((g) => {
+        const list = open.filter((m) => m.group === g)
+        if (list.length === 0) return null
+        return (
           <WorkSection
-            group="ended"
-            label={t("matters.ended")}
-            count={ended.length}
+            key={g}
+            group={g}
+            label={t(`items.waits.${g}`)}
+            count={list.length}
           >
-            {shownEnded.map((d) => (
-              <DispatchCard key={d.id} d={d} now={now} />
+            {list.map((m) => (
+              <MatterCard key={m.key} m={m} inDrawer={inDrawer} now={now} />
             ))}
-            {ended.length > shownEnded.length ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="ghost"
-                className="self-start text-muted-foreground"
-                onClick={() => setAllEnded(true)}
-              >
-                {t("matters.showAll", { count: ended.length })}
-              </Button>
-            ) : null}
           </WorkSection>
-        ) : null}
-      </div>
-    </ScrollArea>
+        )
+      })}
+    </div>
   )
 }
 
@@ -1369,23 +1432,22 @@ function DetailsSection({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
   )
 }
 
-function StatusTab({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
+/** Its status: the details' first section. */
+function StatusBody({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
   const t = useTranslations("PersonalAgent.status")
   const readOnly = snapshot.status.engine !== "here"
   return (
-    <ScrollArea className="h-full">
-      <div className="min-w-0 space-y-4 p-3 text-sm">
-        {readOnly ? (
-          <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200">
-            {t("elsewhere")}
-          </p>
-        ) : null}
-        <AgentCard snapshot={snapshot} readOnly={readOnly} />
-        <ContextSection snapshot={snapshot} readOnly={readOnly} />
-        <RunLogSection />
-        <DetailsSection snapshot={snapshot} />
-      </div>
-    </ScrollArea>
+    <div className="min-w-0 space-y-4 text-sm">
+      {readOnly ? (
+        <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200">
+          {t("elsewhere")}
+        </p>
+      ) : null}
+      <AgentCard snapshot={snapshot} readOnly={readOnly} />
+      <ContextSection snapshot={snapshot} readOnly={readOnly} />
+      <RunLogSection />
+      <DetailsSection snapshot={snapshot} />
+    </div>
   )
 }
 
@@ -1532,7 +1594,8 @@ function ChartSection({
   )
 }
 
-function StatsTab() {
+/** Its numbers: the details' third section. */
+function StatsBody() {
   const t = useTranslations("PersonalAgent.data")
   const locale = useLocale()
   const tm = useTranslations("PersonalAgent.mode")
@@ -1551,7 +1614,10 @@ function StatsTab() {
   }, [dispatchVersion, botId])
   if (!stats) {
     return (
-      <Loader2 className="mx-auto my-8 size-4 animate-spin text-muted-foreground" />
+      <SyncedSpinner
+        small
+        className="mx-auto my-8 size-4 text-muted-foreground"
+      />
     )
   }
   const sum = (pick: (d: PersonalAgentStats["days"][number]) => number) =>
@@ -1611,109 +1677,441 @@ function StatsTab() {
     hint: t("completedHint", { count: e.completed }),
   }))
   return (
+    <div className="tu-viz min-w-0 space-y-4 text-sm">
+      <section className="min-w-0 rounded-lg border border-border/70 bg-muted/40 p-3">
+        <p className="text-[0.8125rem] leading-[1.125rem] font-semibold">
+          {t("range", { days: STATS_DAYS })}
+        </p>
+        <dl className="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-3">
+          <Figure
+            label={t("figure.conversation")}
+            value={String(owner + replies)}
+            sub={t("figure.conversationSub", { owner, replies })}
+          />
+          <Figure
+            label={t("figure.dispatches")}
+            value={String(handed)}
+            sub={t("figure.dispatchesSub", { completed, failed })}
+          />
+          <Figure
+            label={t("figure.completion")}
+            value={
+              handed > 0 ? `${Math.round((completed / handed) * 100)}%` : "—"
+            }
+            sub={t("figure.completionSub")}
+          />
+          <Figure
+            label={t("figure.tokens")}
+            value={
+              synced ? formatTokenCount(agentTokens + dispatchTokens) : "—"
+            }
+            sub={
+              synced
+                ? t("figure.tokensSub", {
+                    agent: formatTokenCount(agentTokens),
+                    dispatch: formatTokenCount(dispatchTokens),
+                  })
+                : t("figure.tokensUnsynced")
+            }
+          />
+        </dl>
+      </section>
+      <ChartSection
+        fold="stats.interactions"
+        title={t("interactions")}
+        summary={owner + replies}
+      >
+        <TrendChart
+          data={interactions}
+          label={t("interactions")}
+          cacheLabel={t("replies")}
+          freshLabel={t("messages")}
+          emptyLabel={t("empty")}
+          height={CHART_HEIGHT}
+        />
+      </ChartSection>
+      <ChartSection
+        fold="stats.dispatches"
+        title={t("dispatches")}
+        summary={handed}
+      >
+        <TrendChart
+          data={dispatches}
+          label={t("dispatches")}
+          cacheLabel={t("completed")}
+          freshLabel={t("other")}
+          emptyLabel={t("empty")}
+          height={CHART_HEIGHT}
+        />
+      </ChartSection>
+      <ChartSection
+        fold="stats.executors"
+        title={t("executors")}
+        summary={stats.executors.length}
+      >
+        <RankedBars data={executors} emptyLabel={t("empty")} />
+      </ChartSection>
+      <ChartSection
+        fold="stats.tokens"
+        title={t("tokens")}
+        summary={synced ? formatTokenCount(agentTokens + dispatchTokens) : "—"}
+      >
+        <TrendChart
+          data={tokens}
+          label={t("tokens")}
+          cacheLabel={t("dispatchTokens")}
+          freshLabel={t("agentTokens")}
+          emptyLabel={t("empty")}
+          height={CHART_HEIGHT}
+        />
+        <p className="pt-1 text-[0.6875rem] leading-4 text-muted-foreground">
+          {synced
+            ? t("syncedAt", {
+                when: new Date(stats.tokens_synced_at!).toLocaleString(locale),
+              })
+            : t("notSynced")}
+        </p>
+      </ChartSection>
+      <ChartSection fold="stats.usage" title={t("usageCurve")} summary={null}>
+        <UsageCurve stats={stats} />
+      </ChartSection>
+    </div>
+  )
+}
+
+// ── the tabs ────────────────────────────────────────────────────────────────
+
+/** A heading over one of the details' sections. */
+function SectionHead({ children }: { children: ReactNode }) {
+  return (
+    <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+      {children}
+    </h3>
+  )
+}
+
+/** The details: its status, its open matters, its numbers, then "Notify
+ *  me" and the way to its settings. */
+function DetailsTab({
+  snapshot,
+  work,
+  inDrawer,
+}: {
+  snapshot: PersonalAgentSnapshot
+  work: ReturnType<typeof useWork>
+  inDrawer: boolean
+}) {
+  const t = useTranslations("PersonalAgent.detail")
+  const { botId } = usePersonalAgent()
+  const readOnly = snapshot.status.engine !== "here"
+  const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  const entry = usePersonalAgentRoster((s) =>
+    s.entries?.find((e) => e.id === (snapshot.agent?.id ?? botId))
+  )
+  useRoster()
+  const notify = entry?.roster.notify ?? true
+  return (
     <ScrollArea className="h-full">
-      <div className="tu-viz min-w-0 space-y-4 p-3 text-sm">
-        <section className="min-w-0 rounded-lg border border-border/70 bg-muted/40 p-3">
-          <p className="text-[0.8125rem] leading-[1.125rem] font-semibold">
-            {t("range", { days: STATS_DAYS })}
-          </p>
-          <dl className="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-3">
-            <Figure
-              label={t("figure.conversation")}
-              value={String(owner + replies)}
-              sub={t("figure.conversationSub", { owner, replies })}
-            />
-            <Figure
-              label={t("figure.dispatches")}
-              value={String(handed)}
-              sub={t("figure.dispatchesSub", { completed, failed })}
-            />
-            <Figure
-              label={t("figure.completion")}
-              value={
-                handed > 0 ? `${Math.round((completed / handed) * 100)}%` : "—"
-              }
-              sub={t("figure.completionSub")}
-            />
-            <Figure
-              label={t("figure.tokens")}
-              value={
-                synced ? formatTokenCount(agentTokens + dispatchTokens) : "—"
-              }
-              sub={
-                synced
-                  ? t("figure.tokensSub", {
-                      agent: formatTokenCount(agentTokens),
-                      dispatch: formatTokenCount(dispatchTokens),
-                    })
-                  : t("figure.tokensUnsynced")
-              }
-            />
-          </dl>
+      <div className="flex min-w-0 flex-col gap-5 p-3">
+        <section className="flex flex-col gap-2" data-pa-detail="status">
+          <SectionHead>{t("sections.status")}</SectionHead>
+          <StatusBody snapshot={snapshot} />
         </section>
-        <ChartSection
-          fold="stats.interactions"
-          title={t("interactions")}
-          summary={owner + replies}
-        >
-          <TrendChart
-            data={interactions}
-            label={t("interactions")}
-            cacheLabel={t("replies")}
-            freshLabel={t("messages")}
-            emptyLabel={t("empty")}
-            height={CHART_HEIGHT}
-          />
-        </ChartSection>
-        <ChartSection
-          fold="stats.dispatches"
-          title={t("dispatches")}
-          summary={handed}
-        >
-          <TrendChart
-            data={dispatches}
-            label={t("dispatches")}
-            cacheLabel={t("completed")}
-            freshLabel={t("other")}
-            emptyLabel={t("empty")}
-            height={CHART_HEIGHT}
-          />
-        </ChartSection>
-        <ChartSection
-          fold="stats.executors"
-          title={t("executors")}
-          summary={stats.executors.length}
-        >
-          <RankedBars data={executors} emptyLabel={t("empty")} />
-        </ChartSection>
-        <ChartSection
-          fold="stats.tokens"
-          title={t("tokens")}
-          summary={
-            synced ? formatTokenCount(agentTokens + dispatchTokens) : "—"
-          }
-        >
-          <TrendChart
-            data={tokens}
-            label={t("tokens")}
-            cacheLabel={t("dispatchTokens")}
-            freshLabel={t("agentTokens")}
-            emptyLabel={t("empty")}
-            height={CHART_HEIGHT}
-          />
-          <p className="pt-1 text-[0.6875rem] leading-4 text-muted-foreground">
-            {synced
-              ? t("syncedAt", {
-                  when: new Date(stats.tokens_synced_at!).toLocaleString(
-                    locale
-                  ),
-                })
-              : t("notSynced")}
-          </p>
-        </ChartSection>
-        <ChartSection fold="stats.usage" title={t("usageCurve")} summary={null}>
-          <UsageCurve stats={stats} />
-        </ChartSection>
+        <section className="flex flex-col gap-2" data-pa-detail="matters">
+          <SectionHead>{t("sections.matters")}</SectionHead>
+          <WorkBody work={work} inDrawer={inDrawer} />
+        </section>
+        <section className="flex flex-col gap-2" data-pa-detail="data">
+          <SectionHead>{t("sections.data")}</SectionHead>
+          <StatsBody />
+        </section>
+        <section className="flex flex-col gap-3 border-t border-border/60 pt-3">
+          <label className="flex items-center justify-between gap-3">
+            <span className="flex min-w-0 flex-col">
+              <span className="text-sm">{t("notify")}</span>
+              <span className="text-xs text-muted-foreground">
+                {t("notifyHint")}
+              </span>
+            </span>
+            <Switch
+              checked={notify}
+              disabled={readOnly || !entry}
+              onCheckedChange={(on) => {
+                if (!entry) return
+                void personalAgentRosterAct(entry.id, {
+                  act: "notify",
+                  on,
+                }).catch((e) => toast.error(toErrorMessage(e)))
+              }}
+              data-pa-detail-notify
+            />
+          </label>
+          <Button
+            size="sm"
+            variant="outline"
+            className="self-start"
+            onClick={() => openSettings("identity")}
+            data-pa-detail-settings
+          >
+            <Settings2 aria-hidden />
+            {t("settings")}
+          </Button>
+        </section>
+      </div>
+    </ScrollArea>
+  )
+}
+
+type OutputKind = "all" | "tasks" | "reports" | "docs"
+const OUTPUT_KINDS: readonly OutputKind[] = ["all", "tasks", "reports", "docs"]
+
+/** What it made, newest first: the work that ended — a task's card, the
+ *  report of the rest — and the documents it wrote in its working
+ *  directory. */
+function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
+  const t = useTranslations("PersonalAgent.detail.output")
+  const { botId, dispatchVersion } = usePersonalAgent()
+  const now = useNow()
+  const [kind, setKind] = useState<OutputKind>("all")
+  const [docs, setDocs] = useState<PersonalAgentOutputDoc[] | null>(null)
+  const [reading, setReading] = useState<{
+    path: string
+    text: string | null
+  } | null>(null)
+  useEffect(() => {
+    let live = true
+    personalAgentOutputs(botId)
+      .then((list) => {
+        if (live) setDocs(list)
+      })
+      .catch(() => {
+        if (live) setDocs([])
+      })
+    return () => {
+      live = false
+    }
+  }, [botId, dispatchVersion])
+  const open = (path: string) => {
+    setReading({ path, text: null })
+    personalAgentOutputRead(botId, path)
+      .then((text) => setReading({ path, text }))
+      .catch((e) => {
+        setReading(null)
+        toast.error(toErrorMessage(e))
+      })
+  }
+  const ended = work?.ended ?? []
+  const tasks = ended.filter((d) => d.mode === "task")
+  const reports = ended.filter((d) => d.mode !== "task")
+  type Shown =
+    | { at: string; key: string; dispatch: DispatchInfo }
+    | { at: string; key: string; doc: PersonalAgentOutputDoc }
+  const shown: Shown[] = [
+    ...(kind === "all" || kind === "tasks" ? tasks : []).map((d) => ({
+      at: d.finished_at ?? d.updated_at,
+      key: `d${d.id}`,
+      dispatch: d,
+    })),
+    ...(kind === "all" || kind === "reports" ? reports : []).map((d) => ({
+      at: d.finished_at ?? d.updated_at,
+      key: `d${d.id}`,
+      dispatch: d,
+    })),
+    ...(kind === "all" || kind === "docs" ? (docs ?? []) : []).map((doc) => ({
+      at: doc.modified_at,
+      key: `f${doc.path}`,
+      doc,
+    })),
+  ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 flex-wrap gap-1 px-3 pt-3 pb-1">
+        {OUTPUT_KINDS.map((k) => (
+          <Button
+            key={k}
+            size="xs"
+            variant={k === kind ? "secondary" : "ghost"}
+            aria-pressed={k === kind}
+            onClick={() => setKind(k)}
+            data-pa-output-kind={k}
+          >
+            {t(k)}
+          </Button>
+        ))}
+      </div>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col gap-2 p-3 pt-1">
+          {work == null || docs == null ? (
+            <WorkSkeleton />
+          ) : shown.length === 0 ? (
+            <EmptyState icon={TAB_ICON.output} title={t("empty")} hint="" />
+          ) : (
+            shown.map((x) =>
+              "dispatch" in x ? (
+                <DispatchCard key={x.key} d={x.dispatch} now={now} />
+              ) : (
+                <WorkCard
+                  key={x.key}
+                  mark={
+                    <span className="flex size-[1.125rem] items-center justify-center text-muted-foreground">
+                      <FileText className="size-3.5" aria-hidden />
+                    </span>
+                  }
+                  title={x.doc.path}
+                  meta={t("docEdited", {
+                    when: formatRelative(x.doc.modified_at, now),
+                  })}
+                  onOpen={() => open(x.doc.path)}
+                />
+              )
+            )
+          )}
+        </div>
+      </ScrollArea>
+      <Dialog
+        open={reading != null}
+        onOpenChange={(o) => (o ? null : setReading(null))}
+      >
+        <DialogContent className="max-h-[80vh] sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="truncate font-mono text-sm">
+              {reading?.path}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="min-h-0 overflow-y-auto">
+            {reading?.text == null ? (
+              <SyncedSpinner
+                small
+                className="mx-auto my-6 size-4 text-muted-foreground"
+              />
+            ) : /\.(md|markdown)$/i.test(reading.path) ? (
+              <MessageResponse>{reading.text}</MessageResponse>
+            ) : (
+              <pre className="text-xs whitespace-pre-wrap">{reading.text}</pre>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+/** The states a dispatch's conversation streams in. */
+const STREAMING: ReadonlySet<DispatchState> = new Set([
+  "running",
+  "waiting_input",
+])
+
+/** A chat or session dispatch's conversation, live: its connection
+ *  attached (hydrated, forward only) while the preview is shown, as the work
+ *  drawer does. */
+function ConversationPreview({ d }: { d: DispatchInfo }) {
+  const { attachDelegationChild, detachDelegationChild } = useAcpActions()
+  const agentType = d.executor.agent_type
+  const liveId = STREAMING.has(d.state) ? d.connection_id : null
+  const [attachId, setAttachId] = useState<string | null>(liveId)
+  if (liveId !== null && liveId !== attachId) setAttachId(liveId)
+  useEffect(() => {
+    if (attachId == null || agentType == null) return
+    attachDelegationChild({
+      connectionId: attachId,
+      parentConnectionId: attachId,
+      parentToolUseId: `personal-agent-dispatch-${d.id}`,
+      agentType,
+      hydrate: true,
+    })
+    return () => detachDelegationChild(attachId)
+  }, [attachId, agentType, d.id, attachDelegationChild, detachDelegationChild])
+  if (d.conversation_id == null || agentType == null) return null
+  return (
+    <LiveTranscriptView
+      conversationId={d.conversation_id}
+      connectionId={attachId}
+      agentType={agentType}
+    />
+  )
+}
+
+/** A task dispatch's session, live, from the board's task. */
+function TaskPreview({ taskId }: { taskId: number }) {
+  const { tasks } = useTasksView()
+  const task = tasks.find((x) => x.id === taskId) ?? null
+  if (!task || task.conversation_id == null) return null
+  return <TaskTranscriptView task={task} />
+}
+
+/** The work running now, each as a small live view of its session; asleep
+ *  when nothing runs. While the drawer shows one of them, the previews stand
+ *  aside: one surface follows a connection at a time. */
+function WorkspaceTab({ work }: { work: ReturnType<typeof useWork> }) {
+  const t = useTranslations("PersonalAgent.detail.workspace")
+  const openWork = useOpenWork()
+  const { snapshot } = usePersonalAgent()
+  const drawerOpen = usePersonalAgentUi((s) => s.workOpen)
+  const running = (work?.open ?? [])
+    .map((m) => m.dispatch)
+    .filter((d): d is DispatchInfo => d != null && STREAMING.has(d.state))
+  if (work == null) return <WorkSkeleton />
+  if (running.length === 0) {
+    const agent = snapshot?.agent
+    return (
+      <div
+        data-pa-workspace-empty
+        className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center"
+      >
+        <BotAvatar
+          avatar={agent?.avatar ?? null}
+          name={agent?.name ?? ""}
+          size={56}
+          look="sleeping"
+        />
+        <p className="text-sm text-muted-foreground">{t("empty")}</p>
+      </div>
+    )
+  }
+  return (
+    <ScrollArea className="h-full">
+      <div className="flex flex-col gap-3 p-3">
+        {running.map((d) => {
+          const target = workTargetOf(d)
+          return (
+            <section
+              key={d.id}
+              data-pa-workspace-item={d.id}
+              className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-foreground/15 bg-card"
+            >
+              <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+                <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-medium">
+                  #{d.id} {d.title}
+                </span>
+                <DispatchStateChip state={d.state} />
+                {canOpenWork(target) ? (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => openWork(target)}
+                  >
+                    {t("open")}
+                  </Button>
+                ) : null}
+              </div>
+              {drawerOpen ? null : (
+                <div
+                  data-pa-workspace-preview={d.id}
+                  className="pointer-events-none h-56 overflow-hidden text-xs [&_*]:select-none"
+                >
+                  {d.mode === "task" ? (
+                    d.work_task_id != null ? (
+                      <TaskPreview taskId={d.work_task_id} />
+                    ) : null
+                  ) : (
+                    <ConversationPreview d={d} />
+                  )}
+                </div>
+              )}
+            </section>
+          )
+        })}
       </div>
     </ScrollArea>
   )

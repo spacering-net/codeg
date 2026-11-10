@@ -250,6 +250,12 @@
         "appliedToast": "Wallpaper applied",
         "credit": "Images from wallhaven.cc · SFW only"
       }
+    },
+    "paAccent": {
+      "title": "Assistant accent colour",
+      "description": "The colour of your bubbles, card edges and card buttons in an assistant's conversation.",
+      "default": "Default",
+      "bot": "Follow the assistant's colour"
     }
   },
   "SystemSettings": {
@@ -564,6 +570,54 @@
       "zoom_reset": {
         "title": "Reset zoom",
         "description": "Set the window zoom back to 100%"
+      },
+      "switch_assistant_1": {
+        "title": "Switch to Assistant 1",
+        "description": "On the assistants page: open assistant 1 on the roster (1 is the primary)"
+      },
+      "switch_assistant_2": {
+        "title": "Switch to Assistant 2",
+        "description": "On the assistants page: open assistant 2 on the roster (1 is the primary)"
+      },
+      "switch_assistant_3": {
+        "title": "Switch to Assistant 3",
+        "description": "On the assistants page: open assistant 3 on the roster (1 is the primary)"
+      },
+      "switch_assistant_4": {
+        "title": "Switch to Assistant 4",
+        "description": "On the assistants page: open assistant 4 on the roster (1 is the primary)"
+      },
+      "switch_assistant_5": {
+        "title": "Switch to Assistant 5",
+        "description": "On the assistants page: open assistant 5 on the roster (1 is the primary)"
+      },
+      "switch_assistant_6": {
+        "title": "Switch to Assistant 6",
+        "description": "On the assistants page: open assistant 6 on the roster (1 is the primary)"
+      },
+      "switch_assistant_7": {
+        "title": "Switch to Assistant 7",
+        "description": "On the assistants page: open assistant 7 on the roster (1 is the primary)"
+      },
+      "switch_assistant_8": {
+        "title": "Switch to Assistant 8",
+        "description": "On the assistants page: open assistant 8 on the roster (1 is the primary)"
+      },
+      "switch_assistant_9": {
+        "title": "Switch to Assistant 9",
+        "description": "On the assistants page: open assistant 9 on the roster (1 is the primary)"
+      },
+      "prev_assistant": {
+        "title": "Previous Assistant",
+        "description": "On the assistants page: open the assistant above on the roster"
+      },
+      "next_assistant": {
+        "title": "Next Assistant",
+        "description": "On the assistants page: open the assistant below on the roster"
+      },
+      "cycle_assistant": {
+        "title": "Cycle Assistants",
+        "description": "On the assistants page: switch between the assistants opened most recently"
       }
     }
   },
@@ -7734,11 +7788,6 @@
     },
     "aux": {
       "title": "Assistant panel",
-      "tab": {
-        "work": "Work",
-        "status": "Status",
-        "stats": "Stats"
-      },
       "waiting": "{count, plural, one {# thing waits for you} other {# things wait for you}}"
     },
     "status": {
@@ -8133,7 +8182,8 @@
       "unfinished": "Not finished",
       "resend": "Send again",
       "resent": "Sent again",
-      "merged": "Folded into the reply in progress"
+      "merged": "Folded into the reply in progress",
+      "received": "Received"
     },
     "quote": {
       "you": "You",
@@ -8254,10 +8304,6 @@
       "workdirChanged": "The working directory moved to {path}"
     },
     "matters": {
-      "ended": "Ended",
-      "showAll": "Show all {count}",
-      "emptyTitle": "Nothing open",
-      "emptyHint": "Work it hands out, reminders and questions for you show up here.",
       "noneOpen": "Nothing open right now.",
       "origin": "Show the message it came from"
     },
@@ -8418,7 +8464,39 @@
       "roster": {
         "title": "Assistants",
         "add": "New work assistant",
-        "addShort": "New"
+        "search": "Search assistants",
+        "noMatch": "No assistant matches",
+        "pinned": "Pinned",
+        "others": "Others",
+        "hiddenCount": "{count, plural, one {# hidden} other {# hidden}}",
+        "hideHidden": "Hide them",
+        "muted": "Muted",
+        "handWork": "In hand",
+        "awaiting": "Waiting for replies",
+        "nothing": "Nothing in hand",
+        "groupName": "Group name",
+        "newGroupTitle": "New group",
+        "newGroupSave": "Move",
+        "collapse": "Fold {name}",
+        "expand": "Unfold {name}",
+        "menu": {
+          "pin": "Pin",
+          "unpin": "Unpin",
+          "moveTo": "Move to group",
+          "newGroup": "New group…",
+          "noGroup": "No group",
+          "hide": "Hide",
+          "show": "Show",
+          "mute": "Mute",
+          "unmute": "Unmute",
+          "markUnread": "Mark as unread",
+          "markRead": "Mark as read",
+          "notifyOn": "Notify me",
+          "copy": "Copy…",
+          "stopAll": "Stop everything",
+          "delete": "Delete…",
+          "open": "Open"
+        }
       },
       "choice": {
         "other": "Other",
@@ -8481,6 +8559,151 @@
         "workdirCustom": "You picked this directory, so codeg leaves it alone.",
         "cancel": "Cancel",
         "confirm": "Delete"
+      }
+    },
+    "face": {
+      "idle": "idle",
+      "thinking": "thinking",
+      "working": "working",
+      "waiting": "waiting for you",
+      "stuck": "waiting for you a while",
+      "done": "just done",
+      "failed": "something failed",
+      "sleeping": "asleep",
+      "unread": "unread",
+      "stale": "Status unavailable for now",
+      "label": "{name}, {state}",
+      "labelUnread": "{name}, {state}, unread"
+    },
+    "activity": {
+      "think0": "Thinking it through",
+      "think1": "Mulling it over",
+      "think2": "Working out the approach",
+      "work0": "Moving it along",
+      "work1": "Working on it",
+      "work2": "Getting it done",
+      "work3": "Making progress bit by bit",
+      "work4": "Finishing up",
+      "reply": "Writing a reply",
+      "read": "Reading {target}",
+      "readSome": "Reading files",
+      "edit": "Editing {target}",
+      "editSome": "Editing files",
+      "search": "Searching for “{target}”",
+      "searchSome": "Searching",
+      "fetch": "Reading up",
+      "execute": "Running a few commands",
+      "test": "Running the tests",
+      "wait": "Waiting for the result",
+      "commit": "Committing",
+      "plan": "Drafting a plan",
+      "compact": "Tidying up the context",
+      "dispatch": "Handing it to {target}",
+      "dispatchSome": "Handing it out",
+      "followup": "Following up #{id}",
+      "followupSome": "Following up",
+      "message": "Asking {target}",
+      "messageSome": "Asking another assistant",
+      "awaitingReply": "Waiting for {name} to reply",
+      "needsAnswer": "Needs your answer",
+      "needsApproval": "Needs your approval",
+      "workPrefix": "#{id} {title}: {activity}"
+    },
+    "did": {
+      "edit": "Edited {target} +{added} −{removed}",
+      "editPlain": "Edited {target}",
+      "editSome": "Edited files",
+      "test": "Ran the tests, {passed} passed",
+      "testFailed": "Ran the tests, {passed} passed, {failed} failed",
+      "testExit": "Ran the tests, exit code {code}",
+      "testBad": "Ran the tests, they did not pass",
+      "testPlain": "Ran the tests",
+      "execute": "Ran {target}",
+      "executeExit": "Ran {target}, exit code {code}",
+      "executeBad": "Ran {target}, it failed",
+      "executeSome": "Ran a command",
+      "executeSomeBad": "Ran a command, it failed",
+      "read": "Read {target}",
+      "readSome": "Read files",
+      "search": "Searched for “{target}”",
+      "searchHits": "Searched for “{target}”, {hits} found",
+      "searchSome": "Searched",
+      "commit": "Committed: {target}",
+      "commitPlain": "Committed",
+      "dispatch": "Handed to {target}: #{id}",
+      "dispatchPlain": "Handed out #{id}",
+      "dispatchSome": "Handed it out",
+      "followup": "Followed up #{id}",
+      "followupSome": "Followed up",
+      "message": "Sent a message to {target}",
+      "messageSome": "Sent a message",
+      "think": "Thought it over",
+      "reply": "Wrote a reply",
+      "plan": "Drafted a plan",
+      "compact": "Tidied up the context",
+      "fetch": "Read up",
+      "question": "Asked you: {target}",
+      "questionSome": "Asked you",
+      "other": "{target}",
+      "otherPlain": "Took a step"
+    },
+    "needs": {
+      "answer": "Needs your answer: {text}",
+      "approval": "Needs your approval: {text}",
+      "you": "Needs you: {text}",
+      "answerPlain": "Needs your answer",
+      "approvalPlain": "Needs your approval",
+      "youPlain": "Needs you"
+    },
+    "statusLine": {
+      "steps": "This turn's steps",
+      "loading": "Reading the steps…",
+      "empty": "No steps yet",
+      "fold": "Hide the steps",
+      "openWork": "Open the work"
+    },
+    "sending": {
+      "waking": "Waking {name}…",
+      "afterTurn": "Waiting for this turn to finish",
+      "yielding": "Making way"
+    },
+    "pills": {
+      "attention": "{count, plural, one {# item needs you} other {# items need you}}",
+      "newMessages": "New messages"
+    },
+    "detail": {
+      "title": "Details",
+      "open": "Show the details",
+      "close": "Hide the details",
+      "tabs": {
+        "details": "Details",
+        "output": "Output",
+        "workspace": "Workspace"
+      },
+      "sections": {
+        "status": "Status",
+        "matters": "Matters",
+        "data": "Data"
+      },
+      "notify": "Notify me",
+      "notifyHint": "When it finishes something or waits for you",
+      "settings": "Settings",
+      "item": {
+        "done": "Done",
+        "later": "Later",
+        "drop": "Drop"
+      },
+      "output": {
+        "all": "All",
+        "tasks": "Tasks",
+        "reports": "Reports",
+        "docs": "Documents",
+        "empty": "Nothing made yet",
+        "docEdited": "Edited {when}"
+      },
+      "workspace": {
+        "empty": "Nothing running right now",
+        "open": "Open"
       }
     }
   }
