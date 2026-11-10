@@ -13,6 +13,10 @@ pub enum ItemKind {
     Followup,
     #[sea_orm(string_value = "question")]
     Question,
+    /// Waiting for another assistant's answer to a message: closed when it
+    /// comes.
+    #[sea_orm(string_value = "message")]
+    Message,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

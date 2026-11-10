@@ -1895,6 +1895,8 @@ mod tauri_app {
                 crate::commands::personal_agent::personal_agent_save,
                 crate::commands::personal_agent::personal_agent_send,
                 crate::commands::personal_agent::personal_agent_cancel,
+                crate::commands::personal_agent::personal_agent_stop_all,
+                crate::commands::personal_agent::personal_agent_thread,
                 crate::commands::personal_agent::personal_agent_compact,
                 crate::commands::personal_agent::personal_agent_new_session,
                 crate::commands::personal_agent::personal_agent_resume_auto_compact,

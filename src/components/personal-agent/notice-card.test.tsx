@@ -192,3 +192,102 @@ describe("NoticeCard", () => {
     expect((accept as HTMLButtonElement).disabled).toBe(true)
   })
 })
+
+describe("cards about assistants working together", () => {
+  const dev = { id: 2, name: "Dev", avatar: null, kind: "worker" }
+  const review = { id: 3, name: "Review", avatar: null, kind: "worker" }
+
+  it("stops an exchange that went round, and lets the owner decide", async () => {
+    api.personalAgentNoticeAct.mockResolvedValue(card({}))
+    draw(
+      card({
+        notice: "loop",
+        state: "open",
+        thread_id: 12,
+        why: "no_progress",
+        count: 6,
+        bots: [dev, review],
+        refused: "After you.",
+      })
+    )
+    expect(screen.getByText("Exchange stopped · waiting for you")).toBeTruthy()
+    expect(
+      screen.getByText(
+        "Dev and Review went back and forth 6 times with no progress, so codeg stopped them."
+      )
+    ).toBeTruthy()
+    expect(screen.getByText("Held back: “After you.”")).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "See the exchange" })
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Let them go on" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept", null)
+    )
+    fireEvent.click(screen.getByRole("button", { name: "I'll handle it" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(
+        4,
+        "dismiss",
+        null
+      )
+    )
+  })
+
+  it("says a circle was stopped, and once answered offers nothing more", () => {
+    draw(
+      card({
+        notice: "loop",
+        state: "acted",
+        thread_id: 12,
+        why: "cycle",
+        bots: [dev, review],
+      })
+    )
+    expect(screen.getByText("Let them go on")).toBeTruthy()
+    expect(screen.getByText(/went round in a circle/)).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "I'll handle it" })).toBeNull()
+  })
+
+  it("lists what a stop took with it, and stops what it could not on request", async () => {
+    api.personalAgentNoticeAct.mockResolvedValue(card({}))
+    draw(
+      card({
+        notice: "stopped",
+        state: "open",
+        scope: "this",
+        dispatches: [{ id: 5, title: "Fix the login" }],
+        messages: [{ id: 7, to: dev, excerpt: "Fix it." }],
+        handled: [{ id: 8, to: review, excerpt: "Review it." }],
+        also_stopped: [],
+      })
+    )
+    expect(screen.getByText("Stopped, with what it set going")).toBeTruthy()
+    expect(screen.getByText("Fix the login")).toBeTruthy()
+    expect(screen.getByText("To Dev: Fix it.")).toBeTruthy()
+    expect(screen.getByText("Review is on “Review it.”")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Stop Review's too" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "stop:8", null)
+    )
+  })
+
+  it("does not offer to stop again what was stopped from the card", () => {
+    draw(
+      card({
+        notice: "stopped",
+        state: "open",
+        scope: "all",
+        dispatches: [],
+        messages: [],
+        handled: [{ id: 8, to: review, excerpt: "Review it." }],
+        also_stopped: [8],
+      })
+    )
+    expect(screen.getByText("Stopped everything")).toBeTruthy()
+    expect(screen.getByText("Stopped too")).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Stop Review's too" })
+    ).toBeNull()
+  })
+})

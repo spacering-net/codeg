@@ -61,6 +61,8 @@ pub struct EngineHost {
     workers: Mutex<HashMap<i32, Running>>,
     /// The host runs: engines are booted and driven as they are made.
     running: AtomicBool,
+    /// Itself, handed to each engine it makes.
+    me: std::sync::Weak<EngineHost>,
 }
 
 /// Build the host and publish it. Call ONLY where the work-task engine was
@@ -73,7 +75,7 @@ pub fn build(
     bus: Arc<InternalEventBus>,
     data_dir: PathBuf,
 ) -> Option<Arc<EngineHost>> {
-    let host = Arc::new(EngineHost::new(db, manager, emitter, bus, data_dir));
+    let host = EngineHost::new(db, manager, emitter, bus, data_dir);
     HOST.set(host.clone()).ok()?;
     Some(host)
 }
@@ -112,26 +114,30 @@ impl EngineHost {
         emitter: EventEmitter,
         bus: Arc<InternalEventBus>,
         data_dir: PathBuf,
-    ) -> Self {
-        let primary = PersonalAgentEngine::new(
-            AppDatabase {
-                conn: db.conn.clone(),
-            },
-            manager.clone_ref(),
-            emitter.clone(),
-            data_dir.clone(),
-            None,
-        );
-        Self {
-            db,
-            manager,
-            emitter,
-            bus,
-            data_dir,
-            primary,
-            workers: Mutex::new(HashMap::new()),
-            running: AtomicBool::new(false),
-        }
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|me| {
+            let primary = PersonalAgentEngine::new(
+                AppDatabase {
+                    conn: db.conn.clone(),
+                },
+                manager.clone_ref(),
+                emitter.clone(),
+                data_dir.clone(),
+                None,
+                me.clone(),
+            );
+            Self {
+                db,
+                manager,
+                emitter,
+                bus,
+                data_dir,
+                primary,
+                workers: Mutex::new(HashMap::new()),
+                running: AtomicBool::new(false),
+                me: me.clone(),
+            }
+        })
     }
 
     /// A host for tests: not published, its engines booted as they are made
@@ -149,7 +155,7 @@ impl EngineHost {
             data_dir,
         );
         host.running.store(true, Ordering::SeqCst);
-        Arc::new(host)
+        host
     }
 
     /// Boot every assistant on the roster and start their loops — those
@@ -261,6 +267,7 @@ impl EngineHost {
             self.emitter.clone(),
             self.data_dir.clone(),
             Some(id),
+            self.me.clone(),
         );
         // Before the host runs, the engine waits unbooted: `start` boots
         // and drives it with the rest. In tests nothing is driven: they

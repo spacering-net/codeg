@@ -132,6 +132,37 @@ function Resend({ ids }: { ids: number[] }) {
   )
 }
 
+/** A request of this turn's that could not be filed under one input: the
+ *  inputs the turn was working on, and where each came from. */
+function RequestInputs({ rows }: { rows: ReplyItem["attached"] }) {
+  const t = useTranslations("PersonalAgent.reply")
+  const pending = rows.find(
+    (r) =>
+      (r.kind === "question" || r.kind === "permission") &&
+      r.data?.state === "pending" &&
+      Array.isArray(r.data?.inputs)
+  )
+  if (!pending) return null
+  const list = (pending.data?.inputs as unknown[])
+    .filter(
+      (x): x is Record<string, unknown> => x != null && typeof x === "object"
+    )
+    .map((x) => {
+      const ref = typeof x.ref === "string" ? x.ref : ""
+      const bot =
+        x.origin_bot && typeof x.origin_bot === "object"
+          ? (x.origin_bot as Record<string, unknown>)
+          : null
+      const name = typeof bot?.name === "string" ? bot.name : null
+      return name ? `${ref} (${name})` : ref
+    })
+  return (
+    <p className="mt-1.5 text-xs break-words text-muted-foreground">
+      {t("requestInputs", { list: list.join(", ") })}
+    </p>
+  )
+}
+
 export function ReplyBubble({ item }: { item: ReplyItem }) {
   const scope = usePageScope()
   const { liveReplies } = usePersonalAgent()
@@ -192,6 +223,7 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
             />
           </div>
         ) : null}
+        {liveTurn ? <RequestInputs rows={item.attached} /> : null}
         {view.answered.map((line) => (
           <Answered key={line.rowId} line={line} />
         ))}

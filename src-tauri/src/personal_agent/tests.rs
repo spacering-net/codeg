@@ -361,6 +361,7 @@ async fn the_owner_writing_in_a_dispatched_conversation_takes_it_over() {
             prompt: "Look".into(),
             origin_batch_id: None,
             on_done: None,
+            lineage: Default::default(),
         },
     )
     .await
@@ -504,6 +505,7 @@ async fn session_dispatch(engine: &PersonalAgentEngine, state: DispatchState, co
             prompt: "Look".into(),
             origin_batch_id: None,
             on_done: None,
+            lineage: Default::default(),
         },
     )
     .await
@@ -580,6 +582,7 @@ async fn a_put_back_event_lists_what_the_interrupted_turn_dispatched() {
             prompt: "Fix it".into(),
             origin_batch_id: Some(batch.id),
             on_done: None,
+            lineage: Default::default(),
         },
     )
     .await
@@ -1994,6 +1997,7 @@ async fn live_session_dispatch(
             prompt: "Look".into(),
             origin_batch_id: None,
             on_done: None,
+            lineage: Default::default(),
         },
     )
     .await
@@ -2778,6 +2782,7 @@ async fn a_task_follow_up_is_settled_by_the_claim_record() {
             prompt: "fix".into(),
             origin_batch_id: None,
             on_done: None,
+            lineage: Default::default(),
         },
     )
     .await
@@ -3279,6 +3284,7 @@ async fn two_workers_keep_their_records_apart() {
             prompt: "do".into(),
             origin_batch_id: None,
             on_done: None,
+            lineage: Default::default(),
         },
     )
     .await
@@ -4090,4 +4096,592 @@ async fn settling_a_turn_waits_for_the_delivery_in_flight() {
     assert!(!engine.turn_in_flight_for_test().await);
     let pending = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert_eq!(pending.iter().map(|e| e.id).collect::<Vec<_>>(), vec![event]);
+}
+
+// ── 1.4: assistants working with each other ─────────────────────────────────
+
+use crate::db::entities::personal_agent_message::MessageState;
+use crate::db::entities::personal_agent_thread::ThreadState;
+use crate::db::service::personal_agent_message_service as msvc;
+
+async fn say(engine: &Arc<PersonalAgentEngine>, args: serde_json::Value) -> super::tools::ToolOutcome {
+    super::tools::call_for_test(engine, "bot_message", args).await
+}
+
+fn sent_id(out: &super::tools::ToolOutcome) -> i32 {
+    assert!(out.ok, "{}", out.text);
+    out.data["message_id"].as_i64().unwrap() as i32
+}
+
+async fn message(engine: &PersonalAgentEngine, id: i32) -> crate::db::entities::personal_agent_message::Model {
+    msvc::get_message(&engine.db.conn, id).await.unwrap().unwrap()
+}
+
+async fn rows_of(engine: &PersonalAgentEngine, bot: i32, kind: TimelineKind) -> Vec<crate::db::entities::personal_agent_timeline::Model> {
+    let (rows, _) = svc::page(&engine.db.conn, bot, None, 200).await.unwrap();
+    rows.into_iter().filter(|r| r.kind == kind).collect()
+}
+
+/// A delivery of `engine` on `conn` carrying `owners` and `events`, on
+/// record as running.
+async fn turn_with(engine: &PersonalAgentEngine, seg: i32, conn: &str, owners: &[i32], events: &[i32]) -> i32 {
+    let bot = engine.bot().await;
+    let batch = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap();
+    svc::move_owner_rows(
+        &engine.db.conn,
+        owners,
+        &[OwnerStatus::Queued],
+        OwnerStatus::Delivered,
+        Some(batch.id),
+        Some(seg),
+        svc::ReadMark::Read,
+    )
+    .await
+    .unwrap();
+    svc::mark_events_delivered(&engine.db.conn, events, batch.id).await.unwrap();
+    engine
+        .begin_turn_for_test(conn, seg, batch.id, BatchKind::Delivery, false, false)
+        .await;
+    batch.id
+}
+
+async fn pending_message_events(engine: &PersonalAgentEngine, bot: i32) -> Vec<crate::db::entities::personal_agent_event::Model> {
+    svc::pending_events(&engine.db.conn, bot)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == msvc::MESSAGE_EVENT)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_message_wakes_its_receiver_and_its_answer_closes_the_wait() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let p = primary.bot().await;
+    let id = sent_id(&say(&primary, json!({ "to": w.to_string(), "text": "Fix the cold-start white screen." })).await);
+    let m = message(&primary, id).await;
+    assert_eq!(m.state, MessageState::Queued);
+    assert_eq!(m.thread_id, Some(id), "a new request starts its thread");
+    assert!(m.wants_reply);
+    assert_eq!((m.from_bot_id, m.to_bot_id), (p, w));
+    assert_eq!(m.origin_bot_id, Some(p), "nobody started it: it starts at the sender");
+    // The receiver has one thing to wake for.
+    let queued = pending_message_events(&primary, w).await;
+    assert_eq!(queued.len(), 1);
+    assert!(queued[0].wake);
+    assert_eq!(queued[0].thread_id, Some(id));
+    // A line on each side, naming the other.
+    let out = rows_of(&primary, p, TimelineKind::Exchange).await;
+    assert_eq!(out.len(), 1);
+    assert_eq!(data_of(&out[0])["direction"], "out");
+    assert_eq!(data_of(&out[0])["peer"]["id"], w);
+    let inn = rows_of(&primary, w, TimelineKind::Exchange).await;
+    assert_eq!(inn.len(), 1);
+    assert_eq!(data_of(&inn[0])["direction"], "in");
+    assert_eq!(data_of(&inn[0])["peer"]["id"], p);
+    assert_eq!(inn[0].event_id, Some(queued[0].id));
+    // The sender waits for the answer.
+    let waiting = svc::list_items(&primary.db.conn, p, &[ItemStatus::Waiting], 10).await.unwrap();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].kind, ItemKind::Message);
+
+    // The answer goes back to whoever wrote, on the same thread.
+    let out = say(&worker, json!({ "reply_to": format!("m{id}"), "text": "Fixed: PR #12." })).await;
+    assert!(out.text.contains("to the primary assistant"), "an unnamed primary is called by its role: {}", out.text);
+    let back = sent_id(&out);
+    let answer = message(&primary, back).await;
+    assert_eq!((answer.from_bot_id, answer.to_bot_id), (w, p));
+    assert_eq!(answer.thread_id, Some(id));
+    assert!(!answer.wants_reply, "an answer wants none unless it says so");
+    assert_eq!(message(&primary, id).await.state, MessageState::Replied);
+    let item = svc::get_item(&primary.db.conn, waiting[0].id).await.unwrap().unwrap();
+    assert_eq!(item.status, ItemStatus::Done, "the wait is over");
+    assert_eq!(pending_message_events(&primary, p).await.len(), 1, "the answer wakes the sender");
+    assert!(
+        svc::list_items(&worker.db.conn, w, &[ItemStatus::Waiting], 10).await.unwrap().is_empty(),
+        "an answer that wants none leaves the replier nothing to wait for"
+    );
+}
+
+#[tokio::test]
+async fn a_delivery_carries_a_message_as_the_other_assistants_words() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let id = sent_id(
+        &say(&primary, json!({ "to": "Dev", "text": "FYI: the release is Friday.", "wants_reply": false })).await,
+    );
+    let seg = open_segment(&worker).await;
+    let (mut rx, state) = live_connection(&worker, seg, "w-1").await;
+    worker.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    for part in [
+        format!("<codeg-message id=\"m{id}\" from=\""),
+        "role=\"primary\"".to_string(),
+        format!("thread=\"t{id}\""),
+        "wants-reply=\"no\"".to_string(),
+        "FYI: the release is Friday.</codeg-message>".to_string(),
+        "not the owner's".to_string(),
+    ] {
+        assert!(prompt.contains(&part), "{part} in {prompt}");
+    }
+    assert!(!prompt.contains("<codeg-events>"), "a message is not news of work");
+    let m = message(&worker, id).await;
+    assert_eq!(m.state, MessageState::Delivered);
+    let batch = svc::get_batch(&worker.db.conn, m.delivered_batch_id.unwrap()).await.unwrap().unwrap();
+    assert_eq!(
+        batch.trigger,
+        Some(crate::db::entities::personal_agent_batch::BatchTrigger::Message)
+    );
+    for line in msvc::lines_of_message(&worker.db.conn, id).await.unwrap() {
+        assert_eq!(data_of(&line)["state"], "delivered");
+    }
+    start_prompt(&state, Some(&token)).await;
+    emit(&worker, &state, "w-1", text("Noted."), true).await;
+    emit(&worker, &state, "w-1", turn_complete("end_turn"), true).await;
+    assert_eq!(message(&worker, id).await.state, MessageState::Closed, "it wanted no answer");
+}
+
+#[tokio::test]
+async fn a_message_to_nobody_or_to_a_deleted_assistant_is_refused() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    assert!(!say(&primary, json!({ "to": "9999", "text": "hi" })).await.ok);
+    assert!(!say(&primary, json!({ "to": "Nobody", "text": "hi" })).await.ok);
+    let me = primary.bot().await.to_string();
+    assert!(!say(&primary, json!({ "to": me, "text": "hi" })).await.ok, "not to itself");
+    assert!(svc::delete_worker(&primary.db.conn, w).await.unwrap());
+    let out = say(&primary, json!({ "to": w.to_string(), "text": "hi" })).await;
+    assert!(!out.ok);
+    assert!(out.text.contains("deleted"), "{}", out.text);
+}
+
+#[tokio::test]
+async fn bot_list_shows_every_assistant_and_who_is_asking() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let out = super::tools::call_for_test(&primary, "bot_list", json!({})).await;
+    assert!(out.ok);
+    let rows = out.data["assistants"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["you"], true);
+    assert_eq!(rows[1]["id"], w);
+    assert!(out.text.contains("(you)"), "{}", out.text);
+}
+
+#[tokio::test]
+async fn a_message_is_sent_once_across_resends_of_the_owners_message() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let p = primary.bot().await;
+    let seg = open_segment(&primary).await;
+    // #58: the owner's message, in a turn that writes to Dev, then breaks.
+    let first = primary.send_owner_message("Have Dev fix it".into(), Vec::new(), None).await.unwrap();
+    let b1 = turn_with(&primary, seg, "pa-1", &[first.id], &[]).await;
+    let id = sent_id(&say(&primary, json!({ "to": "Dev", "text": "Fix the bug." })).await);
+    assert_eq!(message(&primary, id).await.for_input.as_deref(), Some(format!("owner:{}", first.id).as_str()));
+    svc::move_owner_rows(&primary.db.conn, &[first.id], &[OwnerStatus::Delivered], OwnerStatus::Interrupted, None, None, svc::ReadMark::Keep)
+        .await
+        .unwrap();
+    primary.clear_turn_for_test().await;
+    // Resent twice: #62 from #58, #65 from #62; each turn inherits the last.
+    // Each resend's turn inherits the ledger of every turn before it, as a
+    // delivery's `ledger_from` does.
+    let mut scope = vec![b1];
+    let mut last_row = first.id;
+    for _ in 0..2 {
+        let again = primary.resend(last_row).await.unwrap();
+        let b = turn_with(&primary, seg, "pa-1", &[again.id], &[]).await;
+        scope.push(b);
+        primary.set_ledger_scope_for_test(scope.clone()).await;
+        // Named by its new number or not at all: the same logical input.
+        let out = say(&primary, json!({ "to": "Dev", "text": "fix  the BUG." })).await;
+        assert!(out.ok, "{}", out.text);
+        assert_eq!(out.data["earlier"], true, "{}", out.text);
+        assert_eq!(out.data["message_id"], id);
+        svc::move_owner_rows(&primary.db.conn, &[again.id], &[OwnerStatus::Delivered], OwnerStatus::Interrupted, None, None, svc::ReadMark::Keep)
+            .await
+            .unwrap();
+        primary.clear_turn_for_test().await;
+        last_row = again.id;
+    }
+    let all = msvc::live_messages_from(&primary.db.conn, p).await.unwrap();
+    assert_eq!(all.len(), 1, "sent once");
+    assert_eq!(pending_message_events(&primary, w).await.len(), 1);
+}
+
+#[tokio::test]
+async fn several_sources_in_one_turn_need_for() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let p = primary.bot().await;
+    // The worker writes to the primary; the owner writes too; both ride in
+    // one turn of the primary's.
+    let from_dev = sent_id(&say(&worker, json!({ "to": p.to_string(), "text": "Can you check the logs?" })).await);
+    let owner = primary.send_owner_message("And the release notes?".into(), Vec::new(), None).await.unwrap();
+    let seg = open_segment(&primary).await;
+    let events: Vec<i32> = pending_message_events(&primary, p).await.iter().map(|e| e.id).collect();
+    turn_with(&primary, seg, "pa-1", &[owner.id], &events).await;
+    let out = say(&primary, json!({ "to": "Dev", "text": "On it." })).await;
+    assert!(!out.ok, "two sources, none named");
+    assert!(out.text.contains(&format!("#{}", owner.id)), "{}", out.text);
+    assert!(out.text.contains(&format!("m{from_dev}")), "{}", out.text);
+    // Named: it inherits that input's chain and thread.
+    let id = sent_id(&say(&primary, json!({ "to": "Dev", "text": "Checking.", "for": format!("m{from_dev}") })).await);
+    let m = message(&primary, id).await;
+    assert_eq!(m.thread_id, Some(from_dev), "on the thread of what it is for");
+    assert_eq!(m.for_input.as_deref(), Some(format!("message:{from_dev}").as_str()));
+    // An answer needs no `for`: it is for what it answers.
+    assert!(say(&primary, json!({ "reply_to": format!("m{from_dev}"), "text": "Logs are clean." })).await.ok);
+    // The delivery itself said so.
+    let inputs = primary.batch_inputs(primary.current_batch().await.unwrap()).await;
+    assert!(super::engine::PersonalAgentEngine::sources_note(&inputs).is_some());
+}
+
+#[tokio::test]
+async fn two_assistants_going_round_with_no_progress_are_stopped_and_can_go_on() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let p = primary.bot().await;
+    // Three rounds: six messages pass.
+    let first = sent_id(&say(&primary, json!({ "to": "Dev", "text": "Shall we?" })).await);
+    let mut last = first;
+    for i in 0..5 {
+        let (from, to_reply) = if i % 2 == 0 { (&worker, last) } else { (&primary, last) };
+        last = sent_id(&say(from, json!({ "reply_to": format!("m{to_reply}"), "text": format!("After you ({i})."), "wants_reply": true })).await);
+    }
+    // The seventh — the primary's turn again: stopped.
+    let out = say(&primary, json!({ "reply_to": format!("m{last}"), "text": "No, after you." })).await;
+    assert!(!out.ok);
+    assert!(out.text.contains("no progress"), "{}", out.text);
+    let thread = msvc::get_thread(&primary.db.conn, first).await.unwrap().unwrap();
+    assert_eq!(thread.state, ThreadState::Looped);
+    // Nothing more goes on it, from either.
+    let earlier = message(&primary, last).await.reply_to.unwrap();
+    assert!(!say(&worker, json!({ "reply_to": format!("m{earlier}"), "text": "Hm?" })).await.ok);
+    // The card is in the conversation the chain started in: the primary's.
+    let cards = rows_of(&primary, p, TimelineKind::Notice).await;
+    let card = cards.iter().find(|c| data_of(c)["notice"] == "loop").expect("a loop card");
+    assert_eq!(data_of(card)["why"], "no_progress");
+    assert_eq!(data_of(card)["count"], 6);
+    let notice_id: i32 = card.ref_id.as_deref().unwrap().parse().unwrap();
+    // Let them go on: three rounds more.
+    primary.act_on_notice(notice_id, "accept").await.unwrap();
+    let thread = msvc::get_thread(&primary.db.conn, first).await.unwrap().unwrap();
+    assert_eq!(thread.state, ThreadState::Open);
+    assert!(say(&primary, json!({ "reply_to": format!("m{last}"), "text": "Fine, me first." })).await.ok);
+    // The assistant whose message was refused hears it, and is woken.
+    assert!(svc::pending_events(&primary.db.conn, p)
+        .await
+        .unwrap()
+        .iter()
+        .any(|e| e.kind == "loop" && e.wake));
+    assert!(primary.act_on_notice(notice_id, "dismiss").await.is_err(), "answered already");
+}
+
+#[tokio::test]
+async fn progress_starts_the_count_over() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let first = sent_id(&say(&primary, json!({ "to": "Dev", "text": "Shall we?" })).await);
+    let back = sent_id(&say(&worker, json!({ "reply_to": format!("m{first}"), "text": "Yes.", "wants_reply": true })).await);
+    let t = msvc::get_thread(&primary.db.conn, first).await.unwrap().unwrap();
+    assert_eq!(msvc::thread_counts(&t).values().sum::<u32>(), 2);
+    // The owner speaks to the worker: progress on its threads.
+    worker.owner_spoke().await;
+    let t = msvc::get_thread(&primary.db.conn, first).await.unwrap().unwrap();
+    assert!(msvc::thread_counts(&t).is_empty());
+    assert!(t.last_progress_at.is_some());
+    let _ = back;
+}
+
+#[tokio::test]
+async fn a_request_that_closes_a_circle_is_stopped() {
+    let (host, w1, _tmp) = hosted().await;
+    let primary = host.primary();
+    let w2 = worker_row(&primary, "Review").await;
+    let dev = host.engine_for(Some(w1)).await.unwrap();
+    let review = host.engine_for(Some(w2)).await.unwrap();
+    let p = primary.bot().await;
+    // A asks B; B, for that, asks C; C asks A — who waits on this very
+    // exchange for B.
+    let a_to_b = sent_id(&say(&primary, json!({ "to": "Dev", "text": "Fix it." })).await);
+    let b_to_c = sent_id(&say(&dev, json!({ "to": "Review", "text": "Review my fix.", "for": format!("m{a_to_b}") })).await);
+    let out = say(&review, json!({ "to": p.to_string(), "text": "What did the owner want?", "for": format!("m{b_to_c}") })).await;
+    assert!(!out.ok);
+    assert!(out.text.contains("circle"), "{}", out.text);
+    let t = msvc::get_thread(&primary.db.conn, a_to_b).await.unwrap().unwrap();
+    assert_eq!(t.state, ThreadState::Looped);
+    let card = rows_of(&primary, p, TimelineKind::Notice)
+        .await
+        .into_iter()
+        .find(|c| data_of(c)["notice"] == "loop")
+        .expect("a loop card");
+    assert_eq!(data_of(&card)["why"], "cycle");
+}
+
+#[tokio::test]
+async fn asking_back_the_one_who_asked_is_no_circle() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let p = primary.bot().await;
+    let ask = sent_id(&say(&primary, json!({ "to": "Dev", "text": "Fix it." })).await);
+    // The worker asks the primary something new on the same matter: the
+    // primary waits for the worker, the very one asking.
+    let out = say(&worker, json!({ "to": p.to_string(), "text": "Which branch?", "for": format!("m{ask}") })).await;
+    assert!(out.ok, "{}", out.text);
+}
+
+#[tokio::test]
+async fn the_owners_stop_takes_the_turns_unstarted_messages_with_it() {
+    let (host, w1, _tmp) = hosted().await;
+    let primary = host.primary();
+    let w2 = worker_row(&primary, "Review").await;
+    let review = host.engine_for(Some(w2)).await.unwrap();
+    let p = primary.bot().await;
+    let seg = open_segment(&primary).await;
+    let owner = primary.send_owner_message("Get it fixed and reviewed".into(), Vec::new(), None).await.unwrap();
+    let batch = turn_with(&primary, seg, "pa-1", &[owner.id], &[]).await;
+    let to_dev = sent_id(&say(&primary, json!({ "to": w1.to_string(), "text": "Fix it." })).await);
+    let to_review = sent_id(&say(&primary, json!({ "to": w2.to_string(), "text": "Review it." })).await);
+    // A dispatch the turn made, still running.
+    let d = session_dispatch(&primary, DispatchState::Running, "exec-1").await;
+    {
+        use crate::db::entities::personal_agent_dispatch as de;
+        de::Entity::update_many()
+            .col_expr(de::Column::OriginBatchId, sea_orm::sea_query::Expr::value(batch))
+            .filter(de::Column::Id.eq(d))
+            .exec(&primary.db.conn)
+            .await
+            .unwrap();
+    }
+    // Review has started on its message already.
+    let seg_r = open_segment(&review).await;
+    let ev: Vec<i32> = pending_message_events(&review, w2).await.iter().map(|e| e.id).collect();
+    turn_with(&review, seg_r, "rv-1", &[], &ev).await;
+    review.messages_taken(&[message(&review, to_review).await], review.current_batch().await.unwrap()).await;
+
+    primary.stop().await.unwrap();
+
+    // Dev had not started: its message is taken back, its wake gone.
+    assert_eq!(message(&primary, to_dev).await.state, MessageState::Stopped);
+    assert!(pending_message_events(&primary, w1).await.is_empty());
+    for line in msvc::lines_of_message(&primary.db.conn, to_dev).await.unwrap() {
+        assert_eq!(data_of(&line)["state"], "stopped");
+    }
+    // Review is on it: not stopped, offered.
+    assert_eq!(message(&primary, to_review).await.state, MessageState::Delivered);
+    // The dispatch is canceled, and its late news wakes nobody.
+    assert_eq!(dispatch_state(&primary, d).await.state, DispatchState::Canceled);
+    assert!(svc::pending_events(&primary.db.conn, p)
+        .await
+        .unwrap()
+        .iter()
+        .all(|e| e.kind != "dispatch_status"));
+    let card = rows_of(&primary, p, TimelineKind::Notice)
+        .await
+        .into_iter()
+        .find(|c| data_of(c)["notice"] == "stopped")
+        .expect("a stop card");
+    let data = data_of(&card);
+    assert_eq!(data["messages"][0]["id"], to_dev);
+    assert_eq!(data["handled"][0]["id"], to_review);
+    assert_eq!(data["dispatches"][0]["id"], d);
+    // [Also stop Review's]: Review's turn carrying it stops.
+    let notice_id: i32 = card.ref_id.as_deref().unwrap().parse().unwrap();
+    let row = primary.act_on_notice(notice_id, &format!("stop:{to_review}")).await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["also_stopped"][0], to_review);
+    assert!(primary.act_on_notice(notice_id, "stop:99999").await.is_err(), "only what the card lists");
+}
+
+#[tokio::test]
+async fn stop_everything_takes_all_the_assistant_has_going() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let a = sent_id(&say(&primary, json!({ "to": w.to_string(), "text": "One." })).await);
+    let b = sent_id(&say(&primary, json!({ "to": w.to_string(), "text": "Two." })).await);
+    let d = session_dispatch(&primary, DispatchState::Running, "exec-2").await;
+    primary.stop_all().await.unwrap();
+    assert_eq!(message(&primary, a).await.state, MessageState::Stopped);
+    assert_eq!(message(&primary, b).await.state, MessageState::Stopped);
+    assert_eq!(dispatch_state(&primary, d).await.state, DispatchState::Canceled);
+    let waiting = svc::list_items(&primary.db.conn, primary.bot().await, &[ItemStatus::Waiting], 10).await.unwrap();
+    assert!(waiting.is_empty(), "nothing to wait for any more");
+}
+
+fn question(id: &str) -> crate::acp::question::QuestionSpec {
+    crate::acp::question::QuestionSpec {
+        id: id.into(),
+        question: "Which branch?".into(),
+        header: "Branch".into(),
+        multi_select: false,
+        options: Vec::new(),
+        is_secret: false,
+    }
+}
+
+#[tokio::test]
+async fn a_question_asked_for_another_assistants_request_shows_where_it_began() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let p = primary.bot().await;
+    // The owner asked the primary; the primary wrote to Dev for it.
+    let seg_p = open_segment(&primary).await;
+    let owner = primary.send_owner_message("Get the login fixed".into(), Vec::new(), None).await.unwrap();
+    turn_with(&primary, seg_p, "pa-1", &[owner.id], &[]).await;
+    let id = sent_id(&say(&primary, json!({ "to": "Dev", "text": "Fix the login." })).await);
+    // Dev, working on it, asks the owner.
+    let seg_w = open_segment(&worker).await;
+    let ev: Vec<i32> = pending_message_events(&worker, w).await.iter().map(|e| e.id).collect();
+    turn_with(&worker, seg_w, "w-1", &[], &ev).await;
+    worker
+        .feed_for_test("w-1", 1, AcpEvent::QuestionRequest { question_id: "q1".into(), questions: vec![question("a")] })
+        .await;
+    let own = svc::row_by_ref(&worker.db.conn, w, TimelineKind::Question, "q1").await.unwrap().unwrap();
+    assert_eq!(data_of(&own)["for"], format!("m{id}"));
+    let mirror = svc::row_by_ref(&primary.db.conn, p, TimelineKind::Question, "q1")
+        .await
+        .unwrap()
+        .expect("the question shows where the owner asked");
+    assert_eq!(data_of(&mirror)["mirror_of"]["bot_id"], w);
+    assert_eq!(data_of(&mirror)["for_row"], owner.id);
+    assert_eq!(data_of(&mirror)["from_bot"]["id"], w);
+    // Answering there answers here.
+    let source = primary.mirror_source(TimelineKind::Question, "q1").await.expect("its asker");
+    assert!(Arc::ptr_eq(&source, &worker));
+    // Settled here: settled there.
+    worker
+        .feed_for_test("w-1", 2, AcpEvent::QuestionResolved { question_id: "q1".into() })
+        .await;
+    let mirror = svc::row_by_ref(&primary.db.conn, p, TimelineKind::Question, "q1").await.unwrap().unwrap();
+    assert_eq!(data_of(&mirror)["state"], "resolved");
+}
+
+#[tokio::test]
+async fn a_question_of_a_turn_with_several_sources_lists_them_and_mirrors_nothing() {
+    let (host, w1, _tmp) = hosted().await;
+    let primary = host.primary();
+    let w2 = worker_row(&primary, "Review").await;
+    let dev = host.engine_for(Some(w1)).await.unwrap();
+    let review = host.engine_for(Some(w2)).await.unwrap();
+    // Two requests, from two assistants, in one turn of Review's.
+    sent_id(&say(&primary, json!({ "to": "Review", "text": "Review #1." })).await);
+    sent_id(&say(&dev, json!({ "to": "Review", "text": "Review #2." })).await);
+    let seg = open_segment(&review).await;
+    let ev: Vec<i32> = pending_message_events(&review, w2).await.iter().map(|e| e.id).collect();
+    assert_eq!(ev.len(), 2);
+    turn_with(&review, seg, "rv-1", &[], &ev).await;
+    review.note_ask_for("rv-1", None).await;
+    review
+        .feed_for_test("rv-1", 1, AcpEvent::QuestionRequest { question_id: "q2".into(), questions: vec![question("a")] })
+        .await;
+    let own = svc::row_by_ref(&review.db.conn, w2, TimelineKind::Question, "q2").await.unwrap().unwrap();
+    assert_eq!(data_of(&own)["inputs"].as_array().unwrap().len(), 2);
+    assert!(data_of(&own).get("mirrors").is_none());
+    for bot in [primary.bot().await, w1] {
+        assert!(svc::row_by_ref(&review.db.conn, bot, TimelineKind::Question, "q2").await.unwrap().is_none());
+    }
+    // Named: it shows where that one began.
+    review.note_ask_for("rv-1", Some(format!("m{}", 1))).await;
+    review
+        .feed_for_test("rv-1", 2, AcpEvent::QuestionRequest { question_id: "q3".into(), questions: vec![question("b")] })
+        .await;
+    assert!(svc::row_by_ref(&review.db.conn, primary.bot().await, TimelineKind::Question, "q3")
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn the_thread_view_is_only_for_the_assistants_on_it() {
+    let (host, w1, _tmp) = hosted().await;
+    let primary = host.primary();
+    let w2 = worker_row(&primary, "Review").await;
+    let id = sent_id(&say(&primary, json!({ "to": w1.to_string(), "text": "Fix it." })).await);
+    let view = crate::commands::personal_agent::personal_agent_thread_core(&primary.db, Some(w1), id)
+        .await
+        .unwrap();
+    assert_eq!(view.messages.len(), 1);
+    assert_eq!(view.bots.len(), 2);
+    assert!(crate::commands::personal_agent::personal_agent_thread_core(&primary.db, Some(w2), id)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn a_message_taken_back_while_its_receiver_starts_never_reaches_it() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let stopped = sent_id(&say(&primary, json!({ "to": "Dev", "text": "Fix it." })).await);
+    let kept = sent_id(&say(&primary, json!({ "to": "Dev", "text": "And note the cause." })).await);
+    let seg = open_segment(&worker).await;
+    let (mut rx, _state) = live_connection(&worker, seg, "w-1").await;
+    // The receiver read both as waiting; then the sender's stop took the
+    // first one back before the delivery claimed them.
+    let read = svc::pending_events(&worker.db.conn, w).await.unwrap();
+    assert_eq!(read.len(), 2);
+    assert!(msvc::withdraw_message(&primary.db.conn, &message(&primary, stopped).await, MessageState::Stopped)
+        .await
+        .unwrap());
+    worker.deliver_read_earlier_for_test(read).await.unwrap();
+    assert!(rx.try_recv().is_err(), "nothing went out built from what was read");
+    assert!(worker.pump_again_for_test(), "it is built again");
+    assert_eq!(message(&worker, kept).await.state, MessageState::Queued, "put back as it was");
+    // Built again: only what is still the receiver's.
+    worker.pump().await;
+    let (prompt, _) = take_prompt(&mut rx);
+    assert!(prompt.contains(&format!("id=\"m{kept}\"")), "{prompt}");
+    assert!(!prompt.contains(&format!("id=\"m{stopped}\"")), "{prompt}");
+}
+
+#[tokio::test]
+async fn a_dispatch_stopped_while_its_agent_starts_is_stopped_where_it_runs_now() {
+    let (host, _w, _tmp) = hosted().await;
+    let primary = host.primary();
+    // Claimed and starting: no connection yet when the stop reads it.
+    let d = session_dispatch(&primary, DispatchState::Running, "exec-9").await;
+    svc::update_dispatch(&primary.db.conn, d, None, DispatchWrite { connection_id: Some(None), ..Default::default() })
+        .await
+        .unwrap();
+    let read = dispatch_state(&primary, d).await;
+    // The launch attaches its connection meanwhile.
+    let mut rx = primary
+        .manager
+        .insert_test_connection_live("exec-9", AgentType::Codex, None, EventEmitter::Noop)
+        .await;
+    svc::update_dispatch(&primary.db.conn, d, None, DispatchWrite { connection_id: Some(Some("exec-9".into())), ..Default::default() })
+        .await
+        .unwrap();
+    assert!(primary.stop_dispatch_for_test(&read).await);
+    assert!(
+        matches!(rx.try_recv(), Ok(ConnectionCommand::Cancel)),
+        "the turn on the connection it has now is stopped"
+    );
+    // And a launch that checks now does not send the work.
+    assert!(primary.was_stopped(d).await);
+}
+
+#[tokio::test]
+async fn the_owners_stop_takes_a_follow_up_the_turn_sent() {
+    let (host, _w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let seg = open_segment(&primary).await;
+    // Dispatched by an earlier turn; this turn sent it a follow-up.
+    let d = session_dispatch(&primary, DispatchState::Running, "exec-3").await;
+    let b = turn_with(&primary, seg, "pa-1", &[], &[]).await;
+    svc::update_dispatch(&primary.db.conn, d, None, DispatchWrite { source_batch_id: Some(Some(b)), ..Default::default() })
+        .await
+        .unwrap();
+    primary.stop().await.unwrap();
+    assert_eq!(dispatch_state(&primary, d).await.state, DispatchState::Canceled);
 }

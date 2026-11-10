@@ -7923,7 +7923,10 @@
       "compactHint": "Compact the session's context now",
       "stopCompaction": "Stop compacting",
       "stopReply": "Stop the reply",
-      "newSession": "Start a new session…"
+      "newSession": "Start a new session…",
+      "stopAll": "Stop everything",
+      "stopAllHint": "Stop the reply, the work it handed out, and the messages nobody has started on",
+      "stoppedAll": "Stopped everything this assistant had going"
     },
     "newSession": {
       "title": "Start a new session?",
@@ -8018,7 +8021,8 @@
         "error": "it ran into an error",
         "restart": "codeg restarted",
         "unknown": "it stopped unexpectedly"
-      }
+      },
+      "requestInputs": "This turn was working on several things: {list}"
     },
     "dispatchCard": {
       "continue": "Continue: {title}",
@@ -8104,7 +8108,50 @@
         "acted": "Sent again",
         "dismissed": "Left as it was",
         "resolved": "It did go through"
+      },
+      "loop": {
+        "open": "Exchange stopped · waiting for you",
+        "noProgress": "{a} and {b} went back and forth {count} times with no progress, so codeg stopped them.",
+        "cycle": "{a} wrote to {b}, which was itself waiting on this exchange: it went round in a circle, so codeg stopped it.",
+        "refused": "Held back: “{text}”",
+        "look": "See the exchange",
+        "goOn": "Let them go on",
+        "mine": "I'll handle it",
+        "continued": "Let them go on",
+        "takenOver": "Left to you"
+      },
+      "stopped": {
+        "this": "Stopped, with what it set going",
+        "all": "Stopped everything",
+        "work": "{count, plural, one {Work stopped} other {# pieces of work stopped}}",
+        "messages": "{count, plural, one {Message taken back} other {# messages taken back}}",
+        "messageTo": "To {name}: {text}",
+        "notStopped": "Already being worked on, so not stopped:",
+        "onIt": "{name} is on “{text}”",
+        "stopToo": "Stop {name}'s too",
+        "alsoStopped": "Stopped too"
       }
+    },
+    "exchange": {
+      "sentTo": "Sent a message to <peer></peer>",
+      "from": "Message from <peer></peer>",
+      "exchanged": "Exchanged {count, plural, one {# message} other {# messages}} with {names}",
+      "state": {
+        "stopped": "taken back",
+        "looped": "held: went round",
+        "canceled": "canceled"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "sheetHint": "Every message the two assistants wrote each other on this exchange.",
+      "unavailable": "Could not load the exchange: {error}"
+    },
+    "mirror": {
+      "question": "{name} asks you",
+      "permission": "{name} asks for your permission",
+      "answered": "Answered",
+      "skipped": "Skipped",
+      "withdrawn": "No longer asked",
+      "resolved": "Settled"
     }
   }
 }

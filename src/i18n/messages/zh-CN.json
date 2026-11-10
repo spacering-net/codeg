@@ -7923,7 +7923,10 @@
       "compactHint": "现在就压缩会话的上下文",
       "stopCompaction": "停止整理",
       "stopReply": "停止回复",
-      "newSession": "开启新会话…"
+      "newSession": "开启新会话…",
+      "stopAll": "全部停下",
+      "stopAllHint": "停下回复、它派出的活，以及对方还没开始处理的消息",
+      "stoppedAll": "这个助手手上的事已全部停下"
     },
     "newSession": {
       "title": "开启新会话？",
@@ -8018,7 +8021,8 @@
         "error": "出错了",
         "restart": "codeg 重启了",
         "unknown": "意外停止了"
-      }
+      },
+      "requestInputs": "这一回合同时在处理几件事：{list}"
     },
     "dispatchCard": {
       "continue": "继续：{title}",
@@ -8104,7 +8108,50 @@
         "acted": "已重发",
         "dismissed": "不再处理",
         "resolved": "确认已送达"
+      },
+      "loop": {
+        "open": "往来已停下 · 等你处理",
+        "noProgress": "{a} 和 {b} 来回 {count} 条都没有进展，codeg 让它们停下了。",
+        "cycle": "{a} 发给了 {b}，而 {b} 自己也在这条往来上等回信：绕成了一圈，codeg 让它停下了。",
+        "refused": "没发出去的：“{text}”",
+        "look": "查看往来",
+        "goOn": "让它们继续",
+        "mine": "我来处理",
+        "continued": "已让它们继续",
+        "takenOver": "交给你了"
+      },
+      "stopped": {
+        "this": "已停下，连同它带起的事",
+        "all": "已全部停下",
+        "work": "停下了 {count} 件活",
+        "messages": "收回了 {count} 条消息",
+        "messageTo": "给 {name}：{text}",
+        "notStopped": "对方已经在处理，没有停：",
+        "onIt": "{name} 已经在看“{text}”",
+        "stopToo": "也停下 {name} 的这一件",
+        "alsoStopped": "也停下了"
       }
+    },
+    "exchange": {
+      "sentTo": "已发消息给 <peer></peer>",
+      "from": "消息来自 <peer></peer>",
+      "exchanged": "与 {names} 往来 {count} 条消息",
+      "state": {
+        "stopped": "已收回",
+        "looped": "因循环停下",
+        "canceled": "已取消"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "sheetHint": "这两个助手在这条往来线上互相写的全部消息。",
+      "unavailable": "往来记录读不出来：{error}"
+    },
+    "mirror": {
+      "question": "{name} 问你",
+      "permission": "{name} 请你批准",
+      "answered": "已回答",
+      "skipped": "已跳过",
+      "withdrawn": "已不再需要",
+      "resolved": "已处理"
     }
   }
 }

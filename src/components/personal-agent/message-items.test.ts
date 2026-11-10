@@ -48,9 +48,69 @@ function shape(items: MessageItem[]): string[] {
         return `notice:${i.row.id}`
       case "reply":
         return `reply:${i.anchor.id}[${i.attached.map((a) => a.id).join(",")}]${i.row ? "" : "!"}`
+      case "exchange":
+        return `exchange:${i.rows.map((r) => r.id).join(",")}`
+      case "mirror":
+        return `mirror:${i.row.id}`
     }
   })
 }
+
+describe("lines between assistants", () => {
+  const line = (id: number, patch: Partial<TimelineRow>) =>
+    row(id, "exchange", {
+      data: { direction: "out", peer: { id: 2, name: "Dev" } },
+      ...patch,
+    })
+
+  it("puts what a turn wrote to others right before its conclusion", () => {
+    const items = buildMessageItems([
+      row(1, "owner", { batch_id: 7, status: "answered" }),
+      row(2, "reply", { batch_id: 7, data: { state: "done" } }),
+      line(3, { batch_id: 7 }),
+      line(4, { batch_id: 7 }),
+    ])
+    expect(shape(items)).toEqual([
+      "time",
+      "owner:1",
+      "exchange:3,4",
+      "reply:2[]",
+    ])
+    // The reply starts a run under the line, as under a time line.
+    const reply = items[3] as Extract<MessageItem, { kind: "reply" }>
+    expect(reply.gap).toBe("side")
+    // What is above the line closes its run.
+    const owner = items[1] as Extract<MessageItem, { kind: "owner" }>
+    expect(owner.tail).toBe(true)
+  })
+
+  it("draws a run of lines as one, and a line on its own in its place", () => {
+    const items = buildMessageItems([
+      row(1, "reply", { batch_id: 7, data: { state: "done" } }),
+      line(2, { data: { direction: "in", peer: { id: 2, name: "Dev" } } }),
+      line(3, { data: { direction: "in", peer: { id: 3, name: "Review" } } }),
+      row(4, "reply", { batch_id: 8, data: { state: "done" } }),
+    ])
+    expect(shape(items)).toEqual([
+      "time",
+      "reply:1[]",
+      "exchange:2,3",
+      "reply:4[]",
+    ])
+    expect(drawnRowIds(items).has(3)).toBe(true)
+    expect(newLineIndex(items, 3)).toBe(2)
+  })
+
+  it("shows another assistant's request on its own", () => {
+    const items = buildMessageItems([
+      row(1, "owner", { batch_id: 7, status: "answered" }),
+      row(2, "question", {
+        data: { state: "pending", mirror_of: { bot_id: 2, row_id: 9 } },
+      }),
+    ])
+    expect(shape(items)).toEqual(["time", "owner:1", "mirror:2"])
+  })
+})
 
 describe("buildMessageItems", () => {
   it("draws a native card on its own, on the assistants' side, as new", () => {

@@ -485,8 +485,78 @@ pub async fn personal_agent_send_core(
         .map_err(refused)
 }
 
+/// The conversation's [Stop]: the turn, and what it set going that nobody
+/// started on yet (4.10).
 pub async fn personal_agent_cancel_core(bot_id: Option<i32>) -> Result<(), AppCommandError> {
-    engine(bot_id).await?.cancel_turn().await.map_err(refused)
+    engine(bot_id).await?.stop().await.map_err(refused)
+}
+
+/// "Stop everything": all the assistant has going.
+pub async fn personal_agent_stop_all_core(bot_id: Option<i32>) -> Result<(), AppCommandError> {
+    engine(bot_id).await?.stop_all().await.map_err(refused)
+}
+
+/// A thread between assistants, as one of them sees it: refused for a
+/// thread the assistant is not on. Read-only, so a page anywhere reads it.
+pub async fn personal_agent_thread_core(
+    db: &AppDatabase,
+    bot_id: Option<i32>,
+    thread_id: i32,
+) -> Result<crate::models::personal_agent::ThreadView, AppCommandError> {
+    use crate::db::service::personal_agent_message_service as msvc;
+    let bot = resolve_bot(db, bot_id).await?;
+    let thread = msvc::get_thread(&db.conn, thread_id)
+        .await?
+        .ok_or_else(|| refused(format!("no thread t{thread_id}")))?;
+    let messages = msvc::messages_of_thread(&db.conn, thread_id).await?;
+    if !messages.iter().any(|m| m.from_bot_id == bot || m.to_bot_id == bot) {
+        return Err(refused(format!("t{thread_id} is not this assistant's")));
+    }
+    let mut ids: Vec<i32> = messages
+        .iter()
+        .flat_map(|m| [m.from_bot_id, m.to_bot_id])
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut bots = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(b) = svc::get_bot_any(&db.conn, id).await? {
+            bots.push(crate::personal_agent::messages::bot_face(&b));
+        }
+    }
+    let dispatches = svc::dispatches_of_thread(&db.conn, thread_id)
+        .await?
+        .into_iter()
+        .map(|d| crate::models::personal_agent::ThreadDispatch {
+            id: d.id,
+            bot_id: d.bot_id,
+            title: d.title,
+            mode: d.mode,
+            state: d.state,
+            work_task_id: d.work_task_id,
+            conversation_id: d.conversation_id,
+            created_at: d.created_at,
+        })
+        .collect();
+    Ok(crate::models::personal_agent::ThreadView {
+        id: thread.id,
+        state: thread.state,
+        messages: messages
+            .into_iter()
+            .map(|m| crate::models::personal_agent::ThreadMessage {
+                id: m.id,
+                from_bot_id: m.from_bot_id,
+                to_bot_id: m.to_bot_id,
+                body: m.body,
+                reply_to: m.reply_to,
+                wants_reply: m.wants_reply,
+                state: m.state,
+                created_at: m.created_at,
+            })
+            .collect(),
+        bots,
+        dispatches,
+    })
 }
 
 pub async fn personal_agent_compact_core(bot_id: Option<i32>) -> Result<(), AppCommandError> {
@@ -732,6 +802,24 @@ pub async fn personal_agent_cancel(
     bot_id: Option<i32>,
 ) -> Result<(), AppCommandError> {
     personal_agent_cancel_core(bot_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_stop_all(
+    bot_id: Option<i32>,
+) -> Result<(), AppCommandError> {
+    personal_agent_stop_all_core(bot_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_thread(
+    db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
+    thread_id: i32,
+) -> Result<crate::models::personal_agent::ThreadView, AppCommandError> {
+    personal_agent_thread_core(&db, bot_id, thread_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

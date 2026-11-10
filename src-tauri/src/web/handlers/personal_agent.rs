@@ -205,6 +205,30 @@ pub async fn personal_agent_cancel(
     Ok(Json(()))
 }
 
+pub async fn personal_agent_stop_all(
+    Json(params): Json<BotParams>,
+) -> Result<Json<()>, AppCommandError> {
+    pa::personal_agent_stop_all_core(params.bot_id).await?;
+    Ok(Json(()))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub thread_id: i32,
+}
+
+pub async fn personal_agent_thread(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ThreadParams>,
+) -> Result<Json<crate::models::personal_agent::ThreadView>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_thread_core(&state.db, params.bot_id, params.thread_id).await?,
+    ))
+}
+
 pub async fn personal_agent_compact(
     Json(params): Json<BotParams>,
 ) -> Result<Json<()>, AppCommandError> {

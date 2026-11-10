@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 
 use super::dispatch::{executor_of, DispatchAuth, DispatchRequest, FollowupAuth};
 use super::engine::{enum_str, PersonalAgentEngine};
+use super::messages::{MessageCall, Unnamed};
 use crate::db::entities::folder::FolderKind;
 use crate::db::entities::personal_agent_dispatch::DispatchMode;
 use crate::db::entities::personal_agent_item::{ItemKind, ItemStatus, WaitsFor};
@@ -61,6 +62,16 @@ fn string(args: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// An input or message reference, written as text (`"#58"`, `"m12"`) or as
+/// a bare number.
+fn reference(args: &Value, key: &str) -> Option<String> {
+    match args.get(key)? {
+        Value::Number(n) => Some(n.to_string()),
+        Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        _ => None,
+    }
 }
 
 fn as_i32(v: i64) -> Option<i32> {
@@ -191,10 +202,19 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 report: report || (mode != DispatchMode::Task && args.get("deliverable").is_some()),
                 on_done: string(&args, "on_done"),
             };
-            let valid = match engine.validate_dispatch(&req).await {
+            let mut valid = match engine.validate_dispatch(&req).await {
                 Ok(v) => v,
                 Err(e) => return ToolOutcome::refused(e),
             };
+            // Which input it is for: what it inherits (4.11).
+            let input = match engine
+                .input_for(reference(&args, "for").as_deref(), Unnamed::Refuse)
+                .await
+            {
+                Ok(i) => i,
+                Err(e) => return ToolOutcome::refused(e),
+            };
+            valid.lineage = engine.lineage_of(input.as_ref()).await;
             // In a delivery the ledger keeps a re-delivered turn from making
             // the same dispatch twice; it decides nothing else.
             let auth = match engine.ledger_batch().await {
@@ -211,6 +231,13 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 return ToolOutcome::refused("`dispatch_id` is required");
             };
             let message = string(&args, "message").unwrap_or_default();
+            // A follow-up stays with the dispatch's own chain; a `for` it
+            // names must still be one of this assistant's inputs.
+            if let Some(named) = reference(&args, "for") {
+                if let Err(e) = engine.input_for(Some(&named), Unnamed::Refuse).await {
+                    return ToolOutcome::refused(e);
+                }
+            }
             let auth = match engine.ledger_batch().await {
                 Some((batch_id, scope)) => FollowupAuth::Ledgered { batch_id, scope },
                 None => FollowupAuth::Direct,
@@ -220,6 +247,50 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 .await
             {
                 Ok(text) => ToolOutcome::ok(text, json!({ "dispatch_id": id })),
+                Err(e) => ToolOutcome::refused(e),
+            }
+        }
+        "bot_list" => {
+            let (text, data) = engine.roster_text().await;
+            ToolOutcome::ok(text, data)
+        }
+        "bot_message" => {
+            let call = MessageCall {
+                to: reference(&args, "to"),
+                text: string(&args, "text").unwrap_or_default(),
+                reply_to: reference(&args, "reply_to"),
+                wants_reply: args.get("wants_reply").and_then(|v| v.as_bool()),
+                for_input: reference(&args, "for"),
+            };
+            match engine.send_message(call).await {
+                Ok(sent) => {
+                    let m = &sent.message;
+                    let thread = m.thread_id.map(|t| format!(" on thread t{t}")).unwrap_or_default();
+                    let text = if sent.earlier {
+                        format!(
+                            "Already sent: the turn this delivery repeats sent this same message, \
+                             m{} to {}{thread}; nothing new was sent.",
+                            m.id, sent.to_name
+                        )
+                    } else if m.wants_reply {
+                        format!(
+                            "Sent m{} to {}{thread}. It is theirs to see through now; their \
+                             answer reaches you as a <codeg-message>. You can end your turn.",
+                            m.id, sent.to_name
+                        )
+                    } else {
+                        format!("Sent m{} to {}{thread}.", m.id, sent.to_name)
+                    };
+                    ToolOutcome::ok(
+                        text,
+                        json!({
+                            "message_id": m.id,
+                            "thread_id": m.thread_id,
+                            "state": m.state,
+                            "earlier": sent.earlier,
+                        }),
+                    )
+                }
                 Err(e) => ToolOutcome::refused(e),
             }
         }

@@ -329,6 +329,45 @@ pub struct DispatchExecutorSnapshot {
     pub instructions: String,
 }
 
+/// One message of a thread between assistants, as the exchange sheet shows
+/// it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ThreadMessage {
+    pub id: i32,
+    pub from_bot_id: i32,
+    pub to_bot_id: i32,
+    pub body: String,
+    pub reply_to: Option<i32>,
+    pub wants_reply: bool,
+    pub state: crate::db::entities::personal_agent_message::MessageState,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A dispatch made on a thread, as the exchange sheet links it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ThreadDispatch {
+    pub id: i32,
+    pub bot_id: Option<i32>,
+    pub title: String,
+    pub mode: DispatchMode,
+    pub state: DispatchState,
+    pub work_task_id: Option<i32>,
+    pub conversation_id: Option<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A thread between assistants: every message on it, the assistants on it,
+/// and the work handed out on it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ThreadView {
+    pub id: i32,
+    pub state: crate::db::entities::personal_agent_thread::ThreadState,
+    pub messages: Vec<ThreadMessage>,
+    /// `{ id, name, avatar, kind }` of each assistant on it.
+    pub bots: Vec<serde_json::Value>,
+    pub dispatches: Vec<ThreadDispatch>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DispatchInfo {
     pub id: i32,

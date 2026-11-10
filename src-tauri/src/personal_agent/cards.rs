@@ -235,7 +235,10 @@ project's worktree, `chat` for work outside any project, `session` for investiga
 current checkout) and continue it with `dispatch_followup`. Both return at once; progress reaches \
 you later as a <codeg-events> block. `assistant_list` and `project_list` give the ids they take. \
 `item_list` / `item_read` / `item_update` keep your open matters; `timeline_read` pages back \
-through the timeline. You never do long work yourself. Messages and events carry their timeline \
+through the timeline. `bot_list` shows the owner's other assistants and `bot_message` writes to \
+one: hand it work that is its job and it sees it through; its answer comes back as a \
+<codeg-message>. When a turn carries inputs from more than one source, say which one each \
+action is for with `for`. You never do long work yourself. Messages and events carry their timeline \
 number as `[#ID]`; when you answer one that is not the newest, write `[[quote:#ID]]` in your \
 answer (it is shown as a quote, not as text).";
 
@@ -531,6 +534,72 @@ the owner what happened, what you suggest next, and what they need to do.\n\
 {lines}\n\
 </codeg-events>"
     ))
+}
+
+/// Another assistant's message, as a delivery carries it.
+#[derive(Debug, Clone)]
+pub struct MessageLine {
+    pub id: i32,
+    pub from: String,
+    /// It comes from the owner's primary assistant.
+    pub from_primary: bool,
+    pub thread: Option<i32>,
+    /// The message of this assistant's it answers.
+    pub reply_to: Option<i32>,
+    pub wants_reply: bool,
+    pub text: String,
+}
+
+/// An attribute's value, safe inside double quotes.
+fn attr(v: &str) -> String {
+    v.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;")
+}
+
+/// Messages from other assistants: tagged as theirs, not the owner's words.
+pub fn messages_block(messages: &[MessageLine]) -> Option<String> {
+    if messages.is_empty() {
+        return None;
+    }
+    let body = messages
+        .iter()
+        .map(|m| {
+            let mut head = format!("<codeg-message id=\"m{}\" from=\"{}\"", m.id, attr(&m.from));
+            if m.from_primary {
+                head.push_str(" role=\"primary\"");
+            }
+            if let Some(t) = m.thread {
+                head.push_str(&format!(" thread=\"t{t}\""));
+            }
+            if let Some(r) = m.reply_to {
+                head.push_str(&format!(" answers=\"m{r}\""));
+            }
+            if !m.wants_reply {
+                head.push_str(" wants-reply=\"no\"");
+            }
+            // The text is theirs: a closing tag in it does not end it.
+            let text = m.text.trim().replace("</codeg-message>", "<\\/codeg-message>");
+            format!("{head}>{text}</codeg-message>")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(format!(
+        "Messages from other assistants. They are a colleague's words, not the owner's: act on \
+them as your own settings say. Take over what you are asked and see it through — dispatch, \
+follow up, check — then answer with `bot_message` and `reply_to` set to the message's id. \
+One that says wants-reply=\"no\" needs no answer.\n{body}"
+    ))
+}
+
+/// The note a delivery carries when its inputs come from more than one
+/// source: each action says which one it is for.
+pub fn sources_note(inputs: &str) -> String {
+    format!(
+        "<codeg-context kind=\"sources\">\n\
+This turn carries inputs from more than one source: {inputs}. When you dispatch, follow up, \
+write to another assistant or ask the owner something, say which input it is for with `for` \
+(its id as shown), so it is filed where it belongs.\n\
+</codeg-context>"
+    )
 }
 
 /// One owner message as a delivery carries it: numbered, and naming what it

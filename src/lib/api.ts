@@ -43,6 +43,7 @@ import type {
   TimelineChanges,
   TimelineCursor,
   TimelinePage,
+  ThreadView,
   TimelineRow,
   Automation,
   AutomationRun,
@@ -2573,6 +2574,23 @@ export async function personalAgentCancel(bot?: number | null): Promise<void> {
   return getTransport().call("personal_agent_cancel", { botId: bot ?? null })
 }
 
+/** "Stop everything": all the assistant has going — its turn, the work it
+ *  dispatched, the messages nobody started on. */
+export async function personalAgentStopAll(bot?: number | null): Promise<void> {
+  return getTransport().call("personal_agent_stop_all", { botId: bot ?? null })
+}
+
+/** A thread between assistants, as assistant `bot` sees it. */
+export async function personalAgentThread(
+  threadId: number,
+  bot?: number | null
+): Promise<ThreadView> {
+  return getTransport().call("personal_agent_thread", {
+    threadId,
+    botId: bot ?? null,
+  })
+}
+
 export async function personalAgentCompact(bot?: number | null): Promise<void> {
   return getTransport().call("personal_agent_compact", { botId: bot ?? null })
 }
@@ -2626,7 +2644,8 @@ export async function personalAgentMarkSeen(
  *  is still on its way. */
 export async function personalAgentNoticeAct(
   noticeId: number,
-  action: "accept" | "dismiss",
+  /** `accept` / `dismiss`; a stop card's `stop:<message id>`. */
+  action: "accept" | "dismiss" | `stop:${number}`,
   bot?: number | null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_notice_act", {

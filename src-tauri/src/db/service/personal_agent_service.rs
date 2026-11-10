@@ -64,6 +64,12 @@ pub async fn get_bot(conn: &DatabaseConnection, id: i32) -> Result<Option<agent:
         .await?)
 }
 
+/// An assistant by id, deleted or not (a message names its sender even
+/// after it is gone).
+pub async fn get_bot_any(conn: &DatabaseConnection, id: i32) -> Result<Option<agent::Model>, DbError> {
+    Ok(agent::Entity::find_by_id(id).one(conn).await?)
+}
+
 /// Every assistant not deleted: the primary first, then the roster's order.
 pub async fn list_bots(conn: &DatabaseConnection) -> Result<Vec<agent::Model>, DbError> {
     let mut bots = agent::Entity::find()
@@ -717,7 +723,7 @@ impl NewRow {
         }
     }
 
-    fn into_active(self, bot: i32, now: DateTime<Utc>) -> timeline::ActiveModel {
+    pub(crate) fn into_active(self, bot: i32, now: DateTime<Utc>) -> timeline::ActiveModel {
         timeline::ActiveModel {
             id: NotSet,
             segment_id: Set(self.segment_id),
@@ -1436,6 +1442,30 @@ pub async fn mark_events_delivered(
     delivered_event_ids(conn, batch_id).await
 }
 
+/// Every event batch `batch_id` was handed, whatever came of it since.
+pub async fn events_of_batch(
+    conn: &DatabaseConnection,
+    batch_id: i32,
+) -> Result<Vec<event::Model>, DbError> {
+    Ok(event::Entity::find()
+        .filter(event::Column::BatchId.eq(batch_id))
+        .order_by_asc(event::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// An event of this assistant's, by id: `None` for one of another's.
+pub async fn get_event_of(
+    conn: &DatabaseConnection,
+    bot: i32,
+    id: i32,
+) -> Result<Option<event::Model>, DbError> {
+    Ok(event::Entity::find_by_id(id)
+        .filter(event::Column::BotId.eq(bot))
+        .one(conn)
+        .await?)
+}
+
 /// The events a batch holds now.
 async fn delivered_event_ids(conn: &DatabaseConnection, batch_id: i32) -> Result<Vec<i32>, DbError> {
     Ok(event::Entity::find()
@@ -1569,9 +1599,9 @@ pub async fn insert_event_with_row(
         created_at: Set(now),
         updated_at: Set(now),
         bot_id: Set(Some(bot)),
-        origin_bot_id: Set(None),
-        origin_row_id: Set(None),
-        thread_id: Set(None),
+        origin_bot_id: Set(event.lineage.origin_bot_id),
+        origin_row_id: Set(event.lineage.origin_row_id),
+        thread_id: Set(event.lineage.thread_id),
     }
     .insert(&txn)
     .await;
@@ -1601,6 +1631,8 @@ pub struct NewEvent {
     pub summary: String,
     pub payload: Option<serde_json::Value>,
     pub wake: bool,
+    /// The chain it belongs to: a dispatch's news carries the dispatch's.
+    pub lineage: Lineage,
 }
 
 pub async fn count_pending_events(conn: &DatabaseConnection, bot: i32) -> Result<u64, DbError> {
@@ -1734,6 +1766,21 @@ pub struct NewDispatch {
     pub prompt: String,
     pub origin_batch_id: Option<i32>,
     pub on_done: Option<String>,
+    /// Where the chain it belongs to started, the thread it is on, and the
+    /// input it was dispatched for.
+    pub lineage: Lineage,
+}
+
+/// Where an input's chain started — an assistant and its timeline row (an
+/// owner's message), or the assistant alone (nobody started it) — the thread
+/// between assistants it is on, and the input an action was taken for
+/// (`<kind>:<id>`, the logical input: a resent message's first copy).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Lineage {
+    pub origin_bot_id: Option<i32>,
+    pub origin_row_id: Option<i32>,
+    pub thread_id: Option<i32>,
+    pub for_input: Option<String>,
 }
 
 pub async fn create_dispatch(
@@ -1749,10 +1796,10 @@ fn dispatch_active(new: NewDispatch) -> dispatch::ActiveModel {
     dispatch::ActiveModel {
         id: NotSet,
         bot_id: Set(Some(new.bot_id)),
-        origin_bot_id: Set(None),
-        origin_row_id: Set(None),
-        thread_id: Set(None),
-        for_input: Set(None),
+        origin_bot_id: Set(new.lineage.origin_bot_id),
+        origin_row_id: Set(new.lineage.origin_row_id),
+        thread_id: Set(new.lineage.thread_id),
+        for_input: Set(new.lineage.for_input),
         mode: Set(new.mode),
         executor_assistant_id: Set(new.executor_assistant_id),
         executor_snapshot: Set(new.executor_snapshot_json),
@@ -1826,7 +1873,7 @@ pub struct CardSettle {
     pub row_data: serde_json::Value,
 }
 
-fn is_unique_violation(e: &sea_orm::DbErr) -> bool {
+pub(crate) fn is_unique_violation(e: &sea_orm::DbErr) -> bool {
     matches!(
         e.sql_err(),
         Some(sea_orm::SqlErr::UniqueConstraintViolation(_))
@@ -2421,6 +2468,35 @@ pub async fn dispatches_since(
     Ok(dispatch::Entity::find()
         .filter(dispatch::Column::BotId.eq(bot))
         .filter(dispatch::Column::CreatedAt.gte(since))
+        .order_by_asc(dispatch::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// The dispatches batch `batch_id` made or continued (a follow-up it sent
+/// moves `source_batch_id` to it).
+pub async fn dispatches_run_by_batch(
+    conn: &DatabaseConnection,
+    batch_id: i32,
+) -> Result<Vec<dispatch::Model>, DbError> {
+    Ok(dispatch::Entity::find()
+        .filter(
+            Condition::any()
+                .add(dispatch::Column::OriginBatchId.eq(batch_id))
+                .add(dispatch::Column::SourceBatchId.eq(batch_id)),
+        )
+        .order_by_asc(dispatch::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// The dispatches made on thread `thread_id`, by any assistant.
+pub async fn dispatches_of_thread(
+    conn: &DatabaseConnection,
+    thread_id: i32,
+) -> Result<Vec<dispatch::Model>, DbError> {
+    Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::ThreadId.eq(thread_id))
         .order_by_asc(dispatch::Column::Id)
         .all(conn)
         .await?)

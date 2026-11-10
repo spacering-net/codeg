@@ -33,6 +33,10 @@ pub enum TimelineKind {
     /// say; its state is a `personal_agent_notice` row (`ref_id`).
     #[sea_orm(string_value = "notice")]
     Notice,
+    /// A line codeg writes for a message between assistants: one sent
+    /// ("sent a message to …") or one received ("message from …").
+    #[sea_orm(string_value = "exchange")]
+    Exchange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

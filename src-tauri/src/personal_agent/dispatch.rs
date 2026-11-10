@@ -40,6 +40,8 @@ use crate::models::{AgentType, AssistantRunSnapshot, FollowUpIntent, WorkTaskCon
 
 /// Longest result excerpt kept on a dispatch, in characters.
 const EXCERPT_CHARS: usize = 2_000;
+/// What a dispatch the owner stopped records as its error (4.10).
+pub const STOPPED_NOTE: &str = "stopped by the owner";
 /// Longest title.
 pub const MAX_TITLE_CHARS: usize = 120;
 /// Longest prompt or follow-up message.
@@ -67,6 +69,9 @@ pub struct ValidDispatch {
     pub prompt: String,
     pub report: bool,
     pub on_done: Option<String>,
+    /// The input it is dispatched for, and the chain and thread it inherits
+    /// from that input (`for`, 4.11); empty when nothing started it.
+    pub lineage: svc::Lineage,
 }
 
 impl ValidDispatch {
@@ -347,6 +352,7 @@ impl PersonalAgentEngine {
             prompt,
             report: req.report,
             on_done,
+            lineage: svc::Lineage::default(),
         })
     }
 
@@ -367,7 +373,9 @@ impl PersonalAgentEngine {
             prompt,
             report,
             on_done,
+            lineage,
         } = v;
+        let thread = lineage.thread_id;
         let request = DispatchRequest {
             mode,
             assistant_id: snapshot.assistant_id,
@@ -407,6 +415,7 @@ impl PersonalAgentEngine {
             prompt: prompt.clone(),
             origin_batch_id,
             on_done: on_done.clone(),
+            lineage,
         };
         let payload = serde_json::to_value(&request).ok();
         let row = match &auth {
@@ -482,6 +491,10 @@ impl PersonalAgentEngine {
             card.map(|c| c.id),
         )
         .await;
+        // Work handed out is progress on the thread it is for (4.9).
+        if let Some(t) = thread {
+            self.thread_progress(t).await;
+        }
         self.emit(PersonalAgentChange::Dispatch { id: row.id });
         let engine = self.clone();
         let id = row.id;
@@ -601,7 +614,17 @@ impl PersonalAgentEngine {
         )
         .await;
         let engine = crate::work_task::engine().ok_or("the task engine is not running")?;
+        // Stopped while the task was being made (before it had one to
+        // cancel): the task goes too, unstarted (4.10).
+        if self.was_stopped(d.id).await {
+            let _ = engine.cancel(task.id, None).await;
+            return Ok(());
+        }
         engine.start(task.id).await?;
+        if self.was_stopped(d.id).await {
+            let _ = engine.cancel(task.id, None).await;
+            return Ok(());
+        }
         self.sync_task_dispatch(d.id).await;
         Ok(())
     }
@@ -863,6 +886,13 @@ impl PersonalAgentEngine {
         )
         .await;
         self.emit(PersonalAgentChange::Dispatch { id: d.id });
+        // Stopped while its agent started: it never gets the work. A stop
+        // from here on finds the connection on the row and stops the turn.
+        if self.was_stopped(d.id).await {
+            self.state.lock().await.dispatch_conns.remove(&conn_id);
+            let _ = self.manager.disconnect(&conn_id).await;
+            return Ok(());
+        }
         let suffix = crate::acp::agent_mentions::render_assistant_brief(
             &executor.name,
             &executor.instructions,
@@ -889,7 +919,22 @@ impl PersonalAgentEngine {
             let _ = self.manager.disconnect(&conn_id).await;
             return Err(e.to_string());
         }
+        // A stop that came between the check above and the send found an
+        // idle connection: the turn the send started is stopped here.
+        if self.was_stopped(d.id).await {
+            let _ = self.manager.cancel(&self.db.conn, &conn_id).await;
+        }
         Ok(())
+    }
+
+    /// The owner stopped dispatch `id` (4.10): canceled with the stop's
+    /// note.
+    pub(super) async fn was_stopped(&self, id: i32) -> bool {
+        svc::get_dispatch(&self.db.conn, id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|d| d.state == DispatchState::Canceled && d.error.as_deref() == Some(STOPPED_NOTE))
     }
 
     // ── progress ────────────────────────────────────────────────────────────
@@ -1121,6 +1166,33 @@ impl PersonalAgentEngine {
             "conversation_folder_id": conversation_folder_id,
             "folder_id": d.folder_id,
         }));
+        // The owner stopped it: the card says so, and nobody is woken — the
+        // stop card already told the owner, and what it stopped is not the
+        // assistant's to pick up again (4.10).
+        if cause == "stopped" {
+            match svc::insert_row(&self.db.conn, self.bot().await, card).await {
+                Ok(c) => self.emit_rows(vec![svc::to_row(c)]),
+                Err(e) => tracing::warn!("[personal_agent] dispatch #{} stop not recorded: {e}", d.id),
+            }
+            if let Ok(Some(item)) = svc::item_of_dispatch(&self.db.conn, d.id).await {
+                if item.status != ItemStatus::Dropped {
+                    let _ = svc::update_item(
+                        &self.db.conn,
+                        item.id,
+                        ItemWrite {
+                            status: Some(ItemStatus::Done),
+                            waits_for: Some(None),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                    self.emit(PersonalAgentChange::Item { id: item.id });
+                }
+            }
+            self.emit(PersonalAgentChange::Dispatch { id: d.id });
+            self.emit(PersonalAgentChange::Status);
+            return;
+        }
         // One transaction: a delivery that takes the event finds its card
         // there, to number it and to mark it read.
         let inserted = svc::insert_event_with_row(
@@ -1137,6 +1209,13 @@ impl PersonalAgentEngine {
                     "on_done": d.on_done,
                 })),
                 wake,
+                // The news of a dispatch belongs where the dispatch does.
+                lineage: svc::Lineage {
+                    origin_bot_id: d.origin_bot_id,
+                    origin_row_id: d.origin_row_id,
+                    thread_id: d.thread_id,
+                    for_input: d.for_input.clone(),
+                },
             },
             card,
         )
@@ -1151,6 +1230,10 @@ impl PersonalAgentEngine {
             }
         };
         self.emit_rows(vec![svc::to_row(card)]);
+        // Work done is progress on the thread it was for (4.9).
+        if let (DispatchState::Completed, Some(t)) = (d.state, d.thread_id) {
+            self.thread_progress(t).await;
+        }
         if let Ok(Some(item)) = svc::item_of_dispatch(&self.db.conn, d.id).await {
             let (status, waits_for) = match d.state {
                 DispatchState::WaitingInput | DispatchState::Review => {

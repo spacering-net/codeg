@@ -7923,7 +7923,10 @@
       "compactHint": "Compactar ahora el contexto de la sesión",
       "stopCompaction": "Detener la compactación",
       "stopReply": "Detener la respuesta",
-      "newSession": "Iniciar una sesión nueva…"
+      "newSession": "Iniciar una sesión nueva…",
+      "stopAll": "Detener todo",
+      "stopAllHint": "Detiene la respuesta, el trabajo que encargó y los mensajes que nadie ha empezado",
+      "stoppedAll": "Se detuvo todo lo que tenía en marcha este asistente"
     },
     "newSession": {
       "title": "¿Iniciar una sesión nueva?",
@@ -8018,7 +8021,8 @@
         "error": "hubo un error",
         "restart": "codeg se reinició",
         "unknown": "se detuvo de forma inesperada"
-      }
+      },
+      "requestInputs": "Este turno trataba varias cosas: {list}"
     },
     "dispatchCard": {
       "continue": "Continuar: {title}",
@@ -8104,7 +8108,50 @@
         "acted": "Enviado otra vez",
         "dismissed": "Se dejó así",
         "resolved": "Sí llegó"
+      },
+      "loop": {
+        "open": "Intercambio detenido · esperándote",
+        "noProgress": "{a} y {b} se escribieron {count} veces sin avanzar, así que codeg los detuvo.",
+        "cycle": "{a} escribió a {b}, que a su vez esperaba en este intercambio: daba vueltas en círculo, así que codeg lo detuvo.",
+        "refused": "Retenido: «{text}»",
+        "look": "Ver el intercambio",
+        "goOn": "Dejar que sigan",
+        "mine": "Me encargo yo",
+        "continued": "Se les dejó seguir",
+        "takenOver": "Queda en tus manos"
+      },
+      "stopped": {
+        "this": "Detenido, junto con lo que puso en marcha",
+        "all": "Todo detenido",
+        "work": "{count, plural, one {Trabajo detenido} other {# trabajos detenidos}}",
+        "messages": "{count, plural, one {Mensaje retirado} other {# mensajes retirados}}",
+        "messageTo": "Para {name}: {text}",
+        "notStopped": "Ya se está trabajando en esto, así que no se detuvo:",
+        "onIt": "{name} está con «{text}»",
+        "stopToo": "Detener también lo de {name}",
+        "alsoStopped": "También detenido"
       }
+    },
+    "exchange": {
+      "sentTo": "Mensaje enviado a <peer></peer>",
+      "from": "Mensaje de <peer></peer>",
+      "exchanged": "{count, plural, one {# mensaje} other {# mensajes}} con {names}",
+      "state": {
+        "stopped": "retirado",
+        "looped": "detenido: daba vueltas",
+        "canceled": "cancelado"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "sheetHint": "Todos los mensajes que los dos asistentes se escribieron en este intercambio.",
+      "unavailable": "No se pudo cargar el intercambio: {error}"
+    },
+    "mirror": {
+      "question": "{name} te pregunta",
+      "permission": "{name} pide tu permiso",
+      "answered": "Respondida",
+      "skipped": "Omitida",
+      "withdrawn": "Ya no hace falta",
+      "resolved": "Resuelta"
     }
   }
 }

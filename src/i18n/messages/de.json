@@ -7923,7 +7923,10 @@
       "compactHint": "Den Kontext der Sitzung jetzt komprimieren",
       "stopCompaction": "Aufräumen stoppen",
       "stopReply": "Antwort stoppen",
-      "newSession": "Neue Sitzung starten…"
+      "newSession": "Neue Sitzung starten…",
+      "stopAll": "Alles anhalten",
+      "stopAllHint": "Hält die Antwort, die vergebene Arbeit und die noch nicht begonnenen Nachrichten an",
+      "stoppedAll": "Alles, was dieser Assistent laufen hatte, wurde angehalten"
     },
     "newSession": {
       "title": "Neue Sitzung starten?",
@@ -8018,7 +8021,8 @@
         "error": "es trat ein Fehler auf",
         "restart": "codeg wurde neu gestartet",
         "unknown": "es brach unerwartet ab"
-      }
+      },
+      "requestInputs": "Dieser Durchgang befasste sich mit mehreren Dingen: {list}"
     },
     "dispatchCard": {
       "continue": "Weiter: {title}",
@@ -8104,7 +8108,50 @@
         "acted": "Erneut gesendet",
         "dismissed": "So belassen",
         "resolved": "Ist angekommen"
+      },
+      "loop": {
+        "open": "Austausch angehalten · wartet auf dich",
+        "noProgress": "{a} und {b} haben {count}-mal ohne Fortschritt hin und her geschrieben, also hat codeg sie angehalten.",
+        "cycle": "{a} hat {b} geschrieben, das selbst in diesem Austausch auf eine Antwort wartete: Es drehte sich im Kreis, also hat codeg angehalten.",
+        "refused": "Zurückgehalten: „{text}“",
+        "look": "Austausch ansehen",
+        "goOn": "Weitermachen lassen",
+        "mine": "Ich kümmere mich",
+        "continued": "Weitermachen lassen",
+        "takenOver": "Dir überlassen"
+      },
+      "stopped": {
+        "this": "Angehalten, samt dem, was es angestoßen hat",
+        "all": "Alles angehalten",
+        "work": "{count, plural, one {Arbeit angehalten} other {# Arbeiten angehalten}}",
+        "messages": "{count, plural, one {Nachricht zurückgezogen} other {# Nachrichten zurückgezogen}}",
+        "messageTo": "An {name}: {text}",
+        "notStopped": "Daran wird schon gearbeitet, daher nicht angehalten:",
+        "onIt": "{name} ist an „{text}“",
+        "stopToo": "Auch das von {name} anhalten",
+        "alsoStopped": "Ebenfalls angehalten"
       }
+    },
+    "exchange": {
+      "sentTo": "Nachricht an <peer></peer> gesendet",
+      "from": "Nachricht von <peer></peer>",
+      "exchanged": "{count, plural, one {# Nachricht} other {# Nachrichten}} mit {names} ausgetauscht",
+      "state": {
+        "stopped": "zurückgezogen",
+        "looped": "angehalten: im Kreis",
+        "canceled": "abgebrochen"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "sheetHint": "Alle Nachrichten, die die beiden Assistenten in diesem Austausch einander geschrieben haben.",
+      "unavailable": "Der Austausch konnte nicht geladen werden: {error}"
+    },
+    "mirror": {
+      "question": "{name} fragt dich",
+      "permission": "{name} bittet um deine Erlaubnis",
+      "answered": "Beantwortet",
+      "skipped": "Übersprungen",
+      "withdrawn": "Nicht mehr nötig",
+      "resolved": "Erledigt"
     }
   }
 }

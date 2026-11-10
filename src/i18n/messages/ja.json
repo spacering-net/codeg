@@ -7923,7 +7923,10 @@
       "compactHint": "セッションのコンテキストを今すぐ圧縮します",
       "stopCompaction": "整理を停止",
       "stopReply": "返信を停止",
-      "newSession": "新しいセッションを開始…"
+      "newSession": "新しいセッションを開始…",
+      "stopAll": "すべて停止",
+      "stopAllHint": "返信、送り出した作業、まだ誰も着手していないメッセージを止めます",
+      "stoppedAll": "このアシスタントの作業をすべて止めました"
     },
     "newSession": {
       "title": "新しいセッションを開始しますか？",
@@ -8018,7 +8021,8 @@
         "error": "エラーが発生しました",
         "restart": "codeg が再起動しました",
         "unknown": "予期せず停止しました"
-      }
+      },
+      "requestInputs": "このターンは複数の件を扱っていました：{list}"
     },
     "dispatchCard": {
       "continue": "続き：{title}",
@@ -8104,7 +8108,50 @@
         "acted": "再送しました",
         "dismissed": "そのままにしました",
         "resolved": "届いていました"
+      },
+      "loop": {
+        "open": "やり取りを停止 · 対応待ち",
+        "noProgress": "{a} と {b} が進展のないまま {count} 回やり取りしたため、codeg が止めました。",
+        "cycle": "{a} が {b} に送りましたが、{b} 自身もこのやり取りで返信を待っていました。堂々巡りのため codeg が止めました。",
+        "refused": "送られなかった内容：「{text}」",
+        "look": "やり取りを見る",
+        "goOn": "続けさせる",
+        "mine": "自分で対応する",
+        "continued": "続けさせました",
+        "takenOver": "あなたに任されました"
+      },
+      "stopped": {
+        "this": "停止しました（始めたことも含めて）",
+        "all": "すべて停止しました",
+        "work": "{count} 件の作業を停止",
+        "messages": "{count} 件のメッセージを取り消し",
+        "messageTo": "{name} 宛て：{text}",
+        "notStopped": "相手がすでに対応中のため停止していません：",
+        "onIt": "{name} が「{text}」に対応中",
+        "stopToo": "{name} の分も止める",
+        "alsoStopped": "こちらも停止"
       }
+    },
+    "exchange": {
+      "sentTo": "<peer></peer> にメッセージを送信",
+      "from": "<peer></peer> からのメッセージ",
+      "exchanged": "{names} と {count} 件のやり取り",
+      "state": {
+        "stopped": "取り消し済み",
+        "looped": "堂々巡りで停止",
+        "canceled": "キャンセル済み"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "sheetHint": "このやり取りで 2 つのアシスタントが書いたすべてのメッセージ。",
+      "unavailable": "やり取りを読み込めませんでした：{error}"
+    },
+    "mirror": {
+      "question": "{name} からの質問",
+      "permission": "{name} が許可を求めています",
+      "answered": "回答済み",
+      "skipped": "スキップ済み",
+      "withdrawn": "不要になりました",
+      "resolved": "解決済み"
     }
   }
 }

@@ -49,6 +49,7 @@ use crate::db::entities::personal_agent_batch::{BatchKind, BatchStatus, BatchTri
 use crate::db::entities::personal_agent_item::ItemStatus;
 use crate::db::entities::personal_agent_segment::{self as segment_entity, SegmentReason};
 use crate::db::entities::personal_agent_timeline::{OwnerStatus, TimelineKind};
+use crate::db::service::personal_agent_message_service as msvc;
 use crate::db::service::personal_agent_service as svc;
 use crate::db::service::personal_agent_service::{NewRow, ReadMark};
 use crate::db::AppDatabase;
@@ -315,12 +316,19 @@ pub(super) struct EngineState {
     /// Ledger operations running in this process: a follow-up being sent,
     /// until the executor confirms it or its round ends (`ledger`).
     pub(super) live_ops: HashSet<String>,
+    /// The input the brain named for its pending question (`for` on
+    /// `ask_user_question`), by connection: one ask at a time per
+    /// connection, so the next ask replaces it.
+    pub(super) ask_for: HashMap<String, Option<String>>,
 }
 
 pub struct PersonalAgentEngine {
     /// The assistant this engine runs: a worker's id, or `None` for the
     /// primary — looked up, as it may not be set up yet.
     fixed_bot: Option<i32>,
+    /// The host running it, and the other assistants (a message wakes its
+    /// receiver). Empty for an engine of its own (tests).
+    host: std::sync::Weak<super::host::EngineHost>,
     /// The primary's id once known (0 until then).
     bot_cache: AtomicI32,
     pub(super) db: AppDatabase,
@@ -351,9 +359,11 @@ impl PersonalAgentEngine {
         emitter: EventEmitter,
         data_dir: PathBuf,
         fixed_bot: Option<i32>,
+        host: std::sync::Weak<super::host::EngineHost>,
     ) -> Arc<Self> {
         Arc::new(Self {
             fixed_bot,
+            host,
             bot_cache: AtomicI32::new(0),
             db,
             manager,
@@ -384,7 +394,14 @@ impl PersonalAgentEngine {
         data_dir: PathBuf,
         bot: Option<i32>,
     ) -> Arc<Self> {
-        let engine = Self::new(db, ConnectionManager::new(), EventEmitter::Noop, data_dir, bot);
+        let engine = Self::new(
+            db,
+            ConnectionManager::new(),
+            EventEmitter::Noop,
+            data_dir,
+            bot,
+            std::sync::Weak::new(),
+        );
         engine.booted.store(true, Ordering::SeqCst);
         engine
     }
@@ -544,6 +561,30 @@ impl PersonalAgentEngine {
         self.liveness_tick().await;
     }
 
+    /// Deliver what was read as waiting a moment ago (`events`), as a pump
+    /// that read them before something changed does.
+    #[cfg(test)]
+    pub(crate) async fn deliver_read_earlier_for_test(
+        &self,
+        events: Vec<crate::db::entities::personal_agent_event::Model>,
+    ) -> Result<(), String> {
+        let row = self.agent_row().await.ok_or("no assistant")?;
+        let session = self.ensure_session(&row).await?;
+        self.deliver(&row, &session, Vec::new(), events).await
+    }
+
+    /// Whether a delivery asked to be built again.
+    #[cfg(test)]
+    pub(crate) fn pump_again_for_test(&self) -> bool {
+        self.pump_again.load(Ordering::SeqCst)
+    }
+
+    /// Forget the turn in flight, as if it ended and was settled.
+    #[cfg(test)]
+    pub(crate) async fn clear_turn_for_test(&self) {
+        self.state.lock().await.turn = None;
+    }
+
     /// Whether a turn is on record.
     #[cfg(test)]
     pub(crate) async fn turn_in_flight_for_test(&self) -> bool {
@@ -660,6 +701,25 @@ impl PersonalAgentEngine {
             return cached;
         }
         self.agent_row().await.map(|r| r.id).unwrap_or(0)
+    }
+
+    /// The input the brain names for the question it is about to ask.
+    pub(super) async fn note_ask_for(&self, conn_id: &str, for_input: Option<String>) {
+        self.state
+            .lock()
+            .await
+            .ask_for
+            .insert(conn_id.to_string(), for_input);
+    }
+
+    /// Whether a turn is running.
+    pub(super) async fn busy(&self) -> bool {
+        self.state.lock().await.turn.is_some()
+    }
+
+    /// The host running this engine, when one does.
+    pub(super) fn host_ref(&self) -> Option<Arc<super::host::EngineHost>> {
+        self.host.upgrade()
     }
 
     /// Whether this engine runs the assistant `bot`.
@@ -986,7 +1046,8 @@ impl PersonalAgentEngine {
                 question_id,
                 questions,
             } => {
-                self.record_question_request(question_id, questions).await;
+                self.record_question_request(&env.connection_id, question_id, questions)
+                    .await;
             }
             AcpEvent::QuestionResolved { question_id } => {
                 self.settle_question_row(question_id, None).await;
@@ -1154,7 +1215,12 @@ impl PersonalAgentEngine {
             },
             "options": options,
         }));
-        self.push_row(row).await;
+        // The agent's own request names no input: it belongs to the turn's
+        // only source, when there is one (4.11).
+        if let Some(row) = self.push_row(row).await {
+            let attributed = self.request_input(None).await;
+            self.mirror_request(&row, attributed).await;
+        }
         self.emit(PersonalAgentChange::Status);
     }
 
@@ -1187,6 +1253,7 @@ impl PersonalAgentEngine {
         }
         let _ = svc::update_row_data(&self.db.conn, row.id, None, Some(data)).await;
         if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row.id).await {
+            self.sync_mirrors(&updated).await;
             self.emit_rows(vec![svc::to_row(updated)]);
         }
         self.emit(PersonalAgentChange::Status);
@@ -1194,6 +1261,7 @@ impl PersonalAgentEngine {
 
     async fn record_question_request(
         &self,
+        conn_id: &str,
         question_id: &str,
         questions: &[crate::acp::question::QuestionSpec],
     ) {
@@ -1215,7 +1283,12 @@ impl PersonalAgentEngine {
             "state": "pending",
             "questions": questions,
         }));
-        self.push_row(row).await;
+        // The input the brain said it asks for, when it said (4.11).
+        let named = self.state.lock().await.ask_for.remove(conn_id).flatten();
+        if let Some(row) = self.push_row(row).await {
+            let attributed = self.request_input(named.as_deref()).await;
+            self.mirror_request(&row, attributed).await;
+        }
         self.emit(PersonalAgentChange::Status);
     }
 
@@ -1266,6 +1339,7 @@ impl PersonalAgentEngine {
         }
         let _ = svc::update_row_data(&self.db.conn, row.id, None, Some(data)).await;
         if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row.id).await {
+            self.sync_mirrors(&updated).await;
             self.emit_rows(vec![svc::to_row(updated)]);
         }
         self.emit(PersonalAgentChange::Status);
@@ -1278,6 +1352,10 @@ impl PersonalAgentEngine {
         question_id: &str,
         answer: crate::acp::question::QuestionAnswer,
     ) -> Result<(), String> {
+        // Asked by another assistant, shown here too: answered there.
+        if let Some(source) = self.mirror_source(TimelineKind::Question, question_id).await {
+            return Box::pin(source.answer_question(question_id, answer)).await;
+        }
         let conn_id = self.require_connection().await?;
         let questions = match self.manager.get_state(&conn_id).await {
             Some(state) => state
@@ -1305,6 +1383,9 @@ impl PersonalAgentEngine {
         approval_id: &str,
         answer: crate::acp::plan_approval::PlanApprovalAnswer,
     ) -> Result<(), String> {
+        if let Some(source) = self.mirror_source(TimelineKind::Question, approval_id).await {
+            return Box::pin(source.answer_plan_approval(approval_id, answer)).await;
+        }
         let conn_id = self.require_connection().await?;
         let value = serde_json::to_value(&answer).unwrap_or_default();
         self.settle_question_row(approval_id, Some(value)).await;
@@ -1315,6 +1396,9 @@ impl PersonalAgentEngine {
     }
 
     pub async fn respond_permission(&self, request_id: &str, option_id: &str) -> Result<(), String> {
+        if let Some(source) = self.mirror_source(TimelineKind::Permission, request_id).await {
+            return Box::pin(source.respond_permission(request_id, option_id)).await;
+        }
         let conn_id = self.require_connection().await?;
         self.manager
             .respond_permission(&conn_id, request_id, option_id)
@@ -2446,14 +2530,45 @@ impl PersonalAgentEngine {
         if let Some(note) = self.interrupted_note(&events, &resent_from_batches).await {
             cards_text.push(note);
         }
+        // Inputs of more than one source: each action says which it is for.
+        {
+            let mut inputs = Vec::new();
+            for o in &owners {
+                inputs.push(self.owner_input(o.id).await);
+            }
+            for e in &events {
+                if let Some(i) = self.event_input(e).await {
+                    inputs.push(i);
+                }
+            }
+            if let Some(note) = Self::sources_note(&inputs) {
+                cards_text.push(note);
+            }
+        }
+        // Other assistants' messages read as theirs, apart from the news of
+        // dispatched work.
+        let messages = self.messages_of(&events).await;
+        let news: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind != msvc::MESSAGE_EVENT)
+            .cloned()
+            .collect();
         // What started it — recorded only, for the status and statistics.
-        let trigger = if owners.is_empty() {
-            BatchTrigger::Event
-        } else {
+        let trigger = if !owners.is_empty() {
             BatchTrigger::Owner
+        } else if !messages.is_empty() {
+            BatchTrigger::Message
+        } else {
+            BatchTrigger::Event
         };
-        let event_lines = self.event_lines(&events).await;
-        let events_text = cards::events_block(&event_lines);
+        let event_lines = self.event_lines(&news).await;
+        let events_text = {
+            let parts: Vec<String> = cards::events_block(&event_lines)
+                .into_iter()
+                .chain(cards::messages_block(&self.message_lines(&messages).await))
+                .collect();
+            (!parts.is_empty()).then(|| parts.join("\n\n"))
+        };
         let mut owner_lines = Vec::with_capacity(owners.len());
         for o in &owners {
             owner_lines.push(OwnerLine {
@@ -2470,7 +2585,7 @@ impl PersonalAgentEngine {
         let owner_first = !owners.is_empty() && self.any_yielded(&events).await;
         let text = cards::delivery_text(&cards_text, events_text.as_deref(), &owner_lines, owner_first);
         // An event alone, no message: the reply answers that event.
-        let auto_quote = if owners.is_empty() && event_lines.len() == 1 {
+        let auto_quote = if owners.is_empty() && messages.is_empty() && event_lines.len() == 1 {
             event_lines[0].row_id
         } else {
             None
@@ -2539,6 +2654,34 @@ impl PersonalAgentEngine {
         let taken = svc::mark_events_delivered(&self.db.conn, &event_ids, batch.id)
             .await
             .unwrap_or_default();
+        // Something read for this delivery was taken back meanwhile (a
+        // message its sender stopped): the text says what is no longer
+        // this batch's. Nothing went out — undo, and build it again from
+        // what is still waiting.
+        if event_ids.iter().any(|id| !taken.contains(id)) {
+            let _ = svc::move_owner_rows(
+                &self.db.conn,
+                &owner_ids,
+                &[OwnerStatus::Delivered],
+                OwnerStatus::Queued,
+                None,
+                None,
+                ReadMark::Unread,
+            )
+            .await;
+            let _ = svc::revert_batch_events(&self.db.conn, batch.id).await;
+            let _ = svc::finish_batch(
+                &self.db.conn,
+                batch.id,
+                BatchStatus::Canceled,
+                None,
+                Some("its inputs changed before it was sent".into()),
+                None,
+            )
+            .await;
+            self.pump_again.store(true, Ordering::SeqCst);
+            return Ok(());
+        }
         let read_cards = svc::set_result_rows_read(&self.db.conn, self.bot().await, &taken, Some(Utc::now()))
             .await
             .unwrap_or_default();
@@ -2634,6 +2777,12 @@ impl PersonalAgentEngine {
                 self.drop_connection(&session.conn_id).await;
             }
             return Err(format!("delivery not sent: {e}"));
+        }
+        // The messages it carries are their receiver's now; the owner
+        // speaking is progress on every exchange this assistant is in.
+        self.messages_taken(&messages, batch.id).await;
+        if !owners.is_empty() {
+            self.owner_spoke().await;
         }
         // The persona this delivery hands over is what the agent now has.
         if carried.persona || carried.handoff || carried.state_card {
@@ -3007,6 +3156,7 @@ impl PersonalAgentEngine {
             .unwrap_or_default();
             self.emit_rows(moved.into_iter().map(svc::to_row).collect());
             let _ = svc::finish_batch_events(&self.db.conn, turn.batch_id).await;
+            self.messages_handled(turn.batch_id).await;
             if canceled {
                 self.marker(
                     Some(turn.segment_id),

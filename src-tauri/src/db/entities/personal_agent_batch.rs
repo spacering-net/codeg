@@ -44,6 +44,9 @@ pub enum BatchTrigger {
     /// Only news of dispatched work.
     #[sea_orm(string_value = "event")]
     Event,
+    /// No message of the owner's, another assistant's message or answer.
+    #[sea_orm(string_value = "message")]
+    Message,
     /// A matter came due that the owner asked to have done then.
     #[sea_orm(string_value = "reminder")]
     Reminder,

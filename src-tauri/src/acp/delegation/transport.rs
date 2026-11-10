@@ -186,6 +186,10 @@ pub struct BrokerCommitFeedbackRequest {
 pub struct BrokerAskRequest {
     pub token: String,
     pub questions: Vec<QuestionSpec>,
+    /// A personal assistant's brain names the input of its turn the
+    /// question is for (`for`), so it shows where that input came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub for_input: Option<String>,
 }
 
 /// Resolve a session the user referenced (`codeg://session/<id>`) into its

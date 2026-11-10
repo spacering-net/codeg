@@ -7923,7 +7923,10 @@
       "compactHint": "ضغط سياق الجلسة الآن",
       "stopCompaction": "إيقاف الترتيب",
       "stopReply": "إيقاف الرد",
-      "newSession": "بدء جلسة جديدة…"
+      "newSession": "بدء جلسة جديدة…",
+      "stopAll": "إيقاف كل شيء",
+      "stopAllHint": "يوقف الرد والعمل الذي أُسند والرسائل التي لم يبدأ بها أحد",
+      "stoppedAll": "توقف كل ما كان لدى هذا المساعد"
     },
     "newSession": {
       "title": "بدء جلسة جديدة؟",
@@ -8018,7 +8021,8 @@
         "error": "حدث خطأ",
         "restart": "أُعيد تشغيل codeg",
         "unknown": "توقف على نحو غير متوقع"
-      }
+      },
+      "requestInputs": "كان هذا الدور يعالج عدة أمور: {list}"
     },
     "dispatchCard": {
       "continue": "متابعة: {title}",
@@ -8104,7 +8108,50 @@
         "acted": "أُرسلت مرة أخرى",
         "dismissed": "تُركت كما هي",
         "resolved": "وصلت بالفعل"
+      },
+      "loop": {
+        "open": "توقف التبادل · بانتظارك",
+        "noProgress": "تبادل {a} و{b} الرسائل {count} مرات دون تقدم، فأوقفهما codeg.",
+        "cycle": "كتب {a} إلى {b}، وكان {b} نفسه ينتظر ردًا في هذا التبادل: دار في حلقة، فأوقفه codeg.",
+        "refused": "لم يُرسل: «{text}»",
+        "look": "عرض التبادل",
+        "goOn": "دعهما يكملان",
+        "mine": "سأتولى الأمر",
+        "continued": "سُمح لهما بالمتابعة",
+        "takenOver": "تُرك لك"
+      },
+      "stopped": {
+        "this": "توقف، مع ما بدأه",
+        "all": "توقف كل شيء",
+        "work": "{count, plural, zero {لم يتوقف عمل} one {توقف عمل واحد} two {توقف عملان} few {توقفت # أعمال} many {توقف # عملًا} other {توقف # عمل}}",
+        "messages": "{count, plural, zero {لم تُسحب رسائل} one {سُحبت رسالة واحدة} two {سُحبت رسالتان} few {سُحبت # رسائل} many {سُحبت # رسالة} other {سُحبت # رسالة}}",
+        "messageTo": "إلى {name}: {text}",
+        "notStopped": "يجري العمل عليه بالفعل، لذا لم يتوقف:",
+        "onIt": "{name} يعمل على «{text}»",
+        "stopToo": "أوقف ما لدى {name} أيضًا",
+        "alsoStopped": "توقف أيضًا"
       }
+    },
+    "exchange": {
+      "sentTo": "أُرسلت رسالة إلى <peer></peer>",
+      "from": "رسالة من <peer></peer>",
+      "exchanged": "{count, plural, zero {لا رسائل} one {رسالة واحدة} two {رسالتان} few {# رسائل} many {# رسالة} other {# رسالة}} مع {names}",
+      "state": {
+        "stopped": "سُحبت",
+        "looped": "أُوقفت: دوران في حلقة",
+        "canceled": "أُلغيت"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "sheetHint": "كل الرسائل التي تبادلها المساعدان في هذا التبادل.",
+      "unavailable": "تعذّر تحميل التبادل: {error}"
+    },
+    "mirror": {
+      "question": "{name} يسألك",
+      "permission": "{name} يطلب إذنك",
+      "answered": "تمت الإجابة",
+      "skipped": "تم التخطي",
+      "withdrawn": "لم يعد مطلوبًا",
+      "resolved": "تمت التسوية"
     }
   }
 }

@@ -187,6 +187,13 @@ impl PersonalAgentEngine {
             .await
             .map_err(|e| e.to_string())?
             .ok_or("no such card")?;
+        // The cards about assistants working with each other answer
+        // their own way (4.9, 4.10).
+        match notice.kind {
+            NoticeKind::Loop => return self.act_on_loop(&notice, action).await,
+            NoticeKind::Stopped => return self.act_on_stopped(&notice, action).await,
+            NoticeKind::Proposal | NoticeKind::Uncertain => {}
+        }
         // A card whose own run ended unknown can be run again, or let be.
         let from: &[NoticeState] = &[NoticeState::Open, NoticeState::Unknown];
         let accept = match action {

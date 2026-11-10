@@ -7923,7 +7923,10 @@
       "compactHint": "Compactar agora o contexto da sessão",
       "stopCompaction": "Parar a organização",
       "stopReply": "Parar a resposta",
-      "newSession": "Iniciar uma nova sessão…"
+      "newSession": "Iniciar uma nova sessão…",
+      "stopAll": "Parar tudo",
+      "stopAllHint": "Para a resposta, o trabalho delegado e as mensagens que ninguém começou",
+      "stoppedAll": "Tudo o que este assistente tinha em andamento foi parado"
     },
     "newSession": {
       "title": "Iniciar uma nova sessão?",
@@ -8018,7 +8021,8 @@
         "error": "houve um erro",
         "restart": "o codeg reiniciou",
         "unknown": "parou inesperadamente"
-      }
+      },
+      "requestInputs": "Este turno tratava de várias coisas: {list}"
     },
     "dispatchCard": {
       "continue": "Continuar: {title}",
@@ -8104,7 +8108,50 @@
         "acted": "Enviado de novo",
         "dismissed": "Deixado assim",
         "resolved": "Chegou, sim"
+      },
+      "loop": {
+        "open": "Conversa parada · aguardando você",
+        "noProgress": "{a} e {b} trocaram {count} mensagens sem avançar, então o codeg os parou.",
+        "cycle": "{a} escreveu para {b}, que também esperava resposta nesta conversa: andava em círculos, então o codeg parou.",
+        "refused": "Retido: “{text}”",
+        "look": "Ver a conversa",
+        "goOn": "Deixar continuar",
+        "mine": "Eu cuido disso",
+        "continued": "Liberados para continuar",
+        "takenOver": "Deixado com você"
+      },
+      "stopped": {
+        "this": "Parado, com o que ele iniciou",
+        "all": "Tudo parado",
+        "work": "{count, plural, one {Trabalho parado} other {# trabalhos parados}}",
+        "messages": "{count, plural, one {Mensagem retirada} other {# mensagens retiradas}}",
+        "messageTo": "Para {name}: {text}",
+        "notStopped": "Já em andamento, então não foi parado:",
+        "onIt": "{name} está cuidando de “{text}”",
+        "stopToo": "Parar também o de {name}",
+        "alsoStopped": "Também parado"
       }
+    },
+    "exchange": {
+      "sentTo": "Mensagem enviada para <peer></peer>",
+      "from": "Mensagem de <peer></peer>",
+      "exchanged": "{count, plural, one {# mensagem trocada} other {# mensagens trocadas}} com {names}",
+      "state": {
+        "stopped": "retirada",
+        "looped": "parada: andava em círculos",
+        "canceled": "cancelada"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "sheetHint": "Todas as mensagens que os dois assistentes trocaram nesta conversa.",
+      "unavailable": "Não foi possível carregar a conversa: {error}"
+    },
+    "mirror": {
+      "question": "{name} pergunta a você",
+      "permission": "{name} pede sua permissão",
+      "answered": "Respondida",
+      "skipped": "Ignorada",
+      "withdrawn": "Não é mais necessária",
+      "resolved": "Resolvida"
     }
   }
 }

@@ -1945,6 +1945,9 @@ export type TimelineKind =
   /** A native card codeg wrote itself — a proposal waiting for the owner, a
    *  step whose outcome it cannot tell. */
   | "notice"
+  /** A line codeg writes for a message between assistants: one sent ("sent a
+   *  message to …") or one received ("message from …"). */
+  | "exchange"
 
 export type OwnerStatus = "queued" | "delivered" | "answered" | "interrupted"
 
@@ -2051,6 +2054,57 @@ export interface DispatchExecutorSnapshot {
   agent_options: AgentDelegationDefaults
   label_snapshot: AssistantLabelSnapshot | null
   instructions: string
+}
+
+/** An assistant as a line or a card names it. */
+export interface BotFace {
+  id: number
+  name: string
+  avatar: AssistantAvatar | null
+  kind: "primary" | "worker"
+}
+
+export type BotMessageState =
+  | "queued"
+  | "delivered"
+  | "replied"
+  | "closed"
+  | "stopped"
+  | "looped"
+  | "canceled"
+
+/** One message of a thread between assistants. */
+export interface ThreadMessage {
+  id: number
+  from_bot_id: number
+  to_bot_id: number
+  body: string
+  reply_to: number | null
+  wants_reply: boolean
+  state: BotMessageState
+  created_at: string
+}
+
+/** A dispatch made on a thread. */
+export interface ThreadDispatch {
+  id: number
+  bot_id: number | null
+  title: string
+  mode: DispatchMode
+  state: DispatchState
+  work_task_id: number | null
+  conversation_id: number | null
+  created_at: string
+}
+
+/** A thread between assistants: its messages, the assistants on it, and the
+ *  work handed out on it. */
+export interface ThreadView {
+  id: number
+  state: "open" | "stopped" | "looped"
+  messages: ThreadMessage[]
+  bots: BotFace[]
+  dispatches: ThreadDispatch[]
 }
 
 export interface DispatchInfo {

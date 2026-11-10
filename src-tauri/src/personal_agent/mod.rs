@@ -28,6 +28,7 @@ pub mod dispatch;
 pub mod engine;
 pub mod host;
 pub mod ledger;
+pub mod messages;
 pub mod notices;
 pub mod templates;
 pub mod tools;
@@ -67,4 +68,17 @@ pub fn note_owner_prompt(connection_id: &str, conversation_id: Option<i32>) {
             engine.handover(&connection_id, conversation_id).await;
         }
     });
+}
+
+/// The brain on `connection_id` is about to ask the owner something and
+/// named the input it asks for (`for` on `ask_user_question`, 4.11). Kept
+/// until its question is recorded; every ask replaces it, named or not.
+/// Nothing for a connection that is no assistant's.
+pub async fn note_ask_for(connection_id: &str, for_input: Option<String>) {
+    let Some(host) = host::host() else {
+        return;
+    };
+    if let Some(engine) = host.engine_by_connection(connection_id).await {
+        engine.note_ask_for(connection_id, for_input).await;
+    }
 }

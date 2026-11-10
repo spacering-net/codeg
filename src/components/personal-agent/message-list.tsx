@@ -52,6 +52,8 @@ import { toErrorMessage } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { EventCard } from "./event-card"
+import { ExchangeRow } from "./exchange-row"
+import { MirrorCard } from "./mirror-card"
 import { NoticeCard } from "./notice-card"
 import { BlockingPrompts } from "./live-turn"
 import { useMessageTime } from "./message-actions"
@@ -166,6 +168,10 @@ function Item({ item }: { item: MessageItem }) {
       return <EventCard item={item} />
     case "notice":
       return <NoticeCard item={item} />
+    case "exchange":
+      return <ExchangeRow item={item} />
+    case "mirror":
+      return <MirrorCard item={item} />
   }
 }
 
@@ -389,7 +395,13 @@ export function MessageList({
   // corner, and shows its actions on hover.
   const placed = useMemo(() => {
     const above = items[newLineAt - 1]
-    if (newLineAt <= 0 || above.kind === "time" || above.tail) return items
+    if (
+      newLineAt <= 0 ||
+      above.kind === "time" ||
+      above.kind === "exchange" ||
+      above.tail
+    )
+      return items
     return items.map((item, i) =>
       i === newLineAt - 1 ? { ...above, tail: true } : item
     )

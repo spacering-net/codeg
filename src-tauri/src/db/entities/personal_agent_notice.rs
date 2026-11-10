@@ -14,6 +14,15 @@ pub enum NoticeKind {
     /// has it done again, or lets it be.
     #[sea_orm(string_value = "uncertain")]
     Uncertain,
+    /// What a stop took with it: the turn, the work it dispatched, the
+    /// messages it sent — and what it could not take back, each with a way
+    /// to stop it where it is now.
+    #[sea_orm(string_value = "stopped")]
+    Stopped,
+    /// An exchange between assistants went round without progress, or in a
+    /// circle, and was stopped: the owner lets it go on or takes it over.
+    #[sea_orm(string_value = "loop")]
+    Loop,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

@@ -7923,7 +7923,10 @@
       "compactHint": "Compacter maintenant le contexte de la session",
       "stopCompaction": "Arrêter le rangement",
       "stopReply": "Arrêter la réponse",
-      "newSession": "Démarrer une nouvelle session…"
+      "newSession": "Démarrer une nouvelle session…",
+      "stopAll": "Tout arrêter",
+      "stopAllHint": "Arrête la réponse, le travail confié et les messages que personne n’a commencés",
+      "stoppedAll": "Tout ce que cet assistant avait en cours a été arrêté"
     },
     "newSession": {
       "title": "Démarrer une nouvelle session ?",
@@ -8018,7 +8021,8 @@
         "error": "une erreur est survenue",
         "restart": "codeg a redémarré",
         "unknown": "elle s'est arrêtée de façon inattendue"
-      }
+      },
+      "requestInputs": "Ce tour traitait plusieurs choses : {list}"
     },
     "dispatchCard": {
       "continue": "Suite : {title}",
@@ -8104,7 +8108,50 @@
         "acted": "Renvoyé",
         "dismissed": "Laissé tel quel",
         "resolved": "C'est bien arrivé"
+      },
+      "loop": {
+        "open": "Échange arrêté · en attente de toi",
+        "noProgress": "{a} et {b} ont échangé {count} fois sans avancer, donc codeg les a arrêtés.",
+        "cycle": "{a} a écrit à {b}, qui attendait lui-même une réponse dans cet échange : cela tournait en rond, donc codeg l’a arrêté.",
+        "refused": "Retenu : « {text} »",
+        "look": "Voir l’échange",
+        "goOn": "Les laisser continuer",
+        "mine": "Je m’en occupe",
+        "continued": "Autorisés à continuer",
+        "takenOver": "Laissé à toi"
+      },
+      "stopped": {
+        "this": "Arrêté, avec ce qu’il avait lancé",
+        "all": "Tout arrêté",
+        "work": "{count, plural, one {Travail arrêté} other {# travaux arrêtés}}",
+        "messages": "{count, plural, one {Message repris} other {# messages repris}}",
+        "messageTo": "À {name} : {text}",
+        "notStopped": "Déjà en cours de traitement, donc pas arrêté :",
+        "onIt": "{name} s’occupe de « {text} »",
+        "stopToo": "Arrêter aussi celui de {name}",
+        "alsoStopped": "Arrêté aussi"
       }
+    },
+    "exchange": {
+      "sentTo": "Message envoyé à <peer></peer>",
+      "from": "Message de <peer></peer>",
+      "exchanged": "{count, plural, one {# message échangé} other {# messages échangés}} avec {names}",
+      "state": {
+        "stopped": "repris",
+        "looped": "arrêté : tournait en rond",
+        "canceled": "annulé"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "sheetHint": "Tous les messages que les deux assistants se sont écrits dans cet échange.",
+      "unavailable": "Impossible de charger l’échange : {error}"
+    },
+    "mirror": {
+      "question": "{name} te pose une question",
+      "permission": "{name} demande ton autorisation",
+      "answered": "Répondu",
+      "skipped": "Ignoré",
+      "withdrawn": "Plus nécessaire",
+      "resolved": "Réglé"
     }
   }
 }

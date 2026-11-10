@@ -7923,7 +7923,10 @@
       "compactHint": "지금 세션의 컨텍스트를 압축합니다",
       "stopCompaction": "정리 중지",
       "stopReply": "답장 중지",
-      "newSession": "새 세션 시작…"
+      "newSession": "새 세션 시작…",
+      "stopAll": "모두 멈추기",
+      "stopAllHint": "답장, 맡긴 작업, 아직 아무도 시작하지 않은 메시지를 멈춥니다",
+      "stoppedAll": "이 어시스턴트의 일을 모두 멈췄습니다"
     },
     "newSession": {
       "title": "새 세션을 시작할까요?",
@@ -8018,7 +8021,8 @@
         "error": "오류가 발생했습니다",
         "restart": "codeg가 다시 시작되었습니다",
         "unknown": "예기치 않게 중지되었습니다"
-      }
+      },
+      "requestInputs": "이 턴은 여러 건을 다루고 있었습니다: {list}"
     },
     "dispatchCard": {
       "continue": "이어서: {title}",
@@ -8104,7 +8108,50 @@
         "acted": "다시 보냄",
         "dismissed": "그대로 둠",
         "resolved": "전달된 것으로 확인됨"
+      },
+      "loop": {
+        "open": "대화 멈춤 · 확인 대기",
+        "noProgress": "{a}와(과) {b}이(가) 진전 없이 {count}번 주고받아 codeg가 멈췄습니다.",
+        "cycle": "{a}이(가) {b}에게 보냈는데 {b}도 이 대화에서 답을 기다리고 있었습니다. 순환이어서 codeg가 멈췄습니다.",
+        "refused": "보내지 않은 내용: “{text}”",
+        "look": "대화 보기",
+        "goOn": "계속하게 하기",
+        "mine": "내가 처리하기",
+        "continued": "계속하게 함",
+        "takenOver": "직접 처리하기로 함"
+      },
+      "stopped": {
+        "this": "멈춤 (시작한 일 포함)",
+        "all": "모두 멈춤",
+        "work": "작업 {count}개 멈춤",
+        "messages": "메시지 {count}개 회수",
+        "messageTo": "{name}에게: {text}",
+        "notStopped": "상대가 이미 처리 중이라 멈추지 않음:",
+        "onIt": "{name}이(가) “{text}” 처리 중",
+        "stopToo": "{name}의 것도 멈추기",
+        "alsoStopped": "함께 멈춤"
       }
+    },
+    "exchange": {
+      "sentTo": "<peer></peer>에게 메시지 보냄",
+      "from": "<peer></peer>의 메시지",
+      "exchanged": "{names}와(과) 메시지 {count}개 주고받음",
+      "state": {
+        "stopped": "회수됨",
+        "looped": "순환으로 멈춤",
+        "canceled": "취소됨"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "sheetHint": "이 대화 줄에서 두 어시스턴트가 서로 주고받은 모든 메시지.",
+      "unavailable": "대화를 불러오지 못했습니다: {error}"
+    },
+    "mirror": {
+      "question": "{name}의 질문",
+      "permission": "{name}이(가) 승인을 요청합니다",
+      "answered": "답변함",
+      "skipped": "건너뜀",
+      "withdrawn": "더 이상 필요 없음",
+      "resolved": "처리됨"
     }
   }
 }

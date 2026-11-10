@@ -538,6 +538,7 @@ async fn end_to_end_uds_ask_question_round_trip() {
     let ask_task = tokio::spawn(async move {
         let req = BrokerAskRequest {
             token: "tok".into(),
+            for_input: None,
             questions: vec![QuestionSpec {
                 id: "qa".into(),
                 question: "Which approach?".into(),
@@ -681,6 +682,7 @@ async fn end_to_end_uds_ask_revoked_after_register_declines() {
 
     let req = BrokerAskRequest {
         token: "tok".into(),
+        for_input: None,
         questions: vec![QuestionSpec {
             id: "qa".into(),
             question: "Which approach?".into(),

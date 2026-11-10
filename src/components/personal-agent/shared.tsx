@@ -391,3 +391,17 @@ export function excerptOf(text: string, max = 120): string {
     .trim()
   return flat.length > max ? `${flat.slice(0, max)}…` : flat
 }
+
+/** An assistant's name as a line or a card shows it: the primary may have
+ *  none, and is then called by its role, as the page's title does. */
+export function useBotName(): (
+  bot: { id?: number | null; name?: string | null; kind?: string | null } | null
+) => string {
+  const t = useTranslations("PersonalAgent")
+  return (bot) => {
+    const name = bot?.name?.trim()
+    if (name) return name
+    if (bot?.kind === "worker" && bot.id != null) return `#${bot.id}`
+    return t("title")
+  }
+}

@@ -15,6 +15,7 @@ import { useTranslations } from "next-intl"
 import {
   Eye,
   MoreHorizontal,
+  OctagonX,
   PanelRight,
   RotateCcw,
   Settings2,
@@ -33,7 +34,11 @@ import {
 } from "@/components/ui/dropdown-menu"
 import type { WorkbenchChromeActionsProps } from "@/components/workbench/workbench-content"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
-import { personalAgentCancel, personalAgentCompact } from "@/lib/api"
+import {
+  personalAgentCancel,
+  personalAgentCompact,
+  personalAgentStopAll,
+} from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import {
   PERSONAL_AGENT_EVENTS,
@@ -45,7 +50,7 @@ export function PersonalAgentChromeActions({
   iconClassName,
 }: WorkbenchChromeActionsProps) {
   const t = useTranslations("PersonalAgent.menu")
-  const { snapshot } = usePersonalAgent()
+  const { snapshot, botId } = usePersonalAgent()
   const auxOpen = usePersonalAgentUi((s) => s.auxOpen)
   const toggleAux = usePersonalAgentUi((s) => s.toggleAux)
   const [acting, setActing] = useState(false)
@@ -109,7 +114,7 @@ export function PersonalAgentChromeActions({
               {turn ? (
                 <DropdownMenuItem
                   disabled={readOnly || acting}
-                  onClick={() => void act(personalAgentCancel)}
+                  onClick={() => void act(() => personalAgentCancel(botId))}
                 >
                   <Square className="size-4" />
                   {compacting ? t("stopCompaction") : t("stopReply")}
@@ -118,7 +123,7 @@ export function PersonalAgentChromeActions({
                 <DropdownMenuItem
                   disabled={readOnly || acting || !status?.segment}
                   title={t("compactHint")}
-                  onClick={() => void act(personalAgentCompact)}
+                  onClick={() => void act(() => personalAgentCompact(botId))}
                 >
                   <Shrink className="size-4" />
                   {t("compact")}
@@ -134,6 +139,17 @@ export function PersonalAgentChromeActions({
               >
                 <RotateCcw className="size-4" />
                 {t("newSession")}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={readOnly || acting}
+                title={t("stopAllHint")}
+                onClick={() =>
+                  void act(() => personalAgentStopAll(botId), t("stoppedAll"))
+                }
+              >
+                <OctagonX className="size-4" />
+                {t("stopAll")}
               </DropdownMenuItem>
             </>
           ) : null}

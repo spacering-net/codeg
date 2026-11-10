@@ -1460,6 +1460,10 @@
           "type": "string",
           "maxLength": 2000,
           "description": "What you should do once it finishes, e.g. 'remind the owner to release after the review passes'. Handed back to you with the completion event."
+        },
+        "for": {
+          "type": "string",
+          "description": "The input of this turn the work is for — its id as the delivery shows it: an owner's message #58, another assistant's message m12, news #61. The dispatch is filed under where that input came from. Needed only when the turn carries inputs from more than one source; otherwise leave it out."
         }
       }
     }
@@ -1492,6 +1496,10 @@
             "verify"
           ],
           "description": "task in review only; defaults to revise."
+        },
+        "for": {
+          "type": "string",
+          "description": "The input of this turn the follow-up is for (#58, m12). Optional: a follow-up stays with its dispatch's own chain."
         }
       }
     }
@@ -1597,6 +1605,47 @@
           "minimum": 1,
           "maximum": 100,
           "description": "Rows to return; default 20."
+        }
+      }
+    }
+  },
+  {
+    "name": "bot_list",
+    "description": "List the owner's assistants you can write to with bot_message — the primary assistant and the workers — with what each is for, whether it is working now, and how many open matters it has. Hidden assistants are listed too (they take messages); deleted ones are not.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "bot_message",
+    "description": "Write to another of the owner's assistants (from bot_list) — to hand it work that is its job, to ask it something, or to answer a message it sent you. ASYNCHRONOUS: returns at once with the message id; you can end your turn. The receiver takes over what you ask and sees it through (it dispatches, follows up, checks), and its answer reaches you later as a <codeg-message>; codeg keeps an open matter for you until it comes. Write it as you would to a colleague: the goal, the context it needs, the constraints, what done looks like. To answer a message, or to ask back about one, set `reply_to` to its id rather than starting a new request.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "to": {
+          "type": "string",
+          "description": "The receiving assistant: its id (\"3\") or its name, from bot_list. May be left out when `reply_to` is set (the answer goes to whoever wrote that message)."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 20000,
+          "description": "What you have to say."
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "The message this answers, e.g. \"m12\"."
+        },
+        "wants_reply": {
+          "type": "boolean",
+          "description": "Whether you want an answer. Defaults to true for a new request, false for an answer."
+        },
+        "for": {
+          "type": "string",
+          "description": "The input of this turn the message is for — its id as the delivery shows it (#58, m12, #61). The message carries where that input came from. Needed only when the turn carries inputs from more than one source; not needed with `reply_to`."
         }
       }
     }

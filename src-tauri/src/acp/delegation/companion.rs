@@ -295,7 +295,8 @@ impl CompanionFeatures {
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
             "assistant_list" | "project_list" | "dispatch" | "dispatch_followup"
-            | "item_list" | "item_read" | "item_update" | "timeline_read" => self.personal_agent,
+            | "item_list" | "item_read" | "item_update" | "timeline_read" | "bot_list"
+            | "bot_message" => self.personal_agent,
             "browser_list_tabs" | "browser_snapshot" | "browser_console_messages"
             | "browser_screenshot" | "browser_click" | "browser_hover" | "browser_type"
             | "browser_press_key" | "browser_select_option" | "browser_open_tab"
@@ -677,6 +678,9 @@ pub async fn dispatch_line(
                 ),
                 None => all,
             };
+            if ctx.features.personal_agent {
+                offer_for_on_ask(&mut tools);
+            }
             remove_disabled_agents_from_delegate_enum(&mut tools, &ctx.disabled_agents);
             append_custom_agents_to_delegate_enum(&mut tools, &ctx.custom_agents);
             if ctx.features.allows_tool("delegate_to_agent") {
@@ -1083,6 +1087,16 @@ async fn build_tools_call_spawn(
             let req = BrokerAskRequest {
                 token: ctx.token.clone(),
                 questions,
+                // Only a personal assistant's tool offers it.
+                for_input: if ctx.features.personal_agent {
+                    arguments.get("for").and_then(|v| match v {
+                        Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                        Value::Number(n) => Some(n.to_string()),
+                        _ => None,
+                    })
+                } else {
+                    None
+                },
             };
             // No external_handle: canceling a blocking ask only suppresses its
             // response. The companion dropping the round-trip future closes the
@@ -1487,7 +1501,7 @@ async fn build_tools_call_spawn(
             register_and_spawn(inflight, id, None, round_trip, render_authoring_result).await
         }
         "assistant_list" | "project_list" | "dispatch" | "dispatch_followup" | "item_list"
-        | "item_read" | "item_update" | "timeline_read" => {
+        | "item_read" | "item_update" | "timeline_read" | "bot_list" | "bot_message" => {
             // Shape only: the app owns every rule (which assistants exist,
             // which projects may be targeted, which states allow a
             // follow-up), so the companion forwards the arguments as given.
@@ -1996,6 +2010,35 @@ fn render_feedback_result_with_streak(outcome: &Value, empty_streak: Option<u32>
             "hint": hint,
         },
     })
+}
+
+/// A personal assistant's `ask_user_question` takes `for`: the input of its
+/// turn the question is for, so the question also shows in the conversation
+/// that input came from. Not in the embedded schema: no other agent has
+/// inputs to name.
+fn offer_for_on_ask(tools: &mut Value) {
+    let Some(list) = tools.as_array_mut() else {
+        return;
+    };
+    for t in list.iter_mut() {
+        if t.get("name").and_then(|n| n.as_str()) != Some("ask_user_question") {
+            continue;
+        }
+        if let Some(props) = t
+            .pointer_mut("/inputSchema/properties")
+            .and_then(|p| p.as_object_mut())
+        {
+            props.insert(
+                "for".into(),
+                json!({
+                    "type": "string",
+                    "description": "The input of this turn the question is for — its id as the \
+                                    delivery shows it (#58, m12). Needed only when the turn carries \
+                                    inputs from more than one source."
+                }),
+            );
+        }
+    }
 }
 
 /// Map the `ask_user_question` round-trip outcome (a `{ answers, declined }`
@@ -5740,7 +5783,7 @@ mod tests {
         computer_clipboard: false,
     };
 
-    const PERSONAL_AGENT_TOOLS: [&str; 8] = [
+    const PERSONAL_AGENT_TOOLS: [&str; 10] = [
         "assistant_list",
         "project_list",
         "dispatch",
@@ -5749,7 +5792,34 @@ mod tests {
         "item_read",
         "item_update",
         "timeline_read",
+        "bot_list",
+        "bot_message",
     ];
+
+    #[tokio::test]
+    async fn a_personal_assistants_ask_names_the_input_it_is_for() {
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let ask_for = |action: LineAction| {
+            unwrap_respond(action).result.unwrap()["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == "ask_user_question")
+                .and_then(|t| t.pointer("/inputSchema/properties/for").cloned())
+        };
+        // Any other agent's ask takes no `for`: it has no inputs to name.
+        let plain = CompanionFeatures {
+            ask: true,
+            personal_agent: false,
+            ..PERSONAL_AGENT_ONLY
+        };
+        assert!(ask_for(dispatch_with_features(plain, list).await).is_none());
+        let assistant = CompanionFeatures {
+            ask: true,
+            ..PERSONAL_AGENT_ONLY
+        };
+        assert!(ask_for(dispatch_with_features(assistant, list).await).is_some());
+    }
 
     #[test]
     fn the_personal_agent_token_parses_on_its_own() {

@@ -525,6 +525,9 @@ impl DelegationListener {
                     write_frame(conn, &ask_declined_response()?).await?;
                     return Ok(());
                 };
+                // Before the card exists: an assistant's engine files the
+                // question under the input it names when it records it.
+                crate::personal_agent::note_ask_for(&parent_conn_id, req.for_input.clone()).await;
                 let Some(reg) = self
                     .questions
                     .register_question(&parent_conn_id, req.questions)
@@ -3423,6 +3426,7 @@ mod tests {
                 ],
                 is_secret: false,
             }],
+            for_input: None,
         })
     }
 
