@@ -19,6 +19,7 @@ import type {
 } from "@/lib/types"
 import { ComposerStatusStrips } from "@/components/chat/composer-status-strips"
 import { AsyncTaskStrip } from "@/components/chat/async-task-strip"
+import { LiveOutputFileWatcher } from "@/components/chat/live-output-file-watcher"
 import { RemoteControlStrip } from "@/components/chat/remote-control-strip"
 import type {
   PendingPermission,
@@ -255,11 +256,17 @@ export function ConversationShell({
         />
       )}
       {asyncTasks && asyncTasks.length > 0 && (
-        <AsyncTaskStrip
-          tasks={asyncTasks}
-          onStop={onStopAsyncTask}
-          agentName={agentName}
-        />
+        <>
+          <AsyncTaskStrip
+            tasks={asyncTasks}
+            onStop={onStopAsyncTask}
+            agentName={agentName}
+          />
+          {/* Null-rendering leaf: keeps the output tabs the strip's button
+              opens fresh while their task is still writing (temp-dir logs
+              sit outside the notify-watched roots, so nothing else does). */}
+          <LiveOutputFileWatcher tasks={asyncTasks} />
+        </>
       )}
 
       <div className={cn("flex-1 min-h-0", resizableWidth && "relative")}>
