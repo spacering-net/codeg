@@ -282,7 +282,7 @@
     "proxyAddress": "プロキシアドレス",
     "proxyHint": "http(s)/socks5 をサポート。例: {example}。システムプロキシ有効時のみ有効です。",
     "proxyBypass": "プロキシを使用しないアドレス",
-    "proxyBypassHint": "複数のアドレスは半角カンマ <code>,</code> で区切り、スペースは入れません。例: <code>{example}</code>。<code>example.com</code> はそのドメインに、<code>.example.com</code> はそのすべてのサブドメインに一致します。IP アドレスも指定できます。ローカルアドレス <code>localhost,127.0.0.1,::1</code> は常に直接接続されるため、入力は不要です。このリストは環境変数 NO_PROXY として適用されます。",
+    "proxyBypassHint": "複数のアドレスは半角カンマ <code>,</code> で区切り、スペースは入れません。例: <code>{example}</code>。<code>example.com</code> はそのドメインに、<code>.example.com</code> はそのすべてのサブドメインに一致します。IP アドレスも指定できます。ローカルアドレス <code>localhost,127.0.0.1,::1</code> は常にリストに含まれるため入力は不要ですが、IPv6 アドレスを角括弧で書いた URL（例: <code>http://[::1]:3000</code>）は一部のツールでプロキシを経由します。このリストは環境変数 NO_PROXY として適用されます。",
     "save": "保存",
     "saving": "保存中...",
     "proxyRequired": "プロキシ有効時はプロキシ URL が必要です",
