@@ -3514,7 +3514,7 @@
         "attachLocalUpload": "Téléverser un fichier local",
         "attachServerFile": "Sélectionner un fichier serveur",
         "attachUploadTooLarge": "{names} dépasse la limite de téléversement de {limit} Mo et a été ignoré.",
-        "attachUploadFailed": "Échec du téléversement de {names}.",
+        "attachUploadFailed": "Échec du téléversement de {names}. Motif : {reason}",
         "attachUploadNotAFile": "{names} n'est pas un fichier régulier (répertoire ou fichier spécial) et a été ignoré.",
         "attachUploadQuotaExceeded": "Le serveur n'a plus d'espace pour les téléversements ; {names} n'a pas pu être envoyé.",
         "attachUploadInProgress": "Les images sont encore en cours d'envoi — réessayez dans un instant.",

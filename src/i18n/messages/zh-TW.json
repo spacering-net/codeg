@@ -3514,7 +3514,7 @@
         "attachLocalUpload": "附加本機檔案",
         "attachServerFile": "附加伺服器檔案",
         "attachUploadTooLarge": "{names} 超過 {limit}MB 上傳上限，已略過。",
-        "attachUploadFailed": "上傳失敗：{names}。",
+        "attachUploadFailed": "上傳失敗：{names}。原因：{reason}",
         "attachUploadNotAFile": "{names} 不是常規檔案（目錄或特殊檔案），已略過。",
         "attachUploadQuotaExceeded": "伺服器上傳空間已用盡，{names} 未能上傳。",
         "attachUploadInProgress": "圖片仍在上傳中，請稍候再傳送。",
