@@ -23,7 +23,9 @@ export const HIGHLIGHT_LIMITS = {
   inFlight: 16,
   // Legacy callers without a lifecycle cannot wait indefinitely in bulk.
   detachedWaiters: 128,
-  codeLength: 100_000,
+  // Same ceilings as the file source view (`SOURCE_VIEW_MAX_BYTES`/`_LINES`),
+  // so every file it agrees to show is still highlighted.
+  codeLength: 512 * 1024,
   lines: 5_000,
 } as const
 

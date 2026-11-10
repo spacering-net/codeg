@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { TokensResult } from "shiki"
+import {
+  SOURCE_VIEW_MAX_BYTES,
+  SOURCE_VIEW_MAX_LINES,
+} from "@/components/files/file-document-view"
 
 const mocks = vi.hoisted(() => ({
   createHighlighter: vi.fn(),
@@ -146,6 +150,18 @@ describe("shared code highlighting memory", () => {
     expect(result.tokens[0][0].content).toBe(code)
     expect(mocks.createHighlighter).not.toHaveBeenCalled()
     expect(service.getCodeHighlightStats().entries).toBe(0)
+  })
+
+  it("highlights every file the source view agrees to show", async () => {
+    const line = "x".repeat(
+      Math.floor(SOURCE_VIEW_MAX_BYTES / SOURCE_VIEW_MAX_LINES) - 1
+    )
+    const code = Array(SOURCE_VIEW_MAX_LINES).fill(line).join("\n")
+    expect(code.length).toBeLessThanOrEqual(SOURCE_VIEW_MAX_BYTES)
+    expect(code.length).toBeGreaterThan(SOURCE_VIEW_MAX_BYTES - 5_000)
+    const result = await highlight(options(code))
+    expect(result.fg).toBe("#000")
+    expect(mocks.codeToTokens).toHaveBeenCalledOnce()
   })
 
   it("does not cache a token tree larger than the entire budget", async () => {
