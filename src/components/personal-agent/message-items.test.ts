@@ -372,3 +372,26 @@ describe("the news of a piece of work", () => {
     expect(latest).toEqual({ 1: false, 2: true, 4: true, 5: false })
   })
 })
+
+describe("an executor's question (7.3.1)", () => {
+  it("stands as a card of its own after its work's news, and is not news itself", () => {
+    const result = row(1, "result", { dispatch_id: 5 })
+    const asked = row(2, "notice", {
+      dispatch_id: 5,
+      data: { notice: "ask", state: "asking", dispatch_id: 5 },
+    })
+    const mirrored = row(3, "notice", {
+      data: {
+        notice: "ask",
+        state: "forwarded",
+        dispatch_id: 5,
+        mirror_of: { bot_id: 4, row_id: 2, ask_id: 12 },
+      },
+    })
+    const items = buildMessageItems([result, asked, mirrored])
+    expect(shape(items)).toEqual(["time", "event:1", "notice:2", "notice:3"])
+    // The work's news stays the latest news of it: the card is not news.
+    const news = items.find((i) => i.kind === "event")
+    expect(news?.kind === "event" && news.latest).toBe(true)
+  })
+})

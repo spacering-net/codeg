@@ -44,6 +44,23 @@ fn default_loop_rounds() -> u32 {
     DEFAULT_LOOP_ROUNDS
 }
 
+/// How many times codeg retries one dispatch on its own after a restart
+/// interrupted it (7.3), unless the owner changes it; 0 is never.
+pub const DEFAULT_RETRY_ROUNDS: u32 = 2;
+/// The most automatic retries that can be set.
+pub const MAX_RETRY_ROUNDS: u32 = 10;
+
+fn default_retry_rounds() -> u32 {
+    DEFAULT_RETRY_ROUNDS
+}
+
+fn lenient_retry_rounds<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_u64()
+        .map(|n| n.min(MAX_RETRY_ROUNDS as u64) as u32)
+        .unwrap_or(DEFAULT_RETRY_ROUNDS))
+}
+
 fn lenient_rounds<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let v = Value::deserialize(d)?;
     Ok(v.as_u64()
@@ -110,6 +127,18 @@ pub enum AskFirst {
     Ask,
 }
 
+/// Who answers an executor's questions or plan approvals (7.3.1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecAnswers {
+    /// The assistant that dispatched the work answers for the owner, and
+    /// forwards what it cannot settle.
+    #[default]
+    Assistant,
+    /// Always the owner.
+    Owner,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerHandoff {
@@ -145,6 +174,19 @@ pub struct Prefs {
     /// stopped; 0 is no limit.
     #[serde(default = "default_loop_rounds", deserialize_with = "lenient_rounds")]
     pub loop_rounds: u32,
+    /// A dispatch a restart interrupted: retried at once, or put to the
+    /// owner on a card first (7.3).
+    #[serde(default, deserialize_with = "lenient")]
+    pub interrupt_retry: AskFirst,
+    /// How many times one dispatch is retried on its own; 0 is never.
+    #[serde(default = "default_retry_rounds", deserialize_with = "lenient_retry_rounds")]
+    pub retry_rounds: u32,
+    /// An executor's questions (7.3.1).
+    #[serde(default, deserialize_with = "lenient")]
+    pub exec_questions: ExecAnswers,
+    /// An executor's plan approvals (7.3.1).
+    #[serde(default, deserialize_with = "lenient")]
+    pub exec_plans: ExecAnswers,
 }
 
 impl Default for Prefs {
@@ -159,6 +201,10 @@ impl Default for Prefs {
             messages: AskFirst::default(),
             worker_handoff: WorkerHandoff::default(),
             loop_rounds: DEFAULT_LOOP_ROUNDS,
+            interrupt_retry: AskFirst::default(),
+            retry_rounds: DEFAULT_RETRY_ROUNDS,
+            exec_questions: ExecAnswers::default(),
+            exec_plans: ExecAnswers::default(),
         }
     }
 }
@@ -230,6 +276,28 @@ pub const PREFS: &[PrefSpec] = &[
         },
         label: "rounds without progress before an exchange between assistants stops",
     },
+    PrefSpec {
+        key: "interrupt_retry",
+        kind: PrefKind::Choice(&["auto", "ask"]),
+        label: "retrying a dispatch a restart interrupted",
+    },
+    PrefSpec {
+        key: "retry_rounds",
+        kind: PrefKind::Count {
+            max: MAX_RETRY_ROUNDS,
+        },
+        label: "automatic retries of one dispatch",
+    },
+    PrefSpec {
+        key: "exec_questions",
+        kind: PrefKind::Choice(&["assistant", "owner"]),
+        label: "questions from the sessions you dispatched",
+    },
+    PrefSpec {
+        key: "exec_plans",
+        kind: PrefKind::Choice(&["assistant", "owner"]),
+        label: "plan approvals from the sessions you dispatched",
+    },
 ];
 
 /// The "automation level" (13.4): a preset over the items below — not
@@ -244,12 +312,18 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("followups", json!("auto")),
             ("messages", json!("auto")),
             ("chat_changes", json!("apply")),
+            ("interrupt_retry", json!("auto")),
+            ("exec_questions", json!("assistant")),
+            ("exec_plans", json!("assistant")),
         ]),
         "ask_more" => Some(vec![
             ("confirm_dispatch", json!("code")),
             ("followups", json!("ask")),
             ("messages", json!("ask")),
             ("chat_changes", json!("show")),
+            ("interrupt_retry", json!("ask")),
+            ("exec_questions", json!("owner")),
+            ("exec_plans", json!("owner")),
         ]),
         _ => None,
     }
@@ -373,6 +447,22 @@ fn brain_value(key: &str, value: &Value) -> String {
             Some(n) => n.to_string(),
             None => value.to_string(),
         },
+        ("interrupt_retry", "auto") => {
+            "codeg retries it once by itself and notes it on its card".into()
+        }
+        ("interrupt_retry", "ask") => "codeg asks the owner on a card first".into(),
+        ("retry_rounds", _) => match value.as_u64() {
+            Some(0) => "none: the owner retries".into(),
+            Some(n) => format!("at most {n}, then it is the owner's"),
+            None => value.to_string(),
+        },
+        ("exec_questions" | "exec_plans", "assistant") => {
+            "you answer them for the owner (dispatch_answer), and forward what you cannot settle"
+                .into()
+        }
+        ("exec_questions" | "exec_plans", "owner") => {
+            "they go to the owner; you are told, nothing to answer".into()
+        }
         _ => value.to_string(),
     }
 }

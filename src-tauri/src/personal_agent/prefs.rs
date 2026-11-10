@@ -402,6 +402,26 @@ impl PersonalAgentEngine {
         if applied.is_empty() {
             return Ok(());
         }
+        let answers_changed = applied
+            .iter()
+            .any(|a| a.key == "prefs.exec_questions" || a.key == "prefs.exec_plans");
+        self.write_settings_now(applied).await?;
+        // Who answers the executors' questions changed: every running
+        // session's windows are told anew (7.3.1).
+        if answers_changed {
+            match self.host_ref() {
+                Some(host) => {
+                    for engine in host.engines().await {
+                        engine.refresh_ask_delegates().await;
+                    }
+                }
+                None => self.refresh_ask_delegates().await,
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) async fn write_settings_now(&self, applied: &[Applied]) -> Result<(), String> {
         let mut account = Map::new();
         let mut own = Map::new();
         // The brain is the row's own columns, written as the identity page

@@ -142,6 +142,7 @@ import {
 } from "./shared"
 
 import { BotAvatar } from "./bot-avatar"
+import { AnsweredForYou } from "./event-card"
 import { LadderChip, TaskStrip } from "./task-strip"
 
 /** Run-log lines the status tab lists. */
@@ -746,7 +747,16 @@ function DispatchCard({
       notes={notes}
       onOpen={canOpen ? () => openWork(target) : null}
       openLabel={canOpen ? t("timeline.viewSession") : undefined}
-      extra={d.task ? <TaskStrip d={d} /> : undefined}
+      extra={
+        d.task || d.answered_for_you > 0 ? (
+          <>
+            {d.task ? <TaskStrip d={d} /> : null}
+            {d.answered_for_you > 0 ? (
+              <AnsweredForYou count={d.answered_for_you} className="mt-1.5" />
+            ) : null}
+          </>
+        ) : undefined
+      }
       actions={actions}
     />
   )

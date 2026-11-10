@@ -32,6 +32,8 @@ import type {
   AssistantDraft,
   AssistantInfo,
   AssistantPatch,
+  AskAnswerOutcome,
+  AskPlanDecision,
   ConversationTarget,
   DispatchInfo,
   DispatchMode,
@@ -2661,6 +2663,23 @@ export async function personalAgentDispatchStop(
   return getTransport().call("personal_agent_dispatch_stop", {
     botId,
     dispatchId,
+  })
+}
+
+/** The owner answers an executor's question or plan approval on an ask
+ *  card (7.3.1): the card of the assistant answering it, or its mirror.
+ *  The first answer wins; a late one is told whose did. */
+export async function personalAgentAskAnswer(params: {
+  askId: number
+  answer?: QuestionAnswer
+  decision?: AskPlanDecision
+  feedback?: string | null
+}): Promise<AskAnswerOutcome> {
+  return getTransport().call("personal_agent_ask_answer", {
+    askId: params.askId,
+    answer: params.answer,
+    decision: params.decision,
+    feedback: params.feedback ?? undefined,
   })
 }
 

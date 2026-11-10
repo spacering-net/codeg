@@ -4159,7 +4159,8 @@
           "allowAlways": "sempre permitido",
           "rejected": "recusado",
           "viaChatChannel": "por um canal de chat",
-          "byPolicy": "pela política de permissões da execução"
+          "byPolicy": "pela política de permissões da execução",
+          "byAssistant": "respondido por um assistente por você"
         }
       },
       "messageNav": {
@@ -8044,11 +8045,33 @@
           "ask_more": "Perguntar mais vezes",
           "custom": "Personalizado",
           "standardHint": "Tudo roda sozinho e avisa você em um cartão.",
-          "ask_moreHint": "Acompanhamentos e novas tentativas, mensagens para outros assistentes, mudanças que você pede na conversa e atribuições que mudam código chegam a você primeiro como cartão.",
+          "ask_moreHint": "Continuações e novas tentativas, a nova tentativa de trabalho interrompido por um reinício, mensagens para outros assistentes, mudanças que você pede na conversa e delegações que alteram código chegam primeiro como cartão; as perguntas e aprovações de plano das sessões vêm para você.",
           "customHint": "Alguns dos itens abaixo estão do seu jeito.",
           "confirmTitle": "Mudar para “{level}”?",
           "confirmBody": "{count, plural, one {Isso sobrescreve # item que você alterou.} other {Isso sobrescreve # itens que você alterou.}}",
           "confirm": "Mudar"
+        },
+        "interrupt_retry": {
+          "title": "Trabalho interrompido por um reinício",
+          "hint": "Quando o codeg reinicia no meio de um trabalho que um assistente delegou.",
+          "auto": "Tentar de novo automaticamente",
+          "ask": "Perguntar antes"
+        },
+        "retry_rounds": {
+          "title": "Novas tentativas automáticas do mesmo trabalho",
+          "hint": "Quantas vezes o codeg tenta de novo o mesmo trabalho por conta própria antes de deixar você decidir. 0 é nunca."
+        },
+        "exec_questions": {
+          "title": "Perguntas das sessões delegadas",
+          "hint": "Quando uma sessão que um assistente delegou para e faz uma pergunta. Uma pergunta que pede um segredo sempre vem para você.",
+          "assistant": "O assistente responde e me pergunta quando estiver em dúvida",
+          "owner": "Sempre me perguntar"
+        },
+        "exec_plans": {
+          "title": "Aprovação de planos das sessões delegadas",
+          "hint": "Quando uma sessão que um assistente delegou quer o plano aprovado antes de continuar.",
+          "assistant": "O assistente responde e me pergunta quando estiver em dúvida",
+          "owner": "Sempre me perguntar"
         }
       },
       "workdir": {
@@ -8268,6 +8291,13 @@
         "boot": "O codeg reiniciou",
         "lost": "A conexão da sessão caiu",
         "gone": "A tarefa foi excluída do quadro"
+      },
+      "retry": {
+        "pending": "Tentando de novo automaticamente (tentativa {attempt} de {max})…",
+        "retried": "Tentado de novo automaticamente (tentativa {attempt} de {max})",
+        "failed": "A nova tentativa automática falhou: {error}",
+        "asked": "Perguntamos se você quer tentar de novo",
+        "exhausted": "{max, plural, one {Já tentado de novo # vez — você decide} other {Já tentado de novo # vezes — você decide}}"
       }
     },
     "overview": {
@@ -8381,7 +8411,8 @@
         "dismiss": "Agora não",
         "undo": "Desfazer",
         "seeSettings": "Ver nas configurações"
-      }
+      },
+      "retryOf": "Tentar de novo “{title}”"
     },
     "exchange": {
       "sentTo": "Mensagem enviada para <peer></peer>",
@@ -8729,6 +8760,57 @@
       "prOpened": "PR aberto",
       "prNotTracked": "O status do PR ainda não é acompanhado",
       "pastStopping": "Não dá mais para parar: terminou ou está sendo mesclada"
+    },
+    "ask": {
+      "heading": {
+        "question": "{executor} está perguntando",
+        "plan": "{executor} quer o plano aprovado"
+      },
+      "someone": "O executor",
+      "mirror": "Do trabalho que {name} assumiu por você aqui",
+      "state": {
+        "asking": "{name} está respondendo por você…",
+        "forwarded": "Aguardando sua resposta",
+        "submitting": "Enviando…",
+        "withdrawn": "Retirada — não espera mais resposta"
+      },
+      "why": {
+        "assistant": "{name} não conseguiu decidir e passou para você",
+        "settings": "Suas configurações enviam essas perguntas para você",
+        "secret": "Ela pede um segredo",
+        "no_brain": "Nenhum assistente está configurado para responder",
+        "turn_ended": "{name} encerrou o turno sem responder",
+        "turn_failed": "O turno de {name} falhou antes de responder",
+        "timeout": "Nenhuma resposta de {name} em 10 minutos",
+        "handed_over": "Você assumiu este trabalho"
+      },
+      "suggestion": "{name} tende a: {suggestion}",
+      "reason": "Por quê: {reason}",
+      "openSession": "Abrir sessão",
+      "answer": {
+        "skipped": "pulada",
+        "empty": "sem resposta",
+        "approved": "aprovou o plano",
+        "revised": "pediu mudanças no plano",
+        "revisedWith": "pediu mudanças: {feedback}",
+        "abandoned": "abandonou o plano",
+        "approvedAs": "aprovou o plano ({option})",
+        "sentBackAs": "devolveu o plano ({option})"
+      },
+      "by": {
+        "assistant": "{name} respondeu por você: {answer}",
+        "ownerSession": "Você respondeu na sessão: {answer}",
+        "ownerPage": "Você respondeu na página de assistentes: {answer}",
+        "owner": "Você respondeu: {answer}",
+        "channel": "Respondida por um canal de chat: {answer}",
+        "policy": "Respondida pela política de uma execução: {answer}",
+        "someone": "Respondida: {answer}"
+      },
+      "toast": {
+        "already": "Já respondida — o cartão mostra qual resposta valeu",
+        "withdrawn": "Não espera mais resposta"
+      },
+      "answeredForYou": "{count, plural, one {Respondida por você # vez} other {Respondida por você # vezes}}"
     }
   }
 }

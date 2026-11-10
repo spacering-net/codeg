@@ -298,6 +298,34 @@ pub async fn personal_agent_dispatch_stop(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AskAnswerParams {
+    pub ask_id: i32,
+    #[serde(default)]
+    pub answer: Option<crate::acp::question::QuestionAnswer>,
+    #[serde(default)]
+    pub decision: Option<String>,
+    #[serde(default)]
+    pub feedback: Option<String>,
+}
+
+pub async fn personal_agent_ask_answer(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AskAnswerParams>,
+) -> Result<Json<pa::AskAnswerOutcome>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_ask_answer_core(
+            &state.db,
+            params.ask_id,
+            params.answer,
+            params.decision,
+            params.feedback,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversationTargetParams {
     pub conversation_id: i32,
 }

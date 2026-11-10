@@ -123,6 +123,9 @@ pub enum FollowupAuth {
     Card { notice_id: i32, op_id: String },
     /// Outside any delivery and any card.
     Direct,
+    /// codeg's own step, under a stable operation id (an automatic retry,
+    /// a plan's feedback): one that is on record already is not run again.
+    Op { op_id: String },
 }
 
 /// The states in which a dispatch still holds or waits for its executor.
@@ -221,7 +224,7 @@ fn moved_meanwhile(task_id: i32, e: String) -> String {
     }
 }
 
-fn cut(text: &str, max: usize) -> String {
+pub(super) fn cut(text: &str, max: usize) -> String {
     let t = text.trim();
     if t.chars().count() <= max {
         t.to_string()
@@ -232,7 +235,7 @@ fn cut(text: &str, max: usize) -> String {
     }
 }
 
-fn mode_label(mode: DispatchMode) -> &'static str {
+pub(super) fn mode_label(mode: DispatchMode) -> &'static str {
     match mode {
         DispatchMode::Task => "kanban task",
         DispatchMode::Chat => "chat",
@@ -822,6 +825,9 @@ impl PersonalAgentEngine {
             },
         )
         .await;
+        // Its questions and plan approvals are this assistant's to answer
+        // (7.3.1): the windows hold back their notification of those.
+        self.delegate_asks(conn_id).await;
     }
 
 
@@ -1027,6 +1033,14 @@ impl PersonalAgentEngine {
             AcpEvent::PermissionRequest { .. }
             | AcpEvent::QuestionRequest { .. }
             | AcpEvent::PlanApprovalRequest { .. } => {
+                // A question or a plan approval is the assistant's to answer
+                // (7.3.1): its card says so, not the waiting-for-input news.
+                let ask = match &env.payload {
+                    AcpEvent::PermissionRequest {
+                        tool_call, options, ..
+                    } => crate::acp::types::PlanPermission::of(tool_call, options).is_some(),
+                    _ => true,
+                };
                 if let Ok(Some(updated)) = svc::update_dispatch(
                     &self.db.conn,
                     id,
@@ -1038,12 +1052,24 @@ impl PersonalAgentEngine {
                 )
                 .await
                 {
-                    self.record_progress(&updated, None, None, "wait").await;
+                    if ask {
+                        self.emit(PersonalAgentChange::Dispatch { id });
+                    } else {
+                        self.record_progress(&updated, None, None, "wait").await;
+                    }
+                }
+                if ask {
+                    if let Ok(Some(d)) = svc::get_dispatch(&self.db.conn, id).await {
+                        self.on_ask_event(&d, env).await;
+                    }
                 }
             }
             AcpEvent::PermissionResolved { .. }
             | AcpEvent::QuestionResolved { .. }
             | AcpEvent::PlanApprovalResolved { .. } => {
+                if let Ok(Some(d)) = svc::get_dispatch(&self.db.conn, id).await {
+                    self.on_ask_event(&d, env).await;
+                }
                 if svc::update_dispatch(
                     &self.db.conn,
                     id,
@@ -1207,11 +1233,29 @@ impl PersonalAgentEngine {
         }
         // Waking the agent for a state it has to interpret; a dispatch taken
         // over by the owner only rides along with the next delivery.
-        let wake = !matches!(
+        let mut wake = !matches!(
             d.state,
             DispatchState::Queued | DispatchState::Running | DispatchState::HandedOver
         );
-        let quiet = matches!(d.state, DispatchState::Queued | DispatchState::Running);
+        // A question or a plan approval is told by its own card (7.3.1).
+        let asking = d.state == DispatchState::WaitingInput && self.waits_on_ask(d).await;
+        let quiet = matches!(d.state, DispatchState::Queued | DispatchState::Running) || asking;
+        // A restart cut it off: codeg retries it, or asks the owner (7.3).
+        let mut retry = serde_json::Value::Null;
+        if d.state == DispatchState::Interrupted {
+            let plan = self.retry_plan(d).await;
+            retry = plan.card();
+            if let Some((sentence, wakes)) = plan.sentence() {
+                summary.push_str(&sentence);
+                wake = wakes;
+            }
+        }
+        // A plan sent back with feedback the answer could not carry: the
+        // feedback goes as its next message, nothing to interpret.
+        if self.feedback_pending(d.id).await {
+            summary.push_str(" codeg sends it the plan feedback as its next message.");
+            wake = false;
+        }
         if quiet {
             self.emit(PersonalAgentChange::Dispatch { id: d.id });
             return;
@@ -1259,6 +1303,8 @@ impl PersonalAgentEngine {
             "conversation_id": d.conversation_id,
             "conversation_folder_id": conversation_folder_id,
             "folder_id": d.folder_id,
+            // How codeg goes on from a restart's interruption (7.3).
+            "auto_retry": retry,
         }));
         // The owner stopped it: the card says so, and nobody is woken — the
         // stop card already told the owner, and what it stopped is not the
@@ -1637,6 +1683,8 @@ impl PersonalAgentEngine {
             return;
         };
         self.record_progress(&updated, None, None, "handover").await;
+        // Its questions are the owner's now (7.3.1).
+        self.after_handover(&updated, d.connection_id.as_deref()).await;
         // The owner wrote in it, and that wins: the agent's send that has not
         // started going out does not go out at all (the connection is refused
         // it). One already going out cannot be called back — whether it
@@ -1732,6 +1780,7 @@ impl PersonalAgentEngine {
             }
             FollowupAuth::Card { notice_id, op_id } => (LedgerSlot::outside(op_id), Some(notice_id)),
             FollowupAuth::Direct => (LedgerSlot::outside(ledger::fresh_op_id()), None),
+            FollowupAuth::Op { op_id } => (LedgerSlot::outside(op_id), None),
         };
         let op = match svc::begin_op(
             &self.db.conn,

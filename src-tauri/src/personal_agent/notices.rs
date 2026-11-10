@@ -384,7 +384,7 @@ impl PersonalAgentEngine {
     /// `why`: `proposal` (the assistant's suggestion) or `confirm` (the
     /// owner asked to confirm such actions first).
     #[allow(clippy::too_many_arguments)]
-    async fn raise_proposal(
+    pub(super) async fn raise_proposal(
         &self,
         action: ProposalAction,
         display: Value,
@@ -453,6 +453,9 @@ impl PersonalAgentEngine {
             NoticeKind::Changed => return self.act_on_changed(&notice, action).await,
             NoticeKind::Choice => {
                 return Err("a choice card is answered with its choices".into());
+            }
+            NoticeKind::Ask => {
+                return Err("a question card is answered with its answer".into());
             }
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }

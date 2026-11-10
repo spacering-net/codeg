@@ -4159,7 +4159,8 @@
           "allowAlways": "一律允許",
           "rejected": "已拒絕",
           "viaChatChannel": "來自聊天頻道",
-          "byPolicy": "由執行的權限原則決定"
+          "byPolicy": "由執行的權限原則決定",
+          "byAssistant": "由助理代答"
         }
       },
       "messageNav": {
@@ -8044,11 +8045,33 @@
           "ask_more": "多問我",
           "custom": "自訂",
           "standardHint": "一切自動，做了都出卡告訴你。",
-          "ask_moreHint": "續作與重試、給別的助手傳訊息、對話裡的改動、改程式碼的派活，都先出卡，你點了才做。",
+          "ask_moreHint": "續作與重試、中斷後的重試、傳訊息給其他助理、對話裡的變更、會改程式碼的派工，都先出卡片，你點了才做；執行工作階段的提問和計畫審批一律轉給你。",
           "customHint": "下面有幾項是你自己調過的。",
           "confirmTitle": "切換到「{level}」？",
           "confirmBody": "會覆蓋你改過的 {count} 項。",
           "confirm": "切換"
+        },
+        "interrupt_retry": {
+          "title": "中斷後自動重試",
+          "hint": "codeg 重新啟動打斷了助理派出的工作時。",
+          "auto": "自動重試",
+          "ask": "先問我"
+        },
+        "retry_rounds": {
+          "title": "同一件工作最多自動重試",
+          "hint": "同一件工作 codeg 自己重試幾次，之後交給你決定。0 是不自動重試。"
+        },
+        "exec_questions": {
+          "title": "執行工作階段的提問",
+          "hint": "助理派出的工作階段停下來提問時。要填密鑰的問題一律交給你。",
+          "assistant": "助理代答，拿不準時轉給我",
+          "owner": "一律轉給我"
+        },
+        "exec_plans": {
+          "title": "執行工作階段的計畫審批",
+          "hint": "助理派出的工作階段要先批准計畫才往下做時。",
+          "assistant": "助理代答，拿不準時轉給我",
+          "owner": "一律轉給我"
         }
       },
       "workdir": {
@@ -8268,6 +8291,13 @@
         "boot": "codeg 重新啟動了",
         "lost": "工作階段連線中斷了",
         "gone": "看板上的任務被刪除了"
+      },
+      "retry": {
+        "pending": "正在自動重試（第 {attempt}/{max} 次）…",
+        "retried": "已自動重試（第 {attempt}/{max} 次）",
+        "failed": "自動重試失敗：{error}",
+        "asked": "已問你要不要重試",
+        "exhausted": "已經自動重試 {max} 次，交給你決定"
       }
     },
     "overview": {
@@ -8381,7 +8411,8 @@
         "dismiss": "不用",
         "undo": "復原",
         "seeSettings": "去設定裡看"
-      }
+      },
+      "retryOf": "重試「{title}」"
     },
     "exchange": {
       "sentTo": "已傳訊息給 <peer></peer>",
@@ -8729,6 +8760,57 @@
       "prOpened": "已提 PR",
       "prNotTracked": "PR 狀態還沒追蹤",
       "pastStopping": "已經做完或正在合併，停不下來了"
+    },
+    "ask": {
+      "heading": {
+        "question": "{executor} 在提問",
+        "plan": "{executor} 請你批准計畫"
+      },
+      "someone": "執行者",
+      "mirror": "來自 {name} 替你接手的工作",
+      "state": {
+        "asking": "{name} 正在代你回答…",
+        "forwarded": "等你回答",
+        "submitting": "正在送出…",
+        "withdrawn": "已撤回，不再等回答"
+      },
+      "why": {
+        "assistant": "{name} 拿不準，轉給了你",
+        "settings": "你的設定讓這類問題交給你",
+        "secret": "這是要填密鑰的問題",
+        "no_brain": "沒有可代答的助理",
+        "turn_ended": "{name} 這一回合結束了，沒有回答",
+        "turn_failed": "{name} 這一回合沒跑完就失敗了",
+        "timeout": "{name} 10 分鐘沒有回答",
+        "handed_over": "你接手了這件工作"
+      },
+      "suggestion": "{name} 傾向於：{suggestion}",
+      "reason": "依據：{reason}",
+      "openSession": "開啟工作階段",
+      "answer": {
+        "skipped": "略過",
+        "empty": "沒有回答",
+        "approved": "批准了計畫",
+        "revised": "要求修改計畫",
+        "revisedWith": "要求修改：{feedback}",
+        "abandoned": "放棄了計畫",
+        "approvedAs": "批准了計畫（{option}）",
+        "sentBackAs": "退回了計畫（{option}）"
+      },
+      "by": {
+        "assistant": "{name} 代答：{answer}",
+        "ownerSession": "你在工作階段裡回答了：{answer}",
+        "ownerPage": "你在助手頁面回答了：{answer}",
+        "owner": "你回答了：{answer}",
+        "channel": "從聊天頻道回答了：{answer}",
+        "policy": "由執行的策略回答了：{answer}",
+        "someone": "已回答：{answer}"
+      },
+      "toast": {
+        "already": "已經回答過了，卡片上記著採用的是誰的答案",
+        "withdrawn": "它已經不再等回答了"
+      },
+      "answeredForYou": "助理代答 {count} 次"
     }
   }
 }

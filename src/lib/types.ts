@@ -1601,6 +1601,36 @@ export type PermissionAnswerOrigin =
   | { kind: "user" }
   | { kind: "chat_channel" }
   | { kind: "cli_policy"; run_id: string }
+  /** An assistant answering a plan approval for the owner (7.3.1). */
+  | { kind: "assistant"; bot_id: number }
+  /** The owner answering such a plan approval on an assistant's page. */
+  | { kind: "assistant_page" }
+
+/** Who answered a question or a plan approval (Rust `AnswerOrigin`). */
+export type AnswerOrigin =
+  | { kind: "user" }
+  | { kind: "assistant_page" }
+  | { kind: "assistant"; bot_id: number }
+  | { kind: "chat_channel" }
+  | { kind: "cli_policy" }
+
+/** How a question or plan approval settled: the answer that took effect and
+ *  whose it was — or, with neither, that it was withdrawn (Rust
+ *  `AnswerResolution`). */
+export interface AnswerResolution {
+  answer?: unknown
+  origin?: AnswerOrigin
+  at: string
+}
+
+/** What the assistant that dispatched a session answers there for the owner
+ *  (Rust `AskDelegate`): a window holds back its notification of those until
+ *  one is forwarded. */
+export interface AskDelegate {
+  bot_id: number
+  questions: boolean
+  plans: boolean
+}
 
 /**
  * One answered permission request, as a record about its tool call (Rust
@@ -2170,6 +2200,73 @@ export interface DispatchInfo {
   ladder: Ladder
   /** The kanban task behind a task dispatch, while it exists. */
   task: TaskFacts | null
+  /** How many of its executor's questions and plan approvals its assistant
+   *  answered for the owner (7.3.1). */
+  answered_for_you: number
+}
+
+/** A plan answer on an ask card: send it back (`revise`) with feedback. */
+export type AskPlanDecision = "approve" | "revise" | "abandon"
+
+/** What the owner's answer on an ask card came to (7.3.1). */
+export interface AskAnswerOutcome {
+  state: "answered" | "already_answered" | "withdrawn" | "submitted"
+  text: string
+}
+
+/** Who answered an ask, as its card says. */
+export type AskAnsweredBy =
+  | { kind: "assistant"; bot_id: number; name?: string | null }
+  | { kind: "owner"; where?: "session" | "page" | null }
+  | { kind: "channel" }
+  | { kind: "policy" }
+
+/** An executor's question or plan approval, answered by the assistant that
+ *  dispatched the work or forwarded to the owner: an ask card's `data`
+ *  (Rust `AskCard`). */
+export interface AskCardData {
+  notice: "ask"
+  ask_id: number
+  bot_id: number
+  dispatch_id: number
+  title: string
+  executor: string
+  executor_id: number
+  agent_type: AgentType | null
+  mode: DispatchMode | null
+  folder_id: number | null
+  conversation_id: number | null
+  conversation_folder_id: number | null
+  work_task_id: number | null
+  request: "question" | "plan" | "plan_permission"
+  request_id: string
+  questions: QuestionSpec[]
+  plan: string | null
+  plan_actions: string[]
+  state: "asking" | "forwarded" | "submitting" | "answered" | "withdrawn"
+  forward_reason:
+    | "assistant"
+    | "settings"
+    | "secret"
+    | "no_brain"
+    | "turn_ended"
+    | "turn_failed"
+    | "timeout"
+    | "handed_over"
+    | null
+  suggestion: string | null
+  reason: string | null
+  answered_by: AskAnsweredBy | null
+  answer: unknown
+  answered_at: string | null
+  asked_at: string | null
+  forwarded_at: string | null
+  mirror_of: {
+    bot_id: number
+    row_id: number | null
+    ask_id: number
+    name?: string | null
+  } | null
 }
 
 /** Where a conversation opens: its project and the agent that reads it. */
@@ -2319,6 +2416,15 @@ export interface PersonalAgentPrefs {
   worker_handoff: "message" | "direct"
   /** 0 = no limit. */
   loop_rounds: number
+  /** A dispatch a restart interrupted: retried at once, or asked first. */
+  interrupt_retry: "auto" | "ask"
+  /** Automatic retries of one dispatch; 0 = never. */
+  retry_rounds: number
+  /** An executor's questions: the dispatching assistant answers, or the
+   *  owner. */
+  exec_questions: "assistant" | "owner"
+  /** An executor's plan approvals. */
+  exec_plans: "assistant" | "owner"
 }
 
 export type PersonalAgentPrefKey = keyof PersonalAgentPrefs
@@ -4210,6 +4316,8 @@ export type AcpEvent =
   | {
       type: "question_resolved"
       question_id: string
+      /** Whose answer took effect, or that it was withdrawn. */
+      resolution?: AnswerResolution
     }
   /**
    * A Grok `exit_plan_mode` call: the agent finished planning and is blocked on
@@ -4229,6 +4337,25 @@ export type AcpEvent =
   | {
       type: "plan_approval_resolved"
       approval_id: string
+      resolution?: AnswerResolution
+    }
+  /**
+   * The assistant that dispatched this session answers its questions and
+   * plan approvals for the owner: hold back their notifications until one is
+   * forwarded (`ask_forwarded`).
+   */
+  | {
+      type: "ask_delegate"
+      delegate?: AskDelegate | null
+    }
+  /**
+   * A question or plan approval the assistant was answering is now the
+   * owner's: notify them as its kind would have.
+   */
+  | {
+      type: "ask_forwarded"
+      request_id: string
+      kind: "question" | "plan" | "permission"
     }
   /**
    * The agent's effective settings (env vars / model provider / native config)
@@ -4609,6 +4736,9 @@ export interface LiveSessionSnapshot {
   /** Awaiting-decision Grok `exit_plan_mode` approval, recoverable on mid-turn
    *  attach. Absent (omitted) when no approval is pending. */
   pending_plan_approval?: PendingPlanApprovalState | null
+  /** What the dispatching assistant answers here for the owner. Absent when
+   *  nobody does. */
+  ask_delegate?: AskDelegate | null
   /** In-flight user prompt for the current turn — lets a client attaching
    *  mid-turn render the user turn. Absent (omitted) when no turn is in flight. */
   pending_user_message?: {

@@ -4159,7 +4159,8 @@
           "allowAlways": "toujours autorisé",
           "rejected": "refusé",
           "viaChatChannel": "depuis un canal de discussion",
-          "byPolicy": "par la politique d'autorisation de l'exécution"
+          "byPolicy": "par la politique d'autorisation de l'exécution",
+          "byAssistant": "répondu par un assistant pour toi"
         }
       },
       "messageNav": {
@@ -8044,11 +8045,33 @@
           "ask_more": "Me consulter plus souvent",
           "custom": "Personnalisé",
           "standardHint": "Tout s'exécute seul et vous est signalé sur une carte.",
-          "ask_moreHint": "Les relances et nouvelles tentatives, les messages aux autres assistants, les modifications demandées dans la conversation et les missions qui modifient du code vous parviennent d'abord sous forme de carte.",
+          "ask_moreHint": "Les suites et relances, la relance du travail interrompu par un redémarrage, les messages aux autres assistants, les changements demandés dans la conversation et les tâches qui modifient du code te parviennent d'abord sous forme de carte ; les questions et validations de plan des sessions te reviennent.",
           "customHint": "Certains des éléments ci-dessous sont réglés à votre façon.",
           "confirmTitle": "Passer à « {level} » ?",
           "confirmBody": "{count, plural, one {Cela écrase # élément que vous avez modifié.} other {Cela écrase # éléments que vous avez modifiés.}}",
           "confirm": "Changer"
+        },
+        "interrupt_retry": {
+          "title": "Travail interrompu par un redémarrage",
+          "hint": "Quand codeg redémarre au milieu d'un travail confié par un assistant.",
+          "auto": "Le relancer automatiquement",
+          "ask": "Me demander d'abord"
+        },
+        "retry_rounds": {
+          "title": "Relances automatiques d'un même travail",
+          "hint": "Combien de fois codeg relance le même travail de lui-même avant de te laisser décider. 0 : jamais."
+        },
+        "exec_questions": {
+          "title": "Questions des sessions confiées",
+          "hint": "Quand une session confiée par un assistant s'arrête pour poser une question. Une question qui demande un secret te revient toujours.",
+          "assistant": "L'assistant répond, et me demande en cas de doute",
+          "owner": "Toujours me demander"
+        },
+        "exec_plans": {
+          "title": "Validation des plans des sessions confiées",
+          "hint": "Quand une session confiée par un assistant veut faire valider son plan avant de continuer.",
+          "assistant": "L'assistant répond, et me demande en cas de doute",
+          "owner": "Toujours me demander"
         }
       },
       "workdir": {
@@ -8268,6 +8291,13 @@
         "boot": "codeg a redémarré",
         "lost": "La connexion de la session a été perdue",
         "gone": "Sa tâche a été supprimée du tableau"
+      },
+      "retry": {
+        "pending": "Relance automatique (essai {attempt} sur {max})…",
+        "retried": "Relancé automatiquement (essai {attempt} sur {max})",
+        "failed": "La relance automatique a échoué : {error}",
+        "asked": "On t'a demandé s'il fallait le relancer",
+        "exhausted": "{max, plural, one {Déjà relancé # fois — à toi de décider} other {Déjà relancé # fois — à toi de décider}}"
       }
     },
     "overview": {
@@ -8381,7 +8411,8 @@
         "dismiss": "Pas maintenant",
         "undo": "Annuler",
         "seeSettings": "Voir dans les réglages"
-      }
+      },
+      "retryOf": "Relancer « {title} »"
     },
     "exchange": {
       "sentTo": "Message envoyé à <peer></peer>",
@@ -8729,6 +8760,57 @@
       "prOpened": "PR ouverte",
       "prNotTracked": "Statut de la PR pas encore suivi",
       "pastStopping": "Trop tard pour arrêter : terminée ou en cours de fusion"
+    },
+    "ask": {
+      "heading": {
+        "question": "{executor} pose une question",
+        "plan": "{executor} demande la validation de son plan"
+      },
+      "someone": "L'exécutant",
+      "mirror": "Du travail que {name} a pris en charge pour toi ici",
+      "state": {
+        "asking": "{name} y répond pour toi…",
+        "forwarded": "En attente de ta réponse",
+        "submitting": "Envoi…",
+        "withdrawn": "Retirée — elle n'attend plus de réponse"
+      },
+      "why": {
+        "assistant": "{name} n'a pas pu trancher et te l'a transmise",
+        "settings": "Tes réglages t'envoient ces questions",
+        "secret": "Elle demande un secret",
+        "no_brain": "Aucun assistant n'est configuré pour y répondre",
+        "turn_ended": "{name} a terminé son tour sans répondre",
+        "turn_failed": "Le tour de {name} a échoué avant de répondre",
+        "timeout": "Pas de réponse de {name} en 10 minutes",
+        "handed_over": "Tu as repris ce travail"
+      },
+      "suggestion": "{name} penche pour : {suggestion}",
+      "reason": "Pourquoi : {reason}",
+      "openSession": "Ouvrir la session",
+      "answer": {
+        "skipped": "ignorée",
+        "empty": "aucune réponse",
+        "approved": "a validé le plan",
+        "revised": "a demandé des modifications du plan",
+        "revisedWith": "a demandé des modifications : {feedback}",
+        "abandoned": "a abandonné le plan",
+        "approvedAs": "a validé le plan ({option})",
+        "sentBackAs": "a renvoyé le plan ({option})"
+      },
+      "by": {
+        "assistant": "{name} a répondu pour toi : {answer}",
+        "ownerSession": "Tu as répondu dans la session : {answer}",
+        "ownerPage": "Tu as répondu sur la page des assistants : {answer}",
+        "owner": "Tu as répondu : {answer}",
+        "channel": "Répondue depuis un canal de discussion : {answer}",
+        "policy": "Répondue par la politique d'une exécution : {answer}",
+        "someone": "Répondue : {answer}"
+      },
+      "toast": {
+        "already": "Déjà répondue : la carte indique quelle réponse a été retenue",
+        "withdrawn": "Elle n'attend plus de réponse"
+      },
+      "answeredForYou": "{count, plural, one {Répondue pour toi # fois} other {Répondue pour toi # fois}}"
     }
   }
 }

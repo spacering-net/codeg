@@ -295,10 +295,10 @@ impl CompanionFeatures {
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
             "assistant_list" | "project_list" | "dispatch" | "dispatch_followup"
-            | "item_list" | "item_read" | "item_update" | "timeline_read" | "bot_list"
-            | "bot_message" | "prefs_update" | "bot_create" | "overview" | "board_status"
-            | "session_list" | "automation_status" | "pr_status" | "usage_summary"
-            | "activity_summary" => self.personal_agent,
+            | "dispatch_answer" | "item_list" | "item_read" | "item_update" | "timeline_read"
+            | "bot_list" | "bot_message" | "prefs_update" | "bot_create" | "overview"
+            | "board_status" | "session_list" | "automation_status" | "pr_status"
+            | "usage_summary" | "activity_summary" => self.personal_agent,
             "browser_list_tabs" | "browser_snapshot" | "browser_console_messages"
             | "browser_screenshot" | "browser_click" | "browser_hover" | "browser_type"
             | "browser_press_key" | "browser_select_option" | "browser_open_tab"
@@ -1502,8 +1502,8 @@ async fn build_tools_call_spawn(
                 Box::pin(async move { client_create_work_task_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_authoring_result).await
         }
-        "assistant_list" | "project_list" | "dispatch" | "dispatch_followup" | "item_list"
-        | "item_read" | "item_update" | "timeline_read" | "bot_list" | "bot_message"
+        "assistant_list" | "project_list" | "dispatch" | "dispatch_followup" | "dispatch_answer"
+        | "item_list" | "item_read" | "item_update" | "timeline_read" | "bot_list" | "bot_message"
         | "prefs_update" | "bot_create" | "overview" | "board_status" | "session_list"
         | "automation_status" | "pr_status" | "usage_summary" | "activity_summary" => {
             // Shape only: the app owns every rule (which assistants exist,
@@ -5787,11 +5787,12 @@ mod tests {
         computer_clipboard: false,
     };
 
-    const PERSONAL_AGENT_TOOLS: [&str; 19] = [
+    const PERSONAL_AGENT_TOOLS: [&str; 20] = [
         "assistant_list",
         "project_list",
         "dispatch",
         "dispatch_followup",
+        "dispatch_answer",
         "item_list",
         "item_read",
         "item_update",

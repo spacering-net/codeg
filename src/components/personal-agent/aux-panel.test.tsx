@@ -134,6 +134,7 @@ function dispatch(patch: Partial<DispatchInfo>): DispatchInfo {
     finished_at: null,
     ladder: "working",
     task: null,
+    answered_for_you: 0,
     ...patch,
   }
 }

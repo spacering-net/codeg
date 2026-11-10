@@ -394,6 +394,25 @@ pub fn validate_specs(specs: &[QuestionSpec]) -> Result<(), String> {
 ///
 /// Output is therefore bounded by the question set's own size, in asked order.
 /// A declined submission yields an empty, `declined: true` outcome.
+/// What stands in for a secret answer anywhere but in the executor's own
+/// tool result.
+pub const REDACTED_SECRET: &str = "•••";
+
+/// The outcome of `answer` as it may be kept and shown: the answers to a
+/// question that asks for a secret (`is_secret`) read [`REDACTED_SECRET`].
+pub fn redacted_outcome(questions: &[QuestionSpec], answer: &QuestionAnswer) -> QuestionOutcome {
+    let mut shown = answer.clone();
+    for item in &mut shown.answers {
+        let secret = questions
+            .iter()
+            .any(|q| q.id == item.question_id && q.is_secret);
+        if secret && !item.labels.is_empty() {
+            item.labels = vec![REDACTED_SECRET.to_string()];
+        }
+    }
+    build_outcome(questions, &shown)
+}
+
 pub fn build_outcome(questions: &[QuestionSpec], answer: &QuestionAnswer) -> QuestionOutcome {
     if answer.declined {
         return QuestionOutcome {

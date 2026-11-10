@@ -1504,6 +1504,76 @@
     }
   },
   {
+    "name": "dispatch_answer",
+    "description": "Answer a question or a plan approval from the session of work you dispatched, for the owner — the <codeg-ask> blocks, by their `ask_id`. Answer from what the owner asked for, what they said and what you know of them, and say what the answer rests on in `reason` (quote their words when you can). When you cannot settle it — a trade-off nothing they said decides, something that changes the scope of the work, something hard to undo they never asked for — forward it with `forward: true` and say what you lean to in `suggestion`. The first answer wins: when the owner answered first, you are told theirs, and yours is not used. Questions asking for a secret are the owner's; so are the executor's other permission requests.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "ask_id",
+        "reason"
+      ],
+      "properties": {
+        "ask_id": {
+          "type": "integer",
+          "description": "The id on the <codeg-ask> block."
+        },
+        "answers": {
+          "type": "array",
+          "description": "For a question: one entry per question, by its number.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "question": {
+                "type": "integer",
+                "description": "The question's number (1, 2, …); optional when there is only one."
+              },
+              "choose": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The labels of the options you pick (one, unless the question takes several)."
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 4000,
+                "description": "An answer in your own words, instead of or besides the options."
+              }
+            }
+          }
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "revise",
+            "abandon"
+          ],
+          "description": "For a plan approval."
+        },
+        "feedback": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "With revise (required) or abandon: what to change, or why."
+        },
+        "forward": {
+          "type": "boolean",
+          "description": "Leave it to the owner instead of answering."
+        },
+        "suggestion": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "With forward: the answer you lean to."
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "One sentence: what the answer (or forwarding it) rests on."
+        }
+      }
+    }
+  },
+  {
     "name": "item_list",
     "description": "List your open matters (the ledger codeg keeps for you, including one per dispatch): id, kind, status, who it waits for, a summary, and the dispatch's current state. Defaults to the active ones (open and waiting).",
     "inputSchema": {

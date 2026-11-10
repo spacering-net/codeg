@@ -33,6 +33,10 @@ pub enum NoticeKind {
     /// (4.12): a question, its lettered answers and one of their own.
     #[sea_orm(string_value = "choice")]
     Choice,
+    /// An executor's question or plan approval the dispatching assistant
+    /// answers for the owner, or forwards to them (7.3.1).
+    #[sea_orm(string_value = "ask")]
+    Ask,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

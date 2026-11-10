@@ -313,6 +313,11 @@ pub struct SessionState {
     /// by `approval_id`.
     pub pending_plan_approval: Option<PendingPlanApprovalState>,
 
+    /// What the assistant that dispatched this session answers for the owner
+    /// (7.3.1): a window holds back its notification of those until one is
+    /// forwarded. Set by `AskDelegate`; outlives turns.
+    pub ask_delegate: Option<crate::acp::types::AskDelegate>,
+
     /// In-flight (running) sub-agent delegations keyed by `parent_tool_use_id`.
     /// `DelegationStarted` inserts; `DelegationCompleted` removes. UNLIKE
     /// `active_tool_calls`, NOT cleared on `TurnComplete` (an async delegation
@@ -909,6 +914,7 @@ impl SessionState {
             pending_permission: None,
             pending_question: None,
             pending_plan_approval: None,
+            ask_delegate: None,
             active_delegations: BTreeMap::new(),
             feedback: Vec::new(),
             tool_approvals: Vec::new(),
@@ -1305,7 +1311,7 @@ impl SessionState {
                     created_at: Utc::now(),
                 });
             }
-            AcpEvent::QuestionResolved { question_id } => {
+            AcpEvent::QuestionResolved { question_id, .. } => {
                 // Mirror `PermissionResolved`: only clear when the resolved id
                 // matches the current one, so a late event for an already-
                 // replaced question can't wipe a live card from under the user.
@@ -1328,7 +1334,12 @@ impl SessionState {
                     created_at: Utc::now(),
                 });
             }
-            AcpEvent::PlanApprovalResolved { approval_id } => {
+            AcpEvent::AskDelegate { delegate } => {
+                self.ask_delegate = *delegate;
+            }
+            // A notification for the windows; nothing to keep.
+            AcpEvent::AskForwarded { .. } => {}
+            AcpEvent::PlanApprovalResolved { approval_id, .. } => {
                 // Mirror `QuestionResolved`: only clear when the resolved id
                 // matches the current one, so a late event for an already-
                 // replaced approval can't wipe a live card from under the user.
@@ -2455,6 +2466,7 @@ impl SessionState {
             pending_permission: self.pending_permission.clone(),
             pending_question: self.pending_question.clone(),
             pending_plan_approval: self.pending_plan_approval.clone(),
+            ask_delegate: self.ask_delegate,
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
             feedback: self.feedback.clone(),
@@ -2558,6 +2570,10 @@ pub struct LiveSessionSnapshot {
     /// pre-feature shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_plan_approval: Option<PendingPlanApprovalState>,
+    /// See `SessionState.ask_delegate`; off the wire when nobody answers for
+    /// the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_delegate: Option<crate::acp::types::AskDelegate>,
     /// The in-flight user prompt for the current turn (see
     /// `SessionState.pending_user_message`). `#[serde(default)]` so older
     /// payloads still deserialize; `skip_serializing_if` so the no-pending case
@@ -2856,12 +2872,14 @@ mod tests {
         // A resolve for a DIFFERENT id must not wipe the live approval.
         s.apply_event(&AcpEvent::PlanApprovalResolved {
             approval_id: "other".into(),
+            resolution: None,
         });
         assert!(s.pending_plan_approval.is_some());
 
         // Matching resolve clears it (and the snapshot).
         s.apply_event(&AcpEvent::PlanApprovalResolved {
             approval_id: "ap-1".into(),
+            resolution: None,
         });
         assert!(s.pending_plan_approval.is_none());
         assert!(s.to_snapshot().pending_plan_approval.is_none());

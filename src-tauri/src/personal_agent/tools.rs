@@ -320,6 +320,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 Err(e) => ToolOutcome::refused(e),
             }
         }
+        "dispatch_answer" => engine.dispatch_answer_call(&args).await,
         "prefs_update" => engine.prefs_update_call(&args).await,
         "bot_create" => engine.bot_create_call(&args).await,
         "bot_list" => engine.bot_list_call().await,

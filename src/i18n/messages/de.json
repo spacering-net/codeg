@@ -4159,7 +4159,8 @@
           "allowAlways": "immer erlaubt",
           "rejected": "abgelehnt",
           "viaChatChannel": "über einen Chat-Kanal",
-          "byPolicy": "durch die Berechtigungsrichtlinie des Laufs"
+          "byPolicy": "durch die Berechtigungsrichtlinie des Laufs",
+          "byAssistant": "von einem Assistenten für dich beantwortet"
         }
       },
       "messageNav": {
@@ -8044,11 +8045,33 @@
           "ask_more": "Frag mich öfter",
           "custom": "Benutzerdefiniert",
           "standardHint": "Alles läuft von selbst und wird dir auf einer Karte gemeldet.",
-          "ask_moreHint": "Nachfassen und Wiederholungen, Nachrichten an andere Assistenten, Änderungen, um die du im Gespräch bittest, und Zuweisungen, die Code ändern, kommen erst als Karte zu dir.",
+          "ask_moreHint": "Nachfassen und Wiederholungen, das Wiederholen von Arbeit, die ein Neustart unterbrochen hat, Nachrichten an andere Assistenten, Änderungen, um die du im Gespräch bittest, und Zuweisungen, die Code ändern, kommen erst als Karte zu dir; Fragen und Plan-Freigaben der Sitzungen gehen an dich.",
           "customHint": "Einige der Punkte unten hast du selbst eingestellt.",
           "confirmTitle": "Zu „{level}“ wechseln?",
           "confirmBody": "{count, plural, one {Das überschreibt # Punkt, den du geändert hast.} other {Das überschreibt # Punkte, die du geändert hast.}}",
           "confirm": "Wechseln"
+        },
+        "interrupt_retry": {
+          "title": "Durch einen Neustart unterbrochene Arbeit",
+          "hint": "Wenn codeg mitten in Arbeit neu startet, die ein Assistent abgegeben hat.",
+          "auto": "Automatisch wiederholen",
+          "ask": "Frag mich vorher"
+        },
+        "retry_rounds": {
+          "title": "Automatische Wiederholungen derselben Arbeit",
+          "hint": "Wie oft codeg dieselbe Arbeit selbst wiederholt, bevor du entscheidest. 0 heißt nie."
+        },
+        "exec_questions": {
+          "title": "Fragen der abgegebenen Sitzungen",
+          "hint": "Wenn eine Sitzung, die ein Assistent abgegeben hat, anhält und etwas fragt. Eine Frage nach einem Geheimnis kommt immer zu dir.",
+          "assistant": "Der Assistent antwortet und fragt mich, wenn er unsicher ist",
+          "owner": "Immer mich fragen"
+        },
+        "exec_plans": {
+          "title": "Plan-Freigaben der abgegebenen Sitzungen",
+          "hint": "Wenn eine Sitzung, die ein Assistent abgegeben hat, ihren Plan freigeben lassen will, bevor sie weitermacht.",
+          "assistant": "Der Assistent antwortet und fragt mich, wenn er unsicher ist",
+          "owner": "Immer mich fragen"
         }
       },
       "workdir": {
@@ -8268,6 +8291,13 @@
         "boot": "codeg wurde neu gestartet",
         "lost": "Die Verbindung der Sitzung ging verloren",
         "gone": "Die Aufgabe wurde vom Board gelöscht"
+      },
+      "retry": {
+        "pending": "Wird automatisch wiederholt (Versuch {attempt} von {max}) …",
+        "retried": "Automatisch wiederholt (Versuch {attempt} von {max})",
+        "failed": "Automatische Wiederholung fehlgeschlagen: {error}",
+        "asked": "Du wurdest gefragt, ob es wiederholt werden soll",
+        "exhausted": "{max, plural, one {Schon # Mal wiederholt – du entscheidest} other {Schon # Mal wiederholt – du entscheidest}}"
       }
     },
     "overview": {
@@ -8381,7 +8411,8 @@
         "dismiss": "Nicht jetzt",
         "undo": "Rückgängig",
         "seeSettings": "In den Einstellungen ansehen"
-      }
+      },
+      "retryOf": "„{title}“ wiederholen"
     },
     "exchange": {
       "sentTo": "Nachricht an <peer></peer> gesendet",
@@ -8729,6 +8760,57 @@
       "prOpened": "PR erstellt",
       "prNotTracked": "PR-Status wird noch nicht verfolgt",
       "pastStopping": "Nicht mehr zu stoppen: fertig oder wird gemergt"
+    },
+    "ask": {
+      "heading": {
+        "question": "{executor} fragt",
+        "plan": "{executor} möchte seinen Plan freigegeben haben"
+      },
+      "someone": "Der Ausführende",
+      "mirror": "Aus der Arbeit, die {name} hier für dich übernommen hat",
+      "state": {
+        "asking": "{name} beantwortet das für dich …",
+        "forwarded": "Wartet auf deine Antwort",
+        "submitting": "Wird gesendet …",
+        "withdrawn": "Zurückgezogen – wartet nicht mehr auf eine Antwort"
+      },
+      "why": {
+        "assistant": "{name} konnte es nicht entscheiden und hat es an dich weitergegeben",
+        "settings": "Deine Einstellungen schicken solche Fragen an dich",
+        "secret": "Es fragt nach einem Geheimnis",
+        "no_brain": "Kein Assistent ist eingerichtet, um sie zu beantworten",
+        "turn_ended": "{name} hat seinen Zug beendet, ohne zu antworten",
+        "turn_failed": "Der Zug von {name} ist vor der Antwort fehlgeschlagen",
+        "timeout": "Keine Antwort von {name} in 10 Minuten",
+        "handed_over": "Du hast diese Arbeit übernommen"
+      },
+      "suggestion": "{name} tendiert zu: {suggestion}",
+      "reason": "Begründung: {reason}",
+      "openSession": "Sitzung öffnen",
+      "answer": {
+        "skipped": "übersprungen",
+        "empty": "keine Antwort",
+        "approved": "hat den Plan freigegeben",
+        "revised": "hat Änderungen am Plan verlangt",
+        "revisedWith": "hat Änderungen verlangt: {feedback}",
+        "abandoned": "hat den Plan verworfen",
+        "approvedAs": "hat den Plan freigegeben ({option})",
+        "sentBackAs": "hat den Plan zurückgeschickt ({option})"
+      },
+      "by": {
+        "assistant": "{name} hat für dich geantwortet: {answer}",
+        "ownerSession": "Du hast in der Sitzung geantwortet: {answer}",
+        "ownerPage": "Du hast auf der Assistentenseite geantwortet: {answer}",
+        "owner": "Du hast geantwortet: {answer}",
+        "channel": "Aus einem Chat-Kanal beantwortet: {answer}",
+        "policy": "Von der Richtlinie eines Laufs beantwortet: {answer}",
+        "someone": "Beantwortet: {answer}"
+      },
+      "toast": {
+        "already": "Schon beantwortet – die Karte zeigt, wessen Antwort galt",
+        "withdrawn": "Es wartet nicht mehr auf eine Antwort"
+      },
+      "answeredForYou": "{count, plural, one {# Mal für dich beantwortet} other {# Mal für dich beantwortet}}"
     }
   }
 }

@@ -71,6 +71,10 @@ const PREFS: PersonalAgentPrefs = {
   messages: "auto",
   worker_handoff: "message",
   loop_rounds: 3,
+  interrupt_retry: "auto",
+  retry_rounds: 2,
+  exec_questions: "assistant",
+  exec_plans: "assistant",
 }
 
 function snapshot(

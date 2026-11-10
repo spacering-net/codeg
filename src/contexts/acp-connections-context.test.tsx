@@ -8982,3 +8982,139 @@ describe("hasPrompted: whether a turn has run on the connection", () => {
     expect(hasPrompted()).toBe(false)
   })
 })
+
+describe("a dispatching assistant answers for the owner (personal agent 7.3.1)", () => {
+  async function connectOwner(): Promise<AttachHandlers> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    return latestAttachHandlers()
+  }
+
+  async function delegated(): Promise<AttachHandlers> {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "ask_delegate",
+      delegate: { bot_id: 3, questions: true, plans: true },
+    })
+    h.notifyDesktop.mockClear()
+    h.requestWindowAttention.mockClear()
+    return handlers
+  }
+
+  it("holds back a question and a plan approval the assistant answers, not a command's permission", async () => {
+    const handlers = await delegated()
+    expect(h.store!.getConnection(TAB)!.askDelegate).toEqual({
+      bot_id: 3,
+      questions: true,
+      plans: true,
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [],
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-plan",
+      tool_call: { kind: "switch_mode", toolCallId: "call_plan" },
+      options: [
+        { option_id: "exit-plan-default", name: "Yes", kind: "allow_once" },
+        { option_id: "reject", name: "No", kind: "reject_once" },
+      ],
+    })
+    // The card still shows: only the notification waits.
+    expect(h.store!.getConnection(TAB)!.pendingAskQuestion?.question_id).toBe(
+      "q-1"
+    )
+    expect(h.notifyDesktop).not.toHaveBeenCalled()
+    expect(h.requestWindowAttention).not.toHaveBeenCalled()
+
+    emitAcpEvent(handlers, {
+      seq: 4,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-cmd",
+      tool_call: { kind: "execute", toolCallId: "call_cmd" },
+      options: [{ option_id: "allow", name: "Allow", kind: "allow_once" }],
+    })
+    expect(h.requestWindowAttention).toHaveBeenCalledWith("permission_request")
+  })
+
+  it("notifies a question asking for a secret at once", async () => {
+    const handlers = await delegated()
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-secret",
+      questions: [
+        {
+          id: "k",
+          question: "API key?",
+          header: "",
+          multi_select: false,
+          options: [],
+          is_secret: true,
+        },
+      ],
+    })
+    expect(h.requestWindowAttention).toHaveBeenCalledWith("question_request")
+  })
+
+  it("notifies once the assistant forwards it to the owner", async () => {
+    const handlers = await delegated()
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "ask_forwarded",
+      request_id: "q-1",
+      kind: "question",
+    })
+    expect(h.requestWindowAttention).toHaveBeenCalledWith("question_request")
+    expect(h.notifyDesktop).toHaveBeenCalledWith(
+      "question_request",
+      expect.anything()
+    )
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "ask_forwarded",
+      request_id: "ap-1",
+      kind: "plan",
+    })
+    expect(h.notifyDesktop).toHaveBeenLastCalledWith(
+      "permission_request",
+      expect.objectContaining({
+        body: expect.stringContaining("notificationPlanApproval"),
+      })
+    )
+  })
+
+  it("notifies as always once nobody answers for the owner", async () => {
+    const handlers = await delegated()
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "ask_delegate",
+      delegate: null,
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "plan_approval_request",
+      approval_id: "ap-1",
+      tool_call_id: "call_plan",
+      plan_markdown: "# Plan",
+    })
+    expect(h.requestWindowAttention).toHaveBeenCalledWith("permission_request")
+  })
+})

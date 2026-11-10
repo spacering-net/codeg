@@ -4159,7 +4159,8 @@
           "allowAlways": "总是允许",
           "rejected": "已拒绝",
           "viaChatChannel": "来自聊天频道",
-          "byPolicy": "由运行的权限策略决定"
+          "byPolicy": "由运行的权限策略决定",
+          "byAssistant": "由助手代答"
         }
       },
       "messageNav": {
@@ -8043,11 +8044,33 @@
           "ask_more": "多问我",
           "custom": "自定义",
           "standardHint": "一切自动，做了都出卡告诉你。",
-          "ask_moreHint": "续作与重试、给别的助手发消息、对话里的改动、改代码的派活，都先出卡，你点了才做。",
+          "ask_moreHint": "续作与重试、中断后的重试、给别的助手发消息、对话里的改动、改代码的派活，都先出卡，你点了才做；执行会话的提问和计划审批一律转给你。",
           "customHint": "下面有几项是你自己调过的。",
           "confirmTitle": "切到「{level}」？",
           "confirmBody": "会覆盖你改过的 {count} 项。",
           "confirm": "切换"
+        },
+        "interrupt_retry": {
+          "title": "中断后自动重试",
+          "hint": "codeg 重启打断了助手派出的活时。",
+          "auto": "自动重试",
+          "ask": "先问我"
+        },
+        "retry_rounds": {
+          "title": "同一件活最多自动重试",
+          "hint": "同一件活 codeg 自己重试几次，之后交给你决定。0 是不自动重试。"
+        },
+        "exec_questions": {
+          "title": "执行会话的提问",
+          "hint": "助手派出的会话停下来问问题时。要填密钥的问题总是交给你。",
+          "assistant": "助手代答，拿不准时转给我",
+          "owner": "一律转给我"
+        },
+        "exec_plans": {
+          "title": "执行会话的计划审批",
+          "hint": "助手派出的会话要先批准计划才往下做时。",
+          "assistant": "助手代答，拿不准时转给我",
+          "owner": "一律转给我"
         }
       },
       "workdir": {
@@ -8268,6 +8291,13 @@
         "boot": "codeg 重启了",
         "lost": "会话连接断开了",
         "gone": "看板上的任务被删除了"
+      },
+      "retry": {
+        "pending": "正在自动重试（第 {attempt}/{max} 次）…",
+        "retried": "已自动重试（第 {attempt}/{max} 次）",
+        "failed": "自动重试失败：{error}",
+        "asked": "已问你要不要重试",
+        "exhausted": "已经自动重试 {max} 次，交给你决定"
       }
     },
     "overview": {
@@ -8381,7 +8411,8 @@
         "dismiss": "不用",
         "undo": "撤销",
         "seeSettings": "去设置里看"
-      }
+      },
+      "retryOf": "重试「{title}」"
     },
     "exchange": {
       "sentTo": "已发消息给 <peer></peer>",
@@ -8729,6 +8760,57 @@
       "prOpened": "已提 PR",
       "prNotTracked": "PR 状态还没跟踪",
       "pastStopping": "已经做完或正在合并，停不了了"
+    },
+    "ask": {
+      "heading": {
+        "question": "{executor} 在问",
+        "plan": "{executor} 请你批准计划"
+      },
+      "someone": "执行者",
+      "mirror": "来自 {name} 替你接手的活",
+      "state": {
+        "asking": "{name} 正在代你回答…",
+        "forwarded": "等你回答",
+        "submitting": "正在提交…",
+        "withdrawn": "已撤回，不再等回答"
+      },
+      "why": {
+        "assistant": "{name} 拿不准，转给了你",
+        "settings": "你的设置让这类问题交给你",
+        "secret": "这是要填密钥的问题",
+        "no_brain": "没有可代答的助手",
+        "turn_ended": "{name} 这一回合结束了，没有回答",
+        "turn_failed": "{name} 这一回合没跑完就失败了",
+        "timeout": "{name} 10 分钟没有回答",
+        "handed_over": "你接手了这件活"
+      },
+      "suggestion": "{name} 倾向于：{suggestion}",
+      "reason": "依据：{reason}",
+      "openSession": "打开会话",
+      "answer": {
+        "skipped": "略过",
+        "empty": "没有回答",
+        "approved": "批准了计划",
+        "revised": "要求修改计划",
+        "revisedWith": "要求修改：{feedback}",
+        "abandoned": "放弃了计划",
+        "approvedAs": "批准了计划（{option}）",
+        "sentBackAs": "退回了计划（{option}）"
+      },
+      "by": {
+        "assistant": "{name} 代答：{answer}",
+        "ownerSession": "你在会话里答了：{answer}",
+        "ownerPage": "你在助手页答了：{answer}",
+        "owner": "你答了：{answer}",
+        "channel": "从聊天频道答了：{answer}",
+        "policy": "由运行的策略答了：{answer}",
+        "someone": "已回答：{answer}"
+      },
+      "toast": {
+        "already": "已经答过了，卡上记着采用的是谁的答案",
+        "withdrawn": "它已经不再等回答了"
+      },
+      "answeredForYou": "助手代答 {count} 次"
     }
   }
 }

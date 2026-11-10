@@ -111,6 +111,26 @@ describe("NoticeCard", () => {
     )
   })
 
+  it("names a retry of interrupted work as such", () => {
+    draw(
+      card({
+        state: "open",
+        action: "followup",
+        why: "confirm",
+        display: {
+          executor: "Researcher",
+          executor_id: 3,
+          agent_type: "codex",
+          mode: "session",
+          title: "Research X",
+          message: "Pick it up where you left off.",
+          retry: true,
+        },
+      })
+    )
+    expect(screen.getByText("Retry “Research X”")).toBeTruthy()
+  })
+
   it("says how it was answered, with nothing left to click", () => {
     draw(card({ state: "dismissed" }))
     expect(screen.getByText("Not taken up")).toBeTruthy()

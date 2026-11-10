@@ -23,8 +23,10 @@
 //! it; any other process on the same data dir sees the page read-only.
 
 pub mod activity;
+pub mod asks;
 pub mod ladder;
 pub mod overview;
+pub mod retry;
 pub mod bot_templates;
 pub mod bots;
 pub mod cards;

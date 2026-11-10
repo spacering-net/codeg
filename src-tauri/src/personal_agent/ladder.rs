@@ -36,6 +36,17 @@ pub fn ladder_of(d: &dispatch_entity::Model, task: Option<&work_task::Model>) ->
     }
 }
 
+/// Where a dispatch stands for the owner: one waiting on a question its
+/// assistant is answering is still working, as far as they are concerned
+/// (7.3.1).
+pub fn for_owner(ladder: Ladder, answering: bool) -> Ladder {
+    if answering && ladder == Ladder::WaitingYou {
+        Ladder::Working
+    } else {
+        ladder
+    }
+}
+
 /// Where a kanban task stands.
 pub fn task_ladder(t: &work_task::Model) -> Ladder {
     let set_aside = t.deferred_at.is_some();

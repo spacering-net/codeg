@@ -346,6 +346,8 @@ pub struct PersonalAgentEngine {
     pump_lock: Mutex<()>,
     /// Serializes starting queued dispatches.
     pub(super) dispatch_lock: Mutex<()>,
+    /// Serializes writing the ask cards (7.3.1): raised once, settled once.
+    pub(super) asks_lock: Mutex<()>,
     /// A delivery was asked for while one ran: run again after it.
     pump_again: AtomicBool,
     wake: Notify,
@@ -378,6 +380,7 @@ impl PersonalAgentEngine {
             state: Mutex::new(EngineState::default()),
             pump_lock: Mutex::new(()),
             dispatch_lock: Mutex::new(()),
+            asks_lock: Mutex::new(()),
             pump_again: AtomicBool::new(false),
             wake: Notify::new(),
             booted: AtomicBool::new(false),
@@ -643,7 +646,10 @@ impl PersonalAgentEngine {
                     self.liveness_tick().await;
                     self.poll_task_dispatches().await;
                 }
-                _ = reconcile.tick() => self.reconcile_dispatches().await,
+                _ = reconcile.tick() => {
+                    self.reconcile_dispatches().await;
+                    self.ask_tick().await;
+                }
             }
         }
     }
@@ -654,6 +660,9 @@ impl PersonalAgentEngine {
     pub(super) async fn on_lagged(self: &Arc<Self>) {
         self.schedule_reply_push();
         self.liveness_tick().await;
+        // A question raised or settled in what was dropped (7.3.1).
+        self.scan_live_asks().await;
+        self.sweep_asks().await;
     }
 
     /// Whether `conn_id` is this assistant's own connection or one of its
@@ -836,6 +845,8 @@ impl PersonalAgentEngine {
         // before the dispatches still running are marked interrupted.
         self.boot_ledger().await;
         self.boot_dispatches().await;
+        // The sessions that were asking died with the process (7.3.1).
+        self.sweep_asks().await;
     }
 
     /// Mark a delivery's owner messages interrupted and put its events back
@@ -1062,7 +1073,7 @@ impl PersonalAgentEngine {
                 self.record_question_request(&env.connection_id, question_id, questions)
                     .await;
             }
-            AcpEvent::QuestionResolved { question_id } => {
+            AcpEvent::QuestionResolved { question_id, .. } => {
                 self.settle_question_row(question_id, None).await;
             }
             AcpEvent::PlanApprovalRequest {
@@ -1072,7 +1083,7 @@ impl PersonalAgentEngine {
             } => {
                 self.record_plan_request(approval_id, plan_markdown).await;
             }
-            AcpEvent::PlanApprovalResolved { approval_id } => {
+            AcpEvent::PlanApprovalResolved { approval_id, .. } => {
                 self.settle_question_row(approval_id, None).await;
             }
             AcpEvent::SessionConfigStale { stale: true, .. } => {
@@ -1779,6 +1790,9 @@ impl PersonalAgentEngine {
             if let Err(e) = self.pump_once().await {
                 tracing::warn!("[personal_agent] delivery: {e}");
                 self.state.lock().await.last_error = Some(e);
+                // No turn to answer them: the executors' questions waiting
+                // on this assistant are the owner's (7.3.1).
+                self.forward_all_asking("turn_failed").await;
                 self.emit(PersonalAgentChange::Status);
             }
             if !self.pump_again.load(Ordering::SeqCst) {
@@ -2589,9 +2603,14 @@ impl PersonalAgentEngine {
         let messages = self.messages_of(&events).await;
         let news: Vec<_> = events
             .iter()
-            .filter(|e| e.kind != msvc::MESSAGE_EVENT)
+            .filter(|e| e.kind != msvc::MESSAGE_EVENT && e.kind != svc::ASK_EVENT)
             .cloned()
             .collect();
+        // The executors' questions and plan approvals, each in full (7.3.1).
+        let mut asks = Vec::new();
+        for e in events.iter().filter(|e| e.kind == svc::ASK_EVENT) {
+            asks.push(self.ask_block(e).await);
+        }
         // What started it — recorded only, for the status and statistics.
         let trigger = if !owners.is_empty() {
             BatchTrigger::Owner
@@ -2605,6 +2624,7 @@ impl PersonalAgentEngine {
             let parts: Vec<String> = cards::events_block(&event_lines)
                 .into_iter()
                 .chain(cards::messages_block(&self.message_lines(&messages).await))
+                .chain((!asks.is_empty()).then(|| asks.join("\n\n")))
                 .collect();
             (!parts.is_empty()).then(|| parts.join("\n\n"))
         };
@@ -3090,6 +3110,9 @@ impl PersonalAgentEngine {
     }
 
     async fn finish_delivery(&self, turn: ActiveTurn, end: TurnEnd, capture: ReplyCapture) {
+        // The executors' questions it carried, read before its events are
+        // settled or put back (7.3.1).
+        let asks = self.asks_of_batch(turn.batch_id).await;
         let (stop, lost) = match &end {
             TurnEnd::Completed(stop) => (stop.clone(), None),
             TurnEnd::Lost(why) => (None, Some(why.clone())),
@@ -3253,6 +3276,12 @@ impl PersonalAgentEngine {
                 s.overflow_compacted = false;
             })
             .await;
+        }
+        // An executor's question this turn carried and did not answer is
+        // the owner's now (7.3.1) — unless the turn gave way to the owner's
+        // message, and its events ride with that one.
+        if !preempted {
+            self.forward_unanswered(&asks, interrupted).await;
         }
         self.after_turn_bookkeeping(&turn).await;
     }

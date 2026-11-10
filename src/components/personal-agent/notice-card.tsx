@@ -54,6 +54,7 @@ import {
   type SettingsPage,
 } from "@/stores/personal-agent-ui-store"
 
+import { AskCard } from "./ask-card"
 import { BotAvatar } from "./bot-avatar"
 import { ChoiceCard } from "./choice-card"
 import { CollapsedText } from "./event-card"
@@ -101,6 +102,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
     )
   }
   if (kind === "choice") return <ChoiceCard item={item} />
+  if (kind === "ask") return <AskCard item={item} />
   return null
 }
 
@@ -171,6 +173,8 @@ function ActionCard({
   const text = str(display, "prompt") ?? str(display, "message")
   // Held for the owner's confirmation by their settings, not suggested.
   const confirm = !uncertain && str(data, "why") === "confirm"
+  // Work a restart interrupted, to retry (7.3).
+  const retry = display?.retry === true
   const isMessage = action === "message"
   const tc = (k: "open" | "acted" | "dismissed" | "accept" | "dismiss") =>
     t(`confirm.${k}` as "confirm.open")
@@ -261,9 +265,11 @@ function ActionCard({
               executor={executor}
               agentType={agentType}
               title={
-                action === "followup"
-                  ? t("followupOf", { title: str(display, "title") ?? "" })
-                  : (str(display, "title") ?? row.body)
+                retry
+                  ? t("retryOf", { title: str(display, "title") ?? "" })
+                  : action === "followup"
+                    ? t("followupOf", { title: str(display, "title") ?? "" })
+                    : (str(display, "title") ?? row.body)
               }
               meta={meta({
                 executor,

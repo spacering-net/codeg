@@ -193,10 +193,10 @@ impl LiveHub {
 
 /// What the database says of an assistant.
 pub(super) struct DbFacts {
-    needs: Vec<NeedsYou>,
+    pub(super) needs: Vec<NeedsYou>,
     unread: u32,
     has_open_items: bool,
-    hand: Vec<HandWork>,
+    pub(super) hand: Vec<HandWork>,
     awaiting: Vec<AwaitedReply>,
     last_line: Option<LastLine>,
     last_activity_at: Option<DateTime<Utc>>,
@@ -303,9 +303,41 @@ async fn needs_of(
             dispatch_id: None,
         });
     }
+    // An executor's question or plan approval is the owner's once it is
+    // forwarded to them; one the assistant is answering is not (7.3.1).
+    // Either way its card stands for the dispatch's wait.
+    let mut asked: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    for r in svc::ask_rows(&db.conn, bot, svc::ASK_OPEN_STATES)
+        .await
+        .unwrap_or_default()
+    {
+        let data = r.data.as_deref().map(payload_of).unwrap_or_default();
+        let mirror = data.get("mirror_of").is_some_and(|m| !m.is_null());
+        let dispatch_id = data["dispatch_id"].as_i64().and_then(|v| i32::try_from(v).ok());
+        if !mirror {
+            asked.extend(dispatch_id);
+        }
+        if data["state"].as_str() != Some("forwarded") {
+            continue;
+        }
+        let kind = if data["request"].as_str() == Some("question") {
+            "question"
+        } else {
+            "plan"
+        };
+        needs.push(NeedsYou {
+            kind: kind.into(),
+            text: first_line(&r.body, LAST_LINE_CHARS),
+            since: r.created_at,
+            row_id: Some(r.id),
+            count: 1,
+            mirror,
+            dispatch_id: if mirror { None } else { dispatch_id },
+        });
+    }
     for w in hand
         .iter()
-        .filter(|w| w.state == DispatchState::WaitingInput)
+        .filter(|w| w.state == DispatchState::WaitingInput && !asked.contains(&w.dispatch_id))
     {
         needs.push(NeedsYou {
             kind: "input".into(),
@@ -333,11 +365,15 @@ pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbF
     let hand_since: HashMap<i32, DateTime<Utc>> =
         dispatches.iter().map(|d| (d.id, d.updated_at)).collect();
     let tasks = super::ladder::tasks_of(db, &dispatches).await;
+    let ids: Vec<i32> = dispatches.iter().map(|d| d.id).collect();
+    let answering = super::asks::answering_dispatches(db, &ids).await;
     let mut hand: Vec<HandWork> = dispatches
         .into_iter()
         .map(|d| {
-            let ladder =
-                super::ladder::ladder_of(&d, d.work_task_id.and_then(|id| tasks.get(&id)));
+            let ladder = super::ladder::for_owner(
+                super::ladder::ladder_of(&d, d.work_task_id.and_then(|id| tasks.get(&id))),
+                answering.contains(&d.id),
+            );
             HandWork {
                 dispatch_id: d.id,
                 title: d.title,

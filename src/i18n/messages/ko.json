@@ -4159,7 +4159,8 @@
           "allowAlways": "항상 허용",
           "rejected": "거부됨",
           "viaChatChannel": "채팅 채널에서",
-          "byPolicy": "실행 권한 정책에 따름"
+          "byPolicy": "실행 권한 정책에 따름",
+          "byAssistant": "어시스턴트가 대신 답함"
         }
       },
       "messageNav": {
@@ -8044,11 +8045,33 @@
           "ask_more": "더 자주 묻기",
           "custom": "사용자 지정",
           "standardHint": "모두 자동으로 실행하고 카드로 알려 줍니다.",
-          "ask_moreHint": "후속 조치와 재시도, 다른 어시스턴트에게 보내는 메시지, 대화에서 요청한 변경, 코드를 바꾸는 배정은 먼저 카드로 확인을 받습니다.",
+          "ask_moreHint": "후속 작업과 재시도, 재시작으로 중단된 작업의 재시도, 다른 어시스턴트에게 보내는 메시지, 대화에서 요청한 변경, 코드를 바꾸는 작업 맡기기는 먼저 카드로 확인합니다. 세션의 질문과 계획 승인은 당신에게 넘어옵니다.",
           "customHint": "아래 항목 중 일부를 직접 조정했습니다.",
           "confirmTitle": "“{level}”(으)로 전환할까요?",
           "confirmBody": "직접 바꾼 항목 {count}개를 덮어씁니다.",
           "confirm": "전환"
+        },
+        "interrupt_retry": {
+          "title": "재시작으로 중단된 작업",
+          "hint": "어시스턴트가 맡긴 작업 도중 codeg가 재시작되었을 때.",
+          "auto": "자동으로 다시 시도",
+          "ask": "먼저 물어보기"
+        },
+        "retry_rounds": {
+          "title": "같은 작업의 자동 재시도 횟수",
+          "hint": "같은 작업을 codeg가 스스로 다시 시도하는 횟수. 넘으면 결정은 당신 몫입니다. 0이면 다시 시도하지 않습니다."
+        },
+        "exec_questions": {
+          "title": "맡긴 세션의 질문",
+          "hint": "어시스턴트가 맡긴 세션이 멈춰서 질문할 때. 비밀값을 묻는 질문은 항상 당신에게 옵니다.",
+          "assistant": "어시스턴트가 대신 답하고, 확실하지 않으면 나에게 넘김",
+          "owner": "항상 나에게 넘김"
+        },
+        "exec_plans": {
+          "title": "맡긴 세션의 계획 승인",
+          "hint": "어시스턴트가 맡긴 세션이 계속하기 전에 계획 승인을 요청할 때.",
+          "assistant": "어시스턴트가 대신 답하고, 확실하지 않으면 나에게 넘김",
+          "owner": "항상 나에게 넘김"
         }
       },
       "workdir": {
@@ -8268,6 +8291,13 @@
         "boot": "codeg가 다시 시작되었습니다",
         "lost": "세션 연결이 끊어졌습니다",
         "gone": "보드 작업이 삭제되었습니다"
+      },
+      "retry": {
+        "pending": "자동으로 다시 시도하는 중({max}번 중 {attempt}번째)…",
+        "retried": "자동으로 다시 시도함({max}번 중 {attempt}번째)",
+        "failed": "자동 재시도 실패: {error}",
+        "asked": "다시 시도할지 물어봤습니다",
+        "exhausted": "이미 {max}번 다시 시도했습니다 — 결정은 당신 몫입니다"
       }
     },
     "overview": {
@@ -8381,7 +8411,8 @@
         "dismiss": "하지 않기",
         "undo": "되돌리기",
         "seeSettings": "설정에서 보기"
-      }
+      },
+      "retryOf": "“{title}” 다시 시도"
     },
     "exchange": {
       "sentTo": "<peer></peer>에게 메시지 보냄",
@@ -8729,6 +8760,57 @@
       "prOpened": "PR 생성됨",
       "prNotTracked": "PR 상태는 아직 추적하지 않음",
       "pastStopping": "이미 끝났거나 병합 중이라 중지할 수 없습니다"
+    },
+    "ask": {
+      "heading": {
+        "question": "{executor}이(가) 묻고 있습니다",
+        "plan": "{executor}이(가) 계획 승인을 요청합니다"
+      },
+      "someone": "실행자",
+      "mirror": "{name}이(가) 대신 맡은 작업에서",
+      "state": {
+        "asking": "{name}이(가) 대신 답하는 중…",
+        "forwarded": "답변을 기다리는 중",
+        "submitting": "제출하는 중…",
+        "withdrawn": "철회됨 — 더 이상 답을 기다리지 않습니다"
+      },
+      "why": {
+        "assistant": "{name}이(가) 판단하지 못해 당신에게 넘겼습니다",
+        "settings": "설정에 따라 이런 질문은 당신에게 옵니다",
+        "secret": "비밀값을 묻는 질문입니다",
+        "no_brain": "대신 답할 어시스턴트가 설정되지 않았습니다",
+        "turn_ended": "{name}이(가) 답하지 않고 턴을 마쳤습니다",
+        "turn_failed": "{name}의 턴이 답하기 전에 실패했습니다",
+        "timeout": "{name}이(가) 10분 동안 답하지 않았습니다",
+        "handed_over": "이 작업을 직접 맡았습니다"
+      },
+      "suggestion": "{name}의 생각: {suggestion}",
+      "reason": "근거: {reason}",
+      "openSession": "세션 열기",
+      "answer": {
+        "skipped": "건너뜀",
+        "empty": "답 없음",
+        "approved": "계획을 승인함",
+        "revised": "계획 수정을 요청함",
+        "revisedWith": "수정 요청: {feedback}",
+        "abandoned": "계획을 폐기함",
+        "approvedAs": "계획을 승인함({option})",
+        "sentBackAs": "계획을 되돌려 보냄({option})"
+      },
+      "by": {
+        "assistant": "{name}이(가) 대신 답함: {answer}",
+        "ownerSession": "세션에서 답함: {answer}",
+        "ownerPage": "어시스턴트 페이지에서 답함: {answer}",
+        "owner": "답함: {answer}",
+        "channel": "채팅 채널에서 답함: {answer}",
+        "policy": "실행 정책이 답함: {answer}",
+        "someone": "답변됨: {answer}"
+      },
+      "toast": {
+        "already": "이미 답변되었습니다 — 어떤 답이 채택되었는지는 카드에 있습니다",
+        "withdrawn": "더 이상 답을 기다리지 않습니다"
+      },
+      "answeredForYou": "대신 {count}번 답함"
     }
   }
 }

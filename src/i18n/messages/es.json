@@ -4159,7 +4159,8 @@
           "allowAlways": "siempre permitido",
           "rejected": "rechazado",
           "viaChatChannel": "desde un canal de chat",
-          "byPolicy": "por la política de permisos de la ejecución"
+          "byPolicy": "por la política de permisos de la ejecución",
+          "byAssistant": "respondido por un asistente por ti"
         }
       },
       "messageNav": {
@@ -8044,11 +8045,33 @@
           "ask_more": "Pregúntame más",
           "custom": "Personalizado",
           "standardHint": "Todo se hace solo y te lo cuentan en una tarjeta.",
-          "ask_moreHint": "Los seguimientos y reintentos, los mensajes a otros asistentes, los cambios que pides en la conversación y las asignaciones que cambian código te llegan primero como tarjeta.",
+          "ask_moreHint": "Los seguimientos y reintentos, el reintento del trabajo interrumpido por un reinicio, los mensajes a otros asistentes, los cambios que pides en la conversación y los encargos que cambian código te llegan primero como tarjeta; las preguntas y aprobaciones de plan de las sesiones te llegan a ti.",
           "customHint": "Algunos de los elementos de abajo están ajustados a tu manera.",
           "confirmTitle": "¿Cambiar a «{level}»?",
           "confirmBody": "{count, plural, one {Esto sobrescribe # elemento que cambiaste.} other {Esto sobrescribe # elementos que cambiaste.}}",
           "confirm": "Cambiar"
+        },
+        "interrupt_retry": {
+          "title": "Trabajo interrumpido por un reinicio",
+          "hint": "Cuando codeg se reinicia en mitad de un trabajo que un asistente encargó.",
+          "auto": "Reintentarlo automáticamente",
+          "ask": "Pregúntame antes"
+        },
+        "retry_rounds": {
+          "title": "Reintentos automáticos de un mismo trabajo",
+          "hint": "Cuántas veces codeg reintenta el mismo trabajo por su cuenta antes de dejarte decidir. 0 es nunca."
+        },
+        "exec_questions": {
+          "title": "Preguntas de las sesiones que encargaron",
+          "hint": "Cuando una sesión que encargó un asistente se detiene a preguntar algo. Una pregunta que pide un secreto siempre te llega a ti.",
+          "assistant": "El asistente responde y me pregunta si duda",
+          "owner": "Preguntarme siempre"
+        },
+        "exec_plans": {
+          "title": "Aprobación de planes de las sesiones que encargaron",
+          "hint": "Cuando una sesión que encargó un asistente quiere que se apruebe su plan antes de seguir.",
+          "assistant": "El asistente responde y me pregunta si duda",
+          "owner": "Preguntarme siempre"
         }
       },
       "workdir": {
@@ -8268,6 +8291,13 @@
         "boot": "codeg se reinició",
         "lost": "Se perdió la conexión de la sesión",
         "gone": "Su tarea se eliminó del tablero"
+      },
+      "retry": {
+        "pending": "Reintentando automáticamente (intento {attempt} de {max})…",
+        "retried": "Reintentado automáticamente (intento {attempt} de {max})",
+        "failed": "Falló el reintento automático: {error}",
+        "asked": "Se te preguntó si reintentarlo",
+        "exhausted": "{max, plural, one {Ya se reintentó # vez: te toca decidir} other {Ya se reintentó # veces: te toca decidir}}"
       }
     },
     "overview": {
@@ -8381,7 +8411,8 @@
         "dismiss": "Ahora no",
         "undo": "Deshacer",
         "seeSettings": "Ver en los ajustes"
-      }
+      },
+      "retryOf": "Reintentar «{title}»"
     },
     "exchange": {
       "sentTo": "Mensaje enviado a <peer></peer>",
@@ -8729,6 +8760,57 @@
       "prOpened": "PR abierta",
       "prNotTracked": "Aún no se sigue el estado de la PR",
       "pastStopping": "Ya no se puede detener: terminó o se está fusionando"
+    },
+    "ask": {
+      "heading": {
+        "question": "{executor} pregunta",
+        "plan": "{executor} pide aprobar su plan"
+      },
+      "someone": "El ejecutor",
+      "mirror": "Del trabajo que {name} asumió por ti aquí",
+      "state": {
+        "asking": "{name} lo está respondiendo por ti…",
+        "forwarded": "Esperando tu respuesta",
+        "submitting": "Enviando…",
+        "withdrawn": "Retirada: ya no espera respuesta"
+      },
+      "why": {
+        "assistant": "{name} no pudo decidirlo y te lo pasó",
+        "settings": "Tu configuración te envía estas preguntas",
+        "secret": "Pide un secreto",
+        "no_brain": "No hay ningún asistente configurado para responder",
+        "turn_ended": "{name} terminó su turno sin responder",
+        "turn_failed": "El turno de {name} falló antes de responder",
+        "timeout": "{name} no respondió en 10 minutos",
+        "handed_over": "Tomaste este trabajo"
+      },
+      "suggestion": "{name} se inclina por: {suggestion}",
+      "reason": "Por qué: {reason}",
+      "openSession": "Abrir sesión",
+      "answer": {
+        "skipped": "omitida",
+        "empty": "sin respuesta",
+        "approved": "aprobó el plan",
+        "revised": "pidió cambios en el plan",
+        "revisedWith": "pidió cambios: {feedback}",
+        "abandoned": "abandonó el plan",
+        "approvedAs": "aprobó el plan ({option})",
+        "sentBackAs": "devolvió el plan ({option})"
+      },
+      "by": {
+        "assistant": "{name} respondió por ti: {answer}",
+        "ownerSession": "Respondiste en la sesión: {answer}",
+        "ownerPage": "Respondiste en la página de asistentes: {answer}",
+        "owner": "Respondiste: {answer}",
+        "channel": "Respondida desde un canal de chat: {answer}",
+        "policy": "Respondida por la política de una ejecución: {answer}",
+        "someone": "Respondida: {answer}"
+      },
+      "toast": {
+        "already": "Ya estaba respondida: la tarjeta muestra qué respuesta se tomó",
+        "withdrawn": "Ya no espera respuesta"
+      },
+      "answeredForYou": "{count, plural, one {Respondida por ti # vez} other {Respondida por ti # veces}}"
     }
   }
 }

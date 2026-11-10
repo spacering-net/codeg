@@ -653,10 +653,13 @@ impl PersonalAgentEngine {
         let mut needs_data = Vec::new();
         // The handed-out work whose ask is on its assistant's line: its
         // session and its board task are not listed again.
-        let asking: HashSet<i32> = all
+        // So is one whose question its assistant is answering: not the
+        // owner's until it is forwarded to them (7.3.1).
+        let mut asking: HashSet<i32> = all
             .iter()
             .flat_map(|(_, _, needs)| needs.iter().filter_map(|n| n.dispatch_id))
             .collect();
+        asking.extend(super::asks::asked_dispatches(db).await);
         for (row, _, needs) in &all {
             // A request shown where it began is the asker's: listed there.
             for n in needs.iter().filter(|n| !n.mirror) {

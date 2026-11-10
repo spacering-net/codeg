@@ -224,16 +224,65 @@ impl EngineHost {
     /// assistant's own session or a conversation it dispatched. Nobody's
     /// goes nowhere.
     pub async fn route(self: &Arc<Self>, env: &crate::acp::types::EventEnvelope) {
+        let mut owned = false;
         for engine in self.engines().await {
             if engine.owns_connection(&env.connection_id).await {
+                owned = true;
                 engine.on_event(env).await;
                 // Its session or its work moved: its live state may have.
                 self.touch(engine.bot().await);
             }
         }
-        // A task it handed out runs on a connection no engine routes.
+        // A task it handed out runs on a connection no engine routes: its
+        // questions and plan approvals go to the assistant that dispatched
+        // it (7.3.1).
+        if !owned && is_ask_event(&env.payload) {
+            if let Some((engine, d)) = self.task_dispatch_of(&env.connection_id).await {
+                engine.on_ask_event(&d, env).await;
+            }
+        }
         if let Some(bot) = self.live.task_conn_owner(&env.connection_id) {
             self.touch(bot);
+        }
+    }
+
+    /// The dispatch whose kanban task runs on `conn_id`, and the engine of
+    /// the assistant that dispatched it.
+    pub(super) async fn task_dispatch_of(
+        &self,
+        conn_id: &str,
+    ) -> Option<(
+        Arc<PersonalAgentEngine>,
+        crate::db::entities::personal_agent_dispatch::Model,
+    )> {
+        use crate::db::entities::work_task;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+        let task = work_task::Entity::find()
+            .filter(work_task::Column::ConnectionId.eq(conn_id))
+            .filter(work_task::Column::PersonalAgentDispatchId.is_not_null())
+            .filter(work_task::Column::DeletedAt.is_null())
+            .order_by_desc(work_task::Column::Id)
+            .one(&self.db.conn)
+            .await
+            .ok()
+            .flatten()?;
+        let d = svc::get_dispatch(&self.db.conn, task.personal_agent_dispatch_id?)
+            .await
+            .ok()
+            .flatten()?;
+        if d.work_task_id != Some(task.id) {
+            return None;
+        }
+        let engine = self.engine_for(d.bot_id).await?;
+        Some((engine, d))
+    }
+
+    /// The kanban task `task_id` started a round on `conn_id`: when the
+    /// task is an assistant's dispatch, its windows learn that the assistant
+    /// answers its questions and plan approvals for the owner (7.3.1).
+    pub async fn task_connection_opened(&self, conn_id: &str) {
+        if let Some((engine, _)) = self.task_dispatch_of(conn_id).await {
+            engine.delegate_asks(conn_id).await;
         }
     }
 
@@ -338,4 +387,18 @@ impl EngineHost {
             r.engine.shutdown().await;
         }
     }
+}
+
+/// The events about an executor's waits the assistants answer (7.3.1).
+fn is_ask_event(payload: &crate::acp::types::AcpEvent) -> bool {
+    use crate::acp::types::AcpEvent;
+    matches!(
+        payload,
+        AcpEvent::QuestionRequest { .. }
+            | AcpEvent::QuestionResolved { .. }
+            | AcpEvent::PlanApprovalRequest { .. }
+            | AcpEvent::PlanApprovalResolved { .. }
+            | AcpEvent::PermissionRequest { .. }
+            | AcpEvent::PermissionResolved { .. }
+    )
 }

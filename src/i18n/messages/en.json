@@ -4159,7 +4159,8 @@
           "allowAlways": "always allowed",
           "rejected": "declined",
           "viaChatChannel": "via a chat channel",
-          "byPolicy": "by the run's permission policy"
+          "byPolicy": "by the run's permission policy",
+          "byAssistant": "answered by an assistant for you"
         }
       },
       "messageNav": {
@@ -8043,11 +8044,33 @@
           "ask_more": "Ask me more",
           "custom": "Custom",
           "standardHint": "Everything runs on its own and tells you on a card.",
-          "ask_moreHint": "Follow-ups and retries, messages to other assistants, changes you ask for in chat and code-changing dispatches go to you as a card first.",
+          "ask_moreHint": "Follow-ups and retries, retrying work a restart interrupted, messages to other assistants, changes you ask for in chat and code-changing dispatches go to you as a card first; the sessions' questions and plan approvals come to you.",
           "customHint": "Some of the items below are set your own way.",
           "confirmTitle": "Switch to “{level}”?",
           "confirmBody": "{count, plural, one {This overwrites # item you changed.} other {This overwrites # items you changed.}}",
           "confirm": "Switch"
+        },
+        "interrupt_retry": {
+          "title": "Work a restart interrupted",
+          "hint": "When codeg restarts in the middle of work an assistant handed out.",
+          "auto": "Retry it automatically",
+          "ask": "Ask me first"
+        },
+        "retry_rounds": {
+          "title": "Automatic retries of one piece of work",
+          "hint": "How many times codeg retries the same work by itself before it is yours to decide. 0 is never."
+        },
+        "exec_questions": {
+          "title": "Questions from the sessions they handed out",
+          "hint": "When a session an assistant dispatched stops to ask something. A question asking for a secret always comes to you.",
+          "assistant": "The assistant answers, and asks me when unsure",
+          "owner": "Always ask me"
+        },
+        "exec_plans": {
+          "title": "Plan approvals from the sessions they handed out",
+          "hint": "When a session an assistant dispatched wants its plan approved before it goes on.",
+          "assistant": "The assistant answers, and asks me when unsure",
+          "owner": "Always ask me"
         }
       },
       "workdir": {
@@ -8268,6 +8291,13 @@
         "boot": "codeg restarted",
         "lost": "The session's connection was lost",
         "gone": "Its task was deleted from the board"
+      },
+      "retry": {
+        "pending": "Retrying automatically (attempt {attempt} of {max})…",
+        "retried": "Retried automatically (attempt {attempt} of {max})",
+        "failed": "Automatic retry failed: {error}",
+        "asked": "Asked you whether to retry it",
+        "exhausted": "{max, plural, one {Retried # time already — yours to decide} other {Retried # times already — yours to decide}}"
       }
     },
     "overview": {
@@ -8381,7 +8411,8 @@
         "dismiss": "Not now",
         "undo": "Undo",
         "seeSettings": "See in settings"
-      }
+      },
+      "retryOf": "Retry “{title}”"
     },
     "exchange": {
       "sentTo": "Sent a message to <peer></peer>",
@@ -8729,6 +8760,57 @@
       "prOpened": "PR opened",
       "prNotTracked": "PR status not tracked yet",
       "pastStopping": "Too late to stop: it has finished or is merging"
+    },
+    "ask": {
+      "heading": {
+        "question": "{executor} is asking",
+        "plan": "{executor} wants its plan approved"
+      },
+      "someone": "The executor",
+      "mirror": "From the work {name} took on for you here",
+      "state": {
+        "asking": "{name} is answering this for you…",
+        "forwarded": "Waiting for your answer",
+        "submitting": "Submitting…",
+        "withdrawn": "Withdrawn — it no longer waits for an answer"
+      },
+      "why": {
+        "assistant": "{name} could not settle it and passed it to you",
+        "settings": "Your settings send these to you",
+        "secret": "It asks for a secret",
+        "no_brain": "No assistant is set up to answer it",
+        "turn_ended": "{name} ended its turn without answering",
+        "turn_failed": "{name}'s turn failed before it answered",
+        "timeout": "No answer from {name} in 10 minutes",
+        "handed_over": "You took this work over"
+      },
+      "suggestion": "{name} leans to: {suggestion}",
+      "reason": "Why: {reason}",
+      "openSession": "Open session",
+      "answer": {
+        "skipped": "skipped",
+        "empty": "no answer",
+        "approved": "approved the plan",
+        "revised": "asked for changes to the plan",
+        "revisedWith": "asked for changes: {feedback}",
+        "abandoned": "abandoned the plan",
+        "approvedAs": "approved the plan ({option})",
+        "sentBackAs": "sent the plan back ({option})"
+      },
+      "by": {
+        "assistant": "{name} answered for you: {answer}",
+        "ownerSession": "You answered in the session: {answer}",
+        "ownerPage": "You answered on the assistants page: {answer}",
+        "owner": "You answered: {answer}",
+        "channel": "Answered from a chat channel: {answer}",
+        "policy": "Answered by a run's policy: {answer}",
+        "someone": "Answered: {answer}"
+      },
+      "toast": {
+        "already": "Already answered — the card shows whose answer was taken",
+        "withdrawn": "It no longer waits for an answer"
+      },
+      "answeredForYou": "{count, plural, one {Answered for you # time} other {Answered for you # times}}"
     }
   }
 }

@@ -773,7 +773,7 @@ impl ReplyTurns {
                     .unwrap_or_default();
                 turn.wait(format!("question:{question_id}"), None, "question", title);
             }
-            AcpEvent::QuestionResolved { question_id } => {
+            AcpEvent::QuestionResolved { question_id, .. } => {
                 turn.resolve(&format!("question:{question_id}"));
             }
             AcpEvent::PlanApprovalRequest {
@@ -788,7 +788,7 @@ impl ReplyTurns {
                     plan_heading(plan_markdown),
                 );
             }
-            AcpEvent::PlanApprovalResolved { approval_id } => {
+            AcpEvent::PlanApprovalResolved { approval_id, .. } => {
                 turn.resolve(&format!("plan:{approval_id}"));
             }
             AcpEvent::TurnComplete { stop_reason, .. } if turn_open => {

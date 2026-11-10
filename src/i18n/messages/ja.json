@@ -4159,7 +4159,8 @@
           "allowAlways": "常に許可",
           "rejected": "拒否",
           "viaChatChannel": "チャットチャネル経由",
-          "byPolicy": "実行の権限ポリシーによる"
+          "byPolicy": "実行の権限ポリシーによる",
+          "byAssistant": "アシスタントが代わりに回答"
         }
       },
       "messageNav": {
@@ -8044,11 +8045,33 @@
           "ask_more": "もっと確認して",
           "custom": "カスタム",
           "standardHint": "すべて自動で行い、カードで知らせます。",
-          "ask_moreHint": "フォローアップと再試行、他のアシスタントへのメッセージ、会話で頼んだ変更、コードを変更する依頼は、まずカードであなたに確認します。",
+          "ask_moreHint": "フォローアップと再試行、再起動で中断した作業の再試行、他のアシスタントへのメッセージ、会話で頼んだ変更、コードを変更する依頼は、まずカードであなたに確認します。セッションからの質問とプラン承認はあなたに回ります。",
           "customHint": "下の項目のいくつかを個別に設定しています。",
           "confirmTitle": "「{level}」に切り替えますか？",
           "confirmBody": "変更した {count} 項目が上書きされます。",
           "confirm": "切り替える"
+        },
+        "interrupt_retry": {
+          "title": "再起動で中断した作業",
+          "hint": "アシスタントが依頼した作業の途中で codeg が再起動したとき。",
+          "auto": "自動で再試行",
+          "ask": "先に確認して"
+        },
+        "retry_rounds": {
+          "title": "同じ作業の自動再試行の回数",
+          "hint": "同じ作業を codeg が自分で再試行する回数。超えたらあなたの判断に任せます。0 で再試行しません。"
+        },
+        "exec_questions": {
+          "title": "依頼したセッションからの質問",
+          "hint": "アシスタントが依頼したセッションが止まって質問してきたとき。シークレットを求める質問は常にあなたに届きます。",
+          "assistant": "アシスタントが代わりに答え、迷うときは私に回す",
+          "owner": "常に私に回す"
+        },
+        "exec_plans": {
+          "title": "依頼したセッションからのプラン承認",
+          "hint": "アシスタントが依頼したセッションが、先へ進む前にプランの承認を求めてきたとき。",
+          "assistant": "アシスタントが代わりに答え、迷うときは私に回す",
+          "owner": "常に私に回す"
         }
       },
       "workdir": {
@@ -8268,6 +8291,13 @@
         "boot": "codeg が再起動しました",
         "lost": "セッションの接続が切れました",
         "gone": "ボードのタスクが削除されました"
+      },
+      "retry": {
+        "pending": "自動で再試行中（{max} 回中 {attempt} 回目）…",
+        "retried": "自動で再試行しました（{max} 回中 {attempt} 回目）",
+        "failed": "自動再試行に失敗しました：{error}",
+        "asked": "再試行するかあなたに確認しました",
+        "exhausted": "すでに {max} 回再試行しました。判断はあなたに任せます"
       }
     },
     "overview": {
@@ -8381,7 +8411,8 @@
         "dismiss": "やめておく",
         "undo": "元に戻す",
         "seeSettings": "設定で見る"
-      }
+      },
+      "retryOf": "「{title}」を再試行"
     },
     "exchange": {
       "sentTo": "<peer></peer> にメッセージを送信",
@@ -8729,6 +8760,57 @@
       "prOpened": "PR 作成済み",
       "prNotTracked": "PR の状態はまだ追跡していません",
       "pastStopping": "完了済みかマージ中のため停止できません"
+    },
+    "ask": {
+      "heading": {
+        "question": "{executor} が質問しています",
+        "plan": "{executor} がプランの承認を求めています"
+      },
+      "someone": "実行者",
+      "mirror": "{name} があなたの代わりに引き受けた作業から",
+      "state": {
+        "asking": "{name} があなたの代わりに答えています…",
+        "forwarded": "あなたの回答待ち",
+        "submitting": "送信中…",
+        "withdrawn": "取り下げられました（もう回答を待っていません）"
+      },
+      "why": {
+        "assistant": "{name} が判断しきれず、あなたに回しました",
+        "settings": "設定でこの種の質問はあなたに回ります",
+        "secret": "シークレットを求める質問です",
+        "no_brain": "答えられるアシスタントが設定されていません",
+        "turn_ended": "{name} は答えずにターンを終えました",
+        "turn_failed": "{name} のターンが答える前に失敗しました",
+        "timeout": "{name} から 10 分間回答がありません",
+        "handed_over": "あなたがこの作業を引き継ぎました"
+      },
+      "suggestion": "{name} の見立て：{suggestion}",
+      "reason": "根拠：{reason}",
+      "openSession": "セッションを開く",
+      "answer": {
+        "skipped": "スキップ",
+        "empty": "回答なし",
+        "approved": "プランを承認",
+        "revised": "プランの修正を依頼",
+        "revisedWith": "修正を依頼：{feedback}",
+        "abandoned": "プランを破棄",
+        "approvedAs": "プランを承認（{option}）",
+        "sentBackAs": "プランを差し戻し（{option}）"
+      },
+      "by": {
+        "assistant": "{name} が代わりに回答：{answer}",
+        "ownerSession": "あなたがセッションで回答：{answer}",
+        "ownerPage": "あなたがアシスタントのページで回答：{answer}",
+        "owner": "あなたが回答：{answer}",
+        "channel": "チャットチャネルから回答：{answer}",
+        "policy": "実行のポリシーが回答：{answer}",
+        "someone": "回答済み：{answer}"
+      },
+      "toast": {
+        "already": "すでに回答済みです。採用された回答はカードに表示されます",
+        "withdrawn": "もう回答を待っていません"
+      },
+      "answeredForYou": "代わりに {count} 回回答"
     }
   }
 }

@@ -14,14 +14,18 @@ import {
   Gauge,
   HandHelping,
   LayoutGrid,
+  ListChecks,
   MessageCircleQuestion,
+  MessageSquareReply,
   MessagesSquare,
   Repeat,
   RotateCcw,
+  RotateCw,
   Send,
   ShieldCheck,
   SlidersHorizontal,
   Text,
+  Timer,
   Waypoints,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
@@ -70,6 +74,10 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   messages: "auto",
   worker_handoff: "message",
   loop_rounds: 3,
+  interrupt_retry: "auto",
+  retry_rounds: 2,
+  exec_questions: "assistant",
+  exec_plans: "assistant",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -82,12 +90,18 @@ export const AUTOMATION_PRESETS: Record<
     followups: "auto",
     messages: "auto",
     chat_changes: "apply",
+    interrupt_retry: "auto",
+    exec_questions: "assistant",
+    exec_plans: "assistant",
   },
   ask_more: {
     confirm_dispatch: "code",
     followups: "ask",
     messages: "ask",
     chat_changes: "show",
+    interrupt_retry: "ask",
+    exec_questions: "owner",
+    exec_plans: "owner",
   },
 }
 
@@ -116,6 +130,15 @@ const CHOICES: Partial<Record<PersonalAgentPrefKey, readonly string[]>> = {
   followups: ["auto", "ask"],
   messages: ["auto", "ask"],
   worker_handoff: ["message", "direct"],
+  interrupt_retry: ["auto", "ask"],
+  exec_questions: ["assistant", "owner"],
+  exec_plans: ["assistant", "owner"],
+}
+
+/** The most a count item takes (`PrefKind::Count`). */
+const COUNT_MAX: Partial<Record<PersonalAgentPrefKey, number>> = {
+  loop_rounds: 1000,
+  retry_rounds: 10,
 }
 
 const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
@@ -128,6 +151,10 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   messages: MessagesSquare,
   worker_handoff: HandHelping,
   loop_rounds: Waypoints,
+  interrupt_retry: RotateCw,
+  retry_rounds: Timer,
+  exec_questions: MessageSquareReply,
+  exec_plans: ListChecks,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
@@ -139,9 +166,13 @@ export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
 
 export const AUTOMATION_ITEMS: PersonalAgentPrefKey[] = [
   "confirm_dispatch",
+  "interrupt_retry",
   "followups",
+  "exec_questions",
+  "exec_plans",
   "messages",
   "worker_handoff",
+  "retry_rounds",
   "loop_rounds",
 ]
 
@@ -172,7 +203,8 @@ function PrefRow({
     if (draft == null) return
     const n = Number(draft)
     setDraft(null)
-    if (Number.isInteger(n) && n >= 0 && n <= 1000 && n !== value) onPick(n)
+    const max = COUNT_MAX[item] ?? 1000
+    if (Number.isInteger(n) && n >= 0 && n <= max && n !== value) onPick(n)
   }
   return (
     <SettingRow

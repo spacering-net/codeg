@@ -102,6 +102,55 @@ export function CollapsedText({ text }: { text: string }) {
   )
 }
 
+/** How codeg went on from a restart's interruption (7.3), from the card's
+ *  `auto_retry`: retried, retrying, asked, out of retries. */
+export function useRetryLine(): (v: unknown) => string | null {
+  const t = useTranslations("PersonalAgent.event.retry")
+  return (v) => {
+    if (!v || typeof v !== "object") return null
+    const r = v as Record<string, unknown>
+    const attempt = typeof r.attempt === "number" ? r.attempt : 0
+    const max = typeof r.max === "number" ? r.max : 0
+    switch (r.state) {
+      case "pending":
+        return t("pending", { attempt, max })
+      case "retried":
+        return t("retried", { attempt, max })
+      case "failed":
+        return t("failed", {
+          error: typeof r.error === "string" ? r.error : "",
+        })
+      case "asked":
+        return t("asked")
+      case "exhausted":
+        return t("exhausted", { max })
+      default:
+        return null
+    }
+  }
+}
+
+/** "Answered for you N times": the questions and plan approvals of the
+ *  work its assistant answered for the owner (7.3.1). */
+export function AnsweredForYou({
+  count,
+  className,
+}: {
+  count: number
+  className?: string
+}) {
+  const t = useTranslations("PersonalAgent.ask")
+  if (count <= 0) return null
+  return (
+    <p
+      data-pa-answered-for-you={count}
+      className={cn("text-xs text-muted-foreground", className)}
+    >
+      {t("answeredForYou", { count })}
+    </p>
+  )
+}
+
 export function EventCard({ item }: { item: EventItem }) {
   const t = useTranslations("PersonalAgent")
   const { dispatchById } = usePersonalAgent()
@@ -127,6 +176,7 @@ export function EventCard({ item }: { item: EventItem }) {
       ? t(`event.note.${cause}` as "event.note.boot")
       : rawNote
   const title = info?.title ?? str(data, "title") ?? row.body
+  const retry = useRetryLine()(data?.auto_retry)
   const target = workTargetOf(info, row)
   const unread = row.read_at == null
   return (
@@ -184,9 +234,20 @@ export function EventCard({ item }: { item: EventItem }) {
         {item.latest && info?.task ? (
           <TaskStrip d={info} chip={newsLadder !== info.ladder} />
         ) : null}
+        {item.latest && info && info.answered_for_you > 0 ? (
+          <AnsweredForYou count={info.answered_for_you} className="mt-2" />
+        ) : null}
         {note ? (
           <p className="mt-2 text-xs break-words text-muted-foreground">
             {note}
+          </p>
+        ) : null}
+        {retry ? (
+          <p
+            className="mt-1.5 text-xs break-words text-muted-foreground"
+            data-pa-retry
+          >
+            {retry}
           </p>
         ) : null}
         {excerpt ? <CollapsedText text={excerpt} /> : null}

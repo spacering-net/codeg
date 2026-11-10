@@ -444,6 +444,9 @@ pub struct DispatchInfo {
     pub ladder: super::personal_agent_overview::Ladder,
     /// The kanban task behind a task dispatch, while it exists.
     pub task: Option<super::personal_agent_overview::TaskFacts>,
+    /// How many of its executor's questions and plan approvals its assistant
+    /// answered for the owner (7.3.1).
+    pub answered_for_you: u32,
 }
 
 /// Where a conversation opens: its project and the agent that reads it.

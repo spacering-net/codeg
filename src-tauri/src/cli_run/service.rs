@@ -2009,9 +2009,12 @@ impl CliRunService {
         let decided_by = match origin {
             None => DecidedBy::Withdrawn,
             Some(PermissionAnswerOrigin::CliPolicy { .. }) => DecidedBy::Policy,
-            Some(PermissionAnswerOrigin::User | PermissionAnswerOrigin::ChatChannel) => {
-                DecidedBy::User
-            }
+            Some(
+                PermissionAnswerOrigin::User
+                | PermissionAnswerOrigin::ChatChannel
+                | PermissionAnswerOrigin::Assistant { .. }
+                | PermissionAnswerOrigin::AssistantPage,
+            ) => DecidedBy::User,
         };
         if inner.phase == Phase::Settled {
             return;

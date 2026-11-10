@@ -4564,7 +4564,7 @@ async fn a_question_asked_for_another_assistants_request_shows_where_it_began() 
     assert!(Arc::ptr_eq(&source, &worker));
     // Settled here: settled there.
     worker
-        .feed_for_test("w-1", 2, AcpEvent::QuestionResolved { question_id: "q1".into() })
+        .feed_for_test("w-1", 2, AcpEvent::QuestionResolved { question_id: "q1".into(), resolution: None })
         .await;
     let mirror = svc::row_by_ref(&primary.db.conn, p, TimelineKind::Question, "q1").await.unwrap().unwrap();
     assert_eq!(data_of(&mirror)["state"], "resolved");
@@ -6461,7 +6461,7 @@ async fn usage_and_activity_are_read_by_the_local_day() {
         .await
         .unwrap();
     }
-    let out = call_tool(&engine, "usage_summary", serde_json::json!({ "days": 1 })).await;
+    let out = call_tool(&engine, "usage_summary", serde_json::json!({ "days": 2 })).await;
     assert!(out.ok, "{}", out.text);
     let by = &out.data["by_assistant"][0];
     assert_eq!((by["own_tokens"].as_u64(), by["handed_out_tokens"].as_u64()), (Some(1000), Some(5000)), "{}", out.text);
@@ -6583,10 +6583,1045 @@ async fn an_assistants_usage_counts_its_work_all_the_way_down_and_nothing_delete
         .await
         .unwrap();
     }
-    let out = call_tool(&engine, "usage_summary", serde_json::json!({ "days": 1 })).await;
+    // Today and yesterday: facts a few seconds old are in it even when the
+    // test runs across local midnight.
+    let out = call_tool(&engine, "usage_summary", serde_json::json!({ "days": 2 })).await;
     assert!(out.ok, "{}", out.text);
     let by = &out.data["by_assistant"][0];
     assert_eq!(by["handed_out_tokens"].as_u64(), Some(32_100), "a delegation's sessions are the work's: {}", out.text);
     assert_eq!(out.data["totals"]["total_tokens"], 32_100, "a deleted conversation counts nowhere: {}", out.text);
     assert_eq!(out.data["rest_tokens"], 0, "{}", out.text);
+}
+
+// ── 1.9: the assistant answers its executors' questions; retries ──────────
+
+use super::asks::{AskAnswer, AskCard, Answerer};
+use crate::acp::question::{QuestionAnswer, QuestionAnswerItem, QuestionSpec};
+use crate::acp::types::{PermissionAnswerOrigin, PermissionOptionInfo};
+
+fn ask_spec(id: &str, header: &str, options: &[&str]) -> QuestionSpec {
+    QuestionSpec {
+        id: id.into(),
+        question: format!("{header}: which one?"),
+        header: header.into(),
+        multi_select: false,
+        options: options
+            .iter()
+            .map(|l| crate::acp::question::QuestionOption {
+                label: l.to_string(),
+                description: String::new(),
+            })
+            .collect(),
+        is_secret: false,
+    }
+}
+
+/// An executor's live connection: its command channel, and its state.
+async fn exec_conn(engine: &PersonalAgentEngine, conn: &str) -> (tokio::sync::mpsc::Receiver<ConnectionCommand>, State) {
+    let rx = engine
+        .manager
+        .insert_test_connection_live(conn, AgentType::ClaudeCode, None, EventEmitter::Noop)
+        .await;
+    let st = engine.manager.get_state(conn).await.unwrap();
+    (rx, st)
+}
+
+/// The executor on `conn` asks `specs`, as `ask_user_question` does: the
+/// manager parks it and the engine reads the event.
+async fn exec_asks(
+    engine: &Arc<PersonalAgentEngine>,
+    conn: &str,
+    specs: Vec<QuestionSpec>,
+) -> crate::acp::question::RegisteredQuestion {
+    let reg = engine
+        .manager
+        .register_question(conn, specs.clone())
+        .await
+        .expect("the question is parked");
+    engine
+        .feed_for_test(
+            conn,
+            1,
+            AcpEvent::QuestionRequest {
+                question_id: reg.question_id.clone(),
+                questions: specs,
+            },
+        )
+        .await;
+    reg
+}
+
+/// Every ask card of `engine`'s (not the mirrors shown to it), oldest first.
+async fn ask_cards(engine: &PersonalAgentEngine) -> Vec<AskCard> {
+    svc::ask_rows(
+        &engine.db.conn,
+        engine.bot().await,
+        &["asking", "forwarded", "submitting", "answered", "withdrawn"],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .filter_map(|r| r.data.as_deref().and_then(|d| serde_json::from_str::<AskCard>(d).ok()))
+    .filter(|c| c.mirror_of.is_none())
+    .collect()
+}
+
+fn pick(question_id: &str, label: &str) -> QuestionAnswer {
+    QuestionAnswer {
+        answers: vec![QuestionAnswerItem {
+            question_id: question_id.into(),
+            labels: vec![label.into()],
+        }],
+        declined: false,
+    }
+}
+
+fn claude_plan(request_id: &str, plan: &str) -> AcpEvent {
+    let opt = |id: &str, kind: &str| PermissionOptionInfo {
+        option_id: id.into(),
+        name: id.into(),
+        kind: kind.into(),
+        meta: None,
+    };
+    AcpEvent::PermissionRequest {
+        request_id: request_id.into(),
+        tool_call: json!({ "toolCallId": "t-plan", "kind": "switch_mode", "title": "Approve Plan", "rawInput": { "plan": plan } }),
+        options: vec![
+            opt("exit-plan-clear-auto", "allow_always"),
+            opt("exit-plan-auto", "allow_always"),
+            opt("exit-plan-default", "allow_once"),
+            opt("reject", "reject_once"),
+        ],
+        queued: 0,
+    }
+}
+
+/// The permission answer the engine sent on the executor's connection.
+fn take_permission_answer(rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>) -> (String, String, PermissionAnswerOrigin) {
+    loop {
+        match rx.try_recv() {
+            Ok(ConnectionCommand::RespondPermission {
+                request_id,
+                option_id,
+                origin,
+            }) => return (request_id, option_id, origin),
+            Ok(_) => continue,
+            Err(_) => panic!("a permission answer was sent"),
+        }
+    }
+}
+
+/// 1.9 ①: a dispatched session's question wakes the assistant that
+/// dispatched it, as one card; it answers for the owner, the executor gets
+/// the answer, and nothing waits on the owner meanwhile. A late answer of
+/// the owner's is told whose answer took effect.
+#[tokio::test]
+async fn a_dispatched_sessions_question_is_answered_by_its_assistant_for_the_owner() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-q").await;
+    let (_rx, st) = exec_conn(&engine, "c-q").await;
+    engine.open_round("c-q", id).await;
+    // The windows learn the assistant answers there: they do not notify.
+    let delegate = st.read().await.ask_delegate.expect("delegated");
+    assert!(delegate.questions && delegate.plans);
+
+    let reg = exec_asks(&engine, "c-q", vec![ask_spec("q1", "Approach", &["A", "B"])]).await;
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::WaitingInput);
+    let cards = ask_cards(&engine).await;
+    assert_eq!(cards.len(), 1);
+    let ask_id = cards[0].ask_id;
+    assert_eq!(cards[0].state, "asking");
+    // Woken by the question itself, not by the waiting-for-input news.
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, svc::ASK_EVENT);
+    assert!(events[0].wake);
+    // Nothing waits on the owner; the work reads as going on.
+    let facts = super::live::db_facts(&engine.db, &engine.agent_row().await.unwrap()).await;
+    assert!(facts.needs.is_empty(), "{:?}", facts.needs);
+    assert_eq!(facts.hand[0].ladder, crate::models::personal_agent_overview::Ladder::Working);
+    // The delivery carries it whole.
+    let block = engine.ask_block(&events[0]).await;
+    assert!(block.starts_with(&format!("<codeg-ask id=\"{ask_id}\"")), "{block}");
+    assert!(block.contains("Question 1 [Approach] (pick one)") && block.contains("  - A"), "{block}");
+
+    let (_seg, _batch) = event_turn(&engine, "pa-q").await;
+    let args = json!({ "ask_id": ask_id, "answers": [{ "question": 1, "choose": ["a"] }], "reason": "The owner said: use A." });
+    let out = call(&engine, "dispatch_answer", args.clone()).await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(out.data["state"], "answered");
+    let got = reg.answer_rx.await.expect("the executor got an answer");
+    assert_eq!(got.answers[0].selected, vec!["A".to_string()]);
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!(card.state, "answered");
+    assert_eq!(card.answered_by.as_ref().unwrap()["kind"], "assistant");
+    assert_eq!(card.reason.as_deref(), Some("The owner said: use A."));
+    // The connection's own resolved event changes nothing more.
+    let resolution = engine.manager.resolution_of(&reg.question_id);
+    engine
+        .feed_for_test("c-q", 2, AcpEvent::QuestionResolved { question_id: reg.question_id.clone(), resolution })
+        .await;
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Running);
+    assert_eq!(ask_cards(&engine).await[0].answered_by.as_ref().unwrap()["kind"], "assistant");
+    // The same call again in this turn: what it did the first time.
+    let again = call(&engine, "dispatch_answer", args).await;
+    assert!(again.text.starts_with("Done in the turn this delivery repeats"), "{}", again.text);
+    // The owner's late answer is not used; the card keeps the winner's.
+    let late = engine
+        .answer_ask(ask_id, AskAnswer::Question(pick("q1", "B")), Answerer::OwnerPage, None)
+        .await
+        .unwrap();
+    assert_eq!(late.state, "already_answered");
+    assert!(late.text.contains("Approach: A"), "{}", late.text);
+    assert_eq!(ask_cards(&engine).await[0].answer.as_ref().unwrap()["answers"][0]["selected"][0], "A");
+    assert_eq!(super::asks::answered_for_owner(&engine.db, &[id]).await.get(&id), Some(&1));
+}
+
+/// 1.9 ③ ④: the owner answered in the session first — the assistant is told
+/// theirs; and its late answer never lands on the next question.
+#[tokio::test]
+async fn a_late_answer_is_told_the_first_and_never_lands_on_the_next_question() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-r").await;
+    let (_rx, st) = exec_conn(&engine, "c-r").await;
+    engine.open_round("c-r", id).await;
+    let q1 = exec_asks(&engine, "c-r", vec![ask_spec("a1", "First", &["A", "B"])]).await;
+    let first = ask_cards(&engine).await[0].ask_id;
+    // The owner answers on the session's card.
+    engine
+        .manager
+        .answer_question("c-r", &q1.question_id, pick("a1", "B"))
+        .await
+        .unwrap();
+    let resolution = engine.manager.resolution_of(&q1.question_id);
+    engine
+        .feed_for_test("c-r", 2, AcpEvent::QuestionResolved { question_id: q1.question_id.clone(), resolution })
+        .await;
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!(card.state, "answered");
+    assert_eq!(card.answered_by.as_ref().unwrap(), &json!({ "kind": "owner", "where": "session" }));
+    // The executor asks the next one at once.
+    let q2 = exec_asks(&engine, "c-r", vec![ask_spec("a2", "Second", &["X", "Y"])]).await;
+    let (_seg, _batch) = event_turn(&engine, "pa-r").await;
+    let out = call(
+        &engine,
+        "dispatch_answer",
+        json!({ "ask_id": first, "answers": [{ "question": 1, "choose": ["A"] }], "reason": "r" }),
+    )
+    .await;
+    assert_eq!(out.data["state"], "already_answered", "{}", out.text);
+    assert!(out.text.contains("the owner, in the session") && out.text.contains("First: B"), "{}", out.text);
+    // The second question is untouched, on a card of its own.
+    assert_eq!(
+        st.read().await.pending_question.as_ref().map(|q| q.question_id.clone()),
+        Some(q2.question_id.clone())
+    );
+    let cards = ask_cards(&engine).await;
+    assert_eq!(cards.len(), 2);
+    assert_eq!(cards[1].state, "asking");
+    assert_ne!(cards[1].ask_id, first);
+}
+
+/// 1.9 ⑤: one wait is one card, however often the dispatch flips and
+/// whether its event came or was dropped.
+#[tokio::test]
+async fn one_wait_is_one_card_and_a_dropped_one_is_found() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-1").await;
+    exec_conn(&engine, "c-1").await;
+    engine.open_round("c-1", id).await;
+    let specs = vec![ask_spec("o1", "Only", &["A", "B"])];
+    let reg = exec_asks(&engine, "c-1", specs.clone()).await;
+    engine
+        .feed_for_test("c-1", 5, AcpEvent::QuestionRequest { question_id: reg.question_id.clone(), questions: specs })
+        .await;
+    engine.ask_tick().await;
+    assert_eq!(ask_cards(&engine).await.len(), 1);
+    // Another dispatch's question the bus dropped: the tick finds it.
+    let other = session_dispatch(&engine, DispatchState::Running, "c-2").await;
+    exec_conn(&engine, "c-2").await;
+    engine.open_round("c-2", other).await;
+    engine
+        .manager
+        .register_question("c-2", vec![ask_spec("o2", "Dropped", &["A", "B"])])
+        .await
+        .unwrap();
+    engine.ask_tick().await;
+    let cards = ask_cards(&engine).await;
+    assert_eq!(cards.len(), 2);
+    assert_eq!(cards[1].dispatch_id, other);
+    // A wait gone with its connection is withdrawn.
+    engine.manager.disconnect("c-2").await.ok();
+    engine.ask_tick().await;
+    assert_eq!(ask_cards(&engine).await[1].state, "withdrawn");
+}
+
+/// 1.9 ⑨ ⑪ ⑫: the owner's setting, a secret, a taken-over session — the
+/// owner's, at once; the assistant is not woken, only told.
+#[tokio::test]
+async fn settings_secrets_and_taken_over_work_go_to_the_owner() {
+    let (engine, _tmp) = configured().await;
+    engine.apply_settings(&[change("prefs.exec_questions", json!("owner"))]).await.unwrap();
+    let id = session_dispatch(&engine, DispatchState::Running, "c-s").await;
+    let (_rx, st) = exec_conn(&engine, "c-s").await;
+    engine.open_round("c-s", id).await;
+    let delegate = st.read().await.ask_delegate.expect("plans are still the assistant's");
+    assert!(!delegate.questions && delegate.plans);
+    exec_asks(&engine, "c-s", vec![ask_spec("s1", "Which", &["A", "B"])]).await;
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!((card.state.as_str(), card.forward_reason.as_deref()), ("forwarded", Some("settings")));
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert!(!events[0].wake, "told with the next delivery only");
+    assert!(engine.ask_block(&events[0]).await.contains("Nothing for you to answer"));
+    // On the owner's list, as a question.
+    let facts = super::live::db_facts(&engine.db, &engine.agent_row().await.unwrap()).await;
+    assert_eq!(facts.needs.len(), 1);
+    assert_eq!(facts.needs[0].kind, "question");
+
+    engine.apply_settings(&[change("prefs.exec_questions", json!("assistant"))]).await.unwrap();
+    let secret = session_dispatch(&engine, DispatchState::Running, "c-k").await;
+    exec_conn(&engine, "c-k").await;
+    engine.open_round("c-k", secret).await;
+    let mut spec = ask_spec("k1", "API key", &[]);
+    spec.is_secret = true;
+    exec_asks(&engine, "c-k", vec![spec]).await;
+    let card = ask_cards(&engine).await.pop().unwrap();
+    assert_eq!(card.forward_reason.as_deref(), Some("secret"));
+    let (_seg, _b) = event_turn(&engine, "pa-k").await;
+    let out = call(&engine, "dispatch_answer", json!({ "ask_id": card.ask_id, "answers": [{ "text": "sk-1" }], "reason": "r" })).await;
+    assert!(!out.ok, "a secret is the owner's: {}", out.text);
+
+    // Taken over: the owner's own; no card.
+    let mine = session_dispatch(&engine, DispatchState::Running, "c-h").await;
+    exec_conn(&engine, "c-h").await;
+    engine.open_round("c-h", mine).await;
+    svc::update_dispatch(
+        &engine.db.conn,
+        mine,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::HandedOver),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let before = ask_cards(&engine).await.len();
+    exec_asks(&engine, "c-h", vec![ask_spec("h1", "Mine", &["A", "B"])]).await;
+    assert_eq!(ask_cards(&engine).await.len(), before);
+}
+
+/// 1.9 ⑩ ⑮: a turn that ends without an answer forwards it; the owner sees
+/// it where the work began too, and one answer settles both cards.
+#[tokio::test]
+async fn an_unanswered_question_goes_to_the_owner_and_shows_where_the_work_began() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let p = primary.bot().await;
+    let owner = primary.send_owner_message("Fix the login".into(), Vec::new(), None).await.unwrap();
+    // The primary handed it to Dev, who dispatched it.
+    let id = session_dispatch(&worker, DispatchState::Running, "c-m").await;
+    let row = svc::get_dispatch(&worker.db.conn, id).await.unwrap().unwrap();
+    let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = row.into();
+    am.origin_bot_id = Set(Some(p));
+    am.origin_row_id = Set(Some(owner.id));
+    am.update(&worker.db.conn).await.unwrap();
+    exec_conn(&worker, "c-m").await;
+    worker.open_round("c-m", id).await;
+    exec_asks(&worker, "c-m", vec![ask_spec("m1", "Login", &["Cookie", "Token"])]).await;
+    let ask = ask_cards(&worker).await.remove(0);
+    // Dev's turn carries it and ends without an answer.
+    let seg = open_segment(&worker).await;
+    let (mut rx, state) = live_connection(&worker, seg, "w-m").await;
+    worker.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains("<codeg-ask") && prompt.contains("Fix the login"), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(&worker, &state, "w-m", text("I am not sure."), true).await;
+    emit(&worker, &state, "w-m", turn_complete("end_turn"), true).await;
+    let card = ask_cards(&worker).await.remove(0);
+    assert_eq!((card.state.as_str(), card.forward_reason.as_deref()), ("forwarded", Some("turn_ended")));
+    // Shown where the owner asked, as the same question.
+    let mirrors = svc::ask_rows(&primary.db.conn, p, &["forwarded"]).await.unwrap();
+    assert_eq!(mirrors.len(), 1);
+    assert_eq!(data_of(&mirrors[0])["mirror_of"]["ask_id"], ask.ask_id);
+    assert_eq!(mirrors[0].reply_to, Some(owner.id));
+    let primary_needs = super::live::db_facts(&primary.db, &primary.agent_row().await.unwrap()).await.needs;
+    assert!(primary_needs.iter().any(|n| n.mirror && n.kind == "question"));
+    // The owner answers on the primary's page: both cards settle.
+    let reply = worker
+        .answer_ask(ask.ask_id, AskAnswer::Question(pick("m1", "Token")), Answerer::OwnerPage, None)
+        .await
+        .unwrap();
+    assert_eq!(reply.state, "answered");
+    let mirror = svc::get_row(&primary.db.conn, mirrors[0].id).await.unwrap().unwrap();
+    assert_eq!(data_of(&mirror)["state"], "answered");
+    assert_eq!(data_of(&mirror)["answered_by"], json!({ "kind": "owner", "where": "page" }));
+}
+
+/// 1.9 ⑥ ⑦: a plan that arrives as a permission request (Claude Code): the
+/// assistant's answer is submitted, and the card settles as the executor's
+/// `PermissionResolved` says — the owner's when theirs came first. Approving
+/// never picks an option that clears the context.
+#[tokio::test]
+async fn a_plan_permission_settles_by_whose_answer_took_effect() {
+    let (engine, _tmp) = configured().await;
+    let me = engine.bot().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-p").await;
+    let (mut rx, _st) = exec_conn(&engine, "c-p").await;
+    engine.open_round("c-p", id).await;
+    engine.feed_for_test("c-p", 1, claude_plan("p1", "1. Add the cache")).await;
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!((card.request.as_str(), card.plan.as_deref()), ("plan_permission", Some("1. Add the cache")));
+    let (_seg, _b) = event_turn(&engine, "pa-p").await;
+    let out = call(&engine, "dispatch_answer", json!({ "ask_id": card.ask_id, "decision": "approve", "reason": "As asked." })).await;
+    assert_eq!(out.data["state"], "submitted", "{}", out.text);
+    let (rid, option, origin) = take_permission_answer(&mut rx);
+    assert_eq!((rid.as_str(), option.as_str()), ("p1", "exit-plan-default"));
+    assert_eq!(origin, PermissionAnswerOrigin::Assistant { bot_id: me });
+    assert_eq!(ask_cards(&engine).await[0].state, "submitting");
+    engine
+        .feed_for_test(
+            "c-p",
+            2,
+            AcpEvent::PermissionResolved {
+                request_id: "p1".into(),
+                option_id: Some("exit-plan-default".into()),
+                origin: Some(PermissionAnswerOrigin::Assistant { bot_id: me }),
+            },
+        )
+        .await;
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!(card.state, "answered");
+    assert_eq!(card.answered_by.as_ref().unwrap()["kind"], "assistant");
+
+    // The owner clicked in the session first: theirs is the answer.
+    let other = session_dispatch(&engine, DispatchState::Running, "c-p2").await;
+    let (mut rx2, _st2) = exec_conn(&engine, "c-p2").await;
+    engine.open_round("c-p2", other).await;
+    engine.feed_for_test("c-p2", 1, claude_plan("p2", "1. Rewrite it")).await;
+    let second = ask_cards(&engine).await.pop().unwrap();
+    call(&engine, "dispatch_answer", json!({ "ask_id": second.ask_id, "decision": "revise", "feedback": "Keep it small.", "reason": "r" })).await;
+    assert_eq!(take_permission_answer(&mut rx2).1, "reject");
+    engine
+        .feed_for_test(
+            "c-p2",
+            2,
+            AcpEvent::PermissionResolved {
+                request_id: "p2".into(),
+                option_id: Some("exit-plan-auto".into()),
+                origin: Some(PermissionAnswerOrigin::User),
+            },
+        )
+        .await;
+    let second = ask_cards(&engine).await.pop().unwrap();
+    assert_eq!(second.answered_by.as_ref().unwrap(), &json!({ "kind": "owner" }));
+    assert_eq!(second.feedback, None, "the assistant's feedback rode with an answer that lost");
+    assert!(second.answer_text.unwrap().starts_with("approved"));
+}
+
+/// 1.9 ⑥: a plan sent back with feedback the answer cannot carry (Claude
+/// Code's "keep planning") gets the feedback as its next message, once.
+#[tokio::test]
+async fn a_plan_sent_back_gets_its_feedback_as_the_next_message() {
+    let (engine, tmp) = configured().await;
+    let me = engine.bot().await;
+    let (id, mut rx, _st, _conv) = live_session_dispatch(&engine, &tmp, "c-f", DispatchState::Running).await;
+    engine.open_round("c-f", id).await;
+    engine.feed_for_test("c-f", 1, claude_plan("pf", "1. Rewrite everything")).await;
+    let card = ask_cards(&engine).await.remove(0);
+    let (_seg, _b) = event_turn(&engine, "pa-f").await;
+    call(
+        &engine,
+        "dispatch_answer",
+        json!({ "ask_id": card.ask_id, "decision": "revise", "feedback": "Reuse the existing cache.", "reason": "Too big." }),
+    )
+    .await;
+    assert_eq!(take_permission_answer(&mut rx).1, "reject");
+    engine
+        .feed_for_test(
+            "c-f",
+            2,
+            AcpEvent::PermissionResolved {
+                request_id: "pf".into(),
+                option_id: Some("reject".into()),
+                origin: Some(PermissionAnswerOrigin::Assistant { bot_id: me }),
+            },
+        )
+        .await;
+    // Claude stops the turn on "keep planning".
+    engine.feed_for_test("c-f", 3, turn_complete("cancelled")).await;
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Canceled);
+    engine.ask_tick().await;
+    let (sent, _suffix, _mid, _receipt) = take_followup(&mut rx);
+    assert!(sent.contains("Reuse the existing cache."), "{sent}");
+    engine.ask_tick().await;
+    assert!(no_prompt(&mut rx), "sent once");
+}
+
+/// 1.9 ⑥: Grok drops what rides with "request changes": the feedback goes
+/// as the next message; Cursor carries it with the answer.
+#[tokio::test]
+async fn grok_gets_plan_feedback_as_a_message_and_cursor_with_the_answer() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, _tmp) = configured().await;
+    for (conn, agent, sends_after) in [("c-g", "grok", true), ("c-c", "cursor", false)] {
+        let id = session_dispatch(&engine, DispatchState::Running, conn).await;
+        let row = svc::get_dispatch(&engine.db.conn, id).await.unwrap().unwrap();
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = row.into();
+        am.executor_snapshot = Set(json!({ "assistant_id": 1, "name": "Planner", "agent_type": agent }).to_string());
+        am.update(&engine.db.conn).await.unwrap();
+        exec_conn(&engine, conn).await;
+        engine.open_round(conn, id).await;
+        let reg = engine
+            .manager
+            .register_plan_approval(conn, "t".into(), "# Plan".into())
+            .await
+            .unwrap();
+        engine
+            .feed_for_test(
+                conn,
+                1,
+                AcpEvent::PlanApprovalRequest {
+                    approval_id: reg.approval_id.clone(),
+                    tool_call_id: "t".into(),
+                    plan_markdown: "# Plan".into(),
+                },
+            )
+            .await;
+        let card = ask_cards(&engine).await.pop().unwrap();
+        assert_eq!(card.request, "plan");
+        let reply = engine
+            .answer_ask(
+                card.ask_id,
+                AskAnswer::Plan {
+                    decision: crate::acp::plan_approval::PlanApprovalDecision::RequestChanges,
+                    feedback: Some("Smaller steps.".into()),
+                },
+                Answerer::Assistant,
+                Some("r".into()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply.state, "answered");
+        let got = reg.answer_rx.await.unwrap();
+        assert_eq!(got.feedback.as_deref(), Some("Smaller steps."));
+        let card = ask_cards(&engine).await.pop().unwrap();
+        assert_eq!(card.feedback.is_some(), sends_after, "{agent}");
+        assert_eq!(engine.feedback_pending(id).await, sends_after, "{agent}");
+    }
+}
+
+/// 1.9 ⑬: a kanban task an assistant dispatched asks through its board
+/// connection, which no engine routes: the host hands the question to the
+/// assistant that dispatched it.
+#[tokio::test]
+async fn a_dispatched_tasks_question_reaches_its_assistant() {
+    use sea_orm::Set;
+    let (host, _w, tmp) = hosted().await;
+    let engine = host.primary();
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let task = board_task(&engine, project, "Fix", crate::db::entities::work_task::WorkTaskStatus::Running, |am| {
+        am.connection_id = Set(Some("c-task".into()));
+    })
+    .await;
+    let d = task_dispatch(&engine, coder, project, task.id, "Fix", DispatchState::Running).await;
+    let (_rx, st) = exec_conn(&engine, "c-task").await;
+    host.task_connection_opened("c-task").await;
+    assert!(st.read().await.ask_delegate.is_some());
+    let reg = engine
+        .manager
+        .register_question("c-task", vec![ask_spec("t1", "Scope", &["A", "B"])])
+        .await
+        .unwrap();
+    host.route(&crate::acp::types::EventEnvelope {
+        seq: 1,
+        connection_id: "c-task".into(),
+        payload: AcpEvent::QuestionRequest {
+            question_id: reg.question_id.clone(),
+            questions: vec![ask_spec("t1", "Scope", &["A", "B"])],
+        },
+    })
+    .await;
+    let cards = ask_cards(&engine).await;
+    assert_eq!(cards.len(), 1);
+    assert_eq!((cards[0].dispatch_id, cards[0].work_task_id), (d.id, Some(task.id)));
+    // The board's poll does not tell it again as "waiting for input".
+    svc::update_dispatch(
+        &engine.db.conn,
+        d.id,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::WaitingInput),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let now = dispatch_state(&engine, d.id).await;
+    engine.record_progress(&now, None, None, "task").await;
+    let kinds: Vec<String> = svc::pending_events(&engine.db.conn, engine.bot().await)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(kinds, vec![svc::ASK_EVENT.to_string()]);
+}
+
+/// 7.3 / 1.9 ⑭: work a restart cut off is retried by codeg once per
+/// interruption — not twice for one, not past the limit — and noted on its
+/// card; with "ask me first", a card to retry it instead.
+#[tokio::test]
+async fn interrupted_work_is_retried_once_per_interruption_up_to_the_limit() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, st, _conv) = live_session_dispatch(&engine, &tmp, "c-rt", DispatchState::Interrupted).await;
+    let d = dispatch_state(&engine, id).await;
+    engine.record_progress(&d, None, Some("codeg restarted".into()), "boot").await;
+    let card = svc::latest_result_row(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(data_of(&card)["auto_retry"]["state"], "pending");
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert!(!events.last().unwrap().wake, "nothing for the assistant to do");
+    engine.ask_tick().await;
+    let (sent, ..) = take_followup(&mut rx);
+    assert!(sent.contains("codeg restarted"), "{sent}");
+    let card = svc::latest_result_row(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(data_of(&card)["auto_retry"], json!({ "state": "retried", "attempt": 1, "max": 2 }));
+    // The same interruption again (a second restart before it moved on):
+    // not retried twice.
+    svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Interrupted),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    engine.ask_tick().await;
+    assert!(no_prompt(&mut rx));
+    // A second interruption: retried; a third: the owner's.
+    for (round, retried) in [(1, true), (2, false)] {
+        // The retried turn is over (the restart took its connection's
+        // turn with it).
+        st.write().await.turn_in_flight = false;
+        svc::update_dispatch(
+            &engine.db.conn,
+            id,
+            None,
+            DispatchWrite {
+                state: Some(DispatchState::Interrupted),
+                bump_turns: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let d = dispatch_state(&engine, id).await;
+        let plan = engine.retry_plan(&d).await;
+        engine.record_progress(&d, None, Some("codeg restarted".into()), "boot").await;
+        engine.ask_tick().await;
+        assert_eq!(!no_prompt(&mut rx), retried, "interruption {}", round + 1);
+        if !retried {
+            assert_eq!(plan, super::retry::RetryPlan::Exhausted { max: 2 });
+        }
+    }
+
+    // An interruption told before codeg retried by itself: left as told.
+    let (old, mut rx3, _st3, _c3) = live_session_dispatch(&engine, &tmp, "c-rt3", DispatchState::Interrupted).await;
+    engine.ask_tick().await;
+    assert!(no_prompt(&mut rx3), "dispatch #{old} was not told it would be retried");
+
+    // Ask me first: a card to retry, once.
+    engine.apply_settings(&[change("prefs.interrupt_retry", json!("ask"))]).await.unwrap();
+    let (other, mut rx2, _st2, _c2) = live_session_dispatch(&engine, &tmp, "c-rt2", DispatchState::Interrupted).await;
+    let d = dispatch_state(&engine, other).await;
+    engine.record_progress(&d, None, Some("codeg restarted".into()), "boot").await;
+    assert_eq!(
+        data_of(&svc::latest_result_row(&engine.db.conn, other).await.unwrap().unwrap())["auto_retry"]["state"],
+        "asked"
+    );
+    engine.ask_tick().await;
+    engine.ask_tick().await;
+    assert!(no_prompt(&mut rx2));
+    let cards: Vec<_> = notice_rows(&engine)
+        .await
+        .into_iter()
+        .filter(|r| data_of(r)["display"]["retry"] == true && data_of(r)["display"]["dispatch_id"] == other)
+        .collect();
+    assert_eq!(cards.len(), 1);
+}
+
+/// The settle point: the first answer wins and is recorded; a later one
+/// learns it; a withdrawn request says so.
+#[tokio::test]
+async fn the_settle_point_records_whose_answer_took_effect() {
+    use crate::acp::types::{AnswerOrigin, AnswerOutcome};
+    let (engine, _tmp) = configured().await;
+    exec_conn(&engine, "c-sp").await;
+    let m = &engine.manager;
+    let reg = m.register_question("c-sp", vec![ask_spec("x", "X", &["A", "B"])]).await.unwrap();
+    let first = m
+        .answer_question_from("c-sp", &reg.question_id, pick("x", "A"), AnswerOrigin::Assistant { bot_id: 7 })
+        .await;
+    let AnswerOutcome::Answered(r) = first else { panic!("{first:?}") };
+    assert_eq!(r.origin, Some(AnswerOrigin::Assistant { bot_id: 7 }));
+    let late = m.answer_question_from("c-sp", &reg.question_id, pick("x", "B"), AnswerOrigin::User).await;
+    let AnswerOutcome::AlreadyAnswered(r) = late else { panic!("{late:?}") };
+    assert_eq!(r.answer.unwrap()["answers"][0]["selected"][0], "A");
+    let gone = m.register_question("c-sp", vec![ask_spec("y", "Y", &["A", "B"])]).await.unwrap();
+    m.cancel_question("c-sp", &gone.question_id).await;
+    assert_eq!(
+        m.answer_question_from("c-sp", &gone.question_id, pick("y", "A"), AnswerOrigin::User).await,
+        AnswerOutcome::Withdrawn
+    );
+    assert!(m.resolution_of(&gone.question_id).is_some_and(|r| !r.is_answer()));
+}
+
+// ── 1.9, review round 1 regressions ─────────────────────────────────────────
+
+/// A secret the owner gives goes to the executor alone: the card, the
+/// record and what the assistant reads show it masked.
+#[tokio::test]
+async fn a_secret_answer_reaches_the_executor_and_nobody_else() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-sec").await;
+    exec_conn(&engine, "c-sec").await;
+    engine.open_round("c-sec", id).await;
+    let mut spec = ask_spec("k", "API key", &[]);
+    spec.is_secret = true;
+    let reg = exec_asks(&engine, "c-sec", vec![spec]).await;
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!(card.forward_reason.as_deref(), Some("secret"));
+    engine
+        .answer_ask(card.ask_id, AskAnswer::Question(pick("k", "sk-live-123")), Answerer::OwnerPage, None)
+        .await
+        .unwrap();
+    assert_eq!(reg.answer_rx.await.unwrap().answers[0].selected, vec!["sk-live-123".to_string()]);
+    let card = ask_cards(&engine).await.remove(0);
+    let shown = serde_json::to_string(&card).unwrap();
+    assert!(!shown.contains("sk-live-123"), "{shown}");
+    assert!(!format!("{:?}", engine.manager.resolution_of(&reg.question_id)).contains("sk-live-123"));
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    let told = engine.ask_block(events.last().unwrap()).await;
+    assert!(!told.contains("sk-live-123"), "{told}");
+}
+
+/// Taken over: what the assistant was answering is the owner's, the
+/// windows notify again, and the assistant can no longer answer it. A
+/// change of the owner's setting reaches the running sessions' windows.
+#[tokio::test]
+async fn taking_work_over_or_changing_the_setting_tells_the_windows() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-to").await;
+    let (_rx, st) = exec_conn(&engine, "c-to").await;
+    engine.open_round("c-to", id).await;
+    exec_asks(&engine, "c-to", vec![ask_spec("t", "Which", &["A", "B"])]).await;
+    // The owner's setting changes: the windows hold back no more questions,
+    // and the one the assistant was answering is the owner's.
+    engine.apply_settings(&[change("prefs.exec_questions", json!("owner"))]).await.unwrap();
+    assert!(!st.read().await.ask_delegate.unwrap().questions);
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!((card.state.as_str(), card.forward_reason.as_deref()), ("forwarded", Some("settings")));
+    engine.apply_settings(&[change("prefs.exec_questions", json!("assistant"))]).await.unwrap();
+    assert!(st.read().await.ask_delegate.unwrap().questions);
+    // Another one; the owner writes in its session: it is theirs.
+    let mine = session_dispatch(&engine, DispatchState::Running, "c-to2").await;
+    let (_rx2, st2) = exec_conn(&engine, "c-to2").await;
+    engine.open_round("c-to2", mine).await;
+    exec_asks(&engine, "c-to2", vec![ask_spec("t2", "Which", &["A", "B"])]).await;
+    let ask = ask_cards(&engine).await.pop().unwrap();
+    engine.handover("c-to2", None).await;
+    assert_eq!(dispatch_state(&engine, mine).await.state, DispatchState::HandedOver);
+    assert!(st2.read().await.ask_delegate.is_none());
+    let card = ask_cards(&engine).await.pop().unwrap();
+    assert_eq!((card.state.as_str(), card.forward_reason.as_deref()), ("forwarded", Some("handed_over")));
+    let (_seg, _b) = event_turn(&engine, "pa-to").await;
+    let out = call(
+        &engine,
+        "dispatch_answer",
+        json!({ "ask_id": ask.ask_id, "answers": [{ "choose": ["A"] }], "reason": "r" }),
+    )
+    .await;
+    assert!(!out.ok, "{}", out.text);
+}
+
+/// A plan answer that lost keeps neither the card's settled state nor its
+/// feedback: the owner's "keep planning" beat the assistant's abandon.
+#[tokio::test]
+async fn a_losing_plan_answer_neither_reopens_the_card_nor_sends_its_feedback() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-l").await;
+    let (mut rx, _st) = exec_conn(&engine, "c-l").await;
+    engine.open_round("c-l", id).await;
+    engine.feed_for_test("c-l", 1, claude_plan("pl", "1. Big rewrite")).await;
+    let card = ask_cards(&engine).await.remove(0);
+    let (_seg, _b) = event_turn(&engine, "pa-l").await;
+    call(&engine, "dispatch_answer", json!({ "ask_id": card.ask_id, "decision": "abandon", "reason": "r" })).await;
+    assert_eq!(take_permission_answer(&mut rx).1, "reject");
+    // The owner's own reject in the session took effect first.
+    engine
+        .feed_for_test(
+            "c-l",
+            2,
+            AcpEvent::PermissionResolved {
+                request_id: "pl".into(),
+                option_id: Some("reject".into()),
+                origin: Some(PermissionAnswerOrigin::User),
+            },
+        )
+        .await;
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!(card.answered_by.as_ref().unwrap(), &json!({ "kind": "owner" }));
+    assert_eq!(card.feedback, None);
+    // A late submission finds it settled and leaves it so.
+    let again = call(&engine, "dispatch_answer", json!({ "ask_id": card.ask_id, "decision": "approve", "reason": "r2" })).await;
+    assert!(again.text.contains("Already answered by the owner"), "{}", again.text);
+    let late = engine
+        .answer_ask(
+            card.ask_id,
+            AskAnswer::Plan {
+                decision: crate::acp::plan_approval::PlanApprovalDecision::Approve,
+                feedback: None,
+            },
+            Answerer::OwnerPage,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(late.state, "already_answered");
+    assert_eq!(ask_cards(&engine).await[0].state, "answered");
+    assert!(no_prompt(&mut rx) && rx.try_recv().is_err(), "nothing more was submitted");
+}
+
+/// A task's plan sent back cannot always take the feedback (its turn was
+/// canceled with the task): the assistant is told it instead — however
+/// many answered cards came before.
+#[tokio::test]
+async fn plan_feedback_a_task_cannot_take_goes_to_the_assistant() {
+    use sea_orm::Set;
+    let (host, _w, tmp) = hosted().await;
+    let engine = host.primary();
+    let bot = engine.bot().await;
+    for i in 0..205 {
+        let mut row = NewRow::new(TimelineKind::Notice, format!("old {i}"));
+        row.data = Some(json!({ "notice": "ask", "state": "answered", "dispatch_id": 0 }));
+        svc::insert_row(&engine.db.conn, bot, row).await.unwrap();
+    }
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("p").to_string_lossy()).await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let task = board_task(&engine, project, "Plan", crate::db::entities::work_task::WorkTaskStatus::Running, |am| {
+        am.connection_id = Set(Some("c-tp".into()));
+    })
+    .await;
+    let d = task_dispatch(&engine, coder, project, task.id, "Plan", DispatchState::Running).await;
+    let (_rx, _st) = exec_conn(&engine, "c-tp").await;
+    host.route(&crate::acp::types::EventEnvelope {
+        seq: 1,
+        connection_id: "c-tp".into(),
+        payload: claude_plan("tp", "1. Do it"),
+    })
+    .await;
+    let card: AskCard = svc::ask_rows_of_dispatches(&engine.db.conn, &[d.id])
+        .await
+        .unwrap()
+        .iter()
+        .find_map(|r| r.data.as_deref().and_then(|x| serde_json::from_str(x).ok()))
+        .expect("the plan's card");
+    engine
+        .answer_ask(
+            card.ask_id,
+            AskAnswer::Plan {
+                decision: crate::acp::plan_approval::PlanApprovalDecision::RequestChanges,
+                feedback: Some("Smaller.".into()),
+            },
+            Answerer::Assistant,
+            Some("r".into()),
+        )
+        .await
+        .unwrap();
+    host.route(&crate::acp::types::EventEnvelope {
+        seq: 2,
+        connection_id: "c-tp".into(),
+        payload: AcpEvent::PermissionResolved {
+            request_id: "tp".into(),
+            option_id: Some("reject".into()),
+            origin: Some(PermissionAnswerOrigin::Assistant { bot_id: bot }),
+        },
+    })
+    .await;
+    assert!(engine.feedback_pending(d.id).await);
+    // Claude stopped the turn; the board canceled the task with it.
+    svc::update_dispatch(
+        &engine.db.conn,
+        d.id,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Canceled),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    engine.ask_tick().await;
+    assert!(!engine.feedback_pending(d.id).await, "handled once");
+    let told: Vec<_> = svc::pending_events(&engine.db.conn, bot)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.summary.contains("could not send the feedback"))
+        .collect();
+    assert_eq!(told.len(), 1);
+    assert!(told[0].wake && told[0].summary.contains("Smaller."), "{}", told[0].summary);
+}
+
+/// A turn that fails with the question in it (its events put back for
+/// another try) still hands the question to the owner at once.
+#[tokio::test]
+async fn a_failed_turn_forwards_the_question_it_carried() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-ft").await;
+    exec_conn(&engine, "c-ft").await;
+    engine.open_round("c-ft", id).await;
+    exec_asks(&engine, "c-ft", vec![ask_spec("f", "Which", &["A", "B"])]).await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-ft").await;
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains("<codeg-ask"), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(
+        &engine,
+        &state,
+        "pa-ft",
+        AcpEvent::StatusChanged {
+            status: ConnectionStatus::Disconnected,
+        },
+        true,
+    )
+    .await;
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!((card.state.as_str(), card.forward_reason.as_deref()), ("forwarded", Some("turn_failed")));
+}
+
+// ── 1.9, review round 2 regressions ─────────────────────────────────────────
+
+/// The owner takes the setting back while a question their window held
+/// back is up: they are told of it then — once, whether its card was
+/// raised yet or not.
+#[tokio::test]
+async fn a_held_back_question_is_told_when_the_setting_hands_it_to_the_owner() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-hb").await;
+    let bus = Arc::new(crate::acp::InternalEventBus::new(Arc::new(crate::acp::EventBusMetrics::default())));
+    let mut sub = bus.subscribe();
+    let emitter = EventEmitter::WebOnly {
+        broadcaster: Arc::new(crate::web::event_bridge::WebEventBroadcaster::new()),
+        bus: bus.clone(),
+    };
+    let _rx = engine
+        .manager
+        .insert_test_connection_live("c-hb", AgentType::ClaudeCode, None, emitter)
+        .await;
+    engine.open_round("c-hb", id).await;
+    let specs = vec![ask_spec("h", "Which", &["A", "B"])];
+    // Asked; the window held it back; the engine has not read it yet.
+    let reg = engine.manager.register_question("c-hb", specs.clone()).await.unwrap();
+    engine.apply_settings(&[change("prefs.exec_questions", json!("owner"))]).await.unwrap();
+    engine
+        .feed_for_test("c-hb", 9, AcpEvent::QuestionRequest { question_id: reg.question_id.clone(), questions: specs })
+        .await;
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!(card.forward_reason.as_deref(), Some("settings"));
+    let mut told = 0;
+    while let Ok(env) = sub.try_recv() {
+        if let AcpEvent::AskForwarded { request_id, kind } = &env.payload {
+            assert_eq!((request_id.as_str(), kind.as_str()), (reg.question_id.as_str(), "question"));
+            told += 1;
+        }
+    }
+    assert_eq!(told, 1, "told once");
+}
+
+/// Two answers of the owner's to one plan — the page's and the session's,
+/// both "keep planning": only the page's own, when it is the one that took
+/// effect, brings its feedback along.
+#[tokio::test]
+async fn the_owners_session_answer_does_not_carry_the_pages_feedback() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-oo").await;
+    let (mut rx, _st) = exec_conn(&engine, "c-oo").await;
+    engine.open_round("c-oo", id).await;
+    engine.feed_for_test("c-oo", 1, claude_plan("po", "1. Rewrite")).await;
+    let card = ask_cards(&engine).await.remove(0);
+    engine
+        .answer_ask(
+            card.ask_id,
+            AskAnswer::Plan {
+                decision: crate::acp::plan_approval::PlanApprovalDecision::Abandon,
+                feedback: None,
+            },
+            Answerer::OwnerPage,
+            None,
+        )
+        .await
+        .unwrap();
+    let (_rid, option, origin) = take_permission_answer(&mut rx);
+    assert_eq!((option.as_str(), origin), ("reject", PermissionAnswerOrigin::AssistantPage));
+    engine
+        .feed_for_test(
+            "c-oo",
+            2,
+            AcpEvent::PermissionResolved {
+                request_id: "po".into(),
+                option_id: Some("reject".into()),
+                origin: Some(PermissionAnswerOrigin::User),
+            },
+        )
+        .await;
+    let card = ask_cards(&engine).await.remove(0);
+    assert_eq!(card.answered_by.as_ref().unwrap(), &json!({ "kind": "owner" }));
+    assert_eq!(card.feedback, None, "the session's answer took effect, not the page's");
+}
+
+/// The other order of the same hand-off: the question's card is raised
+/// after the setting was written but before the windows were told — it
+/// tells the owner itself, and the hand-off that follows does not again.
+#[tokio::test]
+async fn a_card_raised_between_the_setting_and_the_hand_off_tells_the_owner_once() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-hb2").await;
+    let bus = Arc::new(crate::acp::InternalEventBus::new(Arc::new(crate::acp::EventBusMetrics::default())));
+    let mut sub = bus.subscribe();
+    let emitter = EventEmitter::WebOnly {
+        broadcaster: Arc::new(crate::web::event_bridge::WebEventBroadcaster::new()),
+        bus: bus.clone(),
+    };
+    let _rx = engine
+        .manager
+        .insert_test_connection_live("c-hb2", AgentType::ClaudeCode, None, emitter)
+        .await;
+    engine.open_round("c-hb2", id).await;
+    // The setting is written; the windows are not told yet.
+    let plan = engine
+        .plan_settings(&[change("prefs.exec_questions", json!("owner"))])
+        .await
+        .unwrap();
+    engine.write_settings_now(&plan).await.unwrap();
+    assert!(engine.manager.get_state("c-hb2").await.unwrap().read().await.ask_delegate.unwrap().questions);
+    exec_asks(&engine, "c-hb2", vec![ask_spec("h2", "Which", &["A", "B"])]).await;
+    assert_eq!(ask_cards(&engine).await[0].forward_reason.as_deref(), Some("settings"));
+    engine.refresh_ask_delegates().await;
+    let mut told = 0;
+    while let Ok(env) = sub.try_recv() {
+        if matches!(env.payload, AcpEvent::AskForwarded { .. }) {
+            told += 1;
+        }
+    }
+    assert_eq!(told, 1, "told once");
 }

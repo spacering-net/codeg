@@ -872,9 +872,16 @@ pub enum AcpEvent {
         questions: Vec<crate::acp::question::QuestionSpec>,
     },
     /// A previously-pending question was answered (from any client) or canceled
-    /// (the tool call was aborted / the connection drained). Carries only the
-    /// `question_id`; clients clear the matching card. Idempotent on apply.
-    QuestionResolved { question_id: String },
+    /// (the tool call was aborted / the connection drained). Clients clear the
+    /// matching card by `question_id`. Idempotent on apply.
+    QuestionResolved {
+        question_id: String,
+        /// Whose answer took effect and what it was — or, with no answer,
+        /// that it was withdrawn (7.3.1). Additive: older clients read the id
+        /// alone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<AnswerResolution>,
+    },
     /// A Grok `exit_plan_mode` call: the agent finished planning and is BLOCKED
     /// on the user's approval of the plan before it leaves plan mode and starts
     /// implementing (Grok's native `_x.ai/exit_plan_mode` ext request). Broadcast
@@ -889,9 +896,30 @@ pub enum AcpEvent {
         plan_markdown: String,
     },
     /// A previously-pending plan approval was answered (from any client) or
-    /// canceled (the connection drained). Carries only the `approval_id`; clients
-    /// clear the matching card. Idempotent on apply.
-    PlanApprovalResolved { approval_id: String },
+    /// canceled (the connection drained). Clients clear the matching card by
+    /// `approval_id`. Idempotent on apply.
+    PlanApprovalResolved {
+        approval_id: String,
+        /// As on [`AcpEvent::QuestionResolved`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<AnswerResolution>,
+    },
+    /// The assistant that dispatched this session answers its questions and
+    /// plan approvals for the owner (7.3.1): a window does not notify the
+    /// owner of those at once, only when one is forwarded to them
+    /// ([`AcpEvent::AskForwarded`]). Kept in `SessionState.ask_delegate`.
+    AskDelegate {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delegate: Option<AskDelegate>,
+    },
+    /// A question or plan approval of this session the dispatching assistant
+    /// was answering is now the owner's to answer: notify them.
+    AskForwarded {
+        request_id: String,
+        /// `question`, `plan` or `permission` (a plan approval that arrived
+        /// as a permission request).
+        kind: String,
+    },
     /// The agent's effective settings (env vars / model provider / native config
     /// files) changed AFTER this connection was spawned, so the running process
     /// is still using its launch-time config. Emitted by
@@ -1427,6 +1455,14 @@ pub enum PermissionAnswerOrigin {
     ChatChannel,
     /// The permission policy of a headless `codeg-cli` run.
     CliPolicy { run_id: String },
+    /// An assistant answering a plan approval that arrived as a permission
+    /// request, for the owner (7.3.1). Only plan approvals: an executor's
+    /// other permission requests are the owner's.
+    Assistant { bot_id: i32 },
+    /// The owner, answering such a plan approval on an assistant's page —
+    /// told apart from the session's card so the page's own submission is
+    /// recognised when it is the one that took effect.
+    AssistantPage,
 }
 
 impl PermissionAnswerOrigin {
@@ -1437,7 +1473,105 @@ impl PermissionAnswerOrigin {
             Self::User => "user",
             Self::ChatChannel => "chat_channel",
             Self::CliPolicy { .. } => "cli_policy",
+            Self::Assistant { .. } => "assistant",
+            Self::AssistantPage => "assistant_page",
         }
+    }
+}
+
+/// Who answered a question or a plan approval (7.3.1). The first answer
+/// wins; this names whose that was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AnswerOrigin {
+    /// A person, on the card in the session (any Codeg window).
+    User,
+    /// The owner, on an assistant's page.
+    AssistantPage,
+    /// An assistant, answering for the owner.
+    Assistant { bot_id: i32 },
+    /// A chat channel.
+    ChatChannel,
+    /// The policy of a headless `codeg-cli` run.
+    CliPolicy,
+}
+
+/// How a question or plan approval was settled: the answer that took effect
+/// and whose it was, or — with neither — that it was withdrawn before any
+/// answer (the tool call aborted, the connection drained).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnswerResolution {
+    /// What the agent got: a `QuestionOutcome` or a `PlanApprovalAnswer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<AnswerOrigin>,
+    pub at: chrono::DateTime<chrono::Utc>,
+}
+
+impl AnswerResolution {
+    pub fn withdrawn() -> Self {
+        Self {
+            answer: None,
+            origin: None,
+            at: chrono::Utc::now(),
+        }
+    }
+
+    pub fn is_answer(&self) -> bool {
+        self.answer.is_some()
+    }
+}
+
+/// What an answer to a question or plan approval came to (7.3.1): taken, too
+/// late (another answer took effect first: that one), or the request is gone.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnswerOutcome {
+    Answered(AnswerResolution),
+    AlreadyAnswered(AnswerResolution),
+    Withdrawn,
+}
+
+/// What the dispatching assistant answers for the owner on a session (7.3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskDelegate {
+    pub bot_id: i32,
+    /// Questions (except those asking for a secret).
+    pub questions: bool,
+    /// Plan approvals: extension requests and the plan-approval permission
+    /// requests of Claude Code and Codex.
+    pub plans: bool,
+}
+
+/// Which plan approval a permission request is, when it is one (7.3.1):
+/// Claude Code's `ExitPlanMode` or a Codex plan review. Any other
+/// permission request is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanPermission {
+    ClaudeExitPlan,
+    CodexPlanReview,
+}
+
+impl PlanPermission {
+    /// Read off the request: Claude Code offers `exit-plan-*` options, a
+    /// Codex review is the `plan-review:<item>` call offering
+    /// `implement_plan`.
+    pub fn of(tool_call: &serde_json::Value, options: &[PermissionOptionInfo]) -> Option<Self> {
+        if options.iter().any(|o| o.option_id.starts_with("exit-plan-")) {
+            return Some(Self::ClaudeExitPlan);
+        }
+        let call_id = tool_call
+            .get("toolCallId")
+            .or_else(|| tool_call.get("tool_call_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if call_id.starts_with("plan-review:")
+            || options.iter().any(|o| o.option_id == "implement_plan")
+        {
+            return Some(Self::CodexPlanReview);
+        }
+        None
     }
 }
 

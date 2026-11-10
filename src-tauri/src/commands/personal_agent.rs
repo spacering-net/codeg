@@ -212,10 +212,17 @@ pub async fn personal_agent_dispatches_core(
     };
     let mut folder_names: HashMap<i32, Option<String>> = HashMap::new();
     let tasks = crate::personal_agent::ladder::tasks_of(db, &rows).await;
+    let ids: Vec<i32> = rows.iter().map(|d| d.id).collect();
+    let answering = crate::personal_agent::asks::answering_dispatches(db, &ids).await;
+    let answered = crate::personal_agent::asks::answered_for_owner(db, &ids).await;
     let mut out = Vec::with_capacity(rows.len());
     for d in rows {
         let task = d.work_task_id.and_then(|id| tasks.get(&id));
-        let ladder = crate::personal_agent::ladder::ladder_of(&d, task);
+        let ladder = crate::personal_agent::ladder::for_owner(
+            crate::personal_agent::ladder::ladder_of(&d, task),
+            answering.contains(&d.id),
+        );
+        let answered_for_you = answered.get(&d.id).copied().unwrap_or(0);
         let task = task.map(crate::personal_agent::ladder::task_facts);
         let folder_name = match d.folder_id {
             Some(fid) => {
@@ -258,6 +265,7 @@ pub async fn personal_agent_dispatches_core(
             updated_at: d.updated_at,
             finished_at: d.finished_at,
             ladder,
+            answered_for_you,
             task,
         });
     }
@@ -585,6 +593,52 @@ pub async fn personal_agent_dispatch_stop_core(
 ) -> Result<bool, AppCommandError> {
     let engine = engine(bot_id).await?;
     engine.stop_one(dispatch_id).await.map_err(refused)
+}
+
+/// What the owner's answer on a question card came to (7.3.1).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AskAnswerOutcome {
+    /// `answered`, `already_answered`, `withdrawn`, `submitted`.
+    pub state: String,
+    pub text: String,
+}
+
+/// The owner answers an executor's question or plan approval on a card on
+/// the assistants page — the card of the assistant answering it, or its
+/// mirror. Through the same settle point as every answer: the first wins,
+/// and a late one is told whose did.
+pub async fn personal_agent_ask_answer_core(
+    db: &AppDatabase,
+    ask_id: i32,
+    answer: Option<crate::acp::question::QuestionAnswer>,
+    decision: Option<String>,
+    feedback: Option<String>,
+) -> Result<AskAnswerOutcome, AppCommandError> {
+    use crate::personal_agent::asks::{plan_decision, AskAnswer, Answerer};
+    let notice = svc::get_notice(&db.conn, ask_id)
+        .await
+        .map_err(|e| AppCommandError::database_error(e.to_string()))?
+        .filter(|n| n.kind == crate::db::entities::personal_agent_notice::NoticeKind::Ask)
+        .ok_or_else(|| refused(format!("no question card {ask_id}")))?;
+    let engine = engine(notice.bot_id).await?;
+    let answer = match (answer, decision) {
+        (Some(a), None) => AskAnswer::Question(a),
+        (None, Some(word)) => AskAnswer::Plan {
+            decision: plan_decision(&word).map_err(refused)?,
+            feedback: feedback
+                .map(|f| f.trim().to_string())
+                .filter(|f| !f.is_empty()),
+        },
+        _ => return Err(refused("give either the answers or a decision".into())),
+    };
+    let reply = engine
+        .answer_ask(ask_id, answer, Answerer::OwnerPage, None)
+        .await
+        .map_err(refused)?;
+    Ok(AskAnswerOutcome {
+        state: reply.state.to_string(),
+        text: reply.text,
+    })
 }
 
 /// Where a conversation opens (a session link in a reply): its project and
@@ -1169,6 +1223,18 @@ pub async fn personal_agent_dispatch_stop(
     dispatch_id: i32,
 ) -> Result<bool, AppCommandError> {
     personal_agent_dispatch_stop_core(bot_id, dispatch_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_ask_answer(
+    db: State<'_, AppDatabase>,
+    ask_id: i32,
+    answer: Option<crate::acp::question::QuestionAnswer>,
+    decision: Option<String>,
+    feedback: Option<String>,
+) -> Result<AskAnswerOutcome, AppCommandError> {
+    personal_agent_ask_answer_core(&db, ask_id, answer, decision, feedback).await
 }
 
 #[cfg(feature = "tauri-runtime")]

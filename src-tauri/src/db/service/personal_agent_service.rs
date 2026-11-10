@@ -2894,3 +2894,229 @@ pub async fn queued_conversation_dispatches(
         .all(conn)
         .await?)
 }
+
+// ── asks (7.3.1) ────────────────────────────────────────────────────────────
+
+/// The event kind telling an assistant about an executor's question or plan
+/// approval.
+pub const ASK_EVENT: &str = "ask";
+
+/// The states of an ask card a page shows as still open: the assistant is
+/// answering it, the owner is, or an answer is on its way.
+pub const ASK_OPEN_STATES: &[&str] = &["asking", "forwarded", "submitting"];
+
+fn ask_state_filter(states: &[&str]) -> String {
+    let list = states
+        .iter()
+        .map(|s| format!("'{}'", s.replace('\'', "")))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("json_extract(data, '$.state') IN ({list})")
+}
+
+/// Raise an ask card: its notice, its timeline row and the event that tells
+/// its assistant (`event`; its source key is made from the notice's id, so
+/// one wait is told once), in one transaction. The event's payload gets the
+/// card's `ask_id` and `row_id`; the row's `ref_id` is the notice's id.
+pub async fn create_ask(
+    conn: &DatabaseConnection,
+    bot: i32,
+    new: NewNotice,
+    mut row: NewRow,
+    event: NewEvent,
+) -> Result<(notice::Model, timeline::Model, event::Model), DbError> {
+    use sea_orm::TransactionTrait;
+    require_bot(bot)?;
+    let prefix = scoped_source_key(conn, bot, "ask:").await?;
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let made = notice::ActiveModel {
+        id: NotSet,
+        bot_id: Set(Some(bot)),
+        kind: Set(new.kind),
+        subject_key: Set(new.subject_key),
+        level: Set(new.level),
+        state: Set(NoticeState::Open),
+        timeline_id: Set(None),
+        batch_id: Set(new.batch_id),
+        payload: Set(new.payload.to_string()),
+        notified_at: Set(None),
+        acted_at: Set(None),
+        expires_at: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(&txn)
+    .await?;
+    row.ref_id = Some(made.id.to_string());
+    let card = row.into_active(bot, now).insert(&txn).await?;
+    let mut payload = event.payload.unwrap_or_else(|| serde_json::json!({}));
+    if let Some(map) = payload.as_object_mut() {
+        map.insert("ask_id".into(), made.id.into());
+        map.insert("row_id".into(), card.id.into());
+    }
+    let ev = event::ActiveModel {
+        id: NotSet,
+        kind: Set(event.kind),
+        source_key: Set(format!("{prefix}{}", made.id)),
+        coalesce_key: Set(event.coalesce_key),
+        summary: Set(event.summary),
+        payload: Set(Some(payload.to_string())),
+        wake: Set(event.wake),
+        state: Set(EventState::Pending),
+        batch_id: Set(None),
+        requeues: Set(0),
+        requeued_from: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        bot_id: Set(Some(bot)),
+        origin_bot_id: Set(event.lineage.origin_bot_id),
+        origin_row_id: Set(event.lineage.origin_row_id),
+        thread_id: Set(event.lineage.thread_id),
+    }
+    .insert(&txn)
+    .await?;
+    timeline::Entity::update_many()
+        .col_expr(timeline::Column::EventId, Expr::value(ev.id))
+        .filter(timeline::Column::Id.eq(card.id))
+        .exec(&txn)
+        .await?;
+    notice::Entity::update_many()
+        .col_expr(notice::Column::TimelineId, Expr::value(card.id))
+        .filter(notice::Column::Id.eq(made.id))
+        .exec(&txn)
+        .await?;
+    txn.commit().await?;
+    let made = notice::Model {
+        timeline_id: Some(card.id),
+        ..made
+    };
+    let card = timeline::Model {
+        event_id: Some(ev.id),
+        ..card
+    };
+    Ok((made, card, ev))
+}
+
+/// The ask card raised for one underlying request (`subject`: connection
+/// and request id), whoever's it is.
+pub async fn ask_by_subject(
+    conn: &DatabaseConnection,
+    subject: &str,
+) -> Result<Option<notice::Model>, DbError> {
+    Ok(notice::Entity::find()
+        .filter(notice::Column::Kind.eq(NoticeKind::Ask))
+        .filter(notice::Column::SubjectKey.eq(subject))
+        .order_by_desc(notice::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// The ask cards of `bot` still open (any bot's with `None`), oldest first.
+pub async fn open_asks(
+    conn: &DatabaseConnection,
+    bot: Option<i32>,
+) -> Result<Vec<notice::Model>, DbError> {
+    let mut q = notice::Entity::find()
+        .filter(notice::Column::Kind.eq(NoticeKind::Ask))
+        .filter(notice::Column::State.eq(NoticeState::Open));
+    if let Some(b) = bot {
+        q = q.filter(notice::Column::BotId.eq(b));
+    }
+    Ok(q.order_by_asc(notice::Column::Id).all(conn).await?)
+}
+
+/// `bot`'s ask card rows (its own and the mirrors shown to it) in one of
+/// `states`, oldest first.
+pub async fn ask_rows(
+    conn: &DatabaseConnection,
+    bot: i32,
+    states: &[&str],
+) -> Result<Vec<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
+        .filter(timeline::Column::Kind.eq(TimelineKind::Notice))
+        .filter(Expr::cust("json_extract(data, '$.notice') = 'ask'"))
+        .filter(Expr::cust(ask_state_filter(states)))
+        .order_by_asc(timeline::Column::Id)
+        .limit(200)
+        .all(conn)
+        .await?)
+}
+
+/// `bot`'s answered ask cards with plan feedback still to send.
+pub async fn ask_rows_with_feedback(
+    conn: &DatabaseConnection,
+    bot: i32,
+) -> Result<Vec<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
+        .filter(timeline::Column::Kind.eq(TimelineKind::Notice))
+        .filter(Expr::cust("json_extract(data, '$.notice') = 'ask'"))
+        .filter(Expr::cust("json_extract(data, '$.state') = 'answered'"))
+        .filter(Expr::cust("json_extract(data, '$.feedback') IS NOT NULL"))
+        .filter(Expr::cust("COALESCE(json_extract(data, '$.feedback_sent'), 0) = 0"))
+        .filter(Expr::cust("json_extract(data, '$.mirror_of') IS NULL"))
+        .order_by_asc(timeline::Column::Id)
+        .limit(50)
+        .all(conn)
+        .await?)
+}
+
+/// The ask card rows (not the mirrors) of these dispatches, oldest first.
+pub async fn ask_rows_of_dispatches(
+    conn: &DatabaseConnection,
+    dispatch_ids: &[i32],
+) -> Result<Vec<timeline::Model>, DbError> {
+    if dispatch_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Kind.eq(TimelineKind::Notice))
+        .filter(timeline::Column::DispatchId.is_in(dispatch_ids.to_vec()))
+        .filter(Expr::cust("json_extract(data, '$.notice') = 'ask'"))
+        .order_by_asc(timeline::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// How many operations have ids starting with `prefix` (an automatic
+/// retry's are `pa-retry-<dispatch>-`).
+pub async fn count_ops_with_prefix(conn: &DatabaseConnection, prefix: &str) -> Result<u64, DbError> {
+    let pattern = format!("{}%", prefix.replace('%', "").replace('_', "\\_"));
+    Ok(action::Entity::find()
+        .filter(Expr::cust_with_values(
+            "op_id LIKE ? ESCAPE '\\'",
+            [sea_orm::Value::from(pattern)],
+        ))
+        .count(conn)
+        .await?)
+}
+
+/// The newest result card of a dispatch.
+pub async fn latest_result_row(
+    conn: &DatabaseConnection,
+    dispatch_id: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Kind.eq(TimelineKind::Result))
+        .filter(timeline::Column::DispatchId.eq(dispatch_id))
+        .order_by_desc(timeline::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// Replace a notice's payload.
+pub async fn set_notice_payload(
+    conn: &DatabaseConnection,
+    id: i32,
+    payload: &serde_json::Value,
+) -> Result<(), DbError> {
+    notice::Entity::update_many()
+        .col_expr(notice::Column::Payload, Expr::value(payload.to_string()))
+        .col_expr(notice::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(notice::Column::Id.eq(id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}

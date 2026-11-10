@@ -1683,6 +1683,12 @@ impl TaskEngine {
             return Ok(());
         }
         self.emit_upsert(task_id);
+        // A task an assistant dispatched: that assistant answers its
+        // questions and plan approvals for the owner, so the windows hold
+        // back their notification of those (personal agent 7.3.1).
+        if let Some(host) = crate::personal_agent::host::host() {
+            host.task_connection_opened(&conn_id).await;
+        }
 
         let prompt_head = prompt_head(&blocks);
         match self
@@ -2873,7 +2879,7 @@ impl TaskEngine {
                 self.track_request(&env.connection_id, format!("q:{question_id}"), true)
                     .await;
             }
-            AcpEvent::QuestionResolved { question_id } => {
+            AcpEvent::QuestionResolved { question_id, .. } => {
                 self.track_request(&env.connection_id, format!("q:{question_id}"), false)
                     .await;
             }
@@ -2889,7 +2895,7 @@ impl TaskEngine {
                 self.track_request(&env.connection_id, format!("a:{approval_id}"), true)
                     .await;
             }
-            AcpEvent::PlanApprovalResolved { approval_id } => {
+            AcpEvent::PlanApprovalResolved { approval_id, .. } => {
                 self.track_request(&env.connection_id, format!("a:{approval_id}"), false)
                     .await;
             }
