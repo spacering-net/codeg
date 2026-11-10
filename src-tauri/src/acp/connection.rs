@@ -2152,9 +2152,23 @@ fn agent_debug_callback(
 /// makes it exit, but each release tried from 1.1.0 to 1.1.84 (1.1.0, 1.1.30,
 /// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84) takes `--settings`, and
 /// 1.1.30 and 1.1.64 open sessions with this one as without it.
-const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
+pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
-/// The arguments codeg adds after an npx agent's registry `args`.
+/// The arguments codeg adds after an npx agent's registry `args`: for Qoder,
+/// `--settings` with its value inline as JSON on every platform.
+///
+/// Inline JSON survives a launch only when argv reaches the CLI verbatim. On
+/// Windows that means not going through the cmd wrappers `qoder` resolves to:
+/// the official installer's `qoder.cmd` forwards `%*` to a PowerShell `-File`
+/// script, whose command-line parser strips the JSON's embedded quotes as
+/// string delimiters (reproduced on a live 1.1.84): the CLI receives
+/// `{mcp:{lazyLoad:false}}`, calls it invalid JSON, and exits ~1s into the
+/// handshake — codeg sees `initialize` fail on a closed transport. So on
+/// Windows [`crate::acp::qoder`] resolves the wrapper to the real CLI first
+/// (the native `qodercli.exe`, or Node running the npm package's entry) and
+/// spawns that directly, which delivers the JSON as one untouched argv entry.
+///
+/// [`crate::acp::qoder`] is the Windows-only resolver the launch below uses.
 fn npx_launch_extra_args(agent_type: AgentType) -> &'static [&'static str] {
     match agent_type {
         AgentType::Qoder => &["--settings", QODER_LAUNCH_SETTINGS],
@@ -2268,8 +2282,28 @@ async fn build_agent(
             for (k, v) in &merged_env {
                 parts.push(format!("{k}={v}"));
             }
-            let bridge_command = crate::commands::acp::resolve_npx_command_for(agent_type, cmd)
-                .await
+            let resolved_command =
+                crate::commands::acp::resolve_npx_command_for(agent_type, cmd).await;
+            let qoder_direct = if agent_type == AgentType::Qoder && cfg!(windows) {
+                // Windows reaches Qoder through cmd wrappers that would strip
+                // the inline `--settings` JSON's quotes (see
+                // `npx_launch_extra_args`); resolve the wrapper to the real
+                // CLI and spawn that directly. A wrapper codeg cannot place a
+                // CLI behind is a clear error, never a silent fall back onto
+                // the fragile wrapper.
+                match resolved_command {
+                    Some(ref path) => {
+                        let launch_env = merged_env.iter().cloned().collect();
+                        let launch = crate::acp::qoder::resolve_launch(path, &launch_env)
+                            .map_err(|error| AcpError::SdkNotInstalled(error.to_string()))?;
+                        Some(launch)
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
+            let bridge_command = resolved_command
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| {
                     crate::process::normalized_program(cmd)
@@ -2287,6 +2321,11 @@ async fn build_agent(
                 // bypassing npm shims that might select an older Node on PATH.
                 parts.push(runtime.node.to_string_lossy().into_owned());
                 parts.push(entry.to_string_lossy().into_owned());
+            } else if let Some(launch) = &qoder_direct {
+                parts.push(launch.program.to_string_lossy().into_owned());
+                for arg in &launch.prefix_args {
+                    parts.push(arg.to_string_lossy().into_owned());
+                }
             } else {
                 parts.push(bridge_command);
             }
@@ -43799,7 +43838,9 @@ mod tests {
     }
 
     /// The launch `build_agent` assembles for Qoder carries the settings right
-    /// after the registry's `--acp`.
+    /// after the registry's `--acp`. On Windows, where a Qoder installation
+    /// resolves, the launch names the real program rather than a cmd wrapper,
+    /// whose reparsing would strip the settings' quotes (see `acp::qoder`).
     #[tokio::test]
     async fn qoder_launch_carries_the_lazy_loading_settings() {
         let tail = Arc::new(StderrTail::new());
@@ -43819,6 +43860,85 @@ mod tests {
             "--acp", "--settings", QODER_LAUNCH_SETTINGS
         );
         assert!(launch.contains(&expected), "{launch}");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn qoder_build_and_spawn_preserve_argv_and_the_workspace() {
+        use tokio::io::AsyncReadExt;
+
+        let node = crate::commands::acp::resolve_command_on_path("node")
+            .expect("the fixture needs a real node");
+        let root = tempfile::tempdir().unwrap();
+        let tricky = root.path().join("Qoder A&%USERNAME% 中文");
+        let shim = crate::acp::qoder::tests::npm_fixture(&tricky, false);
+        let bin = shim.parent().unwrap();
+        let entry = bin.join("node_modules/@qoder-ai/qodercli/bundle/qodercli.js");
+        std::fs::write(
+            &entry,
+            "console.log(JSON.stringify({argv: process.argv.slice(2), cwd: process.cwd(), program: process.execPath}));\n",
+        )
+        .unwrap();
+        let node_dir = tricky.join("Node");
+        std::fs::create_dir_all(&node_dir).unwrap();
+        let native_node = node_dir.join("node.exe");
+        std::fs::copy(std::fs::canonicalize(node).unwrap(), &native_node).unwrap();
+        std::fs::write(bin.join("node.js"), "// npm must exclude this from lookup").unwrap();
+        let workspace = tricky.join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let dispatcher = crate::acp::qoder::tests::dispatcher_fixture(root.path());
+
+        // Both an npm qoder shim and the official dispatcher -> npm qodercli
+        // path go through the production builder and AcpAgent spawn.
+        for first_dir in [bin, dispatcher.parent().unwrap()] {
+            let path = std::env::join_paths([first_dir, bin, &node_dir]).unwrap();
+            let env = BTreeMap::from([
+                ("Path".into(), path.to_string_lossy().into_owned()),
+                ("PATHEXT".into(), ".EXE;.JS;.CMD".into()),
+                ("QODER_CLI_BIN".into(), String::new()),
+            ]);
+            temp_env::async_with_vars([("PATH", Some(path.as_os_str()))], async {
+                let tail = Arc::new(StderrTail::new());
+                let (agent, _) =
+                    build_agent(AgentType::Qoder, &env, &workspace, &tail, None, false)
+                        .await
+                        .unwrap();
+                let (stdin, mut stdout, mut stderr, mut child) = agent.spawn_process().unwrap();
+                drop(stdin);
+                let output = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                    let mut out = Vec::new();
+                    let mut err = Vec::new();
+                    let (out_result, err_result, status) = tokio::join!(
+                        stdout.read_to_end(&mut out),
+                        stderr.read_to_end(&mut err),
+                        child.wait()
+                    );
+                    out_result.unwrap();
+                    err_result.unwrap();
+                    (status.unwrap(), out, err)
+                })
+                .await;
+                if output.is_err() {
+                    let _ = child.kill().await;
+                }
+                let (status, out, err) = output.expect("the fixture exits");
+                assert!(status.success(), "{}", String::from_utf8_lossy(&err));
+                let received: serde_json::Value = serde_json::from_slice(&out).unwrap();
+                assert_eq!(
+                    received["argv"],
+                    serde_json::json!(["--acp", "--settings", QODER_LAUNCH_SETTINGS])
+                );
+                assert_eq!(
+                    std::fs::canonicalize(received["cwd"].as_str().unwrap()).unwrap(),
+                    std::fs::canonicalize(&workspace).unwrap()
+                );
+                assert_eq!(
+                    std::fs::canonicalize(received["program"].as_str().unwrap()).unwrap(),
+                    std::fs::canonicalize(&native_node).unwrap()
+                );
+            })
+            .await;
+        }
     }
 
     /// Only an update carrying a title and nothing else is a Kimi status.
