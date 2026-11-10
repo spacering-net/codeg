@@ -26,6 +26,7 @@ pub mod cards;
 pub mod compaction;
 pub mod dispatch;
 pub mod engine;
+pub mod host;
 pub mod ledger;
 pub mod notices;
 pub mod templates;
@@ -55,11 +56,15 @@ pub fn is_personal_agent_owner(owner_window_label: &str) -> bool {
 /// "from no delegation" — so text, image-only and steering input all count,
 /// and nothing else does.
 pub fn note_owner_prompt(connection_id: &str, conversation_id: Option<i32>) {
-    let Some(engine) = engine() else {
+    let Some(host) = host::host() else {
         return;
     };
     let connection_id = connection_id.to_string();
     tokio::spawn(async move {
-        engine.handover(&connection_id, conversation_id).await;
+        // Whichever assistant dispatched it hands it over; the others find
+        // nothing of theirs.
+        for engine in host.engines().await {
+            engine.handover(&connection_id, conversation_id).await;
+        }
     });
 }

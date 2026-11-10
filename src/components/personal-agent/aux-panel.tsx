@@ -949,7 +949,9 @@ function useRunLogLine(): (row: TimelineRow) => string {
       case "turn_failed":
         return t("turnFailed", { error: str(data, "error") ?? "" })
       case "turn_interrupted":
-        return t("turnInterrupted")
+        return str(data, "why") === "preempted"
+          ? t("turnPreempted")
+          : t("turnInterrupted")
       case "workdir_changed":
         return t("workdirChanged", { path: str(data, "path") ?? "" })
       default:

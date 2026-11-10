@@ -611,6 +611,13 @@ pub struct SessionState {
     /// client snapshot.
     pub codex_user_input_shape: Option<crate::acp::question::CodexUserInputShape>,
 
+    /// What the RUNNING adapter said it is at initialize: `agentInfo`'s
+    /// `(name, version)`, when it sent one. The personal agent reads it to
+    /// decide whether a message can be folded into a turn in flight
+    /// (claude-agent-acp 0.86.0 and earlier never answer a folded prompt).
+    /// Backend-only: not part of the client snapshot.
+    pub agent_info: Option<(String, String)>,
+
     /// Which `session_info_update` meta key carries goal snapshots for this
     /// connection: `true` ⇒ the provider-neutral `_meta.goal` (adapter
     /// advertised the goal extension at initialize — claude-agent-acp 0.66+,
@@ -941,6 +948,7 @@ impl SessionState {
             antigravity_answered_interactions: BTreeSet::new(),
             native_steering_available: false,
             codex_user_input_shape: None,
+            agent_info: None,
             neutral_goal_channel: false,
             goal_control_method: crate::acp::codex_goal::LEGACY_GOAL_CONTROL_METHOD.to_string(),
             goal_actions: None,

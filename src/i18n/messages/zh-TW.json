@@ -7948,7 +7948,8 @@
       "unread": "未讀",
       "unfinished": "未處理完",
       "resend": "重新傳送",
-      "resent": "已重新傳送"
+      "resent": "已重新傳送",
+      "merged": "已併入進行中的回覆"
     },
     "quote": {
       "you": "你",
@@ -8008,6 +8009,7 @@
       "errorMidway": "回覆中途出錯：{error}",
       "interrupted": "這次回覆沒有完成：{reason}",
       "truncated": "回覆達到長度上限，被截斷了",
+      "preempted": "讓位給你的訊息",
       "resend": "{count, plural, one {重新傳送這則訊息} other {重新傳送這 # 則訊息}}",
       "why": {
         "connection": "連線中斷了",
@@ -8063,6 +8065,7 @@
       "turnStopped": "一次回覆被停止了",
       "turnFailed": "一次回覆失敗了：{error}",
       "turnInterrupted": "一次回覆沒有完成",
+      "turnPreempted": "一次回覆讓位給了你的訊息",
       "workdirChanged": "工作目錄換到了 {path}"
     },
     "matters": {

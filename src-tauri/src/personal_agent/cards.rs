@@ -535,7 +535,7 @@ the owner what happened, what you suggest next, and what they need to do.\n\
 
 /// One owner message as a delivery carries it: numbered, and naming what it
 /// replies to.
-fn owner_message(m: &OwnerLine) -> String {
+pub fn owner_message(m: &OwnerLine) -> String {
     let head = match &m.quote {
         Some((id, excerpt)) => format!("[#{}, replying to #{} — \"{}\"]", m.id, id, excerpt),
         None => format!("[#{}]", m.id),
@@ -549,29 +549,44 @@ fn owner_message(m: &OwnerLine) -> String {
 }
 
 /// The text of one delivery: the cards first (context before the request),
-/// then the events, then what the owner wrote — the newest ask last.
+/// then the events, then what the owner wrote — the newest ask last. With
+/// `owner_first`, the owner's messages come before the events: they cut
+/// into the turn that was handling those events, which now follow them.
 pub fn delivery_text(
     cards: &[String],
     events: Option<&str>,
     owner_messages: &[OwnerLine],
+    owner_first: bool,
 ) -> String {
     let mut parts: Vec<String> = cards.iter().map(|c| c.trim().to_string()).collect();
-    if let Some(e) = events {
-        parts.push(e.trim().to_string());
-    }
-    match owner_messages.len() {
-        0 => {}
-        1 => parts.push(owner_message(&owner_messages[0])),
+    let owner_part = match owner_messages.len() {
+        0 => None,
+        1 => Some(owner_message(&owner_messages[0])),
         n => {
             let joined = owner_messages
                 .iter()
                 .map(owner_message)
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            parts.push(format!(
+            Some(format!(
                 "(The owner sent {n} messages in a row.)\n\n{joined}"
-            ));
+            ))
         }
+    };
+    let events_part = events.map(|e| {
+        let e = e.trim().to_string();
+        if owner_first && owner_part.is_some() {
+            format!("(These came in while your previous turn ran; it stopped so the owner's message could go first.)\n\n{e}")
+        } else {
+            e
+        }
+    });
+    if owner_first {
+        parts.extend(owner_part);
+        parts.extend(events_part);
+    } else {
+        parts.extend(events_part);
+        parts.extend(owner_part);
     }
     parts
         .into_iter()
@@ -823,6 +838,7 @@ mod tests {
             &["<card/>".into()],
             Some("<codeg-events/>"),
             &[owner(7, "first"), owner(8, "second")],
+            false,
         );
         let card = text.find("<card/>").unwrap();
         let events = text.find("<codeg-events/>").unwrap();
@@ -830,7 +846,27 @@ mod tests {
         assert!(card < events && events < ask, "{text}");
         assert!(text.contains("The owner sent 2 messages"));
         assert!(text.contains("[#7] first"));
-        assert_eq!(delivery_text(&[], None, &[owner(3, "only")]), "[#3] only");
+        assert_eq!(delivery_text(&[], None, &[owner(3, "only")], false), "[#3] only");
+    }
+
+    /// The owner's message cut into a turn handling events: it goes first,
+    /// and the events it cut into follow, said to be such.
+    #[test]
+    fn a_message_that_cut_in_comes_before_the_events_it_cut_into() {
+        let text = delivery_text(
+            &["<card/>".into()],
+            Some("<codeg-events/>"),
+            &[owner(9, "now this")],
+            true,
+        );
+        let card = text.find("<card/>").unwrap();
+        let ask = text.find("[#9] now this").unwrap();
+        let events = text.find("<codeg-events/>").unwrap();
+        assert!(card < ask && ask < events, "{text}");
+        assert!(text.contains("it stopped so the owner's message could go first"));
+        // Without a message there is nothing to put first: the events alone.
+        let alone = delivery_text(&[], Some("<codeg-events/>"), &[], true);
+        assert_eq!(alone, "<codeg-events/>");
     }
 
     /// A message replying to an earlier row carries what that row says: the
@@ -843,7 +879,7 @@ mod tests {
             text: "why?".into(),
         };
         assert_eq!(
-            delivery_text(&[], None, &[line]),
+            delivery_text(&[], None, &[line], false),
             "[#58, replying to #55 — \"the build is red\"] why?"
         );
     }

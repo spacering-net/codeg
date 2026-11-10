@@ -3497,3 +3497,597 @@ async fn upgrading_files_the_existing_records_under_the_primary() {
         "k"
     );
 }
+
+// ── 1.3: one engine per assistant ────────────────────────────────────────────
+
+use crate::acp::connection::SteerOutcome;
+use crate::db::entities::personal_agent_batch::BatchStatus;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use super::host::EngineHost;
+
+/// A worker's row on `engine`'s database (no engine of its own: the host
+/// makes that).
+async fn worker_row(engine: &PersonalAgentEngine, name: &str) -> i32 {
+    let brain = brain(AgentType::ClaudeCode);
+    svc::create_worker(
+        &engine.db.conn,
+        svc::NewWorker {
+            name: name.into(),
+            avatar_json: r#"{"kind":"emoji","emoji":"🔧","color":"blue"}"#.into(),
+            agent_type: brain.agent_type.as_wire().into_owned(),
+            agent_options_json: "{}".into(),
+            label_snapshot_json: serde_json::to_string(&brain.label_snapshot).unwrap(),
+            settings_json: "{}".into(),
+            template: Some("dev".into()),
+            executor_assistant_id: None,
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+/// A host whose primary is set up, with a worker on the roster.
+async fn hosted() -> (Arc<EngineHost>, i32, tempfile::TempDir) {
+    let db = crate::db::test_helpers::fresh_in_memory_db().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let host = EngineHost::new_for_test(db, tmp.path().to_path_buf());
+    host.primary()
+        .save(PersonalAgentDraft {
+            agent_config: Some(brain(AgentType::ClaudeCode)),
+            locale: Some("en".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let w = worker_row(&host.primary(), "Dev").await;
+    (host, w, tmp)
+}
+
+/// One pending event handed to a fresh delivery batch on `seg`: the batch
+/// and the event.
+async fn event_in_a_batch(engine: &PersonalAgentEngine, seg: i32, key: &str) -> (i32, i32) {
+    assert!(svc::insert_event(
+        &engine.db.conn,
+        engine.bot().await,
+        "dispatch_status",
+        key,
+        Some("dispatch:1".into()),
+        "Dispatch #1 finished.".into(),
+        None,
+        true,
+    )
+    .await
+    .unwrap());
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap();
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    let id = events.iter().find(|e| e.source_key.ends_with(key)).unwrap().id;
+    svc::mark_events_delivered(&engine.db.conn, &[id], batch.id).await.unwrap();
+    (batch.id, id)
+}
+
+/// The reply row a delivery would have made for `batch`, still running.
+async fn running_reply(engine: &PersonalAgentEngine, seg: i32, batch: i32) -> i32 {
+    let mut row = NewRow::new(TimelineKind::Reply, "");
+    row.segment_id = Some(seg);
+    row.batch_id = Some(batch);
+    row.data = Some(serde_json::json!({ "state": "running", "started_at": chrono::Utc::now() }));
+    svc::insert_row(&engine.db.conn, engine.bot().await, row).await.unwrap().id
+}
+
+async fn markers_named(engine: &PersonalAgentEngine, name: &str) -> Vec<serde_json::Value> {
+    let (rows, _) = svc::page(&engine.db.conn, engine.bot().await, None, 200).await.unwrap();
+    rows.into_iter()
+        .filter(|r| r.kind == TimelineKind::Marker)
+        .map(|r| data_of(&r))
+        .filter(|d| d.get("marker").and_then(|m| m.as_str()) == Some(name))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_host_runs_one_engine_per_assistant() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let p = primary.bot().await;
+    assert!(Arc::ptr_eq(&host.engine_for(None).await.unwrap(), &primary));
+    assert!(Arc::ptr_eq(&host.engine_for(Some(p)).await.unwrap(), &primary));
+    let worker = host.engine_for(Some(w)).await.expect("made on first ask");
+    assert!(!Arc::ptr_eq(&worker, &primary));
+    assert_eq!(worker.bot().await, w);
+    assert!(worker.serves(w).await && !primary.serves(w).await);
+    assert!(
+        Arc::ptr_eq(&host.engine_for(Some(w)).await.unwrap(), &worker),
+        "the same engine every time"
+    );
+    assert!(host.engine_for(Some(9999)).await.is_none(), "nobody");
+    assert_eq!(host.engines().await.len(), 2);
+    // The worker's engine starts booted, as the host runs.
+    assert!(!worker.turn_in_flight_for_test().await);
+    // Also through the module-level lookup used by the page commands:
+    // nothing runs in the test process (no published host).
+    assert!(super::engine::engine_for(Some(w)).await.is_none());
+}
+
+#[tokio::test]
+async fn events_go_to_the_assistant_whose_connection_they_are_about() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let seg_p = open_segment(&primary).await;
+    let seg_w = open_segment(&worker).await;
+    let batch_p = svc::create_batch(&primary.db.conn, primary.bot().await, seg_p, BatchKind::Delivery, None)
+        .await
+        .unwrap()
+        .id;
+    let batch_w = svc::create_batch(&worker.db.conn, worker.bot().await, seg_w, BatchKind::Delivery, None)
+        .await
+        .unwrap()
+        .id;
+    primary.begin_turn_for_test("p-conn", seg_p, batch_p, BatchKind::Delivery, false, false).await;
+    worker.begin_turn_for_test("w-conn", seg_w, batch_w, BatchKind::Delivery, false, false).await;
+    // Two turns in flight at once, one per assistant.
+    assert!(primary.turn_in_flight_for_test().await && worker.turn_in_flight_for_test().await);
+
+    host.route(&crate::acp::types::EventEnvelope {
+        seq: 1,
+        connection_id: "w-conn".into(),
+        payload: turn_complete("end_turn"),
+    })
+    .await;
+    assert!(!worker.turn_in_flight_for_test().await, "the worker's turn ended");
+    assert!(primary.turn_in_flight_for_test().await, "the primary's goes on");
+    assert_eq!(
+        svc::get_batch(&worker.db.conn, batch_w).await.unwrap().unwrap().status,
+        BatchStatus::Completed
+    );
+    assert_eq!(
+        svc::get_batch(&primary.db.conn, batch_p).await.unwrap().unwrap().status,
+        BatchStatus::Running
+    );
+    // Nobody's connection: nothing happens anywhere.
+    host.route(&crate::acp::types::EventEnvelope {
+        seq: 2,
+        connection_id: "x-conn".into(),
+        payload: turn_complete("end_turn"),
+    })
+    .await;
+    assert!(primary.turn_in_flight_for_test().await);
+}
+
+#[tokio::test]
+async fn a_tool_call_is_answered_as_the_assistant_whose_session_it_comes_from() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let seg_p = open_segment(&primary).await;
+    let seg_w = open_segment(&worker).await;
+    primary.begin_turn_for_test("p-conn", seg_p, 1, BatchKind::Delivery, false, false).await;
+    worker.begin_turn_for_test("w-conn", seg_w, 2, BatchKind::Delivery, false, false).await;
+    // A conversation the worker dispatched: its calls are the executor's.
+    session_dispatch(&worker, DispatchState::Running, "d-conn").await;
+    worker.track_conn("d-conn", 1).await;
+
+    let by_w = host.engine_by_connection("w-conn").await.expect("the worker's session");
+    assert_eq!(by_w.bot().await, w);
+    let by_p = host.engine_by_connection("p-conn").await.expect("the primary's session");
+    assert_eq!(by_p.bot().await, primary.bot().await);
+    assert!(host.engine_by_connection("d-conn").await.is_none(), "a dispatched conversation");
+    assert!(host.engine_by_connection("nobody").await.is_none());
+    // And the call itself, as the worker: it reads the worker's records.
+    let out = super::tools::call_for_test(&by_w, "item_list", serde_json::json!({})).await;
+    assert!(out.ok, "{}", out.text);
+}
+
+#[tokio::test]
+async fn a_retired_worker_has_no_engine() {
+    let (host, w, _tmp) = hosted().await;
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let seg = open_segment(&worker).await;
+    worker.begin_turn_for_test("w-conn", seg, 1, BatchKind::Delivery, false, false).await;
+    assert!(svc::delete_worker(&worker.db.conn, w).await.unwrap());
+    host.retire(w).await;
+    assert!(host.engine_for(Some(w)).await.is_none(), "deleted: nobody");
+    assert_eq!(host.engines().await.len(), 1);
+}
+
+#[tokio::test]
+async fn the_owners_message_cuts_into_a_turn_that_carries_none_of_theirs() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (batch, event) = event_in_a_batch(&engine, seg, "dispatch:1:0:completed:turn").await;
+    let reply = running_reply(&engine, seg, batch).await;
+    engine.begin_turn_for_test("c", seg, batch, BatchKind::Delivery, false, false).await;
+    // No connection "c" in the manager: the stop cannot be sent, the turn
+    // is asked to give way all the same (the liveness check or the agent's
+    // own completion settles it).
+    let msg = engine.send_owner_message("now this".into(), Vec::new(), None).await.unwrap();
+    assert!(engine.preempting_for_test().await, "told to give way");
+    assert_eq!(msg.status, Some(OwnerStatus::Queued), "waits for the turn to stop");
+    // Writing again while it stops asks nothing more.
+    engine.send_owner_message("and this".into(), Vec::new(), None).await.unwrap();
+    assert!(engine.preempting_for_test().await);
+
+    engine.feed_for_test("c", 1, turn_complete("cancelled")).await;
+    assert!(!engine.turn_in_flight_for_test().await);
+    let b = svc::get_batch(&engine.db.conn, batch).await.unwrap().unwrap();
+    assert_eq!(b.status, BatchStatus::Interrupted);
+    assert_eq!(svc::batch_why(&b).as_deref(), Some("preempted"));
+    // The event rides again, with no requeue counted.
+    let pending = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].id, event);
+    assert_eq!(pending[0].requeues, 0, "giving way is not a failure");
+    assert_eq!(pending[0].requeued_from, Some(batch));
+    assert!(engine.any_yielded(&pending).await);
+    assert!(engine.interrupted_note(&pending, &[]).await.is_some(), "the next turn is told");
+    // The reply is settled as having given way, not as an error.
+    let r = svc::get_row(&engine.db.conn, reply).await.unwrap().unwrap();
+    assert_eq!(data_of(&r)["state"], "interrupted");
+    assert_eq!(data_of(&r)["why"], "preempted");
+    let marks = markers_named(&engine, "turn_interrupted").await;
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0]["why"], "preempted");
+    assert!(markers_named(&engine, "turn_failed").await.is_empty());
+    // Both messages still wait: the next delivery carries them first and
+    // the event after.
+    let queued = svc::queued_owner_rows(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert_eq!(queued.len(), 2);
+    // Had the same event then failed for real, the one requeue is still
+    // there for it.
+    let batch2 = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap();
+    svc::mark_events_delivered(&engine.db.conn, &[event], batch2.id).await.unwrap();
+    let back = svc::requeue_batch_events(&engine.db.conn, batch2.id).await.unwrap();
+    assert_eq!(back, vec![event]);
+    let again = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert_eq!(again[0].requeues, 1);
+}
+
+#[tokio::test]
+async fn an_event_put_back_once_already_keeps_its_count_when_it_gives_way() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (batch, event) = event_in_a_batch(&engine, seg, "dispatch:2:0:completed:turn").await;
+    event_entity::Entity::update_many()
+        .col_expr(event_entity::Column::Requeues, sea_orm::sea_query::Expr::value(1))
+        .filter(event_entity::Column::Id.eq(event))
+        .exec(&engine.db.conn)
+        .await
+        .unwrap();
+    engine.begin_turn_for_test("c", seg, batch, BatchKind::Delivery, false, false).await;
+    engine.send_owner_message("now".into(), Vec::new(), None).await.unwrap();
+    engine.feed_for_test("c", 1, turn_complete("cancelled")).await;
+    let pending = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert_eq!(pending.len(), 1, "not settled as handled");
+    assert_eq!(pending[0].requeues, 1, "unchanged");
+    assert_eq!(pending[0].state, EventState::Pending);
+}
+
+#[tokio::test]
+async fn a_turn_that_ended_on_its_own_before_the_stop_landed_finished_as_usual() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (batch, _event) = event_in_a_batch(&engine, seg, "dispatch:3:0:completed:turn").await;
+    engine.begin_turn_for_test("c", seg, batch, BatchKind::Delivery, false, false).await;
+    engine.send_owner_message("now".into(), Vec::new(), None).await.unwrap();
+    assert!(engine.preempting_for_test().await);
+    engine.feed_for_test("c", 1, turn_complete("end_turn")).await;
+    let b = svc::get_batch(&engine.db.conn, batch).await.unwrap().unwrap();
+    assert_eq!(b.status, BatchStatus::Completed);
+    assert!(svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap().is_empty());
+    assert!(markers_named(&engine, "turn_interrupted").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_compaction_is_never_cut_into() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Compaction, None)
+        .await
+        .unwrap();
+    engine.begin_turn_for_test("c", seg, batch.id, BatchKind::Compaction, false, false).await;
+    let msg = engine.send_owner_message("now".into(), Vec::new(), None).await.unwrap();
+    assert!(!engine.preempting_for_test().await);
+    assert_eq!(msg.status, Some(OwnerStatus::Queued));
+    assert!(engine.turn_in_flight_for_test().await);
+}
+
+#[tokio::test]
+async fn the_owners_own_stop_is_still_a_stop() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (batch, _event) = event_in_a_batch(&engine, seg, "dispatch:4:0:completed:turn").await;
+    engine.begin_turn_for_test("c", seg, batch, BatchKind::Delivery, false, false).await;
+    // Nobody wrote: a cancelled completion is the owner's stop button.
+    engine.feed_for_test("c", 1, turn_complete("cancelled")).await;
+    let b = svc::get_batch(&engine.db.conn, batch).await.unwrap().unwrap();
+    assert_eq!(b.status, BatchStatus::Canceled);
+    assert!(svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap().is_empty());
+}
+
+/// A turn carrying the owner's earlier message takes the new one in while
+/// it runs, when the agent folds steered input into the turn in flight.
+#[tokio::test]
+async fn a_message_folds_into_a_turn_carrying_an_earlier_one_when_the_agent_takes_it() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap()
+        .id;
+    let first = engine.send_owner_message("first".into(), Vec::new(), None).await.unwrap();
+    svc::move_owner_rows(
+        &engine.db.conn,
+        &[first.id],
+        &[OwnerStatus::Queued],
+        OwnerStatus::Delivered,
+        Some(batch),
+        Some(seg),
+        svc::ReadMark::Read,
+    )
+    .await
+    .unwrap();
+    let mut rx = engine
+        .manager
+        .insert_test_connection_live("c", AgentType::ClaudeCode, None, EventEmitter::Noop)
+        .await;
+    {
+        let state = engine.manager.get_state("c").await.unwrap();
+        let mut s = state.write().await;
+        s.native_steering_available = true;
+        s.turn_in_flight = true;
+        s.agent_info = Some(("claude-agent-acp".into(), "0.101.0".into()));
+    }
+    engine.begin_turn_for_test("c", seg, batch, BatchKind::Delivery, false, false).await;
+    engine.set_turn_owner_rows_for_test(vec![first.id]).await;
+    // The connection loop's part: take the steer.
+    let taken = tokio::spawn(async move {
+        match rx.recv().await {
+            Some(ConnectionCommand::Steer { blocks, reply }) => {
+                let _ = reply.send(Ok(SteerOutcome::Injected));
+                (blocks, rx)
+            }
+            _ => panic!("expected a steer"),
+        }
+    });
+    let second = engine
+        .send_owner_message("second".into(), Vec::new(), Some(first.id))
+        .await
+        .unwrap();
+    let (blocks, mut rx) = taken.await.unwrap();
+    let text = blocks
+        .iter()
+        .find_map(|b| match b {
+            crate::acp::types::PromptInputBlock::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(text.starts_with(&format!("[#{}, replying to #{}", second.id, first.id)), "{text}");
+    assert!(text.ends_with("second"), "{text}");
+    assert_eq!(second.status, Some(OwnerStatus::Delivered), "the turn's now");
+    assert_eq!(second.batch_id, Some(batch));
+    assert_eq!(second.data.as_ref().unwrap()["merged"], true);
+    assert!(second.read_at.is_some());
+    assert!(!engine.preempting_for_test().await, "nothing was stopped");
+    // When that turn ends, both messages are answered.
+    engine.feed_for_test("c", 1, turn_complete("end_turn")).await;
+    let r2 = svc::get_row(&engine.db.conn, second.id).await.unwrap().unwrap();
+    assert_eq!(r2.status, Some(OwnerStatus::Answered));
+
+    // An adapter that never answers a folded prompt: the message waits.
+    let batch2 = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap()
+        .id;
+    {
+        let state = engine.manager.get_state("c").await.unwrap();
+        let mut s = state.write().await;
+        s.turn_in_flight = true;
+        s.agent_info = Some(("claude-agent-acp".into(), "0.86.0".into()));
+    }
+    engine.begin_turn_for_test("c", seg, batch2, BatchKind::Delivery, false, false).await;
+    engine.set_turn_owner_rows_for_test(vec![first.id]).await;
+    let third = engine.send_owner_message("third".into(), Vec::new(), None).await.unwrap();
+    assert_eq!(third.status, Some(OwnerStatus::Queued));
+    assert!(rx.try_recv().is_err(), "no steer went out");
+}
+
+#[test]
+fn only_adapters_that_answer_a_folded_prompt_take_one() {
+    use super::engine::steering_answers_folded_input;
+    let claude = |v: &str| Some(("claude-agent-acp".to_string(), v.to_string()));
+    assert!(!steering_answers_folded_input(claude("0.86.0").as_ref()));
+    assert!(!steering_answers_folded_input(claude("0.65.0").as_ref()));
+    assert!(steering_answers_folded_input(claude("0.87.0").as_ref()));
+    assert!(steering_answers_folded_input(claude("0.101.0").as_ref()));
+    assert!(!steering_answers_folded_input(claude("not a version").as_ref()));
+    let scoped = Some(("@agentclientprotocol/claude-agent-acp".to_string(), "0.80.0".to_string()));
+    assert!(!steering_answers_folded_input(scoped.as_ref()));
+    let codex = Some(("codex-acp".to_string(), "2.4.0".to_string()));
+    assert!(steering_answers_folded_input(codex.as_ref()));
+    assert!(steering_answers_folded_input(None));
+}
+
+/// With attachments, the blocks are the whole of what goes over the wire:
+/// the message's text leads them.
+#[tokio::test]
+async fn a_folded_message_with_attachments_leads_with_its_text() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap()
+        .id;
+    let first = engine.send_owner_message("first".into(), Vec::new(), None).await.unwrap();
+    let mut rx = engine
+        .manager
+        .insert_test_connection_live("c", AgentType::ClaudeCode, None, EventEmitter::Noop)
+        .await;
+    {
+        let state = engine.manager.get_state("c").await.unwrap();
+        let mut s = state.write().await;
+        s.native_steering_available = true;
+        s.turn_in_flight = true;
+        s.agent_info = Some(("codex-acp".into(), "2.5.0".into()));
+    }
+    engine.begin_turn_for_test("c", seg, batch, BatchKind::Delivery, false, false).await;
+    engine.set_turn_owner_rows_for_test(vec![first.id]).await;
+    let taken = tokio::spawn(async move {
+        match rx.recv().await {
+            Some(ConnectionCommand::Steer { blocks, reply }) => {
+                let _ = reply.send(Ok(SteerOutcome::Injected));
+                blocks
+            }
+            _ => panic!("expected a steer"),
+        }
+    });
+    let image = crate::acp::types::PromptInputBlock::Image {
+        data: "aGk=".into(),
+        mime_type: "image/png".into(),
+        uri: None,
+    };
+    let second = engine
+        .send_owner_message("use this screenshot".into(), vec![image], None)
+        .await
+        .unwrap();
+    let blocks = taken.await.unwrap();
+    assert_eq!(blocks.len(), 2, "{blocks:?}");
+    match &blocks[0] {
+        crate::acp::types::PromptInputBlock::Text { text } => {
+            assert_eq!(text, &format!("[#{}] use this screenshot", second.id));
+        }
+        other => panic!("the text leads: {other:?}"),
+    }
+    assert!(matches!(&blocks[1], crate::acp::types::PromptInputBlock::Image { .. }));
+    assert_eq!(second.data.as_ref().unwrap()["merged"], true);
+}
+
+/// The turn ends while a message is being handed to it. Claimed before the
+/// hand-over, the message is settled with the turn when the agent took it,
+/// and goes back to the queue — once, unread — when it did not.
+#[tokio::test]
+async fn a_message_claimed_by_a_turn_that_ends_during_the_hand_over_is_settled_once() {
+    // (taken by the agent, how the turn ended)
+    for (taken, stop) in [(true, "end_turn"), (false, "end_turn"), (false, "rejected")] {
+        let (engine, _tmp) = configured().await;
+        let seg = open_segment(&engine).await;
+        let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
+            .await
+            .unwrap()
+            .id;
+        let first = engine.send_owner_message("first".into(), Vec::new(), None).await.unwrap();
+        svc::move_owner_rows(
+            &engine.db.conn,
+            &[first.id],
+            &[OwnerStatus::Queued],
+            OwnerStatus::Delivered,
+            Some(batch),
+            Some(seg),
+            svc::ReadMark::Read,
+        )
+        .await
+        .unwrap();
+        let mut rx = engine
+            .manager
+            .insert_test_connection_live("c", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        {
+            let state = engine.manager.get_state("c").await.unwrap();
+            let mut s = state.write().await;
+            s.native_steering_available = true;
+            s.turn_in_flight = true;
+            s.agent_info = Some(("codex-acp".into(), "2.5.0".into()));
+        }
+        engine.begin_turn_for_test("c", seg, batch, BatchKind::Delivery, false, false).await;
+        engine.set_turn_owner_rows_for_test(vec![first.id]).await;
+        let e = engine.clone();
+        let handler = tokio::spawn(async move {
+            match rx.recv().await {
+                Some(ConnectionCommand::Steer { reply, .. }) => {
+                    // The turn ends before the steer is answered.
+                    e.feed_for_test("c", 1, turn_complete(stop)).await;
+                    let _ = reply.send(if taken {
+                        Ok(SteerOutcome::Injected)
+                    } else {
+                        Err(crate::acp::error::AcpError::NoActiveTurn)
+                    });
+                }
+                _ => panic!("expected a steer"),
+            }
+        });
+        let second = engine.send_owner_message("second".into(), Vec::new(), None).await.unwrap();
+        handler.await.unwrap();
+        assert!(!engine.turn_in_flight_for_test().await);
+        let r2 = svc::get_row(&engine.db.conn, second.id).await.unwrap().unwrap();
+        let queued = svc::queued_owner_rows(&engine.db.conn, engine.bot().await).await.unwrap();
+        if taken {
+            assert_eq!(r2.status, Some(OwnerStatus::Answered), "settled with the turn");
+            assert_eq!(data_of(&r2)["merged"], true);
+            assert!(queued.is_empty(), "not sent a second time");
+        } else if stop == "rejected" {
+            // The turn was interrupted meanwhile: the claim went down with
+            // the turn's own message, and is sent again from the page like
+            // it — not queued here as well, or the owner's own resend would
+            // make two.
+            assert_eq!(r2.status, Some(OwnerStatus::Interrupted));
+            assert_eq!(data_of(&r2).get("merged"), None);
+            assert!(queued.is_empty());
+            let r1 = svc::get_row(&engine.db.conn, first.id).await.unwrap().unwrap();
+            assert_eq!(r1.status, Some(OwnerStatus::Interrupted), "the turn's own message too");
+            let copy = engine.resend(second.id).await.unwrap();
+            assert_eq!(copy.status, Some(OwnerStatus::Queued));
+            assert_eq!(
+                svc::queued_owner_rows(&engine.db.conn, engine.bot().await).await.unwrap().len(),
+                1,
+                "exactly one copy"
+            );
+        } else {
+            // The turn finished meanwhile: nothing of this message reached
+            // the agent, so it simply goes next.
+            assert_eq!(r2.status, Some(OwnerStatus::Queued), "waits for the next delivery");
+            assert!(r2.read_at.is_none());
+            assert_eq!(queued.len(), 1);
+            assert_eq!(data_of(&r2).get("merged"), None);
+        }
+        let b = svc::get_batch(&engine.db.conn, batch).await.unwrap().unwrap();
+        if stop == "rejected" {
+            assert_eq!(b.status, BatchStatus::Interrupted);
+        } else {
+            assert_eq!(b.status, BatchStatus::Completed);
+        }
+    }
+}
+
+/// Settling a turn is serialized with deliveries: while one is being
+/// delivered, the end of a turn waits; and while a turn is being settled
+/// (its events put back), no delivery starts.
+#[tokio::test]
+async fn settling_a_turn_waits_for_the_delivery_in_flight() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (batch, event) = event_in_a_batch(&engine, seg, "dispatch:5:0:completed:turn").await;
+    engine.begin_turn_for_test("c", seg, batch, BatchKind::Delivery, false, false).await;
+    engine.send_owner_message("now".into(), Vec::new(), None).await.unwrap();
+    let guard = engine.hold_pump_for_test().await;
+    let e = engine.clone();
+    let settling = tokio::spawn(async move {
+        e.feed_for_test("c", 1, turn_complete("cancelled")).await;
+    });
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(engine.turn_in_flight_for_test().await, "waits for the delivery lock");
+    assert!(
+        svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap().is_empty(),
+        "nothing put back yet"
+    );
+    drop(guard);
+    settling.await.unwrap();
+    assert!(!engine.turn_in_flight_for_test().await);
+    let pending = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert_eq!(pending.iter().map(|e| e.id).collect::<Vec<_>>(), vec![event]);
+}

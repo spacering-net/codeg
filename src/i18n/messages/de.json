@@ -7948,7 +7948,8 @@
       "unread": "Ungelesen",
       "unfinished": "Nicht fertig",
       "resend": "Erneut senden",
-      "resent": "Erneut gesendet"
+      "resent": "Erneut gesendet",
+      "merged": "In die laufende Antwort aufgenommen"
     },
     "quote": {
       "you": "Du",
@@ -8008,6 +8009,7 @@
       "errorMidway": "Bei der Antwort trat ein Fehler auf: {error}",
       "interrupted": "Diese Antwort wurde nicht fertig: {reason}",
       "truncated": "Die Antwort erreichte ihre Längengrenze und wurde abgeschnitten",
+      "preempted": "Angehalten, um deiner Nachricht Platz zu machen",
       "resend": "{count, plural, one {Nachricht erneut senden} other {Die # Nachrichten erneut senden}}",
       "why": {
         "connection": "die Verbindung ging verloren",
@@ -8063,6 +8065,7 @@
       "turnStopped": "Eine Antwort wurde gestoppt",
       "turnFailed": "Eine Antwort ist fehlgeschlagen: {error}",
       "turnInterrupted": "Eine Antwort wurde nicht fertig",
+      "turnPreempted": "Eine Antwort machte deiner Nachricht Platz",
       "workdirChanged": "Das Arbeitsverzeichnis wurde nach {path} verschoben"
     },
     "matters": {

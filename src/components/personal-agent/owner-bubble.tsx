@@ -11,7 +11,7 @@
 
 import { useState } from "react"
 import { useTranslations } from "next-intl"
-import { RotateCcw } from "lucide-react"
+import { CornerDownRight, RotateCcw } from "lucide-react"
 import { toast } from "sonner"
 
 import { personalAgentResend } from "@/lib/api"
@@ -45,6 +45,8 @@ export function OwnerBubble({ item }: { item: OwnerItem }) {
       )
     : []
   const interrupted = row.status === "interrupted"
+  // Folded into the reply that was already being written when it was sent.
+  const merged = row.data?.merged === true && !interrupted
   const unread = row.read_at == null && !interrupted
   return (
     <MessageRow
@@ -55,7 +57,15 @@ export function OwnerBubble({ item }: { item: OwnerItem }) {
       actions={{ rowId: row.id, text: row.body || null, at: row.created_at }}
       aside={unread ? <UnreadMark /> : null}
       below={
-        interrupted ? (
+        merged ? (
+          <div
+            data-pa-state
+            className="mt-1 flex h-5 items-center gap-1.5 pe-1 text-[0.6875rem] whitespace-nowrap text-muted-foreground"
+          >
+            <CornerDownRight className="size-3" aria-hidden />
+            <span>{t("merged")}</span>
+          </div>
+        ) : interrupted ? (
           <div
             data-pa-state
             className="mt-1 flex h-5 items-center gap-1.5 pe-1 text-[0.6875rem] whitespace-nowrap text-muted-foreground"

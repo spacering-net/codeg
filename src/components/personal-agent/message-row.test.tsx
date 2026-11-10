@@ -543,6 +543,24 @@ describe("the bubbles", () => {
     )
   })
 
+  it("says a reply made way for the owner's message without an alarm", () => {
+    const item = itemOf(
+      [
+        row(3, "reply", {
+          batch_id: 7,
+          data: { state: "interrupted", why: "preempted" },
+        }),
+      ],
+      "reply"
+    ) as Extract<MessageItem, { kind: "reply" }>
+    const { container } = draw(<ReplyBubble item={item} />)
+    const ending = container.querySelector("[data-bubble]")!
+      .firstElementChild as HTMLElement
+    expect(ending.textContent).toBe("Stopped to make way for your message")
+    expect(ending.className).toContain("text-muted-foreground")
+    expect(ending.className).not.toContain("text-amber-700")
+  })
+
   it("stops a reply while it is written, from its actions or its menu", async () => {
     const item = itemOf(
       [row(4, "reply", { batch_id: 7, data: { state: "running" } })],
@@ -963,6 +981,25 @@ describe("the bubbles", () => {
     expect(line.textContent).toContain("Not finished")
     fireEvent.click(screen.getByRole("button", { name: /Send again/ }))
     expect(api.personalAgentResend).toHaveBeenCalledWith(10, null)
+  })
+
+  it("says a message was folded into the reply being written", () => {
+    const { container } = draw(
+      <OwnerBubble
+        item={ownerItem(
+          row(11, "owner", {
+            body: "and this",
+            status: "delivered",
+            read_at: "2026-11-09T10:00:00Z",
+            data: { merged: true },
+          })
+        )}
+      />
+    )
+    const line = container.querySelector("[data-pa-state]")!
+    expect(line.textContent).toBe("Folded into the reply in progress")
+    expect(screen.queryByRole("button", { name: /Send again/ })).toBeNull()
+    expect(container.querySelector("[data-pa-aside]")).toBeNull()
   })
 })
 

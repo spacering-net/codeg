@@ -709,7 +709,7 @@ async fn async_main(
         tokio::spawn(codeg_lib::work_task::run_task_engine(engine));
         // The personal agent (mirrors lib.rs setup): next to the task engine
         // whose tasks it dispatches.
-        if let Some(agent) = codeg_lib::personal_agent::engine::build(
+        if let Some(host) = codeg_lib::personal_agent::host::build(
             codeg_lib::db::AppDatabase {
                 conn: state.db.conn.clone(),
             },
@@ -718,7 +718,7 @@ async fn async_main(
             state.acp_event_bus.clone(),
             state.data_dir.clone(),
         ) {
-            tokio::spawn(codeg_lib::personal_agent::engine::run(agent));
+            tokio::spawn(codeg_lib::personal_agent::host::run(host));
         }
         // Repository-panel auto-processing (mirrors lib.rs setup): only where
         // the task engine runs, since it mints tasks unattended.

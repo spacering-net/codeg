@@ -9348,6 +9348,10 @@ async fn run_connection(
                 // agents could ship it someday).
                 s.native_steering_available = native_steering_available;
                 s.codex_user_input_shape = codex_user_input_shape;
+                s.agent_info = init_resp
+                    .agent_info
+                    .as_ref()
+                    .map(|info| (info.name.clone(), info.version.clone()));
                 s.neutral_goal_channel = neutral_goal_channel;
                 // The vocabulary is decided HERE for every adapter, advertising
                 // or not — this assignment is what flips it from "unknown" to

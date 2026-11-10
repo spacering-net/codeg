@@ -7948,7 +7948,8 @@
       "unread": "Non lu",
       "unfinished": "Inachevé",
       "resend": "Renvoyer",
-      "resent": "Renvoyé"
+      "resent": "Renvoyé",
+      "merged": "Intégré à la réponse en cours"
     },
     "quote": {
       "you": "Vous",
@@ -8008,6 +8009,7 @@
       "errorMidway": "La réponse a rencontré une erreur : {error}",
       "interrupted": "Cette réponse ne s'est pas terminée : {reason}",
       "truncated": "La réponse a atteint sa limite de longueur et a été coupée",
+      "preempted": "Interrompue pour laisser passer votre message",
       "resend": "{count, plural, one {Renvoyer le message} other {Renvoyer les # messages}}",
       "why": {
         "connection": "la connexion a été perdue",
@@ -8063,6 +8065,7 @@
       "turnStopped": "Une réponse a été arrêtée",
       "turnFailed": "Une réponse a échoué : {error}",
       "turnInterrupted": "Une réponse ne s'est pas terminée",
+      "turnPreempted": "Une réponse a laissé passer votre message",
       "workdirChanged": "Le répertoire de travail a été déplacé vers {path}"
     },
     "matters": {

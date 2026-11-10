@@ -547,6 +547,8 @@ describe("the status tab", () => {
         reason: "first",
       }),
       marker(2, { marker: "reconnected" }),
+      marker(3, { marker: "turn_interrupted", why: "preempted" }),
+      marker(4, { marker: "turn_interrupted", why: "restart" }),
     ]
     draw()
     fireEvent.click(screen.getByRole("button", { name: /Run log/ }))
@@ -554,6 +556,8 @@ describe("the status tab", () => {
     // Newest first, a line each and when — no icon before it.
     const lines = screen.getAllByRole("listitem")
     expect(lines.map((li) => li.firstElementChild!.textContent)).toEqual([
+      "A reply did not finish",
+      "A reply made way for your message",
       "Reconnected to the same session",
       "A new session started on Claude Code (first session)",
     ])

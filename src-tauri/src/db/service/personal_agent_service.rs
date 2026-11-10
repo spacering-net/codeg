@@ -562,6 +562,39 @@ pub async fn finish_batch(
     Ok(update.exec(conn).await?.rows_affected == 1)
 }
 
+/// Add `why` to a batch's detail (`"why"`), keeping the rest of it.
+pub async fn set_batch_why(conn: &DatabaseConnection, id: i32, why: &str) -> Result<(), DbError> {
+    let Some(batch) = get_batch(conn, id).await? else {
+        return Ok(());
+    };
+    let mut detail = batch
+        .detail
+        .as_deref()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(map) = detail.as_object_mut() {
+        map.insert("why".into(), why.into());
+    } else {
+        detail = serde_json::json!({ "why": why });
+    }
+    batch::Entity::update_many()
+        .col_expr(batch::Column::Detail, Expr::value(detail.to_string()))
+        .filter(batch::Column::Id.eq(id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// A batch's `why`, from its detail: how it ended when that was not an
+/// ordinary completion (`"preempted"`: it gave way to the owner's message).
+pub fn batch_why(batch: &batch::Model) -> Option<String> {
+    batch
+        .detail
+        .as_deref()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+        .and_then(|d| d.get("why").and_then(|v| v.as_str()).map(str::to_string))
+}
+
 /// The newest compaction batch of a segment.
 pub async fn last_compaction(
     conn: &DatabaseConnection,
@@ -1474,6 +1507,28 @@ pub async fn revert_batch_events(conn: &DatabaseConnection, batch_id: i32) -> Re
     event::Entity::update_many()
         .col_expr(event::Column::State, Expr::value(EventState::Pending))
         .col_expr(event::Column::BatchId, Expr::value(Option::<i32>::None))
+        .col_expr(event::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(event::Column::Id.is_in(back.clone()))
+        .filter(event::Column::State.eq(EventState::Delivered))
+        .exec(conn)
+        .await?;
+    Ok(back)
+}
+
+/// The batch gave way to the owner's message: every event it was handed
+/// waits again, to ride with that message — `requeued_from` names the batch
+/// (its ledger is inherited, its note written), and `requeues` is NOT
+/// counted: giving way is not a failure, and the one requeue a failure gets
+/// stays available. Returns the ids put back.
+pub async fn yield_batch_events(conn: &DatabaseConnection, batch_id: i32) -> Result<Vec<i32>, DbError> {
+    let back = delivered_event_ids(conn, batch_id).await?;
+    if back.is_empty() {
+        return Ok(back);
+    }
+    event::Entity::update_many()
+        .col_expr(event::Column::State, Expr::value(EventState::Pending))
+        .col_expr(event::Column::BatchId, Expr::value(Option::<i32>::None))
+        .col_expr(event::Column::RequeuedFrom, Expr::value(batch_id))
         .col_expr(event::Column::UpdatedAt, Expr::value(Utc::now()))
         .filter(event::Column::Id.is_in(back.clone()))
         .filter(event::Column::State.eq(EventState::Delivered))

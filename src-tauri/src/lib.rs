@@ -1488,7 +1488,7 @@ mod tauri_app {
                     // The personal agent dispatches kanban tasks and lives
                     // next to the engine that runs them: the one process
                     // holding this data directory's task lock.
-                    if let Some(agent) = crate::personal_agent::engine::build(
+                    if let Some(host) = crate::personal_agent::host::build(
                         crate::db::AppDatabase {
                             conn: app.state::<crate::db::AppDatabase>().conn.clone(),
                         },
@@ -1499,7 +1499,7 @@ mod tauri_app {
                             .clone(),
                         effective_data_dir.clone(),
                     ) {
-                        tauri::async_runtime::spawn(crate::personal_agent::engine::run(agent));
+                        tauri::async_runtime::spawn(crate::personal_agent::host::run(host));
                     }
                     // The repository panel's auto-processing mints tasks
                     // unattended, so it runs only where the task engine does —

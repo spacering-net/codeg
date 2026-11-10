@@ -14,7 +14,7 @@
 
 import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
-import { CircleAlert, RotateCcw, Square } from "lucide-react"
+import { CircleAlert, CornerDownRight, RotateCcw, Square } from "lucide-react"
 import { toast } from "sonner"
 
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
@@ -73,6 +73,13 @@ function Ending({ ending }: { ending: ReplyEnding }) {
       tone = "text-red-700 dark:text-red-300"
       break
     case "interrupted":
+      if (ending.why === "preempted") {
+        // It stopped so the owner's message could go first: nothing went
+        // wrong, so no warning colour.
+        text = t("preempted")
+        Icon = CornerDownRight
+        break
+      }
       text = t("interrupted", {
         reason: why(ending.why) ?? ending.detail ?? t("why.unknown"),
       })

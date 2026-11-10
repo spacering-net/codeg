@@ -7948,7 +7948,8 @@
       "unread": "Unread",
       "unfinished": "Not finished",
       "resend": "Send again",
-      "resent": "Sent again"
+      "resent": "Sent again",
+      "merged": "Folded into the reply in progress"
     },
     "quote": {
       "you": "You",
@@ -8008,6 +8009,7 @@
       "errorMidway": "The reply ran into an error: {error}",
       "interrupted": "This reply did not finish: {reason}",
       "truncated": "The reply hit its length limit and was cut off",
+      "preempted": "Stopped to make way for your message",
       "resend": "{count, plural, one {Send the message again} other {Send the # messages again}}",
       "why": {
         "connection": "the connection was lost",
@@ -8063,6 +8065,7 @@
       "turnStopped": "A reply was stopped",
       "turnFailed": "A reply failed: {error}",
       "turnInterrupted": "A reply did not finish",
+      "turnPreempted": "A reply made way for your message",
       "workdirChanged": "The working directory moved to {path}"
     },
     "matters": {

@@ -7948,7 +7948,8 @@
       "unread": "Não lida",
       "unfinished": "Não concluída",
       "resend": "Enviar de novo",
-      "resent": "Enviada de novo"
+      "resent": "Enviada de novo",
+      "merged": "Incorporada à resposta em andamento"
     },
     "quote": {
       "you": "Você",
@@ -8008,6 +8009,7 @@
       "errorMidway": "A resposta teve um erro: {error}",
       "interrupted": "Esta resposta não terminou: {reason}",
       "truncated": "A resposta atingiu o limite de tamanho e foi cortada",
+      "preempted": "Parou para dar lugar à sua mensagem",
       "resend": "{count, plural, one {Enviar a mensagem de novo} other {Enviar as # mensagens de novo}}",
       "why": {
         "connection": "a conexão caiu",
@@ -8063,6 +8065,7 @@
       "turnStopped": "Uma resposta foi parada",
       "turnFailed": "Uma resposta falhou: {error}",
       "turnInterrupted": "Uma resposta não terminou",
+      "turnPreempted": "Uma resposta deu lugar à sua mensagem",
       "workdirChanged": "O diretório de trabalho foi movido para {path}"
     },
     "matters": {

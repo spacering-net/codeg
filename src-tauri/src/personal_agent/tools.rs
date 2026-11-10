@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::dispatch::{executor_of, DispatchAuth, DispatchRequest, FollowupAuth};
-use super::engine::{engine, enum_str, PersonalAgentEngine};
+use super::engine::{enum_str, PersonalAgentEngine};
 use crate::db::entities::folder::FolderKind;
 use crate::db::entities::personal_agent_dispatch::DispatchMode;
 use crate::db::entities::personal_agent_item::{ItemKind, ItemStatus, WaitsFor};
@@ -67,16 +67,19 @@ fn as_i32(v: i64) -> Option<i32> {
     i32::try_from(v).ok()
 }
 
-/// Answer one tool call from `parent_connection_id`.
+/// Answer one tool call from `parent_connection_id`, as the assistant whose
+/// current session that connection is. A call from any other connection —
+/// a dispatched conversation's, a window's, a retired session's — is
+/// refused: nobody's.
 pub async fn call(parent_connection_id: &str, tool: &str, args: Value) -> ToolOutcome {
-    let Some(engine) = engine() else {
+    let Some(host) = super::host::host() else {
         return ToolOutcome::refused("the personal agent is not running in this codeg process");
     };
-    if !engine.is_current_connection(parent_connection_id).await {
+    let Some(engine) = host.engine_by_connection(parent_connection_id).await else {
         return ToolOutcome::refused(
-            "these tools belong to the personal agent's current session only",
+            "these tools belong to an assistant's current session only",
         );
-    }
+    };
     answer(&engine, tool, args).await
 }
 

@@ -7948,7 +7948,8 @@
       "unread": "未读",
       "unfinished": "未处理完",
       "resend": "重新发送",
-      "resent": "已重新发送"
+      "resent": "已重新发送",
+      "merged": "已并入正在进行的回复"
     },
     "quote": {
       "you": "你",
@@ -8008,6 +8009,7 @@
       "errorMidway": "回复中途出错：{error}",
       "interrupted": "这次回复没有完成：{reason}",
       "truncated": "回复达到长度上限，被截断了",
+      "preempted": "让位给你的消息",
       "resend": "{count, plural, one {重新发送这条消息} other {重新发送这 # 条消息}}",
       "why": {
         "connection": "连接断开了",
@@ -8063,6 +8065,7 @@
       "turnStopped": "一次回复被停止了",
       "turnFailed": "一次回复失败了：{error}",
       "turnInterrupted": "一次回复没有完成",
+      "turnPreempted": "一次回复让位给了你的消息",
       "workdirChanged": "工作目录换到了 {path}"
     },
     "matters": {

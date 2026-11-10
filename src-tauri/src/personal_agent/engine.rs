@@ -28,12 +28,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::MissedTickBehavior;
 
@@ -45,7 +44,6 @@ use super::{DISPATCH_OWNER_LABEL, OWNER_LABEL};
 use crate::acp::manager::ConnectionManager;
 use crate::acp::reply_turn::{ReplySnapshot, ReplyStep};
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope, PromptInputBlock};
-use crate::acp::InternalEventBus;
 use crate::db::entities::personal_agent::{self as agent_entity, BotKind};
 use crate::db::entities::personal_agent_batch::{BatchKind, BatchStatus, BatchTrigger};
 use crate::db::entities::personal_agent_item::ItemStatus;
@@ -86,25 +84,19 @@ const REPLY_CHECKPOINT_EVERY: Duration = Duration::from_secs(2);
 /// How much of a quoted row a delivery repeats.
 const QUOTE_EXCERPT_CHARS: usize = 200;
 
-static ENGINE: OnceLock<Arc<PersonalAgentEngine>> = OnceLock::new();
-
-/// The engine of this process, when this process runs it (it holds the
-/// work-task engine). `None` everywhere else: the page is then read-only.
-/// It runs the primary assistant.
+/// The primary assistant's engine, when this process runs the assistants (it
+/// holds the work-task engine). `None` everywhere else: the page is then
+/// read-only.
 pub fn engine() -> Option<Arc<PersonalAgentEngine>> {
-    ENGINE.get().cloned()
+    super::host::host().map(|h| h.primary())
 }
 
 /// The engine running the assistant `bot` (`None`: the primary) in this
-/// process, when one does. Only the primary runs so far: a worker has its
-/// records and its page, and no engine of its own yet.
+/// process, when one does. A worker's engine is made the first time it is
+/// asked for, when its row exists.
 pub async fn engine_for(bot: Option<i32>) -> Option<Arc<PersonalAgentEngine>> {
-    let engine = engine()?;
-    match bot {
-        None => Some(engine),
-        Some(id) if engine.serves(id).await => Some(engine),
-        Some(_) => None,
-    }
+    let host = super::host::host()?;
+    host.engine_for(bot).await
 }
 
 /// What a segment owes the agent and how its compactions have gone. JSON on
@@ -202,6 +194,10 @@ struct ActiveTurn {
     /// For a delivery: the batches whose ledger entries count as its own —
     /// itself, and those it re-delivers what they carried of.
     ledger_scope: Vec<i32>,
+    /// For a delivery: the owner wrote while it ran and it carried no
+    /// message of theirs, so it was told to stop and give way. When it
+    /// stops, its events ride with the owner's message, not as a failure.
+    preempted: bool,
 }
 
 /// How a turn ended.
@@ -330,7 +326,6 @@ pub struct PersonalAgentEngine {
     pub(super) db: AppDatabase,
     pub(super) manager: ConnectionManager,
     pub(super) emitter: EventEmitter,
-    pub(super) bus: Arc<InternalEventBus>,
     pub(super) data_dir: PathBuf,
     pub(super) state: Mutex<EngineState>,
     /// Serializes deliveries.
@@ -346,38 +341,35 @@ pub struct PersonalAgentEngine {
     reply_push: Mutex<ReplyPush>,
 }
 
-/// Build the engine and publish it. Call ONLY where the work-task engine was
-/// just built: owning that engine is what makes this the one process that
-/// drives the personal agent (and the tasks it dispatches) on this data dir.
-pub fn build(
-    db: AppDatabase,
-    manager: ConnectionManager,
-    emitter: EventEmitter,
-    bus: Arc<InternalEventBus>,
-    data_dir: PathBuf,
-) -> Option<Arc<PersonalAgentEngine>> {
-    let engine = Arc::new(PersonalAgentEngine {
-        fixed_bot: None,
-        bot_cache: AtomicI32::new(0),
-        db,
-        manager,
-        emitter,
-        bus,
-        data_dir,
-        state: Mutex::new(EngineState::default()),
-        pump_lock: Mutex::new(()),
-        dispatch_lock: Mutex::new(()),
-        pump_again: AtomicBool::new(false),
-        wake: Notify::new(),
-        booted: AtomicBool::new(false),
-        reply_push_pending: AtomicBool::new(false),
-        reply_push: Mutex::new(ReplyPush::default()),
-    });
-    ENGINE.set(engine.clone()).ok()?;
-    Some(engine)
-}
-
 impl PersonalAgentEngine {
+    /// One assistant's runtime: a worker's (`fixed_bot`) or the primary's
+    /// (`None`). Not booted: the host boots it (`boot`) and drives it
+    /// (`drive`), and hands it the bus events that are its (`on_event`).
+    pub(super) fn new(
+        db: AppDatabase,
+        manager: ConnectionManager,
+        emitter: EventEmitter,
+        data_dir: PathBuf,
+        fixed_bot: Option<i32>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            fixed_bot,
+            bot_cache: AtomicI32::new(0),
+            db,
+            manager,
+            emitter,
+            data_dir,
+            state: Mutex::new(EngineState::default()),
+            pump_lock: Mutex::new(()),
+            dispatch_lock: Mutex::new(()),
+            pump_again: AtomicBool::new(false),
+            wake: Notify::new(),
+            booted: AtomicBool::new(false),
+            reply_push_pending: AtomicBool::new(false),
+            reply_push: Mutex::new(ReplyPush::default()),
+        })
+    }
+
     /// An engine for tests: not published as the process global, already past
     /// boot.
     #[cfg(test)]
@@ -392,32 +384,41 @@ impl PersonalAgentEngine {
         data_dir: PathBuf,
         bot: Option<i32>,
     ) -> Arc<Self> {
-        let bus = Arc::new(InternalEventBus::new(Arc::new(
-            crate::acp::EventBusMetrics::default(),
-        )));
-        Arc::new(Self {
-            fixed_bot: bot,
-            bot_cache: AtomicI32::new(0),
-            db,
-            manager: ConnectionManager::new(),
-            emitter: EventEmitter::Noop,
-            bus,
-            data_dir,
-            state: Mutex::new(EngineState::default()),
-            pump_lock: Mutex::new(()),
-            dispatch_lock: Mutex::new(()),
-            pump_again: AtomicBool::new(false),
-            wake: Notify::new(),
-            booted: AtomicBool::new(true),
-            reply_push_pending: AtomicBool::new(false),
-            reply_push: Mutex::new(ReplyPush::default()),
-        })
+        let engine = Self::new(db, ConnectionManager::new(), EventEmitter::Noop, data_dir, bot);
+        engine.booted.store(true, Ordering::SeqCst);
+        engine
     }
 
     /// Run boot recovery, as `run` does first.
     #[cfg(test)]
     pub(crate) async fn boot_for_test(&self) {
         self.boot_reconcile().await;
+    }
+
+    /// Whether the turn in flight was asked to give way to the owner's
+    /// message.
+    #[cfg(test)]
+    pub(crate) async fn preempting_for_test(&self) -> bool {
+        self.state
+            .lock()
+            .await
+            .turn
+            .as_ref()
+            .is_some_and(|t| t.preempted)
+    }
+
+    /// Hold the delivery lock, as a pump does while it delivers.
+    #[cfg(test)]
+    pub(crate) async fn hold_pump_for_test(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.pump_lock.lock().await
+    }
+
+    /// Put `rows` on the turn in flight as the owner messages it carries.
+    #[cfg(test)]
+    pub(crate) async fn set_turn_owner_rows_for_test(&self, rows: Vec<i32>) {
+        if let Some(t) = self.state.lock().await.turn.as_mut() {
+            t.owner_row_ids = rows;
+        }
     }
 
     /// Put a turn on record on `conn`, as if its prompt had just gone out:
@@ -463,6 +464,7 @@ impl PersonalAgentEngine {
             reply_token: None,
             auto_quote: None,
             ledger_scope: vec![batch_id],
+            preempted: false,
         });
     }
 
@@ -506,6 +508,7 @@ impl PersonalAgentEngine {
             reply_token: Some(token.to_string()),
             auto_quote: None,
             ledger_scope: vec![batch_id],
+            preempted: false,
         });
         row.id
     }
@@ -567,52 +570,63 @@ impl PersonalAgentEngine {
     }
 }
 
-/// The engine's driver: boot recovery, then one loop over the bus, the wake
-/// signal and the ticks. Spawn once, next to `run_task_engine`.
-pub async fn run(engine: Arc<PersonalAgentEngine>) {
-    // Subscribed before anything else, so nothing a recovery step triggers is
-    // missed.
-    let mut rx = engine.bus.subscribe();
-    // The task engine fails every running task as "interrupted by restart" on
-    // boot; a task dispatched before that ran would be failed with them.
-    crate::work_task::wait_boot_reconciled(Duration::from_secs(60)).await;
-    engine.boot_reconcile().await;
-    engine.booted.store(true, Ordering::SeqCst);
-    engine.nudge();
+impl PersonalAgentEngine {
+    /// Boot recovery, once, before the engine is driven: a fresh process has
+    /// no live connection, so whatever was running was interrupted.
+    pub(super) async fn boot(&self) {
+        self.boot_reconcile().await;
+        self.booted.store(true, Ordering::SeqCst);
+        self.nudge();
+    }
 
-    let mut liveness = tokio::time::interval(LIVENESS_TICK);
-    liveness.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut reconcile = tokio::time::interval(RECONCILE_TICK);
-    reconcile.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    loop {
-        tokio::select! {
-            ev = rx.recv() => match ev {
-                Ok(env) => engine.on_event(&env).await,
-                Err(RecvError::Lagged(n)) => {
-                    tracing::warn!(
-                        "[personal_agent] event bus lagged: {n} events dropped; the ticks recover"
-                    );
-                    // The reply is read from the connection's state, which
-                    // missed nothing: push it as it stands.
-                    engine.schedule_reply_push();
-                    engine.liveness_tick().await;
+    /// This engine's own loop: the wake signal and the ticks. The bus is the
+    /// host's: it hands this engine the events that are its (`on_event`).
+    pub(super) async fn drive(self: Arc<Self>) {
+        let mut liveness = tokio::time::interval(LIVENESS_TICK);
+        liveness.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut reconcile = tokio::time::interval(RECONCILE_TICK);
+        reconcile.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = self.wake.notified() => {
+                    let e = self.clone();
+                    tokio::spawn(async move { e.pump().await });
                 }
-                Err(RecvError::Closed) => break,
-            },
-            _ = engine.wake.notified() => {
-                let e = engine.clone();
-                tokio::spawn(async move { e.pump().await });
+                _ = liveness.tick() => {
+                    self.liveness_tick().await;
+                    self.poll_task_dispatches().await;
+                }
+                _ = reconcile.tick() => self.reconcile_dispatches().await,
             }
-            _ = liveness.tick() => {
-                engine.liveness_tick().await;
-                engine.poll_task_dispatches().await;
-            }
-            _ = reconcile.tick() => engine.reconcile_dispatches().await,
         }
     }
-}
 
-impl PersonalAgentEngine {
+    /// The bus dropped events: the reply is read from the connection's
+    /// state, which missed nothing, and the liveness check settles a turn
+    /// whose end went by.
+    pub(super) async fn on_lagged(self: &Arc<Self>) {
+        self.schedule_reply_push();
+        self.liveness_tick().await;
+    }
+
+    /// Whether `conn_id` is this assistant's own connection or one of its
+    /// dispatched conversations — the host asks before handing an event over.
+    pub(super) async fn owns_connection(&self, conn_id: &str) -> bool {
+        let st = self.state.lock().await;
+        st.connection_id.as_deref() == Some(conn_id) || st.dispatch_conns.contains_key(conn_id)
+    }
+
+    /// The engine is retired (its assistant deleted): stop the turn in
+    /// flight and end its connection. Its dispatched work is the runtime's
+    /// and goes on.
+    pub(super) async fn shutdown(&self) {
+        let _ = self.cancel_turn().await;
+        let conn = self.state.lock().await.connection_id.take();
+        if let Some(c) = conn {
+            let _ = self.manager.disconnect(&c).await;
+        }
+    }
+
     /// Ask for a delivery attempt. Cheap and idempotent.
     pub fn nudge(&self) {
         self.wake.notify_one();
@@ -791,9 +805,15 @@ impl PersonalAgentEngine {
         self.emit_rows(moved.into_iter().map(svc::to_row).collect());
         // Put back means not handled: the cards of exactly those are unread
         // again; an event already put back once is settled, and stays read.
-        let back = svc::requeue_batch_events(&self.db.conn, batch_id)
-            .await
-            .unwrap_or_default();
+        // A turn that gave way to the owner's message put everything back,
+        // with no requeue counted: giving way is not the failure that rule
+        // is about.
+        let back = if why == "preempted" {
+            svc::yield_batch_events(&self.db.conn, batch_id).await
+        } else {
+            svc::requeue_batch_events(&self.db.conn, batch_id).await
+        }
+        .unwrap_or_default();
         let unread = svc::set_result_rows_read(&self.db.conn, self.bot().await, &back, None)
             .await
             .unwrap_or_default();
@@ -809,7 +829,7 @@ impl PersonalAgentEngine {
 
     // ── events ──────────────────────────────────────────────────────────────
 
-    async fn on_event(self: &Arc<Self>, env: &EventEnvelope) {
+    pub(super) async fn on_event(self: &Arc<Self>, env: &EventEnvelope) {
         let (is_mine, dispatch_id) = {
             let st = self.state.lock().await;
             (
@@ -2123,6 +2143,7 @@ impl PersonalAgentEngine {
                 reply_token: None,
                 auto_quote: None,
                 ledger_scope: Vec::new(),
+                preempted: false,
             });
             st.last_check = Some(CompactCheck {
                 at: Utc::now(),
@@ -2261,12 +2282,13 @@ impl PersonalAgentEngine {
         events: &[crate::db::entities::personal_agent_event::Model],
         resent_from: &[i32],
     ) -> Option<String> {
-        if !events.iter().any(|e| e.requeues > 0) && resent_from.is_empty() {
+        // An event with a batch behind it was handed out before: that turn
+        // failed (`requeues` counted) or gave way to the owner's message.
+        if !events.iter().any(|e| e.requeued_from.is_some()) && resent_from.is_empty() {
             return None;
         }
         let mut batches: Vec<i32> = events
             .iter()
-            .filter(|e| e.requeues > 0)
             .filter_map(|e| e.requeued_from)
             .chain(resent_from.iter().copied())
             .collect();
@@ -2279,6 +2301,27 @@ impl PersonalAgentEngine {
             }
         }
         Some(cards::interrupted_note(&dispatched))
+    }
+
+    /// Whether any of `events` was put back by a turn that gave way to the
+    /// owner's message.
+    pub(super) async fn any_yielded(&self, events: &[crate::db::entities::personal_agent_event::Model]) -> bool {
+        let mut seen: Vec<i32> = Vec::new();
+        for b in events.iter().filter_map(|e| e.requeued_from) {
+            if seen.contains(&b) {
+                continue;
+            }
+            seen.push(b);
+            let why = svc::get_batch(&self.db.conn, b)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|batch| svc::batch_why(&batch));
+            if why.as_deref() == Some("preempted") {
+                return true;
+            }
+        }
+        false
     }
 
     /// The batches whose ledger a delivery re-delivering `direct` inherits:
@@ -2422,7 +2465,10 @@ impl PersonalAgentEngine {
                 text: o.body.clone(),
             });
         }
-        let text = cards::delivery_text(&cards_text, events_text.as_deref(), &owner_lines);
+        // Events that gave way to the owner's message follow it: the message
+        // is what cut in, the events are what it cut into.
+        let owner_first = !owners.is_empty() && self.any_yielded(&events).await;
+        let text = cards::delivery_text(&cards_text, events_text.as_deref(), &owner_lines, owner_first);
         // An event alone, no message: the reply answers that event.
         let auto_quote = if owners.is_empty() && event_lines.len() == 1 {
             event_lines[0].row_id
@@ -2528,6 +2574,7 @@ impl PersonalAgentEngine {
                 reply_token: reply.as_ref().map(|_| token.clone()),
                 auto_quote,
                 ledger_scope,
+                preempted: false,
             });
             st.last_error = None;
         }
@@ -2794,20 +2841,37 @@ impl PersonalAgentEngine {
     // ── a turn ends ─────────────────────────────────────────────────────────
 
     async fn finish_turn(&self, end: TurnEnd, seq: Option<u64>, capture: ReplyCapture) {
-        let turn = {
-            let mut st = self.state.lock().await;
-            let Some(turn) = st.turn.take() else {
-                return;
-            };
-            // Fence everything up to here: a second completion of this turn
-            // must not settle the next one.
-            let mark = seq.unwrap_or(u64::MAX).max(turn.start_seq);
-            st.fence.insert(turn.conn_id.clone(), mark);
-            turn
+        let Some(expected) = self.state.lock().await.turn.as_ref().map(|t| t.batch_id) else {
+            return;
         };
-        match turn.kind {
-            BatchKind::Delivery => self.finish_delivery(turn, end, capture).await,
-            BatchKind::Compaction => self.finish_compaction(turn, end).await,
+        // Settling is a delivery's turn too: no delivery starts while a
+        // turn's messages and events are still being settled or put back
+        // (a message that cut in would otherwise go out without the events
+        // it cut into, which arrive a turn late). A pump finding the lock
+        // taken runs again when this is done (`nudge` below) — so the lock
+        // is let go of BEFORE the nudge, or a pump woken by it would find
+        // the lock still taken and nobody to run it again.
+        {
+            let _settling = self.pump_lock.lock().await;
+            let turn = {
+                let mut st = self.state.lock().await;
+                // Still the turn this end was decided for.
+                if st.turn.as_ref().is_none_or(|t| t.batch_id != expected) {
+                    return;
+                }
+                let Some(turn) = st.turn.take() else {
+                    return;
+                };
+                // Fence everything up to here: a second completion of this turn
+                // must not settle the next one.
+                let mark = seq.unwrap_or(u64::MAX).max(turn.start_seq);
+                st.fence.insert(turn.conn_id.clone(), mark);
+                turn
+            };
+            match turn.kind {
+                BatchKind::Delivery => self.finish_delivery(turn, end, capture).await,
+                BatchKind::Compaction => self.finish_compaction(turn, end).await,
+            }
         }
         self.emit(PersonalAgentChange::Status);
         self.nudge();
@@ -2838,10 +2902,17 @@ impl PersonalAgentEngine {
         };
         let has_text = !content.text.trim().is_empty();
         let canceled = matches!(stop.as_deref(), Some("cancelled" | "canceled"));
+        // It was told to stop for the owner's message and did: not a
+        // failure, and not the owner's own stop either — its events ride
+        // with that message. A turn that ran to its end before the stop
+        // landed finished as any other.
+        let preempted = turn.preempted && canceled;
         let rejected = stop.as_deref() == Some("rejected");
-        let interrupted = lost.is_some() || turn.overflow || rejected
+        let interrupted = preempted || lost.is_some() || turn.overflow || rejected
             || (turn.error.is_some() && !has_text && !canceled);
-        let why = if turn.overflow {
+        let why = if preempted {
+            "preempted"
+        } else if turn.overflow {
             "overflow"
         } else if lost.is_some() {
             "connection"
@@ -2896,9 +2967,14 @@ impl PersonalAgentEngine {
                 None,
             )
             .await;
+            if preempted {
+                let _ = svc::set_batch_why(&self.db.conn, turn.batch_id, "preempted").await;
+            }
             self.interrupt_delivery(turn.batch_id, Some(turn.segment_id), why).await;
             if turn.overflow {
                 self.on_overflow(turn.segment_id).await;
+            } else if preempted {
+                // Nothing failed: the message that cut in is delivered next.
             } else if let Some(err) = turn.error.as_ref().or(lost.as_ref()) {
                 self.marker(
                     Some(turn.segment_id),
@@ -3207,8 +3283,170 @@ impl PersonalAgentEngine {
         }
         let row = self.push_row(row).await.ok_or("could not record the message")?;
         self.emit(PersonalAgentChange::Status);
+        let row = self.give_way_to(row, &blocks).await;
         self.nudge();
         Ok(row)
+    }
+
+    /// The owner's message comes first. With nothing in flight it is
+    /// delivered at once. A turn carrying no message of theirs (events, a
+    /// routine, a due item) is told to stop: when it does, it is recorded
+    /// as having given way and its events ride behind the message. A
+    /// compaction is never cut into. A turn carrying their earlier message
+    /// takes this one in while it runs, when the agent folds steered input
+    /// into the turn in flight; otherwise the message waits its turn.
+    async fn give_way_to(&self, row: TimelineRow, blocks: &[PromptInputBlock]) -> TimelineRow {
+        let turn = {
+            let st = self.state.lock().await;
+            st.turn.as_ref().map(|t| {
+                (
+                    t.kind,
+                    t.conn_id.clone(),
+                    t.owner_row_ids.is_empty(),
+                    t.preempted,
+                    t.batch_id,
+                    t.segment_id,
+                )
+            })
+        };
+        let Some((kind, conn_id, no_owner, preempted, batch_id, segment_id)) = turn else {
+            return row;
+        };
+        if kind != BatchKind::Delivery {
+            return row;
+        }
+        if no_owner {
+            if preempted {
+                return row;
+            }
+            {
+                let mut st = self.state.lock().await;
+                match st.turn.as_mut() {
+                    Some(t) if t.batch_id == batch_id => t.preempted = true,
+                    _ => return row,
+                }
+            }
+            if let Err(e) = self.manager.cancel(&self.db.conn, &conn_id).await {
+                // Gone already: the liveness check settles the turn, and
+                // the message goes out after it.
+                tracing::info!("[personal_agent] could not stop the turn for the owner's message: {e}");
+            }
+            return row;
+        }
+        // Claimed for the turn BEFORE it is handed over: should the turn end
+        // while the hand-over is under way, its settlement finds the row
+        // among its own (answered with it), and no pump finds it queued and
+        // sends it a second time. A hand-over that fails gives it back.
+        {
+            let mut st = self.state.lock().await;
+            match st.turn.as_mut() {
+                Some(t) if t.batch_id == batch_id => t.owner_row_ids.push(row.id),
+                _ => return row,
+            }
+        }
+        let _ = svc::move_owner_rows(
+            &self.db.conn,
+            &[row.id],
+            &[OwnerStatus::Queued],
+            OwnerStatus::Delivered,
+            Some(batch_id),
+            Some(segment_id),
+            ReadMark::Read,
+        )
+        .await;
+        match self.fold_into_turn(&row, blocks, &conn_id).await {
+            Ok(()) => {
+                // It is the running turn's now, marked as folded in for
+                // the page.
+                let mut data = row.data.clone().unwrap_or_else(|| serde_json::json!({}));
+                if let Some(map) = data.as_object_mut() {
+                    map.insert("merged".into(), true.into());
+                }
+                let _ = svc::update_row_data(&self.db.conn, row.id, None, Some(data)).await;
+            }
+            Err(e) => {
+                tracing::debug!("[personal_agent] the message waits for the turn: {e}");
+                {
+                    let mut st = self.state.lock().await;
+                    if let Some(t) = st.turn.as_mut().filter(|t| t.batch_id == batch_id) {
+                        t.owner_row_ids.retain(|id| *id != row.id);
+                    }
+                }
+                // Back in the queue, unread — from "answered" too, when the
+                // turn ended well meanwhile and settled the claim with its
+                // own rows: nothing of this one reached the agent, so it
+                // simply goes next. A turn that was INTERRUPTED meanwhile
+                // left it "interrupted" with the turn's other messages, to
+                // be sent again from the page like them: that stays — the
+                // owner may already have sent it again, and a copy queued
+                // here as well would reach the agent twice.
+                let _ = svc::move_owner_rows(
+                    &self.db.conn,
+                    &[row.id],
+                    &[OwnerStatus::Delivered, OwnerStatus::Answered],
+                    OwnerStatus::Queued,
+                    None,
+                    None,
+                    ReadMark::Unread,
+                )
+                .await;
+            }
+        }
+        let shown = match svc::get_row(&self.db.conn, row.id).await.ok().flatten() {
+            Some(m) => svc::to_row(m),
+            None => return row,
+        };
+        self.emit_rows(vec![shown.clone()]);
+        shown
+    }
+
+    /// Hand `row` to the turn in flight on `conn_id` as steered input, when
+    /// the agent takes it: its connection reports native steering, and it
+    /// is not a claude-agent-acp of 0.86.0 or earlier, which never answers a
+    /// folded prompt.
+    async fn fold_into_turn(
+        &self,
+        row: &TimelineRow,
+        blocks: &[PromptInputBlock],
+        conn_id: &str,
+    ) -> Result<(), String> {
+        let state = self
+            .manager
+            .get_state(conn_id)
+            .await
+            .ok_or("the connection is gone")?;
+        let (native, in_flight, info) = {
+            let s = state.read().await;
+            (s.native_steering_available, s.turn_in_flight, s.agent_info.clone())
+        };
+        if !native || !in_flight {
+            return Err("the agent does not fold input into a running turn".into());
+        }
+        if !steering_answers_folded_input(info.as_ref()) {
+            return Err("this adapter never answers a folded prompt".into());
+        }
+        let quote = match row.reply_to {
+            Some(id) => self.quote_excerpt(id).await.map(|text| (id, text)),
+            None => None,
+        };
+        let line = OwnerLine {
+            id: row.id,
+            quote,
+            text: row.body.clone(),
+        };
+        let text = cards::owner_message(&line);
+        // With attachments, the blocks ARE the wire payload: the text leads
+        // them, as it does in a delivery.
+        let more = (!blocks.is_empty()).then(|| {
+            let mut all = vec![PromptInputBlock::Text { text: text.clone() }];
+            all.extend(blocks.iter().cloned());
+            all
+        });
+        self.manager
+            .submit_feedback(conn_id, text, more)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// Stop the turn in flight, delivery or compaction.
@@ -3988,6 +4226,27 @@ pub async fn snapshot_any(
 /// dispatched (owner label check, for code that only has the state).
 pub fn is_dispatch_owner(owner_window_label: &str) -> bool {
     owner_window_label == DISPATCH_OWNER_LABEL
+}
+
+/// Whether the adapter `info` names (`(name, version)` from `agentInfo`)
+/// answers a prompt folded into a running turn. claude-agent-acp 0.86.0 and
+/// earlier never do (measured): a message folded in would wait for ever, so
+/// it queues instead. Any other adapter that reports native steering does;
+/// a claude-agent-acp whose version cannot be read is held to the queue.
+pub(super) fn steering_answers_folded_input(info: Option<&(String, String)>) -> bool {
+    const LAST_SILENT: &str = "0.86.0";
+    match info {
+        Some((name, version)) if name.ends_with("claude-agent-acp") => {
+            match semver::Version::parse(version.trim()) {
+                Ok(v) => {
+                    v.cmp_precedence(&semver::Version::parse(LAST_SILENT).expect("a version"))
+                        == std::cmp::Ordering::Greater
+                }
+                Err(_) => false,
+            }
+        }
+        _ => true,
+    }
 }
 
 #[cfg(test)]

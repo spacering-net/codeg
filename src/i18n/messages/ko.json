@@ -7948,7 +7948,8 @@
       "unread": "읽지 않음",
       "unfinished": "처리 미완료",
       "resend": "다시 보내기",
-      "resent": "다시 보냄"
+      "resent": "다시 보냄",
+      "merged": "진행 중인 답장에 합쳐졌습니다"
     },
     "quote": {
       "you": "나",
@@ -8008,6 +8009,7 @@
       "errorMidway": "답장 도중 오류가 발생했습니다: {error}",
       "interrupted": "이 답장은 완료되지 않았습니다: {reason}",
       "truncated": "답장이 길이 한도에 도달해 잘렸습니다",
+      "preempted": "보낸 메시지에 자리를 내주고 멈췄습니다",
       "resend": "{count, plural, other {메시지 #개 다시 보내기}}",
       "why": {
         "connection": "연결이 끊어졌습니다",
@@ -8063,6 +8065,7 @@
       "turnStopped": "답장이 중지되었습니다",
       "turnFailed": "답장이 실패했습니다: {error}",
       "turnInterrupted": "답장이 완료되지 않았습니다",
+      "turnPreempted": "답장이 보낸 메시지에 자리를 내주었습니다",
       "workdirChanged": "작업 디렉터리를 {path}(으)로 옮겼습니다"
     },
     "matters": {

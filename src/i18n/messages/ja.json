@@ -7948,7 +7948,8 @@
       "unread": "未読",
       "unfinished": "未完了",
       "resend": "再送信",
-      "resent": "再送信済み"
+      "resent": "再送信済み",
+      "merged": "進行中の返信に取り込まれました"
     },
     "quote": {
       "you": "あなた",
@@ -8008,6 +8009,7 @@
       "errorMidway": "返信の途中でエラーが発生しました：{error}",
       "interrupted": "この返信は完了しませんでした：{reason}",
       "truncated": "返信が長さの上限に達し、途中で切れました",
+      "preempted": "あなたのメッセージに道を譲って止まりました",
       "resend": "{count, plural, other {# 件のメッセージを再送信}}",
       "why": {
         "connection": "接続が切れました",
@@ -8063,6 +8065,7 @@
       "turnStopped": "返信が停止されました",
       "turnFailed": "返信に失敗しました：{error}",
       "turnInterrupted": "返信が完了しませんでした",
+      "turnPreempted": "返信があなたのメッセージに道を譲りました",
       "workdirChanged": "作業ディレクトリを {path} に移しました"
     },
     "matters": {
