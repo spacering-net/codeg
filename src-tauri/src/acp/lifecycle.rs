@@ -150,6 +150,29 @@ const HANDLE_EVENT_RETRY_BACKOFFS: &[Duration] =
 ///
 /// Final failure is logged at ERROR — this is the only signal the
 /// subscriber is dropping correctness on the floor, so it must be noisy.
+async fn acknowledge_turn_lifecycle(
+    manager: &ConnectionManager,
+    envelope: &EventEnvelope,
+    success: bool,
+) {
+    if !matches!(envelope.payload, AcpEvent::TurnComplete { .. }) {
+        return;
+    }
+    let Some(state) = manager.get_state(&envelope.connection_id).await else {
+        return;
+    };
+    let mut state = state.write().await;
+    if success {
+        state.lifecycle_completed_turn_seq = state.lifecycle_completed_turn_seq.max(envelope.seq);
+    } else {
+        state.lifecycle_turn_error = Some((
+            envelope.seq,
+            "child turn lifecycle persistence failed; continuation paused".into(),
+        ));
+    }
+    state.lifecycle_turn_notify.notify_waiters();
+}
+
 async fn handle_event_with_retry(
     db_conn: &DatabaseConnection,
     manager: &ConnectionManager,
@@ -157,7 +180,10 @@ async fn handle_event_with_retry(
     broker: Option<&Arc<DelegationBroker>>,
 ) {
     match handle_event(db_conn, manager, envelope, broker).await {
-        Ok(()) => return,
+        Ok(()) => {
+            acknowledge_turn_lifecycle(manager, envelope, true).await;
+            return;
+        }
         Err(e) => {
             tracing::warn!(
                 "[lifecycle][WARN] handle_event failed (attempt 1, will retry) for {:?}: {e}",
@@ -168,7 +194,10 @@ async fn handle_event_with_retry(
     for (attempt, backoff) in HANDLE_EVENT_RETRY_BACKOFFS.iter().enumerate() {
         tokio::time::sleep(*backoff).await;
         match handle_event(db_conn, manager, envelope, broker).await {
-            Ok(()) => return,
+            Ok(()) => {
+                acknowledge_turn_lifecycle(manager, envelope, true).await;
+                return;
+            }
             Err(e) => {
                 let attempt_num = attempt + 2;
                 let is_last = attempt + 1 == HANDLE_EVENT_RETRY_BACKOFFS.len();
@@ -196,6 +225,7 @@ async fn handle_event_with_retry(
                 .release_turn_status(envelope.seq, TurnStatusWriter::Lifecycle);
         }
     }
+    acknowledge_turn_lifecycle(manager, envelope, false).await;
 }
 
 /// The conversation status a `TurnComplete` with `stop_reason` leaves the row
@@ -428,13 +458,9 @@ pub(crate) async fn handle_event(
                     return Ok(());
                 };
                 let continues: Vec<String> = current.external_id.into_iter().collect();
-                let preserved = conversation_service::bind_external_id(
-                    db_conn,
-                    cid,
-                    transcript_id,
-                    &continues,
-                )
-                .await?;
+                let preserved =
+                    conversation_service::bind_external_id(db_conn, cid, transcript_id, &continues)
+                        .await?;
                 crate::commands::conversations::emit_conversation_upsert(&emitter, db_conn, cid)
                     .await;
                 crate::commands::conversations::emit_preserved_conversation(
@@ -1254,9 +1280,7 @@ fn skip_js_ws_and_comments(code: &str, mut i: usize) -> usize {
 fn is_line_terminator_start(b: &[u8], i: usize) -> bool {
     match b.get(i) {
         Some(b'\n' | b'\r') => true,
-        Some(0xE2) => {
-            b.get(i + 1) == Some(&0x80) && matches!(b.get(i + 2), Some(0xA8 | 0xA9))
-        }
+        Some(0xE2) => b.get(i + 1) == Some(&0x80) && matches!(b.get(i + 2), Some(0xA8 | 0xA9)),
         _ => false,
     }
 }
@@ -4354,7 +4378,10 @@ mod tests {
         let env = EventEnvelope {
             seq: 1,
             connection_id: "c1".to_string(),
-            payload: AcpEvent::ContentDelta { text: "hi".into(), parent_tool_use_id: None },
+            payload: AcpEvent::ContentDelta {
+                text: "hi".into(),
+                parent_tool_use_id: None,
+            },
         };
         handle_event(&db.conn, &mgr, &env, None).await.unwrap();
 

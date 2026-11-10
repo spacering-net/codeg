@@ -56,8 +56,12 @@ pub enum LiveContentBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_tool_use_id: Option<String>,
     },
-    ToolCallRef { tool_call_id: String },
-    Plan { entries: serde_json::Value },
+    ToolCallRef {
+        tool_call_id: String,
+    },
+    Plan {
+        entries: serde_json::Value,
+    },
 }
 
 /// 工具调用的运行态。turn 完成时统一 clear。
@@ -258,6 +262,8 @@ pub struct SessionState {
     pub connection_id: String,
     pub conversation_id: Option<i32>,
     pub external_id: Option<String>,
+    /// Messaging continuation must never replace missing agent context.
+    pub require_session_resume: bool,
     /// Wall-clock instant `external_id` last CHANGED value (SessionStarted
     /// for a new/loaded/forked session). The transcript watcher uses this as
     /// its re-arm epoch: records appended to the (forked) transcript between
@@ -837,6 +843,10 @@ pub struct SessionState {
     /// Which writer owns the conversation-status write of a `TurnComplete`,
     /// keyed by that event's envelope `seq`. See [`Self::claim_turn_status`].
     pub turn_status_claim: Option<(u64, TurnStatusWriter)>,
+    pub last_turn_complete_seq: u64,
+    pub lifecycle_completed_turn_seq: u64,
+    pub lifecycle_turn_error: Option<(u64, String)>,
+    pub lifecycle_turn_notify: Arc<tokio::sync::Notify>,
 }
 
 /// The two writers of a `TurnComplete`'s conversation status.
@@ -894,6 +904,7 @@ impl SessionState {
             connection_id,
             conversation_id: None,
             external_id: None,
+            require_session_resume: false,
             external_id_changed_at: None,
             agent_type,
             prompt_usage_mode: crate::acp::reported_usage::PromptUsageMode::default(),
@@ -972,6 +983,10 @@ impl SessionState {
             cli_run: None,
             cli_output_schema: None,
             turn_status_claim: None,
+            last_turn_complete_seq: 0,
+            lifecycle_completed_turn_seq: 0,
+            lifecycle_turn_error: None,
+            lifecycle_turn_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -1477,6 +1492,7 @@ impl SessionState {
                 }
             }
             AcpEvent::TurnComplete { stop_reason, .. } => {
+                self.last_turn_complete_seq = self.event_seq + 1;
                 // Diagnostic only (no behavior change): pairs with the
                 // StatusChanged log above. This is the ACTUAL point the turn
                 // settles (`self.status` flips to `Connected` right below,
@@ -3413,7 +3429,12 @@ mod tests {
             }
         }
         let mut s = fresh_state();
-        s.apply_event(&failure("t1:error", 5, "warning", "Reconnecting, attempt 5 of 5."));
+        s.apply_event(&failure(
+            "t1:error",
+            5,
+            "warning",
+            "Reconnecting, attempt 5 of 5.",
+        ));
 
         // A cancelled/failed/empty exit is NOT recovery — the incident (e.g.
         // reconnect attempts with the network still down) must stay active
@@ -4124,7 +4145,10 @@ mod tests {
             text: "Answer ".into(),
             parent_tool_use_id: None,
         });
-        s.apply_event(&AcpEvent::Thinking { text: "hmm".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::Thinking {
+            text: "hmm".into(),
+            parent_tool_use_id: None,
+        });
         s.apply_event(&AcpEvent::ContentDelta {
             text: "continues here".into(),
             parent_tool_use_id: None,
@@ -4320,9 +4344,18 @@ mod tests {
     #[test]
     fn thinking_delta_creates_separate_block_from_text() {
         let mut s = fresh_state();
-        s.apply_event(&AcpEvent::ContentDelta { text: "T".into(), parent_tool_use_id: None });
-        s.apply_event(&AcpEvent::Thinking { text: "X".into(), parent_tool_use_id: None });
-        s.apply_event(&AcpEvent::ContentDelta { text: "Y".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "T".into(),
+            parent_tool_use_id: None,
+        });
+        s.apply_event(&AcpEvent::Thinking {
+            text: "X".into(),
+            parent_tool_use_id: None,
+        });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "Y".into(),
+            parent_tool_use_id: None,
+        });
         let live = s.live_message.as_ref().unwrap();
         assert_eq!(live.content.len(), 3);
         match &live.content[0] {
@@ -4765,7 +4798,12 @@ mod tests {
         for i in 0..200 {
             run_tool_call(&mut s, &format!("tc-{i:04}"), 16 * 1024, true);
         }
-        run_tool_call(&mut s, "tc-huge", MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES + 1024, false);
+        run_tool_call(
+            &mut s,
+            "tc-huge",
+            MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES + 1024,
+            false,
+        );
 
         let snap = s.to_snapshot();
         let huge = snap
@@ -4940,7 +4978,10 @@ mod tests {
     #[test]
     fn turn_complete_clears_live_and_tool_calls_and_pending_permission() {
         let mut s = fresh_state();
-        s.apply_event(&AcpEvent::ContentDelta { text: "hi".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "hi".into(),
+            parent_tool_use_id: None,
+        });
         s.apply_event(&AcpEvent::ToolCall {
             tool_call_id: "tc-1".into(),
             title: "x".into(),
@@ -6106,7 +6147,10 @@ mod tests {
     fn plan_update_appends_at_end_replacing_existing() {
         use crate::acp::types::PlanEntryInfo;
         let mut s = fresh_state();
-        s.apply_event(&AcpEvent::ContentDelta { text: "A".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "A".into(),
+            parent_tool_use_id: None,
+        });
         s.apply_event(&AcpEvent::PlanUpdate {
             entries: vec![PlanEntryInfo {
                 content: "step v1".into(),
@@ -6114,7 +6158,10 @@ mod tests {
                 status: "pending".into(),
             }],
         });
-        s.apply_event(&AcpEvent::ContentDelta { text: "B".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "B".into(),
+            parent_tool_use_id: None,
+        });
         s.apply_event(&AcpEvent::PlanUpdate {
             entries: vec![PlanEntryInfo {
                 content: "step v2".into(),
@@ -6176,7 +6223,10 @@ mod tests {
     fn turn_complete_clears_plan_and_tool_refs() {
         use crate::acp::types::PlanEntryInfo;
         let mut s = fresh_state();
-        s.apply_event(&AcpEvent::ContentDelta { text: "x".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "x".into(),
+            parent_tool_use_id: None,
+        });
         s.apply_event(&tool_call_event("tc-1", "ls"));
         s.apply_event(&AcpEvent::PlanUpdate {
             entries: vec![PlanEntryInfo {
@@ -6206,7 +6256,10 @@ mod tests {
         let env = EventEnvelope {
             seq: 7,
             connection_id: "conn-x".into(),
-            payload: AcpEvent::ContentDelta { text: "abc".into(), parent_tool_use_id: None },
+            payload: AcpEvent::ContentDelta {
+                text: "abc".into(),
+                parent_tool_use_id: None,
+            },
         };
         let json = serde_json::to_string(&env).unwrap();
         let back: EventEnvelope = serde_json::from_str(&json).unwrap();

@@ -124,6 +124,23 @@ pub fn default_chat_channel_manager() -> ChatChannelManager {
     ChatChannelManager::new()
 }
 
+/// Shared child-message service for desktop and server listeners.
+pub fn build_subsession_messages(
+    manager: &ConnectionManager,
+    broker: Arc<DelegationBroker>,
+    conn: sea_orm::DatabaseConnection,
+    data_dir: PathBuf,
+) -> Arc<dyn crate::acp::subsession_messages::SubsessionMessageAccess> {
+    let db = Arc::new(AppDatabase { conn });
+    let runtime = Arc::new(crate::acp::subsession_runtime::AcpSubsessionRuntime::new(
+        Arc::new(manager.clone_ref()),
+        broker,
+        db.clone(),
+        Arc::new(data_dir),
+    ));
+    Arc::new(crate::acp::subsession_messages::SubsessionMessages::with_runtime(db, runtime))
+}
+
 /// Build the delegation broker + token registry + per-process UDS socket
 /// path. Shared between codeg-server bootstrap and the Tauri `setup` block
 /// so both modes apply identical depth limit + timeout defaults.

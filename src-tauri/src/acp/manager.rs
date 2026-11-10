@@ -10,11 +10,11 @@ use sea_orm::{
     TransactionTrait,
 };
 
+use crate::acp::agent_mentions::strip_route_separator_from_prompt;
 use crate::acp::connection::{
     spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction, SetterOutcome,
     SteerOutcome,
 };
-use crate::acp::agent_mentions::strip_route_separator_from_prompt;
 use crate::acp::error::AcpError;
 use crate::acp::feedback::{
     bounded_feedback_batch, FeedbackItem, FeedbackStatus, PendingFeedback,
@@ -609,16 +609,11 @@ impl ConnectionManager {
     /// Install the chat-channel manager exactly once during bootstrap so
     /// live title writes can sync bound forum topics. Calling twice is a
     /// no-op. Tests leave this unset and skip the remote sync.
-    pub fn install_chat_channel(
-        &self,
-        manager: crate::chat_channel::manager::ChatChannelManager,
-    ) {
+    pub fn install_chat_channel(&self, manager: crate::chat_channel::manager::ChatChannelManager) {
         let _ = self.chat_channel.set(manager);
     }
 
-    pub(crate) fn chat_channel(
-        &self,
-    ) -> Option<crate::chat_channel::manager::ChatChannelManager> {
+    pub(crate) fn chat_channel(&self) -> Option<crate::chat_channel::manager::ChatChannelManager> {
         self.chat_channel.get().map(|c| c.clone_ref())
     }
 
@@ -1158,7 +1153,12 @@ impl ConnectionManager {
             }
         }
         for (state, emitter, stale) in targets {
-            emit_with_state(&state, &emitter, AcpEvent::SessionConfigStale { stale, kind }).await;
+            emit_with_state(
+                &state,
+                &emitter,
+                AcpEvent::SessionConfigStale { stale, kind },
+            )
+            .await;
         }
         stale_count
     }
@@ -2181,6 +2181,88 @@ impl ConnectionManager {
             .map_err(|_| AcpError::protocol("Async task stop reply channel closed".to_string()))?
     }
 
+    /// Cancel and await the wire prompt response, rather than the eager UI event.
+    pub async fn cancel_and_wait(
+        &self,
+        db: &DatabaseConnection,
+        conn_id: &str,
+    ) -> Result<(), String> {
+        self.cancel(db, conn_id).await.map_err(|e| e.to_string())?;
+        self.wait_prompt_quiescence(conn_id).await
+    }
+
+    /// Wait until the prior turn's DB/broker lifecycle work has finished.
+    pub async fn wait_turn_lifecycle(&self, conn_id: &str) -> Result<(), String> {
+        let state = self
+            .get_state(conn_id)
+            .await
+            .ok_or("child connection disappeared before lifecycle settlement")?;
+        let (target, notify) = {
+            let state = state.read().await;
+            (
+                state.last_turn_complete_seq,
+                state.lifecycle_turn_notify.clone(),
+            )
+        };
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let notified = notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                {
+                    let state = state.read().await;
+                    if let Some((seq, error)) = &state.lifecycle_turn_error {
+                        if *seq >= target {
+                            return Err(error.clone());
+                        }
+                    }
+                    if state.lifecycle_completed_turn_seq >= target {
+                        return Ok(());
+                    }
+                }
+                notified.await;
+            }
+        })
+        .await
+        .map_err(|_| "child lifecycle did not settle; continuation paused".to_string())?
+    }
+
+    pub async fn wait_prompt_quiescence(&self, conn_id: &str) -> Result<(), String> {
+        let (reply, receiver) = tokio::sync::oneshot::channel();
+        {
+            let connections = self.connections.lock().await;
+            let conn = connections
+                .get(conn_id)
+                .ok_or("connection disappeared during cancellation")?;
+            conn.cmd_tx
+                .send(ConnectionCommand::AwaitPromptQuiescence { reply })
+                .await
+                .map_err(|_| "connection closed before cancellation settled")?;
+        }
+        receiver
+            .await
+            .map_err(|_| "connection closed before cancellation settled".to_string())?
+    }
+
+    pub async fn cancel_if_turn(
+        &self,
+        db: &DatabaseConnection,
+        conn_id: &str,
+        turns_completed: u64,
+    ) -> Result<(), AcpError> {
+        let lock = self.clone_prompt_lock(conn_id).await?;
+        let _lock = lock.lock().await;
+        let Some(state) = self.get_state(conn_id).await else {
+            return Ok(());
+        };
+        let state = state.read().await;
+        if !state.turn_in_flight || state.turns_completed != turns_completed {
+            return Ok(());
+        }
+        drop(state);
+        self.cancel(db, conn_id).await
+    }
+
     pub async fn cancel(&self, db: &DatabaseConnection, conn_id: &str) -> Result<(), AcpError> {
         let (cmd_tx, state_arc, emitter) = {
             let connections = self.connections.lock().await;
@@ -2969,13 +3051,7 @@ impl ConnectionManager {
         let grace_period = Duration::from_millis(500);
         let mut selectors_ready_at: Option<std::time::Instant> = None;
         loop {
-            let (
-                config_options,
-                modes,
-                available_commands,
-                prompt_capabilities,
-                selectors_ready,
-            ) = {
+            let (config_options, modes, available_commands, prompt_capabilities, selectors_ready) = {
                 let conns = self.connections.lock().await;
                 let conn = conns
                     .get(conn_id)
@@ -3324,9 +3400,7 @@ impl ConnectionManager {
     /// Block new connections from being established until the returned guard
     /// is dropped. The caller must enumerate live connections only AFTER
     /// holding this, never before.
-    pub async fn lock_out_new_connections(
-        &self,
-    ) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+    pub async fn lock_out_new_connections(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
         self.external_restore_lock.clone().write_owned().await
     }
 
@@ -3482,6 +3556,37 @@ impl ConnectionManager {
     /// image attachments) to deliver on the native wire instead of the bare
     /// `text` — `text` then serves as the recorded note. Only the native
     /// channel can carry blocks; see the pull-path gate below.
+    /// Immediate subsession messages must never degrade into pull feedback.
+    pub async fn submit_feedback_native_only(
+        &self,
+        conn_id: &str,
+        text: String,
+    ) -> Result<FeedbackItem, AcpError> {
+        if text.trim().is_empty() {
+            return Err(AcpError::InvalidFeedback("empty note".into()));
+        }
+        if text.chars().count() > MAX_FEEDBACK_CHARS {
+            return Err(AcpError::InvalidFeedback(format!(
+                "note exceeds {MAX_FEEDBACK_CHARS} characters"
+            )));
+        }
+        let (state, tx, emitter) = {
+            let conns = self.connections.lock().await;
+            let conn = conns
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+            (
+                conn.state.clone(),
+                conn.cmd_tx.clone(),
+                conn.emitter.clone(),
+            )
+        };
+        if !state.read().await.native_steering_available {
+            return Err(AcpError::FeedbackDisabled);
+        }
+        Self::submit_feedback_native(conn_id, state, tx, emitter, text, None).await
+    }
+
     pub async fn submit_feedback(
         &self,
         conn_id: &str,
@@ -3545,11 +3650,8 @@ impl ConnectionManager {
             return Err(AcpError::NoActiveTurn);
         }
 
-        let item = FeedbackItem::new_pending(
-            uuid::Uuid::new_v4().to_string(),
-            text,
-            chrono::Utc::now(),
-        );
+        let item =
+            FeedbackItem::new_pending(uuid::Uuid::new_v4().to_string(), text, chrono::Utc::now());
         // Gate on `turn_in_flight` and append in ONE critical section (via the
         // gated emit): a `TurnComplete` (flips the flag) or `UserMessage`
         // (clears `feedback`) can't slip between the gate and the append+seq, so
@@ -3717,9 +3819,9 @@ impl ConnectionManager {
                     })
                     .await
                     .map_err(|_| AcpError::ProcessExited)?;
-                let steer = reply_rx.await.map_err(|_| {
-                    AcpError::protocol("Steer reply channel closed".to_string())
-                })??;
+                let steer = reply_rx
+                    .await
+                    .map_err(|_| AcpError::protocol("Steer reply channel closed".to_string()))??;
                 match steer {
                     // Honored opt-in: the content was NOT consumed and is
                     // still host-owned. Surface the frontend's existing
@@ -4249,8 +4351,12 @@ impl ConnectionManager {
         // (disconnect removes it before this sweep), so tolerate `None`.
         if let Some((state, emitter)) = self.get_state_and_emitter(conn_id).await {
             for approval_id in drained {
-                emit_with_state(&state, &emitter, AcpEvent::PlanApprovalResolved { approval_id })
-                    .await;
+                emit_with_state(
+                    &state,
+                    &emitter,
+                    AcpEvent::PlanApprovalResolved { approval_id },
+                )
+                .await;
             }
         }
     }
@@ -4361,6 +4467,118 @@ pub struct ConnectionManagerSpawner {
     pub manager: Arc<ConnectionManager>,
     pub db: Arc<AppDatabase>,
     pub data_dir: Arc<PathBuf>,
+}
+
+impl ConnectionManagerSpawner {
+    pub async fn spawn_for_resume_strict(
+        &self,
+        parent_connection_id: &str,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        external_session_id: &str,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<
+        crate::acp::delegation::spawner::ResumedSpawn,
+        crate::acp::delegation::spawner::SpawnerError,
+    > {
+        self.spawn_resume_impl(
+            parent_connection_id,
+            agent_type,
+            working_dir,
+            external_session_id,
+            preferred_mode_id,
+            preferred_config_values,
+            true,
+        )
+        .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_resume_impl(
+        &self,
+        parent_connection_id: &str,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        external_session_id: &str,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        strict: bool,
+    ) -> Result<
+        crate::acp::delegation::spawner::ResumedSpawn,
+        crate::acp::delegation::spawner::SpawnerError,
+    > {
+        use crate::acp::delegation::spawner::{ResumedSpawn, SpawnerError};
+        // Same parent inheritance as `spawn` — a resumed child whose emitter is
+        // wired to a different broadcaster would stream to nobody.
+        let (emitter, owner_window, parent_working_dir) = {
+            let conns = self.manager.connections.lock().await;
+            let parent = conns.get(parent_connection_id).ok_or_else(|| {
+                SpawnerError::Spawn(format!(
+                    "parent connection {parent_connection_id} not found"
+                ))
+            })?;
+            let pwd = {
+                let s = parent.state.read().await;
+                s.working_dir
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+            };
+            (
+                parent.emitter.clone(),
+                parent.owner_window_label.clone(),
+                pwd,
+            )
+        };
+        let effective_working_dir = working_dir.or(parent_working_dir);
+
+        let mut runtime_env = crate::commands::acp::build_session_runtime_env(
+            &self.db,
+            agent_type,
+            None,
+            self.data_dir.as_path(),
+        )
+        .await
+        .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+
+        if strict {
+            runtime_env.insert("CODEG_ACP_REQUIRE_RESUME".into(), "1".into());
+        }
+
+        // `session_id = Some(..)` is the whole difference vs `spawn`: the
+        // connection loads the child's prior agent session (and its context)
+        // instead of minting a fresh one — unless a live connection already
+        // represents that session (e.g. the user has the canceled child open
+        // in a tab), which the dedup hands back instead. The broker must know
+        // which, because its failure teardown may only disconnect a connection
+        // this call actually created; and a reused connection must not take
+        // the parent's CLI run tag, or the run's policy would answer the cards
+        // of a session a person is driving. `reused` is the dedup's own
+        // verdict, so a connection appearing just before the spawn cannot slip
+        // past it.
+        let outcome = self
+            .manager
+            .spawn_agent_with_outcome(
+                agent_type,
+                effective_working_dir,
+                Some(external_session_id.to_string()),
+                runtime_env,
+                owner_window,
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+            )
+            .await
+            .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+        if !outcome.reused {
+            self.manager
+                .inherit_cli_run_tag(parent_connection_id, &outcome.connection_id)
+                .await;
+        }
+        Ok(ResumedSpawn {
+            connection_id: outcome.connection_id,
+            reused: outcome.reused,
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -4501,75 +4719,20 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         external_session_id: &str,
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
-    ) -> Result<crate::acp::delegation::spawner::ResumedSpawn, crate::acp::delegation::spawner::SpawnerError>
-    {
-        use crate::acp::delegation::spawner::{ResumedSpawn, SpawnerError};
-        // Same parent inheritance as `spawn` — a resumed child whose emitter is
-        // wired to a different broadcaster would stream to nobody.
-        let (emitter, owner_window, parent_working_dir) = {
-            let conns = self.manager.connections.lock().await;
-            let parent = conns.get(parent_connection_id).ok_or_else(|| {
-                SpawnerError::Spawn(format!(
-                    "parent connection {parent_connection_id} not found"
-                ))
-            })?;
-            let pwd = {
-                let s = parent.state.read().await;
-                s.working_dir
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string())
-            };
-            (
-                parent.emitter.clone(),
-                parent.owner_window_label.clone(),
-                pwd,
-            )
-        };
-        let effective_working_dir = working_dir.or(parent_working_dir);
-
-        let runtime_env = crate::commands::acp::build_session_runtime_env(
-            &self.db,
+    ) -> Result<
+        crate::acp::delegation::spawner::ResumedSpawn,
+        crate::acp::delegation::spawner::SpawnerError,
+    > {
+        self.spawn_resume_impl(
+            parent_connection_id,
             agent_type,
-            None,
-            self.data_dir.as_path(),
+            working_dir,
+            external_session_id,
+            preferred_mode_id,
+            preferred_config_values,
+            false,
         )
         .await
-        .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
-
-        // `session_id = Some(..)` is the whole difference vs `spawn`: the
-        // connection loads the child's prior agent session (and its context)
-        // instead of minting a fresh one — unless a live connection already
-        // represents that session (e.g. the user has the canceled child open
-        // in a tab), which the dedup hands back instead. The broker must know
-        // which, because its failure teardown may only disconnect a connection
-        // this call actually created; and a reused connection must not take
-        // the parent's CLI run tag, or the run's policy would answer the cards
-        // of a session a person is driving. `reused` is the dedup's own
-        // verdict, so a connection appearing just before the spawn cannot slip
-        // past it.
-        let outcome = self
-            .manager
-            .spawn_agent_with_outcome(
-                agent_type,
-                effective_working_dir,
-                Some(external_session_id.to_string()),
-                runtime_env,
-                owner_window,
-                emitter,
-                preferred_mode_id,
-                preferred_config_values,
-            )
-            .await
-            .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
-        if !outcome.reused {
-            self.manager
-                .inherit_cli_run_tag(parent_connection_id, &outcome.connection_id)
-                .await;
-        }
-        Ok(ResumedSpawn {
-            connection_id: outcome.connection_id,
-            reused: outcome.reused,
-        })
     }
 
     async fn send_resume_prompt(
@@ -4618,6 +4781,17 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
             .map_err(|e| crate::acp::delegation::spawner::SpawnerError::Cancel(e.to_string()))
     }
 
+    async fn cancel_if_turn(
+        &self,
+        conn_id: &str,
+        turns_completed: u64,
+    ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
+        self.manager
+            .cancel_if_turn(&self.db.conn, conn_id, turns_completed)
+            .await
+            .map_err(|e| crate::acp::delegation::spawner::SpawnerError::Spawn(e.to_string()))
+    }
+
     async fn disconnect(
         &self,
         conn_id: &str,
@@ -4660,10 +4834,7 @@ pub struct ConnectionManagerFeedbackLookup {
 
 #[async_trait::async_trait]
 impl SessionFeedbackAccess for ConnectionManagerFeedbackLookup {
-    async fn read_pending_feedback(
-        &self,
-        parent_connection_id: &str,
-    ) -> Vec<PendingFeedback> {
+    async fn read_pending_feedback(&self, parent_connection_id: &str) -> Vec<PendingFeedback> {
         self.manager
             .read_pending_feedback(parent_connection_id)
             .await
@@ -5959,8 +6130,9 @@ mod tests {
         mut rx: tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>,
         expected: GoalControlAction,
         landed: bool,
-    ) -> tokio::task::JoinHandle<tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>>
-    {
+    ) -> tokio::task::JoinHandle<
+        tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>,
+    > {
         tokio::spawn(async move {
             match rx.recv().await.expect("goal control enqueued") {
                 ConnectionCommand::GoalControl { action, reply } => {
@@ -11125,7 +11297,73 @@ mod tests {
             .await
             .is_empty());
         // Commit on a missing connection is a safe no-op.
-        mgr.commit_feedback_delivered("nope", vec!["x".into()]).await;
+        mgr.commit_feedback_delivered("nope", vec!["x".into()])
+            .await;
+    }
+}
+
+#[cfg(test)]
+mod subsession_ordering_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn delayed_original_cancellation_does_not_stop_a_later_turn() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let manager = ConnectionManager::new();
+        let mut commands = manager
+            .insert_test_connection_live("child", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        let state = manager.get_state("child").await.unwrap();
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.turns_completed = 1;
+        }
+        manager.cancel_if_turn(&db.conn, "child", 0).await.unwrap();
+        assert!(matches!(
+            commands.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        manager.cancel_if_turn(&db.conn, "child", 1).await.unwrap();
+        assert!(matches!(
+            commands.recv().await,
+            Some(ConnectionCommand::Cancel)
+        ));
     }
 
+    #[tokio::test]
+    async fn child_continuation_waits_for_lifecycle_persistence() {
+        let manager = Arc::new(ConnectionManager::new());
+        manager
+            .insert_test_connection("child", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        let state = manager.get_state("child").await.unwrap();
+        let mut events = state.read().await.event_stream().subscribe();
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::TurnComplete {
+                session_id: "original".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "codex".into(),
+            },
+        )
+        .await;
+        let completion = events.recv().await.unwrap();
+        assert_eq!(state.read().await.last_turn_complete_seq, completion.seq);
+        assert!(completion.seq > 0);
+        let waiter = manager.clone();
+        let mut waiting = tokio::spawn(async move { waiter.wait_turn_lifecycle("child").await });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut waiting)
+                .await
+                .is_err()
+        );
+        {
+            let mut state = state.write().await;
+            state.lifecycle_completed_turn_seq = completion.seq;
+            state.lifecycle_turn_notify.notify_waiters();
+        }
+        waiting.await.unwrap().unwrap();
+    }
 }

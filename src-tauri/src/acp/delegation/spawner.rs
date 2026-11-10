@@ -184,6 +184,15 @@ pub trait ConnectionSpawner: Send + Sync {
     /// calling on a connection with nothing in flight is a no-op success.
     async fn cancel(&self, conn_id: &str) -> Result<(), SpawnerError>;
 
+    /// Cancel only the retained original turn, never a later messaging prompt.
+    async fn cancel_if_turn(
+        &self,
+        conn_id: &str,
+        _turns_completed: u64,
+    ) -> Result<(), SpawnerError> {
+        self.cancel(conn_id).await
+    }
+
     /// Tear down the child connection. Always called after the broker has
     /// resolved (or failed) the pending call, to enforce v1's one-shot
     /// semantics.
@@ -400,9 +409,7 @@ pub mod mock {
                 .lock()
                 .await
                 .pop_front()
-                .unwrap_or_else(|| {
-                    Err(SpawnerError::Spawn("no queued resume spawn result".into()))
-                })
+                .unwrap_or_else(|| Err(SpawnerError::Spawn("no queued resume spawn result".into())))
         }
 
         async fn send_resume_prompt(

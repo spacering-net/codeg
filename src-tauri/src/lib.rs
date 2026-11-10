@@ -1340,6 +1340,12 @@ mod tauri_app {
                                 manager: std::sync::Arc::new(cm_state.clone_ref()),
                             },
                         ),
+                        crate::app_state::build_subsession_messages(
+                            &cm_state,
+                            broker.clone(),
+                            db_conn.clone(),
+                            effective_data_dir.clone(),
+                        ),
                     );
                     // Bind through the service handle rather than a bare
                     // `listener.run` spawn: it keeps the bind error and the

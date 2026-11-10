@@ -1,7 +1,7 @@
 [
   {
     "name": "delegate_to_agent",
-    "description": "Hand off a self-contained sub-task to a separate local AI agent that runs in its own session. ASYNCHRONOUS: returns a task_id right away and the sub-agent keeps working in the background — this call never blocks. So you can fan out several delegations at once and keep working, then collect the results with get_delegation_status by passing the task_ids array (one id to poll a single task, or many at once to poll the whole fan-out in one call) — or stop one early with cancel_delegation(task_id). The sub-agent CANNOT see this conversation, your open files, or earlier turns — it starts cold, so `task` must carry everything it needs. Best for independent, parallelizable work you can describe up front; not for steps that need your ongoing back-and-forth. RECOGNIZING AN EXPLICIT DELEGATION REQUEST: the user can name a sub-agent directly in their message — it appears as `@AgentName` or as a Markdown link `[@AgentName](codeg://agent/<agent_type>)`. Such a mention IS an explicit instruction to delegate the associated work to that agent, even when the user never names this tool. If the message names several agents, make one call per agent, each carrying that agent's slice of the work.",
+    "description": "Hand off a self-contained sub-task to a separate local AI agent that runs in its own session. ASYNCHRONOUS: returns a task_id right away and the sub-agent keeps working in the background — this call never blocks. So you can fan out several delegations at once and keep working, then collect the results with get_delegation_status by passing the task_ids array (one id to poll a single task, or many at once to poll the whole fan-out in one call) — or stop one early with cancel_delegation(task_id). The sub-agent CANNOT see this conversation, your open files, or earlier turns — it starts cold, so `task` must carry everything it needs. For follow-up work in this SAME child context, use send_to_subsession with its child_conversation_id. Manage queued messages and collect follow-up results with manage_subsession_messages; do not create another child for each reply. RECOGNIZING AN EXPLICIT DELEGATION REQUEST: the user can name a sub-agent directly in their message — it appears as `@AgentName` or as a Markdown link `[@AgentName](codeg://agent/<agent_type>)`. Such a mention IS an explicit instruction to delegate the associated work to that agent, even when the user never names this tool. If the message names several agents, make one call per agent, each carrying that agent's slice of the work.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -89,7 +89,7 @@
   },
   {
     "name": "resume_delegation",
-    "description": "Resume a delegated task that was INTERRUPTED — canceled, or cut off when a session/app terminated unexpectedly — so its sub-agent picks the ORIGINAL task back up in its own session with all prior context and work intact, under the SAME task_id (keep collecting it with get_delegation_status, or stop it again with cancel_delegation). STRICT SCOPE: this tool ONLY revives interrupted work; it takes no task text and must NOT be used to iterate on, extend, retry, or redo a task. A task that is still running, or that already finished on its own (completed or failed), is refused with error_code \"not_resumable\" and its actual status — for follow-up or retry work, start a fresh delegate_to_agent call instead. The optional `reason` is context about WHY the run is being resumed (e.g. \"the app was killed mid-run\"), passed to the sub-agent as interruption context — never new instructions.",
+    "description": "Resume a delegated task that was INTERRUPTED — canceled, or cut off when a session/app terminated unexpectedly — so its sub-agent picks the ORIGINAL task back up in its own session with all prior context and work intact, under the SAME task_id (keep collecting it with get_delegation_status, or stop it again with cancel_delegation). STRICT SCOPE: this tool ONLY revives interrupted work; it takes no task text and must NOT be used to iterate on, extend, retry, or redo a task. A task that is still running, or that already finished on its own (completed or failed), is refused with error_code \"not_resumable\" and its actual status — for follow-up or retry work in the same child context, use send_to_subsession with its child_conversation_id instead. The optional `reason` is context about WHY the run is being resumed (e.g. \"the app was killed mid-run\"), passed to the sub-agent as interruption context — never new instructions.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -117,7 +117,7 @@
   },
   {
     "name": "ask_user_question",
-    "description": "Ask the user one or more multiple-choice questions and BLOCK until they answer. The questions render as interactive cards above the user's input box; this call returns only once the user submits their choices (or dismisses the card). Use ONLY when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults (e.g. which approach, which format, which library, which of several files). Do NOT use it to ask 'should I proceed?' or to confirm an obvious default, and do NOT use it for open-ended questions that aren't a small set of discrete choices. The user can always pick 'Other' and type a custom answer, so don't add your own 'Other' option. If you want to recommend a choice, put it first and append ' (Recommended)' to its label. Prefer ONE call with a few related questions over many sequential calls. Once the user has answered \u2014 including picking a recommended option or telling you to proceed \u2014 act on the answer immediately. Do NOT call this tool again to confirm execution or to ask whether you should proceed.",
+    "description": "Ask the user one or more multiple-choice questions and BLOCK until they answer. The questions render as interactive cards above the user's input box; this call returns only once the user submits their choices (or dismisses the card). Use ONLY when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults (e.g. which approach, which format, which library, which of several files). Do NOT use it to ask 'should I proceed?' or to confirm an obvious default, and do NOT use it for open-ended questions that aren't a small set of discrete choices. The user can always pick 'Other' and type a custom answer, so don't add your own 'Other' option. If you want to recommend a choice, put it first and append ' (Recommended)' to its label. Prefer ONE call with a few related questions over many sequential calls. Once the user has answered — including picking a recommended option or telling you to proceed — act on the answer immediately. Do NOT call this tool again to confirm execution or to ask whether you should proceed.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -1391,6 +1391,88 @@
           "description": "The text to put on the clipboard."
         }
       }
+    }
+  },
+  {
+    "name": "send_to_subsession",
+    "description": "Send a new message to an existing child conversation in the same child context, agent, and working directory. Returns message_id and per-message state/result. delivery defaults to queue: wait until the current round completes. Explicit immediate uses native steering when available; otherwise cancel the current round, wait for it to finish, then send in the same context. Read subsequent state/results with manage_subsession_messages.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["child_conversation_id", "message"],
+      "properties": {
+        "child_conversation_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "delivery": {
+          "type": "string",
+          "enum": ["queue", "immediate"],
+          "default": "queue"
+        }
+      }
+    }
+  },
+  {
+    "name": "manage_subsession_messages",
+    "description": "List messages and their individual states/results for an existing child conversation. Update or cancel only queued messages that have not started; message_id is required for update/cancel and message is required for update. Started messages cannot be edited or canceled by this queue-management tool. The child keeps its existing context.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["child_conversation_id", "action"],
+      "properties": {
+        "child_conversation_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "action": {
+          "type": "string",
+          "enum": ["list", "update", "cancel"]
+        },
+        "message_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": ["update", "cancel"]
+              }
+            }
+          },
+          "then": {
+            "required": ["message_id"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "update"
+              }
+            }
+          },
+          "then": {
+            "required": ["message"]
+          }
+        }
+      ]
     }
   }
 ]

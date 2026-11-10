@@ -500,6 +500,7 @@ mod tests {
             Arc::new(Stub),
             Arc::new(crate::acp::computer_tools::NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
+            Arc::new(crate::acp::subsession_messages::NoSubsessionMessages),
         );
         DelegationService::new(listener, socket_path)
     }
