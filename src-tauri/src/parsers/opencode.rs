@@ -2662,11 +2662,12 @@ async fn load_media_blobs(conn: &DatabaseConnection, hashes: &[String]) -> Media
 ///
 /// OpenCode 2.2.5 added the table and reads an assistant message's content
 /// from it whenever the message has rows there (`core/src/session/history.ts`,
-/// `withParts`): the rows' data, in order, replaces the message's inline
-/// `content`. 2.2.5 itself writes rows only for a message that already has
-/// some, and then leaves `content: []` in its `session_message` row; its own
-/// comment reserves the table for "a newer release" that moves a message's
-/// parts there. Its rows carry each part whole, `type` included, and the row's
+/// `withParts`; see [`splice_v2_parts`] for how the rows and the inline
+/// `content` combine). 2.2.5 itself writes rows only for a message that
+/// already has some. 2.2.6 writes every new assistant part as a row when
+/// `experimental.part_rows` is on (off by default), moving a message's inline
+/// parts there on its first part write and leaving `content: []` in its
+/// `session_message` row. Its rows carry each part whole, `type` included, and the row's
 /// `type` column says the same, so the column only fills a part that lacks one.
 /// A database from before 2.2.5 has no such table, so a failed read leaves
 /// every message as it is stored inline.
@@ -2716,16 +2717,21 @@ async fn load_v2_session_parts(
 }
 
 /// Give `message` the content parts its `session_part` rows hold, the way
-/// OpenCode reads it: only a message that has rows there, and only in place of
-/// a `content` its data already carries.
+/// OpenCode 2.2.6 reads it (`withParts`): only a message that has rows there,
+/// whose content becomes those parts followed by any inline `content` array it
+/// still carries. 2.2.5 replaced the inline array with the parts, and only when
+/// the message had one. The two readings differ only for a message with both,
+/// which an older build leaves when it writes inline content into a message
+/// that already has rows; 2.2.6 keeps both for that case, rows first.
 fn splice_v2_parts(message: &mut serde_json::Value, parts: Option<Vec<serde_json::Value>>) {
-    let Some(parts) = parts else {
+    let Some(mut parts) = parts else {
         return;
     };
     if let Some(fields) = message.as_object_mut() {
-        if fields.contains_key("content") {
-            fields.insert("content".to_string(), serde_json::Value::Array(parts));
+        if let Some(serde_json::Value::Array(inline)) = fields.remove("content") {
+            parts.extend(inline);
         }
+        fields.insert("content".to_string(), serde_json::Value::Array(parts));
     }
 }
 
@@ -5187,26 +5193,37 @@ mod tests {
         );
     }
 
-    /// Parts replace a `content` the message carries and nothing else, as
-    /// OpenCode's `withParts` (`"content" in row.data`) does; no rows, no change.
+    /// Parts come first and an inline `content` array the message still carries
+    /// follows them, as OpenCode 2.2.6's `withParts` reads it; a message with no
+    /// `content` (or a non-array one) gets the parts alone; no rows, no change.
     #[test]
-    fn session_parts_only_replace_a_content_the_message_carries() {
+    fn session_parts_come_before_the_inline_content() {
         let part = serde_json::json!({ "type": "text", "text": "from the part" });
+        let inline = serde_json::json!({ "type": "text", "text": "inline" });
 
-        let mut with_content =
-            serde_json::json!({ "content": [{ "type": "text", "text": "inline" }] });
+        let mut with_content = serde_json::json!({ "content": [inline.clone()] });
         super::splice_v2_parts(&mut with_content, Some(vec![part.clone()]));
-        assert_eq!(with_content["content"], serde_json::json!([part]));
-
-        let mut without_content = serde_json::json!({ "error": { "type": "aborted" } });
-        super::splice_v2_parts(&mut without_content, Some(vec![part]));
         assert_eq!(
-            without_content,
-            serde_json::json!({ "error": { "type": "aborted" } })
+            with_content["content"],
+            serde_json::json!([part.clone(), inline.clone()])
         );
 
-        let mut untouched =
-            serde_json::json!({ "content": [{ "type": "text", "text": "inline" }] });
+        let mut empty_content = serde_json::json!({ "content": [] });
+        super::splice_v2_parts(&mut empty_content, Some(vec![part.clone()]));
+        assert_eq!(empty_content["content"], serde_json::json!([part.clone()]));
+
+        let mut without_content = serde_json::json!({ "error": { "type": "aborted" } });
+        super::splice_v2_parts(&mut without_content, Some(vec![part.clone()]));
+        assert_eq!(
+            without_content,
+            serde_json::json!({ "error": { "type": "aborted" }, "content": [part.clone()] })
+        );
+
+        let mut null_content = serde_json::json!({ "content": null });
+        super::splice_v2_parts(&mut null_content, Some(vec![part.clone()]));
+        assert_eq!(null_content["content"], serde_json::json!([part]));
+
+        let mut untouched = serde_json::json!({ "content": [inline] });
         super::splice_v2_parts(&mut untouched, None);
         assert_eq!(untouched["content"][0]["text"], "inline");
     }
