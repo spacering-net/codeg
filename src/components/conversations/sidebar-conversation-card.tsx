@@ -384,12 +384,13 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       "rounded-full",
                       "pr-[0.25rem]"
                     )}
-                    // Rail-axis-relative left padding (was a fixed `pl-7`): at depth 0
-                    // this resolves to 0.875rem + 0.875rem = 1.75rem (= pl-7), so root
-                    // rows are pixel-identical; deeper rows inherit the shifted var.
+                    // Parents reserve room for both the persistent chevron and
+                    // their agent icon. Leaves keep the existing rail spacing.
                     style={{
                       paddingLeft:
-                        "calc(var(--conv-rail-axis, 0.875rem) + 0.875rem)",
+                        hasChildren && onToggleExpand
+                          ? "calc(var(--conv-rail-axis, 0.875rem) + 1.875rem)"
+                          : "calc(var(--conv-rail-axis, 0.875rem) + 0.875rem)",
                     }}
                   >
                     {/* Ancestor guide rails (depth ≥ 1): keep each parent's vertical
@@ -412,18 +413,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       }}
                     />
                     <div
-                      className={cn(
-                        "pointer-events-none absolute top-1/2 z-10 flex items-center justify-center",
-                        // With children, the row hover (or focus) swaps this agent
-                        // icon out for the expand chevron at the same spot — fade it
-                        // so the two cross-fade in place. On touch (no hover) the
-                        // chevron is always shown, so the icon is always hidden.
-                        hasChildren &&
-                          onToggleExpand &&
-                          "transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0 [@media(hover:none)]:opacity-0"
-                      )}
+                      className="pointer-events-none absolute top-1/2 z-10 flex items-center justify-center"
                       style={{
-                        left: "var(--conv-rail-axis, 0.875rem)",
+                        left:
+                          hasChildren && onToggleExpand
+                            ? "calc(var(--conv-rail-axis, 0.875rem) + 1rem)"
+                            : "var(--conv-rail-axis, 0.875rem)",
                         width: "0.875rem",
                         height: "0.875rem",
                         transform: "translate(-50%, -50%)",
@@ -462,6 +457,18 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       {formatConversationTitle(conversation.title) ||
                         t("untitledConversation")}
                     </span>
+                    {hasChildren && conversation.child_count > 0 && (
+                      <span
+                        className="relative -ml-1 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded bg-sidebar-accent px-1 text-[0.625rem] font-medium text-muted-foreground tabular-nums"
+                        title={
+                          expanded
+                            ? t("collapseSubsessions")
+                            : t("expandSubsessions")
+                        }
+                      >
+                        {conversation.child_count}
+                      </span>
+                    )}
                     {/* Inline, inside the row's fixed 2rem height: the list's
                     virtualizer and rail geometry assume one line per row. The
                     full set of tags is in the hover bubble. Capped so the
@@ -495,13 +502,9 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     the hover bubble names the original path instead. */}
                   </button>
 
-                  {/* Expand/collapse affordance for delegation children. It overlays
-                  the agent icon at the rail axis: idle shows the icon, and
-                  hovering (or focusing) the row swaps in this chevron at the very
-                  same spot while the icon fades. A sibling of the row button (HTML
-                  forbids nested buttons) with `stopPropagation` so a toggle never
-                  selects the row; pointer events stay off until revealed so a
-                  click on the icon area still selects the row when not hovering. */}
+                  {/* Keep the child toggle visible at the rail axis, alongside
+                  the agent icon. It is a sibling of the row button so expanding
+                  a subtree never selects the conversation. */}
                   {hasChildren && onToggleExpand && (
                     <button
                       type="button"
@@ -520,14 +523,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                           ? t("collapseSubsessions")
                           : t("expandSubsessions")
                       }
-                      className={cn(
-                        "absolute top-0 bottom-0 z-20 flex items-center justify-center",
-                        "cursor-pointer outline-none",
-                        "opacity-0 pointer-events-none transition-opacity duration-150",
-                        "group-hover:opacity-100 group-hover:pointer-events-auto",
-                        "group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
-                        "[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
-                      )}
+                      className="absolute top-0 bottom-0 z-20 flex cursor-pointer items-center justify-center rounded-sm text-sidebar-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
                       style={{
                         left: "var(--conv-rail-axis, 0.875rem)",
                         width: "0.875rem",
@@ -537,7 +533,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       <ChevronRight
                         aria-hidden
                         className={cn(
-                          "h-3 w-3 shrink-0 text-muted-foreground/70",
+                          "h-3.5 w-3.5 shrink-0",
                           "transition-transform duration-200 ease-out",
                           expanded && "rotate-90"
                         )}
