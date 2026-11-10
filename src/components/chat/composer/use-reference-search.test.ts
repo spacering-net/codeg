@@ -461,11 +461,11 @@ describe("useReferenceSearch", () => {
       .mockResolvedValue({ entries: [], has_upstream: false })
   })
 
-  it("prepares native storage without transferring files until the file group is requested", async () => {
+  it("starts no discovery or prewarm until the file group is requested", async () => {
     const { result } = renderHook(() =>
       useReferenceSearch({ defaultPath: "/repo" })
     )
-    expect(mocks.prepareWorkspaceFileSearch).toHaveBeenCalledWith("/repo")
+    expect(mocks.prepareWorkspaceFileSearch).not.toHaveBeenCalled()
     expect(mocks.searchWorkspaceFiles).not.toHaveBeenCalled()
     await act(async () => {
       await result.current("a", undefined, ["agent"])

@@ -676,29 +676,12 @@ pub async fn cancel_workspace_file_search(request: SearchRequest) -> Result<(), 
     Ok(())
 }
 
-/// Prewarm only native, budgeted storage. Return no file list to the renderer.
+/// Compatibility endpoint for older clients. Discovery is now owned by an
+/// actual foreground query and its cancellation token; mounting a composer
+/// must never start an uncancellable full-workspace traversal.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn prepare_workspace_file_search(path: String) {
-    if path.trim().is_empty() {
-        return;
-    }
-    let Ok(mut cache) = CACHE.try_lock() else {
-        return;
-    };
-    tokio::task::spawn_blocking(move || {
-        search_or_build(
-            &mut cache,
-            path,
-            SearchOptions {
-                query: "",
-                limit: 0,
-                files_only: false,
-                refresh: false,
-            },
-            INDEX_BUDGET,
-            &SearchControl::default(),
-        );
-    });
+    drop(path);
 }
 
 #[cfg(test)]

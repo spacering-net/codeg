@@ -4,12 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
 
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import type { FlatFileEntry } from "@/hooks/use-file-tree"
-import {
-  gitLog,
-  listAllConversations,
-  prepareWorkspaceFileSearch,
-  searchWorkspaceFiles,
-} from "@/lib/api"
+import { gitLog, listAllConversations, searchWorkspaceFiles } from "@/lib/api"
 import type {
   AcpAgentInfo,
   AssistantInfo,
@@ -260,9 +255,6 @@ export function useReferenceSearch({
 }: UseReferenceSearchOptions): ReferenceSearch {
   const path = defaultPath || null
 
-  useEffect(() => {
-    if (enabled && path) void prepareWorkspaceFileSearch(path).catch(() => {})
-  }, [enabled, path])
   const { agents } = useAcpAgents()
   const assistants = useAssistants()
 

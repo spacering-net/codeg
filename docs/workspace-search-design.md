@@ -7,6 +7,26 @@ and traversal under a global mutex are still present; the proposed replacement
 below must land and pass the acceptance tests before this PR becomes ready.
 The WebKit, Tauri callback, and highlighting splits are independent of this work.
 
+## Current experiment: no eager discovery
+
+The 0.42.2 experiment initially included only the other three splits. It still
+issued full `list_workspace_files` requests when composers mounted. An isolated
+read-only client issued eight of those requests during startup; a previous
+measurement of the user's workspace counted 5,308,089 entries and a 970,417,831
+byte response. That path is sufficient to multiply gigabytes of path strings
+and objects across composers.
+
+The experimental integration now uses this draft's bounded native queries.
+Mounting a composer or picker never schedules a prewarm. The legacy prepare
+endpoint is a no-op for compatibility; only an actual query owns a discovery
+and cancellation token. Closed search dialogs do not request results.
+
+This removes eager full-workspace payloads from the renderer. It does not
+resolve this draft's remaining single-root cache, global query admission, or
+repeated over-budget traversal issues. Those remain merge blockers. Reintroduce
+background prewarming only after the lifecycle/scheduling design below is
+implemented and validated.
+
 ## Foreground work must not wait for background traversal
 
 Separate the short-held cache/registry mutex from traversal and scoring. The

@@ -53,7 +53,7 @@ describe("bounded workspace file search", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(150)
     })
-    expect(api.prepare).toHaveBeenCalledOnce()
+    expect(api.prepare).not.toHaveBeenCalled()
     expect(api.search).toHaveBeenCalledExactlyOnceWith("/repo", "auth", {
       limit: 100,
       filesOnly: false,

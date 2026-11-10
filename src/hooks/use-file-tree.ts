@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import { prepareWorkspaceFileSearch, searchWorkspaceFiles } from "@/lib/api"
+import { searchWorkspaceFiles } from "@/lib/api"
 import type { WorkspaceFileEntry } from "@/lib/types"
 import { randomUUID } from "@/lib/utils"
 
@@ -50,12 +50,6 @@ export function useFileTree({
   const generation = useRef(0)
   const refresh = useRef(false)
   const consumer = useRef<string | undefined>(undefined)
-
-  useEffect(() => {
-    if (enabled && folderPath) {
-      void prepareWorkspaceFileSearch(folderPath).catch(() => {})
-    }
-  }, [enabled, folderPath])
 
   useEffect(() => {
     const current = ++generation.current
