@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use sacp::schema::{
+use agent_client_protocol::schema::v1::{
     ReadTextFileRequest, ReadTextFileResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use tokio::sync::Semaphore;
@@ -28,10 +28,10 @@ pub enum FileSystemRuntimeError {
 }
 
 impl FileSystemRuntimeError {
-    pub fn into_rpc_error(self) -> sacp::Error {
+    pub fn into_rpc_error(self) -> agent_client_protocol::Error {
         match self {
-            Self::InvalidParams(message) => sacp::Error::invalid_params().data(message),
-            Self::Internal(message) => sacp::util::internal_error(message),
+            Self::InvalidParams(message) => agent_client_protocol::Error::invalid_params().data(message),
+            Self::Internal(message) => agent_client_protocol::util::internal_error(message),
         }
     }
 }
@@ -76,6 +76,12 @@ pub struct FsAccessPolicy {
     read_roots: Vec<PathBuf>,
     /// Roots a write may land in. Empty ⇒ unrestricted.
     write_roots: Vec<PathBuf>,
+    /// Kimi Code's `sessions` directories, where a plan file that does not
+    /// exist yet reads as empty instead of failing (see [`is_kimi_plan_file`]).
+    /// Empty for every other agent, and under `strict`.
+    kimi_sessions_roots: Vec<PathBuf>,
+    /// The most text one read may return (see [`read_response_limit`]).
+    read_response_limit: usize,
 }
 
 impl FsAccessPolicy {
@@ -86,6 +92,8 @@ impl FsAccessPolicy {
         Self {
             read_roots: roots.clone(),
             write_roots: roots,
+            kimi_sessions_roots: Vec::new(),
+            read_response_limit: FS_MAX_READ_RESPONSE_BYTES,
         }
     }
 
@@ -94,6 +102,8 @@ impl FsAccessPolicy {
         Self {
             read_roots: Vec::new(),
             write_roots: Vec::new(),
+            kimi_sessions_roots: Vec::new(),
+            read_response_limit: FS_MAX_READ_RESPONSE_BYTES,
         }
     }
 
@@ -121,6 +131,8 @@ impl FsAccessPolicy {
         Self {
             read_roots: Vec::new(),
             write_roots,
+            kimi_sessions_roots: kimi_sessions_roots(agent_type, runtime_env),
+            read_response_limit: read_response_limit(agent_type),
         }
     }
 
@@ -139,8 +151,17 @@ impl FsAccessPolicy {
             None | Some("") | Some("default") => {
                 Self::permissive(workspace_root, agent_type, runtime_env)
             }
-            Some("strict") => Self::strict(workspace_root),
-            Some("unrestricted") => Self::unrestricted(),
+            // The read limit is about how an agent reads, not where, so it
+            // holds under every policy; the Kimi plan exception is about where.
+            Some("strict") => Self {
+                read_response_limit: read_response_limit(agent_type),
+                ..Self::strict(workspace_root)
+            },
+            Some("unrestricted") => Self {
+                kimi_sessions_roots: kimi_sessions_roots(agent_type, runtime_env),
+                read_response_limit: read_response_limit(agent_type),
+                ..Self::unrestricted()
+            },
             Some(other) => {
                 tracing::warn!(
                     "[ACP] unrecognized {FS_POLICY_ENV}={other:?}; falling back to \"default\""
@@ -277,6 +298,128 @@ fn agent_data_roots(agent_type: AgentType, runtime_env: &BTreeMap<String, String
         .collect()
 }
 
+/// The most text one `fs/read_text_file` answer may carry for `agent_type`.
+///
+/// Every agent gets [`FS_MAX_READ_RESPONSE_BYTES`], and a bigger read fails
+/// with a hint to narrow it with `line` / `limit`. Two agents never narrow a
+/// read, so under that limit even a few lines of a file over 2 MiB would fail
+/// to read, and their whole file may fill the [`FS_MAX_FILE_SIZE_BYTES`] any
+/// read is held to:
+///
+/// - Google Antigravity: from 1.4.4 its `client_view_file` asks for the whole
+///   file and slices out the requested lines itself, because its output header
+///   shows the file's line count, which an answer does not carry. Its stdio
+///   transport takes such an answer as one line: past its buffer limit it reads
+///   the line in pieces instead of refusing it.
+/// - Kimi Code: its ACP file service asks for the whole file with only the
+///   session and the path (`acp-fs/acpFsService.ts`, 2.4.0, 2.4.1 and 2.5.1) and cuts
+///   out the page its `Read` tool returns, so the `line` / `limit` hint never
+///   reaches it and the model only sees "Invalid params". It caps what the
+///   model gets itself (2.4.1: 100,000 characters or about 25,000 tokens). The
+///   line buffer of the ACP SDK it bundles (1.3.0) has no length limit.
+///   Measured on 2.4.1 with a 3,000,000-byte file: given the whole file, a
+///   `Read` handed the model its first 958 lines, 99,918 characters ending in
+///   Kimi's own "Next Read" hint, and one with `n_lines=10` the ten lines.
+fn read_response_limit(agent_type: AgentType) -> usize {
+    match agent_type {
+        AgentType::Antigravity | AgentType::KimiCode => {
+            usize::try_from(FS_MAX_FILE_SIZE_BYTES).unwrap_or(usize::MAX)
+        }
+        _ => FS_MAX_READ_RESPONSE_BYTES,
+    }
+}
+
+/// `<KIMI_CODE_HOME>/sessions` (else `~/.kimi-code/sessions`) for the Kimi Code
+/// a connection launches, resolved like its write root; empty for every other
+/// agent.
+///
+/// Kimi Code keeps a session's plan in
+/// `<sessions>/<workdir>/<session>/agents/<agent>/plans/<id>.md`, and in plan
+/// mode it reads that file before every model request and every tool call. No
+/// way into plan mode creates it: the model writes it, with the Write tool,
+/// once it has a plan. Through codeg's `fs/read_text_file` the read of a plan
+/// not written yet fails with a JSON-RPC error, and Kimi takes only a local
+/// `ENOENT` for "no plan yet" (`isMissingFileError` in its plan service,
+/// 2.3.3 through 2.4.1, and `isHostFsNotFound` in 2.5.1), so the error fails
+/// the call instead. The model never gets
+/// the plan file's path, its first tool call ends the turn with no reply, and
+/// plan mode cannot start. A missing plan file therefore reads as empty here,
+/// which is what Kimi reads from its own disk.
+fn kimi_sessions_roots(
+    agent_type: AgentType,
+    runtime_env: &BTreeMap<String, String>,
+) -> Vec<PathBuf> {
+    if agent_type != AgentType::KimiCode {
+        return Vec::new();
+    }
+    agent_data_roots(agent_type, runtime_env)
+        .into_iter()
+        .map(|home| home.join("sessions"))
+        .collect()
+}
+
+/// Whether `path` names a Kimi Code plan file under one of `sessions_roots`
+/// (see [`kimi_sessions_roots`]).
+///
+/// Kimi names the path through its home as it sees it, which may be another
+/// spelling of codeg's root (macOS hands out `/var/…` for `/private/var/…`), so
+/// the canonical forms of the plan's folder and of the root are compared too.
+/// Only the folder is canonicalized: the plan file itself does not exist yet.
+fn is_kimi_plan_file(path: &Path, sessions_roots: &[PathBuf]) -> bool {
+    if sessions_roots.is_empty() {
+        return false;
+    }
+    if sessions_roots
+        .iter()
+        .any(|root| kimi_plan_file_below(path, root))
+    {
+        return true;
+    }
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return false;
+    };
+    let Ok(dir) = std::fs::canonicalize(dir) else {
+        return false;
+    };
+    let canonical = dir.join(name);
+    sessions_roots.iter().any(|root| {
+        std::fs::canonicalize(root).is_ok_and(|root| kimi_plan_file_below(&canonical, &root))
+    })
+}
+
+/// `<workdir>/<session>/agents/<agent>/plans/<id>.md` below `sessions_root`,
+/// with nothing else on the path. Kimi names each plan after three heroes
+/// joined by hyphens (`iron-man-thor-hulk`, with `-<8 hex digits>` added on a
+/// collision), so a plan id is lowercase letters, digits and hyphens with at
+/// least one hyphen. The `AGENTS.md` / `agents.md` files Kimi looks for in the
+/// same folder after a write are not plans, and keep their not-found answer.
+fn kimi_plan_file_below(path: &Path, sessions_root: &Path) -> bool {
+    let Ok(rest) = path.strip_prefix(sessions_root) else {
+        return false;
+    };
+    let parts: Vec<&std::ffi::OsStr> = rest
+        .components()
+        .map_while(|component| match component {
+            Component::Normal(part) => Some(part),
+            _ => None,
+        })
+        .collect();
+    let [_workdir, _session, agents, _agent, plans, file] = parts.as_slice() else {
+        return false;
+    };
+    if rest.components().count() != parts.len() || *agents != "agents" || *plans != "plans" {
+        return false;
+    }
+    file.to_str()
+        .and_then(|name| name.strip_suffix(".md"))
+        .is_some_and(|id| {
+            id.contains('-')
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+}
+
 /// One independently-relocatable directory belonging to an agent.
 ///
 /// Modelled declaratively because three separate review findings were all the
@@ -289,6 +432,13 @@ struct RootSlot {
     candidates: &'static [(&'static str, &'static str, bool)],
     /// Home-relative default when none of the candidates reaches the child.
     default_rel: &'static [&'static str],
+    /// The variable that renames the directory itself, for the one resolver
+    /// that has such a thing: Qoder's `QODER_CONFIG_DIR_NAME`, which replaces
+    /// the `.qoder` directory name under `QODER_CLI_HOME` or the home
+    /// directory. It stands in for the sub-path of a candidate that appends
+    /// one and for the last segment of `default_rel`; a candidate whose value
+    /// IS the root never reads it. See [`renamed_dir`].
+    dir_name_env: Option<&'static str>,
     /// Whether the agent's own resolver TRIMS the value before using it. Hermes
     /// (`resolve_hermes_home` / `hermes_home_for_launch`) and Cline
     /// (`cline_data_dir`) do, so a whitespace-only value is genuinely unset for
@@ -382,7 +532,7 @@ fn resolve_root_slot(slot: &RootSlot, runtime_env: &BTreeMap<String, String>) ->
         let root = if suffix.is_empty() {
             base
         } else {
-            base.join(suffix)
+            base.join(renamed_dir(slot, runtime_env, suffix)?)
         };
 
         // Same fail-closed rule one level up: a root this broad makes the gate
@@ -412,10 +562,58 @@ fn resolve_root_slot(slot: &RootSlot, runtime_env: &BTreeMap<String, String>) ->
     // default — resolved against the CHILD's home, not codeg's (see
     // `child_home_dir`).
     let mut root = child_home_dir(runtime_env)?;
-    for segment in slot.default_rel {
-        root.push(segment);
+    if let Some((last, parents)) = slot.default_rel.split_last() {
+        for segment in parents {
+            root.push(segment);
+        }
+        root.push(renamed_dir(slot, runtime_env, last)?);
+    }
+
+    // A renamed default can be any directory under the child's home, codeg's
+    // own home included when the child's home is set one level above it, so it
+    // answers to the same rule as a relocation does.
+    if is_over_broad_root(&root, runtime_env) {
+        tracing::warn!(
+            "[ACP] the agent's default directory {} is the home directory or the \
+             filesystem root, which is too broad to authorize; the agent's own \
+             directory is NOT writable this launch",
+            root.display()
+        );
+        return None;
     }
     Some(root)
+}
+
+/// The name the slot's directory goes by for this launch: the value of
+/// [`RootSlot::dir_name_env`] when one reaches the child, else `default`.
+///
+/// `None` when that value is anything but a single plain directory name. Qoder
+/// refuses to start with one (its validator takes letters, digits, `.`, `_`,
+/// `-` and inner spaces, and rejects `.` and `..`), so such a value names no
+/// directory the agent uses, and joining it could climb out of the parent.
+fn renamed_dir(
+    slot: &RootSlot,
+    runtime_env: &BTreeMap<String, String>,
+    default: &str,
+) -> Option<OsString> {
+    let Some(key) = slot.dir_name_env else {
+        return Some(OsString::from(default));
+    };
+    let Some(name) = child_env_value(runtime_env, key, slot.trims) else {
+        return Some(OsString::from(default));
+    };
+    let mut components = Path::new(&name).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(only)), None) if only == name.as_os_str() => Some(name),
+        _ => {
+            tracing::warn!(
+                "[ACP] {key}={} is not a plain directory name, so the agent's own \
+                 directory cannot be located and is NOT writable this launch",
+                name.to_string_lossy()
+            );
+            None
+        }
+    }
 }
 
 /// Whether a resolved root would swallow so much that the containment gate
@@ -526,9 +724,9 @@ pub(crate) fn child_home_dir(runtime_env: &BTreeMap<String, String>) -> Option<P
 ///
 /// * non-blank in `runtime_env` — `merge_agent_env` gives `runtime_env` the
 ///   highest precedence, so this REPLACES the parent's value in the child.
-/// * blank in `runtime_env` — the vendored spawn layer treats an empty value as
-///   `env_remove` ("an empty value means ensure this var is ABSENT from the
-///   child", `vendor/sacp-tokio/src/acp_agent.rs`). The child therefore does NOT
+/// * blank in `runtime_env` — the spawn layer (`acp::agent_process`) treats an
+///   empty value as `env_remove` ("an empty value means ensure this var is
+///   ABSENT from the child"). The child therefore does NOT
 ///   inherit our value; the agent falls back to its own default. Reading through
 ///   to our process env here would point the root at a profile the child never
 ///   opens, re-breaking the writes this change exists to allow.
@@ -580,14 +778,21 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             candidates: &[("GROK_HOME", "", VERBATIM)],
             trims: false,
             default_rel: &[".grok"],
+            dir_name_env: None,
         }],
-        // Qoder relocates its whole home via `QODER_CONFIG_DIR` (the env form
-        // of the CLI's `--config-dir`); the sessions tree lives under
-        // `projects/` inside it.
+        // Qoder's directory is `QODER_CONFIG_DIR` itself (the env form of the
+        // CLI's `--config-dir`), else `QODER_CONFIG_DIR_NAME` (default
+        // `.qoder`) under `QODER_CLI_HOME`, else under the home directory — see
+        // `parsers::qoder::resolve_qoder_config_dir`. The sessions tree lives
+        // under `projects/` inside it.
         AgentType::Qoder => &[RootSlot {
-            candidates: &[("QODER_CONFIG_DIR", "", VERBATIM)],
+            candidates: &[
+                ("QODER_CONFIG_DIR", "", VERBATIM),
+                ("QODER_CLI_HOME", ".qoder", VERBATIM),
+            ],
             trims: false,
             default_rel: &[".qoder"],
+            dir_name_env: Some("QODER_CONFIG_DIR_NAME"),
         }],
         // Antigravity's whole tree hangs off `GEMINI_HOME`, which — unlike
         // Gemini CLI's `GEMINI_CLI_HOME` above — names the `.gemini` directory
@@ -598,32 +803,48 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             candidates: &[("GEMINI_HOME", "", EXPANDS_TILDE)],
             trims: false,
             default_rel: &[".gemini"],
+            dir_name_env: None,
+        }],
+        // `KIRO_HOME` names the `.kiro` directory ITSELF (agents, prompts,
+        // skills, steering, settings and sessions all hang off it), the same
+        // shape `GEMINI_HOME` has for Antigravity — see
+        // `parsers::kiro::resolve_kiro_home_dir`.
+        AgentType::Kiro => &[RootSlot {
+            candidates: &[("KIRO_HOME", "", VERBATIM)],
+            trims: false,
+            default_rel: &[".kiro"],
+            dir_name_env: None,
         }],
         AgentType::ClaudeCode => &[RootSlot {
             candidates: &[("CLAUDE_CONFIG_DIR", "", VERBATIM)],
             trims: false,
             default_rel: &[".claude"],
+            dir_name_env: None,
         }],
         AgentType::Codex => &[RootSlot {
             candidates: &[("CODEX_HOME", "", VERBATIM)],
             trims: false,
             default_rel: &[".codex"],
+            dir_name_env: None,
         }],
         // `resolve_gemini_base_dir_from` joins `.gemini` onto GEMINI_CLI_HOME.
         AgentType::Gemini => &[RootSlot {
             candidates: &[("GEMINI_CLI_HOME", ".gemini", VERBATIM)],
             trims: false,
             default_rel: &[".gemini"],
+            dir_name_env: None,
         }],
         AgentType::CodeBuddy => &[RootSlot {
             candidates: &[("CODEBUDDY_CONFIG_DIR", "", VERBATIM)],
             trims: false,
             default_rel: &[".codebuddy"],
+            dir_name_env: None,
         }],
         AgentType::KimiCode => &[RootSlot {
             candidates: &[("KIMI_CODE_HOME", "", VERBATIM)],
             trims: false,
             default_rel: &[".kimi-code"],
+            dir_name_env: None,
         }],
         // `resolve_cursor_config_from` prefers CURSOR_CONFIG_DIR verbatim and
         // only then `<XDG_CONFIG_HOME>/cursor` — order matters.
@@ -631,27 +852,33 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             candidates: &[("CURSOR_CONFIG_DIR", "", VERBATIM), ("XDG_CONFIG_HOME", "cursor", VERBATIM)],
             trims: false,
             default_rel: &[".cursor"],
+            dir_name_env: None,
         }],
         AgentType::Hermes => &[RootSlot {
             candidates: &[("HERMES_HOME", "", VERBATIM)],
             trims: true,
             default_rel: &[".hermes"],
+            dir_name_env: None,
         }],
         // `resolve_opencode_base_dir` is `<XDG_DATA_HOME>/opencode`.
         AgentType::OpenCode => &[RootSlot {
             candidates: &[("XDG_DATA_HOME", "opencode", VERBATIM)],
             trims: false,
             default_rel: &[".local", "share", "opencode"],
+            dir_name_env: None,
         }],
+        // `cline_data_dir_for_env`: `CLINE_DATA_DIR`, else `<CLINE_DIR>/data`.
         AgentType::Cline => &[RootSlot {
-            candidates: &[("CLINE_DIR", "", VERBATIM)],
+            candidates: &[("CLINE_DATA_DIR", "", VERBATIM), ("CLINE_DIR", "data", VERBATIM)],
             trims: true,
             default_rel: &[".cline", "data"],
+            dir_name_env: None,
         }],
         AgentType::OpenClaw => &[RootSlot {
             candidates: &[],
             trims: false,
             default_rel: &[".openclaw"],
+            dir_name_env: None,
         }],
         // DeepSeek Harness mirrors pi's two-root shape: the harness home
         // (`DSH_HOME`, default `~/.dsh`) and the session-log root, which
@@ -662,6 +889,7 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
                 candidates: &[("DSH_HOME", "", EXPANDS_TILDE)],
                 trims: false,
                 default_rel: &[".dsh"],
+                dir_name_env: None,
             },
             RootSlot {
                 candidates: &[
@@ -673,6 +901,7 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
                 ],
                 trims: false,
                 default_rel: &[".dsh", "sessions"],
+                dir_name_env: None,
             },
         ],
         // pi's agent home and its session store relocate INDEPENDENTLY, so both
@@ -684,6 +913,7 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
                 candidates: &[("PI_CODING_AGENT_DIR", "", VERBATIM)],
                 trims: false,
                 default_rel: &[".pi", "agent"],
+                dir_name_env: None,
             },
             RootSlot {
                 candidates: &[
@@ -692,12 +922,26 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
                 ],
                 trims: false,
                 default_rel: &[".pi", "agent", "sessions"],
+                dir_name_env: None,
             },
         ],
         // A custom ACP agent has no codeg-known private directory layout —
         // codeg never reads its store (history comes from codeg's own ACP
         // transcript), so there is nothing to widen the sandbox roots for.
-        AgentType::Custom(_) => &[],
+        // TRAE CLI's history is codeg's transcript too, and it reads and
+        // writes files itself rather than through `fs/*` (verified against
+        // 0.209.1), so its `~/.trae` never needs to be a write root either.
+        // Command Code is the same case: codeg's transcript is its history,
+        // and its tools never go through `fs/*` (verified against 1.84.0,
+        // 1.86.3, 1.88.0, 1.88.1, 1.88.2 and 1.88.4). So is MiniMax Code: its
+        // tools
+        // run in-process and it sends codeg no `fs/*` or `terminal/*` request
+        // (verified against 0.7.0).
+        AgentType::Custom(_)
+        | AgentType::ZCode
+        | AgentType::Trae
+        | AgentType::CommandCode
+        | AgentType::MiniMaxCode => &[],
     }
 }
 
@@ -766,8 +1010,7 @@ impl FileSystemRuntime {
         let path_for_log = path.clone();
 
         let response = run_blocking_with_timeout("fs/read_text_file", move || {
-            read_text_file_impl(&path, line, limit, &policy.read_roots)
-                .map(ReadTextFileResponse::new)
+            read_text_file_impl(&path, line, limit, &policy).map(ReadTextFileResponse::new)
         })
         .await;
 
@@ -848,11 +1091,22 @@ fn read_text_file_impl(
     path: &Path,
     line: Option<u32>,
     limit: Option<u32>,
-    read_roots: &[PathBuf],
+    policy: &FsAccessPolicy,
 ) -> Result<String, FileSystemRuntimeError> {
-    ensure_path_allowed(path, read_roots, false)?;
+    ensure_path_allowed(path, &policy.read_roots, false)?;
 
-    let metadata = std::fs::metadata(path).map_err(|err| map_io_error("read", path, err))?;
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        // A Kimi Code plan the model has not written yet, which Kimi itself
+        // reads as empty; see `kimi_sessions_roots`.
+        Err(err)
+            if err.kind() == ErrorKind::NotFound
+                && is_kimi_plan_file(path, &policy.kimi_sessions_roots) =>
+        {
+            return Ok(String::new());
+        }
+        Err(err) => return Err(map_io_error("read", path, err)),
+    };
     if metadata.len() > FS_MAX_FILE_SIZE_BYTES {
         return Err(FileSystemRuntimeError::InvalidParams(format!(
             "file too large for fs/read_text_file ({} bytes, limit {} bytes)",
@@ -871,8 +1125,8 @@ fn read_text_file_impl(
     let mut taken = 0usize;
     let mut out = String::with_capacity(
         usize::try_from(metadata.len())
-            .unwrap_or(FS_MAX_READ_RESPONSE_BYTES)
-            .min(FS_MAX_READ_RESPONSE_BYTES),
+            .unwrap_or(policy.read_response_limit)
+            .min(policy.read_response_limit),
     );
     let mut line_buf = String::new();
 
@@ -892,10 +1146,10 @@ fn read_text_file_impl(
                 }
             }
 
-            if out.len().saturating_add(line_buf.len()) > FS_MAX_READ_RESPONSE_BYTES {
+            if out.len().saturating_add(line_buf.len()) > policy.read_response_limit {
                 return Err(FileSystemRuntimeError::InvalidParams(format!(
                     "read result too large (limit {} bytes). Narrow with line/limit.",
-                    FS_MAX_READ_RESPONSE_BYTES
+                    policy.read_response_limit
                 )));
             }
 
@@ -1150,6 +1404,8 @@ mod tests {
         FsAccessPolicy {
             read_roots: Vec::new(),
             write_roots: vec![canonical_root(workspace)],
+            kimi_sessions_roots: Vec::new(),
+            read_response_limit: FS_MAX_READ_RESPONSE_BYTES,
         }
     }
 
@@ -1385,6 +1641,310 @@ mod tests {
         let _ = fs::remove_dir_all(grok_home);
     }
 
+    /// A Kimi Code plans folder as Kimi lays it out, and the plan file in it
+    /// that the model has not written yet.
+    fn kimi_plan_layout(kimi_home: &Path) -> (PathBuf, PathBuf) {
+        let plans = kimi_home
+            .join("sessions")
+            .join("wd_my-app_0c1f9d2e4b7a")
+            .join("session_6f1d2c3b-0a9e-4c8d-9b7a-1e2f3a4b5c6d")
+            .join("agents")
+            .join("main")
+            .join("plans");
+        fs::create_dir_all(&plans).expect("create kimi plans dir");
+        let plan = plans.join("iron-man-thor-hulk.md");
+        (plans, plan)
+    }
+
+    fn kimi_env(kimi_home: &Path) -> BTreeMap<String, String> {
+        BTreeMap::from([(
+            "KIMI_CODE_HOME".to_string(),
+            kimi_home.to_string_lossy().to_string(),
+        )])
+    }
+
+    async fn read_error(runtime: &FileSystemRuntime, path: &Path) -> String {
+        match runtime
+            .read_text_file(ReadTextFileRequest::new("sid", path))
+            .await
+        {
+            Ok(response) => panic!(
+                "{} must still fail to read, got {:?}",
+                path.display(),
+                response.content
+            ),
+            Err(error) => invalid_params(error),
+        }
+    }
+
+    /// Kimi Code reads its plan file before every model request and tool call
+    /// in plan mode, and takes only a local `ENOENT` for "no plan yet". The
+    /// error codeg answered a missing file with failed the call, so plan mode
+    /// never got past its first tool call (see `kimi_sessions_roots`).
+    #[tokio::test(flavor = "current_thread")]
+    async fn kimi_plan_not_written_yet_reads_empty() {
+        let workspace = temp_workspace();
+        let kimi_home = temp_workspace();
+        let (plans, plan) = kimi_plan_layout(&kimi_home);
+        let runtime = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+            &workspace,
+            AgentType::KimiCode,
+            &kimi_env(&kimi_home),
+        ));
+
+        let response = runtime
+            .read_text_file(ReadTextFileRequest::new("sid", &plan))
+            .await
+            .expect("a plan Kimi has not written yet reads as empty");
+        assert_eq!(response.content, "");
+        assert!(!plan.exists(), "reading the plan must not create it");
+
+        // The same folder named through its canonical path (macOS hands the
+        // temp dir out as `/var/…`, which canonicalizes to `/private/var/…`).
+        let canonical_plan = fs::canonicalize(&plans)
+            .expect("canonical plans dir")
+            .join("captain-america-ant-man-thor-1a2b3c4d.md");
+        let response = runtime
+            .read_text_file(ReadTextFileRequest::new("sid", &canonical_plan))
+            .await
+            .expect("the canonical spelling of a plan path matches too");
+        assert_eq!(response.content, "");
+
+        // Once the model writes the plan, it reads back as usual.
+        runtime
+            .write_text_file(WriteTextFileRequest::new("sid", &plan, "# Plan\n"))
+            .await
+            .expect("kimi must be able to write its own plan file");
+        let response = runtime
+            .read_text_file(ReadTextFileRequest::new("sid", &plan))
+            .await
+            .expect("read the written plan");
+        assert_eq!(response.content, "# Plan\n");
+
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(kimi_home);
+    }
+
+    /// Only a missing PLAN reads as empty: every other missing file keeps its
+    /// error, including the `AGENTS.md` lookups Kimi makes in the plans folder
+    /// after a write, the same layout for another agent, and Kimi under the
+    /// `strict` policy, which confines reads to the workspace.
+    #[tokio::test(flavor = "current_thread")]
+    async fn only_a_missing_kimi_plan_reads_empty() {
+        let workspace = temp_workspace();
+        let kimi_home = temp_workspace();
+        let (plans, plan) = kimi_plan_layout(&kimi_home);
+        let session_dir = plans
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .expect("session dir")
+            .to_path_buf();
+        let kimi = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+            &workspace,
+            AgentType::KimiCode,
+            &kimi_env(&kimi_home),
+        ));
+
+        for path in [
+            plans.join("AGENTS.md"),
+            plans.join("agents.md"),
+            plans.join(".kimi-code").join("AGENTS.md"),
+            plans.join("notes.md"),
+            plans.join("Iron-Man-Thor-Hulk.md"),
+            plans.join("iron-man-thor-hulk.txt"),
+            plans.join("archive").join("iron-man-thor-hulk.md"),
+            session_dir
+                .join("agents")
+                .join("main")
+                .join("notes")
+                .join("iron-man-thor-hulk.md"),
+            session_dir
+                .join("tasks")
+                .join("main")
+                .join("plans")
+                .join("iron-man-thor-hulk.md"),
+            session_dir.join("plans").join("iron-man-thor-hulk.md"),
+            kimi_home.join("plans").join("iron-man-thor-hulk.md"),
+            workspace.join("iron-man-thor-hulk.md"),
+        ] {
+            let message = read_error(&kimi, &path).await;
+            assert!(message.contains("failed to read"), "{message}");
+        }
+
+        let grok = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+            &workspace,
+            AgentType::Grok,
+            &kimi_env(&kimi_home),
+        ));
+        let message = read_error(&grok, &plan).await;
+        assert!(message.contains("failed to read"), "{message}");
+
+        let mut strict_env = kimi_env(&kimi_home);
+        strict_env.insert(FS_POLICY_ENV.to_string(), "strict".to_string());
+        let strict = FileSystemRuntime::with_policy(FsAccessPolicy::from_env(
+            &workspace,
+            AgentType::KimiCode,
+            &strict_env,
+        ));
+        read_error(&strict, &plan).await;
+
+        // `unrestricted` lifts the path gates but keeps the plan answer.
+        let mut open_env = kimi_env(&kimi_home);
+        open_env.insert(FS_POLICY_ENV.to_string(), "unrestricted".to_string());
+        let open = FileSystemRuntime::with_policy(FsAccessPolicy::from_env(
+            &workspace,
+            AgentType::KimiCode,
+            &open_env,
+        ));
+        let response = open
+            .read_text_file(ReadTextFileRequest::new("sid", &plan))
+            .await
+            .expect("unrestricted keeps the missing-plan answer");
+        assert_eq!(response.content, "");
+
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(kimi_home);
+    }
+
+    /// A file over the 2 MiB most reads may return: 32,000 lines of 103 bytes.
+    fn file_over_the_read_limit(workspace: &Path) -> (PathBuf, String) {
+        let content: String = (1..=32_000)
+            .map(|i| format!("line {i:06} {}\n", "x".repeat(90)))
+            .collect();
+        assert!(content.len() > FS_MAX_READ_RESPONSE_BYTES);
+        let file = workspace.join("big.txt");
+        fs::write(&file, &content).expect("write big file");
+        (file, content)
+    }
+
+    /// Antigravity and Kimi Code read the whole file for every read and slice
+    /// it themselves (see `read_response_limit`), so their read of a file over
+    /// 2 MiB must succeed, under every policy, up to the file size limit.
+    #[tokio::test(flavor = "current_thread")]
+    async fn whole_file_readers_read_up_to_the_file_size_limit() {
+        let workspace = temp_workspace();
+        let (file, content) = file_over_the_read_limit(&workspace);
+        let huge = workspace.join("huge.txt");
+        File::create(&huge)
+            .and_then(|file| file.set_len(FS_MAX_FILE_SIZE_BYTES + 1))
+            .expect("create a file over the size limit");
+
+        for agent_type in [AgentType::Antigravity, AgentType::KimiCode] {
+            for policy in ["default", "strict", "unrestricted"] {
+                let env = BTreeMap::from([(FS_POLICY_ENV.to_string(), policy.to_string())]);
+                let runtime = FileSystemRuntime::with_policy(FsAccessPolicy::from_env(
+                    &workspace, agent_type, &env,
+                ));
+                let response = runtime
+                    .read_text_file(ReadTextFileRequest::new("sid", &file))
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("{agent_type:?} {policy}: whole-file read failed: {error:?}")
+                    });
+                assert!(
+                    response.content == content,
+                    "{agent_type:?} {policy}: the read returned other text"
+                );
+            }
+
+            // A file over the size limit still fails.
+            let runtime = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+                &workspace,
+                agent_type,
+                &BTreeMap::new(),
+            ));
+            let message = read_error(&runtime, &huge).await;
+            assert!(
+                message.contains("file too large"),
+                "{agent_type:?}: {message}"
+            );
+        }
+
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    /// Every other agent keeps the 2 MiB answer limit: the same whole-file read
+    /// fails with the hint to narrow it, and the narrowed read still works.
+    #[tokio::test(flavor = "current_thread")]
+    async fn other_agents_keep_the_read_limit() {
+        let workspace = temp_workspace();
+        let (file, _) = file_over_the_read_limit(&workspace);
+        let expected = format!("read result too large (limit {FS_MAX_READ_RESPONSE_BYTES} bytes)");
+
+        for agent_type in [
+            AgentType::Codex,
+            AgentType::ClaudeCode,
+            AgentType::CodeBuddy,
+        ] {
+            let runtime = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+                &workspace,
+                agent_type,
+                &BTreeMap::new(),
+            ));
+            let message = read_error(&runtime, &file).await;
+            assert!(message.contains(&expected), "{agent_type:?}: {message}");
+
+            let response = runtime
+                .read_text_file(ReadTextFileRequest::new("sid", &file).line(2).limit(1))
+                .await
+                .expect("a narrowed read");
+            assert_eq!(
+                response.content,
+                format!("line 000002 {}\n", "x".repeat(90))
+            );
+        }
+
+        // `strict` without an agent keeps it too.
+        let strict = FileSystemRuntime::with_policy(FsAccessPolicy::strict(&workspace));
+        let message = read_error(&strict, &file).await;
+        assert!(message.contains(&expected), "{message}");
+
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    /// `KIMI_CODE_HOME` through a link: Kimi may name the plan by the real
+    /// path while codeg resolved the link, or the other way round.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn kimi_plan_through_a_linked_home_reads_empty() {
+        let workspace = temp_workspace();
+        let real_home = temp_workspace();
+        let links = temp_workspace();
+        let linked_home = links.join("kimi-home");
+        std::os::unix::fs::symlink(&real_home, &linked_home).expect("link the kimi home");
+        let (real_plans, _) = kimi_plan_layout(&real_home);
+        let relative_plans = real_plans
+            .strip_prefix(&real_home)
+            .expect("plans under the home")
+            .to_path_buf();
+
+        for (codeg_home, kimi_path) in [
+            (&linked_home, real_plans.join("hulk-thor-wasp.md")),
+            (
+                &real_home,
+                linked_home.join(&relative_plans).join("hulk-thor-wasp.md"),
+            ),
+        ] {
+            let runtime = FileSystemRuntime::with_policy(FsAccessPolicy::permissive(
+                &workspace,
+                AgentType::KimiCode,
+                &kimi_env(codeg_home),
+            ));
+            let response = runtime
+                .read_text_file(ReadTextFileRequest::new("sid", &kimi_path))
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{} must read as empty: {error:?}", kimi_path.display())
+                });
+            assert_eq!(response.content, "");
+        }
+
+        for dir in [workspace, real_home, links] {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
     /// End-to-end on the REAL default policy, which is what catches root
     /// canonicalization mismatches: on macOS the temp dir is handed to us as
     /// `/var/folders/…` but canonicalizes to `/private/var/folders/…`, and the
@@ -1487,7 +2047,7 @@ mod tests {
             (AgentType::KimiCode, "KIMI_CODE_HOME"),
             (AgentType::Cursor, "CURSOR_CONFIG_DIR"),
             (AgentType::Hermes, "HERMES_HOME"),
-            (AgentType::Cline, "CLINE_DIR"),
+            (AgentType::Cline, "CLINE_DATA_DIR"),
             (AgentType::Pi, "PI_CODING_AGENT_DIR"),
         ];
 
@@ -1755,16 +2315,22 @@ mod tests {
     fn builtin_default_roots(agent_type: AgentType) -> Vec<PathBuf> {
         let blanked: BTreeMap<String, String> = agent_root_slots(agent_type)
             .iter()
-            .flat_map(|slot| slot.candidates.iter())
-            .map(|(key, _, _)| ((*key).to_string(), String::new()))
+            .flat_map(|slot| {
+                slot.candidates
+                    .iter()
+                    .map(|(key, _, _)| *key)
+                    .chain(slot.dir_name_env)
+            })
+            .map(|key| (key.to_string(), String::new()))
             .collect();
         agent_data_roots(agent_type, &blanked)
     }
 
-    /// A BLANK value in `env_json` is not "unset, use ours" — the vendored spawn
-    /// layer `env_remove`s it, so the child falls back to its OWN default. Reading
-    /// through to codeg's process env would aim the root at a profile the child
-    /// never opens, re-breaking the writes this change exists to allow.
+    /// A BLANK value in `env_json` is not "unset, use ours" — the spawn layer
+    /// (`acp::agent_process`) `env_remove`s it, so the child falls back to its
+    /// OWN default. Reading through to codeg's process env would aim the root
+    /// at a profile the child never opens, re-breaking the writes this change
+    /// exists to allow.
     #[test]
     fn blank_runtime_value_falls_back_to_the_agents_default_not_our_env() {
         let home = dirs::home_dir().expect("home dir");
@@ -2013,6 +2579,8 @@ mod tests {
         let runtime = FileSystemRuntime::with_policy(FsAccessPolicy {
             read_roots: Vec::new(),
             write_roots: vec![canonical_root(&workspace)],
+            kimi_sessions_roots: Vec::new(),
+            read_response_limit: FS_MAX_READ_RESPONSE_BYTES,
         });
         assert!(runtime
             .write_text_file(WriteTextFileRequest::new(
@@ -2113,8 +2681,10 @@ mod tests {
     fn root_slots_match_parser_resolvers() {
         use crate::parsers;
 
-        let expected: [(AgentType, PathBuf); 12] = [
+        let expected: [(AgentType, PathBuf); 14] = [
             (AgentType::Grok, parsers::grok::resolve_grok_home_dir()),
+            (AgentType::Qoder, parsers::qoder::resolve_qoder_config_dir()),
+            (AgentType::Kiro, parsers::kiro::resolve_kiro_home_dir()),
             (
                 AgentType::ClaudeCode,
                 parsers::claude::resolve_claude_config_dir(),
@@ -2155,8 +2725,13 @@ mod tests {
         for (agent_type, resolver_root) in expected {
             let env_configured = agent_root_slots(agent_type)
                 .iter()
-                .flat_map(|slot| slot.candidates.iter())
-                .any(|(key, _, _)| std::env::var_os(key).is_some());
+                .flat_map(|slot| {
+                    slot.candidates
+                        .iter()
+                        .map(|(key, _, _)| *key)
+                        .chain(slot.dir_name_env)
+                })
+                .any(|key| std::env::var_os(key).is_some());
             if env_configured {
                 continue;
             }
@@ -2167,6 +2742,175 @@ mod tests {
                 "{agent_type:?}: slot default {roots:?} drifted from resolver {}",
                 resolver_root.display()
             );
+        }
+    }
+
+    /// The history parsers must look where the slot table says the LAUNCHED
+    /// agent lives once its settings relocate it. They used to read codeg's
+    /// own environment only, so a `CLAUDE_CONFIG_DIR` in `env_json` moved the
+    /// agent and its write root but left its history unreadable (#948).
+    ///
+    /// Each candidate wins in turn — the higher-precedence ones blanked
+    /// (removed for the child), the lower ones relocated elsewhere — so a
+    /// resolver reading the wrong key, or the right keys in the wrong order,
+    /// fails. Every value names a directory that does not exist under a fresh
+    /// tempdir, so nothing on the machine can change the answer (pi looks for
+    /// a `settings.json` under its agent dir); no skip is needed for variables
+    /// set in this process, because every candidate is overridden one way or
+    /// the other.
+    #[test]
+    fn parser_resolvers_follow_a_relocation_in_the_launch_env() {
+        use crate::parsers::{self, AgentEnv};
+
+        let base = tempfile::tempdir().expect("tempdir");
+
+        type Resolver = fn(&AgentEnv) -> PathBuf;
+        // `(agent, resolver its history parser is built from, slot index,
+        // where under that slot's root the resolver points)`.
+        let cases: [(AgentType, Resolver, usize, &[&str]); 17] = [
+            (
+                AgentType::Grok,
+                parsers::grok::resolve_grok_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Qoder,
+                parsers::qoder::resolve_qoder_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Antigravity,
+                parsers::antigravity::resolve_antigravity_sessions_dir_for_env,
+                0,
+                &["antigravity-acp", "conversations"],
+            ),
+            (
+                AgentType::Kiro,
+                parsers::kiro::resolve_kiro_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::ClaudeCode,
+                parsers::claude::resolve_claude_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Codex,
+                parsers::codex::resolve_codex_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Gemini,
+                parsers::gemini::resolve_gemini_base_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::CodeBuddy,
+                parsers::codebuddy::resolve_codebuddy_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::KimiCode,
+                parsers::kimi_code::resolve_kimi_code_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Cursor,
+                parsers::cursor::resolve_cursor_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Hermes,
+                parsers::hermes::resolve_hermes_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::OpenCode,
+                parsers::opencode::resolve_opencode_base_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Cline,
+                parsers::cline::cline_data_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Pi,
+                parsers::pi::resolve_pi_agent_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Pi,
+                parsers::pi::resolve_pi_sessions_dir_for_env,
+                1,
+                &[],
+            ),
+            (
+                AgentType::DeepSeek,
+                parsers::deepseek::resolve_deepseek_sessions_root_for_env,
+                1,
+                &[],
+            ),
+            (
+                AgentType::DeepSeek,
+                parsers::deepseek::resolve_deepseek_attachments_root_for_env,
+                0,
+                &["attachments", "v1"],
+            ),
+        ];
+
+        for (agent_type, resolve, slot_index, under_root) in cases {
+            let slot = &agent_root_slots(agent_type)[slot_index];
+            for winner in 0..slot.candidates.len() {
+                let runtime_env: BTreeMap<String, String> = slot
+                    .candidates
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (key, _, _))| {
+                        let value = match index.cmp(&winner) {
+                            std::cmp::Ordering::Less => String::new(),
+                            std::cmp::Ordering::Equal => base
+                                .path()
+                                .join("relocated")
+                                .join(key)
+                                .to_string_lossy()
+                                .into_owned(),
+                            std::cmp::Ordering::Greater => base
+                                .path()
+                                .join("unused")
+                                .join(key)
+                                .to_string_lossy()
+                                .into_owned(),
+                        };
+                        ((*key).to_string(), value)
+                    })
+                    .collect();
+                let key = slot.candidates[winner].0;
+
+                let root = resolve_root_slot(slot, &runtime_env)
+                    .expect("an absolute relocation resolves to a root");
+                let expected = under_root
+                    .iter()
+                    .fold(root, |path, segment| path.join(segment));
+                assert_eq!(
+                    resolve(&AgentEnv::from_overrides(runtime_env)),
+                    expected,
+                    "{agent_type:?} with {key} winning"
+                );
+            }
         }
     }
 
@@ -2188,6 +2932,136 @@ mod tests {
 
         let roots = agent_data_roots(AgentType::Cursor, &runtime_env);
         assert_eq!(roots, vec![config_dir]);
+    }
+
+    /// Qoder's directory is `QODER_CONFIG_DIR` itself, else
+    /// `QODER_CONFIG_DIR_NAME` (default `.qoder`) under `QODER_CLI_HOME`, else
+    /// under the home directory. A table that knew only the first left a Qoder
+    /// relocated by either of the others unable to write its own directory,
+    /// while authorizing `~/.qoder`, which that Qoder does not use.
+    #[test]
+    fn qoder_root_follows_its_cli_home_and_dir_name() {
+        let home = dirs::home_dir().expect("home dir");
+        let config_dir = absolute_path("tmp/codeg-qoder-config");
+        let cli_home = absolute_path("tmp/codeg-qoder-home");
+        let (config, cli) = (config_dir.to_string_lossy(), cli_home.to_string_lossy());
+        // Every key is set, blank meaning removed for the child, so nothing in
+        // this process's own environment can change the answer.
+        const KEYS: [&str; 3] = [
+            "QODER_CONFIG_DIR",
+            "QODER_CLI_HOME",
+            "QODER_CONFIG_DIR_NAME",
+        ];
+        let roots = |pairs: &[(&str, &str)]| {
+            let mut runtime_env: BTreeMap<String, String> = KEYS
+                .iter()
+                .map(|key| (key.to_string(), String::new()))
+                .collect();
+            for (key, value) in pairs {
+                runtime_env.insert(key.to_string(), value.to_string());
+            }
+            agent_data_roots(AgentType::Qoder, &runtime_env)
+        };
+
+        assert_eq!(roots(&[]), vec![home.join(".qoder")]);
+        assert_eq!(
+            roots(&[("QODER_CLI_HOME", &cli)]),
+            vec![cli_home.join(".qoder")]
+        );
+        assert_eq!(
+            roots(&[("QODER_CONFIG_DIR_NAME", ".qalt")]),
+            vec![home.join(".qalt")]
+        );
+        assert_eq!(
+            roots(&[("QODER_CLI_HOME", &cli), ("QODER_CONFIG_DIR_NAME", ".qalt")]),
+            vec![cli_home.join(".qalt")]
+        );
+        assert_eq!(
+            roots(&[
+                ("QODER_CONFIG_DIR", &config),
+                ("QODER_CLI_HOME", &cli),
+                ("QODER_CONFIG_DIR_NAME", ".qalt"),
+            ]),
+            vec![config_dir.clone()],
+            "the config dir is the directory itself, whatever the name says"
+        );
+
+        // Qoder refuses to start unless the name is a plain directory name, so
+        // anything else names no directory it uses and authorizes nothing.
+        for name in ["..", ".", "a/b", "../escape", "/abs"] {
+            assert_eq!(
+                roots(&[("QODER_CONFIG_DIR_NAME", name)]),
+                Vec::<PathBuf>::new(),
+                "{name}"
+            );
+            assert_eq!(
+                roots(&[("QODER_CLI_HOME", &cli), ("QODER_CONFIG_DIR_NAME", name)]),
+                Vec::<PathBuf>::new(),
+                "{name} under QODER_CLI_HOME"
+            );
+        }
+        let overridden = [
+            ("QODER_CONFIG_DIR", &*config),
+            ("QODER_CONFIG_DIR_NAME", ".."),
+        ];
+        assert_eq!(
+            roots(&overridden),
+            vec![config_dir],
+            "a name the config dir overrides is never read"
+        );
+    }
+
+    /// A renamed directory is held to the broad-root rule wherever it lands.
+    /// With the child's home one level above codeg's, a valid name can be
+    /// codeg's own home directory, which must not become writable, whether it
+    /// is reached through the home default or through `QODER_CLI_HOME`.
+    #[test]
+    fn qoder_renamed_root_cannot_be_a_home_directory() {
+        #[cfg(windows)]
+        const HOME_KEY: &str = "USERPROFILE";
+        #[cfg(not(windows))]
+        const HOME_KEY: &str = "HOME";
+
+        // A home with no parent (the filesystem root) leaves no level above it
+        // to set the child's home to, so there is nothing to check there.
+        let home = dirs::home_dir().expect("home dir");
+        let (Some(parent_dir), Some(name)) = (home.parent(), home.file_name()) else {
+            return;
+        };
+        let (parent, name) = (parent_dir.to_string_lossy(), name.to_string_lossy());
+        let roots = |dir_name: &str, pairs: &[(&str, &str)]| {
+            let mut runtime_env: BTreeMap<String, String> = [
+                ("QODER_CONFIG_DIR", ""),
+                ("QODER_CLI_HOME", ""),
+                ("QODER_CONFIG_DIR_NAME", dir_name),
+            ]
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+            for (key, value) in pairs {
+                runtime_env.insert(key.to_string(), value.to_string());
+            }
+            agent_data_roots(AgentType::Qoder, &runtime_env)
+        };
+
+        assert_eq!(roots(&name, &[(HOME_KEY, &parent)]), Vec::<PathBuf>::new());
+        assert_eq!(
+            roots(&name, &[("QODER_CLI_HOME", &parent)]),
+            Vec::<PathBuf>::new()
+        );
+
+        // The same launches with any other name keep their directory, so the
+        // refusals above come from the broad-root rule and from nothing that
+        // would refuse every renamed directory under this parent.
+        let sibling = format!("{name}-qoder");
+        assert_eq!(
+            roots(&sibling, &[(HOME_KEY, &parent)]),
+            vec![parent_dir.join(&sibling)]
+        );
+        assert_eq!(
+            roots(&sibling, &[("QODER_CLI_HOME", &parent)]),
+            vec![parent_dir.join(&sibling)]
+        );
     }
 
     /// pi relocates its session store independently of its agent home, so a

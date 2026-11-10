@@ -116,18 +116,41 @@ pub struct Model {
     /// exactly once — and every explicit claim clears it too, because a task
     /// that already started has no start left to plan.
     pub scheduled_at: Option<DateTimeUtc>,
+    /// The user put this settled task aside ("handle later"): the board files
+    /// it under Done instead of "needs you", and it stops counting toward the
+    /// attention badge, until they pick it back up. NULL = not put aside.
+    ///
+    /// Only ever set on a `review` / `failed` row, and NOT a status of its own:
+    /// the task stays exactly as resumable as it was (a follow-up or a retry
+    /// starts a new run from here), so its review or failure remains the truth
+    /// about it. Every transition out of those two statuses clears it, so a
+    /// task that comes back from another run always lands in "needs you"
+    /// again — and the unattended merge refuses a row carrying it.
+    pub deferred_at: Option<DateTimeUtc>,
     /// Forge provenance: 'forge_issue' | 'forge_pr'; NULL = not forge-sourced.
     /// Set once at creation by the forge trigger command, never by the public
     /// create/update DTO paths, and never mutated afterwards.
     pub source_kind: Option<String>,
-    /// Canonical lookup/dedup key (`forge::source_key` output). Queried — the
-    /// one exception to `config`'s "never queried" rule, which is exactly why
-    /// it is a column and not part of `config`.
+    /// Canonical key (`forge::source_key` output) of the task's LEAD item —
+    /// its only item, unless the task was made from several related issues.
+    /// Display and deep-link only: which items a task handles is recorded in
+    /// `work_task_source_key`, and every query asking "which tasks handle item
+    /// X" (dedup, the resurrection guards, the reverse lookup, auto-processing)
+    /// goes there instead. Reading this column for that would miss every item
+    /// of a combined task but its first.
     pub source_key: Option<String>,
     /// JSON snapshot of the source (URL, title, account id, PR head/base …).
     /// Same discipline as `config`: replayed/displayed, never queried.
     #[sea_orm(column_type = "Text")]
     pub source_meta: Option<String>,
+    /// JSON `WorkTaskDelivery` — for a task WITHOUT forge provenance only:
+    /// the repository and account its first delivery resolved from the
+    /// project's `origin` (pinned from then on), and the pull request it
+    /// opened there. NULL until such a task is first delivered. A
+    /// forge-sourced task records its pull request in `source_meta` instead,
+    /// which already names its repository and the account that triggered it.
+    #[sea_orm(column_type = "Text")]
+    pub delivery: Option<String>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub started_at: Option<DateTimeUtc>,
@@ -142,6 +165,8 @@ pub struct Model {
 pub enum Relation {
     #[sea_orm(has_many = "super::work_task_event::Entity")]
     Events,
+    #[sea_orm(has_many = "super::work_task_source_key::Entity")]
+    SourceKeys,
     #[sea_orm(
         belongs_to = "super::folder::Entity",
         from = "Column::FolderId",
@@ -153,6 +178,12 @@ pub enum Relation {
 impl Related<super::work_task_event::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Events.def()
+    }
+}
+
+impl Related<super::work_task_source_key::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::SourceKeys.def()
     }
 }
 

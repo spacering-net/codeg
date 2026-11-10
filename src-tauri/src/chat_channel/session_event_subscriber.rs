@@ -13,7 +13,8 @@ use super::types::{ChannelMessageTarget, MessageLevel, RichMessage};
 use crate::acp::internal_bus::InternalEventBus;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{
-    AcpEvent, ConnectionStatus, DelegationResultSummary, EventEnvelope, PromptInputBlock,
+    AcpEvent, ConnectionStatus, DelegationResultSummary, EventEnvelope, PermissionAnswerOrigin,
+    PermissionOptionInfo, PromptInputBlock,
 };
 
 use crate::db::service::{
@@ -408,11 +409,11 @@ async fn handle_acp_envelope(
                         || session
                             .tool_call_inputs
                             .get(tool_call_id)
-                            .map(|s| extract_agent_type(s).is_some())
+                            .map(|s| names_delegation_target(s))
                             .unwrap_or(false)
                         || raw_input
                             .as_deref()
-                            .map(|s| extract_agent_type(s).is_some())
+                            .map(names_delegation_target)
                             .unwrap_or(false);
                     let target = session.target.clone();
                     if is_delegation {
@@ -428,13 +429,15 @@ async fn handle_acp_envelope(
                             // and it no-ops when the completion event already
                             // rendered first.
                             if !already_rendered {
-                                let agent = session
-                                    .tool_call_inputs
-                                    .get(tool_call_id)
-                                    .map(String::as_str)
-                                    .or(raw_input.as_deref())
-                                    .and_then(extract_agent_type)
-                                    .unwrap_or_else(|| "agent".to_string());
+                                let agent = delegation_target_label(
+                                    session
+                                        .tool_call_inputs
+                                        .get(tool_call_id)
+                                        .map(String::as_str)
+                                        .or(raw_input.as_deref()),
+                                    report.as_ref().and_then(|r| r.assistant_name.as_deref()),
+                                )
+                                .unwrap_or_else(|| "agent".to_string());
                                 let body =
                                     format_delegation_terminal(&agent, report.as_ref().unwrap());
                                 session.delegation_rendered.insert(tool_call_id.clone());
@@ -449,13 +452,15 @@ async fn handle_acp_envelope(
                             // `DelegationCompleted` render needs the agent_type.
                             // Suppressed once the result has rendered, so a late
                             // re-emitted ack can't appear after the result.
-                            let agent = session
-                                .tool_call_inputs
-                                .get(tool_call_id)
-                                .map(String::as_str)
-                                .or(raw_input.as_deref())
-                                .and_then(extract_agent_type)
-                                .unwrap_or_else(|| "agent".to_string());
+                            let agent = delegation_target_label(
+                                session
+                                    .tool_call_inputs
+                                    .get(tool_call_id)
+                                    .map(String::as_str)
+                                    .or(raw_input.as_deref()),
+                                report.as_ref().and_then(|r| r.assistant_name.as_deref()),
+                            )
+                            .unwrap_or_else(|| "agent".to_string());
                             drop(guard);
                             let msg = RichMessage::info(format_delegation_ack(&agent));
                             let _ = manager.send_to_target(&target, &msg).await;
@@ -483,6 +488,7 @@ async fn handle_acp_envelope(
         AcpEvent::DelegationCompleted {
             parent_tool_use_id,
             result,
+            assistant_name,
             ..
         } => {
             let mut guard = bridge.lock().await;
@@ -493,12 +499,10 @@ async fn handle_acp_envelope(
                 // here at all, so this arm naturally no-ops for synthetic ids —
                 // the terminal `ToolCallUpdate` is their surface.)
                 if !session.delegation_rendered.contains(parent_tool_use_id) {
-                    let agent = session
-                        .tool_call_inputs
-                        .remove(parent_tool_use_id)
-                        .as_deref()
-                        .and_then(extract_agent_type)
-                        .unwrap_or_else(|| "sub-agent".to_string());
+                    let stored_input = session.tool_call_inputs.remove(parent_tool_use_id);
+                    let agent =
+                        delegation_target_label(stored_input.as_deref(), assistant_name.as_deref())
+                            .unwrap_or_else(|| "sub-agent".to_string());
                     session
                         .delegation_rendered
                         .insert(parent_tool_use_id.clone());
@@ -530,20 +534,24 @@ async fn handle_acp_envelope(
                         .map(|ctx| ctx.auto_approve)
                         .unwrap_or(false);
 
-                if auto_approve {
-                    let option_id = options
-                        .iter()
-                        .find(|o| o.kind == "allow" || o.kind == "allowForSession")
-                        .or_else(|| options.first())
-                        .map(|o| o.option_id.clone());
-
+                // Auto-approve answers one call at a time, with the allow-once
+                // option (see `allow_once_in`). A request without one goes to
+                // the chat like any other, for the sender to answer.
+                let auto_option = if auto_approve {
+                    PermissionOptionInfo::allow_once_in(options).map(|o| o.option_id.clone())
+                } else {
+                    None
+                };
+                if let Some(oid) = auto_option {
                     drop(guard);
-
-                    if let Some(oid) = option_id {
-                        let _ = conn_mgr
-                            .respond_permission(connection_id, request_id, &oid)
-                            .await;
-                    }
+                    let _ = conn_mgr
+                        .respond_permission_from(
+                            connection_id,
+                            request_id,
+                            &oid,
+                            PermissionAnswerOrigin::ChatChannel,
+                        )
+                        .await;
                     return;
                 }
 
@@ -575,7 +583,7 @@ async fn handle_acp_envelope(
 
                 let lang = get_lang(db).await;
                 let prefix = get_prefix(db).await;
-                let body = match lang {
+                let mut body = match lang {
                     Lang::ZhCn | Lang::ZhTw => {
                         format!("Agent 请求权限: {tool_desc}\n\n{prefix}approve 批准 | {prefix}deny 拒绝 | {prefix}approve always 自动批准")
                     }
@@ -583,6 +591,15 @@ async fn handle_acp_envelope(
                         format!("Agent requests permission: {tool_desc}\n\n{prefix}approve | {prefix}deny | {prefix}approve always")
                     }
                 };
+                // Auto-approve is on, yet this request reached the chat.
+                if auto_approve {
+                    body.push_str(match lang {
+                        Lang::ZhCn | Lang::ZhTw => {
+                            "\n\n自动批准跳过了这个请求：它没有「只允许这一次」的选项。"
+                        }
+                        _ => "\n\nAuto-approve skipped this request: it has no allow-once option.",
+                    });
+                }
 
                 let msg = RichMessage {
                     title: Some(match lang {
@@ -967,6 +984,40 @@ fn extract_agent_type(raw_input: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// The `assistant_id` a `delegate_to_agent` raw_input names, by the same
+/// parser the listener dispatches with.
+fn extract_assistant_id(raw_input: &str) -> Option<i32> {
+    let parsed: serde_json::Value = serde_json::from_str(raw_input).ok()?;
+    match crate::acp::delegation::types::delegation_target_from_args(&parsed) {
+        Ok(crate::acp::delegation::types::DelegationTarget::Assistant(id)) => Some(id),
+        _ => None,
+    }
+}
+
+/// Whether a raw_input looks like `delegate_to_agent` arguments: an agent
+/// slug, or a task for an assistant.
+fn names_delegation_target(raw_input: &str) -> bool {
+    extract_agent_type(raw_input).is_some()
+        || (extract_assistant_id(raw_input).is_some()
+            && serde_json::from_str::<serde_json::Value>(raw_input)
+                .ok()
+                .is_some_and(|v| v.get("task").is_some()))
+}
+
+/// Who a delegation went to, for the relay's lines: the assistant's name when
+/// the report or event carried it, `assistant #<id>` when only the arguments
+/// named one, otherwise the agent slug the caller supplied.
+fn delegation_target_label(raw_input: Option<&str>, assistant_name: Option<&str>) -> Option<String> {
+    if let Some(name) = assistant_name.map(str::trim).filter(|n| !n.is_empty()) {
+        return Some(name.to_string());
+    }
+    let raw_input = raw_input?;
+    if let Some(id) = extract_assistant_id(raw_input) {
+        return Some(format!("assistant #{id}"));
+    }
+    extract_agent_type(raw_input)
+}
+
 /// Ack line for a `delegate_to_agent` call: under async delegation the tool
 /// output is just a task id, so the channel shows that the sub-agent started
 /// and is running in the background. The result lands later via
@@ -982,6 +1033,8 @@ struct DelegationReportView {
     error_code: Option<String>,
     message: Option<String>,
     text: Option<String>,
+    /// The assistant the task ran as, when it ran as one.
+    assistant_name: Option<String>,
 }
 
 impl DelegationReportView {
@@ -1017,6 +1070,10 @@ fn parse_delegation_report(raw_output: Option<&str>) -> Option<DelegationReportV
             .map(str::to_string),
         text: report
             .get("text")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        assistant_name: report
+            .get("assistant_name")
             .and_then(|v| v.as_str())
             .map(str::to_string),
     })
@@ -1120,6 +1177,34 @@ mod delegation_relay_tests {
         );
         assert_eq!(extract_agent_type(r#"{"task":"x"}"#), None);
         assert_eq!(extract_agent_type("not json"), None);
+    }
+
+    #[test]
+    fn an_assistant_delegation_is_labeled_by_the_assistant() {
+        // The report's name wins; the arguments alone give `assistant #<id>`.
+        assert_eq!(
+            delegation_target_label(Some(r#"{"assistant_id":3,"task":"x"}"#), Some("Reviewer")),
+            Some("Reviewer".into())
+        );
+        assert_eq!(
+            delegation_target_label(
+                Some(r#"{"assistant_id":"3","agent_type":"codex","task":"x"}"#),
+                None
+            ),
+            Some("assistant #3".into())
+        );
+        assert_eq!(
+            delegation_target_label(Some(r#"{"agent_type":"codex","task":"x"}"#), None),
+            Some("codex".into())
+        );
+        assert_eq!(delegation_target_label(None, Some("  ")), None);
+        assert!(names_delegation_target(r#"{"assistant_id":3,"task":"x"}"#));
+        assert!(!names_delegation_target(r#"{"assistant_id":3}"#));
+        let report = parse_delegation_report(Some(
+            r#"{"structuredContent":{"status":"running","assistant_name":"Reviewer"}}"#,
+        ))
+        .unwrap();
+        assert_eq!(report.assistant_name.as_deref(), Some("Reviewer"));
     }
 
     #[test]
@@ -1385,6 +1470,8 @@ mod async_relay_dedup_tests {
                     duration_ms: 3,
                     text_preview: Some("done".into()),
                 },
+                assistant_id: None,
+                assistant_name: None,
             },
         }
     }
@@ -2062,5 +2149,193 @@ mod error_terminal_gate_tests {
             read_row_status(&db, conv_id).await,
             ConversationStatus::Cancelled
         );
+    }
+}
+
+#[cfg(test)]
+mod auto_approve_tests {
+    //! A sender who turned on auto-approve (`/approve always`) has codeg answer
+    //! each permission request for them. The answer is the allow-once option,
+    //! found by its kind — never the first option, which an adapter may well
+    //! have made the rejection, and never one that leaves a rule behind in the
+    //! agent's settings.
+    use super::*;
+    use crate::acp::connection::ConnectionCommand;
+    use crate::chat_channel::session_bridge::ActiveSession;
+    use crate::db::service::chat_channel_service;
+    use crate::db::test_helpers;
+    use crate::models::agent::AgentType;
+
+    fn permission_option(option_id: &str, name: &str, kind: &str) -> PermissionOptionInfo {
+        PermissionOptionInfo {
+            option_id: option_id.into(),
+            name: name.into(),
+            kind: kind.into(),
+            meta: None,
+        }
+    }
+
+    /// A sender with auto-approve on and a live session. Returns the receiving
+    /// end of the session's commands.
+    async fn auto_approving_session(
+        db: &crate::db::AppDatabase,
+    ) -> (
+        Arc<Mutex<SessionBridge>>,
+        ConnectionManager,
+        tokio::sync::mpsc::Receiver<ConnectionCommand>,
+    ) {
+        let channel_id = chat_channel_service::create(
+            &db.conn,
+            "Telegram test".to_string(),
+            "telegram".to_string(),
+            serde_json::json!({ "chat_id": "-100123" }).to_string(),
+            true,
+            false,
+            None,
+        )
+        .await
+        .expect("seed chat channel")
+        .id;
+        sender_context_service::update_auto_approve(&db.conn, channel_id, "u1", true)
+            .await
+            .expect("auto-approve on");
+        let folder_id = test_helpers::seed_folder(db, "/tmp/chat-auto-approve").await;
+        let conv_id = test_helpers::seed_conversation(db, folder_id, AgentType::ClaudeCode).await;
+        let conn_mgr = ConnectionManager::new();
+        let rx = conn_mgr
+            .insert_test_connection_live(
+                "conn-auto",
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        bridge.lock().await.register(
+            "conn-auto".to_string(),
+            ActiveSession {
+                channel_id,
+                sender_id: "u1".into(),
+                target: ChannelMessageTarget::channel(channel_id),
+                conversation_id: conv_id,
+                connection_id: "conn-auto".to_string(),
+                agent_type: AgentType::ClaudeCode,
+                content_buffer: String::new(),
+                tool_calls: Vec::new(),
+                tool_call_inputs: std::collections::HashMap::new(),
+                delegation_rendered: std::collections::HashSet::new(),
+                last_flushed: Instant::now(),
+                pending_prompt: None,
+                permission_pending: None,
+            },
+        );
+        (bridge, conn_mgr, rx)
+    }
+
+    async fn request_permission(
+        db: &crate::db::AppDatabase,
+        bridge: &Arc<Mutex<SessionBridge>>,
+        conn_mgr: &ConnectionManager,
+        options: Vec<PermissionOptionInfo>,
+    ) {
+        let envelope = EventEnvelope {
+            seq: 1,
+            connection_id: "conn-auto".to_string(),
+            payload: AcpEvent::PermissionRequest {
+                request_id: "req-1".to_string(),
+                tool_call: serde_json::json!({ "title": "Bash" }),
+                options,
+                queued: 0,
+            },
+        };
+        handle_acp_envelope(
+            &envelope,
+            bridge,
+            &ChatChannelManager::new(),
+            conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
+    }
+
+    fn answered_option(rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>) -> Option<String> {
+        match rx.try_recv() {
+            Ok(ConnectionCommand::RespondPermission {
+                request_id,
+                option_id,
+                origin,
+            }) => {
+                assert_eq!(origin, PermissionAnswerOrigin::ChatChannel);
+                assert_eq!(request_id, "req-1");
+                Some(option_id)
+            }
+            Ok(_) => panic!("expected a permission response"),
+            Err(_) => None,
+        }
+    }
+
+    async fn pending_request_id(bridge: &Arc<Mutex<SessionBridge>>) -> Option<String> {
+        bridge
+            .lock()
+            .await
+            .get("conn-auto")
+            .and_then(|s| s.permission_pending.as_ref())
+            .map(|p| p.request_id.clone())
+    }
+
+    #[tokio::test]
+    async fn auto_approve_allows_once_when_the_rejection_leads() {
+        // claude-agent-acp 0.91.0 leads with the rejection for a call the
+        // Claude CLI marks `defaultToNo`; picked by position, auto-approve
+        // turned down exactly the calls it was there to let through.
+        let db = test_helpers::fresh_in_memory_db().await;
+        let (bridge, conn_mgr, mut rx) = auto_approving_session(&db).await;
+
+        request_permission(
+            &db,
+            &bridge,
+            &conn_mgr,
+            vec![
+                permission_option("reject", "No", "reject_once"),
+                permission_option("allow-once", "Yes", "allow_once"),
+                permission_option(
+                    "allow-with-updates",
+                    "Yes, and don't ask again",
+                    "allow_always",
+                ),
+            ],
+        )
+        .await;
+
+        assert_eq!(answered_option(&mut rx).as_deref(), Some("allow-once"));
+        assert_eq!(pending_request_id(&bridge).await, None);
+    }
+
+    #[tokio::test]
+    async fn auto_approve_leaves_a_request_without_an_allow_once_option_to_the_sender() {
+        // Auto-approve answers for the sender one call at a time; a standing
+        // allow in the agent's own settings is not its to grant. The request
+        // goes to the chat like any other, for the sender to answer.
+        let db = test_helpers::fresh_in_memory_db().await;
+        let (bridge, conn_mgr, mut rx) = auto_approving_session(&db).await;
+
+        request_permission(
+            &db,
+            &bridge,
+            &conn_mgr,
+            vec![
+                permission_option(
+                    "allow-with-updates",
+                    "Yes, and don't ask again",
+                    "allow_always",
+                ),
+                permission_option("reject", "No", "reject_once"),
+            ],
+        )
+        .await;
+
+        assert_eq!(answered_option(&mut rx), None);
+        assert_eq!(pending_request_id(&bridge).await.as_deref(), Some("req-1"));
     }
 }

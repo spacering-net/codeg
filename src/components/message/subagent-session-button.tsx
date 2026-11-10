@@ -13,8 +13,7 @@
  * Styled as the quieter sibling of the capsule's own pill: same chip family
  * (`ws-msg-chip`, so it stays legible over a workspace background image),
  * muted until hover. The label collapses to icon-only on narrow capsules via the
- * `@container/agentcap` the header row declares — the same trick
- * `DelegationCardRow` uses for the delegation cards' identical action.
+ * `@container/agentcap` the header row declares.
  */
 
 import { MessagesSquare } from "lucide-react"

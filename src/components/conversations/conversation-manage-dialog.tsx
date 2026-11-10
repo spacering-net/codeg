@@ -84,6 +84,7 @@ import {
 import { FolderAliasLabel } from "@/components/conversations/folder-alias-label"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/contexts/tab-context"
+import { useAcpAgents } from "@/hooks/use-acp-agents"
 import {
   deleteConversation,
   listAllConversations,
@@ -521,6 +522,7 @@ export function ConversationManageDialog({
   )
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const { closeConversationTab } = useTabActions()
+  const { agents } = useAcpAgents()
 
   const [search, setSearch] = useState("")
   /** The folder facet: a folder id, or `null` for the whole workspace. */
@@ -542,6 +544,22 @@ export function ConversationManageDialog({
   const [pending, setPending] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState(false)
+
+  // History remains filterable when an agent is disabled or removed. Prefer
+  // the live registry's order, retain built-ins while it loads, and include
+  // agents from saved rows plus the selection even after an empty response.
+  const agentTypes = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...agents.map((agent) => agent.agent_type),
+          ...ALL_AGENT_TYPES,
+          ...rows.map((row) => row.agent_type),
+          ...(agentFilter === "all" ? [] : [agentFilter]),
+        ])
+      ),
+    [agents, rows, agentFilter]
+  )
 
   // The folders the scope facet offers: the top-level repos the sidebar draws
   // headers for. Worktree children are reached through their parent (see
@@ -870,8 +888,12 @@ export function ConversationManageDialog({
                       {t("agentFilterAll")}
                     </span>
                   </SelectItem>
-                  {ALL_AGENT_TYPES.map((at) => (
-                    <SelectItem key={at} value={at}>
+                  {agentTypes.map((at) => (
+                    <SelectItem
+                      key={at}
+                      value={at}
+                      textValue={getAgentLabel(at)}
+                    >
                       <span className="flex items-center gap-2">
                         <AgentIcon agentType={at} className="h-3.5 w-3.5" />
                         {getAgentLabel(at)}
@@ -984,70 +1006,76 @@ export function ConversationManageDialog({
                           agentType={conv.agent_type}
                           className="h-4 w-4 shrink-0"
                         />
-                        <span className="flex-1 min-w-0 truncate text-sm">
-                          {formatConversationTitle(conv.title) ||
-                            t("untitledConversation")}
-                        </span>
-                        {showFolderColumn ? (
-                          // Workspace-wide scope only: with rows from every
-                          // folder the title alone doesn't say which project a
-                          // conversation belongs to.
-                          <span
-                            className="shrink-0 max-w-28 truncate text-xs text-muted-foreground"
-                            title={
-                              folder
-                                ? [
-                                    formatFolderLabelWithAlias(folder),
-                                    folder.path,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · ")
-                                : `#${conv.folder_id}`
-                            }
-                          >
-                            {folder ? (
-                              <FolderAliasLabel
-                                name={folder.name}
-                                alias={folder.alias}
-                              />
-                            ) : (
-                              `#${conv.folder_id}`
-                            )}
+                        <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+                          <span className="min-w-0 truncate text-sm sm:flex-1">
+                            {formatConversationTitle(conv.title) ||
+                              t("untitledConversation")}
                           </span>
-                        ) : null}
-                        {/* The branch the conversation was started on — what
-                            tells two runs of the same project apart. */}
-                        <span
-                          className="flex w-28 shrink-0 items-center justify-end gap-1 text-xs text-muted-foreground"
-                          title={conv.git_branch ?? t("branchNone")}
-                        >
-                          {conv.git_branch ? (
-                            <>
-                              <GitBranch
-                                className="h-3 w-3 shrink-0"
-                                aria-hidden="true"
-                              />
-                              <span dir="ltr" className="truncate">
-                                {conv.git_branch}
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:shrink-0 sm:flex-nowrap">
+                            {showFolderColumn ? (
+                              // Workspace-wide scope only: with rows from every
+                              // folder the title alone doesn't say which project a
+                              // conversation belongs to.
+                              <span
+                                className="shrink-0 max-w-28 truncate text-xs text-muted-foreground"
+                                title={
+                                  folder
+                                    ? [
+                                        formatFolderLabelWithAlias(folder),
+                                        folder.path,
+                                      ]
+                                        .filter(Boolean)
+                                        .join(" · ")
+                                    : `#${conv.folder_id}`
+                                }
+                              >
+                                {folder ? (
+                                  <FolderAliasLabel
+                                    name={folder.name}
+                                    alias={folder.alias}
+                                  />
+                                ) : (
+                                  `#${conv.folder_id}`
+                                )}
                               </span>
-                            </>
-                          ) : (
-                            <span className="text-muted-foreground/60">—</span>
-                          )}
-                        </span>
-                        <span className="shrink-0 text-xs text-muted-foreground w-10 text-right">
-                          {formatRelative(conv.created_at)}
-                        </span>
-                        <ConversationStatusDot
-                          status={conv.status as ConversationStatus}
-                          title={
-                            STATUS_ORDER.includes(
-                              conv.status as ConversationStatus
-                            )
-                              ? tStatus(conv.status as ConversationStatus)
-                              : conv.status
-                          }
-                        />
+                            ) : null}
+                            {/* The branch the conversation was started on — what
+                            tells two runs of the same project apart. */}
+                            <span
+                              className="flex min-w-0 max-w-full items-center gap-1 text-xs text-muted-foreground sm:w-28 sm:shrink-0 sm:justify-end"
+                              title={conv.git_branch ?? t("branchNone")}
+                            >
+                              {conv.git_branch ? (
+                                <>
+                                  <GitBranch
+                                    className="h-3 w-3 shrink-0"
+                                    aria-hidden="true"
+                                  />
+                                  <span dir="ltr" className="truncate">
+                                    {conv.git_branch}
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="text-muted-foreground/60">
+                                  —
+                                </span>
+                              )}
+                            </span>
+                            <span className="shrink-0 text-xs text-muted-foreground sm:w-10 sm:text-right">
+                              {formatRelative(conv.created_at)}
+                            </span>
+                            <ConversationStatusDot
+                              status={conv.status as ConversationStatus}
+                              title={
+                                STATUS_ORDER.includes(
+                                  conv.status as ConversationStatus
+                                )
+                                  ? tStatus(conv.status as ConversationStatus)
+                                  : conv.status
+                              }
+                            />
+                          </div>
+                        </div>
                       </div>
                     )
                   })

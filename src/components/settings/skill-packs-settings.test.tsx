@@ -43,6 +43,9 @@ vi.mock("@/components/settings/office-tools-settings", () => ({
 vi.mock("@/components/settings/custom-skills-settings", () => ({
   CustomSkillsBody: () => <div data-testid="custom-body" />,
 }))
+vi.mock("@/components/settings/generative-ui-settings", () => ({
+  GenerativeUiBody: () => <div data-testid="ui-body" />,
+}))
 
 import { SkillPacksSettings } from "./skill-packs-settings"
 import enMessages from "@/i18n/messages/en.json"
@@ -62,7 +65,7 @@ describe("SkillPacksSettings", () => {
     currentSearch = ""
   })
 
-  it("renders the shared header, four tabs, and the fixed toolbar", () => {
+  it("renders the shared header, five tabs, and the fixed toolbar", () => {
     renderHub()
     expect(screen.getByText("Skill Packs")).toBeInTheDocument()
     expect(
@@ -73,6 +76,7 @@ describe("SkillPacksSettings", () => {
     expect(
       screen.getByRole("tab", { name: "Office Tools" })
     ).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "UI" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Custom" })).toBeInTheDocument()
     // The two toolbar buttons are fixed — present regardless of the active tab.
     expect(
@@ -106,6 +110,13 @@ describe("SkillPacksSettings", () => {
     currentSearch = "tab=office"
     renderHub()
     expect(screen.getByTestId("office-body")).toBeInTheDocument()
+    expect(screen.queryByTestId("experts-body")).not.toBeInTheDocument()
+  })
+
+  it("honors a ?tab=ui deep-link to the generative-UI skill", () => {
+    currentSearch = "tab=ui"
+    renderHub()
+    expect(screen.getByTestId("ui-body")).toBeInTheDocument()
     expect(screen.queryByTestId("experts-body")).not.toBeInTheDocument()
   })
 

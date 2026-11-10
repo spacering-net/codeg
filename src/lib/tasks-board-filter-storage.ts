@@ -1,5 +1,7 @@
 "use client"
 
+import { useSyncExternalStore } from "react"
+
 const BOARD_FILTER_KEY = "workspace:tasks-board-filter"
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
@@ -63,6 +65,82 @@ export function saveTasksBoardFilter(filter: TasksBoardFilter): void {
   } catch {
     /* ignore */
   }
+  // Published from the value, not read back: a write storage refuses still
+  // holds in this window, as it does on the board that made it.
+  publishTasksBoardFilter({
+    showCanceled: filter.showCanceled,
+    showArchived: filter.showArchived,
+  })
+}
+
+// ── Live copy for the board's other reader ──
+//
+// The aux panel's task tab applies the same two toggles as the board, and it
+// stays mounted while the board is opened, changed and left again. So the
+// toggles are also kept as one parsed copy per window, republished on every
+// save (the board saves on each change) and on another window's write — the
+// tab follows the board instead of keeping whatever was stored when it first
+// mounted. Its identity only changes when a toggle does.
+
+let filterSnapshot: TasksBoardFilter | null = null
+const filterListeners = new Set<() => void>()
+let filterWindowBound = false
+
+function publishTasksBoardFilter(next: TasksBoardFilter): void {
+  if (
+    filterSnapshot != null &&
+    filterSnapshot.showCanceled === next.showCanceled &&
+    filterSnapshot.showArchived === next.showArchived
+  ) {
+    return
+  }
+  filterSnapshot = next
+  for (const listener of filterListeners) listener()
+}
+
+function bindFilterWindow(): void {
+  if (filterWindowBound || typeof window === "undefined") return
+  filterWindowBound = true
+  window.addEventListener("storage", (event) => {
+    // `key === null` is a wholesale `localStorage.clear()` elsewhere.
+    if (event.key !== null && event.key !== BOARD_FILTER_KEY) return
+    publishTasksBoardFilter(loadTasksBoardFilter())
+  })
+}
+
+export function subscribeTasksBoardFilter(onChange: () => void): () => void {
+  bindFilterWindow()
+  filterListeners.add(onChange)
+  return () => {
+    filterListeners.delete(onChange)
+  }
+}
+
+/** The current toggles; the identity only changes when they do. */
+export function getTasksBoardFilter(): TasksBoardFilter {
+  bindFilterWindow()
+  if (typeof window === "undefined") return DEFAULT_TASKS_BOARD_FILTER
+  filterSnapshot ??= loadTasksBoardFilter()
+  return filterSnapshot
+}
+
+function getServerTasksBoardFilter(): TasksBoardFilter {
+  return DEFAULT_TASKS_BOARD_FILTER
+}
+
+/** Reactive read of the board's visibility toggles, live across saves here and
+ *  in other windows. */
+export function useTasksBoardFilter(): TasksBoardFilter {
+  return useSyncExternalStore(
+    subscribeTasksBoardFilter,
+    getTasksBoardFilter,
+    getServerTasksBoardFilter
+  )
+}
+
+/** Test seam: forget the parsed copy so the next read hits storage. */
+export function resetTasksBoardFilterCacheForTests(): void {
+  filterSnapshot = null
 }
 
 export function loadTasksViewMode(): TasksViewMode {

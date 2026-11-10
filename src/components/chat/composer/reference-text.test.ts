@@ -64,6 +64,34 @@ describe("referenceToMarkdown", () => {
     ).toBe("[@Codex](codeg://agent/codex)")
   })
 
+  it("renders an assistant as a [@name](codeg://assistant/<id>) link", () => {
+    expect(
+      referenceToMarkdown(
+        ref({
+          refType: "assistant",
+          id: "3",
+          label: "Code Reviewer",
+          uri: "codeg://assistant/3",
+          meta: { assistantId: 3 },
+        })
+      )
+    ).toBe("[@Code Reviewer](codeg://assistant/3)")
+  })
+
+  it("escapes an assistant name that could break out of its link", () => {
+    // The backend's routing scan accepts backslash escapes inside the text.
+    expect(
+      referenceToMarkdown(
+        ref({
+          refType: "assistant",
+          id: "3",
+          label: "Rev](x) [y",
+          uri: "codeg://assistant/3",
+        })
+      )
+    ).toBe("[@Rev\\]\\(x\\) \\[y](codeg://assistant/3)")
+  })
+
   it("renders a skill as a /invocation token from its id", () => {
     expect(
       referenceToMarkdown(ref({ refType: "skill", id: "code-review" }))
@@ -221,6 +249,28 @@ describe("referenceToMarkdown", () => {
       expect(
         referenceToMarkdown(ref({ refType: "skill", id: "scope/my.skill_v2" }))
       ).toBe("/scope/my.skill_v2")
+    })
+
+    it("keeps a namespaced command id literal (must invoke)", () => {
+      // Qoder advertises skills as `sites:sites-building`; an escaped `_` in a
+      // namespaced name would reach the agent as a different command.
+      expect(
+        referenceToMarkdown(
+          ref({ refType: "skill", id: "sites:sites-building" })
+        )
+      ).toBe("/sites:sites-building")
+      expect(
+        referenceToMarkdown(ref({ refType: "skill", id: "my_plugin:run_all" }))
+      ).toBe("/my_plugin:run_all")
+    })
+
+    it("still neutralizes a namespaced id that could autolink or emphasize", () => {
+      expect(
+        referenceToMarkdown(ref({ refType: "skill", id: "http:evil" }))
+      ).toBe("`/http:evil`")
+      expect(referenceToMarkdown(ref({ refType: "skill", id: "a:_b" }))).toBe(
+        "/a:\\_b"
+      )
     })
 
     it("escapes a `_` that flanks a separator (would emphasize otherwise)", () => {

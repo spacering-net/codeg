@@ -25,14 +25,6 @@ vi.mock("@/components/ai-elements/link-safety", () => ({
   useStreamdownLinkSafety: () => ({ enabled: false }),
 }))
 
-vi.mock("@/components/ai-elements/code-block", () => ({
-  CodeBlock: ({ code, language }: { code: string; language?: string }) => (
-    <pre data-testid="code-block" data-language={language}>
-      {code}
-    </pre>
-  ),
-}))
-
 vi.mock("@/components/ai-elements/message", () => ({
   MessageResponse: ({ children }: { children: string }) => (
     <div>{children}</div>
@@ -84,20 +76,23 @@ describe("codex code-mode cards", () => {
     ])
 
     expect(screen.getByText("cargo test")).toBeInTheDocument()
-    // First block is the input (the script); the second is the output body.
-    const block = screen.getAllByTestId("code-block")[0]
-    expect(block).toHaveAttribute("data-language", "javascript")
-    expect(block.textContent).toContain("Promise.all")
-    expect(screen.getByText("1 tool call")).toBeInTheDocument()
-    expect(document.body.textContent).toContain("test result: ok. 12 passed")
+    // The panel holds the script, then its output.
+    const panel = document.querySelector(".activity-detail-box")!
+    const script = panel.textContent!.indexOf("Promise.all")
+    expect(script).toBeGreaterThan(-1)
+    expect(
+      panel.textContent!.indexOf("test result: ok. 12 passed")
+    ).toBeGreaterThan(script)
+    // No count of the script's tool call sites: a site in a `map` runs once
+    // per item, so "1 tool call" undercounts what it ran.
+    expect(panel.textContent).not.toContain("tool call")
   })
 
   it("falls back to a plain Script label when no command could be read", () => {
     renderParts([scriptPart({ source: "text('hi');", call_count: 0 }, "hi")])
 
     expect(screen.getByText("Script")).toBeInTheDocument()
-    // The count line is suppressed when the script called no tools at all.
-    expect(document.body.textContent).not.toContain("tool call")
+    expect(document.body.textContent).toContain("text('hi');")
   })
 
   it("never renders the script as a shell command", () => {

@@ -67,6 +67,10 @@ pub struct WorkTaskInfo {
     /// Planned start of a to-do task (`None` = no plan). Cleared the moment the
     /// task is claimed, by the scheduler or by hand.
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// The user put this settled (review / failed) task aside to handle later:
+    /// the board files it under Done until they pick it back up. `None` = not
+    /// put aside. Cleared by every transition out of review / failed.
+    pub deferred_at: Option<DateTime<Utc>>,
     /// Forge provenance ('forge_issue' | 'forge_pr'); `None` = not forge-sourced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,
@@ -76,6 +80,12 @@ pub struct WorkTaskInfo {
     /// Source snapshot (URL, title, account id …), parsed from the row's JSON.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_meta: Option<serde_json::Value>,
+    /// Where a task WITHOUT forge provenance delivered its work, and the pull
+    /// request it opened (`forge::WorkTaskDelivery`), parsed from the row's
+    /// JSON. `None` until such a task is first delivered, and always on a
+    /// forge-sourced task — that one's pull request is `source_meta.result_pr`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<serde_json::Value>,
     /// Latest `agent_progress` milestone OF THIS GENERATION (filled by `list`
     /// for live tasks only — the card's realtime progress line). Scoped by
     /// `run_seq`: a retry, a follow-up and a merge each start a new one, and
@@ -127,10 +137,24 @@ pub struct WorkTaskDraft {
 pub struct WorkTaskSource {
     /// 'forge_issue' | 'forge_pr'
     pub kind: String,
-    /// Canonical key from `forge::source_key` — recomputed server-side.
+    /// Canonical key from `forge::source_key` — recomputed server-side. The
+    /// task's lead item: its only one, unless `extra_keys` names more.
     pub key: String,
+    /// The other items a task made from several related issues handles, in
+    /// the task's own order after the lead. Empty for a task triggered from
+    /// one item. Same derivation as `key`.
+    #[serde(default)]
+    pub extra_keys: Vec<String>,
     /// `ForgeSourceMeta` as JSON (URL, title, account id, PR head/base …).
     pub meta: serde_json::Value,
+}
+
+impl WorkTaskSource {
+    /// Every item the task handles, lead first — what its
+    /// `work_task_source_key` rows record.
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.key).chain(self.extra_keys.iter())
+    }
 }
 
 /// Wire DTO for a saved task template: a display name plus the title seed and
@@ -416,8 +440,10 @@ pub struct WorkTaskMergeState {
     /// Land only: "squash" | "merge"
     #[serde(default)]
     pub strategy: String,
-    /// Whether the user asked to delete the worktree after landing — persisted
-    /// so crash recovery can honor the choice when it back-fills `done`.
+    /// Whether the user asked to delete the worktree after landing — or, on a
+    /// delivery, after it settles `done` — persisted so crash recovery can
+    /// honor the choice when it back-fills `done`. Never set together with
+    /// `keep_in_review`: a task that stays in review keeps its checkout.
     #[serde(default)]
     pub delete_worktree: bool,
     /// The agent writes the commit message itself (`message` is empty then).
@@ -443,6 +469,25 @@ pub struct WorkTaskMergeState {
     /// Delivery only: open the pull request as a draft.
     #[serde(default)]
     pub draft: bool,
+    /// Delivery only: the user chose NOT to finish the task with this
+    /// delivery, so it settles back to review — the pull request recorded on
+    /// the row, the worktree kept — instead of to `done`, and its next
+    /// delivery pushes into that same pull request. `false` on every row
+    /// written before the choice existed, which is what they all did.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_in_review: bool,
+    /// Delivery only, and only for a task without forge provenance: the
+    /// repository and account this delivery pushes with. Persisted because
+    /// such a task has nothing else naming them until its first delivery
+    /// settles — crash recovery must ask the same forge, as the same account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<crate::forge::DeliveryTarget>,
+    /// Delivery only: the pull request this delivery pushes INTO — the one an
+    /// earlier delivery opened and the task stayed in review after. Absent
+    /// when it opens (or adopts by branch) a pull request instead, and on a
+    /// pull-request task, whose number is part of its own identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_number: Option<i64>,
 }
 
 /// A merge the user asked for while the folder's one merge slot was busy,

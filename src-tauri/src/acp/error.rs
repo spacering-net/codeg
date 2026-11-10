@@ -65,6 +65,29 @@ pub enum AcpError {
     /// message and the frontend renders the suggestion alongside it.
     #[error("{0}")]
     McpRejectedByAgent(String),
+    /// The agent refused to OPEN a session with ACP's `authRequired` (-32000):
+    /// it launched fine and simply has no credential it can use. Distinct from
+    /// the same rejection on `session/prompt`, which is turn-scoped and leaves
+    /// the connection alive (`turn_failed_auth_required`).
+    ///
+    /// It earns a code of its own because the agent's own wording is the part
+    /// the user cannot act on. cursor-agent, for one, answers `Please run
+    /// 'agent login' first` — and `agent` is not a command that exists: the
+    /// binary is `cursor-agent`, and codeg's managed copy is not on `$PATH`
+    /// either. The frontend renders codeg's instruction from the code instead
+    /// and points at the agent's own settings panel, which knows the path.
+    #[error("{0}")]
+    AgentAuthRequired(String),
+    /// The agent launched, but its own runtime is too old for the ACP adapter
+    /// codeg pins, so no session can open. pi is the case today: pi-acp asks pi
+    /// for the current model's thinking levels while opening every session, and
+    /// a pi that predates that RPC answers `Unknown command`. Recognised from that
+    /// answer rather than predicted from a version string (see
+    /// `acp::connection::pi_runtime_is_outdated`). Carries codeg's upgrade
+    /// instructions — which version is needed and how to get it — shown as the
+    /// notification's detail under the localized headline.
+    #[error("{0}")]
+    AgentRuntimeOutdated(String),
 }
 
 impl AcpError {
@@ -84,9 +107,16 @@ impl AcpError {
 
     /// [`Self::McpRejectedByAgent`] with the same sanitization
     /// [`Self::protocol`] applies — the agent's message is still shown, so it
-    /// must not leak local paths or spawn metadata either.
+    /// drops the spawn metadata too.
     pub fn mcp_rejected(raw: impl Into<String>) -> Self {
         Self::McpRejectedByAgent(sanitize_protocol_message(&raw.into()))
+    }
+
+    /// [`Self::AgentAuthRequired`] with the same sanitization. The payload is
+    /// only a fallback (logs, and any surface that has no code mapping); the
+    /// user-facing wording comes from the code.
+    pub fn agent_auth_required(raw: impl Into<String>) -> Self {
+        Self::AgentAuthRequired(sanitize_protocol_message(&raw.into()))
     }
 
     /// Stable machine-readable identifier for this error kind.
@@ -111,6 +141,8 @@ impl AcpError {
             Self::DownloadFailed(_) => Some("download_failed"),
             Self::ConnectionNotFound(_) => Some("connection_not_found"),
             Self::McpRejectedByAgent(_) => Some("mcp_rejected_by_agent"),
+            Self::AgentAuthRequired(_) => Some("agent_auth_required"),
+            Self::AgentRuntimeOutdated(_) => Some("agent_runtime_outdated"),
             Self::Protocol(_) => None,
         }
     }
@@ -125,24 +157,26 @@ impl Serialize for AcpError {
     }
 }
 
+/// Drops the spawn metadata (`"spawned_at": "…"`) an error's JSON can carry,
+/// which tells the user nothing.
+///
+/// Local paths are kept. codeg is run by the person whose machine it runs on,
+/// and the path is often the part of the message they act on: Claude Code's
+/// `config_file_invalid` names the settings file to fix, and codeg's own
+/// messages name the file they could not lock or write. These paths used to be
+/// replaced with `<local-path>`, which hid exactly that, swallowed the
+/// punctuation after each path, and only ever caught `/Users/` and `/home/`
+/// (a Windows path showed in full).
 fn sanitize_protocol_message(raw: &str) -> String {
     let without_spawned_at = regex::Regex::new(r#"\s*,?\s*"spawned_at"\s*:\s*"[^"]*"\s*,?"#)
         .ok()
         .map(|re| re.replace_all(raw, "").into_owned())
         .unwrap_or_else(|| raw.to_string());
 
-    let without_dangling_comma = regex::Regex::new(r#",\s*([}\]])"#)
+    regex::Regex::new(r#",\s*([}\]])"#)
         .ok()
         .map(|re| re.replace_all(&without_spawned_at, "$1").into_owned())
-        .unwrap_or(without_spawned_at);
-
-    regex::Regex::new(r#"/(?:Users|home)/[^"\s]+"#)
-        .ok()
-        .map(|re| {
-            re.replace_all(&without_dangling_comma, "<local-path>")
-                .into_owned()
-        })
-        .unwrap_or(without_dangling_comma)
+        .unwrap_or(without_spawned_at)
 }
 
 fn is_executable_format_error(message: &str) -> bool {
@@ -152,4 +186,54 @@ fn is_executable_format_error(message: &str) -> bool {
         || lowered.contains("bad cpu type in executable")
         || lowered.contains("not a valid win32 application")
         || lowered.contains("is not a valid application for this os platform")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Claude Code 2.1.318 refusing to start over a broken settings file
+    /// (claude-agent-acp 0.101.0, `startupFailureReason: config_file_invalid`).
+    const CONFIG_FILE_INVALID: &str = "Internal error: Configuration error in \
+        /Users/me/.claude/.claude.json: JSON Parse error: Expected '}'\n\
+        No backup of this file was found.\n\
+        Fix the JSON in /Users/me/.claude/.claude.json, or move the file aside \
+        to start with default settings.";
+
+    fn payload(err: AcpError) -> String {
+        match err {
+            AcpError::Protocol(message)
+            | AcpError::McpRejectedByAgent(message)
+            | AcpError::AgentAuthRequired(message) => message,
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_protocol_error_keeps_the_paths_it_names() {
+        assert_eq!(
+            payload(AcpError::protocol(CONFIG_FILE_INVALID)),
+            CONFIG_FILE_INVALID
+        );
+        let raw = "ENOENT: no such file or directory, open '/home/me/.codex/config.toml'";
+        assert_eq!(payload(AcpError::protocol(raw)), raw);
+    }
+
+    #[test]
+    fn the_agent_worded_errors_keep_their_paths_too() {
+        let raw = "Please run 'agent login' first (reading /Users/me/.cursor/cli-config.json)";
+        assert_eq!(payload(AcpError::agent_auth_required(raw)), raw);
+        let raw = "cannot start MCP server /home/me/bin/codeg-mcp: permission denied";
+        assert_eq!(payload(AcpError::mcp_rejected(raw)), raw);
+    }
+
+    #[test]
+    fn spawn_metadata_is_still_dropped() {
+        assert_eq!(
+            payload(AcpError::protocol(
+                r#"{"error":"boom","spawned_at":"2026-11-06T01:02:03Z"}"#
+            )),
+            r#"{"error":"boom"}"#
+        );
+    }
 }

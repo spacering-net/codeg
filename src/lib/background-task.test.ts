@@ -170,6 +170,54 @@ describe("parseBackgroundLaunch", () => {
   it("extracts the task id from a background launch result", () => {
     expect(parseBackgroundLaunch(LAUNCH)).toEqual({ taskId: "be7lh91re" })
   })
+  it("recognizes every wording Claude Code uses for a command moved to the background", () => {
+    // Claude Code 2.1.286's acknowledgements, verbatim. The steer one is from a
+    // live run: the transcript stores it bare, claude-agent-acp wraps it in a
+    // console fence on the wire.
+    const steered =
+      "Command was moved to the background (ID: bj0x9uqsf) so that a message that arrived while it was running can reach you; it was not interrupted. Output is being written to: /private/tmp/x/tasks/bj0x9uqsf.output. You will be notified when it completes. If it is still running after 30m in the background, it will be stopped and you will be notified. To check interim output, use Read on that file path."
+    expect(parseBackgroundLaunch(steered)).toEqual({ taskId: "bj0x9uqsf" })
+    expect(parseBackgroundLaunch("```console\n" + steered + "\n```")).toEqual({
+      taskId: "bj0x9uqsf",
+    })
+    expect(
+      parseBackgroundLaunch(
+        "Command did not complete within its 120s timeout and was moved to the background (ID: b3k9x2m1q). Output is being written to: /tmp/tasks/b3k9x2m1q.output. You will be notified when it completes."
+      )
+    ).toEqual({ taskId: "b3k9x2m1q" })
+    expect(
+      parseBackgroundLaunch(
+        "Command was manually backgrounded by user with ID: bz81ab3cd. Output is being written to: /tmp/tasks/bz81ab3cd.output."
+      )
+    ).toEqual({ taskId: "bz81ab3cd" })
+  })
+  it("finds the timed-out acknowledgement after the output so far", () => {
+    // Claude Code 2.1.312 (claude-agent-acp 0.99.0) puts what a command that
+    // outlived its timeout printed before the sentence; the transcript keeps
+    // it bare and the adapter fences it on the wire. Captured live.
+    const timedOut =
+      "tick-1\ntick-2\nCommand did not complete within its 2s timeout and was moved to the background (ID: bekp4cb00). Output is being written to: /private/tmp/claude-501/w/56c31d82/tasks/bekp4cb00.output. You will be notified when it completes. If it is still running after 30m in the background, it will be stopped and you will be notified. It is running now: do not start a second copy while it runs. If it is no longer needed, stop it with TaskStop. To check interim output, use Read on that file path."
+    expect(parseBackgroundLaunch(timedOut)).toEqual({ taskId: "bekp4cb00" })
+    expect(parseBackgroundLaunch("```console\n" + timedOut + "\n```")).toEqual({
+      taskId: "bekp4cb00",
+    })
+  })
+  it("recognizes OpenCode 2's background shell acknowledgement", () => {
+    // packages/core/src/tool/plugin/shell.ts `backgroundResult`, 2.2.0 capture.
+    expect(
+      parseBackgroundLaunch(
+        "Command moved to the background (shell ID: sh_17d9d0e2d001XnyG98WPjd9Z7G).\nOutput is streaming to: /w/xdg/data/opencode/shell/sh_17d9d0e2d001XnyG98WPjd9Z7G.log"
+      )
+    ).toEqual({ taskId: "sh_17d9d0e2d001XnyG98WPjd9Z7G" })
+  })
+  it("leaves an MCP tool that was moved to the background alone", () => {
+    // Not a command acknowledgement: the MCP card has no launch body to swap.
+    expect(
+      parseBackgroundLaunch(
+        'MCP tool "blocker/wait_for_answer" was moved to the background as task kjgwltsdi so that a message that arrived while it was running can reach you; it was not interrupted and keeps running'
+      )
+    ).toBeNull()
+  })
   it("extracts the task id from Grok's launch acknowledgement", () => {
     expect(parseBackgroundLaunch(GROK_LAUNCH)).toEqual({
       taskId: "term_b0d9512484964551a5bac4f82a805ae2",

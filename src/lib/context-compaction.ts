@@ -20,10 +20,9 @@
  * boolean. Because recognition is by `_meta` key and NOT by agent, an adapter
  * that adopts the convention lights the card up with no wiring — which is
  * exactly what claude 0.75.0 did. Matching renders through the dedicated
- * `<ContextCompactionCard>` (a subtle status row, not the generic tool shell)
- * and must NOT fold into a "调用 N 个工具" tool-group.
+ * `<ContextCompactionCard>` (a subtle status row, not the generic tool shell).
  *
- * Kept in a dependency-free module so both the grouping pass
+ * Kept in a dependency-free module so the adapter's passes
  * (`ai-elements-adapter.ts`) and the card/renderer can share it without an
  * import cycle (the card re-exports `ToolCallState` from the adapter).
  */
@@ -36,6 +35,36 @@ export function isContextCompactionMeta(meta: unknown): boolean {
   return (
     typeof version === "number" && Number.isInteger(version) && version >= 1
   )
+}
+
+/**
+ * `_meta` key with which the backend claims a compaction call's output IS its
+ * retained summary. The Rust twin (`COMPACTION_SUMMARY_META_KEY` in
+ * `parsers/mod.rs`) is stamped by the reader that translates the ACP
+ * `compaction_update` / `compaction_summary_chunk` lifecycle, whose summary
+ * streams on the call's `raw_output`, and by the history parsers that recover
+ * the summary from the transcript onto the divider's result (claude's
+ * continuation record, codex's `compacted` record).
+ */
+export const COMPACTION_SUMMARY_META_KEY = "codeg.compactionSummary"
+
+/**
+ * The retained summary a compaction call carries, or `null`.
+ *
+ * Requires the backend's explicit claim rather than trusting any output: the
+ * LEGACY compaction call puts other things on the same channel (claude's parks
+ * its `{trigger, preTokens, …}` metadata object there), and a history divider
+ * whose transcript kept no summary has none to claim.
+ */
+export function contextCompactionSummary(
+  meta: unknown,
+  output: string | null | undefined
+): string | null {
+  if (!isContextCompactionMeta(meta)) return null
+  if ((meta as Record<string, unknown>)[COMPACTION_SUMMARY_META_KEY] !== true) {
+    return null
+  }
+  return typeof output === "string" && output.trim().length > 0 ? output : null
 }
 
 /**

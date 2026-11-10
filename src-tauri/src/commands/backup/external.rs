@@ -6,10 +6,12 @@
 //! them to a safe side folder (SideLocation), or — only with an explicit
 //! conflict decision — write them back to their original locations
 //! (OriginalLocations), where any file that already exists is skipped unless
-//! the user authorized overwriting.
+//! the user authorized overwriting. The one exception is an append-only index
+//! ([`AppendOnlyIndex`]), which is merged into its live copy by appending.
 
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -19,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use zip::ZipArchive;
 
 use crate::app_error::AppCommandError;
-use crate::parsers::{external_transcript_sources, ExternalSource};
+use crate::parsers::{external_transcript_sources, AppendOnlyIndex, ExternalSource};
 
 use super::archive::{ArchiveBuilder, ProgressFn};
 use super::manifest::{DegradedSqlite, SqliteDegradation};
@@ -477,9 +479,18 @@ fn scan_external_conflicts_with_sources(
             continue;
         };
         let rel_str = to_slash(&rel);
-        let Some((agent, _base, target)) = map_external_to_target(&rel_str, sources) else {
+        let Some((agent, base, target)) = map_external_to_target(&rel_str, sources) else {
             continue;
         };
+        // An index is merged into its live copy rather than skipped or
+        // replaced, so a live one is not a conflict — unless what sits at its
+        // path is not a file, which `merge_index` leaves to the ordinary
+        // conflict handling.
+        if index_at(sources, &agent, &base, &target).is_some()
+            && std::fs::symlink_metadata(&target).map_or(true, |meta| meta.file_type().is_file())
+        {
+            continue;
+        }
         // `symlink_metadata` matches the restore-side conflict test exactly, so
         // the preview reports dangling symlinks too (they are conflicts on
         // restore).
@@ -595,7 +606,11 @@ fn restore_external_with_sources(
             continue;
         }
 
-        match restore_one(entry.path(), &base, &target, policy, sqlite_store) {
+        let outcome = match index_at(sources, &agent, &base, &target) {
+            Some(index) => merge_index(entry.path(), &base, &target, index, policy),
+            None => restore_one(entry.path(), &base, &target, policy, sqlite_store),
+        };
+        match outcome {
             FileOutcome::Written => {}
             FileOutcome::Skipped => report
                 .skipped_conflicts
@@ -705,6 +720,125 @@ fn restore_one(
             FileOutcome::Written
         }
     }
+}
+
+/// The append-only index `target` is, if its source declares one there.
+fn index_at<'a>(
+    sources: &'a [ExternalSource],
+    agent: &str,
+    base: &Path,
+    target: &Path,
+) -> Option<&'a AppendOnlyIndex> {
+    let src = sources.iter().find(|s| s.agent == agent)?;
+    let rel = to_slash(target.strip_prefix(base).ok()?);
+    src.indexes.iter().find(|index| index.path == rel)
+}
+
+/// Restore an [`AppendOnlyIndex`] by appending to the live copy.
+///
+/// The backup's lines are appended for every key the live copy has no line
+/// for. Under `Overwrite` they are also appended for every key whose newest
+/// line differs: landing last, they win, just as the transcript they describe
+/// replaced the live one. Under `SkipExisting` such a key keeps its live line,
+/// as its transcript was kept. Only lines the reader uses count (see
+/// [`keyed_lines`]); any other line is neither compared nor appended.
+///
+/// The live bytes are never rewritten. Appending is how the CLI itself writes
+/// the file, so one that is running, or holds the file open, loses nothing;
+/// a rewrite-and-rename would discard whatever it appended meanwhile.
+fn merge_index(
+    src: &Path,
+    base: &Path,
+    target: &Path,
+    index: &AppendOnlyIndex,
+    policy: ConflictPolicy,
+) -> FileOutcome {
+    match std::fs::symlink_metadata(target) {
+        Ok(meta) if meta.file_type().is_file() => {}
+        // Absent: an ordinary restore. Anything else at that path (a
+        // symlink, a directory) is not ours to append to, and gets the
+        // ordinary conflict handling.
+        _ => return restore_one(src, base, target, policy, false),
+    }
+    if !target
+        .parent()
+        .is_some_and(|parent| parent_chain_is_safe(base, parent))
+    {
+        tracing::warn!(
+            "[RESTORE] external: symlinked parent under {}, skipping {}",
+            base.display(),
+            target.display()
+        );
+        return FileOutcome::Failed;
+    }
+    let (live, staged) = match (std::fs::read(target), std::fs::read(src)) {
+        (Ok(live), Ok(staged)) => (live, staged),
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::error!(
+                "[RESTORE] external: read index for {} failed: {e}",
+                target.display()
+            );
+            return FileOutcome::Failed;
+        }
+    };
+
+    // Collecting keeps each key's LAST line: the one that wins.
+    let newest_live: HashMap<String, &[u8]> = keyed_lines(&live, index).collect();
+    let newest_staged: HashMap<String, &[u8]> = keyed_lines(&staged, index).collect();
+    let appended: HashSet<&String> = newest_staged
+        .iter()
+        .filter(|(k, line)| match newest_live.get(*k) {
+            None => true,
+            Some(live_line) => policy == ConflictPolicy::Overwrite && live_line != *line,
+        })
+        .map(|(k, _)| k)
+        .collect();
+
+    let mut chunk = Vec::new();
+    for (k, line) in keyed_lines(&staged, index) {
+        if appended.contains(&k) {
+            chunk.extend_from_slice(line);
+            chunk.push(b'\n');
+        }
+    }
+    if chunk.is_empty() {
+        return FileOutcome::Written;
+    }
+    // Never glue the first appended line onto an unterminated last one.
+    if live.last().is_some_and(|byte| *byte != b'\n') {
+        chunk.insert(0, b'\n');
+    }
+    let append = OpenOptions::new()
+        .append(true)
+        .open(target)
+        .and_then(|mut out| out.write_all(&chunk).and_then(|_| out.sync_all()));
+    match append {
+        Ok(()) => FileOutcome::Written,
+        Err(e) => {
+            tracing::error!(
+                "[RESTORE] external: append to index {} failed: {e}",
+                target.display()
+            );
+            FileOutcome::Failed
+        }
+    }
+}
+
+/// Each usable line of a JSONL index, as `(key, line)` in file order, the line
+/// trimmed of surrounding whitespace: one naming its record with a string
+/// `key` and setting a `value` its reader acts on (`AppendOnlyIndex::usable`,
+/// the reader's own test).
+fn keyed_lines<'a>(
+    bytes: &'a [u8],
+    index: &'a AppendOnlyIndex,
+) -> impl Iterator<Item = (String, &'a [u8])> {
+    bytes.split(|byte| *byte == b'\n').filter_map(move |line| {
+        let line = line.trim_ascii();
+        let record: serde_json::Value = serde_json::from_slice(line).ok()?;
+        let k = record.get(index.key)?.as_str()?.to_string();
+        let value = record.get(index.value)?.as_str()?;
+        (index.usable)(value).then_some((k, line))
+    })
 }
 
 /// Publish a SQLite store, deleting the live `-wal`/`-shm` **before** the new
@@ -931,6 +1065,7 @@ mod tests {
             is_file: false,
             sqlite: false,
             include_top: None,
+            indexes: &[],
         }
     }
 
@@ -1014,6 +1149,7 @@ mod tests {
             is_file: false,
             sqlite: false,
             include_top: Some(&["objects"]),
+            indexes: &[],
         }];
         let report = restore_external_with_sources(
             &staged,
@@ -1142,6 +1278,7 @@ mod tests {
             is_file: false,
             sqlite: false,
             include_top: Some(&["tmp", "history"]),
+            indexes: &[],
         };
         // A crafted credential path is rejected.
         let gemini = std::slice::from_ref(&gemini);
@@ -1155,6 +1292,7 @@ mod tests {
             is_file: true,
             sqlite: true,
             include_top: None,
+            indexes: &[],
         };
         let opencode = std::slice::from_ref(&opencode);
         assert!(map_external_to_target("external/opencode/evil.sh", opencode).is_none());
@@ -1168,6 +1306,372 @@ mod tests {
         );
     }
 
+    // ── append-only indexes ──────────────────────────────────────────────
+
+    fn index_line(id: &str, name: &str) -> String {
+        format!(
+            r#"{{"id":"{id}","thread_name":"{name}","updated_at":"2026-10-10T04:47:19.375134Z"}}"#
+        )
+    }
+
+    fn codex_index_source(root: PathBuf) -> ExternalSource {
+        ExternalSource {
+            agent: "codex-session-index",
+            root,
+            is_file: true,
+            sqlite: false,
+            include_top: None,
+            indexes: &[AppendOnlyIndex {
+                path: "session_index.jsonl",
+                key: "id",
+                value: "thread_name",
+                usable: crate::parsers::codex::is_usable_thread_name,
+            }],
+        }
+    }
+
+    /// A thread's name (a `/rename`, a generated title) lives only in
+    /// `~/.codex/session_index.jsonl`, never in its rollout, so the index is
+    /// archived as a source of its own BESIDE the rollouts: the `codex` source
+    /// keeps its `sessions/` root, and an archive made before the index was
+    /// one still restores its rollouts exactly where it always did.
+    #[test]
+    fn codex_thread_names_are_backed_up_beside_the_rollouts() {
+        let sources = external_transcript_sources();
+        let rollouts = sources.iter().find(|s| s.agent == "codex").unwrap();
+        let index = sources
+            .iter()
+            .find(|s| s.agent == "codex-session-index")
+            .expect("codex's thread-name index is not registered for backup");
+        assert!(index.is_file);
+        assert_eq!(index.root.parent(), rollouts.root.parent());
+        assert_eq!(index.root.file_name().unwrap(), "session_index.jsonl");
+        assert_eq!(rollouts.root.file_name().unwrap(), "sessions");
+
+        let (agent, base, target) =
+            map_external_to_target("external/codex-session-index/session_index.jsonl", &sources)
+                .expect("index entry must map");
+        assert_eq!(target, index.root);
+        assert!(index_at(&sources, &agent, &base, &target).is_some());
+        // The index itself only — never a sibling like `auth.json`.
+        assert!(
+            map_external_to_target("external/codex-session-index/auth.json", &sources).is_none()
+        );
+
+        let (_, _, rollout) =
+            map_external_to_target("external/codex/2026/10/10/rollout-x.jsonl", &sources)
+                .expect("an existing archive's rollout must still map");
+        assert_eq!(
+            rollout,
+            rollouts
+                .root
+                .join("2026")
+                .join("10")
+                .join("10")
+                .join("rollout-x.jsonl")
+        );
+    }
+
+    /// It packs as the one entry the mapping above restores.
+    #[test]
+    fn codex_thread_name_index_packs_as_its_own_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("codex-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("session_index.jsonl"),
+            index_line("a", "A") + "\n",
+        )
+        .unwrap();
+        std::fs::write(home.join("auth.json"), b"{}").unwrap();
+        let (entries, _) = pack_one(
+            &codex_index_source(home.join("session_index.jsonl")),
+            dir.path(),
+        );
+        assert_eq!(
+            entries,
+            ["external/codex-session-index/session_index.jsonl"]
+        );
+    }
+
+    /// The live index holds every session created since the backup, so the
+    /// archived one is merged into it: its lines are appended for each key
+    /// the live copy lacks, and the live bytes stay exactly as they were. A
+    /// key both know keeps its live line under `SkipExisting` (its rollout was
+    /// kept) and takes the backup's under `Overwrite` (its rollout was
+    /// replaced). Restoring the same archive again changes nothing.
+    #[test]
+    fn an_index_restores_by_appending_what_the_live_copy_lacks() {
+        for policy in [ConflictPolicy::SkipExisting, ConflictPolicy::Overwrite] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("codex-home");
+            std::fs::create_dir_all(home.join("sessions")).unwrap();
+            let staged = dir.path().join("external");
+            std::fs::create_dir_all(staged.join("codex-session-index")).unwrap();
+            let backup = [
+                index_line("a", "A as backed up"),
+                index_line("b", "B"),
+                "not json".to_string(),
+                r#"{"thread_name":"no id"}"#.to_string(),
+                index_line("b", "B renamed"),
+            ]
+            .join("\n");
+            std::fs::write(
+                staged.join("codex-session-index/session_index.jsonl"),
+                backup + "\n",
+            )
+            .unwrap();
+            // Its last line unterminated, as an interrupted writer leaves it.
+            let live = format!(
+                "{}\n{}",
+                index_line("a", "A renamed since"),
+                index_line("c", "C")
+            );
+            std::fs::write(home.join("session_index.jsonl"), &live).unwrap();
+
+            let sources = vec![codex_index_source(home.join("session_index.jsonl"))];
+            let cancel = CancellationToken::new();
+            let report = restore_external_with_sources(&staged, &sources, policy, &cancel).unwrap();
+            assert!(report.skipped_conflicts.is_empty(), "{report:?}");
+
+            let merged = std::fs::read_to_string(home.join("session_index.jsonl")).unwrap();
+            let mut appended = Vec::new();
+            if policy == ConflictPolicy::Overwrite {
+                appended.push(index_line("a", "A as backed up"));
+            }
+            appended.push(index_line("b", "B"));
+            appended.push(index_line("b", "B renamed"));
+            assert_eq!(
+                merged,
+                format!("{live}\n{}\n", appended.join("\n")),
+                "{policy:?}"
+            );
+
+            let names = crate::parsers::codex::CodexParser::with_base_dir(home.join("sessions"))
+                .load_thread_name_index();
+            let a = match policy {
+                ConflictPolicy::SkipExisting => "A renamed since",
+                ConflictPolicy::Overwrite => "A as backed up",
+            };
+            assert_eq!(names["a"], a);
+            assert_eq!(names["b"], "B renamed");
+            assert_eq!(names["c"], "C");
+
+            restore_external_with_sources(&staged, &sources, policy, &cancel).unwrap();
+            assert_eq!(
+                std::fs::read_to_string(home.join("session_index.jsonl")).unwrap(),
+                merged,
+                "{policy:?}"
+            );
+        }
+    }
+
+    /// Only a line the readers act on counts: one with a blank value (an
+    /// empty name) is skipped by `load_thread_name_index`, so it can neither
+    /// stand for a key's newest line nor be worth appending. Compared by raw
+    /// last line, a trailing blank line on both sides hid a real difference
+    /// under `Overwrite`, and a blank-only live key blocked a real archived
+    /// name under `SkipExisting`.
+    #[test]
+    fn an_index_counts_only_the_lines_its_readers_use() {
+        let blank = |id: &str| format!(r#"{{"id":"{id}","thread_name":""}}"#);
+        for (policy, expected_a) in [
+            (ConflictPolicy::SkipExisting, "A live"),
+            (ConflictPolicy::Overwrite, "A backed up"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("codex-home");
+            std::fs::create_dir_all(home.join("sessions")).unwrap();
+            let staged = dir.path().join("external");
+            std::fs::create_dir_all(staged.join("codex-session-index")).unwrap();
+            let backup = [
+                index_line("a", "A backed up"),
+                blank("a"),
+                index_line("b", "B backed up"),
+                index_line("c", "C backed up"),
+            ]
+            .join("\n");
+            std::fs::write(
+                staged.join("codex-session-index/session_index.jsonl"),
+                backup + "\n",
+            )
+            .unwrap();
+            // `c`'s name is a lone BOM: blank to codex-acp's whitespace (and so
+            // to the reader), though not to Rust's `trim`.
+            let live = [
+                index_line("a", "A live"),
+                blank("a"),
+                blank("b"),
+                "{\"id\":\"c\",\"thread_name\":\"\u{FEFF}\"}".to_string(),
+            ]
+            .join("\n")
+                + "\n";
+            std::fs::write(home.join("session_index.jsonl"), &live).unwrap();
+
+            let sources = vec![codex_index_source(home.join("session_index.jsonl"))];
+            restore_external_with_sources(&staged, &sources, policy, &CancellationToken::new())
+                .unwrap();
+
+            let names = crate::parsers::codex::CodexParser::with_base_dir(home.join("sessions"))
+                .load_thread_name_index();
+            assert_eq!(names["a"], expected_a, "{policy:?}");
+            assert_eq!(names["b"], "B backed up", "{policy:?}");
+            assert_eq!(names["c"], "C backed up", "{policy:?}");
+            let merged = std::fs::read_to_string(home.join("session_index.jsonl")).unwrap();
+            assert!(merged.starts_with(&live), "{policy:?}");
+            assert!(
+                !merged[live.len()..].contains(r#""thread_name":"""#),
+                "{merged}"
+            );
+        }
+    }
+
+    /// Something other than a file at the index's path is left to the
+    /// ordinary conflict handling, so the preview lists it like any conflict.
+    #[test]
+    fn the_conflict_scan_lists_an_index_path_that_is_not_a_file() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("b.zip");
+        {
+            let mut w = zip::ZipWriter::new(File::create(&zip_path).unwrap());
+            w.start_file(
+                "external/codex-session-index/session_index.jsonl",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            w.write_all(b"{}\n").unwrap();
+            w.finish().unwrap();
+        }
+        let home = dir.path().join("codex-home");
+        std::fs::create_dir_all(home.join("session_index.jsonl")).unwrap();
+
+        let sources = vec![codex_index_source(home.join("session_index.jsonl"))];
+        let conflicts = scan_external_conflicts_with_sources(&zip_path, &sources).unwrap();
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+    }
+
+    /// With no live copy the archived index is restored whole, byte for byte.
+    #[test]
+    fn an_index_without_a_live_copy_restores_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("codex-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let staged = dir.path().join("external");
+        std::fs::create_dir_all(staged.join("codex-session-index")).unwrap();
+        let backup = format!("{}\nnot json\n", index_line("a", "A"));
+        std::fs::write(
+            staged.join("codex-session-index/session_index.jsonl"),
+            &backup,
+        )
+        .unwrap();
+
+        let sources = vec![codex_index_source(home.join("session_index.jsonl"))];
+        let report = restore_external_with_sources(
+            &staged,
+            &sources,
+            ConflictPolicy::SkipExisting,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert!(report.skipped_conflicts.is_empty(), "{report:?}");
+        assert_eq!(
+            std::fs::read_to_string(home.join("session_index.jsonl")).unwrap(),
+            backup
+        );
+    }
+
+    /// The conflict preview leaves an index out: it is merged under either
+    /// policy, so listing it would ask a question whose answer cannot change
+    /// what happens to the file.
+    #[test]
+    fn the_conflict_scan_leaves_an_index_out() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("b.zip");
+        {
+            let mut w = zip::ZipWriter::new(File::create(&zip_path).unwrap());
+            for name in [
+                "external/codex-session-index/session_index.jsonl",
+                "external/codex/2026/10/10/rollout-x.jsonl",
+            ] {
+                w.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                w.write_all(b"{}\n").unwrap();
+            }
+            w.finish().unwrap();
+        }
+        let home = dir.path().join("codex-home");
+        std::fs::create_dir_all(home.join("sessions/2026/10/10")).unwrap();
+        std::fs::write(home.join("session_index.jsonl"), b"{}\n").unwrap();
+        std::fs::write(home.join("sessions/2026/10/10/rollout-x.jsonl"), b"{}\n").unwrap();
+
+        let sources = vec![
+            dir_source("codex", home.join("sessions")),
+            codex_index_source(home.join("session_index.jsonl")),
+        ];
+        let conflicts = scan_external_conflicts_with_sources(&zip_path, &sources).unwrap();
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+        assert!(conflicts[0].archive_path.ends_with("rollout-x.jsonl"));
+    }
+
+    /// Kimi's index is the only record of a session's working directory, so a
+    /// restored session needs its line even where kimi has been used since the
+    /// backup; the session files beside it restore as before.
+    #[test]
+    fn kimi_restores_its_session_index_by_merging() {
+        let sources = external_transcript_sources();
+        let kimi = sources.iter().find(|s| s.agent == "kimi-code").unwrap();
+        assert!(
+            kimi.indexes
+                .iter()
+                .any(|index| index.path == "session_index.jsonl" && index.key == "sessionId"),
+            "{:?}",
+            kimi.indexes
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("kimi-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let staged = dir.path().join("external");
+        std::fs::create_dir_all(staged.join("kimi-code/sessions/s1")).unwrap();
+        let restored_line = r#"{"sessionId":"s1","sessionDir":"sessions/s1","workDir":"/w1"}"#;
+        std::fs::write(
+            staged.join("kimi-code/session_index.jsonl"),
+            format!("{restored_line}\n"),
+        )
+        .unwrap();
+        std::fs::write(staged.join("kimi-code/sessions/s1/wire.jsonl"), b"{}\n").unwrap();
+        let live =
+            r#"{"sessionId":"s2","sessionDir":"sessions/s2","workDir":"/w2"}"#.to_string() + "\n";
+        std::fs::write(home.join("session_index.jsonl"), &live).unwrap();
+
+        let source = ExternalSource {
+            agent: "kimi-code",
+            root: home.clone(),
+            is_file: false,
+            sqlite: false,
+            include_top: kimi.include_top,
+            indexes: kimi.indexes,
+        };
+        let report = restore_external_with_sources(
+            &staged,
+            std::slice::from_ref(&source),
+            ConflictPolicy::SkipExisting,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert!(report.skipped_conflicts.is_empty(), "{report:?}");
+        assert_eq!(
+            std::fs::read_to_string(home.join("session_index.jsonl")).unwrap(),
+            format!("{live}{restored_line}\n")
+        );
+        assert_eq!(
+            std::fs::read(home.join("sessions/s1/wire.jsonl")).unwrap(),
+            b"{}\n"
+        );
+    }
+
     // ── third-party SQLite stores ────────────────────────────────────────
 
     fn sqlite_file_source(agent: &'static str, db: PathBuf) -> ExternalSource {
@@ -1177,6 +1681,7 @@ mod tests {
             is_file: true,
             sqlite: true,
             include_top: None,
+            indexes: &[],
         }
     }
 
@@ -1187,6 +1692,7 @@ mod tests {
             is_file: false,
             sqlite: true,
             include_top: None,
+            indexes: &[],
         }
     }
 

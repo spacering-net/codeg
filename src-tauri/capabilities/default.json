@@ -20,7 +20,9 @@
     "remote-commit-*",
     "remote-merge-*",
     "remote-stash-*",
-    "remote-push-*"
+    "remote-push-*",
+    "computer-indicator",
+    "computer-marker"
   ],
   "permissions": [
     "core:default",
@@ -34,6 +36,7 @@
     "core:window:allow-outer-position",
     "core:window:allow-set-position",
     "core:window:allow-scale-factor",
+    "core:window:allow-request-user-attention",
     "opener:default",
     {
       "identifier": "opener:allow-open-path",

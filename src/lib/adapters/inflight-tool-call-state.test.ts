@@ -28,6 +28,7 @@ import type { ContentBlock, MessageTurn } from "@/lib/types"
 const TEXT: AdapterMessageText = {
   attachedResources: "attached",
   toolCallFailed: "Tool failed",
+  pageHandoffName: () => "",
 }
 
 function turnWith(blocks: ContentBlock[]): MessageTurn {
@@ -39,12 +40,9 @@ function turnWith(blocks: ContentBlock[]): MessageTurn {
   }
 }
 
-/** Tool calls in render order, unwrapping the `tool-group` a run of generic
- *  tools folds into (only the agent-like lanes stay standalone). */
+/** Tool calls in render order. */
 function toolParts(parts: AdaptedContentPart[]): AdaptedToolCallPart[] {
-  return parts.flatMap((p) =>
-    p.type === "tool-call" ? [p] : p.type === "tool-group" ? p.items : []
-  )
+  return parts.flatMap((p) => (p.type === "tool-call" ? [p] : []))
 }
 
 const bash = (id: string): ContentBlock => ({
@@ -193,7 +191,7 @@ describe("the delegation cards follow that state", () => {
         toolOutput: parseToolOutput(null),
         state: "input-available",
         errorText: null,
-        childAwaitingPermission: false,
+        childAwaitingUser: false,
       })
     ).not.toBe("ok")
   })

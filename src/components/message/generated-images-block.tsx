@@ -57,9 +57,6 @@ interface GeneratedImagesBlockProps {
  *   - narrow: image stacks below the prompt, mirroring the original
  *     vertical layout
  *
- * Distinct from regular tool-call cards so it never folds into a
- * `tool-group` collapsible.
- *
  * Download is platform-aware:
  *   - desktop: native "Save As" via Tauri command
  *   - web: blob `<a download>`

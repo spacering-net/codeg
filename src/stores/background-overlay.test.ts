@@ -394,6 +394,44 @@ describe("RESOLVE_BACKGROUND_TASK (in-memory launch-card flip)", () => {
     expect(session(7)!.pendingBackgroundSettlements).toEqual([])
   })
 
+  // A sub-agent waiting on background work of its own notifies `completed`
+  // with an interim result, then again when it is done: the card carries the
+  // interim flag the detail parse writes, until the final settlement drops it.
+  it("flips the card to an interim result, then to the final one", () => {
+    actions().appendOptimisticTurn(
+      7,
+      launchCardTurn("t-0", "toolu_01"),
+      "tok-1"
+    )
+    actions().completeTurn(7, null)
+
+    actions().resolveBackgroundTask(7, {
+      ...settlement,
+      summary: "Agent is waiting on its own background work",
+      result: "interim",
+      interim: true,
+    })
+    const interim = ackOutput(session(7)!.localTurns, "toolu_01")
+    expect(parseBackgroundTaskMarker(interim)).toMatchObject({
+      status: "completed",
+      result: "interim",
+      interim: true,
+    })
+    // Key for key what the detail parse writes, `interim` last.
+    expect(interim).toBe(
+      `${BACKGROUND_TASK_MARKER}{"task_id":"agent1","status":"completed","summary":"Agent is waiting on its own background work","result":"interim","interim":true}`
+    )
+
+    actions().resolveBackgroundTask(7, settlement)
+    const final = ackOutput(session(7)!.localTurns, "toolu_01")
+    expect(parseBackgroundTaskMarker(final)).toMatchObject({
+      result: "Build succeeded (exit code 0).",
+      interim: false,
+    })
+    expect(final).not.toContain("interim")
+    expect(session(7)!.pendingBackgroundSettlements).toEqual([])
+  })
+
   it("queues a settlement whose launch turn hasn't promoted yet, then applies it at COMPLETE_TURN", () => {
     // Session exists (a user prompt is in flight) but the launch card is not in
     // any promotable buffer yet — it's mid-stream in liveMessage, un-patchable.
@@ -527,5 +565,159 @@ describe("RESOLVE_BACKGROUND_TASK (in-memory launch-card flip)", () => {
       ackOutput(session(7)!.localTurns, "toolu_01")
     )
     expect(parsed?.result).toBe("newer B")
+  })
+
+  // A background shell notifies too, and its `<task-notification>` names the
+  // `Bash` call that started it, so its settlement arrives with that call's id.
+  // Text and settlement as Claude Code 2.1.286 wrote them for a command a steer
+  // moved to the background.
+  const SHELL_ACK =
+    "Command was moved to the background (ID: bu6gyv42q) so that a message " +
+    "that arrived while it was running can reach you; it was not interrupted. " +
+    "Output is being written to: /private/tmp/claude-501/proj/s1/tasks/" +
+    "bu6gyv42q.output. You will be notified when it completes."
+  const shellSettlement = {
+    toolUseId: "toolu_sh",
+    taskId: "bu6gyv42q",
+    status: "completed",
+    summary: 'Background command "Sleep ten seconds" completed (exit code 0)',
+    result: null,
+  }
+  function shellCardTurn(id: string): MessageTurn {
+    return {
+      id,
+      role: "assistant",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "toolu_sh",
+          tool_name: "Bash",
+          input_preview: '{"command":"sleep 10 && echo done"}',
+        },
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_sh",
+          output_preview: SHELL_ACK,
+          is_error: false,
+        },
+      ],
+      timestamp: "2026-07-07T03:47:00.000Z",
+    }
+  }
+
+  it("leaves a background command's card alone when its notification names the call", () => {
+    actions().appendOptimisticTurn(7, shellCardTurn("t-0"), "tok-1")
+    actions().completeTurn(7, null)
+    const before = session(7)!.localTurns
+
+    actions().resolveBackgroundTask(7, shellSettlement)
+
+    expect(ackOutput(session(7)!.localTurns, "toolu_sh")).toBe(SHELL_ACK)
+    expect(session(7)!.localTurns).toBe(before)
+    // Found, so not queued for a later turn either.
+    expect(session(7)!.pendingBackgroundSettlements).toEqual([])
+  })
+
+  it("drops a queued background-command settlement once its card promotes, leaving the card alone", () => {
+    actions().appendOptimisticTurn(
+      7,
+      {
+        id: "u-1",
+        role: "user",
+        blocks: [{ type: "text", text: "run the sleeper" }],
+        timestamp: "2026-07-07T03:46:00.000Z",
+      },
+      "tok-1"
+    )
+    actions().resolveBackgroundTask(7, shellSettlement)
+    expect(session(7)!.pendingBackgroundSettlements).toHaveLength(1)
+
+    actions().appendOptimisticTurn(7, shellCardTurn("t-0"), "tok-1")
+    actions().completeTurn(7, null)
+
+    expect(ackOutput(session(7)!.localTurns, "toolu_sh")).toBe(SHELL_ACK)
+    expect(session(7)!.pendingBackgroundSettlements).toEqual([])
+  })
+})
+
+// A Grok background sub-agent ticks every few seconds while it runs, after its
+// launch turn ended: each tick is merged into its launch card's `meta`, wherever
+// that card sits (promoted this session, or cold-loaded history).
+describe("APPLY_BACKGROUND_TASK_PROGRESS", () => {
+  function spawnCardTurn(id: string, toolUseId: string): MessageTurn {
+    return {
+      id,
+      role: "assistant",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: toolUseId,
+          tool_name: "spawn_subagent",
+          input_preview: null,
+          meta: { "x.ai/tool": { name: "spawn_subagent" } },
+        },
+        {
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          output_preview: "Subagent started in background.\nsubagent_id: sub-1",
+          is_error: false,
+        },
+      ],
+      timestamp: "2026-07-07T03:47:00.000Z",
+    }
+  }
+
+  function cardMeta(turns: MessageTurn[], toolUseId: string) {
+    for (const t of turns) {
+      for (const b of t.blocks) {
+        if (b.type === "tool_use" && b.tool_use_id === toolUseId) {
+          return b.meta ?? null
+        }
+      }
+    }
+    return undefined
+  }
+
+  const tick = (toolCallCount: number) => ({
+    grokSubagentSession: { subagentId: "sub-1", childSessionId: "sub-1" },
+    grokSubagentProgress: { toolCallCount, durationMs: toolCallCount * 1000 },
+  })
+
+  it("merges each tick into a promoted launch card, keeping its other keys", () => {
+    actions().appendOptimisticTurn(7, spawnCardTurn("t-0", "call_9"), "tok-1")
+    actions().completeTurn(7, null)
+
+    actions().applyBackgroundTaskProgress(7, "call_9", tick(1))
+    actions().applyBackgroundTaskProgress(7, "call_9", tick(3))
+
+    expect(cardMeta(session(7)!.localTurns, "call_9")).toEqual({
+      "x.ai/tool": { name: "spawn_subagent" },
+      ...tick(3),
+    })
+  })
+
+  it("reaches a cold-loaded card in detail turns", async () => {
+    mockGetFolderConversation.mockResolvedValueOnce(
+      detail({ turns: [spawnCardTurn("turn-0", "call_9")] })
+    )
+    actions().fetchDetail(7)
+    await flushMicrotasks()
+
+    actions().applyBackgroundTaskProgress(7, "call_9", tick(2))
+
+    expect(cardMeta(session(7)!.detail!.turns, "call_9")).toMatchObject(tick(2))
+  })
+
+  it("leaves the state untouched when no card matches", () => {
+    actions().appendOptimisticTurn(7, spawnCardTurn("t-0", "call_9"), "tok-1")
+    actions().completeTurn(7, null)
+    const before = useConversationRuntimeStore.getState()
+
+    actions().applyBackgroundTaskProgress(7, "call_other", tick(1))
+    // An unopened conversation is not materialized for a tick either.
+    actions().applyBackgroundTaskProgress(8, "call_9", tick(1))
+
+    expect(useConversationRuntimeStore.getState()).toBe(before)
+    expect(session(8)).toBeUndefined()
   })
 })

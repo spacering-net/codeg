@@ -1,6 +1,7 @@
 import { mergeAttributes, Node, type JSONContent } from "@tiptap/core"
 import { ReactNodeViewRenderer } from "@tiptap/react"
 
+import { deleteReferenceThroughGap } from "../reference-backspace"
 import { referenceToMarkdown } from "../reference-text"
 import {
   REFERENCE_KINDS,
@@ -121,6 +122,16 @@ export const Reference = Node.create({
 
   addNodeView() {
     return ReactNodeViewRenderer(ReferenceView)
+  },
+
+  addKeyboardShortcuts() {
+    return {
+      // Backspace right after a just-inserted badge hits the badge, not the
+      // invisible space the insertion left behind (see the command's doc).
+      // Returns false everywhere else, so the default Backspace still applies.
+      Backspace: ({ editor }) =>
+        deleteReferenceThroughGap(editor.state, editor.view.dispatch),
+    }
   },
 
   addCommands() {

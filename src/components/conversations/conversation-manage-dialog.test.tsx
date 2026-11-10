@@ -5,7 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ConversationManageDialog } from "./conversation-manage-dialog"
 import enMessages from "@/i18n/messages/en.json"
-import type { DbConversationSummary, FolderDetail } from "@/lib/types"
+import type {
+  AcpAgentInfo,
+  DbConversationSummary,
+  FolderDetail,
+} from "@/lib/types"
+import { setCustomAgentDisplay } from "@/lib/custom-agents"
 
 const h = vi.hoisted(() => ({
   listAll: vi.fn(),
@@ -14,6 +19,14 @@ const h = vi.hoisted(() => ({
   closeConversationTab: vi.fn(),
   refreshConversations: vi.fn(),
   folders: [] as FolderDetail[],
+  agents: [] as Pick<
+    AcpAgentInfo,
+    "agent_type" | "name" | "enabled" | "available"
+  >[],
+}))
+
+vi.mock("@/hooks/use-acp-agents", () => ({
+  useAcpAgents: () => ({ agents: h.agents, fresh: true, refresh: vi.fn() }),
 }))
 
 // Inline SVG with a <title> would duplicate the agent label in text queries.
@@ -138,7 +151,97 @@ describe("ConversationManageDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     h.folders = FOLDERS
+    h.agents = [
+      {
+        agent_type: "claude_code",
+        name: "Claude Code",
+        enabled: true,
+        available: true,
+      },
+      {
+        agent_type: "custom:claude-code-2",
+        name: "Claude Code 2",
+        enabled: true,
+        available: true,
+      },
+      {
+        agent_type: "custom:claude-code-3",
+        name: "Review account",
+        enabled: true,
+        available: true,
+      },
+      {
+        agent_type: "custom:codex-2",
+        name: "Codex 2",
+        enabled: false,
+        available: false,
+      },
+    ]
+    setCustomAgentDisplay(
+      h.agents.map((a) => ({ agentType: a.agent_type, name: a.name }))
+    )
     h.listAll.mockResolvedValue(ROWS)
+  })
+
+  it("offers configured custom agents by name and sends their exact filter id", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+    await user.click(screen.getAllByRole("combobox")[0])
+
+    expect(screen.getByRole("option", { name: "Claude Code 2" })).toBeTruthy()
+    expect(screen.getByRole("option", { name: "Review account" })).toBeTruthy()
+    expect(screen.getAllByRole("option", { name: "Claude Code" })).toHaveLength(
+      1
+    )
+    // This is a history filter: disabling an agent must not hide its chats.
+    expect(screen.getByRole("option", { name: "Codex 2" })).not.toHaveAttribute(
+      "data-disabled"
+    )
+    await user.click(screen.getByRole("option", { name: "Claude Code 2" }))
+
+    await waitFor(() =>
+      expect(h.listAll).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          agent_type: "custom:claude-code-2",
+          folder_ids: [1, 2],
+        })
+      )
+    )
+  })
+
+  it("keeps a removed agent from saved chats selectable even when its filter returns no rows", async () => {
+    h.listAll.mockResolvedValue([
+      conversation({
+        id: 4,
+        title: "old custom chat",
+        agent_type: "custom:retired-reviewer",
+      }),
+    ])
+    const user = renderDialog()
+    await screen.findByText("old custom chat")
+    await user.click(screen.getAllByRole("combobox")[0])
+    h.listAll.mockResolvedValue([])
+    await user.click(screen.getByRole("option", { name: "Retired Reviewer" }))
+
+    await waitFor(() =>
+      expect(h.listAll).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent_type: "custom:retired-reviewer" })
+      )
+    )
+    await waitFor(() =>
+      expect(screen.queryByText("old custom chat")).toBeNull()
+    )
+    const selected = screen.getAllByRole("combobox")[0]
+    await user.click(selected)
+    expect(
+      screen.getByRole("option", { name: "Retired Reviewer" })
+    ).toHaveAttribute("aria-selected", "true")
+    await user.click(screen.getByRole("option", { name: "All agents" }))
+    await waitFor(() =>
+      expect(h.listAll).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent_type: null })
+      )
+    )
   })
 
   it("shows each conversation's branch in place of its message count", async () => {

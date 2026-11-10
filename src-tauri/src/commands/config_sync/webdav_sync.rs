@@ -33,6 +33,7 @@ use super::snapshot::{
 use crate::app_error::{AppCommandError, CONFIG_SYNC_I18N_KEY_NO_REMOTE};
 use crate::db::service::app_metadata_service;
 use crate::network::webdav::{sanitize_path_segment, WebdavClient};
+use crate::web::event_bridge::EventEmitter;
 
 /// Settings of this feature. NOT in `portable_keys`: if they travelled, one
 /// machine's credentials would overwrite the other's and the two would sync
@@ -732,6 +733,7 @@ async fn open_after_download(
 /// another machine last pushed.
 pub async fn download_and_apply_core(
     conn: &DatabaseConnection,
+    emitter: &EventEmitter,
 ) -> Result<DownloadOutcome, AppCommandError> {
     let settings = load_settings(conn).await;
     let client = client_for(&settings)?;
@@ -771,7 +773,7 @@ pub async fn download_and_apply_core(
     let _suppression = super::auto_sync::suppress_auto_sync();
     let rollback_path =
         super::local_io::save_rollback(conn, &super::snapshot::rollback_dir()).await;
-    let applied = apply_snapshot_core(conn, &snapshot).await?;
+    let applied = apply_snapshot_core(conn, emitter, &snapshot).await?;
 
     Ok(DownloadOutcome {
         manifest,

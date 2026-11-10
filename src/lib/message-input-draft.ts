@@ -359,3 +359,28 @@ export function clearMessageInputDraftV2(draftKey: string): void {
     /* ignore */
   }
 }
+
+/**
+ * Mounted composers holding content their saved draft may not show (yet):
+ * text still inside the save debounce, or image attachments, which are never
+ * saved. Keyed by draft key, then by composer, since two composers can share
+ * a key. Lets code that tidies drafts away tell a blank draft from one the
+ * user is writing in, which the saved draft alone cannot.
+ */
+const liveComposerContent = new Map<string, Set<string>>()
+
+export function setLiveComposerContent(
+  draftKey: string,
+  composerId: string,
+  hasContent: boolean
+): void {
+  const composers = liveComposerContent.get(draftKey) ?? new Set<string>()
+  if (hasContent) composers.add(composerId)
+  else composers.delete(composerId)
+  if (composers.size > 0) liveComposerContent.set(draftKey, composers)
+  else liveComposerContent.delete(draftKey)
+}
+
+export function hasLiveComposerContent(draftKey: string): boolean {
+  return liveComposerContent.has(draftKey)
+}

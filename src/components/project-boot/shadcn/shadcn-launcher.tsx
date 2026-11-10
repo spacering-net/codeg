@@ -86,9 +86,13 @@ export function ShadcnLauncher() {
           "relative z-20 flex w-px cursor-col-resize items-center justify-center",
           "before:pointer-events-none before:absolute before:inset-y-0 before:left-1/2 before:h-full before:w-[var(--resize-handle-thickness)] before:-translate-x-1/2 before:bg-border before:transition-[width,background-color] before:duration-150 before:ease-out",
           "after:absolute after:inset-y-0 after:left-1/2 after:w-3 after:-translate-x-1/2",
+          // Opaque thickened line, for the same reason as `ResizableHandle`:
+          // the 5px line is centred on a 1px handle box that neither column
+          // backs, so a translucent one shows a seam down its middle wherever
+          // the columns' background differs from the page's.
           isDragging
-            ? "[--resize-handle-thickness:5px] before:bg-foreground/60"
-            : "[--resize-handle-thickness:1px] hover:[--resize-handle-thickness:5px] hover:before:bg-foreground/40"
+            ? "[--resize-handle-thickness:5px] before:bg-[var(--resize-handle-drag)]"
+            : "[--resize-handle-thickness:1px] hover:[--resize-handle-thickness:5px] hover:before:bg-[var(--resize-handle-hover)]"
         )}
         onMouseDown={handleMouseDown}
       />

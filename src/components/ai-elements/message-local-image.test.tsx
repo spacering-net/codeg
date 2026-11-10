@@ -3,10 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
+  readFile: vi.fn(),
   download: vi.fn(),
   copy: vi.fn(),
 }))
-vi.mock("@/lib/api", () => ({ readWorkspaceFileBase64: mocks.read }))
+vi.mock("@/lib/api", () => ({
+  readWorkspaceFileBase64: mocks.read,
+  readFileBase64: mocks.readFile,
+}))
 vi.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
 vi.mock("@/components/ai-elements/link-safety", () => ({
   useStreamdownLinkSafety: () => ({ enabled: false }),
@@ -42,6 +46,7 @@ function preview(markdown: string, rootPath: string | null = "/repo") {
 
 beforeEach(() => {
   mocks.read.mockReset().mockResolvedValue(PNG)
+  mocks.readFile.mockReset().mockResolvedValue(PNG)
   mocks.copy.mockReset()
   mocks.download.mockReset()
 })
@@ -86,6 +91,7 @@ describe("inline local images in real chat Markdown", () => {
         )
       )
       expect(mocks.read).toHaveBeenCalledWith(root, path, LOCAL_IMAGE_MAX_BYTES)
+      expect(mocks.readFile).not.toHaveBeenCalled()
       expect(container.textContent).not.toContain("Image blocked")
       expect(container.querySelector("img[src^='file:']")).toBeNull()
     }
@@ -137,21 +143,49 @@ describe("inline local images in real chat Markdown", () => {
     )
   })
 
+  // #978: the reply's QR code sat in /tmp, outside the transcript's folder.
   it.each([
-    "../secret.png",
-    "/repo-other/secret.png",
-    "file:///private/secret.png",
-    "javascript:alert(1)",
-    "data:image/png;base64,AAAA",
-    "./secret.json",
+    [
+      "/tmp/nanguang-login/login-qr-new.png",
+      "/repo",
+      "/tmp/nanguang-login/login-qr-new.png",
+    ],
+    ["file:///private/tmp/shot.png", "/repo", "/private/tmp/shot.png"],
+    ["../shared/shot.png", "/w/repo", "/w/shared/shot.png"],
+    ["C:\\Users\\me\\shot.png", "D:/work", "C:/Users/me/shot.png"],
+  ])(
+    "shows %s, outside the transcript's folder, through the file panel's reader",
+    async (source, root, path) => {
+      render(preview(`请扫码登录：\n\n![登录二维码](${source})`, root))
+      await waitFor(() =>
+        expect(screen.getByRole("img", { name: "登录二维码" })).toHaveAttribute(
+          "src",
+          `data:image/png;base64,${PNG}`
+        )
+      )
+      expect(mocks.readFile).toHaveBeenCalledWith(path, LOCAL_IMAGE_MAX_BYTES)
+      expect(mocks.read).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([
+    // A network share: drawing it would make this machine contact the host
+    // the reply names (on Windows, signing in to it).
+    ["file://attacker.example/share/qr.png", "/repo"],
+    ["file://attacker.example/share/qr.png", "C:/repo"],
+    ["javascript:alert(1)", "/repo"],
+    ["data:image/png;base64,AAAA", "/repo"],
+    ["./secret.json", "/repo"],
+    ["/tmp/notes.txt", "/repo"],
   ])(
     "does not read an unsafe or unsupported destination: %s",
-    async (source) => {
-      const { container } = render(preview(`![Unavailable](<${source}>)`))
+    async (source, root) => {
+      const { container } = render(preview(`![Unavailable](<${source}>)`, root))
       await waitFor(() =>
         expect(container.textContent).toContain("Unavailable")
       )
       expect(mocks.read).not.toHaveBeenCalled()
+      expect(mocks.readFile).not.toHaveBeenCalled()
       expect(container.querySelector("img")).toBeNull()
     }
   )
@@ -219,6 +253,45 @@ describe("inline local images in real chat Markdown", () => {
       screen.getByRole("img", { name: "Unavailable" })
     ).not.toHaveAttribute("src")
     expect(mocks.read).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["/tmp/login.png", "/tmp/login.png"],
+    ["file:///tmp/login.png", "/tmp/login.png"],
+    ["C:\\Users\\me\\login.png", "C:/Users/me/login.png"],
+  ])(
+    "still shows %s when the transcript's folder is unknown",
+    async (source, path) => {
+      render(preview(`![qrcode](${source})`, null))
+      await waitFor(() =>
+        expect(screen.getByRole("img", { name: "qrcode" })).toHaveAttribute(
+          "src",
+          `data:image/png;base64,${PNG}`
+        )
+      )
+      expect(mocks.readFile).toHaveBeenCalledWith(path, LOCAL_IMAGE_MAX_BYTES)
+      expect(mocks.read).not.toHaveBeenCalled()
+    }
+  )
+
+  it("refuses a network share when the transcript's folder is unknown", async () => {
+    const { container } = render(
+      preview("![qrcode](file://attacker.example/share/qr.png)", null)
+    )
+    await waitFor(() => expect(container.textContent).toContain("qrcode"))
+    expect(mocks.readFile).not.toHaveBeenCalled()
+    expect(container.querySelector("img")).toBeNull()
+  })
+
+  it("loads no local file for Markdown outside any transcript", async () => {
+    // An issue body, say: nothing this machine's agent wrote.
+    const { container } = render(
+      <MessageResponse>{"![qrcode](/tmp/login.png)"}</MessageResponse>
+    )
+    await waitFor(() => expect(container.textContent).toContain("qrcode"))
+    expect(mocks.readFile).not.toHaveBeenCalled()
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(container.querySelector("img")).toBeNull()
   })
 
   it("replaces a refused or undecodable image with its accessible alt text", async () => {

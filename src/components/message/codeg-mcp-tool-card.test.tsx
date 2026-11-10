@@ -161,8 +161,8 @@ describe("CodegMcpToolCard", () => {
   })
 
   it("exposes the untruncated label on hover", () => {
-    // The row is CSS-truncated and the panel carries the RESULT, not the
-    // arguments — so `title` is the only way to read a long message back.
+    // The row is CSS-truncated; `title` gives a long message back without
+    // opening the panel.
     const message = "a".repeat(200)
     renderWithIntl(
       <CodegMcpToolCard
@@ -222,16 +222,142 @@ describe("CodegMcpToolCard", () => {
 
   it("does not show a prompt block for the non-authoring tools", () => {
     // `task_progress` has no `prompt` argument; a stray one must not leak into
-    // the panel and must not make an ack-less call look expandable.
-    const { container } = renderWithIntl(
+    // the panel, which carries the report instead.
+    const { container, unmount } = renderWithIntl(
       <CodegMcpToolCard
         tool="task_progress"
         input={JSON.stringify({ message: "halfway", prompt: "not mine" })}
         state="input-available"
       />
     )
-    expect(screen.queryByRole("button")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button"))
+    expect(screen.getByTestId("markdown-response")).toHaveTextContent("halfway")
+    expect(screen.queryByText("Prompt")).not.toBeInTheDocument()
     expect(container.textContent).not.toContain("not mine")
+    unmount()
+
+    // Nor may it make an in-flight call with nothing to read expandable.
+    renderWithIntl(
+      <CodegMcpToolCard
+        tool="get_session_info"
+        input={JSON.stringify({ session_id: 7, prompt: "not mine" })}
+        state="input-available"
+      />
+    )
+    expect(screen.queryByRole("button")).not.toBeInTheDocument()
+  })
+
+  it("expands a progress report to the whole message and what became of it", () => {
+    // Claude Code and Codex persist only the structured half of the result, so
+    // `{"recorded":true}` is all the transcript holds — it must not be the
+    // panel's text.
+    const message =
+      "Located it: the card showed the ack as its result. " + "x".repeat(200)
+    const { container } = renderWithIntl(
+      <CodegMcpToolCard
+        tool="task_progress"
+        input={JSON.stringify({ message })}
+        output='{"recorded":true}'
+        state="output-available"
+      />
+    )
+    // The report is readable in full from the arguments alone; the panel stays
+    // out of the tree until it is opened.
+    expect(screen.queryByTestId("markdown-response")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button"))
+    expect(screen.getByTestId("markdown-response")).toHaveTextContent(message)
+    expect(screen.getByText("Recorded on the work task")).toBeInTheDocument()
+    expect(container.textContent).not.toContain('{"recorded"')
+  })
+
+  it("reads a progress report in full while the call is still in flight", () => {
+    renderWithIntl(
+      <CodegMcpToolCard
+        tool="task_progress"
+        input={JSON.stringify({ message: "tests passing" })}
+        state="input-available"
+      />
+    )
+    fireEvent.click(screen.getByRole("button"))
+    expect(screen.getByTestId("markdown-response")).toHaveTextContent(
+      "tests passing"
+    )
+    expect(
+      screen.queryByText("Recorded on the work task")
+    ).not.toBeInTheDocument()
+  })
+
+  it("says when a report was not recorded, and why", () => {
+    const { container, unmount } = renderWithIntl(
+      <CodegMcpToolCard
+        tool="task_progress"
+        input={JSON.stringify({ message: "halfway" })}
+        output={JSON.stringify({
+          recorded: false,
+          note: "this session is not executing a work task",
+        })}
+        state="output-available"
+      />
+    )
+    fireEvent.click(screen.getByRole("button"))
+    expect(
+      screen.getByText(
+        "Not recorded on the work task: this session is not executing a work task"
+      )
+    ).toBeInTheDocument()
+    // A refusal is not a failed call: it keeps the ordinary frame.
+    expect(container.querySelector(".border-destructive\\/30")).toBeNull()
+    unmount()
+
+    renderWithIntl(
+      <CodegMcpToolCard
+        tool="task_progress"
+        input={JSON.stringify({ message: "halfway" })}
+        output="Not recorded."
+        state="output-available"
+      />
+    )
+    fireEvent.click(screen.getByRole("button"))
+    expect(
+      screen.getByText("Not recorded on the work task")
+    ).toBeInTheDocument()
+  })
+
+  it("expands a completion to the whole summary", () => {
+    const summary =
+      "Bumped both pins.\n\n- Cursor `e3cb207`\n- Antigravity 1.4.1"
+    renderWithIntl(
+      <CodegMcpToolCard
+        tool="task_complete"
+        input={JSON.stringify({ verdict: "success", summary })}
+        output='{"recorded":true}'
+        state="output-available"
+      />
+    )
+    fireEvent.click(screen.getByRole("button"))
+    // Through the Markdown renderer, like the drawer's result summary.
+    expect(screen.getByTestId("markdown-response").textContent).toBe(summary)
+    expect(screen.getByText("Recorded on the work task")).toBeInTheDocument()
+  })
+
+  it("keeps the report above a failed call's error", () => {
+    renderWithIntl(
+      <CodegMcpToolCard
+        tool="task_progress"
+        input={JSON.stringify({ message: "halfway" })}
+        errorText="socket closed"
+        state="output-error"
+      />
+    )
+    fireEvent.click(screen.getByRole("button"))
+    const blocks = screen.getAllByTestId("markdown-response")
+    expect(blocks.map((block) => block.textContent)).toEqual([
+      "halfway",
+      "socket closed",
+    ])
+    expect(
+      screen.queryByText("Recorded on the work task")
+    ).not.toBeInTheDocument()
   })
 
   it("expands to the result text, rendered as Markdown", () => {
@@ -256,7 +382,7 @@ describe("CodegMcpToolCard", () => {
   it("peels codex-acp's live {result, error} envelope", () => {
     // codex-acp forwards every MCP outcome as `{result: <CallToolResult>,
     // error: null}`; without the peel the whole envelope lands in the card.
-    renderWithIntl(
+    const { container } = renderWithIntl(
       <CodegMcpToolCard
         tool="task_progress"
         input={JSON.stringify({ message: "halfway" })}
@@ -272,13 +398,13 @@ describe("CodegMcpToolCard", () => {
       />
     )
     fireEvent.click(screen.getByRole("button"))
-    expect(screen.getByTestId("markdown-response")).toHaveTextContent(
-      "Recorded."
-    )
+    expect(screen.getByTestId("markdown-response")).toHaveTextContent("halfway")
+    expect(screen.getByText("Recorded on the work task")).toBeInTheDocument()
+    expect(container.textContent).not.toContain("Recorded.")
   })
 
   it("reads Codex's Wall time / Output wrap", () => {
-    renderWithIntl(
+    const { container } = renderWithIntl(
       <CodegMcpToolCard
         tool="task_complete"
         input={JSON.stringify({ verdict: "success", summary: "shipped" })}
@@ -290,13 +416,14 @@ describe("CodegMcpToolCard", () => {
       />
     )
     fireEvent.click(screen.getByRole("button"))
-    expect(screen.getByTestId("markdown-response")).toHaveTextContent(
-      "Recorded."
-    )
+    expect(screen.getByTestId("markdown-response")).toHaveTextContent("shipped")
+    expect(screen.getByText("Recorded on the work task")).toBeInTheDocument()
+    expect(container.textContent).not.toContain("Wall time")
   })
 
-  it("shows plain text hosts (claude-agent-acp) verbatim", () => {
-    renderWithIntl(
+  it("reads the companion's ack text from hosts that keep only content", () => {
+    // OpenCode drops `structuredContent` and keeps the companion's text.
+    const { container } = renderWithIntl(
       <CodegMcpToolCard
         tool="task_progress"
         input={JSON.stringify({ message: "halfway" })}
@@ -305,9 +432,28 @@ describe("CodegMcpToolCard", () => {
       />
     )
     fireEvent.click(screen.getByRole("button"))
-    expect(screen.getByTestId("markdown-response")).toHaveTextContent(
-      "Recorded."
+    expect(screen.getByText("Recorded on the work task")).toBeInTheDocument()
+    expect(container.textContent).not.toContain("Recorded.")
+  })
+
+  it("shows a result it cannot identify as an ack verbatim", () => {
+    // OpenCode's half of a refusal is the bare reason, which no reader can tell
+    // from any other text — so it is shown as-is, not relabelled.
+    renderWithIntl(
+      <CodegMcpToolCard
+        tool="task_progress"
+        input={JSON.stringify({ message: "halfway" })}
+        output="the task moved on to a new run"
+        state="output-available"
+      />
     )
+    fireEvent.click(screen.getByRole("button"))
+    const blocks = screen.getAllByTestId("markdown-response")
+    expect(blocks.map((block) => block.textContent)).toEqual([
+      "halfway",
+      "the task moved on to a new run",
+    ])
+    expect(screen.queryByText(/work task/)).not.toBeInTheDocument()
   })
 
   it("surfaces a real tool error and tints the card", () => {

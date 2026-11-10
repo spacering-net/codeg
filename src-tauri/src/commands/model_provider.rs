@@ -1,6 +1,9 @@
 use std::path::Path;
 
+use serde::Deserialize;
+
 use crate::acp::manager::ConnectionManager;
+use crate::acp::provider_models::{self, KeyHeader, ModelList, ModelsProtocol, ModelsRequest};
 use crate::acp::types::ConfigStaleKind;
 use crate::app_error::AppCommandError;
 use crate::commands::acp;
@@ -57,14 +60,19 @@ fn validate_fields(
     Ok(())
 }
 
-fn validate_model(agent_type: &str, model: Option<&str>) -> Result<(), AppCommandError> {
+pub(crate) fn validate_model(agent_type: &str, model: Option<&str>) -> Result<(), AppCommandError> {
     let Some(raw) = model.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(());
     };
     // Codex stores a structured multi-model catalog whose entries may carry
     // per-model `base_instructions` overrides (a full system prompt), so allow a
     // much larger payload than the plain-string agents.
-    let max_len = if agent_type == "codex" { 262_144 } else { 4096 };
+    // A Claude provider's model JSON may carry its `/model` picker ids.
+    let max_len = match agent_type {
+        "codex" => 262_144,
+        "claude_code" => 65_536,
+        _ => 4096,
+    };
     if raw.len() > max_len {
         return Err(AppCommandError::invalid_input(format!(
             "Model must be {max_len} characters or less"
@@ -80,6 +88,7 @@ fn validate_model(agent_type: &str, model: Option<&str>) -> Result<(), AppComman
                 "Claude model must be a JSON object",
             ));
         }
+        validate_claude_picker_models(&value)?;
     }
     // Codex accepts either the structured config `{"customs":[{slug, base, …}],
     // "excludedOfficials":[…]}`, a legacy `{"models":[…]}` catalog, or a legacy
@@ -114,6 +123,78 @@ fn validate_model(agent_type: &str, model: Option<&str>) -> Result<(), AppComman
                     }
                 }
             }
+            if let Some(source) = value.get("catalog") {
+                validate_codex_catalog_source(source)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A Claude model JSON's `pickerModels`, when present: a list of ids
+/// (`acp::claude_model_picker`).
+fn validate_claude_picker_models(value: &serde_json::Value) -> Result<(), AppCommandError> {
+    use crate::acp::claude_model_picker as picker;
+    let Some(raw) = value.get(picker::PROVIDER_FIELD) else {
+        return Ok(());
+    };
+    let Some(items) = raw.as_array() else {
+        return Err(AppCommandError::invalid_input(
+            "pickerModels must be a list of model ids",
+        ));
+    };
+    if !items
+        .iter()
+        .all(|id| id.as_str().is_some_and(|s| !s.trim().is_empty()))
+    {
+        return Err(AppCommandError::invalid_input(
+            "pickerModels must be a list of model ids",
+        ));
+    }
+    let ids: Vec<String> = items
+        .iter()
+        .filter_map(|id| id.as_str().map(str::to_string))
+        .collect();
+    match picker::invalid(&ids) {
+        Some(why) => Err(AppCommandError::invalid_input(why)),
+        None => Ok(()),
+    }
+}
+
+/// The `catalog` of a Codex model config: where the list comes from when it
+/// is the provider's (`{url?, format?, selected?}`).
+fn validate_codex_catalog_source(source: &serde_json::Value) -> Result<(), AppCommandError> {
+    let invalid =
+        |what: &str| AppCommandError::invalid_input(format!("Codex model list source: {what}"));
+    let Some(obj) = source.as_object() else {
+        return Err(invalid("must be an object"));
+    };
+    if let Some(url) = obj.get("url").filter(|v| !v.is_null()) {
+        let ok = url
+            .as_str()
+            .and_then(|u| url::Url::parse(u.trim()).ok())
+            .is_some_and(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some());
+        if !ok {
+            return Err(invalid("url must be an http(s) URL"));
+        }
+    }
+    if let Some(format) = obj.get("format").filter(|v| !v.is_null()) {
+        if !matches!(format.as_str(), Some("native" | "openai_list")) {
+            return Err(invalid("format must be \"native\" or \"openai_list\""));
+        }
+    }
+    if let Some(selected) = obj.get("selected").filter(|v| !v.is_null()) {
+        let Some(ids) = selected.as_array() else {
+            return Err(invalid("selected must be a list of model ids"));
+        };
+        if ids.len() > 4096 {
+            return Err(invalid("selected holds more than 4096 ids"));
+        }
+        if !ids
+            .iter()
+            .all(|id| id.as_str().is_some_and(|s| !s.trim().is_empty()))
+        {
+            return Err(invalid("selected must be a list of model ids"));
         }
     }
     Ok(())
@@ -328,6 +409,127 @@ pub async fn delete_model_provider_core(db: &AppDatabase, id: i32) -> Result<(),
     Ok(())
 }
 
+/// Where the key for listing a provider's models comes from. Its `Debug`
+/// never shows a key.
+#[derive(Clone, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelsKeySource {
+    /// Typed into the page.
+    Inline { api_key: String },
+    /// A saved provider; a key typed into its dialog wins over the stored one.
+    Provider {
+        provider_id: i32,
+        #[serde(default)]
+        api_key: Option<String>,
+    },
+    /// The key pi keeps for one of its providers (its `auth.json`), which the
+    /// Pi panel never shows.
+    PiAuth { provider: String },
+    /// The key OpenCode 2 keeps for one of its integrations (its credential
+    /// store), read through OpenCode itself; the OpenCode panel never shows it.
+    OpencodeCredential { integration_id: String },
+}
+
+impl std::fmt::Debug for ModelsKeySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModelsKeySource::Inline { .. } => f.write_str("Inline { .. }"),
+            ModelsKeySource::Provider { provider_id, .. } => f
+                .debug_struct("Provider")
+                .field("provider_id", provider_id)
+                .finish_non_exhaustive(),
+            ModelsKeySource::PiAuth { provider } => f
+                .debug_struct("PiAuth")
+                .field("provider", provider)
+                .finish(),
+            ModelsKeySource::OpencodeCredential { integration_id } => f
+                .debug_struct("OpencodeCredential")
+                .field("integration_id", integration_id)
+                .finish(),
+        }
+    }
+}
+
+/// A settings page asking for a provider's models.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListProviderModelsParams {
+    pub protocol: ModelsProtocol,
+    pub base_url: String,
+    pub key_source: ModelsKeySource,
+    /// How the agent sends the key, when not the protocol's usual way.
+    #[serde(default)]
+    pub key_header: Option<KeyHeader>,
+}
+
+/// The i18n namespace the pages localize these errors under.
+const MODELS_ERROR_NAMESPACE: &str = "providerModels";
+
+/// The models a provider lists, asked the way the agent itself would ask.
+pub async fn list_provider_models_core(
+    db: &AppDatabase,
+    data_dir: &std::path::Path,
+    params: ListProviderModelsParams,
+) -> Result<ModelList, AppCommandError> {
+    let api_key = match params.key_source {
+        ModelsKeySource::Inline { api_key } => api_key,
+        ModelsKeySource::Provider {
+            provider_id,
+            api_key,
+        } => match api_key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
+            Some(typed) => typed,
+            None => {
+                model_provider_service::get_by_id(&db.conn, provider_id)
+                    .await
+                    .map_err(AppCommandError::from)?
+                    .ok_or_else(|| {
+                        provider_models::EndpointError::new(
+                            "provider_not_found",
+                            format!("model provider not found: {provider_id}"),
+                        )
+                        .to_app_error(MODELS_ERROR_NAMESPACE)
+                    })?
+                    .api_key
+            }
+        },
+        ModelsKeySource::PiAuth { provider } => {
+            acp::pi_stored_api_key(db, &provider)
+                .await
+                .map_err(|e| AppCommandError::io_error(e.to_string()))?
+                .unwrap_or_default()
+        }
+        ModelsKeySource::OpencodeCredential { integration_id } => {
+            let env = acp::build_runtime_env_for_agent(
+                db,
+                crate::models::agent::AgentType::OpenCode,
+                None,
+                data_dir,
+                true,
+            )
+            .await
+            .map_err(|e| AppCommandError::io_error(e.to_string()))?;
+            crate::acp::opencode_credentials::stored_key(&env, data_dir, &integration_id)
+                .await
+                .map_err(|e| AppCommandError::io_error(e.to_string()))?
+                .unwrap_or_default()
+        }
+    };
+    let request = ModelsRequest::new(
+        params.protocol,
+        &params.base_url,
+        &api_key,
+        params.key_header,
+    )
+    .map_err(|e| e.to_app_error(MODELS_ERROR_NAMESPACE))?;
+    provider_models::list_models(&request)
+        .await
+        .map_err(|e| e.to_app_error(MODELS_ERROR_NAMESPACE))
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -398,10 +600,45 @@ pub async fn delete_model_provider(
     delete_model_provider_core(&db, id).await
 }
 
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn list_provider_models(
+    params: ListProviderModelsParams,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<ModelList, AppCommandError> {
+    use tauri::Manager;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map(|p| crate::paths::resolve_effective_data_dir(&p))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    list_provider_models_core(&db, &data_dir, params).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::test_helpers::fresh_in_memory_db;
+
+    #[test]
+    fn a_codex_list_source_must_be_well_formed() {
+        let ok = |raw: &str| validate_model("codex", Some(raw)).is_ok();
+        assert!(ok(r#"{"customs":[],"catalog":{}}"#));
+        assert!(ok(
+            r#"{"customs":[],"catalog":{"url":"https://r/v1/models","format":"openai_list","selected":["glm-5.2"]}}"#
+        ));
+        assert!(ok(r#"{"customs":[],"catalog":{"url":null,"format":null}}"#));
+        assert!(!ok(r#"{"customs":[],"catalog":"yes"}"#));
+        assert!(!ok(
+            r#"{"customs":[],"catalog":{"url":"file:///etc/passwd"}}"#
+        ));
+        assert!(!ok(r#"{"customs":[],"catalog":{"format":"xml"}}"#));
+        assert!(!ok(r#"{"customs":[],"catalog":{"selected":"glm"}}"#));
+        assert!(!ok(r#"{"customs":[],"catalog":{"selected":["", "x"]}}"#));
+        // Only Codex has a list source; another agent's plain model is fine.
+        assert!(validate_model("gemini", Some("catalog")).is_ok());
+    }
 
     /// Regression: an `api_key` containing a multibyte character (e.g. a
     /// full-width char typed under a CJK IME) must not panic the masking in
@@ -409,6 +646,135 @@ mod tests {
     /// and then panicked, after which every `list_model_providers` call
     /// panicked on that row — breaking the settings list and the agent
     /// management provider dropdown until the row was removed.
+    /// A listener answering one request with `body`, handing back the request.
+    async fn serve_list(body: &'static str) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = sock.read(&mut buf).await.unwrap_or(0);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.shutdown().await;
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+        (format!("http://{addr}/v1"), handle)
+    }
+
+    fn list_params(base_url: &str, key_source: ModelsKeySource) -> ListProviderModelsParams {
+        ListProviderModelsParams {
+            protocol: ModelsProtocol::Openai,
+            base_url: base_url.to_string(),
+            key_source,
+            key_header: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_saved_providers_models_are_listed_with_its_stored_key_unless_one_is_typed() {
+        let db = fresh_in_memory_db().await;
+        let provider = create_model_provider_core(
+            &db,
+            "Relay".to_string(),
+            "https://relay.example/v1".to_string(),
+            "sk-stored".to_string(),
+            "claude_code".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (base, seen) = serve_list(r#"{"data":[{"id":"glm-5.2"}]}"#).await;
+        let source = ModelsKeySource::Provider {
+            provider_id: provider.id,
+            api_key: None,
+        };
+        let list = list_provider_models_core(&db, std::path::Path::new("."), list_params(&base, source))
+            .await
+            .unwrap();
+        assert_eq!(list.models[0].id, "glm-5.2");
+        assert!(seen.await.unwrap().contains("Bearer sk-stored"));
+
+        let (base, seen) = serve_list(r#"{"data":[]}"#).await;
+        let source = ModelsKeySource::Provider {
+            provider_id: provider.id,
+            api_key: Some(" sk-typed ".to_string()),
+        };
+        list_provider_models_core(&db, std::path::Path::new("."), list_params(&base, source))
+            .await
+            .unwrap();
+        assert!(seen.await.unwrap().contains("Bearer sk-typed"));
+
+        let source = ModelsKeySource::Provider {
+            provider_id: provider.id + 1,
+            api_key: None,
+        };
+        let err = list_provider_models_core(&db, std::path::Path::new("."), list_params(&base, source))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.i18n_key.as_deref(),
+            Some("providerModels.provider_not_found")
+        );
+    }
+
+    #[test]
+    fn a_claude_providers_picker_ids_must_be_a_list_of_ids() {
+        let ok = |raw: &str| validate_model("claude_code", Some(raw)).is_ok();
+        assert!(ok(
+            r#"{"main":"glm-5.2","pickerModels":["glm-5.2","kimi-k3"]}"#
+        ));
+        assert!(ok(r#"{"main":"glm-5.2"}"#));
+        assert!(!ok(r#"{"pickerModels":"glm-5.2"}"#));
+        assert!(!ok(r#"{"pickerModels":["glm-5.2",""]}"#));
+        assert!(!ok(r#"{"pickerModels":[3]}"#));
+        // Room for a long list, far past the plain-string limit.
+        let many: Vec<String> = (0..300).map(|i| format!("vendor/model-{i:04}")).collect();
+        let raw = serde_json::json!({ "main": "m", "pickerModels": many }).to_string();
+        assert!(raw.len() > 4096);
+        assert!(ok(&raw));
+    }
+
+    #[test]
+    fn a_key_source_never_prints_its_key() {
+        let typed = ModelsKeySource::Provider {
+            provider_id: 3,
+            api_key: Some("sk-typed".to_string()),
+        };
+        let inline = ModelsKeySource::Inline {
+            api_key: "sk-inline".to_string(),
+        };
+        for shown in [format!("{typed:?}"), format!("{inline:?}")] {
+            assert!(!shown.contains("sk-"), "{shown}");
+        }
+    }
+
+    #[test]
+    fn a_models_request_reads_the_shape_the_pages_send() {
+        let params: ListProviderModelsParams = serde_json::from_value(serde_json::json!({
+            "protocol": "anthropic",
+            "baseUrl": "https://relay.example",
+            "keySource": { "kind": "provider", "providerId": 3 },
+            "keyHeader": "bearer"
+        }))
+        .unwrap();
+        assert_eq!(params.protocol, ModelsProtocol::Anthropic);
+        assert_eq!(params.key_header, Some(KeyHeader::Bearer));
+        assert!(matches!(
+            params.key_source,
+            ModelsKeySource::Provider { provider_id: 3, api_key: None }
+        ));
+        let inline: ModelsKeySource =
+            serde_json::from_value(serde_json::json!({ "kind": "inline", "apiKey": "sk" }))
+                .unwrap();
+        assert!(matches!(inline, ModelsKeySource::Inline { api_key } if api_key == "sk"));
+    }
+
     #[tokio::test]
     async fn create_and_list_tolerate_multibyte_api_key() {
         let db = fresh_in_memory_db().await;

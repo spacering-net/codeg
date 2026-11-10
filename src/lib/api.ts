@@ -6,7 +6,11 @@ import {
   isRemoteDesktopMode,
   notifyRemoteDesktopUnauthorized,
 } from "./transport"
-import { getCodegToken } from "./transport/web-auth"
+import {
+  codegAuthHeaders,
+  getCodegToken,
+  unauthorizedSource,
+} from "./transport/web-auth"
 import { notifyWebUnauthorized } from "./transport/web-connection-store"
 import { getCurrentEffectiveAppLocale } from "./i18n"
 import {
@@ -21,13 +25,20 @@ import type {
   LeakedTempReclaim,
   LeakedTempScan,
   AgentType,
+  CliAccessStatus,
+  CliToolStatus,
   AgentDelegationDefaults,
   AgentOptionsSnapshot,
+  AssistantDraft,
+  AssistantInfo,
+  AssistantPatch,
   Automation,
   AutomationRun,
   AutomationDraft,
   DeepSeekCatalogModel,
   DeepSeekModelCatalog,
+  ForgeAutoScanReport,
+  ForgeAutoStatus,
   ForgeChangeDetail,
   ForgeChangedFileList,
   ForgeComment,
@@ -36,6 +47,8 @@ import type {
   ForgeIdentity,
   ForgeIssueList,
   ForgeIssueRow,
+  ForgeIssuesCreateResult,
+  ForgeIssuesTaskDraftInput,
   ForgeLabelList,
   ForgeMergeMethod,
   ForgeMergeOptions,
@@ -56,6 +69,7 @@ import type {
   WorkTaskTemplate,
   ConversationSummary,
   ConversationDetail,
+  ConversationOutline,
   ConversationTurnsPage,
   DbConversationDetail,
   FolderInfo,
@@ -69,6 +83,7 @@ import type {
   PlanApprovalAnswer,
   AcpAgentInfo,
   AcpAgentStatus,
+  AgentLatestRelease,
   AgentDiagnosticsReport,
   GrokStructuredConfig,
   CodexSandboxStructuredConfig,
@@ -77,6 +92,13 @@ import type {
   CursorModelsResult,
   QoderAuthStatus,
   CodexModelInfo,
+  CodexCatalogLookup,
+  CodexCatalogRequest,
+  CodexPlanPreview,
+  ProviderModelList,
+  ProviderModelsRequest,
+  CodexCatalogStatus,
+  CodexEndpointCatalogView,
   AgentSkillScope,
   AgentSkillLayout,
   AgentSkillItem,
@@ -93,10 +115,14 @@ import type {
   FolderHistoryEntry,
   FolderDetail,
   FolderGroupDetail,
+  ConversationBranchTag,
+  ConversationTagDetail,
   SidebarLayoutEntry,
   FolderLinkDetail,
   FolderLinkPlan,
   FolderLinkRequestItem,
+  CanvasBoard,
+  CanvasBoardSummary,
   CanvasMutation,
   CanvasNode,
   CanvasNodeKind,
@@ -126,6 +152,8 @@ import type {
   GitResetMode,
   GitConflictFileVersions,
   GitCommitResult,
+  CommitMessageSettings,
+  GeneratedCommitMessage,
   GitRemote,
   GitStashEntry,
   PreflightResult,
@@ -176,8 +204,11 @@ import type {
   WebhookConfig,
   ModelProviderInfo,
   UpdateModelProviderResult,
-  PluginCheckSummary,
+  OpencodePluginList,
   OpenCodeCatalogProvider,
+  OpenCodeConnectKeyRequest,
+  OpenCodeCredentialChange,
+  OpenCodeIntegration,
   QuickMessage,
   OfficecliInfo,
   OfficecliSkill,
@@ -252,8 +283,8 @@ export async function acpConnect(
  * would blow axum's 2 MiB `DefaultBodyLimit` and 413 the send.
  *
  * `shouldStrip` is false on a local desktop workspace (Tauri IPC has no body
- * limit and there is no uploads dir to hydrate from), so those blocks pass
- * through byte-identical. Under `shouldStrip`, a `file://` uri on an image
+ * limit, and an image there is never uploaded to be hydrated back), so those
+ * blocks pass through byte-identical. Under `shouldStrip`, a `file://` uri on an image
  * block can only have come from an upload — every web/remote attach path
  * routes through `/upload_attachment` first — so uri presence is the marker.
  * Pure; exported for tests.
@@ -535,6 +566,27 @@ export async function acpDownloadAgentBinary(
   })
 }
 
+/**
+ * Upgrade an agent codeg launches but does not install (Kiro CLI) through the
+ * vendor's own updater, streaming its output on the install topic. Resolves to
+ * the version found afterwards — the same one when nothing newer existed.
+ */
+export async function acpUpdateSystemAgent(
+  agentType: AgentType,
+  taskId: string
+): Promise<string | null> {
+  // The updater downloads a whole build (Kiro's are 150–360 MB), and the
+  // backend gives it up to 15 minutes (`SYSTEM_UPDATE_TIMEOUT`). Outlast that,
+  // so a slow update ends with the backend's own answer instead of the default
+  // 60 s web-call timeout — which would report a failure and free the Upgrade
+  // button while the updater is still running.
+  return getTransport().call(
+    "acp_update_system_agent",
+    { agentType, taskId },
+    { timeoutMs: 16 * 60_000 }
+  )
+}
+
 export async function acpInstallUvTool(taskId: string): Promise<void> {
   // uv install downloads + extracts the toolchain from GitHub; allow well
   // beyond the default 60s web-call timeout so slow networks don't surface a
@@ -550,6 +602,17 @@ export async function acpDetectAgentLocalVersion(
   agentType: AgentType
 ): Promise<string | null> {
   return getTransport().call("acp_detect_agent_local_version", { agentType })
+}
+
+/**
+ * The newest upstream release of an agent that is newer than codeg's pinned
+ * version and that Custom install can fetch; `null` when there is none. Hits
+ * npm or the ACP registry, so callers ask once per visit, not per render.
+ */
+export async function acpFetchAgentLatestRelease(
+  agentType: AgentType
+): Promise<AgentLatestRelease | null> {
+  return getTransport().call("acp_fetch_agent_latest_release", { agentType })
 }
 
 export async function acpPrepareNpxAgent(
@@ -581,7 +644,6 @@ export async function acpUpdateAgentPreferences(
     enabled: boolean
     env: Record<string, string>
     config_json?: string | null
-    opencode_auth_json?: string | null
     codex_auth_json?: string | null
     codex_config_toml?: string | null
   }
@@ -591,7 +653,6 @@ export async function acpUpdateAgentPreferences(
     enabled: params.enabled,
     env: params.env,
     configJson: params.config_json ?? null,
-    opencodeAuthJson: params.opencode_auth_json ?? null,
     codexAuthJson: params.codex_auth_json ?? null,
     codexConfigToml: params.codex_config_toml ?? null,
   })
@@ -621,12 +682,19 @@ export async function acpUpdateAgentConfig(
   agentType: AgentType,
   params: {
     config_json?: string | null
-    opencode_auth_json?: string | null
+    system_instructions_content?: string | null
+    /** The instructions file the editor showed: the content is written there
+     *  (the agent's own file only), not to a fresh resolution. */
+    system_instructions_file_path?: string | null
     codex_auth_json?: string | null
     codex_config_toml?: string | null
-    /** Compact structured codex model list; backend regenerates the
-     * `model_catalog_json` catalog files from it (config.toml keys are patched
-     * into `codex_config_toml` text by the caller). */
+    /** The config.toml text the draft was loaded from: a key codeg manages
+     * (`model_catalog_json`, root `model` while a catalog is published) that
+     * differs from it was edited by hand, and the save is refused. */
+    codex_config_toml_baseline?: string | null
+    /** Compact structured codex model list. The backend publishes what it
+     * makes (catalog file, `model_catalog_json`, root `model`) through one
+     * commit; callers send config.toml without patching those keys. */
     codex_model_catalog?: string | null
     /** Codex sandbox / approval controls; merged onto the on-disk config.toml
      * server-side. Governs the turns codex starts itself (/goal, /review,
@@ -646,9 +714,11 @@ export async function acpUpdateAgentConfig(
   return getTransport().call("acp_update_agent_config", {
     agentType,
     configJson: params.config_json ?? null,
-    opencodeAuthJson: params.opencode_auth_json ?? null,
+    systemInstructionsContent: params.system_instructions_content ?? null,
+    systemInstructionsFilePath: params.system_instructions_file_path ?? null,
     codexAuthJson: params.codex_auth_json ?? null,
     codexConfigToml: params.codex_config_toml ?? null,
+    codexConfigTomlBaseline: params.codex_config_toml_baseline ?? null,
     codexModelCatalog: params.codex_model_catalog ?? null,
     codexSandbox: params.codex_sandbox ?? null,
     grokConfigToml: params.grok_config_toml ?? null,
@@ -758,21 +828,6 @@ export async function acpUpdateKimiCodeConfig(params: {
 }
 
 /**
- * List the models an API key + endpoint can access (GET `<baseUrl>/models`).
- * Validates the key and powers the Kimi settings model picker; throws with the
- * provider's error message on failure.
- */
-export async function acpFetchKimiModels(params: {
-  baseUrl: string
-  apiKey: string
-}): Promise<string[]> {
-  return getTransport().call("acp_fetch_kimi_models", {
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-  })
-}
-
-/**
  * Apply a structured Pi config update. Merge-writes pi's native
  * `~/.pi/agent/settings.json` (`defaultProvider` / `defaultModel` /
  * `defaultThinkingLevel`) and, when an API key is supplied,
@@ -795,6 +850,9 @@ export async function acpUpdatePiConfig(params: {
     reasoning: boolean
     thinkingLevelMap: Record<string, string | null>
   }
+  /** The custom provider's whole model list (the chosen model always kept);
+   * omit to add the model to whatever the list holds. */
+  customModels?: string[]
 }): Promise<void> {
   return getTransport().call("acp_update_pi_config", {
     provider: params.provider,
@@ -804,6 +862,7 @@ export async function acpUpdatePiConfig(params: {
     customBaseUrl: params.customBaseUrl ?? null,
     customApi: params.customApi ?? null,
     modelReasoning: params.modelReasoning ?? null,
+    customModels: params.customModels ?? null,
   })
 }
 
@@ -833,6 +892,38 @@ export async function loadPiConfig(): Promise<{
   }[]
 }> {
   return getTransport().call("acp_load_pi_config", {})
+}
+
+/** One built-in model's thinking capability, as pi's own registry reports it. */
+export interface PiModelCapability {
+  provider: string
+  id: string
+  reasoning: boolean
+  thinkingLevelMap: Record<string, string | null>
+}
+
+/**
+ * Whether pi answered the catalog query, and if not, why — `models` is empty
+ * unless this is `ok`. An `ok` list covers only providers pi has credentials for.
+ */
+export type PiCatalogStatus =
+  | "ok"
+  | "not_found"
+  | "relative_path"
+  | "failed"
+  | "timed_out"
+
+export interface PiModelCatalog {
+  status: PiCatalogStatus
+  models: PiModelCapability[]
+}
+
+/**
+ * pi's built-in model catalog, asked of the configured pi runtime (offline — no
+ * session, no prompt, no network).
+ */
+export async function listPiModelCapabilities(): Promise<PiModelCatalog> {
+  return getTransport().call("acp_list_pi_model_capabilities", {})
 }
 
 /**
@@ -1387,7 +1478,7 @@ export async function acpPreflight(
   })
 }
 
-export async function opencodeListPlugins(): Promise<PluginCheckSummary> {
+export async function opencodeListPlugins(): Promise<OpencodePluginList> {
   return getTransport().call("opencode_list_plugins", {})
 }
 
@@ -1411,20 +1502,90 @@ export async function codexBundledCatalog(
   })
 }
 
-export async function opencodeInstallPlugins(
-  taskId: string,
-  names?: string[] | null
-): Promise<void> {
-  return getTransport().call("opencode_install_plugins", {
-    names: names ?? null,
-    taskId,
+/** Every integration OpenCode 2 knows (providers, mostly), with how each is
+ *  connected. Asked of OpenCode itself, with the environment a session would
+ *  launch it with; never carries a secret. Needs OpenCode 2 installed. */
+export async function opencodeListIntegrations(): Promise<
+  OpenCodeIntegration[]
+> {
+  return getTransport().call("opencode_list_integrations", {})
+}
+
+/** Store an API key for an OpenCode integration in OpenCode's own credential
+ *  store. Returns the integrations as that leaves them, and how many running
+ *  OpenCode sessions need a restart to use it. */
+export async function opencodeConnectKey(
+  request: OpenCodeConnectKeyRequest
+): Promise<OpenCodeCredentialChange> {
+  return getTransport().call("opencode_connect_key", { request })
+}
+
+/** Remove every credential OpenCode stores for an integration. */
+export async function opencodeDisconnectProvider(
+  integrationId: string
+): Promise<OpenCodeCredentialChange> {
+  return getTransport().call("opencode_disconnect_provider", {
+    integrationId,
   })
 }
 
-export async function opencodeUninstallPlugin(
-  name: string
-): Promise<PluginCheckSummary> {
-  return getTransport().call("opencode_uninstall_plugin", { name })
+/** Fetch a provider's model list for the settings page, without publishing
+ *  it (the next save does). A native catalog is checked by the codex that
+ *  would run; the answer is cached for that save. */
+export async function codexFetchEndpointCatalog(
+  params: CodexCatalogRequest
+): Promise<CodexEndpointCatalogView> {
+  return getTransport().call("codex_fetch_endpoint_catalog", { params })
+}
+
+/** What saving this Codex draft would make of the keys codeg manages. Never
+ *  fetches, checks or writes. */
+export async function codexCatalogPlanPreview(params: {
+  configToml: string
+  authJson?: string | null
+  modelList?: string | null
+}): Promise<CodexPlanPreview> {
+  return getTransport().call("codex_catalog_plan_preview", { params })
+}
+
+/** The published provider list, when it answers this request. */
+export async function codexEndpointCatalogPublished(
+  params: CodexCatalogRequest
+): Promise<CodexCatalogLookup> {
+  return getTransport().call("codex_endpoint_catalog_published", { params })
+}
+
+/** The cached answer to exactly this request. Never fetches. */
+export async function codexEndpointCatalogCached(
+  params: CodexCatalogRequest
+): Promise<CodexCatalogLookup> {
+  return getTransport().call("codex_endpoint_catalog_cached", { params })
+}
+
+/** What is published under codeg's CODEX_HOME, and how refreshing it goes. */
+export async function codexEndpointCatalogStatus(): Promise<CodexCatalogStatus> {
+  return getTransport().call("codex_endpoint_catalog_status", {})
+}
+
+/** "Refresh now": fetch the provider list whatever its age and publish what
+ *  the current settings make of it. */
+export async function codexRefreshEndpointCatalog(): Promise<CodexCatalogStatus> {
+  return getTransport().call("codex_refresh_endpoint_catalog", {})
+}
+
+/** Declare `spec` in OpenCode's `plugins`; OpenCode installs a package plugin
+ *  itself the next time a session starts. */
+export async function opencodeAddPlugin(
+  spec: string
+): Promise<OpencodePluginList> {
+  return getTransport().call("opencode_add_plugin", { spec })
+}
+
+/** Remove every declaration of `spec` from OpenCode's plugin lists. */
+export async function opencodeRemovePlugin(
+  spec: string
+): Promise<OpencodePluginList> {
+  return getTransport().call("opencode_remove_plugin", { spec })
 }
 
 export async function acpListAgentSkills(params: {
@@ -1432,6 +1593,22 @@ export async function acpListAgentSkills(params: {
   workspacePath?: string | null
 }): Promise<AgentSkillsListResult> {
   return getTransport().call("acp_list_agent_skills", {
+    agentType: params.agentType,
+    workspacePath: params.workspacePath ?? null,
+  })
+}
+
+/**
+ * The skills an agent's sessions can load, for the composer menus. For
+ * OpenCode that is every skill it reads (`.claude` folders and the folders
+ * above the workspace included), more than the Skills settings page manages
+ * through {@link acpListAgentSkills}; for every other agent the two agree.
+ */
+export async function acpListAgentRuntimeSkills(params: {
+  agentType: AgentType
+  workspacePath?: string | null
+}): Promise<AgentSkillsListResult> {
+  return getTransport().call("acp_list_agent_runtime_skills", {
     agentType: params.agentType,
     workspacePath: params.workspacePath ?? null,
   })
@@ -1770,23 +1947,67 @@ export async function officecliRenderHtml(
  * officecli's own SSE channel, so the preview no longer re-reads (and locks)
  * the file the way the one-shot {@link officecliRenderHtml} did.
  *
- * `cap` is only used by web/server mode, where the iframe loads the preview
- * through the `/api/office-watch-proxy/{port}` reverse proxy and authenticates
- * with `?cap=` (the master token never enters the iframe). Desktop ignores it.
+ * `cap` names this watch: a new one mints a new `cap`. Web/server mode also
+ * authenticates the iframe with it, loading the preview through the
+ * `/api/office-watch-proxy/{port}` reverse proxy with `?cap=` (the master
+ * token never enters the iframe); desktop loads the loopback port directly.
+ *
+ * `hold` (web/server mode only) names the hold this start took on the watch,
+ * which the page renews and releases by name.
  */
 export async function startOfficeWatch(
   rootPath: string,
   path: string
-): Promise<{ port: number; cap: string }> {
-  return getTransport().call("start_office_watch", { rootPath, path })
+): Promise<{ port: number; cap: string; hold?: string }> {
+  // Allow the backend's 120s cold-start budget plus cleanup/response overhead.
+  return getTransport().call(
+    "start_office_watch",
+    { rootPath, path },
+    { timeoutMs: 150_000 }
+  )
 }
 
-/** Release one reference to an office file's watch preview server. */
+/**
+ * Release one reference to an office file's watch preview server. `cap` and
+ * `hold` are what {@link startOfficeWatch} returned: when that watch is gone
+ * (stopped with its folder, say) the release is a no-op instead of taking a
+ * reference from whatever watch serves the file now, and a web page's release
+ * takes only its own hold.
+ */
 export async function stopOfficeWatch(
   rootPath: string,
-  path: string
+  path: string,
+  cap?: string,
+  hold?: string
 ): Promise<void> {
-  return getTransport().call("stop_office_watch", { rootPath, path })
+  return getTransport().call("stop_office_watch", {
+    rootPath,
+    path,
+    cap,
+    hold,
+  })
+}
+
+/**
+ * Renew this window's hold on the watch named by `cap`, and say whether it is
+ * still the live one serving the file — false once it was stopped, crashed,
+ * or replaced by a new one. A web page's hold lapses when the page goes quiet
+ * (the server can't tell a closed browser from one that just isn't talking),
+ * so a preview renews on a timer, naming its `hold`; one that lapsed meanwhile
+ * comes back. A desktop window's never lapses, and for it this only asks.
+ */
+export async function renewOfficeWatch(
+  rootPath: string,
+  path: string,
+  cap: string,
+  hold?: string
+): Promise<boolean> {
+  return getTransport().call("renew_office_watch", {
+    rootPath,
+    path,
+    cap,
+    hold,
+  })
 }
 
 export async function getSystemProxySettings(): Promise<SystemProxySettings> {
@@ -2002,6 +2223,14 @@ export async function validateGiteaToken(
   return getTransport().call("validate_gitea_token", { serverUrl, token })
 }
 
+/** CNB is its own API dialect: `https://api.cnb.cool` with a `Bearer` token. */
+export async function validateCnbToken(
+  serverUrl: string,
+  token: string
+): Promise<GitHubTokenValidation> {
+  return getTransport().call("validate_cnb_token", { serverUrl, token })
+}
+
 export async function updateGitHubAccounts(
   settings: GitHubAccountsSettings
 ): Promise<GitHubAccountsSettings> {
@@ -2079,11 +2308,16 @@ export async function mcpUpsertLocalServer(params: {
   serverId: string
   spec: Record<string, unknown>
   apps: McpAppType[]
+  /** The spec the editor loaded before the edit (omit for a new server): an
+   * agent that keeps per-server settings of its own (Kiro) keeps them for
+   * every field the edit left alone. */
+  shownSpec?: Record<string, unknown> | null
 }): Promise<LocalMcpServer> {
   return getTransport().call("mcp_upsert_local_server", {
     serverId: params.serverId,
     spec: params.spec,
     apps: params.apps,
+    shownSpec: params.shownSpec ?? null,
   })
 }
 
@@ -2216,6 +2450,103 @@ export async function setFolderGroup(
   return getTransport().call("set_folder_group", { folderId, groupId })
 }
 
+/** Every assistant, tombstones included, in display order. */
+export async function assistantList(): Promise<AssistantInfo[]> {
+  return getTransport().call("assistant_list", {})
+}
+
+export async function assistantCreate(
+  draft: AssistantDraft
+): Promise<AssistantInfo> {
+  return getTransport().call("assistant_create", { draft })
+}
+
+/** Apply an edit; only the fields present change. */
+export async function assistantUpdate(
+  id: number,
+  patch: AssistantPatch
+): Promise<AssistantInfo> {
+  return getTransport().call("assistant_update", { id, patch })
+}
+
+/** Soft-delete; resolves to the tombstone. */
+export async function assistantDelete(id: number): Promise<AssistantInfo> {
+  return getTransport().call("assistant_delete", { id })
+}
+
+/** Persist the order after a drag (the complete list, first to last);
+ *  resolves to the rows whose position changed. */
+export async function assistantReorder(
+  ids: number[]
+): Promise<AssistantInfo[]> {
+  return getTransport().call("assistant_reorder", { ids })
+}
+
+export async function listConversationTags(): Promise<ConversationTagDetail[]> {
+  return getTransport().call("list_conversation_tags", {})
+}
+
+/** Create a tag. `folderId: null` makes it global; a folder id scopes it to
+ *  that folder's family (a worktree child resolves to its root). */
+export async function createConversationTag(args: {
+  folderId: number | null
+  name: string
+  color: string
+}): Promise<ConversationTagDetail> {
+  return getTransport().call("create_conversation_tag", args)
+}
+
+/** Rename and/or recolour a tag. An omitted field is left alone. */
+export async function updateConversationTag(
+  tagId: number,
+  patch: { name?: string; color?: string }
+): Promise<ConversationTagDetail> {
+  return getTransport().call("update_conversation_tag", { tagId, ...patch })
+}
+
+/** Delete a tag; it comes off every conversation that carried it. */
+export async function deleteConversationTag(tagId: number): Promise<void> {
+  return getTransport().call("delete_conversation_tag", { tagId })
+}
+
+/** Persist one scope's order after a drag: its complete list, first to last. */
+export async function reorderConversationTags(tagIds: number[]): Promise<void> {
+  return getTransport().call("reorder_conversation_tags", { tagIds })
+}
+
+/** The branch tag setting: off, in its default colour, until first saved. */
+export async function getConversationBranchTag(): Promise<ConversationBranchTag> {
+  return getTransport().call("get_conversation_branch_tag", {})
+}
+
+/** Save the branch tag setting whole; resolves to it as stored (the colour
+ *  normalized). */
+export async function updateConversationBranchTag(
+  setting: ConversationBranchTag
+): Promise<ConversationBranchTag> {
+  return getTransport().call("update_conversation_branch_tag", {
+    enabled: setting.enabled,
+    color: setting.color,
+  })
+}
+
+/**
+ * Put tags on / take tags off one conversation — a delta, so two windows
+ * toggling different tags at once both land. Resolves to the conversation's
+ * fresh summary (the same one broadcast on `conversation://changed`).
+ */
+export async function updateConversationTags(args: {
+  conversationId: number
+  add?: number[]
+  remove?: number[]
+}): Promise<DbConversationSummary> {
+  return getTransport().call("update_conversation_tags", {
+    conversationId: args.conversationId,
+    add: args.add ?? [],
+    remove: args.remove ?? [],
+  })
+}
+
 export async function updateFolderColor(
   folderId: number,
   color: FolderThemeColor
@@ -2291,6 +2622,17 @@ export async function getFolderConversationTurns(
     conversationId,
     beforeIndex,
     limit,
+  })
+}
+
+/** Fetch the message navigator's outline of the history before `beforeIndex`. */
+export async function getFolderConversationOutline(
+  conversationId: number,
+  beforeIndex: number
+): Promise<ConversationOutline> {
+  return getTransport().call("get_folder_conversation_outline", {
+    conversationId,
+    beforeIndex,
   })
 }
 
@@ -2867,6 +3209,71 @@ export async function gitCommit(
   })
 }
 
+/**
+ * Have an agent write a message for the commit `gitCommit(path, …, files)`
+ * would make. Runs as long as the agent takes — there is no deadline on the
+ * backend — so the call waits well past the transport defaults (60 s on web,
+ * 30 s through the remote-desktop proxy); stop it with
+ * `gitGenerateCommitMessageCancel(requestId)`.
+ */
+export async function gitGenerateCommitMessage(params: {
+  requestId: string
+  path: string
+  folderId: number | null
+  files: string[]
+  draft: string | null
+  fallbackAgent: AgentType | null
+}): Promise<GeneratedCommitMessage> {
+  return getTransport().call(
+    "git_generate_commit_message",
+    {
+      requestId: params.requestId,
+      path: params.path,
+      folderId: params.folderId,
+      files: params.files,
+      draft: params.draft,
+      fallbackAgent: params.fallbackAgent,
+    },
+    { timeoutMs: 30 * 60_000 }
+  )
+}
+
+/** Stop the generation started under `requestId` (a no-op once it ended). */
+export async function gitGenerateCommitMessageCancel(
+  requestId: string
+): Promise<void> {
+  return getTransport().call("git_generate_commit_message_cancel", {
+    requestId,
+  })
+}
+
+/** A project folder's own settings — `null` while it follows the global ones
+ *  — or with `folderId` null the global settings. */
+export async function getCommitMessageSettings(
+  folderId: number | null
+): Promise<CommitMessageSettings | null> {
+  return getTransport().call("get_commit_message_settings", { folderId })
+}
+
+/** Save a project folder's own settings, or with `folderId` null the global
+ *  ones. */
+export async function setCommitMessageSettings(
+  folderId: number | null,
+  settings: CommitMessageSettings
+): Promise<CommitMessageSettings> {
+  return getTransport().call("set_commit_message_settings", {
+    folderId,
+    settings,
+  })
+}
+
+/** Drop a project folder's own settings: it follows the global ones again. */
+export async function deleteCommitMessageSettings(
+  folderId: number
+): Promise<void> {
+  return getTransport().call("delete_commit_message_settings", { folderId })
+}
+
 export async function gitRollbackFile(
   path: string,
   file: string
@@ -3024,15 +3431,67 @@ export interface GroupIntoRegionResult {
   deletedIds: number[]
 }
 
-/** The full canvas node set plus the revision it was read at. */
-export async function canvasListNodes(): Promise<CanvasSnapshot> {
-  return getTransport().call("canvas_list_nodes", {})
+/** Input for `canvasCreateBoard`. Every field optional — an unnamed board is
+ *  a real board, titled "Untitled canvas" by the client. */
+export interface CreateCanvasBoardInput {
+  name?: string
+  description?: string
+  color?: string
 }
 
+/** Field-by-field board patch: absent = untouched, empty string clears. */
+export interface CanvasBoardPatchInput {
+  name?: string
+  description?: string
+  color?: string
+}
+
+/** Every canvas, most recently edited first, each with its node count and a
+ *  thumbnail's worth of node footprints. */
+export async function canvasListBoards(): Promise<CanvasBoardSummary[]> {
+  return getTransport().call("canvas_list_boards", {})
+}
+
+export async function canvasCreateBoard(
+  input: CreateCanvasBoardInput
+): Promise<CanvasBoard> {
+  return getTransport().call("canvas_create_board", { input })
+}
+
+export async function canvasUpdateBoard(
+  boardId: number,
+  patch: CanvasBoardPatchInput
+): Promise<CanvasBoard> {
+  return getTransport().call("canvas_update_board", { boardId, patch })
+}
+
+/** Delete a board and everything on it (terminal cards' shells included). The
+ *  value is the ids of the nodes removed. Idempotent: a board already gone is a
+ *  success with an empty list. */
+export async function canvasDeleteBoard(
+  boardId: number
+): Promise<CanvasMutation<number[]>> {
+  return getTransport().call("canvas_delete_board", { boardId })
+}
+
+/** One board's node set plus the (global) revision it was read at. A board
+ *  that no longer exists rejects with `not_found`. */
+export async function canvasListNodes(
+  boardId: number
+): Promise<CanvasSnapshot> {
+  return getTransport().call("canvas_list_nodes", { boardId })
+}
+
+/** Place a node on a board. The board is its own argument rather than a field
+ *  of `input`: the node menus build the input without knowing which board
+ *  they are on, and the board view is what supplies it. */
 export async function canvasCreateNode(
+  boardId: number,
   input: CreateCanvasNodeInput
 ): Promise<CanvasMutation<CanvasNode>> {
-  return getTransport().call("canvas_create_node", { input })
+  return getTransport().call("canvas_create_node", {
+    input: { ...input, boardId },
+  })
 }
 
 /** "Collect these conversations into a region": the region write, its member
@@ -3040,9 +3499,12 @@ export async function canvasCreateNode(
  *  ONE revision. Doing it as create + N × memberAdd + M × delete would spray a
  *  dozen events for one gesture and make every intermediate state observable. */
 export async function canvasGroupIntoRegion(
+  boardId: number,
   input: GroupIntoRegionInput
 ): Promise<CanvasMutation<GroupIntoRegionResult>> {
-  return getTransport().call("canvas_group_into_region", { input })
+  return getTransport().call("canvas_group_into_region", {
+    input: { ...input, boardId },
+  })
 }
 
 export async function canvasUpdateNode(
@@ -3103,6 +3565,30 @@ export async function openInCode(path: string): Promise<void> {
 }
 
 /**
+ * Run a shell command detached on THIS desktop machine, even from a
+ * remote-desktop window — hence the shell transport. `folderPath` (the folder's
+ * path on its own host) and `remoteHost` reach the command as
+ * `$CODEG_FOLDER_PATH` / `$CODEG_REMOTE_HOST`. `remoteHost` is non-null exactly
+ * in a remote-desktop window (empty when its host's name can't be read): the
+ * backend then treats `folderPath` as the remote server's, not this machine's.
+ * It runs in `workingDir` when that is a directory on this machine, else in
+ * the home directory. Desktop only.
+ */
+export async function runLocalCommand(
+  command: string,
+  folderPath: string,
+  remoteHost: string | null,
+  workingDir: string | null
+): Promise<void> {
+  return getShellTransport().call("run_local_command", {
+    command,
+    folderPath,
+    remoteHost,
+    workingDir,
+  })
+}
+
+/**
  * Open a freshly created git worktree directory as a folder, recording the root
  * folder it descends from (`sourceFolderId` is the folder the worktree was
  * created from; the backend flattens to the root). Lets the worktree folder be
@@ -3155,6 +3641,9 @@ export type SettingsSection =
   | "experts"
   | "science"
   | "office-tools"
+  | "collaboration"
+  | "browser"
+  | "computer-use"
   | "version-control"
   | "shortcuts"
   | "system"
@@ -3394,18 +3883,25 @@ export async function deleteConversation(
 export async function listFolderCommands(
   folderId: number
 ): Promise<FolderCommand[]> {
-  return getTransport().call("list_folder_commands", { folderId })
+  // `includeLocal` tells the host this client knows `run_local`; it withholds
+  // such commands from older clients, which would run them in its terminal.
+  return getTransport().call("list_folder_commands", {
+    folderId,
+    includeLocal: true,
+  })
 }
 
 export async function createFolderCommand(
   folderId: number,
   name: string,
-  command: string
+  command: string,
+  runLocal: boolean
 ): Promise<FolderCommand> {
   return getTransport().call("create_folder_command", {
     folderId,
     name,
     command,
+    runLocal,
   })
 }
 
@@ -3413,13 +3909,16 @@ export async function updateFolderCommand(
   id: number,
   name?: string,
   command?: string,
-  sortOrder?: number
+  sortOrder?: number,
+  runLocal?: boolean
 ): Promise<FolderCommand> {
   return getTransport().call("update_folder_command", {
     id,
     name: name ?? null,
     command: command ?? null,
     sortOrder: sortOrder ?? null,
+    runLocal: runLocal ?? null,
+    includeLocal: true,
   })
 }
 
@@ -3441,6 +3940,7 @@ export async function bootstrapFolderCommandsFromPackageJson(
   return getTransport().call("bootstrap_folder_commands_from_package_json", {
     folderId,
     folderPath,
+    includeLocal: true,
   })
 }
 
@@ -3755,30 +4255,42 @@ export async function workTaskMerge(
   })
 }
 
-/** Accept a reviewed forge-sourced task by pushing it back: an issue's task
- *  publishes its branch and opens (or adopts) a pull request, a pull request's
- *  task pushes onto that pull request's own branch (where `title`/`draft` are
- *  ignored — nothing is created). Resolves with the pull request URL.
+/** Accept a reviewed task by delivering it to a forge: an issue's task — or a
+ *  task with no forge provenance, on its project's `origin` — publishes its
+ *  branch and opens (or adopts) a pull request; a pull request's task pushes
+ *  onto that pull request's own branch, and so does a task whose earlier
+ *  delivery opened one it stayed in review after (`title`/`draft` are ignored
+ *  there — nothing is created). Resolves with the pull request URL.
  *
  *  Unlike the merge dispatch this awaits the WHOLE operation — no agent runs,
  *  just a push and two REST calls — so a rejection is the real reason and the
  *  task is already back in review by the time it surfaces.
  *
- *  `deleteWorktree` takes the checkout along once the delivery lands — the
- *  same offer the merge and complete acceptances make. It rides on the
- *  delivery: a removal that fails leaves a retryable cleanup mark on the card
- *  and this call still resolves with the URL. */
+ *  `markDone` finishes the task; `false` keeps it in review with the pull
+ *  request recorded, for another round on the same branch.
+ *
+ *  `deleteWorktree` takes the checkout along once a delivery that finishes
+ *  the task lands — the same offer the merge and complete acceptances make.
+ *  It rides on the delivery: a removal that fails leaves a retryable cleanup
+ *  mark on the card and this call still resolves with the URL. */
 export async function workTaskDeliverPr(
   id: number,
   prTitle: string | null,
   draft: boolean,
-  deleteWorktree: boolean
+  deleteWorktree: boolean,
+  markDone: boolean,
+  /** Which issues the pull request closes — a task made from several related
+   *  issues only, and only before its first delivery fixed the list. Omitted
+   *  (`undefined`) for every other delivery. */
+  closes?: number[]
 ): Promise<string> {
   return getTransport().call("work_task_deliver_pr", {
     id,
     prTitle,
     draft,
     deleteWorktree,
+    markDone,
+    ...(closes === undefined ? {} : { closes }),
   })
 }
 
@@ -3801,6 +4313,16 @@ export async function workTaskArchive(
   archived: boolean
 ): Promise<void> {
   return getTransport().call("work_task_archive", { id, archived })
+}
+
+/** Put a reviewed / failed task aside to handle later ("以后处理" — it waits
+ *  under Done), or bring it back to "needs you". No status change: a follow-up,
+ *  retry or merge picks a deferred task back up on its own. */
+export async function workTaskDefer(
+  id: number,
+  deferred: boolean
+): Promise<void> {
+  return getTransport().call("work_task_defer", { id, deferred })
 }
 
 /** Remove the task's worktree + branch (also retries a failed cleanup). */
@@ -3887,6 +4409,18 @@ export async function listDirectoryEntries(
   return getTransport().call("list_directory_entries", { path })
 }
 
+/**
+ * Create the folder `name` directly inside `parentPath`, on the host that owns
+ * the filesystem the directory browser walks, and resolve to its path. One
+ * level only, and an existing entry of that name is an error, never reused.
+ */
+export async function createDirectory(
+  parentPath: string,
+  name: string
+): Promise<string> {
+  return getTransport().call("create_directory", { parentPath, name })
+}
+
 export async function listDirectoryWithFiles(
   path: string
 ): Promise<DirectoryItem[]> {
@@ -3902,7 +4436,8 @@ export const UPLOAD_MAX_BYTES = 20 * 1024 * 1024
 
 // `btoa` only accepts a binary string, and `String.fromCharCode(...bytes)`
 // hits the call-stack limit somewhere around a few hundred KB. Chunk the
-// buffer so a 2 MB upload encodes without blowing the stack.
+// buffer so an upload at the full `UPLOAD_MAX_BYTES` encodes without
+// blowing the stack.
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf)
   let binary = ""
@@ -3968,8 +4503,10 @@ export function isEmptyAttachmentError(err: unknown): boolean {
 // page was served from. Desktop + remote workspace: routes through the Rust
 // `remote_upload_attachment` command, because the webview's `fetch` can't
 // hit a plain `http://` remote (mixed-content rules block secure-context
-// requests). Returns the server-side absolute path so the caller can attach
-// it as a `file://` ResourceLink — identical shape on both transports.
+// requests). Local desktop: there is no server, so `save_pasted_attachment`
+// keeps the bytes in this machine's own uploads directory. Returns the
+// absolute path so the caller can attach it as a `file://` ResourceLink —
+// identical shape on every transport.
 export async function uploadAttachment(
   file: File,
   sessionId?: string | null
@@ -4000,6 +4537,18 @@ export async function uploadAttachment(
       }
     )
   }
+  if (isDesktop()) {
+    const buf = await file.arrayBuffer()
+    return getShellTransport().call<UploadAttachmentResult>(
+      "save_pasted_attachment",
+      {
+        fileName: file.name,
+        mimeType: file.type || null,
+        sessionId: sessionId ?? null,
+        dataBase64: arrayBufferToBase64(buf),
+      }
+    )
+  }
 
   const token = getCodegToken()
   const form = new FormData()
@@ -4008,11 +4557,13 @@ export async function uploadAttachment(
 
   const res = await fetch(`${window.location.origin}/api/upload_attachment`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: codegAuthHeaders(token),
     body: form,
   })
   if (res.status === 401) {
-    notifyWebUnauthorized()
+    notifyWebUnauthorized(
+      unauthorizedSource(res.headers.get("www-authenticate"))
+    )
     throw new Error("Unauthorized")
   }
   if (!res.ok) {
@@ -4102,9 +4653,7 @@ async function workspaceFileFetch(
   isMultipart: boolean
 ): Promise<Response> {
   const token = getCodegToken()
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-  }
+  const headers = codegAuthHeaders(token)
   if (!isMultipart) {
     headers["Content-Type"] = "application/json"
   }
@@ -4114,7 +4663,9 @@ async function workspaceFileFetch(
     body,
   })
   if (res.status === 401) {
-    notifyWebUnauthorized()
+    notifyWebUnauthorized(
+      unauthorizedSource(res.headers.get("www-authenticate"))
+    )
     throw new Error("Unauthorized")
   }
   if (!res.ok) {
@@ -4172,7 +4723,9 @@ export async function uploadWorkspaceFile(
     const token = getCodegToken()
     const xhr = new XMLHttpRequest()
     xhr.open("POST", `${window.location.origin}/api/upload_workspace_file`)
-    xhr.setRequestHeader("Authorization", `Bearer ${token}`)
+    for (const [name, value] of Object.entries(codegAuthHeaders(token))) {
+      xhr.setRequestHeader(name, value)
+    }
 
     if (args.onProgress) {
       const onProgress = args.onProgress
@@ -4185,7 +4738,9 @@ export async function uploadWorkspaceFile(
 
     xhr.onload = () => {
       if (xhr.status === 401) {
-        notifyWebUnauthorized()
+        notifyWebUnauthorized(
+          unauthorizedSource(xhr.getResponseHeader("www-authenticate"))
+        )
         reject(new Error("Unauthorized"))
         return
       }
@@ -4725,9 +5280,9 @@ export async function terminalResize(
 
 /**
  * Recent output of an already-running terminal, for a viewer attaching to a
- * PTY it did not spawn (a canvas terminal card coming back from another
- * route). `alive: false` is the settled answer "nothing to attach to" — spawn
- * instead; it is never an error, so callers don't have to parse one.
+ * PTY it did not spawn (a canvas terminal card or restored panel tab).
+ * `alive: false, exists: true` carries retained final output; `exists: false`
+ * means no session is known. Older backends omit `exists`.
  *
  * Subscribe to `terminal://output/<id>` BEFORE calling this, and drop the
  * events whose `seq` is at or below the returned `seq` — that overlap is
@@ -4739,8 +5294,18 @@ export async function terminalSnapshot(
   return getTransport().call("terminal_snapshot", { terminalId })
 }
 
+/** Close a terminal: ends its process and forgets it, output included. */
 export async function terminalKill(terminalId: string): Promise<void> {
   return getTransport().call("terminal_kill", { terminalId })
+}
+
+/**
+ * End a terminal's process but keep the terminal: its final output stays on
+ * the backend for the tab still showing it, as after a natural exit, until
+ * `terminalKill` closes it. A server without `keepOutput` closes it instead.
+ */
+export async function terminalStop(terminalId: string): Promise<void> {
+  return getTransport().call("terminal_kill", { terminalId, keepOutput: true })
 }
 
 export async function terminalList(): Promise<TerminalInfo[]> {
@@ -4783,6 +5348,30 @@ export interface WebServiceConfig {
 
 export async function getWebServiceConfig(): Promise<WebServiceConfig> {
   return getTransport().call("get_web_service_config")
+}
+
+/** Whether `codeg-cli` on this machine can reach this runtime. */
+export async function getCliAccessStatus(): Promise<CliAccessStatus> {
+  return getTransport().call("cli_access_status")
+}
+
+/** Turn command-line access on or off; applied at once. */
+export async function setCliAccessEnabled(
+  enabled: boolean
+): Promise<CliAccessStatus> {
+  return getTransport().call("cli_access_set_enabled", { enabled })
+}
+
+/** Desktop only: whether this app's `codeg-cli` is on the user's PATH. Asked
+ *  of this window's own app, even one bound to a remote server. */
+export async function getCliToolStatus(): Promise<CliToolStatus> {
+  return getShellTransport().call("cli_tool_status")
+}
+
+/** Desktop only: put this app's `codeg-cli` on the user's PATH. On macOS
+ *  this may ask for an administrator's password. */
+export async function installCliTool(): Promise<CliToolStatus> {
+  return getShellTransport().call("cli_tool_install")
 }
 
 export async function updateWebServiceConfig(
@@ -4927,6 +5516,16 @@ export async function setChatEventWebhooks(
   return getTransport().call("set_chat_event_webhooks", { webhooks })
 }
 
+export async function getChatEventTopLevelOnly(): Promise<boolean> {
+  return getTransport().call("get_chat_event_top_level_only")
+}
+
+export async function setChatEventTopLevelOnly(
+  enabled: boolean
+): Promise<void> {
+  return getTransport().call("set_chat_event_top_level_only", { enabled })
+}
+
 export async function getChatMessageLanguage(): Promise<string> {
   return getTransport().call("get_chat_message_language")
 }
@@ -4999,6 +5598,22 @@ export async function deleteModelProvider(id: number): Promise<void> {
   return getTransport().call("delete_model_provider", { id })
 }
 
+/** Keep the /model picker ids codeg adds for an unbound Claude agent; returns
+ *  how many running sessions now need a restart. */
+export async function acpUpdateClaudeModelPicker(
+  models: string[]
+): Promise<number> {
+  return getTransport().call("acp_update_claude_model_picker", { models })
+}
+
+/** The models a provider lists, asked the way the agent itself would ask.
+ *  Fails with a `providerModels.<code>` i18n key. */
+export async function listProviderModels(
+  params: ProviderModelsRequest
+): Promise<ProviderModelList> {
+  return getTransport().call("list_provider_models", { params })
+}
+
 // ─── Delegation settings ───────────────────────────────────────────────
 
 export interface DelegationSettings {
@@ -5036,6 +5651,11 @@ export type CodegMcpServiceState =
 export interface CodegMcpToolGroup {
   key: string
   enabled: boolean
+  /** The group this one lives inside, when it lives inside one
+   * (`browser_eval` inside `browser`). Sent by the backend so the two
+   * surfaces that render this list cannot disagree about which switch gates
+   * which. Absent for a group proper. */
+  requires?: string | null
 }
 
 /** Mirror of Rust `CodegMcpServiceStatus`. */
@@ -5076,6 +5696,42 @@ export async function setCodegMcpToolGroup(
   enabled: boolean
 ): Promise<void> {
   return getTransport().call("set_codeg_mcp_tool_group", { key, enabled })
+}
+
+// ─── Generative UI (the ui-render skill) ────────────────────────────────
+// Enabled per agent like the bundled packs; link statuses reuse the Expert*
+// DTOs, with `expertId` carrying the skill's id.
+
+/** Mirror of Rust `GenerativeUiSkillInfo`. */
+export interface GenerativeUiSkillInfo {
+  /** The skill's name: its folder, and what the user types (`/ui-render`). */
+  id: string
+  /** The central skill store holds a skill of that name the user made, so
+   *  Codeg leaves the skill alone until it is renamed. */
+  conflict: boolean
+}
+
+export async function generativeUiSkillInfo(): Promise<GenerativeUiSkillInfo> {
+  return getTransport().call("generative_ui_skill_info")
+}
+
+/** One round-trip snapshot of the skill's link state for every agent. */
+export async function generativeUiListAllInstallStatuses(): Promise<
+  ExpertInstallStatus[]
+> {
+  return getTransport().call("generative_ui_list_all_install_statuses")
+}
+
+/** Apply a batch of enable/disable ops; returns one result per op. */
+export async function generativeUiApplyLinks(
+  ops: LinkOp[]
+): Promise<LinkOpResult[]> {
+  return getTransport().call("generative_ui_apply_links", { ops })
+}
+
+/** The skill's `SKILL.md`, for the matrix's preview drawer. */
+export async function generativeUiReadContent(): Promise<string> {
+  return getTransport().call("generative_ui_read_content")
 }
 
 // ─── Live feedback settings + submit ───────────────────────────────────
@@ -5160,6 +5816,32 @@ export async function setSessionInfoSettings(
   return getTransport().call("set_session_info_settings", { settings })
 }
 
+// ─── Built-in browser tools settings ───────────────────────────────────────
+
+/** Mirror of Rust `BrowserToolsSettings` (default OFF). Whether agents get
+ *  `browser_list_tabs` / `browser_snapshot` at all; which individual page they
+ *  may read is a separate, per-tab decision made from the tab's own toolbar. */
+export interface BrowserToolsSettings {
+  enabled: boolean
+  /** Whether `browser_eval` exists: an agent running its own code on a shared
+   *  page. Off by default and separate from `enabled`, because everything else
+   *  in the group is a named act a person sharing a tab can picture and this
+   *  is not one of them. Never in force with `enabled` off — the backend drops
+   *  it, so a stale `true` cannot outlive the switch above it. Even on, every
+   *  individual snippet is shown to the person and approved on its own. */
+  eval: boolean
+}
+
+export async function getBrowserToolsSettings(): Promise<BrowserToolsSettings> {
+  return getTransport().call("get_browser_tools_settings")
+}
+
+export async function setBrowserToolsSettings(
+  settings: BrowserToolsSettings
+): Promise<BrowserToolsSettings> {
+  return getTransport().call("set_browser_tools_settings", { settings })
+}
+
 // ─── Create-from-chat (chat authoring) settings ────────────────────────────
 
 /** Mirror of Rust `ChatAuthoringSettings`. Both default OFF — these tools write
@@ -5188,7 +5870,15 @@ export async function setChatAuthoringSettings(
  * Does NOT touch chat-side `selectorsCache` or `localStorage` preferences. */
 export async function describeAgentOptions(
   agentType: AgentType,
-  workingDir?: string | null
+  workingDir?: string | null,
+  /** Config selections to apply on the probe session before reading the
+   *  snapshot. Callers pass the model: an agent that derives one option's
+   *  choices from another's value (opencode lists `effort` per model) then
+   *  answers for the user's selection instead of its own default model. An
+   *  applied option still reports the agent's own pick as its `current_value`
+   *  (what it runs when left unset), so a "Default" label keeps naming the
+   *  agent's model rather than the selection. */
+  configValues?: Record<string, string> | null
 ): Promise<AgentOptionsSnapshot> {
   // The backend probe has its own 60s timeout (`ConnectionManager::
   // probe_agent_options`) plus 500ms grace + poll/serialization
@@ -5201,6 +5891,7 @@ export async function describeAgentOptions(
     {
       agentType,
       workingDir: workingDir ?? null,
+      configValues: configValues ?? null,
     },
     { timeoutMs: 70_000 }
   )
@@ -5401,7 +6092,9 @@ export async function uploadBackupWeb(
     const token = getCodegToken()
     const xhr = new XMLHttpRequest()
     xhr.open("POST", `${window.location.origin}/api/backup_upload`)
-    xhr.setRequestHeader("Authorization", `Bearer ${token}`)
+    for (const [name, value] of Object.entries(codegAuthHeaders(token))) {
+      xhr.setRequestHeader(name, value)
+    }
     if (onProgress) {
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) onProgress(event.loaded, event.total)
@@ -5409,7 +6102,9 @@ export async function uploadBackupWeb(
     }
     xhr.onload = () => {
       if (xhr.status === 401) {
-        notifyWebUnauthorized()
+        notifyWebUnauthorized(
+          unauthorizedSource(xhr.getResponseHeader("www-authenticate"))
+        )
         reject(new Error("Unauthorized"))
         return
       }
@@ -5608,6 +6303,24 @@ export async function forgeListIssues(
       perPage: query.perPage ?? DEFAULT_FORGE_PAGE_SIZE,
       accountId: query.accountId ?? null,
     },
+  })
+}
+
+/** One issue, read in full — its description included.
+ *
+ *  CNB's issue LIST omits the body (its pull list carries one), so the detail
+ *  panel asks for the item itself the moment it opens — one request, paid only
+ *  for the item somebody is reading, the same trade the comment thread makes.
+ *  No other forge takes this path: their list rows already carry the body. */
+export async function forgeIssueDetail(
+  folderId: number,
+  number: number,
+  accountId?: string | null
+): Promise<ForgeIssueRow> {
+  return getTransport().call("forge_issue_detail", {
+    folderId,
+    number,
+    accountId: accountId ?? null,
   })
 }
 
@@ -5897,6 +6610,13 @@ export async function workTaskCreateFromForge(
   return getTransport().call("work_task_create_from_forge", { draft })
 }
 
+/** One task for several related issues — see `ForgeIssuesTaskDraftInput`. */
+export async function workTaskCreateFromForgeIssues(
+  draft: ForgeIssuesTaskDraftInput
+): Promise<ForgeIssuesCreateResult> {
+  return getTransport().call("work_task_create_from_forge_issues", { draft })
+}
+
 /** Latest task per source key (any state) — drives the row chips. */
 export async function workTaskLookupBySource(
   sourceKeys: string[]
@@ -5926,4 +6646,20 @@ export async function forgeSettingsSet(
   settings: ForgePanelSettings | null
 ): Promise<ForgeSettingsStore> {
   return getTransport().call("forge_settings_set", { folderId, settings })
+}
+
+/** Where auto-processing stands for one folder: the last scan's report, the
+ *  next scheduled scan, the last webhook delivery. */
+export async function forgeAutoStatus(
+  folderId: number
+): Promise<ForgeAutoStatus> {
+  return getTransport().call("forge_auto_status", { folderId })
+}
+
+/** Scan one folder now with its SAVED rules, and get back what the scan did.
+ *  Resolves once the scan has finished. */
+export async function forgeAutoScanNow(
+  folderId: number
+): Promise<ForgeAutoScanReport> {
+  return getTransport().call("forge_auto_scan_now", { folderId })
 }

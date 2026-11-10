@@ -316,6 +316,11 @@ pub struct PetSessionEntry {
     /// Absent for ordinary sessions, which are their own jump target.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<PetParentRef>,
+    /// The assistant a delegation sub-agent runs as, by the name it started
+    /// with — the panel names the row after it rather than after the agent.
+    /// Resolved by the command layer, like `title`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant_name: Option<String>,
 }
 
 /// Aggregate payload for the `pet://sessions` event and the
@@ -424,6 +429,7 @@ mod tests {
                 options: vec![],
             }),
             parent: None,
+            assistant_name: None,
         }
     }
 

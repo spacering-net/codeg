@@ -16,7 +16,7 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, latest_turn_total_usage_tokens, merge_context_window_stats,
     relocate_orphaned_tool_results, resolve_patch_line_numbers, structurize_read_tool_output,
-    title_from_user_text, truncate_str, AgentParser, ParseError,
+    title_from_user_text, truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 /// Resolve the `pi` coding agent's sessions directory, honoring (highest
@@ -45,11 +45,152 @@ use crate::parsers::{
 /// `--<dashed-cwd>--/` buckets and the FLAT directory a custom `sessionDir`
 /// produces (pi uses the configured path verbatim, with no per-cwd bucket).
 pub(crate) fn resolve_pi_sessions_dir() -> PathBuf {
+    resolve_pi_sessions_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_pi_sessions_dir`] for the pi launched with `env`.
+pub(crate) fn resolve_pi_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_pi_sessions_dir_from(
-        std::env::var_os("PI_CODING_AGENT_SESSION_DIR"),
-        std::env::var_os("PI_CODING_AGENT_DIR"),
+        env.var_os("PI_CODING_AGENT_SESSION_DIR"),
+        env.var_os("PI_CODING_AGENT_DIR"),
         dirs::home_dir(),
     )
+}
+
+/// Pi's agent directory: `PI_CODING_AGENT_DIR` (through pi's tilde rule), else
+/// `~/.pi/agent`. The same rule [`resolve_pi_sessions_dir_from`] applies before
+/// it looks for `sessions`, kept in one place so the two can't drift.
+pub(crate) fn resolve_pi_agent_dir_from(
+    agent_dir_env: Option<OsString>,
+    home_dir: Option<&Path>,
+) -> PathBuf {
+    match agent_dir_env
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.into_string().ok())
+    {
+        Some(dir) => expand_pi_tilde(&dir, home_dir),
+        None => home_dir
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+            .join(".pi")
+            .join("agent"),
+    }
+}
+
+pub(crate) fn resolve_pi_agent_dir() -> PathBuf {
+    resolve_pi_agent_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_pi_agent_dir`] for the pi launched with `env`.
+pub(crate) fn resolve_pi_agent_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_pi_agent_dir_from(
+        env.var_os("PI_CODING_AGENT_DIR"),
+        dirs::home_dir().as_deref(),
+    )
+}
+
+/// What pi gives a `models.json` model that declares no `contextWindow`:
+/// `provider-composer.js`'s `modelFromJson` ends with
+/// `contextWindow: definition.contextWindow ?? 128000`. The entry REPLACES any
+/// built-in model of the same id (`applyModelsJson` upserts by id and only
+/// borrows `api`/`baseUrl` from the one it replaces), so 128K is what pi runs
+/// with — not the built-in catalog's number, and not codeg's name table's.
+const PI_DEFAULT_MODEL_CONTEXT_WINDOW: u64 = 128_000;
+
+/// The context window `<agent_dir>/models.json` settles on for a model.
+///
+/// Why this is needed: `infer_context_window_max_tokens` guesses from a table of
+/// known model names — Claude / Gemini / Gemma / Kimi / Grok / OpenAI — and
+/// returns `None` for anything else. Model ids served by a self-hosted
+/// OpenAI-compatible endpoint land on `None` (no context meter at all) or, when
+/// the id merely LOOKS familiar — a proxy answering to `gpt-5.5` — on a
+/// confident number the guess cannot actually know.
+///
+/// Pi records the real window per provider, which beats guessing by name and
+/// keeps working when the model changes. Any read failure (file absent, bad
+/// JSON, model not listed) yields `None` and falls back to the existing
+/// name-based guess, so behaviour is never worse than before.
+///
+/// Takes the directory rather than resolving it, mirroring
+/// `grok::grok_catalog_context_window(home, model)`: the lookup stays a function
+/// of its inputs, so a test drives it from a fixture instead of whatever
+/// `models.json` the machine running the suite happens to have.
+pub(crate) fn pi_declared_context_window(
+    agent_dir: &Path,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Option<u64> {
+    let model = model?.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let raw = fs::read_to_string(agent_dir.join("models.json")).ok()?;
+    pi_declared_context_window_from(&raw, provider, model)
+}
+
+/// Pure over the file contents so it can be tested without touching the disk.
+///
+/// pi keys a model by `(provider, id)`, and the transcript records both, so the
+/// session's own provider decides which entry applies — a provider this file
+/// does not define is a BUILT-IN one, whose catalogue lives inside pi rather
+/// than on disk, and correctly yields `None`. Only a session that recorded no
+/// provider at all scans every provider, and then only an unambiguous answer
+/// counts: two providers disagreeing about the same id is exactly the case
+/// where picking one would be a guess wearing a declaration's clothes.
+fn pi_declared_context_window_from(raw: &str, provider: Option<&str>, model: &str) -> Option<u64> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let providers = value.get("providers")?.as_object()?;
+
+    if let Some(provider) = provider.map(str::trim).filter(|p| !p.is_empty()) {
+        return provider_declared_context_window(providers.get(provider)?, model);
+    }
+
+    let mut agreed: Option<u64> = None;
+    for config in providers.values() {
+        let Some(window) = provider_declared_context_window(config, model) else {
+            continue;
+        };
+        if agreed.is_some_and(|previous| previous != window) {
+            return None;
+        }
+        agreed = Some(window);
+    }
+    agreed
+}
+
+/// One provider's answer for `model`, in pi's own layering order.
+fn provider_declared_context_window(config: &Value, model: &str) -> Option<u64> {
+    // `modelOverrides` is the topmost layer pi applies ("they apply once, after
+    // custom-model upserts, extension model replacement, and legacy OAuth
+    // projection"), and it patches rather than replaces: an override without a
+    // `contextWindow` leaves the layer below in charge.
+    let overridden = config
+        .get("modelOverrides")
+        .and_then(Value::as_object)
+        .and_then(|overrides| overrides.get(model))
+        .and_then(|entry| entry.get("contextWindow"))
+        .and_then(Value::as_u64)
+        .filter(|window| *window > 0);
+    if overridden.is_some() {
+        return overridden;
+    }
+
+    // Last declaration wins: `applyModelsJson` walks `models` in order and
+    // upserts by id (`models[existingIndex] = model`), so a repeated id ends up
+    // holding the LAST entry's fields.
+    let declared = config
+        .get("models")
+        .and_then(Value::as_array)?
+        .iter()
+        .rev()
+        .find(|entry| entry.get("id").and_then(Value::as_str) == Some(model))?;
+    match declared.get("contextWindow") {
+        // Absent is not unknown — it is pi's `?? 128000`.
+        None | Some(Value::Null) => Some(PI_DEFAULT_MODEL_CONTEXT_WINDOW),
+        // A window pi itself rejects (`invalid contextWindow` for `<= 0`), or
+        // one that is not a number at all, is not a declaration to honor.
+        Some(window) => window.as_u64().filter(|window| *window > 0),
+    }
 }
 
 fn resolve_pi_sessions_dir_from(
@@ -63,17 +204,7 @@ fn resolve_pi_sessions_dir_from(
     {
         return expand_pi_tilde(&session_dir, home_dir.as_deref());
     }
-    let agent_dir = match agent_dir_env
-        .filter(|value| !value.is_empty())
-        .and_then(|value| value.into_string().ok())
-    {
-        Some(dir) => expand_pi_tilde(&dir, home_dir.as_deref()),
-        None => home_dir
-            .clone()
-            .unwrap_or_default()
-            .join(".pi")
-            .join("agent"),
-    };
+    let agent_dir = resolve_pi_agent_dir_from(agent_dir_env, home_dir.as_deref());
     session_dir_from_settings(&agent_dir, home_dir.as_deref())
         .unwrap_or_else(|| agent_dir.join("sessions"))
 }
@@ -199,20 +330,39 @@ fn session_dir_from_settings(agent_dir: &Path, home_dir: Option<&Path>) -> Optio
 /// partially-written log is read robustly rather than panicking.
 pub struct PiParser {
     base_dir: PathBuf,
+    /// Where `models.json` lives. Resolved separately from `base_dir` because a
+    /// custom `sessionDir` moves the sessions OUT of the agent dir, so the one
+    /// cannot be derived from the other.
+    agent_dir: PathBuf,
 }
 
 impl PiParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the pi launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_pi_sessions_dir(),
+            base_dir: resolve_pi_sessions_dir_for_env(env),
+            agent_dir: resolve_pi_agent_dir_for_env(env),
         }
     }
 
     /// Construct a parser pointed at an explicit `sessions` directory (test
-    /// fixtures).
+    /// fixtures). The agent dir is taken to be its parent — pi's default
+    /// `<agent dir>/sessions` layout — so a fixture can place `models.json`
+    /// next to the sessions folder and nothing reaches the real `~/.pi`.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+        let agent_dir = base_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| base_dir.clone());
+        Self {
+            base_dir,
+            agent_dir,
+        }
     }
 
     fn parse_summary(&self, path: &Path) -> Option<ConversationSummary> {
@@ -257,7 +407,15 @@ impl PiParser {
         backfill_turn_durations(&mut turns, &[]);
 
         let used_tokens = latest_turn_total_usage_tokens(&turns);
-        let max_tokens = infer_context_window_max_tokens(parsed.model.as_deref());
+        // Ask Pi what the provider declared first; only then guess by name.
+        // Self-hosted model ids are absent from the built-in table, so guessing
+        // alone drops the context meter entirely.
+        let max_tokens = pi_declared_context_window(
+            &self.agent_dir,
+            parsed.provider.as_deref(),
+            parsed.model.as_deref(),
+        )
+        .or_else(|| infer_context_window_max_tokens(parsed.model.as_deref()));
         let session_stats =
             merge_context_window_stats(compute_session_stats(&turns), used_tokens, max_tokens);
 
@@ -323,6 +481,7 @@ impl AgentParser for PiParser {
 
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
         if self.base_dir.exists() {
+            let mut by_filename: Option<PathBuf> = None;
             for entry in WalkDir::new(&self.base_dir)
                 .into_iter()
                 .filter_map(|e| e.ok())
@@ -331,11 +490,23 @@ impl AgentParser for PiParser {
                 if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                     continue;
                 }
-                // Match by the header `id` (the stable external id); fall back to
+                // Match by the header `id` (what listing reports); fall back to
                 // the filename uuid when a malformed file has no header.
                 if session_id_of(path).as_deref() == Some(conversation_id) {
                     return self.parse_detail(path, conversation_id);
                 }
+                // The filename carries the id pi reported when the session was
+                // created — pi-acp's ACP session id, which codeg stores. The
+                // header can still differ: a session loaded before its first
+                // prompt relaunches `pi --session <unwritten file>`, and pi then
+                // writes a fresh header id into that file (#1068). Accept the
+                // filename uuid, but only when no header matches.
+                if by_filename.is_none() && fallback_id(path) == conversation_id {
+                    by_filename = Some(path.to_path_buf());
+                }
+            }
+            if let Some(path) = by_filename {
+                return self.parse_detail(&path, conversation_id);
             }
         }
 
@@ -351,7 +522,8 @@ struct SessionParse {
     messages: Vec<UnifiedMessage>,
     first_ts: Option<DateTime<Utc>>,
     last_ts: Option<DateTime<Utc>>,
-    /// Header `id` (the stable external id; `None` when the header is missing).
+    /// Header `id` (the listed id; `None` when the header is missing). It can
+    /// differ from the filename uuid — see `get_conversation`.
     session_id: Option<String>,
     /// Header `cwd`.
     cwd: Option<String>,
@@ -361,6 +533,10 @@ struct SessionParse {
     first_user_text: Option<String>,
     /// Latest model from an assistant message's `model` or a `model_change`.
     model: Option<String>,
+    /// The provider named alongside that model, always written with it so the
+    /// pair can never be mixed across a switch. pi identifies a model by
+    /// `(provider, id)` — see [`pi_declared_context_window`].
+    provider: Option<String>,
     /// User + assistant turns (tool calls/results and thinking excluded), the
     /// list-view activity count.
     message_count: u32,
@@ -434,6 +610,7 @@ fn parse_session(path: &Path) -> SessionParse {
             "model_change" => {
                 if let Some(model) = string_field(value, "modelId") {
                     sp.model = Some(model);
+                    sp.provider = string_field(value, "provider");
                 }
             }
             "message" => parse_message_record(&mut sp, value, ts, idx),
@@ -653,6 +830,7 @@ fn parse_message_record(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
             let model = string_field(message, "model");
             if let Some(ref m) = model {
                 sp.model = Some(m.clone());
+                sp.provider = string_field(message, "provider");
             }
 
             let mut blocks = assistant_content_blocks(message.get("content"));
@@ -697,6 +875,7 @@ fn parse_message_record(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
                     is_error,
                     agent_stats: None,
                     images: content_images(message.get("content")),
+                    exit_code: None,
                 }],
                 ts,
                 None,
@@ -779,6 +958,7 @@ fn parse_compaction(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>, idx
                 is_error: false,
                 agent_stats: None,
                 images: Vec::new(),
+                exit_code: None,
             },
         ],
         ts,
@@ -903,6 +1083,7 @@ fn parse_bash_execution(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
             is_error,
             agent_stats: None,
             images: Vec::new(),
+            exit_code,
         }],
         ts,
         None,
@@ -1348,6 +1529,201 @@ mod tests {
     use std::io::Write;
     use tempfile::tempdir;
 
+    /// Two providers, same id, different windows — the file pi would resolve
+    /// with the session's own provider, not with a tie-break.
+    const TWO_PROVIDER_MODELS_JSON: &str = r#"{
+      "providers": {
+        "openai-compatible": { "models": [
+          { "id": "qwen-flash", "contextWindow": 262144, "maxTokens": 32768 }
+        ]},
+        "other": { "models": [
+          { "id": "qwen-flash", "contextWindow": 131072 }
+        ]}
+      }
+    }"#;
+
+    #[test]
+    fn declared_context_window_resolves_the_session_s_own_provider() {
+        let window = |provider: Option<&str>| {
+            pi_declared_context_window_from(TWO_PROVIDER_MODELS_JSON, provider, "qwen-flash")
+        };
+        // The recorded provider decides. Taking the largest instead would have
+        // told a session on `other` it had twice the room it really has.
+        assert_eq!(window(Some("openai-compatible")), Some(262_144));
+        assert_eq!(window(Some("other")), Some(131_072));
+        // A provider this file does not define is a BUILT-IN one, whose
+        // catalogue lives inside pi — nothing to read here.
+        assert_eq!(window(Some("anthropic")), None);
+        // Without a recorded provider, two disagreeing declarations are not an
+        // answer; one agreed answer still is.
+        assert_eq!(window(None), None);
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"a":{"models":[{"id":"m","contextWindow":50}]},
+                                  "b":{"models":[{"id":"m","contextWindow":50}]}}}"#,
+                None,
+                "m"
+            ),
+            Some(50)
+        );
+        // An id the file does not list → None, so the name-based guess still runs.
+        assert_eq!(
+            pi_declared_context_window_from(TWO_PROVIDER_MODELS_JSON, None, "nope"),
+            None
+        );
+    }
+
+    /// pi's `modelFromJson` ends `contextWindow: definition.contextWindow ??
+    /// 128000`, and the entry REPLACES any built-in of the same id. So a listed
+    /// model that declares nothing is not unknown — it is 128K, including for
+    /// an id codeg's own name table would answer differently. This is the shape
+    /// codeg's Pi settings panel writes (`apply_pi_custom_model` records `id` +
+    /// `name` + reasoning, never a window).
+    #[test]
+    fn a_listed_model_without_a_window_takes_pi_s_own_default() {
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"gs":{"baseUrl":"http://127.0.0.1:8080/v1",
+                     "models":[{"id":"gpt-5.5","name":"gpt-5.5"}]}}}"#,
+                Some("gs"),
+                "gpt-5.5"
+            ),
+            Some(128_000),
+            "the name table's 258K is what pi is NOT running with"
+        );
+    }
+
+    /// One provider listing an id twice: pi's `applyModelsJson` upserts in file
+    /// order, so the second entry overwrites the first and 100K is what pi
+    /// runs with. Reading the first instead would report 9× the room.
+    #[test]
+    fn a_repeated_model_id_resolves_to_its_last_declaration() {
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"p":{"models":[
+                     {"id":"m","contextWindow":900000},
+                     {"id":"m","contextWindow":100000}
+                   ]}}}"#,
+                Some("p"),
+                "m"
+            ),
+            Some(100_000)
+        );
+    }
+
+    /// `modelOverrides` is the topmost layer in pi's composer, and it patches:
+    /// a window there wins, its absence leaves the layer below in charge.
+    #[test]
+    fn a_model_override_wins_over_the_models_entry() {
+        let raw = r#"{"providers":{"p":{
+            "models":[{"id":"m","contextWindow":100}],
+            "modelOverrides":{"m":{"contextWindow":900},"other":{"contextWindow":7}}
+        }}}"#;
+        assert_eq!(
+            pi_declared_context_window_from(raw, Some("p"), "m"),
+            Some(900)
+        );
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"p":{"models":[{"id":"m","contextWindow":100}],
+                     "modelOverrides":{"m":{"name":"renamed"}}}}}"#,
+                Some("p"),
+                "m"
+            ),
+            Some(100),
+            "an override that declares no window must not erase the declaration"
+        );
+    }
+
+    #[test]
+    fn declared_context_window_declines_junk_without_panicking() {
+        // Unreadable, not JSON, missing fields or a zero window must be None, never a panic.
+        assert_eq!(
+            pi_declared_context_window_from("", None, "qwen-flash"),
+            None
+        );
+        assert_eq!(
+            pi_declared_context_window_from("not json", None, "qwen-flash"),
+            None
+        );
+        assert_eq!(
+            pi_declared_context_window_from(r#"{"providers": "wrong"}"#, None, "qwen-flash"),
+            None
+        );
+        // pi throws `invalid contextWindow` for `<= 0` rather than defaulting,
+        // so a file it would refuse to load must not be read as a declaration.
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"p":{"models":[{"id":"m","contextWindow":0}]}}}"#,
+                Some("p"),
+                "m"
+            ),
+            None
+        );
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"p":{"models":[{"id":"m","contextWindow":"wide"}]}}}"#,
+                Some("p"),
+                "m"
+            ),
+            None
+        );
+    }
+
+    /// The lookup only pays off if `get_conversation` actually consults it —
+    /// and only if the declaration OUTRANKS the name table, which is the whole
+    /// point (a proxy in front of a known model id serves a window the table
+    /// cannot know). `sample_records` runs `claude-sonnet-4-6`, which the table
+    /// answers with 200K, so the two readings are distinguishable.
+    #[test]
+    fn a_declared_window_outranks_the_name_table_through_get_conversation() {
+        let dir = tempdir().expect("tempdir");
+        let agent_dir = dir.path().join("agent");
+        let sessions = agent_dir.join("sessions");
+        let id = "0f3c1d2e-1111-2222-3333-444455556666";
+        write_session(
+            &sessions,
+            "--Users-demo-my-app--",
+            "2026-06-27T10-00-00_0f3c1d2e.jsonl",
+            &sample_records(id),
+        );
+
+        let window = || {
+            PiParser::with_base_dir(sessions.clone())
+                .get_conversation(id)
+                .expect("detail")
+                .session_stats
+                .expect("session stats")
+                .context_window_max_tokens
+        };
+        let declare = |json: &str| std::fs::write(agent_dir.join("models.json"), json).unwrap();
+
+        // No models.json at all: unchanged behaviour, the name table answers.
+        assert_eq!(window(), Some(200_000));
+
+        // The session runs `anthropic`/`claude-sonnet-4-6` (`model_change`
+        // carries the pair). A declaration under a DIFFERENT provider is a
+        // different model to pi, so the table keeps the answer.
+        declare(
+            r#"{"providers":{"proxy":{"baseUrl":"http://127.0.0.1:8080/v1",
+                 "models":[{"id":"claude-sonnet-4-6","contextWindow":900000}]}}}"#,
+        );
+        assert_eq!(window(), Some(200_000));
+
+        // Declared under the provider the session actually used — even though
+        // the other provider's window is larger, and even though it is SMALLER
+        // than what the name table would have guessed.
+        declare(
+            r#"{"providers":{
+                 "proxy":{"baseUrl":"http://127.0.0.1:8080/v1",
+                   "models":[{"id":"claude-sonnet-4-6","contextWindow":900000}]},
+                 "anthropic":{"baseUrl":"http://127.0.0.1:9090/v1",
+                   "models":[{"id":"claude-sonnet-4-6","contextWindow":150000}]}
+               }}"#,
+        );
+        assert_eq!(window(), Some(150_000));
+    }
+
     /// Same fixture — and same reason — as `acp::file_system_runtime`'s tests: a
     /// unix-shaped `/srv/x` has a root but NO drive prefix on Windows, so
     /// `Path::is_absolute` (the gate in [`session_dir_from_settings`]) calls it
@@ -1703,10 +2079,13 @@ mod tests {
         assert!(has_bash_use, "bashExecution becomes a bash ToolUse");
 
         let errored = detail.turns.iter().flat_map(|t| &t.blocks).any(|b| {
-            matches!(b, ContentBlock::ToolResult { is_error, output_preview, .. }
-                if *is_error && output_preview.as_deref() == Some("boom"))
+            matches!(b, ContentBlock::ToolResult { is_error, output_preview, exit_code, .. }
+                if *is_error && output_preview.as_deref() == Some("boom") && *exit_code == Some(1))
         });
-        assert!(errored, "a non-zero exitCode marks the bash result an error");
+        assert!(
+            errored,
+            "a non-zero exitCode marks the bash result an error, and is kept"
+        );
     }
 
     #[test]
@@ -1747,6 +2126,75 @@ mod tests {
         assert_eq!(summaries[0].id, id);
         let detail = parser.get_conversation(id).expect("detail survives malformed lines");
         assert!(detail.turns.iter().any(|t| matches!(t.role, TurnRole::User)));
+    }
+
+    /// REGRESSION (#1068): a session reloaded before its first prompt is named
+    /// after the ACP session id (the one codeg stores as `external_id`) but
+    /// carries a different header `id`. pi 1.0.0 + pi-acp 0.0.34 really write
+    /// this shape: `session/new`, then `session/load`, then a prompt. Matching
+    /// the header alone left every such conversation with an empty history.
+    #[test]
+    fn filename_uuid_finds_a_session_whose_header_id_differs() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path();
+        let acp_id = "01a18bd6-7bac-773a-a4b6-cdb58ac62a44";
+        let header_id = "01a18bd6-914a-76bc-9d69-00f93c18dc57";
+        write_session(
+            base,
+            "--Users-demo-my-app--",
+            &format!("2026-10-30T08-04-11-821Z_{acp_id}.jsonl"),
+            &sample_records(header_id),
+        );
+        let parser = PiParser::with_base_dir(base.to_path_buf());
+
+        assert_eq!(parser.list_conversations().expect("list")[0].id, header_id);
+
+        let detail = parser
+            .get_conversation(acp_id)
+            .expect("found by filename uuid");
+        assert!(detail
+            .turns
+            .iter()
+            .any(|t| matches!(t.role, TurnRole::User)));
+        // The id asked for comes back unchanged, so the open path does not
+        // rewrite `external_id` away from the id pi-acp's session map knows.
+        assert_eq!(detail.summary.id, acp_id);
+
+        assert!(
+            parser.get_conversation(header_id).is_ok(),
+            "header id still works"
+        );
+    }
+
+    /// The header `id` wins over another file's filename uuid, whatever order
+    /// the directory walk visits them in.
+    #[test]
+    fn header_id_match_wins_over_a_filename_match() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path();
+        let id = "01a18bd6-0000-7000-8000-000000000001";
+        // The decoy's filename names `id`; only the other file's header does.
+        let decoy: Vec<Value> = sample_records("01a18bd6-0000-7000-8000-000000000002")
+            .into_iter()
+            .map(|mut r| {
+                if r["type"] == "session_info" {
+                    r["name"] = json!("Filename match");
+                }
+                r
+            })
+            .collect();
+        write_session(base, "--Users-demo-a--", &format!("a_{id}.jsonl"), &decoy);
+        write_session(
+            base,
+            "--Users-demo-b--",
+            "b_other.jsonl",
+            &sample_records(id),
+        );
+
+        let detail = PiParser::with_base_dir(base.to_path_buf())
+            .get_conversation(id)
+            .expect("detail");
+        assert_eq!(detail.summary.title.as_deref(), Some("Build the app"));
     }
 
     #[test]
@@ -2183,7 +2631,7 @@ mod tests {
             ],
             id,
         );
-        let (output, is_error) = detail
+        let (output, is_error, exit_code) = detail
             .turns
             .iter()
             .flat_map(|t| &t.blocks)
@@ -2191,12 +2639,18 @@ mod tests {
                 ContentBlock::ToolResult {
                     output_preview,
                     is_error,
+                    exit_code,
                     ..
-                } => Some((output_preview.clone().unwrap_or_default(), *is_error)),
+                } => Some((
+                    output_preview.clone().unwrap_or_default(),
+                    *is_error,
+                    *exit_code,
+                )),
                 _ => None,
             })
             .expect("the bash result");
         assert!(is_error, "a cancelled run is not a success");
+        assert_eq!(exit_code, None, "an interrupted run never got a code");
         assert!(output.contains("partial"), "the output is kept: {output}");
         assert!(output.contains("[cancelled]"), "got: {output}");
         assert!(output.contains("/tmp/pi-out.txt"), "got: {output}");
@@ -2503,5 +2957,18 @@ mod tests {
                 "contents: {contents}"
             );
         }
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_both_dirs_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[
+            ("PI_CODING_AGENT_DIR", "/relocated/pi-agent"),
+            ("PI_CODING_AGENT_SESSION_DIR", "/relocated/pi-sessions"),
+        ]);
+        let parser = PiParser::for_env(&env);
+        assert_eq!(parser.base_dir, PathBuf::from("/relocated/pi-sessions"));
+        assert_eq!(parser.agent_dir, PathBuf::from("/relocated/pi-agent"));
     }
 }

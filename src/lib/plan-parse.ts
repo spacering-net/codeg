@@ -111,8 +111,8 @@ export function isPlanLikeToolName(toolName: string): boolean {
   if (normalized === "todowrite") return true
   // Kimi Code's todo tool is named `TodoList` (normalizes to "todolist", which
   // also covers "todo_list" since `normalizeToolName` strips separators). Like
-  // `TodoWrite`, conversion to a <PlanCard> still requires non-empty parsed
-  // entries at the call site, so read/clear forms stay normal tool cards.
+  // `TodoWrite`, conversion to a plan still requires non-empty parsed entries
+  // at the call site, so read/clear forms stay normal tool calls.
   if (normalized === "todolist") return true
   return normalized.includes("plan")
 }
@@ -120,21 +120,21 @@ export function isPlanLikeToolName(toolName: string): boolean {
 /**
  * Plan-*mode* transition tools — Claude Code's `EnterPlanMode`/`ExitPlanMode`,
  * Cline's `switch_mode`, and codex-acp ≥1.1.8's Plan-mode review gate
- * (`plan_review`). These are mode signals (not work tools), so they render
- * through a dedicated `<PlanModeCard>` and must NOT fold into the "思考 N 次"
- * tool-group the way `classifyToolKind` would otherwise group them.
+ * (`plan_review`). These are mode signals (not work tools), drawn by the
+ * timeline's plan-mode row rather than as ordinary tool calls.
  *
  * Distinct from `isPlanLikeToolName`: that matches anything containing "plan"
- * (e.g. Codex's `update_plan`, which legitimately converts to a `<PlanCard>`
+ * (e.g. Codex's `update_plan`, which legitimately converts to a plan
  * checklist). `update_plan` normalizes to "updateplan" and is intentionally
- * NOT matched here, so its PlanCard path stays untouched. `plan_review` DOES
+ * NOT matched here, so its checklist path stays untouched. `plan_review` DOES
  * also match `isPlanLikeToolName`, but harmlessly: the seeded call carries no
  * input, so `agent-plan.ts` extracts no entries from it.
  *
  * Uses the separator-stripping `normalizeToolName` above, so `switch_mode`
- * normalizes to "switchmode". (The renderer-side gate in `ToolCallPart` uses
- * the underscore-preserving `tool-call-normalization` form and matches
- * "switch_mode" directly — keep the two call sites in sync.)
+ * normalizes to "switchmode". (The timeline's gate, `PLAN_MODE_TOOLS` in
+ * `lib/activity/describe-tool-call.ts`, uses the underscore-preserving
+ * `tool-call-normalization` form and matches "switch_mode" directly — keep the
+ * two in sync.)
  */
 export function isPlanModeToolName(toolName: string): boolean {
   const normalized = normalizeToolName(toolName)
@@ -150,7 +150,7 @@ export function isPlanModeToolName(toolName: string): boolean {
  * Extract freeform plan markdown from a plan-mode tool's input. Looks at
  * `plan`/`Plan` directly and one level into a `rawInput`/`raw_input` envelope
  * (some hosts wrap the real arguments). Pure and dependency-free so the
- * `<PlanModeCard>` component can import it without an adapter/component cycle.
+ * plan-mode marker can import it without an adapter/component cycle.
  * Returns null when there is no non-empty plan string.
  */
 export function extractPlanMarkdown(

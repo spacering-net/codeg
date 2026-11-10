@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react"
 import { useTranslations } from "next-intl"
@@ -14,10 +15,14 @@ import {
   ExternalLink,
   Funnel,
   GitPullRequestArrow,
+  Layers,
   Plus,
+  RefreshCw,
   Search,
+  SquareArrowOutUpRight,
   X,
 } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import {
   Command,
@@ -65,8 +70,13 @@ import {
   type FolderSelectOption,
 } from "@/components/shared/folder-select"
 import { OPEN_FORGE_SETTINGS_EVENT } from "@/components/forge/forge-chrome-actions"
+import { GIT_TOOLBAR_ICON_BUTTON_CLASS } from "@/components/layout/git-toolbar-controls"
 import { ForgeIssueDetailSheet } from "@/components/forge/forge-issue-detail-sheet"
-import { ForgeIssueRowItem } from "@/components/forge/forge-issue-row"
+import { ForgeCombineDialog } from "@/components/forge/forge-combine-dialog"
+import {
+  ForgeIssueRowItem,
+  type RowSelection,
+} from "@/components/forge/forge-issue-row"
 import { ForgeNewIssueDialog } from "@/components/forge/forge-new-issue-dialog"
 import { ForgeSettingsDialog } from "@/components/forge/forge-settings-dialog"
 import { ForgeStartDialog } from "@/components/forge/forge-start-dialog"
@@ -86,15 +96,20 @@ import {
   type AppErrorTranslator,
 } from "@/lib/app-error"
 import { buildForgeSourceKey } from "@/lib/forge-source-key"
+import { chipStateForLink } from "@/lib/forge-task-chip"
+import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import {
   FORGE_PAGE_SIZES,
+  loadForgeFolderId,
   loadForgePageSize,
   loadForgeTab,
+  saveForgeFolderId,
   saveForgePageSize,
   saveForgeTab,
   type ForgePageSize,
 } from "@/lib/forge-list-prefs"
 import { pageCount, pageSlots } from "@/lib/forge-pagination"
+import { rememberForgeRemote } from "@/lib/forge-provider-cache"
 import { effectiveForgeSettings } from "@/lib/forge-settings"
 import { openUrl, subscribe } from "@/lib/platform"
 import { cn } from "@/lib/utils"
@@ -113,7 +128,6 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useForgeRefreshStore } from "@/stores/forge-refresh-store"
 
 const WORK_TASK_CHANGED_EVENT = "task://changed"
-const FOLDER_STORAGE_KEY = "forge:folderId"
 
 /** Separates label names inside the counts scope key, so that a label carrying
  *  the outer `:` cannot make two different filter sets read as one scope.
@@ -144,6 +158,12 @@ const UNSUPPORTED_HOST_KEY = "errors.unsupportedHost"
  *  is, so the recovery is to ask again rather than to tell the user anything —
  *  see `forgeCorrectedRef`. */
 const WRONG_FORGE_I18N_KEY = "Forge.errors.wrongForge"
+
+/** Keys one reverse lookup may carry — the backend's `LOOKUP_KEYS_CAP`
+ *  (src-tauri/src/commands/forge.rs). A page, the detail panel's item and a
+ *  selection gathered across pages can outgrow it together, so the lookup is
+ *  sent in batches of this size instead of being cut short. */
+const LOOKUP_BATCH = 100
 
 /** How long typing has to stop before the filter becomes a request. GitHub's
  *  search endpoint allows THIRTY calls a minute (its own quota, separate from
@@ -176,7 +196,20 @@ const STATE_OPTIONS = [
 const PILL =
   "h-8 gap-1.5 rounded-full bg-muted/70 px-3 text-[0.8125rem] font-medium ws-msg-chip hover:bg-muted"
 
-/** The four orders GitHub and GitLab can honour, in the order they are offered.
+/** The same pill a size down, for the aux panel's sidebar-width copy of the
+ *  page: two filters to a line there instead of one. */
+const PILL_COMPACT =
+  "h-7 gap-1 rounded-full bg-muted/70 px-2.5 text-xs font-medium ws-msg-chip hover:bg-muted"
+
+/** A select trigger in the pill row, at either size. */
+function pillSelectClass(compact: boolean): string {
+  return cn(
+    "w-auto rounded-full border-transparent font-medium shadow-none hover:bg-muted",
+    compact ? "h-7 gap-1 px-2.5 text-xs" : "h-8 gap-1.5 px-3 text-[0.8125rem]"
+  )
+}
+
+/** The four orders the workbench offers, in the order they are offered.
  *  `as const` so the label keys stay literal and next-intl can check them. */
 const SORT_OPTIONS = [
   { value: "newest", labelKey: "sortNewest" },
@@ -197,6 +230,31 @@ const SORT_OPTIONS = [
  *  `belongsOnPage` keeps placing a new issue where it will actually appear. */
 function canSort(provider: ForgeProviderId | undefined): boolean {
   return provider !== "gitea"
+}
+
+/** The orders this forge can actually honour.
+ *
+ *  CNB's `order_by` takes `created_at`, `-created_at` and `-updated_at` — but
+ *  no ASCENDING updated order, so `least_recently_updated` is not offered
+ *  there rather than shown and ignored. Everything else gets all four. */
+function sortOptionsFor(provider: ForgeProviderId | undefined) {
+  if (provider === "cnb") {
+    return SORT_OPTIONS.filter((o) => o.value !== "least_recently_updated")
+  }
+  return SORT_OPTIONS
+}
+
+/** Whether the CURRENT TAB can be filtered by free text.
+ *
+ *  CNB's OpenAPI takes a `keyword` on issues only — its merge-request list has
+ *  no such parameter. A search box there would be a control whose input is
+ *  dropped on the floor, so it is not shown. Everything else searches both
+ *  tabs. */
+function supportsSearch(
+  provider: ForgeProviderId | undefined,
+  tab: ForgeTab
+): boolean {
+  return !(provider === "cnb" && tab === "prs")
 }
 
 /** The raw thrown value, boxed. Boxed for two reasons: `setState` would CALL a
@@ -481,13 +539,16 @@ type TabCounts = Partial<Record<ForgeTab, TabCount>>
  * An HTTPS remote already IS the web URL (bar the `.git`), and using it keeps
  * whatever scheme, port and mount path a self-hosted instance runs under. An
  * SSH remote (`git@host:owner/repo.git`, `ssh://…`) is not something a browser
- * can open at all, so those fall back to the canonical https page built from
- * the coordinates the backend derived.
+ * can open at all and carries none of those parts, so its page is built under
+ * the web origin the backend took from the host's account — an instance served
+ * over plain http is not there at `https://`. Only a server too old to send
+ * that origin leaves the https guess.
  */
 export function repoWebUrl(remote: ForgeRemote): string {
   const url = remote.remote_url.trim()
   if (/^https?:\/\//i.test(url)) return url.replace(/\.git$/i, "")
-  return `https://${remote.server_host}/${remote.owner_repo}`
+  const origin = remote.web_origin ?? `https://${remote.server_host}`
+  return `${origin.replace(/\/+$/, "")}/${remote.owner_repo}`
 }
 
 export function ForgePageTitle() {
@@ -520,13 +581,6 @@ function AddAccountButton({ label }: { label: string }) {
   )
 }
 
-function loadStoredFolderId(): number | null {
-  if (typeof window === "undefined") return null
-  const raw = window.localStorage.getItem(FOLDER_STORAGE_KEY)
-  const parsed = raw == null ? NaN : Number.parseInt(raw, 10)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
 /**
  * The forge workbench: pick a project folder, see its repository's issues and
  * PRs, and turn an issue into a work task with one click. The row chips are a
@@ -540,7 +594,32 @@ function loadStoredFolderId(): number | null {
  * remembered across sessions; the page number deliberately is not — coming back
  * to page 7 of a list that has since moved is worse than page 1.
  */
-export function ForgePage() {
+/**
+ * The page drawn inside the aux panel's Issues or Pull requests tab: the same
+ * list — its filters, paging, task chips, detail panel and trigger dialog — locked to
+ * the project the active conversation belongs to and to the one kind of item
+ * the tab stands for, so neither a folder picker nor the tab switcher shows.
+ *
+ * What the full page hands to the window chrome (reload, settings) the panel
+ * keeps to itself: both instances can be mounted at once — the panel stays
+ * mounted, collapsed, while the repository route covers the workspace — and the
+ * chrome belongs to the route.
+ */
+export interface ForgePageEmbed {
+  /** The project folder, followed rather than picked. */
+  folderId: number | null
+  tab: ForgeTab
+  /** Whether the tab is on screen. While it is not, the list asks the forge
+   *  for nothing — a filter settling, the remote resolving — and the moment it
+   *  is shown again it reloads, with one request, the way the full page
+   *  reloads on every visit. */
+  active: boolean
+  /** Opens the full repository panel on this folder and tab. */
+  onOpenFullPage: () => void
+}
+
+export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
+  const embedded = embed != null
   const t = useTranslations("Forge")
   // Root-scoped translator: backend errors carry FULL dotted keys
   // (`Forge.errors.noAccount`), which the namespaced `t` above cannot resolve.
@@ -553,14 +632,18 @@ export function ForgePage() {
     [folders]
   )
 
-  const [folderId, setFolderId] = useState<number | null>(loadStoredFolderId)
-  // Fall back to the first project folder once folders arrive.
+  const [folderId, setFolderId] = useState<number | null>(loadForgeFolderId)
+  // Fall back to the first project folder once folders arrive. Embedded, the
+  // folder is the host's — the active conversation's project, which is a
+  // project root whether or not it is still open in the sidebar.
+  const embedFolderId = embed?.folderId ?? null
   const effectiveFolderId = useMemo(() => {
+    if (embedded) return embedFolderId
     if (folderId != null && projectFolders.some((f) => f.id === folderId)) {
       return folderId
     }
     return projectFolders[0]?.id ?? null
-  }, [folderId, projectFolders])
+  }, [embedded, embedFolderId, folderId, projectFolders])
 
   const [remote, setRemote] = useState<ForgeRemote | null>(null)
   const [remoteLoading, setRemoteLoading] = useState(false)
@@ -575,7 +658,9 @@ export function ForgePage() {
    *  screen rather than in another silent retry. */
   const forgeCorrectedRef = useRef<Set<number>>(new Set())
   // Restored synchronously, like the page size below and for the same reason.
-  const [tab, setTab] = useState<ForgeTab>(loadForgeTab)
+  // Embedded, the tab is fixed by the host and nothing is remembered.
+  const [pageTab, setTab] = useState<ForgeTab>(loadForgeTab)
+  const tab = embed?.tab ?? pageTab
   // Open by default: a triage list opens on the work that is still work.
   const [stateFilter, setStateFilter] = useState<StateFilter>("open")
   const [assignedMe, setAssignedMe] = useState(false)
@@ -600,6 +685,25 @@ export function ForgePage() {
   const [error, setError] = useState<ListFailure | null>(null)
   const [links, setLinks] = useState<Map<string, ForgeTaskLink>>(new Map())
   const [startRow, setStartRow] = useState<ForgeIssueRow | null>(null)
+  /**
+   * The issues picked to be handled together as ONE task, by number, each as
+   * its row read when it was picked — what the task is created from, the
+   * same snapshot discipline "Start" follows.
+   *
+   * Kept across pages, filters, searches and sorts: related issues are rarely
+   * on one page, and finding them takes exactly those. Dropped with the
+   * repository it belongs to (see the reset effect below), with the tab, and
+   * once its task exists. An issue that gains a live task elsewhere leaves it
+   * when the lookup says so (see `refreshLinks`), for good.
+   */
+  const [selected, setSelected] = useState<ReadonlyMap<number, ForgeIssueRow>>(
+    () => new Map()
+  )
+  /** The combine dialog's issues, frozen when it opened; `null` = closed. */
+  const [combineItems, setCombineItems] = useState<ForgeIssueRow[] | null>(null)
+  /** The issue a Shift-click extends a range from: the last one toggled. */
+  const anchorRef = useRef<number | null>(null)
+  const { setRoute } = useWorkbenchRoute()
   /** The item the right-side detail panel is open on, or `null` for closed. */
   const [detailRow, setDetailRow] = useState<ForgeIssueRow | null>(null)
   const [newIssueOpen, setNewIssueOpen] = useState(false)
@@ -654,6 +758,12 @@ export function ForgePage() {
     setCounts({})
     setStartRow(null)
     setDetailRow(null)
+    // The selection names issues by number in THIS repository — kept across
+    // a switch it would hand another project's #12 to a task — and the
+    // combine dialog holds a frozen copy of it.
+    setSelected(new Map())
+    setCombineItems(null)
+    anchorRef.current = null
     // The new-issue dialog goes with them, and for the same reason as the
     // panel: it files against the folder it was opened over, and a folder
     // switch while it is open would file the issue somewhere else.
@@ -665,8 +775,13 @@ export function ForgePage() {
     if (effectiveFolderId == null) return
     let cancelled = false
     setRemoteLoading(true)
-    folderForgeRemote(effectiveFolderId)
+    const resolving = effectiveFolderId
+    folderForgeRemote(resolving)
       .then((r) => {
+        // Whoever else reads the folder's forge — the aux panel naming its
+        // change-request tab, the task board offering a pull request — learns
+        // it from here too: see `forge-provider-cache.ts`.
+        rememberForgeRemote(resolving, r)
         if (!cancelled) setRemote(r)
       })
       .catch(() => {
@@ -874,9 +989,16 @@ export function ForgePage() {
 
   // (Re)load on any filter/paging/remote change. `page` is in `fetchPage`'s
   // deps, so a page click IS the refetch — there is no separate trigger.
+  //
+  // Embedded, nothing is fetched while the host's tab is hidden: every list
+  // request spends search quota, and one spent on a page nobody is looking at
+  // is wasted. Showing the tab again flips `paused` back, which re-runs this
+  // effect — that is the reload, and it is exactly one request however many
+  // of its inputs moved meanwhile.
+  const paused = embed != null && !embed.active
   useEffect(() => {
-    if (readable != null) void fetchPage()
-  }, [readable, fetchPage])
+    if (readable != null && !paused) void fetchPage()
+  }, [readable, fetchPage, paused])
 
   // Read through a ref so the probe below can consult the numbers it writes
   // without depending on them — a dependency there would re-arm the effect
@@ -898,19 +1020,29 @@ export function ForgePage() {
   // Both conditions test the scope, and that is the point: a number left over
   // from filters that no longer apply is not an answer to this question, so it
   // must not be what stops the question from being asked.
+  //
+  // Embedded there is no switcher, so no other tab to put a number on: the
+  // probe would spend a search call on a badge nobody can see.
   useEffect(() => {
+    if (embedded) return
     if (countsRef.current[otherTab]?.scope === countsScope) return
     if (probingRef.current[otherTab] === `${countsScope}:${otherTab}`) return
     void fetchCount(otherTab)
-  }, [countsScope, otherTab, fetchCount])
+  }, [embedded, countsScope, otherTab, fetchCount])
 
   // Reloading the whole list is the one control that does not narrow it, so it
   // lives in the window chrome next to the settings gear rather than in the
   // toolbar. That button is in another branch of the tree entirely; this is how
   // it reaches the fetch — and how it learns there is nothing to fetch yet.
+  //
+  // Not when embedded: the chrome button is the route's, and the aux panel's
+  // copy of this page can be mounted under the route's own — publishing, or
+  // withdrawing on unmount, would take the button over from the page it sits
+  // above. The panel has its own reload button instead.
   const publishRefresh = useForgeRefreshStore((s) => s.publish)
   const withdrawRefresh = useForgeRefreshStore((s) => s.withdraw)
   useEffect(() => {
+    if (embedded) return
     publishRefresh({
       refresh:
         readable == null
@@ -927,6 +1059,7 @@ export function ForgePage() {
       busy: loading || countsLoading,
     })
   }, [
+    embedded,
     publishRefresh,
     fetchPage,
     fetchCount,
@@ -937,7 +1070,10 @@ export function ForgePage() {
   ])
   // Only on unmount: leaving a handler behind would give the next route's
   // chrome a live button pointing at a page that no longer exists.
-  useEffect(() => () => withdrawRefresh(), [withdrawRefresh])
+  useEffect(() => {
+    if (embedded) return
+    return () => withdrawRefresh()
+  }, [embedded, withdrawRefresh])
 
   // The chrome cluster's gear, and the preferences it edits. One read for the
   // page's whole life: the store holds every scope, it only changes through the
@@ -945,6 +1081,9 @@ export function ForgePage() {
   // straight back. A failure is silent on purpose — the trigger dialog falls
   // back to the built-in defaults, and a toast about preferences nobody asked
   // for yet would be noise over a page that works.
+  //
+  // Embedded, only the read: the gear belongs to the route's page, and a panel
+  // listening too would open a second settings dialog under the first.
   useEffect(() => {
     let cancelled = false
     forgeSettingsGet()
@@ -952,13 +1091,18 @@ export function ForgePage() {
         if (!cancelled) setSettings(s)
       })
       .catch(() => {})
+    if (embedded) {
+      return () => {
+        cancelled = true
+      }
+    }
     const open = () => setSettingsOpen(true)
     window.addEventListener(OPEN_FORGE_SETTINGS_EVENT, open)
     return () => {
       cancelled = true
       window.removeEventListener(OPEN_FORGE_SETTINGS_EVENT, open)
     }
-  }, [])
+  }, [embedded])
 
   // The typed text becomes a request only once typing stops. `search` is in the
   // dependency list so the settled value short-circuits the next run instead of
@@ -971,6 +1115,25 @@ export function ForgePage() {
     }, SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(handle)
   }, [searchInput, search])
+
+  // A tab that cannot be searched must not keep a query it cannot apply: the
+  // box is gone, so text left behind would either do nothing (a list that
+  // ignores what the control says) or come back as a filter the moment the
+  // other tab is reopened, with no visible reason for it.
+  useEffect(() => {
+    if (supportsSearch(remote?.provider, tab)) return
+    setSearchInput("")
+    setSearch("")
+  }, [remote?.provider, tab])
+
+  // Same rule for the order: a forge that cannot honour the current one (a
+  // folder switch from GitLab to CNB, say) falls back to the default rather
+  // than leaving the select showing a choice its list no longer contains.
+  useEffect(() => {
+    if (sortOptionsFor(remote?.provider).some((o) => o.value === sort)) return
+    setPage(1)
+    setSort("newest")
+  }, [remote?.provider, sort])
 
   // A different repository has a different label vocabulary, so a selection
   // made against the old one would filter by labels that may not exist here.
@@ -1059,7 +1222,7 @@ export function ForgePage() {
   // Reverse lookup for visible rows; re-run on board nudges so a chip follows
   // its task through the pipeline without polling.
   const keyFor = useCallback(
-    (row: ForgeIssueRow) =>
+    (row: Pick<ForgeIssueRow, "is_pr" | "number">) =>
       remote == null
         ? null
         : buildForgeSourceKey({
@@ -1104,6 +1267,78 @@ export function ForgePage() {
       ) ?? detailRow
     )
   }, [rows, detailRow])
+
+  const clearSelection = useCallback(() => {
+    setSelected(new Map())
+    anchorRef.current = null
+  }, [])
+  /** Whether a row can join the selection: an issue without a live task.
+   *  One whose task finished can — handling it again is what "re-trigger"
+   *  offers too — while one with a task under way would only be refused as
+   *  a duplicate. */
+  const pickable = useCallback(
+    (row: ForgeIssueRow) =>
+      !row.is_pr && chipStateForLink(linkFor(row)) !== "active",
+    [linkFor]
+  )
+  /** Picked issues the current page does not show — counted on the bar, so
+   *  a selection gathered elsewhere never reads as smaller than it is, and
+   *  asked about by the lookup, so their chips stay current. A string, so a
+   *  toggle on this page does not re-send the lookup. */
+  const offPageSelected = useMemo(() => {
+    const here = new Set(rows.filter((r) => !r.is_pr).map((r) => r.number))
+    return [...selected.keys()]
+      .filter((n) => !here.has(n))
+      .sort((a, b) => a - b)
+      .join(",")
+  }, [rows, selected])
+  const offPageCount =
+    offPageSelected === "" ? 0 : offPageSelected.split(",").length
+
+  /** Tick or untick one row — or, with Shift, every pickable row between it
+   *  and the last one toggled on this page, all to the state this row is
+   *  going to. */
+  const toggleRow = (row: ForgeIssueRow, index: number, range: boolean) => {
+    const on = !selected.has(row.number)
+    const anchor = anchorRef.current
+    const from =
+      range && anchor != null
+        ? rows.findIndex((r) => !r.is_pr && r.number === anchor)
+        : -1
+    const span =
+      from >= 0
+        ? rows.slice(Math.min(from, index), Math.max(from, index) + 1)
+        : [row]
+    setSelected((held) => {
+      const next = new Map(held)
+      for (const r of span) {
+        if (!pickable(r)) continue
+        if (on) next.set(r.number, r)
+        else next.delete(r.number)
+      }
+      return next
+    })
+    anchorRef.current = row.number
+  }
+  const selectionFor = (
+    row: ForgeIssueRow,
+    index: number
+  ): RowSelection | undefined => {
+    if (row.is_pr || tab !== "issues") return undefined
+    return {
+      checked: selected.has(row.number),
+      blockedReason: pickable(row) ? null : t("selectBlockedActive"),
+      onToggle: (range) => toggleRow(row, index, range),
+    }
+  }
+  /** Esc on a tick box or the selection bar lets go of the whole selection
+   *  — focus there means the selection is what is being worked on. */
+  const escapeClears = (e: ReactKeyboardEvent) => {
+    if (e.key !== "Escape" || selected.size === 0) return
+    if (!(e.target as HTMLElement).closest("[data-forge-select]")) return
+    e.preventDefault()
+    clearSelection()
+  }
 
   /**
    * Note a row this page took from a write, for the list responses that have
@@ -1325,9 +1560,22 @@ export function ForgePage() {
     // and only a panel outliving its row adds a key here.
     const wanted =
       detail == null || rows.includes(detail) ? rows : [...rows, detail]
-    const keys = wanted
-      .map((r) => keyFor(r))
-      .filter((k): k is string => k != null)
+    // …and so are the picked issues this page does not show: the bar counts
+    // them, and the one that gains a live task elsewhere has to leave the
+    // selection rather than be handed to a second task.
+    const picked =
+      offPageSelected === ""
+        ? []
+        : offPageSelected
+            .split(",")
+            .map((n) => keyFor({ is_pr: false, number: Number(n) }))
+    const keys = [
+      ...new Set(
+        [...wanted.map((r) => keyFor(r)), ...picked].filter(
+          (k): k is string => k != null
+        )
+      ),
+    ]
     if (keys.length === 0) {
       // Claimed the generation above, so this clear is ordered against the
       // in-flight lookups like any other answer: it lands only while it is
@@ -1337,13 +1585,34 @@ export function ForgePage() {
       return
     }
     try {
-      const found = await workTaskLookupBySource(keys)
+      const batches: string[][] = []
+      for (let at = 0; at < keys.length; at += LOOKUP_BATCH) {
+        batches.push(keys.slice(at, at + LOOKUP_BATCH))
+      }
+      // One generation for the whole set: the answer replaces the map only
+      // once every batch is back, never half of it.
+      const found = (
+        await Promise.all(batches.map((batch) => workTaskLookupBySource(batch)))
+      ).flat()
       if (id !== linksReqRef.current) return
-      setLinks(new Map(found.map((l) => [l.source_key, l])))
+      const next = new Map(found.map((l) => [l.source_key, l]))
+      setLinks(next)
+      setSelected((held) => {
+        let pruned: Map<number, ForgeIssueRow> | null = null
+        for (const number of held.keys()) {
+          const key = keyFor({ is_pr: false, number })
+          const link = key != null ? next.get(key) : undefined
+          if (chipStateForLink(link) === "active") {
+            pruned ??= new Map(held)
+            pruned.delete(number)
+          }
+        }
+        return pruned ?? held
+      })
     } catch {
       // Chips are best-effort decoration; the list itself stays useful.
     }
-  }, [rows, detail, keyFor])
+  }, [rows, detail, keyFor, offPageSelected])
   useEffect(() => {
     void refreshLinks()
   }, [refreshLinks])
@@ -1365,7 +1634,7 @@ export function ForgePage() {
   const pickFolder = useCallback(
     (id: number) => {
       resetTo(() => setFolderId(id))
-      window.localStorage.setItem(FOLDER_STORAGE_KEY, String(id))
+      saveForgeFolderId(id)
     },
     [resetTo]
   )
@@ -1386,13 +1655,44 @@ export function ForgePage() {
     }
   }, [error, tRoot])
 
-  const changeNounKey = remote?.provider === "gitlab" ? "tabMrs" : "tabPrs"
+  // GitLab and CNB call the same thing a merge request; GitHub and Gitea a
+  // pull request.
+  const changeNounKey =
+    remote?.provider === "gitlab" || remote?.provider === "cnb"
+      ? "tabMrs"
+      : "tabPrs"
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {embed != null ? (
+        <EmbeddedHeader
+          remote={remote}
+          count={badge(tab)}
+          state={stateFilter}
+          pending={pending}
+          busy={loading}
+          canReload={readable != null}
+          onReload={() => void fetchPage()}
+          // Issues only: the panel's change-request tab is a review queue,
+          // and its header has no room to spare for an action about a
+          // different kind of item.
+          onNewIssue={
+            readable != null && effectiveFolderId != null && tab === "issues"
+              ? () => setNewIssueOpen(true)
+              : null
+          }
+          onOpenFullPage={embed.onOpenFullPage}
+        />
+      ) : null}
       {/* `relative` for the pending bar, which rides the bottom edge. */}
-      <div className="relative flex shrink-0 flex-col gap-2.5 border-b border-border/60 px-4 pb-2.5 pt-3">
-        {/* WHERE the list comes from, and WHICH kind of thing is in it. No
+      <div
+        className={cn(
+          "relative flex shrink-0 flex-col border-b border-border/60",
+          embedded ? "gap-2 px-3 py-2" : "gap-2.5 px-4 pb-2.5 pt-3"
+        )}
+      >
+        {embedded ? null : (
+          /* WHERE the list comes from, and WHICH kind of thing is in it. No
             heading: the switcher already names what you are looking at, in a
             control you can act on, and the route's own name is in the chrome
             strip directly above — three words for one fact was two too many.
@@ -1401,104 +1701,120 @@ export function ForgePage() {
 
             Two ends, nothing between: the source on the left, the switcher
             pinned right. Everything that merely NARROWS the list is a row
-            down, the search box included. */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <RepoBar
-            folders={projectFolders}
-            folderId={effectiveFolderId}
-            onPickFolder={pickFolder}
-            remote={remote}
-          />
+            down, the search box included. */
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <RepoBar
+              folders={projectFolders}
+              folderId={effectiveFolderId}
+              onPickFolder={pickFolder}
+              remote={remote}
+            />
 
-          {/* Only once a repository is resolved: without one there is nowhere
+            {/* Only once a repository is resolved: without one there is nowhere
               for the issue to go and the backend would refuse it. Sits with
               the SOURCE rather than with the filters below because it acts on
               the repository, not on the list. It stays offered on the pull
               request tab too — "file an issue about this" is exactly the
               thought a review produces, and putting it behind a tab switch
               would be hiding it. */}
-          {readable != null && effectiveFolderId != null ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              className="h-8 shrink-0 gap-1.5 rounded-full px-3 text-[0.8125rem] font-medium"
-              onClick={() => setNewIssueOpen(true)}
+            {readable != null && effectiveFolderId != null ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-8 shrink-0 gap-1.5 rounded-full px-3 text-[0.8125rem] font-medium"
+                onClick={() => setNewIssueOpen(true)}
+              >
+                <Plus className="size-3.5" aria-hidden />
+                {t("newIssue")}
+              </Button>
+            ) : null}
+
+            <Tabs
+              className="shrink-0 sm:ms-auto"
+              value={tab}
+              onValueChange={(v) => {
+                // Written on the CLICK, not from an effect on `tab`: the value
+                // worth remembering is the one the user chose, and an effect
+                // would also persist the initial value it just read back.
+                saveForgeTab(v as ForgeTab)
+                // Issues and changes are never handled together: the other
+                // tab starts with nothing picked.
+                clearSelection()
+                resetTo(() => setTab(v as ForgeTab))
+              }}
             >
-              <Plus className="size-3.5" aria-hidden />
-              {t("newIssue")}
-            </Button>
-          ) : null}
+              <TabsList className="h-8">
+                <TabsTrigger value="issues">
+                  {t("tabIssues")}
+                  <TabCount
+                    value={badge("issues")}
+                    state={stateFilter}
+                    pending={pending}
+                  />
+                </TabsTrigger>
+                <TabsTrigger value="prs">
+                  {t(changeNounKey)}
+                  <TabCount
+                    value={badge("prs")}
+                    state={stateFilter}
+                    pending={pending}
+                  />
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+        )}
 
-          <Tabs
-            className="shrink-0 sm:ms-auto"
-            value={tab}
-            onValueChange={(v) => {
-              // Written on the CLICK, not from an effect on `tab`: the value
-              // worth remembering is the one the user chose, and an effect
-              // would also persist the initial value it just read back.
-              saveForgeTab(v as ForgeTab)
-              resetTo(() => setTab(v as ForgeTab))
-            }}
-          >
-            <TabsList className="h-8">
-              <TabsTrigger value="issues">
-                {t("tabIssues")}
-                <TabCount
-                  value={badge("issues")}
-                  state={stateFilter}
-                  pending={pending}
-                />
-              </TabsTrigger>
-              <TabsTrigger value="prs">
-                {t(changeNounKey)}
-                <TabCount
-                  value={badge("prs")}
-                  state={stateFilter}
-                  pending={pending}
-                />
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-        </div>
-
-        {/* One family of h-8 controls, all of them narrowing the same list —
-            WHERE it comes from is the row above. */}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* One family of h-8 controls (h-7 embedded), all of them narrowing the
+            same list — WHERE it comes from is the row above. */}
+        <div
+          className={cn(
+            "flex flex-wrap items-center",
+            embedded ? "gap-1.5" : "gap-2"
+          )}
+        >
           {/* Leads the row: it is the widest net of the four, and the three
               pills after it narrow whatever it caught. A whole row to itself
               on a phone (`w-full` forces the wrap) — sharing one would leave
               too little of it to read back what you typed. */}
-          <InputGroup className="h-8 w-full rounded-full sm:w-64">
-            <InputGroupAddon align="inline-start">
-              <Search className="size-3.5" aria-hidden />
-            </InputGroupAddon>
-            <InputGroupInput
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape" && searchInput !== "") {
-                  e.preventDefault()
-                  setSearchInput("")
-                }
-              }}
-              placeholder={t("searchPlaceholder")}
-              aria-label={t("searchPlaceholder")}
-              className="h-8 text-[0.8125rem]"
-            />
-            {searchInput !== "" ? (
-              <InputGroupAddon align="inline-end">
-                <InputGroupButton
-                  size="icon-xs"
-                  aria-label={t("clearSearch")}
-                  title={t("clearSearch")}
-                  onClick={() => setSearchInput("")}
-                >
-                  <X className="size-3" />
-                </InputGroupButton>
+          {supportsSearch(remote?.provider, tab) ? (
+            <InputGroup
+              className={cn(
+                "w-full rounded-full",
+                embedded ? "h-7" : "h-8 sm:w-64"
+              )}
+            >
+              <InputGroupAddon align="inline-start">
+                <Search className="size-3.5" aria-hidden />
               </InputGroupAddon>
-            ) : null}
-          </InputGroup>
+              <InputGroupInput
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" && searchInput !== "") {
+                    e.preventDefault()
+                    setSearchInput("")
+                  }
+                }}
+                placeholder={t("searchPlaceholder")}
+                aria-label={t("searchPlaceholder")}
+                className={embedded ? "h-7 text-xs" : "h-8 text-[0.8125rem]"}
+              />
+              {searchInput !== "" ? (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    size="icon-xs"
+                    aria-label={t("clearSearch")}
+                    title={t("clearSearch")}
+                    onClick={() => setSearchInput("")}
+                  >
+                    <X className="size-3" />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              ) : null}
+            </InputGroup>
+          ) : null}
 
           {/* Was a button whose LABEL changed on click, which reads equally as
               "you are here" and "go here". Named options remove the guess —
@@ -1514,7 +1830,7 @@ export function ForgePage() {
             <SelectTrigger
               size="sm"
               aria-label={t("stateFilter")}
-              className="h-8 w-auto gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none hover:bg-muted"
+              className={cn(pillSelectClass(embedded), "bg-muted/70")}
             >
               <SelectValue />
             </SelectTrigger>
@@ -1535,7 +1851,7 @@ export function ForgePage() {
             variant="ghost"
             aria-pressed={assignedMe}
             className={cn(
-              PILL,
+              embedded ? PILL_COMPACT : PILL,
               assignedMe &&
                 "bg-primary/10 text-primary hover:bg-primary/15 dark:hover:bg-primary/15"
             )}
@@ -1552,6 +1868,7 @@ export function ForgePage() {
               truncated={labelsTruncated}
               selected={labelFilter}
               onChange={(next) => resetTo(() => setLabelFilter(next))}
+              compact={embedded}
             />
           ) : null}
 
@@ -1567,12 +1884,18 @@ export function ForgePage() {
               <SelectTrigger
                 size="sm"
                 aria-label={t("sortBy")}
-                className="h-8 w-auto gap-1.5 rounded-full border-transparent px-3 text-[0.8125rem] font-medium text-muted-foreground shadow-none hover:bg-muted sm:ms-auto"
+                className={cn(
+                  pillSelectClass(embedded),
+                  "text-muted-foreground",
+                  // In flow when embedded: at sidebar width the row wraps, and
+                  // pushed to the end it would sit stranded on its own line.
+                  !embedded && "sm:ms-auto"
+                )}
               >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="end">
-                {SORT_OPTIONS.map((option) => (
+                {sortOptionsFor(remote?.provider).map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {t(option.labelKey)}
                   </SelectItem>
@@ -1635,17 +1958,19 @@ export function ForgePage() {
           // replaced.
           <div
             aria-busy={pending}
+            onKeyDown={escapeClears}
             className={cn(
               "flex flex-col divide-y divide-border/40 transition-opacity",
               pending && "opacity-50"
             )}
           >
-            {rows.map((row) => (
+            {rows.map((row, index) => (
               <ForgeIssueRowItem
                 key={`${row.is_pr ? "pr" : "issue"}-${row.number}`}
                 row={row}
                 link={linkFor(row)}
-                compact={isMobile}
+                compact={isMobile || embedded}
+                selection={selectionFor(row, index)}
                 onOpenDetail={() => setDetailRow(row)}
                 onStart={() => setStartRow(row)}
               />
@@ -1654,7 +1979,34 @@ export function ForgePage() {
         )}
       </ScrollArea>
 
-      {readable != null && failure == null ? (
+      {selected.size > 0 && readable != null ? (
+        <SelectionBar
+          count={selected.size}
+          offPage={offPageCount}
+          onKeyDown={escapeClears}
+          onClear={clearSelection}
+          onCombine={() =>
+            // The page's own copy where it has one — the freshest read of
+            // that issue — and the snapshot taken when it was picked where
+            // it does not.
+            setCombineItems(
+              [...selected.values()].map(
+                (held) =>
+                  rows.find((r) => !r.is_pr && r.number === held.number) ?? held
+              )
+            )
+          }
+        />
+      ) : null}
+
+      {embedded ? (
+        // A sidebar has no room for page numbers and a size picker: previous,
+        // where you are, next — and nothing at all for a list that fits on one
+        // page. The page size is the full page's to choose.
+        readable != null && failure == null && list != null ? (
+          <CompactListFooter list={list} busy={pending} onPage={setPage} />
+        ) : null
+      ) : readable != null && failure == null ? (
         list != null ? (
           <ListFooter
             list={list}
@@ -1687,6 +2039,9 @@ export function ForgePage() {
         // list was fetched with, so a folder switch (which closes the panel —
         // see the reset effect above) cannot leave the two disagreeing.
         folderId={effectiveFolderId}
+        // CNB's issue list carries no description; the panel reads the item
+        // itself when it opens. Every other forge ships the body with the row.
+        issueBodyOnDemand={remote?.provider === "cnb"}
         onOpenChange={(open) => {
           if (!open) setDetailRow(null)
         }}
@@ -1737,18 +2092,280 @@ export function ForgePage() {
         />
       ) : null}
 
-      <ForgeSettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        // Opens on the folder whose list you were looking at — the scope you
-        // are almost certainly there to change — with the picker inside to go
-        // global or elsewhere.
-        folderId={effectiveFolderId}
-        // Kept in the page rather than re-fetched: the next trigger dialog
-        // opens on what was just saved, and the read that seeded this page may
-        // have happened minutes ago.
-        onSaved={setSettings}
-      />
+      {combineItems != null && readable != null && effectiveFolderId != null ? (
+        <ForgeCombineDialog
+          items={combineItems}
+          remote={readable}
+          folderId={effectiveFolderId}
+          settings={effectiveForgeSettings(settings, effectiveFolderId)}
+          onClose={() => setCombineItems(null)}
+          onCreated={(_task, count) => {
+            setCombineItems(null)
+            clearSelection()
+            void refreshLinks()
+            toast.success(t("combineCreated", { count }), {
+              action: {
+                label: t("combineViewBoard"),
+                onClick: () => setRoute("tasks"),
+              },
+            })
+          }}
+        />
+      ) : null}
+
+      {/* The route's own: embedded, nothing opens it (see the settings
+          listener above). */}
+      {embedded ? null : (
+        <ForgeSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          // Opens on the folder whose list you were looking at — the scope you
+          // are almost certainly there to change — with the picker inside to go
+          // global or elsewhere.
+          folderId={effectiveFolderId}
+          // Kept in the page rather than re-fetched: the next trigger dialog
+          // opens on what was just saved, and the read that seeded this page may
+          // have happened minutes ago.
+          onSaved={setSettings}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * What is picked, and the one thing to do with it: hand it to a single task.
+ * Between the list and the pager, so it stays in view whichever page the
+ * list is on — the selection outlives them all. Wraps rather than truncates:
+ * the aux panel is a sidebar's width.
+ */
+function SelectionBar({
+  count,
+  offPage,
+  onKeyDown,
+  onClear,
+  onCombine,
+}: {
+  count: number
+  /** How many of them the list on screen does not show. */
+  offPage: number
+  onKeyDown: (e: ReactKeyboardEvent) => void
+  onClear: () => void
+  onCombine: () => void
+}) {
+  const t = useTranslations("Forge")
+  const tooFew = count < 2
+  return (
+    <div
+      role="region"
+      aria-label={t("selectionLabel")}
+      data-forge-select=""
+      onKeyDown={onKeyDown}
+      className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border/60 bg-muted/30 px-4 py-2 text-xs"
+    >
+      <span className="font-medium">{t("selectionCount", { count })}</span>
+      {offPage > 0 ? (
+        <span className="text-muted-foreground">
+          {t("selectionOffPage", { count: offPage })}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        onClick={onClear}
+        className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+      >
+        {t("selectionClear")}
+      </button>
+      {/* The hint rides on a wrapper: a disabled button gets no pointer
+          events, so its own title would never show. */}
+      <span
+        className="ms-auto"
+        title={tooFew ? t("combineNeedsTwo") : undefined}
+      >
+        <Button
+          type="button"
+          size="sm"
+          className="h-7 gap-1.5 rounded-full px-3 text-xs"
+          disabled={tooFew}
+          onClick={onCombine}
+        >
+          <Layers className="size-3.5" aria-hidden />
+          {t("combineAction", { count })}
+        </Button>
+      </span>
+    </div>
+  )
+}
+
+/**
+ * The embedded page's header band — the h-10 strip every aux-panel tab opens
+ * with, in the git tabs' round-button language. The repository the list comes
+ * from on the left (out to the forge on click), the count under the current
+ * filters beside it, and the page-level actions on the right: file an issue,
+ * reload, and go to the full panel.
+ */
+function EmbeddedHeader({
+  remote,
+  count,
+  state,
+  pending,
+  busy,
+  canReload,
+  onReload,
+  onNewIssue,
+  onOpenFullPage,
+}: {
+  remote: ForgeRemote | null
+  count: number | null | undefined
+  state: StateFilter
+  pending: boolean
+  /** The list itself is loading — what the reload button spins for. */
+  busy: boolean
+  canReload: boolean
+  onReload: () => void
+  /** `null` hides the button (no repository to file in, or not the issue
+   *  tab). */
+  onNewIssue: (() => void) | null
+  onOpenFullPage: () => void
+}) {
+  const t = useTranslations("Forge")
+  const tAux = useTranslations("Folder.auxPanel")
+  return (
+    <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border/50 pl-3 pr-2">
+      {remote != null ? (
+        <button
+          type="button"
+          className="inline-flex min-w-0 items-center gap-1 rounded-md font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+          title={`${t("openRepo")} · ${remote.server_host}/${remote.owner_repo}`}
+          onClick={() => {
+            void openUrl(repoWebUrl(remote)).catch(() => {
+              // An unopenable remote must not take the panel down with it.
+            })
+          }}
+        >
+          <span className="min-w-0 truncate">{remote.owner_repo}</span>
+          <ExternalLink className="size-3 shrink-0 opacity-60" aria-hidden />
+        </button>
+      ) : null}
+      <TabCount value={count} state={state} pending={pending} />
+      <div className="min-w-0 flex-1" />
+      {onNewIssue != null ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={GIT_TOOLBAR_ICON_BUTTON_CLASS}
+          title={t("newIssue")}
+          aria-label={t("newIssue")}
+          onClick={onNewIssue}
+        >
+          <Plus className="size-3.5" aria-hidden />
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className={GIT_TOOLBAR_ICON_BUTTON_CLASS}
+        disabled={!canReload || busy}
+        title={t("refresh")}
+        aria-label={t("refresh")}
+        onClick={onReload}
+      >
+        <RefreshCw
+          className={cn("size-3.5", busy && "animate-spin")}
+          aria-hidden
+        />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className={GIT_TOOLBAR_ICON_BUTTON_CLASS}
+        title={tAux("openFullPage")}
+        aria-label={tAux("openFullPage")}
+        onClick={onOpenFullPage}
+      >
+        <SquareArrowOutUpRight className="size-3.5" aria-hidden />
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * The embedded page's footer: previous, "page / pages", next. Rendered only
+ * when there is somewhere to go or something to say — a list that fits on one
+ * page needs no pager under it. The two notes about an incomplete or capped
+ * result are the full footer's own, kept because they change what the count
+ * means.
+ */
+function CompactListFooter({
+  list,
+  busy,
+  onPage,
+}: {
+  list: ForgeIssueList
+  busy: boolean
+  onPage: (page: number) => void
+}) {
+  const t = useTranslations("Forge")
+  const multiPage = list.page > 1 || list.has_next
+  if (!multiPage && !list.incomplete && list.reachable_count == null) {
+    return null
+  }
+  const totalPages = pageCount(
+    list.reachable_count ?? list.total_count,
+    list.per_page
+  )
+  return (
+    <div
+      data-testid="forge-footer"
+      className="flex shrink-0 flex-col items-center gap-1 border-t border-border/60 px-2 py-1.5"
+    >
+      {list.incomplete ? (
+        <span className="text-center text-[0.6875rem] text-amber-600 dark:text-amber-500">
+          {t("incompleteResults")}
+        </span>
+      ) : null}
+      {list.reachable_count != null ? (
+        <span className="text-center text-[0.6875rem] text-muted-foreground">
+          {t("reachableCap", { count: list.reachable_count })}
+        </span>
+      ) : null}
+      {multiPage ? (
+        <Pagination aria-label={t("pagination")} className="mx-0 w-auto">
+          <PaginationContent>
+            <PaginationItem>
+              <PaginationPrevious
+                aria-label={t("previousPage")}
+                title={t("previousPage")}
+                disabled={busy || list.page <= 1}
+                onClick={() => onPage(list.page - 1)}
+              />
+            </PaginationItem>
+            <PaginationItem>
+              <span
+                aria-current="page"
+                className="px-2 text-xs tabular-nums text-muted-foreground"
+              >
+                {totalPages != null
+                  ? `${list.page} / ${totalPages}`
+                  : list.has_next
+                    ? `${list.page} …`
+                    : String(list.page)}
+              </span>
+            </PaginationItem>
+            <PaginationItem>
+              <PaginationNext
+                aria-label={t("nextPage")}
+                title={t("nextPage")}
+                disabled={busy || !list.has_next}
+                onClick={() => onPage(list.page + 1)}
+              />
+            </PaginationItem>
+          </PaginationContent>
+        </Pagination>
+      ) : null}
     </div>
   )
 }
@@ -1901,6 +2518,7 @@ function LabelFilter({
   truncated,
   selected,
   onChange,
+  compact = false,
 }: {
   options: ForgeLabel[]
   truncated: boolean
@@ -1908,6 +2526,8 @@ function LabelFilter({
    *  colour is only ever decoration on the way out. */
   selected: string[]
   onChange: (next: string[]) => void
+  /** The aux panel's sidebar-width row: the pill a size down. */
+  compact?: boolean
 }) {
   const t = useTranslations("Forge")
   const [open, setOpen] = useState(false)
@@ -1922,7 +2542,7 @@ function LabelFilter({
           variant="ghost"
           aria-pressed={active}
           className={cn(
-            PILL,
+            compact ? PILL_COMPACT : PILL,
             active &&
               "bg-primary/10 text-primary hover:bg-primary/15 dark:hover:bg-primary/15"
           )}

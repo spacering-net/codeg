@@ -71,6 +71,7 @@ function makeLabels(): ExportLabels {
     system: "System",
     toolResult: "Tool result",
     toolError: "Tool error",
+    turnFailed: "Turn failed",
     statusLabels: {},
   }
 }
@@ -212,6 +213,45 @@ describe("exportAsHtml", () => {
       { name: "HTML", extensions: ["html"] },
     ])
     expect(mockInvoke.mock.calls[0][0]).toBe("save_text_file")
+  })
+})
+
+// A failed turn's line exports under its own label, never as text someone
+// said — and its message is escaped like any other agent text.
+describe("a failed turn", () => {
+  function dataWithFailure(): ExportConversationData {
+    const data = makeData()
+    data.turns.push({
+      id: "t2",
+      role: "system",
+      blocks: [{ type: "turn_error", message: "API Error: 503\n<overloaded>" }],
+      timestamp: "2026-05-27T00:00:01Z",
+    })
+    return data
+  }
+
+  async function exported(
+    run: (data: ExportConversationData) => Promise<unknown>
+  ): Promise<string> {
+    mockIsDesktop.mockReturnValue(true)
+    mockSave.mockResolvedValue("/Users/me/out")
+    mockInvoke.mockResolvedValue(undefined)
+    await run(dataWithFailure())
+    return (mockInvoke.mock.calls[0][1] as { contents: string }).contents
+  }
+
+  it("exports to Markdown as a labeled quote", async () => {
+    const contents = await exported(exportAsMarkdown)
+    expect(contents).toContain(
+      "> **Turn failed**\n>\n> API Error: 503\n> <overloaded>"
+    )
+  })
+
+  it("exports to HTML as a labeled, escaped line", async () => {
+    const contents = await exported(exportAsHtml)
+    expect(contents).toContain(
+      '<div class="turn-error"><strong>Turn failed</strong><br>API Error: 503<br>&lt;overloaded&gt;</div>'
+    )
   })
 })
 

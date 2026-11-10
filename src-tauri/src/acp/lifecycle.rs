@@ -22,22 +22,24 @@ use crate::acp::delegation::broker::{DelegationBroker, DelegationMatchKey};
 use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
 use crate::acp::internal_bus::InternalEventBus;
 use crate::acp::manager::ConnectionManager;
-use crate::acp::session_state::SessionState;
+use crate::acp::session_state::{SessionState, TurnStatusWriter};
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope};
 use crate::db::entities::conversation::ConversationStatus;
 use crate::db::error::DbError;
-use crate::db::service::conversation_service;
+use crate::db::service::{conversation_service, tool_approval_service};
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
-use crate::models::AgentType;
 use crate::web::event_bridge::{emit_with_state, EventEmitter};
 use tokio::sync::RwLock;
 
 /// Per-connection worker queue depth. Sized for the **filtered** event set
 /// only (see `is_lifecycle_relevant`) — high-frequency events (ContentDelta,
 /// ToolCall*, PermissionRequest) are dropped at the dispatcher and never
-/// enter the queue. The remaining 6 event types arrive at most a handful
+/// enter the queue. The remaining 8 event types arrive at most a handful
 /// of times per turn, so 64 slots is comfortable headroom for a sustained
 /// SQLite stall without forcing the dispatcher to block on `send`.
+/// (SessionStarted, TurnComplete, ConversationLinked, NativeSessionTitle,
+/// TranscriptRolledOver, ToolApproval, Disconnected, Error.) `ToolApproval`
+/// is one per answered permission card, so it is paced by a person.
 const WORKER_QUEUE_CAPACITY: usize = 64;
 
 /// Whether an event needs to reach the per-connection worker. Mirrors the
@@ -66,6 +68,8 @@ fn is_lifecycle_relevant(event: &AcpEvent) -> bool {
             | AcpEvent::TurnComplete { .. }
             | AcpEvent::ConversationLinked { .. }
             | AcpEvent::NativeSessionTitle { .. }
+            | AcpEvent::TranscriptRolledOver { .. }
+            | AcpEvent::ToolApproval { .. }
             | AcpEvent::StatusChanged {
                 status: ConnectionStatus::Disconnected
             }
@@ -182,6 +186,68 @@ async fn handle_event_with_retry(
             }
         }
     }
+    // Given up. A turn's status write is released, so a CLI run's fallback —
+    // the one other writer — may still make it.
+    if matches!(envelope.payload, AcpEvent::TurnComplete { .. }) {
+        if let Some(state) = manager.get_state(&envelope.connection_id).await {
+            state
+                .write()
+                .await
+                .release_turn_status(envelope.seq, TurnStatusWriter::Lifecycle);
+        }
+    }
+}
+
+/// The conversation status a `TurnComplete` with `stop_reason` leaves the row
+/// in. `end_turn` is the only success case and goes to `PendingReview`.
+/// `refusal`, `max_tokens`, `max_turn_requests`, `unknown`, `empty`,
+/// `auth_required` and `rejected` indicate the turn failed (often a
+/// backend/gateway error masquerading as `Refusal` per the ACP spec gap, or —
+/// common with OpenCode — a silent EndTurn that produced no output), so they go
+/// to `Cancelled`, paired with an `AcpEvent::Error` toast emitted upstream by
+/// `connection.rs`. `auth_required` and `rejected` are the ones whose
+/// CONNECTION survives (the agent rejected the prompt — with ACP's -32000 when
+/// it wants the user to sign in, with anything else when it simply would not
+/// run this one), but their turn is just as dead as the others — leaving those
+/// rows out would strand them at InProgress for good. `cancelled` is already
+/// written by `manager.cancel()` (eager CAS InProgress → Cancelled at the
+/// user-cancel entry point), so it — and any future reason — writes nothing.
+pub(crate) fn turn_complete_status(stop_reason: &str) -> Option<ConversationStatus> {
+    match stop_reason {
+        "end_turn" => Some(ConversationStatus::PendingReview),
+        "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty" | "auth_required"
+        | "rejected" => Some(ConversationStatus::Cancelled),
+        _ => None,
+    }
+}
+
+/// The conversation-status write a `TurnComplete` makes: the row first, then
+/// `ConversationStatusChanged`, so any subscriber that observes the event can
+/// assume the row is already at the target status. Shared by the lifecycle
+/// worker and a CLI run's fallback for a turn the worker never got; whichever
+/// claimed the turn (`SessionState::claim_turn_status`) is the one that calls
+/// it.
+pub(crate) async fn write_turn_status(
+    db_conn: &DatabaseConnection,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    conversation_id: i32,
+    stop_reason: &str,
+) -> Result<(), DbError> {
+    let Some(status) = turn_complete_status(stop_reason) else {
+        return Ok(());
+    };
+    conversation_service::update_status(db_conn, conversation_id, status.clone()).await?;
+    emit_with_state(
+        state,
+        emitter,
+        AcpEvent::ConversationStatusChanged {
+            conversation_id,
+            status,
+        },
+    )
+    .await;
+    Ok(())
 }
 
 pub(crate) async fn handle_event(
@@ -246,35 +312,38 @@ pub(crate) async fn handle_event(
             //
             // The target status depends on the stop reason: `end_turn` is the
             // only success case and goes to `PendingReview`. `refusal`,
-            // `max_tokens`, `max_turn_requests`, `unknown`, `empty`, and
-            // `auth_required` indicate the turn failed (often a backend/gateway
-            // error masquerading as `Refusal` per the ACP spec gap, or — common
-            // with OpenCode — a silent EndTurn that produced no output), so
-            // we flip to `Cancelled` and pair the transition with an
+            // `max_tokens`, `max_turn_requests`, `unknown`, `empty`,
+            // `auth_required` and `rejected` indicate the turn failed (often a
+            // backend/gateway error masquerading as `Refusal` per the ACP spec
+            // gap, or — common with OpenCode — a silent EndTurn that produced no
+            // output), so we flip to `Cancelled` and pair the transition with an
             // `AcpEvent::Error` toast emitted upstream by `connection.rs`.
-            // `auth_required` is the one whose CONNECTION survives (the agent
-            // refused the prompt with ACP's -32000 and wants the user to sign
-            // in), but the turn is just as dead as the others — leaving the row
-            // out of this arm would strand it at InProgress for good.
+            // `auth_required` and `rejected` are the ones whose CONNECTION
+            // survives (the agent rejected the prompt — with ACP's -32000 when
+            // it wants the user to sign in, with anything else when it simply
+            // would not run this one), but their turn is just as dead as the
+            // others — leaving those rows out of this arm would strand them at
+            // InProgress for good.
             // `cancelled` is already written by `manager.cancel()` (eager
             // CAS InProgress → Cancelled at the user-cancel entry point), so
             // we leave it alone here. `completed` transitions remain
             // frontend-driven.
-            let target_status = match stop_reason.as_str() {
-                "end_turn" => Some(ConversationStatus::PendingReview),
-                "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty"
-                | "auth_required" => Some(ConversationStatus::Cancelled),
-                // `cancelled` and any future reason: don't write here.
-                _ => None,
-            };
             let Some((state_arc, emitter)) =
                 manager.get_state_and_emitter(&envelope.connection_id).await
             else {
                 return Ok(());
             };
-            let (conversation_id, last_text) = {
-                let snap = state_arc.read().await;
-                (snap.conversation_id, snap.last_assistant_text.clone())
+            let (conversation_id, last_text, claimed) = {
+                let mut snap = state_arc.write().await;
+                // Re-entrant for this worker: a retry of this same envelope
+                // claims again and goes on. Only a CLI run's fallback that
+                // already wrote this turn's status makes it skip.
+                let claimed = snap.claim_turn_status(envelope.seq, TurnStatusWriter::Lifecycle);
+                (
+                    snap.conversation_id,
+                    snap.last_assistant_text.clone(),
+                    claimed,
+                )
             };
             // No conversation row bound (defensive — should never happen in
             // practice since `send_prompt_linked` runs before TurnComplete can
@@ -282,20 +351,8 @@ pub(crate) async fn handle_event(
             let Some(cid) = conversation_id else {
                 return Ok(());
             };
-            if let Some(ts) = target_status.clone() {
-                // DB write before emit so any downstream subscriber that observes
-                // the ConversationStatusChanged event can assume the row is
-                // already at the target status.
-                conversation_service::update_status(db_conn, cid, ts.clone()).await?;
-                emit_with_state(
-                    &state_arc,
-                    &emitter,
-                    AcpEvent::ConversationStatusChanged {
-                        conversation_id: cid,
-                        status: ts,
-                    },
-                )
-                .await;
+            if claimed {
+                write_turn_status(db_conn, &state_arc, &emitter, cid, stop_reason).await?;
             }
 
             // If this conversation was spawned by a delegation, resolve the
@@ -349,6 +406,58 @@ pub(crate) async fn handle_event(
                 }
             }
             Ok(())
+        }
+        AcpEvent::TranscriptRolledOver { transcript_id } => {
+            // Claude `/clear` wrote a new transcript uuid. The ACP session id
+            // on SessionState is unchanged and must stay that way (prompts
+            // still use it). Re-point the conversation row in place — the
+            // outgoing id is this conversation's previous transcript, so it
+            // is passed as `continues` to avoid a sidebar split.
+            let Some((state_arc, emitter)) =
+                manager.get_state_and_emitter(&envelope.connection_id).await
+            else {
+                return Ok(());
+            };
+            let conversation_id = { state_arc.read().await.conversation_id };
+            if let Some(cid) = conversation_id {
+                // Continues is the row's current pointer (the file we are
+                // leaving), not SessionState.external_id — after the first
+                // `/clear` those diverge, and using the ACP id would split
+                // on a second rollover.
+                let Ok(current) = conversation_service::get_by_id(db_conn, cid).await else {
+                    return Ok(());
+                };
+                let continues: Vec<String> = current.external_id.into_iter().collect();
+                let preserved = conversation_service::bind_external_id(
+                    db_conn,
+                    cid,
+                    transcript_id,
+                    &continues,
+                )
+                .await?;
+                crate::commands::conversations::emit_conversation_upsert(&emitter, db_conn, cid)
+                    .await;
+                crate::commands::conversations::emit_preserved_conversation(
+                    &emitter, db_conn, preserved,
+                )
+                .await;
+            }
+            Ok(())
+        }
+        AcpEvent::ToolApproval { approval } => {
+            // Agent transcripts record the call but not how its permission
+            // request was answered, so this row is the only thing that brings
+            // the approval back when the conversation is reopened.
+            let Some(state_arc) = manager.get_state(&envelope.connection_id).await else {
+                return Ok(());
+            };
+            let conversation_id = { state_arc.read().await.conversation_id };
+            // A permission request is raised by a running prompt, and the row
+            // is bound before the prompt is sent — defensive only.
+            let Some(cid) = conversation_id else {
+                return Ok(());
+            };
+            tool_approval_service::record(db_conn, cid, approval).await
         }
         // Other events don't need cross-connection DB persistence today; extend
         // this dispatcher with new arms as the lifecycle scope grows.
@@ -425,6 +534,9 @@ async fn forward_turn_complete_to_broker(
         "empty" => DelegationOutcome::from_err(DelegationError::ChildEmpty, Some(conversation_id)),
         "auth_required" => {
             DelegationOutcome::from_err(DelegationError::ChildAuthRequired, Some(conversation_id))
+        }
+        "rejected" => {
+            DelegationOutcome::from_err(DelegationError::ChildRejected, Some(conversation_id))
         }
         other => DelegationOutcome::from_err(
             DelegationError::ChildUnknown(other.to_string()),
@@ -580,9 +692,13 @@ fn find_delegation_args(
     }
     let obj = value.as_object()?;
     // Direct hit: this object declares a delegation field at its top level.
+    // `assistant_id` counts whether a host sent it as a number or a string.
     if obj.get("task").and_then(|v| v.as_str()).is_some()
         || obj.get("agent_type").and_then(|v| v.as_str()).is_some()
         || obj.get("working_dir").and_then(|v| v.as_str()).is_some()
+        || obj
+            .get("assistant_id")
+            .is_some_and(|v| v.is_number() || v.is_string())
     {
         return Some(obj.clone());
     }
@@ -615,12 +731,20 @@ pub(crate) const CURSOR_IDENTITYLESS_MCP_TITLE: &str = "MCP: tool";
 ///   rephrase it (`Delegate to codex`). We match by substring so any
 ///   form containing `delegate_to_agent` is captured.
 /// * `raw_input` is the JSON arg blob the agent sent to the MCP server. The
-///   `delegate_to_agent` schema requires `agent_type` AND `task`; presence
-///   of both — after peeling any wrapper layers via [`find_delegation_args`] —
-///   is a near-zero false-positive shape check that catches any host that
-///   mangles the title beyond recognition, including ones that wrap their
-///   tool-call args.
-fn is_delegation_invocation(title: &str, raw_input: Option<&str>) -> bool {
+///   `delegate_to_agent` schema requires `task` plus a target — `agent_type`,
+///   or `assistant_id` for an assistant; `task` with either — after peeling
+///   any wrapper layers via [`find_delegation_args`] — is a near-zero
+///   false-positive shape check that catches any host that mangles the title
+///   beyond recognition, including ones that wrap their tool-call args.
+/// * on opencode's code-mode tool (title `execute`), `raw_input` is
+///   `{"code": "<JS>"}` and the call lives in the script — see
+///   [`code_mode_delegation_code`].
+///
+/// This is also the replay-side gate: `commands::conversations::inject_delegation_meta`
+/// reuses it so a persisted tool block whose title/args (or opencode `code`)
+/// shape would have been registered live gets historical meta on reload —
+/// live and cold-start recognition stay identical by construction.
+pub(crate) fn is_delegation_invocation(title: &str, raw_input: Option<&str>) -> bool {
     let normalized_title = title.to_ascii_lowercase().replace([' ', '-'], "_");
     if normalized_title.contains("delegate_to_agent") {
         return true;
@@ -630,14 +754,33 @@ fn is_delegation_invocation(title: &str, raw_input: Option<&str>) -> bool {
             if let Some(args) = find_delegation_args(&v, 0) {
                 let has_task = args.get("task").and_then(|t| t.as_str()).is_some();
                 let has_agent_type = args.get("agent_type").and_then(|a| a.as_str()).is_some();
-                if has_task && has_agent_type {
+                let has_assistant_id = args
+                    .get("assistant_id")
+                    .is_some_and(|v| v.is_number() || v.is_string());
+                if has_task && (has_agent_type || has_assistant_id) {
                     return true;
                 }
             }
         }
     }
+    // opencode's code-mode `execute` tool: the call lives in a JS `code`
+    // string. Gated on that tool, whose every input-carrying frame (2.0.28
+    // through 2.1.4) and history block are named `execute`: another tool's
+    // `code` argument — a Playwright `browser_run_code` script that mocks the
+    // call, say — must not register, or a real delegation with the same key
+    // could claim its id.
+    if title.trim().eq_ignore_ascii_case(CODE_MODE_TOOL_TITLE) {
+        if let Some(raw) = raw_input {
+            if code_mode_delegation_code(raw) {
+                return true;
+            }
+        }
+    }
     false
 }
+
+/// The title (live) and tool name (history) of opencode's code-mode tool.
+const CODE_MODE_TOOL_TITLE: &str = "execute";
 
 /// Build the broker's `(agent_type, task, working_dir)` correlation key from
 /// a `delegate_to_agent` tool_call's `raw_input` JSON. All three are values
@@ -647,29 +790,908 @@ fn is_delegation_invocation(title: &str, raw_input: Option<&str>) -> bool {
 /// alone, doesn't collide when two parallel calls target different agents —
 /// or different directories — with the same task text). `working_dir` is the
 /// LLM's explicit value (`None` when omitted), matching the broker's
-/// `DelegationRequest::requested_working_dir`. The args are located via
-/// [`find_delegation_args`], so hosts that wrap or double-encode `raw_input`
-/// are keyed identically to hosts that send the fields at the top level.
-/// Returns `None` when `raw_input` is absent, not JSON, has no locatable
-/// delegation object, or is missing/unparseable for `agent_type`/`task` — the
-/// broker then falls back to FIFO ordering.
+/// `DelegationRequest::requested_working_dir`.
+///
+/// Two shapes are understood, in order:
+///
+/// * a JSON arg blob the LLM sent to the MCP server (located via
+///   [`find_delegation_args`], so hosts that wrap or double-encode `raw_input`
+///   are keyed identically to hosts that send the fields at the top level) —
+///   see [`extract_args_match_key`];
+/// * opencode's code-mode `execute` payload, whose `code` string wraps the
+///   real call — see [`extract_code_mode_match_key`].
+///
+/// Returns `None` when neither shape yields a fully parseable
+/// `(target, task, working_dir)` — the broker then falls back to FIFO
+/// ordering. A missing key is strictly better than a wrong one: keyed entries
+/// are retained indefinitely and claimable ONLY by exact match, so a
+/// mismatched key would deadlock the correlation until teardown.
 fn extract_delegation_match_key(raw_input: Option<&str>) -> Option<DelegationMatchKey> {
+    if let Some(key) = extract_args_match_key(raw_input) {
+        return Some(key);
+    }
+    extract_code_mode_match_key(raw_input)
+}
+
+fn extract_args_match_key(raw_input: Option<&str>) -> Option<DelegationMatchKey> {
     let raw = raw_input?;
     let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
     let args = find_delegation_args(&parsed, 0)?;
     let task = args.get("task").and_then(|v| v.as_str())?.to_string();
-    // Parse `agent_type` through the same serde path the MCP listener uses,
-    // so the stored enum equals `DelegationRequest::agent_type`.
-    let agent_type: AgentType = serde_json::from_value(args.get("agent_type")?.clone()).ok()?;
     let working_dir = args
         .get("working_dir")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let args = serde_json::Value::Object(args);
+    // The same parser the MCP listener dispatches the call with, so the
+    // target here equals `DelegationRequest::target()` for the same arguments.
+    let target = crate::acp::delegation::types::delegation_target_from_args(&args).ok()?;
     Some(DelegationMatchKey {
-        agent_type,
+        target,
         task,
         working_dir,
     })
+}
+
+/// ── opencode 2.x "code-mode" delegation recognition ────────────────────────
+///
+/// opencode ≥2.x routes every MCP tool call through its built-in `execute`
+/// tool: the model writes JavaScript
+/// `await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `…` })`
+/// and the ACP announcement is `{title: "execute", raw_input: {"code": "<js>"}}`.
+/// Neither earlier branch of [`is_delegation_invocation`] matches — the title
+/// carries no `delegate_to_agent`, and the args live inside a JS string
+/// invisible to [`find_delegation_args`] — so the call never registered, the
+/// round-trip fell back to a synthetic `delegation-<uuid>`, and the child's
+/// status/result had no parent card to bind to.
+///
+/// The recognizers below parse the `code` string with a small structural JS
+/// scanner rather than regexes, and are STRICT about what counts as a call:
+/// `tools` must be a standalone identifier reaching `delegate_to_agent(`
+/// through a real accessor (`tools["codeg-mcp"].…` or `tools.<ns>.…`), and
+/// the scan skips strings, template literals, and comments, so a task text
+/// *quoting* such a call (or a comment mentioning one) cannot register a
+/// phantom delegation.
+///
+/// Extraction is conservative in the same direction: any ambiguity
+/// (interpolation, an unknown escape, an ESCAPED quoted `task`, a value that
+/// continues past its literal (`"a" + b`, `` `a`.trim() ``), a present but
+/// unreadable `working_dir`, an `assistant_id` in any spelling (quoted,
+/// computed, spread-in), spread or computed-key syntax, a conditional, a
+/// shorthand or Unicode-escaped argument key, non-ASCII code between the
+/// properties, an argument that is not exactly one object literal,
+/// unbalanced syntax) degrades to NO key — the pre-existing unkeyed path
+/// (post-budget FIFO claim) — rather than a WRONG keyed one. Template values
+/// are read as the runtime would cook them (escapes decoded, bare CR/CRLF
+/// TV-normalized to LF, U+2028/U+2029 preserved verbatim), so the key
+/// matches what the MCP listener receives.
+/// An escape-free quoted `task` is accepted: with no backslash present, the
+/// evaluated value is exactly the source text (reviewed deviation from plan
+/// v2's blanket "quoted task → no key").
+///
+/// Only the FIRST call site is read, and one `execute` owns one tool-call id,
+/// so a script that delegates several times binds at most one child to its
+/// card; the others fall back to synthetic ids. Keying that first site is only
+/// right when it is the call that runs, so a script with several sites is
+/// keyed only when its first one provably runs first (see
+/// [`CodeModeCallSite::readable`]); otherwise — and whenever the first call
+/// can't be keyed (a loop over a variable task, say) — which of several
+/// CONCURRENT calls claims the id is first-come, the same unkeyed FIFO every
+/// other host's unparseable call gets.
+///
+/// The first `delegate_to_agent(` call reached via a `tools` accessor in real
+/// (non-string, non-comment) JS.
+struct CodeModeCallSite {
+    /// Byte offset of the `(` opening the call's arguments.
+    open: usize,
+    /// Byte offset of the matching `)`.
+    close: usize,
+    /// Whether this call's arguments may be read as the delegation's: it is
+    /// the only call site in a scan that reached the end of the script, or it
+    /// provably runs before any other — at brace depth 0, outside any
+    /// parameter list or destructuring pattern, with nothing before it that
+    /// branches, defers or hides code (`if`/`else`/`switch`/`for`/`while`/
+    /// `do`/`catch`/`yield`/`function`, `?`, `&&`, `||`, `=>`, a `${…}`). A
+    /// first site in a dead or conditional branch (`if (false) { …decoy… }
+    /// …real…`) is otherwise read while a later one runs, minting a key no
+    /// round-trip claims; a call inside a `${…}` after it is one the count
+    /// cannot see.
+    readable: bool,
+}
+
+/// Locate the first code-mode delegate call in `code`. `None` when the code
+/// exceeds the scan cap, is structurally unbalanced before the call, names no
+/// such call, or holds a `/` that is neither a comment nor inside a string
+/// BEFORE the call: a regex literal is indistinguishable from division to
+/// this scanner, and its body can carry the quote, backtick or `//` that
+/// desynchronizes everything after it (`/'/` opens a "string" that skips the
+/// real call and closes in a later comment, which then reads as code).
+fn code_mode_call_site(code: &str) -> Option<CodeModeCallSite> {
+    // A heuristic scan cap in UTF-8 bytes — the TS mirror measures the same.
+    const MAX_CODE_BYTES: usize = 1 << 20;
+    if code.len() > MAX_CODE_BYTES {
+        return None;
+    }
+    let b = code.as_bytes();
+    let mut i = 0usize;
+    let mut depth: i32 = 0;
+    // The `(` / `[` groups open at `i`, innermost last.
+    let mut groups: Vec<u8> = Vec::new();
+    let mut branched = false;
+    let mut first: Option<(usize, usize)> = None;
+    let mut runs_first = false;
+    // How many groups enclosing the first site have yet to close. Each must
+    // close as a call, a grouping or an array — not as an arrow's parameter
+    // list (`(x = …call…) => x`) or a destructuring pattern (`[a = …call…] =
+    // xs`), whose defaults run only when a value is missing.
+    let mut enclosing = 0usize;
+    let mut sites = 0usize;
+    // Whether the scan for further call sites reached the end of the script.
+    let mut counted = true;
+    while i < b.len() {
+        match b[i] {
+            quote @ (b'\'' | b'"' | b'`') => {
+                let end = if quote == b'`' {
+                    skip_js_template(code, i)
+                } else {
+                    skip_js_string(code, i)
+                };
+                // Unbalanced: before the first site no call can be found
+                // (`first?` gives up); after it, only the count is lost.
+                let Some(end) = end else {
+                    first?;
+                    counted = false;
+                    break;
+                };
+                // A `${…}` runs code the scan skips: a call in it is one the
+                // count cannot see, and before the first site it may run first.
+                if quote == b'`' && code[i..end].contains("${") {
+                    counted = false;
+                    if first.is_none() {
+                        branched = true;
+                    }
+                }
+                i = end;
+            }
+            b'/' if matches!(b.get(i + 1), Some(b'/') | Some(b'*')) => {
+                i = skip_js_ws_and_comments(code, i);
+            }
+            // Division or a regex: before the first site it may have
+            // desynchronized the search itself; after it, only the count.
+            b'/' => {
+                first?;
+                counted = false;
+                break;
+            }
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+            }
+            b'(' | b'[' => {
+                groups.push(b[i]);
+                i += 1;
+            }
+            close @ (b')' | b']') => {
+                groups.pop();
+                i += 1;
+                if enclosing > groups.len() {
+                    enclosing = groups.len();
+                    let next = skip_js_ws_and_comments(code, i);
+                    let after = (b.get(next).copied(), b.get(next + 1).copied());
+                    let parameters = close == b')' && after == (Some(b'='), Some(b'>'));
+                    let pattern = close == b']'
+                        && after.0 == Some(b'=')
+                        && !matches!(after.1, Some(b'=') | Some(b'>'));
+                    if parameters || pattern {
+                        runs_first = false;
+                    }
+                }
+            }
+            b'?' => {
+                branched = true;
+                i += 1;
+            }
+            b'&' | b'|' if b.get(i + 1) == Some(&b[i]) => {
+                branched = true;
+                i += 2;
+            }
+            b'=' if b.get(i + 1) == Some(&b'>') => {
+                branched = true;
+                i += 2;
+            }
+            _ if CODE_MODE_BRANCH_KEYWORDS
+                .iter()
+                .any(|k| is_js_word_at(b, i, k)) =>
+            {
+                branched = true;
+                i += 1;
+            }
+            _ if is_js_word_at(b, i, b"tools") => {
+                let Some(open) = code_mode_tools_call_open(code, i) else {
+                    i += 1;
+                    continue;
+                };
+                let Some(close) = matching_paren(code, open) else {
+                    // As for an unbalanced string above.
+                    first?;
+                    counted = false;
+                    break;
+                };
+                sites += 1;
+                if first.is_none() {
+                    first = Some((open, close));
+                    runs_first = depth == 0 && !branched;
+                    enclosing = groups.len();
+                }
+                i = close + 1;
+            }
+            _ => i += 1,
+        }
+    }
+    let (open, close) = first?;
+    // A group around the first site that never closed in the scan could
+    // still be a parameter list or a pattern.
+    let runs_first = runs_first && enclosing == 0;
+    Some(CodeModeCallSite {
+        open,
+        close,
+        readable: runs_first || (sites == 1 && counted),
+    })
+}
+
+/// Keywords that make what follows them conditional, repeated or deferred
+/// (see [`CodeModeCallSite::readable`]); `function` defers its body and its
+/// parameter defaults alike.
+const CODE_MODE_BRANCH_KEYWORDS: [&[u8]; 9] = [
+    b"if", b"else", b"switch", b"for", b"while", b"do", b"catch", b"yield", b"function",
+];
+
+/// Byte offset of the `(` that opens the argument list of the
+/// `delegate_to_agent` call whose `tools` token sits at `tools_at`. Two
+/// accepted accessor shapes (opencode emits the first; the second covers a
+/// namespaced client): `tools["codeg-mcp"].delegate_to_agent(` and
+/// `tools.codeg_mcp.delegate_to_agent(`.
+fn code_mode_tools_call_open(code: &str, tools_at: usize) -> Option<usize> {
+    let b = code.as_bytes();
+    let mut i = tools_at + b"tools".len();
+    i = skip_js_ws_and_comments(code, i);
+    match b.get(i) {
+        Some(b'[') => {
+            i += 1;
+            i = skip_js_ws_and_comments(code, i);
+            let quote = *b.get(i)?;
+            if quote != b'\'' && quote != b'"' {
+                return None;
+            }
+            let end = skip_js_string(code, i)?;
+            // A non-empty member name: `tools[""].delegate…` is no call site.
+            if end == i + 2 {
+                return None;
+            }
+            i = skip_js_ws_and_comments(code, end);
+            if b.get(i) != Some(&b']') {
+                return None;
+            }
+            i = skip_js_ws_and_comments(code, i + 1);
+            if b.get(i) != Some(&b'.') {
+                return None;
+            }
+            i = skip_js_ws_and_comments(code, i + 1);
+        }
+        Some(b'.') => {
+            i += 1;
+            i = skip_js_ws_and_comments(code, i);
+            let end = js_ident_end(b, i);
+            if end == i {
+                return None;
+            }
+            i = skip_js_ws_and_comments(code, end);
+            if b.get(i) != Some(&b'.') {
+                return None;
+            }
+            i = skip_js_ws_and_comments(code, i + 1);
+        }
+        _ => return None,
+    }
+    if !is_js_word_at(b, i, b"delegate_to_agent") {
+        return None;
+    }
+    i = skip_js_ws_and_comments(code, i + b"delegate_to_agent".len());
+    if b.get(i) == Some(&b'(') {
+        Some(i)
+    } else {
+        None
+    }
+}
+
+/// Byte offset of the `)` matching the `(` at `open`, skipping strings,
+/// templates, and comments so a `)` inside them can't close the call early.
+/// `None` on unbalanced input.
+fn matching_paren(code: &str, open: usize) -> Option<usize> {
+    matching_close(code, open, b'(', b')')
+}
+
+/// Byte offset of the `close` matching the `open_byte` at `open`, skipping
+/// strings, templates, and comments. `None` on unbalanced input.
+fn matching_close(code: &str, open: usize, open_byte: u8, close: u8) -> Option<usize> {
+    let b = code.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = open;
+    while i < b.len() {
+        match b[i] {
+            b'\'' | b'"' => i = skip_js_string(code, i)?,
+            b'`' => i = skip_js_template(code, i)?,
+            b'/' => match b.get(i + 1) {
+                Some(b'/') | Some(b'*') => i = skip_js_ws_and_comments(code, i),
+                _ => i += 1,
+            },
+            c if c == open_byte => {
+                depth += 1;
+                i += 1;
+            }
+            c if c == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Byte offset just past the closing quote of the `'…'`/`"…"` string opening
+/// at `open`. Byte-wise: multi-byte UTF-8 continuation bytes never equal an
+/// ASCII quote, so `i` only ever lands on boundaries. `None` when the string
+/// never closes.
+fn skip_js_string(code: &str, open: usize) -> Option<usize> {
+    let b = code.as_bytes();
+    let quote = b[open];
+    let mut i = open + 1;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            c if c == quote => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Byte offset just past the closing backtick of the template literal opening
+/// at `open`, tracking `${ … }` interpolation nesting (with strings, nested
+/// templates, and comments inside interpolations). Frame-depth-capped;
+/// `None` on unbalanced input.
+fn skip_js_template(code: &str, open: usize) -> Option<usize> {
+    const MAX_FRAMES: usize = 16;
+    enum Frame {
+        Content,
+        Interp { brace_depth: i32 },
+    }
+    let b = code.as_bytes();
+    let mut stack: Vec<Frame> = vec![Frame::Content];
+    let mut i = open + 1;
+    while !stack.is_empty() {
+        if stack.len() > MAX_FRAMES {
+            return None;
+        }
+        let c = *b.get(i)?;
+        match (stack.last_mut()?, c) {
+            (Frame::Content, b'`') => {
+                stack.pop();
+                i += 1;
+                if stack.is_empty() {
+                    return Some(i);
+                }
+            }
+            (Frame::Content, b'\\') => i += 2,
+            (Frame::Content, b'$') if b.get(i + 1) == Some(&b'{') => {
+                stack.push(Frame::Interp { brace_depth: 0 });
+                i += 2;
+            }
+            (Frame::Interp { brace_depth }, b'{') => {
+                *brace_depth += 1;
+                i += 1;
+            }
+            (Frame::Interp { brace_depth }, b'}') => {
+                if *brace_depth == 0 {
+                    stack.pop();
+                } else {
+                    *brace_depth -= 1;
+                }
+                i += 1;
+            }
+            (Frame::Interp { .. }, b'\'' | b'"') => i = skip_js_string(code, i)?,
+            (Frame::Interp { .. }, b'`') => {
+                stack.push(Frame::Content);
+                i += 1;
+            }
+            (Frame::Interp { .. }, b'/') if b.get(i + 1) == Some(&b'/') => {
+                while i < b.len() && !is_line_terminator_start(b, i) {
+                    i += 1;
+                }
+            }
+            (Frame::Interp { .. }, b'/') if b.get(i + 1) == Some(&b'*') => {
+                i = code[i + 2..].find("*/").map(|p| i + 2 + p + 2)?;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Advance past whitespace and both comment forms. Stops at the first
+/// non-ws/non-comment byte (or end of input).
+fn skip_js_ws_and_comments(code: &str, mut i: usize) -> usize {
+    let b = code.as_bytes();
+    loop {
+        match b.get(i) {
+            Some(c) if c.is_ascii_whitespace() => i += 1,
+            Some(b'/') if b.get(i + 1) == Some(&b'/') => {
+                i += 2;
+                while i < b.len() && !is_line_terminator_start(b, i) {
+                    i += 1;
+                }
+            }
+            Some(b'/') if b.get(i + 1) == Some(&b'*') => match code[i + 2..].find("*/") {
+                Some(p) => i = i + 2 + p + 2,
+                None => return b.len(),
+            },
+            _ => return i,
+        }
+    }
+}
+
+/// True when the byte at `i` begins a JS LineTerminator: LF, CR, U+2028 (LS),
+/// or U+2029 (PS). ECMA-262 line comments end at ANY of these — a scanner
+/// stopping only at LF would swallow the real code that follows an LS/PS/CR.
+fn is_line_terminator_start(b: &[u8], i: usize) -> bool {
+    match b.get(i) {
+        Some(b'\n' | b'\r') => true,
+        Some(0xE2) => {
+            b.get(i + 1) == Some(&0x80) && matches!(b.get(i + 2), Some(0xA8 | 0xA9))
+        }
+        _ => false,
+    }
+}
+
+/// True when `word` sits at `at` as a standalone JS identifier: the
+/// surrounding bytes are not identifier characters (ASCII ident chars, `$`,
+/// or any non-ASCII byte — JS identifiers allow Unicode, and treating every
+/// non-ASCII byte as an ident char is the safe over-approximation).
+fn is_js_word_at(b: &[u8], at: usize, word: &[u8]) -> bool {
+    if b.len() < at + word.len() || &b[at..at + word.len()] != word {
+        return false;
+    }
+    let after = at + word.len();
+    (at == 0 || !is_js_ident_byte(b[at - 1])) && (after >= b.len() || !is_js_ident_byte(b[after]))
+}
+
+fn is_js_ident_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80
+}
+
+fn js_ident_end(b: &[u8], at: usize) -> usize {
+    let mut end = at;
+    while end < b.len() && is_js_ident_byte(b[end]) {
+        end += 1;
+    }
+    end
+}
+
+/// True when `raw_input` is an opencode code-mode `execute` payload whose
+/// `code` string announces a `delegate_to_agent` call reachable via a `tools`
+/// accessor. False for anything else — including other `execute` calls and
+/// code that only *mentions* the method inside a string or comment.
+fn code_mode_delegation_code(raw_input: &str) -> bool {
+    // Cheap pre-gate: any JSON payload carrying a `code` key contains the
+    // literal `"code"` bytes, so skipping the parse for payloads that don't
+    // keeps this branch free for every non-code-mode tool call.
+    if !raw_input.contains("\"code\"") {
+        return false;
+    }
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw_input) else {
+        return false;
+    };
+    parsed
+        .get("code")
+        .and_then(|v| v.as_str())
+        .is_some_and(|code| code_mode_call_site(code).is_some())
+}
+
+/// Build the broker key from a code-mode `execute` payload: locate the
+/// `delegate_to_agent(` call span, then read `agent_type`/`working_dir`/`task`
+/// out of its argument region. Every ambiguity returns `None` — see the
+/// module doc — so the extraction can only produce a key byte-identical to
+/// what the MCP listener receives, or no key at all.
+fn extract_code_mode_match_key(raw_input: Option<&str>) -> Option<DelegationMatchKey> {
+    let raw = raw_input?;
+    // Same cheap pre-gate as [`code_mode_delegation_code`]: this runs after
+    // the args-shape extractor already parsed the payload once.
+    if !raw.contains("\"code\"") {
+        return None;
+    }
+    let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let code = parsed.get("code")?.as_str()?;
+    let site = code_mode_call_site(code)?;
+    if !site.readable {
+        return None;
+    }
+    let (open, close) = (site.open, site.close);
+    let region = (open + 1, close);
+    // Only an argument list holding exactly one object literal passes that
+    // literal to the listener — see [`code_mode_single_object_argument`].
+    if !code_mode_single_object_argument(code, open, close) {
+        return None;
+    }
+    // Syntax whose contribution the scanner cannot evaluate (spread, computed
+    // keys, escaped quoted keys, conditionals) could hide an `assistant_id` or
+    // change any value — the whole extraction degrades to unkeyed, see
+    // [`code_mode_args_transparent`].
+    if !code_mode_args_transparent(code, region) {
+        return None;
+    }
+    // Mixed-shape guard: a present `assistant_id` resolves to Assistant(id)
+    // on the MCP side and wins over `agent_type`; guessing Agent(…) from the
+    // code text would mint a keyed entry no round-trip can ever claim.
+    // Quoted spellings (`"assistant_id": 3`) are keys too — see
+    // [`code_mode_find_key`].
+    if code_mode_find_key(code, region, b"assistant_id").is_some() {
+        return None;
+    }
+    let agent_type_at = code_mode_find_key(code, region, b"agent_type")?;
+    let agent_type = object_string_value(code, agent_type_at)?;
+    // `working_dir` is OPTIONAL in the key: ABSENT yields `working_dir:
+    // None`, but present-and-unreadable (backslash path, template, variable,
+    // concatenation) must bail the WHOLE key — the MCP side sees Some(…),
+    // so a None-keyed entry could never match.
+    let working_dir = match code_mode_find_key(code, region, b"working_dir") {
+        Some(at) => Some(object_string_value(code, at)?),
+        None => None,
+    };
+    let task_at = code_mode_find_key(code, region, b"task")?;
+    let task = object_task_value(code, task_at)?;
+    let args = serde_json::json!({ "agent_type": agent_type });
+    // The same parser the MCP listener dispatches the call with, so this
+    // target equals `DelegationRequest::target()` for the same call.
+    let target = crate::acp::delegation::types::delegation_target_from_args(&args).ok()?;
+    Some(DelegationMatchKey {
+        target,
+        task,
+        working_dir,
+    })
+}
+
+/// True when the call's argument list `(open, close)` holds exactly ONE
+/// object literal (a trailing comma aside): its first token is `{` and the
+/// matching `}` is followed only by whitespace/comments before the call's
+/// `)`. Any other shape passes something the literal alone does not
+/// determine — `c ? {…} : {…}` and `x || {…}` evaluate to whichever operand
+/// wins at runtime, `{…}.y` to a property of it, a bare variable to its
+/// runtime value — and opencode rejects a second argument object outright
+/// ("expects at most one input object") before any MCP call.
+fn code_mode_single_object_argument(code: &str, open: usize, close: usize) -> bool {
+    let b = code.as_bytes();
+    let start = skip_js_ws_and_comments(code, open + 1);
+    if b.get(start) != Some(&b'{') {
+        return false;
+    }
+    let Some(object_close) = matching_close(code, start, b'{', b'}') else {
+        return false;
+    };
+    let mut after = skip_js_ws_and_comments(code, object_close + 1);
+    if b.get(after) == Some(&b',') {
+        after = skip_js_ws_and_comments(code, after + 1);
+    }
+    after == close
+}
+
+/// The argument keys the scanner reads. A bare one not followed by `:` is a
+/// SHORTHAND property (or a variable in value position): its value is the
+/// variable's runtime value, and a shorthand AFTER an explicit spelling
+/// overrides it.
+const CODE_MODE_ARG_KEYS: [&[u8]; 4] = [b"agent_type", b"task", b"working_dir", b"assistant_id"];
+
+/// Conservative pre-pass over the argument region: `false` when the region
+/// contains syntax whose effect the scanner cannot evaluate. Spread
+/// (`...base`) may carry an `assistant_id`; a `[` covers computed keys
+/// (`["assistant_id"]: 3`) and array values; a quoted KEY containing a
+/// backslash evaluates to an unknowable spelling (it could BE the key being
+/// searched for); a `(`/`)` or a non-comment `/` is a call/parenthesized/
+/// division/regex expression the scanner cannot evaluate (and a regex body
+/// could feed quotes or braces to the string/template arms); a `?` is a
+/// conditional, optional chain or `??` (a ternary also puts a value string in
+/// front of a `:`, where it reads as a key); a `\` outside a string is a
+/// Unicode-escaped identifier (`\u0074ask` IS `task`); a non-ASCII byte
+/// outside a string is a Unicode identifier or whitespace (`U+00A0`,
+/// `U+FEFF`, `U+2028`) the ASCII word matcher cannot delimit; a bare argument
+/// key is a SHORTHAND property whose value is the variable's runtime value.
+/// Each degrades to the unkeyed path.
+fn code_mode_args_transparent(code: &str, region: (usize, usize)) -> bool {
+    let b = code.as_bytes();
+    let (start, end) = region;
+    let mut i = start;
+    'scan: while i < end {
+        match b[i] {
+            b'\'' | b'"' => {
+                let Some(str_end) = skip_js_string(code, i) else {
+                    return false;
+                };
+                let after = skip_js_ws_and_comments(code, str_end);
+                if b.get(after) == Some(&b':') && code[i + 1..str_end - 1].contains('\\') {
+                    return false;
+                }
+                i = str_end;
+            }
+            b'`' => {
+                let Some(t) = skip_js_template(code, i) else {
+                    return false;
+                };
+                i = t;
+            }
+            b'/' if b.get(i + 1) == Some(&b'/') || b.get(i + 1) == Some(&b'*') => {
+                i = skip_js_ws_and_comments(code, i);
+            }
+            b'/' => return false,
+            b'(' | b')' => return false,
+            b'[' | b'?' | b'\\' => return false,
+            0x80..=0xFF => return false,
+            b'.' if b.get(i + 1) == Some(&b'.') && b.get(i + 2) == Some(&b'.') => return false,
+            _ => {
+                for key in CODE_MODE_ARG_KEYS {
+                    if !is_js_word_at(b, i, key) {
+                        continue;
+                    }
+                    let after = skip_js_ws_and_comments(code, i + key.len());
+                    if b.get(after) != Some(&b':') {
+                        return false;
+                    }
+                    i += key.len();
+                    continue 'scan;
+                }
+                i += 1;
+            }
+        }
+    }
+    true
+}
+
+/// Byte offset of the VALUE of a top-level `key:` inside the `(start, end)`
+/// byte region, skipping strings, templates, and comments so only real-code
+/// occurrences count. Both spellings of a key match — bare `agent_type:` and
+/// quoted `"agent_type":` / `'agent_type':` — but only escape-free quoted
+/// keys (an escaped quoted key evaluates to an unknowable spelling, and
+/// guessing could match a key that is really something else) and only at
+/// brace depth 1, i.e. directly inside the call's argument object: the MCP
+/// listener reads FLAT args, so a same-named key nested in a sub-object is
+/// invisible to it too; scanning STOPS when that object closes (depth 1→0),
+/// so a second argument object can never override the first's keys.
+/// Duplicate keys take the LAST occurrence — the spelling
+/// the JS runtime (and the serde JSON path) actually uses. Missing a key
+/// degrades to unkeyed; seeing a wrong one could mint a key nothing can
+/// claim. `None` when the key is absent or not followed by `:`.
+fn code_mode_find_key(code: &str, region: (usize, usize), key: &[u8]) -> Option<usize> {
+    let b = code.as_bytes();
+    let (start, end) = region;
+    let mut i = start;
+    let mut depth: usize = 0;
+    let mut found: Option<usize> = None;
+    while i < end {
+        match b[i] {
+            b'\'' | b'"' => {
+                let str_end = skip_js_string(code, i)?;
+                if depth == 1 && str_end >= i + 2 {
+                    let inner = &code[i + 1..str_end - 1];
+                    let after = skip_js_ws_and_comments(code, str_end);
+                    if b.get(after) == Some(&b':')
+                        && !inner.contains('\\')
+                        && inner.as_bytes() == key
+                    {
+                        found = Some(skip_js_ws_and_comments(code, after + 1));
+                    }
+                }
+                i = str_end;
+            }
+            b'`' => i = skip_js_template(code, i)?,
+            b'/' if b.get(i + 1) == Some(&b'/') || b.get(i + 1) == Some(&b'*') => {
+                i = skip_js_ws_and_comments(code, i);
+            }
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                if depth <= 1 {
+                    // This closes the call's argument object (or is a stray
+                    // close): everything after lies outside the flat args the
+                    // MCP listener reads, so a second object must not
+                    // contribute keys — last-wins applies within ONE object.
+                    break;
+                }
+                depth -= 1;
+                i += 1;
+            }
+            _ if depth == 1 && is_js_word_at(b, i, key) => {
+                let after = skip_js_ws_and_comments(code, i + key.len());
+                if b.get(after) == Some(&b':') {
+                    found = Some(skip_js_ws_and_comments(code, after + 1));
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    found
+}
+
+/// True when the value's last consumed byte is followed (past whitespace and
+/// comments) by `,` or `}` — i.e. the literal ends exactly where its object
+/// property ends. A literal followed by an operator (`"a" + b`, `` `a`.trim()
+/// ``) evaluates to something else at runtime, so the value must not be read
+/// as the property's contribution.
+fn value_ends_object_property(code: &str, end: usize) -> bool {
+    let after = skip_js_ws_and_comments(code, end);
+    matches!(code.as_bytes().get(after), Some(b',') | Some(b'}'))
+}
+
+/// The contents of the plain `'…'`/`"…"` string starting at `at`, plus the
+/// byte offset just past its closing quote. `None` for anything containing a
+/// backslash: the key must match what the MCP listener receives
+/// byte-for-byte, and these argument values are simple slugs/paths in
+/// practice — an escaped one is not worth guessing.
+fn plain_string_value_end(code: &str, at: usize) -> Option<(String, usize)> {
+    let b = code.as_bytes();
+    let quote = *b.get(at)?;
+    if quote != b'\'' && quote != b'"' {
+        return None;
+    }
+    let end = skip_js_string(code, at)?;
+    let inner = &code[at + 1..end - 1];
+    if inner.contains('\\') {
+        return None;
+    }
+    Some((inner.to_string(), end))
+}
+
+/// The evaluated `agent_type` / `working_dir` VALUE starting at `at`: an
+/// escape-free plain string that ends where its property ends. Anything else
+/// (template, variable, concatenation, number) yields `None`.
+fn object_string_value(code: &str, at: usize) -> Option<String> {
+    let (value, end) = plain_string_value_end(code, at)?;
+    if !value_ends_object_property(code, end) {
+        return None;
+    }
+    Some(value)
+}
+
+/// The evaluated `task` VALUE starting at `at`. Template literals go through
+/// [`template_literal_text_end`]; plain `'…'`/`"…"` strings are accepted only
+/// when escape-free (a value with a backslash could decode differently than
+/// the source suggests — bail to the unkeyed path instead). Anything else
+/// (numbers, shorthand, interpolation) yields `None`.
+fn object_task_value(code: &str, at: usize) -> Option<String> {
+    let (value, end) = match code.as_bytes().get(at) {
+        Some(b'`') => template_literal_text_end(code, at)?,
+        Some(b'\'') | Some(b'"') => plain_string_value_end(code, at)?,
+        _ => return None,
+    };
+    if !value_ends_object_property(code, end) {
+        return None;
+    }
+    Some(value)
+}
+
+/// The evaluated text of the template literal starting at `at`, plus the byte
+/// offset just past its closing backtick — the exact string the JS runtime
+/// passes to the MCP listener. That means the template's cooked text, not its
+/// source: `\n \t \r \b \f \v \0 \\ \` \' \" \$ \u{…} \uXXXX \xXX` decode,
+/// line continuations (`\` + CR/CRLF/LF) contribute nothing, and a BARE CR
+/// or CRLF is TV-normalized to a single LF — ECMA-262's normalization
+/// rewrites only those two, so U+2028/U+2029 pass through verbatim.
+/// `None` for `${…}` interpolations (the evaluated value
+/// differs from the source text), for any escape outside the minimal set,
+/// and for legacy octal — all degrade to the pre-existing unkeyed path.
+fn template_literal_text_end(code: &str, at: usize) -> Option<(String, usize)> {
+    let b = code.as_bytes();
+    let mut out = String::new();
+    let mut i = at + 1;
+    while i < b.len() {
+        match b[i] {
+            b'`' => return Some((out, i + 1)),
+            b'\\' => {
+                i += 1;
+                let e = *b.get(i)?;
+                i += 1;
+                match e {
+                    b'n' => out.push('\n'),
+                    b't' => out.push('\t'),
+                    b'r' => out.push('\r'),
+                    b'b' => out.push('\u{0008}'),
+                    b'f' => out.push('\u{000C}'),
+                    b'v' => out.push('\u{000B}'),
+                    b'0' => {
+                        if b.get(i).is_some_and(|c| c.is_ascii_digit()) {
+                            // Legacy octal (`\01` ≠ `\0` + `1`); not supported.
+                            return None;
+                        }
+                        out.push('\0');
+                    }
+                    b'\\' => out.push('\\'),
+                    b'`' => out.push('`'),
+                    b'$' => out.push('$'),
+                    b'\'' => out.push('\''),
+                    b'"' => out.push('"'),
+                    b'u' => {
+                        if b.get(i) == Some(&b'{') {
+                            let close = b[i..].iter().position(|&c| c == b'}')?;
+                            let digits = &b[i + 1..i + close];
+                            if digits.is_empty() || digits.len() > 6 {
+                                return None;
+                            }
+                            let mut v: u32 = 0;
+                            for &d in digits {
+                                v = v * 16 + (d as char).to_digit(16)?;
+                            }
+                            out.push(char::from_u32(v)?);
+                            i += close + 1;
+                        } else {
+                            let (v, next) = read_hex_digits(b, i, 4)?;
+                            out.push(char::from_u32(v)?);
+                            i = next;
+                        }
+                    }
+                    b'x' => {
+                        let (v, next) = read_hex_digits(b, i, 2)?;
+                        out.push(char::from_u32(v)?);
+                        i = next;
+                    }
+                    // Line continuations contribute nothing to the cooked text.
+                    b'\r' => {
+                        if b.get(i) == Some(&b'\n') {
+                            i += 1;
+                        }
+                    }
+                    b'\n' => {}
+                    _ => return None,
+                }
+            }
+            b'$' if b.get(i + 1) == Some(&b'{') => return None,
+            // A bare CR (or the CR of a CRLF) is TV-normalized to a single LF.
+            b'\r' => {
+                out.push('\n');
+                i += 1;
+                if b.get(i) == Some(&b'\n') {
+                    i += 1;
+                }
+            }
+            _ => {
+                // U+2028/U+2029 are JS line terminators but NOT TV-normalized
+                // (only CR and CRLF are); folding them to LF here would mint a
+                // key the MCP side never receives.
+                let ch = code[i..].chars().next()?;
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+    }
+    None
+}
+
+fn read_hex_digits(b: &[u8], at: usize, count: usize) -> Option<(u32, usize)> {
+    if at + count > b.len() {
+        return None;
+    }
+    let mut v: u32 = 0;
+    for k in 0..count {
+        v = v * 16 + (b[at + k] as char).to_digit(16)?;
+    }
+    Some((v, at + count))
 }
 
 /// True when an ACP `ToolCallUpdate.status` string is terminal for delegation
@@ -847,15 +1869,55 @@ async fn register_delegation_tool_call_from_event(
 #[cfg(test)]
 mod delegation_title_tests {
     use super::{extract_delegation_match_key, is_delegation_invocation};
+    use crate::acp::delegation::broker::DelegationMatchKey;
     use crate::models::AgentType;
 
     #[test]
     fn extract_match_key_pulls_agent_task_and_dir() {
         let raw = r#"{"agent_type":"codex","task":"smoke test","working_dir":"/tmp"}"#;
         let key = extract_delegation_match_key(Some(raw)).expect("key parses");
-        assert_eq!(key.agent_type, AgentType::Codex);
+        assert_eq!(
+            key.target,
+            crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex)
+        );
         assert_eq!(key.task, "smoke test");
         assert_eq!(key.working_dir.as_deref(), Some("/tmp"));
+    }
+
+    #[test]
+    fn an_assistant_call_is_keyed_by_its_assistant_never_its_agent_type() {
+        use crate::acp::delegation::types::DelegationTarget;
+        // The host may fill `agent_type` with anything when it names an
+        // assistant: the broker keys the call by the assistant, so must we.
+        for raw in [
+            r#"{"assistant_id":3,"task":"review"}"#,
+            r#"{"assistant_id":"3","agent_type":"codex","task":"review"}"#,
+            r#"{"params":{"input":{"assistant_id":3,"agent_type":"garbage","task":"review"}}}"#,
+        ] {
+            let key = extract_delegation_match_key(Some(raw)).expect("assistant key parses");
+            assert_eq!(key.target, DelegationTarget::Assistant(3), "{raw}");
+            assert_eq!(key.task, "review");
+        }
+        // An invalid id is no key at all (the listener refuses the call).
+        assert!(
+            extract_delegation_match_key(Some(r#"{"assistant_id":0,"task":"x"}"#)).is_none()
+        );
+    }
+
+    #[test]
+    fn an_assistant_call_is_recognized_by_its_shape() {
+        assert!(is_delegation_invocation(
+            "some host title",
+            Some(r#"{"assistant_id":3,"task":"review"}"#)
+        ));
+        assert!(is_delegation_invocation(
+            "some host title",
+            Some(r#"{"arguments":{"assistant_id":"3","task":"review"}}"#)
+        ));
+        assert!(!is_delegation_invocation(
+            "some host title",
+            Some(r#"{"assistant_id":3}"#)
+        ));
     }
 
     #[test]
@@ -889,7 +1951,10 @@ mod delegation_title_tests {
         // `findDelegationArgs` walker in delegated-sub-thread.tsx).
         let nested = r#"{"params":{"input":{"agent_type":"codex","task":"t","working_dir":"/w"}}}"#;
         let key = extract_delegation_match_key(Some(nested)).expect("nested key parses");
-        assert_eq!(key.agent_type, AgentType::Codex);
+        assert_eq!(
+            key.target,
+            crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex)
+        );
         assert_eq!(key.task, "t");
         assert_eq!(key.working_dir.as_deref(), Some("/w"));
 
@@ -914,7 +1979,10 @@ mod delegation_title_tests {
         let inner = r#"{"agent_type":"codex","task":"double"}"#;
         let double = serde_json::Value::String(inner.to_string()).to_string();
         let key = extract_delegation_match_key(Some(&double)).expect("double-encoded parses");
-        assert_eq!(key.agent_type, AgentType::Codex);
+        assert_eq!(
+            key.target,
+            crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex)
+        );
         assert_eq!(key.task, "double");
     }
 
@@ -989,6 +2057,530 @@ mod delegation_title_tests {
         // turn-cancel path), so it must not be treated as terminal here.
         assert!(!is_terminal(Some("canceled")));
         assert!(!is_terminal(Some("cancelled")));
+    }
+
+    // ── opencode 2.x code-mode (`execute` tool) recognition ────────────────
+
+    #[test]
+    fn recognizes_opencode_code_mode_execute_call() {
+        // opencode 2.x wraps MCP calls in its built-in `execute` tool: the
+        // title is "execute" and the real call lives in a JS string under
+        // `code`.
+        let raw = r#"{"code":"const res = await tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `smoke test` })"}"#;
+        assert!(is_delegation_invocation("execute", Some(raw)));
+        // Namespaced accessor form.
+        let raw2 = r#"{"code":"await tools.codeg_mcp.delegate_to_agent({agent_type:\"codex\",task:`t`})"}"#;
+        assert!(is_delegation_invocation("execute", Some(raw2)));
+        // Loose whitespace is still the same call site.
+        let raw3 = r#"{"code":"tools [ \"codeg-mcp\" ] . delegate_to_agent ( { agent_type: \"codex\", task: `t` } )"}"#;
+        assert!(is_delegation_invocation("execute", Some(raw3)));
+    }
+
+    #[test]
+    fn rejects_code_mode_shapes_that_are_not_calls() {
+        // Searching FOR the method is not calling it.
+        assert!(!is_delegation_invocation(
+            "execute",
+            Some(r#"{"code":"const q = tools.search({ query: \"delegate_to_agent\" })"}"#)
+        ));
+        // A comment mentioning the call shape registers nothing.
+        assert!(!is_delegation_invocation(
+            "execute",
+            Some(r#"{"code":"// tools[\"codeg-mcp\"].delegate_to_agent({agent_type:\"codex\",task:`t`})\nconst x = 1"}"#)
+        ));
+        // The call shape inside a string literal is data, not code.
+        assert!(!is_delegation_invocation(
+            "execute",
+            Some(r#"{"code":"const s = 'tools[\"codeg-mcp\"].delegate_to_agent({task:`t`})'"}"#)
+        ));
+        // No `code` field, not JSON, and other tools of the same host.
+        assert!(!is_delegation_invocation(
+            "execute",
+            Some(r#"{"input":"tools[\"codeg-mcp\"].delegate_to_agent({})"}"#)
+        ));
+        assert!(!is_delegation_invocation("execute", Some("not json")));
+        assert!(!is_delegation_invocation(
+            "execute",
+            Some(r#"{"code":"await tools[\"codeg-mcp\"].get_delegation_status({ handle: \"h\" })"}"#)
+        ));
+    }
+
+    #[test]
+    fn extracts_code_mode_key_from_template_task() {
+        let code = "const res = await tools[\"codeg-mcp\"].delegate_to_agent({\n  agent_type: \"codex\",\n  task: `帮我 review\n第二行`,\n  working_dir: \"/tmp/w\",\n})";
+        let raw = serde_json::json!({ "code": code }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("code-mode key parses");
+        assert_eq!(
+            key.target,
+            crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex)
+        );
+        assert_eq!(key.task, "帮我 review\n第二行");
+        assert_eq!(key.working_dir.as_deref(), Some("/tmp/w"));
+    }
+
+    #[test]
+    fn code_mode_key_unescapes_minimal_js_escapes() {
+        // `\n` in the template SOURCE is a real newline after JS evaluation —
+        // the key must match what the MCP listener receives, not the source.
+        let code = r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `line1\nline2\tend` })"#;
+        let raw = serde_json::json!({ "code": code }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("escaped key parses");
+        assert_eq!(key.task, "line1\nline2\tend");
+    }
+
+    #[test]
+    fn code_mode_key_accepts_escape_free_quoted_task() {
+        // A quoted string with no backslashes evaluates byte-identically, so
+        // it keys like a template would.
+        let code = r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "plain task" })"#;
+        let raw = serde_json::json!({ "code": code }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("quoted key parses");
+        assert_eq!(key.task, "plain task");
+        // …but an escaped quoted string bails (unkeyed) instead of guessing.
+        let escaped = r#"{"code":"tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: \"a\\nb\" })"}"#;
+        assert!(extract_delegation_match_key(Some(escaped)).is_none());
+    }
+
+    #[test]
+    fn code_mode_key_bails_on_ambiguity() {
+        // Interpolation evaluates differently from the source text.
+        let interp = r#"{"code":"tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `sum ${1 + 1}` })"}"#;
+        assert!(extract_delegation_match_key(Some(interp)).is_none());
+        // Unknown escape → bail rather than guess. (`\\q` in the JSON string
+        // is the JS source's `\q`.)
+        let unknown_escape = r#"{"code":"tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `a\\qb` })"}"#;
+        assert!(extract_delegation_match_key(Some(unknown_escape)).is_none());
+        // Mixed shape: `assistant_id` wins on the MCP side; guessing
+        // Agent(…) here would mint an unclaimable keyed entry.
+        let mixed = r#"{"code":"tools[\"codeg-mcp\"].delegate_to_agent({ assistant_id: 3, agent_type: \"codex\", task: `t` })"}"#;
+        assert!(extract_delegation_match_key(Some(mixed)).is_none());
+        // No target / unknown target → no key.
+        let no_target = r#"{"code":"tools[\"codeg-mcp\"].delegate_to_agent({ task: `t` })"}"#;
+        assert!(extract_delegation_match_key(Some(no_target)).is_none());
+        let bad_target = r#"{"code":"tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"garbage\", task: `t` })"}"#;
+        assert!(extract_delegation_match_key(Some(bad_target)).is_none());
+        // The invocation is still RECOGNIZED in every ambiguous shape, so the
+        // id registers as an unkeyed candidate (post-budget FIFO claim).
+        assert!(is_delegation_invocation("execute", Some(interp)));
+        assert!(is_delegation_invocation("execute", Some(unknown_escape)));
+        assert!(is_delegation_invocation("execute", Some(mixed)));
+        assert!(is_delegation_invocation("execute", Some(no_target)));
+    }
+
+    #[test]
+    fn code_mode_region_scan_does_not_bleed_across_calls() {
+        // A second tool call AFTER the delegate call carries its own `task:`
+        // field; keys must be read only within the delegate call's parens.
+        let code = "tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `t1` }); tools[\"codeg-mcp\"].get_delegation_status({ task: `other`, handle: \"h\" })";
+        let raw = serde_json::json!({ "code": code }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("key parses");
+        assert_eq!(key.task, "t1");
+    }
+
+    #[test]
+    fn code_mode_key_matches_the_mcp_side_for_the_same_call() {
+        // 对拍: the same logical delegation expressed twice — once as the
+        // evaluated MCP `tools/call` args (how `handle_request` builds the
+        // request key), once as opencode's code-mode ACP payload — must
+        // produce byte-identical keys.
+        use crate::acp::delegation::types::delegation_target_from_args;
+
+        let task = "review 对拍\nsecond\tline ✓";
+        let working_dir = "/tmp/对拍";
+        let mcp_args = serde_json::json!({
+            "agent_type": "codex",
+            "task": task,
+            "working_dir": working_dir,
+        });
+        let request_key = DelegationMatchKey {
+            target: delegation_target_from_args(&mcp_args).unwrap(),
+            task: task.to_string(),
+            working_dir: Some(working_dir.to_string()),
+        };
+        let code = r#"await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", working_dir: "/tmp/对拍", task: `review 对拍\nsecond\tline ✓` })"#;
+        let raw = serde_json::json!({ "code": code }).to_string();
+        let acp_key = extract_delegation_match_key(Some(&raw)).expect("acp key parses");
+        assert_eq!(acp_key, request_key);
+
+        // U+2028/U+2029 pass through BOTH sides verbatim (ECMA-262
+        // TV-normalizes only CR/CRLF), so the keys still match byte-for-byte.
+        let task_ls = "seg\u{2028}a\u{2029}b";
+        let mcp_args = serde_json::json!({ "agent_type": "codex", "task": task_ls });
+        let request_key = DelegationMatchKey {
+            target: delegation_target_from_args(&mcp_args).unwrap(),
+            task: task_ls.to_string(),
+            working_dir: None,
+        };
+        let code_ls = "tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `seg\u{2028}a\u{2029}b` })";
+        let raw = serde_json::json!({ "code": code_ls }).to_string();
+        let acp_key = extract_delegation_match_key(Some(&raw)).expect("ls acp key parses");
+        assert_eq!(acp_key, request_key);
+    }
+
+    #[test]
+    fn code_mode_key_bails_when_working_dir_present_but_unreadable() {
+        // Present-and-unreadable must bail the WHOLE key: the MCP side sees
+        // Some(dir), so a None-keyed entry could never be claimed. Absent
+        // `working_dir` stays keyed with working_dir None.
+        let cases = [
+            // JS source `working_dir: "C:\\proj"` — an escaped (unreadable) value.
+            r#"{ agent_type: "codex", working_dir: "C:\\proj", task: `t` }"#,
+            r#"{ agent_type: "codex", working_dir: `${cwd}/proj`, task: `t` }"#,
+            r#"{ agent_type: "codex", working_dir: projectDir, task: `t` }"#,
+            r#"{ agent_type: "codex", working_dir: "/tmp" + "/w", task: `t` }"#,
+        ];
+        for code in cases {
+            let raw =
+                serde_json::json!({ "code": format!("tools[\"codeg-mcp\"].delegate_to_agent({code})") })
+                    .to_string();
+            assert!(
+                extract_delegation_match_key(Some(&raw)).is_none(),
+                "expected unkeyed for {code}"
+            );
+            assert!(is_delegation_invocation("execute", Some(&raw)));
+        }
+        let absent = r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t` })"#;
+        let raw = serde_json::json!({ "code": absent }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("absent working_dir keys");
+        assert_eq!(key.working_dir, None);
+        assert_eq!(key.task, "t");
+    }
+
+    #[test]
+    fn code_mode_key_bails_when_value_continues_past_literal() {
+        // A literal followed by an operator evaluates to something else at
+        // runtime; reading the literal alone would mint a wrong key.
+        let cases = [
+            r#"{ agent_type: "codex", task: "a" + b }"#,
+            r#"{ agent_type: "codex", task: `a`.trim() }"#,
+            r#"{ agent_type: "co" + "dex", task: `t` }"#,
+            r#"{ agent_type: "codex", working_dir: "/a" + suffix, task: `t` }"#,
+        ];
+        for code in cases {
+            let raw =
+                serde_json::json!({ "code": format!("tools[\"codeg-mcp\"].delegate_to_agent({code})") })
+                    .to_string();
+            assert!(
+                extract_delegation_match_key(Some(&raw)).is_none(),
+                "expected unkeyed for {code}"
+            );
+            assert!(is_delegation_invocation("execute", Some(&raw)));
+        }
+    }
+
+    #[test]
+    fn code_mode_key_bails_when_args_syntax_is_unreadable() {
+        // A shorthand property evaluates to the variable's runtime value
+        // (keyed-with-None could never be claimed by THIS call's round-trip
+        // and would poison the FIFO pool); a nested call/parenthesized
+        // expression and a regex literal are expressions the scanner cannot
+        // evaluate — and a regex body could feed quotes/braces to the
+        // string/template arms.
+        let cases = [
+            r#"{ agent_type: "codex", task: `t`, working_dir }"#,
+            r#"{ agent_type: "codex", task: `t`, assistant_id }"#,
+            r#"{ agent_type: pick("codex"), task: `t` }"#,
+            r#"{ agent_type: "codex", task: `t`, flag: /}/ }"#,
+        ];
+        for code in cases {
+            let raw =
+                serde_json::json!({ "code": format!("tools[\"codeg-mcp\"].delegate_to_agent({code})") })
+                    .to_string();
+            assert!(
+                extract_delegation_match_key(Some(&raw)).is_none(),
+                "expected unkeyed for {code}"
+            );
+            assert!(is_delegation_invocation("execute", Some(&raw)));
+        }
+    }
+
+    #[test]
+    fn code_mode_key_needs_exactly_one_object_literal_argument() {
+        // What runs is whatever the argument evaluates to, which the first
+        // literal in it does not determine; a second argument object makes
+        // opencode throw "expects at most one input object" before any MCP
+        // call. Each stays a recognized (unkeyed) delegation.
+        let cases = [
+            r#"tools["codeg-mcp"].delegate_to_agent(c ? { agent_type: "codex", task: `a` } : { agent_type: "codex", task: `b` })"#,
+            r#"tools["codeg-mcp"].delegate_to_agent(x || { agent_type: "codex", task: `decoy` })"#,
+            r#"tools["codeg-mcp"].delegate_to_agent(x ?? { agent_type: "codex", task: `decoy` })"#,
+            r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t` }.y)"#,
+            r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t` }, { agent_type: "goose", task: `u` })"#,
+            r#"tools["codeg-mcp"].delegate_to_agent(args)"#,
+        ];
+        for code in cases {
+            let raw = serde_json::json!({ "code": code }).to_string();
+            assert!(
+                extract_delegation_match_key(Some(&raw)).is_none(),
+                "expected unkeyed for {code}"
+            );
+            assert!(is_delegation_invocation("execute", Some(&raw)));
+        }
+        // A trailing comma still leaves exactly one argument.
+        let trailing = r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t` }, /* end */ )"#;
+        let raw = serde_json::json!({ "code": trailing }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("trailing comma keys");
+        assert_eq!(key.task, "t");
+    }
+
+    #[test]
+    fn code_mode_recognition_is_scoped_to_the_execute_tool() {
+        // Another tool's `code` argument — a Playwright script that mocks the
+        // call, say — is no delegation: registering it would let a real
+        // delegation with the same key claim its id.
+        let raw = serde_json::json!({
+            "code": "async page => { const tools = {'codeg-mcp': {delegate_to_agent: async x => x}}; await tools['codeg-mcp'].delegate_to_agent({agent_type:'codex',task:'review'}); }"
+        })
+        .to_string();
+        for title in ["mcp__playwright__browser_run_code", "browser_run_code", ""] {
+            assert!(!is_delegation_invocation(title, Some(&raw)), "title {title:?}");
+        }
+        assert!(is_delegation_invocation("execute", Some(&raw)));
+        assert!(is_delegation_invocation(" Execute ", Some(&raw)));
+    }
+
+    #[test]
+    fn code_mode_declines_a_script_with_a_slash_before_the_call() {
+        // A regex is indistinguishable from division to the scanner, and
+        // `/'/` opens a "string" that skips the real call and closes in a
+        // later comment, which then reads as a call site.
+        let code = "const re = /'/;\nawait tools[\"codeg-mcp\"].delegate_to_agent({agent_type:\"codex\",task:\"real\"});\n// here's an example: tools[\"codeg-mcp\"].delegate_to_agent({agent_type:\"codex\",task:\"decoy\"})";
+        let raw = serde_json::json!({ "code": code }).to_string();
+        assert!(extract_delegation_match_key(Some(&raw)).is_none());
+        assert!(!is_delegation_invocation("execute", Some(&raw)));
+
+        // After a call that runs first, a slash changes nothing.
+        let after = r#"const r = await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "t" }); return r.ms / 1000"#;
+        let raw = serde_json::json!({ "code": after }).to_string();
+        assert_eq!(extract_delegation_match_key(Some(&raw)).expect("keys").task, "t");
+
+        // After a call that may not run, it hides whether another site exists.
+        let unsure = r#"if (bad) { await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "t" }) } const n = 4 / 2"#;
+        let raw = serde_json::json!({ "code": unsure }).to_string();
+        assert!(extract_delegation_match_key(Some(&raw)).is_none());
+        assert!(is_delegation_invocation("execute", Some(&raw)));
+    }
+
+    #[test]
+    fn code_mode_keys_the_first_of_several_calls_only_when_it_runs_first() {
+        let key_task = |code: &str| {
+            let raw = serde_json::json!({ "code": code }).to_string();
+            assert!(is_delegation_invocation("execute", Some(&raw)), "{code}");
+            extract_delegation_match_key(Some(&raw)).map(|k| k.task)
+        };
+        // Runs first: in order, or eagerly side by side.
+        assert_eq!(
+            key_task(r#"await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#).as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            key_task(r#"const [a, b] = await Promise.allSettled([tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }), tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })])"#).as_deref(),
+            Some("A")
+        );
+        // A lone call keys wherever it sits: if it runs, it is the call.
+        assert_eq!(
+            key_task(r#"if (failed) { await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "fix" }) }"#).as_deref(),
+            Some("fix")
+        );
+        assert_eq!(
+            key_task(r#"const r = await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" }); return `${r.task_id}`"#).as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            key_task(r#"await Promise.allSettled([tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }), tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })]).then(rs => rs)"#).as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            key_task(r#"return await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" })"#).as_deref(),
+            Some("A")
+        );
+        // The first site may not run while a later one does: a branch, a
+        // deferred function or parameter default, a destructuring default, or
+        // a `${…}` the count cannot see; one case per construct.
+        for code in [
+            r#"const later = (x = tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "decoy" })) => x; await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "real" })"#,
+            r#"const later = async (x = tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "decoy" })) => x; await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "real" })"#,
+            r#"function later(x = tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "decoy" })) { return x } await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "real" })"#,
+            r#"const [a = tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "decoy" })] = [1]; await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "real" })"#,
+            r#"if (false) { await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "decoy" }) } const text = `${await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "real" })}`"#,
+            r#"const text = `${await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "real" })}`; if (c) { await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "decoy" }) }"#,
+            r#"c && await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"c || await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"switch (c) {} await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"for (const x of xs) {} await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"while (false) {} await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"do {} while (false); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"try {} catch (e) {} await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"const t = `${await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "real" })}`; return t; await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"const f = (x = tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "decoy" }), y = 1 / 2) => x; await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "real" })"#,
+            r#"if (false) { await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "decoy" }) } await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "real" })"#,
+            r#"c ? tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }) : tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"if (c) await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); else await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"const later = () => tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }); await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+            r#"async function go() { await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "A" }) } await tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: "B" })"#,
+        ] {
+            assert_eq!(key_task(code), None, "{code}");
+        }
+    }
+
+    #[test]
+    fn code_mode_key_bails_when_later_syntax_can_override_or_hide_a_key() {
+        // Each passes a different `task`/`agent_type` at runtime than an
+        // earlier explicit spelling: a later shorthand, a Unicode-escaped key
+        // (`\u0074ask` IS `task`), a ternary (whose string reads like a key
+        // before its `:`), an optional chain, and a duplicate key behind
+        // non-ASCII whitespace the word matcher cannot see.
+        let cases = [
+            r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "decoy", task })"#,
+            r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "t", agent_type })"#,
+            r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: "decoy", \u0074ask: "real" })"#,
+            r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: c ? "task" : "real" })"#,
+            r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: c ? "agent_type" : "codex", task: "t" })"#,
+            r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: obj?.task })"#,
+            "tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: \"decoy\",\u{a0}task: \"real\" })",
+            "tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: \"decoy\",\u{feff}task: \"real\" })",
+        ];
+        for code in cases {
+            let raw = serde_json::json!({ "code": code }).to_string();
+            assert!(
+                extract_delegation_match_key(Some(&raw)).is_none(),
+                "expected unkeyed for {code}"
+            );
+            assert!(is_delegation_invocation("execute", Some(&raw)));
+        }
+    }
+
+    #[test]
+    fn code_mode_line_comments_end_at_every_js_line_terminator() {
+        // ECMA-262 line comments end at CR, LF, U+2028 and U+2029; a scanner
+        // stopping only at LF would swallow the real code after the others.
+        let cr = "tools[\"codeg-mcp\"].delegate_to_agent({ // pick\r agent_type: \"codex\", task: `t` })";
+        let raw = serde_json::json!({ "code": cr }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("CR comment ends");
+        assert_eq!(key.task, "t");
+
+        let ls = "// delegate\u{2028}await tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `t` })";
+        let raw = serde_json::json!({ "code": ls }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("LS comment ends");
+        assert_eq!(key.task, "t");
+
+        // Inside the argument object the terminator is non-ASCII code the word
+        // matcher cannot delimit, so the key degrades rather than guesses.
+        let ls_in_args = "tools[\"codeg-mcp\"].delegate_to_agent({ // pick\u{2028} agent_type: \"codex\", task: `t` })";
+        let raw = serde_json::json!({ "code": ls_in_args }).to_string();
+        assert!(extract_delegation_match_key(Some(&raw)).is_none());
+        assert!(is_delegation_invocation("execute", Some(&raw)));
+    }
+
+    #[test]
+    fn code_mode_key_accepts_comments_around_values() {
+        // Comments between a value and its property terminator (or between
+        // properties) are whitespace; they must not break a readable call.
+        let code = r#"tools["codeg-mcp"].delegate_to_agent({
+  // choose the agent
+  agent_type: "codex", /* trailing */ task: `t` /* last */, // done
+})"#;
+        let raw = serde_json::json!({ "code": code }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("commented form parses");
+        assert_eq!(key.task, "t");
+        assert_eq!(
+            key.target,
+            crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex)
+        );
+    }
+
+    #[test]
+    fn code_mode_assistant_id_guard_covers_every_spelling() {
+        // Bare numeric, quoted-key, and quoted-key+quoted-value spellings all
+        // resolve to Assistant(…) on the MCP side; no Agent(…) guess may key.
+        let bare = r#"tools["codeg-mcp"].delegate_to_agent({ assistant_id: 3, task: `t` })"#;
+        let quoted = r#"tools["codeg-mcp"].delegate_to_agent({ "assistant_id": 3, task: `t` })"#;
+        let quoted_value = r#"tools["codeg-mcp"].delegate_to_agent({ "assistant_id": "3", task: `t` })"#;
+        for code in [bare, quoted, quoted_value] {
+            let raw = serde_json::json!({ "code": code }).to_string();
+            assert!(
+                extract_delegation_match_key(Some(&raw)).is_none(),
+                "expected unkeyed for {code}"
+            );
+            assert!(is_delegation_invocation("execute", Some(&raw)));
+        }
+        // Computed key and spread are unknowable syntax: the transparency
+        // pre-pass degrades the whole region.
+        let computed =
+            r#"tools["codeg-mcp"].delegate_to_agent({ ["assistant_id"]: 3, agent_type: "codex", task: `t` })"#;
+        let spread = r#"tools["codeg-mcp"].delegate_to_agent({ ...base, task: `t` })"#;
+        for code in [computed, spread] {
+            let raw = serde_json::json!({ "code": code }).to_string();
+            assert!(
+                extract_delegation_match_key(Some(&raw)).is_none(),
+                "expected unkeyed for {code}"
+            );
+            assert!(is_delegation_invocation("execute", Some(&raw)));
+        }
+    }
+
+    #[test]
+    fn code_mode_key_reads_quoted_keys_and_ignores_nested_ones() {
+        // Quoted property keys are real keys too.
+        let quoted =
+            r#"tools["codeg-mcp"].delegate_to_agent({ "agent_type": "codex", 'task': "plain" })"#;
+        let raw = serde_json::json!({ "code": quoted }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("quoted-key form parses");
+        assert_eq!(key.task, "plain");
+        assert_eq!(
+            key.target,
+            crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex)
+        );
+
+        // A same-named key nested in a sub-object is invisible to the MCP
+        // listener (it reads flat args), so it must not be read here either —
+        // in either source order.
+        let nested = r#"tools["codeg-mcp"].delegate_to_agent({
+  meta: { agent_type: "zzz", task: `decoy` },
+  agent_type: "codex",
+  task: `real`,
+})"#;
+        let raw = serde_json::json!({ "code": nested }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("nested form parses");
+        assert_eq!(key.task, "real");
+        assert_eq!(
+            key.target,
+            crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex)
+        );
+        let nested_rev = r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `real`, meta: { task: `decoy`, agent_type: "zzz" } })"#;
+        let raw = serde_json::json!({ "code": nested_rev }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("nested-rev form parses");
+        assert_eq!(key.task, "real");
+    }
+
+    #[test]
+    fn code_mode_template_task_normalizes_line_terminators() {
+        // The JS runtime TV-normalizes bare line terminators in template
+        // literals to a single LF (CRLF and CR included); the key must be
+        // built from the COOKED text the MCP listener receives.
+        let code = "tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `a\r\nb\rc` })";
+        let raw = serde_json::json!({ "code": code }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("crlf key parses");
+        assert_eq!(key.task, "a\nb\nc");
+
+        // U+2028/U+2029 are JS line terminators but NOT TV-normalized
+        // (ECMA-262 rewrites only CR and CRLF); they pass through verbatim.
+        let ls = "tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `a\u{2028}b` })";
+        let raw = serde_json::json!({ "code": ls }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("LS key parses");
+        assert_eq!(key.task, "a\u{2028}b");
+
+        let ps = "tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `a\u{2029}b` })";
+        let raw = serde_json::json!({ "code": ps }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("PS key parses");
+        assert_eq!(key.task, "a\u{2029}b");
+
+        // A backslash line continuation contributes nothing to the cooked text.
+        let cont =
+            "tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `a\\\r\nb` })";
+        let raw = serde_json::json!({ "code": cont }).to_string();
+        let key = extract_delegation_match_key(Some(&raw)).expect("continuation key parses");
+        assert_eq!(key.task, "ab");
     }
 }
 
@@ -1070,7 +2662,7 @@ mod delegation_registration_tests {
 
     fn codex_key(task: &str) -> DelegationMatchKey {
         DelegationMatchKey {
-            agent_type: AgentType::Codex,
+            target: crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex),
             task: task.to_string(),
             working_dir: None,
         }
@@ -1461,6 +3053,109 @@ mod delegation_registration_tests {
             "args-wrapped delegation input must produce a keyed entry"
         );
     }
+
+    /// opencode 2.x code-mode: the `execute` announcement (title "execute",
+    /// the real call inside a JS string under `code`) must register KEYED, and
+    /// the exact key the MCP round-trip presents must claim that id — the
+    /// full loop that used to end in a synthetic `delegation-<uuid>`.
+    #[tokio::test]
+    async fn opencode_code_mode_execute_yields_keyed_registration() {
+        let b = broker();
+        let code = r#"const res = await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `research code-mode` })"#;
+        let raw = serde_json::json!({ "code": code }).to_string();
+        register_delegation_tool_call_from_event(
+            &b,
+            &tool_call_event("tc-codemode", "execute", Some(&raw)),
+        )
+        .await;
+        assert_eq!(
+            b.take_matching_tool_call("parent-conn", &codex_key("research code-mode"))
+                .await
+                .as_deref(),
+            Some("tc-codemode"),
+            "code-mode execute payload must produce a keyed entry the MCP-side key claims"
+        );
+    }
+
+    /// A `code` argument of another tool, shaped like the call, registers
+    /// nothing: a real delegation with the same key must not claim its id.
+    #[tokio::test]
+    async fn code_mode_payload_on_another_tool_does_not_register() {
+        let b = broker();
+        let code = r#"await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `review` })"#;
+        let raw = serde_json::json!({ "code": code }).to_string();
+        register_delegation_tool_call_from_event(
+            &b,
+            &tool_call_event("browser-1", "mcp__playwright__browser_run_code", Some(&raw)),
+        )
+        .await;
+        assert!(b
+            .take_matching_tool_call("parent-conn", &codex_key("review"))
+            .await
+            .is_none());
+        assert!(b.take_pending_tool_call("parent-conn").await.is_none());
+    }
+
+    /// An ambiguous code-mode payload (interpolated task) still registers the
+    /// id UNKEYED, so the post-budget FIFO path can bind it instead of
+    /// orphaning the call to a synthetic id.
+    #[tokio::test]
+    async fn ambiguous_code_mode_execute_still_registers_unkeyed() {
+        let b = broker();
+        let raw = r#"{"code":"tools[\"codeg-mcp\"].delegate_to_agent({ agent_type: \"codex\", task: `sum ${1 + 1}` })"}"#;
+        register_delegation_tool_call_from_event(
+            &b,
+            &tool_call_event("tc-ambiguous", "execute", Some(raw)),
+        )
+        .await;
+        // Keyed claim must NOT match (no key was minted); the unkeyed FIFO
+        // fallback is what picks the id up.
+        assert!(
+            b.take_matching_tool_call("parent-conn", &codex_key("sum 2"))
+                .await
+                .is_none(),
+            "an ambiguous payload must not mint a keyed entry"
+        );
+        assert_eq!(
+            b.take_pending_tool_call("parent-conn").await.as_deref(),
+            Some("tc-ambiguous"),
+            "the id must remain claimable via the unkeyed FIFO path"
+        );
+    }
+
+    /// The synthetic-fallback diagnostic: keyed pending entries still waiting
+    /// on this parent surface as `id=… target=… task=… dir=…` summaries, so a
+    /// "pending key vs request key" mismatch is visible in the WARN.
+    #[tokio::test]
+    async fn unmatched_pending_key_summaries_reports_keyed_entries() {
+        let b = broker();
+        assert!(
+            b.unmatched_pending_key_summaries("parent-conn")
+                .await
+                .is_empty(),
+            "no entries → no summaries"
+        );
+        b.register_pending_tool_call_with_key(
+            "parent-conn",
+            "call-keyed".into(),
+            Some(codex_key("review 对拍")),
+        )
+        .await;
+        b.register_pending_tool_call_with_key("parent-conn", "call-unkeyed".into(), None)
+            .await;
+        let summaries = b.unmatched_pending_key_summaries("parent-conn").await;
+        assert_eq!(summaries.len(), 1, "unkeyed entries are not summarized");
+        assert!(summaries[0].contains("call-keyed"), "{}", summaries[0]);
+        assert!(summaries[0].contains("review 对拍"), "{}", summaries[0]);
+        // Claiming the entry empties the summary again.
+        b.take_matching_tool_call("parent-conn", &codex_key("review 对拍"))
+            .await;
+        assert!(
+            b.unmatched_pending_key_summaries("parent-conn")
+                .await
+                .is_empty()
+        );
+    }
 }
 
 /// Per-connection worker that owns the cache for one connection and
@@ -1570,7 +3265,7 @@ async fn connection_worker_loop(
 /// connections, workers run independently so a slow SQLite write on one
 /// connection doesn't backpressure the others.
 ///
-/// All forwarded events (the 6 types in `is_lifecycle_relevant`) use
+/// All forwarded events (the 7 types in `is_lifecycle_relevant`) use
 /// blocking `send().await` to guarantee delivery even when the worker
 /// mailbox is full — `SessionStarted` (writes external_id) and
 /// `TurnComplete` (writes terminal status) are correctness-critical and
@@ -1749,6 +3444,7 @@ mod tests {
             status: crate::acp::types::ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -1786,6 +3482,98 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reloaded.external_id.as_deref(), Some("ext-99"));
+    }
+
+    #[tokio::test]
+    async fn handle_event_keeps_a_tool_approval_for_the_bound_conversation() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/test-approval").await;
+        let conv =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .unwrap();
+        let mgr = ConnectionManager::new();
+        {
+            let mut map = mgr.connections.lock().await;
+            map.insert(
+                "c1".to_string(),
+                fake_connection_with_state("c1", Some(conv.id)),
+            );
+            map.insert("c2".to_string(), fake_connection_with_state("c2", None));
+        }
+        let approval = crate::acp::types::ToolApprovalInfo {
+            tool_call_id: "toolu_1".into(),
+            option_kind: "allow_once".into(),
+            option_name: "Allow".into(),
+            origin: "user".into(),
+            decided_at: chrono::Utc::now(),
+        };
+        assert!(is_lifecycle_relevant(&AcpEvent::ToolApproval {
+            approval: approval.clone()
+        }));
+        for connection_id in ["c1", "c2"] {
+            let env = EventEnvelope {
+                seq: 1,
+                connection_id: connection_id.to_string(),
+                payload: AcpEvent::ToolApproval {
+                    approval: approval.clone(),
+                },
+            };
+            handle_event(&db.conn, &mgr, &env, None).await.unwrap();
+        }
+        // The unbound connection's copy had nowhere to go.
+        let kept = tool_approval_service::list_by_conversation(&db.conn, conv.id)
+            .await
+            .unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].tool_call_id, "toolu_1");
+        assert_eq!(kept[0].option_kind, "allow_once");
+    }
+
+    #[tokio::test]
+    async fn handle_event_clear_rollover_repoints_external_id_in_place() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/test-clear-rollover").await;
+        let conv =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .unwrap();
+        conversation_service::bind_external_id(&db.conn, conv.id, "old-sess", &[])
+            .await
+            .unwrap();
+        let mgr = ConnectionManager::new();
+        {
+            let mut map = mgr.connections.lock().await;
+            let conn = fake_connection_with_state("c1", Some(conv.id));
+            conn.state.write().await.external_id = Some("old-sess".into());
+            map.insert("c1".to_string(), conn);
+        }
+        let env = EventEnvelope {
+            seq: 1,
+            connection_id: "c1".to_string(),
+            payload: AcpEvent::TranscriptRolledOver {
+                transcript_id: "new-sess".into(),
+            },
+        };
+        handle_event(&db.conn, &mgr, &env, None).await.unwrap();
+        let reloaded = conversation_service::get_by_id(&db.conn, conv.id)
+            .await
+            .unwrap();
+        assert_eq!(reloaded.external_id.as_deref(), Some("new-sess"));
+
+        // A second rollover must also stay in place (ACP id still old-sess).
+        let env2 = EventEnvelope {
+            seq: 2,
+            connection_id: "c1".to_string(),
+            payload: AcpEvent::TranscriptRolledOver {
+                transcript_id: "newer-sess".into(),
+            },
+        };
+        handle_event(&db.conn, &mgr, &env2, None).await.unwrap();
+        let reloaded = conversation_service::get_by_id(&db.conn, conv.id)
+            .await
+            .unwrap();
+        assert_eq!(reloaded.external_id.as_deref(), Some("newer-sess"));
     }
 
     #[tokio::test]
@@ -2094,6 +3882,117 @@ mod tests {
             read_row_status(&db, conv.id).await,
             ConversationStatus::PendingReview
         );
+    }
+
+    /// A turn whose status a CLI run's fallback already wrote is skipped
+    /// whole — a late lifecycle write must not overwrite what the user did to
+    /// the row after the fallback — while the worker's own retries of the same
+    /// envelope keep their claim.
+    #[tokio::test]
+    async fn handle_event_skips_a_turn_the_cli_fallback_claimed() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/turn-claimed").await;
+        let conv =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .unwrap();
+        let mgr = ConnectionManager::new();
+        let conn = fake_connection_with_state("c1", Some(conv.id));
+        let state = conn.state.clone();
+        mgr.connections.lock().await.insert("c1".to_string(), conn);
+        let turn = |seq| EventEnvelope {
+            seq,
+            connection_id: "c1".to_string(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "ext-1".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "claude_code".into(),
+            },
+        };
+
+        assert!(state
+            .write()
+            .await
+            .claim_turn_status(7, TurnStatusWriter::CliFallback));
+        // The fallback wrote, then the user marked the conversation done.
+        conversation_service::update_status(&db.conn, conv.id, ConversationStatus::Completed)
+            .await
+            .unwrap();
+        handle_event(&db.conn, &mgr, &turn(7), None).await.unwrap();
+        assert_eq!(
+            read_row_status(&db, conv.id).await,
+            ConversationStatus::Completed,
+            "the late lifecycle write was skipped"
+        );
+
+        // The next turn is the worker's again, retries included.
+        handle_event(&db.conn, &mgr, &turn(9), None).await.unwrap();
+        assert_eq!(
+            read_row_status(&db, conv.id).await,
+            ConversationStatus::PendingReview
+        );
+        conversation_service::update_status(&db.conn, conv.id, ConversationStatus::InProgress)
+            .await
+            .unwrap();
+        handle_event(&db.conn, &mgr, &turn(9), None).await.unwrap();
+        assert_eq!(
+            read_row_status(&db, conv.id).await,
+            ConversationStatus::PendingReview,
+            "a retry of its own envelope still writes"
+        );
+        assert!(!state
+            .write()
+            .await
+            .claim_turn_status(9, TurnStatusWriter::CliFallback));
+    }
+
+    #[tokio::test]
+    async fn a_turn_status_the_worker_gives_up_on_is_left_to_the_fallback() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/turn-given-up").await;
+        let conv =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .unwrap();
+        let mgr = ConnectionManager::new();
+        let conn = fake_connection_with_state("c1", Some(conv.id));
+        let state = conn.state.clone();
+        mgr.connections.lock().await.insert("c1".to_string(), conn);
+        let turn = EventEnvelope {
+            seq: 4,
+            connection_id: "c1".to_string(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "ext-1".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "claude_code".into(),
+            },
+        };
+        // Every attempt fails.
+        db.conn.clone().close().await.unwrap();
+
+        handle_event_with_retry(&db.conn, &mgr, &turn, None).await;
+
+        assert!(
+            state
+                .write()
+                .await
+                .claim_turn_status(4, TurnStatusWriter::CliFallback),
+            "the worker let go of the turn it could not write"
+        );
+    }
+
+    #[test]
+    fn only_the_holder_of_a_turn_can_let_it_go() {
+        let mut s = SessionState::new("c".into(), AgentType::ClaudeCode, None, "w".into(), None);
+        assert!(s.claim_turn_status(3, TurnStatusWriter::Lifecycle));
+        s.release_turn_status(3, TurnStatusWriter::CliFallback);
+        s.release_turn_status(2, TurnStatusWriter::Lifecycle);
+        assert!(
+            !s.claim_turn_status(3, TurnStatusWriter::CliFallback),
+            "still held"
+        );
+        s.release_turn_status(3, TurnStatusWriter::Lifecycle);
+        assert!(s.claim_turn_status(3, TurnStatusWriter::CliFallback));
     }
 
     #[tokio::test]
@@ -2499,6 +4398,9 @@ mod tests {
         }));
         assert!(is_lifecycle_relevant(&AcpEvent::NativeSessionTitle {
             title: "Fix login".into(),
+        }));
+        assert!(is_lifecycle_relevant(&AcpEvent::TranscriptRolledOver {
+            transcript_id: "new-sess".into(),
         }));
         assert!(is_lifecycle_relevant(&AcpEvent::StatusChanged {
             status: ConnectionStatus::Disconnected,
@@ -2912,6 +4814,7 @@ mod tests {
             working_dir: None,
             requested_working_dir: None,
             external_handle: None,
+            assistant: None,
         }
     }
 

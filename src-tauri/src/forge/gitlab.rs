@@ -32,12 +32,13 @@ use serde::Deserialize;
 use super::auth::ResolvedAuth;
 use super::deliver::{ForgePr, NewPullRequest};
 use super::{
-    count_diff_lines, sanitize_web_url, truncate_chars, urlencode_path, urlencode_query,
-    validate_state_filter, web_origin, ForgeChangeDetail, ForgeChangedFile, ForgeChangedFileList,
-    ForgeCheck, ForgeCheckList, ForgeCheckState, ForgeComment, ForgeCommentList, ForgeError,
-    ForgeFileStatus, ForgeIssueList, ForgeIssueRow, ForgeItemKind, ForgeLabel, ForgeLabelList,
-    ForgeMergeMethod, ForgeMergeOptions, ForgeMergeStrategy, ForgeSort, ForgeStateAction,
-    ListIssuesRequest, ResolvedNewIssue, BODY_CAP, LABEL_PAGE_SIZE,
+    count_diff_lines, sanitize_web_url, scan_timestamp, truncate_chars, urlencode_path,
+    urlencode_query, validate_state_filter, web_origin, ForgeChangeDetail, ForgeChangedFile,
+    ForgeChangedFileList, ForgeCheck, ForgeCheckList, ForgeCheckState, ForgeComment,
+    ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList, ForgeIssueRow, ForgeItemKind,
+    ForgeLabel, ForgeLabelList, ForgeMergeMethod, ForgeMergeOptions, ForgeMergeStrategy,
+    ForgeSort, ForgeStateAction, ListIssuesRequest, OpenItemsScan, ResolvedNewIssue, ScanCursor,
+    BODY_CAP, LABEL_PAGE_SIZE, SCAN_MAX_PAGES, SCAN_PAGE_SIZE,
 };
 
 // ── reads ───────────────────────────────────────────────────────────────────
@@ -126,6 +127,68 @@ pub async fn list_issues(
         has_next,
         // GitLab has no partial-result flag; only GitHub search does.
         incomplete: false,
+    })
+}
+
+/// Every OPEN item of the wanted kinds updated at or after `since` (every open
+/// item when `None`) — what an auto-processing scan reads — starting from
+/// where `from` says (see `github::list_open_items`).
+///
+/// One collection per kind, as everywhere here (rule 1 of this module), each
+/// filtered server-side with `updated_after` — "on or after", which is the
+/// inclusive edge a watermark needs — and read newest-updated first, so an
+/// item updated mid-read shifts the rest down rather than up (see
+/// [`ScanCursor`]). Each collection carries its own place in the cursor.
+pub async fn list_open_items(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    issues: bool,
+    pulls: bool,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    from: &ScanCursor,
+) -> Result<OpenItemsScan, ForgeError> {
+    let project = project_ref(owner_repo)?;
+    let mut rows = Vec::new();
+    let mut cursor = ScanCursor::default();
+    for (wanted, collection, is_pr) in [
+        (issues, "issues", false),
+        (pulls, "merge_requests", true),
+    ] {
+        if !wanted {
+            continue;
+        }
+        let project = &project;
+        super::scan_collection(collection, from, &mut cursor, &mut rows, SCAN_MAX_PAGES, |page| {
+            let mut url = format!(
+                "{}/projects/{project}/{collection}?state=opened&order_by=updated_at&sort=desc\
+                 &with_labels_details=true&per_page={SCAN_PAGE_SIZE}&page={page}",
+                auth.api_base
+            );
+            if let Some(since) = since {
+                url.push_str(&format!(
+                    "&updated_after={}",
+                    urlencode_query(&scan_timestamp(since))
+                ));
+            }
+            async move {
+                let response = api_get(auth, &url).await?;
+                let has_next = header_str(response.headers(), "x-next-page")
+                    .is_some_and(|v| !v.trim().is_empty());
+                let raw: Vec<RawItem> = response
+                    .json()
+                    .await
+                    .map_err(|e| ForgeError::Network(format!("bad list payload: {e}")))?;
+                Ok((
+                    raw.into_iter().map(|item| item.into_row(is_pr)).collect(),
+                    has_next,
+                ))
+            }
+        })
+        .await?;
+    }
+    Ok(OpenItemsScan {
+        rows,
+        resume: cursor.has_more().then_some(cursor),
     })
 }
 
@@ -2711,4 +2774,193 @@ mod tests {
         assert_eq!(exact_changes_count(""), None);
         assert_eq!(exact_changes_count("many"), None);
     }
+}
+
+/// `list_open_items` — the auto-processing scan's read.
+#[cfg(test)]
+mod open_items_tests {
+    use super::*;
+    use crate::forge::ForgeProvider;
+    use axum::extract::Query;
+    use axum::http::HeaderMap;
+    use axum::routing::get;
+    use axum::Json;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    type Seen = Arc<Mutex<Vec<(String, HashMap<String, String>)>>>;
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: ForgeProvider::GitLab,
+            server_host: "gitlab.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec![],
+        }
+    }
+
+    fn item(iid: i64, draft: bool) -> serde_json::Value {
+        serde_json::json!({
+            "iid": iid,
+            "title": format!("item {iid}"),
+            "state": "opened",
+            "draft": draft,
+            "labels": [{ "name": "bug", "color": "#d9534f" }],
+            "author": { "username": "alice" },
+            "updated_at": "2026-10-14T09:00:00.000Z",
+            "web_url": format!("https://gitlab.test/group/proj/-/issues/{iid}"),
+        })
+    }
+
+    async fn serve() -> (String, Seen) {
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let route = |collection: &'static str, seen: Seen| {
+            get(move |Query(q): Query<HashMap<String, String>>| {
+                let seen = seen.clone();
+                async move {
+                    let page: u32 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+                    seen.lock().unwrap().push((collection.to_string(), q));
+                    let mut headers = HeaderMap::new();
+                    // GitLab's own pagination signal: empty on the last page.
+                    let next = if page == 1 { "2" } else { "" };
+                    headers.insert("x-next-page", next.parse().unwrap());
+                    let is_mr = collection == "merge_requests";
+                    let rows = vec![item(i64::from(page) * 10, is_mr)];
+                    (headers, Json(serde_json::Value::Array(rows)))
+                }
+            })
+        };
+        let app = axum::Router::new()
+            .route("/projects/group%2Fproj/issues", route("issues", seen.clone()))
+            .route(
+                "/projects/group%2Fproj/merge_requests",
+                route("merge_requests", seen.clone()),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), seen)
+    }
+
+    /// One collection per kind, each read to its last page, `opened` only and
+    /// cut at `updated_after` — with GitLab's `opened` normalized like every
+    /// other row.
+    #[tokio::test]
+    async fn the_scan_reads_both_collections_since_the_window() {
+        let (base, seen) = serve().await;
+        let since = chrono::DateTime::parse_from_rfc3339("2026-10-14T08:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let scan = list_open_items(
+            &auth_for(base),
+            "Group/Proj",
+            true,
+            true,
+            Some(since),
+            &ScanCursor::default(),
+        )
+        .await
+        .expect("listed");
+        assert_eq!(scan.resume, None);
+        let rows: Vec<(i64, bool, bool)> =
+            scan.rows.iter().map(|r| (r.number, r.is_pr, r.draft)).collect();
+        assert_eq!(
+            rows,
+            vec![(10, false, false), (20, false, false), (10, true, true), (20, true, true)]
+        );
+        assert!(scan.rows.iter().all(|r| r.state == "open"));
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 4, "two pages of each collection");
+        for (_, q) in &seen {
+            assert_eq!(q.get("state").map(String::as_str), Some("opened"));
+            assert_eq!(q.get("order_by").map(String::as_str), Some("updated_at"));
+            assert_eq!(q.get("sort").map(String::as_str), Some("desc"));
+            assert_eq!(
+                q.get("updated_after").map(String::as_str),
+                Some("2026-10-14T08:00:00Z")
+            );
+            assert_eq!(q.get("per_page").map(String::as_str), Some("100"));
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_wanted_collections_are_asked() {
+        let (base, seen) = serve().await;
+        let fresh = ScanCursor::default();
+        let scan = list_open_items(&auth_for(base), "group/proj", false, true, None, &fresh)
+            .await
+            .expect("listed");
+        assert!(scan.rows.iter().all(|r| r.is_pr));
+        let seen = seen.lock().unwrap().clone();
+        assert!(seen.iter().all(|(collection, q)| collection == "merge_requests"
+            && !q.contains_key("updated_after")));
+    }
+
+    /// Each collection carries its own place: one cut short reads on from the
+    /// page after its last, one read to its end is not asked again within the
+    /// same window.
+    #[tokio::test]
+    async fn each_collection_carries_its_own_place() {
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let issues_log = seen.clone();
+        let mrs_log = seen.clone();
+        let app = axum::Router::new()
+            .route(
+                "/projects/group%2Fproj/issues",
+                get(move |Query(q): Query<HashMap<String, String>>| {
+                    let log = issues_log.clone();
+                    async move {
+                        let page: i64 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+                        log.lock().unwrap().push(("issues".to_string(), q));
+                        let mut headers = HeaderMap::new();
+                        // Endless: always a next page.
+                        headers.insert("x-next-page", (page + 1).to_string().parse().unwrap());
+                        (headers, Json(serde_json::json!([item(page, false)])))
+                    }
+                }),
+            )
+            .route(
+                "/projects/group%2Fproj/merge_requests",
+                get(move |Query(q): Query<HashMap<String, String>>| {
+                    let log = mrs_log.clone();
+                    async move {
+                        log.lock().unwrap().push(("merge_requests".to_string(), q));
+                        let mut headers = HeaderMap::new();
+                        headers.insert("x-next-page", "".parse().unwrap());
+                        (headers, Json(serde_json::json!([item(500, true)])))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let auth = auth_for(format!("http://{addr}"));
+
+        let fresh = ScanCursor::default();
+        let scan = list_open_items(&auth, "group/proj", true, true, None, &fresh)
+            .await
+            .expect("listed");
+        let cursor = scan.resume.expect("the issues were cut short");
+        assert_eq!(cursor.first_page("issues"), Some(SCAN_MAX_PAGES + 1));
+        assert_eq!(cursor.first_page("merge_requests"), None, "read to its end");
+
+        seen.lock().unwrap().clear();
+        list_open_items(&auth, "group/proj", true, true, None, &cursor)
+            .await
+            .expect("listed");
+        let asked = seen.lock().unwrap().clone();
+        assert!(
+            asked.iter().all(|(collection, _)| collection == "issues"),
+            "a finished collection was asked again"
+        );
+        // Carrying on re-reads the overlap first.
+        let restart = SCAN_MAX_PAGES + 1 - crate::forge::SCAN_CONTINUATION_OVERLAP_PAGES;
+        assert_eq!(asked[0].1.get("page").cloned(), Some(restart.to_string()));
+    }
+
 }

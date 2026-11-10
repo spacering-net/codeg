@@ -25,6 +25,7 @@ import {
   ExternalLink,
   GitMerge,
   GitPullRequestClosed,
+  Layers,
   Link2,
   ListTodo,
   LoaderCircle,
@@ -43,10 +44,13 @@ import {
 } from "@/components/diff/unified-diff-preview"
 import {
   CHIP_FILL,
+  canStartTask,
   ForgeLabelChip,
+  numberList,
   ROW_ACTION,
   ROW_ACTION_GLYPH,
   stateGlyph,
+  togetherWith,
 } from "@/components/forge/forge-issue-row"
 import { statusLabelKey } from "@/components/tasks/task-card"
 import {
@@ -95,13 +99,14 @@ import {
   forgeMergeOptions,
   forgeSetItemState,
 } from "@/lib/api"
+import { useIssueBody } from "@/components/forge/use-issue-body"
 import {
   type AppErrorTranslator,
   toLocalizedErrorMessage,
 } from "@/lib/app-error"
 import { useDiffViewMode } from "@/lib/diff-view-mode-prefs"
 import { mergeForgeRowUpdate } from "@/lib/forge-row-update"
-import { chipStateForLink } from "@/lib/forge-task-chip"
+import { chipStateForLink, isDeferredLink } from "@/lib/forge-task-chip"
 import { cn } from "@/lib/utils"
 import type {
   ForgeChangeDetail,
@@ -2208,6 +2213,8 @@ function MergeBox({
  */
 function Conversation({
   row,
+  description,
+  descriptionPending = false,
   folderId,
   identity,
   onCommentPosted,
@@ -2216,6 +2223,12 @@ function Conversation({
   viewportEl,
 }: {
   row: ForgeIssueRow
+  /** The item's description. Passed in rather than read off `row` because a
+   *  CNB issue's list row carries none — it comes from its own read, see
+   *  [`useIssueBody`]. */
+  description: string | null
+  /** That read is still out — see [`useIssueBody`]. */
+  descriptionPending?: boolean
   folderId: number | null
   /** Who a comment from here would be signed as — see [`useForgeIdentity`]. */
   identity: ForgeIdentity | null
@@ -2231,7 +2244,7 @@ function Conversation({
   viewportEl: HTMLElement | null
 }) {
   const t = useTranslations("Forge")
-  const body = row.body?.trim()
+  const body = description?.trim()
   return (
     <>
       {/* The description is the first thing said about the item, so it sits in
@@ -2246,7 +2259,10 @@ function Conversation({
           label={row.author ?? undefined}
         />
         <div className={RAIL_BODY}>
-          {body ? (
+          {/* Nothing at all while the description is still being read: "no
+              description" is a CLAIM, and making it before the answer arrives
+              would flash that sentence over every issue that has one. */}
+          {descriptionPending ? null : body ? (
             // The forge's own Markdown, through the same renderer the chat
             // uses — headings, task lists, tables, fenced code and images all
             // come out as the author wrote them, and link clicks go through
@@ -2327,6 +2343,7 @@ export function ForgeIssueDetailSheet({
   row,
   link,
   folderId,
+  issueBodyOnDemand = false,
   onOpenChange,
   onStart,
   onRowUpdated,
@@ -2342,6 +2359,12 @@ export function ForgeIssueDetailSheet({
    *  repository from this folder's own remote). `null` while no folder is
    *  resolved, which costs the thread and nothing else. */
   folderId: number | null
+  /**
+   * This forge's ISSUE list rows carry no description, so the panel reads the
+   * item itself when it opens (see [`useIssueBody`]). Set only for CNB; the
+   * others serve the body with the row.
+   */
+  issueBodyOnDemand?: boolean
   onOpenChange: (open: boolean) => void
   /** Opens the page's trigger dialog on this item. */
   onStart: () => void
@@ -2416,6 +2439,9 @@ export function ForgeIssueDetailSheet({
     change?.folderId ?? null,
     change?.number ?? null
   )
+  /** An ISSUE's description when the list did not bring one — CNB only (see
+   *  [`useIssueBody`]); a no-op everywhere else. */
+  const issueBody = useIssueBody(folderId, row, issueBodyOnDemand)
   /**
    * A change there is still something to land. A merged one is done, and
    * neither forge will merge a closed change — the box would be an offer to
@@ -2583,6 +2609,12 @@ export function ForgeIssueDetailSheet({
   const chip = chipStateForLink(link)
   const active = chip === "active"
   const terminal = chip === "terminal"
+  // The row's own rules (see `canStartTask` / `togetherWith`), so the footer
+  // and the list never offer different things for the same item — plus the
+  // panel's own read of a change, which can know it merged before the list
+  // row does.
+  const startable = canStartTask(row) && detail.detail?.state !== "merged"
+  const others = togetherWith(link, row)
   const { Icon, className: glyphClass, labelKey } = stateGlyph(row)
   const stateLabel = t(labelKey)
   /** Which way the state button points — and whether there is one at all.
@@ -2706,6 +2738,7 @@ export function ForgeIssueDetailSheet({
             >
               <Conversation
                 row={row}
+                description={row.body ?? null}
                 folderId={folderId}
                 identity={identity}
                 onCommentPosted={onCommentPosted}
@@ -2764,6 +2797,8 @@ export function ForgeIssueDetailSheet({
           >
             <Conversation
               row={row}
+              description={issueBody.body}
+              descriptionPending={issueBody.pending}
               folderId={folderId}
               identity={identity}
               onCommentPosted={onCommentPosted}
@@ -2842,21 +2877,23 @@ export function ForgeIssueDetailSheet({
 
           <div className="ms-auto flex items-center gap-1.5">
             {link == null ? (
-              <Button
-                type="button"
-                size="sm"
-                className={ROW_ACTION}
-                onClick={onStart}
-              >
-                <CirclePlay className={ROW_ACTION_GLYPH} aria-hidden />
-                {t("start")}
-              </Button>
+              startable ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className={ROW_ACTION}
+                  onClick={onStart}
+                >
+                  <CirclePlay className={ROW_ACTION_GLYPH} aria-hidden />
+                  {t("start")}
+                </Button>
+              ) : null
             ) : (
               // Siblings, never nested — same reason as on the row: a button
               // inside a button folds its text into the outer one's accessible
               // name and leaves keyboard activation to the browser.
               <>
-                {terminal ? (
+                {terminal && startable ? (
                   <button
                     type="button"
                     onClick={onStart}
@@ -2871,14 +2908,29 @@ export function ForgeIssueDetailSheet({
                   size="sm"
                   variant="ghost"
                   onClick={() => setRoute("tasks")}
-                  title={t("viewTask")}
+                  title={
+                    others.length > 0
+                      ? `${t("viewTask")} · ${t("combinedWith", { numbers: numberList(others) })}`
+                      : t("viewTask")
+                  }
                   className={cn(
                     ROW_ACTION,
                     active ? CHIP_FILL.active : CHIP_FILL.settled
                   )}
                 >
-                  <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
-                  {tTasks(statusLabelKey(link.status))}
+                  {others.length > 0 ? (
+                    <Layers className={ROW_ACTION_GLYPH} aria-hidden />
+                  ) : (
+                    <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
+                  )}
+                  {isDeferredLink(link)
+                    ? tTasks("statusDeferred")
+                    : tTasks(statusLabelKey(link.status))}
+                  {others.length > 0 ? (
+                    <span className="sr-only">
+                      {t("combinedWith", { numbers: numberList(others) })}
+                    </span>
+                  ) : null}
                 </Button>
               </>
             )}

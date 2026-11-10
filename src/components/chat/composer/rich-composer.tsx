@@ -23,6 +23,7 @@ import {
   type KnownInvocations,
 } from "@/lib/invocation-token"
 import { matchShortcutEvent } from "@/lib/keyboard-shortcuts"
+import { useVisibleMentionTabs } from "@/lib/mention-panel-prefs"
 import { cn } from "@/lib/utils"
 
 import { buildComposerExtensions } from "./editor-config"
@@ -232,6 +233,15 @@ export interface RichComposerProps {
    * clipboard read is unavailable).
    */
   onPlainPaste?: () => boolean
+  /**
+   * Text a bare Tab fills the document with while it is empty — the follow-up
+   * prompt the agent predicted, which the host shows as the placeholder. The
+   * filled text is an ordinary edit (onChange fires, nothing is sent), and the
+   * caret lands after it. Ignored once the document has content, and Tab then
+   * keeps its default meaning. Read at key time, so a new prediction needs no
+   * editor rebuild.
+   */
+  promptSuggestion?: string | null
 }
 
 /**
@@ -268,6 +278,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       onPasteFiles,
       onDropFiles,
       onPlainPaste,
+      promptSuggestion,
     },
     ref
   ) {
@@ -294,6 +305,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     const onPasteFilesRef = useRef(onPasteFiles)
     const onDropFilesRef = useRef(onDropFiles)
     const onPlainPasteRef = useRef(onPlainPaste)
+    const promptSuggestionRef = useRef(promptSuggestion)
     // The live editor, captured for command access inside editorProps handlers
     // (which are created before `editor` is assigned in this closure).
     const editorInstanceRef = useRef<Editor | null>(null)
@@ -315,6 +327,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       onPasteFilesRef.current = onPasteFiles
       onDropFilesRef.current = onDropFiles
       onPlainPasteRef.current = onPlainPaste
+      promptSuggestionRef.current = promptSuggestion
     })
 
     // ── Unified `@` mention panel state bridge ──
@@ -327,6 +340,10 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     // (so Enter defers to the panel without waiting for a re-render).
     const mentionOpenRef = useRef(false)
     const popupRef = useRef<SuggestionPopupHandle>(null)
+    // Which `@` tabs to show and in what order — the user's preference from
+    // Settings → General, the same for every host. Read here rather than by
+    // each host so none of them can forget it; live across windows.
+    const mentionTabs = useVisibleMentionTabs()
     // Stable controller created once (refs/setState are stable), so the editor
     // is built a single time with it.
     const mentionController = useMemo<MentionController>(
@@ -382,7 +399,12 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       autofocus: autoFocus ? "end" : false,
       editorProps: {
         attributes: {
-          class: "codeg-composer-content",
+          // `grow`: the editable node fills the scroll area (a flex column, see
+          // EditorContent below) so the blank space under a short draft is
+          // still the contenteditable and a tap there focuses it natively. Its
+          // automatic minimum size keeps it from being squeezed under its own
+          // text once the composer is at max height and scrolling.
+          class: "codeg-composer-content grow",
           role: "textbox",
           "aria-multiline": "true",
           ...(ariaLabel ? { "aria-label": ariaLabel } : {}),
@@ -404,6 +426,28 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
           // list) to let the inline token keep growing.
           if (isExternalMenuOpenRef.current) {
             return onExternalMenuKeyDownRef.current?.(event) ?? false
+          }
+          // A bare Tab in the empty composer takes the predicted follow-up
+          // prompt the placeholder shows, as AIR and Claude Code's own prompt
+          // do. It fills the document and sends nothing. Ahead of the
+          // submit/newline bindings: either one bound to Tab would act on an
+          // empty document, which sends or breaks nothing useful.
+          if (
+            event.key === "Tab" &&
+            !event.shiftKey &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey
+          ) {
+            const suggestion = promptSuggestionRef.current?.trim()
+            const ed = editorInstanceRef.current
+            if (suggestion && ed?.isEmpty) {
+              ed.chain()
+                .setContent(textToSeededDoc(suggestion, known()))
+                .focus("end")
+                .run()
+              return true
+            }
           }
           // Prompt history (chat composer only): a bare Up/Down at the
           // document's first/last position steps through sent prompts; anywhere
@@ -682,9 +726,27 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
         style={style}
         data-disabled={disabled || undefined}
       >
+        {/* `grow` (a CONTENT flex basis), never `flex-1` (a ZERO basis). The
+            box this sits in is a flex column whose height usually comes only
+            from a `min-height`, and an engine that treats such a column as
+            main-size-indefinite hands its `flex-grow` children no free space
+            at all. Off a zero basis that leaves the editable area at 0px: the
+            action row rides up to the top of the box, the rest of it is
+            untappable dead space, and the placeholder is clipped away — the
+            mobile-web report in #746. Off a content basis the editor is always
+            at least as tall as the text it holds, whatever the engine does,
+            while `min-h-0` still lets it shrink and scroll at the box's
+            max height.
+
+            The column here plus `grow` on the editable node itself (see the
+            `codeg-composer-content` class) also makes the contenteditable
+            cover the whole editable area, so a tap on the blank space under a
+            short draft lands on the editor natively instead of going through
+            the chrome's mousedown fallback — which touch has no reliable
+            equivalent for. */}
         <EditorContent
           editor={editor}
-          className="codeg-composer-scroll min-h-0 flex-1 overflow-y-auto px-3 py-2 text-base md:text-sm"
+          className="codeg-composer-scroll flex min-h-0 grow flex-col overflow-y-auto px-3 py-2 text-base md:text-sm"
         />
         {referenceSearch && mentionState && (
           <SuggestionPopup
@@ -705,6 +767,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
             moreLabel={mentionUiLabels?.more}
             countLabel={mentionUiLabels?.count}
             tabLabels={tabLabels}
+            tabs={mentionTabs}
           />
         )}
       </div>

@@ -433,6 +433,10 @@ function parseGrokTaskOutputEnvelopes(text: string): BackgroundTaskEnvelope[] {
     .filter((e): e is BackgroundTaskEnvelope => e !== null)
 }
 
+/** A tag a Claude Code poll envelope cannot do without (see
+ *  `parsePollEnvelope`). */
+const POLL_TAG_RE = /<(?:retrieval_status|task_type|task_id)>/i
+
 /** Every task reported by one background-task tool result: a single envelope for
  *  Claude Code's poll/stop and CodeBuddy's plain-text snapshot shapes, and one
  *  per task for Grok's `TaskOutput` (whose `MultiResult` variant can cover
@@ -443,12 +447,18 @@ export function parseBackgroundTaskEnvelopes(
 ): BackgroundTaskEnvelope[] {
   const raw = text?.trim()
   if (!raw) return []
+  // This runs on every tool call's result while a reply is adapted, and the
+  // parsers are not cheap (a regex per tag, a JSON parse, a split into lines).
+  // Each shape is recognizable up front, so ordinary output skips them all.
+  const json = raw.startsWith("{")
   const single =
-    parsePollEnvelope(raw) ??
-    parseStopEnvelope(raw) ??
-    parseCodeBuddySnapshot(raw)
+    (POLL_TAG_RE.test(raw) ? parsePollEnvelope(raw) : null) ??
+    (json ? parseStopEnvelope(raw) : null) ??
+    (raw.startsWith("Task ID: ") || raw.startsWith("Shell ID: ")
+      ? parseCodeBuddySnapshot(raw)
+      : null)
   if (single) return [single]
-  return parseGrokTaskOutputEnvelopes(raw)
+  return json ? parseGrokTaskOutputEnvelopes(raw) : []
 }
 
 /** Parse a background-task tool result into its structured envelope, or `null`
@@ -460,9 +470,25 @@ export function parseBackgroundTaskEnvelope(
   return parseBackgroundTaskEnvelopes(text)[0] ?? null
 }
 
-const LAUNCH_RE = /Command running in background with ID:\s*([A-Za-z0-9_-]+)/i
+/** Claude Code's Bash/PowerShell acknowledgement for a command that keeps
+ *  running in the background. The CLI words it four ways, one per reason the
+ *  command left the foreground, with the same task id and output file after
+ *  it: a `run_in_background` launch (also used when a plugin's turn abort moved
+ *  it), the user's Ctrl+B in the terminal UI, a message that arrived while the
+ *  command ran, and a command that outlived its timeout. The third is the one
+ *  codeg causes: since Claude Code 2.1.286 (claude-agent-acp 0.85.0) a steer
+ *  sent during a foreground command moves that command to the background
+ *  instead of waiting for it to finish. */
+const LAUNCH_RE =
+  /Command (?:running in background with ID:|was manually backgrounded by user with ID:|was moved to the background \(ID:|did not complete within its \d+s timeout and was moved to the background \(ID:)\s*([A-Za-z0-9_-]+)/i
 /** Grok's `run_terminal_command(background: true)` acknowledgement. */
 const GROK_LAUNCH_RE = /Background task\s+([A-Za-z0-9_-]+)\s+started/i
+/** OpenCode 2's shell acknowledgement for a `background: true` command, or a
+ *  foreground one moved there: `Command moved to the background (shell ID:
+ *  sh_…).` (packages/core/src/tool/plugin/shell.ts `backgroundResult`,
+ *  2.2.0). */
+const OPENCODE_LAUNCH_RE =
+  /Command moved to the background \(shell ID:\s*([A-Za-z0-9_-]+)\)/i
 
 /** Recognize a background launch result and pull the task id. Lets the command
  *  card flag itself as a background launch. */
@@ -470,7 +496,10 @@ export function parseBackgroundLaunch(
   text: string | null | undefined
 ): { taskId: string } | null {
   if (!text) return null
-  const match = text.match(LAUNCH_RE) ?? text.match(GROK_LAUNCH_RE)
+  const match =
+    text.match(LAUNCH_RE) ??
+    text.match(GROK_LAUNCH_RE) ??
+    text.match(OPENCODE_LAUNCH_RE)
   return match ? { taskId: match[1] } : null
 }
 

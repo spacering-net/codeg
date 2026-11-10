@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import { GitLogCommitMessage } from "./git-log-commit-message"
 import enMessages from "@/i18n/messages/en.json"
+import { mockClampLayout } from "@/test-layout"
 
 function renderWithIntl(ui: ReactElement) {
   return render(
@@ -15,47 +16,6 @@ function renderWithIntl(ui: ReactElement) {
 }
 
 const MESSAGE = "feat: add a thing\n\nWith a body."
-
-// jsdom does no layout: scrollHeight/clientHeight both default to 0, which
-// already reads as "not overflowing" for the short-message case. The overflow
-// cases patch both onto Element.prototype *before* rendering so the
-// synchronous mount-time measurement picks them up (the global ResizeObserver
-// stub in test-setup.ts never invokes its callback). Mirrors
-// collapsible-user-message.test.tsx.
-function mockScrollMetrics(scrollHeight: number, clientHeight: number) {
-  const scrollHeightDescriptor = Object.getOwnPropertyDescriptor(
-    Element.prototype,
-    "scrollHeight"
-  )
-  const clientHeightDescriptor = Object.getOwnPropertyDescriptor(
-    Element.prototype,
-    "clientHeight"
-  )
-  Object.defineProperty(Element.prototype, "scrollHeight", {
-    configurable: true,
-    get: () => scrollHeight,
-  })
-  Object.defineProperty(Element.prototype, "clientHeight", {
-    configurable: true,
-    get: () => clientHeight,
-  })
-  return () => {
-    if (scrollHeightDescriptor) {
-      Object.defineProperty(
-        Element.prototype,
-        "scrollHeight",
-        scrollHeightDescriptor
-      )
-    }
-    if (clientHeightDescriptor) {
-      Object.defineProperty(
-        Element.prototype,
-        "clientHeight",
-        clientHeightDescriptor
-      )
-    }
-  }
-}
 
 describe("GitLogCommitMessage", () => {
   let restoreMetrics: (() => void) | null = null
@@ -77,7 +37,7 @@ describe("GitLogCommitMessage", () => {
   })
 
   it("shows a Show more toggle when the message overflows the cap", () => {
-    restoreMetrics = mockScrollMetrics(900, 192)
+    restoreMetrics = mockClampLayout(900, 192)
 
     renderWithIntl(<GitLogCommitMessage message={MESSAGE} />)
 
@@ -90,7 +50,7 @@ describe("GitLogCommitMessage", () => {
   })
 
   it("expands to Show less on click and removes the clamp", () => {
-    restoreMetrics = mockScrollMetrics(900, 192)
+    restoreMetrics = mockClampLayout(900, 192)
 
     renderWithIntl(<GitLogCommitMessage message={MESSAGE} />)
 

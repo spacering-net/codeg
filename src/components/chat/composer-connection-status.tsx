@@ -125,16 +125,43 @@ export function ComposerConnectionStatus({ tabId }: { tabId: string | null }) {
     getPendingSnapshot,
     getPendingSnapshot
   )
-  const status = conn?.status ?? (connectPending ? "connecting" : null)
+  // A connect that FAILED leaves no entry either; without this the heart fell
+  // back to a dimmed "disconnected", as if nothing had been tried.
+  const getConnectErrorSnapshot = useCallback(
+    () => (tabId ? store.getConnectError(tabId) : undefined),
+    [store, tabId]
+  )
+  const connectError = useSyncExternalStore(
+    subscribeConn,
+    getConnectErrorSnapshot,
+    getConnectErrorSnapshot
+  )
+  const failedConnect = !conn && !connectPending ? connectError : undefined
+  const status =
+    conn?.status ??
+    (connectPending ? "connecting" : failedConnect ? "error" : null)
+  // What went wrong, in one line: the live connection's error, or why the
+  // last connect attempt failed.
+  const errorText =
+    conn?.error ??
+    (failedConnect
+      ? failedConnect.detail
+        ? `${failedConnect.title} · ${failedConnect.detail}`
+        : failedConnect.title
+      : null)
 
   const statusKey = toConnStatus(status)
   const statusLabel = t(statusKey)
-  const agentType = conn?.agentType ?? connectPending?.agentType ?? null
+  const agentType =
+    conn?.agentType ??
+    connectPending?.agentType ??
+    failedConnect?.agentType ??
+    null
   const agentLabel = agentType ? getAgentLabel(agentType) : null
   const titleText = !agentLabel
     ? statusLabel
-    : statusKey === "error" && conn?.error
-      ? t("tooltipError", { agent: agentLabel, error: conn.error })
+    : statusKey === "error" && errorText
+      ? t("tooltipError", { agent: agentLabel, error: errorText })
       : t("tooltip", { agent: agentLabel, status: statusLabel })
 
   const { Icon, className } = STATUS_ICON[statusKey]
@@ -155,15 +182,10 @@ export function ComposerConnectionStatus({ tabId }: { tabId: string | null }) {
     reconnectInfo?.workingDir ??
     null
   const sessionId = conn?.sessionId ?? reconnectInfo?.sessionId ?? null
-  // A reconnect on a busy OWNER kills the agent CLI mid-turn; a viewer's only
-  // detaches and re-attaches, leaving the owner's agent alone — so only the
-  // former is worth warning about.
-  const destructive =
-    !conn?.isViewer &&
-    isConnectionBusy({
-      status: conn?.status ?? null,
-      backgroundOutstanding: conn?.backgroundOutstanding ?? 0,
-    })
+  // A reconnect on a busy OWNER kills the agent CLI and the work running in it;
+  // a viewer's only detaches and re-attaches, leaving the owner's agent alone —
+  // so only the former is worth warning about.
+  const destructive = conn != null && !conn.isViewer && isConnectionBusy(conn)
   const canReconnect = reconnectInfo !== null
 
   const handleReconnect = useCallback(() => {
@@ -171,7 +193,7 @@ export function ComposerConnectionStatus({ tabId }: { tabId: string | null }) {
     setPending(true)
     void reconnect(tabId)
       .catch(() => {
-        // connect() surfaces its own failures (alert banner / agent-settings
+        // connect() notifies its own failures (with the agent-settings
         // action); the status icon flipping to `error` is the local signal.
       })
       .finally(() => setPending(false))
@@ -210,9 +232,16 @@ export function ComposerConnectionStatus({ tabId }: { tabId: string | null }) {
           </span>
         </div>
 
-        {conn?.error ? (
-          <p className="max-h-24 overflow-auto rounded-md bg-destructive/10 px-2 py-1 text-2xs leading-snug break-words text-destructive">
-            {conn.error}
+        {errorText ? (
+          <p
+            className={cn(
+              "max-h-24 overflow-auto rounded-md px-2 py-1 text-2xs leading-snug break-words",
+              conn?.error && conn.errorLevel === "warning"
+                ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                : "bg-destructive/10 text-destructive"
+            )}
+          >
+            {errorText}
           </p>
         ) : null}
 

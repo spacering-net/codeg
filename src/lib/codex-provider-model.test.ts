@@ -127,6 +127,50 @@ const CATALOG: CodexModelInfo[] = [
   { slug: "gpt-5.4-mini", visibility: "hide" },
 ]
 
+describe("Codex model list source", () => {
+  it("round-trips a provider source in a fixed shape", () => {
+    const config: CodexModelConfig = {
+      customs: [],
+      default: "glm-5.2",
+      catalog: {
+        url: "https://relay.example/v1/models",
+        format: "openai_list",
+        selected: ["glm-5.2", "kimi-k3"],
+      },
+    }
+    const raw = serializeCodexModelConfig(config)
+    expect(raw).toBe(
+      '{"customs":[],"default":"glm-5.2","catalog":{"url":"https://relay.example/v1/models","format":"openai_list","selected":["glm-5.2","kimi-k3"]}}'
+    )
+    expect(parseCodexModelConfig(raw)).toEqual(config)
+    expect(serializeCodexModelConfig(parseCodexModelConfig(raw))).toBe(raw)
+  })
+
+  // "From the provider" with nothing else set is still a choice to keep.
+  it("keeps a source with no customs, no removals and no picks", () => {
+    const raw = serializeCodexModelConfig({ customs: [], catalog: {} })
+    expect(raw).toBe('{"customs":[],"catalog":{}}')
+    expect(parseCodexModelConfig(raw).catalog).toEqual({})
+    expect(hasCodexCustomization(parseCodexModelConfig(raw), [])).toBe(true)
+  })
+
+  it("keeps the picks in the user's order, once each", () => {
+    const config = parseCodexModelConfig(
+      JSON.stringify({
+        customs: [],
+        catalog: { selected: [" b ", "a", "b", "", 3], format: "xml" },
+      })
+    )
+    expect(config.catalog).toEqual({ selected: ["b", "a"] })
+  })
+
+  it("drops a source that is not an object", () => {
+    expect(
+      parseCodexModelConfig('{"customs":[],"catalog":"yes"}').catalog
+    ).toBeUndefined()
+  })
+})
+
 describe("Codex ghost exclusions", () => {
   it("drops removals of officials codex no longer lists", () => {
     expect(

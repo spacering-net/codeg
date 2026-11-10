@@ -6,11 +6,10 @@
  * `tool-call-normalization.test.ts` pins the identity resolution and
  * `codeg-mcp-tool-card.test.tsx` pins the rendering, but the passes BETWEEN them
  * are where a codeg-mcp call would silently disappear: `dropEmptyInFlightToolCalls`
- * can delete an arg-less in-flight call, and `groupConsecutiveToolCalls` folds a
- * run of tool calls into a single "调用 N 个工具" tally — either one and the card
- * never renders no matter how correct the name is. Both are gated on
- * `isAgentLikeToolName`, so this asserts the whole chain rather than that one
- * predicate.
+ * can delete an arg-less in-flight call, and the timeline folds runs of some
+ * kinds into one row — either one and the card never renders no matter how
+ * correct the name is. The drop is gated on `isAgentLikeToolName`, so this
+ * asserts the whole chain rather than that one predicate.
  *
  * Frames below are the real thing. Captured with a throwaway stdio MCP server
  * named `codeg-mcp` wired into `session/new`, driving one live turn:
@@ -28,10 +27,10 @@ import { describe, expect, it } from "vitest"
 
 import {
   dropEmptyInFlightToolCalls,
-  groupConsecutiveToolCalls,
   type AdaptedContentPart,
   type AdaptedToolCallPart,
 } from "./ai-elements-adapter"
+import { buildActivity } from "@/lib/activity/build-activity"
 import { inferLiveToolName } from "@/lib/tool-call-normalization"
 
 /** The five workbench companions plus the delegation/feedback ones. */
@@ -99,7 +98,7 @@ function toolCallPart(
 
 describe("Qoder live frames reach their card through every adapter pass", () => {
   it.each(QODER_FRAMES)(
-    "$tool survives identity resolution, the empty-drop and the grouper",
+    "$tool survives identity resolution and the empty-drop",
     ({ tool, rawInput, expected }) => {
       const resolved = inferLiveToolName(qoderFrame(tool, rawInput))
       expect(resolved).toBe(expected)
@@ -108,28 +107,22 @@ describe("Qoder live frames reach their card through every adapter pass", () => 
       // the one `dropEmptyInFlightToolCalls` is allowed to delete.
       const part = toolCallPart(resolved, rawInput, "input-available")
       expect(dropEmptyInFlightToolCalls([part])).toHaveLength(1)
-
-      // …and it must not be folded into a generic tool-group, or the card's
-      // renderer branch is never reached.
-      const grouped = groupConsecutiveToolCalls([part])
-      expect(grouped).toHaveLength(1)
-      expect(grouped[0].type).toBe("tool-call")
     }
   )
 
   it("keeps an arg-less in-flight check_user_feedback alive through the empty-drop", () => {
     // `check_user_feedback` takes NO arguments, so its live frame is the exact
     // "empty args + unsettled + no output" shape `dropEmptyInFlightToolCalls`
-    // deletes. It must be exempt — the FeedbackCheckResultCard owns the decision
-    // to hide a no-op poll (`dropHiddenFeedbackChecks`), not this pass.
+    // deletes. It must be exempt — the feedback lane owns the decision to hide
+    // a no-op poll (`dropHiddenFeedbackChecks`), not this pass.
     const resolved = inferLiveToolName(qoderFrame("check_user_feedback", {}))
     const part = toolCallPart(resolved, {}, "input-available")
     expect(dropEmptyInFlightToolCalls([part])).toEqual([part])
   })
 
-  it("does not let a run of codeg-mcp calls collapse into one tool-group", () => {
-    // A real delegation turn is a burst of polls; if they folded, the user would
-    // see "调用 5 个工具" instead of five cards.
+  it("does not let a run of codeg-mcp calls collapse into one row", () => {
+    // A real delegation turn is a burst of calls; if they folded, the user
+    // would see one tally instead of a row per call.
     const parts: AdaptedContentPart[] = QODER_FRAMES.map(({ tool, rawInput }) =>
       toolCallPart(
         inferLiveToolName(qoderFrame(tool, rawInput)),
@@ -137,9 +130,9 @@ describe("Qoder live frames reach their card through every adapter pass", () => 
         "output-available"
       )
     )
-    const grouped = groupConsecutiveToolCalls(parts)
-    expect(grouped).toHaveLength(QODER_FRAMES.length)
-    expect(grouped.every((p) => p.type === "tool-call")).toBe(true)
+    const { items } = buildActivity(parts, { isStreaming: false })
+    expect(items).toHaveLength(QODER_FRAMES.length)
+    expect(items.every((item) => item.type === "step")).toBe(true)
   })
 
   it("holds the identity when the follow-up frame carries no _meta", () => {

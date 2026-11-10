@@ -11,6 +11,7 @@ import {
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useOpenFileTarget } from "@/hooks/use-open-file-target"
+import { useArrivedOnCompletion } from "@/hooks/use-chat-motion"
 import {
   CommitFileAdditions,
   CommitFileDeletions,
@@ -93,6 +94,7 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
     }
     return { addedFiles, changedFiles }
   }, [files])
+  const arrived = useArrivedOnCompletion(isResponseComplete)
 
   if (!isResponseComplete) return null
   if (files.length === 0) return null
@@ -132,7 +134,7 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
   const totalDeletions = changedFiles.reduce((sum, f) => sum + f.deletions, 0)
 
   return (
-    <div className="mt-2 space-y-2">
+    <div className={cn("mt-2 space-y-2", arrived && "chat-enter")}>
       {addedFiles.length > 0 && (
         <div className="overflow-hidden rounded-lg border border-border bg-card/40 text-card-foreground">
           <button
@@ -177,7 +179,7 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
                     return (
                       <div
                         key={file.id}
-                        className="flex items-stretch overflow-hidden rounded-md border border-green-600/30 bg-green-500/5 transition-colors hover:border-green-600/50 hover:bg-green-500/10 dark:border-green-400/30 dark:hover:border-green-400/50"
+                        className="flex items-stretch overflow-hidden rounded-md border border-tone-success/30 bg-tone-success/5 transition-colors hover:border-tone-success/50 hover:bg-tone-success/10"
                       >
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -221,7 +223,7 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
                                 type="button"
                                 onClick={() => revealInFolder(file)}
                                 aria-label={t("revealInFolder")}
-                                className="flex w-9 shrink-0 items-center justify-center border-l border-green-600/30 text-muted-foreground transition-colors hover:bg-green-500/15 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring dark:border-green-400/30"
+                                className="flex w-9 shrink-0 items-center justify-center border-l border-tone-success/30 text-muted-foreground transition-colors hover:bg-tone-success/15 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                               >
                                 <ExternalLink className="h-3.5 w-3.5" />
                               </button>
@@ -259,12 +261,8 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
             {/* Always render BOTH counts (incl. zeros) so a one-sided reply
                 still shows its +N and -N. */}
             <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-3xs">
-              <span className="text-green-600 dark:text-green-400">
-                +{totalAdditions}
-              </span>
-              <span className="text-red-600 dark:text-red-400">
-                -{totalDeletions}
-              </span>
+              <span className="text-tone-success">+{totalAdditions}</span>
+              <span className="text-tone-danger">-{totalDeletions}</span>
             </span>
             <ChevronRight
               className={cn(

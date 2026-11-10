@@ -3,6 +3,7 @@ import { formatConversationTitle } from "@/lib/conversation-title"
 import { buildFileUri } from "@/lib/reference-link"
 import {
   type AcpAgentInfo,
+  type AssistantInfo,
   type DbConversationSummary,
   type GitLogEntry,
 } from "@/lib/types"
@@ -52,6 +53,30 @@ export function agentToSuggestion(agent: AcpAgentInfo): SuggestionItem {
     },
     detail: agent.description || null,
     keywords: agent.agent_type,
+  }
+}
+
+/**
+ * Assistant → assistant reference, routed like an agent: it serializes inline
+ * as `[@name](codeg://assistant/<id>)`, from which the backend derives the
+ * delegation reminder at send time. The second line is the description the
+ * delegating agent also reads, or the agent it runs on when there is none; the
+ * agent's name and slug are searchable too.
+ */
+export function assistantToSuggestion(
+  assistant: AssistantInfo
+): SuggestionItem {
+  const agentLabel = getAgentLabel(assistant.agent_type)
+  return {
+    reference: {
+      refType: "assistant",
+      id: String(assistant.id),
+      label: assistant.name,
+      uri: `codeg://assistant/${assistant.id}`,
+      meta: { assistantId: assistant.id },
+    },
+    detail: assistant.description || agentLabel,
+    keywords: `${agentLabel} ${assistant.agent_type}`,
   }
 }
 

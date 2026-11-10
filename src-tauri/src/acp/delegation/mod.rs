@@ -36,6 +36,7 @@
 //! `delegation_call_id` routing — strictly a continuation of the original
 //! task, never a second iteration on it (the tool takes no task text).
 
+pub mod assistants;
 pub mod broker;
 pub mod companion;
 pub mod depth;
@@ -63,3 +64,65 @@ pub const DELEGATE_TOOL_REWRITE_TITLE: &str = "codeg-mcp__delegate_to_agent";
 pub const STATUS_TOOL_REWRITE_TITLE: &str = "codeg-mcp__get_delegation_status";
 pub const CANCEL_TOOL_REWRITE_TITLE: &str = "codeg-mcp__cancel_delegation";
 pub const RESUME_TOOL_REWRITE_TITLE: &str = "codeg-mcp__resume_delegation";
+
+/// Whether a host's name for a tool is codeg-mcp's own `tool`, in whatever
+/// spelling the host composed it — `mcp__codeg-mcp__ask_user_question` from
+/// claude-agent-acp, `codeg-mcp__ask_user_question`, `codeg-mcp/…`,
+/// `codeg-mcp: …`, `mcp.codeg-mcp.…`, any case. The name is cut at the first
+/// separator between server and tool (`__`, `/`, `:` or `.`, after an optional
+/// leading `mcp`), and each half must be exactly codeg-mcp's and the tool's: a
+/// server named `other-codeg-mcp` or `codeg` (whose `mcp_submit_result` would
+/// read the same with the boundary gone), or a tool named
+/// `ask_user_question_twice`, is someone else's. It decides auto-approvals, so a
+/// near miss keeps its approval card.
+pub fn is_codeg_mcp_tool(name: &str, tool: &str) -> bool {
+    const BOUNDARIES: [&str; 4] = ["__", "/", ":", "."];
+    let name = name.trim().to_ascii_lowercase();
+    let name = BOUNDARIES
+        .iter()
+        .find_map(|sep| name.strip_prefix(&format!("mcp{sep}")))
+        .unwrap_or(&name);
+    let Some((at, sep)) = BOUNDARIES
+        .iter()
+        .filter_map(|sep| name.find(sep).map(|at| (at, *sep)))
+        .min_by_key(|(at, _)| *at)
+    else {
+        return false;
+    };
+    let (server, named_tool) = (name[..at].trim(), name[at + sep.len()..].trim());
+    matches!(server, "codeg-mcp" | "codeg_mcp") && named_tool == tool
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_codeg_mcp_tool;
+
+    #[test]
+    fn a_codeg_mcp_tool_is_known_by_its_whole_name_only() {
+        for name in [
+            "mcp__codeg-mcp__submit_result",
+            "codeg-mcp__submit_result",
+            "codeg-mcp/submit_result",
+            "codeg-mcp: submit_result",
+            "mcp.codeg-mcp.submit_result",
+            "  MCP__Codeg-MCP__Submit_Result  ",
+        ] {
+            assert!(is_codeg_mcp_tool(name, "submit_result"), "{name}");
+        }
+        for name in [
+            "mcp__other-codeg-mcp__submit_result",
+            "mcp__codeg-mcp-x__submit_result",
+            "mcp__codeg-mcp__submit_result_twice",
+            "mcp__codeg-mcp__ask_user_question",
+            // A server named `codeg` with a tool `mcp_submit_result`: the same
+            // words, another boundary.
+            "mcp__codeg__mcp_submit_result",
+            "codeg/mcp_submit_result",
+            "submit_result",
+            "codeg-mcp",
+            "",
+        ] {
+            assert!(!is_codeg_mcp_tool(name, "submit_result"), "{name}");
+        }
+    }
+}

@@ -62,6 +62,62 @@ describe("FileTree keyboard focus topology", () => {
   })
 })
 
+describe("FileTree row chrome", () => {
+  it("leaves a directory with the chevron as its only glyph", () => {
+    // The chevron already says "directory" AND expanded/collapsed; a folder
+    // icon beside it is a second copy of the same information.
+    const { container } = renderTree(false)
+
+    expect(container.querySelector(".lucide-folder")).toBeNull()
+    expect(container.querySelector(".lucide-folder-open")).toBeNull()
+    expect(
+      screen
+        .getByRole("button", { name: "dir" })
+        .querySelector(".lucide-chevron-right")
+    ).not.toBeNull()
+  })
+
+  it("puts a file's icon in the same leading column as a folder's chevron", () => {
+    // Folder rows read [chevron][name] and file rows [icon][name]. A spacer in
+    // front of the file icon (which is what the folder icon used to line up
+    // with) would push every file name one glyph right of its sibling
+    // directory's.
+    renderTree(false)
+    const [, fileItem] = screen.getAllByRole("treeitem")
+
+    expect(
+      fileItem.firstElementChild?.querySelector(".lucide-file")
+    ).not.toBeNull()
+  })
+
+  it("indents one glyph width (1rem) per nesting level", () => {
+    // Narrow panels are the file tree's home, so a level costs exactly one
+    // leading-glyph column. jsdom folds the row's
+    // `calc(<depth> * 1rem + 0.5rem)` down to a single term, which is why the
+    // expectations read as the already-summed values.
+    render(
+      <FileTree expanded={new Set(["dir", "dir/sub"])}>
+        <FileTreeFolder path="dir" name="dir" depth={0}>
+          <FileTreeFolder path="dir/sub" name="sub" depth={1}>
+            <FileTreeFile path="dir/sub/file.ts" name="file.ts" depth={2} />
+          </FileTreeFolder>
+        </FileTreeFolder>
+      </FileTree>
+    )
+
+    expect(screen.getByRole("button", { name: "dir" })).toHaveStyle({
+      paddingLeft: "calc(0.5rem)",
+    })
+    expect(screen.getByRole("button", { name: "sub" })).toHaveStyle({
+      paddingLeft: "calc(1.5rem)",
+    })
+    const fileRow = screen
+      .getAllByRole("treeitem")
+      .find((row) => row.textContent === "file.ts")
+    expect(fileRow).toHaveStyle({ paddingLeft: "calc(2.5rem)" })
+  })
+})
+
 describe("FileTree trailing row actions", () => {
   afterEach(() => {
     vi.restoreAllMocks()

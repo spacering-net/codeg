@@ -55,6 +55,35 @@ describe("denormalizeSnapshot — active_delegations", () => {
     const patch = denormalizeSnapshot(snap)
     expect(patch.activeDelegations).toEqual([])
   })
+
+  // Every running delegation, card or not: the parent's busy signal.
+  it("carries delegated_children, defaulting to [] when absent", () => {
+    expect(
+      denormalizeSnapshot(baseSnapshot({ delegated_children: ["c1", "c2"] }))
+        .delegatedChildren
+    ).toEqual(["c1", "c2"])
+    expect(denormalizeSnapshot(baseSnapshot()).delegatedChildren).toEqual([])
+  })
+})
+
+describe("denormalizeSnapshot — hasPrompted", () => {
+  it("is false for a connection no prompt has linked yet", () => {
+    // A new conversation's draft, or a reopened one before its first prompt:
+    // the backend binds `conversation_id` at the first prompt, not at connect.
+    expect(denormalizeSnapshot(baseSnapshot()).hasPrompted).toBe(false)
+  })
+
+  it("is true once a prompt has linked the connection to its row", () => {
+    expect(
+      denormalizeSnapshot(baseSnapshot({ conversation_id: 42 })).hasPrompted
+    ).toBe(true)
+  })
+
+  it("is true mid-turn, linked or not", () => {
+    expect(
+      denormalizeSnapshot(baseSnapshot({ status: "prompting" })).hasPrompted
+    ).toBe(true)
+  })
 })
 
 describe("denormalizeSnapshot — subagent attribution on live blocks", () => {
@@ -221,7 +250,23 @@ describe("denormalizeSnapshot — last_error", () => {
       })
     )
     expect(patch.lastError).toBe("ACP protocol error: Forbidden")
+    // The code rides along so the provider can localize the message the same
+    // way it localizes the live `error` event.
+    expect(patch.lastErrorCode).toBe("forbidden")
+    expect(patch.lastErrorLevel).toBe("error")
     expect(patch.status).toBe("connected")
+  })
+
+  it("routes the level off the code", () => {
+    const patch = denormalizeSnapshot(
+      baseSnapshot({
+        last_error: {
+          message: "Failed to load session, starting new: gone",
+          code: "session_load_fallback",
+        },
+      })
+    )
+    expect(patch.lastErrorLevel).toBe("warning")
   })
 
   it("defaults lastError to null when the field is absent", () => {
@@ -229,6 +274,7 @@ describe("denormalizeSnapshot — last_error", () => {
     delete (snap as { last_error?: unknown }).last_error
     const patch = denormalizeSnapshot(snap)
     expect(patch.lastError).toBeNull()
+    expect(patch.lastErrorCode).toBeNull()
     expect(patch.status).toBe("connected")
   })
 })

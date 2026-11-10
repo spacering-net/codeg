@@ -4,9 +4,11 @@ import { forwardRef, useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { formatTokenCount } from "@/lib/token-format"
 import {
+  CACHE_HIT_RATE_DIGITS,
   cacheHitRate,
   deriveArchetype,
   formatDuration,
+  formatPercent,
   formatTokensPrecise,
   type ArchetypeId,
 } from "@/lib/token-usage"
@@ -654,7 +656,7 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(
                     color: theme.text,
                   }}
                 >
-                  {Math.round(cache * 100)}%
+                  {formatPercent(cache, CACHE_HIT_RATE_DIGITS)}
                 </div>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>

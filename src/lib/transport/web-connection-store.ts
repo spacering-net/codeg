@@ -13,6 +13,7 @@
 
 import { detectEnvironment } from "./detect"
 import { getShellTransport, isRemoteDesktopMode } from "./index"
+import type { UnauthorizedSource } from "./web-auth"
 import type { WebConnState, WebTransport } from "./web-transport"
 
 // Module-level constant so `getServerSnapshot` returns a STABLE reference on
@@ -36,6 +37,12 @@ function webTransport(): WebTransport | null {
     return null
   }
   return transport as WebTransport
+}
+
+/** Whether this page was served by the server it talks to — false on desktop
+ *  and in remote-desktop windows, whose pages ship with the app. */
+export function usesWebTransport(): boolean {
+  return webTransport() !== null
 }
 
 export function subscribeWebConnection(callback: () => void): () => void {
@@ -62,6 +69,6 @@ export function reconnectWebNow(): void {
  * `lib/api.ts` that bypasses `WebTransport.call`) into the same unauthorized
  * dialog state, rather than an abrupt redirect. No-op off the web shell.
  */
-export function notifyWebUnauthorized(): void {
-  webTransport()?.markUnauthorized()
+export function notifyWebUnauthorized(source: UnauthorizedSource): void {
+  webTransport()?.markUnauthorized(source)
 }

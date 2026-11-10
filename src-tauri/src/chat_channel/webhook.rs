@@ -38,22 +38,58 @@ pub fn enabled_webhook_urls(json: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The conversation behind the connection an event came from, as far as the
+/// global feed could resolve it. Every field is optional on the wire: a
+/// connection that has not been bound to a conversation row yet (or whose row
+/// is gone) still delivers, with these left `null`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SessionContext {
+    pub conversation_id: Option<i32>,
+    pub conversation_title: Option<String>,
+    /// Stable agent id (`claude_code`, `codex`, a custom agent's id, ...).
+    pub agent_type: Option<String>,
+    /// The agent's display name (`Claude Code`, a custom agent's label, ...).
+    pub agent_name: Option<String>,
+    /// The assistant a delegated sub-session runs as, if it was started as one.
+    pub assistant_name: Option<String>,
+    /// Set for a delegation sub-session: the conversation that delegated it.
+    /// `None` for a top-level session.
+    pub parent: Option<ParentSession>,
+}
+
+/// The conversation a sub-session was delegated from (its direct parent; for
+/// a nested sub-session that is itself a sub-session).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParentSession {
+    pub conversation_id: i32,
+    pub title: Option<String>,
+}
+
 /// Build the JSON body POSTed to each webhook for one event.
 ///
 /// Pure (no I/O, no clock) so the wire contract is unit-testable. `title`,
 /// `body` and the `fields` labels are localized per the chat message-language
-/// setting (same text IM channels receive); `event`, `level` and `source` are
-/// stable machine-readable values.
+/// setting (same text IM channels receive); `event`, `level`, `source`,
+/// `agent_type` and `session_kind` are stable machine-readable values.
+/// `session_kind` is `"sub_session"` for a delegation sub-session (then the
+/// `parent_conversation_*` keys name the conversation that delegated it) and
+/// `"session"` otherwise.
 pub fn build_webhook_payload(
     event_type: &str,
     connection_id: &str,
     msg: &RichMessage,
+    session: &SessionContext,
 ) -> serde_json::Value {
     let fields: Vec<serde_json::Value> = msg
         .fields
         .iter()
         .map(|(label, value)| serde_json::json!({ "label": label, "value": value }))
         .collect();
+    let session_kind = if session.parent.is_some() {
+        "sub_session"
+    } else {
+        "session"
+    };
 
     serde_json::json!({
         "event": event_type,
@@ -62,6 +98,14 @@ pub fn build_webhook_payload(
         "body": msg.body,
         "fields": fields,
         "connection_id": connection_id,
+        "conversation_id": session.conversation_id,
+        "conversation_title": session.conversation_title,
+        "agent_type": session.agent_type,
+        "agent_name": session.agent_name,
+        "assistant_name": session.assistant_name,
+        "session_kind": session_kind,
+        "parent_conversation_id": session.parent.as_ref().map(|p| p.conversation_id),
+        "parent_conversation_title": session.parent.as_ref().and_then(|p| p.title.clone()),
         "source": "codeg",
     })
 }
@@ -156,7 +200,12 @@ mod tests {
 
     #[test]
     fn payload_has_stable_envelope_and_localized_text() {
-        let payload = build_webhook_payload("turn_complete", "conn-abc", &sample_msg());
+        let payload = build_webhook_payload(
+            "turn_complete",
+            "conn-abc",
+            &sample_msg(),
+            &SessionContext::default(),
+        );
         assert_eq!(payload["event"], "turn_complete");
         assert_eq!(payload["level"], "info");
         assert_eq!(payload["title"], "Turn Complete");
@@ -168,6 +217,70 @@ mod tests {
     }
 
     #[test]
+    fn payload_without_a_resolved_conversation_is_a_session_with_null_context() {
+        let payload = build_webhook_payload(
+            "turn_complete",
+            "conn-abc",
+            &sample_msg(),
+            &SessionContext::default(),
+        );
+        assert_eq!(payload["session_kind"], "session");
+        for key in [
+            "conversation_id",
+            "conversation_title",
+            "agent_type",
+            "agent_name",
+            "assistant_name",
+            "parent_conversation_id",
+            "parent_conversation_title",
+        ] {
+            assert!(payload[key].is_null(), "{key} should be null: {payload}");
+        }
+    }
+
+    #[test]
+    fn payload_carries_top_level_session_context() {
+        let session = SessionContext {
+            conversation_id: Some(7),
+            conversation_title: Some("Fix the login flow".into()),
+            agent_type: Some("claude_code".into()),
+            agent_name: Some("Claude Code".into()),
+            assistant_name: None,
+            parent: None,
+        };
+        let payload = build_webhook_payload("turn_complete", "conn-abc", &sample_msg(), &session);
+        assert_eq!(payload["conversation_id"], 7);
+        assert_eq!(payload["conversation_title"], "Fix the login flow");
+        assert_eq!(payload["agent_type"], "claude_code");
+        assert_eq!(payload["agent_name"], "Claude Code");
+        assert!(payload["assistant_name"].is_null());
+        assert_eq!(payload["session_kind"], "session");
+        assert!(payload["parent_conversation_id"].is_null());
+        assert!(payload["parent_conversation_title"].is_null());
+    }
+
+    #[test]
+    fn payload_marks_a_sub_session_and_names_its_parent() {
+        let session = SessionContext {
+            conversation_id: Some(9),
+            conversation_title: Some("Review the patch".into()),
+            agent_type: Some("codex".into()),
+            agent_name: Some("Codex CLI".into()),
+            assistant_name: Some("Reviewer".into()),
+            parent: Some(ParentSession {
+                conversation_id: 7,
+                title: Some("Fix the login flow".into()),
+            }),
+        };
+        let payload = build_webhook_payload("turn_complete", "conn-child", &sample_msg(), &session);
+        assert_eq!(payload["session_kind"], "sub_session");
+        assert_eq!(payload["conversation_id"], 9);
+        assert_eq!(payload["assistant_name"], "Reviewer");
+        assert_eq!(payload["parent_conversation_id"], 7);
+        assert_eq!(payload["parent_conversation_title"], "Fix the login flow");
+    }
+
+    #[test]
     fn payload_level_tracks_message_level() {
         let err = RichMessage {
             title: Some("Agent Error".into()),
@@ -175,7 +288,7 @@ mod tests {
             fields: vec![],
             level: MessageLevel::Error,
         };
-        let payload = build_webhook_payload("error", "c", &err);
+        let payload = build_webhook_payload("error", "c", &err, &SessionContext::default());
         assert_eq!(payload["level"], "error");
         assert_eq!(payload["title"], "Agent Error");
         assert!(payload["fields"].as_array().unwrap().is_empty());
@@ -220,7 +333,8 @@ mod tests {
     #[test]
     fn payload_title_null_when_absent() {
         let msg = RichMessage::info("just a body");
-        let payload = build_webhook_payload("permission_request", "c", &msg);
+        let payload =
+            build_webhook_payload("permission_request", "c", &msg, &SessionContext::default());
         assert!(payload["title"].is_null());
         assert_eq!(payload["event"], "permission_request");
     }
@@ -279,7 +393,12 @@ mod tests {
         });
 
         let client = make_webhook_client();
-        let payload = build_webhook_payload("turn_complete", "conn-1", &sample_msg());
+        let payload = build_webhook_payload(
+            "turn_complete",
+            "conn-1",
+            &sample_msg(),
+            &SessionContext::default(),
+        );
         post_one(&client, &format!("http://{addr}/hook"), &payload)
             .await
             .expect("post should succeed");

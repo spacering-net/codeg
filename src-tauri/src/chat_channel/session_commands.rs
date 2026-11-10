@@ -14,7 +14,7 @@ use super::types::{
 };
 use crate::acp::manager::ConnectionManager;
 use crate::acp::registry::all_acp_agents;
-use crate::acp::types::PromptInputBlock;
+use crate::acp::types::{PermissionAnswerOrigin, PermissionOptionInfo, PromptInputBlock};
 use crate::db::entities::{chat_channel_thread_binding, conversation};
 use crate::db::service::{
     conversation_service, folder_service, sender_context_service, thread_binding_service,
@@ -1042,7 +1042,7 @@ pub async fn handle_permission_response(
         }
     };
 
-    let pending = {
+    let (pending, option_id) = {
         let mut bridge_guard = bridge.lock().await;
         let session = match bridge_guard.get_mut(&session_ref.connection_id) {
             Some(s) => s,
@@ -1053,39 +1053,34 @@ pub async fn handle_permission_response(
                 return RichMessage::info(i18n::no_active_session_found(lang));
             }
         };
-        session.permission_pending.take()
-    };
-
-    let pending = match pending {
-        Some(p) => p,
-        None => {
+        let Some(pending) = session.permission_pending.take() else {
             return RichMessage::info(i18n::no_pending_permission(lang));
-        }
-    };
-
-    // Find the appropriate option_id
-    let option_id = if approve {
-        pending
-            .options
-            .iter()
-            .find(|o| o.kind == "allow" || o.kind == "allowForSession")
-            .or_else(|| pending.options.first())
-            .map(|o| o.option_id.clone())
-    } else {
-        pending
-            .options
-            .iter()
-            .find(|o| o.kind == "deny")
-            .or_else(|| pending.options.last())
-            .map(|o| o.option_id.clone())
-    };
-
-    let Some(option_id) = option_id else {
-        return RichMessage::info(i18n::no_valid_permission_option(lang));
+        };
+        // A one-time answer, found by kind: see `allow_once_in`.
+        let option = if approve {
+            PermissionOptionInfo::allow_once_in(&pending.options)
+        } else {
+            PermissionOptionInfo::reject_once_in(&pending.options)
+        };
+        let Some(option_id) = option.map(|o| o.option_id.clone()) else {
+            // Left waiting, for the card in codeg or the other command.
+            session.permission_pending = Some(pending);
+            return RichMessage::info(if approve {
+                i18n::no_allow_once_option(lang)
+            } else {
+                i18n::no_reject_once_option(lang)
+            });
+        };
+        (pending, option_id)
     };
 
     if let Err(e) = conn_mgr
-        .respond_permission(&session_ref.connection_id, &pending.request_id, &option_id)
+        .respond_permission_from(
+            &session_ref.connection_id,
+            &pending.request_id,
+            &option_id,
+            PermissionAnswerOrigin::ChatChannel,
+        )
         .await
     {
         return RichMessage::error(format!(
@@ -1736,6 +1731,7 @@ fn truncate_title(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::acp::connection::ConnectionCommand;
+    use crate::chat_channel::session_bridge::PendingPermission;
     use crate::db::service::{agent_setting_service, chat_channel_service, sender_context_service};
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
 
@@ -2198,5 +2194,238 @@ mod tests {
 
         crate::acp::custom_registry::hydrate(&[]);
         assert_eq!(parse_agent_type("chat-cmd-qwen-code"), None);
+    }
+
+    /// One option of a permission request, as `connection.rs` passes it on:
+    /// the agent's own id and name, the kind normalized.
+    fn permission_option(option_id: &str, name: &str, kind: &str) -> PermissionOptionInfo {
+        PermissionOptionInfo {
+            option_id: option_id.into(),
+            name: name.into(),
+            kind: kind.into(),
+            meta: None,
+        }
+    }
+
+    /// claude-agent-acp 0.91.0's options for a call the Claude CLI marks
+    /// `defaultToNo`: `declineFirstOptionOrder` puts the rejection first, so
+    /// the first option turns the call away and the last allows it for good.
+    fn decline_first_options() -> Vec<PermissionOptionInfo> {
+        vec![
+            permission_option("reject", "No", "reject_once"),
+            permission_option("allow-once", "Yes", "allow_once"),
+            permission_option(
+                "allow-with-updates",
+                "Yes, and don't ask again",
+                "allow_always",
+            ),
+        ]
+    }
+
+    /// A sender whose live session has a permission request with `options`
+    /// waiting on it. Returns the receiving end of the session's commands.
+    async fn pending_permission_session(
+        db: &crate::db::AppDatabase,
+        options: Vec<PermissionOptionInfo>,
+    ) -> (
+        i32,
+        ChannelMessageTarget,
+        ConnectionManager,
+        tokio::sync::mpsc::Receiver<ConnectionCommand>,
+        Arc<Mutex<SessionBridge>>,
+    ) {
+        let channel_id = seed_chat_channel(db).await;
+        let folder_id = seed_folder(db, "/tmp/codeg-chat-permission").await;
+        let conv_id = seed_conversation(db, folder_id, AgentType::ClaudeCode).await;
+        sender_context_service::update_session(
+            &db.conn,
+            channel_id,
+            "sender-1",
+            Some(conv_id),
+            Some("conn-permission".to_string()),
+        )
+        .await
+        .expect("sender session");
+        let conn_mgr = ConnectionManager::new();
+        let rx = conn_mgr
+            .insert_test_connection_live(
+                "conn-permission",
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        let target = ChannelMessageTarget::channel(channel_id);
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        bridge.lock().await.register(
+            "conn-permission".to_string(),
+            ActiveSession {
+                channel_id,
+                sender_id: "sender-1".to_string(),
+                target: target.clone(),
+                conversation_id: conv_id,
+                connection_id: "conn-permission".to_string(),
+                agent_type: AgentType::ClaudeCode,
+                content_buffer: String::new(),
+                tool_calls: Vec::new(),
+                tool_call_inputs: std::collections::HashMap::new(),
+                delegation_rendered: std::collections::HashSet::new(),
+                last_flushed: Instant::now(),
+                pending_prompt: None,
+                permission_pending: Some(PendingPermission {
+                    request_id: "req-1".to_string(),
+                    tool_description: "Bash: rm -rf build".to_string(),
+                    options,
+                    sent_message_id: None,
+                }),
+            },
+        );
+        (channel_id, target, conn_mgr, rx, bridge)
+    }
+
+    /// The option the session was answered with, if it was answered.
+    fn answered_option(rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>) -> Option<String> {
+        match rx.try_recv() {
+            Ok(ConnectionCommand::RespondPermission {
+                request_id,
+                option_id,
+                origin,
+            }) => {
+                assert_eq!(origin, PermissionAnswerOrigin::ChatChannel);
+                assert_eq!(request_id, "req-1");
+                Some(option_id)
+            }
+            Ok(_) => panic!("expected a permission response"),
+            Err(_) => None,
+        }
+    }
+
+    async fn pending_request_id(bridge: &Arc<Mutex<SessionBridge>>) -> Option<String> {
+        bridge
+            .lock()
+            .await
+            .get("conn-permission")
+            .and_then(|s| s.permission_pending.as_ref())
+            .map(|p| p.request_id.clone())
+    }
+
+    #[tokio::test]
+    async fn deny_rejects_once_when_the_rejection_leads() {
+        // Picked by position, `/deny` took the last option — here the one that
+        // allows the call for good, so saying no wrote a standing yes.
+        let db = fresh_in_memory_db().await;
+        let (channel_id, target, conn_mgr, mut rx, bridge) =
+            pending_permission_session(&db, decline_first_options()).await;
+
+        handle_permission_response(
+            false,
+            false,
+            &db.conn,
+            channel_id,
+            "sender-1",
+            &target,
+            &conn_mgr,
+            &bridge,
+            Lang::En,
+        )
+        .await;
+
+        assert_eq!(answered_option(&mut rx).as_deref(), Some("reject"));
+        assert_eq!(pending_request_id(&bridge).await, None);
+    }
+
+    #[tokio::test]
+    async fn approve_allows_once_when_the_rejection_leads() {
+        // Picked by position, `/approve` took the first option — here the
+        // rejection.
+        let db = fresh_in_memory_db().await;
+        let (channel_id, target, conn_mgr, mut rx, bridge) =
+            pending_permission_session(&db, decline_first_options()).await;
+
+        handle_permission_response(
+            true,
+            false,
+            &db.conn,
+            channel_id,
+            "sender-1",
+            &target,
+            &conn_mgr,
+            &bridge,
+            Lang::En,
+        )
+        .await;
+
+        assert_eq!(answered_option(&mut rx).as_deref(), Some("allow-once"));
+        assert_eq!(pending_request_id(&bridge).await, None);
+    }
+
+    #[tokio::test]
+    async fn approve_always_grants_nothing_standing() {
+        // `/approve always` turns on codeg's own auto-approve for this sender;
+        // it never asks the agent to remember the call. With no allow-once
+        // option on offer, the request stays where it was — for the card in
+        // codeg, or for `/deny` — and auto-approve stays off.
+        let db = fresh_in_memory_db().await;
+        let options = vec![
+            permission_option(
+                "allow-with-updates",
+                "Yes, and don't ask again",
+                "allow_always",
+            ),
+            permission_option("reject", "No", "reject_once"),
+        ];
+        let (channel_id, target, conn_mgr, mut rx, bridge) =
+            pending_permission_session(&db, options).await;
+
+        let reply = handle_permission_response(
+            true,
+            true,
+            &db.conn,
+            channel_id,
+            "sender-1",
+            &target,
+            &conn_mgr,
+            &bridge,
+            Lang::En,
+        )
+        .await;
+
+        assert_eq!(answered_option(&mut rx), None);
+        assert_eq!(pending_request_id(&bridge).await.as_deref(), Some("req-1"));
+        assert_eq!(reply.body, i18n::no_allow_once_option(Lang::En));
+        let ctx = sender_context_service::get_or_create(&db.conn, channel_id, "sender-1")
+            .await
+            .unwrap();
+        assert!(!ctx.auto_approve);
+    }
+
+    #[tokio::test]
+    async fn deny_sets_no_standing_rejection() {
+        // A `reject_always` writes a rule into the agent's settings as surely
+        // as an `allow_always`; `/deny` asked for neither.
+        let db = fresh_in_memory_db().await;
+        let options = vec![
+            permission_option("allow-once", "Yes", "allow_once"),
+            permission_option("reject-always", "No, and don't ask again", "reject_always"),
+        ];
+        let (channel_id, target, conn_mgr, mut rx, bridge) =
+            pending_permission_session(&db, options).await;
+
+        let reply = handle_permission_response(
+            false,
+            false,
+            &db.conn,
+            channel_id,
+            "sender-1",
+            &target,
+            &conn_mgr,
+            &bridge,
+            Lang::En,
+        )
+        .await;
+
+        assert_eq!(answered_option(&mut rx), None);
+        assert_eq!(pending_request_id(&bridge).await.as_deref(), Some("req-1"));
+        assert_eq!(reply.body, i18n::no_reject_once_option(Lang::En));
     }
 }

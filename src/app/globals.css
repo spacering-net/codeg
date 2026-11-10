@@ -9,6 +9,10 @@
 @import "@fontsource-variable/fira-code";
 @import "@fontsource-variable/geist-mono";
 @custom-variant dark (&:is(.dark *));
+/* json-render's shadcn components (the cards in components/message/
+   json-render-block.tsx) carry their Tailwind classes in node_modules, which
+   Tailwind v4 does not scan. */
+@source "../../node_modules/@json-render/shadcn/dist";
 
 :root {
   /* 默认界面字体 = Inter（与 DEFAULT_UI_FONT_ID = "inter" 一致，须等于
@@ -981,8 +985,202 @@
   }
 }
 
+/* ===========================================================================
+   Activity timeline tokens（会话消息「执行过程」时间线）
+   语义色只在这里定义一份（亮/暗各一），不进 12 套主题预设：预设只换中性色和主色，
+   成败的颜色与主色解耦，失败独占红色。主色只落在「在动」的地方 —— 运行中圆环转动
+   的那段弧、运行中标题的流光 —— 和 MCP 徽标上（--activity-accent，见下方按预设的
+   一段）。red / rose 预设的主色色相（25° / 16°）几乎等于 --destructive（27°）：
+   那里的弧和失败同色，靠转动和只有一小段跟整圈红环分开。中性部分（轨道、圆环）从
+   --foreground 混色，跟随每套预设的明暗反转。
+   混色一律在 oklab（直角坐标）里做：在 oklch 里和 transparent / 白色这类无色相的
+   颜色混，旧内核会把缺失的色相当 0°（红）插值，绿色的 diff 底会混成粉色。
+   对比度按 12 套预设 × 明暗实测：文字 ≥ 4.5:1，圆环和图标 ≥ 3:1。亮色下绿 / 琥珀
+   压得比直觉深，是为了在自己的 10% 底色上仍过 4.5；圆环 45% 是过 3:1 的下限。
+   ========================================================================= */
+:root {
+  --activity-rail: color-mix(in oklab, var(--foreground) 12%, transparent);
+  --activity-ring: color-mix(in oklab, var(--foreground) 45%, transparent);
+  --activity-ring-done: color-mix(in oklab, var(--foreground) 22%, transparent);
+  --activity-ring-live: var(--activity-accent);
+  /* 没有 data-theme 时的兜底；各预设的值在 .dark 之后那段。 */
+  --activity-accent: var(--primary);
+  --activity-surface: var(--muted);
+  /* --muted-foreground 在 --muted 底上只有约 4.3:1：详情框和灰底小标签里的次要文字
+     改用它（向前景色略收），见下方 .activity-detail-box。 */
+  --activity-muted-strong: color-mix(
+    in oklab,
+    var(--muted-foreground) 88%,
+    var(--foreground)
+  );
+  /* 非文本步骤的标签、描述、命令行、路径和数字：保留半透明的次要层级，
+     比原先的 85% 略清楚；标签用字重区分，避免抢过正文。 */
+  --activity-secondary: color-mix(
+    in oklab,
+    var(--muted-foreground) 90%,
+    transparent
+  );
+  /* 「执行过程」头部胶囊的底：同用户消息气泡（bg-secondary），彩色预设下跟气泡一样带
+     主题色调。悬停是同一种颜色向前景色收 6%（亮色加深、暗色提亮），不换成别的灰；再深
+     胶囊里的次要文字就不到 4.5:1 了。开图时同气泡一样转半透明，见
+     [data-workspace-bg="on"]。胶囊里的次要文字用 --activity-muted-strong，12 套预设明暗
+     下静止 ≥ 5.3:1、悬停 ≥ 4.6:1。 */
+  --activity-capsule: var(--secondary);
+  --activity-capsule-hover: color-mix(
+    in oklab,
+    var(--secondary),
+    var(--foreground) 6%
+  );
+  /* 胶囊里「N 次失败」的红：--destructive 在气泡底上只有约 4.3:1，向前景色收 15%
+     （暗色下是提亮），胶囊静止和悬停时都 ≥ 4.9:1。 */
+  --activity-capsule-danger: color-mix(
+    in oklab,
+    var(--tone-danger) 85%,
+    var(--foreground)
+  );
+  --tone-success: oklch(0.52 0.13 150);
+  --tone-danger: var(--destructive);
+  --tone-danger-surface: color-mix(
+    in oklab,
+    var(--destructive) 8%,
+    var(--background)
+  );
+  --tone-warning: oklch(0.53 0.12 65);
+  --tone-info: oklch(0.58 0.13 255);
+  --diff-added-bg: color-mix(in oklab, var(--tone-success) 10%, transparent);
+  --diff-deleted-bg: color-mix(in oklab, var(--tone-danger) 10%, transparent);
+  --diff-modified-bg: color-mix(in oklab, var(--tone-info) 10%, transparent);
+  /* diff 行首的 + / −：画在同色系的行底上，向前景色收两成才够 4.5:1
+     （暗色下是提亮）。 */
+  --diff-added-fg: color-mix(
+    in oklab,
+    var(--tone-success) 80%,
+    var(--foreground)
+  );
+  --diff-deleted-fg: color-mix(
+    in oklab,
+    var(--tone-danger) 80%,
+    var(--foreground)
+  );
+}
+
+.dark {
+  --tone-success: oklch(0.74 0.15 150);
+  --tone-danger-surface: color-mix(
+    in oklab,
+    var(--destructive) 12%,
+    var(--background)
+  );
+  --tone-warning: oklch(0.8 0.14 80);
+  --tone-info: oklch(0.74 0.12 255);
+  --diff-added-bg: color-mix(in oklab, var(--tone-success) 14%, transparent);
+  --diff-deleted-bg: color-mix(in oklab, var(--tone-danger) 14%, transparent);
+  --diff-modified-bg: color-mix(in oklab, var(--tone-info) 14%, transparent);
+}
+
+/* 时间线里的主题色（--activity-accent）：运行中圆环转动的那段弧、运行中标题的流光、
+   MCP 徽标。不直接用 --primary —— 黄 / 绿 / 橙的亮色主色在白底上不到 3:1。取侧边栏
+   文件夹标题同一张表（theme-presets.ts 的 THEME_COLOR_TITLE：亮色明度压到 0.5、暗色
+   抬到 0.8，彩度收在 sRGB 里；灰阶五套就是主色本身），两处一起改，
+   globals-activity-accent.test.ts 逐值对账。实测在底上 ≥ 5.5:1，MCP 徽标自己 10%
+   的底色上 ≥ 4.8:1。自定义样式里设了主色时，appearance-provider 按同一规则
+   （readable-accent.ts）算出它的那份写到 <html> 行内，盖过这里。 */
+[data-theme="neutral"] {
+  --activity-accent: oklch(0.205 0 0);
+}
+[data-theme="neutral"].dark {
+  --activity-accent: oklch(0.87 0 0);
+}
+[data-theme="zinc"] {
+  --activity-accent: oklch(0.21 0.006 285.885);
+}
+[data-theme="zinc"].dark {
+  --activity-accent: oklch(0.92 0.004 286.32);
+}
+[data-theme="slate"] {
+  --activity-accent: oklch(0.208 0.042 265.755);
+}
+[data-theme="slate"].dark {
+  --activity-accent: oklch(0.929 0.013 255.508);
+}
+[data-theme="stone"] {
+  --activity-accent: oklch(0.216 0.006 56.043);
+}
+[data-theme="stone"].dark {
+  --activity-accent: oklch(0.923 0.003 48.717);
+}
+[data-theme="gray"] {
+  --activity-accent: oklch(0.21 0.034 264.665);
+}
+[data-theme="gray"].dark {
+  --activity-accent: oklch(0.928 0.006 264.531);
+}
+[data-theme="red"] {
+  --activity-accent: oklch(0.5 0.203 25.331);
+}
+[data-theme="red"].dark {
+  --activity-accent: oklch(0.8 0.114 25.331);
+}
+[data-theme="rose"] {
+  --activity-accent: oklch(0.5 0.2 16.439);
+}
+[data-theme="rose"].dark {
+  --activity-accent: oklch(0.8 0.115 16.439);
+}
+[data-theme="orange"] {
+  --activity-accent: oklch(0.5 0.137 47.604);
+}
+[data-theme="orange"].dark {
+  --activity-accent: oklch(0.8 0.119 41.116);
+}
+[data-theme="green"] {
+  --activity-accent: oklch(0.5 0.139 149.579);
+}
+[data-theme="green"].dark {
+  --activity-accent: oklch(0.8 0.17 162.48);
+}
+[data-theme="blue"] {
+  --activity-accent: oklch(0.5 0.245 262.881);
+}
+[data-theme="blue"].dark {
+  --activity-accent: oklch(0.8 0.1 259.815);
+}
+[data-theme="yellow"] {
+  --activity-accent: oklch(0.5 0.102 86.047);
+}
+[data-theme="yellow"].dark {
+  --activity-accent: oklch(0.8 0.163 86.047);
+}
+[data-theme="violet"] {
+  --activity-accent: oklch(0.5 0.25 292.717);
+}
+[data-theme="violet"].dark {
+  --activity-accent: oklch(0.8 0.111 293.009);
+}
+
 @theme inline {
   --font-sans: var(--font-sans);
+  --color-activity-rail: var(--activity-rail);
+  --color-activity-ring: var(--activity-ring);
+  --color-activity-ring-done: var(--activity-ring-done);
+  --color-activity-ring-live: var(--activity-ring-live);
+  --color-activity-accent: var(--activity-accent);
+  --color-activity-surface: var(--activity-surface);
+  --color-activity-muted-strong: var(--activity-muted-strong);
+  --color-activity-secondary: var(--activity-secondary);
+  --color-activity-capsule: var(--activity-capsule);
+  --color-activity-capsule-hover: var(--activity-capsule-hover);
+  --color-activity-capsule-danger: var(--activity-capsule-danger);
+  --color-tone-success: var(--tone-success);
+  --color-tone-danger: var(--tone-danger);
+  --color-tone-danger-surface: var(--tone-danger-surface);
+  --color-tone-warning: var(--tone-warning);
+  --color-tone-info: var(--tone-info);
+  --color-diff-added: var(--diff-added-bg);
+  --color-diff-deleted: var(--diff-deleted-bg);
+  --color-diff-modified: var(--diff-modified-bg);
+  --color-diff-added-fg: var(--diff-added-fg);
+  --color-diff-deleted-fg: var(--diff-deleted-fg);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -1043,9 +1241,33 @@
   font-size: 0.625rem; /* 10px @100% */
 }
 
+/* The chat column's max width: the user's dragged width (see
+   `ChatWidthHandles`), else 48rem (= the old `max-w-3xl`). Capped at the parent
+   minus `--chat-gutter` on each side — a relative ceiling, so it follows the
+   window, and the column never runs edge to edge (the conversation shell sets
+   the gutter, which keeps the drag handles off the window's resize border;
+   elsewhere it is 0). Shared by the transcript rows and the composer dock so
+   they stay aligned. */
+@utility chat-content-w {
+  max-width: min(
+    var(--chat-content-width, 48rem),
+    100% - 2 * var(--chat-gutter, 0px)
+  );
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+  /* Lucide draws on a 24px grid with a 2px stroke. Most icons here render at
+     12–16px, where that stroke lands at ~1–1.3 CSS px and reads heavy next to
+     12–14px text, so the library default is lightened to 1.75. Any other
+     `strokeWidth` keeps its weight. An explicit `strokeWidth={2}` renders the
+     same attribute as the default, so it is lightened too; pin a real 2 with
+     the `stroke-2` utility, which outranks this base-layer rule. Hand-written
+     lucide SVGs need the `lucide` class to pick this up. */
+  svg.lucide[stroke-width="2"] {
+    stroke-width: 1.75;
   }
   html,
   body {
@@ -1198,9 +1420,32 @@
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
+/* 「执行过程」头部胶囊（元素自带 bg-activity-capsule）：开图时同用户消息气泡（上面的
+   .is-user .ws-msg-secondary）——同一句半透明 --muted 加 inset 细线。悬停在同样的透明度上
+   向前景色收一档：叠在图上的那一层深 6%（--muted 收 12%、只铺一半），同关图时一样是加深，
+   图照样透出来。改的是令牌、不是 background-color：直接写 unlayered 的 background-color 会
+   盖掉元素上的 hover:bg-activity-capsule-hover，开图就没了悬停反馈。 */
+[data-workspace-bg="on"] {
+  --activity-capsule: color-mix(
+    in oklch,
+    var(--muted) calc(var(--ws-msg-alpha) * 100%),
+    transparent
+  );
+  --activity-capsule-hover: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--muted), var(--foreground) 12%)
+      calc(var(--ws-msg-alpha) * 100%),
+    transparent
+  );
+}
+[data-workspace-bg="on"] .activity-capsule {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
 /* 会话表格（Streamdown 内部渲染）：表格整体做成圆角半透明卡片——圆角/边框挂在滚动容器上（见
    下方 table-wrapper 区块，不磨砂），thead/tbody 只上半透明中性染色。表头比表体略深保层级；关图
-   回落各自 bg-muted/80·bg-muted/40（属性选择器 unlayered 压过 streamdown 的 layered 值）。 */
+   回落表头自带的 bg-muted/80、表体下方补的 muted 40%（属性选择器 unlayered 压过 streamdown 的
+   layered 值）。 */
 [data-workspace-bg="on"] [data-streamdown="table-header"] {
   background-color: color-mix(in oklch, var(--muted) 65%, transparent);
 }
@@ -1212,13 +1457,65 @@
   );
 }
 
-/* 围栏代码块标题栏（Streamdown 的 code-block-header，元素自带 bg-muted/80）：转半透明中性染色
-   （不磨砂），与其它 muted 标题栏统一。代码块根自带 rounded-xl border 作边界。代码正文
-   （code-block-body）有 shiki 底色、保持不透明（护可读性），不在此列。 */
+/* 围栏代码块（Streamdown 的 code-block）：标题栏（关图时是下方「Streamdown code blocks」区块
+   给的 muted 80%）和代码正文（关图时是 Streamdown 自带的不透明 bg-background）开图都转同一种
+   半透明中性染色（不磨砂），跟消息里其它表面一样透出背景图。两者底色一样了，标题栏底边补一条
+   inset 1px 分隔线（纯色 var(--border)，不改盒模型；关图两者底色不同，不需要）。代码块根自带
+   rounded-xl border 作外边界。 */
 [data-workspace-bg="on"] [data-streamdown="code-block-header"] {
   background-color: color-mix(
     in oklch,
     var(--muted) calc(var(--ws-msg-alpha) * 100%),
+    transparent
+  );
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+[data-workspace-bg="on"] [data-streamdown="code-block-body"] {
+  background-color: color-mix(
+    in oklch,
+    var(--muted) calc(var(--ws-msg-alpha) * 100%),
+    transparent
+  );
+}
+
+/* 消息里的细线，开图时加深。消息里的描边（「执行过程」胶囊、代码块和它标题栏的底边、表格、
+   内联代码、用户气泡、卡片和详情面板的 border-border……）都是主题 --border：一种不透明的浅灰
+   （深色主题是白 10%）。压在被遮罩冲淡的背景图上，它和线两侧的颜色差不多，线就看不出来了。
+   开图时在消息范围里把 --border 换成前景色的一层薄染色 --ws-msg-border：它按「比下面深多少」
+   画，压在图的哪种颜色上都一样看得出（深色主题是提亮），深浅同 chrome 分隔线。范围 = 消息
+   （.is-user / .is-assistant，会话和子会话抽屉里的都是）+ 显式的 .ws-msg-scope（消息之间的上下文
+   压缩分隔线、会话详情的消息导航）：任务、自动化等页面复用的 ws-msg-* 表面不在范围里，不受
+   影响。混色用 oklab：在 oklch 里和 transparent 混，旧内核会把缺失的色相按 0°（红）插值。 */
+[data-workspace-bg="on"] {
+  --ws-msg-border: color-mix(in oklab, var(--foreground) 18%, transparent);
+}
+[data-workspace-bg="on"] :is(.is-user, .is-assistant, .ws-msg-scope) {
+  --border: var(--ws-msg-border);
+}
+
+/* 面板：执行过程里步骤展开后的详情框（DetailBox）这类关图时无边框的浅底面板，开图后底色
+   半透明，和背景图分不开——补一圈上面那种细线。失败的面板（data-tone="danger"）关图是不透明
+   的浅红底，开图也换成半透明（消息表面同一种染色里调进一点红），线也带红。两处都只设自定义
+   属性、不直接写 color-mix 的颜色声明：构建会在直接写的 color-mix 前面补一条取第一种颜色的
+   回落声明（这里就是纯红的 --destructive），不认识 color-mix 的老内核丢掉后一条、用那条回落，
+   会把失败面板整块涂红；自定义属性的两条声明在任何内核里都是后一条生效，那条回落等于没有，
+   老内核里它在用处作废——底色同关图（老内核本就算不出 --tone-danger-surface），线不画。 */
+[data-workspace-bg="on"] .ws-msg-panel {
+  border: 1px solid var(--ws-msg-panel-border, var(--border));
+}
+[data-workspace-bg="on"] .ws-msg-panel[data-tone="danger"] {
+  --tone-danger-surface: color-mix(
+    in oklab,
+    var(--destructive) 10%,
+    color-mix(
+      in oklab,
+      var(--muted) calc(var(--ws-msg-alpha) * 100%),
+      transparent
+    )
+  );
+  --ws-msg-panel-border: color-mix(
+    in oklab,
+    var(--tone-danger) 35%,
     transparent
   );
 }
@@ -1229,6 +1526,13 @@
    color-mix，故无需 @supports 降级。 */
 [data-workspace-bg="on"] .ws-transparent-bg {
   background-color: transparent;
+}
+
+/* 渐隐到页面底色的遮挡（bg-gradient-to-* from-background）：开图时那一截渐变是一条不透明的
+   底色带，压在背景图上。去掉它，浮在上面的东西自己带磨砂底（会话详情消息导航底部的「当前
+   消息」按钮）。无 base 规则，关图零回归。 */
+[data-workspace-bg="on"] .ws-no-fade {
+  background-image: none;
 }
 
 /* 终端画布：让 xterm 视口透出所属 ws-surface 面板的磨砂表面（而非黑块）。xterm 6 的视口
@@ -1290,10 +1594,20 @@
 [data-workspace-bg="on"] {
   --ws-chrome-border: color-mix(in oklch, var(--foreground) 18%, transparent);
 }
-/* 老引擎无 color-mix 时回落到主题 --border（仍随主题，至少不崩）。 */
+/* 老引擎无 color-mix 时回落到主题 --border（仍随主题，至少不崩）。消息细线 --ws-msg-border 同理：
+   不回落的话，消息里的 --border 会是一句作废的 color-mix，边框退成 currentColor 的黑线。 */
 @supports not (background: color-mix(in oklch, white, transparent)) {
+  /* 「执行过程」胶囊同理：令牌作废的话底色是透明的，退回气泡的 --secondary（气泡在这里
+     也是它，开图那句 color-mix 被丢掉了），悬停不再变深。 */
+  :root {
+    --activity-capsule-hover: var(--secondary);
+    --activity-capsule-danger: var(--tone-danger);
+  }
   [data-workspace-bg="on"] {
     --ws-chrome-border: var(--border);
+    --ws-msg-border: var(--border);
+    --activity-capsule: var(--secondary);
+    --activity-capsule-hover: var(--secondary);
   }
 }
 /* 组合式 utility（无 base 规则）：挂在已带 border-* / border-border* 的 chrome 元素上，开图时用加强色
@@ -1311,11 +1625,36 @@
 }
 
 /* 分栏拖拽把手的静止细线（会话↔文件、自动化列表↔详情…）：ResizableHandle 的 `before:bg-border` 在
-   背景图上同样被冲淡，两栏之间没了边界。只把 **inactive** 态换成加强色——hover/drag 态那两档
-   （foreground/40 · /60）是 Tailwind layered 工具类，无条件覆盖会被 unlayered 规则静默吃掉、丢掉拖拽
-   反馈，故用 state 属性精确限定。关图无此规则 → 仍是 bg-border，零回归。 */
+   背景图上同样被冲淡，两栏之间没了边界。只把 **inactive** 态换成加强色——hover/drag 态那两档是
+   Tailwind layered 工具类，无条件覆盖会被 unlayered 规则静默吃掉、丢掉拖拽反馈，故用 state 属性
+   精确限定。关图无此规则 → 仍是 bg-border，零回归。 */
 [data-workspace-bg="on"] [data-resize-handle-state="inactive"]::before {
   background-color: var(--ws-chrome-border);
+}
+
+/* ===== 分栏拖拽把手 hover/drag 的**实色** =====
+   这两档原本是 `bg-foreground/40` / `/60`（半透明）。把手盒子本身只有 1px 宽，加粗后的 5px 线
+   居中压过去 → 两侧各 2px 骑在相邻面板上，正中 1px 却是两个面板都够不到的缝，透出的是面板组
+   底下的页面底色。于是只要两栏的背景不是页面底色（会话↔文件分栏顶部那条 `bg-muted` 标签条就是
+   典型），半透明线在缝上会亮一档，整条线读成「两条竖线中间夹一道缝」（用户反馈「顶部有两个边框
+   竖线重叠」）。实色取「40%/60% foreground 压在 --background 上」的同一个合成值：页面底色上与
+   原来逐像素一致（`in srgb` 而非 oklab——alpha 合成就是在 sRGB 分量上线性插值，oklab 混出来会
+   暗一档），换到标签条那种别的底色上也不再变调，缝随之消失。随主题走：自定义属性里的 var() 是在
+   **声明它的那个元素**上代入的（不是使用处），而主题的 --foreground/--background 正是由
+   `[data-theme=…]` / `.dark` 写在根元素上的（见 appearance-provider 的 documentElement），
+   和这条 :root 同一个元素 ⇒ 深色主题、强调色主题自动跟随。要把主题挪到子树上，这两行得跟着挪。
+   color-mix 不是新依赖——Tailwind v4 的 `/40` 透明度修饰符本身就是 color-mix。 */
+:root {
+  --resize-handle-hover: color-mix(
+    in srgb,
+    var(--foreground) 40%,
+    var(--background)
+  );
+  --resize-handle-drag: color-mix(
+    in srgb,
+    var(--foreground) 60%,
+    var(--background)
+  );
 }
 
 /* 旧 WebKitGTK 无 color-mix 时降级为不透明（背景图仅在透明内容区透出，不崩）。 */
@@ -1346,6 +1685,55 @@
 .scrollbar-thin {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+}
+
+/* A text field that scrolls inside its own box (a commit message): the
+   OverlayScrollbars look — a 6px rounded thumb on a clear track, 8px under the
+   pointer — instead of the platform's boxy bar, which squares off a rounded
+   field's corners. Drawn the same in both webview engines (WebKit, Chromium)
+   through their scrollbar pseudo-elements, which Chromium only honours while
+   the standard properties are unset; engines without them get those. The
+   gutter is kept, so the text does not re-wrap when the bar appears. */
+.field-scrollbar {
+  scrollbar-gutter: stable;
+}
+.field-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.field-scrollbar::-webkit-scrollbar-track,
+.field-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.field-scrollbar::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: var(--border);
+  background-clip: padding-box;
+}
+.field-scrollbar::-webkit-scrollbar-thumb:hover {
+  border-width: 1px;
+  background-color: var(--muted-foreground);
+}
+@supports not selector(::-webkit-scrollbar) {
+  .field-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+
+/* A borderless scrolling field (the Changes tab's commit box): text scrolled
+   under its 0.5rem padding fades out instead of being cut at the box's edge.
+   At rest only padding is under the fade. Not for bordered fields: the mask
+   would take their border and focus ring with it. */
+.field-fade-y {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 0.5rem,
+    #000 calc(100% - 0.5rem),
+    transparent
+  );
 }
 
 /* OverlayScrollbars custom theme — 6px track, grows to 8px on hover.
@@ -1436,10 +1824,80 @@
   animation: forge-progress 1.1s linear infinite;
 }
 
-/* Streamdown code blocks: dark mode via shiki dual-theme CSS variables */
-.dark [data-streamdown="code-block-body"] {
-  background-color: var(--shiki-dark-bg, var(--sdm-bg, transparent)) !important;
-  color: var(--shiki-dark, var(--sdm-fg, inherit)) !important;
+/* Streamdown code blocks: one card.
+   Streamdown 2.7 renders the block as a padded `bg-sidebar` card (`rounded-xl
+   border p-2 gap-2`) holding a header row, a floating actions chip with a
+   frame of its own, and a body that is a second bordered card (`rounded-md
+   border bg-background p-4`). Lay it back to a single card: the root keeps
+   its rounded border and clips the corners, the header is a muted title bar
+   with the language on the left and the actions centred on its right, and
+   the body sits flush beneath it. */
+[data-streamdown="code-block"] {
+  --sd-code-header-height: 2.5rem;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: transparent;
+}
+
+[data-streamdown="code-block-header"] {
+  height: var(--sd-code-header-height);
+  padding-inline: 0.75rem;
+  background-color: color-mix(in oklch, var(--muted) 80%, transparent);
+}
+
+/* A fence that names no language leaves the bar's language label empty, and
+   the bar bare on its left. A code glyph takes the label's place there: lucide
+   `code`, the icon of a script step, as big as the actions' icons across
+   the bar (so as heavy a stroke), in the bar's own ink. */
+[data-streamdown="code-block-header"] > span:empty::before {
+  content: "";
+  display: block;
+  width: 1rem;
+  height: 1rem;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m16 18 6-6-6-6'/%3E%3Cpath d='m8 6-6 6 6 6'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m16 18 6-6-6-6'/%3E%3Cpath d='m8 6-6 6 6 6'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+/* The actions chip hangs off an `absolute top-2 right-2` positioner. Stretch
+   that over the title bar so the chip centres on it, inset like the language
+   label, and drop the chip's frame: it sits on the bar now. */
+[data-streamdown="code-block"]
+  > div:has(> [data-streamdown="code-block-actions"]) {
+  top: 0;
+  right: 0.75rem;
+  height: var(--sd-code-header-height);
+}
+
+[data-streamdown="code-block-actions"] {
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* The body keeps Streamdown's own `bg-background p-4`, in both themes: there
+   is no shiki background to paint. With two themes shiki reports the block
+   background as one compound string (`#fff;--shiki-dark-bg:#24292e`), which
+   Streamdown writes into `--sdm-bg` whole; a custom property cannot hold a
+   top-level `;`, so the browser drops it and `--shiki-dark-bg` never exists.
+   The rule that used to read it here only ever resolved to `transparent`. */
+[data-streamdown="code-block-body"] {
+  border: 0;
+  border-radius: 0;
+}
+
+/* Token colours. Shiki sets each token's colours as separate properties, so
+   these do arrive: `--sdm-c` (light) and `--shiki-dark`. 2.7 paints the light
+   one with its own `text-[var(--sdm-c,inherit)]`, a class from node_modules
+   our Tailwind scan never generates, so without this rule every token drew in
+   the plain text colour. */
+[data-streamdown="code-block-body"] code > span > span {
+  color: var(--sdm-c, inherit);
 }
 
 .dark [data-streamdown="code-block-body"] code > span > span {
@@ -1447,14 +1905,6 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not(.light) [data-streamdown="code-block-body"] {
-    background-color: var(
-      --shiki-dark-bg,
-      var(--sdm-bg, transparent)
-    ) !important;
-    color: var(--shiki-dark, var(--sdm-fg, inherit)) !important;
-  }
-
   :root:not(.light) [data-streamdown="code-block-body"] code > span > span {
     color: var(--shiki-dark, var(--sdm-c, inherit)) !important;
   }
@@ -1472,13 +1922,69 @@
   display: inline;
 }
 
-/* Streamdown table overrides */
-[data-streamdown="table-wrapper"] {
-  position: relative;
+/* GFM task lists. remark-gfm marks a task item `task-list-item` and puts its
+   checkbox first in it (in its first paragraph, in a loose list). The checkbox
+   is the item's marker, so the bullet our inside-positioned lists would draw
+   beside it goes, and the box keeps a marker's room from the text. Plain items
+   in the same list keep their bullets. */
+[data-streamdown="list-item"].task-list-item {
+  list-style-type: none;
 }
 
-/* Toolbar: float over table top-right, no vertical space */
-[data-streamdown="table-wrapper"] > div:first-child:has(button) {
+[data-streamdown="list-item"].task-list-item > input[type="checkbox"],
+[data-streamdown="list-item"].task-list-item
+  > p:first-child
+  > input[type="checkbox"]:first-child {
+  margin-inline-end: 0.5em;
+  vertical-align: middle;
+}
+
+/* A plan in its card is a document inside the reply, often inside the
+   timeline: its headings step down from a reply's own (Streamdown's 1.875rem
+   h1 would tower over the 0.875rem text around the card). */
+.plan-markdown [data-streamdown="heading-1"] {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+}
+
+.plan-markdown [data-streamdown="heading-2"] {
+  font-size: 1rem;
+  line-height: 1.5rem;
+}
+
+.plan-markdown
+  :is(
+    [data-streamdown="heading-3"],
+    [data-streamdown="heading-4"],
+    [data-streamdown="heading-5"],
+    [data-streamdown="heading-6"]
+  ) {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+/* Streamdown table overrides.
+   Streamdown 2.7 makes the wrapper a card of its own (`rounded-lg border
+   bg-sidebar p-2 gap-2`) around a scroll container it frames again
+   (`rounded-md border bg-background`), which draws two nested borders. Only
+   the scroll container is the card here (below), so the wrapper goes back to a
+   plain box. The wrapper inside the fullscreen view carries none of this, so
+   the reset is a no-op there. */
+[data-streamdown="table-wrapper"] {
+  position: relative;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+}
+
+/* Toolbar: float over table top-right, no vertical space. Inline tables only:
+   the fullscreen view (`table-fullscreen`, portaled to <body>) reuses the
+   wrapper attribute, and floating its toolbar there lifts the exit button
+   above the top of the screen. */
+[data-streamdown="table-wrapper"]:not([data-streamdown="table-fullscreen"] > *)
+  > div:first-child:has(button) {
   position: absolute;
   top: -2rem;
   right: 0;
@@ -1487,10 +1993,34 @@
 
 /* 表格圆角卡片化（与背景图无关，始终生效·点③·参考委派卡）：把圆角 + 边框挂在滚动容器
    （直接包着 <table> 的 overflow-x-auto div）——它已有 overflow(auto)，border-radius 会把表格裁到
-   圆角；复制工具条是 table-wrapper 的兄弟、不在此容器内，故不被裁（无需搬动）。 */
+   圆角；复制工具条是 table-wrapper 的兄弟、不在此容器内，故不被裁（无需搬动）。底色透明：
+   2.7 给它加了不透明的 bg-background，会把开图时 thead/tbody 的半透明染色垫成实底。 */
 [data-streamdown="table-wrapper"] > div:has(> [data-streamdown="table"]) {
   border-radius: 0.5rem;
   border: 1px solid var(--border);
+  background-color: transparent;
+}
+/* 表体浅染色：2.7 去掉了 tbody 自带的 bg-muted/40，补回来让表体仍比表头浅一级（关图时的
+   底色；开图走上方 [data-workspace-bg="on"] 的半透明规则，选择器更具体，照样压过这条）。 */
+[data-streamdown="table-body"] {
+  background-color: color-mix(in oklch, var(--muted) 40%, transparent);
+}
+/* 表头/表体分隔线：行内表格靠 2.7 给 <table> 的 divide-y 画出，全屏视图的 <table> 没有这个类、
+   只剩底色区分。这里统一补上（与 divide-y 同样跳过末尾子元素：只有表头的表格不画，免得和卡片
+   底边叠成双线）。 */
+[data-streamdown="table-header"]:not(:last-child) {
+  border-bottom: 1px solid var(--border);
+}
+/* 全屏表格（2.7 的 table-fullscreen）：滚动容器是 flex-1 + p-4 pt-0，上面那条卡片边框会沿着
+   整块屏幕画框、表格缩在框里。改成贴着表格：去掉内边距换成外边距，按内容高度收缩、超出
+   屏幕时在卡片内滚动。 */
+[data-streamdown="table-fullscreen"]
+  > [data-streamdown="table-wrapper"]
+  > div:has(> [data-streamdown="table"]) {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0 1rem 1rem;
+  padding: 0;
 }
 /* 表格自带外边框归 0，避免与容器边框双线；内部行线（tr border-b / tbody divide-y）保留。 */
 [data-streamdown="table"] {
@@ -1558,11 +2088,9 @@
   transition: none !important;
 }
 
-/* Tool collapsible: fade-in on expand (height must change instantly for virtualizer) */
-.tool-collapsible-content[data-state="open"] > * {
-  animation: tool-content-fade 150ms ease-out;
-}
-
+/* A fade for content that appears under a timeline row without moving it
+   (a running command's live tail, a thought's first text): opacity only, so
+   the row's height changes at once and the virtual list measures it right. */
 @keyframes tool-content-fade {
   from {
     opacity: 0;
@@ -1572,8 +2100,8 @@
   }
 }
 
-/* Reply fold body — the "Worked for …" header's progress section
-   (`CompletedTurnContent`). Unlike the tool collapsibles above, this one DOES
+/* Reply fold body — the activity header's progress section
+   (`CompletedTurnContent`). Unlike the row fades above, this one DOES
    animate its height: it is the one fold per reply the reader toggles by hand,
    and the answer below reading as pushed down / pulled back up is the whole
    point of the affordance.
@@ -1649,6 +2177,674 @@
   }
 }
 
+/* ===== Activity timeline（执行过程时间线，components/message/activity）=====
+   Left rail: a 2rem column with a 1px line down it and a 1.25rem status ring
+   per row. The line is drawn as SEGMENTS between rings (each row's
+   ::before runs from just under its own ring to just above the next row's)
+   rather than one line behind opaque rings, so nothing has to paint a backdrop
+   — the rail stays transparent over a workspace background image. Pure CSS,
+   no measuring: the last row has a segment only beside a body under its line
+   (`data-body`, set by the row). A list that folds away — a reply's open
+   steps, an open group's members — ends on a foot (timeline-foot.tsx): the
+   turning ring while its steps go on (`data-marker="working"`), then a row
+   that folds it (`data-marker="foot"`). Its last step, then, is no longer
+   last, and that step's segment runs down to the foot as to a ring: the
+   foot's ring sits where a ring of the list would.
+
+   Geometry (rem, so it follows the app zoom): the column is 2rem wide and the
+   ring — 1.25rem across, the widest mark — starts flush with its left edge, so
+   the rail runs down its centre at 0.625rem and the words start 0.75rem past
+   the ring, as they do in a group (below). Vertically a row's first line is
+   1.5rem tall with 0.125rem of padding above it, so its centre — and the
+   ring's — sits at 0.875rem; the ring spans 0.25rem–1.5rem down the row.
+   Segments keep a 0.125rem gap to the rings on both ends. A row marked `data-marker="dot"` (prose between
+   steps) carries a 0.375rem dot on the line instead of a ring. */
+.activity-timeline {
+  --activity-gap: 0.5rem;
+  position: relative;
+}
+
+/* `text-align: start` on the rows: the UA gives <li> `-webkit-match-parent`,
+   which turns the list's logical `start` into a physical `right` under RTL —
+   and that inherits through `dir="ltr"`, so code and paths in a row's detail
+   would hug the right edge in Arabic. */
+.activity-item {
+  position: relative;
+  padding-inline-start: 2rem;
+  text-align: start;
+}
+
+/* Spaced from the row before it — keyed on position, not written as
+   `.activity-item + .activity-item`: with an adjacent-sibling rule on the
+   list, Chrome restyles every row in it whenever one leaves from the middle,
+   which a long reply's fold does on each new step while it streams. */
+.activity-item:not(:first-child) {
+  margin-top: var(--activity-gap);
+}
+
+.activity-item::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: calc(0.625rem - 0.5px);
+  top: 1.625rem;
+  bottom: calc(-1 * (var(--activity-gap) + 0.125rem));
+  width: 1px;
+  background: var(--activity-rail);
+}
+
+.activity-item[data-marker="dot"]::before {
+  top: 1.125rem;
+}
+
+/* The last row: a segment only beside a body under its line — an open panel,
+   prose, a card (`data-body`); a folded row ends the rail at its ring. The
+   segment ends a little further above the row's bottom edge than a one-line
+   row reaches below the segment's top (0.125rem for a ring row, 0.375rem for
+   a line of prose), so a one-line note gets none either. */
+.activity-item:last-child::before {
+  bottom: 0.25rem;
+}
+
+.activity-item[data-marker="dot"]:last-child::before {
+  bottom: 0.4375rem;
+}
+
+.activity-item:last-child:not([data-body])::before {
+  content: none;
+}
+
+/* The incoming segment of a dot row: the segment above it — the previous
+   row's, or the one a list under the header runs down from it (below) — stops
+   0.125rem into this one (it was sized for a ring at 0.25rem); this fills the
+   rest of the way down to the dot. */
+.activity-item[data-marker="dot"]:not(:first-child)::after,
+.activity-timeline[data-headed]
+  > .activity-item[data-marker="dot"]:first-child::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: calc(0.625rem - 0.5px);
+  top: 0.125rem;
+  height: 0.5rem;
+  width: 1px;
+  background: var(--activity-rail);
+}
+
+/* A reply's list under its header capsule (`data-headed`, set by the turn).
+   It starts a row's gap plus 0.25rem below the capsule — as if the capsule's
+   edge were the bottom of a ring on a row before it — so the first ring sits
+   as far under the capsule (1rem) as a ring under the one before. The rail
+   runs up to that edge as that row's segment would, down to 0.125rem above
+   the first ring — or, when prose comes first, on into its dot by the dot's
+   incoming segment. The list draws it, not its first row: it stands while
+   rows join, the first one too — a reply with nothing in it yet is this list
+   with its foot alone, the turning ring where the first step will go. */
+.activity-timeline[data-headed] {
+  padding-top: calc(var(--activity-gap) + 0.25rem);
+}
+
+.activity-timeline[data-headed]::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: calc(0.625rem - 0.5px);
+  top: 0;
+  height: calc(var(--activity-gap) + 0.375rem);
+  width: 1px;
+  background: var(--activity-rail);
+}
+
+/* Rows inside an expanded group: indented into the content column, with a
+   marker column of their own on a dashed sub-rail, and spaced like the rows
+   around the group — the same gap, the same 0.125rem above and below the line
+   (centre 0.875rem), the words the same 0.75rem past the ring (a 1rem ring in
+   a 1.75rem column). A child ring is 1rem (0.375rem–1.375rem), a child
+   dot 0.375rem (0.6875rem–1.0625rem). Like the main rail, a segment stops
+   0.125rem short of the next marker — the group's foot included — and the
+   last row of a list with no foot (a folded group's live member) has one only
+   beside its open panel. */
+.activity-children {
+  position: relative;
+  margin-top: 0.125rem;
+}
+
+.activity-child {
+  position: relative;
+  padding-inline-start: 1.75rem;
+  text-align: start;
+}
+
+.activity-child:not(:first-child) {
+  margin-top: var(--activity-gap);
+}
+
+/* A group's foot after dot members (an explore group's reads): a dot's
+   segment reaches 0.3125rem further into the next row than a ring member's,
+   so the foot starts that much lower, its ring as far under the segment as a
+   ring member's. */
+.activity-child[data-after="dot"]:not(:first-child) {
+  margin-top: calc(var(--activity-gap) + 0.3125rem);
+}
+
+.activity-child::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: calc(0.5rem - 0.5px);
+  border-inline-start: 1px dashed var(--activity-rail);
+}
+
+.activity-child[data-marker="ring"]::before {
+  top: 1.5rem;
+  bottom: calc(-1 * (var(--activity-gap) + 0.25rem));
+}
+
+.activity-child[data-marker="dot"]::before {
+  top: 1.1875rem;
+  bottom: calc(-1 * (var(--activity-gap) + 0.5625rem));
+}
+
+.activity-child[data-marker="ring"]:last-child::before {
+  bottom: 0.3125rem;
+}
+
+.activity-child[data-marker="dot"]:last-child::before {
+  bottom: 0.625rem;
+}
+
+.activity-child:last-child:not([data-body])::before {
+  content: none;
+}
+
+/* A live list's rail grows down to the steps that join it rather than
+   appearing at once. `use-rail-growth.ts` marks, while the list is live, a row
+   that joined (`data-rail-enter`) and the row that was last before it
+   (`data-rail-extend`), and clears the marks once they have run. A new
+   row's segment — down to the next row, or to the foot of the list — and a
+   dot's incoming one grow from the top, and so does the segment
+   the last row gains once a row follows it. A last row with a body already
+   had a segment beside it (`data-rail-body`, noted as the rows join): only
+   the part past its line grows, the clip let out from where the segment
+   stopped. The rows one join touched take their turn top to bottom (the hook
+   holds each one's growth back a little longer), so the rail draws down
+   through them. The rail up to the header is the list's own and stands as
+   it is; a reply's first words, joining under it, grow their dot's incoming
+   segment on from it. Transform and clip only, so no row changes size under
+   the virtual list. */
+@keyframes activity-rail-grow {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+@keyframes activity-rail-extend {
+  from {
+    clip-path: inset(0 0 var(--activity-rail-extension) 0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .activity-item[data-rail-enter]::before,
+  .activity-item[data-rail-enter][data-marker="dot"]:not(:first-child)::after,
+  .activity-timeline[data-headed]
+    > .activity-item[data-rail-enter][data-marker="dot"]:first-child::after,
+  .activity-item[data-rail-extend]:not(
+      [data-rail-enter],
+      [data-rail-body]
+    )::before,
+  .activity-child[data-rail-enter]::before,
+  .activity-child[data-rail-extend]:not(
+      [data-rail-enter],
+      [data-rail-body]
+    )::before {
+    transform-origin: top;
+    animation: activity-rail-grow 0.26s cubic-bezier(0.33, 1, 0.68, 1) backwards;
+  }
+
+  .activity-item[data-rail-extend][data-rail-body]:not(
+      [data-rail-enter]
+    )::before,
+  .activity-child[data-rail-extend][data-rail-body]:not(
+      [data-rail-enter]
+    )::before {
+    animation: activity-rail-extend 0.26s cubic-bezier(0.33, 1, 0.68, 1)
+      backwards;
+  }
+
+  /* How much further the segment reaches once a row follows: from a last
+     row's `bottom` to a middle row's, per marker. */
+  .activity-item[data-rail-extend]::before {
+    --activity-rail-extension: calc(var(--activity-gap) + 0.375rem);
+  }
+  .activity-item[data-rail-extend][data-marker="dot"]::before {
+    --activity-rail-extension: calc(var(--activity-gap) + 0.5625rem);
+  }
+  .activity-child[data-rail-extend]::before {
+    --activity-rail-extension: calc(var(--activity-gap) + 0.5625rem);
+  }
+  .activity-child[data-rail-extend][data-marker="dot"]::before {
+    --activity-rail-extension: calc(var(--activity-gap) + 1.1875rem);
+  }
+}
+
+/* A row's panel that closes by itself — a group folding once the reply has
+   moved past it (`slideShut`, activity-row.tsx) — slides shut rather than
+   vanishing, so what follows it rises instead of jumping, on a grid track like
+   the reply's own fold: no layout read, the engine interpolates the track. The
+   row holds the panel mounted until the animation ends; with no animation
+   (reduced motion, chat animations off) it drops it at once. */
+@media (prefers-reduced-motion: no-preference) {
+  .activity-detail-shut {
+    display: grid;
+    grid-template-rows: 1fr;
+    animation: activity-detail-shut 0.24s cubic-bezier(0.65, 0, 0.35, 1)
+      forwards;
+  }
+
+  /* The panel's one child. In flow its margins collapsed into the panel's
+     own; a grid item's do not, so they go — the track would start taller and
+     never reach zero. */
+  .activity-detail-shut > * {
+    min-height: 0;
+    margin-block: 0;
+    overflow: hidden;
+  }
+}
+
+@keyframes activity-detail-shut {
+  to {
+    grid-template-rows: 0fr;
+    margin-top: 0;
+    margin-bottom: 0;
+    opacity: 0;
+  }
+}
+
+/* Figures and short labels the timeline sets in the monospace face (the
+   header summary, a row's end column, a detail box's footer). Words in a
+   script the monospace stack has no glyphs for — CJK, Arabic — fall back to a
+   letter-spaced substitute that reads badly, so those languages keep the
+   interface face. */
+.activity-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+:lang(zh) .activity-mono,
+:lang(ja) .activity-mono,
+:lang(ko) .activity-mono,
+:lang(ar) .activity-mono {
+  font-family: var(--font-sans);
+}
+
+/* A row that opens (the header button of `ActivityRow`, of a delegation
+   check, of a codeg tool or question record laid out as a row, of a goal),
+   pointed at or
+   focused: its grey words — label, description, command, path, figure, the
+   chevron — and the grey glyph in its ring (`RailIcon`'s `data-quiet`) darken
+   to the foreground, as the fold row at the foot of a list does
+   (`TimelineFoot`). What has a colour of its own keeps it: a tone (a diff's
+   counts, a failure, an amber wait), the shimmer of a running label, a name
+   already in the foreground, an agent's logo; the ring itself stays, as the
+   foot's does.
+   The ring is the row's marker (`.activity-marker`), beside the header and
+   not in it, so it is found from the row: the nearest row holding the button
+   — not a row whose panel holds a nested row that does. Hover only where
+   there is a pointer that hovers, as Tailwind's `hover:` does, so a tap does
+   not leave the row lit. */
+@media (hover: hover) {
+  .activity-row-toggle:hover
+    :is(.text-activity-secondary, .text-muted-foreground),
+  :is(.activity-item, .activity-child):has(.activity-row-toggle:hover):not(
+      :has(:is(.activity-item, .activity-child) .activity-row-toggle:hover)
+    )
+    > .activity-marker
+    [data-quiet] {
+    color: var(--foreground);
+  }
+}
+.activity-row-toggle:focus-visible
+  :is(.text-activity-secondary, .text-muted-foreground),
+:is(.activity-item, .activity-child):has(
+    .activity-row-toggle:focus-visible
+  ):not(
+    :has(
+      :is(.activity-item, .activity-child) .activity-row-toggle:focus-visible
+    )
+  )
+  > .activity-marker
+  [data-quiet] {
+  color: var(--foreground);
+}
+
+/* A row's figure (`RowFigure`) takes the line's room past the label and runs a
+   faint dashed line across it, up to the figure, so a figure at the far end
+   of a wide row still reads as its label's. None when the figure shows
+   nothing: empty (a step with nothing to count), or only the running word,
+   which shows only under reduced motion (`hidden motion-reduce:inline`). */
+.activity-figure::before {
+  content: "";
+  flex: 1 1 0;
+  min-width: 0;
+  border-top: 1px dashed var(--activity-rail);
+}
+
+.activity-figure:empty::before {
+  display: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .activity-figure:has(> .hidden:only-child)::before {
+    display: none;
+  }
+}
+
+/* Muted text with a highlight in the theme's colour sweeping across it, for
+   the live label of a running step. */
+.activity-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 40%,
+    var(--activity-accent) 50%,
+    var(--muted-foreground) 60%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 250% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: activity-shimmer 1.6s linear infinite;
+}
+
+@keyframes activity-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-shimmer {
+    animation: none;
+    background: none;
+    color: var(--muted-foreground);
+  }
+}
+
+/* A detail box's scroll body fades out at whichever edge has more content
+   beyond it; the class and attributes go on its OverlayScrollbars viewport,
+   set by the box while it is open, so the overlay scrollbar stays crisp — or
+   on each part's that scrolls itself in a box that does not (`DetailScroll`,
+   a half of a side-by-side diff). */
+.activity-detail-viewport[data-overflow="end"] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5rem), transparent);
+}
+.activity-detail-viewport[data-overflow="start"] {
+  mask-image: linear-gradient(to top, #000 calc(100% - 1.5rem), transparent);
+}
+.activity-detail-viewport[data-overflow="both"] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 1.5rem,
+    #000 calc(100% - 1.5rem),
+    transparent
+  );
+}
+
+/* Inside a detail box the surface is darker than the page, so secondary text
+   (labels, line numbers, footers — the box's own and the components it hosts)
+   takes the slightly stronger muted tone to keep 4.5:1. Set on the children:
+   the token is resolved at the root, so this does not reference itself. */
+.activity-detail-box > * {
+  --muted-foreground: var(--activity-muted-strong);
+}
+
+/* Command output colours. ansi-to-react writes anser's xterm palette as
+   inline `color: rgb(…)` styles, made for a black terminal: on the light
+   surfaces yellow, cyan, white and every bright colour all but vanish, and on
+   the dark ones black, blue, red and magenta do. Remap the 16 base colours per
+   theme, as terminals do, and leave 256-colour / truecolour output as the
+   program chose it. Only spans without a background are remapped (their style
+   then starts with `color:`), so text on a coloured badge keeps its pair. */
+.activity-ansi {
+  --ansi-black: var(--foreground);
+  --ansi-white: var(--muted-foreground);
+  --ansi-red: oklch(0.52 0.19 27);
+  --ansi-green: oklch(0.5 0.13 145);
+  --ansi-yellow: oklch(0.5 0.1 90);
+  --ansi-blue: oklch(0.48 0.17 262);
+  --ansi-magenta: oklch(0.5 0.19 330);
+  --ansi-cyan: oklch(0.5 0.08 205);
+}
+.dark .activity-ansi {
+  --ansi-black: var(--muted-foreground);
+  --ansi-white: var(--foreground);
+  --ansi-red: oklch(0.7 0.17 25);
+  --ansi-green: oklch(0.75 0.17 145);
+  --ansi-yellow: oklch(0.82 0.15 95);
+  --ansi-blue: oklch(0.72 0.13 262);
+  --ansi-magenta: oklch(0.74 0.16 330);
+  --ansi-cyan: oklch(0.78 0.11 205);
+}
+.activity-ansi [style^="color: rgb(0, 0, 0)"] {
+  color: var(--ansi-black) !important;
+}
+.activity-ansi [style^="color: rgb(85, 85, 85)"] {
+  color: var(--muted-foreground) !important;
+}
+.activity-ansi [style^="color: rgb(255, 255, 255)"] {
+  color: var(--ansi-white) !important;
+}
+.activity-ansi
+  :is([style^="color: rgb(187, 0, 0)"], [style^="color: rgb(255, 85, 85)"]) {
+  color: var(--ansi-red) !important;
+}
+.activity-ansi
+  :is([style^="color: rgb(0, 187, 0)"], [style^="color: rgb(0, 255, 0)"]) {
+  color: var(--ansi-green) !important;
+}
+.activity-ansi
+  :is([style^="color: rgb(187, 187, 0)"], [style^="color: rgb(255, 255, 85)"]) {
+  color: var(--ansi-yellow) !important;
+}
+.activity-ansi
+  :is([style^="color: rgb(0, 0, 187)"], [style^="color: rgb(85, 85, 255)"]) {
+  color: var(--ansi-blue) !important;
+}
+.activity-ansi
+  :is([style^="color: rgb(187, 0, 187)"], [style^="color: rgb(255, 85, 255)"]) {
+  color: var(--ansi-magenta) !important;
+}
+.activity-ansi
+  :is([style^="color: rgb(0, 187, 187)"], [style^="color: rgb(85, 255, 255)"]) {
+  color: var(--ansi-cyan) !important;
+}
+
+/* ===== Chat motion (the conversation view; `@/lib/chat-motion`) =====
+   What arrives while the reader is watching eases in; what is already there
+   when they arrive stays put. Every rule here plays only without a
+   reduced-motion preference, and the "Chat animations" switch below drops all
+   of it. Script-driven motion (`ReplyMotion`, the reply's layout as it changes
+   shape) asks the same two questions before it plays. */
+
+/* Something that arrives fades in, rising a few pixels: a reply's stats row
+   and its changed files as it finishes (`useArrivedOnCompletion`).
+   `chat-enter-late` waits a beat first — the pending reply, after the
+   message that was just sent — and `chat-enter-rise` comes from further
+   down: that message. Each is put on its element once, as it mounts, so the
+   virtual list bringing an element back never replays it; filled backwards
+   only, so once played it leaves nothing applied to the element. */
+@keyframes chat-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes chat-enter-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-enter {
+    animation: chat-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+
+  .chat-enter-late {
+    animation: chat-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) 120ms backwards;
+  }
+
+  .chat-enter-rise {
+    animation: chat-enter-rise 320ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+}
+
+/* A slot that slides open as its content arrives and shut as it goes
+   (`SlideSlot`): a running command's last lines, the running turn's figures
+   over the composer. On a grid track like the reply's own fold, so nothing
+   reads layout; its content is clipped only while it moves. With no
+   animation the slot opens and shuts at once. */
+.slide-slot {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.slide-slot > * {
+  min-height: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .slide-slot[data-motion] > * {
+    overflow: hidden;
+  }
+
+  .slide-slot[data-motion="enter"] {
+    animation: slide-slot-open 220ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+
+  .slide-slot[data-motion="leave"] {
+    animation: slide-slot-close 180ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  }
+}
+
+@keyframes slide-slot-open {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+@keyframes slide-slot-close {
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+/* The prose being written (`MarkdownText`), as it arrives: every character
+   Streamdown wraps for it (`[data-sd-animate]`) fades in, a chunk's
+   characters one after another (`--sd-delay`), and a block that is not words
+   — a code block, a table, a rule, an image — fades in whole. A transition
+   from the starting style rather than Streamdown's keyframes, which its next
+   render re-times to nothing mid-fade; and a starting style applies only to
+   an element's first style, so what was already written when the fade was
+   armed (`data-word-fade`, a frame after the text mounted) stays as it is. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-word-fade] [data-sd-animate],
+  [data-word-fade]
+    :is(
+      [data-streamdown="code-block"],
+      [data-streamdown="table-wrapper"],
+      hr,
+      img
+    ) {
+    transition: opacity 320ms ease-out var(--sd-delay, 0ms);
+  }
+
+  @starting-style {
+    [data-word-fade] [data-sd-animate],
+    [data-word-fade]
+      :is(
+        [data-streamdown="code-block"],
+        [data-streamdown="table-wrapper"],
+        hr,
+        img
+      ) {
+      opacity: 0;
+    }
+  }
+}
+
+/* A reply's Markdown spaces its blocks with `space-y-4` and drops the outer
+   margins of the first and last (`MessageResponse`, Streamdown's own root).
+   While the text streams, Streamdown wraps each block in a `display:
+   contents` box carrying its direction (`div[dir]` with no `data-streamdown`
+   — settled, a code block is a top-level `div[dir]` too, but one of
+   Streamdown's own, so marked), so those rules land on the boxes —
+   which take no margins — and the blocks ran together until the reply
+   settled, then spread apart all at once. The blocks inside the boxes get
+   the same spacing here, in the same layer and at the same weight as
+   `space-y-4` (none), so a block's own margins win as they do settled.
+   Matched by `dir`, never by the box's inline style: a selector on `style`
+   re-styles the whole subtree of every element whose inline style changes,
+   and the transcript's change on every streamed token. */
+@layer utilities {
+  :where(.chat-markdown > div[dir]:not([data-streamdown]):not(:last-child) > *),
+  :where(
+    .chat-markdown
+      > div[dir]:not([data-streamdown]):last-child
+      > :not(:last-child)
+  ) {
+    margin-block-start: 0;
+    margin-block-end: calc(var(--spacing) * 4);
+  }
+
+  .chat-markdown > div[dir]:not([data-streamdown]):first-child > :first-child {
+    margin-top: 0;
+  }
+
+  .chat-markdown > div[dir]:not([data-streamdown]):last-child > :last-child {
+    margin-bottom: 0;
+  }
+}
+
+/* Streamdown lays a code block out only once it is scrolled near (inline
+   `content-visibility: auto`), at a 200px stand-in height until then — and
+   "near" is decided a frame late, so even a block in plain view is drawn
+   200px tall for a frame first. In the reply being written, or the one just
+   written (`data-reply-current`), that frame lurched everything under a new
+   code block, the turning ring and the scroll with it, as the block appeared
+   and again as the reply settled. There every code block is laid out at
+   once; history keeps the deferral. */
+[data-reply-current] [data-streamdown="code-block"] {
+  content-visibility: visible !important;
+}
+
+/* Settings → Appearance → "Chat animations" off. <html> carries
+   `data-chat-animations="off"` (set by the pre-hydration script and by
+   `AppearanceProvider`); `.chat-motion-scope` wraps the conversation view in
+   `MessageListView`. Inside it every CSS animation and transition is dropped:
+   collapse/expand (the `animate-in/out` slides, the tool fade, the reply fold),
+   chevron rotations, pulse/typing dots, hover fades.
+
+   Safe for `instant-collapsible`: it reads `animationName` after the close
+   commits and, finding `none`, unmounts synchronously — the same path it takes
+   without any exit animation. `.animate-spin` is deliberately kept: a spinner is
+   the only "still working" cue left once the pulse and shimmer are gone, and
+   rotation is not the slow fade this switch is about. JS-driven motion (Shimmer,
+   smooth stick-to-bottom scrolling) reads the same setting via
+   `useChatAnimationsEnabled`. */
+[data-chat-animations="off"] .chat-motion-scope *:not(.animate-spin),
+[data-chat-animations="off"] .chat-motion-scope *:not(.animate-spin)::before,
+[data-chat-animations="off"] .chat-motion-scope *:not(.animate-spin)::after {
+  animation: none !important;
+  transition: none !important;
+}
+
 /* Welcome-page quick actions: the skill rail (see quick-actions.tsx). A plain
    horizontal scroller — paging is done by the two arrow buttons calling
    `scrollBy`, so nothing here animates. The native scrollbar is hidden: the row
@@ -1717,20 +2913,40 @@
 }
 
 /* Workspace panel show/hide slide. Toggling the left sidebar, right aux panel,
-   or bottom terminal recomputes the react-resizable-panels layout and snaps
-   each panel's `flex-grow` (0 ↔ N). FolderWorkspaceShell tags the affected
-   panel group with `.panel-slide-animating` for the duration of the toggle
-   only — never during handle drags or container/window resizes — so the
-   neighboring panes get pushed smoothly instead of jumping. The `>` child
-   combinator scopes the transition to the group's own panels, so a horizontal
-   (sidebar/aux) toggle never animates the nested vertical (terminal) group,
-   and vice versa. */
+   or bottom terminal snaps that panel's px `flex-basis` (0 ↔ N —
+   FolderWorkspaceShell pins those three panels in px over the
+   react-resizable-panels `flex-grow`, which the center / workspace pane still
+   carries). FolderWorkspaceShell tags the affected panel group with
+   `.panel-slide-animating` for the duration of the toggle only — never during
+   handle drags or container/window resizes — so the neighboring panes get
+   pushed smoothly instead of jumping. The `>` child combinator scopes the
+   transition to the group's own panels, so a horizontal (sidebar/aux) toggle
+   never animates the nested vertical (terminal) group, and vice versa. */
 .panel-slide-animating > [data-panel] {
-  transition: flex-grow 240ms ease-out;
+  transition:
+    flex-grow 240ms ease-out,
+    flex-basis 240ms ease-out;
 }
 
+/* The top strips' corner reserves (`ChromeReserve`) slide with the side
+   panels: a reserve that snapped in/out while its column was still sliding
+   made the tabs jump by the reserve's width and then slide back. Descendant
+   (not child) selector, since the reserves sit deep inside the shell's panels
+   — so it is pinned to the HORIZONTAL (sidebar/aux) group: the nested vertical
+   (terminal) group carries the same class while it slides, and no reserve
+   follows the terminal. Timing pinned to the panels' by
+   chrome-reserve-slide-source.test.ts. */
+.panel-slide-animating[data-panel-group-direction="horizontal"]
+  .chrome-reserve {
+  transition: width 240ms ease-out;
+}
+
+/* The reserve selector is repeated in full: a shorter one would lose to the
+   rule above on specificity and leave the reserves sliding. */
 @media (prefers-reduced-motion: reduce) {
-  .panel-slide-animating > [data-panel] {
+  .panel-slide-animating > [data-panel],
+  .panel-slide-animating[data-panel-group-direction="horizontal"]
+    .chrome-reserve {
     transition: none;
   }
 }
@@ -2796,8 +4012,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   0%,
   100% {
     box-shadow:
-      var(--tw-ring-offset-shadow, 0 0 #0000),
-      var(--tw-ring-shadow, 0 0 #0000);
+      var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000);
   }
   50% {
     box-shadow:
@@ -2953,4 +4168,36 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 .canvas-surface[data-canvas-panning],
 .canvas-surface[data-canvas-panning] * {
   cursor: grabbing !important;
+}
+
+/* Built-in browser: indeterminate loading bar under the toolbar. */
+@keyframes browser-loading {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+/* Computer use: the mark an agent's action leaves where it landed — a ring
+   that opens and fades, and the whole mark fading after it. */
+@keyframes computer-marker-ring {
+  0% {
+    transform: scale(0.4);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@keyframes computer-marker-fade {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }

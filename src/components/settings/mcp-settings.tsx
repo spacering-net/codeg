@@ -80,6 +80,31 @@ const DEFAULT_DRAFT_SPEC = JSON.stringify(
   2
 )
 
+/**
+ * Servers worth offering by name rather than making someone find.
+ *
+ * One, and the reason for it is not convenience: the registry carries
+ * lookalikes of `chrome-devtools-mcp` under the same name and description with
+ * a different owner, and a person adding a browser tool by hand is exactly the
+ * person who cannot tell them apart. This fills the draft with the official
+ * package. It does not install it — the spec stays in front of the user, who
+ * still chooses which agents get it — and the note beside it says what the
+ * thing is and, just as much, what it is not.
+ */
+export const SUGGESTED_SERVERS = [
+  {
+    key: "chromeDevtools",
+    id: "chrome-devtools",
+    label: "Chrome DevTools",
+    note: "local.suggestedChromeNote",
+    spec: {
+      type: "stdio",
+      command: "npx",
+      args: ["-y", "chrome-devtools-mcp@latest"],
+    },
+  },
+] as const
+
 type McpTranslator = (
   key: string,
   values?: Record<string, string | number>
@@ -98,11 +123,16 @@ const APP_OPTIONS: { value: McpAppType; label: string }[] = [
   { value: "hermes", label: "Hermes Agent" },
   { value: "code_buddy", label: "CodeBuddy" },
   { value: "kimi_code", label: "Kimi Code" },
+  { value: "minimax_code", label: "MiniMax Code" },
   { value: "grok", label: "Grok" },
   { value: "cursor", label: "Cursor" },
   { value: "deepseek", label: "DeepSeek Harness" },
   { value: "qoder", label: "Qoder" },
   { value: "antigravity", label: "Google Antigravity" },
+  { value: "kiro", label: "Kiro CLI" },
+  { value: "zcode", label: "ZCode" },
+  { value: "trae", label: "TRAE CLI" },
+  { value: "command_code", label: "Command Code" },
   // pi 同理不作为可分配目标：读写的 ~/.pi/agent/mcp.json 属于第三方 pi 扩展，
   // pi 自身没有 MCP，pi-acp 也不转发线缆上的 mcpServers。给没装该扩展的用户
   // 写这个文件只会造出一个没人读的配置。存量 "pi" 条目照样能改能删——
@@ -288,11 +318,16 @@ function appsToDraft(apps: McpAppType[]): Record<McpAppType, boolean> {
     hermes: appSet.has("hermes"),
     code_buddy: appSet.has("code_buddy"),
     kimi_code: appSet.has("kimi_code"),
+    minimax_code: appSet.has("minimax_code"),
     grok: appSet.has("grok"),
     cursor: appSet.has("cursor"),
     deepseek: appSet.has("deepseek"),
     qoder: appSet.has("qoder"),
     antigravity: appSet.has("antigravity"),
+    kiro: appSet.has("kiro"),
+    zcode: appSet.has("zcode"),
+    trae: appSet.has("trae"),
+    command_code: appSet.has("command_code"),
     pi: appSet.has("pi"),
   }
 }
@@ -323,6 +358,30 @@ function detectEnvOnRemote(text: string): boolean {
   const env = parsed.env
   if (!isObject(env)) return false
   return Object.keys(env).length > 0
+}
+
+/**
+ * Whether the spec text is an SSE server — `type: "sse"`, or OpenCode's own
+ * `type: "remote"` with `transport: "sse"`, which is how the backend reads it.
+ * OpenCode 2 has no SSE client, so such a server never reaches OpenCode.
+ */
+export function detectSseSpec(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return false
+  }
+  if (!isObject(parsed)) return false
+  const canonical = normalizeMcpType(
+    typeof parsed.type === "string" ? parsed.type : ""
+  )
+  return (
+    canonical === "sse" ||
+    (canonical === "remote" && parsed.transport === "sse")
+  )
 }
 
 function parseJsonObject(
@@ -434,6 +493,27 @@ export function McpSettings() {
     () => detectEnvOnRemote(localSpecText),
     [localSpecText]
   )
+  // OpenCode 2 cannot run SSE servers, and the backend leaves OpenCode out of
+  // such a save (or refuses it when OpenCode is the only agent picked), so say
+  // so where the choice is made.
+  const draftOpencodeSse = useMemo(
+    () => draftAppsDraft.open_code && detectSseSpec(draftSpecText),
+    [draftAppsDraft.open_code, draftSpecText]
+  )
+  const localOpencodeSse = useMemo(
+    () => localAppsDraft.open_code && detectSseSpec(localSpecText),
+    [localAppsDraft.open_code, localSpecText]
+  )
+  const installOpencodeSse = useMemo(() => {
+    if (!installAppsDraft.open_code) return false
+    if (marketSpecDirty) return detectSseSpec(marketSpecText)
+    return normalizeMcpType(selectedInstallOption?.protocol ?? "") === "sse"
+  }, [
+    installAppsDraft.open_code,
+    marketSpecDirty,
+    marketSpecText,
+    selectedInstallOption,
+  ])
 
   // A scan that could not read every agent is fine to LIST from but not to
   // reassign from: the app checkboxes it seeds drive removals, so an agent
@@ -668,6 +748,10 @@ export function McpSettings() {
         serverId: selectedLocal.id,
         spec: parsedSpec,
         apps,
+        // What the editor was loaded with — it is reset from this spec
+        // whenever the selection or the scan changes — so the backend can
+        // tell the fields the user edited from the ones they left alone.
+        shownSpec: selectedLocal.spec,
       })
       const next = await refreshLocalServers()
       toast.success(t("toasts.saveSuccess"))
@@ -1053,6 +1137,11 @@ export function McpSettings() {
                   <span>{app.label}</span>
                 </label>
               ))}
+              {installOpencodeSse ? (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                  {t("errors.opencodeSseUnsupported")}
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -1408,6 +1497,38 @@ export function McpSettings() {
 
               <div className="space-y-2">
                 <div className="text-xs text-muted-foreground">
+                  {t("local.suggestedLabel")}
+                </div>
+                {SUGGESTED_SERVERS.map((suggested) => (
+                  <div key={suggested.key} className="space-y-1.5">
+                    {/* Off once the spec has been written in: "start from" is
+                        for a form nobody has started, and a button that threw
+                        away a spec someone had typed — with no undo and no
+                        warning — would be a bad trade for saving them a
+                        paste. The id is left alone for the same reason. */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={draftSpecText.trim() !== DEFAULT_DRAFT_SPEC}
+                      onClick={() => {
+                        if (!draftServerId.trim())
+                          setDraftServerId(suggested.id)
+                        setDraftSpecText(
+                          JSON.stringify(suggested.spec, null, 2)
+                        )
+                      }}
+                    >
+                      {suggested.label}
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      {t(suggested.note)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground">
                   {t("local.serverIdLabel")}
                 </div>
                 <Input
@@ -1460,6 +1581,12 @@ export function McpSettings() {
               {draftEnvOnRemote ? (
                 <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
                   {t("local.envOnRemoteWarning")}
+                </div>
+              ) : null}
+
+              {draftOpencodeSse ? (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                  {t("errors.opencodeSseUnsupported")}
                 </div>
               ) : null}
 
@@ -1578,6 +1705,12 @@ export function McpSettings() {
               {localEnvOnRemote ? (
                 <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
                   {t("local.envOnRemoteWarning")}
+                </div>
+              ) : null}
+
+              {localOpencodeSse ? (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                  {t("errors.opencodeSseUnsupported")}
                 </div>
               ) : null}
 

@@ -15,14 +15,29 @@ const mocks = vi.hoisted(() => {
     connections,
     openProjectBootWindow: vi.fn(() => Promise.resolve()),
     openPetWindow: vi.fn(() => Promise.resolve()),
+    openLocalWorkspace: vi.fn(() => Promise.resolve()),
     openRemoteWorkspace: vi.fn(() => Promise.resolve()),
     listRemoteWorkspaceConnections: vi.fn(() => Promise.resolve(connections)),
     setRoute: vi.fn(),
+    openConversations: vi.fn(),
+    openBrowserTab: vi.fn(() => "browser:new"),
+    toastError: vi.fn(),
   }
 })
 
+// The built-in browser row is gated on the backend's own answer, not on the
+// platform, so the test drives that answer directly.
+let browserAvailable = true
+
 let desktop = true
-vi.mock("@/lib/platform", () => ({ isDesktop: () => desktop }))
+// A desktop window bound to a remote server, as opposed to the local `main`.
+let remoteWindow = false
+vi.mock("@/lib/platform", () => ({
+  isDesktop: () => desktop,
+  isRemoteDesktopWindow: () => desktop && remoteWindow,
+}))
+
+vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }))
 
 vi.mock("@/lib/api", () => ({
   openProjectBootWindow: mocks.openProjectBootWindow,
@@ -32,6 +47,7 @@ vi.mock("@/lib/pet/api", () => ({ openPetWindow: mocks.openPetWindow }))
 
 vi.mock("@/lib/remote-workspace", () => ({
   listRemoteWorkspaceConnections: mocks.listRemoteWorkspaceConnections,
+  openLocalWorkspace: mocks.openLocalWorkspace,
   openRemoteWorkspace: mocks.openRemoteWorkspace,
 }))
 
@@ -47,7 +63,19 @@ vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({
     routeId: "conversations",
     setRoute: mocks.setRoute,
+    openConversations: mocks.openConversations,
   }),
+}))
+
+vi.mock("@/contexts/workspace-context", () => ({
+  useOptionalWorkspaceActions: () => ({
+    openBrowserTab: mocks.openBrowserTab,
+  }),
+}))
+
+vi.mock("@/lib/browser/use-browser-capabilities", () => ({
+  useBrowserCapabilities: () =>
+    browserAvailable ? { available: true } : { available: false },
 }))
 
 // Dialogs render nothing until opened and drag in large trees; the menu only
@@ -94,11 +122,13 @@ const FORGE_ROW = "Repository panel"
 
 beforeEach(() => {
   desktop = true
+  remoteWindow = false
+  browserAvailable = true
   vi.clearAllMocks()
 })
 
 describe("QuickActionsDropdown", () => {
-  it("groups all eight actions under their headings on desktop", async () => {
+  it("groups desktop actions under their headings", async () => {
     await mountAndOpen()
 
     for (const group of ["Workspace", "Navigation", "More"]) {
@@ -112,10 +142,36 @@ describe("QuickActionsDropdown", () => {
       AUTOMATIONS_ROW,
       "To-dos",
       FORGE_ROW,
+      "Open browser tab",
       "Show pet",
     ]) {
       expect(await screen.findByRole("menuitem", { name: label })).toBeVisible()
     }
+  })
+
+  it("opens a blank browser tab, returning to the conversations route first", async () => {
+    await mountAndOpen()
+    await clickItem("Open browser tab")
+
+    // The file column that holds browser tabs only exists on the conversations
+    // route, so the route swap has to happen too — otherwise the tab opens
+    // behind whichever full-page route is covering the workspace.
+    expect(mocks.openConversations).toHaveBeenCalled()
+    expect(mocks.openBrowserTab).toHaveBeenCalledWith("about:blank")
+  })
+
+  it("drops the browser row when there is no built-in browser", async () => {
+    browserAvailable = false
+    await mountAndOpen()
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Open browser tab" })
+    ).toBeNull()
+    // The rest of the group survives, so this is the gate and not the group
+    // failing to render.
+    expect(
+      await screen.findByRole("menuitem", { name: "Show pet" })
+    ).toBeVisible()
   })
 
   it("has no Search row — that button is always visible in the chrome", async () => {
@@ -156,8 +212,49 @@ describe("QuickActionsDropdown", () => {
     expect(
       screen.queryByRole("menuitem", { name: "Open remote workspace" })
     ).toBeNull()
+    expect(
+      screen.queryByRole("menuitem", { name: "Open local workspace" })
+    ).toBeNull()
     expect(screen.queryByRole("menuitem", { name: "Show pet" })).toBeNull()
     expect(screen.queryByText("More")).toBeNull()
+  })
+
+  it("offers the local workspace from a remote workspace window", async () => {
+    remoteWindow = true
+    await mountAndOpen()
+    expect(mocks.openLocalWorkspace).not.toHaveBeenCalled()
+
+    await clickItem("Open local workspace")
+    expect(mocks.openLocalWorkspace).toHaveBeenCalledOnce()
+    expect(mocks.openRemoteWorkspace).not.toHaveBeenCalled()
+  })
+
+  it("has no local workspace row in the local workspace itself", async () => {
+    await mountAndOpen()
+
+    // There it could only focus the window it was picked from. The rest of
+    // the group survives, so this is the gate and not the group failing.
+    expect(
+      await screen.findByRole("menuitem", { name: "Open remote workspace" })
+    ).toBeVisible()
+    expect(
+      screen.queryByRole("menuitem", { name: "Open local workspace" })
+    ).toBeNull()
+  })
+
+  it("says so when the local workspace cannot be brought up", async () => {
+    remoteWindow = true
+    mocks.openLocalWorkspace.mockRejectedValueOnce(new Error("ipc down"))
+    await mountAndOpen()
+    expect(mocks.toastError).not.toHaveBeenCalled()
+
+    await clickItem("Open local workspace")
+    await vi.waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "Failed to open local workspace",
+        { description: "ipc down" }
+      )
+    )
   })
 
   it("routes each action to its own entry point", async () => {

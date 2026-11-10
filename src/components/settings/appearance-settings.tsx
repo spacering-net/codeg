@@ -1,6 +1,15 @@
 "use client"
 
-import { LayoutGrid, Monitor, Moon, Sun, Type } from "lucide-react"
+import {
+  LayoutGrid,
+  Monitor,
+  Moon,
+  MoveHorizontal,
+  Sparkles,
+  Sun,
+  Type,
+} from "lucide-react"
+import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { useTheme } from "next-themes"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -11,12 +20,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Button } from "@/components/ui/button"
+import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import {
   useThemeColor,
   useZoomLevel,
   useWelcomeQuickActions,
+  useChatAnimationsSetting,
+  useChatContentWidth,
 } from "@/hooks/use-appearance"
+import {
+  CHAT_CONTENT_DEFAULT,
+  CHAT_CONTENT_MIN,
+  chatContentWidthCeiling,
+} from "@/lib/chat-content-width"
 import { cn } from "@/lib/utils"
 import {
   DEFAULT_ZOOM_LEVEL,
@@ -30,6 +48,16 @@ import { PetManagerSection } from "./pet-manager-section"
 import { FontSettingsSection } from "./font-settings-section"
 import { WorkspaceBackgroundSection } from "./workspace-background-section"
 import { CustomStyleSection } from "./custom-style-section"
+import { ChatHtmlSettingsSection } from "./chat-html-settings"
+
+/**
+ * 屏幕可用宽度（CSS px），用作聊天宽度滑块上限的依据——主窗口铺满屏幕时聊天列
+ * 能达到的最宽值。不用 window.innerWidth：桌面端设置页是独立窗口，量到的是它自己
+ * 的宽度。实际显示宽度另由 CSS 按所在列的宽度再封顶（见 chat-content-w）。
+ */
+function readScreenWidth(): number {
+  return typeof window === "undefined" ? 0 : (window.screen?.availWidth ?? 0)
+}
 
 type ThemeMode = "system" | "light" | "dark"
 
@@ -40,6 +68,12 @@ export function AppearanceSettings() {
   const { zoomLevel, setZoomLevel } = useZoomLevel()
   const { showWelcomeQuickActions, setShowWelcomeQuickActions } =
     useWelcomeQuickActions()
+  const { chatAnimations, setChatAnimations } = useChatAnimationsSetting()
+  const { chatContentWidth, setChatContentWidth } = useChatContentWidth()
+  const [screenWidth] = useState(readScreenWidth)
+  // 宽度以 100% 缩放下的 px 计（随缩放一起放大），所以同一块屏幕在高缩放下能放下
+  // 的宽度更小。
+  const chatWidthMax = chatContentWidthCeiling(screenWidth, zoomLevel / 100)
 
   const resolvedThemeLabel =
     resolvedTheme === "dark"
@@ -236,6 +270,86 @@ export function AppearanceSettings() {
               {t("welcomePanel.showQuickActions")}
             </span>
           </label>
+        </section>
+
+        {/* ===== Chat animations ===== */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">
+              {t("chatAnimations.sectionTitle")}
+            </h2>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("chatAnimations.sectionDescription")}
+          </p>
+
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={chatAnimations}
+              onCheckedChange={setChatAnimations}
+            />
+            <span className="text-xs text-muted-foreground">
+              {t("chatAnimations.enable")}
+            </span>
+          </label>
+        </section>
+
+        <ChatHtmlSettingsSection />
+
+        {/* ===== Chat content width ===== */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <MoveHorizontal className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">
+              {t("chatWidth.sectionTitle")}
+            </h2>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("chatWidth.sectionDescription")}
+          </p>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">
+                {t("chatWidth.label")}
+              </span>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {chatContentWidth === null
+                  ? t("chatWidth.default", { width: CHAT_CONTENT_DEFAULT })
+                  : `${chatContentWidth}px`}
+              </span>
+            </div>
+            <Slider
+              value={[
+                Math.min(
+                  chatContentWidth ?? CHAT_CONTENT_DEFAULT,
+                  chatWidthMax
+                ),
+              ]}
+              min={CHAT_CONTENT_MIN}
+              max={chatWidthMax}
+              step={8}
+              onValueChange={([v]) => setChatContentWidth(v)}
+              aria-label={t("chatWidth.label")}
+            />
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-2xs text-muted-foreground leading-4">
+                {t("chatWidth.hint")}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={chatContentWidth === null}
+                onClick={() => setChatContentWidth(null)}
+              >
+                {t("chatWidth.reset")}
+              </Button>
+            </div>
+          </div>
         </section>
 
         {/* ===== Desktop Pet ===== */}

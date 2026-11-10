@@ -72,7 +72,9 @@ export function PanelPermissionCard({
       <div className="flex items-center gap-1.5 text-xs font-medium">
         <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-amber-500" />
         {/* Same precedence as PermissionDialog: description (≥0.63 meta)
-            over the raw command title — the command row below shows it. */}
+            over the raw command title — the command row below shows it, and
+            `parsePermissionToolCall` keeps a description that merely repeats
+            the command from taking the heading. */}
         <span className="truncate">{parsed.description ?? parsed.title}</span>
       </div>
 

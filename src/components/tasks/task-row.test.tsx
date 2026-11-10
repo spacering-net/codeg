@@ -60,6 +60,8 @@ function renderRow(
     onUnqueueMerge: noop,
     onComplete: noop,
     onArchive: noop,
+    onDefer: noop,
+    onFollowUp: noop,
     onEdit: noop,
     onSchedule: noop,
     ...handlers,
@@ -133,6 +135,33 @@ describe("TaskRow", () => {
     ).toBeInTheDocument()
     await userEvent.click(screen.getByRole("button", { name: "View session" }))
     expect(onViewSession).toHaveBeenCalledTimes(1)
+  })
+
+  it("leads a task awaiting input with answering the agent", async () => {
+    const onOpen = vi.fn()
+    const onViewSession = vi.fn()
+    const onCancel = vi.fn()
+    renderRow(task({ status: "awaiting_input", conversation_id: 42 }), {
+      onOpen,
+      onViewSession,
+      onCancel,
+    })
+
+    const respond = screen.getByRole("button", { name: "Respond" })
+    // Filled: the row is waiting on the user.
+    expect(respond).toHaveAttribute("data-variant", "default")
+    // Icon-only, so the tooltip names the action AND says what it is for.
+    await userEvent.hover(respond)
+    const tip = await screen.findByRole("tooltip")
+    expect(tip).toHaveTextContent("Respond")
+    expect(tip).toHaveTextContent(enMessages.Tasks.actionRespondHint)
+    await userEvent.click(respond)
+    expect(onViewSession).toHaveBeenCalledTimes(1)
+    expect(onOpen).not.toHaveBeenCalled()
+
+    expect(screen.queryByRole("button", { name: "View session" })).toBeNull()
+    await userEvent.click(screen.getByRole("button", { name: "Cancel task" }))
+    expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
   it("does not open the detail sheet when a secondary action is clicked", async () => {
@@ -227,5 +256,37 @@ describe("TaskRow", () => {
       })
     )
     expect(screen.queryByText("Worktree removed")).toBeNull()
+  })
+
+  it("puts a reviewed row aside, and a deferred row stops asking for the user", async () => {
+    const onDefer = vi.fn()
+    const { unmount } = renderRow(task(), { onDefer })
+    // Waiting on the user: the primary is filled.
+    expect(screen.getByRole("button", { name: "Merge" })).toHaveAttribute(
+      "data-variant",
+      "default"
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Handle later" }))
+    expect(onDefer).toHaveBeenCalledTimes(1)
+    unmount()
+
+    const onFollowUp = vi.fn()
+    const onBack = vi.fn()
+    renderRow(task({ deferred_at: "2026-08-01T02:00:00Z" }), {
+      onFollowUp,
+      onDefer: onBack,
+    })
+    expect(screen.getByText("Deferred")).toBeInTheDocument()
+    // Put aside by the user's own word: the follow-up leads, but outlined —
+    // the filled button is reserved for rows that are waiting right now.
+    const followUp = screen.getByRole("button", { name: "Follow up" })
+    expect(followUp).toHaveAttribute("data-variant", "outline")
+    await userEvent.click(followUp)
+    expect(onFollowUp).toHaveBeenCalledTimes(1)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Back to Needs you" })
+    )
+    expect(onBack).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole("button", { name: "Merge" })).toBeNull()
   })
 })

@@ -4,7 +4,9 @@
 //! per-folder git mutex.
 
 use crate::app_error::{AppCommandError, AppErrorCode};
-use crate::commands::folders::{detect_conflicts, git_command_error};
+use crate::commands::folders::{
+    detect_conflicts, git_command_error, numstat_rename_sides, to_git_literal_pathspec,
+};
 use crate::models::WorkTaskChangedFile;
 
 async fn run_git(path: &str, args: &[&str]) -> Result<std::process::Output, AppCommandError> {
@@ -23,7 +25,7 @@ async fn run_git(path: &str, args: &[&str]) -> Result<std::process::Output, AppC
 /// with splitting on, writing it deposits a fresh `sharedindex.*` beside it in
 /// the git directory, which outlives the scratch (git only prunes those on a
 /// later `gc`).
-async fn run_git_with_index(
+pub(crate) async fn run_git_with_index(
     path: &str,
     index: &std::path::Path,
     args: &[&str],
@@ -247,6 +249,37 @@ pub async fn commit_present(path: &str, rev: &str) -> Result<bool, AppCommandErr
     Ok(out.status.success())
 }
 
+/// The newest commit under `tip` (and not under `stop`) that carries the same
+/// change as one of `commit`'s own commits — where `commit` ended up after a
+/// rebase gave its changes new parents and new shas. "The same change" is
+/// git's patch-id equivalence (`--cherry-mark`, what `git cherry` and `rebase`
+/// use to skip a commit already applied). `None` when there is no such copy,
+/// and when git can't say.
+pub async fn rebased_copy(path: &str, commit: &str, tip: &str, stop: &str) -> Option<String> {
+    let range = format!("{commit}...{tip}");
+    let not_stop = format!("^{stop}");
+    let out = run_git(
+        path,
+        &[
+            "rev-list",
+            "--cherry-mark",
+            "--right-only",
+            "--no-merges",
+            "--topo-order",
+            &range,
+            &not_stop,
+        ],
+    )
+    .await
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix('=').map(str::to_string))
+}
+
 /// `git fetch <remote> +<remote_ref>:<local_ref>` → the fetched tip.
 ///
 /// Two deliberate choices:
@@ -302,13 +335,39 @@ pub async fn diff_numstat(
     path: &str,
     base: &str,
 ) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
-    let out = run_git(path, &["diff", "--numstat", base]).await?;
+    let out = run_git(
+        path,
+        &["-c", "core.quotePath=false", "diff", "--numstat", base],
+    )
+    .await?;
     if !out.status.success() {
         return Err(git_command_error("diff --numstat", &out.stderr));
     }
     Ok(parse_numstat(&out.stdout))
 }
 
+/// `git diff --numstat <from> <to>` — the change between two commits, with
+/// nothing from the worktree in it.
+pub async fn diff_numstat_between(
+    path: &str,
+    from: &str,
+    to: &str,
+) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
+    let out = run_git(
+        path,
+        &["-c", "core.quotePath=false", "diff", "--numstat", from, to],
+    )
+    .await?;
+    if !out.status.success() {
+        return Err(git_command_error("diff --numstat", &out.stderr));
+    }
+    Ok(parse_numstat(&out.stdout))
+}
+
+/// Reads `--numstat` run with `core.quotePath=false`. Without it git prints a
+/// non-ASCII path C-quoted and octal-escaped (`"\351\234\200\346\261\202.md"`):
+/// unreadable in the task drawer, and a pathspec that matches nothing when the
+/// drawer asks [`diff_patch_with_untracked`] for that file.
 fn parse_numstat(stdout: &[u8]) -> Vec<WorkTaskChangedFile> {
     let mut files = Vec::new();
     for line in String::from_utf8_lossy(stdout).lines() {
@@ -341,8 +400,12 @@ fn parse_numstat(stdout: &[u8]) -> Vec<WorkTaskChangedFile> {
 /// The worktree's REAL index is never touched — `git add -N` on it would leave
 /// the agent's next round, and any `git stash` / `git commit -a` the user runs,
 /// looking at an index this feature quietly edited.
-struct ScratchIndex {
-    path: std::path::PathBuf,
+///
+/// [`ScratchIndex::copy_of`] is the same throwaway copy without the
+/// intent-to-add pass, for a caller that stages into it what it wants to look
+/// at (the commit message generator's "what would this commit contain").
+pub(crate) struct ScratchIndex {
+    pub(crate) path: std::path::PathBuf,
 }
 
 impl Drop for ScratchIndex {
@@ -364,6 +427,25 @@ impl ScratchIndex {
     /// to prevent. `anchor` is only the fallback seed for a checkout that has
     /// no index to copy at all.
     async fn build(wt_path: &str, anchor: &str) -> Result<Self, AppCommandError> {
+        let scratch = Self::copy_of(wt_path, Some(anchor)).await?;
+        // git runs with the worktree root as its cwd, so a bare `-A` covers the
+        // whole tree; `-N` records names only — nothing is staged, and the
+        // content the diff reports is read from the working tree either way.
+        let add = run_git_with_index(wt_path, &scratch.path, &["add", "-A", "-N"]).await?;
+        if !add.status.success() {
+            return Err(git_command_error("add -A -N", &add.stderr));
+        }
+        Ok(scratch)
+    }
+
+    /// A copy of the worktree's own index and nothing more (see the type docs
+    /// for why a copy). With no index to copy, `anchor` seeds it with
+    /// `read-tree`; without an anchor either it is left EMPTY, which is what a
+    /// repository nothing was ever staged in has.
+    pub(crate) async fn copy_of(
+        wt_path: &str,
+        anchor: Option<&str>,
+    ) -> Result<Self, AppCommandError> {
         // Inside the worktree's own git directory: never visible to
         // `git status`, never committable, and on the same filesystem as the
         // index it copies. The name carries the process id and a counter
@@ -388,18 +470,34 @@ impl ScratchIndex {
         // Git replaces the index by renaming `index.lock` over it, so a copy
         // racing an agent's own `git add` reads one whole version or the
         // other — never a half-written file.
-        if std::fs::copy(git_dir.join("index"), &scratch.path).is_err() {
-            let read = run_git_with_index(wt_path, &scratch.path, &["read-tree", anchor]).await?;
-            if !read.status.success() {
-                return Err(git_command_error("read-tree", &read.stderr));
+        let index = git_dir.join("index");
+        let copied = std::fs::File::open(&index).and_then(|mut source| {
+            let metadata = source.metadata()?;
+            let mut destination = std::fs::File::create(&scratch.path)?;
+            std::io::copy(&mut source, &mut destination)?;
+            destination.set_permissions(metadata.permissions())?;
+            // Git rehashes an entry whose timestamp is at least the index's
+            // timestamp (a "racily clean" entry). A fresh mtime on the copy
+            // would disable that check and hide same-size edits made within
+            // the filesystem's timestamp resolution. Read both the contents
+            // and metadata from one handle, even if git replaces the source.
+            destination.set_modified(metadata.modified()?)
+        });
+        if let Err(e) = copied {
+            match anchor {
+                Some(anchor) => {
+                    let read =
+                        run_git_with_index(wt_path, &scratch.path, &["read-tree", anchor]).await?;
+                    if !read.status.success() {
+                        return Err(git_command_error("read-tree", &read.stderr));
+                    }
+                }
+                // An index that is there but could not be copied is not an
+                // empty one: left empty, the copy would read as every tracked
+                // file deleted.
+                None if index.exists() => return Err(AppCommandError::io(e)),
+                None => {}
             }
-        }
-        // git runs with the worktree root as its cwd, so a bare `-A` covers the
-        // whole tree; `-N` records names only — nothing is staged, and the
-        // content the diff reports is read from the working tree either way.
-        let add = run_git_with_index(wt_path, &scratch.path, &["add", "-A", "-N"]).await?;
-        if !add.status.success() {
-            return Err(git_command_error("add -A -N", &add.stderr));
         }
         Ok(scratch)
     }
@@ -413,7 +511,12 @@ pub async fn diff_numstat_with_untracked(
     anchor: &str,
 ) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
     let scratch = ScratchIndex::build(path, anchor).await?;
-    let out = run_git_with_index(path, &scratch.path, &["diff", "--numstat", anchor]).await?;
+    let out = run_git_with_index(
+        path,
+        &scratch.path,
+        &["-c", "core.quotePath=false", "diff", "--numstat", anchor],
+    )
+    .await?;
     if !out.status.success() {
         return Err(git_command_error("diff --numstat", &out.stderr));
     }
@@ -423,23 +526,92 @@ pub async fn diff_numstat_with_untracked(
 /// The patch behind [`diff_numstat_with_untracked`] — whole change set, or one
 /// file. An uncommitted new file renders as a normal `new file mode` hunk
 /// rather than as an empty diff nobody can explain.
+///
+/// `file` is a name as that list gives it, and a renamed file is listed in
+/// numstat's notation (`docs/{sub => }/moved.txt`, `old.txt => new.txt`),
+/// which names no path. When the name itself finds nothing, both sides of the
+/// rename are asked for instead, so git pairs them into the rename the list
+/// counted.
 pub async fn diff_patch_with_untracked(
     path: &str,
     anchor: &str,
     file: Option<&str>,
 ) -> Result<String, AppCommandError> {
     let scratch = ScratchIndex::build(path, anchor).await?;
-    let literal = file.map(|f| format!(":(literal){f}"));
-    let mut args = vec!["diff", "--no-color", anchor];
-    if let Some(ref f) = literal {
+    let patch = diff_patch_against(path, &scratch, anchor, file.as_slice()).await?;
+    if patch.trim().is_empty() {
+        if let Some((old, new)) = file.and_then(numstat_rename_sides) {
+            return diff_patch_against(path, &scratch, anchor, &[&old, &new]).await;
+        }
+    }
+    Ok(patch)
+}
+
+/// `git diff <anchor>` against `scratch`: the whole change set, or only the
+/// sections about `files` (see [`sections_about`]).
+async fn diff_patch_against(
+    path: &str,
+    scratch: &ScratchIndex,
+    anchor: &str,
+    files: &[&str],
+) -> Result<String, AppCommandError> {
+    let literals: Vec<String> = files.iter().map(|f| to_git_literal_pathspec(f)).collect();
+    // Unquoted like the file list, so the preview names a non-ASCII file as
+    // itself rather than by its octal escapes. Git's own patch with fixed
+    // prefixes and a submodule as its gitlink, whatever the user's diff
+    // config says, so each section is told apart by its header.
+    let mut args = vec![
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--submodule=short",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        anchor,
+    ];
+    if !literals.is_empty() {
         args.push("--");
-        args.push(f);
+        args.extend(literals.iter().map(String::as_str));
     }
     let out = run_git_with_index(path, &scratch.path, &args).await?;
     if !out.status.success() {
         return Err(git_command_error("diff", &out.stderr));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    let patch = String::from_utf8_lossy(&out.stdout);
+    Ok(if files.is_empty() {
+        patch.into_owned()
+    } else {
+        sections_about(&patch, files)
+    })
+}
+
+/// The sections of `patch` whose `diff --git` header has one of `files` on
+/// either side. A pathspec also matches everything below a directory of its
+/// name, so asking for `old.txt` brings along `old.txt/child.txt` when the
+/// worktree has a directory where the anchor had that file. (Excluding
+/// `old.txt/` from the pathspec instead would hide a file moved into a
+/// directory of its own name, `tool => tool/main`, and a submodule, whose
+/// gitlink a trailing `/` matches as well.)
+fn sections_about(patch: &str, files: &[&str]) -> String {
+    let about = |header: &str| {
+        files.iter().any(|f| {
+            header.starts_with(&format!("diff --git a/{f} b/"))
+                || header.ends_with(&format!(" b/{f}"))
+        })
+    };
+    let mut kept = String::with_capacity(patch.len());
+    let mut keep = true;
+    for line in patch.split_inclusive('\n') {
+        if line.starts_with("diff --git ") {
+            keep = about(line.trim_end_matches('\n'));
+        }
+        if keep {
+            kept.push_str(line);
+        }
+    }
+    kept
 }
 
 /// Tip commit of a LOCAL branch (`refs/heads/<name>`), or `None` when no such
@@ -792,6 +964,66 @@ mod tests {
         }
     }
 
+    /// Copying an index must keep Git's racy-clean check: a same-size edit
+    /// whose stat data still matches the cached entry needs to be rehashed.
+    #[tokio::test]
+    async fn a_copied_index_still_stages_a_racily_clean_edit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root.to_str().expect("utf-8 path");
+        git_run(root, &["init", "-q"]);
+        git_run(root, &["config", "core.trustctime", "false"]);
+        git_run(root, &["config", "core.checkStat", "minimal"]);
+        let file = root.join("Cargo.lock");
+        // Whole seconds model a filesystem whose timestamp resolution cannot
+        // distinguish the two writes, independently of how fast this runs.
+        let timestamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::write(&file, "a\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(timestamp)
+            .unwrap();
+        git_run(root, &["add", "Cargo.lock"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+
+        std::fs::write(&file, "b\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(timestamp)
+            .unwrap();
+        let index = root.join(".git/index");
+        std::fs::File::options()
+            .write(true)
+            .open(&index)
+            .unwrap()
+            .set_modified(timestamp)
+            .unwrap();
+        let original = std::fs::read(&index).unwrap();
+        let original_mtime = std::fs::metadata(&index).unwrap().modified().unwrap();
+
+        let scratch = ScratchIndex::copy_of(path, None).await.unwrap();
+        let add = run_git_with_index(path, &scratch.path, &["add", "--", "Cargo.lock"])
+            .await
+            .unwrap();
+        assert!(add.status.success(), "{:?}", add.stderr);
+        let diff = run_git_with_index(path, &scratch.path, &["diff", "--cached"])
+            .await
+            .unwrap();
+        assert!(diff.status.success(), "{:?}", diff.stderr);
+        let patch = String::from_utf8(diff.stdout).unwrap();
+        assert!(patch.contains("-a\n+b\n"), "same-size edit lost: {patch}");
+        assert_eq!(std::fs::read(&index).unwrap(), original);
+        assert_eq!(
+            std::fs::metadata(&index).unwrap().modified().unwrap(),
+            original_mtime,
+            "the real index's contents and timestamp stay untouched"
+        );
+    }
+
     /// Why removing a task worktree has to consult BOTH probes: each is blind
     /// to exactly what the other sees. `remove_worktree_and_branch` runs
     /// `worktree remove --force` + `branch -D`, so anything either probe would
@@ -935,6 +1167,178 @@ mod tests {
             seen.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
             ["kept.log"],
             "committed work must not vanish because a pattern would have ignored it: {seen:?}"
+        );
+    }
+
+    /// The task drawer lists a file by the name numstat gives it, then asks for
+    /// that file's patch by the same name. By default git prints a non-ASCII
+    /// path C-quoted and octal-escaped, so the drawer showed
+    /// `"\351\234\200\346\261\202.md"` and the patch it asked for came back
+    /// empty.
+    #[tokio::test]
+    async fn a_non_ascii_path_is_listed_and_diffed_by_its_own_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_str().expect("utf-8 path");
+        git_run(dir.path(), &["init", "-q", "-b", "main"]);
+        // Git's default, set repo-local so the git the code under test runs
+        // reads it too: a developer's global `core.quotePath=false` must not
+        // hide the bug.
+        git_run(dir.path(), &["config", "core.quotePath", "true"]);
+        std::fs::write(dir.path().join("需求.md"), "one\n").expect("write");
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "base"]);
+        let base = rev_parse(path, "HEAD").await.expect("base sha");
+
+        std::fs::write(dir.path().join("需求.md"), "one\ntwo\n").expect("write");
+        std::fs::write(dir.path().join("新文件.txt"), "x\n").expect("write");
+
+        let plain = diff_numstat(path, &base).await.expect("plain diff");
+        assert_eq!(
+            plain.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["需求.md"]
+        );
+        let seen = diff_numstat_with_untracked(path, &base)
+            .await
+            .expect("acceptance diff");
+        assert_eq!(
+            seen.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["新文件.txt", "需求.md"]
+        );
+        let patch = diff_patch_with_untracked(path, &base, Some("需求.md"))
+            .await
+            .expect("patch");
+        assert!(patch.contains("+++ b/需求.md"), "{patch}");
+        assert!(patch.contains("+two"), "{patch}");
+
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "the task's work"]);
+        let head = rev_parse(path, "HEAD").await.expect("head sha");
+        let committed = diff_numstat_between(path, &base, &head)
+            .await
+            .expect("commit diff");
+        assert_eq!(
+            committed
+                .iter()
+                .map(|f| f.file.as_str())
+                .collect::<Vec<_>>(),
+            ["新文件.txt", "需求.md"]
+        );
+    }
+
+    /// A renamed file is listed in numstat's notation, which names no path:
+    /// asked for by that name, its patch came back empty and the drawer said
+    /// "No changes vs the base yet" for a file it had just listed. A move the
+    /// agent never ran `git mv` for is listed the same way (the scratch index
+    /// pairs the deleted path with the intent-to-add one).
+    ///
+    /// Each file's patch holds that file alone, also where the worktree has a
+    /// directory named like a path the anchor had as a file (a pathspec
+    /// matches everything below a directory of its name), including a file
+    /// moved into a directory of its own name, and a submodule.
+    #[tokio::test]
+    async fn a_renamed_file_is_diffed_by_the_name_the_list_gives_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root.to_str().expect("utf-8 path");
+        git_run(root, &["init", "-q", "-b", "main"]);
+        // Git's default, repo-local so a developer's global config cannot
+        // turn rename detection off for the code under test.
+        git_run(root, &["config", "diff.renames", "true"]);
+        // Not git's defaults: what a user may configure — other prefixes
+        // (`c/`, `w/`), a submodule shown as its own files' diffs — must not
+        // change which sections a file's patch keeps.
+        git_run(root, &["config", "diff.mnemonicPrefix", "true"]);
+        git_run(root, &["config", "diff.submodule", "diff"]);
+        // Distinct contents, so each rename has exactly one possible pairing.
+        std::fs::create_dir_all(root.join("docs").join("sub")).expect("mkdir");
+        std::fs::write(root.join("docs/sub/moved.txt"), "a\nb\nc\nd\ne\n").expect("write");
+        std::fs::write(root.join("old.txt"), "1\n2\n3\n4\n5\n").expect("write");
+        std::fs::write(root.join("tool"), "t1\nt2\nt3\nt4\nt5\n").expect("write");
+        std::fs::write(root.join("gone"), "x\n").expect("write");
+        let module = root.join("module");
+        std::fs::create_dir(&module).expect("mkdir");
+        git_run(&module, &["init", "-q", "-b", "main"]);
+        std::fs::write(module.join("inside.txt"), "m\n").expect("write");
+        git_run(&module, &["add", "-A"]);
+        git_run(&module, &["commit", "-q", "-m", "m1"]);
+        git_run(root, &["add", "-A"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+        let base = rev_parse(path, "HEAD").await.expect("base sha");
+
+        // Committed: a move up a directory, with an edit.
+        git_run(root, &["mv", "docs/sub/moved.txt", "docs/moved.txt"]);
+        std::fs::write(root.join("docs/moved.txt"), "a\nb\nc\nd\ne\nf\n").expect("write");
+        git_run(root, &["commit", "-q", "-am", "move"]);
+        // Uncommitted, and never `git mv`ed — then a directory where the file
+        // was. Likewise a deleted file with a directory in its place, and a
+        // file moved into a directory of its own name next to a new file.
+        std::fs::rename(root.join("old.txt"), root.join("new.txt")).expect("rename");
+        std::fs::create_dir(root.join("old.txt")).expect("mkdir");
+        std::fs::write(root.join("old.txt/child.txt"), "c\n").expect("write");
+        std::fs::remove_file(root.join("gone")).expect("remove");
+        std::fs::create_dir(root.join("gone")).expect("mkdir");
+        std::fs::write(root.join("gone/inner.txt"), "d\n").expect("write");
+        std::fs::rename(root.join("tool"), root.join("tool.tmp")).expect("rename");
+        std::fs::create_dir(root.join("tool")).expect("mkdir");
+        std::fs::rename(root.join("tool.tmp"), root.join("tool/main")).expect("rename");
+        std::fs::write(root.join("tool/other"), "o\n").expect("write");
+        // The submodule moves on to a new commit.
+        std::fs::write(module.join("inside.txt"), "m\nm2\n").expect("write");
+        git_run(&module, &["commit", "-q", "-am", "m2"]);
+
+        let mut listed: Vec<String> = diff_numstat_with_untracked(path, &base)
+            .await
+            .expect("list")
+            .into_iter()
+            .map(|f| f.file)
+            .collect();
+        listed.sort();
+        assert_eq!(
+            listed,
+            [
+                "docs/{sub => }/moved.txt",
+                "gone",
+                "gone/inner.txt",
+                "module",
+                "old.txt => new.txt",
+                "old.txt/child.txt",
+                "tool => tool/main",
+                "tool/other",
+            ]
+        );
+
+        let gone = diff_patch_with_untracked(path, &base, Some("gone"))
+            .await
+            .expect("patch");
+        assert!(gone.contains("deleted file mode"), "{gone}");
+        assert_eq!(gone.matches("diff --git ").count(), 1, "{gone}");
+        let module = diff_patch_with_untracked(path, &base, Some("module"))
+            .await
+            .expect("patch");
+        assert!(module.contains("+Subproject commit "), "{module}");
+        assert_eq!(module.matches("diff --git ").count(), 1, "{module}");
+        for (name, from, to) in [
+            (
+                "docs/{sub => }/moved.txt",
+                "docs/sub/moved.txt",
+                "docs/moved.txt",
+            ),
+            ("old.txt => new.txt", "old.txt", "new.txt"),
+            ("tool => tool/main", "tool", "tool/main"),
+        ] {
+            let patch = diff_patch_with_untracked(path, &base, Some(name))
+                .await
+                .expect("patch");
+            assert!(patch.contains(&format!("rename from {from}\n")), "{patch}");
+            assert!(patch.contains(&format!("rename to {to}\n")), "{patch}");
+            assert_eq!(patch.matches("diff --git ").count(), 1, "{patch}");
+        }
+        let moved = diff_patch_with_untracked(path, &base, Some("docs/{sub => }/moved.txt"))
+            .await
+            .expect("patch");
+        assert!(
+            moved.contains("\n+f\n"),
+            "the move's edit is in it: {moved}"
         );
     }
 

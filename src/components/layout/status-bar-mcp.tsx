@@ -1,19 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import {
-  Bubbles,
-  CalendarClock,
-  HelpCircle,
-  ListTodo,
-  MessageSquare,
-  MessageSquarePlus,
-  Plug,
-  RotateCw,
-  Settings2,
-  Unplug,
-  type LucideIcon,
-} from "lucide-react"
+import { Plug, RotateCw, Settings2, Unplug } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import {
@@ -31,6 +19,10 @@ import {
   type CodegMcpServiceState,
   type CodegMcpServiceStatus,
 } from "@/lib/api"
+import {
+  AGENT_TOOLS_NAMESPACE,
+  AGENT_TOOL_GROUPS,
+} from "@/lib/agent-tool-groups"
 import { toErrorMessage } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
 
@@ -42,77 +34,6 @@ const POLL_MS = 60_000
 /** `unknown` is frontend-only: the status call itself failed, which says
  * nothing about the service and must not be painted as a service fault. */
 type IndicatorState = CodegMcpServiceState | "unknown"
-
-/** Message keys for a tool group's name and one-line description. An unmapped
- * slug (a group added backend-first) falls back to the raw slug and no
- * description rather than throwing a missing-message error. */
-type GroupLabelKey =
-  | "groupDelegation"
-  | "groupFeedback"
-  | "groupAsk"
-  | "groupSessions"
-  | "groupAutomations"
-  | "groupTaskboard"
-
-type GroupDescKey =
-  | "descDelegation"
-  | "descFeedback"
-  | "descAsk"
-  | "descSessions"
-  | "descAutomations"
-  | "descTaskboard"
-
-interface GroupPresentation {
-  label: GroupLabelKey
-  desc: GroupDescKey
-  icon: LucideIcon
-}
-
-/**
- * Presentation per tool group.
- *
- * The icons are deliberately the same ones the General settings page uses for
- * these very switches — `AgentToolsSettingsSection`'s `TOOL_ROWS` for the five
- * agent tools, and `DelegationSettingsSection`'s heading glyph for delegation.
- * The popover's "Open full settings" button leads straight there, so a
- * different glyph on each side would make one control look like two.
- *
- * No per-group hue: six fixed colours ignored the chosen theme and turned a
- * settings list into a paint chart. The rows are told apart by icon shape and
- * label; the tile behind the glyph takes the theme's own accent.
- */
-const GROUPS: Record<string, GroupPresentation | undefined> = {
-  delegation: {
-    label: "groupDelegation",
-    desc: "descDelegation",
-    icon: Bubbles,
-  },
-  feedback: {
-    label: "groupFeedback",
-    desc: "descFeedback",
-    icon: MessageSquarePlus,
-  },
-  ask: {
-    label: "groupAsk",
-    desc: "descAsk",
-    icon: HelpCircle,
-  },
-  sessions: {
-    label: "groupSessions",
-    desc: "descSessions",
-    icon: MessageSquare,
-  },
-  automations: {
-    label: "groupAutomations",
-    desc: "descAutomations",
-    icon: CalendarClock,
-  },
-  taskboard: {
-    label: "groupTaskboard",
-    desc: "descTaskboard",
-    icon: ListTodo,
-  },
-}
 
 /** Badge tint per state. `disabled` and `unknown` stay neutral on purpose: the
  * service is not faulty in either case, and colouring them would train people
@@ -163,6 +84,7 @@ function Stat({ label, value }: { label: string; value: string }) {
  */
 export function StatusBarMcp() {
   const t = useTranslations("Folder.statusBar.mcp")
+  const tools = useTranslations(AGENT_TOOLS_NAMESPACE)
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<CodegMcpServiceStatus | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -347,13 +269,34 @@ export function StatusBarMcp() {
           // switches are a single control surface and read as one.
           <div className="divide-y overflow-hidden rounded-lg border">
             {status.tool_groups.map((group) => {
-              const meta = GROUPS[group.key]
-              const label = meta ? t(meta.label) : group.key
+              const meta = AGENT_TOOL_GROUPS[group.key]
+              const label = meta ? tools(meta.label) : group.key
               const Icon = meta?.icon ?? Plug
+              // A switch that lives inside another is shown off and left
+              // untouchable until its parent is on — the same treatment the
+              // settings panel gives it. Turning it on from here while the
+              // group is off would write a `true` that nothing acts on, and
+              // show an agent a tool it cannot call. Not indented for it,
+              // though: the settings list draws its rows on one rail, and a
+              // single stepped-in row here read as a misaligned one rather
+              // than as a nested one. Being off and untouchable while the
+              // group is off already says where it belongs.
+              const parent = group.requires
+              const available =
+                !parent ||
+                (pending[parent] ??
+                  status.tool_groups.find((g) => g.key === parent)?.enabled ??
+                  false)
+              const checked = available && (pending[group.key] ?? group.enabled)
               return (
                 <label
                   key={group.key}
-                  className="flex cursor-pointer items-center gap-2 px-2 py-1.5 transition-colors hover:bg-accent/40"
+                  className={cn(
+                    "flex items-center gap-2 px-2 py-1.5 transition-colors",
+                    available
+                      ? "cursor-pointer hover:bg-accent/40"
+                      : "cursor-not-allowed opacity-55"
+                  )}
                 >
                   {/* One tile tint for every row — the theme's accent, so the
                       list follows whatever `[data-theme]` is on. An unmapped
@@ -367,13 +310,13 @@ export function StatusBarMcp() {
                     </span>
                     {meta && (
                       <span className="block text-3xs leading-snug text-muted-foreground">
-                        {t(meta.desc)}
+                        {tools(meta.short)}
                       </span>
                     )}
                   </span>
                   <Switch
-                    checked={pending[group.key] ?? group.enabled}
-                    disabled={group.key in pending}
+                    checked={checked}
+                    disabled={!available || group.key in pending}
                     aria-label={label}
                     onCheckedChange={(next) =>
                       void handleToggle(group.key, next)
@@ -407,9 +350,10 @@ export function StatusBarMcp() {
           variant="outline"
           className="w-full"
           onClick={() => {
-            // The General page is where these same switches live in full, with
-            // the depth limit and the per-agent defaults beside them.
-            openSettingsWindow("general").catch((err) => {
+            // The Collaboration page is where these same switches live in
+            // full, with the depth limit and the per-agent defaults beside
+            // them.
+            openSettingsWindow("collaboration").catch((err) => {
               console.error("[StatusBarMcp] failed to open settings:", err)
             })
           }}

@@ -93,6 +93,7 @@ function folder(id: number, over: Partial<FolderDetail> = {}): FolderDetail {
 function node(id: number, over: Partial<CanvasNode> = {}): CanvasNode {
   return {
     id,
+    board_id: 1,
     kind: "custom",
     folder_id: null,
     folder_group_id: null,

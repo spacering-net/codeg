@@ -1,13 +1,14 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   ChevronDown,
   ChevronRight,
   Info,
+  ListChecks,
+  Loader2,
   Plus,
-  RefreshCw,
   Star,
   Trash2,
 } from "lucide-react"
@@ -30,15 +31,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  CodexCatalogPickerDialog,
+  CodexCatalogStatusLine,
+  CodexListNotices,
+  CodexListUrlField,
+  CodexProviderListSummary,
+  CodexSourceSwitch,
+  deriveCatalogUrl,
+  templateHint,
+  useCodexProviderList,
+  type CodexCatalogEndpoint,
+  type CodexPickerItem,
+} from "@/components/settings/codex-catalog-source"
+import { ProviderModelsRefreshButton } from "@/components/settings/provider-models"
 import { codexBundledCatalog } from "@/lib/api"
+import type { CodexCatalogTranslator } from "@/lib/codex-catalog-error"
 import {
   applyCodexCompatOverrides,
   hasCodexCustomization,
   isCodexCompatEntry,
   pruneCodexGhostExclusions,
+  type CodexCatalogSource,
   type CodexCustomEntry,
+  type CodexEndpointCatalogView,
   type CodexModelConfig,
   type CodexModelInfo,
+  type CodexOpenAiIdView,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -228,22 +247,51 @@ export function CodexModelListEditor({
   value,
   onChange: rawOnChange,
   readOnly = false,
+  endpoint = null,
 }: {
   value: CodexModelConfig
   onChange: (next: CodexModelConfig) => void
   readOnly?: boolean
+  /** Where a provider's own list would come from. `null` offers codex's
+   *  built-in list only (no provider to ask, e.g. the ChatGPT subscription). */
+  endpoint?: CodexCatalogEndpoint | null
 }) {
   const t = useTranslations("CodexModelEditor")
+  const ts = useTranslations("CodexModelEditor.catalogSource")
+  const tl = ts as unknown as CodexCatalogTranslator
   const { catalog, refreshing, refresh } = useCodexCatalog()
+  const source = endpoint ? value.catalog : undefined
+  const provider = useCodexProviderList(endpoint, source)
+  const valueRef = useRef(value)
+  useEffect(() => {
+    valueRef.current = value
+  }, [value])
 
-  // Heal ghost exclusions (officials codex has since retired to `hide`) on the
-  // way out: they are invisible here yet would keep codeg replacing codex's
-  // whole model table. Pruning on emit — not on mount — keeps an untouched form
-  // byte-identical to what was stored, so nothing reports a spurious change.
+  // The shape the provider's rows have: the one recorded when the list was
+  // applied, else what the rows at hand say.
+  const format = source ? (source.format ?? provider.rows?.format) : undefined
+  const providerModels = useMemo(
+    () =>
+      source && format === "native" && provider.rows?.models
+        ? provider.rows.models
+        : null,
+    [source, format, provider.rows]
+  )
+
+  // Heal ghost exclusions (officials codex has since retired to `hide`, or a
+  // provider stopped listing) on the way out: they are invisible here yet
+  // would keep codeg replacing codex's whole model table. Pruning on emit —
+  // not on mount — keeps an untouched form byte-identical to what was stored,
+  // so nothing reports a spurious change. Without rows to judge by (a provider
+  // list not fetched yet) nothing is pruned.
+  const pruneAgainst = useMemo(
+    () => (source ? (providerModels ?? []) : catalog),
+    [source, providerModels, catalog]
+  )
   const onChange = useCallback(
     (next: CodexModelConfig) =>
-      rawOnChange(pruneCodexGhostExclusions(next, catalog)),
-    [rawOnChange, catalog]
+      rawOnChange(pruneCodexGhostExclusions(next, pruneAgainst)),
+    [rawOnChange, pruneAgainst]
   )
 
   const customs = value.customs ?? []
@@ -255,27 +303,186 @@ export function CodexModelListEditor({
   // whole `model_catalog_json` (a full-table replace), so officials codex ships
   // later stop appearing on their own until this list is refreshed + re-saved.
   // Surface that caveat wherever this editor is mounted — but only for removals
-  // that still apply, or a long-retired one keeps the warning up forever.
-  const hasCustomization = hasCodexCustomization(value, catalog)
+  // that still apply, or a long-retired one keeps the warning up forever. A
+  // provider's list is refreshed on its own, so it carries no such caveat.
+  const hasCustomization = !source && hasCodexCustomization(value, catalog)
   const bySlug = useMemo(() => {
     const map = new Map<string, CodexModelInfo>()
     for (const m of catalog) map.set(m.slug, m)
     return map
   }, [catalog])
 
-  const officials = useMemo(() => catalog.filter(isListable), [catalog])
+  const officials = useMemo(
+    () => (source ? (providerModels ?? []) : catalog).filter(isListable),
+    [source, providerModels, catalog]
+  )
   const shownOfficials = officials.filter((m) => !excluded.has(m.slug))
   const excludedOfficials = officials.filter((m) => excluded.has(m.slug))
+  const selected = useMemo(
+    () => (format === "openai_list" ? (source?.selected ?? []) : []),
+    [format, source]
+  )
+  const idViews = useMemo(() => {
+    const map = new Map<string, CodexOpenAiIdView>()
+    for (const v of provider.rows?.missing ?? []) map.set(v.id, v)
+    for (const v of provider.rows?.ids ?? []) map.set(v.id, v)
+    return map
+  }, [provider.rows])
+  const returned = useMemo(
+    () => new Set((provider.rows?.ids ?? []).map((v) => v.id)),
+    [provider.rows]
+  )
 
   // Effective default mirrors the backend: explicit default when it names a
-  // shown model, else the first custom, else the first shown official.
+  // shown model, else the first custom, else the first shown official (or
+  // picked id).
+  const shownSlugs =
+    format === "openai_list" ? selected : shownOfficials.map((m) => m.slug)
   const isShown = (slug: string) =>
-    customs.some((c) => c.slug === slug) ||
-    shownOfficials.some((m) => m.slug === slug)
+    customs.some((c) => c.slug === slug) || shownSlugs.includes(slug)
   const effectiveDefault =
     value.default && isShown(value.default)
       ? value.default
-      : (customs[0]?.slug ?? shownOfficials[0]?.slug)
+      : (customs[0]?.slug ?? shownSlugs[0])
+
+  // ── The provider's list ──
+  const [picker, setPicker] = useState<{
+    mode: "manage" | "repick"
+    view: CodexEndpointCatalogView
+  } | null>(null)
+  const autoFetch = useRef(false)
+
+  const fetchList = useCallback(async () => {
+    const view = await provider.fetchNow()
+    const current = valueRef.current
+    if (!view || !current.catalog) return
+    if (!current.catalog.format) {
+      // The first answer fixes the shape, and with it what removing means.
+      rawOnChange({
+        ...current,
+        catalog: { ...current.catalog, format: view.format },
+      })
+      if (view.format === "openai_list") setPicker({ mode: "manage", view })
+    }
+  }, [provider, rawOnChange])
+
+  useEffect(() => {
+    if (autoFetch.current && provider.request && !provider.fetching) {
+      autoFetch.current = false
+      void fetchList()
+    }
+  }, [provider.request, provider.fetching, fetchList])
+
+  const setSource = (next: CodexCatalogSource | undefined) => {
+    const current = valueRef.current
+    const out: CodexModelConfig = { ...current }
+    if (next) out.catalog = next
+    else delete out.catalog
+    // Switched on: ask the provider at once.
+    if (next && !current.catalog) autoFetch.current = true
+    rawOnChange(out)
+  }
+
+  const unselect = (id: string) =>
+    onChange({
+      ...value,
+      catalog: { ...source, selected: selected.filter((s) => s !== id) },
+      default: value.default === id ? undefined : value.default,
+    })
+
+  const asCustom = (id: string): CodexCustomEntry => ({
+    slug: id,
+    base:
+      catalog.find((m) => id.startsWith(m.slug))?.slug ??
+      catalog[0]?.slug ??
+      id,
+  })
+
+  const pickerProps = (() => {
+    if (!picker) return null
+    const view = picker.view
+    if (picker.mode === "manage" || view.format === "openai_list") {
+      const ids = view.ids ?? []
+      const previous =
+        picker.mode === "manage" ? selected : shownOfficials.map((m) => m.slug)
+      const newIds = new Set(view.diff.added)
+      const items: CodexPickerItem[] = ids.map((v) => ({
+        id: v.id,
+        hint: templateHint(v, tl),
+        badge: newIds.has(v.id) && !previous.includes(v.id) ? "new" : undefined,
+      }))
+      const listed = new Set(ids.map((v) => v.id))
+      if (picker.mode === "manage") {
+        // Picked ids the provider stopped returning stay picked until the
+        // user lets them go.
+        for (const id of selected.filter((s) => !listed.has(s))) {
+          items.push({
+            id,
+            hint: templateHint(idViews.get(id), tl),
+            badge: "gone",
+          })
+        }
+      }
+      return {
+        title: ts(picker.mode === "manage" ? "pickerTitle" : "repickTitle"),
+        description: ts(
+          picker.mode === "manage" ? "pickerHint" : "repickHintOpenai"
+        ),
+        items,
+        initial:
+          picker.mode === "manage"
+            ? previous
+            : previous.filter((id) => listed.has(id)),
+        removals:
+          picker.mode === "manage"
+            ? []
+            : previous.filter((id) => !listed.has(id)),
+        onConfirm: (picked: string[], keep: string[]) => {
+          const current = valueRef.current
+          onChange({
+            ...current,
+            customs: [...(current.customs ?? []), ...keep.map(asCustom)],
+            catalog: {
+              ...current.catalog,
+              format: "openai_list",
+              selected: picked,
+            },
+          })
+        },
+      }
+    }
+    // Into a native catalog: what stays unpicked is hidden.
+    const models = (view.models ?? []).filter(isListable)
+    const slugs = new Set(models.map((m) => m.slug))
+    return {
+      title: ts("repickTitle"),
+      description: ts("repickHintNative"),
+      items: models.map((m) => ({
+        id: m.slug,
+        hint:
+          m.display_name && m.display_name !== m.slug
+            ? m.display_name
+            : undefined,
+      })),
+      initial: selected.filter((id) => slugs.has(id)),
+      removals: selected.filter((id) => !slugs.has(id)),
+      onConfirm: (picked: string[], keep: string[]) => {
+        const current = valueRef.current
+        const kept = new Set(picked)
+        const next: CodexModelConfig = {
+          ...current,
+          customs: [...(current.customs ?? []), ...keep.map(asCustom)],
+          catalog: { ...current.catalog, format: "native" },
+          excludedOfficials: models
+            .map((m) => m.slug)
+            .filter((slug) => !kept.has(slug)),
+        }
+        delete next.catalog?.selected
+        if (!next.excludedOfficials?.length) delete next.excludedOfficials
+        rawOnChange(next)
+      },
+    }
+  })()
 
   const setDefault = (slug: string) => onChange({ ...value, default: slug })
   const excludeOfficial = (slug: string) =>
@@ -319,117 +526,225 @@ export function CodexModelListEditor({
     })
   }
 
+  const providerRowsMissing = !!source && !provider.rows
+  const managed = !!endpoint?.managedBy
+  const editable = !readOnly && !managed
+  const officialsHint = !source
+    ? t("officialsHint")
+    : format === "openai_list"
+      ? ts("providerModelsHintOpenai")
+      : ts("providerModelsHintNative")
+  const listUrl = source
+    ? source.url?.trim() || deriveCatalogUrl(endpoint?.baseUrl ?? "") || ""
+    : ""
+
+  const emptyText =
+    format === "openai_list"
+      ? providerRowsMissing
+        ? ts("fetchFirst")
+        : ts("nothingPicked")
+      : providerRowsMissing
+        ? ts("fetchFirst")
+        : t("officialsEmpty")
+  const rows =
+    format === "openai_list"
+      ? selected.map((id) => (
+          <CodexModelRow
+            key={id}
+            name={id}
+            mono
+            detail={templateHint(idViews.get(id), tl)}
+            badge={
+              provider.rows && !returned.has(id) ? ts("badgeGone") : undefined
+            }
+            isDefault={id === effectiveDefault}
+            readOnly={readOnly}
+            onMakeDefault={() => onChange({ ...value, default: id })}
+            onRemove={() => unselect(id)}
+          />
+        ))
+      : shownOfficials.map((m) => (
+          <CodexModelRow
+            key={m.slug}
+            name={m.display_name || m.slug}
+            mono={!m.display_name || m.display_name === m.slug}
+            detail={m.display_name && m.display_name !== m.slug ? m.slug : ""}
+            detailMono
+            isDefault={m.slug === effectiveDefault}
+            readOnly={readOnly}
+            onMakeDefault={() => setDefault(m.slug)}
+            onRemove={() => excludeOfficial(m.slug)}
+          />
+        ))
+
   return (
     <div className="space-y-4">
-      {hasCustomization && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
-          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>{t("customizedNotice")}</span>
-        </div>
-      )}
-
-      {/* Officials: auto-included from the live catalog, deletable. */}
+      {/* The models Codex offers: where they come from, how that list
+          stands, and the rows themselves — one section. */}
       <section className="space-y-2">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs font-semibold">{t("officialsTitle")}</p>
-            <p className="text-2xs text-muted-foreground">
-              {t("officialsHint")}
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 text-muted-foreground"
-            onClick={refresh}
-            disabled={refreshing}
-            title={t("refresh")}
-            aria-label={t("refresh")}
-          >
-            <RefreshCw
-              className={cn("h-3.5 w-3.5", refreshing && "animate-spin")}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <p className="text-xs font-semibold">{t("modelsTitle")}</p>
+          {endpoint && (
+            <CodexSourceSwitch
+              value={source ? "provider" : "builtin"}
+              disabled={readOnly || managed}
+              onChange={(next) =>
+                setSource(next === "provider" ? (source ?? {}) : undefined)
+              }
             />
-          </Button>
+          )}
         </div>
-
-        {shownOfficials.length === 0 ? (
-          <p className="rounded-md border border-dashed px-3 py-3 text-center text-2xs text-muted-foreground">
-            {t("officialsEmpty")}
+        {managed && (
+          <p className="text-2xs font-medium text-muted-foreground">
+            {ts("managedBy", { name: endpoint?.managedBy ?? "" })}
           </p>
-        ) : (
-          <div className="space-y-1.5">
-            {shownOfficials.map((m) => (
-              <div
-                key={m.slug}
-                className="flex items-center gap-2 rounded-md border px-2 py-1.5"
-              >
-                <button
-                  type="button"
-                  title={
-                    m.slug === effectiveDefault
-                      ? t("defaultHint")
-                      : t("makeDefault")
-                  }
-                  onClick={() => setDefault(m.slug)}
-                  disabled={readOnly}
-                  className={cn(
-                    "shrink-0 text-muted-foreground transition-colors hover:text-amber-500 disabled:opacity-40",
-                    m.slug === effectiveDefault && "text-amber-500"
-                  )}
-                >
-                  <Star
-                    className={cn(
-                      "h-4 w-4",
-                      m.slug === effectiveDefault && "fill-current"
-                    )}
-                  />
-                </button>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs">{m.display_name || m.slug}</p>
-                  <p className="truncate text-2xs text-muted-foreground">
-                    {m.slug}
-                  </p>
-                </div>
-                {!readOnly && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-red-500"
-                    onClick={() => excludeOfficial(m.slug)}
-                    aria-label={t("remove")}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
-            ))}
+        )}
+        <p className="text-2xs text-muted-foreground">{officialsHint}</p>
+        {source && endpoint && editable && (
+          <CodexListUrlField
+            endpoint={endpoint}
+            source={source}
+            onSourceChange={setSource}
+          />
+        )}
+        {source && managed && listUrl && (
+          <p className="truncate font-mono text-2xs text-muted-foreground">
+            {listUrl}
+          </p>
+        )}
+        {source && (
+          <CodexListNotices
+            list={provider}
+            editable={editable}
+            onRepick={() =>
+              provider.formatChanged &&
+              setPicker({ mode: "repick", view: provider.formatChanged })
+            }
+          />
+        )}
+        {hasCustomization && (
+          <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-600 dark:text-amber-400">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{t("customizedNotice")}</span>
           </div>
         )}
 
-        {!readOnly && excludedOfficials.length > 0 && (
-          <Select value="" onValueChange={readdOfficial}>
-            <SelectTrigger className="h-7 w-auto gap-1 text-xs">
-              <Plus className="h-3.5 w-3.5" />
-              <SelectValue placeholder={t("readdOfficial")} />
-            </SelectTrigger>
-            <SelectContent>
-              {excludedOfficials.map((m) => (
-                <SelectItem key={m.slug} value={m.slug} className="text-xs">
-                  {m.display_name || m.slug}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+        <div className="overflow-hidden rounded-xl border">
+          <div className="flex min-h-9 items-center gap-2 border-b bg-muted/30 ps-3 pe-1.5 py-1 text-2xs">
+            <div className="flex min-w-0 flex-1 items-center">
+              {source && endpoint ? (
+                <CodexProviderListSummary
+                  endpoint={endpoint}
+                  list={provider}
+                  tally={
+                    format === "openai_list"
+                      ? {
+                          kind: "picked",
+                          // Picks the provider no longer returns are rows
+                          // of their own, marked; they are not of these.
+                          picked: selected.filter((id) => returned.has(id))
+                            .length,
+                          offered: returned.size,
+                        }
+                      : {
+                          kind: "models",
+                          shown: shownOfficials.length,
+                          removed: excludedOfficials.length,
+                        }
+                  }
+                />
+              ) : (
+                <span className="truncate text-muted-foreground">
+                  {[
+                    t("builtinSummary", { count: shownOfficials.length }),
+                    excludedOfficials.length > 0
+                      ? ts("summaryRemoved", {
+                          count: excludedOfficials.length,
+                        })
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              )}
+            </div>
+            {!source ? (
+              <ProviderModelsRefreshButton
+                fetching={refreshing}
+                onRefresh={refresh}
+                label={t("refresh")}
+              />
+            ) : (
+              editable && (
+                <>
+                  {format === "openai_list" && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      disabled={!provider.rows}
+                      onClick={() =>
+                        provider.rows &&
+                        setPicker({ mode: "manage", view: provider.rows })
+                      }
+                    >
+                      <ListChecks />
+                      {ts("manage")}
+                    </Button>
+                  )}
+                  <ProviderModelsRefreshButton
+                    fetching={provider.fetching}
+                    onRefresh={() => void fetchList()}
+                    disabled={!provider.request}
+                    label={ts("fetch")}
+                  />
+                </>
+              )
+            )}
+          </div>
+          {rows.length > 0 ? (
+            <div>{rows}</div>
+          ) : providerRowsMissing && provider.fetching ? (
+            // The line above says it is on its way.
+            <div className="flex justify-center px-3 py-4 text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+            </div>
+          ) : (
+            <p className="px-3 py-4 text-center text-2xs text-muted-foreground">
+              {emptyText}
+            </p>
+          )}
+          {!readOnly &&
+            format !== "openai_list" &&
+            excludedOfficials.length > 0 && (
+              <div className="border-t px-1.5 py-1">
+                <Select value="" onValueChange={readdOfficial}>
+                  <SelectTrigger className="h-7 w-auto gap-1 border-transparent bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:text-foreground">
+                    <Plus className="h-3.5 w-3.5" />
+                    <SelectValue placeholder={t("readdOfficial")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {excludedOfficials.map((m) => (
+                      <SelectItem
+                        key={m.slug}
+                        value={m.slug}
+                        className="text-xs"
+                      >
+                        {m.display_name || m.slug}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+        </div>
       </section>
 
       {/* Customs: user-defined models cloning an official base. */}
       <section className="space-y-2">
         <p className="text-xs font-semibold">{t("customsTitle")}</p>
         {customs.length === 0 ? (
-          <p className="rounded-md border border-dashed px-3 py-3 text-center text-2xs text-muted-foreground">
+          <p className="rounded-xl border border-dashed px-3 py-3 text-center text-2xs text-muted-foreground">
             {t("customsEmpty")}
           </p>
         ) : (
@@ -452,15 +767,10 @@ export function CodexModelListEditor({
         {!readOnly && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs"
-              >
-                <Plus className="mr-1 h-3.5 w-3.5" />
+              <Button type="button" variant="outline" size="xs" className="h-7">
+                <Plus />
                 {t("addCustom")}
-                <ChevronDown className="ml-1 h-3.5 w-3.5" />
+                <ChevronDown />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
@@ -480,6 +790,104 @@ export function CodexModelListEditor({
           </DropdownMenu>
         )}
       </section>
+
+      {/* What Codex runs now, once a list is published. */}
+      {(endpoint?.showStatus || endpoint?.statusBinding) && (
+        <CodexCatalogStatusLine
+          onPublished={endpoint.onPublished}
+          binding={endpoint.statusBinding}
+        />
+      )}
+
+      {pickerProps && (
+        <CodexCatalogPickerDialog
+          open={!!picker}
+          onOpenChange={(open) => !open && setPicker(null)}
+          {...pickerProps}
+        />
+      )}
+    </div>
+  )
+}
+
+/** One model Codex offers: its name, a note in a lighter ink (the slug, or
+ *  what an OpenAI-list id is built from), the star that makes it the
+ *  default, and the bin. */
+function CodexModelRow({
+  name,
+  detail,
+  mono = false,
+  detailMono = false,
+  badge,
+  isDefault,
+  readOnly,
+  onMakeDefault,
+  onRemove,
+}: {
+  name: string
+  detail?: string
+  /** The name is an id. */
+  mono?: boolean
+  /** The note is one (a slug). */
+  detailMono?: boolean
+  badge?: string
+  isDefault: boolean
+  readOnly: boolean
+  onMakeDefault: () => void
+  onRemove: () => void
+}) {
+  const t = useTranslations("CodexModelEditor")
+  return (
+    <div
+      data-model-row
+      className="flex min-h-9 items-center gap-2 ps-2 pe-1.5 py-1 text-xs [&+&]:border-t"
+    >
+      <button
+        type="button"
+        title={isDefault ? t("defaultHint") : t("makeDefault")}
+        aria-label={isDefault ? t("defaultHint") : t("makeDefault")}
+        aria-pressed={isDefault}
+        onClick={onMakeDefault}
+        disabled={readOnly}
+        className={cn(
+          "flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-amber-500 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40",
+          isDefault && "text-amber-500"
+        )}
+      >
+        <Star className={cn("h-3.5 w-3.5", isDefault && "fill-current")} />
+      </button>
+      <span className={cn("min-w-0 truncate", mono && "font-mono")}>
+        {name}
+      </span>
+      {detail ? (
+        <span
+          className={cn(
+            "min-w-0 truncate text-2xs text-muted-foreground",
+            detailMono && "font-mono"
+          )}
+        >
+          {detail}
+        </span>
+      ) : null}
+      <span className="flex-1" />
+      {badge ? (
+        <span className="shrink-0 rounded-full bg-amber-500/10 px-1.5 text-2xs text-amber-600 dark:text-amber-400">
+          {badge}
+        </span>
+      ) : null}
+      {!readOnly && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="text-muted-foreground hover:text-red-500"
+          onClick={onRemove}
+          aria-label={t("remove")}
+          title={t("remove")}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      )}
     </div>
   )
 }

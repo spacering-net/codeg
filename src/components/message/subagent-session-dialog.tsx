@@ -26,12 +26,14 @@
  * drawer.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Loader2 } from "lucide-react"
 
 import { AgentIcon } from "@/components/agent-icon"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
+import { DelegationStatusIndexProvider } from "@/components/message/delegation-status-index-context"
+import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
 import {
   Drawer,
   DrawerContent,
@@ -44,6 +46,11 @@ import {
   type AdaptedMessage,
 } from "@/lib/adapters/ai-elements-adapter"
 import { getConversation } from "@/lib/api"
+import {
+  collectDelegationStatusTasks,
+  createDelegationStatusIndexer,
+} from "@/lib/delegation-status-index"
+import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
 import { toolStatusUnsettled } from "@/lib/tool-call-lifecycle"
 import type { AgentType, MessageTurn } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -115,6 +122,10 @@ export function SubagentSessionDialog({
 }: Props) {
   const t = useTranslations("Folder.chat.contentParts")
   const sharedT = useTranslations("Folder.chat.shared")
+  // The dialog is a state toggle, not a route: without a history entry behind
+  // it, the back gesture unloads the whole page instead of closing the dialog.
+  useHistoryBackDismiss(open, () => onOpenChange(false))
+  const pageHandoffName = usePageHandoffName()
   const [messages, setMessages] = useState<AdaptedMessage[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Only the FIRST load blanks the body: a refresh that lands mid-read must not
@@ -152,6 +163,7 @@ export function SubagentSessionDialog({
             {
               attachedResources: sharedT("attachedResources"),
               toolCallFailed: sharedT("toolCallFailed"),
+              pageHandoffName,
             },
             undefined,
             live ? inProgressToolCallsByTurn(detail.turns) : undefined
@@ -171,7 +183,7 @@ export function SubagentSessionDialog({
         if (mountedRef.current && initial) setLoading(false)
       }
     },
-    [agentType, sessionId, sharedT, live]
+    [agentType, sessionId, sharedT, pageHandoffName, live]
   )
 
   useEffect(() => {
@@ -184,6 +196,22 @@ export function SubagentSessionDialog({
     const timer = window.setInterval(() => void load(false), LIVE_REFRESH_MS)
     return () => window.clearInterval(timer)
   }, [open, live, load])
+
+  // The child's status rows answer to its own transcript's index, not to the
+  // thread this drawer is opened from (`@/lib/delegation-status-index`). The
+  // indexer keeps it across the refreshes that change no task's newest row.
+  const [indexDelegationStatus] = useState(() =>
+    createDelegationStatusIndexer()
+  )
+  const delegationStatusIndex = useMemo(
+    () =>
+      indexDelegationStatus(
+        (messages ?? []).map((message) =>
+          collectDelegationStatusTasks(message.content)
+        )
+      ),
+    [indexDelegationStatus, messages]
+  )
 
   const subtitle = [subagentType, description].filter(Boolean).join(" · ")
 
@@ -229,25 +257,27 @@ export function SubagentSessionDialog({
               {error}
             </p>
           ) : messages && messages.length > 0 ? (
-            <div className="flex flex-col gap-4">
-              {messages.map((message, i) => (
-                <div
-                  key={`${message.id ?? "turn"}-${i}`}
-                  className={cn(
-                    "flex flex-col gap-2",
-                    // The kickoff prompt (and any later user turn) reads as an
-                    // aside — the child's own work is the content here.
-                    message.role === "user" &&
-                      "rounded-lg bg-muted/50 px-3 py-2 text-sm"
-                  )}
-                >
-                  <ContentPartsRenderer
-                    parts={message.content}
-                    role={message.role}
-                  />
-                </div>
-              ))}
-            </div>
+            <DelegationStatusIndexProvider value={delegationStatusIndex}>
+              <div className="flex flex-col gap-4">
+                {messages.map((message, i) => (
+                  <div
+                    key={`${message.id ?? "turn"}-${i}`}
+                    className={cn(
+                      "flex flex-col gap-2",
+                      // The kickoff prompt (and any later user turn) reads as
+                      // an aside — the child's own work is the content here.
+                      message.role === "user" &&
+                        "rounded-lg bg-muted/50 px-3 py-2 text-sm"
+                    )}
+                  >
+                    <ContentPartsRenderer
+                      parts={message.content}
+                      role={message.role}
+                    />
+                  </div>
+                ))}
+              </div>
+            </DelegationStatusIndexProvider>
           ) : (
             <p className="text-xs text-muted-foreground">
               {t("agentSessionEmpty")}

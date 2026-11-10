@@ -739,7 +739,7 @@ pub async fn open_worktree_folder_core(
 /// - The write only lands when no alias is set yet (see
 ///   [`folder_service::seed_folder_alias`]), so re-registering a worktree — a
 ///   task retry, a re-created checkout — never overwrites a name the user chose.
-async fn seed_worktree_alias(db: &AppDatabase, folder_id: i32, path: &str) {
+pub(crate) async fn seed_worktree_alias(db: &AppDatabase, folder_id: i32, path: &str) {
     let Some(branch) = resolve_git_head(path).await.ok().and_then(|h| h.branch) else {
         return;
     };
@@ -2522,7 +2522,7 @@ pub async fn git_status(
         .filter(|l| !l.is_empty())
         .map(|line| {
             let status = line[..2].trim().to_string();
-            let file = unquote_git_path(&line[3..]);
+            let file = unquote_status_path(&line[3..]);
             GitStatusEntry { status, file }
         })
         .collect();
@@ -2554,7 +2554,11 @@ pub async fn git_diff(path: String, file: Option<String>) -> Result<String, AppC
         args.push(f.clone());
     }
 
+    // Unquoted paths, as `git_status` asks for: the overview's file list is
+    // read from these headers, and its "view diff" / "open file" ask for the
+    // file by the name found there — an octal-escaped one names no file.
     let output = crate::process::tokio_command("git")
+        .args(["-c", "core.quotePath=false"])
         .args(&args)
         .current_dir(&path)
         .output()
@@ -2569,6 +2573,7 @@ pub async fn git_diff(path: String, file: Option<String>) -> Result<String, AppC
             fallback_args.push(f.clone());
         }
         let fallback = crate::process::tokio_command("git")
+            .args(["-c", "core.quotePath=false"])
             .args(&fallback_args)
             .current_dir(&path)
             .output()
@@ -2606,7 +2611,9 @@ pub async fn git_diff_with_branch(
         args.push(f.clone());
     }
 
+    // Unquoted paths — see `git_diff`.
     let output = crate::process::tokio_command("git")
+        .args(["-c", "core.quotePath=false"])
         .args(&args)
         .current_dir(&path)
         .output()
@@ -2644,7 +2651,9 @@ pub async fn git_show_diff(
         args.push(f.clone());
     }
 
+    // Unquoted paths — see `git_diff`.
     let output = crate::process::tokio_command("git")
+        .args(["-c", "core.quotePath=false"])
         .args(&args)
         .current_dir(&path)
         .output()
@@ -2865,13 +2874,21 @@ pub(crate) async fn git_commit_core(
         .filter(|f| !staged_deletions.contains(f.as_str()))
         .collect();
 
+    let add_specs: Vec<String> = files_to_add
+        .iter()
+        .map(|file| to_git_literal_pathspec(file))
+        .collect();
+    // What the index holds for them before anything is staged here, so a
+    // refused commit can give back exactly what it staged itself.
+    let indexed_before = if add_specs.is_empty() {
+        None
+    } else {
+        index_entries(path, &add_specs).await
+    };
+
     if !files_to_add.is_empty() {
         let mut add_args = vec!["add".to_string(), "--".to_string()];
-        add_args.extend(
-            files_to_add
-                .iter()
-                .map(|file| to_git_literal_pathspec(file)),
-        );
+        add_args.extend(add_specs.iter().cloned());
 
         let add_output = crate::process::tokio_command("git")
             .args(&add_args)
@@ -2884,6 +2901,18 @@ pub(crate) async fn git_commit_core(
             return Err(git_command_error("add", &add_output.stderr));
         }
     }
+
+    // The files that add brought into the index, untracked until now, with
+    // what it staged for each.
+    let added: Option<HashMap<String, String>> = match indexed_before {
+        Some(before) => index_entries(path, &add_specs).await.map(|after| {
+            after
+                .into_iter()
+                .filter(|(file, _)| !before.contains_key(file))
+                .collect()
+        }),
+        None => None,
+    };
 
     // Resolve commit author from matching account (e.g. GitHub username)
     let author_override = crate::git_credential::resolve_commit_author(path, conn).await;
@@ -2903,6 +2932,13 @@ pub(crate) async fn git_commit_core(
     let commit_output = commit_cmd.output().await.map_err(AppCommandError::io)?;
 
     if !commit_output.status.success() {
+        match added {
+            Some(added) => unstage_added_files(path, &added).await,
+            None if !add_specs.is_empty() => tracing::warn!(
+                "[folders] can't tell which new files a refused commit staged in {path}"
+            ),
+            None => {}
+        }
         return Err(git_command_error("commit", &commit_output.stderr));
     }
 
@@ -2922,6 +2958,134 @@ pub(crate) async fn git_commit_core(
     }
 
     Ok(GitCommitResult { committed_files })
+}
+
+/// The index entries `pathspecs` match, as repository-relative path → staged
+/// object id; `None` when git can't tell.
+async fn index_entries(path: &str, pathspecs: &[String]) -> Option<HashMap<String, String>> {
+    let output = crate::process::tokio_command("git")
+        .args(["ls-files", "--stage", "--full-name", "-z", "--"])
+        .args(pathspecs)
+        .current_dir(path)
+        .output()
+        .await
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .split('\0')
+            .filter_map(|record| {
+                // `<mode> <object> <stage>\t<path>`
+                let (meta, file) = record.split_once('\t')?;
+                let object = meta.split(' ').nth(1)?;
+                Some((file.to_string(), object.to_string()))
+            })
+            .collect(),
+    )
+}
+
+/// After a refused commit (a pre-commit hook, say), take the files its
+/// `git add` brought into the index back out: they were untracked, and left
+/// staged a later commit would take them whatever was picked for it. Only
+/// while the index still holds what that add staged (`added`) and the
+/// working copy still matches it — restaged since (by a hook or an agent) or
+/// edited since, its staged content would be lost, so it stays. `git reset`
+/// puts back what HEAD holds, so a file another commit has taken in since
+/// stays as committed. Best effort: on a failure the index keeps what the
+/// refused commit staged.
+async fn unstage_added_files(path: &str, added: &HashMap<String, String>) {
+    if added.is_empty() {
+        return;
+    }
+    let specs: Vec<String> = added
+        .keys()
+        .map(|file| format!(":(top,literal){file}"))
+        .collect();
+    let (Some(now), Some(edited)) = (
+        index_entries(path, &specs).await,
+        edited_since_staged(path, &specs).await,
+    ) else {
+        tracing::warn!("[folders] can't tell what a refused commit left staged in {path}");
+        return;
+    };
+    let ours: Vec<String> = added
+        .iter()
+        .filter(|(file, object)| now.get(*file) == Some(*object) && !edited.contains(*file))
+        .map(|(file, _)| format!(":(top,literal){file}"))
+        .collect();
+    if ours.is_empty() {
+        return;
+    }
+    // `git reset` reads HEAD once: when a commit lands while it runs, reset
+    // again, so whatever that commit took in goes back as committed.
+    let mut head = head_commit(path).await;
+    let mut reset = reset_paths(path, &ours).await;
+    for _ in 0..3 {
+        let landed = head_commit(path).await;
+        if landed == head {
+            break;
+        }
+        head = landed;
+        reset = reset_paths(path, &ours).await;
+    }
+    if !reset {
+        tracing::warn!(
+            "[folders] a refused commit left {} new file(s) staged in {path}",
+            ours.len()
+        );
+    }
+}
+
+/// The commit HEAD names; `None` on an unborn branch or when git can't tell.
+async fn head_commit(path: &str) -> Option<String> {
+    let output = crate::process::tokio_command("git")
+        .args(["rev-parse", "-q", "--verify", "HEAD"])
+        .current_dir(path)
+        .output()
+        .await
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Reset the index entries `pathspecs` match to HEAD's; whether git did.
+async fn reset_paths(path: &str, pathspecs: &[String]) -> bool {
+    crate::process::tokio_command("git")
+        .args(["reset", "-q", "--"])
+        .args(pathspecs)
+        .current_dir(path)
+        .output()
+        .await
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Of the files `pathspecs` match, the ones whose working copy differs from
+/// what is staged, repository-relative; `None` when git can't tell.
+async fn edited_since_staged(path: &str, pathspecs: &[String]) -> Option<HashSet<String>> {
+    let output = crate::process::tokio_command("git")
+        .args([
+            "--no-optional-locks",
+            "-c",
+            "diff.relative=false",
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            "--",
+        ])
+        .args(pathspecs)
+        .current_dir(path)
+        .output()
+        .await
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .split('\0')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect(),
+    )
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -3967,7 +4131,7 @@ const FILE_IO_MAX_CONCURRENT_OPS: usize = 8;
 static FILE_IO_SEMAPHORE: LazyLock<Semaphore> =
     LazyLock::new(|| Semaphore::new(FILE_IO_MAX_CONCURRENT_OPS));
 
-fn to_git_literal_pathspec(path: &str) -> String {
+pub(crate) fn to_git_literal_pathspec(path: &str) -> String {
     format!(":(literal){path}")
 }
 
@@ -3983,6 +4147,76 @@ fn unquote_git_path(path: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// [`unquote_git_path`] for the path field of a `git status --porcelain=v1`
+/// line, which for a rename or copy is `<from> -> <to>` with EACH side quoted
+/// on its own. Status quotes a path that has a space in it, so moving
+/// `my notes.md` reads `"my notes.md" -> "notes/my notes.md"`, and unquoting
+/// the field as one string would keep the inner quotes
+/// (`my notes.md" -> "notes/my notes.md`).
+fn unquote_status_path(field: &str) -> String {
+    let field = field.trim();
+    let sides = match field.strip_prefix('"') {
+        // The closing quote of a quoted `<from>`: inside the quotes git
+        // escapes `"` and `\` with a backslash, so skip whatever follows one.
+        Some(quoted) => {
+            let mut close = None;
+            let mut chars = quoted.char_indices();
+            while let Some((i, c)) = chars.next() {
+                match c {
+                    '\\' => {
+                        chars.next();
+                    }
+                    '"' => {
+                        close = Some(i + 2);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            close.and_then(|end| {
+                field[end..]
+                    .strip_prefix(" -> ")
+                    .map(|to| (&field[..end], to))
+            })
+        }
+        // An unquoted `<from>` has no space in it (status would have quoted
+        // it), so the first ` -> ` is the separator.
+        None => field.split_once(" -> "),
+    };
+    match sides {
+        Some((from, to)) => format!("{} -> {}", unquote_git_path(from), unquote_git_path(to)),
+        None => unquote_git_path(field),
+    }
+}
+
+/// Both sides of a rename as `git diff --numstat` prints it: `old => new`, or
+/// with the part they share factored out of braces, `src/{old => new}/main.rs`.
+/// `None` for a path that is not written as a rename.
+///
+/// Around the braces git keeps the `/` that ends the shared prefix and the one
+/// that starts the shared suffix, so a side left empty by a move up a directory
+/// (`docs/{sub => }/moved.txt`) would join them into `docs//moved.txt`.
+pub(crate) fn numstat_rename_sides(path: &str) -> Option<(String, String)> {
+    if let (Some(open), Some(close)) = (path.find('{'), path.rfind('}')) {
+        if open < close {
+            let (prefix, suffix) = (&path[..open], &path[close + 1..]);
+            if let Some((old, new)) = path[open + 1..close].split_once(" => ") {
+                let side = |middle: &str| {
+                    let suffix = if middle.is_empty() {
+                        suffix.strip_prefix('/').unwrap_or(suffix)
+                    } else {
+                        suffix
+                    };
+                    format!("{prefix}{middle}{suffix}")
+                };
+                return Some((side(old), side(new)));
+            }
+        }
+    }
+    path.rsplit_once(" => ")
+        .map(|(old, new)| (old.to_string(), new.to_string()))
 }
 
 pub(crate) fn resolve_tree_path(
@@ -5132,7 +5366,7 @@ pub async fn read_file_base64(
 /// path validated by canonicalization cannot be redirected through a symlink
 /// swapped in afterward.
 #[cfg(unix)]
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .read(true)
@@ -5141,7 +5375,7 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 #[cfg(windows)]
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     // FILE_FLAG_OPEN_REPARSE_POINT opens the reparse point itself instead of
     // following it, so a symlink/junction swapped in after validation is opened
@@ -5155,7 +5389,7 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
@@ -6813,6 +7047,142 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
+    /// What the hook `refusing_hook` installs writes to stderr as it refuses.
+    const HOOK_REFUSAL: &str = "refused by the test pre-commit hook";
+
+    /// Point the repository at a pre-commit hook that runs `script` and then
+    /// refuses the commit, whatever hooks path the user's own config names:
+    /// the repository's setting wins.
+    fn refusing_hook(root: &std::path::Path, script: &str) {
+        let hooks = root.join(".test-hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        std::fs::write(
+            &hook,
+            format!("#!/bin/sh\n{script}\necho '{HOOK_REFUSAL}' >&2\nexit 1\n"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        git_run(root, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    }
+
+    /// Commit `files` as the app does and return git's stderr from the
+    /// refusal. `git_commit_core` runs git with this process's environment,
+    /// not `git_run`'s, and git looks for an author before it runs pre-commit:
+    /// without one in the repository's own config, a machine that has none
+    /// configured (a CI runner) would refuse every commit before the hook ran.
+    async fn refused_commit(path: &std::path::Path, files: &[&str]) -> String {
+        git_run(path, &["config", "user.name", "t"]);
+        git_run(path, &["config", "user.email", "t@example.com"]);
+        let db = fresh_in_memory_db().await;
+        let files: Vec<String> = files.iter().map(|f| f.to_string()).collect();
+        match git_commit_core(
+            &EventEmitter::Noop,
+            None,
+            &db.conn,
+            path.to_str().unwrap(),
+            "feat: refused",
+            &files,
+        )
+        .await
+        {
+            Ok(_) => panic!("the commit went through"),
+            Err(err) => err.detail.unwrap_or(err.message),
+        }
+    }
+
+    /// A commit refused after its `git add` gives back the files that add
+    /// brought into the index, so a later commit with another pick can't take
+    /// them. What the index held before stays; so does a new file restaged
+    /// (here by the hook) or edited since, whose staged content would be lost.
+    #[tokio::test]
+    async fn a_refused_commit_gives_back_the_new_files_it_staged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_run(root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("tracked.txt"), "one\n").unwrap();
+        git_run(root, &["add", "tracked.txt"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+        std::fs::write(root.join("tracked.txt"), "one\ntwo\n").unwrap();
+        for file in ["picked.txt", "restaged.txt", "edited.txt", "staged.txt"] {
+            std::fs::write(root.join(file), "new\n").unwrap();
+        }
+        git_run(root, &["add", "staged.txt"]);
+        refusing_hook(
+            root,
+            "echo changed > restaged.txt && git add restaged.txt\necho changed > edited.txt",
+        );
+
+        let files = [
+            "edited.txt",
+            "picked.txt",
+            "restaged.txt",
+            "staged.txt",
+            "tracked.txt",
+        ];
+        let refusal = refused_commit(root, &files).await;
+        assert!(refusal.contains(HOOK_REFUSAL), "{refusal}");
+
+        let status = git_capture(root, &["status", "--porcelain=v1", "-uall"]);
+        let lines: Vec<&str> = status.lines().collect();
+        assert!(lines.contains(&"?? picked.txt"), "{status}");
+        assert!(lines.contains(&"A  restaged.txt"), "{status}");
+        assert!(lines.contains(&"AM edited.txt"), "{status}");
+        assert!(lines.contains(&"A  staged.txt"), "{status}");
+        // A tracked file is never taken out of the index, only re-staged.
+        assert!(lines.contains(&"M  tracked.txt"), "{status}");
+    }
+
+    /// A file another process committed between the refusal and the clean-up
+    /// stays as committed: what goes back is HEAD's, never a deletion.
+    #[tokio::test]
+    async fn giving_back_a_file_committed_meanwhile_leaves_it_committed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_run(root, &["init", "-q", "-b", "main"]);
+        git_run(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        std::fs::write(root.join("f.txt"), "x\n").unwrap();
+        git_run(root, &["add", "f.txt"]);
+        let path = root.to_str().unwrap();
+        let added = index_entries(path, &[to_git_literal_pathspec("f.txt")])
+            .await
+            .expect("index entries");
+        git_run(root, &["commit", "-q", "-m", "another process"]);
+
+        unstage_added_files(path, &added).await;
+        assert_eq!(
+            git_capture(root, &["status", "--porcelain=v1", "-uall"]),
+            ""
+        );
+    }
+
+    /// Below the repository root, what goes back is what the add actually
+    /// staged: its pathspecs resolve against the folder, the index's paths
+    /// against the root.
+    #[tokio::test]
+    async fn a_refused_commit_below_the_root_gives_back_what_its_add_staged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_run(root, &["init", "-q", "-b", "main"]);
+        git_run(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let folder = root.join("pkg");
+        std::fs::create_dir_all(folder.join("src")).unwrap();
+        std::fs::write(folder.join("src/new.txt"), "new\n").unwrap();
+        refusing_hook(root, ":");
+
+        let refusal = refused_commit(&folder, &["src/new.txt"]).await;
+        assert!(refusal.contains(HOOK_REFUSAL), "{refusal}");
+        let status = git_capture(root, &["status", "--porcelain=v1", "-uall"]);
+        assert!(
+            status.lines().any(|l| l == "?? pkg/src/new.txt"),
+            "{status}"
+        );
+    }
+
     // All-branches push status: with no remote-tracking refs every listed commit
     // is a definite "not pushed" (never the old unknown/None), and the classified
     // set walks the same `--all` universe as the log so a tag-only commit shown in
@@ -7369,6 +7739,23 @@ mod tests {
         );
         let all = list_all_folder_details_core(&db).await.expect("all list");
         assert!(all.iter().any(|f| f.id == entry.id));
+    }
+
+    /// Two callers making the row of one new path at once — the runs of a
+    /// `codeg-cli -a x -a y` in a new workspace, delegations into a new cwd —
+    /// both get it: the one that lost the insert reads the winner's.
+    #[tokio::test]
+    async fn ensure_folder_for_path_made_twice_at_once_is_one_row() {
+        let db = fresh_in_memory_db().await;
+        let path = "/tmp/codeg-ensure-race";
+        let (a, b) = tokio::join!(
+            folder_service::ensure_folder_for_path(&db.conn, path),
+            folder_service::ensure_folder_for_path(&db.conn, path),
+        );
+        let (a, b) = (a.expect("first"), b.expect("second"));
+        assert_eq!(a.id, b.id);
+        let all = list_all_folder_details_core(&db).await.expect("all list");
+        assert_eq!(all.iter().filter(|f| f.path == path).count(), 1);
     }
 
     /// The overwhelmingly common case: the child runs in the same folder as its
@@ -8317,6 +8704,148 @@ branch refs/heads/main";
         )
         .await;
         assert!(res.is_err(), "dest containing '..' must be rejected");
+    }
+
+    #[test]
+    fn unquote_status_path_unquotes_each_side_of_a_rename() {
+        assert_eq!(unquote_status_path("src/main.rs"), "src/main.rs");
+        assert_eq!(unquote_status_path("\"with space.txt\""), "with space.txt");
+        assert_eq!(
+            unquote_status_path("d/旧.txt -> d/新.txt"),
+            "d/旧.txt -> d/新.txt"
+        );
+        assert_eq!(
+            unquote_status_path("\"d/old name.txt\" -> \"d/new name.txt\""),
+            "d/old name.txt -> d/new name.txt"
+        );
+        assert_eq!(
+            unquote_status_path("plain.txt -> \"with space.txt\""),
+            "plain.txt -> with space.txt"
+        );
+        assert_eq!(
+            unquote_status_path("\"with space.txt\" -> plain.txt"),
+            "with space.txt -> plain.txt"
+        );
+        // An escaped quote inside the first side does not end it. (The sides
+        // keep git's escapes, as `unquote_git_path` always has.)
+        assert_eq!(
+            unquote_status_path(r#""q\" -> x.txt" -> "y z.txt""#),
+            r#"q\" -> x.txt -> y z.txt"#
+        );
+    }
+
+    #[test]
+    fn numstat_rename_sides_reads_both_sides() {
+        let sides = |raw: &str| numstat_rename_sides(raw);
+        let pair = |old: &str, new: &str| Some((old.to_string(), new.to_string()));
+        assert_eq!(sides("src/main.rs"), None);
+        assert_eq!(sides("src/{a}.rs"), None);
+        assert_eq!(sides("old.rs => new.rs"), pair("old.rs", "new.rs"));
+        assert_eq!(
+            sides("src/{old => new}/main.rs"),
+            pair("src/old/main.rs", "src/new/main.rs")
+        );
+        assert_eq!(
+            sides("d/{old name.txt => new name.txt}"),
+            pair("d/old name.txt", "d/new name.txt")
+        );
+        assert_eq!(sides("{a => b}/x.rs"), pair("a/x.rs", "b/x.rs"));
+        // An emptied side: into a directory, and up out of one.
+        assert_eq!(
+            sides("src/{ => sub}/main.rs"),
+            pair("src/main.rs", "src/sub/main.rs")
+        );
+        assert_eq!(
+            sides("src/{sub => }/main.rs"),
+            pair("src/sub/main.rs", "src/main.rs")
+        );
+    }
+
+    /// Init a repo for the tests below, with the config the code under test
+    /// would otherwise read from the developer's machine pinned repo-locally
+    /// (the one layer both this helper and that code read): git's default
+    /// `core.quotePath`, which a global `false` would hide the bugs behind,
+    /// and no CRLF conversion, which Git for Windows turns on system-wide.
+    fn init_quoting_fixture(root: &std::path::Path) {
+        git_run(root, &["init", "-q", "-b", "main"]);
+        git_run(root, &["config", "core.quotePath", "true"]);
+        git_run(root, &["config", "core.autocrlf", "false"]);
+        git_run(root, &["config", "status.renames", "true"]);
+    }
+
+    /// Status quotes a path that has a space in it, and a rename quotes its two
+    /// sides separately: the whole field unquoted as one string read
+    /// `d/old name.txt" -> "d/new name.txt`, so the Git panel showed the
+    /// rename as `"d/new name.txt` and asked for that file by that name.
+    #[tokio::test]
+    async fn git_status_unquotes_both_sides_of_a_rename() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        init_quoting_fixture(root);
+        std::fs::create_dir(root.join("d")).expect("mkdir");
+        std::fs::write(root.join("d").join("old name.txt"), "1\n2\n3\n").expect("write");
+        std::fs::write(root.join("d").join("旧.txt"), "1\n2\n3\n").expect("write");
+        git_run(root, &["add", "-A"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+        git_run(root, &["mv", "d/old name.txt", "d/new name.txt"]);
+        git_run(root, &["mv", "d/旧.txt", "d/新.txt"]);
+
+        let entries = git_status(root.to_str().expect("utf-8 path").to_string(), Some(true))
+            .await
+            .expect("status");
+        let files: Vec<(&str, &str)> = entries
+            .iter()
+            .map(|e| (e.status.as_str(), e.file.as_str()))
+            .collect();
+        assert_eq!(
+            files,
+            [
+                ("R", "d/old name.txt -> d/new name.txt"),
+                ("R", "d/旧.txt -> d/新.txt"),
+            ]
+        );
+    }
+
+    /// The diff overviews (working tree, branch, commit) list their files by
+    /// the paths in the patch headers, and "view diff" / "open file" ask for a
+    /// file by that path — so a header has to name a non-ASCII file as itself,
+    /// not by git's default octal escapes.
+    #[tokio::test]
+    async fn diff_headers_name_a_non_ascii_path_as_itself() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root.to_str().expect("utf-8 path").to_string();
+        init_quoting_fixture(root);
+        std::fs::create_dir(root.join("docs")).expect("mkdir");
+        std::fs::write(root.join("docs").join("需求.md"), "one\n").expect("write");
+        git_run(root, &["add", "-A"]);
+        // Not a `+++ b/…` match: a developer's `diff.mnemonicPrefix` or
+        // `diff.noprefix` changes the prefix, and the name is the point here.
+        let names_itself = |patch: &str| patch.contains("docs/需求.md") && !patch.contains("\\351");
+
+        // No commit yet: `diff HEAD` fails and the `--cached` fallback answers.
+        let unborn = git_diff(path.clone(), None).await.expect("unborn diff");
+        assert!(names_itself(&unborn), "{unborn}");
+
+        git_run(root, &["commit", "-q", "-m", "base"]);
+        git_run(root, &["branch", "base"]);
+        std::fs::write(root.join("docs").join("需求.md"), "one\ntwo\n").expect("write");
+        let working = git_diff(path.clone(), None).await.expect("working diff");
+        assert!(names_itself(&working), "{working}");
+        let one = git_diff(path.clone(), Some("docs/需求.md".to_string()))
+            .await
+            .expect("file diff");
+        assert!(names_itself(&one), "{one}");
+
+        git_run(root, &["commit", "-q", "-am", "edit"]);
+        let commit = git_show_diff(path.clone(), "HEAD".to_string(), None)
+            .await
+            .expect("commit diff");
+        assert!(names_itself(&commit), "{commit}");
+        let branch = git_diff_with_branch(path, "base".to_string(), None)
+            .await
+            .expect("branch diff");
+        assert!(names_itself(&branch), "{branch}");
     }
 }
 

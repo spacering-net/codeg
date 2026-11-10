@@ -4,11 +4,11 @@ import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it, vi } from "vitest"
 
 /**
- * End-to-end check of the codex `search` command-action card: the tool call
+ * End-to-end check of the codex `search` command-action row: the tool call
  * carries no rawInput (only codex-acp's human title) and completes with a
- * `{formatted_output, exit_code}` envelope. Before this the card showed a wrench
- * icon, a title polluted with the first line of output, and the raw JSON
- * envelope as its result.
+ * `{formatted_output, exit_code}` envelope. Once this showed a wrench icon, a
+ * title polluted with the first line of output, and the raw JSON envelope as
+ * its result.
  */
 
 vi.mock("@/components/ai-elements/link-safety", () => ({
@@ -44,15 +44,24 @@ import { ContentPartsRenderer } from "./content-parts-renderer"
 import enMessages from "@/i18n/messages/en.json"
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
 
-/** Search cards are collapsed by default; expand so the body is asserted on. */
+/** Search rows start folded (a failure opens itself); open the row so its
+ *  panel is asserted on. */
 function renderParts(parts: AdaptedContentPart[], expand = true) {
   const result = render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <ContentPartsRenderer parts={parts} role="assistant" />
     </NextIntlClientProvider>
   )
-  if (expand) fireEvent.click(screen.getAllByRole("button")[0])
+  const header = screen.getAllByRole("button")[0]!
+  if (expand && header.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(header)
+  }
   return result
+}
+
+/** The row's header line, as one string. */
+function headerText(): string {
+  return document.querySelector("li > button")?.textContent ?? ""
 }
 
 /** What the live store hands the adapter for a codex search command action. */
@@ -81,8 +90,8 @@ function searchPart(
   }
 }
 
-describe("codex search command-action card", () => {
-  it("titles the card from the pattern and never shows the raw envelope", () => {
+describe("codex search command-action row", () => {
+  it("titles the row from the pattern and never shows the raw envelope", () => {
     renderParts([
       searchPart(
         "Tests run:",
@@ -91,10 +100,10 @@ describe("codex search command-action card", () => {
       ),
     ])
 
-    expect(screen.getByText("Grep Tests run:")).toBeInTheDocument()
-    // The scope path shows in the body's search input summary.
+    expect(headerText()).toContain("SearchedTests run:")
+    // The scope path shows beside the pattern.
     expect(screen.getByText("com.forwayaudio.app")).toBeInTheDocument()
-    // No `{"exit_code":…}` anywhere — the defect this card was rewritten for.
+    // No `{"exit_code":…}` anywhere — the defect this was rewritten for.
     expect(document.body.textContent).not.toContain("exit_code")
     expect(document.body.textContent).not.toContain("formatted_output")
   })
@@ -123,16 +132,21 @@ describe("codex search command-action card", () => {
     // exit 1 + no output is rg/grep's "found nothing", which codex reports as a
     // FAILED call — it must not render as an error envelope dump.
     const { container } = renderParts([searchPart("nope", null, "", 1)])
-    expect(screen.getByText("No matches")).toBeInTheDocument()
+    expect(screen.getByText("no matches")).toBeInTheDocument()
+    expect(container.querySelector("li")).toHaveAttribute(
+      "data-status",
+      "succeeded"
+    )
     expect(document.body.textContent).not.toContain("exit_code")
     expect(container.querySelector(".text-destructive")).toBeNull()
+    expect(container.querySelector(".text-tone-danger")).toBeNull()
   })
 
   it("keeps a genuine search failure on the error path", () => {
     // exit 2 with stderr text is a real rg error; it stays in the error block
     // rather than being passed off as an empty result.
     renderParts([searchPart("[bad", null, "rg: regex parse error", 2)])
-    expect(screen.queryByText("No matches")).not.toBeInTheDocument()
+    expect(screen.queryByText("no matches")).not.toBeInTheDocument()
     expect(document.body.textContent).toContain("rg: regex parse error")
   })
 
@@ -151,8 +165,8 @@ describe("codex search command-action card", () => {
       },
     ])
 
-    expect(screen.getByText("List files src/components")).toBeInTheDocument()
-    expect(screen.getByText("2 files")).toBeInTheDocument()
+    expect(headerText()).toContain("Listedsrc/components")
+    expect(headerText()).toContain("2 files")
     expect(document.body.textContent).not.toContain("formatted_output")
   })
 })

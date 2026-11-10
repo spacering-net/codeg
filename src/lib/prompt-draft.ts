@@ -3,6 +3,7 @@ import type {
   UserImageDisplay,
   UserResourceDisplay,
 } from "@/lib/adapters/ai-elements-adapter"
+import { foldReferenceLinks } from "@/lib/reference-link"
 import type { PromptDraft, PromptInputBlock } from "@/lib/types"
 
 function isResourceLinkBlock(
@@ -69,6 +70,28 @@ export function getPromptDraftDisplayText(
 ): string {
   const trimmed = draft.displayText.trim()
   return trimmed || attachedResourcesFallback
+}
+
+/**
+ * The title a new conversation starts with, until its agent names it: the
+ * draft's display text the way a title displays (`formatConversationTitle`
+ * folds each reference link to its label), cut to `max` characters.
+ *
+ * Folded BEFORE it is cut. A badge's link can be long — the one for a page the
+ * built-in browser handed over carries the page's address — and a cut inside
+ * one leaves a link that no longer folds, so the tab and the sidebar showed
+ * raw `[Page screenshot](codeg://embedded/…` until the real title arrived.
+ */
+export function promptDraftTitleSeed(
+  draft: PromptDraft,
+  attachedResourcesFallback: string,
+  max = 80
+): string {
+  const folded = foldReferenceLinks(
+    getPromptDraftDisplayText(draft, attachedResourcesFallback)
+  ).trim()
+  // Links whose labels are blank fold to nothing; a title still says something.
+  return (folded || attachedResourcesFallback).slice(0, max)
 }
 
 /**

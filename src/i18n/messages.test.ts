@@ -93,3 +93,24 @@ describe("i18n messages are valid ICU", () => {
     expect(broken).toEqual([])
   })
 })
+
+// A task id inside an Arabic sentence: the `#` is a neutral character, so in
+// a right-to-left line it attaches to the Arabic around it and is drawn after
+// the id (`beecec7d#`). Isolated, the id reads as the one token it is.
+describe("Arabic keeps a task id one left-to-right token", () => {
+  const t = createTranslator({
+    locale: "ar",
+    messages: ar as Record<string, MessageNode>,
+  })
+  it.each([
+    ["Folder.chat.activity.row.background", { id: "beecec7d" }, "#beecec7d"],
+    [
+      "Folder.chat.delegation.waitForResult",
+      { task: "#14be49e7" },
+      "#14be49e7",
+    ],
+    ["Folder.chat.delegation.cancelTask", { task: "#14be49e7" }, "#14be49e7"],
+  ] as const)("%s", (key, values, id) => {
+    expect(t(key as never, values as never)).toContain(`\u2066${id}\u2069`)
+  })
+})

@@ -1,0 +1,18 @@
+---
+source: tests/parsers_snapshot.rs
+expression: summaries
+---
+[
+  {
+    "id": "0b6c1f7e-4d2a-4c5e-9a55-3f1e2d7c8b90",
+    "agent_type": "kiro",
+    "folder_path": "/tmp/demo",
+    "folder_name": "demo",
+    "title": "list the repo",
+    "started_at": "[ts]",
+    "ended_at": "[ts]",
+    "message_count": 7,
+    "model": "claude-opus-5.5",
+    "git_branch": null
+  }
+]

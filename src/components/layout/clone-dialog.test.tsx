@@ -116,3 +116,99 @@ describe("CloneDialog clone path preview", () => {
     )
   })
 })
+
+describe("CloneDialog opened-folder report", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    withCredentialRetry.mockImplementation(
+      (run: (creds: unknown) => Promise<unknown>) => run(undefined)
+    )
+  })
+
+  it("hands the folder the clone opened to onFolderOpened, then closes", async () => {
+    const detail = { id: 42, path: "/home/me/work/codeg" }
+    openFolder.mockResolvedValue(detail)
+    const onFolderOpened = vi.fn()
+    const onOpenChange = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <CloneDialog
+          open
+          onOpenChange={onOpenChange}
+          onFolderOpened={onFolderOpened}
+        />
+      </NextIntlClientProvider>
+    )
+    fillForm("https://github.com/xintaofei/codeg", "/home/me/work")
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^clone$/i }))
+    })
+
+    expect(openFolder).toHaveBeenCalledWith("/home/me/work/codeg")
+    expect(onFolderOpened).toHaveBeenCalledTimes(1)
+    expect(onFolderOpened).toHaveBeenCalledWith(detail)
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it("reports nothing when the clone fails", async () => {
+    withCredentialRetry.mockRejectedValue(new Error("auth"))
+    const onFolderOpened = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <CloneDialog
+          open
+          onOpenChange={() => {}}
+          onFolderOpened={onFolderOpened}
+        />
+      </NextIntlClientProvider>
+    )
+    fillForm("https://github.com/xintaofei/codeg", "/home/me/work")
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^clone$/i }))
+    })
+
+    expect(openFolder).not.toHaveBeenCalled()
+    expect(onFolderOpened).not.toHaveBeenCalled()
+  })
+
+  it("reports to the caller that started a clone, not one that took over mid-clone", async () => {
+    // A slow clone outlives the render that started it: the sidebar may have
+    // reopened the dialog from elsewhere (a different target group) by the
+    // time it lands.
+    let finishClone: () => void = () => {}
+    withCredentialRetry.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishClone = resolve
+        })
+    )
+    const detail = { id: 42, path: "/home/me/work/codeg" }
+    openFolder.mockResolvedValue(detail)
+    const started = vi.fn()
+    const later = vi.fn()
+    const dialog = (onFolderOpened: (folder: unknown) => void) => (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <CloneDialog
+          open
+          onOpenChange={() => {}}
+          onFolderOpened={onFolderOpened}
+        />
+      </NextIntlClientProvider>
+    )
+    const { rerender } = render(dialog(started))
+    fillForm("https://github.com/xintaofei/codeg", "/home/me/work")
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^clone$/i }))
+    })
+
+    rerender(dialog(later))
+    await act(async () => {
+      finishClone()
+    })
+
+    expect(started).toHaveBeenCalledWith(detail)
+    expect(later).not.toHaveBeenCalled()
+  })
+})

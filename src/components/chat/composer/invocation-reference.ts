@@ -1,5 +1,9 @@
 import type { KnownInvocations } from "@/lib/invocation-token"
-import type { AgentSkillItem, AvailableCommandInfo } from "@/lib/types"
+import type {
+  AgentSkillItem,
+  AgentType,
+  AvailableCommandInfo,
+} from "@/lib/types"
 
 import type { ReferenceAttrs } from "./types"
 
@@ -15,6 +19,53 @@ import type { ReferenceAttrs } from "./types"
 export type InvocationPrefix = "/" | "$"
 
 /**
+ * The trigger under which the composer menus list an agent's skills read from
+ * disk (`useAgentSkills`), or `null` when the agent advertises its skills as
+ * commands itself, so they already reach the `/` menu through
+ * `availableCommands`.
+ *
+ * - Codex: `$`, its own skill-mention syntax. Its `$` menu is the disk list.
+ * - Antigravity: `/`, beside its commands. Its ACP server advertises only its
+ *   built-ins (`/plan`, `/logout`, `/usage`) and never a skill, although it
+ *   loads every skill in its skill directories and names each one to the
+ *   model. A `/<skill>` the user sends reaches the model as written, next to
+ *   that list.
+ * - OpenCode: `/`, the same way. OpenCode 1.x turned every skill into a
+ *   command, but 2.x keeps skills apart from commands: its ACP server
+ *   advertises only its commands (`/init`, `/review`, `/goal`, `/compact`, plus
+ *   configured and MCP-prompt ones), while it still loads every skill, names
+ *   each to the model and gives the model a `skill` tool to load one by id. A
+ *   `/<skill>` the user sends reaches the model as written.
+ */
+export function diskSkillTrigger(
+  agentType: AgentType | null | undefined
+): InvocationPrefix | null {
+  if (agentType === "codex") return "$"
+  if (agentType === "antigravity" || agentType === "open_code") return "/"
+  return null
+}
+
+/**
+ * The disk skills a menu offers under `trigger`. Under `/` they share the menu
+ * with the agent's own commands, and a skill whose `/<id>` is also a command is
+ * left out: sending that token runs the command, so the skill row could not do
+ * what it says. Antigravity, for one, intercepts `/plan`, `/logout` and
+ * `/usage` before its model sees them, and OpenCode runs any advertised
+ * command, `/review` included.
+ */
+export function skillsForMenu(
+  skills: readonly AgentSkillItem[],
+  commands: readonly Pick<AvailableCommandInfo, "name">[],
+  trigger: InvocationPrefix
+): readonly AgentSkillItem[] {
+  if (trigger !== "/" || commands.length === 0) return skills
+  const commandTokens = new Set(
+    commands.map((cmd) => commandInvocationToken(cmd.name))
+  )
+  return skills.filter((skill) => !commandTokens.has(`/${skill.id}`))
+}
+
+/**
  * The literal token an advertised command executes as. Codex (via codex-acp)
  * advertises its skills as commands NAMED `$<skill>` — for those the `$` IS the
  * invocation prefix (`$deploy`), not part of the name, so no `/` is prepended.
@@ -23,6 +74,46 @@ export type InvocationPrefix = "/" | "$"
  */
 export function commandInvocationToken(name: string): string {
   return name.startsWith("$") ? name : `/${name}`
+}
+
+const NO_SKILL_COMMANDS: ReadonlySet<string> = new Set()
+
+/**
+ * The names of the advertised commands a `/` menu shows as skills, or an empty
+ * set when it should show none.
+ *
+ * claude-agent-acp (0.99.1+) marks a command as a skill in two passes. The
+ * list `session/new` sends marks only the skills whose `SKILL.md` the adapter
+ * found itself, under the cwd or the home directory. Once Claude Code's own
+ * skill list has been read (shortly after the session's first prompt starts),
+ * it sends the list again with every skill marked, the plugin and nested ones
+ * with their path and the ones bundled with the CLI (`simplify`, `loop`, …)
+ * with the kind alone. A list made before that read would show some skills
+ * marked and others not, so the marks count only in a list that has a skill
+ * without a path: only that read produces one. Until then (and in a list from
+ * a session that never prompts, such as the agent-options probe) every row
+ * keeps the one look it has always had.
+ */
+export function skillMarkedCommands(
+  commands: readonly Pick<
+    AvailableCommandInfo,
+    "name" | "skill" | "skill_path"
+  >[]
+): ReadonlySet<string> {
+  if (!commands.some((cmd) => cmd.skill && !cmd.skill_path)) {
+    return NO_SKILL_COMMANDS
+  }
+  return new Set(commands.filter((cmd) => cmd.skill).map((cmd) => cmd.name))
+}
+
+/**
+ * What the agent says goes after a command (codex `/review-branch` → `branch
+ * name`, claude `/mcp` → `[reconnect|enable|disable [<server>|all]]`), or
+ * `null` when it advertises nothing to type there. Menus show it beside the
+ * token; selecting the command still inserts the token alone.
+ */
+export function commandInputHint(cmd: AvailableCommandInfo): string | null {
+  return cmd.input_hint?.trim() || null
 }
 
 /** A `/`-triggered ACP slash command → command badge (`/name` — except a
@@ -60,12 +151,12 @@ export function skillToReference(
  * would insert as a badge is also what typed or pasted text is allowed to become
  * one, and nothing else is.
  *
- * `skills` are the on-disk skills behind the `$` menu (Codex only; every other
- * agent advertises its skills through `commands` already) and are keyed with the
- * prefix that agent triggers them by.
+ * `skills` are the on-disk skills the menu lists for an agent that does not
+ * advertise them itself (see {@link diskSkillTrigger}), keyed with the prefix
+ * that agent triggers them by.
  */
 export function buildKnownInvocations(
-  commands: readonly AvailableCommandInfo[] | null | undefined,
+  commands: readonly Pick<AvailableCommandInfo, "name">[] | null | undefined,
   skills?: readonly AgentSkillItem[] | null,
   skillPrefix: InvocationPrefix = "/"
 ): KnownInvocations {

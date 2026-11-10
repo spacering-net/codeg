@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Begin one task of an inline plan execution in a single call: extract the
+# task's brief (via subagent-driven-development's task-brief, so both skills
+# share one workspace) and record BASE, the commit the task's review range is
+# cut from. One tool call instead of two, because every call in an inline
+# session is a turn that re-reads the whole context.
+#
+# Usage: task-start PLAN_FILE TASK_NUMBER
+# Prints:
+#   brief: <path to the task's brief file>
+#   base:  <full SHA of HEAD>
+set -euo pipefail
+
+if [ $# -ne 2 ]; then
+  echo "usage: task-start PLAN_FILE TASK_NUMBER" >&2
+  exit 2
+fi
+
+plan=$1
+n=$2
+
+# Codeg extracts and links each skill independently. Keep the shared helpers
+# beside this skill so a Windows copy fallback still works and a foreign
+# sibling skill cannot shadow the intended implementation. The sibling path
+# remains a compatibility fallback for older installations.
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+task_brief="$script_dir/task-brief"
+if [ ! -f "$task_brief" ]; then
+  task_brief="$(cd "$script_dir/../../subagent-driven-development/scripts" && pwd)/task-brief"
+fi
+
+out=$("${BASH:-bash}" "$task_brief" "$plan" "$n")
+brief=$(printf '%s\n' "$out" | sed -n 's/^wrote \(.*\): [0-9][0-9]* lines$/\1/p')
+[ -n "$brief" ] || { echo "task-brief did not report a path: $out" >&2; exit 1; }
+
+echo "brief: $brief"
+echo "base: $(git rev-parse HEAD)"

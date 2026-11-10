@@ -28,7 +28,14 @@ import type { FeedbackSettings } from "@/lib/api"
 
 let cached: boolean | null = null
 let inflight: Promise<boolean> | null = null
+/** Bumped by every save and broadcast: a read that started before one of
+ *  them is older than the value it would overwrite. */
 let saveGeneration = 0
+/** Reads of the stored value — the initial load, reconnect re-fetches —
+ *  numbered as they start, so a read that lands after a later one has
+ *  committed is dropped too. */
+let readsStarted = 0
+let newestReadCommitted = 0
 let crossWindowWired = false
 const listeners = new Set<(enabled: boolean) => void>()
 
@@ -49,23 +56,39 @@ function applyEnabled(enabled: boolean): void {
  *  settings page after a successful save). Authoritative and instant for the
  *  saving window; other windows converge via the backend broadcast below. */
 export function primeFeedbackEnabled(enabled: boolean): void {
+  // A primed cache is never loaded again, so it must follow broadcasts from
+  // here on even if no hook in this window has mounted yet.
+  ensureCrossWindowSync()
   applyEnabled(enabled)
 }
 
-/** Kick off (or reuse) the one-shot initial load. Commits the fetched value to
- *  the cache only if no explicit update happened while it was in flight. */
+/** Start a read of the stored value. The returned commit applies what it
+ *  read only if no save or broadcast happened since (those are
+ *  authoritative — don't clobber them), and no read that started later has
+ *  committed already. Reads never bump `saveGeneration`: one read must not
+ *  void another that is newer than it. */
+function beginRead(): (value: boolean) => void {
+  const read = ++readsStarted
+  const startGeneration = saveGeneration
+  return (value) => {
+    if (saveGeneration !== startGeneration || read < newestReadCommitted) {
+      return
+    }
+    newestReadCommitted = read
+    cached = value
+    notify(value)
+  }
+}
+
+/** Kick off (or reuse) the one-shot initial load. */
 function ensureLoaded(): Promise<boolean> {
   if (inflight) return inflight
-  const startGeneration = saveGeneration
+  const commit = beginRead()
   inflight = getFeedbackSettings()
     .then((s) => s.enabled)
     .catch(() => false)
     .then((value) => {
-      // A save/broadcast during the fetch is authoritative — don't clobber it.
-      if (saveGeneration === startGeneration) {
-        cached = value
-        notify(value)
-      }
+      commit(value)
       return cached ?? value
     })
     .finally(() => {
@@ -90,8 +113,9 @@ function ensureCrossWindowSync(): void {
   })
   // Returns null on desktop IPC (no disconnect window) → harmless no-op there.
   onTransportReconnect(() => {
+    const commit = beginRead()
     void getFeedbackSettings()
-      .then((s) => applyEnabled(s.enabled))
+      .then((s) => commit(s.enabled))
       .catch(() => {})
   })
 }

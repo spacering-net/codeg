@@ -96,20 +96,21 @@ function defaultSkillContent(
   return t("templates.default")
 }
 
+/**
+ * The layout a new skill is written in, which the path preview shows. Every
+ * agent's store takes `<id>/SKILL.md` bundles, and the backend writes a bundle
+ * for any agent whose store takes nothing else (custom agents included), so
+ * that is the default. Only pi and DeepSeek Harness get no layout: their stores
+ * also read flat `<id>.md` files, which the backend then writes. Codex reads
+ * flat files too, but its new skills are bundles.
+ */
 function defaultSkillLayoutForAgent(
   agentType: AgentType,
   existingLayout?: AgentSkillLayout | null
 ): AgentSkillLayout | null {
   if (existingLayout) return existingLayout
-  if (agentType === "claude_code") return "skill_directory"
-  if (agentType === "open_code") return "skill_directory"
-  if (agentType === "codex") return "skill_directory"
-  if (agentType === "gemini") return "skill_directory"
-  if (agentType === "open_claw") return "skill_directory"
-  if (agentType === "cline") return "skill_directory"
-  if (agentType === "hermes") return "skill_directory"
-  if (agentType === "code_buddy") return "skill_directory"
-  return null
+  if (agentType === "pi" || agentType === "deepseek") return null
+  return "skill_directory"
 }
 
 function buildDraftPathPreview(params: {

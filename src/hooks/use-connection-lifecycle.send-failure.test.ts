@@ -38,7 +38,11 @@ vi.mock("next-intl", () => ({
 const sendPrompt = vi.fn()
 
 vi.mock("@/contexts/acp-connections-context", () => ({
-  useAcpActions: () => ({ setActiveKey: vi.fn(), touchActivity: vi.fn() }),
+  useAcpActions: () => ({
+    setActiveKey: vi.fn(),
+    releaseActiveKey: vi.fn(),
+    touchActivity: vi.fn(),
+  }),
 }))
 
 vi.mock("@/contexts/task-context", () => ({
@@ -65,6 +69,9 @@ vi.mock("@/hooks/use-connection", () => ({
     hasCachedSelectors: true,
     isViewer: false,
     backgroundOutstanding: 0,
+    asyncTasks: [],
+    remoteControl: null,
+    delegatedChildren: [],
   }),
 }))
 

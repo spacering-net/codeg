@@ -10,7 +10,7 @@
 //!
 //! **Identity by exclusion.** A "custom skill" is any directory in the central
 //! store that holds a `SKILL.md` and whose id is NOT claimed by a bundled pack
-//! (experts ∪ science ∪ office). This keeps the store's disjoint-id-namespace
+//! (experts ∪ science ∪ office ∪ the generative-UI skill). This keeps the store's disjoint-id-namespace
 //! safety model (see `science.rs`) holding for custom too, and lets a user drop
 //! a folder into `~/.codeg/skills` and have it appear on refresh. The startup
 //! extraction of bundled packs is id-scoped (hash + manifest + backup, never a
@@ -156,12 +156,17 @@ fn supported_agents() -> Vec<AgentType> {
 // ─── Reserved (built-in) ids ────────────────────────────────────────────
 
 /// Union of every bundled pack's ids. A central-store dir with one of these ids
-/// belongs to experts/science/office and is never treated as custom.
+/// belongs to experts/science/office — or is the generative-UI skill — and is
+/// never treated as custom.
 fn reserved_ids() -> BTreeSet<String> {
     let mut set = BTreeSet::new();
     set.extend(crate::commands::experts::bundled_ids());
     set.extend(crate::commands::science::bundled_ids());
     set.extend(crate::commands::office_tools::bundled_skill_ids());
+    // `ui-render` (and 0.35.0's `json-render`, until startup moves it over)
+    // only while the directory is the copy Codeg wrote: a skill of that name
+    // the user made themselves stays theirs to see and edit.
+    set.extend(crate::commands::generative_ui::reserved_skill_ids());
     set
 }
 
@@ -829,6 +834,30 @@ mod tests {
         assert!(agents.iter().all(|a| skill_storage_spec(*a).is_some()));
     }
 
+    /// ZCode's runtime loads user skills from `<os home>/.zcode/skills` whatever
+    /// `ZCODE_HOME` says, so a matrix link must land there and not follow it.
+    /// Its home is the one Node reads, `HOME` or on Windows `USERPROFILE`;
+    /// both are pinned so the link lands in the fixture on every platform.
+    #[test]
+    fn zcode_joins_the_custom_skill_matrix_at_its_os_home_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (home, relocated) = (tmp.path().join("home"), tmp.path().join("relocated"));
+        temp_env::with_vars(
+            [
+                ("HOME", Some(&home)),
+                ("USERPROFILE", Some(&home)),
+                ("ZCODE_HOME", Some(&relocated)),
+            ],
+            || {
+                assert!(supported_agents().contains(&AgentType::ZCode));
+                assert_eq!(
+                    agent_link_path(AgentType::ZCode, "example").unwrap(),
+                    home.join(".zcode").join("skills").join("example")
+                );
+            },
+        );
+    }
+
     #[test]
     fn a_custom_agent_joins_the_matrix_by_declaring_a_store() {
         use crate::acp::custom_registry::{
@@ -1002,13 +1031,36 @@ mod tests {
     }
 
     #[tokio::test]
+    // The hydrate guard is held across awaits on purpose — see the identical
+    // note in `custom_agent_service`: it is a test-only mutex no production
+    // code takes, and `#[tokio::test]` runs this on a single-threaded runtime.
+    #[allow(clippy::await_holding_lock)]
     async fn list_all_install_statuses_is_wellformed() {
-        // Never panics; row count is a multiple of the supported-agent count.
-        let rows = custom_list_all_install_statuses()
-            .await
-            .expect("snapshot returns Ok");
-        let agents = supported_agents().len();
-        assert_eq!(rows.len() % agents, 0);
+        // A row per custom skill and skill-capable agent, and both halves are
+        // process-global: a test hydrating a custom agent that declares a store
+        // adds a column mid-snapshot, and the fs-mutation tests below point
+        // HOME at a temp tree of their own, which swaps the rows. So the
+        // registry is held still, and HOME is read under `temp_env`'s lock
+        // with nothing changed.
+        let _guard = crate::acp::custom_registry::hydrate_test_guard();
+        let unchanged: [(&str, Option<&str>); 0] = [];
+        let (ids, agents, rows) = temp_env::async_with_vars(unchanged, async {
+            let rows = custom_list_all_install_statuses()
+                .await
+                .expect("snapshot returns Ok");
+            (collect_custom_ids().expect("ids"), supported_agents(), rows)
+        })
+        .await;
+        assert_eq!(rows.len(), ids.len() * agents.len());
+        for id in &ids {
+            for agent in &agents {
+                assert!(
+                    rows.iter()
+                        .any(|row| &row.expert_id == id && row.agent_type == *agent),
+                    "no row for {id} × {agent:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1074,6 +1126,113 @@ mod tests {
                 .expect("delete batch");
             assert!(results.iter().all(|r| r.ok), "{results:?}");
             assert!(!dir.exists(), "central dir must be gone after delete");
+        })
+        .await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fs_zcode_import_and_matrix_links_use_its_os_home_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        // The runtime's user store; a relocated `ZCODE_HOME` must not move it.
+        let native = tmp.path().join(".zcode");
+        let relocated = tmp.path().join("relocated");
+        temp_env::async_with_vars(
+            [
+                ("HOME", Some(tmp.path())),
+                ("ZCODE_HOME", Some(relocated.as_path())),
+            ],
+            async {
+                assert!(central_experts_dir().starts_with(tmp.path()));
+                let source = native.join("skills/zcode-import-fixture");
+                fs::create_dir_all(source.join("references")).unwrap();
+                fs::write(
+                    source.join("SKILL.md"),
+                    "---\nname: Original\ndescription: Example\n---\nbody",
+                )
+                .unwrap();
+                fs::write(source.join("references/proof.txt"), "asset").unwrap();
+                let imported =
+                    custom_import_from_agent(AgentType::ZCode, vec!["zcode-import-fixture".into()])
+                        .await
+                        .unwrap();
+                assert!(imported[0].ok, "{imported:?}");
+                assert_eq!(
+                    fs::read_to_string(
+                        central_experts_dir().join("zcode-import-fixture/references/proof.txt")
+                    )
+                    .unwrap(),
+                    "asset"
+                );
+
+                let id = "zcode-managed-fixture";
+                custom_create_skill(
+                    id.into(),
+                    "---\nname: Managed\ndescription: Test\n---\nbody".into(),
+                )
+                .await
+                .unwrap();
+                let rows = custom_apply_links(vec![LinkOp {
+                    expert_id: id.into(),
+                    agent_type: AgentType::ZCode,
+                    enable: true,
+                }])
+                .await
+                .unwrap();
+                assert!(rows[0].ok, "{rows:?}");
+                assert_eq!(
+                    rows[0].status.as_ref().unwrap().state,
+                    ExpertLinkState::LinkedToCodeg
+                );
+                let link = native.join("skills").join(id);
+                assert!(path_is_symlink(&link));
+                let rows = custom_list_all_install_statuses().await.unwrap();
+                assert!(rows.iter().any(|r| r.expert_id == id
+                    && r.agent_type == AgentType::ZCode
+                    && r.state == ExpertLinkState::LinkedToCodeg));
+                let rows = custom_apply_links(vec![LinkOp {
+                    expert_id: id.into(),
+                    agent_type: AgentType::ZCode,
+                    enable: false,
+                }])
+                .await
+                .unwrap();
+                assert!(rows[0].ok, "{rows:?}");
+                assert!(!link.exists() && !path_is_symlink(&link));
+                assert!(central_experts_dir().join(id).join("SKILL.md").is_file());
+                assert!(source.join("references/proof.txt").is_file());
+                assert!(!relocated.exists(), "nothing is written under ZCODE_HOME");
+            },
+        )
+        .await;
+    }
+
+    /// The generative-UI skill shares the central store but is only Codeg's
+    /// once its marker is there; until then a `ui-render` is the user's.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fs_ui_render_stays_custom_until_codeg_marks_it() {
+        with_temp_home(|| async {
+            let id = crate::commands::generative_ui::SKILL_ID;
+            let content = "---\nname: ui-render\n---\nmine\n";
+            custom_create_skill(id.into(), content.into())
+                .await
+                .expect("free until Codeg claims it");
+            let listed = |items: Vec<CustomSkillItem>| items.iter().any(|s| s.id == id);
+            assert!(listed(custom_list().await.expect("list")));
+
+            fs::write(
+                central_experts_dir()
+                    .join(id)
+                    .join(crate::commands::generative_ui::MARKER_FILE),
+                "",
+            )
+            .unwrap();
+            assert!(!listed(custom_list().await.expect("list")));
+            assert!(matches!(
+                custom_save_skill(id.into(), content.into()).await,
+                Err(CustomSkillsError::ReservedId(_))
+            ));
         })
         .await;
     }

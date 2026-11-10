@@ -1,10 +1,23 @@
 "use client"
 
 import {
+  useVisibleConversationLayout,
+  useVisibleConversationTabs,
+} from "@/stores/tab-store"
+import { leafIds } from "@/lib/tab-group-layout"
+import { useFolderTabsStore } from "@/stores/folder-tabs-store"
+import { BrowserEvalConfirm } from "@/components/browser/browser-eval-confirm"
+import { BrowserEventsBridge } from "@/components/browser/browser-events-bridge"
+import { BrowserScreenshotMarkupHost } from "@/components/browser/browser-screenshot-markup"
+import { BrowserServiceBridge } from "@/components/browser/browser-service-bridge"
+import { BrowserTabsPersistence } from "@/components/browser/browser-tabs-persistence"
+import { BrowserTabsSuspender } from "@/components/browser/browser-tabs-suspender"
+import {
   Suspense,
   useMemo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react"
@@ -16,6 +29,9 @@ import {
   AppWorkspaceProvider,
   ConversationStatusEventBridge,
 } from "@/contexts/app-workspace-context"
+import { AssistantsSync } from "@/stores/assistants-store"
+import { ConversationTagsSync } from "@/stores/conversation-tags-store"
+import { ConversationTagsManagerHost } from "@/components/conversations/conversation-tags-manager"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { TaskProvider } from "@/contexts/task-context"
 import { AlertProvider } from "@/contexts/alert-context"
@@ -26,11 +42,11 @@ import {
 import { DelegationProvider } from "@/contexts/delegation-context"
 import { ConversationRuntimeProvider } from "@/contexts/conversation-runtime-context"
 import { TabProvider, useTabStore, useTabActions } from "@/contexts/tab-context"
-import { selectIsSplit } from "@/stores/tab-store"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
 import { TasksViewProvider } from "@/contexts/tasks-view-context"
+import { TaskFromMessageHost } from "@/components/tasks/task-from-message-host"
 import {
   WorkbenchRouteProvider,
   useWorkbenchRoute,
@@ -57,13 +73,16 @@ import {
 import { RemoteConnectionGate } from "@/contexts/remote-connection-context"
 import { UpdateProvider } from "@/components/providers/update-provider"
 import { useWorkspaceBackground, useZoomLevel } from "@/hooks/use-appearance"
+import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
 import { FILL_MODE_STYLE } from "@/lib/workspace-background"
 import { TabBar } from "@/components/tabs/tab-bar"
 import { TerminalPanel } from "@/components/terminal/terminal-panel"
 import { AuxPanel } from "@/components/layout/aux-panel"
+import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { LeftEdgeChrome } from "@/components/layout/left-edge-chrome"
 import { RightEdgeChrome } from "@/components/layout/right-edge-chrome"
 import { WorkspaceChromeController } from "@/components/layout/workspace-chrome-controller"
+import { MobileWorkspacePanes } from "@/components/layout/mobile-workspace-panes"
 import { WindowControls } from "@/components/layout/window-controls"
 import { FileWorkspaceTabBar } from "@/components/files/file-workspace-tab-bar"
 import { FileWorkspaceHeader } from "@/components/files/file-workspace-header"
@@ -75,6 +94,7 @@ import {
   PetFocusBridge,
 } from "@/components/workspace/deep-link-bootstrap"
 import { WorkspaceOpenFolderListener } from "@/components/workspace/workspace-open-folder-listener"
+import { WorkspaceRestoreNotices } from "@/components/workspace/workspace-restore-notices"
 import { HeavyPluginsWarmup } from "@/components/ai-elements/heavy-plugins-warmup"
 import {
   ResizableHandle,
@@ -118,8 +138,18 @@ const DEFAULT_FUSION_LAYOUT: [number, number] = [56, 44]
 const MIN_CENTER_WIDTH_PX = 420
 const MIN_WORKSPACE_HEIGHT_PX = 220
 const LAYOUT_EPSILON = 0.25
-// Slide duration for panel show/hide; must match the CSS transition on
-// `.panel-slide-animating > [data-panel]` in globals.css. The transition class
+// Skip-check for re-applying a pixel-derived layout to the library. The
+// columns on screen are pinned in px (see sidebarPanelStyle), but the
+// library's percent layout is the base a handle drag (or arrow key) starts
+// from, so it has to track those px to well under a pixel: with
+// LAYOUT_EPSILON (0.25% ≈ 3.6px at 1440px) here, small resize steps were
+// skipped until they added up, and the next drag started that far off the
+// divider on screen.
+const PIXEL_LAYOUT_EPSILON = 0.01
+// Slide duration for panel show/hide; must match the CSS transitions on
+// `.panel-slide-animating > [data-panel]` and on the top strips' corner
+// reserves (`.chrome-reserve`) in globals.css — pinned together by
+// chrome-reserve-slide-source.test.ts. The transition class
 // is held a touch past this so the animation finishes before it's removed
 // (removing it mid-transition would snap the final pixels).
 const PANEL_SLIDE_MS = 240
@@ -135,9 +165,13 @@ function TabKeysSync() {
   return null
 }
 
-function isSameLayout(a: number[], b: number[]): boolean {
+function isSameLayout(
+  a: number[],
+  b: number[],
+  epsilon: number = LAYOUT_EPSILON
+): boolean {
   if (a.length !== b.length) return false
-  return a.every((value, index) => Math.abs(value - b[index]) <= LAYOUT_EPSILON)
+  return a.every((value, index) => Math.abs(value - b[index]) <= epsilon)
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -170,9 +204,10 @@ function resolvePanelSizeRange(
  * The toggle is detected during render (React's sanctioned "adjust state when a
  * prop changes" pattern) rather than in an effect: turning the class on in the
  * render that observes the flip lands it in the same commit as the panel
- * resize, so the browser has the transition in place before `flex-grow`
- * changes. Turn-off is deferred to a timer keyed on a per-toggle sequence, so a
- * fresh toggle mid-slide re-arms the timer instead of inheriting the old one.
+ * resize, so the browser has the transition in place before the panel's
+ * `flex-basis` (or `flex-grow`) changes. Turn-off is deferred to a timer keyed
+ * on a per-toggle sequence, so a fresh toggle mid-slide re-arms the timer
+ * instead of inheriting the old one.
  */
 function usePanelSlideOnToggle(open: boolean, ready: boolean): boolean {
   const [animating, setAnimating] = useState(false)
@@ -245,7 +280,7 @@ function KeptMountedSurface({
 }
 
 function WorkspaceContent({ children }: { children: React.ReactNode }) {
-  const { mode, filesMaximized } = useWorkspaceView()
+  const { mode, filesMaximized, conversationMaximized } = useWorkspaceView()
   const { setActivePane } = useWorkspaceActions()
   const panelGroupRef = useRef<ImperativePanelGroupHandle | null>(null)
   const fusionLayoutRef = useRef<[number, number]>(DEFAULT_FUSION_LAYOUT)
@@ -258,9 +293,9 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   }, [mode, filesMaximized, setActivePane])
 
   const markFileActive = useCallback(() => {
-    if (mode !== "fusion") return
+    if (mode !== "fusion" || conversationMaximized) return
     setActivePane("files")
-  }, [mode, setActivePane])
+  }, [mode, conversationMaximized, setActivePane])
 
   const applyLayout = useCallback((layout: [number, number]) => {
     desiredLayoutRef.current = layout
@@ -316,8 +351,11 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   const { isOpen: auxOpen } = useAuxPanelContext()
   const { isMac, isWindows, isLinux } = usePlatform()
   const { zoomLevel } = useZoomLevel()
-  const hasConvTabs = useTabStore((s) => s.tabs.length > 0)
-  const isConvSplit = useTabStore(selectIsSplit)
+  const hasConvTabs = useVisibleConversationTabs().length > 0
+  // Tabs following the folder keep the strip (and its "+") for an empty one.
+  const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
+  const showConvStrip = hasConvTabs || tabsFollowFolder
+  const isConvSplit = leafIds(useVisibleConversationLayout()).length > 1
   const winLinuxControls = isDesktop() && (isWindows || isLinux)
   // The window chrome (toggle/search left, terminal/aux/settings right) now
   // lives in fixed corner overlays (see FolderLayoutShell) that never move on
@@ -326,14 +364,28 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   // tracks the rem-sized overlay buttons (which grow with zoom).
   const leftReserve = leftChromeReserve(isMac && isDesktop(), zoomLevel)
   const rightReserve = rightChromeReserve(winLinuxControls, zoomLevel)
-  // A middle column reserves the right overlay only when it (not the aux panel)
-  // is the window's right edge: the file column in fusion, else conversation.
-  const convReservesRight = !auxOpen && mode === "conversation"
-  const fileReservesRight = !auxOpen && mode === "fusion"
-  // Maximizing files overlays the whole middle area, so the file column then
-  // also owns the window's LEFT edge when the sidebar is collapsed — reserve the
-  // left overlay too (normally that's the conversation column's job).
-  const fileReservesLeft = filesMaximized && !sidebarOpen
+  // A corner needs reserving only while no side panel covers it, and that
+  // width slides in and out with the panel's own toggle (ChromeReserve).
+  const leftCornerWidth = sidebarOpen ? 0 : leftReserve
+  const rightCornerWidth = auxOpen ? 0 : rightReserve
+  // The conversation column covers the whole middle area, the file column
+  // hidden under it: there is no file column (conversation mode), or the
+  // conversation is maximized over it.
+  const conversationFillsArea = mode === "conversation" || conversationMaximized
+  // WHICH column holds a corner is structural instead: the right one is the
+  // file column's in fusion, else the conversation column's; maximizing files
+  // overlays the whole middle area, so the file column then holds the LEFT one
+  // too (normally that's the conversation column's job), and maximizing the
+  // conversation hands the RIGHT one to the conversation column the same way
+  // (the covered file column keeps its own, unseen, just as the covered
+  // conversation column keeps its left one). Those switches snap the layout,
+  // so they decide whether a reserve is MOUNTED — a mounted one would keep
+  // animating after its column had moved (picking a nested file in search
+  // opens the aux panel and the first file tab within one slide), and a fresh
+  // mount starts at its final width.
+  const convHoldsRight = conversationFillsArea
+  const fileHoldsRight = mode === "fusion"
+  const fileHoldsLeft = filesMaximized
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
@@ -357,7 +409,11 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
               <section
                 className={cn(
                   "flex h-full min-h-0 flex-col overflow-hidden",
-                  mode === "conversation" &&
+                  // Over the whole area — the same overlay for conversation
+                  // mode and for a maximized conversation, so maximizing
+                  // resizes nothing in the file column underneath (its
+                  // editors and pages keep their size and state).
+                  conversationFillsArea &&
                     "absolute inset-0 z-30 bg-background ws-transparent-bg",
                   // Covered by the files-maximized overlay: stop painting so it
                   // can't show through the now-translucent overlay. `invisible`
@@ -371,14 +427,18 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                 inert={filesMaximized || undefined}
               >
                 {/* Conversation column top bar (UNSPLIT only): the tab strip,
-                  plus a left reserve (only when the sidebar is collapsed, so
-                  this column owns the window's left edge) and a right reserve
-                  (only when it's the window's right edge) for the fixed corner
-                  overlays. The detail header + tiles render inside {children},
-                  directly below. `bg-muted` shades the strip like a browser tab
-                  bar (matching the bottom StatusBar) — the active tab
-                  (bg-background) reads as a white tab seated on it, with
-                  reverse bottom corners. With a workspace background image on,
+                  plus a left reserve (this column always holds the window's
+                  left corner; it is 0 wide while the sidebar covers it) and a
+                  right reserve (mounted only while this column is the window's
+                  right edge — conversation mode, or maximized over the file
+                  column; 0 wide while the aux panel
+                  covers it) for the fixed corner overlays — both slide with
+                  their panel's toggle (ChromeReserve). The detail header +
+                  tiles render inside {children}, directly below. `bg-muted`
+                  shades the strip like a browser tab bar (matching the bottom
+                  StatusBar) — the active tab (bg-background) reads as a white
+                  tab seated on it, with reverse bottom corners. With a
+                  workspace background image on,
                   the strip + every tab go transparent (reveal the image); a
                   hairline bottom border (ws-strip-line) runs under the reserves
                   and inactive tabs while the active tab omits it and the border
@@ -390,16 +450,12 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                   SplitStripCornerReserve in conversation-detail-panel). */}
                 {!isConvSplit && (
                   <div className="flex h-10 shrink-0 items-stretch bg-muted ws-transparent-bg">
-                    {!sidebarOpen && (
-                      <div
-                        data-tauri-drag-region
-                        className="h-full shrink-0 ws-strip-line"
-                        style={{ width: leftReserve }}
-                      />
-                    )}
+                    <ChromeReserve width={leftCornerWidth} />
                     <div className="flex min-w-0 flex-1 items-stretch">
-                      {hasConvTabs ? (
-                        <TabBar />
+                      {showConvStrip ? (
+                        // The unsplit strip IS the column's top-right strip,
+                        // so it carries the maximize/restore button.
+                        <TabBar maximizeControl />
                       ) : (
                         // No tabs → TabBar renders null; keep a drag region so
                         // the title bar can still move the window.
@@ -409,21 +465,21 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                         />
                       )}
                     </div>
-                    {convReservesRight && (
-                      <div
-                        data-tauri-drag-region
-                        className="h-full shrink-0 ws-strip-line"
-                        style={{ width: rightReserve }}
-                      />
+                    {convHoldsRight && (
+                      <ChromeReserve width={rightCornerWidth} />
                     )}
                   </div>
                 )}
                 {/* Pane activation lives on the CONTENT, not the top bar: clicking
                   edge chrome (terminal/settings/toggles) or grabbing a drag
                   region stays pane-neutral so it never hijacks close-tab /
-                  next-tab routing. Tabs self-activate via switchTab. */}
+                  next-tab routing. Tabs self-activate via switchTab. Neither
+                  handler fires for a click inside an iframe or a native page;
+                  `data-workspace-pane` is how ⌘W pressed there finds its pane
+                  (see `menu-close-shortcut`). */}
                 <div
                   className="relative flex-1 min-h-0 overflow-hidden"
+                  data-workspace-pane="conversation"
                   onPointerDownCapture={markConversationActive}
                   onFocusCapture={markConversationActive}
                 >
@@ -434,22 +490,25 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
           </ResizablePanel>
           {/* The divider only belongs to a real two-column split. In conversation
               mode the column overlays the whole area, so the handle collapses to
-              zero width. While files are MAXIMIZED it must go too: that overlay
-              is translucent under a workspace background image, so the handle's
-              1px `bg-border` line stayed visible straight through it — a stray
-              vertical divider running down the maximized file column and on
-              through the editor / diff canvas below. There it only turns
-              invisible (no `w-0`): dropping its width would resize the
-              conversation panel and reset its stick-to-bottom scroll, the very
-              thing the overlay approach avoids. */}
+              zero width. While either column is MAXIMIZED it must go too: that
+              overlay is translucent under a workspace background image, so the
+              handle's 1px `bg-border` line stayed visible straight through it —
+              a stray vertical divider running down the maximized column and on
+              through the editor / diff canvas or transcript below. There it
+              only turns invisible (no `w-0`): dropping its width would resize
+              the covered column — the conversation panel's stick-to-bottom
+              scroll resets, the file column's editors and pages re-lay out —
+              the very thing the overlay approach avoids. */}
           <ResizableHandle
             withHandle
-            disabled={mode !== "fusion" || filesMaximized}
+            disabled={
+              mode !== "fusion" || filesMaximized || conversationMaximized
+            }
             className={cn(
               mode !== "fusion" &&
                 "pointer-events-none w-0 opacity-0 after:w-0",
               mode === "fusion" &&
-                filesMaximized &&
+                (filesMaximized || conversationMaximized) &&
                 "pointer-events-none invisible"
             )}
           />
@@ -468,67 +527,70 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                 root. This depends on react-resizable-panels keeping the Panel
                 root at `position: static`; if a future version sets
                 `position: relative` there, this overlay (and the mirrored
-                `mode === "conversation"` overlay above) would clip to the
+                `conversationFillsArea` overlay above) would clip to the
                 Panel's allocated slice and need to be lifted outside the panel
-                group. */}
-            <section
-              className={cn(
-                "flex h-full min-h-0 flex-col overflow-hidden",
-                filesMaximized &&
-                  "absolute inset-0 z-30 bg-background ws-transparent-bg",
-                // Covered by the conversation overlay in conversation mode: hide
-                // from paint (keep mount + layout) so it can't show through the
-                // translucent overlay. conversation-tab-hidden goes with it —
-                // an open git-diff tab lives in this column and Monaco's diff
-                // panes set their own inline `visibility: visible` (see
-                // globals.css), so `invisible` alone leaves them painting.
-                mode === "conversation" && "conversation-tab-hidden invisible"
-              )}
-              aria-hidden={mode === "conversation"}
-            >
-              {/* File column top bar: the file tab strip + a right reserve for
-                  the fixed corner overlay (only when the aux panel is collapsed,
-                  so this column owns the window's right edge). Per-file actions
-                  live in FileWorkspaceHeader below, above every
-                  FileWorkspacePanel render branch. `bg-muted` shades the strip
-                  like a browser tab bar (matches the conversation column and the
-                  bottom StatusBar). With a workspace background image on, the
-                  strip + every tab go transparent (reveal the image) and a
-                  hairline bottom border (ws-strip-line) sits under the reserves
-                  and inactive tabs, arching over the active tab (the active
-                  browser-tab-item's `::after`) — same as the conversation column. */}
-              <div className="flex h-10 shrink-0 items-stretch bg-muted ws-transparent-bg">
-                {fileReservesLeft && (
-                  <div
-                    data-tauri-drag-region
-                    className="h-full shrink-0 ws-strip-line"
-                    style={{ width: leftReserve }}
-                  />
+                group.
+                While the conversation overlay covers this column it is the
+                mirror of the conversation column under the files overlay, and
+                gets the same four parts (see `KeptMountedSurface`). The flag
+                matters most here for the built-in browser: a page is a native
+                view painted above the whole DOM, out of reach of any CSS, so
+                its host has to take it off screen — and this flag tells it so
+                directly, without leaning on the engine reporting the
+                placeholder's CSS visibility. */}
+            <OverlayHostHiddenProvider hidden={conversationFillsArea}>
+              <section
+                className={cn(
+                  "flex h-full min-h-0 flex-col overflow-hidden",
+                  filesMaximized &&
+                    "absolute inset-0 z-30 bg-background ws-transparent-bg",
+                  // Covered by the conversation overlay (conversation mode, or a
+                  // maximized conversation): hide from paint (keep mount +
+                  // layout) so it can't show through the translucent overlay.
+                  // conversation-tab-hidden goes with it — an open git-diff tab
+                  // lives in this column and Monaco's diff panes set their own
+                  // inline `visibility: visible` (see globals.css), so
+                  // `invisible` alone leaves them painting.
+                  conversationFillsArea && "conversation-tab-hidden invisible"
                 )}
-                <div className="flex min-w-0 flex-1 items-stretch">
-                  <FileWorkspaceTabBar />
-                </div>
-                {fileReservesRight && (
-                  <div
-                    data-tauri-drag-region
-                    className="h-full shrink-0 ws-strip-line"
-                    style={{ width: rightReserve }}
-                  />
-                )}
-              </div>
-              {/* Pane activation on the file content + its detail header, not
-                  the top bar (see the conversation section). */}
-              <div
-                className="flex min-h-0 flex-1 flex-col overflow-hidden"
-                onPointerDownCapture={markFileActive}
-                onFocusCapture={markFileActive}
+                aria-hidden={conversationFillsArea}
+                inert={conversationFillsArea || undefined}
               >
-                <FileWorkspaceHeader />
-                <div className="flex-1 min-h-0 overflow-hidden">
-                  <FileWorkspacePanel />
+                {/* File column top bar: the file tab strip + a right reserve for
+                    the fixed corner overlay (mounted in fusion, when this column
+                    is the window's right edge; 0 wide while the aux panel covers
+                    it) and, while files are maximized, a left one (0 wide while
+                    the sidebar covers it). Per-file actions live in
+                    FileWorkspaceHeader below, above every FileWorkspacePanel
+                    render branch. `bg-muted` shades the strip like a browser tab
+                    bar (matches the conversation column and the bottom
+                    StatusBar). With a workspace background image on, the
+                    strip + every tab go transparent (reveal the image) and a
+                    hairline bottom border (ws-strip-line) sits under the reserves
+                    and inactive tabs, arching over the active tab (the active
+                    browser-tab-item's `::after`) — same as the conversation column. */}
+                <div className="flex h-10 shrink-0 items-stretch bg-muted ws-transparent-bg">
+                  {fileHoldsLeft && <ChromeReserve width={leftCornerWidth} />}
+                  <div className="flex min-w-0 flex-1 items-stretch">
+                    <FileWorkspaceTabBar />
+                  </div>
+                  {fileHoldsRight && <ChromeReserve width={rightCornerWidth} />}
                 </div>
-              </div>
-            </section>
+                {/* Pane activation on the file content + its detail header, not
+                    the top bar (see the conversation section). */}
+                <div
+                  className="flex min-h-0 flex-1 flex-col overflow-hidden"
+                  data-workspace-pane="files"
+                  onPointerDownCapture={markFileActive}
+                  onFocusCapture={markFileActive}
+                >
+                  <FileWorkspaceHeader />
+                  <div className="flex-1 min-h-0 overflow-hidden">
+                    <FileWorkspacePanel />
+                  </div>
+                </div>
+              </section>
+            </OverlayHostHiddenProvider>
           </ResizablePanel>
         </ResizablePanelGroup>
       </KeptMountedSurface>
@@ -542,20 +604,16 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
               band, hosts the active route's title on the left, and keeps the
               empty middle as a window-drag region. With a title present it
               closes with the sidebar-header hairline (ws-chrome-border keeps
-              it legible over a background image). */}
+              it legible over a background image) — which is why its left
+              reserve, sliding with the sidebar like the tab strips' do, draws
+              no strip hairline of its own. */}
           <div
             className={cn(
               "flex h-10 shrink-0 items-stretch",
               hasRouteStrip && "border-b border-border/50 ws-chrome-border"
             )}
           >
-            {!sidebarOpen && (
-              <div
-                data-tauri-drag-region
-                className="h-full shrink-0"
-                style={{ width: leftReserve }}
-              />
-            )}
+            <ChromeReserve width={leftCornerWidth} line={false} />
             <WorkbenchRouteStrip />
             <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
           </div>
@@ -570,34 +628,38 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
 
 function MobileWorkspaceContent({ children }: { children: React.ReactNode }) {
   const { mode, activePane } = useWorkspaceView()
+  const { activateConversationPane } = useWorkspaceActions()
   const { isConversations } = useWorkbenchRoute()
   const hasRouteStrip = useHasWorkbenchRouteStrip()
 
   const showConversation =
     mode === "conversation" || activePane === "conversation"
 
+  // The mobile file view is a pane swap, not a route: without a history entry
+  // behind it, a back gesture falls straight through the /workspace navigation
+  // and unloads the whole page (or exits the PWA). One pushed entry lets back
+  // close the file view instead.
+  useHistoryBackDismiss(
+    isConversations && !showConversation,
+    activateConversationPane
+  )
+
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
       <KeptMountedSurface hidden={!isConversations}>
-        {showConversation ? (
-          // Mobile mirrors the desktop chrome: no tab strip — the conversation
-          // detail header (folder › title) renders inside {children}, and tabs
-          // are navigated from the sidebar (single active conversation at a time).
-          <section className="flex h-full min-h-0 flex-col overflow-hidden">
-            <div className="relative flex-1 min-h-0 overflow-hidden">
-              {children}
-            </div>
-          </section>
-        ) : (
-          // File view: the shared FileWorkspaceHeader (folder › file breadcrumb)
-          // replaces the file tab strip, matching the desktop file column.
-          <section className="flex h-full min-h-0 flex-col overflow-hidden">
-            <FileWorkspaceHeader />
-            <div className="flex-1 min-h-0 overflow-hidden">
-              <FileWorkspacePanel />
-            </div>
-          </section>
-        )}
+        <MobileWorkspacePanes
+          showConversation={showConversation}
+          files={
+            <>
+              <FileWorkspaceHeader />
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <FileWorkspacePanel />
+              </div>
+            </>
+          }
+        >
+          {children}
+        </MobileWorkspacePanes>
       </KeptMountedSurface>
       {!isConversations ? (
         // Same canvas as the desktop overlay: conversation-identical background
@@ -632,8 +694,28 @@ function MobileFolderWorkspaceShell({
     isOpen: auxOpen,
     restored: auxRestored,
     toggle: toggleAux,
+    setOpen: setAuxOpen,
   } = useAuxPanelContext()
   const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
+
+  // A full-page route opened from inside the aux drawer — a work tab's "open
+  // full page", a repository row's task chip — would otherwise land UNDER the
+  // drawer, which on a phone covers nearly the whole screen. The desktop panel
+  // collapses for a route by itself (see FolderWorkspaceShell); here the drawer
+  // closes, and its toggle stays hidden until the conversations come back.
+  const { isConversations } = useWorkbenchRoute()
+  useEffect(() => {
+    if (!isConversations) setAuxOpen(false)
+  }, [isConversations, setAuxOpen])
+
+  // Each of these drawers is a state toggle, not a route: without a history
+  // entry behind them the back gesture falls through and unloads the whole
+  // page. One pushed entry per open drawer lets back close the topmost one
+  // (the entries stack in open order, so drawers open on top of each other
+  // unwind top-down).
+  useHistoryBackDismiss(sidebarRestored && sidebarOpen, toggleSidebar)
+  useHistoryBackDismiss(auxRestored && auxOpen, toggleAux)
+  useHistoryBackDismiss(terminalOpen, toggleTerminal)
 
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -746,23 +828,59 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
 
   const [shellWidth, setShellWidth] = useState(0)
   const [mainHeight, setMainHeight] = useState(0)
+  // The panels split the width LEFT OVER by the dividers, not the container's:
+  // an open divider is a fixed 1px flex item (a closed one is `w-0`), and the
+  // panels' percentages are shares of the remainder. Converting px <-> percent
+  // against the full container width left the side columns up to a pixel off
+  // their requested width, by an amount that changes with every window width —
+  // the divider crept sub-pixel on each resize step.
+  const shellHandlesWidth = (sidebarOpen ? 1 : 0) + (auxOpen ? 1 : 0)
+  const shellPanelsWidth =
+    shellWidth > 0 ? Math.max(1, shellWidth - shellHandlesWidth) : 0
+  const mainHandlesHeight = terminalOpen ? 1 : 0
+  const mainPanelsHeight =
+    mainHeight > 0 ? Math.max(1, mainHeight - mainHandlesHeight) : 0
 
   const shellDesiredLayoutRef = useRef<[number, number, number]>([0, 100, 0])
   const shellAppliedLayoutRef = useRef<[number, number, number] | null>(null)
   const mainDesiredLayoutRef = useRef<[number, number]>([100, 0])
   const mainAppliedLayoutRef = useRef<[number, number] | null>(null)
 
+  // A window resize needs no JS to keep the panes in place: the side columns
+  // and the terminal are sized in px through CSS (see the panel styles below)
+  // and the center / workspace pane flexes. The container size is only tracked
+  // to keep react-resizable-panels' percent layout and min/max in step (and to
+  // shrink the side columns once the window is too narrow for them), so an
+  // ordinary state update is enough: no frame depends on it being flushed
+  // synchronously, and none has to wait for a re-render of the shell.
+  //
+  // Each container size is held twice: as last observed, and as last applied
+  // to the library's layout (by the layout effects below). While the two
+  // differ, a container resize is on its way to that layout effect, and the
+  // onLayout calls in between (the library re-clamping the panels against the
+  // new min/max percentages, then our own setLayout) aren't user resizes and
+  // must not be persisted — the re-clamp reports through an onLayout still
+  // holding the old container size. Comparing sizes, rather than raising a
+  // flag in the observer for the layout effect to lower, also holds when two
+  // observations cancel out before React renders: that render bails out with
+  // no layout effect run, and a flag left raised would swallow every later
+  // drag until the next resize.
+  const shellWidthRef = useRef(0)
+  const shellAppliedWidthRef = useRef(0)
+  const mainHeightRef = useRef(0)
+  const mainAppliedHeightRef = useRef(0)
+
   useEffect(() => {
     const container = shellContainerRef.current
     if (!container) return
 
-    const updateWidth = (next: number) => {
-      setShellWidth((prev) => (Math.abs(prev - next) < 1 ? prev : next))
-    }
-
-    updateWidth(container.clientWidth)
+    shellWidthRef.current = container.clientWidth
+    setShellWidth(container.clientWidth)
     const observer = new ResizeObserver((entries) => {
-      updateWidth(entries[0]?.contentRect.width ?? container.clientWidth)
+      const next = entries[0]?.contentRect.width ?? container.clientWidth
+      if (Math.abs(shellWidthRef.current - next) < 1) return
+      shellWidthRef.current = next
+      setShellWidth(next)
     })
 
     observer.observe(container)
@@ -775,13 +893,13 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     const container = mainContainerRef.current
     if (!container) return
 
-    const updateHeight = (next: number) => {
-      setMainHeight((prev) => (Math.abs(prev - next) < 1 ? prev : next))
-    }
-
-    updateHeight(container.clientHeight)
+    mainHeightRef.current = container.clientHeight
+    setMainHeight(container.clientHeight)
     const observer = new ResizeObserver((entries) => {
-      updateHeight(entries[0]?.contentRect.height ?? container.clientHeight)
+      const next = entries[0]?.contentRect.height ?? container.clientHeight
+      if (Math.abs(mainHeightRef.current - next) < 1) return
+      mainHeightRef.current = next
+      setMainHeight(next)
     })
 
     observer.observe(container)
@@ -790,7 +908,16 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const buildShellLayout = useCallback((): [number, number, number] => {
+  // The side columns' widths in px: the requested widths, scaled down together
+  // when the window is too narrow to also leave MIN_CENTER_WIDTH_PX between —
+  // but never below a column's own minimum. These px are what is drawn, and
+  // the library clamps its own layout to the panels' minSize, so they have to
+  // land where that clamp would: below it, a column renders narrower than its
+  // content allows (the aux minimum on Windows/Linux is what keeps the
+  // title-bar overlay off the center column), and the library's layout — the
+  // base a handle drag starts from — sits tens of px away from the divider on
+  // screen.
+  const shellSides = useMemo(() => {
     const requestedLeft = sidebarOpen
       ? clamp(sidebarWidth, sidebarMinWidth, sidebarMaxWidth)
       : 0
@@ -799,7 +926,9 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       : 0
 
     const totalWidth =
-      shellWidth > 0 ? shellWidth : requestedLeft + requestedRight + 960
+      shellPanelsWidth > 0
+        ? shellPanelsWidth
+        : requestedLeft + requestedRight + 960
 
     let left = requestedLeft
     let right = requestedRight
@@ -810,28 +939,71 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       const scale = maxSideTotal / sideTotal
       left *= scale
       right *= scale
+
+      // Back up to each open column's minimum the way the library's clamp
+      // does it (validatePanelGroupLayout): a panel raised to its minSize
+      // takes the shortfall from the first panel in order that can spare it —
+      // the sidebar, down to its own minimum, and then the center.
+      let shortfall = 0
+      if (sidebarOpen && left < sidebarMinWidth) {
+        shortfall += sidebarMinWidth - left
+        left = sidebarMinWidth
+      }
+      if (auxOpen && right < auxMinWidth) {
+        shortfall += auxMinWidth - right
+        right = auxMinWidth
+      }
+      if (sidebarOpen && shortfall > 0) {
+        left -= Math.min(shortfall, left - sidebarMinWidth)
+      }
     }
 
-    const center = Math.max(1, totalWidth - left - right)
-    const total = left + center + right
-
-    return [(left / total) * 100, (center / total) * 100, (right / total) * 100]
+    return { left, right, totalWidth }
   }, [
     auxMaxWidth,
     auxMinWidth,
     auxOpen,
     auxWidth,
-    shellWidth,
+    shellPanelsWidth,
     sidebarMaxWidth,
     sidebarMinWidth,
     sidebarOpen,
     sidebarWidth,
   ])
 
-  const buildMainLayout = useCallback((): [number, number] => {
-    if (!terminalOpen) {
-      return [100, 0]
-    }
+  const buildShellLayout = useCallback((): [number, number, number] => {
+    const { left, right, totalWidth } = shellSides
+    const center = Math.max(1, totalWidth - left - right)
+    const total = left + center + right
+
+    return [(left / total) * 100, (center / total) * 100, (right / total) * 100]
+  }, [shellSides])
+
+  // The side panels are sized in px straight through CSS, overriding the
+  // `flex-grow: <percent>` react-resizable-panels writes (a Panel's `style`
+  // prop wins over its computed one), and the center — the only panel left
+  // growing — takes whatever remains. That style is rounded to 3 significant
+  // digits (`toPrecision(3)`, e.g. 20.83% → "20.8"): ~0.5px at 1440px wide, by
+  // an error that changes with every window width, so a sidebar sized through
+  // it wobbled on each resize step however precise the layout fed in. Pinned
+  // in px, a window resize leaves the side columns alone and only the center
+  // flexes. The library's layout is still kept in step (buildShellLayout) — it
+  // drives handle drags and the min/max clamping, and a drag reaches these px
+  // through handleShellLayout → setSidebarWidth / setAuxWidth.
+  const sidebarPanelStyle = useMemo(
+    () => ({ flexGrow: 0, flexShrink: 0, flexBasis: `${shellSides.left}px` }),
+    [shellSides.left]
+  )
+  const auxPanelStyle = useMemo(
+    () => ({ flexGrow: 0, flexShrink: 0, flexBasis: `${shellSides.right}px` }),
+    [shellSides.right]
+  )
+
+  // The terminal's height in px: the requested height, capped so the workspace
+  // above keeps MIN_WORKSPACE_HEIGHT_PX — but, like the side columns, never
+  // below the panel's own minimum, where the library's layout clamps it.
+  const terminalSize = useMemo(() => {
+    if (!terminalOpen) return { terminal: 0, totalHeight: 0 }
 
     const requestedTerminalHeight = clamp(
       terminalHeight,
@@ -839,27 +1011,50 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       terminalMaxHeight
     )
     const totalHeight =
-      mainHeight > 0 ? mainHeight : requestedTerminalHeight + 640
+      mainPanelsHeight > 0 ? mainPanelsHeight : requestedTerminalHeight + 640
 
     const maxTerminalHeight = Math.max(0, totalHeight - MIN_WORKSPACE_HEIGHT_PX)
-    const terminal = Math.min(requestedTerminalHeight, maxTerminalHeight)
-    const workspace = Math.max(1, totalHeight - terminal)
-    const total = workspace + terminal
-
-    return [(workspace / total) * 100, (terminal / total) * 100]
+    const terminal = Math.max(
+      Math.min(requestedTerminalHeight, maxTerminalHeight),
+      terminalMinHeight
+    )
+    return { terminal, totalHeight }
   }, [
-    mainHeight,
+    mainPanelsHeight,
     terminalHeight,
     terminalMaxHeight,
     terminalMinHeight,
     terminalOpen,
   ])
 
+  const buildMainLayout = useCallback((): [number, number] => {
+    if (!terminalOpen) {
+      return [100, 0]
+    }
+
+    const { terminal, totalHeight } = terminalSize
+    const workspace = Math.max(1, totalHeight - terminal)
+    const total = workspace + terminal
+
+    return [(workspace / total) * 100, (terminal / total) * 100]
+  }, [terminalOpen, terminalSize])
+
+  // Same px pinning as the side columns (see sidebarPanelStyle), so a window
+  // height change leaves the terminal alone and only the workspace flexes.
+  const terminalPanelStyle = useMemo(
+    () => ({
+      flexGrow: 0,
+      flexShrink: 0,
+      flexBasis: `${terminalSize.terminal}px`,
+    }),
+    [terminalSize.terminal]
+  )
+
   const applyShellLayout = useCallback((layout: [number, number, number]) => {
     shellDesiredLayoutRef.current = layout
     if (
       shellAppliedLayoutRef.current &&
-      isSameLayout(shellAppliedLayoutRef.current, layout)
+      isSameLayout(shellAppliedLayoutRef.current, layout, PIXEL_LAYOUT_EPSILON)
     ) {
       return
     }
@@ -879,7 +1074,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     mainDesiredLayoutRef.current = layout
     if (
       mainAppliedLayoutRef.current &&
-      isSameLayout(mainAppliedLayoutRef.current, layout)
+      isSameLayout(mainAppliedLayoutRef.current, layout, PIXEL_LAYOUT_EPSILON)
     ) {
       return
     }
@@ -895,13 +1090,19 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  useEffect(() => {
+  // Layout effects so the library catches up in the same commit as the new
+  // container size. Recording the size the layout was applied for, AFTER the
+  // apply (whose own onLayout must still read as resize-caused), ends the
+  // resize window (see the ResizeObserver note).
+  useLayoutEffect(() => {
     applyShellLayout(buildShellLayout())
-  }, [applyShellLayout, buildShellLayout])
+    shellAppliedWidthRef.current = shellWidth
+  }, [applyShellLayout, buildShellLayout, shellWidth])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     applyMainLayout(buildMainLayout())
-  }, [applyMainLayout, buildMainLayout])
+    mainAppliedHeightRef.current = mainHeight
+  }, [applyMainLayout, buildMainLayout, mainHeight])
 
   const handleShellLayout = useCallback(
     (layout: number[]) => {
@@ -927,10 +1128,14 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         return
       }
 
-      if (shellWidth <= 0) return
+      if (
+        shellWidthRef.current !== shellAppliedWidthRef.current ||
+        shellPanelsWidth <= 0
+      )
+        return
 
       if (sidebarOpen) {
-        const nextSidebarWidth = (normalizedLayout[0] / 100) * shellWidth
+        const nextSidebarWidth = (normalizedLayout[0] / 100) * shellPanelsWidth
         const withinSidebarRange =
           nextSidebarWidth >= sidebarMinWidth - 1 &&
           nextSidebarWidth <= sidebarMaxWidth + 1
@@ -943,7 +1148,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       }
 
       if (auxOpen) {
-        const nextAuxWidth = (normalizedLayout[2] / 100) * shellWidth
+        const nextAuxWidth = (normalizedLayout[2] / 100) * shellPanelsWidth
         const withinAuxRange =
           nextAuxWidth >= auxMinWidth - 1 && nextAuxWidth <= auxMaxWidth + 1
         if (withinAuxRange && Math.abs(nextAuxWidth - auxWidth) >= 1) {
@@ -959,7 +1164,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       auxWidth,
       setAuxWidth,
       setSidebarWidth,
-      shellWidth,
+      shellPanelsWidth,
       sidebarMaxWidth,
       sidebarMinWidth,
       sidebarOpen,
@@ -984,9 +1189,14 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         return
       }
 
-      if (!terminalOpen || mainHeight <= 0) return
+      if (
+        !terminalOpen ||
+        mainHeightRef.current !== mainAppliedHeightRef.current ||
+        mainPanelsHeight <= 0
+      )
+        return
 
-      const nextTerminalHeight = (normalizedLayout[1] / 100) * mainHeight
+      const nextTerminalHeight = (normalizedLayout[1] / 100) * mainPanelsHeight
       const withinTerminalRange =
         nextTerminalHeight >= terminalMinHeight - 1 &&
         nextTerminalHeight <= terminalMaxHeight + 1
@@ -999,7 +1209,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     },
     [
       applyMainLayout,
-      mainHeight,
+      mainPanelsHeight,
       setTerminalHeight,
       terminalHeight,
       terminalMaxHeight,
@@ -1008,7 +1218,20 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     ]
   )
 
-  const safeShellWidth = shellWidth > 0 ? shellWidth : 1440
+  // The panes' contents as stable elements: the shell re-renders on every
+  // container resize step (and on each drag step), and none of these read
+  // anything from it — they take their state from context — so React bails
+  // out of re-rendering their (large) subtrees instead of redoing the whole
+  // workspace each frame.
+  const sidebarElement = useMemo(() => <Sidebar />, [])
+  const auxElement = useMemo(() => <AuxPanel />, [])
+  const terminalElement = useMemo(() => <TerminalPanel />, [])
+  const workspaceElement = useMemo(
+    () => <WorkspaceContent>{children}</WorkspaceContent>,
+    [children]
+  )
+
+  const safeShellWidth = shellPanelsWidth > 0 ? shellPanelsWidth : 1440
   const sidebarSizeRange = resolvePanelSizeRange(
     sidebarMinWidth,
     sidebarMaxWidth,
@@ -1020,7 +1243,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     safeShellWidth
   )
 
-  const safeMainHeight = mainHeight > 0 ? mainHeight : 900
+  const safeMainHeight = mainPanelsHeight > 0 ? mainPanelsHeight : 900
   const terminalSizeRange = resolvePanelSizeRange(
     terminalMinHeight,
     terminalMaxHeight,
@@ -1043,6 +1266,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
           id={FOLDER_SHELL_LEFT_PANEL_ID}
           order={1}
           defaultSize={18}
+          style={sidebarPanelStyle}
           minSize={sidebarOpen ? sidebarSizeRange.minSize : 0}
           maxSize={sidebarOpen ? sidebarSizeRange.maxSize : 0}
         >
@@ -1052,7 +1276,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               slide — an un-backed wrapper would show the root `bg-background`
               (white) through that gap. */}
           <div className="h-full min-h-0 overflow-hidden ws-surface-sidebar">
-            <Sidebar />
+            {sidebarElement}
           </div>
         </ResizablePanel>
 
@@ -1089,16 +1313,28 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
                 defaultSize={72}
                 minSize={15}
               >
-                <WorkspaceContent>{children}</WorkspaceContent>
+                {workspaceElement}
               </ResizablePanel>
 
+              {/* Closed, the handle gives up its BOX, not just its paint — and
+                  the override has to carry the same
+                  `data-[panel-group-direction=vertical]` prefix the base size
+                  does. A bare `h-0` is (0,1,0) against that rule's (0,2,0)
+                  attribute selector and tailwind-merge keeps both (different
+                  modifier sets), so it loses in silence: the closed terminal
+                  kept a 1px invisible strip of the app background between the
+                  workspace and the status bar, which reads as a gap under a
+                  browser page or an HTML preview (the only panes that paint to
+                  their own edge). The horizontal handles' `w-0` needs no
+                  prefix — their base `w-px` is unprefixed, so twMerge drops
+                  it. */}
               <ResizableHandle
                 withHandle
                 disabled={!terminalOpen}
                 className={
                   terminalOpen
                     ? ""
-                    : "pointer-events-none h-0 opacity-0 after:h-0"
+                    : "pointer-events-none opacity-0 data-[panel-group-direction=vertical]:h-0 data-[panel-group-direction=vertical]:after:h-0"
                 }
               />
 
@@ -1106,11 +1342,12 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
                 id={FOLDER_MAIN_TERMINAL_PANEL_ID}
                 order={2}
                 defaultSize={28}
+                style={terminalPanelStyle}
                 minSize={terminalOpen ? terminalSizeRange.minSize : 0}
                 maxSize={terminalOpen ? terminalSizeRange.maxSize : 0}
               >
                 <div className="h-full min-h-0 overflow-hidden">
-                  <TerminalPanel />
+                  {terminalElement}
                 </div>
               </ResizablePanel>
             </ResizablePanelGroup>
@@ -1129,6 +1366,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
           id={FOLDER_SHELL_RIGHT_PANEL_ID}
           order={3}
           defaultSize={18}
+          style={auxPanelStyle}
           minSize={auxOpen ? auxSizeRange.minSize : 0}
           maxSize={auxOpen ? auxSizeRange.maxSize : 0}
         >
@@ -1140,7 +1378,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               to the old opaque wrapper, so the 240ms collapse slide still never
               flashes white while AuxPanel `return null`s. */}
           <div className="h-full min-h-0 overflow-hidden bg-background ws-transparent-bg">
-            <AuxPanel />
+            {auxElement}
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
@@ -1274,14 +1512,40 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
             <AcpConnectionsProvider>
               <DelegationProvider>
                 <ConversationStatusEventBridge />
+                {/* Tag definitions (names, colours) for every chip in this
+                    window; which tags a conversation carries rides on its
+                    summary instead. */}
+                <ConversationTagsSync />
+                <AssistantsSync />
+                {/* The tag manager, opened from tag pickers, folder menus and
+                    the sidebar's tag filter — all popovers or menus that
+                    unmount as they close, so none can host it. */}
+                <ConversationTagsManagerHost />
                 <ConversationRuntimeProvider>
                   <WorkspaceProvider>
                     <TabProvider>
                       <WorkspaceDocumentTitle />
                       <TabKeysSync />
+                      <BrowserEventsBridge />
+                      {/* Beside the events bridge and not inside it: that one
+                          stops where no built-in browser exists, and a local
+                          server is worth hearing about in web mode too (the
+                          port bridge can show it). */}
+                      <BrowserServiceBridge />
+                      {/* Mounted beside the bridge, not inside a tab: the tab
+                          an agent asks to run code on is usually not the one
+                          the person is looking at. */}
+                      <BrowserEvalConfirm />
+                      {/* Here and not in the browser tab it is opened from:
+                          only the tab on screen is mounted, and a tab opening
+                          on its own would take the marks with it. */}
+                      <BrowserScreenshotMarkupHost />
+                      <BrowserTabsPersistence />
+                      <BrowserTabsSuspender />
                       <HeavyPluginsWarmup />
                       <DeepLinkBootstrap />
                       <PetFocusBridge />
+                      <WorkspaceRestoreNotices />
                       {/* Always mounted: external-change conflicts must be
                             resolvable even with the aux file tree closed. */}
                       <ExternalConflictDialog />
@@ -1293,6 +1557,12 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                                 <TasksViewProvider>
                                   <WorkbenchRouteProvider>
                                     <WorkbenchRouteConversationSync />
+                                    {/* The task editor a message's "create
+                                          task" opens over the page it is on:
+                                          a transcript shows in a tab, a canvas
+                                          card or a drawer on any route, and
+                                          none of them keeps one of its own. */}
+                                    <TaskFromMessageHost />
                                     {/* Inside WorkbenchRouteProvider: the
                                           listener calls openConversations() to
                                           surface a launcher-opened folder. */}

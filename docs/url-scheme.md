@@ -5,8 +5,8 @@ can bring Codeg forward and open a specific conversation.
 
 This is the OS handler for the same `codeg://session/<id>` form already used
 as an in-app markdown mention. Mention badges (`codeg://agent/…`,
-`codeg://commit/…`, `codeg://embedded/…`) stay in-process and are **not**
-OS navigation.
+`codeg://assistant/…`, `codeg://commit/…`, `codeg://embedded/…`) stay
+in-process and are **not** OS navigation.
 
 ## Forms
 

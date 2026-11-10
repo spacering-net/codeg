@@ -1,7 +1,15 @@
 import { useRef } from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest"
 
 const toastSuccess = vi.fn()
 const toastError = vi.fn()
@@ -145,7 +153,7 @@ function openAskComposer(container: HTMLElement, text = "hello") {
   return screen.getByRole("textbox", { name: "Ask about this selection…" })
 }
 
-let rectSpy: ReturnType<typeof vi.spyOn>
+let rectSpy: MockInstance
 
 /**
  * jsdom lays nothing out, so the toolbar's own width — which the edge clamp

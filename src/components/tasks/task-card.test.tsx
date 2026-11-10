@@ -68,6 +68,8 @@ function renderCard(
     onUnqueueMerge: noop,
     onComplete: noop,
     onArchive: noop,
+    onDefer: noop,
+    onFollowUp: noop,
     onEdit: noop,
     onSchedule: noop,
     ...handlers,
@@ -212,6 +214,39 @@ describe("TaskCard secondaries", () => {
   })
 })
 
+describe("TaskCard awaiting input", () => {
+  const waiting = () => task({ status: "awaiting_input", conversation_id: 42 })
+
+  it("leads with answering the agent, which opens its session", async () => {
+    const onOpen = vi.fn()
+    const onViewSession = vi.fn()
+    const onCancel = vi.fn()
+    renderCard(waiting(), { onOpen, onViewSession, onCancel })
+
+    const respond = screen.getByRole("button", { name: "Respond" })
+    // Filled: this is the card's one call to action.
+    expect(respond).toHaveAttribute("data-variant", "default")
+    // The hover text says what "respond" means for a first-time user.
+    expect(respond).toHaveAttribute("title", enMessages.Tasks.actionRespondHint)
+    await userEvent.click(respond)
+    expect(onViewSession).toHaveBeenCalledTimes(1)
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it("keeps cancel as a named secondary, and no second session button", async () => {
+    const onCancel = vi.fn()
+    renderCard(waiting(), { onCancel })
+
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "View session" })).toBeNull()
+    const cancel = screen.getByRole("button", { name: "Cancel task" })
+    expect(cancel).toHaveAttribute("data-variant", "outline")
+    await userEvent.click(cancel)
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("TaskCard worktree-removed badge", () => {
   it("flags a deleted worktree in any status — done and canceled included", () => {
     // Detached after removal: the pointer is gone, the branch remains.
@@ -299,6 +334,30 @@ describe("TaskCard forge provenance", () => {
     expect(onOpen).not.toHaveBeenCalled()
   })
 
+  /** A task made from several issues links each of them — four, then a
+   *  count — each straight to its own item. */
+  it("links every issue of a task made from several", () => {
+    const base = sourced()
+    const items = [3, 5, 9, 12, 15, 21].map((number) => ({
+      number,
+      url: `https://github.com/acme/widgets/issues/${number}`,
+      title: `issue ${number}`,
+    }))
+    renderCard({
+      ...base,
+      source_meta: { ...base.source_meta!, number: 3, items },
+    })
+    for (const number of [3, 5, 9, 12]) {
+      expect(screen.getByRole("link", { name: `#${number}` })).toHaveAttribute(
+        "href",
+        `https://github.com/acme/widgets/issues/${number}`
+      )
+    }
+    expect(screen.queryByRole("link", { name: "#15" })).toBeNull()
+    expect(screen.getByText("+2")).toBeInTheDocument()
+    expect(screen.getByText("· acme/widgets")).toBeInTheDocument()
+  })
+
   it("keeps the link off the folder/branch line", () => {
     // A repo path beside `repo / task/7` either crowds it or truncates itself
     // into uselessness — the link owns its own row.
@@ -329,5 +388,70 @@ describe("TaskCard live note", () => {
       })
     )
     expect(screen.getByText("installing deps")).toBeTruthy()
+  })
+})
+
+describe("TaskCard handle later", () => {
+  it("offers it beside a reviewed task's acceptance", async () => {
+    const onDefer = vi.fn()
+    const onMerge = vi.fn()
+    renderCard(task({ files_changed: 3 }), { onDefer, onMerge })
+    await userEvent.click(screen.getByRole("button", { name: "Handle later" }))
+    expect(onDefer).toHaveBeenCalledTimes(1)
+    expect(onMerge).not.toHaveBeenCalled()
+  })
+
+  it("says a deferred task is deferred and leads with the follow-up", async () => {
+    const onFollowUp = vi.fn()
+    const onDefer = vi.fn()
+    const onOpen = vi.fn()
+    renderCard(
+      task({ files_changed: 3, deferred_at: "2026-08-01T02:00:00Z" }),
+      { onFollowUp, onDefer, onOpen }
+    )
+    // The chip names the deferral; the review underneath rides its tooltip.
+    expect(screen.getByTitle("Deferred · To review")).toHaveTextContent(
+      "Deferred"
+    )
+    expect(screen.queryByRole("button", { name: "Merge" })).toBeNull()
+    await userEvent.click(screen.getByRole("button", { name: "Follow up" }))
+    expect(onFollowUp).toHaveBeenCalledTimes(1)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Back to Needs you" })
+    )
+    expect(onDefer).toHaveBeenCalledTimes(1)
+    // Neither action opens the detail sheet underneath.
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it("keeps a deferred failure's retry, error and all", async () => {
+    const onRetry = vi.fn()
+    renderCard(
+      task({
+        status: "failed",
+        last_error: "boom: exit 1",
+        deferred_at: "2026-08-01T02:00:00Z",
+      }),
+      { onRetry }
+    )
+    expect(screen.getByTitle("Deferred · Failed")).toBeInTheDocument()
+    expect(screen.getByText("boom: exit 1")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+    expect(
+      screen.getByRole("button", { name: "Back to Needs you" })
+    ).toBeInTheDocument()
+  })
+
+  it("lets the primary label give way instead of the secondaries", () => {
+    // A failed card carries four round secondaries; the primary is the one
+    // control allowed to shrink, truncating its label (whole on hover).
+    renderCard(task({ status: "failed", conversation_id: 3 }))
+    const retry = screen.getByRole("button", { name: "Retry" })
+    expect(retry).toHaveClass("min-w-0", "shrink")
+    expect(retry).toHaveAttribute("title", "Retry")
+    for (const name of ["Edit", "Handle later", "Archive", "View session"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument()
+    }
   })
 })

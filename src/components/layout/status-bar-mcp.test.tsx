@@ -142,9 +142,50 @@ describe("StatusBarMcp", () => {
     await openPopover()
 
     expect(toolSwitch("Delegation")).toBeChecked()
-    expect(toolSwitch("Live feedback")).toBeChecked()
-    expect(toolSwitch("Ask a question")).not.toBeChecked()
-    expect(toolSwitch("Session lookup")).not.toBeChecked()
+    expect(toolSwitch("Live Feedback")).toBeChecked()
+    expect(toolSwitch("Ask user question")).not.toBeChecked()
+    expect(toolSwitch("Get session info")).not.toBeChecked()
+  })
+
+  /** `browser_eval` is a switch inside another one: it is shown here (so the
+   * popover is the whole list, not most of it) but is not something to turn
+   * on in passing while the browser itself is off — the backend would drop it
+   * and the row would be promising a tool nothing can call. */
+  it("shows a switch that lives inside another as off and untouchable", async () => {
+    getCodegMcpServiceStatus.mockResolvedValue(
+      makeStatus({
+        tool_groups: [
+          { key: "browser", enabled: false },
+          { key: "browser_eval", enabled: false, requires: "browser" },
+        ],
+      })
+    )
+    await mount()
+    await openPopover()
+
+    const evalSwitch = toolSwitch("Run code in the built-in browser")
+    expect(evalSwitch).toBeDisabled()
+    expect(evalSwitch).not.toBeChecked()
+    fireEvent.click(evalSwitch)
+    expect(setCodegMcpToolGroup).not.toHaveBeenCalled()
+
+    // With the group on it is an ordinary row again, and writes its own key.
+    getCodegMcpServiceStatus.mockResolvedValue(
+      makeStatus({
+        tool_groups: [
+          { key: "browser", enabled: true },
+          { key: "browser_eval", enabled: false, requires: "browser" },
+        ],
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: /Refresh/ }))
+    await waitFor(() =>
+      expect(toolSwitch("Run code in the built-in browser")).toBeEnabled()
+    )
+    fireEvent.click(toolSwitch("Run code in the built-in browser"))
+    await waitFor(() =>
+      expect(setCodegMcpToolGroup).toHaveBeenCalledWith("browser_eval", true)
+    )
   })
 
   it("writes a group toggle through and re-reads the status", async () => {
@@ -163,12 +204,12 @@ describe("StatusBarMcp", () => {
         ],
       })
     )
-    fireEvent.click(toolSwitch("Ask a question"))
+    fireEvent.click(toolSwitch("Ask user question"))
 
     await waitFor(() =>
       expect(setCodegMcpToolGroup).toHaveBeenCalledWith("ask", true)
     )
-    await waitFor(() => expect(toolSwitch("Ask a question")).toBeChecked())
+    await waitFor(() => expect(toolSwitch("Ask user question")).toBeChecked())
   })
 
   /** A rejected write must not leave the switch showing a position no setting
@@ -178,12 +219,14 @@ describe("StatusBarMcp", () => {
     await mount()
     await openPopover()
 
-    fireEvent.click(toolSwitch("Ask a question"))
+    fireEvent.click(toolSwitch("Ask user question"))
 
     expect(
       await screen.findByText(/Failed: database is locked/)
     ).toBeInTheDocument()
-    await waitFor(() => expect(toolSwitch("Ask a question")).not.toBeChecked())
+    await waitFor(() =>
+      expect(toolSwitch("Ask user question")).not.toBeChecked()
+    )
     // The refusal is not a reason to re-read: the status never changed.
     expect(getCodegMcpServiceStatus).toHaveBeenCalledTimes(2)
   })
@@ -196,7 +239,7 @@ describe("StatusBarMcp", () => {
     await openPopover()
 
     fireEvent.click(screen.getByRole("button", { name: /Open full settings/ }))
-    expect(openSettingsWindow).toHaveBeenCalledWith("general")
+    expect(openSettingsWindow).toHaveBeenCalledWith("collaboration")
   })
 
   /** The headline promise of the feature: a dead socket is repairable in place. */

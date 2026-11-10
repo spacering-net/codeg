@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { URI } from "monaco-editor/esm/vs/base/common/uri.js"
+import { URI } from "monaco-editor/base/common/uri.js"
 import {
   buildMonacoModelPath,
   collectLiveModelPaths,
+  disposeClosedEditorModels,
 } from "@/lib/monaco-model-path"
 
 describe("buildMonacoModelPath", () => {
@@ -61,5 +62,48 @@ describe("collectLiveModelPaths", () => {
 
   it("returns an empty list for no tabs", () => {
     expect(collectLiveModelPaths([])).toEqual([])
+  })
+})
+
+describe("Folder-tabs Monaco model lifetime", () => {
+  it("keeps model identity and undo while scopes switch, disposing only after a real close", () => {
+    const a = { id: "a", path: "/repo/a.ts" }
+    const b = { id: "b", path: "/other/b.ts" }
+    const uri = buildMonacoModelPath(a.path, a.id)
+    const history = ["saved", "unsaved edit"]
+    let disposed = false
+    const model = {
+      isAttachedToEditor: () => false,
+      dispose: () => {
+        disposed = true
+        history.length = 0
+      },
+      undo: () => {
+        history.pop()
+        return history[history.length - 1]
+      },
+    }
+    const registry = new Map([[uri, model]])
+    const tracked = new Set([uri])
+    // A → B → empty → A changes only the visible refs. Every pass receives
+    // the provider's complete buffers, so the existing model survives.
+    for (const visibleRefs of [[a], [b], [], [a]]) {
+      expect(visibleRefs.length).toBeLessThanOrEqual(1)
+      disposeClosedEditorModels(
+        tracked,
+        new Set(collectLiveModelPaths([a, b])),
+        (key) => registry.get(key) ?? null
+      )
+      expect(disposed).toBe(false)
+      expect(registry.get(uri)).toBe(model)
+    }
+    expect(model.undo()).toBe("saved")
+    disposeClosedEditorModels(
+      tracked,
+      new Set(collectLiveModelPaths([b])),
+      (key) => registry.get(key) ?? null
+    )
+    expect(disposed).toBe(true)
+    expect(tracked.has(uri)).toBe(false)
   })
 })

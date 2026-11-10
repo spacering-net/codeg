@@ -9,6 +9,7 @@ import type {
 } from "shiki"
 
 import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
   SelectContent,
@@ -60,7 +61,7 @@ const addKeysToTokens = (lines: ThemedToken[][]): KeyedLine[] =>
   }))
 
 // Token rendering component
-const TokenSpan = ({ token }: { token: ThemedToken }) => (
+export const TokenSpan = ({ token }: { token: ThemedToken }) => (
   <span
     className="dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]"
     style={
@@ -102,7 +103,7 @@ type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   showLineNumbers?: boolean
 }
 
-interface TokenizedCode {
+export interface TokenizedCode {
   tokens: ThemedToken[][]
   fg: string
   bg: string
@@ -380,15 +381,15 @@ export const CodeBlockActions = ({
   </div>
 )
 
-export const CodeBlockContent = ({
-  code,
-  language,
-  showLineNumbers = false,
-}: {
-  code: string
+/**
+ * `code` as lines of coloured tokens: plain text at once, then the highlighted
+ * tokens once shiki has them (cached by code and language). For code set
+ * outside a `CodeBlock`, with `TokenSpan` per token.
+ */
+export function useHighlightedTokens(
+  code: string,
   language: BundledLanguage
-  showLineNumbers?: boolean
-}) => {
+): TokenizedCode {
   // Memoized raw tokens for immediate display
   const rawTokens = useMemo(() => createRawTokens(code), [code])
 
@@ -421,15 +422,32 @@ export const CodeBlockContent = ({
   }, [code, language])
 
   // Use async result only if it matches current code/language
-  const tokenized =
-    asyncState?.code === code && asyncState?.language === language
-      ? asyncState.tokenized
-      : syncTokenized
+  return asyncState?.code === code && asyncState?.language === language
+    ? asyncState.tokenized
+    : syncTokenized
+}
 
+export const CodeBlockContent = ({
+  code,
+  language,
+  showLineNumbers = false,
+}: {
+  code: string
+  language: BundledLanguage
+  showLineNumbers?: boolean
+}) => {
+  const tokenized = useHighlightedTokens(code, language)
+
+  // Sideways on the app's overlay scrollbars, like every other scroll area.
   return (
-    <div className="relative overflow-auto">
-      <CodeBlockBody showLineNumbers={showLineNumbers} tokenized={tokenized} />
-    </div>
+    <ScrollArea x="scroll" y="hidden">
+      <div className="relative">
+        <CodeBlockBody
+          showLineNumbers={showLineNumbers}
+          tokenized={tokenized}
+        />
+      </div>
+    </ScrollArea>
   )
 }
 

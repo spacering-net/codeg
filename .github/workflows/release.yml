@@ -300,32 +300,75 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      # Build the `codeg-mcp` companion binary for the matrix target and
-      # stage it as a Tauri sidecar at
-      # `src-tauri/binaries/codeg-mcp-<triple>{.exe}`. `tauri-action` (below)
-      # then bundles it via the `bundle.externalBin` entry in
-      # `tauri.conf.json` — Tauri installs it next to the main executable
-      # (Contents/MacOS on macOS, install root on Linux/Windows) where the
-      # runtime `locate_codeg_mcp_binary()` finds it via `current_exe`
-      # sibling lookup. The Linux arm64 cross env vars set above also
+      # Computer use on macOS: codeg and codeg-computer-helper each check the
+      # other's code signature at run time, against a designated requirement
+      # compiled into the binary (never read from the bundle, which the user
+      # can write to), and codeg launches the helper under a launch
+      # requirement naming this Team ID, so the kernel runs nothing else from
+      # the helper's path. All of it names this release's Team ID, so it is
+      # pinned here, before anything is compiled, for every later step: the
+      # helper is built by prepare-sidecars (it checks codeg), codeg by
+      # tauri-action (it checks and launches the helper). A helper built
+      # without its requirement refuses to start once it is Developer-ID
+      # signed, and codeg will not build with one pin and not the other.
+      - name: Pin computer-use trust anchors (macOS)
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "FATAL: APPLE_TEAM_ID is required to pin the computer-use trust anchors"
+            exit 1
+          fi
+          anchor="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = \"${APPLE_TEAM_ID}\""
+          echo "CODEG_COMPUTER_PEER_REQUIREMENT=identifier \"app.codeg\" and ${anchor}" >> "$GITHUB_ENV"
+          echo "CODEG_COMPUTER_HELPER_REQUIREMENT=identifier \"app.codeg.computer-helper\" and ${anchor}" >> "$GITHUB_ENV"
+          echo "CODEG_COMPUTER_TEAM_ID=${APPLE_TEAM_ID}" >> "$GITHUB_ENV"
+
+      # Build the sidecars — the `codeg-mcp` companion, the
+      # `codeg-computer-helper` computer-use executor and the `codeg-cli`
+      # command-line client — for the matrix target
+      # and stage them at `src-tauri/binaries/<bin>-<triple>{.exe}`.
+      # `tauri-action` (below) then bundles them via the `bundle.externalBin`
+      # entries in `tauri.conf.json` — Tauri installs them next to the main
+      # executable (install root on Linux/Windows) where the runtime finds
+      # them via `current_exe` sibling lookup. On macOS the helper is no
+      # sidecar: it is staged as `src-tauri/binaries/codeg-computer-helper.app`
+      # and bundled as `Contents/Helpers/codeg-computer-helper.app`
+      # (`tauri.macos.conf.json`), since macOS charges an executable's
+      # permissions to the app bundle it sits in — a helper in Contents/MacOS
+      # would hold codeg's. The Linux arm64 cross env vars set above also
       # apply to this cargo invocation.
-      - name: Stage codeg-mcp sidecar for Tauri bundle
+      - name: Stage sidecars for Tauri bundle
         shell: bash
         run: pnpm tauri:prepare-sidecars --target ${{ matrix.target }}
 
-      - name: Verify codeg-mcp sidecar landed
+      - name: Verify sidecars landed
         shell: bash
         run: |
           ext=""
           case "${{ matrix.target }}" in
             *windows*) ext=".exe" ;;
           esac
-          file="src-tauri/binaries/codeg-mcp-${{ matrix.target }}${ext}"
-          if [ ! -f "$file" ]; then
-            echo "FATAL: sidecar $file missing after prepare-sidecars"
-            exit 1
-          fi
-          ls -la "$file"
+          for bin in codeg-mcp codeg-computer-helper codeg-cli; do
+            file="src-tauri/binaries/${bin}-${{ matrix.target }}${ext}"
+            if [ ! -s "$file" ]; then
+              echo "FATAL: sidecar $file missing or empty after prepare-sidecars"
+              exit 1
+            fi
+            ls -la "$file"
+          done
+          case "${{ matrix.target }}" in
+            *apple-darwin*)
+              helper="src-tauri/binaries/codeg-computer-helper.app/Contents/MacOS/codeg-computer-helper"
+              if [ ! -s "$helper" ]; then
+                echo "FATAL: helper app executable $helper missing or empty after prepare-sidecars"
+                exit 1
+              fi
+              ls -la "$helper"
+              ;;
+          esac
 
       - name: Import Apple Developer ID certificate
         if: contains(matrix.target, 'apple-darwin')
@@ -424,6 +467,22 @@ jobs:
           echo "APPLE_SIGNING_IDENTITY=$cert_id" >> "$GITHUB_ENV"
           echo "Using Apple signing identity: $cert_id"
 
+      # Tauri copies the helper app into the bundle (`bundle.macOS.files`)
+      # without signing it, and signs the bundle around it without `--deep`,
+      # so it is signed here, before the bundle is built — inside out, as
+      # Apple requires — with the hardened runtime, a secure timestamp and no
+      # entitlements, as notarization and the gate below need.
+      - name: Sign the computer-use helper app (macOS)
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper_app="src-tauri/binaries/codeg-computer-helper.app"
+          codesign --force --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" "$helper_app"
+          codesign --verify --strict -R="${CODEG_COMPUTER_HELPER_REQUIREMENT}" "$helper_app"
+          codesign -dv "$helper_app" 2>&1 | grep -E '^(Identifier|TeamIdentifier)='
+
       - name: Build and upload to draft release (Linux arm64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         uses: tauri-apps/tauri-action@v0.6.1
@@ -452,7 +511,10 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }} --bundles deb,rpm
+          # RPM takes no "-" in a version and the bundler stops at "invalid
+          # version", so a release candidate (x.y.z-rc.N) ships no .rpm. The
+          # tag is "v" + the version: create-draft-release makes sure of it.
+          args: --target ${{ matrix.target }} --bundles ${{ contains(github.ref_name, '-') && 'deb' || 'deb,rpm' }}
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -499,7 +561,9 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }}
+          # Every Linux bundle (deb, rpm, AppImage), less the .rpm for a
+          # release candidate: see the arm64 step.
+          args: --target ${{ matrix.target }}${{ contains(github.ref_name, '-') && ' --bundles deb,appimage' || '' }}
           includeUpdaterJson: true
           retryAttempts: 2
 
@@ -511,6 +575,10 @@ jobs:
           # Skip the duplicate beforeBuildCommand sidecar pass so cross builds
           # do not fall back to the runner host triple.
           CODEG_SKIP_SIDECAR: "1"
+          # beforeBuildCommand runs `next build`, whose type-check needs more
+          # than the 2 GB heap Node defaults to on these 7 GB runners; 4 GB is
+          # what Node already gets on the 16 GB Linux and Windows runners.
+          NODE_OPTIONS: --max-old-space-size=4096
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -530,6 +598,93 @@ jobs:
           args: --target ${{ matrix.target }}
           includeUpdaterJson: true
           retryAttempts: 2
+
+      # The release gate for computer use on macOS. Notarization and a
+      # `runtime` flag prove neither of the things that matter here, so each is
+      # checked on the bundle that was just built and signed:
+      #   * the helper is an app of its own, `Contents/Helpers/
+      #     codeg-computer-helper.app`, and no bare copy of it is in
+      #     `Contents/MacOS/`: macOS charges an executable's permissions to the
+      #     app bundle it sits in, so a helper there would hold codeg's;
+      #   * codeg, codeg-mcp, codeg-cli and codeg-computer-helper carry NO
+      #     entitlements —
+      #     in particular none that let another process load code into them
+      #     (library-validation / dyld / get-task-allow exemptions), and codeg
+      #     never Apple Events: every agent's shell runs as codeg for TCC.
+      #   * each has the hardened runtime;
+      #   * codeg satisfies the requirement compiled into the helper, and the
+      #     helper the one compiled into codeg — otherwise the two refuse each
+      #     other and computer use cannot start;
+      #   * codeg, codeg-mcp and codeg-cli reference no Accessibility /
+      #     event-posting /
+      #     screen-capture API: holding or using those is the helper's job
+      #     alone. `AXIsProcessTrusted` is the one allowed read-only query.
+      #     codeg alone may also import `CGEventTapCreate`: global-hotkey,
+      #     behind the stop shortcut, links it to watch media keys, and codeg
+      #     never asks it to — `StopShortcut` names no media key and no webview
+      #     is given the shortcut plugin, both held by tests. Nothing else is
+      #     let through.
+      #   * the bundle carries no `codeg-server`, and its `codeg-mcp` and
+      #     `codeg-cli` are the sidecars built without the desktop features (no
+      #     WebKit): the copies `tauri build` compiles itself stay out
+      #     (`server-bin` / `mcp-bin` / `cli-bin`).
+      - name: Verify computer-use signing and symbols (macOS)
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/codeg.app"
+          if [ ! -d "$app" ]; then
+            echo "FATAL: $app not found"
+            exit 1
+          fi
+          codesign --verify --strict --deep "$app"
+          helper_app="$app/Contents/Helpers/codeg-computer-helper.app"
+          if [ -e "$app/Contents/MacOS/codeg-computer-helper" ]; then
+            echo "FATAL: codeg-computer-helper is in Contents/MacOS, where macOS charges it to codeg"
+            exit 1
+          fi
+          if [ ! -d "$helper_app" ]; then
+            echo "FATAL: $helper_app not found"
+            exit 1
+          fi
+          if [ -e "$app/Contents/MacOS/codeg-server" ]; then
+            echo "FATAL: codeg-server is in the desktop bundle; its binary target must need server-bin"
+            exit 1
+          fi
+          for sidecar in codeg-mcp codeg-cli; do
+            if otool -L "$app/Contents/MacOS/$sidecar" | grep -q 'WebKit'; then
+              echo "FATAL: $sidecar links WebKit: tauri build's own copy replaced the sidecar"
+              exit 1
+            fi
+          done
+          for path in "$app/Contents/MacOS/codeg" "$app/Contents/MacOS/codeg-mcp" "$app/Contents/MacOS/codeg-cli" "$helper_app"; do
+            name="$(basename "$path")"
+            if ! codesign -dv "$path" 2>&1 | grep -q 'flags=0x[0-9a-f]*(runtime)'; then
+              echo "FATAL: $name is not signed with the hardened runtime"
+              exit 1
+            fi
+            if codesign -d --entitlements - --xml "$path" 2>/dev/null | grep -q '<key>'; then
+              echo "FATAL: $name carries entitlements; codeg's executables must carry none"
+              codesign -d --entitlements - "$path" || true
+              exit 1
+            fi
+          done
+          codesign --verify --strict -R="${CODEG_COMPUTER_PEER_REQUIREMENT}" "$app/Contents/MacOS/codeg"
+          codesign --verify --strict -R="${CODEG_COMPUTER_HELPER_REQUIREMENT}" "$helper_app"
+          deny='^_(CGEventPost|CGEventPostToPid|CGEventPostToPSN|CGEventTapCreate|CGEventTapCreateForPid|CGEventTapCreateForPSN|CGWindowListCreateImage|CGWindowListCreateImageFromArray|CGDisplayCreateImage|CGDisplayCreateImageForRect|CGDisplayStreamCreate|CGDisplayStreamCreateWithDispatchQueue|CGRequestScreenCaptureAccess|CGRequestPostEventAccess|AXIsProcessTrustedWithOptions|AXUIElement[A-Za-z]*|AXObserver[A-Za-z]*)$|^_OBJC_CLASS_\$_SC(ShareableContent|Stream|ScreenshotManager|ContentFilter|ContentSharingPicker)$'
+          for bin in codeg codeg-mcp codeg-cli; do
+            hits="$(nm -u "$app/Contents/MacOS/$bin" | grep -E "$deny" || true)"
+            if [ "$bin" = codeg ]; then
+              hits="$(printf '%s\n' "$hits" | grep -vx '_CGEventTapCreate' || true)"
+            fi
+            if [ -n "$hits" ]; then
+              echo "FATAL: $bin references APIs only codeg-computer-helper may use:"
+              echo "$hits"
+              exit 1
+            fi
+          done
+          echo "computer-use signing and symbol checks passed"
 
       - name: Delete Apple signing keychain
         if: always() && contains(matrix.target, 'apple-darwin')
@@ -658,20 +813,216 @@ jobs:
           cache: "pnpm"
 
       - name: Build frontend
+        env:
+          # The `next build` type-check needs more than the 2 GB heap Node
+          # defaults to on the 7 GB macOS runners. 4 GB is what Node already
+          # gets on the 16 GB Linux and Windows runners, so it changes nothing
+          # there.
+          NODE_OPTIONS: --max-old-space-size=4096
         run: |
           pnpm install --frozen-lockfile
           pnpm build
 
-      - name: Build server + codeg-mcp companion
+      - name: Build server + codeg-mcp companion + computer-use helper + codeg-cli
         working-directory: src-tauri
         # `codeg-mcp` is the stdio MCP companion the runtime injects per
         # session (see acp/delegation/companion.rs). Built with the same
         # `--no-default-features --target` flags as the server so it shares
         # the cross-compile env (Linux arm64) without dragging in tauri
-        # runtime deps.
+        # runtime deps. Each binary target needs its own feature (Cargo.toml).
+        # `codeg-computer-helper` serves computer use, which the server
+        # offers only when started with CODEG_COMPUTER_USE=1 in a desktop
+        # session; it ships beside the server, where the server looks for it.
+        # `codeg-cli` is the command-line client (`codeg-cli run …`), for CI
+        # jobs and scripts on the server's machine or reaching it with --url.
         run: |
-          cargo build --release --bin codeg-server --no-default-features --target ${{ matrix.target }}
-          cargo build --release --bin codeg-mcp --no-default-features --target ${{ matrix.target }}
+          cargo build --release --bin codeg-server --no-default-features --features server-bin --target ${{ matrix.target }}
+          cargo build --release --bin codeg-mcp --no-default-features --features mcp-bin --target ${{ matrix.target }}
+          cargo build --release --bin codeg-computer-helper --no-default-features --features computer-helper --target ${{ matrix.target }}
+          cargo build --release --bin codeg-cli --no-default-features --features cli-bin --target ${{ matrix.target }}
+
+      # macOS holds what a person grants the server — Full Disk Access and the
+      # other privacy permissions — to its designated requirement. Rust leaves
+      # the arm64 binary linker-signed (ad-hoc), which makes that requirement
+      # the one build's cdhash: every update, which puts another build at the
+      # same path, took the grant back (#1035). The x86_64 binary is not
+      # signed at all. Signed with the release's Developer ID under a fixed
+      # identifier, both carry a requirement naming the identifier and the
+      # Team ID, which every release keeps, as the desktop's executables do.
+      # The certificate goes into a temporary keychain the way build-tauri
+      # does it, after everything is built, and the keychain is deleted again
+      # before anything else runs, so no build script or tool sees it
+      # unlocked. No notarization credentials: these binaries are not
+      # notarized.
+      - name: Import Apple Developer ID certificate (macOS)
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for name in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            KEYCHAIN_PASSWORD \
+            APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf '::error::Missing required Apple signing secret(s): %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+          keychain_path="$RUNNER_TEMP/codeg-signing.keychain-db"
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          keychain_search_list_path="$RUNNER_TEMP/codeg-keychains.txt"
+          original_default_keychain="$(
+            security default-keychain -d user \
+              | sed -e 's/^[[:space:]]*//' -e 's/^"//' -e 's/"$//'
+          )"
+          security list-keychains -d user \
+            | sed -e 's/^[[:space:]]*//' -e 's/^"//' -e 's/"$//' \
+            > "$keychain_search_list_path"
+
+          echo "APPLE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+          echo "APPLE_CERTIFICATE_PATH=$certificate_path" >> "$GITHUB_ENV"
+          echo "APPLE_KEYCHAIN_SEARCH_LIST_PATH=$keychain_search_list_path" >> "$GITHUB_ENV"
+          echo "APPLE_ORIGINAL_DEFAULT_KEYCHAIN=$original_default_keychain" >> "$GITHUB_ENV"
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          existing_keychains=()
+          while IFS= read -r existing_keychain; do
+            if [ -n "$existing_keychain" ]; then
+              existing_keychains+=("$existing_keychain")
+            fi
+          done < "$keychain_search_list_path"
+          if [ "${#existing_keychains[@]}" -eq 0 ]; then
+            security list-keychains -d user -s "$keychain_path"
+          else
+            security list-keychains -d user -s "$keychain_path" "${existing_keychains[@]}"
+          fi
+          security default-keychain -s "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -t 21600 -u "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          security find-identity -v -p codesigning "$keychain_path"
+
+      - name: Resolve Apple Developer ID identity (macOS)
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cert_info="$(
+            security find-identity -v -p codesigning "$APPLE_KEYCHAIN_PATH" \
+              | grep "Developer ID Application" \
+              | head -n 1 \
+              || true
+          )"
+
+          if [ -z "$cert_info" ]; then
+            echo "::error::No Developer ID Application signing identity found in imported keychain."
+            security find-identity -v -p codesigning "$APPLE_KEYCHAIN_PATH" || true
+            exit 1
+          fi
+
+          cert_id="$(echo "$cert_info" | awk -F'"' '{print $2}')"
+          echo "APPLE_SIGNING_IDENTITY=$cert_id" >> "$GITHUB_ENV"
+          echo "Using Apple signing identity: $cert_id"
+
+      # Each executable is signed under its file name as its identifier (the
+      # names the desktop bundle signs codeg-mcp and codeg-cli under), with
+      # the hardened runtime, a secure timestamp and no entitlements. A grant
+      # that outlives an update must not be borrowable by loading code into
+      # the server — DYLD_* variables, a library it did not ship — and a
+      # signature without a secure timestamp stops validating once the
+      # certificate expires. Then each is checked against the requirement
+      # macOS records for it. codeg-computer-helper stays ad-hoc: a helper
+      # carrying a Team ID refuses to start unless codeg's designated
+      # requirement was compiled into it (computer/helper/mod.rs), and this
+      # build pins none. Last, the signed server is run once (`--version`) to
+      # show it still launches under the hardened runtime.
+      - name: Sign the server's executables with the Developer ID (macOS)
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          dir="src-tauri/target/${{ matrix.target }}/release"
+          anchor="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = \"${APPLE_TEAM_ID}\""
+          for bin in codeg-server codeg-mcp codeg-cli; do
+            codesign --force --options runtime --timestamp \
+              --identifier "$bin" \
+              --sign "$APPLE_SIGNING_IDENTITY" "$dir/$bin"
+            codesign --verify --strict -R="identifier \"$bin\" and ${anchor}" "$dir/$bin"
+            info="$(codesign -dv --verbose=2 "$dir/$bin" 2>&1)"
+            if ! grep -q 'flags=0x[0-9a-f]*(runtime)' <<< "$info"; then
+              echo "FATAL: $bin is not signed with the hardened runtime"
+              exit 1
+            fi
+            if ! grep -q '^Timestamp=' <<< "$info"; then
+              echo "FATAL: $bin carries no secure timestamp"
+              exit 1
+            fi
+            entitlements="$(codesign -d --entitlements - --xml "$dir/$bin" 2>/dev/null)"
+            if grep -q '<key>' <<< "$entitlements"; then
+              echo "FATAL: $bin carries entitlements; the server's executables must carry none"
+              exit 1
+            fi
+            grep -E '^(Identifier|TeamIdentifier|Timestamp)=' <<< "$info"
+          done
+          "$dir/codeg-server" --version
+
+      - name: Delete Apple signing keychain (macOS)
+        if: always() && contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          if [ -n "${APPLE_ORIGINAL_DEFAULT_KEYCHAIN:-}" ]; then
+            security default-keychain -s "$APPLE_ORIGINAL_DEFAULT_KEYCHAIN" || true
+          fi
+
+          if [ -n "${APPLE_KEYCHAIN_SEARCH_LIST_PATH:-}" ] && \
+             [ -f "$APPLE_KEYCHAIN_SEARCH_LIST_PATH" ]; then
+            restored_keychains=()
+            while IFS= read -r restored_keychain; do
+              if [ -n "$restored_keychain" ]; then
+                restored_keychains+=("$restored_keychain")
+              fi
+            done < "$APPLE_KEYCHAIN_SEARCH_LIST_PATH"
+
+            if [ "${#restored_keychains[@]}" -ne 0 ]; then
+              security list-keychains -d user -s "${restored_keychains[@]}" || true
+            fi
+          fi
+
+          if [ -n "${APPLE_KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$APPLE_KEYCHAIN_PATH" || true
+          fi
+
+          for path in \
+            "${APPLE_CERTIFICATE_PATH:-}" \
+            "${APPLE_KEYCHAIN_SEARCH_LIST_PATH:-}"; do
+            if [ -n "$path" ]; then
+              rm -f "$path"
+            fi
+          done
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -679,7 +1030,9 @@ jobs:
           mkdir -p dist/${{ matrix.artifact }}
           cp src-tauri/target/${{ matrix.target }}/release/codeg-server dist/${{ matrix.artifact }}/
           cp src-tauri/target/${{ matrix.target }}/release/codeg-mcp dist/${{ matrix.artifact }}/
-          chmod +x dist/${{ matrix.artifact }}/codeg-server dist/${{ matrix.artifact }}/codeg-mcp
+          cp src-tauri/target/${{ matrix.target }}/release/codeg-computer-helper dist/${{ matrix.artifact }}/
+          cp src-tauri/target/${{ matrix.target }}/release/codeg-cli dist/${{ matrix.artifact }}/
+          chmod +x dist/${{ matrix.artifact }}/codeg-server dist/${{ matrix.artifact }}/codeg-mcp dist/${{ matrix.artifact }}/codeg-computer-helper dist/${{ matrix.artifact }}/codeg-cli
           cp -r out dist/${{ matrix.artifact }}/web
           cd dist && tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
 
@@ -690,6 +1043,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist/${{ matrix.artifact }}
           Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-server.exe dist/${{ matrix.artifact }}/
           Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-mcp.exe dist/${{ matrix.artifact }}/
+          Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-computer-helper.exe dist/${{ matrix.artifact }}/
+          Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-cli.exe dist/${{ matrix.artifact }}/
           Copy-Item -Recurse out dist/${{ matrix.artifact }}/web
           Compress-Archive -Path dist/${{ matrix.artifact }} -DestinationPath dist/${{ matrix.artifact }}.zip
 
@@ -699,6 +1054,8 @@ jobs:
           set -euo pipefail
           test -x "dist/${{ matrix.artifact }}/codeg-server"
           test -x "dist/${{ matrix.artifact }}/codeg-mcp"
+          test -x "dist/${{ matrix.artifact }}/codeg-computer-helper"
+          test -x "dist/${{ matrix.artifact }}/codeg-cli"
           # `codeg-mcp --help` exits 0 without flags and prints the usage
           # line. Only run it for native targets; cross-compiled arm64
           # binaries on x64 runners can't execute.
@@ -706,8 +1063,10 @@ jobs:
              [ "${{ matrix.target }}" = "x86_64-apple-darwin" ] || \
              [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
             "dist/${{ matrix.artifact }}/codeg-mcp" --help | grep -F 'codeg-mcp --parent-connection-id'
+            "dist/${{ matrix.artifact }}/codeg-cli" --version | grep -F 'codeg-cli '
+            "dist/${{ matrix.artifact }}/codeg-cli" --help | grep -F 'Usage: codeg-cli'
           else
-            echo "skipping codeg-mcp --help on cross-target ${{ matrix.target }}"
+            echo "skipping codeg-mcp --help and codeg-cli --version on cross-target ${{ matrix.target }}"
           fi
 
       - name: Smoke test packaged artifact (Windows)
@@ -720,9 +1079,21 @@ jobs:
           if (-not (Test-Path "dist/${{ matrix.artifact }}/codeg-mcp.exe")) {
             throw "codeg-mcp.exe missing from packaged artifact"
           }
+          if (-not (Test-Path "dist/${{ matrix.artifact }}/codeg-computer-helper.exe")) {
+            throw "codeg-computer-helper.exe missing from packaged artifact"
+          }
+          if (-not (Test-Path "dist/${{ matrix.artifact }}/codeg-cli.exe")) {
+            throw "codeg-cli.exe missing from packaged artifact"
+          }
           $help = & "dist/${{ matrix.artifact }}/codeg-mcp.exe" --help
           if ($help -notlike "*codeg-mcp --parent-connection-id*") {
             throw "codeg-mcp --help output unexpected: $help"
+          }
+          # A console program: its help comes back on stdout, named as the
+          # docs name it (no `.exe`).
+          $cliHelp = (& "dist/${{ matrix.artifact }}/codeg-cli.exe" --help) -join "`n"
+          if ($cliHelp -notlike "*Usage: codeg-cli*") {
+            throw "codeg-cli --help output unexpected: $cliHelp"
           }
 
       - name: Upload artifact for Docker build (Linux only)
@@ -737,6 +1108,10 @@ jobs:
       # updater uses (`tauri signer sign` writes `<file>.sig`). The server's
       # `update::verify` module verifies this signature against the embedded
       # public key before installing — see src-tauri/src/update/verify.rs.
+      # `--app-version` binds it to this release's version (the tag, which
+      # the draft-release job matched against tauri.conf.json): the server
+      # refuses an archive signed for any other version than latest.json
+      # announces, or for none.
       - name: Sign and checksum bundle (Unix)
         if: runner.os != 'Windows'
         env:
@@ -744,7 +1119,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          pnpm tauri signer sign "dist/${{ matrix.artifact }}.tar.gz"
+          pnpm tauri signer sign --app-version "${GITHUB_REF_NAME#v}" "dist/${{ matrix.artifact }}.tar.gz"
           test -f "dist/${{ matrix.artifact }}.tar.gz.sig"
           ( cd dist && shasum -a 256 "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.tar.gz.sha256" )
 
@@ -755,7 +1130,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          pnpm tauri signer sign "dist/${{ matrix.artifact }}.zip"
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          pnpm tauri signer sign --app-version $version "dist/${{ matrix.artifact }}.zip"
           if (-not (Test-Path "dist/${{ matrix.artifact }}.zip.sig")) {
             throw "signature not produced for ${{ matrix.artifact }}.zip"
           }
@@ -809,14 +1185,17 @@ jobs:
           mkdir -p dist/amd64 dist/arm64
           cp artifacts/linux-x64/codeg-server dist/amd64/codeg-server
           cp artifacts/linux-x64/codeg-mcp dist/amd64/codeg-mcp
+          cp artifacts/linux-x64/codeg-cli dist/amd64/codeg-cli
           cp artifacts/linux-arm64/codeg-server dist/arm64/codeg-server
           cp artifacts/linux-arm64/codeg-mcp dist/arm64/codeg-mcp
+          cp artifacts/linux-arm64/codeg-cli dist/arm64/codeg-cli
           cp -r artifacts/linux-x64/web dist/web
-          chmod +x dist/amd64/codeg-server dist/amd64/codeg-mcp \
-                   dist/arm64/codeg-server dist/arm64/codeg-mcp
+          chmod +x dist/amd64/codeg-server dist/amd64/codeg-mcp dist/amd64/codeg-cli \
+                   dist/arm64/codeg-server dist/arm64/codeg-mcp dist/arm64/codeg-cli
           # Fail fast if any companion went missing — Docker would otherwise
-          # produce an image where delegation silently degrades.
-          for f in dist/amd64/codeg-mcp dist/arm64/codeg-mcp; do
+          # produce an image where delegation silently degrades, or without
+          # the codeg-cli its docs promise.
+          for f in dist/amd64/codeg-mcp dist/arm64/codeg-mcp dist/amd64/codeg-cli dist/arm64/codeg-cli; do
             test -x "$f" || { echo "FATAL: $f missing or non-exec"; exit 1; }
           done
 
@@ -839,10 +1218,23 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # The image runs its codeg-cli before it is pushed: an amd64 build loaded
+      # into the runner's daemon, `codeg-cli --version` inside it.
+      - name: Smoke test the image's codeg-cli (amd64)
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/amd64 --load -t codeg-smoke:local -f Dockerfile.ci .
+          docker run --rm codeg-smoke:local codeg-cli --version | grep -F 'codeg-cli '
+          docker run --rm codeg-smoke:local codeg-cli --help | grep -F 'Usage: codeg-cli'
+
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      # `latest` is the newest stable release. A release candidate goes out
+      # under its own version only, so nothing that pulls `latest` is moved
+      # onto it; the line that would name `latest` is left empty, and
+      # build-push-action skips empty lines.
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -850,11 +1242,16 @@ jobs:
           file: Dockerfile.ci
           platforms: linux/amd64,linux/arm64
           push: true
+          # The source label is how ghcr.io ties the package to this
+          # repository: the package page links back here and the package
+          # inherits the repository's access permissions.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository }}:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/codeg:${{ steps.version.outputs.version }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/codeg:latest
+            ${{ needs.create-draft-release.outputs.prerelease != 'true' && format('ghcr.io/{0}:latest', github.repository) || '' }}
+            ${{ needs.create-draft-release.outputs.prerelease != 'true' && format('{0}/codeg:latest', secrets.DOCKERHUB_USERNAME) || '' }}
 
   publish-release:
     needs:

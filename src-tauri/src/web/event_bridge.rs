@@ -170,6 +170,19 @@ pub const QUESTION_SETTINGS_CHANGED_EVENT: &str = "question-settings://changed";
 /// backend broadcast. Payload: `SessionInfoSettings` (`{ "enabled": bool }`).
 pub const SESSION_INFO_SETTINGS_CHANGED_EVENT: &str = "session-info-settings://changed";
 
+/// Global side-channel announcing a browser-tools enable/disable
+/// (`browser_list_tabs` / `browser_snapshot`). Same cross-window rationale as
+/// [`SESSION_INFO_SETTINGS_CHANGED_EVENT`]. Payload: `BrowserToolsSettings`
+/// (`{ "enabled": bool }`).
+pub const BROWSER_TOOLS_SETTINGS_CHANGED_EVENT: &str = "browser-tools-settings://changed";
+
+/// Global side-channel announcing a change to the computer-use settings (the
+/// group switch, the grant timeout, the blocklist). Same cross-window
+/// rationale as [`SESSION_INFO_SETTINGS_CHANGED_EVENT`]. Payload:
+/// `ComputerToolsSettings`. Carries no window titles or anything else about
+/// the screen, so it is safe on the web broadcaster too.
+pub const COMPUTER_TOOLS_SETTINGS_CHANGED_EVENT: &str = "computer-tools-settings://changed";
+
 /// Global side-channel announcing a chat-authoring enable/disable
 /// (`create_automation` / `create_work_task`). Same cross-window rationale as
 /// [`SESSION_INFO_SETTINGS_CHANGED_EVENT`]. Payload: `ChatAuthoringSettings`
@@ -280,6 +293,64 @@ pub enum FolderGroupChange {
     /// Folder membership and/or ordering changed; re-fetch the folder and group
     /// lists.
     Layout,
+}
+
+/// Global side-channel for conversation-tag DEFINITIONS (name, colour, order),
+/// and for the branch tag setting that is drawn alongside them. Tags are
+/// defined in one window but drawn on conversations in every window and
+/// client. Which tags a conversation carries travels on
+/// [`CONVERSATION_CHANGED_EVENT`] instead, inside the summary's `tag_ids`, so
+/// it shares that channel's ordering and reconnect refetch.
+pub const CONVERSATION_TAG_CHANGED_EVENT: &str = "conversation-tag://changed";
+
+/// Payload for [`CONVERSATION_TAG_CHANGED_EVENT`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConversationTagChange {
+    /// Insert-or-replace by id (create / rename / recolour).
+    Upsert {
+        tag: crate::models::ConversationTagDetail,
+    },
+    /// The tag is gone, and with it every link to it. No per-conversation
+    /// upserts follow: clients drop the id themselves, and any summary still
+    /// naming it renders as if it did not (an unknown id is never drawn).
+    Deleted { id: i32 },
+    /// Positions changed across a whole scope; re-fetch the tag list. A nudge
+    /// rather than N upserts for the same reason as [`FolderGroupChange::Layout`].
+    Reordered,
+    /// The branch tag setting as just saved, whole.
+    BranchTag {
+        setting: crate::models::ConversationBranchTag,
+    },
+}
+
+/// Global side-channel for assistant definitions. Assistants are edited in the
+/// settings window but drawn in every window and client — the mention panel,
+/// delegation cards, sub-session rows.
+pub const ASSISTANT_CHANGED_EVENT: &str = "assistant://changed";
+
+/// Payload for [`ASSISTANT_CHANGED_EVENT`].
+///
+/// Always WHOLE rows, never a partial update: a client keeps a row only when
+/// it carries a higher `revision` than the copy it holds, and one revision
+/// always names one content. A nudge carrying only the changed fields would
+/// break that — it would advance a stale copy's revision past the broadcast
+/// that carried the content it missed.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AssistantChange {
+    /// Insert-or-replace by id: create, edit, enable/disable, and delete (the
+    /// row then carries `deleted_at`).
+    Upsert {
+        assistant: Box<crate::models::AssistantInfo>,
+    },
+    /// The rows whose position changed in a reorder, whole.
+    Reordered {
+        assistants: Vec<crate::models::AssistantInfo>,
+    },
+    /// Rows changed without a per-row broadcast (a config snapshot applied
+    /// here): re-fetch the whole list.
+    Resync,
 }
 
 /// Per-agent progress of the import picker's local-session scan. Emitted by
@@ -470,11 +541,34 @@ pub async fn emit_with_state_gated<F>(
 where
     F: FnOnce(&SessionState) -> bool,
 {
-    let (envelope_arc, stream, evicted) = {
+    emit_with_state_built(state, emitter, |s| gate(&*s).then_some(payload)).await
+}
+
+/// Like [`emit_with_state_gated`], but the payload itself is BUILT under the
+/// same write lock, from the state it is about to be applied to: `None` aborts
+/// with no event, no seq bump and no broadcast, and returns `false`.
+///
+/// For a read-modify-emit that another task can write in the middle of. Built
+/// from a copy read under an earlier lock, the event would re-emit whatever it
+/// read and undo the other writer's change. A Grok model picker is the case:
+/// Grok's model catalog broadcast refreshes it from the connection's dispatch
+/// task while the conversation loop applies the user's own picks to it.
+///
+/// `build` may also update backend-internal fields the event's reducer does not
+/// own, and those updates stand even when it returns `None`.
+pub async fn emit_with_state_built<F>(
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    build: F,
+) -> bool
+where
+    F: FnOnce(&mut SessionState) -> Option<AcpEvent>,
+{
+    let (envelope_arc, stream, evicted, turn_file_jobs) = {
         let mut s = state.write().await;
-        if !gate(&s) {
+        let Some(payload) = build(&mut s) else {
             return false;
-        }
+        };
         s.apply_event(&payload);
         s.event_seq += 1;
         let envelope = Arc::new(EventEnvelope {
@@ -483,8 +577,27 @@ where
             payload,
         });
         let evicted = s.push_recent_event(Arc::clone(&envelope));
-        (envelope, s.event_stream(), evicted)
+        let turn_file_jobs = std::mem::take(&mut s.turn_file_jobs);
+        (envelope, s.event_stream(), evicted, turn_file_jobs)
     };
+
+    // Office auto-preview: confirm the files this turn's tool calls named.
+    // Filesystem work, so off the session lock and off the async workers.
+    if !turn_file_jobs.is_empty() {
+        let emitter = emitter.clone();
+        let run = move || {
+            for job in turn_file_jobs {
+                crate::agent_turn_files::run_job(job, &emitter);
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(run);
+            }
+            // Not reachable from the async callers today; never drop the work.
+            Err(_) => run(),
+        }
+    }
 
     // Per-connection broadcaster — primary delivery path for web/remote-
     // desktop transports (they use Subscribe-with-Snapshot attach for ACP
@@ -761,5 +874,141 @@ mod tests {
         assert_eq!(p["kind"], "layout");
         assert!(p["group"].is_null(), "the layout nudge carries no payload");
         assert!(p["id"].is_null(), "the layout nudge carries no payload");
+    }
+
+    #[test]
+    fn emit_event_broadcasts_assistant_change_wire_shapes() {
+        // The shapes the assistant store switches on: whole rows under
+        // `assistant` / `assistants`, and a bare `resync` nudge.
+        use crate::models::assistant::selection;
+        use crate::models::{AgentType, AssistantAvatar, AssistantInfo, AssistantLabelSnapshot};
+
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+        let now = chrono::Utc::now();
+        let row = AssistantInfo {
+            id: 3,
+            uid: "u-3".to_string(),
+            name: "Reviewer".to_string(),
+            description: String::new(),
+            avatar: AssistantAvatar::Monogram {
+                color: "teal".to_string(),
+            },
+            agent_type: AgentType::Codex,
+            agent_options: selection(None, &[]),
+            label_snapshot: AssistantLabelSnapshot::default(),
+            instructions: String::new(),
+            enabled: true,
+            sort_order: 1,
+            revision: 2,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+        };
+
+        emit_event(
+            &emitter,
+            ASSISTANT_CHANGED_EVENT,
+            AssistantChange::Upsert {
+                assistant: Box::new(row.clone()),
+            },
+        );
+        let evt = rx.try_recv().expect("assistant upsert should broadcast");
+        assert_eq!(evt.channel, ASSISTANT_CHANGED_EVENT);
+        let p = &*evt.payload;
+        assert_eq!(p["kind"], "upsert");
+        assert_eq!(p["assistant"]["id"], 3);
+        assert_eq!(p["assistant"]["revision"], 2);
+        assert!(p["assistant"].get("deleted_at").is_some_and(|v| v.is_null()));
+
+        emit_event(
+            &emitter,
+            ASSISTANT_CHANGED_EVENT,
+            AssistantChange::Reordered {
+                assistants: vec![row],
+            },
+        );
+        let evt = rx.try_recv().expect("assistant reorder should broadcast");
+        let p = &*evt.payload;
+        assert_eq!(p["kind"], "reordered");
+        assert_eq!(p["assistants"][0]["name"], "Reviewer");
+
+        emit_event(&emitter, ASSISTANT_CHANGED_EVENT, AssistantChange::Resync);
+        let evt = rx.try_recv().expect("assistant resync should broadcast");
+        let p = &*evt.payload;
+        assert_eq!(p["kind"], "resync");
+        assert!(p["assistant"].is_null(), "the resync nudge carries no rows");
+    }
+
+    #[test]
+    fn emit_event_broadcasts_conversation_tag_change_wire_shapes() {
+        // The shapes the tag store switches on. A global tag's scope must reach
+        // the client as an explicit `null`, not a missing key: the frontend
+        // reads `folder_id === null` as "global".
+        use crate::models::ConversationTagDetail;
+
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+
+        emit_event(
+            &emitter,
+            CONVERSATION_TAG_CHANGED_EVENT,
+            ConversationTagChange::Upsert {
+                tag: ConversationTagDetail {
+                    id: 7,
+                    folder_id: None,
+                    name: "Bug".to_string(),
+                    color: "#d73a4a".to_string(),
+                    sort_order: 1,
+                },
+            },
+        );
+        let evt = rx.try_recv().expect("tag upsert should broadcast");
+        assert_eq!(evt.channel, CONVERSATION_TAG_CHANGED_EVENT);
+        let p = &*evt.payload;
+        assert_eq!(p["kind"], "upsert");
+        assert_eq!(p["tag"]["id"], 7);
+        assert!(p["tag"].get("folder_id").is_some_and(|v| v.is_null()));
+        assert_eq!(p["tag"]["name"], "Bug");
+        assert_eq!(p["tag"]["color"], "#d73a4a");
+        assert_eq!(p["tag"]["sort_order"], 1);
+
+        emit_event(
+            &emitter,
+            CONVERSATION_TAG_CHANGED_EVENT,
+            ConversationTagChange::Deleted { id: 7 },
+        );
+        let evt = rx.try_recv().expect("tag delete should broadcast");
+        let p = &*evt.payload;
+        assert_eq!(p["kind"], "deleted");
+        assert_eq!(p["id"], 7);
+
+        emit_event(
+            &emitter,
+            CONVERSATION_TAG_CHANGED_EVENT,
+            ConversationTagChange::Reordered,
+        );
+        let evt = rx.try_recv().expect("reorder nudge should broadcast");
+        let p = &*evt.payload;
+        assert_eq!(p["kind"], "reordered");
+        assert!(p["tag"].is_null(), "the reorder nudge carries no payload");
+
+        emit_event(
+            &emitter,
+            CONVERSATION_TAG_CHANGED_EVENT,
+            ConversationTagChange::BranchTag {
+                setting: crate::models::ConversationBranchTag {
+                    enabled: true,
+                    color: "#6e7781".to_string(),
+                },
+            },
+        );
+        let evt = rx.try_recv().expect("branch tag change should broadcast");
+        let p = &*evt.payload;
+        assert_eq!(p["kind"], "branch_tag");
+        assert_eq!(p["setting"]["enabled"], true);
+        assert_eq!(p["setting"]["color"], "#6e7781");
     }
 }

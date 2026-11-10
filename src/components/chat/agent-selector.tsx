@@ -51,6 +51,7 @@ interface AgentSelectorProps {
   onFallback?: (agentType: AgentType) => void
   onAgentsLoaded?: (agents: AcpAgentInfo[]) => void
   onOpenAgentsSettings?: () => void
+  /** Lock a bound conversation; draft pickers stay usable during startup. */
   disabled?: boolean
   /**
    * Where the pill sits inside the row it is given. The selector now spans the

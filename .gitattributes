@@ -1,0 +1,5 @@
+# The bundled ui-render skill is compiled into the binary (`include_str!` in
+# src-tauri/src/commands/generative_ui.rs), installed for agents byte for byte,
+# and must equal what src/lib/json-render/skill.ts generates, which is LF.
+# Windows checkouts convert text to CRLF by default (core.autocrlf), so pin it.
+src-tauri/genui/** text eol=lf

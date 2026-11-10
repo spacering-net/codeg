@@ -433,7 +433,7 @@ describe("ForgePage on a host that is neither forge", () => {
 
     expect(
       await screen.findByText(
-        "The repository panel supports GitHub, GitLab and Gitea only, and gitee.com is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea or Forgejo instance, add an account for it under Settings → Version Control."
+        "The repository panel supports GitHub, GitLab, Gitea and CNB only, and gitee.com is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea, Forgejo or CNB instance, add an account for it under Settings → Version Control."
       )
     ).toBeInTheDocument()
     // No request is worth spending on a host no credential of ours fits — not
@@ -484,8 +484,36 @@ describe("repoWebUrl", () => {
     ).toBe("http://git.corp.com:8443/gitlab/team/app")
   })
 
-  it("falls back to the canonical page for an unopenable remote", () => {
-    // A browser cannot open either of these; the coordinates are all there is.
+  it("opens an SSH remote under the origin the host's account registered", () => {
+    // #997: an http-only GitLab whose account was added at its http:// URL.
+    // The SSH remote names no scheme; assuming https opened a dead port.
+    expect(
+      repoWebUrl(
+        at({
+          server_host: "gitlab.example.com",
+          owner_repo: "group/repo",
+          remote_url: "git@gitlab.example.com:group/repo.git",
+          web_origin: "http://gitlab.example.com",
+        })
+      )
+    ).toBe("http://gitlab.example.com/group/repo")
+    // The instance's own port and mount path come along, while the SSH port
+    // in the remote does not.
+    expect(
+      repoWebUrl(
+        at({
+          server_host: "git.corp.com",
+          owner_repo: "team/app",
+          remote_url: "ssh://git@git.corp.com:2222/team/app.git",
+          web_origin: "http://git.corp.com:8929/gitlab/",
+        })
+      )
+    ).toBe("http://git.corp.com:8929/gitlab/team/app")
+  })
+
+  it("falls back to the https page when the server sent no origin", () => {
+    // A remote codeg-server older than the field: the coordinates are all
+    // there is.
     for (const url of ["git@github.com:o/r.git", "ssh://git@github.com/o/r"]) {
       expect(
         repoWebUrl(at({ remote_url: url, owner_repo: "xintaofei/codeg" }))
@@ -635,6 +663,10 @@ describe("ForgePage pagination", () => {
     // the reset below has somewhere to come back from.
     await user.click(screen.getByRole("button", { name: "Go to page 2" }))
     await waitFor(() => expect(askedPages()).toEqual([1, 2]))
+    // Only offered once page 2 has landed, and locked while it loads.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Go to page 3" })).toBeEnabled()
+    )
     await user.click(screen.getByRole("button", { name: "Go to page 3" }))
     await waitFor(() => expect(askedPages()).toEqual([1, 2, 3]))
 
@@ -1746,8 +1778,9 @@ describe("ForgePage writes", () => {
       )
     )
     // Straight into the panel on what was just filed: the number and the link
-    // the forge assigned are only visible there.
-    const panel = await screen.findByRole("dialog")
+    // the forge assigned are only visible there. Found by its title: the
+    // new-issue dialog is a dialog too until the answer closes it.
+    const panel = await screen.findByRole("dialog", { name: "Login times out" })
     expect(within(panel).getByText("· #123")).toBeInTheDocument()
     // And into the list behind it, at the top, from the row the CREATE
     // answered with. This is the whole point: re-reading here would ask an
@@ -1800,8 +1833,9 @@ describe("ForgePage writes", () => {
 
     // The panel opens on it — nothing filed ever goes unseen — so the list is
     // only readable again once that is out of the way (a modal takes the rest
-    // of the tree out of the accessibility tree with it).
-    const panel = await screen.findByRole("dialog")
+    // of the tree out of the accessibility tree with it). Found by its title:
+    // the new-issue dialog is a dialog too until the answer closes it.
+    const panel = await screen.findByRole("dialog", { name: "Login times out" })
     expect(within(panel).getByText("· #123")).toBeInTheDocument()
     await user.click(within(panel).getByRole("button", { name: "Close" }))
 
@@ -2095,6 +2129,14 @@ describe("ForgePage writes from a panel with no row", () => {
     mount()
     await user.click(await screen.findByRole("button", { name: "a row" }))
     await screen.findByPlaceholderText("Leave a comment…")
+    // Base UI moves focus into the panel a frame after it opens, from wherever
+    // it is by then — keys typed into the search box before that would land in
+    // the panel instead.
+    await waitFor(() =>
+      expect(screen.getByRole("dialog")).toContainElement(
+        document.activeElement as HTMLElement
+      )
+    )
 
     // The row leaves the page: a search narrows the list to nothing, and the
     // panel stays open on the item it was reading.

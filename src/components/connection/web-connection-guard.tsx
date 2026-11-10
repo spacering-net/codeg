@@ -26,8 +26,8 @@ import { redirectToCodegLogin } from "@/lib/transport/web-auth"
 // surfacing a modal for every transient drop would flicker. The transport's
 // state machine flips to "reconnecting" instantly; this delay is purely the
 // UI deciding when the interruption is worth interrupting the user over.
-// `unauthorized` bypasses this — a rejected token is a definitive signal worth
-// telling the user about immediately.
+// `unauthorized` and `proxyUnauthorized` bypass this — a rejected session is a
+// definitive signal worth telling the user about immediately.
 const RECONNECT_DIALOG_GRACE_MS = 4_000
 
 /**
@@ -87,7 +87,12 @@ export function WebConnectionGuard() {
 
   const showReconnecting = state === "reconnecting" && graceElapsed
   const showUnauthorized = state === "unauthorized"
-  const open = showReconnecting || showUnauthorized
+  // A proxy in front of Codeg (e.g. Cloudflare Access) rejected the request:
+  // its session expired, not the Codeg token. A top-level reload lets the
+  // proxy run its own login flow and keeps the token; "Go to login" stays as
+  // the way out should the proxy keep refusing after the reload.
+  const showProxyUnauthorized = state === "proxyUnauthorized"
+  const open = showReconnecting || showUnauthorized || showProxyUnauthorized
 
   if (!open) return null
 
@@ -101,25 +106,38 @@ export function WebConnectionGuard() {
       >
         <AlertDialogHeader>
           <AlertDialogMedia>
-            {showUnauthorized ? (
+            {showUnauthorized || showProxyUnauthorized ? (
               <ShieldAlert className="text-destructive" />
             ) : (
               <Loader2 className="animate-spin" />
             )}
           </AlertDialogMedia>
           <AlertDialogTitle>
-            {showUnauthorized
-              ? t("sessionExpiredTitle")
-              : t("disconnectedTitle")}
+            {showProxyUnauthorized
+              ? t("proxySignInTitle")
+              : showUnauthorized
+                ? t("sessionExpiredTitle")
+                : t("disconnectedTitle")}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {showUnauthorized
-              ? t("sessionExpiredDescription")
-              : t("reconnectingDescription")}
+            {showProxyUnauthorized
+              ? t("proxySignInDescription")
+              : showUnauthorized
+                ? t("sessionExpiredDescription")
+                : t("reconnectingDescription")}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          {showUnauthorized ? (
+          {showProxyUnauthorized ? (
+            <>
+              <Button variant="outline" onClick={() => redirectToCodegLogin()}>
+                {t("goToLogin")}
+              </Button>
+              <Button onClick={() => window.location.reload()}>
+                {t("reloadPage")}
+              </Button>
+            </>
+          ) : showUnauthorized ? (
             <Button onClick={() => redirectToCodegLogin()}>
               {t("goToLogin")}
             </Button>

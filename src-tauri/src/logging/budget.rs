@@ -85,20 +85,29 @@ fn unix_day() -> i32 {
     unix_day_from_secs(secs)
 }
 
+/// The name `tracing_appender` gives the `Rotation::DAILY` file covering `now`:
+/// `{prefix}.{%Y-%m-%d}.{suffix}`.
+///
+/// Shared, because two things other than the appender need to name that exact
+/// file and neither may drift from it: [`resume_point`] measures it, and
+/// [`crate::logging::panic_hook`] appends a crash record to it synchronously.
+pub fn daily_file_name(prefix: &str, suffix: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    format!("{prefix}.{}.{suffix}", now.format("%Y-%m-%d"))
+}
+
 /// What a fresh [`BudgetedWriter`] must resume from: the current UTC day, and
 /// how many bytes that day's file already holds.
 ///
 /// The filename is reconstructed the way `tracing_appender` builds it for
-/// `Rotation::DAILY` — `{prefix}.{%Y-%m-%d}.{suffix}` — from the *same* instant
-/// as the day number, so the two can't disagree across a midnight boundary. A
-/// missing or unreadable file reads as `0`: a restart that can't measure the file
-/// gets a full ceiling, which is the pre-existing behavior and strictly safer
-/// than refusing to log.
+/// `Rotation::DAILY` (see [`daily_file_name`]) from the *same* instant as the
+/// day number, so the two can't disagree across a midnight boundary. A missing
+/// or unreadable file reads as `0`: a restart that can't measure the file gets
+/// a full ceiling, which is the pre-existing behavior and strictly safer than
+/// refusing to log.
 pub fn resume_point(dir: &Path, prefix: &str, suffix: &str) -> (i32, u64) {
     let now = chrono::Utc::now();
     let day = unix_day_from_secs(now.timestamp());
-    let name = format!("{prefix}.{}.{suffix}", now.format("%Y-%m-%d"));
-    let existing = std::fs::metadata(dir.join(name))
+    let existing = std::fs::metadata(dir.join(daily_file_name(prefix, suffix, now)))
         .map(|m| m.len())
         .unwrap_or(0);
     (day, existing)
@@ -727,6 +736,21 @@ mod tests {
         assert_eq!(
             unix_day_from_secs(midnight.timestamp()),
             unix_day_from_secs(before.timestamp()) + 1
+        );
+    }
+
+    /// Two readers now reconstruct this name (the budget's resume measurement
+    /// and the panic hook's synchronous append), so the scheme is pinned rather
+    /// than left implicit in each of them.
+    #[test]
+    fn daily_file_name_matches_the_appenders_scheme() {
+        let day = chrono::DateTime::parse_from_rfc3339("2026-09-09T19:26:25Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(daily_file_name("codeg", "log", day), "codeg.2026-09-09.log");
+        assert_eq!(
+            daily_file_name("codeg-server", "log", day),
+            "codeg-server.2026-09-09.log"
         );
     }
 

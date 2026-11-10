@@ -1,5 +1,7 @@
-// Local-file markdown links are otherwise rendered as `… [blocked]`. Two
-// distinct sanitize/harden rules cause this, both sidestepped here in the mdast
+import { isFileName } from "./rehype-relative-file-links"
+
+// Local-file markdown links are otherwise rendered as `… [blocked]`. Three
+// distinct sanitize/harden rules cause this, all sidestepped here in the mdast
 // layer (before remark-rehype) while keeping the link clickable through the
 // existing link-safety + open-file-dialog flow:
 //
@@ -10,6 +12,13 @@
 //      leading `C:` as a URL protocol and strips the href, after which harden
 //      blocks the now-hrefless `<a>`. Rewritten to `/C:/…` so `C:` is no longer
 //      in protocol position (see {@link windowsDrivePathToSafe}).
+//   3. A file position at the folder root (`a.ts:12`) — the same misreading,
+//      of `a.ts:` this time. Rewritten to `./a.ts:12` (see
+//      {@link rootFilePositionToRelative}).
+//
+// Relative links (`./a.md`, `src/a.md`, `~/a.md`) survive sanitize but not
+// harden, which flattens or blocks them; that is handled after sanitize, in
+// ./rehype-relative-file-links, where raw HTML anchors are covered too.
 //
 // Image destinations are handled by remarkLocalImages, which preserves their
 // original path until the workspace-confined image reader can resolve it.
@@ -67,9 +76,26 @@ function windowsDrivePathToSafe(url: string): string | null {
   return WINDOWS_DRIVE_PATH.test(url) ? `/${url}` : null
 }
 
-/** Rewrite a `file://` URI or a bare Windows drive path to a sanitize-safe form. */
+// A file position at the folder root (`a.ts:12`, `.env:3`, `Makefile:40:2`)
+// hits the same wall: with no directory in front, rehype-sanitize reads `a.ts:`
+// as a URL protocol and strips the href. `./a.ts:12` puts the colon behind a
+// slash, and link-safety splits the line back off before opening. A host with
+// a port (`localhost:3000`, `example.com:8080`, `10.0.0.1:80`) has no file
+// name in front of the colon and keeps its href.
+const ROOT_FILE_POSITION = /^([^\s/\\?#:]+):\d+(?::\d+)?$/
+
+function rootFilePositionToRelative(url: string): string | null {
+  const name = ROOT_FILE_POSITION.exec(url)?.[1]
+  return name !== undefined && isFileName(name) ? `./${url}` : null
+}
+
+/** Rewrite a local file url sanitize would misread to a sanitize-safe form. */
 function rewriteLocalFileUrl(url: string): string | null {
-  return fileUriToLocalPath(url) ?? windowsDrivePathToSafe(url)
+  return (
+    fileUriToLocalPath(url) ??
+    windowsDrivePathToSafe(url) ??
+    rootFilePositionToRelative(url)
+  )
 }
 
 function walk(node: MdastNodeLike, fn: (n: MdastNodeLike) => void): void {

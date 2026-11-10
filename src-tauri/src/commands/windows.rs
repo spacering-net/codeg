@@ -379,6 +379,9 @@ fn resolve_settings_route(section: Option<&str>) -> &'static str {
         Some("experts") => "settings/experts",
         Some("science") => "settings/science",
         Some("office-tools") => "settings/office-tools",
+        Some("collaboration") => "settings/collaboration",
+        Some("browser") => "settings/browser",
+        Some("computer-use") => "settings/computer-use",
         Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
         Some("system") => "settings/system",
@@ -883,19 +886,24 @@ pub async fn open_import_sessions_window(
 /// focus alone then left the app with nothing on screen once settings was
 /// closed too.
 ///
-/// Single source of truth for the sequence: the tray / dock / single-instance
-/// path (`show_main_window`) and the auxiliary-window owner restores must not
-/// drift apart again. `unminimize` is inert when the window isn't minimized
-/// (macOS returns early; Windows first syncs the flag from `IsIconic`, so the
-/// diff it applies is empty), and `show` preserves the maximized flag — a
-/// tray-hidden maximized workspace comes back maximized.
-fn show_and_focus_window(app: &AppHandle, label: &str) {
+/// Single source of truth for the sequence: the tray (`show_main_window`),
+/// Dock / second-launch activation (`workspace_windows::activate_workspace`)
+/// and the auxiliary-window owner restores must not drift apart again.
+/// `unminimize` is inert when the window isn't minimized (macOS returns early;
+/// Windows first syncs the flag from `IsIconic`, so the diff it applies is
+/// empty), and `show` preserves the maximized flag — a tray-hidden maximized
+/// workspace comes back maximized.
+pub(crate) fn show_and_focus_window(app: &AppHandle, label: &str) {
     let Some(window) = app.get_webview_window(label) else {
         return;
     };
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
+    // A `main` hidden to the tray is back, so the next launch reopens it too.
+    // Not left to the focus event: `set_focus` is skipped where the app is not
+    // allowed to take focus, and the window is open all the same.
+    crate::commands::workspace_windows::note_shown(app, label);
 }
 
 pub fn restore_windows_after_settings(
@@ -2332,12 +2340,22 @@ fn wait_for_macos_fullscreen_space_release(window: &tauri::WebviewWindow) {
 
 /// Bring the hidden / minimized main workspace window back to the
 /// foreground. Used by:
-///   * single-instance plugin (second launch)
+///   * "Open Local Workspace" (the macOS Window menu, `open_local_workspace`)
 ///   * tray icon left-click and "Show Workspace" menu item
-///   * macOS dock-icon reopen
+///   * explicit local-workspace and deep-link actions
 #[cfg(feature = "tauri-runtime")]
 pub fn show_main_window(app: &AppHandle) {
     show_and_focus_window(app, "main");
+}
+
+/// The frontend's "Open local workspace": Quick actions in a remote workspace
+/// window, and the screens a remote window shows instead of its workspace
+/// when its connection cannot be used. Reached through the shell transport, so
+/// it needs nothing from the remote server.
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub fn open_local_workspace(app: AppHandle) {
+    show_main_window(&app);
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2693,8 +2711,10 @@ mod settings_route_tests {
     /// Every section the frontend's `SettingsSection` union can send must map
     /// to a real route. `general` is the one that looks redundant and is not:
     /// the fallback below it is Appearance, so a caller wanting the General
-    /// page — where the codeg-mcp tool switches live in full — must be able to
-    /// name it and land there.
+    /// page must be able to name it and land there. `collaboration` is where
+    /// the codeg-mcp tool switches live in full, and it is what the status-bar
+    /// codeg-mcp popover links to; `computer-use` is what the Computer use
+    /// popover links to.
     #[test]
     fn every_named_settings_section_resolves_to_its_own_route() {
         for section in [
@@ -2706,6 +2726,9 @@ mod settings_route_tests {
             "experts",
             "science",
             "office-tools",
+            "collaboration",
+            "browser",
+            "computer-use",
             "version-control",
             "shortcuts",
             "system",

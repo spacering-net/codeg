@@ -1,5 +1,30 @@
 import { act, render, screen } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { useEffect } from "react"
+import type { Monaco } from "@monaco-editor/react"
+import { useTrackMonacoModel } from "@/contexts/monaco-model-context"
+import { buildMonacoModelPath } from "@/lib/monaco-model-path"
+import { MobileWorkspacePanes } from "@/components/layout/mobile-workspace-panes"
+import { useOverlayHostHidden } from "@/components/ui/overlay-host-hidden"
+import {
+  AcpConnectionsProvider,
+  useAcpActions,
+  useConnectionStore,
+} from "@/contexts/acp-connections-context"
+import {
+  ConversationRuntimeProvider,
+  resetConversationRuntimeStore,
+  useConversationRuntimeActions,
+  useConversationRuntimeStore,
+} from "@/contexts/conversation-runtime-context"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 import {
   WorkspaceProvider,
   useWorkspaceActions,
@@ -7,18 +32,37 @@ import {
   useWorkspaceExternalConflict,
   useWorkspaceFileTabs,
   useWorkspaceView,
+  type FileWorkspaceTab,
 } from "@/contexts/workspace-context"
 import * as api from "@/lib/api"
+import {
+  claimSurfaceCreation,
+  forgetSurfaceCreation,
+  getBrowserTabState,
+  markBrowserTabHidden,
+  resetBrowserTabStoreForTests,
+  setBrowserTabState,
+} from "@/lib/browser/browser-tab-store"
+import {
+  resetBrowserPrefsForTests,
+  setBrowserNewTabProfile,
+  setBrowserProfiles,
+} from "@/lib/browser/browser-prefs"
 import {
   peekClosedTab,
   popClosedTab,
   resetClosedTabStackForTests,
 } from "@/lib/closed-tab-stack"
+import {
+  resetFolderTabsStore,
+  useFolderTabsStore,
+} from "@/stores/folder-tabs-store"
 import { resetHomeDirCacheForTests } from "@/lib/file-open-target"
 import {
   resetAppWorkspaceStore,
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
+import { resetTabStore, useTabStore, type TabItem } from "@/stores/tab-store"
 
 vi.mock("next-intl", () => {
   // Return a STABLE function instance across renders, mirroring next-intl's
@@ -70,6 +114,17 @@ const foldersMock = vi.hoisted(() => {
   }
 })
 
+// A window bound to a remote codeg-server, when a test says so.
+const remoteMock = vi.hoisted(() => ({
+  remote: false,
+  serverBaseUrl: "https://dev.example.com",
+}))
+vi.mock(import("@/lib/transport"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  isRemoteDesktopMode: () => remoteMock.remote,
+  getServerBaseUrl: () => remoteMock.serverBaseUrl,
+}))
+
 vi.mock("@/contexts/active-folder-context", async () => {
   const { useSyncExternalStore } = await import("react")
   return {
@@ -87,6 +142,7 @@ vi.mock("@/contexts/active-folder-context", async () => {
 })
 
 beforeEach(() => {
+  resetFolderTabsStore()
   foldersMock.reset()
   // The provider reads workspace folders from the real zustand store: restore
   // pristine state, then seed the same default folders the active-folder mock
@@ -102,7 +158,14 @@ beforeEach(() => {
 })
 
 vi.mock("@/lib/api", () => ({
+  acpGetAgentStatus: vi.fn(),
+  acpFindConnectionForConversation: vi.fn(),
+  acpConnect: vi.fn(),
+  acpDisconnect: vi.fn(),
+  acpGetSessionSnapshot: vi.fn(),
+  acpTouchConnection: vi.fn(),
   getHomeDirectory: vi.fn(),
+  listDirectoryWithFiles: vi.fn(),
   readFileForEdit: vi.fn(),
   readFileBase64: vi.fn(),
   readFilePreview: vi.fn(),
@@ -115,10 +178,39 @@ vi.mock("@/lib/api", () => ({
   saveFileCopy: vi.fn(),
 }))
 
-// Controllable workspace-state store: WorkspaceProvider subscribes to its
-// envelopes to auto-open office previews (hook path), and the tab watcher
-// acquires per-root imperative stores (getWorkspaceStateStore path).
-// `emitEnvelope` pushes an event on the office/hook stream; `emitRoot`
+// Backend events by name: tests push an event with `platformEvents.emit`.
+const platformEvents = vi.hoisted(() => {
+  const handlers = new Map<string, Set<(payload: unknown) => void>>()
+  return {
+    subscribe: async (event: string, handler: (payload: unknown) => void) => {
+      let set = handlers.get(event)
+      if (!set) {
+        set = new Set()
+        handlers.set(event, set)
+      }
+      set.add(handler)
+      return () => {
+        handlers.get(event)?.delete(handler)
+      }
+    },
+    emit: (event: string, payload: unknown) => {
+      for (const handler of [...(handlers.get(event) ?? [])]) handler(payload)
+    },
+    listenerCount: (event: string) => handlers.get(event)?.size ?? 0,
+  }
+})
+
+vi.mock(import("@/lib/platform"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  subscribe: vi.fn(platformEvents.subscribe) as never,
+  getEventStream: () => ({
+    attach: () => ({ subscriptionId: "mobile-stream", detach: () => {} }),
+  }),
+}))
+
+// Controllable workspace-state store: the tab watcher acquires per-root
+// imperative stores (getWorkspaceStateStore path); hook consumers get the
+// shared stream. `emitEnvelope` pushes an event on the hook stream; `emitRoot`
 // pushes on a specific root's imperative store as if that folder's file
 // watcher fired. Acquire/release totals are tracked per root so tests can
 // assert subscription stability (no churn on keystrokes).
@@ -228,11 +320,11 @@ beforeEach(() => {
 })
 
 const mockedApi = api as unknown as {
-  getHomeDirectory: ReturnType<typeof vi.fn>
-  readFileForEdit: ReturnType<typeof vi.fn>
-  gitIsTracked: ReturnType<typeof vi.fn>
-  gitShowFile: ReturnType<typeof vi.fn>
-  saveFileContent: ReturnType<typeof vi.fn>
+  getHomeDirectory: Mock
+  readFileForEdit: Mock
+  gitIsTracked: Mock
+  gitShowFile: Mock
+  saveFileContent: Mock
 }
 
 // Tab identity under the unified model: file tabs are keyed by the
@@ -247,6 +339,7 @@ function WorkspaceProbe() {
     activeFileTabId,
     filesMaximized,
     openSessionFileDiff,
+    openFilePreview,
     closeFileTab,
     closeAllFileTabs,
     toggleFilesMaximized,
@@ -255,6 +348,9 @@ function WorkspaceProbe() {
 
   return (
     <div>
+      <button type="button" onClick={() => void openFilePreview("report.docx")}>
+        Open office by hand
+      </button>
       <output data-testid="mode">{mode}</output>
       <output data-testid="file-tab-count">{fileTabs.length}</output>
       <output data-testid="active-pane">{activePane}</output>
@@ -482,6 +578,268 @@ describe("WorkspaceProvider files-maximized", () => {
     expect(screen.getByTestId("active-file-tab")).toHaveTextContent(
       activeBefore
     )
+  })
+})
+
+// An open conversation tab, seeded straight into the real tab store: the
+// provider only asks whether the conversation strip has any tab.
+const seededConversationTab: TabItem = {
+  id: "conv-1-claude_code-5",
+  kind: "conversation",
+  folderId: 1,
+  conversationId: 5,
+  agentType: "claude_code",
+  title: "Conversation",
+  isPinned: false,
+}
+
+function seedConversationTabs(tabs: TabItem[]) {
+  useTabStore.setState({ rawTabs: tabs, tabs })
+}
+
+function MaximizeProbe() {
+  const {
+    mode,
+    activePane,
+    fileTabs,
+    activeFileTabId,
+    filesMaximized,
+    conversationMaximized,
+    openSessionFileDiff,
+    closeFileTab,
+    closeAllFileTabs,
+    switchFileTab,
+    toggleFilesMaximized,
+    toggleConversationMaximized,
+    activateConversationPane,
+    openBrowserTab,
+  } = useWorkspaceContext()
+
+  return (
+    <div>
+      <output data-testid="mode">{mode}</output>
+      <output data-testid="active-pane">{activePane}</output>
+      <output data-testid="file-tab-count">{fileTabs.length}</output>
+      <output data-testid="active-file-tab">{activeFileTabId ?? "none"}</output>
+      <output data-testid="files-maximized">{String(filesMaximized)}</output>
+      <output data-testid="conversation-maximized">
+        {String(conversationMaximized)}
+      </output>
+      <button
+        type="button"
+        onClick={() =>
+          openSessionFileDiff("src/app.ts", "diff --git", "Turn 1")
+        }
+      >
+        Open diff
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          openSessionFileDiff("src/other.ts", "diff --git", "Turn 1")
+        }
+      >
+        Open diff 2
+      </button>
+      <button
+        type="button"
+        onClick={() => fileTabs[0] && switchFileTab(fileTabs[0].id)}
+      >
+        Switch to first file
+      </button>
+      <button
+        type="button"
+        onClick={() => activeFileTabId && closeFileTab(activeFileTabId)}
+      >
+        Close active
+      </button>
+      <button type="button" onClick={closeAllFileTabs}>
+        Close all
+      </button>
+      <button type="button" onClick={toggleFilesMaximized}>
+        Toggle files maximize
+      </button>
+      <button type="button" onClick={toggleConversationMaximized}>
+        Toggle conversation maximize
+      </button>
+      <button type="button" onClick={activateConversationPane}>
+        Activate conversation
+      </button>
+      {/* A local server coming up: its page is selected in the strip without
+          bringing the files pane forward. */}
+      <button
+        type="button"
+        onClick={() =>
+          openBrowserTab("http://localhost:4000/", { activate: "tab" })
+        }
+      >
+        Open page in place
+      </button>
+    </div>
+  )
+}
+
+describe("WorkspaceProvider conversation-maximized", () => {
+  beforeEach(() => {
+    resetTabStore()
+    resetBrowserTabStoreForTests()
+    resetBrowserPrefsForTests()
+    resetClosedTabStackForTests()
+    seedConversationTabs([seededConversationTab])
+  })
+  afterEach(() => {
+    resetTabStore()
+  })
+
+  const click = (name: string) =>
+    act(() => {
+      screen.getByRole("button", { name }).click()
+    })
+  const conversationMaximized = () =>
+    screen.getByTestId("conversation-maximized").textContent
+
+  function renderMaximizeProbe() {
+    return render(
+      <WorkspaceProvider>
+        <MaximizeProbe />
+      </WorkspaceProvider>
+    )
+  }
+
+  it("toggles only beside a file column", () => {
+    renderMaximizeProbe()
+
+    // No file column to cover: the toggle does not take.
+    click("Toggle conversation maximize")
+    expect(conversationMaximized()).toBe("false")
+
+    click("Open diff")
+    expect(screen.getByTestId("mode")).toHaveTextContent("fusion")
+    expect(conversationMaximized()).toBe("false")
+
+    click("Toggle conversation maximize")
+    expect(conversationMaximized()).toBe("true")
+    click("Toggle conversation maximize")
+    expect(conversationMaximized()).toBe("false")
+  })
+
+  it("never has both columns maximized", () => {
+    renderMaximizeProbe()
+    click("Open diff")
+
+    click("Toggle files maximize")
+    expect(screen.getByTestId("files-maximized")).toHaveTextContent("true")
+
+    click("Toggle conversation maximize")
+    expect(conversationMaximized()).toBe("true")
+    expect(screen.getByTestId("files-maximized")).toHaveTextContent("false")
+
+    click("Toggle files maximize")
+    expect(screen.getByTestId("files-maximized")).toHaveTextContent("true")
+    expect(conversationMaximized()).toBe("false")
+  })
+
+  it("leaves the active pane alone on toggle", () => {
+    renderMaximizeProbe()
+    click("Open diff")
+    expect(screen.getByTestId("active-pane")).toHaveTextContent("files")
+
+    click("Toggle conversation maximize")
+    expect(conversationMaximized()).toBe("true")
+    expect(screen.getByTestId("active-pane")).toHaveTextContent("files")
+
+    click("Toggle conversation maximize")
+    expect(screen.getByTestId("active-pane")).toHaveTextContent("files")
+  })
+
+  // Every session opened from the sidebar activates the conversation pane;
+  // that releases a maximized FILES pane, and must keep this one.
+  it("stays maximized when the conversation pane activates", () => {
+    renderMaximizeProbe()
+    click("Open diff")
+    click("Toggle conversation maximize")
+
+    click("Activate conversation")
+    expect(conversationMaximized()).toBe("true")
+    expect(screen.getByTestId("active-pane")).toHaveTextContent("conversation")
+  })
+
+  it("comes out from under a file opened or switched to", () => {
+    renderMaximizeProbe()
+    click("Open diff")
+    click("Toggle conversation maximize")
+
+    click("Open diff 2")
+    expect(conversationMaximized()).toBe("false")
+    expect(screen.getByTestId("active-pane")).toHaveTextContent("files")
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("2")
+
+    click("Toggle conversation maximize")
+    expect(conversationMaximized()).toBe("true")
+    click("Switch to first file")
+    expect(conversationMaximized()).toBe("false")
+    expect(screen.getByTestId("mode")).toHaveTextContent("fusion")
+  })
+
+  // With the file strip hidden, a close of the active file tab comes from
+  // elsewhere — an agent closing its page, a page closing itself — and must
+  // not pull the hidden column back out or move the pane into it.
+  it("stays maximized when the active file tab closes behind it", () => {
+    renderMaximizeProbe()
+    click("Open diff")
+    const firstTabId = screen.getByTestId("active-file-tab").textContent
+    click("Open diff 2")
+    expect(screen.getByTestId("active-file-tab").textContent).not.toBe(
+      firstTabId
+    )
+    click("Activate conversation")
+    click("Toggle conversation maximize")
+    expect(conversationMaximized()).toBe("true")
+
+    click("Close active")
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
+    // The selection still moves to the neighbour, as it does unmaximized.
+    expect(screen.getByTestId("active-file-tab")).toHaveTextContent(
+      firstTabId ?? ""
+    )
+    expect(conversationMaximized()).toBe("true")
+    expect(screen.getByTestId("active-pane")).toHaveTextContent("conversation")
+  })
+
+  it("resets once the file column empties, and does not come back with the next file", () => {
+    renderMaximizeProbe()
+    click("Open diff")
+    click("Toggle conversation maximize")
+
+    click("Close all")
+    expect(screen.getByTestId("mode")).toHaveTextContent("conversation")
+    expect(conversationMaximized()).toBe("false")
+
+    // Reopened WITHOUT bringing the files pane forward, so nothing on the way
+    // back in releases a maximize — only the reset can have. (Any ordinary
+    // open activates the file pane, which would release it by itself.)
+    click("Open page in place")
+    expect(screen.getByTestId("mode")).toHaveTextContent("fusion")
+    expect(screen.getByTestId("active-pane")).toHaveTextContent("conversation")
+    expect(conversationMaximized()).toBe("false")
+  })
+
+  // The column would be an empty pane over the files with no strip — and so
+  // no restore button — left to bring them back.
+  it("resets once the conversation strip empties", () => {
+    renderMaximizeProbe()
+    click("Open diff")
+    click("Toggle conversation maximize")
+    expect(conversationMaximized()).toBe("true")
+
+    act(() => seedConversationTabs([]))
+    expect(conversationMaximized()).toBe("false")
+
+    // Released, not merely hidden: a tab coming back does not re-cover the
+    // files.
+    act(() => seedConversationTabs([seededConversationTab]))
+    expect(conversationMaximized()).toBe("false")
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
   })
 })
 
@@ -1992,22 +2350,25 @@ describe("applyExternalReload git base does not stale-write after close+reopen",
 })
 
 describe("WorkspaceProvider office auto-preview", () => {
+  const AGENT_TURN_FILES = "folder://agent-turn-files"
+  const agentWrote = async (...paths: string[]) => {
+    await act(async () => {
+      platformEvents.emit(AGENT_TURN_FILES, { paths })
+    })
+  }
+
   beforeEach(() => {
     workspaceStoreMock.reset()
     // Preference defaults ON; drop any "false" a prior test left behind.
     localStorage.removeItem("workspace:office-auto-preview")
   })
 
-  it("auto-opens an office file's preview when the watcher reports it, with no aux panel involved", async () => {
+  it("auto-opens a document the agent's turn wrote, with no aux panel involved", async () => {
     renderWorkspace()
     expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
     expect(screen.getByTestId("active-pane")).toHaveTextContent("conversation")
 
-    // The provider — not the (closed-by-default) file-tree aux panel — owns
-    // this subscription, so a watcher envelope surfaces the preview directly.
-    await act(async () => {
-      workspaceStoreMock.emitEnvelope(["report.pptx"])
-    })
+    await agentWrote("/repo/report.pptx")
 
     expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
     expect(screen.getByTestId("active-file-tab")).toHaveTextContent(
@@ -2017,30 +2378,17 @@ describe("WorkspaceProvider office auto-preview", () => {
     expect(screen.getByTestId("mode")).toHaveTextContent("fusion")
   })
 
-  it("ignores non-office changed paths", async () => {
+  it("never opens Office files from workspace watcher events (#1090/#1091)", async () => {
     renderWorkspace()
 
-    await act(async () => {
-      workspaceStoreMock.emitEnvelope(["notes.txt", "src/app.ts"])
-    })
-
-    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
-    expect(screen.getByTestId("active-pane")).toHaveTextContent("conversation")
-  })
-
-  it("ignores hidden office files and office files inside hidden directories", async () => {
-    renderWorkspace()
-
-    // Dot-prefixed names are machine-owned byproducts (LibreOffice lock file,
-    // AppleDouble sidecar, a doc parked under a scratch dir) — auto-preview
-    // must neither open a tab for them nor start their watch.
+    // The reported failure: a burst of change events for templates the agent
+    // never touched (sync clients, antivirus, metadata-only changes, a
+    // branch switch) opened every one of them.
     await act(async () => {
       workspaceStoreMock.emitEnvelope([
-        ".~lock.report.docx#",
-        "._report.docx",
-        "docs/.draft.xlsx",
-        ".git/report.docx",
-        "build/.tmp/deck.pptx",
+        "templates/a.docx",
+        "templates/b.xlsx",
+        "codex-forge/bundled-skills/office/skills/morph-ppt/reference/styles/warm--playful-organic/Cat-Secret-Life.pptx",
       ])
     })
 
@@ -2048,81 +2396,128 @@ describe("WorkspaceProvider office auto-preview", () => {
     expect(screen.getByTestId("active-pane")).toHaveTextContent("conversation")
   })
 
-  it("ignores the burst of `~$` owner files WPS drops when documents are opened", async () => {
+  it("opens every document of one event", async () => {
     renderWorkspace()
 
-    // The reported failure: opening a folder of documents in WPS (or Word)
-    // writes one `~$`-prefixed owner file per document, all at once and all
-    // carrying a real office extension. Auto-preview used to answer with a tab
-    // and an `officecli watch` process for every one of them.
-    await act(async () => {
-      workspaceStoreMock.emitEnvelope([
-        "~$report.docx",
-        "~$budget.xlsx",
-        "~$deck.pptx",
-        "docs/~$minutes.docx",
-        // Word truncates long names to fit the prefix, so the tail need not
-        // match any document sitting next to it.
-        "~$cument.docx",
-      ])
-    })
+    await agentWrote("/repo/report.docx", "/repo/out/deck.pptx")
+
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("2")
+  })
+
+  it("ignores documents outside the active folder", async () => {
+    renderWorkspace()
+
+    await agentWrote(
+      "/repo2/report.docx",
+      "/elsewhere/a.pptx",
+      "/repository/x.docx"
+    )
 
     expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
-    expect(screen.getByTestId("active-pane")).toHaveTextContent("conversation")
   })
 
-  it("still auto-opens the document whose owner file arrives with it", async () => {
+  it("ignores non-office, hidden and owner files", async () => {
     renderWorkspace()
 
-    // Opening `report.docx` externally touches the document itself as well as
-    // its owner file. The owner file is the byproduct; the document is still a
-    // legitimate preview, so the filter must not swallow the pair.
+    await agentWrote(
+      "/repo/notes.txt",
+      "/repo/.draft.xlsx",
+      "/repo/build/.tmp/deck.pptx",
+      "/repo/~$report.docx",
+      "/repo/docs/~$minutes.docx"
+    )
+
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+  })
+
+  it("opens each document once, even when later turns report it again", async () => {
+    renderWorkspace()
+
+    await agentWrote("/repo/deck.pptx")
+    await agentWrote("/repo/deck.pptx")
+
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
+  })
+
+  it("keeps a dismissed preview closed for the rest of the window, across folder switches", async () => {
+    renderWorkspace()
+    await agentWrote("/repo/report.docx")
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
+
+    act(() => screen.getByRole("button", { name: "Close active" }).click())
+    // A later turn writes it again.
+    await agentWrote("/repo/report.docx")
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+
+    act(() => foldersMock.setActiveFolderId(2))
+    act(() => foldersMock.setActiveFolderId(1))
+    await agentWrote("/repo/report.docx")
+
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+  })
+
+  it("does not resurface a document the user opened by hand and closed", async () => {
+    renderWorkspace()
+
     await act(async () => {
-      workspaceStoreMock.emitEnvelope(["~$report.docx", "report.docx"])
+      screen.getByRole("button", { name: "Open office by hand" }).click()
     })
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
+
+    // The agent writes while the hand-opened tab is up: nothing to open.
+    await agentWrote("/repo/report.docx")
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
+
+    act(() => screen.getByRole("button", { name: "Close active" }).click())
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+
+    // A document the user has already seen and dismissed stays dismissed.
+    await agentWrote("/repo/report.docx")
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+  })
+
+  it("does not resurface a hand-opened document closed before the agent wrote it", async () => {
+    renderWorkspace()
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Open office by hand" }).click()
+    })
+    act(() => screen.getByRole("button", { name: "Close active" }).click())
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+
+    await agentWrote("/repo/report.docx")
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
+  })
+
+  it("follows the active folder", async () => {
+    renderWorkspace()
+    act(() => foldersMock.setActiveFolderId(2))
+
+    await agentWrote("/repo/a.docx", "/repo2/b.docx")
 
     expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
     expect(screen.getByTestId("active-file-tab")).toHaveTextContent(
-      fileTabId("/repo/report.docx")
+      fileTabId("/repo2/b.docx")
     )
   })
 
-  it("still auto-opens a visible office file reported alongside hidden ones", async () => {
-    renderWorkspace()
-
-    await act(async () => {
-      workspaceStoreMock.emitEnvelope(["._report.docx", "report.docx"])
-    })
-
-    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
-    expect(screen.getByTestId("active-file-tab")).toHaveTextContent(
-      fileTabId("/repo/report.docx")
-    )
-  })
-
-  it("opens each office file once, even when later envelopes re-report it", async () => {
-    renderWorkspace()
-
-    await act(async () => {
-      workspaceStoreMock.emitEnvelope(["deck.pptx"])
-    })
-    await act(async () => {
-      workspaceStoreMock.emitEnvelope(["deck.pptx"])
-    })
-
-    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
-  })
-
-  it("does not auto-open when the preference is disabled", async () => {
+  it("does not listen or auto-open when the preference is disabled", async () => {
     localStorage.setItem("workspace:office-auto-preview", "false")
     renderWorkspace()
 
-    await act(async () => {
-      workspaceStoreMock.emitEnvelope(["report.pptx"])
-    })
+    expect(platformEvents.listenerCount(AGENT_TURN_FILES)).toBe(0)
+    await agentWrote("/repo/report.pptx")
 
     expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
     expect(screen.getByTestId("active-pane")).toHaveTextContent("conversation")
+  })
+
+  it("stops listening when unmounted", async () => {
+    const view = renderWorkspace()
+    await act(async () => {})
+    expect(platformEvents.listenerCount(AGENT_TURN_FILES)).toBe(1)
+    view.unmount()
+    expect(platformEvents.listenerCount(AGENT_TURN_FILES)).toBe(0)
   })
 })
 
@@ -3258,6 +3653,1219 @@ describe("unified absolute-path file tabs (outside-workspace opens)", () => {
   })
 })
 
+describe("browser tabs", () => {
+  beforeEach(() => {
+    resetBrowserTabStoreForTests()
+    resetClosedTabStackForTests()
+    resetBrowserPrefsForTests()
+    remoteMock.remote = false
+    remoteMock.serverBaseUrl = "https://dev.example.com"
+  })
+
+  function BrowserProbe() {
+    const {
+      openBrowserTab,
+      adoptBrowserTab,
+      closeFileTab,
+      restoreBrowserTabs,
+      suspendBrowserTab,
+      setActivePane,
+    } = useWorkspaceActions()
+    const { fileTabs, activeFileTabId } = useWorkspaceFileTabs()
+    const { activePane } = useWorkspaceView()
+    return (
+      <div>
+        <button onClick={() => openBrowserTab("https://example.com/docs#top")}>
+          open
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("https://example.com/docs#other", {
+              activate: true,
+            })
+          }
+        >
+          open-same
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", { activate: false })
+          }
+        >
+          open-bg
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:4000/", { activate: "tab" })
+          }
+        >
+          open-shown
+        </button>
+        <button onClick={() => setActivePane("conversation")}>
+          to-conversation
+        </button>
+        <button onClick={() => openBrowserTab("not a url")}>open-bad</button>
+        <button onClick={() => openBrowserTab("about:blank")}>
+          open-blank
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("https://example.com/docs#top", {
+              profile: "p-work",
+            })
+          }
+        >
+          open-work
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find((t) => t.kind === "browser")
+            if (!opener) return
+            openBrowserTab("https://example.com/next", {
+              activate: false,
+              openerTabId: opener.id,
+            })
+          }}
+        >
+          open-next
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find((t) => t.kind === "browser")
+            if (!opener) return
+            const parts = opener.id.slice("browser:".length)
+            adoptBrowserTab({
+              backendTabId: `${parts}-p1`,
+              url: "https://example.com/popup",
+              openerBackendTabId: parts,
+            })
+          }}
+        >
+          adopt
+        </button>
+        <button
+          onClick={() =>
+            adoptBrowserTab({
+              backendTabId: "orphan-p1",
+              url: "https://example.com/orphan-popup",
+              openerBackendTabId: "gone",
+              profile: "p-work",
+            })
+          }
+        >
+          adopt-orphan
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find(
+              (t) => t.kind === "browser" && t.browser.profile === "default"
+            )
+            if (!opener) return
+            adoptBrowserTab({
+              backendTabId: "named-p1",
+              url: "https://example.com/named-popup",
+              openerBackendTabId: opener.id.slice("browser:".length),
+              profile: "p-work",
+            })
+          }}
+        >
+          adopt-named
+        </button>
+        <button
+          onClick={() => {
+            const openers = fileTabs.filter((t) => t.kind === "browser")
+            const opener = openers[openers.length - 1]
+            if (!opener) return
+            openBrowserTab("https://example.com/from-last", {
+              activate: false,
+              openerTabId: opener.id,
+            })
+          }}
+        >
+          open-next-from-last
+        </button>
+        <button
+          onClick={() => {
+            if (activeFileTabId) closeFileTab(activeFileTabId)
+          }}
+        >
+          close-active
+        </button>
+        <button
+          onClick={() => {
+            const tab = fileTabs[1]
+            if (tab) closeFileTab(tab.id)
+          }}
+        >
+          close-second
+        </button>
+        {/* What the reopen shortcut does with a browser entry it pops. */}
+        <button
+          onClick={() => {
+            const closed = popClosedTab()
+            if (closed?.kind !== "browser") return
+            openBrowserTab(closed.url, {
+              folderId: closed.folderId ?? undefined,
+              index: closed.index,
+            })
+          }}
+        >
+          reopen-closed
+        </button>
+        <button
+          onClick={() =>
+            restoreBrowserTabs([
+              {
+                url: "https://restored.example/one",
+                title: "One",
+                folderId: 7,
+                profile: "default",
+              },
+              {
+                url: "not a url",
+                title: "bad",
+                folderId: null,
+                profile: "default",
+              },
+              {
+                url: "https://restored.example/two",
+                title: "",
+                folderId: null,
+                profile: "default",
+              },
+            ])
+          }
+        >
+          restore
+        </button>
+        <button
+          onClick={() => {
+            const tab = fileTabs.find((t) => t.kind === "browser")
+            if (tab) suspendBrowserTab(tab.id)
+          }}
+        >
+          suspend-first
+        </button>
+        <button
+          onClick={() => {
+            const tabs = fileTabs.filter((t) => t.kind === "browser")
+            const tab = tabs[tabs.length - 1]
+            if (tab) suspendBrowserTab(tab.id)
+          }}
+        >
+          suspend-last
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", {
+              remote: true,
+              profile: "p-work",
+            })
+          }
+        >
+          open-remote
+        </button>
+        <button onClick={() => openBrowserTab("http://localhost:3000/")}>
+          open-local-3000
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", { profile: "p-work" })
+          }
+        >
+          open-work-3000
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", { remote: false })
+          }
+        >
+          open-here-3000
+        </button>
+        <button onClick={() => openBrowserTab("http://192.168.1.5:3000/")}>
+          open-server-host
+        </button>
+        <button
+          onClick={() =>
+            restoreBrowserTabs([
+              {
+                url: "http://127.0.0.1:8080/",
+                title: "",
+                folderId: null,
+                profile: "default",
+              },
+            ])
+          }
+        >
+          restore-unmarked
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find(
+              (t) => t.kind === "browser" && t.browser.remote === true
+            )
+            if (!opener) return
+            openBrowserTab("http://localhost:3000/next", {
+              activate: false,
+              openerTabId: opener.id,
+            })
+          }}
+        >
+          open-from-remote
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find(
+              (t) => t.kind === "browser" && t.browser.remote === true
+            )
+            if (!opener) return
+            adoptBrowserTab({
+              backendTabId: `${opener.id.slice("browser:".length)}-p1`,
+              url: "http://localhost:3000/popup",
+              openerBackendTabId: opener.id.slice("browser:".length),
+            })
+          }}
+        >
+          adopt-from-remote
+        </button>
+        <button
+          onClick={() =>
+            restoreBrowserTabs([
+              {
+                url: "http://localhost:5173/",
+                title: "",
+                folderId: null,
+                profile: "p-work",
+                remote: true,
+              },
+              {
+                url: "http://localhost:5173/",
+                title: "",
+                folderId: null,
+                profile: "default",
+              },
+            ])
+          }
+        >
+          restore-remote
+        </button>
+        <pre data-testid="tabs">
+          {JSON.stringify(
+            fileTabs.map((t) => ({
+              id: t.id,
+              kind: t.kind,
+              title: t.title,
+              path: t.path,
+              opener: t.kind === "browser" ? t.browser.openerTabId : undefined,
+              url: t.kind === "browser" ? t.browser.initialUrl : undefined,
+              profile: t.kind === "browser" ? t.browser.profile : undefined,
+              remote:
+                t.kind === "browser" ? t.browser.remote === true : undefined,
+            }))
+          )}
+        </pre>
+        <span data-testid="active">{activeFileTabId ?? ""}</span>
+        <span data-testid="pane">{activePane}</span>
+      </div>
+    )
+  }
+
+  function readTabs(): Array<{
+    id: string
+    kind: string
+    title: string
+    path: string | null
+    opener?: string | null
+    url?: string
+    profile?: string
+    remote?: boolean
+  }> {
+    return JSON.parse(screen.getByTestId("tabs").textContent ?? "[]")
+  }
+
+  it("opens one browser tab per URL, activates it, and de-dupes by URL without fragment", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    let tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].kind).toBe("browser")
+    expect(tabs[0].id.startsWith("browser:")).toBe(true)
+    expect(tabs[0].path).toBeNull()
+    expect(tabs[0].title).toBe("example.com")
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+    expect(screen.getByTestId("pane").textContent).toBe("files")
+
+    act(() => screen.getByText("open-same").click())
+    tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+
+    act(() => screen.getByText("open-bad").click())
+    expect(readTabs()).toHaveLength(1)
+
+    act(() => screen.getByText("open-bg").click())
+    tabs = readTabs()
+    expect(tabs).toHaveLength(2)
+    // Background open must not steal the active tab.
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+  })
+
+  it("gives every request for the blank page its own empty tab", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-blank").click())
+    act(() => screen.getByText("open-blank").click())
+    const tabs = readTabs()
+    // Two empty tabs, not one page opened twice. Dedupe by opening URL would
+    // also hand back a blank tab the user had since navigated somewhere —
+    // the record keeps `about:blank` for the tab's whole life.
+    expect(tabs.map((t) => t.url)).toEqual(["about:blank", "about:blank"])
+    expect(tabs[0].id).not.toBe(tabs[1].id)
+    // The second click is a request for a NEW empty tab, so that is the one
+    // brought to the front.
+    expect(screen.getByTestId("active").textContent).toBe(tabs[1].id)
+
+    // A real page still de-dupes.
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-same").click())
+    expect(readTabs()).toHaveLength(3)
+  })
+
+  it("inserts an adopted popup right after its opener and activates it", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-bg").click())
+    act(() => screen.getByText("adopt").click())
+    const tabs = readTabs()
+    expect(tabs.map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "https://example.com/popup",
+      "http://localhost:3000/",
+    ])
+    expect(tabs[1].id).toBe(`${tabs[0].id}-p1`)
+    expect(tabs[1].opener).toBe(tabs[0].id)
+    expect(screen.getByTestId("active").textContent).toBe(tabs[1].id)
+  })
+
+  it("inserts a modifier-click tab right after its opener without activating it", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-bg").click())
+    act(() => screen.getByText("open-next").click())
+    const tabs = readTabs()
+    expect(tabs.map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "https://example.com/next",
+      "http://localhost:3000/",
+    ])
+    expect(tabs[1].opener).toBe(tabs[0].id)
+    // Like a browser: the page the user is reading stays in front.
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+  })
+
+  // The strip and the column are one surface: a tab sitting in the strip
+  // while the column shows "open a file from the right panel" is a dead end
+  // the user can only leave by clicking the tab already in front of them.
+  it("shows a background tab when nothing else holds the selection", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-bg").click())
+    const tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+    // Claimed, not activated: whichever pane the user was on is still the
+    // one in front.
+    expect(screen.getByTestId("pane").textContent).toBe("conversation")
+  })
+
+  it("selects a tab opened with `tab` without pulling the files pane forward", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("to-conversation").click())
+    expect(screen.getByTestId("pane").textContent).toBe("conversation")
+
+    act(() => screen.getByText("open-shown").click())
+    const tabs = readTabs()
+    expect(tabs).toHaveLength(2)
+    // Selected even though the strip was not empty: a page opened for someone
+    // is only opened if it is the one the column shows.
+    expect(screen.getByTestId("active").textContent).toBe(tabs[1].id)
+    expect(screen.getByTestId("pane").textContent).toBe("conversation")
+
+    // An ordinary open still brings the pane forward...
+    act(() => screen.getByText("open").click())
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+    expect(screen.getByTestId("pane").textContent).toBe("files")
+
+    // ...and a second `tab` open of an address already in the strip
+    // re-selects that tab, again without moving the pane.
+    act(() => screen.getByText("to-conversation").click())
+    act(() => screen.getByText("open-shown").click())
+    expect(readTabs()).toHaveLength(2)
+    expect(screen.getByTestId("active").textContent).toBe(tabs[1].id)
+    expect(screen.getByTestId("pane").textContent).toBe("conversation")
+  })
+
+  it("closes a browser tab without a dirty prompt and moves activation to a neighbour", () => {
+    const confirmSpy = vi.spyOn(window, "confirm")
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-bg").click())
+    act(() => screen.getByText("close-active").click())
+    expect(confirmSpy).not.toHaveBeenCalled()
+    const tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].url).toBe("http://localhost:3000/")
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+    confirmSpy.mockRestore()
+  })
+
+  // Restored records carry their stored title and folder, are appended in
+  // order, and none is activated: the surface of a restored tab is created
+  // when it is first shown, not at startup.
+  function DeviceProbe({
+    onTabs,
+  }: {
+    /** Told of every new tab list, so a no-op can be seen to be one. */
+    onTabs?: (tabs: readonly unknown[]) => void
+  }) {
+    const { openBrowserTab, restoreBrowserTabs, setBrowserTabDevice } =
+      useWorkspaceActions()
+    const { fileTabs } = useWorkspaceFileTabs()
+    const first = fileTabs.find((t) => t.kind === "browser")
+    useEffect(() => {
+      onTabs?.(fileTabs)
+    }, [fileTabs, onTabs])
+    return (
+      <div>
+        <button onClick={() => openBrowserTab("http://localhost:3000/")}>
+          open
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:4000/", { device: "tablet" })
+          }
+        >
+          open-tablet
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", { device: "tablet" })
+          }
+        >
+          open-again-as-tablet
+        </button>
+        <button onClick={() => first && setBrowserTabDevice(first.id, "phone")}>
+          phone
+        </button>
+        <button
+          onClick={() => first && setBrowserTabDevice(first.id, "desktop")}
+        >
+          desktop
+        </button>
+        <button onClick={() => setBrowserTabDevice("browser:gone", "phone")}>
+          phone-unknown
+        </button>
+        <button
+          onClick={() =>
+            first && setBrowserTabDevice(first.id, { width: 1440, height: 900 })
+          }
+        >
+          custom
+        </button>
+        <button
+          onClick={() =>
+            first && setBrowserTabDevice(first.id, { width: 20, height: 900 })
+          }
+        >
+          custom-out-of-range
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:5000/", {
+              device: { width: 1024, height: 600 },
+            })
+          }
+        >
+          open-custom
+        </button>
+        <button
+          onClick={() =>
+            restoreBrowserTabs([
+              {
+                url: "https://restored.example/",
+                title: "",
+                folderId: null,
+                profile: "default",
+                device: "phone",
+              },
+            ])
+          }
+        >
+          restore
+        </button>
+        <pre data-testid="devices">
+          {JSON.stringify(
+            fileTabs.flatMap((t) =>
+              t.kind === "browser"
+                ? [
+                    {
+                      url: t.browser.initialUrl,
+                      keyed: "device" in t.browser,
+                      device: t.browser.device ?? null,
+                    },
+                  ]
+                : []
+            )
+          )}
+        </pre>
+      </div>
+    )
+  }
+
+  function readDevices(): Array<{
+    url: string
+    keyed: boolean
+    device: string | { width: number; height: number } | null
+  }> {
+    return JSON.parse(screen.getByTestId("devices").textContent ?? "[]")
+  }
+
+  it("switches a tab's device, with the desktop as no device at all", () => {
+    render(
+      <WorkspaceProvider>
+        <DeviceProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    expect(readDevices()).toEqual([
+      { url: "http://localhost:3000/", keyed: false, device: null },
+    ])
+    act(() => screen.getByText("phone").click())
+    expect(readDevices()[0].device).toBe("phone")
+    // Back on the desktop the record is the one it was before: the key is
+    // gone, not set to a value meaning "none".
+    act(() => screen.getByText("desktop").click())
+    expect(readDevices()[0]).toEqual({
+      url: "http://localhost:3000/",
+      keyed: false,
+      device: null,
+    })
+    act(() => screen.getByText("phone-unknown").click())
+    expect(readDevices()).toHaveLength(1)
+  })
+
+  it("gives a tab a custom device as its size, and changes nothing for the same size or one out of range", () => {
+    const lists: unknown[] = []
+    const onTabs = (tabs: readonly unknown[]) => lists.push(tabs)
+    render(
+      <WorkspaceProvider>
+        <DeviceProbe onTabs={onTabs} />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("custom").click())
+    expect(readDevices()[0]).toEqual({
+      url: "http://localhost:3000/",
+      keyed: true,
+      device: { width: 1440, height: 900 },
+    })
+    const seen = lists.length
+    // The same size, asked for again in an object of its own.
+    act(() => screen.getByText("custom").click())
+    // A size no device can have: neither that nor the desktop.
+    act(() => screen.getByText("custom-out-of-range").click())
+    expect(lists.length).toBe(seen)
+    expect(readDevices()[0].device).toEqual({ width: 1440, height: 900 })
+    act(() => screen.getByText("open-custom").click())
+    expect(readDevices()[1].device).toEqual({ width: 1024, height: 600 })
+  })
+
+  it("opens and restores a tab as the device it was, and leaves an open one its own", () => {
+    render(
+      <WorkspaceProvider>
+        <DeviceProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-tablet").click())
+    act(() => screen.getByText("restore").click())
+    expect(readDevices().map((t) => t.device)).toEqual([
+      null,
+      "tablet",
+      "phone",
+    ])
+    // The page is already open: that tab is the answer, as it is.
+    act(() => screen.getByText("open-again-as-tablet").click())
+    expect(readDevices().map((t) => t.device)).toEqual([
+      null,
+      "tablet",
+      "phone",
+    ])
+  })
+
+  it("restores stored tabs as inactive records, skipping unusable addresses", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("restore").click())
+    const tabs = readTabs()
+    expect(tabs.map((t) => t.url)).toEqual([
+      "https://restored.example/one",
+      "https://restored.example/two",
+    ])
+    expect(tabs[0].title).toBe("One")
+    // No stored title: the host, as for any freshly opened tab.
+    expect(tabs[1].title).toBe("restored.example")
+    expect(screen.getByTestId("active").textContent).toBe("")
+    expect(screen.getByTestId("pane").textContent).toBe("conversation")
+
+    // A second restore (another document of the same run) is a no-op.
+    act(() => screen.getByText("restore").click())
+    expect(readTabs()).toHaveLength(2)
+  })
+
+  // A tab opened before the restore ran (a deep link, an agent request —
+  // the capability probe is a round trip) must not cost the user the stored
+  // set; and a page already open must not be duplicated.
+  it("merges a restore into tabs this window already has", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("restore").click())
+    expect(readTabs().map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "https://restored.example/one",
+      "https://restored.example/two",
+    ])
+
+    // The one-tab-per-URL rule holds across a repeat restore.
+    act(() => screen.getByText("restore").click())
+    expect(readTabs()).toHaveLength(3)
+  })
+
+  // A profile is a separate cookie jar: the same page in two profiles is two
+  // sessions, so it is two tabs; within one profile the one-tab rule holds.
+  it("keeps one tab per URL per profile and inherits the opener's profile", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default"])
+    act(() => screen.getByText("open-work").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default", "p-work"])
+    // Same page, same profile: the existing tab is activated instead.
+    act(() => screen.getByText("open-work").click())
+    expect(readTabs()).toHaveLength(2)
+    expect(screen.getByTestId("active").textContent).toBe(readTabs()[1].id)
+
+    // Opened from another tab (⌘-click): the opener's profile wins over the
+    // preference — the work tab is last in the strip, the preference is
+    // default, so only inheritance yields p-work.
+    act(() => screen.getByText("open-next-from-last").click())
+    const next = readTabs().find(
+      (t) => t.url === "https://example.com/from-last"
+    )
+    expect(next?.profile).toBe("p-work")
+    // `open-next` uses the first browser tab as opener (the default one).
+    act(() => screen.getByText("open-next").click())
+    expect(
+      readTabs().find((t) => t.url === "https://example.com/next")?.profile
+    ).toBe("default")
+    // A popup adopted from the default tab says so as well.
+    act(() => screen.getByText("adopt").click())
+    const popup = readTabs().find((t) => t.url === "https://example.com/popup")
+    expect(popup?.profile).toBe("default")
+  })
+
+  // An address of the remote codeg host is its own kind of tab: never the
+  // same tab as the local page on that address, never in a local profile.
+  it("keeps a remote tab apart from the local page on the same address", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    let tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].remote).toBe(true)
+    // The profile asked for has no say: the page is not in any profile of
+    // this computer.
+    expect(tabs[0].profile).toBe("default")
+    // The local page on the same address is a different tab…
+    act(() => screen.getByText("open-local-3000").click())
+    tabs = readTabs()
+    expect(tabs).toHaveLength(2)
+    expect(tabs.map((t) => t.remote)).toEqual([true, false])
+    // …and asking for the remote one again brings that one back.
+    act(() => screen.getByText("open-remote").click())
+    expect(readTabs()).toHaveLength(2)
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+  })
+
+  // A remote tab carries the default profile's id but is not a page of that
+  // profile: it must never make a local tab of a deleted profile a duplicate.
+  it("moves a dormant tab of a deleted profile past a remote tab on its page", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    act(() => screen.getByText("open-work-3000").click())
+    act(() => setBrowserProfiles([]))
+    expect(readTabs().map((t) => [t.remote, t.profile])).toEqual([
+      [true, "default"],
+      [false, "default"],
+    ])
+  })
+
+  it("suspends a loaded tab of a deleted profile past a remote tab on its page", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    act(() => screen.getByText("open-work-3000").click())
+    const local = readTabs()[1]
+    act(() =>
+      setBrowserTabState({
+        tabId: local.id.slice("browser:".length),
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "http://localhost:3000/",
+        requestedUrl: "http://localhost:3000/",
+        title: "Local",
+        favicon: null,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        origin: "http://localhost:3000",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "p-work",
+        agentGrant: null,
+      })
+    )
+    act(() => setBrowserProfiles([]))
+    act(() => markBrowserTabHidden(local.id))
+    act(() => screen.getByText("suspend-last").click())
+    expect(readTabs().map((t) => [t.remote, t.profile])).toEqual([
+      [true, "default"],
+      [false, "default"],
+    ])
+  })
+
+  // However it came to be opened — a page's ⌘-click, a refused pop-up opened
+  // anyway — an address of the remote host is remote in a remote window.
+  it("opens any address of the remote host as remote in a remote window", () => {
+    remoteMock.remote = true
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-local-3000").click())
+    act(() => screen.getByText("open").click())
+    expect(readTabs().map((t) => [t.url, t.remote])).toEqual([
+      ["http://localhost:3000/", true],
+      // A public page is the same page from here.
+      ["https://example.com/docs#top", false],
+    ])
+  })
+
+  it("keeps an address a person opens on this computer local", () => {
+    remoteMock.remote = true
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-here-3000").click())
+    expect(readTabs()[0].remote).toBe(false)
+  })
+
+  // The window reaches the server itself directly: its own private address
+  // is reachable from this computer.
+  it("leaves the server's own private address to this computer", () => {
+    remoteMock.remote = true
+    remoteMock.serverBaseUrl = "http://192.168.1.5:3080"
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-server-host").click())
+    expect(readTabs()[0].remote).toBe(false)
+  })
+
+  it("restores an address of the remote host as remote even without the mark", () => {
+    remoteMock.remote = true
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("restore-unmarked").click())
+    expect(readTabs()[0].remote).toBe(true)
+  })
+
+  it("makes a tab opened from a remote tab, and its popups, remote too", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    act(() => screen.getByText("open-from-remote").click())
+    act(() => screen.getByText("adopt-from-remote").click())
+    const byUrl = new Map(readTabs().map((t) => [t.url, t]))
+    expect(byUrl.get("http://localhost:3000/next")?.remote).toBe(true)
+    expect(byUrl.get("http://localhost:3000/popup")?.remote).toBe(true)
+  })
+
+  it("restores a remote tab as remote, beside the local page on its address", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("restore-remote").click())
+    const tabs = readTabs()
+    expect(tabs.map((t) => [t.url, t.remote, t.profile])).toEqual([
+      ["http://localhost:5173/", true, "default"],
+      ["http://localhost:5173/", false, "default"],
+    ])
+  })
+
+  // A tab of a deleted profile must never recreate that profile's store:
+  // reopening (⇧⌘T) and dormant records both land in the default profile.
+  it("moves tabs of a deleted profile to the default one", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-work").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["p-work"])
+    // A tab whose surface is being created (claimed, no state yet) is not
+    // dormant either: the backend will close it with the profile.
+    const claimed = readTabs()[0]
+    claimSurfaceCreation(claimed.id.slice("browser:".length))
+    act(() => setBrowserProfiles([]))
+    expect(readTabs().map((t) => t.profile)).toEqual(["p-work"])
+    forgetSurfaceCreation(claimed.id.slice("browser:".length))
+    act(() => setBrowserProfiles([{ id: "p-work", name: "Work" }]))
+
+    // A loaded tab keeps naming its profile until the backend closes it
+    // (its surface still lives in that store); only dormant records move.
+    const loaded = readTabs()[0]
+    act(() =>
+      setBrowserTabState({
+        tabId: loaded.id.slice("browser:".length),
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "https://example.com/docs",
+        requestedUrl: "https://example.com/docs",
+        title: "Docs",
+        favicon: null,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        origin: "https://example.com",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "p-work",
+        agentGrant: null,
+      })
+    )
+    act(() => setBrowserProfiles([]))
+    expect(readTabs().map((t) => t.profile)).toEqual(["p-work"])
+    // Suspending it now leaves a dormant record that must not name the
+    // deleted profile.
+    act(() => markBrowserTabHidden(loaded.id))
+    act(() => screen.getByText("suspend-first").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default"])
+
+    // Suspending a loaded tab of a deleted profile whose page the default
+    // profile already shows drops the record instead of duplicating it.
+    act(() => setBrowserProfiles([{ id: "p-work", name: "Work" }]))
+    act(() => screen.getByText("open-work").click())
+    const second = readTabs().find((t) => t.profile === "p-work")!
+    act(() =>
+      setBrowserTabState({
+        tabId: second.id.slice("browser:".length),
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "https://example.com/docs",
+        requestedUrl: "https://example.com/docs",
+        title: "Docs again",
+        favicon: null,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        origin: "https://example.com",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "p-work",
+        agentGrant: null,
+      })
+    )
+    act(() => setBrowserProfiles([]))
+    // It was the active tab (opened last, activated); the pane may be
+    // hidden with it selected, so the pointer must move to the survivor.
+    expect(screen.getByTestId("active").textContent).toBe(second.id)
+    act(() => markBrowserTabHidden(second.id))
+    act(() => screen.getByText("suspend-last").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default"])
+    expect(readTabs()).toHaveLength(1)
+    expect(screen.getByTestId("active").textContent).toBe(readTabs()[0].id)
+
+    // A dormant record of a deleted profile whose page the default profile
+    // already shows is dropped rather than duplicated.
+    act(() => setBrowserProfiles([{ id: "p-work", name: "Work" }]))
+    act(() => screen.getByText("open-work").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default", "p-work"])
+    act(() => setBrowserProfiles([]))
+    expect(readTabs().map((t) => t.profile)).toEqual(["default"])
+    // Asking for the deleted profile outright is answered with the default.
+    act(() => screen.getByText("open-work").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["default"])
+    expect(readTabs()).toHaveLength(1)
+  })
+
+  it("adopts a popup in the profile the backend names, over the opener's and without one", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("adopt-orphan").click())
+    expect(
+      readTabs().find((t) => t.url === "https://example.com/orphan-popup")
+        ?.profile
+    ).toBe("p-work")
+    // With an opener present IN THE DEFAULT PROFILE the backend's word
+    // (p-work) still wins over the opener's.
+    act(() => screen.getByText("open").click())
+    expect(
+      readTabs().find((t) => t.url === "https://example.com/docs#top")?.profile
+    ).toBe("default")
+    act(() => screen.getByText("adopt-named").click())
+    const named = readTabs().find(
+      (t) => t.url === "https://example.com/named-popup"
+    )
+    expect(named?.profile).toBe("p-work")
+    expect(named?.opener).toBe(
+      readTabs().find((t) => t.url === "https://example.com/docs#top")?.id
+    )
+  })
+
+  it("opens new tabs in the preferred profile when it exists", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    setBrowserNewTabProfile("p-work")
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    expect(readTabs().map((t) => t.profile)).toEqual(["p-work"])
+    // Restored records keep the profile they were saved with.
+    act(() => screen.getByText("restore").click())
+    expect(
+      readTabs()
+        .filter((t) => t.url?.startsWith("https://restored.example/"))
+        .map((t) => t.profile)
+    ).toEqual(["default", "default"])
+  })
+
+  it("suspending a loaded tab keeps the record at the page it was showing", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    const opened = readTabs()[0]
+    const backendId = opened.id.slice("browser:".length)
+    act(() =>
+      setBrowserTabState({
+        tabId: backendId,
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "https://example.com/docs/deep",
+        requestedUrl: "https://example.com/docs/deep",
+        title: "Deep",
+        favicon: null,
+        loading: false,
+        canGoBack: true,
+        canGoForward: false,
+        origin: "https://example.com",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "default",
+        agentGrant: null,
+      })
+    )
+    // Only a tab that is off screen may be released; the suspender's own
+    // bookkeeping says so, and the action re-checks it.
+    act(() => screen.getByText("suspend-first").click())
+    expect(readTabs()[0].url).toBe("https://example.com/docs#top")
+    act(() => markBrowserTabHidden(opened.id))
+
+    act(() => screen.getByText("suspend-first").click())
+    const tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].id).toBe(opened.id)
+    expect(tabs[0].url).toBe("https://example.com/docs/deep")
+    expect(tabs[0].title).toBe("Deep")
+    // The native surface is gone; the record is "not loaded" again.
+    expect(getBrowserTabState(opened.id)).toBeNull()
+
+    // Nothing to release the second time.
+    act(() => screen.getByText("suspend-first").click())
+    expect(readTabs()).toHaveLength(1)
+  })
+
+  it("records a closed browser tab so it can be reopened at its page", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    const opened = readTabs()[0]
+    act(() =>
+      setBrowserTabState({
+        tabId: opened.id.slice("browser:".length),
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "https://example.com/docs/deep",
+        requestedUrl: "https://example.com/docs/deep",
+        title: "Deep",
+        favicon: null,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        origin: "https://example.com",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "default",
+        agentGrant: null,
+      })
+    )
+    act(() => screen.getByText("close-active").click())
+    const closed = popClosedTab()
+    expect(closed).toEqual({
+      kind: "browser",
+      key: opened.id,
+      index: 0,
+      url: "https://example.com/docs/deep",
+      title: "Deep",
+      folderId: 1,
+      profile: "default",
+    })
+  })
+
+  // A browser tab shares the file strip with the file tabs, so it obeys the
+  // same reopen rule: back at the slot it was closed from, not appended.
+  it("puts a reopened browser tab back at the slot it was closed from", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open").click())
+    act(() => screen.getByText("open-bg").click())
+    // Lands right after its opener, i.e. in the middle.
+    act(() => screen.getByText("open-next").click())
+    expect(readTabs().map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "https://example.com/next",
+      "http://localhost:3000/",
+    ])
+
+    act(() => screen.getByText("close-second").click())
+    expect(readTabs().map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "http://localhost:3000/",
+    ])
+
+    act(() => screen.getByText("reopen-closed").click())
+    expect(readTabs().map((t) => t.url)).toEqual([
+      "https://example.com/docs#top",
+      "https://example.com/next",
+      "http://localhost:3000/",
+    ])
+  })
+})
+
 describe("reopening a closed file tab", () => {
   beforeEach(() => {
     resetClosedTabStackForTests()
@@ -3435,5 +5043,820 @@ describe("reopening a closed file tab", () => {
       fileTabId("/repo/b.ts"),
       fileTabId("/repo/c.ts"),
     ])
+  })
+})
+
+describe("PDF file tabs", () => {
+  const mockedReadBase64 = api.readFileBase64 as unknown as ReturnType<
+    typeof vi.fn
+  >
+
+  beforeEach(() => {
+    mockedApi.readFileForEdit.mockReset()
+    mockedApi.gitIsTracked.mockReset()
+    mockedApi.gitShowFile.mockReset()
+    mockedReadBase64.mockReset()
+    mockedApi.gitIsTracked.mockResolvedValue(true)
+    mockedApi.gitShowFile.mockResolvedValue("")
+    // "%PDF-1" in base64.
+    mockedReadBase64.mockResolvedValue("JVBERi0x")
+  })
+
+  function PdfProbe({
+    onCapture,
+  }: {
+    onCapture: (tabs: FileWorkspaceTab[]) => void
+  }) {
+    const { openFilePreview, fileTabs } = useWorkspaceContext()
+    onCapture(fileTabs)
+    return (
+      <div>
+        <button onClick={() => void openFilePreview("docs/report.pdf")}>
+          open-pdf
+        </button>
+        <button onClick={() => void openFilePreview("Scan.PDF")}>
+          open-upper-pdf
+        </button>
+        <button onClick={() => void openFilePreview("pic.png")}>
+          open-png
+        </button>
+      </div>
+    )
+  }
+
+  function renderPdfProbe() {
+    let tabs: FileWorkspaceTab[] = []
+    render(
+      <WorkspaceProvider>
+        <PdfProbe onCapture={(next) => (tabs = next)} />
+      </WorkspaceProvider>
+    )
+    return () => tabs
+  }
+
+  it("opens a PDF as bytes at the backend's read ceiling, never as text", async () => {
+    const tabs = renderPdfProbe()
+
+    await act(async () => {
+      screen.getByText("open-pdf").click()
+    })
+
+    expect(mockedReadBase64).toHaveBeenCalledWith(
+      "/repo/docs/report.pdf",
+      100_000_000
+    )
+    expect(mockedApi.readFileForEdit).not.toHaveBeenCalled()
+    // Binary: no git base for a gutter that does not exist.
+    expect(mockedApi.gitIsTracked).not.toHaveBeenCalled()
+    expect(tabs()).toHaveLength(1)
+    expect(tabs()[0]).toMatchObject({
+      id: fileTabId("/repo/docs/report.pdf"),
+      kind: "file",
+      language: "pdf",
+      content: "data:application/pdf;base64,JVBERi0x",
+      readonly: true,
+      loading: false,
+      saveState: "idle",
+    })
+  })
+
+  it("recognises the extension in any case", async () => {
+    const tabs = renderPdfProbe()
+
+    await act(async () => {
+      screen.getByText("open-upper-pdf").click()
+    })
+
+    expect(tabs()[0]).toMatchObject({
+      language: "pdf",
+      content: "data:application/pdf;base64,JVBERi0x",
+    })
+    expect(mockedApi.readFileForEdit).not.toHaveBeenCalled()
+  })
+
+  it("leaves images on the default read cap", async () => {
+    const tabs = renderPdfProbe()
+
+    await act(async () => {
+      screen.getByText("open-png").click()
+    })
+
+    expect(mockedReadBase64).toHaveBeenCalledWith("/repo/pic.png")
+    expect(tabs()[0]).toMatchObject({
+      language: "image",
+      content: "data:image/png;base64,JVBERi0x",
+    })
+  })
+
+  it("keeps a failed read on the tab instead of retrying it as text", async () => {
+    mockedReadBase64.mockRejectedValueOnce(
+      new Error("File is too large to attach")
+    )
+    const tabs = renderPdfProbe()
+
+    await act(async () => {
+      screen.getByText("open-pdf").click()
+    })
+
+    expect(mockedApi.readFileForEdit).not.toHaveBeenCalled()
+    expect(tabs()[0]).toMatchObject({
+      language: "pdf",
+      loading: false,
+      saveState: "error",
+      content: 'unableLoadContent:{"message":"File is too large to attach"}',
+    })
+  })
+
+  it("re-reads the bytes when the active PDF changes on disk", async () => {
+    const tabs = renderPdfProbe()
+
+    await act(async () => {
+      screen.getByText("open-pdf").click()
+    })
+    mockedReadBase64.mockResolvedValueOnce("JVBERi0y")
+
+    await act(async () => {
+      workspaceStoreMock.emitRoot("/repo", ["docs/report.pdf"])
+    })
+
+    expect(mockedReadBase64).toHaveBeenCalledTimes(2)
+    expect(mockedReadBase64).toHaveBeenLastCalledWith(
+      "/repo/docs/report.pdf",
+      100_000_000
+    )
+    // The text resolver would reject the bytes and put the tab in error.
+    expect(mockedApi.readFileForEdit).not.toHaveBeenCalled()
+    expect(tabs()[0]).toMatchObject({
+      content: "data:application/pdf;base64,JVBERi0y",
+      saveState: "idle",
+      loading: false,
+    })
+  })
+})
+
+let scopedWorkspace: ReturnType<typeof useWorkspaceContext>
+function FolderTabsProbe() {
+  const workspace = useWorkspaceContext()
+  useEffect(() => {
+    scopedWorkspace = workspace
+  }, [workspace])
+  return (
+    <output data-testid="scope-files">
+      {workspace.fileTabs.map((tab) => tab.id).join(",")}
+    </output>
+  )
+}
+
+it("retains mobile conversation identity, connection and runtime through A(files) → B → A → B", async () => {
+  resetConversationRuntimeStore()
+  vi.mocked(api.acpGetAgentStatus).mockResolvedValue({
+    agent_type: "claude_code",
+    enabled: true,
+    available: true,
+    installed_version: "1.0.0",
+    host_tools_agent_mode: false,
+    is_acp_adapter: true,
+  } as never)
+  vi.mocked(api.acpFindConnectionForConversation).mockResolvedValue(null)
+  vi.mocked(api.acpConnect).mockResolvedValue("mobile-connection")
+  vi.mocked(api.acpGetSessionSnapshot).mockResolvedValue(null)
+  vi.mocked(api.acpDisconnect).mockReset().mockResolvedValue(undefined)
+  const mounted = vi.fn()
+  const unmounted = vi.fn()
+  const filesUnmounted = vi.fn()
+  let connections!: ReturnType<typeof useConnectionStore>
+  let connecting!: Promise<void>
+  function Conversation() {
+    const actions = useAcpActions()
+    const store = useConnectionStore()
+    const runtime = useConversationRuntimeActions()
+    const hidden = useOverlayHostHidden()
+    useEffect(() => {
+      connections = store
+      mounted()
+      runtime.setExternalId(42, "mobile-session")
+      connecting = actions.connect(
+        "mobile-tab",
+        "claude_code",
+        "/repo2",
+        "mobile-session",
+        42
+      )
+      return () => {
+        unmounted()
+        void actions.disconnectIfIdle("mobile-tab")
+        runtime.removeConversation(42)
+      }
+    }, [actions, store, runtime])
+    return (
+      <div data-testid="mobile-conversation" data-overlay-hidden={hidden} />
+    )
+  }
+  function Files() {
+    useEffect(
+      () => () => {
+        filesUnmounted()
+      },
+      []
+    )
+    return <div data-testid="mobile-files" />
+  }
+  function Mobile() {
+    const { mode, activePane } = useWorkspaceView()
+    return (
+      <MobileWorkspacePanes
+        showConversation={
+          mode === "conversation" || activePane === "conversation"
+        }
+        files={<Files />}
+      >
+        <Conversation />
+      </MobileWorkspacePanes>
+    )
+  }
+  useAppWorkspaceStore.setState({ activeFolderId: 1 })
+  useFolderTabsStore.getState().setEnabled(true)
+  useFolderTabsStore.getState().activateScope(1)
+  const view = render(
+    <AcpConnectionsProvider>
+      <ConversationRuntimeProvider>
+        <WorkspaceProvider>
+          <FolderTabsProbe />
+          <Mobile />
+        </WorkspaceProvider>
+      </ConversationRuntimeProvider>
+    </AcpConnectionsProvider>
+  )
+  await act(async () => {
+    await connecting
+  })
+  act(() => scopedWorkspace.openSessionFileDiff("a.ts", "diff", "A"))
+  const node = screen.getByTestId("mobile-conversation")
+  const connection = connections.getConnection("mobile-tab")
+  const session = useConversationRuntimeStore
+    .getState()
+    .byConversationId.get(42)
+  expect(connection?.connectionId).toBe("mobile-connection")
+  expect(session?.externalId).toBe("mobile-session")
+  for (const scope of [2, 1, 2]) {
+    act(() => useFolderTabsStore.getState().activateScope(scope))
+    expect(screen.getByTestId("mobile-conversation")).toBe(node)
+    expect(node).toHaveAttribute("data-overlay-hidden", String(scope === 1))
+    expect(node.closest("section")).toHaveAttribute(
+      "aria-hidden",
+      String(scope === 1)
+    )
+    if (scope === 1) {
+      expect(node.closest("section")).toHaveAttribute("inert")
+      expect(node.closest("section")).toHaveClass(
+        "conversation-tab-hidden",
+        "invisible"
+      )
+      expect(screen.getByTestId("mobile-files").closest("section")).toHaveClass(
+        "absolute",
+        "inset-0"
+      )
+    } else {
+      expect(node.closest("section")).not.toHaveAttribute("inert")
+      expect(screen.queryByTestId("mobile-files")).not.toBeInTheDocument()
+    }
+    expect(connections.getConnection("mobile-tab")).toBe(connection)
+    expect(
+      useConversationRuntimeStore.getState().byConversationId.get(42)
+    ).toBe(session)
+  }
+  expect(mounted).toHaveBeenCalledOnce()
+  expect(unmounted).not.toHaveBeenCalled()
+  expect(api.acpConnect).toHaveBeenCalledOnce()
+  expect(api.acpDisconnect).not.toHaveBeenCalled()
+  expect(filesUnmounted).toHaveBeenCalledTimes(2)
+  // A real teardown still releases both resources after the retained view closes.
+  await act(async () => {
+    view.unmount()
+  })
+  expect(unmounted).toHaveBeenCalledOnce()
+  expect(api.acpDisconnect).toHaveBeenCalledWith("mobile-connection")
+  expect(useConversationRuntimeStore.getState().byConversationId.has(42)).toBe(
+    false
+  )
+  resetConversationRuntimeStore()
+})
+
+describe("mobile Monaco model cleanup ownership", () => {
+  it.each(["final close in file pane", "final close after pane unmount"])(
+    "disposes the last buffer on %s and retains open hidden buffers",
+    async (scenario) => {
+      useAppWorkspaceStore.setState({ activeFolderId: 1 })
+      vi.mocked(api.readFileForEdit).mockResolvedValue({
+        path: "a.ts",
+        content: "disk",
+        etag: "e1",
+        mtime_ms: 1,
+        readonly: false,
+        line_ending: "lf",
+      })
+      vi.mocked(api.gitIsTracked).mockResolvedValue(false)
+      let attached = false
+      const history = ["saved", "unsaved"]
+      const model = {
+        isAttachedToEditor: () => attached,
+        dispose: vi.fn(() => {
+          history.length = 0
+        }),
+      }
+      const monaco = {
+        Uri: { parse: (path: string) => path },
+        editor: { getModel: () => model },
+      } as unknown as Monaco
+      function EditorPanel({ tab }: { tab: FileWorkspaceTab }) {
+        const track = useTrackMonacoModel()
+        useEffect(() => {
+          attached = true
+          track(buildMonacoModelPath(tab.path, tab.id), monaco)
+          return () => {
+            attached = false
+          }
+        }, [tab.id, tab.path, track])
+        return <div data-testid="mobile-editor" />
+      }
+      function MobilePane() {
+        const { mode, activePane } = useWorkspaceView()
+        const { activeFileTab } = useWorkspaceFileTabs()
+        return mode !== "conversation" &&
+          activePane === "files" &&
+          activeFileTab ? (
+          <EditorPanel tab={activeFileTab} />
+        ) : null
+      }
+      render(
+        <WorkspaceProvider>
+          <FolderTabsProbe />
+          <MobilePane />
+        </WorkspaceProvider>
+      )
+      await act(async () => {
+        await scopedWorkspace.openFilePreview("/repo/a.ts")
+      })
+      const id = scopedWorkspace.activeFileTabId!
+      expect(screen.getByTestId("mobile-editor")).toBeInTheDocument()
+      act(() => {
+        useFolderTabsStore.getState().setEnabled(true)
+        useFolderTabsStore.getState().activateScope(2)
+      })
+      expect(screen.queryByTestId("mobile-editor")).not.toBeInTheDocument()
+      expect(model.dispose).not.toHaveBeenCalled()
+      expect(history).toEqual(["saved", "unsaved"])
+      act(() => useFolderTabsStore.getState().activateScope(1))
+      expect(screen.getByTestId("mobile-editor")).toBeInTheDocument()
+      if (scenario === "final close after pane unmount") {
+        act(() => scopedWorkspace.activateConversationPane())
+        expect(screen.queryByTestId("mobile-editor")).not.toBeInTheDocument()
+        expect(model.dispose).not.toHaveBeenCalled()
+      }
+      act(() => scopedWorkspace.closeFileTab(id))
+      expect(scopedWorkspace.allFileTabs).toEqual([])
+      expect(scopedWorkspace.activePane).toBe("conversation")
+      expect(screen.queryByTestId("mobile-editor")).not.toBeInTheDocument()
+      expect(model.dispose).toHaveBeenCalledOnce()
+      expect(history).toEqual([])
+    }
+  )
+})
+
+describe("Folder-tabs shared file buffers and selections", () => {
+  beforeEach(() => {
+    vi.mocked(api.readFileForEdit).mockReset().mockResolvedValue({
+      path: "file.ts",
+      content: "disk",
+      etag: "e1",
+      mtime_ms: 1,
+      readonly: false,
+      line_ending: "lf",
+    })
+    vi.mocked(api.gitIsTracked).mockResolvedValue(false)
+    resetHomeDirCacheForTests()
+    useAppWorkspaceStore.setState({ activeFolderId: 1 })
+    useFolderTabsStore.getState().setEnabled(true)
+    useFolderTabsStore.getState().activateScope(1)
+    render(
+      <WorkspaceProvider>
+        <FolderTabsProbe />
+      </WorkspaceProvider>
+    )
+  })
+
+  it("restores per-worktree editor selection and dirty content through A → B → A and disabling", async () => {
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo/a.ts")
+    })
+    act(() => {
+      scopedWorkspace.updateActiveFileContent("unsaved A")
+    })
+    const a = scopedWorkspace.activeFileTabId!
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo/second.ts")
+    })
+    const second = scopedWorkspace.activeFileTabId!
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    expect(scopedWorkspace.fileTabs).toHaveLength(0)
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo2/b.ts")
+    })
+    const b = scopedWorkspace.activeFileTabId!
+    act(() => useFolderTabsStore.getState().activateScope(1))
+    expect(scopedWorkspace.activeFileTabId).toBe(second)
+    expect(scopedWorkspace.fileTabs.find((tab) => tab.id === a)?.content).toBe(
+      "unsaved A"
+    )
+    expect(scopedWorkspace.fileTabs.find((tab) => tab.id === a)).toMatchObject({
+      isDirty: true,
+    })
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    expect(scopedWorkspace.activeFileTabId).toBe(b)
+    act(() => useFolderTabsStore.getState().setEnabled(false))
+    expect(scopedWorkspace.fileTabs).toHaveLength(3)
+    act(() => useFolderTabsStore.getState().setEnabled(true))
+    act(() => useFolderTabsStore.getState().activateScope(1))
+    expect(scopedWorkspace.activeFileTabId).toBe(second)
+    expect(scopedWorkspace.fileTabs.find((tab) => tab.id === a)?.content).toBe(
+      "unsaved A"
+    )
+  })
+
+  it("shares one normalized buffer and closes only the current worktree's references", async () => {
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo/shared.ts")
+    })
+    const shared = scopedWorkspace.activeFileTabId!
+    act(() => {
+      scopedWorkspace.updateActiveFileContent("shared unsaved")
+    })
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo/./shared.ts")
+    })
+    expect(scopedWorkspace.activeFileTabId).toBe(shared)
+    expect(scopedWorkspace.activeFileTab?.content).toBe("shared unsaved")
+    expect(api.readFileForEdit).toHaveBeenCalledTimes(1)
+    act(() => {
+      scopedWorkspace.closeAllFileTabs()
+    })
+    expect(scopedWorkspace.fileTabs).toHaveLength(0)
+    act(() => useFolderTabsStore.getState().activateScope(1))
+    expect(scopedWorkspace.activeFileTab?.content).toBe("shared unsaved")
+    expect(scopedWorkspace.activeFileTab).toMatchObject({ isDirty: true })
+  })
+
+  it("explicitly selects a live shared dirty buffer from canvas or drawer handoffs without IO", async () => {
+    vi.mocked(api.saveFileContent).mockClear()
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo/shared.ts")
+    })
+    act(() => scopedWorkspace.updateActiveFileContent("unsaved shared"))
+    const shared = scopedWorkspace.activeFileTab!
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    expect(scopedWorkspace.fileTabs).toEqual([])
+
+    // Canvas and file drawers resolve their id from allFileTabs and share
+    // this explicit action, rather than running the asynchronous opener.
+    act(() => scopedWorkspace.switchFileTab(shared.id))
+    expect(scopedWorkspace.activeFileTab).toBe(shared)
+    expect(scopedWorkspace.activeFileTab).toMatchObject({
+      content: "unsaved shared",
+      isDirty: true,
+    })
+    expect(scopedWorkspace.activePane).toBe("files")
+    expect(useFolderTabsStore.getState().fileRefs[2]).toEqual([shared.id])
+    expect(useFolderTabsStore.getState().fileRefs[1]).toEqual([shared.id])
+    expect(scopedWorkspace.allFileTabs).toHaveLength(1)
+    expect(api.readFileForEdit).toHaveBeenCalledTimes(1)
+    expect(api.saveFileContent).not.toHaveBeenCalled()
+  })
+
+  it("acquires live browser drawer handoffs but ignores identities that have closed", () => {
+    act(() => scopedWorkspace.openBrowserTab("https://example.com"))
+    const browser = scopedWorkspace.activeFileTab!
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    act(() => scopedWorkspace.switchFileTab(browser.id))
+    expect(scopedWorkspace.activeFileTab).toBe(browser)
+    expect(scopedWorkspace.allFileTabs).toHaveLength(1)
+    expect(useFolderTabsStore.getState().fileRefs[2]).toEqual([browser.id])
+    act(() => scopedWorkspace.closeFileTab(browser.id, { allScopes: true }))
+    act(() => scopedWorkspace.switchFileTab(browser.id))
+    expect(scopedWorkspace.activeFileTabId).toBeNull()
+    expect(useFolderTabsStore.getState().fileRefs[2]).toEqual([])
+  })
+
+  it("captures the original worktree before asynchronous home-path resolution", async () => {
+    let resolveHome!: (path: string) => void
+    vi.mocked(api.getHomeDirectory).mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveHome = resolve
+      })
+    )
+    let opening!: Promise<string | null>
+    act(() => {
+      opening = scopedWorkspace.openFilePreview("~/late.ts")
+    })
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    await act(async () => {
+      resolveHome("/repo")
+      await opening
+    })
+    expect(scopedWorkspace.fileTabs).toHaveLength(0)
+    expect(scopedWorkspace.activeFileTabId).toBeNull()
+    act(() => useFolderTabsStore.getState().activateScope(1))
+    expect(scopedWorkspace.fileTabs).toHaveLength(1)
+    expect(scopedWorkspace.activeFileTab?.path).toBe("/repo/late.ts")
+    expect(useFolderTabsStore.getState().fileRefs[2] ?? []).toHaveLength(0)
+  })
+
+  it("keeps delayed browser popups with their opener and removes closed entities from every scope", () => {
+    let browser!: string
+    act(() => {
+      browser = scopedWorkspace.openBrowserTab("https://example.com")!
+    })
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    act(() => {
+      scopedWorkspace.adoptBrowserTab({
+        backendTabId: "late-popup",
+        url: "https://example.com/popup",
+        openerBackendTabId: browser.slice("browser:".length),
+      })
+    })
+    expect(scopedWorkspace.fileTabs).toHaveLength(0)
+    act(() => useFolderTabsStore.getState().activateScope(1))
+    expect(scopedWorkspace.activeFileTabId).toBe("browser:late-popup")
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    act(() => {
+      scopedWorkspace.openBrowserTab("https://example.com")
+    })
+    expect(scopedWorkspace.activeFileTabId).toBe(browser)
+    act(() => {
+      scopedWorkspace.closeFileTab(browser, { allScopes: true })
+    })
+    expect(scopedWorkspace.fileTabs).toHaveLength(0)
+    act(() => useFolderTabsStore.getState().activateScope(1))
+    expect(scopedWorkspace.fileTabs.map((tab) => tab.id)).toEqual([
+      "browser:late-popup",
+    ])
+  })
+
+  it("scopes browser and diff tabs and preserves inactive tabs on reorder and close", async () => {
+    act(() => {
+      scopedWorkspace.openSessionFileDiff("src/a.ts", "diff A", "A", {
+        folderId: 1,
+      })
+    })
+    const diff = scopedWorkspace.activeFileTabId!
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    act(() => {
+      scopedWorkspace.openBrowserTab("https://example.com")
+    })
+    const browser = scopedWorkspace.activeFileTabId!
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo2/b.ts")
+    })
+    act(() => {
+      scopedWorkspace.reorderFileTabs([...scopedWorkspace.fileTabs].reverse())
+    })
+    expect(scopedWorkspace.fileTabs[1].id).toBe(browser)
+    act(() => {
+      scopedWorkspace.closeOtherFileTabs(browser)
+    })
+    expect(scopedWorkspace.fileTabs.map((tab) => tab.id)).toEqual([browser])
+    act(() => useFolderTabsStore.getState().activateScope(1))
+    expect(scopedWorkspace.activeFileTabId).toBe(diff)
+    expect(scopedWorkspace.activeFileTab?.content).toBe("diff A")
+    act(() => useFolderTabsStore.getState().setEnabled(false))
+    expect(scopedWorkspace.fileTabs).toHaveLength(2)
+  })
+})
+
+// A sibling subscribed to the folder-tabs store: React reports a store write
+// made while WorkspaceProvider renders (inside a state updater) against it.
+function ScopeRefsProbe() {
+  const refs = useFolderTabsStore((s) => s.fileRefs)
+  return <output data-testid="scope-refs">{JSON.stringify(refs)}</output>
+}
+
+const activeFileTrail: Array<string | null> = []
+function ActiveFileTrail() {
+  const { activeFileTabId } = useWorkspaceFileTabs()
+  if (activeFileTrail[activeFileTrail.length - 1] !== activeFileTabId) {
+    activeFileTrail.push(activeFileTabId)
+  }
+  return null
+}
+
+describe("Folder-tabs file closes, restores and selection", () => {
+  let consoleError: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    vi.mocked(api.readFileForEdit).mockReset().mockResolvedValue({
+      path: "file.ts",
+      content: "disk",
+      etag: "e1",
+      mtime_ms: 1,
+      readonly: false,
+      line_ending: "lf",
+    })
+    vi.mocked(api.gitIsTracked).mockResolvedValue(false)
+    resetHomeDirCacheForTests()
+    activeFileTrail.length = 0
+    consoleError = vi.spyOn(console, "error")
+    useAppWorkspaceStore.setState({ activeFolderId: 1 })
+    useFolderTabsStore.getState().setEnabled(true)
+    useFolderTabsStore.getState().activateScope(1)
+    render(
+      <WorkspaceProvider>
+        <FolderTabsProbe />
+        <ScopeRefsProbe />
+        <ActiveFileTrail />
+      </WorkspaceProvider>
+    )
+  })
+  afterEach(() => {
+    consoleError.mockRestore()
+  })
+
+  const renderPhaseWrites = () =>
+    consoleError.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes("Cannot update a component")
+    ).length
+
+  async function openDirty(path: string, dirty = true) {
+    await act(async () => {
+      await scopedWorkspace.openFilePreview(path)
+    })
+    if (dirty)
+      act(() => scopedWorkspace.updateActiveFileContent(`edited ${path}`))
+    return scopedWorkspace.activeFileTabId!
+  }
+
+  it("close all asks once for the scope's unsaved buffers; cancelling closes nothing", async () => {
+    const a = await openDirty("/repo/a.ts")
+    const b = await openDirty("/repo/b.ts")
+    const c = await openDirty("/repo/c.ts", false)
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false)
+    act(() => scopedWorkspace.closeAllFileTabs())
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(scopedWorkspace.fileTabs.map((tab) => tab.id)).toEqual([a, b, c])
+    expect(useFolderTabsStore.getState().fileRefs[1]).toEqual([a, b, c])
+
+    confirm.mockReturnValue(true)
+    act(() => scopedWorkspace.closeAllFileTabs())
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(scopedWorkspace.allFileTabs).toEqual([])
+    expect(useFolderTabsStore.getState().fileRefs[1]).toEqual([])
+    expect(scopedWorkspace.activePane).toBe("conversation")
+    expect(renderPhaseWrites()).toBe(0)
+    confirm.mockRestore()
+  })
+
+  it("close others only releases this worktree's hold on a shared buffer, without asking for it", async () => {
+    const shared = await openDirty("/repo/shared.ts")
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    act(() => scopedWorkspace.switchFileTab(shared))
+    const b = await openDirty("/repo2/b.ts")
+    const c = await openDirty("/repo2/c.ts", false)
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true)
+    act(() => scopedWorkspace.closeOtherFileTabs(c))
+    // b is dirty and closes for good: one question. The shared buffer stays
+    // open in the other worktree, so losing it here costs nothing.
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(scopedWorkspace.fileTabs.map((tab) => tab.id)).toEqual([c])
+    expect(scopedWorkspace.activeFileTabId).toBe(c)
+    expect(scopedWorkspace.allFileTabs?.map((tab) => tab.id)).toEqual([
+      shared,
+      c,
+    ])
+    expect(useFolderTabsStore.getState().fileRefs[1]).toEqual([shared])
+    expect(b).not.toBe(c)
+    act(() => useFolderTabsStore.getState().activateScope(1))
+    expect(scopedWorkspace.activeFileTab).toMatchObject({
+      id: shared,
+      isDirty: true,
+    })
+    expect(renderPhaseWrites()).toBe(0)
+    confirm.mockRestore()
+  })
+
+  it("closing the selected buffer moves straight to its neighbour in the scope's order", async () => {
+    const a = await openDirty("/repo/a.ts", false)
+    const b = await openDirty("/repo/b.ts", false)
+    const c = await openDirty("/repo/c.ts", false)
+    act(() => scopedWorkspace.switchFileTab(b))
+    activeFileTrail.length = 0
+    act(() => scopedWorkspace.closeFileTab(b))
+    // Never through the scope's first tab while the closed one's references
+    // are dropped after the commit.
+    expect(activeFileTrail).toEqual([c])
+    expect(useFolderTabsStore.getState().fileRefs[1]).toEqual([a, c])
+    expect(useFolderTabsStore.getState().fileSelection[1]).toBe(c)
+    expect(renderPhaseWrites()).toBe(0)
+  })
+
+  it("turning the mode off keeps the file the scope was showing", async () => {
+    await openDirty("/repo/a.ts", false)
+    const b = await openDirty("/repo/b.ts", false)
+    const c = await openDirty("/repo/c.ts", false)
+    act(() => scopedWorkspace.switchFileTab(b))
+    act(() => scopedWorkspace.closeFileTab(b))
+    expect(scopedWorkspace.activeFileTabId).toBe(c)
+    act(() => useFolderTabsStore.getState().setEnabled(false))
+    expect(scopedWorkspace.activeFileTabId).toBe(c)
+  })
+
+  it("turning the mode on keeps the file the user is looking at", async () => {
+    act(() => useFolderTabsStore.getState().setEnabled(false))
+    // No conversation tab here, so nothing else names the active folder.
+    act(() => useAppWorkspaceStore.setState({ activeFolderId: 1 }))
+    const a = await openDirty("/repo/a.ts", false)
+    const b = await openDirty("/repo/b.ts", false)
+    act(() => scopedWorkspace.switchFileTab(a))
+    // What this worktree selected the last time the mode was on.
+    act(() => useFolderTabsStore.setState({ fileSelection: { 1: b } }))
+    act(() => useFolderTabsStore.getState().setEnabled(true))
+    expect(useFolderTabsStore.getState().scope).toBe(1)
+    expect(scopedWorkspace.activeFileTabId).toBe(a)
+  })
+
+  it("an open aimed at another worktree does not take this scope's selection through a shared tab", async () => {
+    let page!: string
+    act(() => {
+      page = scopedWorkspace.openBrowserTab("https://example.com/")!
+    })
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    act(() => scopedWorkspace.switchFileTab(page))
+    const own = await openDirty("/repo2/own.ts", false)
+    expect(scopedWorkspace.activeFileTabId).toBe(own)
+    act(() => {
+      scopedWorkspace.openBrowserTab("https://example.com/", {
+        folderId: 1,
+        activate: "tab",
+      })
+    })
+    expect(scopedWorkspace.activeFileTabId).toBe(own)
+    expect(useFolderTabsStore.getState().fileSelection[1]).toBe(page)
+  })
+
+  it("a page restored while a queued close removes its duplicate still joins its worktree", () => {
+    let page!: string
+    act(() => {
+      page = scopedWorkspace.openBrowserTab("https://example.com/u")!
+    })
+    act(() => {
+      scopedWorkspace.closeFileTab(page, { allScopes: true })
+      scopedWorkspace.restoreBrowserTabs([
+        {
+          url: "https://example.com/u",
+          title: "Restored U",
+          folderId: 1,
+          profile: "default",
+        },
+      ])
+    })
+    const restored = scopedWorkspace.allFileTabs?.find(
+      (tab) => tab.title === "Restored U"
+    )
+    expect(restored).toBeDefined()
+    expect(restored!.id).not.toBe(page)
+    expect(scopedWorkspace.fileTabs.map((tab) => tab.id)).toContain(
+      restored!.id
+    )
+    expect(useFolderTabsStore.getState().fileRefs[1]).toContain(restored!.id)
+  })
+
+  it("restored pages join their worktrees without store writes during render", async () => {
+    await openDirty("/repo/a.ts", false)
+    act(() => {
+      scopedWorkspace.restoreBrowserTabs([
+        {
+          url: "https://restored.example/two",
+          title: "Two",
+          folderId: 2,
+          profile: "default",
+        },
+      ])
+    })
+    // A queued update is pending, so the restore updater runs while
+    // WorkspaceProvider renders.
+    act(() => {
+      scopedWorkspace.updateActiveFileContent("typing")
+      scopedWorkspace.restoreBrowserTabs([
+        {
+          url: "https://restored.example/three",
+          title: "Three",
+          folderId: 2,
+          profile: "default",
+        },
+      ])
+    })
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    expect(scopedWorkspace.fileTabs.map((tab) => tab.title)).toEqual([
+      "Two",
+      "Three",
+    ])
+    expect(renderPhaseWrites()).toBe(0)
   })
 })

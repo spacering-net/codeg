@@ -29,6 +29,7 @@ vi.mock("@/lib/transport", () => ({
 }))
 
 import { openCommitWindow, openSettingsWindow } from "@/lib/api"
+import { openLocalWorkspace } from "@/lib/remote-workspace"
 
 /** Stand-in for the reserved WindowProxy: only `location.href` and `close`. */
 function fakePopup(initialHref = "about:blank") {
@@ -200,5 +201,20 @@ describe("web-mode app popup windows", () => {
       expect.objectContaining({ folderId: 7 })
     )
     expect(open).not.toHaveBeenCalled()
+  })
+
+  it("opens the local workspace even when the remote desktop is offline", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    mocks.isRemoteDesktopMode.mockReturnValue(true)
+    mocks.getActiveRemoteConnectionId.mockReturnValue("12")
+    mocks.call.mockImplementation(() => {
+      throw new Error("remote server is offline")
+    })
+    mocks.shellCall.mockResolvedValue(undefined)
+
+    await expect(openLocalWorkspace()).resolves.toBeUndefined()
+
+    expect(mocks.shellCall).toHaveBeenCalledWith("open_local_workspace")
+    expect(mocks.call).not.toHaveBeenCalled()
   })
 })

@@ -247,6 +247,116 @@ describe("AskQuestionResultCard", () => {
     expect(screen.queryByText(result.awaiting)).not.toBeInTheDocument()
   })
 
+  it("matches a question WITH a header to qoder's empty-header sentence answers", () => {
+    // qodercli's native ask result is a plain sentence (see parseAnsweredSentence):
+    // the reconstructed answers carry `header: ""` while the input's questions
+    // DO have headers. The header+question signature therefore misses, and the
+    // question-text fallback must carry the match — the capsule shows the pick
+    // (not "no selection") and the expanded card re-checks the chosen option.
+    const input = JSON.stringify({
+      questions: [
+        {
+          question: "你订阅主要拿来干什么？",
+          header: "用途",
+          multiSelect: false,
+          options: [
+            { label: "AI 编程 Agent 日常主力", description: "" },
+            { label: "偶尔写写脚本", description: "" },
+          ],
+        },
+      ],
+    })
+    const output =
+      'Your questions have been answered: "你订阅主要拿来干什么？"="AI 编程 Agent 日常主力". ' +
+      "You can now continue with these answers in mind."
+    renderWithIntl(
+      <AskQuestionResultCard
+        input={input}
+        output={output}
+        state="output-available"
+      />
+    )
+
+    // Collapsed capsule shows the pick — NOT the noSelection fallback.
+    expect(screen.getByText("AI 编程 Agent 日常主力")).toBeInTheDocument()
+    expect(screen.queryByText(result.noSelection)).toBeNull()
+    // Expanded: the chosen option is re-checked and disabled.
+    expand()
+    const chosen = screen.getByRole("radio", { name: "AI 编程 Agent 日常主力" })
+    expect(chosen).toBeChecked()
+    expect(chosen).toBeDisabled()
+    expect(
+      screen.getByRole("radio", { name: "偶尔写写脚本" })
+    ).not.toBeChecked()
+  })
+
+  it("re-checks each label of a multi-select CLI answer sentence", () => {
+    // The CLI joins a multi-select answer's labels with ", " into one value;
+    // the card must check each label rather than show the joined text as a
+    // typed "Other" answer.
+    const input = JSON.stringify({
+      questions: [
+        {
+          question: "Which features?",
+          header: "Features",
+          multiSelect: true,
+          options: [
+            { label: "Auth", description: "" },
+            { label: "Billing", description: "" },
+            { label: "Search", description: "" },
+          ],
+        },
+      ],
+    })
+    const output =
+      'Your questions have been answered: "Which features?"="Auth, Search". ' +
+      "You can now continue with these answers in mind."
+    renderWithIntl(
+      <AskQuestionResultCard
+        input={input}
+        output={output}
+        state="output-available"
+      />
+    )
+
+    expect(screen.getByText("Auth, Search")).toBeInTheDocument()
+    expand()
+    expect(screen.getByRole("checkbox", { name: "Auth" })).toBeChecked()
+    expect(screen.getByRole("checkbox", { name: "Search" })).toBeChecked()
+    expect(screen.getByRole("checkbox", { name: "Billing" })).not.toBeChecked()
+    expect(screen.getByRole("checkbox", { name: "Other" })).not.toBeChecked()
+  })
+
+  it("matches a CLI answer sentence whose question contains double quotes", () => {
+    const input = JSON.stringify({
+      questions: [
+        {
+          question: 'Name it "codeg"?',
+          header: "Name",
+          multiSelect: false,
+          options: [
+            { label: "Yes", description: "" },
+            { label: "No", description: "" },
+          ],
+        },
+      ],
+    })
+    const output =
+      'Your questions have been answered: "Name it "codeg"?"="Yes". ' +
+      "You can now continue with these answers in mind."
+    renderWithIntl(
+      <AskQuestionResultCard
+        input={input}
+        output={output}
+        state="output-available"
+      />
+    )
+    expand()
+
+    expect(screen.getByRole("radio", { name: "Yes" })).toBeChecked()
+    expect(screen.getByRole("radio", { name: "No" })).not.toBeChecked()
+  })
+
   it("matches grok's header-less questions to their empty-header answers", () => {
     // Grok's native ask carries no `header`; the connection bridge (live) and the
     // history parser both emit header-less questions + answers with `header: ""`.
@@ -470,5 +580,52 @@ describe("AskQuestionResultCard", () => {
     expect(chosen).toBeChecked()
     expect(chosen).toBeDisabled()
     expect(screen.getByRole("radio", { name: /茶/ })).not.toBeChecked()
+  })
+
+  it("echoes a codex free-text answer, not codex's Other encoding", () => {
+    // codex-acp 2.1.0 hands codex the text typed into the card's "Other" as
+    // ["None of the above", "user_note: <text>"], which is what the reloaded
+    // rollout carries. The live card showed the typed text, so the reloaded
+    // one must too.
+    const input = JSON.stringify({
+      questions: [
+        {
+          id: "next_step",
+          header: "Next step",
+          question: "What should I do next?",
+          isOther: true,
+          options: [
+            { label: "Run tests", description: "Run the focused test suite." },
+            { label: "Stop", description: "Stop and report current status." },
+          ],
+        },
+      ],
+    })
+    const output = JSON.stringify({
+      answers: {
+        next_step: {
+          answers: ["None of the above", "user_note: Inspect flaky logs"],
+        },
+      },
+    })
+    renderWithIntl(
+      <AskQuestionResultCard
+        input={input}
+        output={output}
+        state="output-available"
+      />
+    )
+
+    expect(
+      screen.getByTestId("ask-question-result-card").textContent
+    ).toContain("Inspect flaky logs")
+    expect(screen.queryByText(/None of the above/)).toBeNull()
+    expect(screen.queryByText(/user_note/)).toBeNull()
+
+    expand()
+    expect(screen.getByRole("radio", { name: "Other" })).toBeChecked()
+    expect(screen.getByDisplayValue("Inspect flaky logs")).toBeInTheDocument()
+    expect(screen.getByRole("radio", { name: /Run tests/ })).not.toBeChecked()
+    expect(screen.getByRole("radio", { name: /Stop/ })).not.toBeChecked()
   })
 })

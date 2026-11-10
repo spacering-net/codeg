@@ -64,8 +64,8 @@ function QueueItem({
   //   editing for the same reason.)
   // * A draft carrying attachments on a pull-tool session. The pull channel
   //   delivers text, so the backend rejects blocks there — every click would
-  //   land on the turn-end fallback, which for an already-queued row is a
-  //   no-op. It still goes out whole with the next turn, via the queue.
+  //   land on the turn-end fallback, which only moves the row to the front
+  //   and never inserts it. It still goes out whole with the next turn.
   const canSteer =
     Boolean(onSteerItem) &&
     !isEditing &&
@@ -156,18 +156,21 @@ export function MessageQueueDisplay({
   // both disables the clicked row and (via `steeringId !== null`) the others
   // — matching the composer's single-flight `steering` guard.
   const [steeringId, setSteeringId] = useState<string | null>(null)
-  // Latest steeringId for the click handler's re-entrancy check without
-  // re-binding it on every state commit.
+  // The click handler's re-entrancy lock. Taken in the click itself and
+  // released in `finally`, so a second click that lands before React commits
+  // the disabled buttons is still refused: the state above only drives
+  // rendering and lags a commit.
   const steeringIdRef = useRef<string | null>(null)
-  steeringIdRef.current = steeringId
 
   const handleSteerStart = useCallback(
     async (id: string) => {
       if (!onSteerItem || steeringIdRef.current !== null) return
+      steeringIdRef.current = id
       setSteeringId(id)
       try {
         await onSteerItem(id)
       } finally {
+        steeringIdRef.current = null
         setSteeringId(null)
       }
     },

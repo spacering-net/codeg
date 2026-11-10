@@ -2,7 +2,7 @@
  * Resolves a delegation binding by `parent_tool_use_id` (or, for a
  * `resume_delegation` card, by the broker task id) and fetches the child
  * conversation's persisted detail (turns + session stats) so the parent's
- * ToolCallBlock can render a preview inline.
+ * delegation row can show a preview inline.
  *
  * Returns `{ binding, detail, loading, error }`. `binding` may be undefined
  * if the parent UI mounted before the `delegation_started` event was
@@ -65,7 +65,7 @@ export function useDelegatedSubSession(
     fallbackChildConversationId?: number | null
     /**
      * A broker task id to resolve the binding by when `parentToolUseId`
-     * matches none. Set by `ResumedDelegationCard`: `resume_delegation`
+     * matches none. Set by `DelegationResumeRow`: `resume_delegation`
      * re-binds the child to the ORIGINAL `delegate_to_agent` call's
      * tool_use_id, so the resume call's own id is never a binding key — the
      * task id in its arguments is the only handle it has.

@@ -4,7 +4,10 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import type { ConnectionState } from "@/contexts/acp-connections-context"
+import type {
+  ConnectErrorInfo,
+  ConnectionState,
+} from "@/contexts/acp-connections-context"
 
 const fake = vi.hoisted(() => {
   const state = {
@@ -12,6 +15,8 @@ const fake = vi.hoisted(() => {
     // a disconnected composer — teardown REMOVES the entry, it doesn't park a
     // "disconnected" one.
     conn: undefined as ConnectionState | undefined,
+    /** Why the last connect failed (the store's side table). */
+    connectError: undefined as ConnectErrorInfo | undefined,
     reconnectInfo: null as {
       agentType: string
       workingDir: string | null
@@ -28,6 +33,7 @@ const fake = vi.hoisted(() => {
     store: {
       getConnection: () => state.conn,
       getConnectPending: () => undefined,
+      getConnectError: () => state.connectError,
       getActiveKey: () => null,
       subscribeKey: () => () => {},
       subscribeActiveKey: () => () => {},
@@ -61,6 +67,9 @@ function connected(over: Partial<ConnectionState> = {}): ConnectionState {
     error: null,
     isViewer: false,
     backgroundOutstanding: 0,
+    asyncTasks: [],
+    remoteControl: null,
+    delegatedChildren: [],
     ...over,
   } as unknown as ConnectionState
 }
@@ -93,6 +102,7 @@ describe("ComposerConnectionStatus", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     fake.state.conn = connected()
+    fake.state.connectError = undefined
     fake.state.reconnectInfo = {
       agentType: "claude_code",
       workingDir: "/Users/dev/repo",
@@ -188,6 +198,54 @@ describe("ComposerConnectionStatus", () => {
     expect(fake.state.reconnectedKeys).toEqual(["tab-1"])
   })
 
+  it("reads a failed connect as an error, not as 'disconnected'", async () => {
+    // A connect that failed leaves no store entry — the same shape as never
+    // having connected. The side table is what tells the two apart.
+    fake.state.conn = undefined
+    fake.state.connectError = {
+      agentType: "codex",
+      title: "Codex connection failed",
+      detail: "spawn codex-acp ENOENT",
+      opensAgentSettings: false,
+    }
+    renderStatus()
+
+    const trigger = screen.getByRole("button", {
+      name: `${copy.title}: ${copy.error}`,
+    })
+    expect(trigger).toHaveAttribute(
+      "title",
+      "Codex - Codex connection failed · spawn codex-acp ENOENT"
+    )
+
+    await openPopover()
+    expect(
+      await screen.findByText(
+        "Codex connection failed · spawn codex-acp ENOENT"
+      )
+    ).toBeInTheDocument()
+    // Reconnect stays the way out of it.
+    await userEvent.click(
+      await screen.findByRole("button", { name: copy.reconnect })
+    )
+    expect(fake.state.reconnectedKeys).toEqual(["tab-1"])
+  })
+
+  it("lets a live entry's own state win over a stale connect failure", () => {
+    fake.state.connectError = {
+      agentType: "codex",
+      title: "Codex connection failed",
+      detail: null,
+      opensAgentSettings: false,
+    }
+    renderStatus()
+    expect(
+      screen.getByRole("button", {
+        name: `${copy.title}: ${copy.connected}`,
+      })
+    ).toBeInTheDocument()
+  })
+
   it("disables the button when there is no reconnect target", async () => {
     fake.state.conn = undefined
     fake.state.reconnectInfo = null
@@ -215,6 +273,28 @@ describe("ComposerConnectionStatus", () => {
 
   it("warns while background work is outstanding, even between turns", async () => {
     fake.state.conn = connected({ backgroundOutstanding: 2 })
+    renderStatus()
+    await openPopover()
+
+    expect(
+      await screen.findByText(copy.reconnectInterrupts)
+    ).toBeInTheDocument()
+  })
+
+  it("warns while an async task is running, even with nothing outstanding", async () => {
+    fake.state.conn = connected({
+      asyncTasks: [
+        {
+          task_id: "call_bg_1",
+          name: "npm run dev",
+          task_type: "shell",
+          description: "",
+          show_in_transcript: false,
+          can_stop: true,
+          state: "running",
+        },
+      ],
+    })
     renderStatus()
     await openPopover()
 

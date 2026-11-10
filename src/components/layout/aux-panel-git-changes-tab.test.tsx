@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
+import { toast } from "sonner"
 import { describe, expect, it, vi } from "vitest"
 
 import {
@@ -141,10 +142,14 @@ const store = vi.hoisted(() => ({
 const gitCommitMock = vi.hoisted(() =>
   vi.fn(async () => ({ committed_files: 1 }))
 )
+const generateMock = vi.hoisted(() => vi.fn())
+const cancelGenerateMock = vi.hoisted(() => vi.fn(async () => {}))
 
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   gitCommit: gitCommitMock,
+  gitGenerateCommitMessage: generateMock,
+  gitGenerateCommitMessageCancel: cancelGenerateMock,
 }))
 
 vi.mock("@/hooks/use-workspace-state-store", () => ({
@@ -405,5 +410,433 @@ describe("GitChangesTab quick commit IME guard", () => {
       ["f0001"],
       "f1"
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Quick-commit box: multi-line, and the ✨ that writes its message.
+// ---------------------------------------------------------------------------
+
+type Generated = { message: string; agent_type: string; auto_commit: boolean }
+
+describe("GitChangesTab commit message box", () => {
+  const PLACEHOLDER = "Commit message (Enter to commit)"
+  const GENERATE = "Generate a commit message"
+
+  function setup(count = 2) {
+    store.git = flatGit(count)
+    gitCommitMock.mockClear()
+    generateMock.mockReset()
+    cancelGenerateMock.mockClear()
+    renderTab()
+    return screen.getByPlaceholderText(PLACEHOLDER) as HTMLTextAreaElement
+  }
+
+  it("starts a new line on Shift+Enter instead of committing", () => {
+    const box = setup()
+    fireEvent.change(box, { target: { value: "fix: a" } })
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true })
+    expect(gitCommitMock).not.toHaveBeenCalled()
+  })
+
+  it("commits a multi-line message whole", async () => {
+    const box = setup(1)
+    fireEvent.change(box, { target: { value: "fix: a\n\nbecause b" } })
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter" })
+    })
+    expect(gitCommitMock).toHaveBeenCalledWith(
+      "/repo",
+      "fix: a\n\nbecause b",
+      ["f0001"],
+      "f1"
+    )
+  })
+
+  it("fills the box with a message written for the tracked changes", async () => {
+    const box = setup()
+    fireEvent.change(box, { target: { value: "parser" } })
+    let finish!: (value: Generated) => void
+    generateMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    expect(generateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/repo",
+        folderId: "f1",
+        files: ["f0001", "f0002"],
+        draft: "parser",
+        fallbackAgent: null,
+      })
+    )
+    // Read-only while it is written, and Enter does not commit the draft.
+    expect(box.readOnly).toBe(true)
+    fireEvent.keyDown(box, { key: "Enter" })
+    expect(gitCommitMock).not.toHaveBeenCalled()
+
+    await act(async () => {
+      finish({
+        message: "fix(parser): keep quotes\n\nThey were dropped.",
+        agent_type: "claude_code",
+        auto_commit: false,
+      })
+    })
+    expect(box.value).toBe("fix(parser): keep quotes\n\nThey were dropped.")
+    expect(box.readOnly).toBe(false)
+  })
+
+  it("stops on a second click and keeps the draft", async () => {
+    const box = setup()
+    fireEvent.change(box, { target: { value: "draft" } })
+    let finish!: (value: Generated) => void
+    generateMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    const requestId = generateMock.mock.calls[0][0].requestId
+    fireEvent.click(screen.getByRole("button", { name: /Stop generating/ }))
+    expect(cancelGenerateMock).toHaveBeenCalledWith(requestId)
+    await act(async () => {
+      finish({
+        message: "too late",
+        agent_type: "claude_code",
+        auto_commit: false,
+      })
+    })
+    expect(box.value).toBe("draft")
+  })
+
+  it("commits what the message was written for when the settings say so", async () => {
+    const box = setup()
+    generateMock.mockResolvedValueOnce({
+      message: "fix: both",
+      agent_type: "claude_code",
+      auto_commit: true,
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    })
+    expect(gitCommitMock).toHaveBeenCalledWith(
+      "/repo",
+      "fix: both",
+      ["f0001", "f0002"],
+      "f1"
+    )
+    expect(box.value).toBe("")
+  })
+
+  it("only fills the box when the changes moved while it was written", async () => {
+    store.git = flatGit(2)
+    gitCommitMock.mockClear()
+    generateMock.mockReset()
+    const view = renderTab()
+    let finish!: (value: Generated) => void
+    generateMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    store.git = flatGit(3)
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <GitChangesTab />
+      </NextIntlClientProvider>
+    )
+    await act(async () => {
+      finish({
+        message: "fix: two",
+        agent_type: "claude_code",
+        auto_commit: true,
+      })
+    })
+    expect(gitCommitMock).not.toHaveBeenCalled()
+    expect(
+      (screen.getByPlaceholderText(PLACEHOLDER) as HTMLTextAreaElement).value
+    ).toBe("fix: two")
+  })
+
+  it("has nothing to describe without any changes", () => {
+    setup(0)
+    const button = screen.getByRole("button", {
+      name: "No changes to describe",
+    })
+    expect(button).toBeDisabled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Untracked files: the ✨ asks which of them go with the message, and Enter
+// commits the ones kept checked along with the tracked changes.
+// ---------------------------------------------------------------------------
+
+describe("GitChangesTab untracked files and the ✨", () => {
+  const PLACEHOLDER = "Commit message (Enter to commit)"
+  const GENERATE = "Generate a commit message"
+  const DROP = "Don't commit the untracked files"
+
+  const tracked = { path: "f0001", status: "M", additions: 1, deletions: 0 }
+  const untracked = (path: string) => ({
+    path,
+    status: "??",
+    additions: 0,
+    deletions: 0,
+  })
+
+  function setup(
+    git = [tracked, untracked("new/a.ts"), untracked("new/b.ts")]
+  ) {
+    store.git = git
+    gitCommitMock.mockClear()
+    generateMock.mockReset()
+    const view = renderTab()
+    const box = screen.getByPlaceholderText(PLACEHOLDER) as HTMLTextAreaElement
+    return { view, box }
+  }
+
+  function rerenderTab(view: ReturnType<typeof renderTab>) {
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <GitChangesTab />
+      </NextIntlClientProvider>
+    )
+  }
+
+  const checkbox = (name: string) => screen.getByRole("checkbox", { name })
+
+  // Ask, leave `new/b.ts` out, and have the message written.
+  async function generateWithoutB(message: string, autoCommit = false) {
+    generateMock.mockResolvedValueOnce({
+      message,
+      agent_type: "claude_code",
+      auto_commit: autoCommit,
+    })
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    fireEvent.click(checkbox("new/b.ts"))
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Generate" }))
+    })
+  }
+
+  it("asks first, every untracked file checked, and describes the kept ones", async () => {
+    setup()
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+
+    expect(generateMock).not.toHaveBeenCalled()
+    expect(checkbox("new/a.ts")).toHaveAttribute("aria-checked", "true")
+    expect(checkbox("new/b.ts")).toHaveAttribute("aria-checked", "true")
+
+    fireEvent.click(checkbox("new/b.ts"))
+    generateMock.mockReturnValueOnce(new Promise(() => {}))
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Generate" }))
+    })
+    expect(generateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ files: ["f0001", "new/a.ts"] })
+    )
+  })
+
+  it("commits the kept untracked files with the message on Enter", async () => {
+    const { box } = setup()
+    await generateWithoutB("feat: add a")
+
+    expect(box.value).toBe("feat: add a")
+    expect(
+      screen.getByText("Also commits 1 untracked file")
+    ).toBeInTheDocument()
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter" })
+    })
+    expect(gitCommitMock).toHaveBeenCalledWith(
+      "/repo",
+      "feat: add a",
+      ["f0001", "new/a.ts"],
+      "f1"
+    )
+    // Committed: the next commit is asked about afresh.
+    expect(screen.queryByText(/Also commits/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    expect(checkbox("new/b.ts")).toHaveAttribute("aria-checked", "true")
+  })
+
+  it("commits them right away when the settings say so", async () => {
+    setup()
+    await generateWithoutB("feat: add a", true)
+    expect(gitCommitMock).toHaveBeenCalledWith(
+      "/repo",
+      "feat: add a",
+      ["f0001", "new/a.ts"],
+      "f1"
+    )
+  })
+
+  it("keeps a file left out unchecked the next time it asks", async () => {
+    setup()
+    await generateWithoutB("feat: add a")
+
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    expect(checkbox("new/a.ts")).toHaveAttribute("aria-checked", "true")
+    expect(checkbox("new/b.ts")).toHaveAttribute("aria-checked", "false")
+  })
+
+  it("drops the kept files on request, leaving Enter the tracked changes", async () => {
+    const { box } = setup()
+    await generateWithoutB("feat: add a")
+
+    fireEvent.click(screen.getByRole("button", { name: DROP }))
+    expect(screen.queryByText(/Also commits/)).not.toBeInTheDocument()
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter" })
+    })
+    expect(gitCommitMock).toHaveBeenCalledWith(
+      "/repo",
+      "feat: add a",
+      ["f0001"],
+      "f1"
+    )
+  })
+
+  it("writes nothing when the dialog is cancelled", () => {
+    setup()
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+    expect(generateMock).not.toHaveBeenCalled()
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
+    expect(screen.queryByText(/Also commits/)).not.toBeInTheDocument()
+  })
+
+  it("describes untracked files alone when nothing tracked changed", async () => {
+    setup([untracked("new/a.ts"), untracked("new/b.ts")])
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    generateMock.mockReturnValueOnce(new Promise(() => {}))
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Generate" }))
+    })
+    expect(generateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ files: ["new/a.ts", "new/b.ts"] })
+    )
+  })
+
+  it("leaves out a file deleted while the dialog was open", async () => {
+    const { view } = setup()
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    store.git = [tracked, untracked("new/a.ts")]
+    rerenderTab(view)
+
+    generateMock.mockReturnValueOnce(new Promise(() => {}))
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Generate" }))
+    })
+    expect(generateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ files: ["f0001", "new/a.ts"] })
+    )
+  })
+
+  it("keeps the picks when the commit is refused, for the retry", async () => {
+    const { box } = setup()
+    await generateWithoutB("feat: add a")
+    gitCommitMock.mockRejectedValueOnce(new Error("pre-commit hook failed"))
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter" })
+    })
+
+    // The backend took them back out of the index: still untracked, still
+    // picked, and the next Enter commits them.
+    expect(box.value).toBe("feat: add a")
+    expect(
+      screen.getByText("Also commits 1 untracked file")
+    ).toBeInTheDocument()
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter" })
+    })
+    expect(gitCommitMock).toHaveBeenLastCalledWith(
+      "/repo",
+      "feat: add a",
+      ["f0001", "new/a.ts"],
+      "f1"
+    )
+  })
+
+  it("says so when a file left unchecked was staged meanwhile", async () => {
+    const info = vi.spyOn(toast, "info")
+    const { view } = setup()
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    fireEvent.click(checkbox("new/b.ts"))
+    store.git = [
+      tracked,
+      untracked("new/a.ts"),
+      { path: "new/b.ts", status: "A", additions: 1, deletions: 0 },
+    ]
+    rerenderTab(view)
+
+    generateMock.mockReturnValueOnce(new Promise(() => {}))
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Generate" }))
+    })
+    // Staged, it goes with the commit whatever the box said — and is described.
+    expect(generateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ files: ["f0001", "new/b.ts", "new/a.ts"] })
+    )
+    expect(info).toHaveBeenCalledWith(
+      "Some files you unchecked were staged in the meantime, so they're committed with the tracked changes",
+      { description: "new/b.ts" }
+    )
+    info.mockRestore()
+  })
+
+  it("keeps a file left out unchecked through a time off the list", async () => {
+    const { view } = setup()
+    await generateWithoutB("feat: add a")
+
+    // Ignored for a while: the next ask doesn't list it.
+    store.git = [tracked, untracked("new/a.ts")]
+    rerenderTab(view)
+    generateMock.mockResolvedValueOnce({
+      message: "feat: add a",
+      agent_type: "claude_code",
+      auto_commit: false,
+    })
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Generate" }))
+    })
+
+    store.git = [tracked, untracked("new/a.ts"), untracked("new/b.ts")]
+    rerenderTab(view)
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    expect(checkbox("new/b.ts")).toHaveAttribute("aria-checked", "false")
+  })
+
+  it("only fills the box when a kept file went away while it was written", async () => {
+    const { view, box } = setup()
+    let finish!: (value: Generated) => void
+    generateMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: GENERATE }))
+    fireEvent.click(checkbox("new/b.ts"))
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Generate" }))
+    })
+    store.git = [tracked, untracked("new/b.ts")]
+    rerenderTab(view)
+
+    await act(async () => {
+      finish({
+        message: "feat: add a",
+        agent_type: "claude_code",
+        auto_commit: true,
+      })
+    })
+    expect(gitCommitMock).not.toHaveBeenCalled()
+    expect(box.value).toBe("feat: add a")
   })
 })

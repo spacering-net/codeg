@@ -6,6 +6,7 @@ import type { CSSProperties, ElementType, JSX } from "react"
 import { cn } from "@/lib/utils"
 import { motion } from "motion/react"
 import { memo, useMemo } from "react"
+import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
 
 type MotionHTMLProps = MotionProps & Record<string, unknown>
 
@@ -41,6 +42,7 @@ const ShimmerComponent = ({
   spread = 2,
   shineColor,
 }: TextShimmerProps) => {
+  const animated = useChatAnimationsEnabled()
   const MotionComponent = useMemo(
     () => getMotionComponent(Component as keyof JSX.IntrinsicElements),
     [Component]
@@ -56,7 +58,7 @@ const ShimmerComponent = ({
   return (
     // eslint-disable-next-line react-hooks/static-components -- component is cached at module level via motionComponentCache
     <MotionComponent
-      animate={{ backgroundPosition: "0% center" }}
+      animate={{ backgroundPosition: animated ? "0% center" : "100% center" }}
       className={cn(
         "relative inline-block bg-[length:250%_100%,auto] bg-clip-text bg-no-repeat text-transparent",
         className
@@ -68,11 +70,15 @@ const ShimmerComponent = ({
           backgroundImage: `linear-gradient(90deg, #0000 calc(50% - var(--spread)), ${shine}, #0000 calc(50% + var(--spread))), linear-gradient(var(--color-muted-foreground), var(--color-muted-foreground))`,
         } as CSSProperties
       }
-      transition={{
-        duration,
-        ease: "linear",
-        repeat: Number.POSITIVE_INFINITY,
-      }}
+      transition={
+        animated
+          ? {
+              duration,
+              ease: "linear",
+              repeat: Number.POSITIVE_INFINITY,
+            }
+          : { duration: 0 }
+      }
     >
       {children}
     </MotionComponent>

@@ -274,15 +274,41 @@ export function buildHeatMatrix(cells: TokenUsageHeatCell[]): HeatMatrix {
  * input, cache writes, and cache reads — so the ratio answers "how much of what
  * I sent did I not pay full price for". Output tokens are excluded on purpose:
  * they were never cacheable.
+ *
+ * Counter-shaped rather than totals-shaped so the dashboard (`TokenUsageTotals`)
+ * and a single session's live counters (`TurnUsage`, whose fields are named
+ * differently) share ONE definition of the ratio instead of each carrying its
+ * own division.
  */
-export function cacheHitRate(totals: TokenUsageTotals): number | null {
-  const denominator =
-    totals.input_tokens +
-    totals.cache_creation_tokens +
-    totals.cache_read_tokens
+export function cacheHitRatio(
+  inputTokens: number,
+  cacheCreationTokens: number,
+  cacheReadTokens: number
+): number | null {
+  const denominator = inputTokens + cacheCreationTokens + cacheReadTokens
   if (denominator <= 0) return null
-  return totals.cache_read_tokens / denominator
+  return cacheReadTokens / denominator
 }
+
+/** {@link cacheHitRatio} over a dashboard totals row. */
+export function cacheHitRate(totals: TokenUsageTotals): number | null {
+  return cacheHitRatio(
+    totals.input_tokens,
+    totals.cache_creation_tokens,
+    totals.cache_read_tokens
+  )
+}
+
+/**
+ * Decimal places every surface prints the cache hit rate with
+ * ({@link formatPercent}): the dashboard's ring, the share card's copy of it,
+ * and the composer popover's row. One number, one reading — a rounded `95%`
+ * beside a `94.6%` looks like two different measurements.
+ *
+ * Deliberately not applied to the archetype copy, whose `{percent}%` sentences
+ * are a family of five and read as a badge, not a meter.
+ */
+export const CACHE_HIT_RATE_DIGITS = 1
 
 export function averagePerConversation(totals: TokenUsageTotals): number {
   if (totals.conversation_count <= 0) return 0
@@ -496,6 +522,24 @@ export function formatTokensPrecise(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
   if (n >= 10_000) return `${(n / 1_000).toFixed(1)}K`
   return Math.round(n).toLocaleString()
+}
+
+/**
+ * USD list-price amounts for the usage hero. Always a dollar figure, never
+ * localized into another currency: the catalog rates are USD per 1M tokens.
+ */
+export function formatUsd(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "$0"
+  if (n < 0.0001) return "<$0.0001"
+  if (n < 0.01) {
+    const trimmed = n.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")
+    return `$${trimmed}`
+  }
+  if (n < 1000) return `$${n.toFixed(2)}`
+  return `$${n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
 }
 
 /** `1h 24m` / `3m 05s` / `12s` — generation time, never zero-padded hours. */

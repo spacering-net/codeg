@@ -103,6 +103,40 @@ describe("aux file tree row context menus stay reachable", () => {
   })
 })
 
+describe("aux file tree Copy submenu", () => {
+  // "Copy path" grew into a submenu: the workspace-relative path, the
+  // absolute one, and the entry itself on the OS clipboard. The rows live in
+  // file-tree-copy-menu.tsx (behaviour covered by its own test); what this
+  // file owns is wiring all three menus — file, directory, workspace root —
+  // to it, so they cannot drift apart.
+  it("wires every row menu to the shared submenu", () => {
+    const uses = auxSource.match(/<FileTreeCopySubContent\b/g) ?? []
+    expect(uses).toHaveLength(3)
+    expect(auxSource).toMatch(/t\("copy"\)/)
+    // The flat item it replaced is gone from every row menu.
+    expect(auxSource).not.toMatch(/\{t\("copyPath"\)\}/)
+  })
+
+  it("passes each call site its own relative path", () => {
+    // Tree nodes carry a workspace-relative path already; only the root has
+    // none, and "" would copy nothing, so it copies "." instead.
+    expect(auxSource).toMatch(/relativePath=\{node\.path\}/)
+    expect(auxSource).toMatch(/relativePath="\."/)
+  })
+
+  it("marks the workspace as remote from webMode, never from a constant", () => {
+    // webMode covers the browser AND a remote-desktop window. In both the
+    // files live on another host, so the native copy would fill the SERVER's
+    // clipboard — the submenu drops that row on `remote`.
+    const flags = auxSource.match(/remote=\{[^}]*\}/g) ?? []
+    expect(flags).toEqual([
+      "remote={webMode}",
+      "remote={webMode}",
+      "remote={webMode}",
+    ])
+  })
+})
+
 describe("aux file tree Open in submenu includes Code", () => {
   it("offers VS Code next to Explorer and Terminal", () => {
     expect(auxSource).toMatch(/OpenInSubContent/)
@@ -339,6 +373,14 @@ describe("aux file tree drag/selection polish", () => {
     // horizontal padding on the tree container leaves a small left/right gutter
     // so it no longer runs edge-to-edge.
     expect(auxTreeSource).toMatch(/w-max min-w-full px-1\.5/)
+  })
+
+  it("keeps the first row's highlight off the title strip above", () => {
+    // Without top padding a selected root row sat flush against the panel's
+    // title strip. Rows repeat the inset as a scroll margin, so keyboard
+    // navigation back up to the root doesn't scroll the padding away again.
+    expect(auxTreeSource).toMatch(/w-max min-w-full px-1\.5 pt-1\.5 /)
+    expect(auxTreeSource).toMatch(/\[&_\[data-tree-row-path\]\]:scroll-mt-1\.5/)
   })
 })
 

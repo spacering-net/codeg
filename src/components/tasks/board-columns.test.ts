@@ -3,6 +3,7 @@ import {
   ALL_WORK_TASK_STATUSES,
   BOARD_COLUMN_IDS,
   columnForStatus,
+  columnForTask,
   filterTasksForList,
   groupTasksByColumn,
   STATUSES_BY_COLUMN,
@@ -222,5 +223,47 @@ describe("groupTasksByColumn", () => {
     const shown = groupTasksByColumn(tasks, false, true)
     expect(shown.done.map((t) => t.id)).toEqual([1, 3])
     expect(shown.attention.map((t) => t.id)).toEqual([2])
+  })
+})
+
+describe("handle later (以后处理)", () => {
+  const at = "2026-08-01T02:00:00Z"
+
+  it("files a deferred reviewed or failed task under Done, status unchanged", () => {
+    expect(columnForTask(task(1, "review", { deferred_at: at }))).toBe("done")
+    expect(columnForTask(task(2, "failed", { deferred_at: at }))).toBe("done")
+    // Without the mark, the status decides as before.
+    expect(columnForTask(task(3, "review"))).toBe("attention")
+    expect(columnForTask(task(4, "failed"))).toBe("attention")
+    // A stale mark can never move a live task (the backend clears it on every
+    // way out of review / failed, and this is the second guard).
+    expect(columnForTask(task(5, "running", { deferred_at: at }))).toBe(
+      "inProgress"
+    )
+    expect(columnForTask(task(6, "merging", { deferred_at: at }))).toBe(
+      "attention"
+    )
+  })
+
+  it("moves the card on the board and in the list's column filter alike", () => {
+    const tasks = [
+      task(1, "review", { updated_at: "2026-08-01T01:00:00Z" }),
+      task(2, "review", {
+        deferred_at: at,
+        updated_at: "2026-08-01T03:00:00Z",
+      }),
+      task(3, "done", { updated_at: "2026-08-01T02:00:00Z" }),
+    ]
+    const grouped = groupTasksByColumn(tasks, false)
+    expect(grouped.attention.map((t) => t.id)).toEqual([1])
+    // Freshest first, like the rest of Done — deferring stamps updated_at, so
+    // the card the user just put aside lands on top.
+    expect(grouped.done.map((t) => t.id)).toEqual([2, 3])
+    expect(
+      filterTasksForList(tasks, "attention", false, false).map((t) => t.id)
+    ).toEqual([1])
+    expect(
+      filterTasksForList(tasks, "done", false, false).map((t) => t.id)
+    ).toEqual([2, 3])
   })
 })

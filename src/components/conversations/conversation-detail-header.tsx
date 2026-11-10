@@ -62,6 +62,8 @@ import {
   type ActiveSessionDetails,
 } from "./active-session-details"
 import { SessionDetailsDialog } from "./session-details-dialog"
+import { ConversationHeaderTags } from "./conversation-tag-picker"
+import { useIsMobile } from "@/hooks/use-mobile"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -126,6 +128,27 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
       (s.conversations.find((c) => c.id === conversationId)?.pinned_at ??
         null) != null
   )
+  // Tags: offered only on a ROOT conversation of the sidebar list — the same
+  // rows the sidebar lets you tag (a sub-session opened in a tab is not one).
+  // Both reads are narrow: a boolean, and the row's own `tag_ids` array, whose
+  // reference only changes when its tags do.
+  const taggable = useAppWorkspaceStore(
+    (s) =>
+      conversationId != null &&
+      s.conversations.some((c) => c.id === conversationId)
+  )
+  const tagIds = useAppWorkspaceStore((s) =>
+    conversationId == null
+      ? undefined
+      : s.conversations.find((c) => c.id === conversationId)?.tag_ids
+  )
+  const gitBranch = useAppWorkspaceStore((s) =>
+    conversationId == null
+      ? null
+      : (s.conversations.find((c) => c.id === conversationId)?.git_branch ??
+        null)
+  )
+  const isMobile = useIsMobile()
 
   const [details, setDetails] = useState<ActiveSessionDetails | null>(null)
   // Snapshot the action target when a dialog OPENS. The header is a SINGLE
@@ -251,14 +274,28 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50"
           aria-hidden
         />
-        {/* min-w-0 flex-1: the title absorbs the remaining width and takes the
-            ellipsis, so the folder crumb on the left stays fully visible. */}
+        {/* The title takes the ellipsis, so the folder crumb on the left stays
+            fully visible — but grows only as far as its own text
+            (`max-w-max`), so the tags follow it instead of the far edge. */}
         <span
-          className="min-w-0 flex-1 truncate text-sm text-foreground/90"
+          className="min-w-0 max-w-max flex-1 truncate text-sm text-foreground/90"
           title={title}
         >
           {displayTitle}
         </span>
+        {/* Capped at half the row so a long tag list squeezes its own chips
+            (they truncate) before it squeezes the title. */}
+        {taggable && conversationId != null ? (
+          <div className="flex max-w-[50%] min-w-0 shrink items-center">
+            <ConversationHeaderTags
+              conversationId={conversationId}
+              folderId={folderId}
+              tagIds={tagIds}
+              gitBranch={gitBranch}
+              max={isMobile ? 1 : 3}
+            />
+          </div>
+        ) : null}
       </div>
       <div className="flex shrink-0 items-center">
         <DropdownMenu>

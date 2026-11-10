@@ -100,6 +100,9 @@ export interface SkillAgentMatrixProps {
   /** Notified after a batch reconciles, with the distinct agents touched. */
   onApplied?: (touchedAgents: AgentType[]) => void
   searchPlaceholder?: string
+  /** Shows the search box (the default). A pack of one skill turns it off:
+   *  there is nothing to filter. */
+  searchable?: boolean
   /** Tooltip shown over a not-ready skill's cells (office: "sync first"). */
   notReadyHint?: string
   /**
@@ -193,6 +196,7 @@ export function SkillAgentMatrix({
   loadContent,
   onApplied,
   searchPlaceholder,
+  searchable = true,
   notReadyHint,
   toolbarActions,
   rowActions,
@@ -523,12 +527,14 @@ export function SkillAgentMatrix({
       <div className="h-full flex flex-col min-h-0 min-w-0">
         {/* Toolbar: search + everything menu. */}
         <div className="flex items-center gap-2 pb-3">
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={searchPlaceholder ?? t("searchPlaceholder")}
-            className="max-w-xs"
-          />
+          {searchable && (
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={searchPlaceholder ?? t("searchPlaceholder")}
+              className="max-w-xs"
+            />
+          )}
           <div className="ml-auto flex items-center gap-2">
             {toolbarActions}
             <DropdownMenu>

@@ -1,4 +1,51 @@
-import type { WorkTask } from "@/lib/types"
+import type {
+  ForgeProviderId,
+  ForgeRemote,
+  WorkTask,
+  WorkTaskStatus,
+} from "@/lib/types"
+
+/**
+ * The statuses a task can be put aside in ("以后处理") — mirror of the backend's
+ * `DEFERRABLE_STATUSES`: settled and waiting on the user, with nothing running
+ * that a deferral would leave hanging out of sight. `awaiting_input` waits on
+ * the user too, but its agent is live and holds a slot (it is answered or
+ * canceled, not parked), and `merging` is in flight.
+ */
+const DEFERRABLE_STATUSES: ReadonlySet<WorkTaskStatus> = new Set([
+  "review",
+  "failed",
+])
+
+/**
+ * Whether the user put this task aside to handle later. Such a task waits under
+ * Done instead of "needs you" and leaves the attention badge — but nothing
+ * else about it changed: it is still a reviewed (or failed) task, and its
+ * follow-up / retry / merge picks it back up and clears the mark.
+ *
+ * Read off the status as well as the mark. The backend clears the mark on
+ * every way out of review / failed, so the two always agree — and if they ever
+ * did not, a stale mark must not pull a running task off "In progress".
+ */
+export function isDeferred(task: WorkTask): boolean {
+  return task.deferred_at != null && DEFERRABLE_STATUSES.has(task.status)
+}
+
+/**
+ * Whether "以后处理" is on offer — the same conditions the backend's
+ * `set_deferred` enforces: a reviewed or failed task not already put aside,
+ * not archived (that already put it away), and not waiting in its project's
+ * merge queue (an acceptance already made; its decision left is leaving the
+ * queue, not when to look at the task).
+ */
+export function canDefer(task: WorkTask): boolean {
+  return (
+    DEFERRABLE_STATUSES.has(task.status) &&
+    task.deferred_at == null &&
+    task.archived_at == null &&
+    task.merge_queued == null
+  )
+}
 
 /**
  * Whether the task's worktree is gone: it ran in one (every generation does),
@@ -141,22 +188,39 @@ export function mergeQueueRanks(tasks: WorkTask[]): Map<number, number> {
 }
 
 /**
- * Whether a reviewed task can be DELIVERED to the forge — as a new pull
- * request for an issue-sourced task, or back onto its own branch for a
- * pull-request-sourced one. Three conditions, and the backend re-checks every
- * one of them; this predicate only decides whether to offer the button.
- * - it came from a forge issue or pull request (a plain local task has no
- *   repository to push to);
+ * Whether a reviewed task can be DELIVERED to a forge: as a new pull request
+ * for an issue's task, or for a task with no forge provenance whose project
+ * lives on a forge codeg speaks; back onto its own branch for a
+ * pull-request-sourced one; or into the pull request an earlier delivery
+ * opened, for a task that stayed in review after it. The backend re-checks
+ * every condition; this predicate only decides whether to offer the button.
+ * - it has somewhere to go: forge provenance, a pull request it already
+ *   delivered to, or — for an ordinary task — a project `origin` the backend
+ *   recognizes as GitHub, GitLab or Gitea / Forgejo (`remote`, the folder's
+ *   remote as `useFolderForgeRemote` reads it; `null` while unknown);
  * - it has something to land — GitHub answers an empty pull request with a
- *   422, and `hasNothingToMerge` is the same test the merge button uses;
- * - its worktree is still there (folded into `hasNothingToMerge`).
+ *   422, and `hasNothingToMerge` is the same test the merge button uses. Not
+ *   asked of a delivery INTO the pull request an earlier one opened: that pull
+ *   request already carries the work, so finishing the task on it needs
+ *   nothing new — including once it merged and the local base took the same
+ *   commits in, which reads as "no changes" here (the backend skips the same
+ *   check for the same reason);
+ * - its worktree is still there (folded into `hasNothingToMerge`, and asked
+ *   on its own of the delivery into a recorded pull request).
  */
-export function canDeliverToPr(task: WorkTask): boolean {
-  return (
-    task.status === "review" &&
-    (task.source_kind === "forge_issue" || task.source_kind === "forge_pr") &&
-    !hasNothingToMerge(task)
-  )
+export function canDeliverToPr(
+  task: WorkTask,
+  remote?: ForgeRemote | null
+): boolean {
+  if (task.status !== "review") return false
+  if (deliversIntoOpenPr(task)) return !isWorktreeGone(task)
+  if (hasNothingToMerge(task)) return false
+  return isForgeSourced(task) || remote?.supported === true
+}
+
+/** Whether the task came from a forge issue or pull request. */
+function isForgeSourced(task: WorkTask): boolean {
+  return task.source_kind === "forge_issue" || task.source_kind === "forge_pr"
 }
 
 /**
@@ -171,18 +235,53 @@ export function mustDeliverToPr(task: WorkTask): boolean {
 }
 
 /**
+ * Whether this reviewed task's next delivery pushes INTO a pull request it
+ * already has rather than opening one — an issue's or an ordinary task that
+ * was delivered once and kept in review. The same record the backend reads:
+ * an issue's task needs the number beside the link (rows delivered before it
+ * was kept are all finished), an ordinary task its delivery record. A
+ * pull-request task always pushes into its own (see `mustDeliverToPr`), which
+ * the dialog words as a push back.
+ */
+export function deliversIntoOpenPr(task: WorkTask): boolean {
+  if (task.status !== "review") return false
+  if (task.source_kind === "forge_issue") {
+    return (
+      task.source_meta?.result_pr != null &&
+      task.source_meta?.result_pr_number != null
+    )
+  }
+  return task.source_kind == null && task.delivery != null
+}
+
+/**
  * Whether this task's forge calls a proposed change a MERGE request. Only the
  * wording of the acceptance depends on it — a button that promises a pull
  * request and then opens a merge request reads like the wrong tool answered.
- * Tasks with no forge provenance (and rows stored before GitLab support) are
- * GitHub's, which is what they have always been.
+ * The task's own record decides — its provenance, or where its delivery went —
+ * and for an ordinary task not delivered yet, the forge its project lives on
+ * (`folderProvider`). Nothing known at all (and rows stored before GitLab
+ * support) is GitHub's wording, which is what it has always been.
  */
-export function usesMergeRequests(task: WorkTask | null | undefined): boolean {
-  return task?.source_meta?.provider === "gitlab"
+export function usesMergeRequests(
+  task: WorkTask | null | undefined,
+  folderProvider?: ForgeProviderId | null
+): boolean {
+  const provider =
+    task?.source_meta?.provider ?? task?.delivery?.provider ?? folderProvider
+  return provider === "gitlab" || provider === "cnb"
 }
 
-/** The pull request a delivered task ended up in, if that is how it finished. */
-export function deliveredPrUrl(task: WorkTask): string | null {
-  if (task.completion_kind !== "delivered_pr") return null
-  return task.source_meta?.result_pr ?? null
+/**
+ * The pull request this task's work went into, if it went into one: for a task
+ * still in review, the one its next delivery pushes into; for a finished one,
+ * the one it finished in — or opened before it was landed some other way. Rows
+ * that finished before `completion_kind` existed stay silent rather than
+ * guessing from a snapshot nobody kept current.
+ */
+export function taskPullRequestUrl(task: WorkTask): string | null {
+  const url = task.source_meta?.result_pr ?? task.delivery?.pr_url ?? null
+  if (url == null) return null
+  if (task.status === "done" && task.completion_kind == null) return null
+  return url
 }

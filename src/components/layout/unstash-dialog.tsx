@@ -1,7 +1,13 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Archive, ArchiveRestore, ChevronRight, Loader2 } from "lucide-react"
+import {
+  Archive,
+  ArchiveRestore,
+  ChevronRight,
+  FileIcon,
+  Loader2,
+} from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
@@ -35,6 +41,7 @@ import {
   FileTree,
   FileTreeFile,
   FileTreeFolder,
+  FileTreeIcon,
 } from "@/components/ai-elements/file-tree"
 import { DiffViewer } from "@/components/diff/diff-viewer"
 import { ImageDiffView } from "@/components/diff/image-diff-view"
@@ -327,11 +334,13 @@ export function StashWorkspace({ folderPath }: StashWorkspaceProps) {
     return (
       <ContextMenu key={node.path}>
         <ContextMenuTrigger>
-          <FileTreeFile
-            name={node.name}
-            path={node.path}
-            className="gap-1 px-1.5 py-1"
-          >
+          <FileTreeFile name={node.name} path={node.path}>
+            {/* The icon fills the leading column a sibling folder spends on its
+                chevron; without it the file names hang one glyph LEFT of the
+                directory names they sit under. */}
+            <FileTreeIcon>
+              <FileIcon className="size-4 text-muted-foreground" />
+            </FileTreeIcon>
             <span className="flex-1 truncate text-left" title={node.path}>
               {node.name}
             </span>

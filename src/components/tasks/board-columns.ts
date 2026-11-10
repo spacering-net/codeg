@@ -1,5 +1,6 @@
 import { parseTimestamp } from "@/components/conversations/sidebar-conversation-grouping"
 import type { WorkTask, WorkTaskStatus } from "@/lib/types"
+import { isDeferred } from "./task-acceptance"
 
 /** The four board columns (DB statuses are exact; the UI aggregates them). */
 export type BoardColumnId = "todo" | "inProgress" | "attention" | "done"
@@ -18,6 +19,10 @@ export const BOARD_COLUMN_IDS: BoardColumnId[] = [
  * `WorkTaskStatus` appears here exactly once — which is what makes adding a
  * status without filing it in a column a test failure rather than a silent
  * disappearance from the board.
+ *
+ * One overlay sits on top of it, applied per TASK by `columnForTask`: a review
+ * or failed task the user put aside to handle later is filed under Done. Its
+ * status is unchanged — the overlay is the whole of "以后处理".
  */
 export const STATUSES_BY_COLUMN: Record<BoardColumnId, WorkTaskStatus[]> = {
   todo: ["todo", "queued"],
@@ -60,6 +65,16 @@ export function columnForStatus(status: WorkTaskStatus): BoardColumnId {
 }
 
 /**
+ * The column a TASK is filed in: its status's column (`columnForStatus`), except
+ * for a task put aside to handle later, which waits under Done until the user
+ * picks it back up (`isDeferred`). The board and the list's column filter both
+ * read this, so a deferred task is in the same bucket in both views.
+ */
+export function columnForTask(task: WorkTask): BoardColumnId {
+  return isDeferred(task) ? "done" : columnForStatus(task.status)
+}
+
+/**
  * Bucket tasks into the four columns. Canceled tasks are dropped unless
  * `showCanceled`, archived ones unless `showArchived` (archived is always
  * terminal).
@@ -86,7 +101,7 @@ export function groupTasksByColumn(
   for (const task of tasks) {
     if (task.status === "canceled" && !showCanceled) continue
     if (task.archived_at != null && !showArchived) continue
-    grouped[columnForStatus(task.status)].push(task)
+    grouped[columnForTask(task)].push(task)
   }
   for (const column of BOARD_COLUMN_IDS) {
     grouped[column].sort(byFreshest)
@@ -122,7 +137,7 @@ export function filterTasksForList(
       (task) =>
         (task.status !== "canceled" || showCanceled) &&
         (task.archived_at == null || showArchived) &&
-        (group == null || columnForStatus(task.status) === group)
+        (group == null || columnForTask(task) === group)
     )
     .sort(byFreshest)
 }

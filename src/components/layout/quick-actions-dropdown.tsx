@@ -5,9 +5,11 @@ import {
   FolderGit2,
   FolderOpenDot,
   GamepadDirectional,
+  Globe,
   LayoutTemplate,
   ListTodo,
   Map as MapIcon,
+  Monitor,
   MonitorCloud,
   PawPrint,
   Rocket,
@@ -31,10 +33,15 @@ import {
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useOptionalWorkspaceActions } from "@/contexts/workspace-context"
 import { useRemoteWorkspaceConnections } from "@/hooks/use-remote-workspace-connections"
 import { openProjectBootWindow } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
+import { useBrowserCapabilities } from "@/lib/browser/use-browser-capabilities"
 import { openPetWindow } from "@/lib/pet/api"
+import { isRemoteDesktopWindow } from "@/lib/platform"
+import { openLocalWorkspace } from "@/lib/remote-workspace"
 import { CloneDialog } from "./clone-dialog"
 import { RemoteWorkspaceManageDialog } from "./remote-workspace-manage-dialog"
 import { WorkspaceFolderDialog } from "./workspace-folder-dialog"
@@ -44,12 +51,15 @@ import { WorkspaceFolderDialog } from "./workspace-folder-dialog"
  * window's bottom-left corner.
  *
  * Every entry here already exists somewhere else (the sidebar's nav rows, the
- * folder-list context menu, the top-left chrome, Settings › Appearance), but
- * those homes are scattered and several of them disappear with the sidebar
- * collapsed. The status bar never unmounts, so this menu is the one always-on
- * path to all of them. Items are grouped by what they act on rather than by
- * where they used to live: workspace (open/clone/boot/remote), navigation
- * (every full-page workbench route), and the desktop pet. Search and the
+ * folder-list context menu, the top-left chrome, the file tab strip's "+",
+ * Settings › Appearance, the tray menu), but those homes are scattered and
+ * several of them disappear with the sidebar collapsed — or, for the file
+ * strip, whenever no file tab is open. The status bar never unmounts, so this
+ * menu is the one always-on path to all of them. Items are grouped by what
+ * they act on rather than by where they used to live: workspace
+ * (open/clone/boot/local/remote), navigation (every full-page workbench
+ * route), and then the two window-level extras — a browser tab and the
+ * desktop pet. Search and the
  * per-folder session actions (manage / import) are the deliberate omissions —
  * search has a permanent button in the window's top-left chrome, and the
  * session actions are folder-scoped, so they live where a folder is: "Manage
@@ -70,7 +80,11 @@ export function QuickActionsDropdown() {
 
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
-  const { setRoute } = useWorkbenchRoute()
+  const { setRoute, openConversations } = useWorkbenchRoute()
+  // The file tab strip carries the other "+" for this; the launcher covers the
+  // case that strip cannot — with no file tab open there is no strip at all.
+  const openBrowserTab = useOptionalWorkspaceActions()?.openBrowserTab ?? null
+  const browserCapabilities = useBrowserCapabilities()
 
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [cloneOpen, setCloneOpen] = useState(false)
@@ -85,12 +99,32 @@ export function QuickActionsDropdown() {
     refresh: refreshRemote,
     open: handleOpenRemote,
   } = useRemoteWorkspaceConnections()
+  // Only a remote workspace window has a local workspace to go back to; in the
+  // local one the row would just focus the window it was picked from.
+  const remoteWindow = isRemoteDesktopWindow()
 
   const handleProjectBoot = useCallback(() => {
     openProjectBootWindow().catch((err) => {
       console.error("[QuickActionsDropdown] failed to open project boot:", err)
     })
   }, [])
+
+  const handleOpenLocal = useCallback(() => {
+    openLocalWorkspace().catch((err) => {
+      toast.error(tRemote("openLocalFailed"), {
+        description: toErrorMessage(err),
+      })
+    })
+  }, [tRemote])
+
+  // The file column — where browser tabs live — only exists on the
+  // conversations route; every other workbench route is rendered in its place.
+  // So return there first, or the new tab would open somewhere off screen.
+  const handleOpenBrowser = useCallback(() => {
+    if (!openBrowserTab) return
+    openConversations()
+    openBrowserTab(BLANK_PAGE_URL)
+  }, [openBrowserTab, openConversations])
 
   // Summoning fails when no pet has been made active yet (the backend refuses
   // rather than opening an empty window), so surface that instead of a silent
@@ -147,6 +181,12 @@ export function QuickActionsDropdown() {
             <Rocket />
             {tFolderDropdown("projectBoot")}
           </DropdownMenuItem>
+          {remoteWindow && (
+            <DropdownMenuItem onSelect={handleOpenLocal}>
+              <Monitor />
+              {tRemote("openLocalWorkspace")}
+            </DropdownMenuItem>
+          )}
           {desktop && (
             <DropdownMenuSub
               onOpenChange={(open) => open && void refreshRemote()}
@@ -238,6 +278,15 @@ export function QuickActionsDropdown() {
             <>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>{t("groups.more")}</DropdownMenuLabel>
+              {/* Opens the same empty tab the file strip's "+" does. Gated on
+                  the backend's own answer rather than on the platform: where
+                  there is no built-in browser there is nothing to open. */}
+              {(browserCapabilities?.available ?? false) && openBrowserTab && (
+                <DropdownMenuItem onSelect={handleOpenBrowser}>
+                  <Globe />
+                  {t("browserTab")}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onSelect={handleShowPet}>
                 <PawPrint />
                 {t("showPet")}

@@ -8,6 +8,7 @@ import {
   parseStatusReports,
   parseTaskId,
   parseTaskIds,
+  taskEnding,
 } from "./delegation-status"
 import type { AdaptedToolCallPart } from "@/lib/adapters/ai-elements-adapter"
 
@@ -135,6 +136,38 @@ describe("parseStatusReports", () => {
       durationMs: 5,
     })
     expect(reports[1]).toMatchObject({ status: "running", taskId: "t2" })
+  })
+
+  it("carries each task's progress, from either copy of the batch", () => {
+    const progress = {
+      steps: 3,
+      marks: ["ok", "failed", "ok"],
+      last_step: "pnpm test",
+    }
+    const expected = {
+      steps: 3,
+      marks: ["ok", "failed", "ok"],
+      lastStep: "pnpm test",
+    }
+    const structured = parseStatusReports(
+      batchEnvelope([{ task_id: "t1", status: "running", progress }]),
+      null
+    )
+    expect(structured[0]!.progress).toEqual(expected)
+    // Claude Code keeps only the content text: the same JSON.
+    const contentOnly = parseStatusReports(
+      JSON.stringify({
+        tasks: [{ task_id: "t1", status: "completed", text: "ok", progress }],
+      }),
+      null
+    )
+    expect(contentOnly[0]!.progress).toEqual(expected)
+    // A report from before the field has none.
+    const old = parseStatusReports(
+      batchEnvelope([{ task_id: "t1", status: "completed", text: "ok" }]),
+      null
+    )
+    expect(old[0]!.progress).toBeNull()
   })
 
   it("recovers a tasks array from content-only JSON (no structuredContent)", () => {
@@ -594,6 +627,36 @@ describe("deriveBadge", () => {
     expect(deriveBadge("status", report, "output-available", false)).toEqual({
       status: "ok",
     })
+  })
+})
+
+describe("taskEnding", () => {
+  const report = (body: Record<string, unknown>) =>
+    parseStatusReport(envelope({ task_id: "x", ...body }), null)
+
+  it("reads a finished task's outcome off the check", () => {
+    expect(taskEnding(report({ status: "completed", text: "ok" }))).toEqual({
+      status: "ok",
+      errorCode: undefined,
+    })
+    expect(
+      taskEnding(report({ status: "failed", error_code: "timeout" }))
+    ).toEqual({ status: "err", errorCode: "timeout" })
+    expect(taskEnding(report({ status: "canceled" }))).toEqual({
+      status: "err",
+      errorCode: "canceled",
+    })
+    // The broker no longer knows the task: it is not running anywhere.
+    expect(taskEnding(report({ status: "unknown" }))).toEqual({
+      status: "err",
+      errorCode: "unknown",
+    })
+  })
+
+  it("says nothing while the task runs, or when the check named no outcome", () => {
+    expect(taskEnding(report({ status: "running" }))).toBeNull()
+    expect(taskEnding(parseStatusReport("done", null))).toBeNull()
+    expect(taskEnding(null)).toBeNull()
   })
 })
 

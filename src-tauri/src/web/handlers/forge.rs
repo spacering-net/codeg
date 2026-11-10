@@ -3,7 +3,13 @@
 
 use std::sync::Arc;
 
-use axum::{extract::Extension, Json};
+use axum::{
+    body::Bytes,
+    extract::Extension,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
@@ -37,6 +43,15 @@ pub struct ListIssuesParams {
     /// flattened so the trust boundary stays visible: the repository is not in
     /// here, and cannot be.
     pub query: ListFilters,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDetailParams {
+    pub folder_id: i32,
+    pub number: i64,
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -130,6 +145,12 @@ pub struct CreateFromForgeParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreateFromForgeIssuesParams {
+    pub draft: core::ForgeIssuesTaskDraft,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LookupParams {
     pub source_keys: Vec<String>,
 }
@@ -163,6 +184,16 @@ pub async fn forge_list_issues(
 ) -> Result<Json<crate::forge::ForgeIssueList>, AppCommandError> {
     Ok(Json(
         core::forge_list_issues_core(&state.db, params.folder_id, params.query).await?,
+    ))
+}
+
+pub async fn forge_issue_detail(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<IssueDetailParams>,
+) -> Result<Json<crate::forge::ForgeIssueRow>, AppCommandError> {
+    Ok(Json(
+        core::forge_issue_detail_core(&state.db, params.folder_id, params.number, params.account_id)
+            .await?,
     ))
 }
 
@@ -274,6 +305,16 @@ pub async fn work_task_create_from_forge(
     ))
 }
 
+pub async fn work_task_create_from_forge_issues(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<CreateFromForgeIssuesParams>,
+) -> Result<Json<core::ForgeIssuesCreateResult>, AppCommandError> {
+    Ok(Json(
+        core::work_task_create_from_forge_issues_core(&state.emitter, &state.db, params.draft)
+            .await?,
+    ))
+}
+
 pub async fn work_task_lookup_by_source(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<LookupParams>,
@@ -296,4 +337,51 @@ pub async fn forge_settings_set(
     Ok(Json(
         core::forge_settings_set_core(&state.db, params.folder_id, params.settings).await?,
     ))
+}
+
+pub async fn forge_auto_status(
+    Json(params): Json<FolderParams>,
+) -> Result<Json<crate::forge::auto::ForgeAutoStatus>, AppCommandError> {
+    Ok(Json(core::forge_auto_status_core(params.folder_id).await?))
+}
+
+pub async fn forge_auto_scan_now(
+    Json(params): Json<FolderParams>,
+) -> Result<Json<crate::forge::auto::ScanReport>, AppCommandError> {
+    Ok(Json(core::forge_auto_scan_now_core(params.folder_id).await?))
+}
+
+/// Largest webhook body accepted. Issue and pull-request deliveries are a few
+/// kilobytes (a pull request's body is capped at 64k characters by GitHub);
+/// this leaves a wide margin without letting an unauthenticated caller make
+/// the server buffer GitHub's 25 MB push-event ceiling.
+pub const WEBHOOK_BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+/// `POST /api/forge_webhook` — where a forge delivers webhooks for
+/// auto-processing.
+///
+/// PUBLIC, because no forge can send codeg's bearer token; the delivery's own
+/// signature (or GitLab's secret token) is the authentication, checked against
+/// the secrets of the folders that take deliveries before anything else is
+/// done with the request — see `AutoProcessor::handle_webhook`. The answer is
+/// a status plus one line of JSON for the forge's delivery log, which is where
+/// someone setting the webhook up looks first.
+pub async fn forge_webhook(headers: HeaderMap, body: Bytes) -> Response {
+    let Some(processor) = crate::forge::auto::processor() else {
+        return webhook_answer(
+            503,
+            "auto-processing is not running in this codeg process".to_string(),
+        );
+    };
+    let outcome = processor.handle_webhook(&headers, &body).await;
+    webhook_answer(outcome.status, outcome.message)
+}
+
+fn webhook_answer(status: u16, message: String) -> Response {
+    let code = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (
+        code,
+        Json(serde_json::json!({ "ok": code.is_success(), "message": message })),
+    )
+        .into_response()
 }

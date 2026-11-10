@@ -12,23 +12,12 @@ import { createPortal } from "react-dom"
 import { Reorder, type PanInfo } from "motion/react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { Funnel, Play, Plus, ListTodo, Tag } from "lucide-react"
+import { Funnel, Play, Plus, ListTodo, Search, Tag, X } from "lucide-react"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import {
-  workTaskArchive,
-  workTaskCreate,
-  workTaskMergeUnqueue,
-  workTaskReorder,
-  workTaskStart,
-  workTaskUpdate,
-} from "@/lib/api"
+import { workTaskArchive, workTaskReorder, workTaskStart } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import {
-  consumePendingTaskDraft,
-  CREATE_TASK_FROM_TEXT_EVENT,
-  type CreateTaskFromTextDetail,
-} from "@/lib/task-compose-events"
+import { clearTasksFocus, peekTasksFocus } from "@/lib/workbench-focus"
 import {
   DEFAULT_TASKS_BOARD_FILTER,
   loadTasksBoardFilter,
@@ -40,6 +29,12 @@ import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import { FolderSelect } from "@/components/shared/folder-select"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import {
   Popover,
   PopoverContent,
@@ -60,27 +55,15 @@ import {
   groupTasksByColumn,
   type BoardColumnId,
 } from "./board-columns"
-import {
-  isAnotherTaskMerging,
-  isMergeQueued,
-  mergeQueueRanks,
-} from "./task-acceptance"
-import { TaskCancelDialog } from "./task-cancel-dialog"
+import { isDeferred, mergeQueueRanks } from "./task-acceptance"
 import { StatusChip, TaskCard } from "./task-card"
-import type { TaskActionHandlers } from "./task-actions"
-import { TaskCompleteDialog } from "./task-complete-dialog"
-import { TaskDeliverPrDialog } from "./task-deliver-pr-dialog"
-import { TaskDetailSheet } from "./task-detail-sheet"
-import { TaskEditorDialog } from "./task-editor-dialog"
 import { TaskList } from "./task-list"
-import { TaskMergeDialog } from "./task-merge-dialog"
-import { TaskRestartDialog, type TaskRestartKind } from "./task-restart-dialog"
-import { TaskScheduleDialog } from "./task-schedule-dialog"
+import { searchTerms, taskMatchesSearch } from "./task-search"
 import { TaskSettingsDialog } from "./task-settings-dialog"
 import { OPEN_TASK_SETTINGS_EVENT } from "./tasks-chrome-actions"
 import { TasksSkeleton } from "./tasks-skeleton"
-import { TaskTranscriptDialog } from "./task-transcript-dialog"
-import type { WorkTask, WorkTaskDraft } from "@/lib/types"
+import { useTaskDialogs } from "./use-task-dialogs"
+import type { WorkTask } from "@/lib/types"
 
 const COLUMN_LABEL_KEYS = {
   todo: "colTodo",
@@ -117,8 +100,8 @@ export function TasksPageTitle() {
 }
 
 /**
- * The Tasks route page: toolbar (folder filter, filter popover, status filter,
- * new task) plus the board or the list. The page title lives in the chrome
+ * The Tasks route page: toolbar (folder filter, keyword search, filter popover,
+ * status filter, new task) plus the board or the list. The page title lives in the chrome
  * strip above (TasksPageTitle) and the view switch + settings entry in the
  * window's top-right cluster (TasksChromeActions), so the toolbar is purely
  * "narrow what you see" + "add one".
@@ -140,7 +123,14 @@ export function TasksPage() {
     return map
   }, [folders])
 
-  const [selectedFolderFilter, setFolderFilter] = useState<number | null>(null)
+  // Opened from the aux panel's task tab: start on the project it was showing.
+  // Read in the initializer so the first paint is already filtered; cleared
+  // once applied (see `workbench-focus.ts`).
+  const [focus] = useState(peekTasksFocus)
+  useEffect(() => clearTasksFocus(focus), [focus])
+  const [selectedFolderFilter, setFolderFilter] = useState<number | null>(
+    () => focus?.folderId ?? null
+  )
   // A folder can leave the workspace (closed, or removed) while it is the active
   // filter. Fall back to "all" by derivation — no effect, the same guard the
   // Automations list uses — so the board, the drag scope, the new-task prefill,
@@ -169,19 +159,30 @@ export function TasksPage() {
   useEffect(() => {
     saveTasksStatusFilter(statusFilter)
   }, [statusFilter])
+  // Keyword search over both views. Deliberately NOT remembered across visits,
+  // unlike the toggles above: a search left behind from last time silently
+  // hides tasks on a board that otherwise looks normal.
+  const [searchInput, setSearchInput] = useState("")
+  const terms = useMemo(() => searchTerms(searchInput), [searchInput])
+  const searching = terms.length > 0
   // Dragging a pending card is always available: dropping it on In-progress
   // starts the task and needs no order at all. Only the REORDER half waits on
   // a folder — sort_order is per folder, so a mixed-folder列 has nothing it
   // could persist, and the cards simply don't shuffle there.
   const [dragOrder, setDragOrder] = useState<number[] | null>(null)
   const dragOrderRef = useRef<number[] | null>(null)
-  dragOrderRef.current = dragOrder
   const inProgressColRef = useRef<HTMLDivElement | null>(null)
   // A drop acts on the LIVE row, not the snapshot the drag started from: the
   // provider refetches throughout a drag, and the engine's auto-processor can
   // claim a pending task while it is in the air.
   const tasksRef = useRef(tasks)
-  tasksRef.current = tasks
+  // Both read by the drop handler. Synced at commit rather than written during
+  // render (react-hooks/refs): a render React throws away must not be what a
+  // drop acts on.
+  useLayoutEffect(() => {
+    dragOrderRef.current = dragOrder
+    tasksRef.current = tasks
+  }, [dragOrder, tasks])
   // The dragged card cannot visually leave its column — the column is a scroll
   // area, so it clips — which made the drop read as impossible even though it
   // worked. A fixed-position preview follows the pointer instead, portalled
@@ -202,10 +203,6 @@ export function TasksPage() {
   const draggedRef = useRef(false)
   // Set when the gesture ended without a deliberate release (see abortDrag).
   const dragAbortedRef = useRef(false)
-  const [editorOpen, setEditorOpen] = useState(false)
-  const [editorTask, setEditorTask] = useState<WorkTask | null>(null)
-  const [editorPrefill, setEditorPrefill] =
-    useState<CreateTaskFromTextDetail | null>(null)
 
   // One shared timestamp per render tick keeps every card's relative-time
   // label consistent; a minute interval bounds staleness.
@@ -215,52 +212,21 @@ export function TasksPage() {
     return () => window.clearInterval(id)
   }, [])
 
-  // "Task from message" hand-off: consume the parked draft on mount (this page
-  // is unmounted while other routes are active) and on the live event.
-  useEffect(() => {
-    const consume = () => {
-      const draft = consumePendingTaskDraft()
-      if (!draft) return
-      setEditorTask(null)
-      setEditorPrefill(draft)
-      setEditorOpen(true)
+  // The editor, the detail sheet and every dialog a card's buttons open —
+  // shared with the aux panel's task tab (see `use-task-dialogs.tsx`).
+  const { act, handlersFor, openDetail, openNewTask, dialogs } = useTaskDialogs(
+    {
+      tasks,
+      refetch,
+      folderNames,
+      defaultFolderId: folderFilter,
     }
-    consume()
-    window.addEventListener(CREATE_TASK_FROM_TEXT_EVENT, consume)
-    return () =>
-      window.removeEventListener(CREATE_TASK_FROM_TEXT_EVENT, consume)
-  }, [])
-  const [detailTaskId, setDetailTaskId] = useState<number | null>(null)
-  const [mergeTask, setMergeTask] = useState<WorkTask | null>(null)
-  const [mergeOpen, setMergeOpen] = useState(false)
-  // The merge dialog's counterpart for a task that changed nothing.
-  const [completeTask, setCompleteTask] = useState<WorkTask | null>(null)
-  const [completeOpen, setCompleteOpen] = useState(false)
-  // The third way to accept: push the branch and open a pull request on the
-  // repository the task's issue came from.
-  const [deliverTask, setDeliverTask] = useState<WorkTask | null>(null)
-  const [deliverOpen, setDeliverOpen] = useState(false)
-  // Stopping a task asks why (optional) — from the card and from the drawer.
-  const [cancelTask, setCancelTask] = useState<WorkTask | null>(null)
-  const [cancelOpen, setCancelOpen] = useState(false)
-  // Restarting from a card asks for an optional note; the drawer unfolds its
-  // own box in place instead.
-  const [restartTask, setRestartTask] = useState<WorkTask | null>(null)
-  const [restartKind, setRestartKind] = useState<TaskRestartKind>("retry")
-  const [restartOpen, setRestartOpen] = useState(false)
-  // Planning a to-do task's start — tracked by id so the dialog reads the live
-  // row (a task claimed while it is open no longer accepts a plan).
-  const [scheduleTaskId, setScheduleTaskId] = useState<number | null>(null)
-  const [scheduleOpen, setScheduleOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  // Read-only live session viewer ("查看会话") — tracked by id so the dialog
-  // header's status chip follows the live row (like the detail sheet).
-  const [sessionTaskId, setSessionTaskId] = useState<number | null>(null)
-  const [sessionOpen, setSessionOpen] = useState(false)
+  )
 
+  const [settingsOpen, setSettingsOpen] = useState(false)
   // The settings entry lives in the chrome strip (TasksPageTitle), a separate
   // tree branch — it asks this page (which owns the dialog + folder scope) to
-  // open via a window event, like the "task from message" hand-off above.
+  // open via a window event.
   useEffect(() => {
     const open = () => setSettingsOpen(true)
     window.addEventListener(OPEN_TASK_SETTINGS_EVENT, open)
@@ -269,10 +235,16 @@ export function TasksPage() {
 
   const visibleTasks = useMemo(
     () =>
-      folderFilter == null
-        ? tasks
-        : tasks.filter((task) => task.folder_id === folderFilter),
-    [tasks, folderFilter]
+      tasks.filter(
+        (task) =>
+          (folderFilter == null || task.folder_id === folderFilter) &&
+          taskMatchesSearch(
+            task,
+            terms,
+            folderNames.get(task.folder_id) ?? null
+          )
+      ),
+    [tasks, folderFilter, terms, folderNames]
   )
   const columns = useMemo(
     () =>
@@ -297,7 +269,11 @@ export function TasksPage() {
     [visibleTasks, statusFilter, boardFilter]
   )
 
-  const dragEnabled = folderFilter != null
+  // Reordering persists the order of the column's cards — and a search shows
+  // only some of them, so a drop there would save an order for a column the
+  // user is not looking at. Dragging to In-progress (start) needs no order and
+  // stays available.
+  const dragEnabled = folderFilter != null && !searching
   // Optimistic order while a drag is live; server order otherwise.
   const todoTasks = useMemo(() => {
     const base = columns.todo
@@ -313,130 +289,6 @@ export function TasksPage() {
   // over ALL tasks, not the visible ones: the queue is the project's, and a
   // filtered board must not renumber it.
   const queueRanks = useMemo(() => mergeQueueRanks(tasks), [tasks])
-  // The LIVE row behind the open merge dialog — read for its queue state only.
-  // The dialog itself keeps the captured `mergeTask`: it re-seeds its form
-  // whenever that object changes, and the provider hands out a fresh array on
-  // every refetch, so passing the live row would wipe a half-typed commit
-  // message the moment any task anywhere changed.
-  const mergeLiveTask = useMemo(
-    () =>
-      mergeTask == null
-        ? null
-        : (tasks.find((task) => task.id === mergeTask.id) ?? null),
-    [tasks, mergeTask]
-  )
-  // The sheet renders the LIVE row from the provider so status flips (e.g.
-  // merging → done) update in place while it is open.
-  const detailTask = useMemo(
-    () => tasks.find((task) => task.id === detailTaskId) ?? null,
-    [tasks, detailTaskId]
-  )
-  const sessionTask = useMemo(
-    () => tasks.find((task) => task.id === sessionTaskId) ?? null,
-    [tasks, sessionTaskId]
-  )
-  const scheduleTask = useMemo(
-    () => tasks.find((task) => task.id === scheduleTaskId) ?? null,
-    [tasks, scheduleTaskId]
-  )
-
-  const act = useCallback(
-    async (fn: () => Promise<unknown>) => {
-      try {
-        await fn()
-      } catch (e) {
-        toast.error(toErrorMessage(e))
-      } finally {
-        void refetch()
-      }
-    },
-    [refetch]
-  )
-
-  const openSession = useCallback((task: WorkTask) => {
-    if (task.conversation_id == null) return
-    setSessionTaskId(task.id)
-    setSessionOpen(true)
-  }, [])
-
-  const submitEditor = useCallback(
-    async (draft: WorkTaskDraft) => {
-      if (editorTask) await workTaskUpdate(editorTask.id, draft)
-      else await workTaskCreate(draft)
-      setEditorOpen(false)
-      setEditorPrefill(null)
-      void refetch()
-    },
-    [editorTask, refetch]
-  )
-
-  const openMerge = useCallback((task: WorkTask) => {
-    setMergeTask(task)
-    setMergeOpen(true)
-  }, [])
-
-  const openComplete = useCallback((task: WorkTask) => {
-    setCompleteTask(task)
-    setCompleteOpen(true)
-  }, [])
-
-  const openDeliver = useCallback((task: WorkTask) => {
-    setDeliverTask(task)
-    setDeliverOpen(true)
-  }, [])
-
-  const openCancel = useCallback((task: WorkTask) => {
-    setCancelTask(task)
-    setCancelOpen(true)
-  }, [])
-
-  const openRestart = useCallback((task: WorkTask, kind: TaskRestartKind) => {
-    setRestartTask(task)
-    setRestartKind(kind)
-    setRestartOpen(true)
-  }, [])
-
-  const openSchedule = useCallback((task: WorkTask) => {
-    setScheduleTaskId(task.id)
-    setScheduleOpen(true)
-  }, [])
-
-  const openNewTask = useCallback(() => {
-    setEditorTask(null)
-    setEditorOpen(true)
-  }, [])
-
-  // One handler set, wired the same way for a board card and a list row.
-  const handlersFor = useCallback(
-    (task: WorkTask): TaskActionHandlers => ({
-      onStart: () => void act(() => workTaskStart(task.id)),
-      onCancel: () => openCancel(task),
-      onRetry: () => openRestart(task, "retry"),
-      onRequeue: () => openRestart(task, "requeue"),
-      onViewSession: () => openSession(task),
-      onMerge: () => openMerge(task),
-      onDeliverPr: () => openDeliver(task),
-      onUnqueueMerge: () => void act(() => workTaskMergeUnqueue(task.id)),
-      onComplete: () => openComplete(task),
-      onArchive: () =>
-        void act(() => workTaskArchive(task.id, task.archived_at == null)),
-      onEdit: () => {
-        setEditorTask(task)
-        setEditorOpen(true)
-      },
-      onSchedule: () => openSchedule(task),
-    }),
-    [
-      act,
-      openCancel,
-      openComplete,
-      openDeliver,
-      openMerge,
-      openRestart,
-      openSchedule,
-      openSession,
-    ]
-  )
 
   const positionGhost = useCallback((x: number, y: number) => {
     const el = ghostRef.current
@@ -535,9 +387,12 @@ export function TasksPage() {
 
   // The dragged card left the pending column under us — its Reorder.Item
   // unmounts with it and Motion never reports an end, which would strand the
-  // preview and leave the latch swallowing every card click.
+  // preview and leave the latch swallowing every card click. An effect, not a
+  // render-time adjustment: tearing the drag down also resets refs the drop
+  // handler reads.
   useEffect(() => {
     if (drag && !todoTasks.some((task) => task.id === drag.task.id)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       abortDrag()
     }
   }, [drag, todoTasks, abortDrag])
@@ -589,14 +444,24 @@ export function TasksPage() {
   )
 
   // Archives whatever the Done column currently shows unarchived — respects
-  // the visibility toggles by construction (it reads the grouped column).
+  // the visibility toggles by construction (it reads the grouped column). A
+  // task put aside to handle later shares the column but is the opposite of
+  // finished: archiving it would bury exactly what the user meant to come back
+  // to (and a reviewed one cannot be archived at all).
+  const archivableDone = useMemo(
+    () =>
+      columns.done.filter(
+        (task) => task.archived_at == null && !isDeferred(task)
+      ),
+    [columns.done]
+  )
   const archiveAllDone = useCallback(() => {
-    const targets = columns.done.filter((task) => task.archived_at == null)
+    const targets = archivableDone
     if (targets.length === 0) return
     void act(() =>
       Promise.all(targets.map((task) => workTaskArchive(task.id, true)))
     )
-  }, [act, columns.done])
+  }, [act, archivableDone])
 
   // The badge counts deviations from the DEFAULT view (canceled shown,
   // archived hidden), not checked boxes — a pristine board shows no badge.
@@ -637,6 +502,41 @@ export function TasksPage() {
             allLabel={t("allFolders")}
             onSelectAll={() => setFolderFilter(null)}
           />
+
+          {/* Keyword search — the same pill-shaped field the repository panel
+              uses. Filters as you type (it is local, there is no request to
+              debounce), and both views at once. A whole row to itself on a
+              phone, where sharing one would leave too little to read back. */}
+          <InputGroup className="h-8 w-full rounded-full sm:w-56">
+            <InputGroupAddon align="inline-start">
+              <Search className="size-3.5" aria-hidden />
+            </InputGroupAddon>
+            <InputGroupInput
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && searchInput !== "") {
+                  e.preventDefault()
+                  setSearchInput("")
+                }
+              }}
+              placeholder={t("searchPlaceholder")}
+              aria-label={t("searchPlaceholder")}
+              className="h-8 text-[0.8125rem]"
+            />
+            {searchInput !== "" ? (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label={t("clearSearch")}
+                  title={t("clearSearch")}
+                  onClick={() => setSearchInput("")}
+                >
+                  <X className="size-3" />
+                </InputGroupButton>
+              </InputGroupAddon>
+            ) : null}
+          </InputGroup>
 
           {/* Same pill treatment as the folder select so the left cluster reads
               as one family of controls (the settings entry lives in the chrome
@@ -744,7 +644,7 @@ export function TasksPage() {
             type="button"
             size="sm"
             className="h-8 gap-1 rounded-full px-3.5 text-[0.8125rem]"
-            onClick={openNewTask}
+            onClick={() => openNewTask()}
           >
             <Plus className="size-4" aria-hidden="true" />
             {t("new")}
@@ -771,7 +671,7 @@ export function TasksPage() {
             type="button"
             size="sm"
             className="gap-1.5"
-            onClick={openNewTask}
+            onClick={() => openNewTask()}
           >
             <Plus className="size-3.5" aria-hidden="true" />
             {t("new")}
@@ -785,7 +685,9 @@ export function TasksPage() {
           mergeQueueRanks={queueRanks}
           filtered={statusFilter != null}
           onClearFilter={() => setStatusFilter(null)}
-          onOpen={setDetailTaskId}
+          searchQuery={searching ? searchInput.trim() : null}
+          onClearSearch={() => setSearchInput("")}
+          onOpen={openDetail}
           handlersFor={handlersFor}
         />
       ) : (
@@ -807,7 +709,7 @@ export function TasksPage() {
                   onOpen={() => {
                     // Swallow the click that closes a drag.
                     if (draggedRef.current) return
-                    setDetailTaskId(task.id)
+                    openDetail(task.id)
                   }}
                   {...handlersFor(task)}
                 />
@@ -848,8 +750,7 @@ export function TasksPage() {
                       </span>
                     )}
                     <div className="flex-1" />
-                    {col === "done" &&
-                    columns.done.some((task) => task.archived_at == null) ? (
+                    {col === "done" && archivableDone.length > 0 ? (
                       <Button
                         type="button"
                         size="xs"
@@ -881,7 +782,11 @@ export function TasksPage() {
                       )}
                     >
                       <p className="text-xs text-muted-foreground">
-                        {t(EMPTY_LABEL_KEYS[col])}
+                        {/* An empty column under a search says nothing
+                            matched — not that the column has no tasks. */}
+                        {searching
+                          ? t("searchEmptyColumn")
+                          : t(EMPTY_LABEL_KEYS[col])}
                       </p>
                     </div>
                   ) : (
@@ -947,86 +852,7 @@ export function TasksPage() {
         </div>
       )}
 
-      <TaskEditorDialog
-        open={editorOpen}
-        onOpenChange={(o) => {
-          setEditorOpen(o)
-          if (!o) setEditorPrefill(null)
-        }}
-        task={editorTask}
-        defaultFolderId={editorPrefill?.folderId ?? folderFilter}
-        prefillText={editorPrefill?.text ?? null}
-        onSubmit={submitEditor}
-      />
-      <TaskDetailSheet
-        open={detailTaskId != null}
-        onOpenChange={(o) => {
-          if (!o) setDetailTaskId(null)
-        }}
-        task={detailTask}
-        folderName={
-          detailTask ? (folderNames.get(detailTask.folder_id) ?? null) : null
-        }
-        onMerge={openMerge}
-        onComplete={openComplete}
-        onDeliverPr={openDeliver}
-        onCancel={openCancel}
-        onEdit={(task) => {
-          setEditorTask(task)
-          setEditorOpen(true)
-        }}
-        onSchedule={openSchedule}
-      />
-      {/* The queue state comes from the live row (a merge that starts while
-          the dialog is open turns "merge" into "queue"), the form from the
-          captured one — see `mergeLiveTask`. */}
-      <TaskMergeDialog
-        open={mergeOpen}
-        onOpenChange={setMergeOpen}
-        task={mergeTask}
-        anotherMerging={
-          mergeTask != null && isAnotherTaskMerging(tasks, mergeTask)
-        }
-        alreadyQueued={mergeLiveTask != null && isMergeQueued(mergeLiveTask)}
-      />
-      <TaskCompleteDialog
-        open={completeOpen}
-        onOpenChange={setCompleteOpen}
-        task={completeTask}
-      />
-      <TaskDeliverPrDialog
-        open={deliverOpen}
-        onOpenChange={setDeliverOpen}
-        task={deliverTask}
-      />
-      {/* Rendered after the sheet, like the transcript viewer: both portal to
-          body and the later mount stacks above, so a cancel / restart asked
-          for from inside the drawer lands on top of it. */}
-      <TaskCancelDialog
-        open={cancelOpen}
-        onOpenChange={setCancelOpen}
-        task={cancelTask}
-      />
-      <TaskRestartDialog
-        open={restartOpen}
-        onOpenChange={setRestartOpen}
-        task={restartTask}
-        kind={restartKind}
-      />
-      <TaskScheduleDialog
-        open={scheduleOpen && scheduleTask != null}
-        onOpenChange={setScheduleOpen}
-        task={scheduleTask}
-      />
-      {/* The BOARD's session viewer — the card's "查看会话", opened with no
-          detail sheet in play. The sheet's own copy of this viewer lives
-          inside it (see `task-detail-sheet.tsx`), because Base UI stacks a
-          drawer only over an ancestor drawer, never over a sibling. */}
-      <TaskTranscriptDialog
-        open={sessionOpen && sessionTask != null}
-        onOpenChange={setSessionOpen}
-        task={sessionTask}
-      />
+      {dialogs}
       <TaskSettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

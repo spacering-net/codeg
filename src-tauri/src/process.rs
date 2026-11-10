@@ -22,6 +22,9 @@ pub fn configure_std_command(command: &mut Command) -> &mut Command {
         use std::os::windows::process::CommandExt;
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    // The session's environment, not the one an AppImage's launcher set up
+    // for codeg itself.
+    crate::appimage_env::restore(command);
     set_utf8_env(command);
     command
 }
@@ -42,6 +45,7 @@ pub fn configure_tokio_command(
     {
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    crate::appimage_env::restore_tokio(command);
     set_utf8_env(command);
     command
 }
@@ -196,6 +200,37 @@ where
             outcome => return outcome,
         }
     }
+}
+
+/// Test fixture: write `content` to `path` as an executable script that can be
+/// exec'd the moment this returns, however many test threads are spawning.
+///
+/// A script written with `std::fs::write` is exposed to the race described on
+/// [`spawn_retrying_exec_busy`]: a sibling test that forks while the write
+/// descriptor is open leaves a copy of it in its child, and Linux refuses to
+/// exec the script with `ETXTBSY` until that child execs. A code path that does
+/// not retry then fails for a reason unrelated to the test. Writing through a
+/// child shell means this process never holds a write descriptor on the file,
+/// so no fork here can inherit one. The mode is set by path, which opens
+/// nothing either.
+#[cfg(all(test, unix))]
+pub(crate) fn write_test_script(path: &std::path::Path, content: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let status = Command::new("/bin/sh")
+        .args(["-c", "printf '%s' \"$2\" > \"$1\"", "sh"])
+        .arg(path)
+        .arg(content)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .expect("spawn /bin/sh to write a test script");
+    assert!(
+        status.success(),
+        "writing test script {} failed: {status}",
+        path.display()
+    );
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+        .expect("make test script executable");
 }
 
 /// If `node` is not already in PATH, detect common Node.js version manager
@@ -599,6 +634,93 @@ pub fn ensure_user_npm_prefix_in_path() {
     }
 }
 
+/// `pbi_flags` bits of a process's low-swap action (`PROC_FLAG_PC_MASK` in
+/// `<sys/proc_info.h>`): 0 none, `0x200` throttle, `0x400` suspend, `0x600`
+/// kill.
+#[cfg(target_os = "macos")]
+const PROC_FLAG_PC_MASK: u32 = 0x600;
+
+/// Keep macOS from pausing codeg when the system runs out of memory.
+///
+/// An app LaunchServices starts is marked to be suspended when the compressor
+/// and swap are exhausted (`PROC_FLAG_PC_SUSP`); the kernel then suspends the
+/// marked process with the largest footprint, and only the Force Quit window
+/// or a restart brings it back. codeg is the worst victim there is: every
+/// agent session runs through it, while the agents themselves — whose builds
+/// and tools are what use the memory — keep running, so nothing is freed and
+/// every session hangs on a codeg that no longer answers (kernel log:
+/// `memorystatus: suspending codeg [35261] due to swap exhaustion`).
+///
+/// A process may set its own action (`proc_setpcontrol`, which libproc
+/// exports but leaves out of the public headers, so it is looked up at run
+/// time; without it the launcher's choice stands). With none set, the kernel
+/// passes codeg over.
+#[cfg(target_os = "macos")]
+pub fn opt_out_of_low_swap_suspension() {
+    match clear_low_swap_action() {
+        Ok(Some(0)) => {}
+        Ok(Some(before)) => {
+            tracing::info!("[memory] cleared macOS low-swap action {before:#x} (no pause when memory runs out)")
+        }
+        Ok(None) => {}
+        Err(err) => tracing::warn!(
+            "[memory] macOS may pause codeg when memory runs out; clearing its low-swap action failed: {err}"
+        ),
+    }
+}
+
+/// Clear this process's low-swap action. Returns the action it had (`None`
+/// when it could not be read), or why it could not be cleared.
+#[cfg(target_os = "macos")]
+fn clear_low_swap_action() -> Result<Option<u32>, String> {
+    type SetPcontrolFn = unsafe extern "C" fn(libc::c_int) -> libc::c_int;
+    const PROC_SETPC_NONE: libc::c_int = 0;
+    static NAME: &[u8] = b"proc_setpcontrol\0";
+
+    let before = low_swap_action();
+    if before == Some(0) {
+        return Ok(before);
+    }
+    // SAFETY: RTLD_DEFAULT with a NUL-terminated name; the symbol, when
+    // present, has exactly this signature (libproc, macOS 10.7+).
+    let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, NAME.as_ptr().cast()) };
+    if sym.is_null() {
+        return Err("proc_setpcontrol is not available".to_string());
+    }
+    // SAFETY: `sym` is non-null and has the signature above; the call changes
+    // nothing but this process's own action.
+    let rc = unsafe {
+        let set: SetPcontrolFn = std::mem::transmute(sym);
+        set(PROC_SETPC_NONE)
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    match low_swap_action() {
+        Some(after) if after != 0 => Err(format!("the action is still {after:#x}")),
+        _ => Ok(before),
+    }
+}
+
+/// This process's low-swap action bits, `None` when they cannot be read.
+#[cfg(target_os = "macos")]
+fn low_swap_action() -> Option<u32> {
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: a zeroed `proc_bsdinfo` is a valid out-parameter of `size`
+    // bytes for this flavor.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let read = unsafe {
+        libc::proc_pidinfo(
+            std::process::id() as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    (read == size).then_some(info.pbi_flags & PROC_FLAG_PC_MASK)
+}
+
 /// Read `reader` line-by-line as UTF-8-*lossy* text, invoking `on_line` for each
 /// line (trailing newline trimmed) and returning the accumulated text.
 ///
@@ -656,6 +778,26 @@ mod tests {
     use super::{collect_lines_lossy, spawn_retrying_exec_busy, spawn_retrying_exec_busy_within};
     use std::io::Cursor;
     use std::time::Duration;
+
+    /// The test process stands in for an app LaunchServices started: it marks
+    /// itself "suspend on low swap" the way the launcher marks codeg, and the
+    /// opt-out must leave no action at all.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_low_swap_suspend_mark_is_cleared() {
+        type SetPcontrolFn = unsafe extern "C" fn(libc::c_int) -> libc::c_int;
+        const PROC_SETPC_SUSPEND: libc::c_int = 2;
+        let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"proc_setpcontrol".as_ptr()) };
+        assert!(!sym.is_null(), "libproc exports proc_setpcontrol");
+        let set: SetPcontrolFn = unsafe { std::mem::transmute(sym) };
+        assert_eq!(unsafe { set(PROC_SETPC_SUSPEND) }, 0);
+        assert_eq!(super::low_swap_action(), Some(0x400));
+
+        assert_eq!(super::clear_low_swap_action(), Ok(Some(0x400)));
+        assert_eq!(super::low_swap_action(), Some(0));
+        // Nothing to do the second time.
+        assert_eq!(super::clear_low_swap_action(), Ok(Some(0)));
+    }
 
     #[tokio::test]
     async fn collect_lines_lossy_preserves_lines_around_invalid_utf8() {
@@ -777,5 +919,34 @@ mod tests {
         assert!(!super::is_exec_busy(&std::io::Error::from_raw_os_error(
             libc::ENOENT
         )));
+    }
+
+    /// The fixture writes the script byte for byte, leaves it executable, and
+    /// it runs straight away. The path has a space and the content carries
+    /// quotes, `%`, `$`, a backslash and a trailing newline, all of which must
+    /// arrive verbatim.
+    #[cfg(unix)]
+    #[test]
+    fn test_script_is_written_verbatim_and_runs_at_once() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let script = dir.path().join("fixture with spaces");
+        let content = "#!/bin/sh\n# 100% literal: $HOME '\"' \\n\nprintf '%s\\n' fixture-ran\n";
+        super::write_test_script(&script, content);
+
+        assert_eq!(
+            std::fs::read_to_string(&script).expect("read script"),
+            content
+        );
+        let mode = std::fs::metadata(&script)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
+        let output = std::process::Command::new(&script)
+            .output()
+            .expect("run the script");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "fixture-ran\n");
     }
 }

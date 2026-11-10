@@ -124,9 +124,19 @@ describe("ConversationDetailPanel new conversation layout", () => {
       )
     ).toHaveLength(2)
     // The FILE column under the conversation overlay — this is the one that
-    // hosts git-diff tabs.
+    // hosts git-diff tabs — in conversation mode and under a maximized
+    // conversation alike, which take the same overlay over the whole area.
     expect(workspaceLayoutSource).toContain(
-      'mode === "conversation" && "conversation-tab-hidden invisible"'
+      'const conversationFillsArea = mode === "conversation" || conversationMaximized'
+    )
+    expect(workspaceLayoutSource).toContain(
+      'conversationFillsArea && "conversation-tab-hidden invisible"'
+    )
+    expect(workspaceLayoutSource).toMatch(
+      /conversationFillsArea &&\s*"absolute inset-0 z-30 bg-background ws-transparent-bg"/
+    )
+    expect(workspaceLayoutSource).toContain(
+      "inert={conversationFillsArea || undefined}"
     )
     // The conversation column under the files-maximized overlay.
     expect(workspaceLayoutSource).toContain(
@@ -134,14 +144,55 @@ describe("ConversationDetailPanel new conversation layout", () => {
     )
   })
 
+  // The expressions above prove nothing on their own if they sit in the wrong
+  // column: pin each to its subtree. Each column's section is wrapped in its
+  // own provider, so a provider's open..close span is that column.
+  it("puts the overlay on the conversation column and the hiding on the file column", () => {
+    const span = (open: string) => {
+      const start = workspaceLayoutSource.indexOf(open)
+      expect(start).toBeGreaterThan(-1)
+      return workspaceLayoutSource.slice(
+        start,
+        workspaceLayoutSource.indexOf("</OverlayHostHiddenProvider>", start)
+      )
+    }
+    const conversationColumn = span(
+      "<OverlayHostHiddenProvider hidden={filesMaximized}>"
+    )
+    expect(conversationColumn).toContain('data-workspace-pane="conversation"')
+    expect(conversationColumn).not.toContain('data-workspace-pane="files"')
+    expect(conversationColumn).toMatch(
+      /conversationFillsArea &&\s*"absolute inset-0 z-30 bg-background ws-transparent-bg"/
+    )
+    expect(conversationColumn).toContain("<TabBar maximizeControl />")
+
+    const fileColumn = span(
+      "<OverlayHostHiddenProvider hidden={conversationFillsArea}>"
+    )
+    expect(fileColumn).toContain('data-workspace-pane="files"')
+    expect(fileColumn).toContain("<FileWorkspaceTabBar />")
+    expect(fileColumn).not.toContain('data-workspace-pane="conversation"')
+    expect(fileColumn).toContain(
+      'conversationFillsArea && "conversation-tab-hidden invisible"'
+    )
+    expect(fileColumn).toContain("aria-hidden={conversationFillsArea}")
+    expect(fileColumn).toContain("inert={conversationFillsArea || undefined}")
+  })
+
   /**
    * The class above only reaches what stays in the host's DOM subtree. A drawer
    * portals to the body, so every hidden subtree that can host a CONVERSATION
    * (and therefore a "查看会话" viewer) has to publish the flag too, or the
-   * viewer paints over whatever covered it. Three such subtrees exist; the file
-   * column is deliberately not one — no conversation lives there.
+   * viewer paints over whatever covered it. Three such subtrees exist. The file
+   * column hosts no conversation, but it publishes the flag as well while the
+   * conversation overlay covers it: its built-in browser pages are native views
+   * no CSS reaches, and this is what tells their hosts to take them down.
    */
   it("publishes the hidden flag from every conversation-hosting subtree", () => {
+    // File column under the conversation overlay.
+    expect(workspaceLayoutSource).toContain(
+      "<OverlayHostHiddenProvider hidden={conversationFillsArea}>"
+    )
     // Full-page workbench route, both shells.
     expect(workspaceLayoutSource).toContain(
       "<OverlayHostHiddenProvider hidden={hidden}>"
@@ -151,9 +202,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
       "<OverlayHostHiddenProvider hidden={filesMaximized}>"
     )
     // A backgrounded conversation tab behind the selected one.
-    expect(source).toContain(
-      "<OverlayHostHiddenProvider hidden={!canTileG && !visible}>"
-    )
+    expect(source).toContain("<OverlayHostHiddenProvider hidden={!visible}>")
   })
 
   it("does not render a decorative welcome backdrop", () => {
@@ -189,7 +238,6 @@ describe("ConversationDetailPanel new conversation layout", () => {
       '"overflow-hidden rounded-xl transition-colors"'
     )
     expect(messageInputSource).not.toContain("bg-muted/60")
-    expect(messageInputSource).toContain(': "contents"')
     // The rounded border lives in the always-on base (so the active-session flow
     // gradient can overlay a real 1px border without a layout shift); the
     // attached folder-branch-picker treatment still adds a solid surface
@@ -228,7 +276,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
 
   it("keeps ordinary chat input constrained to the message column width", () => {
     expect(conversationShellSource).toContain(
-      'className="mx-auto w-full max-w-3xl"'
+      'className="mx-auto w-full chat-content-w"'
     )
     // Ordinary (active/historical) chat input keeps its own px-4 gutter to align
     // with the sibling cards in conversation-shell AND a tight bottom gap (pb-1)
@@ -238,13 +286,18 @@ describe("ConversationDetailPanel new conversation layout", () => {
     expect(chatInputSource).toContain(
       'cn("pt-0", flush ? "pb-1" : "px-4 pb-1")'
     )
-    expect(chatInputSource).toContain(
-      'cn(tall ? "min-h-30" : "min-h-24", "max-h-60")'
-    )
+    // The composer's ceiling is still the caller's, but its FLOOR travels
+    // through `tall` rather than a `min-h-*` smuggled in via `className`: the
+    // box's floor and the editable area's are two halves of one number, and
+    // only MessageInput knows the action row between them (composer-sizing.ts,
+    // #746). A `min-h-*` set from out here would re-open that split.
+    expect(chatInputSource).toContain("tall={tall}")
+    expect(chatInputSource).toContain('className="max-h-60"')
+    expect(chatInputSource).not.toMatch(/className=.*min-h-/)
     expect(chatInputSource).not.toContain("containerClassName")
     expect(source).not.toContain("containerClassName")
     expect(conversationShellSource).not.toContain("containerClassName")
-    expect(source).toContain("mx-auto flex w-full max-w-3xl")
+    expect(source).toContain("mx-auto flex w-full chat-content-w")
   })
 })
 
@@ -264,7 +317,52 @@ describe("ConversationDetailPanel split-group render model", () => {
     expect(source).not.toContain("<RenderGroupShell")
     expect(source).not.toContain("<RenderTabWrapper")
     expect(source).toContain("key={groupId}")
-    expect(source).toContain("computeRects(groupLayout)")
+    expect(source).toContain("computeRects(visibleLayout)")
+  })
+
+  // While tabs follow the folder, each folder has its own layout. A hidden
+  // tab must stay in its own view's shell, and the shells must keep one fixed
+  // order whatever folder is on screen: a switch that reparented a tab would
+  // remount it, and one that reordered the shells would move their nodes and
+  // reset every transcript inside.
+  it("keeps hidden tabs in their own view's shells, in a fixed order", () => {
+    expect(source).toContain(": shellGroupOfTab(state, tab.id)")
+    expect(source).toContain("[...tabsByGroup.keys()].sort()")
+  })
+
+  // A selected folder with nothing open is not a blank column: the panel says
+  // so and offers a first conversation, whether or not other folders have
+  // tabs, and the workspace keeps the strip (and its "+") up for it.
+  it("shows the empty-folder state instead of a blank column", () => {
+    expect(source).toContain(
+      "return tabsFollowFolder ? <FolderTabsEmptyState /> : null"
+    )
+    expect(source).toContain(
+      "{tabsFollowFolder && visibleTabs.length === 0 && ("
+    )
+    expect(workspaceLayoutSource).toContain(
+      "const showConvStrip = hasConvTabs || tabsFollowFolder"
+    )
+    expect(workspaceLayoutSource).toContain("{showConvStrip ? (")
+  })
+
+  // TileScrollContainer ignores mutations strictly inside a marked tile — that
+  // is what keeps a tiled group's streaming off its forced-layout path — which
+  // is only sound while the tile clips its content at a content-independent
+  // width. Pin the marker and that box together on the tile wrapper.
+  it("marks each tile wrapper for the tile scroller and keeps it clipping", () => {
+    const start = source.indexOf("const renderTabWrapper = (")
+    const end = source.indexOf("const renderGroupShell = (", start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const wrapper = source.slice(start, end)
+    expect(wrapper).toContain('data-tile-scroll-item=""')
+    expect(wrapper).toContain(
+      '"relative h-full min-w-[24rem] flex-1 overflow-hidden"'
+    )
+    expect(source).toMatch(
+      /<TileScrollContainer canTile=\{canTileG\}>[\s\S]*?renderTabWrapper\(tab, visualIndex, groupId, canTileG\)[\s\S]*?<\/TileScrollContainer>/
+    )
   })
 
   it("marks the active session whenever several are visible (split or tiled)", () => {
@@ -272,7 +370,12 @@ describe("ConversationDetailPanel split-group render model", () => {
   })
 
   it("gives each split group its own strip and divider overlays only while split", () => {
-    expect(source).toContain("<TabBar groupId={groupId} />")
+    // The column's single maximize/restore button rides on the top-right
+    // group's strip — the one in the unsplit strip's place.
+    expect(source).toContain(
+      "<TabBar groupId={groupId} maximizeControl={touchesRight} />"
+    )
+    expect(workspaceLayoutSource).toContain("<TabBar maximizeControl />")
     const handlesIdx = source.indexOf("groupHandles.map((handle) => (")
     expect(handlesIdx).toBeGreaterThan(-1)
     expect(source.slice(handlesIdx - 80, handlesIdx)).toContain("{isSplit &&")
@@ -428,14 +531,26 @@ describe("ConversationDetailPanel send-path hardening", () => {
     expect(steerStart).toBeGreaterThan(-1)
     const steerHandler = source.slice(
       steerStart,
-      source.indexOf("[msgQueue, feedbackSteer", steerStart)
+      source.indexOf("\n  return (", steerStart)
     )
-    // Set BEFORE the first await, cleared in a finally.
-    expect(steerHandler.indexOf("setQueueSteerInFlight(true)")).toBeLessThan(
-      steerHandler.indexOf("await feedbackSteer(")
-    )
+    // Set BEFORE the first await, cleared in a finally. Both must be found: a
+    // missing setter's -1 would otherwise pass the ordering check.
+    const holdAt = steerHandler.indexOf("setQueueSteerInFlight(true)")
+    const awaitAt = steerHandler.indexOf("await deliverQueuedSteer(")
+    expect(holdAt).toBeGreaterThan(-1)
+    expect(holdAt).toBeLessThan(awaitAt)
     expect(steerHandler).toContain("finally {")
     expect(steerHandler).toContain("setQueueSteerInFlight(false)")
+    // A turn-end fallback must use the existing mode/readiness/busy handling,
+    // without a second prompt or optimistic-message path in this callback.
+    expect(steerHandler).toContain("() => mqMoveToFront(id)")
+    expect(steerHandler).toContain("if (delivered) mqRemove(id)")
+    // …and still tells the user the row became the next turn, not an insert.
+    expect(steerHandler).toContain(
+      'else toast.info(tCmp("steerQueuedInstead"))'
+    )
+    expect(steerHandler).not.toContain("acpPrompt(")
+    expect(steerHandler).not.toContain("appendOptimisticTurn(")
   })
 
   it("disables the welcome composer while connected-but-not-ready", () => {
@@ -522,7 +637,7 @@ describe("ConversationDetailPanel session-load failure surface", () => {
     const dockIdx = conversationShellSource.indexOf("{composerBanner && (")
     expect(dockIdx).toBeGreaterThan(-1)
     const dock = conversationShellSource.slice(dockIdx, dockIdx + 200)
-    expect(dock).toContain("mx-auto w-full max-w-3xl")
+    expect(dock).toContain("mx-auto w-full chat-content-w")
   })
 
   it("never clears a resolved session id when the persisted detail is absent", () => {
@@ -576,4 +691,14 @@ describe("ConversationDetailPanel session-load failure surface", () => {
       "detail?.summary.external_id ?? runtimeExternalId ?? undefined"
     )
   })
+})
+
+it("gates the no-tab draft creation effect on folder-tabs mode", () => {
+  const start = source.indexOf("// Ensure no-tab state")
+  const end = source.indexOf("// Split-group render model", start)
+  const effect = source.slice(start, end)
+  expect(effect).toContain(
+    "shouldSeedConversation(useFolderTabsStore.getState().enabled, hasNoTabs)"
+  )
+  expect(effect).toContain("openNewConversationTab(")
 })

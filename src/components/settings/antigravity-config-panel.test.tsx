@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 
 vi.mock("@/lib/api", () => ({
   acpSyncAntigravitySettings: vi.fn(),
@@ -209,8 +209,8 @@ describe("AntigravityConfigPanel", () => {
 
   type PanelOverrides = {
     env?: Record<string, string>
-    onSaveEnv?: ReturnType<typeof vi.fn>
-    onSaved?: ReturnType<typeof vi.fn>
+    onSaveEnv?: Mock
+    onSaved?: Mock
   }
 
   function agentOf(overrides?: PanelOverrides): AcpAgentInfo {
@@ -812,8 +812,11 @@ describe("AntigravityConfigPanel", () => {
       expect(String(vi.mocked(toast.error).mock.calls[0]?.[0])).toContain(
         "Google Antigravity is not installed."
       )
-      // Still offering to try again, not stuck in a spinner.
-      expect(screen.getByRole("button", { name: h.start })).toBeEnabled()
+      // Still offering to try again, not stuck in a spinner. The toast goes up
+      // before the render that releases the button.
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: h.start })).toBeEnabled()
+      )
     })
   })
 
@@ -911,7 +914,10 @@ describe("AntigravityConfigPanel", () => {
       expect(String(vi.mocked(toast.error).mock.calls[0]?.[0])).toContain(
         "Google Antigravity is not installed."
       )
-      expect(screen.getByRole("button", { name: s.action })).toBeEnabled()
+      // The toast goes up before the render that releases the button.
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: s.action })).toBeEnabled()
+      )
     })
   })
   /**

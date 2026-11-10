@@ -3,7 +3,8 @@
 This release workflow signs and notarizes the Tauri desktop app for macOS
 outside the App Store. It uses a Developer ID Application certificate, imports it
 into a temporary GitHub Actions keychain, and lets Tauri notarize the generated
-macOS bundles with Apple credentials.
+macOS bundles with Apple credentials. The same certificate also signs the
+standalone server's macOS executables (see [Standalone Server](#standalone-server)).
 
 References:
 
@@ -100,6 +101,38 @@ missing or notarization fails, the draft release is left unpublished even if the
 Linux, Windows, server, and Docker jobs produced artifacts. This avoids
 publishing a release with unsigned or unnotarized macOS desktop packages.
 
-The Apple keychain setup only runs for the `*-apple-darwin` matrix entries. The
-Linux desktop, Windows desktop, standalone server, and Docker build jobs do not
-depend on the Apple certificate or notarization secrets.
+The Apple keychain setup only runs for the `*-apple-darwin` matrix entries of the
+desktop and standalone server jobs. The Linux and Windows desktop and server
+builds and the Docker build do not depend on the Apple certificate, and only the
+desktop's macOS entries use the notarization secrets.
+
+## Standalone Server
+
+The standalone server's macOS archives (`codeg-server-darwin-arm64` and
+`codeg-server-darwin-x64`) are signed with the same Developer ID but are not
+notarized. macOS keeps the privacy permissions a person grants the server, Full
+Disk Access among them, against the executable's designated requirement. An
+ad-hoc (linker-signed) build's requirement is its own cdhash, so every update
+would take the grant back. Signed with the Developer ID under a fixed
+identifier, the requirement stays the same from release to release:
+
+```text
+identifier "codeg-server" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "TEAMID1234"
+```
+
+Once everything is built, the server job's macOS entries import the certificate
+into a temporary keychain and sign `codeg-server`, `codeg-mcp` and `codeg-cli`.
+Each is signed under its file name as its identifier, with the hardened runtime,
+a secure timestamp and no entitlements, then checked against that requirement.
+The keychain is deleted before the bundle is archived and the archive is signed
+for the updater. These entries need `APPLE_CERTIFICATE`,
+`APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD` and `APPLE_TEAM_ID`, and fail
+when one is missing.
+
+`codeg-computer-helper` stays ad-hoc signed in the server archive. A helper that
+carries a Team ID refuses to start unless codeg's designated requirement was
+compiled into it, and the server build pins none.
+
+A server updated from an ad-hoc build to its first Developer ID build needs its
+permissions granted once more, since the old grant names the old cdhash. Later
+updates keep them.

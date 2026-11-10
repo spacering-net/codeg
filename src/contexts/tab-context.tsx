@@ -1,14 +1,20 @@
 "use client"
 
-import { useCallback, useEffect, type ReactNode } from "react"
+import { useCallback, useEffect, useRef, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { useShallow } from "zustand/react/shallow"
+import {
+  followStoredFolderTabsPreference,
+  useFolderTabsStore,
+  shouldSeedConversation,
+} from "@/stores/folder-tabs-store"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
 import { useSortedAvailableAgents } from "@/hooks/use-sorted-available-agents"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import {
+  dropParkedFolderGroupViews,
   pruneOrphanDraftsOnce,
   runCorrectionOnce,
   runRecoveryOnce,
@@ -64,6 +70,7 @@ export function TabProvider({ children }: TabProviderProps) {
 
   // Tab-store slices used only as effect dependencies (this component renders
   // nothing, so subscribing here doesn't cascade to any consumer).
+  const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
   const rawTabs = useTabStore((s) => s.rawTabs)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const previewReplacedTabIds = useTabStore((s) => s.previewReplacedTabIds)
@@ -71,6 +78,22 @@ export function TabProvider({ children }: TabProviderProps) {
   const tabsHydrated = useTabStore((s) => s.tabsHydrated)
   const saveReconcileTick = useTabStore((s) => s.saveReconcileTick)
   const reseedTick = useTabStore((s) => s.reseedTick)
+
+  const preferenceHydrated = useRef(false)
+  useEffect(() => {
+    if (!tabsHydrated || !foldersHydrated || preferenceHydrated.current) return
+    preferenceHydrated.current = true
+    useTabStore.getState().syncActiveFolderId()
+    useFolderTabsStore.getState().hydratePreference()
+    dropParkedFolderGroupViews()
+  }, [tabsHydrated, foldersHydrated])
+  // From then on, a switch made in another window applies here too.
+  useEffect(() => {
+    if (!tabsHydrated || !foldersHydrated) return
+    window.addEventListener("storage", followStoredFolderTabsPreference)
+    return () =>
+      window.removeEventListener("storage", followStoredFolderTabsPreference)
+  }, [tabsHydrated, foldersHydrated])
 
   // ── Runtime dependency injection ─────────────────────────────────────────────
   // Labels first (declared before hydrate) so seed titles are translated before
@@ -195,9 +218,15 @@ export function TabProvider({ children }: TabProviderProps) {
   useEffect(() => {
     if (!tabsHydrated || !foldersHydrated) return
     pruneOrphanDraftsOnce()
-    if (useTabStore.getState().rawTabs.length > 0) return
+    if (
+      !shouldSeedConversation(
+        useFolderTabsStore.getState().enabled,
+        useTabStore.getState().rawTabs.length === 0
+      )
+    )
+      return
     runRecoveryOnce()
-  }, [tabsHydrated, foldersHydrated, rawTabs])
+  }, [tabsHydrated, foldersHydrated, rawTabs, tabsFollowFolder])
 
   // Persist the active draft's context for the next cold start.
   useEffect(() => {
@@ -241,11 +270,15 @@ export interface TabContextValue {
       folderDefaultAgent?: TabItem["agentType"] | null
       targetGroup?: string
       forceAgent?: TabItem["agentType"]
+      /** See the tab store's `openNewConversationTab`. */
+      retargetTabId?: string
     }
   ) => OpenedDraftTarget
   openChatModeTab: (options?: {
     targetGroup?: string
     forceAgent?: TabItem["agentType"]
+    /** See the tab store's `openNewConversationTab`. */
+    retargetTabId?: string
   }) => OpenedDraftTarget
   setChatDraftWorkingDir: (tabId: string, workingDir: string) => void
   confirmDraftAgent: (tabId: string, agentType: TabItem["agentType"]) => void

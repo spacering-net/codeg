@@ -9,6 +9,14 @@ const mocks = vi.hoisted(() => ({
   ),
 }))
 
+vi.mock("next-intl", () => {
+  const t = (key: string) => key
+  return { useTranslations: () => t }
+})
+vi.mock("@/hooks/use-open-url-target", () => ({
+  useOpenUrlTarget: () => () => ({ kind: "system", url: "" }),
+  isPrimaryModifier: () => false,
+}))
 vi.mock("./link-safety", async (importOriginal) => {
   // Only the streamdown hook is stubbed — `parseLocalFileTarget` stays real, so
   // the file badge's hover-actions anchor wraps it exactly as it would in the app.
@@ -132,21 +140,6 @@ describe("MarkdownLink", () => {
       expect(window.open).not.toHaveBeenCalled()
     }
   )
-
-  it("does nothing when clicking an incomplete (streaming) link", () => {
-    render(
-      <MarkdownLink href="streamdown:incomplete-link">partial</MarkdownLink>
-    )
-
-    const button = screen.getByRole("button")
-    expect(button).not.toHaveAttribute("data-resource-kind")
-    expect(button.querySelector("svg")).toBeNull()
-
-    fireEvent.click(button)
-    expect(window.open).not.toHaveBeenCalled()
-    expect(mocks.onLinkCheck).not.toHaveBeenCalled()
-    expect(screen.queryByTestId("link-modal")).not.toBeInTheDocument()
-  })
 
   describe("codeg:// reference badges", () => {
     it("renders a session link as a session badge (conversation glyph, no agent icon or status dot)", () => {

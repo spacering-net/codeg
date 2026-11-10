@@ -1,5 +1,13 @@
 import { act, render, waitFor, cleanup } from "@testing-library/react"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 import {
   resetAppWorkspaceStore,
   useAppWorkspaceStore,
@@ -9,10 +17,10 @@ import {
 // setState in beforeEach and flip hydration with act(setState). The tab half
 // is still a mutable hook mock — the mock reads this module-level var, so
 // reassigning + rerendering simulates the provider state changing.
-let tabs: { tabsHydrated: boolean; openTab: ReturnType<typeof vi.fn> }
-let addFolderToWorkspaceById: ReturnType<typeof vi.fn>
+let tabs: { tabsHydrated: boolean; openTab: Mock }
+let addFolderToWorkspaceById: Mock
 let handlers: Map<string, (p: unknown) => void>
-let takePendingDeepLink: ReturnType<typeof vi.fn>
+let takePendingDeepLink: Mock
 
 const FOCUS = "workspace://focus-conversation"
 const PENDING = "workspace://deep-link-pending"

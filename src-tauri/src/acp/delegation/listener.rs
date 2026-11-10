@@ -16,24 +16,42 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
 use crate::acp::delegation::broker::{DelegationBroker, StatusWait};
-use crate::acp::delegation::transport::{
-    read_frame, write_frame, BrokerAskRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
-    BrokerCommitFeedbackRequest, BrokerFeedbackRequest, BrokerMessage, BrokerRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
-    BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+use crate::acp::browser_tools::{
+    BrowserActOutcome, BrowserCaptureOutcome, BrowserConsoleOutcome, BrowserEvalOutcome,
+    BrowserSnapshotOutcome, BrowserTabOutcome, BrowserTabsOutcome, BrowserToolAccess,
+    ERROR_NO_SUCH_TAB,
 };
+use crate::acp::computer_tools::{
+    ComputerActOutcome, ComputerAppsOutcome, ComputerCaptureOutcome, ComputerSnapshotOutcome,
+    ComputerToolAccess, ComputerVerifyOutcome, ComputerWindowsOutcome, ERROR_NO_SUCH_TARGET,
+};
+use crate::acp::delegation::transport::{
+    read_frame, write_frame, BrokerAskRequest, BrokerBrowserActRequest,
+    BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
+    BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerComputerActRequest,
+    BrokerComputerAppsRequest, BrokerComputerCaptureRequest, BrokerComputerLaunchRequest,
+    BrokerComputerSnapshotRequest,
+    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCommitFeedbackRequest,
+    BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRequest,
+    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
+    BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
+    BrokerStatusRequest, BrokerSubmitResultRequest, BrokerTaskCompleteRequest,
+    BrokerTaskProgressRequest,
+};
+use crate::acp::delegation::assistants::assistant_not_found_message;
 use crate::acp::delegation::types::{
-    DelegationRequest, DelegationTaskReport, ResumeDelegationRequest, TaskStatus,
+    delegation_target_from_args, DelegationRequest, DelegationTarget, DelegationTargetError,
+    DelegationTaskReport, ResumeDelegationRequest, TaskStatus,
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
 #[cfg(unix)]
-use crate::acp::scratch_dir::SUN_PATH_CAP;
+use crate::acp::scratch_dir::{is_inside_sweep_scope, SUN_PATH_CAP};
 use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthoringAccess};
+use crate::acp::result_tool::ResultToolAccess;
 use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
-use crate::models::AgentType;
 use serde_json::Value;
 
 /// Hard ceiling on a *positive* `get_delegation_status` long-poll, so a single
@@ -146,6 +164,21 @@ pub struct DelegationListener {
     /// feature flags at call time, so flipping the setting off stops writes
     /// from sessions that were launched while it was on.
     pub authoring: Arc<dyn ChatAuthoringAccess>,
+    /// Lists the built-in browser's tabs, reads a shared page and acts on one
+    /// (`browser_list_tabs` / `browser_snapshot` / the action tools). Like the
+    /// authoring impl it
+    /// re-checks its feature flag at call time; unlike every other arm here it
+    /// exists only in the desktop build, because a browser tab is a native
+    /// webview — server mode gets `NoBrowserTabs`.
+    pub browser: Arc<dyn BrowserToolAccess>,
+    /// Lists the desktop's applications and windows and reads a shared window
+    /// (`computer_*`). Desktop-only like the browser — server mode gets
+    /// `NoComputerDesktop` — and like it, re-checks its switch at call time.
+    pub computer: Arc<dyn ComputerToolAccess>,
+    /// The schema `submit_result` takes, and the results handed in with it,
+    /// on the root connection of a `codeg-cli` run given `--output-schema`.
+    /// Same token → parent-connection scoping as the delegation arms.
+    pub results: Arc<dyn ResultToolAccess>,
 }
 
 impl DelegationListener {
@@ -159,6 +192,9 @@ impl DelegationListener {
         session_info: Arc<dyn SessionInfoAccess>,
         tasks: Arc<dyn WorkTaskToolAccess>,
         authoring: Arc<dyn ChatAuthoringAccess>,
+        browser: Arc<dyn BrowserToolAccess>,
+        computer: Arc<dyn ComputerToolAccess>,
+        results: Arc<dyn ResultToolAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
             broker,
@@ -169,6 +205,9 @@ impl DelegationListener {
             session_info,
             tasks,
             authoring,
+            browser,
+            computer,
+            results,
         })
     }
 
@@ -407,7 +446,13 @@ impl DelegationListener {
             // anything else is touched so the probe measures the serve path and
             // nothing more.
             BrokerMessage::Ping => BrokerResponse {
-                outcome: serde_json::json!({ "ok": true }),
+                // `assistants: true` is the capability the companion checks
+                // before it forwards an `assistant_id` call — see
+                // `BrokerMessage::Ping`.
+                outcome: serde_json::json!({ "ok": true, "assistants": true }),
+            },
+            BrokerMessage::ListAssistants(req) => BrokerResponse {
+                outcome: self.process_list_assistants(req).await,
             },
             BrokerMessage::Call(req) => report_response(self.process(req).await)?,
             BrokerMessage::Status(req) => {
@@ -537,6 +582,19 @@ impl DelegationListener {
             BrokerMessage::TaskComplete(req) => {
                 task_ack_response(self.process_task_complete(req).await)?
             }
+            // Both bounded and quick — a lookup, and a check against a
+            // compiled schema — so no peer-close race either.
+            BrokerMessage::ResultSchema(req) => BrokerResponse {
+                outcome: serde_json::json!({ "schema": self.process_result_schema(req).await }),
+            },
+            BrokerMessage::SubmitResult(req) => {
+                let outcome = self.process_submit_result(req).await;
+                BrokerResponse {
+                    outcome: serde_json::to_value(&outcome).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+                    })?,
+                }
+            }
             BrokerMessage::CreateAutomation(req) => {
                 // A bounded DB write. Like SessionInfo it never long-polls, so
                 // there is no peer-close race to run — and unlike Ask there is
@@ -546,6 +604,89 @@ impl DelegationListener {
             }
             BrokerMessage::CreateWorkTask(req) => {
                 authoring_response(self.process_create_work_task(req).await)?
+            }
+            BrokerMessage::BrowserTabs(req) => {
+                // A registry read. No peer-close race for the same reason as
+                // SessionInfo: it cannot block on anything.
+                browser_tabs_response(self.process_browser_tabs(req).await)?
+            }
+            BrokerMessage::BrowserSnapshot(req) => {
+                // This one CAN take a moment — it evaluates in the page's
+                // isolated world and waits for the answer — but it is bounded
+                // by the read's own 15 s engine timeout rather than by a human
+                // or a long-poll, and abandoning it early would leave the
+                // activity line unwritten while the page had already been
+                // read. So no peer-close race here either: the read runs to its
+                // own end, and a caller that walked away simply gets no answer.
+                browser_snapshot_response(self.process_browser_snapshot(req).await)?
+            }
+            BrokerMessage::BrowserAct(req) => {
+                // Same shape as the read: bounded by the engine's own
+                // timeouts, and an action that has happened has to leave its
+                // line on the strip whether or not the caller is still there.
+                browser_act_response(self.process_browser_act(req).await)?
+            }
+            BrokerMessage::BrowserConsole(req) => {
+                // A registry read, like the listing; nothing to block on.
+                browser_console_response(self.process_browser_console(req).await)?
+            }
+            BrokerMessage::BrowserCapture(req) => {
+                // Bounded by the capture's own engine timeout, as the read
+                // is; the line it leaves on the strip is written on the
+                // codeg side whether or not the caller waits.
+                browser_capture_response(self.process_browser_capture(req).await)?
+            }
+            BrokerMessage::BrowserEval(req) => {
+                // The one browser message that waits on a human, so it can sit
+                // here for a couple of minutes. Still no peer-close race: the
+                // question is in front of a person, and whipping it away
+                // because the agent's socket went quiet would train them to
+                // dismiss dialogs that vanish. It is bounded by the
+                // confirmation's own timeout either way.
+                browser_eval_response(self.process_browser_eval(req).await)?
+            }
+            BrokerMessage::BrowserTabOp(req) => {
+                // Bounded by the settle timeout on the codeg side. No
+                // peer-close race for the same reason the snapshot arm has
+                // none: dropping the future mid-flight would leave a tab open
+                // (or a page navigated) with nothing on the strip to say so.
+                browser_tab_op_response(self.process_browser_tab_op(req).await)?
+            }
+            BrokerMessage::ComputerApps(req) => {
+                // One driver listing behind the helper, bounded by the
+                // helper's own timeout. No peer-close race, as for the
+                // browser listing: nothing here waits on a person.
+                computer_response(&self.process_computer_apps(req).await)?
+            }
+            BrokerMessage::ComputerWindows(req) => {
+                computer_response(&self.process_computer_windows(req).await)?
+            }
+            BrokerMessage::ComputerCapture(req) => {
+                // Like the browser capture: the read runs to its own end, so
+                // the activity line it writes on the codeg side is never
+                // skipped because the caller walked away.
+                computer_capture_response(self.process_computer_capture(req).await)?
+            }
+            BrokerMessage::ComputerSnapshot(req) => {
+                computer_response(&self.process_computer_snapshot(req).await)?
+            }
+            BrokerMessage::ComputerVerify(req) => {
+                computer_response(&self.process_computer_verify(req).await)?
+            }
+            BrokerMessage::ComputerAct(req) => {
+                // Runs to its end like a read: an action cannot be recalled
+                // halfway, and the line it leaves on the panel's activity
+                // list must not depend on whether the caller is still there.
+                computer_response(&self.process_computer_act(req).await)?
+            }
+            BrokerMessage::ComputerLaunch(req) => {
+                // To its end, as an action: a started application cannot be
+                // recalled either.
+                computer_response(&self.process_computer_launch(req).await)?
+            }
+            BrokerMessage::ComputerClipboard(req) => {
+                // To its end: a write cannot be recalled.
+                computer_response(&self.process_computer_clipboard(req).await)?
             }
             BrokerMessage::Cancel(cancel) => {
                 self.process_cancel(cancel).await;
@@ -773,6 +914,242 @@ impl DelegationListener {
             .await
     }
 
+    /// Validate the token and list the browser tabs an agent may know about.
+    ///
+    /// An invalid token gets the same answer a runtime with no browser gets:
+    /// an empty list. Consistent with every other arm here — a caller that
+    /// cannot prove it is a companion learns nothing, not even whether the
+    /// user has any tabs open.
+    ///
+    /// Not scoped to the caller's parent connection, for the reason spelled
+    /// out on [`BrokerBrowserTabsRequest`]: tabs belong to the user, and what
+    /// an agent may read of one is the per-tab grant.
+    async fn process_browser_tabs(&self, req: BrokerBrowserTabsRequest) -> BrowserTabsOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return BrowserTabsOutcome::default();
+        }
+        self.browser.list_tabs().await
+    }
+
+    /// Validate the token and read one shared page.
+    ///
+    /// An invalid token is told the tab does not exist — the same answer a
+    /// wrong id gets, so a caller off the street cannot use the refusal codes
+    /// to probe which tabs are open or which of them are shared.
+    async fn process_browser_snapshot(
+        &self,
+        req: BrokerBrowserSnapshotRequest,
+    ) -> BrowserSnapshotOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return BrowserSnapshotOutcome::refused(
+                &req.tab_id,
+                ERROR_NO_SUCH_TAB,
+                format!("No browser tab {} is open.", req.tab_id),
+            );
+        }
+        self.browser.snapshot(&req.tab_id, req.max_chars).await
+    }
+
+    /// Validate the token and act on one shared page. An invalid token gets
+    /// the same "no such tab" a wrong id gets, for the reason given on
+    /// [`Self::process_browser_snapshot`].
+    async fn process_browser_act(&self, req: BrokerBrowserActRequest) -> BrowserActOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return BrowserActOutcome::refused(
+                &req.tab_id,
+                ERROR_NO_SUCH_TAB,
+                format!("No browser tab {} is open.", req.tab_id),
+            );
+        }
+        self.browser.act(&req.tab_id, req.request).await
+    }
+
+    /// Validate the token and read one shared page's console; an invalid
+    /// token gets "no such tab", as everywhere here.
+    async fn process_browser_console(
+        &self,
+        req: BrokerBrowserConsoleRequest,
+    ) -> BrowserConsoleOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return BrowserConsoleOutcome::refused(
+                &req.tab_id,
+                ERROR_NO_SUCH_TAB,
+                format!("No browser tab {} is open.", req.tab_id),
+            );
+        }
+        self.browser.console(&req.tab_id, req.query).await
+    }
+
+    /// Validate the token and capture one shared page; an invalid token gets
+    /// "no such tab", as everywhere here.
+    async fn process_browser_capture(
+        &self,
+        req: BrokerBrowserCaptureRequest,
+    ) -> BrowserCaptureOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return BrowserCaptureOutcome::refused(
+                &req.tab_id,
+                ERROR_NO_SUCH_TAB,
+                format!("No browser tab {} is open.", req.tab_id),
+            );
+        }
+        self.browser.capture(&req.tab_id, req.request).await
+    }
+
+    /// Validate the token and run one snippet on one shared page; an invalid
+    /// token gets "no such tab", as everywhere here.
+    ///
+    /// Checking the token BEFORE the access impl matters more here than
+    /// anywhere else on this surface: the impl is what raises the dialog, and
+    /// a caller with no standing must not be able to put a question in front
+    /// of the user at all.
+    async fn process_browser_eval(&self, req: BrokerBrowserEvalRequest) -> BrowserEvalOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return BrowserEvalOutcome::refused(
+                &req.tab_id,
+                ERROR_NO_SUCH_TAB,
+                format!("No browser tab {} is open.", req.tab_id),
+            );
+        }
+        self.browser.eval(&req.tab_id, req.request).await
+    }
+
+    /// Validate the token and open / navigate / close one tab.
+    ///
+    /// The token is checked before the access impl, as everywhere here: an
+    /// invalid one must not be able to open a tab on the user's screen, and
+    /// hears the same "no such tab" every other unauthenticated round trip
+    /// gets. An `Open` has no tab to name, so it hears the note instead —
+    /// which reveals nothing either, being what a session with the browser
+    /// switched off also hears.
+    async fn process_browser_tab_op(&self, req: BrokerBrowserTabOpRequest) -> BrowserTabOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            let tab_id = req.op.tab_id();
+            return BrowserTabOutcome::refused(
+                tab_id,
+                ERROR_NO_SUCH_TAB,
+                match tab_id {
+                    Some(tab_id) => format!("No browser tab {tab_id} is open."),
+                    None => crate::acp::browser_tools::NO_BROWSER_NOTE.to_string(),
+                },
+            );
+        }
+        self.browser.tab_op(req.op).await
+    }
+
+    /// Validate the token and list the running applications. An invalid token
+    /// hears what a runtime with no desktop hears: nothing is listed, so a
+    /// caller that cannot prove it is a companion learns nothing about what
+    /// is running.
+    async fn process_computer_apps(&self, req: BrokerComputerAppsRequest) -> ComputerAppsOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return ComputerAppsOutcome::default();
+        }
+        self.computer.list_apps().await
+    }
+
+    /// Validate the token and list the windows. Same unauthenticated answer as
+    /// the application listing.
+    async fn process_computer_windows(
+        &self,
+        req: BrokerComputerWindowsRequest,
+    ) -> ComputerWindowsOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return ComputerWindowsOutcome::default();
+        }
+        self.computer.list_windows(req.pid).await
+    }
+
+    /// An invalid token is told the window does not exist — the answer a
+    /// wrong id gets — so the refusal codes cannot be used from outside to
+    /// probe which windows exist or which are shared.
+    async fn process_computer_capture(
+        &self,
+        req: BrokerComputerCaptureRequest,
+    ) -> ComputerCaptureOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return ComputerCaptureOutcome::refused(
+                &req.target_id,
+                ERROR_NO_SUCH_TARGET,
+                crate::acp::computer_tools::no_such_target_note(&req.target_id),
+            );
+        }
+        self.computer.capture(&req.target_id, req.max_dimension).await
+    }
+
+    async fn process_computer_snapshot(
+        &self,
+        req: BrokerComputerSnapshotRequest,
+    ) -> ComputerSnapshotOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return ComputerSnapshotOutcome::refused(
+                &req.target_id,
+                ERROR_NO_SUCH_TARGET,
+                crate::acp::computer_tools::no_such_target_note(&req.target_id),
+            );
+        }
+        self.computer.snapshot(&req.target_id, req.request).await
+    }
+
+    async fn process_computer_verify(
+        &self,
+        req: BrokerComputerVerifyRequest,
+    ) -> ComputerVerifyOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return ComputerVerifyOutcome::refused(
+                &req.target_id,
+                ERROR_NO_SUCH_TARGET,
+                crate::acp::computer_tools::no_such_target_note(&req.target_id),
+            );
+        }
+        self.computer.verify(&req.target_id, req.request).await
+    }
+
+    /// Same unauthenticated answer as a read: an invalid token is told the
+    /// window does not exist, and nothing is done.
+    async fn process_computer_act(&self, req: BrokerComputerActRequest) -> ComputerActOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return ComputerActOutcome::refused(
+                &req.target_id,
+                ERROR_NO_SUCH_TARGET,
+                crate::acp::computer_tools::no_such_target_note(&req.target_id),
+            );
+        }
+        self.computer
+            .act(&req.target_id, req.request, req.delivery)
+            .await
+    }
+
+    /// Validate the token and start the application. An invalid token hears
+    /// what a runtime with no desktop hears, and nothing is started.
+    async fn process_computer_launch(
+        &self,
+        req: BrokerComputerLaunchRequest,
+    ) -> crate::acp::computer_tools::ComputerLaunchOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return crate::acp::computer_tools::ComputerLaunchOutcome::refused(
+                crate::acp::computer_tools::ERROR_UNAVAILABLE,
+                crate::acp::computer_tools::NO_DESKTOP_NOTE,
+            );
+        }
+        self.computer.launch_app(req.name, req.key).await
+    }
+
+    /// Validate the token and read or write the clipboard. An invalid token
+    /// hears what a runtime with no desktop hears, and nothing is done.
+    async fn process_computer_clipboard(
+        &self,
+        req: crate::acp::delegation::transport::BrokerComputerClipboardRequest,
+    ) -> crate::acp::computer_tools::ComputerClipboardOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return crate::acp::computer_tools::ComputerClipboardOutcome::refused(
+                crate::acp::computer_tools::ERROR_UNAVAILABLE,
+                crate::acp::computer_tools::NO_DESKTOP_NOTE,
+            );
+        }
+        self.computer.clipboard(req.op).await
+    }
+
     /// Validate the token and hand the progress report to the task engine,
     /// which resolves the parent connection to its owning task + generation.
     async fn process_task_progress(&self, req: BrokerTaskProgressRequest) -> TaskReportAck {
@@ -795,6 +1172,27 @@ impl DelegationListener {
                 &req.verdict,
                 req.summary.as_deref(),
             )
+            .await
+    }
+
+    /// Validate the token and look up the schema `submit_result` takes on the
+    /// caller's connection. An invalid token hears what a connection asked
+    /// for no result hears.
+    async fn process_result_schema(&self, req: BrokerResultSchemaRequest) -> Option<Value> {
+        let entry = self.tokens.lookup(&req.token).await?;
+        self.results.schema(&entry.parent_connection_id).await
+    }
+
+    /// Validate the token and check the result against the caller's schema.
+    async fn process_submit_result(
+        &self,
+        req: BrokerSubmitResultRequest,
+    ) -> crate::cli_run::output_schema::SubmitOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return crate::cli_run::output_schema::SubmitOutcome::not_asked();
+        };
+        self.results
+            .submit(&entry.parent_connection_id, req.result)
             .await
     }
 
@@ -835,6 +1233,16 @@ impl DelegationListener {
         self.authoring.create_work_task(ctx, req.spec).await
     }
 
+    /// The roster for the companion's schema. A bad token gets an error
+    /// payload rather than a dropped connection: the companion must always get
+    /// an answer from a listener that understands the message.
+    async fn process_list_assistants(&self, req: BrokerListAssistantsRequest) -> serde_json::Value {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return serde_json::json!({ "assistants": [], "error": "invalid token" });
+        }
+        serde_json::json!({ "assistants": self.broker.assistant_roster().await })
+    }
+
     async fn process(&self, req: BrokerRequest) -> DelegationTaskReport {
         // 1. Token + parent_connection_id consistency check. Treat both as
         //    "canceled" since the LLM can't usefully react to either —
@@ -859,13 +1267,26 @@ impl DelegationListener {
         };
 
         // 3. Parse the delegate_to_agent arguments. Schema validation lives
-        //    on the LLM side; we only enforce what the broker can't.
-        let agent_type = match req.input.get("agent_type").and_then(|v| v.as_str()) {
-            Some(raw) => match parse_agent_type(raw) {
-                Some(t) => t,
-                None => return invalid_agent_type(raw),
+        //    on the LLM side; we only enforce what the broker can't. An
+        //    `assistant_id` wins over `agent_type` and is resolved NOW, from
+        //    the database: the assistant supplies the agent, its options and
+        //    its brief, frozen for this run.
+        let (agent_type, assistant) = match delegation_target_from_args(&req.input) {
+            Ok(DelegationTarget::Agent(agent_type)) => (agent_type, None),
+            Ok(DelegationTarget::Assistant(id)) => match self.broker.resolve_assistant(id).await {
+                Some((agent_type, assistant)) => (agent_type, Some(assistant)),
+                None => return self.assistant_not_found(&id.to_string()).await,
             },
-            None => return invalid_agent_type(""),
+            Err(DelegationTargetError::InvalidAssistantId(raw)) => {
+                return self.assistant_not_found(&raw).await;
+            }
+            Err(DelegationTargetError::InvalidAgentType(raw)) => return invalid_agent_type(&raw),
+            Err(DelegationTargetError::Missing) => {
+                return report_failed(
+                    "invalid_agent_type",
+                    "missing agent_type (or assistant_id, to delegate to an assistant)",
+                );
+            }
         };
         let task = match req.input.get("task").and_then(|v| v.as_str()) {
             Some(s) if !s.trim().is_empty() => s.to_string(),
@@ -894,8 +1315,17 @@ impl DelegationListener {
             working_dir,
             requested_working_dir,
             external_handle: req.external_handle,
+            assistant,
         };
         self.broker.start_delegation(delegation_req).await
+    }
+
+    async fn assistant_not_found(&self, asked: &str) -> DelegationTaskReport {
+        let roster = self.broker.assistant_roster().await;
+        report_failed(
+            "assistant_not_found",
+            &assistant_not_found_message(asked, &roster),
+        )
     }
 }
 
@@ -965,6 +1395,145 @@ fn session_response(info: SessionInfo) -> std::io::Result<BrokerResponse> {
     })
 }
 
+/// Serialize a [`BrowserTabsOutcome`] into a [`BrokerResponse`] for the
+/// `BrowserTabs` arm — the companion renders it into the `browser_list_tabs`
+/// tool result.
+fn browser_tabs_response(outcome: BrowserTabsOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+/// Serialize a [`BrowserSnapshotOutcome`] into a [`BrokerResponse`] for the
+/// `BrowserSnapshot` arm — the companion renders it into the `browser_snapshot`
+/// tool result.
+fn browser_snapshot_response(
+    outcome: BrowserSnapshotOutcome,
+) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+/// Serialize a [`BrowserActOutcome`] into a [`BrokerResponse`] for the
+/// `BrowserAct` arm — the companion renders it into the action tool's result.
+fn browser_act_response(outcome: BrowserActOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+/// Serialize a [`BrowserConsoleOutcome`] for the `BrowserConsole` arm.
+fn browser_console_response(outcome: BrowserConsoleOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+/// Serialize a [`BrowserEvalOutcome`] for the `BrowserEval` arm. No size guard
+/// like the capture's: what a snippet can send back is already bounded twice,
+/// in the page's renderer and again in `EvalOutcome::from_answer`.
+fn browser_eval_response(outcome: BrowserEvalOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+/// Serialize a [`BrowserTabOutcome`] for the `BrowserTabOp` arm. Nothing to
+/// guard for size: the answer is a tab summary at most.
+fn browser_tab_op_response(outcome: BrowserTabOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+/// Serialize a [`BrowserCaptureOutcome`] for the `BrowserCapture` arm. The
+/// image rides inside as base64. The capture pipeline keeps it far under the
+/// frame cap, but this is the last place before the frame is written, so it
+/// is measured here too: a capture the companion would refuse to read is
+/// answered with a refusal it can, rather than with a broken round trip.
+fn browser_capture_response(outcome: BrowserCaptureOutcome) -> std::io::Result<BrokerResponse> {
+    let encode = |outcome: &BrowserCaptureOutcome| {
+        serde_json::to_vec(outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })
+    };
+    let mut bytes = encode(&outcome)?;
+    if bytes.len() > CAPTURE_RESPONSE_MAX_BYTES {
+        let refused = BrowserCaptureOutcome::refused(
+            &outcome.tab_id,
+            crate::acp::browser_tools::ERROR_READ_FAILED,
+            format!(
+                "The screenshot came out too large to deliver ({} bytes). Ask for a smaller \
+                 `maxWidth`, or `format: \"jpeg\"`.",
+                bytes.len()
+            ),
+        );
+        bytes = encode(&refused)?;
+    }
+    Ok(BrokerResponse {
+        outcome: serde_json::from_slice(&bytes).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+/// What a serialized capture outcome may weigh: the frame cap less room for
+/// the envelope around it.
+const CAPTURE_RESPONSE_MAX_BYTES: usize = super::transport::MAX_FRAME_BYTES - 64 * 1024;
+
+/// Serialize any computer-use outcome for its arm. Nothing but the capture
+/// can come near the frame cap: a snapshot's tree is cut to `maxChars` on the
+/// codeg side, and the listings and verdicts are small.
+fn computer_response(outcome: &impl serde::Serialize) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+/// Serialize a [`ComputerCaptureOutcome`], measured against the frame cap for
+/// the same reason as the browser's: a capture the companion could not read
+/// is answered with a refusal it can.
+fn computer_capture_response(outcome: ComputerCaptureOutcome) -> std::io::Result<BrokerResponse> {
+    let encode = |outcome: &ComputerCaptureOutcome| {
+        serde_json::to_vec(outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })
+    };
+    let mut bytes = encode(&outcome)?;
+    if bytes.len() > CAPTURE_RESPONSE_MAX_BYTES {
+        let refused = ComputerCaptureOutcome::refused(
+            &outcome.target_id,
+            crate::acp::computer_tools::ERROR_READ_FAILED,
+            format!(
+                "The screenshot came out too large to deliver ({} bytes). Ask for a smaller \
+                 `maxDimension`.",
+                bytes.len()
+            ),
+        );
+        bytes = encode(&refused)?;
+    }
+    Ok(BrokerResponse {
+        outcome: serde_json::from_slice(&bytes).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
 /// Serialize a [`TaskReportAck`] into a [`BrokerResponse`] for the
 /// `TaskProgress` / `TaskComplete` arms — the companion renders it into the
 /// tool result.
@@ -1010,6 +1579,9 @@ fn report_canceled(message: &str) -> DelegationTaskReport {
         message: Some(message.into()),
         duration_ms: None,
         blocked_on: None,
+        assistant_id: None,
+        assistant_name: None,
+        progress: None,
     }
 }
 
@@ -1025,6 +1597,9 @@ fn report_failed(error_code: &str, message: &str) -> DelegationTaskReport {
         message: Some(message.into()),
         duration_ms: None,
         blocked_on: None,
+        assistant_id: None,
+        assistant_name: None,
+        progress: None,
     }
 }
 
@@ -1041,6 +1616,9 @@ fn unknown_report(task_id: &str) -> DelegationTaskReport {
         message: Some("unknown task id".into()),
         duration_ms: None,
         blocked_on: None,
+        assistant_id: None,
+        assistant_name: None,
+        progress: None,
     }
 }
 
@@ -1054,10 +1632,6 @@ fn invalid_agent_type(raw: &str) -> DelegationTaskReport {
     } else {
         report_failed("invalid_agent_type", &format!("invalid agent_type: {raw}"))
     }
-}
-
-fn parse_agent_type(raw: &str) -> Option<AgentType> {
-    serde_json::from_value(serde_json::Value::String(raw.to_string())).ok()
 }
 
 /// Whether `path` fits in `sockaddr_un::sun_path`.
@@ -1106,12 +1680,24 @@ fn short_socket_dir() -> PathBuf {
 /// codeg instances on the same machine don't collide.
 ///
 /// Unix: a `.sock` file inside `temp_dir`, or — when that would not fit in
-/// `sun_path` — inside [`short_socket_dir`]. The fallback is not hypothetical
-/// housekeeping: codeg exports a ~72-byte per-session `TMPDIR` to the agents it
-/// launches, so a codeg started from inside one is already within a few bytes
-/// of the macOS cap, and a container or a hand-set `TMPDIR` clears it outright.
-/// Without the fallback that produced a socket nobody could dial and no error
-/// anywhere — see [`DelegationListener::bind`].
+/// `sun_path`, or would put the socket inside a scratch root a startup sweep
+/// deletes wholesale ([`is_inside_sweep_scope`]) — inside [`short_socket_dir`].
+/// Neither fallback is hypothetical housekeeping:
+///
+/// * The length budget: a container's or a hand-set `TMPDIR` can clear the
+///   `sun_path` cap outright, and a codeg session's own `TMPDIR` used to come
+///   close — ~72 bytes under `/var/folders/…/T/` until #754 moved it to the
+///   short scratch root, so a codeg started inside one sat a few bytes under
+///   the macOS cap. Without the fallback that produced a socket nobody could
+///   dial and no error anywhere — see [`DelegationListener::bind`].
+/// * The sweep scope: an app launched from inside a codeg-managed session
+///   inherits that session's scratch `TMPDIR`, whose directory is named like a
+///   `<pid>-<8 hex>` launch dir and is deleted wholesale — by the codeg that
+///   owns it when that launch ends, or by any codeg's startup sweep once the
+///   pid in the name is dead. The socket FILE never matches that pattern —
+///   the danger is its PARENT being deleted with it, after which the listener
+///   keeps serving an unlinked vnode and every `delegate_to_agent` fails
+///   `ENOENT` (2026-10-15, twice in a row on this machine).
 ///
 /// Windows: a named pipe address `\\.\pipe\codeg-delegation-<pid>`. Windows
 /// named pipes live in their own kernel namespace and ignore `temp_dir`; the
@@ -1120,22 +1706,43 @@ fn short_socket_dir() -> PathBuf {
 pub fn default_socket_path(temp_dir: &Path) -> PathBuf {
     let name = format!("codeg-delegation-{}.sock", std::process::id());
     let preferred = temp_dir.join(&name);
-    if fits_sun_path(&preferred) {
+    // The guard gets the full `preferred` path rather than `temp_dir`: that is
+    // strictly stronger — it also refuses the corner where `temp_dir` IS a
+    // sweep root, whose socket inside would be just as deletable.
+    let in_sweep_scope = is_inside_sweep_scope(&preferred);
+    if fits_sun_path(&preferred) && !in_sweep_scope {
         return preferred;
     }
     // No third candidate, because there is no third case to handle: this is
     // `/tmp/codeg-` + at most 10 digits of euid + `/codeg-delegation-` + at
     // most 10 digits of pid + `.sock` — 54 bytes at its absolute widest, or
-    // half the smallest `sun_path` any of these platforms has.
+    // half the smallest `sun_path` any of these platforms has. It is also
+    // outside every sweep root by construction, which is the other half of
+    // what the guard above has to be able to promise about its result.
     let short = short_socket_dir().join(&name);
-    tracing::info!(
-        "[delegation] {} is {} bytes, past the {}-byte AF_UNIX limit; \
-         binding {} instead",
-        preferred.display(),
-        preferred.as_os_str().len(),
-        SUN_PATH_CAP - 1,
-        short.display(),
-    );
+    if !fits_sun_path(&preferred) {
+        tracing::info!(
+            "[delegation] {} is {} bytes, past the {}-byte AF_UNIX limit; \
+             binding {} instead",
+            preferred.display(),
+            preferred.as_os_str().len(),
+            SUN_PATH_CAP - 1,
+            short.display(),
+        );
+    }
+    if in_sweep_scope {
+        tracing::warn!(
+            "[delegation] TMPDIR {} sits inside codeg's per-launch scratch \
+             namespace (`<pid>-<8 hex>` directories codeg deletes wholesale when \
+             their launch ends or their owner dies), so the broker socket is bound \
+             at {} instead — bound there it would silently disappear with that \
+             directory. This usually happens when the app is launched from inside \
+             a codeg-managed session environment and inherits its scratch TMPDIR; \
+             if that was not intentional, restart it from a clean environment.",
+            temp_dir.display(),
+            short.display(),
+        );
+    }
     short
 }
 
@@ -1147,10 +1754,15 @@ pub fn default_socket_path(_temp_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::acp::scratch_dir::short_root;
     use crate::acp::delegation::broker::{ConversationDepthLookup, DelegationConfig};
+    use crate::models::AgentType;
     use crate::acp::delegation::spawner::{
         mock::MockSpawner, ConnectionSpawner, ResumedSpawn, SpawnerError,
     };
+    use crate::acp::browser_tools::{NoBrowserTabs, ERROR_GRANT_REQUIRED};
+    use crate::acp::computer_tools::NoComputerDesktop;
     use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
     use serde_json::json;
     use std::time::Duration;
@@ -1275,6 +1887,107 @@ mod tests {
         }
     }
 
+    /// A browser with one shared tab and one that nobody shared, recording
+    /// every call so a test can prove the token gate never reached it.
+    #[derive(Default)]
+    struct StubBrowser {
+        calls: tokio::sync::Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl BrowserToolAccess for StubBrowser {
+        async fn list_tabs(&self) -> BrowserTabsOutcome {
+            self.calls.lock().await.push("list".into());
+            BrowserTabsOutcome {
+                tabs: vec![crate::browser::agent::AgentTabSummary {
+                    tab_id: "t1".into(),
+                    origin: Some("https://example.com".into()),
+                    level: crate::browser::agent::GrantLevel::Read,
+                    title: Some("Example".into()),
+                }],
+                note: None,
+            }
+        }
+        async fn snapshot(
+            &self,
+            tab_id: &str,
+            max_chars: Option<usize>,
+        ) -> BrowserSnapshotOutcome {
+            self.calls
+                .lock()
+                .await
+                .push(format!("snapshot {tab_id} {max_chars:?}"));
+            BrowserSnapshotOutcome::grant_required(tab_id)
+        }
+        async fn eval(
+            &self,
+            tab_id: &str,
+            request: crate::browser::eval::EvalRequest,
+        ) -> BrowserEvalOutcome {
+            self.calls
+                .lock()
+                .await
+                .push(format!("eval {tab_id} {}", request.code));
+            BrowserEvalOutcome::grant_required(tab_id)
+        }
+        async fn console(
+            &self,
+            tab_id: &str,
+            query: crate::browser::console::ConsoleQuery,
+        ) -> BrowserConsoleOutcome {
+            self.calls.lock().await.push(format!(
+                "console {tab_id} since={} min={:?} limit={:?}",
+                query.since, query.min_level, query.limit
+            ));
+            BrowserConsoleOutcome::grant_required(tab_id)
+        }
+        async fn capture(
+            &self,
+            tab_id: &str,
+            request: crate::browser::capture::CaptureRequest,
+        ) -> BrowserCaptureOutcome {
+            self.calls.lock().await.push(format!(
+                "capture {tab_id} {:?} {:?} {:?}",
+                request.clip_target(),
+                request.max_width,
+                request.format
+            ));
+            BrowserCaptureOutcome::grant_required(tab_id)
+        }
+        async fn act(
+            &self,
+            tab_id: &str,
+            request: crate::browser::agent::ActionRequest,
+        ) -> BrowserActOutcome {
+            self.calls.lock().await.push(format!(
+                "act {tab_id} {} {:?}",
+                request.generation,
+                serde_json::to_value(&request.action).unwrap()
+            ));
+            BrowserActOutcome::control_required(tab_id)
+        }
+        async fn tab_op(
+            &self,
+            op: crate::acp::browser_tools::BrowserTabOp,
+        ) -> BrowserTabOutcome {
+            self.calls
+                .lock()
+                .await
+                .push(format!("tab_op {}", serde_json::to_value(&op).unwrap()));
+            match op.tab_id() {
+                Some(tab_id) => BrowserTabOutcome::control_required(tab_id),
+                None => BrowserTabOutcome::tab(
+                    crate::browser::agent::AgentTabSummary {
+                        tab_id: "t9".into(),
+                        origin: Some("http://localhost:3000".into()),
+                        level: crate::browser::agent::GrantLevel::Control,
+                        title: Some("dev".into()),
+                    },
+                    None,
+                ),
+            }
+        }
+    }
+
     /// No-engine stub: every report is rejected, mirroring a process without a
     /// running task engine.
     struct StubTaskTools;
@@ -1366,6 +2079,9 @@ mod tests {
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
+            Arc::new(NoBrowserTabs),
+            Arc::new(NoComputerDesktop),
+            Arc::new(crate::acp::result_tool::NoResultTool),
         )
     }
 
@@ -1388,6 +2104,9 @@ mod tests {
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
+            Arc::new(NoBrowserTabs),
+            Arc::new(NoComputerDesktop),
+            Arc::new(crate::acp::result_tool::NoResultTool),
         )
     }
 
@@ -1411,6 +2130,9 @@ mod tests {
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
+            Arc::new(NoBrowserTabs),
+            Arc::new(NoComputerDesktop),
+            Arc::new(crate::acp::result_tool::NoResultTool),
         )
     }
 
@@ -1433,6 +2155,9 @@ mod tests {
             session_info,
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
+            Arc::new(NoBrowserTabs),
+            Arc::new(NoComputerDesktop),
+            Arc::new(crate::acp::result_tool::NoResultTool),
         )
     }
 
@@ -1457,6 +2182,35 @@ mod tests {
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             authoring,
+            Arc::new(NoBrowserTabs),
+            Arc::new(NoComputerDesktop),
+            Arc::new(crate::acp::result_tool::NoResultTool),
+        )
+    }
+
+    /// Build a listener whose browser access is the given stub, so
+    /// `browser_list_tabs` / `browser_snapshot` tests can assert what the token
+    /// gate let through.
+    fn make_browser_listener(
+        tokens: Arc<TokenRegistry>,
+        browser: Arc<dyn BrowserToolAccess>,
+    ) -> Arc<DelegationListener> {
+        let broker = Arc::new(DelegationBroker::new(
+            Arc::new(MockSpawner::new()) as Arc<dyn ConnectionSpawner>,
+            Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
+        ));
+        DelegationListener::new(
+            broker,
+            tokens,
+            Arc::new(StaticParentLookup(Some(1))),
+            Arc::new(StubFeedback::default()),
+            Arc::new(StubQuestion::default()),
+            Arc::new(StubSessionInfo::default()),
+            Arc::new(StubTaskTools),
+            Arc::new(StubAuthoring::default()),
+            browser,
+            Arc::new(NoComputerDesktop),
+            Arc::new(crate::acp::result_tool::NoResultTool),
         )
     }
 
@@ -1661,6 +2415,7 @@ mod tests {
                 working_dir: None,
                 requested_working_dir: None,
                 external_handle: None,
+                assistant: None,
             })
             .await;
         let task_id = ack.task_id.clone().expect("running task carries an id");
@@ -1814,6 +2569,7 @@ mod tests {
                         working_dir: None,
                         requested_working_dir: None,
                         external_handle: None,
+                        assistant: None,
                     })
                     .await
                     .task_id
@@ -1916,6 +2672,7 @@ mod tests {
                 working_dir: None,
                 requested_working_dir: None,
                 external_handle: None,
+                assistant: None,
             })
             .await;
         let task_id = ack.task_id.clone().unwrap();
@@ -1967,6 +2724,7 @@ mod tests {
                     working_dir: None,
                     requested_working_dir: None,
                     external_handle: Some("h-1".into()),
+                    assistant: None,
                 };
                 broker.handle_request(req).await
             })
@@ -2033,6 +2791,7 @@ mod tests {
                     folder_id: 7,
                     working_dir: Some("/work".into()),
                     title: Some("do x".into()),
+                    assistant: crate::acp::delegation::broker::ResumeAssistant::None,
                 })
             }
         }
@@ -2753,6 +3512,275 @@ mod tests {
         assert!(questions.registered.lock().await.is_empty());
     }
 
+    // -- browser tools ------------------------------------------------------
+
+    async fn browser_tokens() -> Arc<TokenRegistry> {
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "conn-1".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                },
+            )
+            .await;
+        tokens
+    }
+
+    async fn browser_round_trip(
+        listener: Arc<DelegationListener>,
+        msg: BrokerMessage,
+    ) -> BrokerResponse {
+        let (mut client, mut server) = duplex(64 * 1024);
+        let server_task = tokio::spawn(async move {
+            listener.serve_one(&mut server).await.unwrap();
+        });
+        write_frame(&mut client, &msg).await.unwrap();
+        let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
+        server_task.await.unwrap();
+        resp
+    }
+
+    #[tokio::test]
+    async fn browser_tabs_and_snapshot_reach_the_browser_with_their_arguments() {
+        let browser = Arc::new(StubBrowser::default());
+        let listener = make_browser_listener(browser_tokens().await, browser.clone());
+
+        let listed = browser_round_trip(
+            listener.clone(),
+            BrokerMessage::BrowserTabs(BrokerBrowserTabsRequest { token: "tok".into() }),
+        )
+        .await;
+        assert_eq!(listed.outcome["tabs"][0]["tabId"], "t1");
+        assert_eq!(listed.outcome["tabs"][0]["level"], "read");
+
+        let read = browser_round_trip(
+            listener,
+            BrokerMessage::BrowserSnapshot(BrokerBrowserSnapshotRequest {
+                token: "tok".into(),
+                tab_id: "t9".into(),
+                max_chars: Some(1234),
+            }),
+        )
+        .await;
+        // A refusal travels as a value, not as a transport error: the agent
+        // has something to do about it.
+        assert_eq!(read.outcome["error"], ERROR_GRANT_REQUIRED);
+        assert_eq!(read.outcome["tabId"], "t9");
+        assert!(read.outcome["note"].as_str().unwrap().contains("t9"));
+
+        assert_eq!(
+            browser.calls.lock().await.as_slice(),
+            &["list".to_string(), "snapshot t9 Some(1234)".to_string()]
+        );
+    }
+
+    /// An action reaches the browser with the whole request — token checked,
+    /// nothing reinterpreted on the way — and its refusal comes back as a
+    /// value the companion can render.
+    #[tokio::test]
+    async fn an_action_reaches_the_browser_with_its_request() {
+        use crate::browser::agent::{ActionKind, ActionRequest};
+        let browser = Arc::new(StubBrowser::default());
+        let listener = make_browser_listener(browser_tokens().await, browser.clone());
+
+        let acted = browser_round_trip(
+            listener,
+            BrokerMessage::BrowserAct(BrokerBrowserActRequest {
+                token: "tok".into(),
+                tab_id: "t1".into(),
+                request: ActionRequest {
+                    generation: "g.4.2".into(),
+                    target: Some("e5".into()),
+                    action: ActionKind::Type {
+                        text: "Ada".into(),
+                        submit: true,
+                    },
+                },
+            }),
+        )
+        .await;
+        assert_eq!(
+            acted.outcome["error"],
+            crate::acp::browser_tools::ERROR_CONTROL_REQUIRED
+        );
+        assert_eq!(acted.outcome["tabId"], "t1");
+        assert_eq!(
+            browser.calls.lock().await.as_slice(),
+            &[r#"act t1 g.4.2 Object {"kind": String("type"), "text": String("Ada"), "submit": Bool(true)}"#
+                .to_string()]
+        );
+    }
+
+    /// The console and screenshot arms carry their whole request through and
+    /// bring a refusal back as a value; an invalid token is turned away before
+    /// the browser hears of it, like every other browser arm.
+    #[tokio::test]
+    async fn console_and_capture_reach_the_browser_and_refuse_a_bad_token() {
+        use crate::browser::capture::{CaptureFormat, CaptureRequest};
+        use crate::browser::console::{ConsoleLevel, ConsoleQuery};
+        let browser = Arc::new(StubBrowser::default());
+        let listener = make_browser_listener(browser_tokens().await, browser.clone());
+
+        let console = browser_round_trip(
+            listener.clone(),
+            BrokerMessage::BrowserConsole(BrokerBrowserConsoleRequest {
+                token: "tok".into(),
+                tab_id: "t2".into(),
+                query: ConsoleQuery {
+                    since: 7,
+                    min_level: Some(ConsoleLevel::Warn),
+                    limit: Some(20),
+                },
+            }),
+        )
+        .await;
+        assert_eq!(console.outcome["error"], ERROR_GRANT_REQUIRED);
+        assert_eq!(console.outcome["tabId"], "t2");
+
+        let capture = browser_round_trip(
+            listener.clone(),
+            BrokerMessage::BrowserCapture(BrokerBrowserCaptureRequest {
+                token: "tok".into(),
+                tab_id: "t2".into(),
+                request: CaptureRequest {
+                    generation: Some("g.1.1".into()),
+                    target: Some("e4".into()),
+                    max_width: Some(800),
+                    format: CaptureFormat::Jpeg,
+                },
+            }),
+        )
+        .await;
+        assert_eq!(capture.outcome["error"], ERROR_GRANT_REQUIRED);
+        assert_eq!(
+            browser.calls.lock().await.as_slice(),
+            &[
+                "console t2 since=7 min=Some(Warn) limit=Some(20)".to_string(),
+                "capture t2 Some((\"g.1.1\", \"e4\")) Some(800) Jpeg".to_string(),
+            ]
+        );
+
+        browser.calls.lock().await.clear();
+        for message in [
+            BrokerMessage::BrowserConsole(BrokerBrowserConsoleRequest {
+                token: "not-a-token".into(),
+                tab_id: "t1".into(),
+                query: ConsoleQuery::default(),
+            }),
+            BrokerMessage::BrowserCapture(BrokerBrowserCaptureRequest {
+                token: "not-a-token".into(),
+                tab_id: "t1".into(),
+                request: CaptureRequest::default(),
+            }),
+        ] {
+            let out = browser_round_trip(listener.clone(), message).await;
+            assert_eq!(out.outcome["error"], ERROR_NO_SUCH_TAB);
+        }
+        assert!(browser.calls.lock().await.is_empty());
+    }
+
+    /// A capture the companion could not read back — over the frame cap —
+    /// is turned into a refusal it can, at the last step before the frame.
+    #[test]
+    fn a_capture_over_the_frame_cap_becomes_a_refusal() {
+        use crate::browser::capture::{CaptureOutcome, CaptureRegion};
+        let huge = BrowserCaptureOutcome::image(
+            "t1",
+            CaptureOutcome {
+                mime: "image/png".into(),
+                data: "A".repeat(CAPTURE_RESPONSE_MAX_BYTES + 1),
+                width: 1,
+                height: 1,
+                url: "http://x/".into(),
+                region: CaptureRegion {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                clipped: false,
+            },
+        );
+        let response = browser_capture_response(huge).unwrap();
+        assert_eq!(response.outcome["error"], crate::acp::browser_tools::ERROR_READ_FAILED);
+        assert_eq!(response.outcome["tabId"], "t1");
+        assert!(response.outcome.get("capture").is_none());
+        assert!(serde_json::to_vec(&response.outcome).unwrap().len() < 4096);
+
+        let small = BrowserCaptureOutcome::image(
+            "t1",
+            CaptureOutcome {
+                mime: "image/png".into(),
+                data: "AAAA".into(),
+                width: 1,
+                height: 1,
+                url: "http://x/".into(),
+                region: CaptureRegion {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                clipped: false,
+            },
+        );
+        assert_eq!(browser_capture_response(small).unwrap().outcome["capture"]["data"], "AAAA");
+    }
+
+    /// A caller who cannot prove it is a companion is told the same thing a
+    /// user with no tabs open would be told, and the browser is never asked.
+    /// Anything else would make the refusal codes a way to enumerate someone's
+    /// open pages from outside the process.
+    #[tokio::test]
+    async fn an_invalid_token_learns_nothing_about_the_tabs() {
+        let browser = Arc::new(StubBrowser::default());
+        let listener = make_browser_listener(browser_tokens().await, browser.clone());
+
+        let listed = browser_round_trip(
+            listener.clone(),
+            BrokerMessage::BrowserTabs(BrokerBrowserTabsRequest {
+                token: "not-a-token".into(),
+            }),
+        )
+        .await;
+        assert_eq!(listed.outcome["tabs"].as_array().unwrap().len(), 0);
+        assert!(listed.outcome.get("note").is_none());
+
+        let read = browser_round_trip(
+            listener,
+            BrokerMessage::BrowserSnapshot(BrokerBrowserSnapshotRequest {
+                token: "not-a-token".into(),
+                tab_id: "t1".into(),
+                max_chars: None,
+            }),
+        )
+        .await;
+        // `t1` really is open and really is shared — and the answer is the one
+        // a nonexistent tab gets.
+        assert_eq!(read.outcome["error"], ERROR_NO_SUCH_TAB);
+        assert!(browser.calls.lock().await.is_empty());
+
+        let acted = browser_round_trip(
+            make_browser_listener(browser_tokens().await, browser.clone()),
+            BrokerMessage::BrowserAct(BrokerBrowserActRequest {
+                token: "not-a-token".into(),
+                tab_id: "t1".into(),
+                request: crate::browser::agent::ActionRequest {
+                    generation: "g".into(),
+                    target: Some("e1".into()),
+                    action: crate::browser::agent::ActionKind::Hover,
+                },
+            }),
+        )
+        .await;
+        assert_eq!(acted.outcome["error"], ERROR_NO_SUCH_TAB);
+        assert!(browser.calls.lock().await.is_empty());
+    }
+
+    // -- socket path --------------------------------------------------------
+
     /// The fallback fires only when it has to. A temp directory short enough
     /// to hold a socket keeps the socket where the user's `TMPDIR` points,
     /// which is every ordinary desktop launch.
@@ -2769,17 +3797,22 @@ mod tests {
     #[test]
     fn an_over_long_temp_dir_falls_back_to_the_short_socket_dir() {
         let name = format!("codeg-delegation-{}.sock", std::process::id());
-        // A macOS `/var/folders/…/T` with codeg's own per-session nesting under
-        // it — the shape that actually produces this — padded so the composed
-        // path lands exactly ONE byte past what `sun_path` can hold. Sized from
-        // the cap rather than hard-coded, so it keeps straddling the boundary
-        // if either side of it moves.
+        // A macOS `/var/folders/…/T` with a per-session directory nested under
+        // it, padded so the composed path lands exactly ONE byte past what
+        // `sun_path` can hold. Sized from the cap rather than hard-coded, so it
+        // keeps straddling the boundary if either side of it moves. NOT codeg's
+        // own `codeg-acp/<pid>-<hex>` nesting: that is refused for its sweep
+        // scope as well, and this has to pin the length budget alone.
         let prefix = "/var/folders/hl/";
-        let suffix = "/T/codeg-acp/12345-deadbeef";
+        let suffix = "/T/agent-tmp/12345-deadbeef";
         let pad = SUN_PATH_CAP - 1 - name.len() - prefix.len() - suffix.len();
         let ambient = PathBuf::from(format!("{prefix}{}{suffix}", "z".repeat(pad)));
         assert_eq!(ambient.as_os_str().len() + 1 + name.len(), SUN_PATH_CAP);
         assert!(!fits_sun_path(&ambient.join(&name)));
+        assert!(
+            !is_inside_sweep_scope(&ambient.join(&name)),
+            "the sweep guard must NOT be what refuses this"
+        );
 
         let path = default_socket_path(&ambient);
         assert_eq!(path.parent(), Some(short_socket_dir().as_path()));
@@ -2790,6 +3823,111 @@ mod tests {
             path.display(),
             path.as_os_str().len()
         );
+    }
+
+    /// The second refusal reason, and the one that actually bit (2026-10-15):
+    /// a `temp_dir` inside codeg's own scratch namespace. Such a path is
+    /// perfectly bindable on length, so only the sweep guard can be what
+    /// refuses it — and it must, because a startup sweep deletes the whole
+    /// `<pid>-<8 hex>` directory it sits in once the owner is dead, leaving
+    /// the listener serving an unlinked vnode while every dial gets `ENOENT`.
+    #[cfg(unix)]
+    #[test]
+    fn a_temp_dir_inside_the_sweep_scope_falls_back_to_the_short_socket_dir() {
+        let ambient = short_root().join(format!("{}-deadbeef", std::process::id()));
+        assert!(is_inside_sweep_scope(&ambient));
+        let composed = ambient.join(format!("codeg-delegation-{}.sock", std::process::id()));
+        assert!(
+            fits_sun_path(&composed),
+            "the length budget must NOT be what refuses this: {}",
+            composed.display()
+        );
+
+        let path = default_socket_path(&ambient);
+        assert_eq!(path.parent(), Some(short_socket_dir().as_path()));
+        assert!(
+            !is_inside_sweep_scope(&path),
+            "the fallback itself must stay out of scope: {}",
+            path.display()
+        );
+    }
+
+    /// ...and so must a launch dir under a root that is NOT among this
+    /// process's own sweep roots. Its owner deletes it when that launch ends,
+    /// and any codeg whose root it is sweeps it at startup — neither needs to
+    /// be this process. Linux's default `/tmp/codeg-acp` is the common shape:
+    /// a `TMPDIR` under it pushes this process to the short root instead.
+    #[cfg(unix)]
+    #[test]
+    fn a_launch_dir_under_another_codegs_root_falls_back_too() {
+        let resolved_short_root = Path::new("/private").join(
+            short_root()
+                .strip_prefix("/")
+                .expect("the short root is absolute"),
+        );
+        for ambient in [
+            PathBuf::from("/tmp/codeg-acp/4242-deadbeef"),
+            PathBuf::from("/srv/elsewhere/codeg-acp/4242-deadbeef"),
+            resolved_short_root.join("4242-deadbeef"),
+        ] {
+            let path = default_socket_path(&ambient);
+            assert_eq!(
+                path.parent(),
+                Some(short_socket_dir().as_path()),
+                "{} must not host the socket",
+                ambient.display()
+            );
+        }
+    }
+
+    /// ...and a launch dir reached through an alias that hides every root
+    /// component — here a symlink; a relative `TMPDIR=.` taken from inside a
+    /// launch dir is the same case. The directory behind it is deleted all the
+    /// same.
+    #[cfg(unix)]
+    #[test]
+    fn an_alias_into_a_launch_dir_falls_back_too() {
+        let holder = tempfile::tempdir_in("/tmp").expect("tempdir");
+        let leaf = holder.path().join("codeg-acp").join("4242-deadbeef");
+        std::fs::create_dir_all(&leaf).expect("create leaf");
+        let alias = holder.path().join("session-tmp");
+        std::os::unix::fs::symlink(&leaf, &alias).expect("symlink");
+
+        let path = default_socket_path(&alias);
+        assert_eq!(path.parent(), Some(short_socket_dir().as_path()));
+    }
+
+    /// Property rather than example: for ANY temp directory, the socket this
+    /// picks must sit outside every sweep root — a parent inside one can be
+    /// deleted wholesale by a startup sweep while the listener is live, which
+    /// is the failure the guard exists to prevent. Every operand is read
+    /// through the same helpers production uses, so it holds whether or not
+    /// these tests themselves run inside a codeg-managed session.
+    #[cfg(unix)]
+    #[test]
+    fn no_chosen_socket_path_is_ever_inside_the_sweep_scope() {
+        for temp_dir in [
+            // The ordinary short case, an over-long macOS one, a scratch
+            // directory of our own, the ambient scratch root, one under
+            // another codeg's root, and TMPDIR.
+            PathBuf::from("/tmp"),
+            PathBuf::from(format!("/var/folders/hl/{}/T", "z".repeat(30))),
+            short_root().join(format!("{}-deadbeef", std::process::id())),
+            std::env::temp_dir().join("codeg-acp").join("4242-deadbeef"),
+            PathBuf::from("/tmp/codeg-acp/4242-deadbeef"),
+            std::env::temp_dir(),
+        ] {
+            let path = default_socket_path(&temp_dir);
+            let parent = path
+                .parent()
+                .expect("a socket path always names a directory");
+            assert!(
+                !is_inside_sweep_scope(parent),
+                "{} would put the socket inside a sweep root: {}",
+                temp_dir.display(),
+                path.display()
+            );
+        }
     }
 
     /// The STAGED path is measured too, not assumed shorter than the real one.
@@ -2863,5 +4001,556 @@ mod tests {
             path.as_os_str().len(),
             dialed.err()
         );
+    }
+
+    // ── computer use ───────────────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct StubComputer {
+        calls: tokio::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl ComputerToolAccess for StubComputer {
+        async fn list_apps(&self) -> ComputerAppsOutcome {
+            self.calls.lock().await.push("apps".into());
+            ComputerAppsOutcome::default()
+        }
+        async fn list_windows(&self, pid: Option<u32>) -> ComputerWindowsOutcome {
+            self.calls.lock().await.push(format!("windows {pid:?}"));
+            ComputerWindowsOutcome::default()
+        }
+        async fn capture(&self, target_id: &str, max: Option<u32>) -> ComputerCaptureOutcome {
+            self.calls
+                .lock()
+                .await
+                .push(format!("capture {target_id} {max:?}"));
+            ComputerCaptureOutcome::refused(
+                target_id,
+                crate::acp::computer_tools::ERROR_GRANT_REQUIRED,
+                crate::acp::computer_tools::grant_required_note(target_id),
+            )
+        }
+        async fn snapshot(
+            &self,
+            target_id: &str,
+            request: crate::acp::computer_tools::SnapshotRequest,
+        ) -> ComputerSnapshotOutcome {
+            self.calls
+                .lock()
+                .await
+                .push(format!("snapshot {target_id} {:?}", request.max_chars));
+            ComputerSnapshotOutcome::refused(
+                target_id,
+                crate::acp::computer_tools::ERROR_GRANT_REQUIRED,
+                "stub",
+            )
+        }
+        async fn verify(
+            &self,
+            target_id: &str,
+            request: crate::computer::types::VerifyRequest,
+        ) -> ComputerVerifyOutcome {
+            self.calls
+                .lock()
+                .await
+                .push(format!("verify {target_id} {}", request.expect.len()));
+            ComputerVerifyOutcome::refused(
+                target_id,
+                crate::acp::computer_tools::ERROR_GRANT_REQUIRED,
+                "stub",
+            )
+        }
+        async fn act(
+            &self,
+            target_id: &str,
+            request: crate::computer::types::ComputerActRequest,
+            delivery: Option<crate::computer::types::ActDelivery>,
+        ) -> ComputerActOutcome {
+            let kind = serde_json::to_value(&request).unwrap()["kind"].clone();
+            self.calls.lock().await.push(format!(
+                "act {target_id} {} {delivery:?}",
+                kind.as_str().unwrap_or("?")
+            ));
+            ComputerActOutcome::refused(
+                target_id,
+                crate::acp::computer_tools::ERROR_CONTROL_REQUIRED,
+                "stub",
+            )
+        }
+
+        async fn launch_app(
+            &self,
+            name: Option<String>,
+            key: Option<String>,
+        ) -> crate::acp::computer_tools::ComputerLaunchOutcome {
+            self.calls
+                .lock()
+                .await
+                .push(format!("launch {name:?} {key:?}"));
+            crate::acp::computer_tools::ComputerLaunchOutcome::refused(
+                crate::acp::computer_tools::ERROR_UNAVAILABLE,
+                "stub",
+            )
+        }
+
+        async fn clipboard(
+            &self,
+            op: crate::acp::computer_tools::ClipboardOp,
+        ) -> crate::acp::computer_tools::ComputerClipboardOutcome {
+            self.calls.lock().await.push(format!("clipboard {op:?}"));
+            crate::acp::computer_tools::ComputerClipboardOutcome::refused(
+                crate::acp::computer_tools::ERROR_UNAVAILABLE,
+                "stub",
+            )
+        }
+    }
+
+    fn make_computer_listener(
+        tokens: Arc<TokenRegistry>,
+        computer: Arc<dyn ComputerToolAccess>,
+    ) -> Arc<DelegationListener> {
+        let broker = Arc::new(DelegationBroker::new(
+            Arc::new(MockSpawner::new()) as Arc<dyn ConnectionSpawner>,
+            Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
+        ));
+        DelegationListener::new(
+            broker,
+            tokens,
+            Arc::new(StaticParentLookup(Some(1))),
+            Arc::new(StubFeedback::default()),
+            Arc::new(StubQuestion::default()),
+            Arc::new(StubSessionInfo::default()),
+            Arc::new(StubTaskTools),
+            Arc::new(StubAuthoring::default()),
+            Arc::new(NoBrowserTabs),
+            computer,
+            Arc::new(crate::acp::result_tool::NoResultTool),
+        )
+    }
+
+    /// With a valid token every computer message reaches the access impl with
+    /// its arguments intact, and a refusal comes back as a value.
+    #[tokio::test]
+    async fn computer_messages_reach_the_desktop_with_their_arguments() {
+        let computer = Arc::new(StubComputer::default());
+        let listener = make_computer_listener(browser_tokens().await, computer.clone());
+        let token = || "tok".to_string();
+
+        browser_round_trip(
+            listener.clone(),
+            BrokerMessage::ComputerApps(BrokerComputerAppsRequest { token: token() }),
+        )
+        .await;
+        browser_round_trip(
+            listener.clone(),
+            BrokerMessage::ComputerWindows(BrokerComputerWindowsRequest {
+                token: token(),
+                pid: Some(42),
+            }),
+        )
+        .await;
+        let captured = browser_round_trip(
+            listener.clone(),
+            BrokerMessage::ComputerCapture(BrokerComputerCaptureRequest {
+                token: token(),
+                target_id: "w7".into(),
+                max_dimension: Some(800),
+            }),
+        )
+        .await;
+        assert_eq!(captured.outcome["error"], "computer_grant_required");
+        assert_eq!(captured.outcome["targetId"], "w7");
+        browser_round_trip(
+            listener.clone(),
+            BrokerMessage::ComputerSnapshot(BrokerComputerSnapshotRequest {
+                token: token(),
+                target_id: "w7".into(),
+                request: crate::acp::computer_tools::SnapshotRequest {
+                    max_chars: Some(0),
+                    ..Default::default()
+                },
+            }),
+        )
+        .await;
+        browser_round_trip(
+            listener.clone(),
+            BrokerMessage::ComputerVerify(BrokerComputerVerifyRequest {
+                token: token(),
+                target_id: "w7".into(),
+                request: crate::computer::types::VerifyRequest {
+                    expect: vec![Default::default()],
+                    ..Default::default()
+                },
+            }),
+        )
+        .await;
+        let acted = browser_round_trip(
+            listener,
+            BrokerMessage::ComputerAct(BrokerComputerActRequest {
+                token: token(),
+                target_id: "w7".into(),
+                request: crate::computer::types::ComputerActRequest::SetValue {
+                    target: crate::computer::types::ElementTarget {
+                        generation: "1.2".into(),
+                        index: 4,
+                    },
+                    value: "x".into(),
+                },
+                // Passed on as asked; whether it may be is the service's call.
+                delivery: Some(crate::computer::types::ActDelivery::Foreground),
+            }),
+        )
+        .await;
+        assert_eq!(acted.outcome["error"], "computer_control_required");
+        assert_eq!(
+            computer.calls.lock().await.as_slice(),
+            &[
+                "apps".to_string(),
+                "windows Some(42)".to_string(),
+                "capture w7 Some(800)".to_string(),
+                "snapshot w7 Some(0)".to_string(),
+                "verify w7 1".to_string(),
+                "act w7 setValue Some(Foreground)".to_string(),
+            ]
+        );
+    }
+
+    /// A caller without a valid token learns nothing: the listings are empty,
+    /// every window is "no such window", and the desktop is never asked.
+    #[tokio::test]
+    async fn an_invalid_token_learns_nothing_about_the_desktop() {
+        let computer = Arc::new(StubComputer::default());
+        let listener = make_computer_listener(browser_tokens().await, computer.clone());
+
+        let apps = browser_round_trip(
+            listener.clone(),
+            BrokerMessage::ComputerApps(BrokerComputerAppsRequest {
+                token: "forged".into(),
+            }),
+        )
+        .await;
+        assert_eq!(apps.outcome["apps"], serde_json::json!([]));
+        assert!(apps.outcome.get("error").is_none());
+
+        let read = browser_round_trip(
+            listener.clone(),
+            BrokerMessage::ComputerCapture(BrokerComputerCaptureRequest {
+                token: "forged".into(),
+                target_id: "w1".into(),
+                max_dimension: None,
+            }),
+        )
+        .await;
+        assert_eq!(read.outcome["error"], "computer_no_such_target");
+        let act = browser_round_trip(
+            listener,
+            BrokerMessage::ComputerAct(BrokerComputerActRequest {
+                token: "forged".into(),
+                target_id: "w1".into(),
+                request: crate::computer::types::ComputerActRequest::Key {
+                    target: None,
+                    chord: crate::computer::keys::Chord {
+                        key: crate::computer::keys::Key::Return,
+                        modifiers: Default::default(),
+                    },
+                    repeat: 1,
+                },
+                delivery: None,
+            }),
+        )
+        .await;
+        assert_eq!(act.outcome["error"], "computer_no_such_target");
+        assert!(computer.calls.lock().await.is_empty());
+    }
+    // ── Assistants ──────────────────────────────────────────────────────────
+
+    /// In-memory assistants: `delegatable` answers only for the ids listed as
+    /// usable, the way the database lookup filters deleted / disabled rows.
+    struct StubAssistants(Vec<crate::models::AssistantInfo>);
+
+    #[async_trait]
+    impl crate::acp::delegation::assistants::AssistantLookup for StubAssistants {
+        async fn delegatable(&self, id: i32) -> Option<crate::models::AssistantInfo> {
+            self.0.iter().find(|a| a.id == id).cloned()
+        }
+        async fn roster(&self) -> Vec<crate::models::AssistantInfo> {
+            self.0.clone()
+        }
+    }
+
+    fn assistant_info(id: i32, name: &str) -> crate::models::AssistantInfo {
+        let now = chrono::Utc::now();
+        crate::models::AssistantInfo {
+            id,
+            uid: format!("u-{id}"),
+            name: name.into(),
+            description: format!("{name} description"),
+            avatar: crate::models::AssistantAvatar::Monogram {
+                color: "teal".into(),
+            },
+            agent_type: AgentType::Codex,
+            agent_options: crate::acp::delegation::types::AgentDelegationDefaults {
+                mode_id: None,
+                config_values: [("model".to_string(), "gpt-5.5".to_string())].into(),
+            },
+            label_snapshot: Default::default(),
+            instructions: "Cite line numbers.".into(),
+            enabled: true,
+            sort_order: id,
+            revision: 1,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+        }
+    }
+
+    async fn assistant_listener(
+        mock: Arc<MockSpawner>,
+    ) -> (Arc<DelegationListener>, Arc<TokenRegistry>) {
+        let broker = Arc::new(
+            DelegationBroker::new(
+                mock as Arc<dyn ConnectionSpawner>,
+                Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
+            )
+            .with_assistants(Arc::new(StubAssistants(vec![assistant_info(3, "Reviewer")]))),
+        );
+        broker
+            .set_config(DelegationConfig {
+                enabled: true,
+                ..DelegationConfig::default()
+            })
+            .await;
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                },
+            )
+            .await;
+        (make_listener(broker, tokens.clone(), Some(1)), tokens)
+    }
+
+    async fn serve(listener: Arc<DelegationListener>, msg: BrokerMessage) -> Value {
+        let (mut client, mut server) = duplex(16 * 1024);
+        let server_task = tokio::spawn(async move {
+            listener.serve_one(&mut server).await.unwrap();
+        });
+        write_frame(&mut client, &msg).await.unwrap();
+        let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
+        server_task.await.unwrap();
+        resp.outcome
+    }
+
+    fn call(input: Value) -> BrokerMessage {
+        BrokerMessage::Call(BrokerRequest {
+            token: "tok".into(),
+            parent_connection_id: "parent-conn".into(),
+            parent_tool_use_id: "pt-1".into(),
+            external_handle: None,
+            input,
+        })
+    }
+
+    #[tokio::test]
+    async fn an_assistant_call_runs_on_the_assistants_agent_and_options() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-1".into())).await;
+        mock.queue_send(Ok(42)).await;
+        let (listener, _tokens) = assistant_listener(mock.clone()).await;
+        // `agent_type` is ignored once `assistant_id` is given — even a bogus
+        // one, and even with the id as a string.
+        let ack = serve(
+            listener,
+            call(json!({"assistant_id": "3", "agent_type": "not-an-agent", "task": "review"})),
+        )
+        .await;
+        assert_eq!(ack["status"], "running");
+        assert_eq!(ack["agent_type"], "codex");
+        assert_eq!(ack["assistant_id"], 3);
+        assert_eq!(ack["assistant_name"], "Reviewer");
+        let spawn = mock.spawn_args.lock().await[0].clone();
+        assert_eq!(spawn.agent_type, AgentType::Codex);
+        assert_eq!(
+            spawn.preferred_config_values.get("model").map(String::as_str),
+            Some("gpt-5.5")
+        );
+        let send = mock.send_args.lock().await[0].clone();
+        assert!(send.brief.unwrap().contains("Cite line numbers."));
+    }
+
+    #[tokio::test]
+    async fn an_unusable_assistant_is_refused_with_the_usable_roster() {
+        let mock = Arc::new(MockSpawner::new());
+        let (listener, _tokens) = assistant_listener(mock.clone()).await;
+        let refusal = serve(listener.clone(), call(json!({"assistant_id": 9, "task": "x"}))).await;
+        assert_eq!(refusal["status"], "failed");
+        assert_eq!(refusal["error_code"], "assistant_not_found");
+        let message = refusal["message"].as_str().unwrap();
+        assert!(message.contains("No usable assistant 9"));
+        assert!(message.contains("3: Reviewer [Codex CLI]"));
+        assert!(message.contains("Do not delegate this to another agent instead"));
+
+        // An id that is not one at all is refused the same way — never run on
+        // the `agent_type` the call also carried.
+        let refusal = serve(
+            listener.clone(),
+            call(json!({"assistant_id": "three", "agent_type": "codex", "task": "x"})),
+        )
+        .await;
+        assert_eq!(refusal["error_code"], "assistant_not_found");
+        assert!(mock.spawn_args.lock().await.is_empty(), "nothing was spawned");
+
+        let missing = serve(listener, call(json!({"task": "x"}))).await;
+        assert_eq!(missing["error_code"], "invalid_agent_type");
+        assert!(missing["message"].as_str().unwrap().contains("assistant_id"));
+    }
+
+    #[tokio::test]
+    async fn ping_announces_assistant_support() {
+        let (listener, _tokens) = assistant_listener(Arc::new(MockSpawner::new())).await;
+        let pong = serve(listener, BrokerMessage::Ping).await;
+        assert_eq!(pong, json!({"ok": true, "assistants": true}));
+    }
+
+    #[tokio::test]
+    async fn the_roster_is_served_to_a_known_companion_only() {
+        let (listener, _tokens) = assistant_listener(Arc::new(MockSpawner::new())).await;
+        let roster = serve(
+            listener.clone(),
+            BrokerMessage::ListAssistants(BrokerListAssistantsRequest {
+                token: "tok".into(),
+            }),
+        )
+        .await;
+        assert_eq!(
+            roster,
+            json!({"assistants": [{
+                "id": 3,
+                "name": "Reviewer",
+                "description": "Reviewer description",
+                "agent_type": "codex"
+            }]})
+        );
+        // A bad token still gets an answer — never a dropped connection, which
+        // a companion could mistake for a listener that predates the message.
+        let refused = serve(
+            listener,
+            BrokerMessage::ListAssistants(BrokerListAssistantsRequest {
+                token: "nope".into(),
+            }),
+        )
+        .await;
+        assert_eq!(refused["assistants"], json!([]));
+        assert_eq!(refused["error"], "invalid token");
+    }
+
+    /// Records what reaches the result-tool access, and answers as a run's
+    /// schema would.
+    struct StubResults {
+        schema: Value,
+        seen: std::sync::Mutex<Vec<(String, Value)>>,
+    }
+
+    #[async_trait]
+    impl crate::acp::result_tool::ResultToolAccess for StubResults {
+        async fn schema(&self, parent_connection_id: &str) -> Option<Value> {
+            (parent_connection_id == "parent-conn").then(|| self.schema.clone())
+        }
+
+        async fn submit(
+            &self,
+            parent_connection_id: &str,
+            result: Value,
+        ) -> crate::cli_run::output_schema::SubmitOutcome {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((parent_connection_id.to_string(), result.clone()));
+            crate::cli_run::OutputSchema::compile(self.schema.clone())
+                .unwrap()
+                .submit(result)
+        }
+    }
+
+    /// The schema and each result are the caller's own connection's, by its
+    /// token; a token that is not one is told nothing and changes nothing.
+    #[tokio::test]
+    async fn result_messages_reach_the_callers_connection_by_its_token() {
+        let schema = serde_json::json!({"type": "object", "required": ["verdict"]});
+        let results = Arc::new(StubResults {
+            schema: schema.clone(),
+            seen: Default::default(),
+        });
+        let broker = Arc::new(DelegationBroker::new(
+            Arc::new(MockSpawner::new()) as Arc<dyn ConnectionSpawner>,
+            Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
+        ));
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                },
+            )
+            .await;
+        let listener = DelegationListener::new(
+            broker,
+            tokens,
+            Arc::new(StaticParentLookup(Some(1))),
+            Arc::new(StubFeedback::default()),
+            Arc::new(StubQuestion::default()),
+            Arc::new(StubSessionInfo::default()),
+            Arc::new(StubTaskTools),
+            Arc::new(StubAuthoring::default()),
+            Arc::new(NoBrowserTabs),
+            Arc::new(NoComputerDesktop),
+            results.clone(),
+        );
+        let ask = |token: &str| {
+            BrokerMessage::ResultSchema(BrokerResultSchemaRequest {
+                token: token.into(),
+            })
+        };
+        let hand_in = |token: &str, result: Value| {
+            BrokerMessage::SubmitResult(BrokerSubmitResultRequest {
+                token: token.into(),
+                result,
+            })
+        };
+        assert_eq!(serve(listener.clone(), ask("tok")).await["schema"], schema);
+        assert!(serve(listener.clone(), ask("nope")).await["schema"].is_null());
+
+        let refused = serve(listener.clone(), hand_in("tok", serde_json::json!({}))).await;
+        assert_eq!(refused["accepted"], false);
+        assert!(refused["errors"][0].as_str().unwrap().contains("verdict"));
+        let accepted = serve(
+            listener.clone(),
+            hand_in("tok", serde_json::json!({"verdict": "pass"})),
+        )
+        .await;
+        assert_eq!(accepted["accepted"], true);
+        let stranger = serve(
+            listener.clone(),
+            hand_in("nope", serde_json::json!({"verdict": "pass"})),
+        )
+        .await;
+        assert_eq!(stranger["accepted"], false);
+        assert_eq!(
+            results.seen.lock().unwrap().len(),
+            2,
+            "an unknown token reaches nothing"
+        );
+        assert!(results
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(conn, _)| conn == "parent-conn"));
     }
 }

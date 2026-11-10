@@ -145,9 +145,17 @@ pub(crate) fn filter_recent(
     out
 }
 
+/// The logs directory: the one the file sink is writing to, else (no file
+/// sink in this process) where `paths` resolves it.
+fn logs_dir() -> std::path::PathBuf {
+    crate::logging::panic_hook::log_file_dir()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(crate::paths::codeg_logs_root)
+}
+
 /// List `.log` files in the logs dir, newest first. Empty if the dir is absent.
 pub fn list_log_files_core() -> Vec<LogFileInfo> {
-    let dir = crate::paths::codeg_logs_root();
+    let dir = logs_dir();
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };
@@ -159,7 +167,12 @@ pub fn list_log_files_core() -> Vec<LogFileInfo> {
                 return None;
             }
             let name = path.file_name()?.to_str()?.to_string();
-            let meta = entry.metadata().ok()?;
+            // From the path, not the directory entry: on Windows the entry's
+            // size (what `DirEntry::metadata` reads there) can lag until the
+            // file's last handle closes, and the day's file stays open all
+            // day, so it can read 0 bytes however much was written. Opening
+            // the file reads its current size.
+            let meta = std::fs::metadata(&path).ok()?;
             let modified_ms = meta
                 .modified()
                 .ok()
@@ -182,7 +195,7 @@ pub fn list_log_files_core() -> Vec<LogFileInfo> {
 /// no opener dependency or cfg-gating is needed here, and it compiles in server
 /// mode too.
 pub fn open_logs_dir_core() -> Result<String, AppCommandError> {
-    let dir = crate::paths::codeg_logs_root();
+    let dir = logs_dir();
     std::fs::create_dir_all(&dir).map_err(|e| {
         AppCommandError::io_error("Failed to create log directory").with_detail(e.to_string())
     })?;
@@ -206,7 +219,7 @@ pub fn read_log_file_core(name: &str, max_bytes: Option<usize>) -> Result<String
         return Err(AppCommandError::invalid_input("Not a log file"));
     }
 
-    let dir = crate::paths::codeg_logs_root();
+    let dir = logs_dir();
     let path = dir.join(name);
 
     // Defense in depth: the resolved file's parent must be the logs dir itself,
@@ -395,6 +408,59 @@ mod tests {
                 let files = list_log_files_core();
                 assert_eq!(files.len(), 1);
                 assert_eq!(files[0].name, "a.log");
+            },
+        );
+    }
+
+    /// With no file sink in the process (tests never build one), the logs
+    /// directory is where `paths` resolves it: under the data directory, or
+    /// under `CODEG_HOME` when that is set, as uploads and pets are.
+    #[test]
+    fn logs_dir_follows_the_data_directory_and_codeg_home() {
+        let data = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        temp_env::with_vars(
+            [
+                ("CODEG_HOME", None::<&str>),
+                ("CODEG_DATA_DIR", Some(data.path().to_str().unwrap())),
+            ],
+            || assert_eq!(logs_dir(), data.path().join("logs")),
+        );
+        temp_env::with_vars(
+            [
+                ("CODEG_HOME", Some(home.path().to_str().unwrap())),
+                ("CODEG_DATA_DIR", Some(data.path().to_str().unwrap())),
+            ],
+            || assert_eq!(logs_dir(), home.path().join("logs")),
+        );
+    }
+
+    /// The day's log stays open all day. Its listed size is what was written
+    /// so far, read through the file rather than its directory entry, which on
+    /// Windows can lag until the file is closed.
+    #[test]
+    fn list_log_files_reports_the_size_of_a_file_still_being_written() {
+        use std::io::Write as _;
+        let tmp = tempfile::tempdir().unwrap();
+        temp_env::with_vars(
+            [
+                ("CODEG_HOME", None::<&str>),
+                ("CODEG_DATA_DIR", Some(tmp.path().to_str().unwrap())),
+            ],
+            || {
+                let logs = crate::paths::codeg_logs_root();
+                std::fs::create_dir_all(&logs).unwrap();
+                let mut open = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(logs.join("codeg.2026-10-08.log"))
+                    .unwrap();
+                open.write_all(b"{\"level\":\"INFO\"}\n").unwrap();
+                open.flush().unwrap();
+                let files = list_log_files_core();
+                assert_eq!(files.len(), 1);
+                assert_eq!(files[0].size_bytes, 17);
+                drop(open);
             },
         );
     }

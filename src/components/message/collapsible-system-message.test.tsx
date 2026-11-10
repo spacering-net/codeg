@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import { CollapsibleSystemMessage } from "./collapsible-system-message"
 import enMessages from "@/i18n/messages/en.json"
+import { mockClampLayout } from "@/test-layout"
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
 
 function renderWithIntl(ui: ReactElement) {
@@ -24,31 +25,6 @@ const SUMMARY_PART: AdaptedContentPart[] = [
     text: "This session is being continued from a previous conversation",
   },
 ]
-
-// jsdom does no layout, so scrollHeight/clientHeight both read 0 — already
-// "not overflowing" for the short-content case. Patch both onto
-// Element.prototype *before* rendering so the clamp's synchronous mount-time
-// measurement (it never waits on the inert ResizeObserver stub in
-// test-setup.ts) sees them.
-function mockScrollMetrics(scrollHeight: number, clientHeight: number) {
-  const descriptors = (["scrollHeight", "clientHeight"] as const).map(
-    (prop) =>
-      [prop, Object.getOwnPropertyDescriptor(Element.prototype, prop)] as const
-  )
-  Object.defineProperty(Element.prototype, "scrollHeight", {
-    configurable: true,
-    get: () => scrollHeight,
-  })
-  Object.defineProperty(Element.prototype, "clientHeight", {
-    configurable: true,
-    get: () => clientHeight,
-  })
-  return () => {
-    for (const [prop, descriptor] of descriptors) {
-      if (descriptor) Object.defineProperty(Element.prototype, prop, descriptor)
-    }
-  }
-}
 
 describe("CollapsibleSystemMessage", () => {
   let restoreMetrics: (() => void) | null = null
@@ -77,7 +53,7 @@ describe("CollapsibleSystemMessage", () => {
   })
 
   it("clamps and offers Show more once the summary overflows", () => {
-    restoreMetrics = mockScrollMetrics(900, 288)
+    restoreMetrics = mockClampLayout(900, 288)
 
     renderWithIntl(<CollapsibleSystemMessage parts={SUMMARY_PART} />)
 
@@ -96,7 +72,7 @@ describe("CollapsibleSystemMessage", () => {
   })
 
   it("expands to Show less on click and collapses again", () => {
-    restoreMetrics = mockScrollMetrics(900, 288)
+    restoreMetrics = mockClampLayout(900, 288)
 
     renderWithIntl(<CollapsibleSystemMessage parts={SUMMARY_PART} />)
 

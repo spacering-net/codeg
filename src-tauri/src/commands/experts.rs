@@ -11,18 +11,19 @@
 //! database state, and updates propagate automatically when codeg upgrades
 //! and re-extracts the bundled files.
 //!
-//! `experts/skills/` is vendored from upstream `skills/` verbatim, so a
-//! version bump is an `rsync --delete` plus a `diff -rq` check. The one
-//! deliberate exception is `writing-skills/package.json`: upstream declares
-//! `"type": "module"` once at its repo root, which covers `render-graphs.js`
-//! (ESM since v6.3.0). We extract skill directories standalone, so that
-//! declaration never comes along and Node falls back to CommonJS — the
-//! script then dies on `import` for anyone below Node 22.7, where ESM
-//! auto-detection is off. The marker has to live in the bundle rather than
-//! be written at extraction time: `install_or_refresh_expert` compares the
-//! on-disk hash against the bundled one, so any file extraction invents
-//! reads as user modification and gets backed up on every launch. Re-add it
-//! after each sync.
+//! `experts/skills/` is vendored from Superpowers v7.0.1 (see
+//! `experts/NOTICE.md` for the pinned source and license) with two
+//! standalone-runtime adaptations. `writing-skills/package.json` carries the
+//! root `"type": "module"` marker that `render-graphs.js` needs after skill
+//! extraction, and `executing-plans/scripts/` carries local copies of the
+//! shared workspace helpers. The latter prevents a foreign sibling skill from
+//! shadowing the intended helper and keeps the plan workflow usable when
+//! Windows has to copy just one skill instead of creating a junction. Keep the
+//! upstream tree in sync with `rsync --delete` plus a `diff -rq` check, then
+//! re-apply these documented adaptations. Adaptation files stay in the bundle
+//! rather than being written at extraction time: `install_or_refresh_expert`
+//! compares the on-disk hash against the bundled one, so generated files would
+//! look user-modified and get backed up on every launch.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -806,6 +807,10 @@ fn supported_agents() -> Vec<AgentType> {
         AgentType::DeepSeek,
         AgentType::Qoder,
         AgentType::Antigravity,
+        AgentType::Kiro,
+        AgentType::ZCode,
+        AgentType::Trae,
+        AgentType::CommandCode,
     ];
     // Custom agents that declared the shared skills store join the built-in
     // set — the same `skill_storage_spec` gate every skills surface uses, so
@@ -1067,6 +1072,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bundled_catalog_covers_all_skills_and_fits_compaction_limit() {
+        let metadata = load_bundled_metadata_inner().expect("valid expert metadata");
+        let skills = EXPERTS_BUNDLE.get_dir("skills").expect("bundled skills");
+        assert_eq!(metadata.len(), skills.dirs().count());
+        let ids: std::collections::BTreeSet<_> = metadata.iter().map(|m| &m.id).collect();
+        assert_eq!(ids.len(), metadata.len(), "expert ids must be unique");
+
+        for meta in &metadata {
+            let path = format!("skills/{}/SKILL.md", meta.id);
+            let skill = EXPERTS_BUNDLE.get_file(&path).expect("expert SKILL.md");
+            // Claude Code reattaches skills after compaction with a 20,000
+            // character cut. Bytes are the stricter limit for non-ASCII text.
+            assert!(
+                skill.contents().len() < 20_000,
+                "{} is {} bytes; move supporting content into references/",
+                meta.id,
+                skill.contents().len()
+            );
+        }
+    }
+
+    #[test]
+    fn extracted_experts_preserve_nested_resources_hashes_and_executables() {
+        let root = tempfile::tempdir().expect("isolated central store");
+        for meta in load_bundled_metadata_inner().expect("valid expert metadata") {
+            let target = root.path().join(&meta.id);
+            extract_expert_to_disk(&meta, &target).expect("extract complete skill");
+            assert_eq!(
+                hash_disk_directory(&target).expect("hash extracted skill"),
+                meta.bundled_hash,
+                "{} must stay pristine after extraction",
+                meta.id
+            );
+
+            let prefix = format!("skills/{}/", meta.id);
+            let dir = EXPERTS_BUNDLE
+                .get_dir(prefix.trim_end_matches('/'))
+                .expect("bundled skill");
+            let mut files = Vec::new();
+            collect_bundle_files(dir, &mut files);
+            for (path, contents) in files {
+                let extracted = target.join(path.strip_prefix(&prefix).expect("skill path"));
+                assert_eq!(fs::read(&extracted).expect("extracted resource"), contents);
+                #[cfg(unix)]
+                if contents.starts_with(b"#!") {
+                    use std::os::unix::fs::PermissionsExt;
+                    assert_eq!(
+                        fs::metadata(&extracted).unwrap().permissions().mode() & 0o111,
+                        0o111,
+                        "{path} must be executable after extraction"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_declared_custom_agent_gains_a_column_here_too() {
         use crate::acp::custom_registry::{
             hydrate, hydrate_test_guard, CustomAgentDef, CustomAgentSpec, CustomDistributionKind,
@@ -1172,7 +1234,13 @@ mod tests {
     }
 
     #[tokio::test]
+    // The hydrate guard is held across the await on purpose — see the
+    // identical note in `custom_agent_service`.
+    #[allow(clippy::await_holding_lock)]
     async fn list_all_install_statuses_covers_every_expert_agent_pair() {
+        // A test hydrating a custom agent that declares a store would add a
+        // column between the snapshot and the count below.
+        let _guard = crate::acp::custom_registry::hydrate_test_guard();
         let rows = experts_list_all_install_statuses()
             .await
             .expect("snapshot returns Ok");

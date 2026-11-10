@@ -43,106 +43,132 @@ function setup(initial = "", disabled = false) {
       onText={(value) => seen.push(value)}
     />
   )
+  const latest = () => seen[seen.length - 1] ?? initial
+  const doc = () => JSON.parse(latest() || "{}")
   return {
-    latest: () => seen[seen.length - 1] ?? initial,
-    permission: () =>
-      JSON.parse((seen[seen.length - 1] ?? initial) || "{}").permission,
+    latest,
+    doc,
+    permissions: () => doc().permissions,
+    changes: () => seen.length,
   }
 }
 
+const rule = (action: string, resource: string, effect: string) => ({
+  action,
+  resource,
+  effect,
+})
+
 const autoAcceptName = "Auto-accept every permission"
-const bashRulesName = "Fine-grained rules for bash"
+const shellRulesName = "Fine-grained rules for shell"
+const autoAccept = () => screen.getByRole("switch", { name: autoAcceptName })
 
 describe("OpenCodePermissionsSection", () => {
-  it("lists every documented permission key", () => {
+  it("lists every documented permission action", () => {
     setup()
     for (const key of [
-      "bash",
+      "shell",
       "edit",
       "read",
       "external_directory",
-      "task",
+      "subagent",
       "skill",
-      "glob",
-      "grep",
-      "list",
       "webfetch",
       "websearch",
-      "lsp",
-      "todowrite",
+      "glob",
+      "grep",
+      "execute",
       "question",
-      "doom_loop",
+      "todowrite",
     ]) {
       expect(screen.getByText(key)).toBeInTheDocument()
     }
   })
 
-  it("turning auto-accept on writes an allow-all wildcard", () => {
+  it("turning auto-accept on writes one allow-all rule", () => {
     const harness = setup()
-    const toggle = screen.getByRole("switch", { name: autoAcceptName })
-    expect(toggle).toHaveAttribute("data-state", "unchecked")
-    fireEvent.click(toggle)
-    expect(harness.permission()).toEqual({ "*": "allow" })
-    expect(
-      screen.getByRole("switch", { name: autoAcceptName })
-    ).toHaveAttribute("data-state", "checked")
+    expect(autoAccept()).toHaveAttribute("data-state", "unchecked")
+    fireEvent.click(autoAccept())
+    expect(harness.permissions()).toEqual([rule("*", "*", "allow")])
+    expect(autoAccept()).toHaveAttribute("data-state", "checked")
   })
 
-  it("auto-accept replaces narrowing rules that would still prompt", () => {
+  it("auto-accept replaces 1.x rules that would still prompt", () => {
     const harness = setup(
       JSON.stringify({
         model: "anthropic/claude",
         permission: { "*": "ask", bash: { "rm *": "deny" } },
       })
     )
-    expect(
-      screen.getByRole("switch", { name: autoAcceptName })
-    ).toHaveAttribute("data-state", "unchecked")
-    fireEvent.click(screen.getByRole("switch", { name: autoAcceptName }))
-    expect(harness.permission()).toEqual({ "*": "allow" })
-    expect(JSON.parse(harness.latest()).model).toBe("anthropic/claude")
+    expect(autoAccept()).toHaveAttribute("data-state", "unchecked")
+    fireEvent.click(autoAccept())
+    expect(harness.permissions()).toEqual([rule("*", "*", "allow")])
+    expect(harness.doc().permission).toBeUndefined()
+    expect(harness.doc().model).toBe("anthropic/claude")
   })
 
-  it("turning auto-accept off only drops the global wildcard", () => {
+  it("turning auto-accept off only drops the global rule", () => {
     const harness = setup(
-      JSON.stringify({ permission: { "*": "allow", edit: "allow" } })
+      JSON.stringify({
+        permissions: [rule("*", "*", "allow"), rule("edit", "*", "allow")],
+      })
     )
-    fireEvent.click(screen.getByRole("switch", { name: autoAcceptName }))
-    expect(harness.permission()).toEqual({ edit: "allow" })
+    fireEvent.click(autoAccept())
+    expect(harness.permissions()).toEqual([rule("edit", "*", "allow")])
   })
 
   it("adds, edits and deletes a fine-grained rule", () => {
     const harness = setup()
-    fireEvent.click(screen.getByRole("button", { name: bashRulesName }))
+    fireEvent.click(screen.getByRole("button", { name: shellRulesName }))
     expect(screen.getByText("No fine-grained rules yet.")).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText("git *"), {
       target: { value: "rm *" },
     })
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }))
-    expect(harness.permission()).toEqual({ bash: { "rm *": "allow" } })
+    expect(harness.permissions()).toEqual([rule("shell", "rm *", "allow")])
 
     // The saved rule now owns the first input; the draft row is the second.
     const inputs = screen.getAllByPlaceholderText("git *")
     fireEvent.change(inputs[0], { target: { value: "rm -rf *" } })
-    expect(harness.permission()).toEqual({ bash: { "rm -rf *": "allow" } })
+    expect(harness.permissions()).toEqual([rule("shell", "rm -rf *", "allow")])
 
     fireEvent.click(
       screen.getByRole("button", { name: "Delete rule rm -rf *" })
     )
-    expect(harness.permission()).toBeUndefined()
+    expect(harness.permissions()).toBeUndefined()
+  })
+
+  it("rewrites 1.x rules as permissions on the next edit", () => {
+    const harness = setup(
+      JSON.stringify({ permission: { bash: { "git *": "allow" } } })
+    )
+    expect(screen.getByText(/These rules come from OpenCode 1/)).toBeVisible()
+    fireEvent.click(screen.getByRole("button", { name: shellRulesName }))
+    const inputs = screen.getAllByPlaceholderText("git *")
+    fireEvent.change(inputs[inputs.length - 1], { target: { value: "rm *" } })
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }))
+
+    expect(harness.doc().permission).toBeUndefined()
+    expect(harness.permissions()).toEqual([
+      rule("shell", "git *", "allow"),
+      rule("shell", "rm *", "allow"),
+    ])
+    expect(
+      screen.queryByText(/These rules come from OpenCode 1/)
+    ).not.toBeInTheDocument()
   })
 
   it("keeps the row when a pattern is cleared, and reverts on blur", () => {
     const harness = setup(
-      JSON.stringify({ permission: { bash: { "git *": "allow" } } })
+      JSON.stringify({ permissions: [rule("shell", "git *", "allow")] })
     )
-    fireEvent.click(screen.getByRole("button", { name: bashRulesName }))
+    fireEvent.click(screen.getByRole("button", { name: shellRulesName }))
     const input = screen.getAllByPlaceholderText("git *")[0]
 
     fireEvent.change(input, { target: { value: "" } })
     // Still one saved rule; only the in-flight text went blank.
-    expect(harness.permission()).toEqual({ bash: { "git *": "allow" } })
+    expect(harness.permissions()).toEqual([rule("shell", "git *", "allow")])
     expect(input).toHaveValue("")
     expect(
       screen.getByText(
@@ -158,9 +184,9 @@ describe("OpenCodePermissionsSection", () => {
   // keystroke, so a multi-character edit was impossible without refocusing.
   it("keeps focus on the pattern input across keystrokes", () => {
     const harness = setup(
-      JSON.stringify({ permission: { bash: { g: "allow" } } })
+      JSON.stringify({ permissions: [rule("shell", "g", "allow")] })
     )
-    fireEvent.click(screen.getByRole("button", { name: bashRulesName }))
+    fireEvent.click(screen.getByRole("button", { name: shellRulesName }))
     const input = screen.getAllByPlaceholderText("git *")[0]
     input.focus()
     expect(document.activeElement).toBe(input)
@@ -169,28 +195,32 @@ describe("OpenCodePermissionsSection", () => {
       fireEvent.change(document.activeElement!, { target: { value } })
       expect(document.activeElement).toBe(input)
     }
-    expect(harness.permission()).toEqual({ bash: { "git *": "allow" } })
+    expect(harness.permissions()).toEqual([rule("shell", "git *", "allow")])
   })
 
-  it("refuses to retype a pattern onto one the key already has", () => {
+  it("refuses to retype a pattern onto one the action already has", () => {
     const harness = setup(
       JSON.stringify({
-        permission: { bash: { "git *": "allow", "rm *": "deny" } },
+        permissions: [
+          rule("shell", "git *", "allow"),
+          rule("shell", "rm *", "deny"),
+        ],
       })
     )
-    fireEvent.click(screen.getByRole("button", { name: bashRulesName }))
+    fireEvent.click(screen.getByRole("button", { name: shellRulesName }))
     const input = screen.getAllByPlaceholderText("git *")[1]
 
     fireEvent.change(input, { target: { value: "git *" } })
-    expect(harness.permission()).toEqual({
-      bash: { "git *": "allow", "rm *": "deny" },
-    })
+    expect(harness.permissions()).toEqual([
+      rule("shell", "git *", "allow"),
+      rule("shell", "rm *", "deny"),
+    ])
     expect(screen.getByText("That pattern already exists.")).toBeInTheDocument()
   })
 
-  it("refuses to add a pattern the key already has", () => {
-    setup(JSON.stringify({ permission: { bash: { "git *": "allow" } } }))
-    fireEvent.click(screen.getByRole("button", { name: bashRulesName }))
+  it("refuses to add a pattern the action already has", () => {
+    setup(JSON.stringify({ permissions: [rule("shell", "git *", "allow")] }))
+    fireEvent.click(screen.getByRole("button", { name: shellRulesName }))
     const inputs = screen.getAllByPlaceholderText("git *")
     fireEvent.change(inputs[inputs.length - 1], {
       target: { value: "git *" },
@@ -199,19 +229,23 @@ describe("OpenCodePermissionsSection", () => {
     expect(screen.getByText("That pattern already exists.")).toBeInTheDocument()
   })
 
-  it("shows a rule count badge for keys that carry patterns", () => {
+  it("shows a rule count badge for actions that carry patterns", () => {
     setup(
       JSON.stringify({
-        permission: { bash: { "*": "ask", "git *": "allow", "rm *": "deny" } },
+        permissions: [
+          rule("shell", "*", "ask"),
+          rule("shell", "git *", "allow"),
+          rule("shell", "rm *", "deny"),
+        ],
       })
     )
     expect(screen.getByText("rules: 2")).toBeInTheDocument()
   })
 
-  it("surfaces permission keys that are not built-in tools", () => {
-    setup(JSON.stringify({ permission: { "my-mcp_tool": "deny" } }))
+  it("surfaces permission actions that are not built-in tools", () => {
+    setup(JSON.stringify({ permissions: [rule("my-mcp_tool", "*", "deny")] }))
     expect(
-      screen.getByText("Other permission keys in the file")
+      screen.getByText("Other permission actions in the file")
     ).toBeInTheDocument()
     expect(screen.getByText("my-mcp_tool")).toBeInTheDocument()
   })
@@ -223,43 +257,81 @@ describe("OpenCodePermissionsSection", () => {
         "The native JSON below is not valid, so the visual editor is paused. Fix the JSON to resume."
       )
     ).toBeInTheDocument()
-    expect(screen.getByRole("switch", { name: autoAcceptName })).toBeDisabled()
+    expect(autoAccept()).toBeDisabled()
   })
 
-  it("warns instead of guessing when the block has an unknown shape", () => {
-    setup(JSON.stringify({ permission: { bash: 1 } }))
+  it("warns instead of guessing when the rules have an unknown shape", () => {
+    setup(JSON.stringify({ permissions: "allow" }))
     expect(
       screen.getByText(
-        "The permission block has a shape codeg does not recognize. Edit it in the native JSON below, or use Reset to start over."
+        "The permission rules have a shape codeg does not recognize. Edit them in the native JSON below, or use Reset to start over."
       )
     ).toBeInTheDocument()
-    expect(screen.getByRole("switch", { name: autoAcceptName })).toBeDisabled()
+    expect(autoAccept()).toBeDisabled()
     // Reset stays live — it is the only repair the visual editor can offer.
     expect(screen.getByRole("button", { name: "Reset" })).toBeEnabled()
   })
 
-  it("warns that a trailing wildcard overrides the rows, and can fix it", () => {
+  it("pauses the rows while the rules are out of order, until Fix order", () => {
     const harness = setup(
-      JSON.stringify({ permission: { bash: "deny", "*": "allow" } })
+      JSON.stringify({
+        permissions: [rule("shell", "*", "deny"), rule("*", "*", "allow")],
+      })
     )
     expect(
-      screen.getByText(/A wildcard rule is written after specific tools/)
+      screen.getByText(/not written in the order shown below/)
     ).toBeInTheDocument()
-    // It must not read as auto-accept while the rows claim bash is denied.
     expect(
-      screen.getByRole("switch", { name: autoAcceptName })
-    ).toHaveAttribute("data-state", "unchecked")
+      screen.getByText(/Editing below is paused until the order is fixed/)
+    ).toBeInTheDocument()
+    // It must not read as auto-accept while the rows claim shell is denied.
+    expect(autoAccept()).toHaveAttribute("data-state", "unchecked")
+    for (const select of screen.getAllByRole("combobox")) {
+      expect(select).toBeDisabled()
+    }
+    expect(screen.getByRole("button", { name: shellRulesName })).toBeDisabled()
+    // Auto-accept and Reset replace every rule, so they stay available.
+    expect(autoAccept()).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Reset" })).toBeEnabled()
 
     fireEvent.click(screen.getByRole("button", { name: "Fix order" }))
-    expect(Object.keys(harness.permission() as object)).toEqual(["*", "bash"])
+    expect(harness.permissions()).toEqual([
+      rule("*", "*", "allow"),
+      rule("shell", "*", "deny"),
+    ])
     expect(
-      screen.queryByText(/A wildcard rule is written after specific tools/)
+      screen.queryByText(/not written in the order shown below/)
     ).not.toBeInTheDocument()
+    for (const select of screen.getAllByRole("combobox")) {
+      expect(select).toBeEnabled()
+    }
+  })
+
+  // `rm *` allow then `*` ask asks before `rm` too. An edit elsewhere that
+  // wrote the list back grouped would put the broad rule first and stop asking.
+  it("cannot change a rule list whose order differs from the rows", () => {
+    const harness = setup(
+      JSON.stringify({
+        permissions: [
+          rule("shell", "rm *", "allow"),
+          rule("shell", "*", "ask"),
+        ],
+      })
+    )
+    for (const select of screen.getAllByRole("combobox")) {
+      expect(select).toBeDisabled()
+    }
+    expect(harness.changes()).toBe(0)
   })
 
   it("offers no Fix order button for shadowing reordering cannot fix", () => {
     setup(
-      JSON.stringify({ permission: { mymcp_run: "deny", "mymcp_*": "ask" } })
+      JSON.stringify({
+        permissions: [
+          rule("mymcp_run", "*", "deny"),
+          rule("mymcp_*", "*", "ask"),
+        ],
+      })
     )
     expect(
       screen.getByText(/shadowed by a later, more general pattern/)
@@ -269,63 +341,64 @@ describe("OpenCodePermissionsSection", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("warns about a legacy tools map that denies a tool", () => {
+  it("notes 1.x rules, and a tools deny keeps auto-accept off", () => {
     setup(JSON.stringify({ permission: "allow", tools: { bash: false } }))
-    expect(screen.getByText(/legacy top-level tools map/)).toBeVisible()
-    expect(
-      screen.getByRole("switch", { name: autoAcceptName })
-    ).toHaveAttribute("data-state", "unchecked")
+    expect(screen.getByText(/These rules come from OpenCode 1/)).toBeVisible()
+    expect(autoAccept()).toHaveAttribute("data-state", "unchecked")
   })
 
-  it("warns about agent blocks that outrank everything shown", () => {
+  it("warns about agents whose own rules outrank everything shown", () => {
     setup(
       JSON.stringify({
-        permission: { "*": "allow" },
-        agent: { build: { permission: { bash: "ask" } } },
+        permissions: [rule("*", "*", "allow")],
+        agents: { build: { permissions: [rule("shell", "*", "ask")] } },
       })
     )
     expect(screen.getByText(/These agents override permissions/)).toBeVisible()
-    expect(
-      screen.getByRole("switch", { name: autoAcceptName })
-    ).toHaveAttribute("data-state", "unchecked")
+    expect(autoAccept()).toHaveAttribute("data-state", "unchecked")
   })
 
   it("auto-accept clears agent overrides so the switch tells the truth", () => {
     const harness = setup(
       JSON.stringify({
-        agent: {
-          build: { model: "x/y", permission: { bash: "ask" } },
-          review: { permission: "deny" },
+        agents: {
+          build: { model: "x/y", permissions: [rule("shell", "*", "ask")] },
         },
+        agent: { review: { permission: "deny" } },
       })
     )
-    fireEvent.click(screen.getByRole("switch", { name: autoAcceptName }))
-    expect(JSON.parse(harness.latest()).agent).toEqual({
-      build: { model: "x/y" },
-      // Kept: the entry is what registers the custom agent at all.
-      review: {},
-    })
-    expect(
-      screen.getByRole("switch", { name: autoAcceptName })
-    ).toHaveAttribute("data-state", "checked")
+    fireEvent.click(autoAccept())
+    expect(harness.doc().agents).toEqual({ build: { model: "x/y" } })
+    // Kept: the entry is what registers the custom agent at all.
+    expect(harness.doc().agent).toEqual({ review: {} })
+    expect(autoAccept()).toHaveAttribute("data-state", "checked")
     expect(
       screen.queryByText(/These agents override permissions/)
     ).not.toBeInTheDocument()
   })
 
-  it("reset clears the block but keeps the rest of the config", () => {
+  it("keeps the file's comments when it rewrites the rules", () => {
     const harness = setup(
-      JSON.stringify({ model: "x/y", permission: { "*": "deny" } })
+      '{\n  // my model\n  "model": "x/y",\n  "permissions": []\n}\n'
+    )
+    fireEvent.click(autoAccept())
+    expect(harness.latest()).toContain("// my model")
+    expect(harness.latest()).toContain('"effect": "allow"')
+  })
+
+  it("reset clears the rules but keeps the rest of the config", () => {
+    const harness = setup(
+      JSON.stringify({ model: "x/y", permissions: [rule("*", "*", "deny")] })
     )
     fireEvent.click(screen.getByRole("button", { name: "Reset" }))
-    expect(JSON.parse(harness.latest())).toEqual({ model: "x/y" })
+    expect(harness.doc()).toEqual({ model: "x/y" })
     expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled()
   })
 
   it("locks every control while a save is in flight", () => {
-    setup(JSON.stringify({ permission: { "*": "ask" } }), true)
-    expect(screen.getByRole("switch", { name: autoAcceptName })).toBeDisabled()
-    expect(screen.getByRole("button", { name: bashRulesName })).toBeDisabled()
+    setup(JSON.stringify({ permissions: [rule("*", "*", "ask")] }), true)
+    expect(autoAccept()).toBeDisabled()
+    expect(screen.getByRole("button", { name: shellRulesName })).toBeDisabled()
     expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled()
   })
 })

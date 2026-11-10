@@ -4,14 +4,14 @@
  * Resolves a unified "delegation card model" — agent type, task, status,
  * child ids — from a `delegate_to_agent` tool call, in priority order:
  *   live `DelegationContext` binding → persisted `meta["codeg.delegation"]`
- *   → parsed tool input/output. The same model drives both the inline
- *   `DelegatedSubThread` card and the top-right `SubAgentOverlay`, so the two
- *   never disagree on what a sub-agent is doing.
+ *   → parsed tool input/output. The same model drives the timeline's
+ *   delegation and resumed-delegation rows and the top-right
+ *   `SubAgentOverlay`, so they never disagree on what a sub-agent is doing.
  *
  * Pure parsing lives in `@/lib/delegation-card`; this hook adds the two
  * React-state reads it can't do on its own: the live binding
- * (`useDelegatedSubSession`) and the child connection's pending-permission
- * status (so the card can badge "waiting").
+ * (`useDelegatedSubSession`) and whether the child connection is parked on a
+ * decision (so the card can badge "waiting").
  */
 
 import { useCallback, useMemo, useSyncExternalStore } from "react"
@@ -23,6 +23,7 @@ import {
   type ConnectionState,
 } from "@/contexts/acp-connections-context"
 import { useDelegatedSubSession } from "@/hooks/use-delegated-sub-session"
+import { blockingPrompts } from "@/lib/blocking-prompts"
 import {
   isAffirmedResume,
   parseDelegateTaskId,
@@ -33,9 +34,10 @@ import {
   type DelegationCardStatus,
   type ParsedToolOutput,
 } from "@/lib/delegation-card"
+import { taskEnding, type StatusReport } from "@/lib/delegation-status"
 
-/** The raw inputs a `delegate_to_agent` tool call carries — the props
- *  `DelegatedSubThread` already receives, and the shape `SubAgentOverlay`
+/** The raw inputs a `delegate_to_agent` tool call carries — what the
+ *  delegation row reads off its call, and the shape `SubAgentOverlay`
  *  extracts from the last assistant turn's tool-call parts. */
 export interface DelegationCardSource {
   parentToolUseId: string
@@ -46,15 +48,39 @@ export interface DelegationCardSource {
   meta?: Record<string, unknown> | null
   /**
    * A broker task id to resolve the live binding by when `parentToolUseId`
-   * matches none. Set by `ResumedDelegationCard`: a resume re-binds the child
+   * matches none. Set by `DelegationResumeRow`: a resume re-binds the child
    * to the ORIGINAL `delegate_to_agent` call's tool_use_id, so the resume
    * call's own id is never a binding key — the task id in its arguments is.
    */
   taskIdHint?: string | null
+  /**
+   * The newest `get_delegation_status` report on this task that came after the
+   * call (the timeline hands it over): how the task ended, when no live binding
+   * or stored meta says.
+   */
+  laterReport?: StatusReport | null
+}
+
+/**
+ * Who a delegation card shows as running the task: an assistant (with the
+ * agent it ran on, when known) or a bare agent. Resolved once here and handed
+ * whole to every surface that draws it (`DelegationIdentityAvatar` /
+ * `DelegationIdentityName`), so none can fall back to the bare agent.
+ */
+export interface DelegationIdentity {
+  /** The agent that runs (ran) the task. For an assistant, taken only from the
+   *  backend's own evidence — never from the call's `agent_type` argument,
+   *  which the backend ignores — so it stays null until that arrives. */
+  agentType: AgentType | null
+  assistantId: number | null
+  /** The assistant's name when the delegation started: the fallback for a row
+   *  the assistants store does not hold. */
+  assistantName: string | null
 }
 
 export interface DelegationCardModel {
   agentType: AgentType | null
+  identity: DelegationIdentity
   task: string | null
   taskId: string | null
   status: DelegationCardStatus
@@ -94,8 +120,16 @@ function useDelegationChildLive(
 export function useDelegationCardModel(
   source: DelegationCardSource
 ): DelegationCardModel {
-  const { parentToolUseId, input, output, errorText, state, meta, taskIdHint } =
-    source
+  const {
+    parentToolUseId,
+    input,
+    output,
+    errorText,
+    state,
+    meta,
+    taskIdHint,
+    laterReport,
+  } = source
 
   const parsed = useMemo(() => parseInput(input), [input])
   const parsedMeta = useMemo(() => parseDelegationMeta(meta), [meta])
@@ -179,30 +213,64 @@ export function useDelegationCardModel(
     null
 
   const childLive = useDelegationChildLive(childConnectionId)
-  const childAwaitingPermission = childLive?.pendingPermission != null
+  // Parked on ANY decision — a permission, a question, a plan approval — as
+  // the backend's `blocked_on` and the `get_delegation_status` row count it.
+  const childAwaitingUser = blockingPrompts(childLive) != null
+
+  // The assistant the task runs as: the live binding → the call's own
+  // `assistant_id` → the broker report → the historical meta. Its name comes
+  // from the same places, bar the call (which carries none).
+  const assistantId =
+    binding?.assistantId ??
+    parsed.assistantId ??
+    toolOutput?.assistantId ??
+    parsedMeta?.assistantId ??
+    null
+  const assistantName =
+    binding?.assistantName ??
+    toolOutput?.assistantName ??
+    parsedMeta?.assistantName ??
+    null
 
   // Live binding → the call's own `agent_type` argument → the broker report's
   // `agent_type` → the historical meta injected from the child's DB row. The
   // last two are what a `resume_delegation` card runs on: its arguments name a
-  // task, never an agent.
+  // task, never an agent. A call that names an assistant skips its own
+  // `agent_type`: the backend ignores it (the assistant decides), so a host
+  // that fills it in anyway must not paint the wrong agent.
   const agentType: AgentType | null =
     binding?.agentType ??
-    parsed.agentType ??
+    (assistantId === null ? parsed.agentType : null) ??
     toolOutput?.agentType ??
     parsedMeta?.agentType ??
     null
+  const identity = useMemo<DelegationIdentity>(
+    () => ({ agentType, assistantId, assistantName }),
+    [agentType, assistantId, assistantName]
+  )
+  const ended = useMemo(() => taskEnding(laterReport), [laterReport])
   const status = resolveDelegationStatus({
     binding,
     parsedMeta,
     toolOutput,
     state,
     errorText,
-    childAwaitingPermission,
+    childAwaitingUser,
+    ended,
   })
-  const errorCode = binding?.errorCode ?? parsedMeta?.errorCode ?? undefined
+  // The report is the only source for a call refused before any delegation
+  // started (`assistant_not_found`, the companion's local refusals): no
+  // binding, no meta.
+  const errorCode =
+    binding?.errorCode ??
+    parsedMeta?.errorCode ??
+    toolOutput?.errorCode ??
+    ended?.errorCode ??
+    undefined
 
   return {
     agentType,
+    identity,
     // Parsed raw_input first (full text on hosts that carry it), then the
     // live binding's preview, then the broker meta — the latter two are the
     // only sources on hosts whose announcements never carry arguments
@@ -222,6 +290,7 @@ export function useDelegationCardModel(
     hasModel: Boolean(
       binding ||
       parsed.agentType ||
+      parsed.assistantId ||
       parsed.task ||
       parsedMeta ||
       toolOutput?.agentType ||

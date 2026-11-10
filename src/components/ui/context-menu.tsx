@@ -4,6 +4,9 @@ import * as React from "react"
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
+import { ChevronRightIcon } from "lucide-react"
+import { acquireNativeSurfaceOcclusionFor } from "@/lib/browser/native-surface-occlusion"
+import { attachRef } from "@/lib/attach-ref"
 
 function ContextMenu({
   ...props
@@ -21,11 +24,26 @@ function ContextMenuTrigger({
 
 function ContextMenuContent({
   className,
+  ref,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
+  // Occlusion lease for the built-in browser, held while the menu's DOM
+  // exists (see dialog.tsx).
+  const contentRef = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      const detach = attachRef(ref, node)
+      const release = acquireNativeSurfaceOcclusionFor("context-menu", true)
+      return () => {
+        release()
+        detach()
+      }
+    },
+    [ref]
+  )
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
+        ref={contentRef}
         data-slot="context-menu-content"
         className={cn(
           "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 ring-foreground/5 bg-popover text-popover-foreground min-w-36 rounded-2xl p-1 shadow-2xl ring-1 duration-100 z-50 overflow-hidden",
@@ -85,20 +103,7 @@ function ContextMenuSubTrigger({
       {...props}
     >
       {children}
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="ml-auto size-4"
-      >
-        <path d="m9 18 6-6-6-6" />
-      </svg>
+      <ChevronRightIcon className="ml-auto size-4" />
     </ContextMenuPrimitive.SubTrigger>
   )
 }

@@ -45,3 +45,20 @@ export function collectLiveModelPaths(
   }
   return [...uris]
 }
+
+/** Release only models whose last open buffer closed, never a hidden scope. */
+export function disposeClosedEditorModels(
+  tracked: Set<string>,
+  live: ReadonlySet<string>,
+  getModel: (
+    uri: string
+  ) => { isAttachedToEditor: () => boolean; dispose: () => void } | null
+): void {
+  for (const uri of [...tracked]) {
+    if (live.has(uri)) continue
+    const model = getModel(uri)
+    if (model?.isAttachedToEditor()) continue
+    model?.dispose()
+    tracked.delete(uri)
+  }
+}

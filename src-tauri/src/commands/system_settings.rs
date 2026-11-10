@@ -43,7 +43,10 @@ pub(crate) const TERMINAL_SHELL_OPTION_CUSTOM: &str = "custom";
 /// scheme (see [`proxy::normalize_proxy_url`]) — the stored value, the value
 /// echoed back to the settings page, and the value exported to child processes
 /// are then the same string. Because the load path normalizes too, a row saved
-/// by an older build with a bare `host:port` heals on read; no migration.
+/// by an older build with a bare `host:port` heals on read; no migration. The
+/// bypass list is canonicalized either way, so the page always shows it in the
+/// form it documents (see [`proxy::canonical_no_proxy`]), and checked only
+/// while it is exported (see [`proxy::normalize_no_proxy`]).
 pub(crate) fn normalize_proxy_settings(
     settings: SystemProxySettings,
 ) -> Result<SystemProxySettings, AppCommandError> {
@@ -54,10 +57,15 @@ pub(crate) fn normalize_proxy_settings(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string);
+        let no_proxy = settings
+            .no_proxy
+            .as_deref()
+            .and_then(proxy::canonical_no_proxy);
 
         return Ok(SystemProxySettings {
             enabled: false,
             proxy_url,
+            no_proxy,
         });
     }
 
@@ -73,6 +81,7 @@ pub(crate) fn normalize_proxy_settings(
     Ok(SystemProxySettings {
         enabled: true,
         proxy_url: Some(proxy::normalize_proxy_url(proxy_url)?),
+        no_proxy: proxy::normalize_no_proxy(settings.no_proxy.as_deref().unwrap_or_default())?,
     })
 }
 
@@ -111,13 +120,27 @@ pub(crate) async fn load_system_language_settings(
     })
 }
 
-/// Whether `value` resolves to an executable on the current host. Used to
-/// drive the "not installed" badge in the picker; never used to *block* a
-/// selection — users may legitimately preconfigure a shell before installing it.
-fn shell_exists(value: &str) -> bool {
+/// Where `value` lands on this host, if anywhere: the path itself when it
+/// already names an existing file, or the PATH lookup for a bare command name.
+/// `None` means nothing by that name is runnable here.
+///
+/// One probe feeding two answers that must not disagree — the "not installed"
+/// badge in the picker, and the path the settings page reports as what will
+/// run. Never used to *block* a selection: users may legitimately preconfigure
+/// a shell before installing it.
+///
+/// **This is a probe, not the spawn itself**, and the two can disagree on
+/// Windows. A PATH lookup here searches the PATH of codeg's own process, while
+/// the built-in terminal spawns through `portable-pty`, whose `CommandBuilder`
+/// rebuilds PATH from the registry (HKLM + HKCU `Environment`) and so sees a
+/// PATH edited — or a shell installed — after codeg started. Both answer "which
+/// `pwsh.exe`", and they differ only when those two PATHs name different
+/// directories; what codeg passes to either spawner is the stored string
+/// itself, which no resolution here can change.
+fn resolve_shell_path(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return false;
+        return None;
     }
 
     let path = std::path::Path::new(trimmed);
@@ -127,10 +150,61 @@ fn shell_exists(value: &str) -> bool {
         || path.components().count() > 1;
 
     if looks_like_path {
-        return path.is_file();
+        if path.is_file() {
+            // Reported as typed rather than canonicalized: `canonicalize` hands
+            // back a `\\?\C:\…` UNC path on Windows, which is neither what the
+            // user wrote nor what they want to read back.
+            return Some(trimmed.to_string());
+        }
+        // `…\PowerShell\7\pwsh` IS runnable on Windows: `CreateProcessW`
+        // appends `.exe` to an extension-less path, and portable-pty's own
+        // PATHEXT pass finds it too. Probing the literal string alone would
+        // badge a working configuration as missing — and then report a path
+        // the user cannot find on disk as the one in use.
+        #[cfg(windows)]
+        {
+            if path.extension().is_none() {
+                let with_exe = path.with_extension("exe");
+                if with_exe.is_file() {
+                    return Some(with_exe.display().to_string());
+                }
+            }
+        }
+        return None;
     }
 
-    which::which(trimmed).is_ok()
+    which::which(trimmed)
+        .ok()
+        .map(|resolved| resolved.display().to_string())
+}
+
+/// Whether `value` resolves to an executable on the current host.
+fn shell_exists(value: &str) -> bool {
+    resolve_shell_path(value).is_some()
+}
+
+/// What a terminal tab opened *right now* would launch, given the stored
+/// selection.
+///
+/// `None` — the "system default" row — is the platform fallback chain
+/// ([`resolve_shell`]). Anything else is the user's own choice, resolved to a
+/// concrete path when the host can find it (see [`resolve_shell_path`] for what
+/// that probe can and cannot promise) and echoed verbatim when it cannot: a
+/// shell that isn't installed is still what codeg would try to spawn, and
+/// saying so beats reporting a shell the user did not pick — the picker badges
+/// it "not installed" alongside.
+///
+/// Named for the terminal tab deliberately. The ACP `terminal/create` fallback
+/// reads the SAME stored selection, but its own "no preference" default is not
+/// this one: it is `/bin/sh` on Unix and `COMSPEC` on Windows, never `$SHELL`
+/// (`acp::terminal_runtime::default_platform_shell`, kept for compatibility
+/// with launches that predate this setting). So the "system default" row is the
+/// one case where this line can name a shell an agent's command would not use.
+pub(crate) fn resolve_effective_shell(default_shell: Option<&str>) -> String {
+    match default_shell.map(str::trim).filter(|value| !value.is_empty()) {
+        None => resolve_shell(),
+        Some(selected) => resolve_shell_path(selected).unwrap_or_else(|| selected.to_string()),
+    }
 }
 
 /// Trim and drop empty-only. We deliberately do **not** filter by host
@@ -157,7 +231,13 @@ pub(crate) fn normalize_terminal_settings(
 /// The frontend renders these verbatim, looking each `label_key` up under its
 /// `GeneralSettings` namespace — so adding a new shell here requires zero
 /// frontend code changes (only a new translation key).
-pub(crate) fn build_available_terminal_shells() -> AvailableTerminalShells {
+///
+/// `default_shell` is the currently stored selection, and only feeds
+/// `resolved_shell`: the picker shows the same rows whatever is selected, but
+/// the line under it has to say what the selection actually resolves to.
+pub(crate) fn build_available_terminal_shells(
+    default_shell: Option<&str>,
+) -> AvailableTerminalShells {
     let mut options: Vec<TerminalShellOption> = Vec::new();
 
     options.push(TerminalShellOption {
@@ -197,7 +277,7 @@ pub(crate) fn build_available_terminal_shells() -> AvailableTerminalShells {
 
     AvailableTerminalShells {
         options,
-        resolved_shell: resolve_shell(),
+        resolved_shell: resolve_effective_shell(default_shell),
     }
 }
 
@@ -588,8 +668,11 @@ pub async fn resolve_close_request(
     match behavior {
         CloseWindowBehavior::Minimize => {
             if let Some(window) = tauri::Manager::get_webview_window(&app, "main") {
+                let handle = app.clone();
                 crate::commands::windows::with_macos_fullscreen_drained(&app, move || {
                     let _ = window.hide();
+                    // Closed as far as the next launch is concerned.
+                    crate::commands::workspace_windows::note_hidden(&handle, window.label());
                 });
             }
         }
@@ -617,6 +700,7 @@ pub async fn get_system_proxy_settings(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn update_system_proxy_settings(
+    app: tauri::AppHandle,
     settings: SystemProxySettings,
     db: State<'_, AppDatabase>,
 ) -> Result<SystemProxySettings, AppCommandError> {
@@ -631,6 +715,7 @@ pub async fn update_system_proxy_settings(
         .map_err(AppCommandError::from)?;
 
     proxy::apply_system_proxy_settings(&normalized)?;
+    crate::browser::profile::proxy_settings_changed(&app);
     Ok(normalized)
 }
 
@@ -652,8 +737,13 @@ pub async fn get_system_terminal_settings(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn get_available_terminal_shells() -> Result<AvailableTerminalShells, AppCommandError> {
-    Ok(build_available_terminal_shells())
+pub async fn get_available_terminal_shells(
+    db: State<'_, AppDatabase>,
+) -> Result<AvailableTerminalShells, AppCommandError> {
+    let settings = load_system_terminal_settings(&db.conn).await?;
+    Ok(build_available_terminal_shells(
+        settings.default_shell.as_deref(),
+    ))
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1040,6 +1130,7 @@ mod tests {
         SystemProxySettings {
             enabled: true,
             proxy_url: Some(url.to_string()),
+            no_proxy: None,
         }
     }
 
@@ -1129,6 +1220,7 @@ mod tests {
             SystemProxySettings {
                 enabled: true,
                 proxy_url: None,
+                no_proxy: None,
             },
             enabled_proxy("   "),
         ] {
@@ -1143,6 +1235,7 @@ mod tests {
         let normalized = normalize_proxy_settings(SystemProxySettings {
             enabled: false,
             proxy_url: Some("  127.0.0.1:7890  ".to_string()),
+            no_proxy: None,
         })
         .expect("disabled settings never validate the url");
 
@@ -1161,10 +1254,182 @@ mod tests {
             proxy::proxy_env_value(&SystemProxySettings {
                 enabled: false,
                 proxy_url: Some("127.0.0.1:7890".to_string()),
+                no_proxy: None,
             })
             .expect("disabled is not an error"),
             None
         );
+    }
+
+    fn enabled_proxy_bypassing(no_proxy: &str) -> SystemProxySettings {
+        SystemProxySettings {
+            no_proxy: Some(no_proxy.to_string()),
+            ..enabled_proxy("http://10.0.0.2:3128")
+        }
+    }
+
+    /// Commas, semicolons and line breaks all separate entries, so a list
+    /// pasted from anywhere lands as one canonical list — comma-separated with
+    /// no spaces, the format the settings page asks for; a repeat keeps its
+    /// first spelling.
+    #[test]
+    fn bypass_list_is_canonicalized_when_the_proxy_is_on() {
+        let raw = " corp.example.com;10.0.0.5\n\n.internal , CORP.example.com, ";
+        let normalized =
+            normalize_proxy_settings(enabled_proxy_bypassing(raw)).expect("a host list is valid");
+        assert_eq!(
+            normalized.no_proxy.as_deref(),
+            Some("corp.example.com,10.0.0.5,.internal")
+        );
+
+        let once = normalized.no_proxy.expect("kept");
+        let again = normalize_proxy_settings(enabled_proxy_bypassing(&once)).expect("valid");
+        assert_eq!(again.no_proxy.as_deref(), Some(once.as_str()), "idempotent");
+
+        for blank in ["", " , ;\n", "，、 "] {
+            let normalized =
+                normalize_proxy_settings(enabled_proxy_bypassing(blank)).expect("blank is valid");
+            assert_eq!(normalized.no_proxy, None, "{blank:?} leaves nothing to store");
+        }
+    }
+
+    /// The commas a Chinese, Japanese or Arabic keyboard types separate too:
+    /// no host contains one, and kept inside an entry they would leave a list
+    /// that bypasses nothing.
+    #[test]
+    fn bypass_list_takes_the_commas_other_keyboards_type() {
+        let raw = "a.example，b.example、c.example；d.example،e.example";
+        let normalized =
+            normalize_proxy_settings(enabled_proxy_bypassing(raw)).expect("a host list is valid");
+        assert_eq!(
+            normalized.no_proxy.as_deref(),
+            Some("a.example,b.example,c.example,d.example,e.example")
+        );
+    }
+
+    /// Only the separators change; entries are stored and exported as written.
+    /// `*.corp.example.com` stays distinct from `.corp.example.com`: most tools
+    /// read the dot form as `corp.example.com` itself too, the one host the
+    /// star form leaves on the proxy.
+    #[test]
+    fn a_star_dot_entry_is_kept_as_written() {
+        let settings = enabled_proxy_bypassing("*.corp.example.com, .corp.example.com");
+        assert_eq!(
+            normalize_proxy_settings(settings.clone())
+                .expect("valid")
+                .no_proxy
+                .as_deref(),
+            Some("*.corp.example.com,.corp.example.com")
+        );
+        assert_eq!(
+            proxy::no_proxy_env_value(&settings).expect("valid"),
+            "localhost,127.0.0.1,::1,[::1],*.corp.example.com,.corp.example.com"
+        );
+    }
+
+    /// The page shows back whatever the save returns, so a list typed before
+    /// the proxy is switched on reads in the same canonical form. (That the
+    /// disabled path still never validates is pinned by the control-character
+    /// test above.)
+    #[test]
+    fn bypass_list_is_canonicalized_while_the_proxy_is_off_too() {
+        let disabled = normalize_proxy_settings(SystemProxySettings {
+            enabled: false,
+            ..enabled_proxy_bypassing(" corp.example.com, 10.0.0.5；.internal ")
+        })
+        .expect("disabled is not an error");
+        assert_eq!(
+            disabled.no_proxy.as_deref(),
+            Some("corp.example.com,10.0.0.5,.internal")
+        );
+    }
+
+    /// A control character cannot name a host, and a NUL in the exported value
+    /// would make the env write panic. Disabling still never validates, so a
+    /// bad list can always be switched off, like a bad address.
+    #[test]
+    fn bypass_list_with_a_control_character_is_rejected_only_while_exported() {
+        for bad in ["corp.example.com\u{0}", "a\u{1b}b"] {
+            assert!(
+                normalize_proxy_settings(enabled_proxy_bypassing(bad)).is_err(),
+                "{bad:?} should not be accepted"
+            );
+            // Refused before anything is written, proxy variables included.
+            assert!(proxy::proxy_env_writes(&enabled_proxy_bypassing(bad)).is_err());
+        }
+
+        let disabled = normalize_proxy_settings(SystemProxySettings {
+            enabled: false,
+            ..enabled_proxy_bypassing("  a\u{0}b  ")
+        })
+        .expect("disabled settings never validate the list");
+        assert_eq!(disabled.no_proxy.as_deref(), Some("a\u{0}b"));
+    }
+
+    /// What reaches `NO_PROXY` next to the proxy: the loopback hosts first —
+    /// always, so an agent's own local services stay reachable through a proxy
+    /// on another machine — then the settings' list.
+    #[test]
+    fn exported_bypass_list_leads_with_the_loopback_hosts() {
+        assert_eq!(
+            proxy::no_proxy_env_value(&enabled_proxy("http://10.0.0.2:3128")).expect("valid"),
+            "localhost,127.0.0.1,::1,[::1]"
+        );
+        let settings = enabled_proxy_bypassing("corp.example.com, 127.0.0.1, 10.0.0.5");
+        assert_eq!(
+            proxy::no_proxy_env_value(&settings).expect("valid"),
+            "localhost,127.0.0.1,::1,[::1],corp.example.com,10.0.0.5"
+        );
+    }
+
+    /// Enabling writes the bypass list next to the proxy, in both spellings —
+    /// the child processes that read it disagree on which one comes first.
+    #[test]
+    fn enabling_the_proxy_exports_the_bypass_list() {
+        let writes = proxy::proxy_env_writes(&enabled_proxy_bypassing("corp.example.com"))
+            .expect("valid settings");
+        let written = |key: &str| {
+            writes
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, value)| value.as_deref())
+        };
+        for key in ["NO_PROXY", "no_proxy"] {
+            assert_eq!(
+                written(key),
+                Some(Some("localhost,127.0.0.1,::1,[::1],corp.example.com")),
+                "{key}"
+            );
+        }
+        for key in ["HTTP_PROXY", "https_proxy", "ALL_PROXY"] {
+            assert_eq!(written(key), Some(Some("http://10.0.0.2:3128")), "{key}");
+        }
+    }
+
+    /// Disabling removes the bypass list along with the proxy it was written
+    /// for, so a stale list cannot outlive its settings.
+    #[test]
+    fn disabling_the_proxy_removes_the_bypass_list_too() {
+        let writes = proxy::proxy_env_writes(&SystemProxySettings {
+            enabled: false,
+            ..enabled_proxy_bypassing("corp.example.com")
+        })
+        .expect("disabled is not an error");
+        for key in ["HTTP_PROXY", "all_proxy", "NO_PROXY", "no_proxy"] {
+            assert!(
+                writes.iter().any(|(k, value)| *k == key && value.is_none()),
+                "{key} must be removed"
+            );
+        }
+        assert!(writes.iter().all(|(_, value)| value.is_none()));
+    }
+
+    /// `*` bypasses everything, but Python and curl only honour it as the
+    /// whole value, so it is never exported inside a list.
+    #[test]
+    fn a_wildcard_bypass_is_exported_alone() {
+        let settings = enabled_proxy_bypassing("corp.example.com, *");
+        assert_eq!(proxy::no_proxy_env_value(&settings).expect("valid"), "*");
     }
 
     /// Rows written by a build that stored the address verbatim must heal on
@@ -1189,6 +1454,10 @@ mod tests {
             loaded.proxy_url.as_deref(),
             Some("http://127.0.0.1:7890"),
             "a legacy bare host:port must be repaired on read"
+        );
+        assert_eq!(
+            loaded.no_proxy, None,
+            "a row stored before the bypass list existed still parses"
         );
     }
 
@@ -1279,6 +1548,86 @@ mod tests {
         // `_restore` puts the process global back on the way out — it is
         // shared by every test in this binary, and a bare store at the end
         // would be skipped by any assertion above it that fails.
+    }
+
+    /// The line under the picker ("Currently using: …") reads this field, so it
+    /// has to answer for the SELECTION, not for the host. Reporting
+    /// `resolve_shell()` unconditionally is what made every row in the dropdown
+    /// — pwsh, powershell, a custom path — read back as the same
+    /// `COMSPEC`/`SHELL` value, which is precisely the state where a user
+    /// concludes the setting does nothing.
+    #[test]
+    fn the_reported_shell_follows_the_selection() {
+        // The system row is the one case that IS the host fallback.
+        assert_eq!(resolve_effective_shell(None), resolve_shell());
+        assert_eq!(resolve_effective_shell(Some("   ")), resolve_shell());
+
+        // A picked shell answers for itself. The one shell guaranteed present
+        // on each platform stands in for the whole option list; `which` may
+        // hand back an absolute path, so this asserts the tail rather than
+        // pinning a machine-specific prefix.
+        let (installed, uninstalled) = if cfg!(target_os = "windows") {
+            ("cmd.exe", "definitely-not-a-shell.exe")
+        } else {
+            ("sh", "definitely-not-a-shell")
+        };
+        let reported = resolve_effective_shell(Some(installed));
+        assert!(
+            reported.ends_with(installed),
+            "{reported} should resolve {installed}"
+        );
+        assert!(
+            std::path::Path::new(&reported).is_absolute(),
+            "{reported} should be resolved to a path the user can recognize"
+        );
+
+        // Not installed is still what codeg would try to spawn — echoing it
+        // back is what lets the user see their own typo. Trimmed, because that
+        // is what `normalize_terminal_settings` stored.
+        assert_eq!(
+            resolve_effective_shell(Some(&format!("  {uninstalled}  "))),
+            uninstalled
+        );
+    }
+
+    /// `CreateProcessW` appends `.exe` to an extension-less path, so
+    /// `…\PowerShell\7\pwsh` launches — and a probe that only stats the literal
+    /// string would badge that working configuration "not installed" and then
+    /// report a non-existent file as the shell in use.
+    #[cfg(windows)]
+    #[test]
+    fn an_extension_less_windows_path_resolves_the_way_it_launches() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let exe = dir.path().join("pwsh.exe");
+        std::fs::write(&exe, b"").expect("write fake shell");
+
+        let without_ext = dir.path().join("pwsh");
+        assert!(!without_ext.is_file(), "the bare name must not exist");
+
+        let reported = resolve_effective_shell(Some(&without_ext.display().to_string()));
+        assert_eq!(reported, exe.display().to_string());
+        assert!(shell_exists(&without_ext.display().to_string()));
+
+        // A path that resolves neither way is still unresolvable — the
+        // completion must not invent a file.
+        let missing = dir.path().join("nope");
+        assert!(!shell_exists(&missing.display().to_string()));
+    }
+
+    /// The picker and the line under it are built from one probe, so a shell
+    /// the host cannot find must never be badged "installed" while its path is
+    /// reported as resolved (or the reverse).
+    #[test]
+    fn the_option_badges_agree_with_the_reported_shell() {
+        for option in build_available_terminal_shells(None).options {
+            let Some(value) = option.value.as_deref() else {
+                // `system` and `custom` carry no value of their own; both are
+                // always offered.
+                assert!(option.exists);
+                continue;
+            };
+            assert_eq!(option.exists, resolve_shell_path(value).is_some());
+        }
     }
 
     /// A row stored before the field existed must load as "off" rather than

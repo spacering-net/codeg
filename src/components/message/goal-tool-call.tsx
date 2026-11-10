@@ -10,14 +10,20 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/instant-collapsible"
-import { Shimmer } from "@/components/ai-elements/shimmer"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
-import { ChevronRightIcon, PauseIcon, XIcon } from "lucide-react"
+import { unwrapWholeFence } from "@/lib/fenced-text"
+import { PauseIcon, XIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
+import { useFoldBack } from "./activity/fold-back"
 import { useGoalControl } from "./goal-control-context"
 
 type GoalToolPart = Extract<AdaptedContentPart, { type: "tool-call" }>
+
+/** The card's root, for the fold at the foot of its steps to find its
+ *  trigger by. */
+const GOAL_CARD_SLOT = "goal-card"
 
 type ParsedGoal = {
   objective: string | null
@@ -27,8 +33,6 @@ type ParsedGoal = {
   timeUsedSeconds: number | null
   remainingTokens: number | null
 }
-
-type RenderGoalPart = (part: AdaptedContentPart, key: string) => ReactNode
 
 function parseJsonObject(
   raw: string | null | undefined
@@ -200,18 +204,25 @@ function formatGoalHeaderText(title: string, objective: string | null): string {
   return title.endsWith("：") ? `${title}${objective}` : `${title} ${objective}`
 }
 
+/**
+ * A goal (`create_goal` … `update_goal`) on the activity timeline's rail: a
+ * plain row header (the rail's ring carries the state) that opens to the
+ * objective, the run's own steps, its budget and the controls.
+ */
 function GoalCard({
   startPart,
   endPart,
   items = [],
   forceRunning,
-  renderPart,
+  renderBody,
 }: {
   startPart: GoalToolPart
   endPart: GoalToolPart | null
   items?: AdaptedContentPart[]
   forceRunning?: boolean
-  renderPart?: RenderGoalPart
+  /** Draws the run's steps — the activity timeline's nested timeline —
+   *  handed the fold the row at their foot folds the card with. */
+  renderBody?: (fold: (control: HTMLElement) => void) => ReactNode
 }) {
   const t = useTranslations("Folder.chat.contentParts.goal")
   const inferredRunning =
@@ -237,6 +248,24 @@ function GoalCard({
   // so any of those defaults yields to a deliberate toggle.
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
   const bodyOpen = userOpen ?? (isError || (isRunning && items.length > 0))
+  // Folded from the foot of its steps, the card's header comes back into view
+  // and takes the focus. Found from the control pressed, the card's own
+  // trigger: the fold only ever runs on a press.
+  const foldBack = useFoldBack()
+  const foldFromFoot = (control: HTMLElement) => {
+    const trigger =
+      control
+        .closest(`[data-slot="${GOAL_CARD_SLOT}"]`)
+        ?.querySelector<HTMLElement>(
+          ':scope > [data-slot="collapsible-trigger"]'
+        ) ?? null
+    foldBack({
+      head: trigger,
+      control,
+      toggle: trigger,
+      fold: () => setUserOpen(false),
+    })
+  }
   const goal = useMemo(
     () => parseGoal(startPart, endPart),
     [startPart, endPart]
@@ -272,29 +301,22 @@ function GoalCard({
     (normalizedStatus === "active" || normalizedStatus === "paused")
 
   return (
-    <Collapsible open={bodyOpen} onOpenChange={setUserOpen} className="w-full">
+    <Collapsible
+      open={bodyOpen}
+      onOpenChange={setUserOpen}
+      className="w-full"
+      data-slot={GOAL_CARD_SLOT}
+    >
       <CollapsibleTrigger
         className={cn(
-          "group inline-flex max-w-full items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-medium transition-colors",
-          "bg-primary/10 text-foreground hover:bg-primary/15",
-          tone === "error" &&
-            "bg-destructive/10 text-destructive hover:bg-destructive/15",
-          tone === "muted" && "bg-muted/70 text-foreground hover:bg-muted"
+          "activity-row-toggle group flex min-h-7 w-full max-w-full items-center gap-2 rounded-sm py-0.5 text-start text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          tone === "error" && "text-tone-danger"
         )}
         aria-label={headerText}
       >
-        <ChevronRightIcon
-          aria-hidden="true"
-          className={cn(
-            "size-3 shrink-0 opacity-60 transition-transform",
-            bodyOpen && "rotate-90"
-          )}
-        />
-        <span className="min-w-0 truncate">
+        <span className="min-w-0 truncate font-medium">
           {isRunning ? (
-            <Shimmer as="span" duration={1} shineColor="var(--primary)">
-              {headerText}
-            </Shimmer>
+            <span className="activity-shimmer">{headerText}</span>
           ) : (
             headerText
           )}
@@ -319,7 +341,7 @@ function GoalCard({
           "data-[state=closed]:slide-out-to-top-1 data-[state=open]:slide-in-from-top-1"
         )}
       >
-        <div className="mt-3 w-full rounded-md border border-border/60 px-3.5 py-3 text-sm">
+        <div className="mt-1 mb-1.5 w-full text-sm">
           <div className="space-y-3">
             {goal.objective && (
               <div>
@@ -330,13 +352,7 @@ function GoalCard({
               </div>
             )}
 
-            {items.length > 0 && renderPart && (
-              <div className="space-y-3">
-                {items.map((item, index) =>
-                  renderPart(item, `goal-run-item-${index}`)
-                )}
-              </div>
-            )}
+            {renderBody?.(foldFromFoot)}
 
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
               {statusLabel && (
@@ -407,9 +423,11 @@ function GoalCard({
             )}
 
             {isError && errorText && (
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-destructive/10 p-3 text-xs text-destructive">
-                {errorText}
-              </pre>
+              <ScrollArea className="max-h-64 rounded-md bg-destructive/10">
+                <pre className="whitespace-pre-wrap break-words p-3 text-xs text-destructive">
+                  {unwrapWholeFence(errorText)}
+                </pre>
+              </ScrollArea>
             )}
           </div>
         </div>
@@ -428,10 +446,10 @@ export const GoalToolCallPart = memo(function GoalToolCallPart({
 
 export const GoalRunPart = memo(function GoalRunPart({
   part,
-  renderPart,
+  renderBody,
 }: {
   part: AdaptedGoalRunPart
-  renderPart: RenderGoalPart
+  renderBody?: (fold: (control: HTMLElement) => void) => ReactNode
 }) {
   return (
     <GoalCard
@@ -439,7 +457,7 @@ export const GoalRunPart = memo(function GoalRunPart({
       endPart={part.end}
       items={part.items}
       forceRunning={part.isRunning}
-      renderPart={renderPart}
+      renderBody={renderBody}
     />
   )
 })

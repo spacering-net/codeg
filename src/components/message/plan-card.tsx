@@ -2,22 +2,19 @@
 
 import { memo } from "react"
 import { useTranslations } from "next-intl"
-import { Badge } from "@/components/ui/badge"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import type { PlanEntryInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import {
   CheckCircle2Icon,
   CircleDashedIcon,
   CircleDotIcon,
-  ListTodoIcon,
   Loader2Icon,
 } from "lucide-react"
 
 // ── Shared status/priority label + style helpers ──────────────────────
-// Single source of truth for plan entry labels/colors, shared by <PlanCard>
-// (inline message rendering) and <AgentPlanOverlay> (floating chip) so the
-// two surfaces never drift.
+// Single source of truth for plan entry labels/colors, shared by the timeline's
+// plan row and <AgentPlanOverlay> (floating chip) so the two surfaces never
+// drift.
 
 export type StatusKey =
   | "status.completed"
@@ -60,11 +57,11 @@ export function getPriorityKey(priority: string): PriorityKey {
 export function getPriorityClassName(priority: string): string {
   switch (priority) {
     case "high":
-      return "text-red-700 bg-red-500/10 border-red-500/20 dark:text-red-300"
+      return "text-tone-danger bg-tone-danger/10 border-tone-danger/20"
     case "medium":
-      return "text-amber-700 bg-amber-500/10 border-amber-500/20 dark:text-amber-300"
+      return "text-tone-warning bg-tone-warning/10 border-tone-warning/20"
     case "low":
-      return "text-slate-700 bg-slate-500/10 border-slate-500/20 dark:text-slate-300"
+      return "text-muted-foreground bg-muted border-border"
     default:
       return "text-muted-foreground"
   }
@@ -77,24 +74,42 @@ function StatusIcon({
   status: string
   isStreaming: boolean
 }) {
+  // Centred on the entry's 1.5rem line. A finished step is grey like the
+  // timeline's finished steps; the one in progress is the one in ink.
+  const className = "mt-[0.3125rem] size-3.5 shrink-0"
   if (status === "completed") {
-    return <CheckCircle2Icon className="size-3.5 shrink-0 text-emerald-500" />
+    return (
+      <CheckCircle2Icon
+        aria-hidden="true"
+        className={cn(className, "text-muted-foreground")}
+      />
+    )
   }
   if (status === "in_progress") {
     return isStreaming ? (
-      <Loader2Icon className="size-3.5 shrink-0 animate-spin text-blue-500" />
+      <Loader2Icon
+        aria-hidden="true"
+        className={cn(className, "animate-spin text-foreground/80")}
+      />
     ) : (
-      <CircleDotIcon className="size-3.5 shrink-0 text-blue-500" />
+      <CircleDotIcon
+        aria-hidden="true"
+        className={cn(className, "text-foreground/80")}
+      />
     )
   }
   return (
-    <CircleDashedIcon className="size-3.5 shrink-0 text-muted-foreground" />
+    <CircleDashedIcon
+      aria-hidden="true"
+      className={cn(className, "text-muted-foreground")}
+    />
   )
 }
 
 /**
- * The plan entry rows (checklist body). Shared by <PlanCard> and the
- * historical TodoWrite fallback so every plan surface renders identically.
+ * The plan entry rows (checklist body) of the timeline's plan and todo rows:
+ * one line per step, set in the row's content column — the status glyph under
+ * the row's label, the priority at the end, under the row's own figure.
  */
 export const PlanEntriesList = memo(function PlanEntriesList({
   entries,
@@ -106,75 +121,39 @@ export const PlanEntriesList = memo(function PlanEntriesList({
   const t = useTranslations("Folder.chat.agentPlanOverlay")
 
   if (entries.length === 0) return null
+  // A priority every step shares says nothing — agents that send none get
+  // "medium" throughout — so only a plan that ranks its steps shows them.
+  const ranked = new Set(entries.map((entry) => entry.priority)).size > 1
 
   return (
-    <div className="space-y-1">
+    <ol role="list" className="space-y-1">
       {entries.map((entry, index) => (
-        <div
+        <li
           key={`${entry.content}-${index}`}
-          className="flex items-start gap-2 px-1 py-1 text-sm"
+          className="flex items-start gap-2.5 text-start text-sm leading-6"
         >
-          <span className="mt-0.5">
-            <StatusIcon status={entry.status} isStreaming={isStreaming} />
-          </span>
+          <StatusIcon status={entry.status} isStreaming={isStreaming} />
+          <span className="sr-only">{t(getStatusKey(entry.status))}</span>
           <span
+            dir="auto"
             className={cn(
-              "min-w-0 flex-1 leading-5 break-words [overflow-wrap:anywhere]",
+              "min-w-0 break-words [overflow-wrap:anywhere]",
               entry.status === "completed"
-                ? "text-muted-foreground line-through"
-                : "text-foreground"
+                ? "text-muted-foreground"
+                : entry.status === "in_progress"
+                  ? "font-medium text-foreground"
+                  : "text-foreground/90"
             )}
           >
             {entry.content}
           </span>
-          <Badge
-            variant="outline"
-            className={cn(
-              "h-5 shrink-0 text-3xs uppercase",
-              getPriorityClassName(entry.priority)
-            )}
-          >
-            {t(getPriorityKey(entry.priority))}
-          </Badge>
-        </div>
+          {ranked ? (
+            <span className="activity-mono ms-auto shrink-0 ps-3 text-xs leading-6 text-muted-foreground">
+              {t(getPriorityKey(entry.priority))}
+            </span>
+          ) : null}
+        </li>
       ))}
-    </div>
-  )
-})
-
-/**
- * Inline plan / todo checklist card rendered in the message stream. Replaces
- * the previous behavior of showing the plan as a "Thinking…" reasoning block.
- */
-export const PlanCard = memo(function PlanCard({
-  entries,
-  isStreaming = false,
-}: {
-  entries: PlanEntryInfo[]
-  isStreaming?: boolean
-}) {
-  const t = useTranslations("Folder.chat.agentPlanOverlay")
-
-  if (entries.length === 0) return null
-
-  const completedCount = entries.filter(
-    (entry) => entry.status === "completed"
-  ).length
-
-  return (
-    <div className="overflow-hidden rounded-lg border bg-card/50 ws-msg-card">
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <ListTodoIcon className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">
-          {t("title")}
-        </span>
-        <Badge variant="secondary" className="h-5 shrink-0">
-          {completedCount}/{entries.length}
-        </Badge>
-      </div>
-      <ScrollArea className="max-h-72 px-2 py-2">
-        <PlanEntriesList entries={entries} isStreaming={isStreaming} />
-      </ScrollArea>
-    </div>
+    </ol>
   )
 })

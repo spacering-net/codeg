@@ -67,6 +67,7 @@ mod tauri_commands {
 
     use crate::app_error::AppCommandError;
     use crate::db::AppDatabase;
+    use crate::web::event_bridge::EventEmitter;
 
     use super::local_io::{
         apply_rollback_core, export_content_core, export_to_file_core, import_bytes_core,
@@ -103,10 +104,17 @@ mod tauri_commands {
     /// should propagate to their other machines like any other local change.
     #[tauri::command]
     pub async fn config_sync_import_file(
+        app: tauri::AppHandle,
         src_path: String,
         db: State<'_, AppDatabase>,
     ) -> Result<ConfigImportResult, AppCommandError> {
-        import_from_file_core(&db.conn, Path::new(&src_path), &rollback_dir()).await
+        import_from_file_core(
+            &db.conn,
+            &EventEmitter::Tauri(app),
+            Path::new(&src_path),
+            &rollback_dir(),
+        )
+        .await
     }
 
     #[tauri::command]
@@ -163,9 +171,10 @@ mod tauri_commands {
 
     #[tauri::command]
     pub async fn config_sync_download_apply(
+        app: tauri::AppHandle,
         db: State<'_, AppDatabase>,
     ) -> Result<DownloadOutcome, AppCommandError> {
-        download_and_apply_core(&db.conn).await
+        download_and_apply_core(&db.conn, &EventEmitter::Tauri(app)).await
     }
 
     // ── By-content variants ──
@@ -190,10 +199,17 @@ mod tauri_commands {
 
     #[tauri::command]
     pub async fn config_sync_import_content(
+        app: tauri::AppHandle,
         content: String,
         db: State<'_, AppDatabase>,
     ) -> Result<ConfigImportResult, AppCommandError> {
-        import_bytes_core(&db.conn, content.as_bytes(), &rollback_dir()).await
+        import_bytes_core(
+            &db.conn,
+            &EventEmitter::Tauri(app),
+            content.as_bytes(),
+            &rollback_dir(),
+        )
+        .await
     }
 
     // ── Rollback snapshots ──
@@ -209,10 +225,11 @@ mod tauri_commands {
 
     #[tauri::command]
     pub async fn config_sync_apply_rollback(
+        app: tauri::AppHandle,
         id: String,
         db: State<'_, AppDatabase>,
     ) -> Result<ConfigImportResult, AppCommandError> {
-        apply_rollback_core(&db.conn, &rollback_dir(), &id).await
+        apply_rollback_core(&db.conn, &EventEmitter::Tauri(app), &rollback_dir(), &id).await
     }
 }
 

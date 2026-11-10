@@ -63,18 +63,10 @@ function extractPlanEntriesFromPart(part: AdaptedContentPart): PlanEntryInfo[] {
     return parseTodosFromJson(part.input)
   }
 
-  if (part.type === "tool-group") {
-    // Non-agent tool calls now collapse into tool-group; recurse so
-    // plan-like tools (TodoWrite, plan-update, etc.) are still discovered.
-    // Iterate backwards to match the "latest entry wins" caller semantics.
-    for (let i = part.items.length - 1; i >= 0; i -= 1) {
-      const entries = extractPlanEntriesFromPart(part.items[i])
-      if (entries.length > 0) return entries
-    }
-    return []
-  }
-
   if (part.type === "goal-run") {
+    // Recurse so plan-like tools (TodoWrite, plan-update, etc.) inside a goal
+    // run are still discovered. Iterate backwards to match the "latest entry
+    // wins" caller semantics.
     for (let i = part.items.length - 1; i >= 0; i -= 1) {
       const entries = extractPlanEntriesFromPart(part.items[i])
       if (entries.length > 0) return entries

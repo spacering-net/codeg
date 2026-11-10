@@ -17,10 +17,8 @@ import {
 import { useAgentOptions } from "@/components/automations/use-agent-options"
 import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
-import {
-  isComposerChromeClick,
-  restampSkillPrefixes,
-} from "@/components/chat/composer/composer-commands"
+import { restampSkillPrefixes } from "@/components/chat/composer/composer-commands"
+import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import {
   RichComposer,
   type RichComposerHandle,
@@ -104,6 +102,12 @@ export interface TaskMessageComposerProps {
   /** Extra controls in the bottom bar, right of the "+" (the task editor's
    *  mode/model selectors). */
   bottomBarExtra?: ReactNode
+  /** The host's config selections, when the host probes this same agent for
+   *  selectors of its own (the task editor's mode/model bar). The probe is
+   *  keyed by the selected model, so the composer must probe with the same
+   *  selections to share the host's probe instead of spawning the agent a
+   *  second time. Omit where the composer is the only one probing. */
+  probeConfigValues?: Record<string, string> | null
   /** Sizing for the editor surface itself. */
   editorClassName?: string
 }
@@ -141,11 +145,13 @@ export function TaskMessageComposer({
   onSubmit,
   onAttachmentsChange,
   bottomBarExtra,
+  probeConfigValues,
   editorClassName = "max-h-[12rem] min-h-[4.5rem]",
 }: TaskMessageComposerProps) {
   const t = useTranslations("Folder.chat.messageInput")
   const editorRef = useRef<RichComposerHandle>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const chromeFocus = useComposerChromeFocus(editorRef)
 
   const { groupLabels, uiLabels } = useComposerMentionLabels()
   const referenceSearch = useReferenceSearch({
@@ -157,7 +163,12 @@ export function TaskMessageComposer({
   // One transient probe backs the `/` menu (the snapshot carries
   // available_commands) and the image encoding (prompt_capabilities); `$`
   // skills are a filesystem scan inside `useComposerInvocations`.
-  const agentOptions = useAgentOptions(agentType, folderPath)
+  const agentOptions = useAgentOptions(
+    agentType,
+    folderPath,
+    true,
+    probeConfigValues
+  )
   const availableCommands: AvailableCommandInfo[] =
     agentOptions.snapshot?.available_commands ?? []
   const promptCapabilities =
@@ -292,12 +303,9 @@ export function TaskMessageComposer({
   return (
     <div
       ref={containerRef}
-      onMouseDown={(e) => {
-        // Clicking the box's padding focuses the nearest caret, like a textarea.
-        if (!isComposerChromeClick(e.target)) return
-        e.preventDefault()
-        editorRef.current?.focusAtCoords(e.clientX, e.clientY)
-      }}
+      // Clicking or tapping the box's padding focuses the nearest caret, like a
+      // textarea.
+      {...chromeFocus}
       {...attach.containerDragProps}
       // Same shell the drawer's Textarea had (and the same rounding as every
       // other box in it); the editor brings the matching px-3 padding.

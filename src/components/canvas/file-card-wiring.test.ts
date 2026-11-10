@@ -56,8 +56,8 @@ describe("the canvas file card", () => {
     // the pane switch, the selection move, and a pending reveal some other
     // opener is waiting on.
     const workspace = read(WORKSPACE)
-    expect(workspace).toContain(
-      "const background = options?.background === true"
+    expect(workspace).toMatch(
+      /const background =\s*options\?\.background === true/
     )
     expect(workspace).toContain(
       "setActiveFileTabId((prev) => prev ?? nextTab.id)"

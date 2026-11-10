@@ -6,20 +6,34 @@ import {
   useImperativeHandle,
   useState,
 } from "react"
-import { act, fireEvent, render } from "@testing-library/react"
+import { act, fireEvent, render, within } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { toast } from "sonner"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest"
 
 import {
   SidebarConversationList,
   type SidebarConversationListHandle,
 } from "./sidebar-conversation-list"
 import type { DbConversationSummary, FolderDetail } from "@/lib/types"
+import type { TagFilter } from "@/lib/conversation-tags"
 import {
   resetAppWorkspaceStore,
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
 import enMessages from "@/i18n/messages/en.json"
+import {
+  resetFolderTabsStore,
+  useFolderTabsStore,
+} from "@/stores/folder-tabs-store"
 
 // ── Probes ────────────────────────────────────────────────────────────────
 // AgentIcon renders once per card body → counts card re-renders. The Folder /
@@ -242,7 +256,31 @@ vi.mock("@/contexts/workbench-route-context", () => {
 vi.mock("./conversation-manage-dialog", () => ({
   ConversationManageDialog: () => null,
 }))
-vi.mock("@/components/layout/clone-dialog", () => ({ CloneDialog: () => null }))
+
+// The two "add a folder" dialogs matter here only for what the list hands them
+// — whether they are open, and what happens to the folder they report — so
+// they render nothing and record their latest props.
+type FolderDialogProbe = {
+  open: boolean
+  onFolderOpened?: (folder: FolderDetail) => void
+}
+const folderDialogs = vi.hoisted(() => ({
+  clone: null as FolderDialogProbe | null,
+  browser: null as FolderDialogProbe | null,
+}))
+vi.mock("@/components/layout/clone-dialog", () => ({
+  CloneDialog: (props: FolderDialogProbe) => {
+    folderDialogs.clone = props
+    return null
+  },
+}))
+vi.mock("@/components/layout/workspace-folder-dialog", () => ({
+  WorkspaceFolderDialog: (props: FolderDialogProbe & { folder?: unknown }) => {
+    // The links manager (opened ON a folder) is a separate instance.
+    if (!props.folder) folderDialogs.browser = props
+    return null
+  },
+}))
 // The sub-session realtime sync hook reaches @/lib/platform (transport), which
 // these tests don't load; stub it to a no-op — it has its own unit tests.
 vi.mock("@/hooks/use-subsession-sync", () => ({ useSubsessionSync: () => {} }))
@@ -485,7 +523,7 @@ function firePointer(
 }
 
 describe("SidebarConversationList — folder drag gesture", () => {
-  let rectSpy: ReturnType<typeof vi.spyOn>
+  let rectSpy: MockInstance
 
   beforeEach(() => {
     vi.useFakeTimers({ now: FIXED })
@@ -1080,6 +1118,91 @@ describe("SidebarConversationList — worktree grouping (Show worktrees)", () =>
     expect(probes.folder).toBe(0)
     expect(probes.root).toBe(0)
   })
+
+  describe("while tabs follow the folder", () => {
+    beforeEach(() => resetFolderTabsStore())
+    afterEach(() => resetFolderTabsStore())
+
+    // The container's header and its root row both carry the repo's id; the
+    // worktree's header carries its own.
+    const containerHeader = () =>
+      document.querySelectorAll<HTMLElement>('[data-folder-id="1"]')[0]!
+    const rootHeader = () =>
+      document.querySelectorAll<HTMLElement>('[data-folder-id="1"]')[1]
+    const worktreeHeader = () =>
+      document.querySelector<HTMLElement>('[data-folder-id="2"]')
+    const marked = (header: HTMLElement | null | undefined) =>
+      header?.parentElement?.hasAttribute("data-scope-selected") ?? false
+
+    it("marks the root row, not the container above it, for the repo's own scope", () => {
+      act(() => {
+        useFolderTabsStore.setState({ enabled: true, scope: 1 })
+      })
+      render(wtTree(true))
+      expect(marked(rootHeader())).toBe(true)
+      expect(rootHeader()).toHaveAttribute("aria-current", "true")
+      expect(marked(containerHeader())).toBe(false)
+      expect(containerHeader()).not.toHaveAttribute("aria-current")
+
+      act(() => {
+        fireEvent.click(worktreeHeader()!)
+      })
+      expect(useFolderTabsStore.getState().scope).toBe(2)
+      expect(marked(worktreeHeader())).toBe(true)
+      expect(marked(rootHeader())).toBe(false)
+      // Selecting the container still selects its main worktree — the root
+      // row — and the container stays unmarked.
+      act(() => {
+        fireEvent.click(containerHeader())
+      })
+      expect(useFolderTabsStore.getState().scope).toBe(1)
+      expect(marked(rootHeader())).toBe(true)
+      expect(marked(containerHeader())).toBe(false)
+      expect(marked(worktreeHeader())).toBe(false)
+
+      act(() => {
+        fireEvent.click(rootHeader()!)
+      })
+      expect(useFolderTabsStore.getState().scope).toBe(1)
+      expect(marked(rootHeader())).toBe(true)
+      expect(marked(containerHeader())).toBe(false)
+    })
+
+    it("marks a folded container for the scope folded away inside it", () => {
+      act(() => {
+        useFolderTabsStore.setState({ enabled: true, scope: 2 })
+      })
+      render(wtTree(true))
+      expect(marked(containerHeader())).toBe(false)
+      // Fold the container: its disclosure button sits right after its row
+      // button.
+      act(() => {
+        fireEvent.click(containerHeader().nextElementSibling as HTMLElement)
+      })
+      expect(worktreeHeader()).toBeNull()
+      expect(rootHeader()).toBeUndefined()
+      expect(marked(containerHeader())).toBe(true)
+
+      act(() => {
+        useFolderTabsStore.setState({ scope: 1 })
+      })
+      expect(marked(containerHeader())).toBe(true)
+      act(() => {
+        useFolderTabsStore.setState({ scope: "global" })
+      })
+      expect(marked(containerHeader())).toBe(false)
+
+      // Unfolded, the rows that show the scopes take the mark back.
+      act(() => {
+        fireEvent.click(containerHeader().nextElementSibling as HTMLElement)
+      })
+      act(() => {
+        useFolderTabsStore.setState({ scope: 1 })
+      })
+      expect(marked(rootHeader())).toBe(true)
+      expect(marked(containerHeader())).toBe(false)
+    })
+  })
 })
 
 describe("SidebarConversationList — Recent section", () => {
@@ -1163,11 +1286,53 @@ describe("SidebarConversationList — Recent section", () => {
     ).toHaveLength(2)
   })
 
+  it("orders by last activity even though the sidebar sorts by creation time", () => {
+    // The list under test is `sortMode="created"`. conv-11 was created first
+    // but touched last; conv-12 is newer but idle. A section called "Recent"
+    // must lead with conv-11 and show its activity stamp, not its birth date.
+    // Timestamps hang off the real clock: this suite runs on real timers.
+    const t0 = Date.now()
+    // The collapse test above persists `{recent: true}` into
+    // `workspace:sidebar-section-collapsed`, and the list hydrates from it.
+    localStorage.clear()
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(11, 1, {
+          created_at: new Date(t0 - 5 * MINUTE).toISOString(),
+          updated_at: new Date(t0 - 30_000).toISOString(),
+        }),
+        conv(12, 1, {
+          created_at: new Date(t0 - 4 * MINUTE).toISOString(),
+          updated_at: new Date(t0 - 3 * MINUTE).toISOString(),
+        }),
+      ],
+    })
+    render(recentTree(true))
+
+    // The Folders section emits the canonical copies first (creation order:
+    // conv-12 is newer); everything after them is the Recent duplicate, in
+    // activity order (conv-11 was touched last). Each row's text is its title
+    // followed by its age label: the Folders copies keep their creation age
+    // ("4m", "5m"), while the Recent copies read their last activity ("now"
+    // for 30s ago, "3m"), so each row's position is explained by what it shows.
+    const rows = Array.from(document.querySelectorAll("[data-conv-key]"))
+    expect(rows.map((el) => el.textContent)).toEqual([
+      "conv-124m",
+      "conv-115m",
+      "conv-11now",
+      "conv-123m",
+    ])
+  })
+
   describe("paging", () => {
     // `recentLimit` starts at RECENT_PAGE_SIZE and only ever grew, so a list
     // expanded a few pages deep stayed that way for the rest of the session.
     // These cover the way back out.
-    const PAGE = 15
+    //
+    // A literal rather than the constant: ten rows a page is the product
+    // decision these assertions pin, so a changed page size has to be a
+    // deliberate edit here too.
+    const PAGE = 10
     const TOTAL = PAGE + 4
 
     // Recent duplicates every canonical row, so total cards = canonical + recent
@@ -1296,6 +1461,170 @@ describe("SidebarConversationList — Recent section", () => {
         buttonWithText(showMoreLabel(PAGE * 2))
       )
     })
+  })
+
+  describe("kind filter", () => {
+    const FILTER_KEY = "workspace:sidebar-recent-filter"
+    const { noRecent, noRecentChats, noRecentFolders } =
+      enMessages.Folder.sidebar
+
+    // Cards rendered for one conversation: its canonical row (Folders or
+    // Chat), plus a second one while Recent lists it too.
+    const cardsFor = (id: number) =>
+      document.querySelectorAll(`[data-conversation-id="${id}"]`).length
+
+    // Radix arms its outside-pointer listener in a `setTimeout(0)` and jsdom has
+    // no `PointerEvent`, so drive the header menu with real `MouseEvent`s under
+    // the pointer-event names (same recipe as sidebar-section-header.test.tsx).
+    async function settle() {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    }
+    function press(target: Element) {
+      for (const type of ["pointerdown", "pointerup", "click"]) {
+        fireEvent(
+          target,
+          new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 })
+        )
+      }
+    }
+    // Open the header menu from the trigger carrying `triggerLabel` and pick
+    // the option whose text is `option`.
+    async function pick(triggerLabel: string, option: string) {
+      await settle()
+      press(document.querySelector(`[aria-label="${triggerLabel}"]`)!)
+      await settle()
+      const item = Array.from(
+        document.querySelectorAll('[role="menuitemradio"]')
+      ).find((el) => el.textContent === option)
+      expect(item).toBeDefined()
+      press(item!)
+    }
+
+    beforeEach(() => {
+      // The collapse test above persists `{recent: true}`; left in place the
+      // section renders collapsed, with no rows for a filter to narrow.
+      localStorage.clear()
+    })
+
+    afterEach(() => {
+      // The describes after this one reset only the storage keys they use, so
+      // a filter left behind would quietly narrow Recent in all of them.
+      localStorage.removeItem(FILTER_KEY)
+    })
+
+    it("restores the persisted filter on mount", () => {
+      localStorage.setItem(FILTER_KEY, "chats")
+      render(recentTree(true))
+      // conv-12 (chat) stays in Recent; conv-11 (folder) keeps only its
+      // Folders row.
+      expect(cardsFor(12)).toBe(2)
+      expect(cardsFor(11)).toBe(1)
+    })
+
+    it.each([
+      // Only a folder conversation left, so "chats" empties Recent…
+      { filter: "chats", only: conv(11, 1), hint: noRecentChats },
+      // …and only a chat, so "folders" does.
+      {
+        filter: "folders",
+        only: conv(12, 99, { kind: "chat" }),
+        hint: noRecentFolders,
+      },
+    ])(
+      "names the $filter filter when it narrows Recent to nothing",
+      ({ filter, only, hint }) => {
+        localStorage.setItem(FILTER_KEY, filter)
+        useAppWorkspaceStore.setState({ conversations: [only] })
+        render(recentTree(true))
+        const text = document.body.textContent
+        expect(text).toContain(hint)
+        // Exactly one hint: neither the other filter's nor the unfiltered one.
+        for (const other of [noRecent, noRecentChats, noRecentFolders]) {
+          if (other !== hint) expect(text).not.toContain(other)
+        }
+      }
+    )
+
+    it("applies, persists and undoes a pick from the header menu", async () => {
+      render(recentTree(true))
+      expect(cardsFor(11)).toBe(2)
+      expect(cardsFor(12)).toBe(2)
+
+      await pick("Show in Recent: All", "Folders")
+      expect(localStorage.getItem(FILTER_KEY)).toBe("folders")
+      expect(cardsFor(11)).toBe(2)
+      expect(cardsFor(12)).toBe(1)
+
+      // Back to All from the (now relabelled) trigger: both kinds return.
+      await pick("Show in Recent: Folders", "All")
+      expect(localStorage.getItem(FILTER_KEY)).toBe("all")
+      expect(cardsFor(11)).toBe(2)
+      expect(cardsFor(12)).toBe(2)
+    })
+  })
+})
+
+describe("SidebarConversationList — time labels", () => {
+  beforeEach(() => {
+    // Section collapse and folder expansion persist across tests otherwise.
+    localStorage.clear()
+    const folders = [folder(1, "Repo")]
+    store.activeTabId = null
+    store.tabSpec = []
+    useAppWorkspaceStore.setState({ folders, allFolders: folders })
+  })
+
+  it("labels Chat rows with the last activity they are ordered by", () => {
+    // The list under test is `sortMode="created"`, and Chat orders by last
+    // activity regardless. Timestamps hang off the real clock: this suite runs
+    // on real timers, and the list's `now` is read at mount.
+    const t0 = Date.now()
+    const HOUR = 60 * MINUTE
+    useAppWorkspaceStore.setState({
+      conversations: [
+        // Started two days ago, used 30s ago: Chat lists it first.
+        conv(21, 99, {
+          kind: "chat",
+          created_at: new Date(t0 - 48 * HOUR).toISOString(),
+          updated_at: new Date(t0 - 30_000).toISOString(),
+        }),
+        conv(22, 99, {
+          kind: "chat",
+          created_at: new Date(t0 - HOUR).toISOString(),
+          updated_at: new Date(t0 - HOUR).toISOString(),
+        }),
+        // Pinned (ordered by pin time) and Folders (ordered by creation here)
+        // keep the creation age.
+        conv(23, 99, {
+          kind: "chat",
+          created_at: new Date(t0 - 3 * HOUR).toISOString(),
+          updated_at: new Date(t0 - 30_000).toISOString(),
+          pinned_at: new Date(t0 - 30_000).toISOString(),
+        }),
+        conv(24, 1, {
+          created_at: new Date(t0 - 5 * MINUTE).toISOString(),
+          updated_at: new Date(t0 - 30_000).toISOString(),
+        }),
+      ],
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    // Pinned, Folders, then Chat; each row's text is its title followed by
+    // its age label. Chat reads "now" above "1h" (its order), not "2d" above
+    // "1h".
+    const rows = Array.from(document.querySelectorAll("[data-conv-key]"))
+    expect(rows.map((el) => el.textContent)).toEqual([
+      "conv-233h",
+      "conv-245m",
+      "conv-21now",
+      "conv-221h",
+    ])
   })
 })
 
@@ -1582,5 +1911,422 @@ describe("SidebarConversationList — folder groups", () => {
     expect(title.className).toContain("text-sidebar-foreground/75")
     expect(title.className).not.toContain("folder-title-tint")
     expect(title.getAttribute("style")).toBeNull()
+  })
+
+  // A group heading carries the Folders heading's Clone Repository / Open
+  // Folder pair, and whatever folder they open is filed into that group.
+  describe("adding a folder from a group heading", () => {
+    const GROUP_EXPANDED_KEY = "workspace:sidebar-folder-group-expanded"
+    const setFolderGroup = vi.fn<
+      (folderId: number, groupId: number | null) => Promise<void>
+    >(() => Promise.resolve())
+
+    // Collapsing persists, and nothing else clears this key between tests.
+    afterEach(() => {
+      localStorage.removeItem(GROUP_EXPANDED_KEY)
+    })
+
+    beforeEach(() => {
+      setFolderGroup.mockClear()
+      folderDialogs.clone = null
+      folderDialogs.browser = null
+      localStorage.removeItem(GROUP_EXPANDED_KEY)
+      const folders = [
+        { ...folder(5, "Member"), sort_order: 1, group_id: 7 },
+        { ...folder(9, "Loose"), sort_order: 2, group_id: null },
+      ] as FolderDetail[]
+      useAppWorkspaceStore.setState({
+        folders,
+        allFolders: folders,
+        folderGroups: [group(7, "Work", 1)],
+        conversations: [],
+        setFolderGroup,
+      })
+    })
+
+    /** The heading row of group 7 — the toggle and its trailing actions. */
+    function groupRow() {
+      const toggle = document.querySelector('[data-folder-group-id="7"]')
+      if (!toggle?.parentElement) throw new Error("group 7 heading not found")
+      return within(toggle.parentElement)
+    }
+
+    /** The Folders section heading's action with this label — the one copy of
+     *  it that is NOT inside a group heading. */
+    function headingAction(label: string): HTMLElement {
+      const groupHeading = document.querySelector('[data-folder-group-id="7"]')
+        ?.parentElement as HTMLElement | null | undefined
+      const match = Array.from(
+        document.querySelectorAll<HTMLElement>(`[aria-label="${label}"]`)
+      ).find((el) => !groupHeading?.contains(el))
+      if (!match) throw new Error(`Folders heading action ${label} not found`)
+      return match
+    }
+
+    /** A folder as `openFolder` resolves it: brand new, so at the top level. */
+    function opened(id: number, overrides: Partial<FolderDetail> = {}) {
+      return {
+        ...folder(id, `Opened ${id}`),
+        sort_order: 3,
+        group_id: null,
+        ...overrides,
+      } as FolderDetail
+    }
+
+    async function report(
+      dialog: FolderDialogProbe | null,
+      detail: FolderDetail
+    ) {
+      await act(async () => {
+        dialog?.onFolderOpened?.(detail)
+        // The placement awaits the (stubbed) move before it opens the group.
+        await Promise.resolve()
+      })
+    }
+
+    it("files a folder opened from the group's Open Folder into the group", async () => {
+      render(tree())
+      act(() => {
+        fireEvent.click(groupRow().getByLabelText("Open Folder"))
+      })
+      expect(folderDialogs.browser?.open).toBe(true)
+
+      await report(folderDialogs.browser, opened(42))
+
+      expect(setFolderGroup).toHaveBeenCalledTimes(1)
+      expect(setFolderGroup).toHaveBeenCalledWith(42, 7)
+    })
+
+    it("files a repository cloned from the group into the group", async () => {
+      render(tree())
+      act(() => {
+        fireEvent.click(groupRow().getByLabelText("Clone Repository"))
+      })
+      expect(folderDialogs.clone?.open).toBe(true)
+
+      await report(folderDialogs.clone, opened(42))
+
+      expect(setFolderGroup).toHaveBeenCalledTimes(1)
+      expect(setFolderGroup).toHaveBeenCalledWith(42, 7)
+    })
+
+    it("leaves folders added from the Folders heading at the top level", async () => {
+      render(tree())
+      act(() => {
+        fireEvent.click(headingAction("Open Folder"))
+      })
+      expect(folderDialogs.browser?.open).toBe(true)
+      await report(folderDialogs.browser, opened(42))
+
+      act(() => {
+        fireEvent.click(headingAction("Clone Repository"))
+      })
+      expect(folderDialogs.clone?.open).toBe(true)
+      await report(folderDialogs.clone, opened(43))
+
+      expect(setFolderGroup).not.toHaveBeenCalled()
+    })
+
+    it("files a clone into the group it started from, even if the dialog is reopened elsewhere", async () => {
+      render(tree())
+      act(() => {
+        fireEvent.click(groupRow().getByLabelText("Clone Repository"))
+      })
+      // What a slow clone keeps hold of: the callback of the render its Clone
+      // click happened in (see the CloneDialog test pinning that side).
+      const startedFromGroup = folderDialogs.clone?.onFolderOpened
+      act(() => {
+        fireEvent.click(headingAction("Clone Repository"))
+      })
+      expect(folderDialogs.clone?.onFolderOpened).not.toBe(startedFromGroup)
+
+      await act(async () => {
+        startedFromGroup?.(opened(42))
+        await Promise.resolve()
+      })
+
+      expect(setFolderGroup).toHaveBeenCalledTimes(1)
+      expect(setFolderGroup).toHaveBeenCalledWith(42, 7)
+    })
+
+    it("files every root one open-folder session opens", async () => {
+      render(tree())
+      act(() => {
+        fireEvent.click(groupRow().getByLabelText("Open Folder"))
+      })
+
+      // The dialog's "Change" step goes back and opens another root; both
+      // were opened from this group.
+      await report(folderDialogs.browser, opened(42))
+      await report(folderDialogs.browser, opened(43))
+
+      expect(setFolderGroup.mock.calls).toEqual([
+        [42, 7],
+        [43, 7],
+      ])
+    })
+
+    it("does not carry a group into a later opening from the Folders heading", async () => {
+      render(tree())
+      act(() => {
+        fireEvent.click(groupRow().getByLabelText("Open Folder"))
+      })
+      // The dialog is closed without opening anything, then reopened from the
+      // section heading: that opening names no group, so none may stick.
+      act(() => {
+        fireEvent.click(headingAction("Open Folder"))
+      })
+
+      await report(folderDialogs.browser, opened(42))
+
+      expect(setFolderGroup).not.toHaveBeenCalled()
+    })
+
+    it("opens a collapsed group to show the folder that landed in it", async () => {
+      render(tree())
+      act(() => {
+        fireEvent.click(document.querySelector('[data-folder-group-id="7"]')!)
+      })
+      expect(document.querySelector('[data-folder-id="5"]')).toBeNull()
+
+      act(() => {
+        fireEvent.click(groupRow().getByLabelText("Open Folder"))
+      })
+      await report(folderDialogs.browser, opened(42))
+
+      expect(setFolderGroup).toHaveBeenCalledWith(42, 7)
+      expect(document.querySelector('[data-folder-id="5"]')).not.toBeNull()
+      expect(
+        JSON.parse(localStorage.getItem(GROUP_EXPANDED_KEY) ?? "{}")
+      ).toEqual({ 7: true })
+    })
+
+    it("leaves a folder that is already in the group where it is", async () => {
+      render(tree())
+      act(() => {
+        fireEvent.click(groupRow().getByLabelText("Open Folder"))
+      })
+
+      // Re-moving a member would only shuffle it to the end of the group.
+      await report(folderDialogs.browser, opened(5, { group_id: 7 }))
+
+      expect(setFolderGroup).not.toHaveBeenCalled()
+    })
+
+    it("leaves a worktree of an open repo with its repo", async () => {
+      render(tree())
+      act(() => {
+        fireEvent.click(groupRow().getByLabelText("Open Folder"))
+      })
+
+      // Folder 9 is open, so this worktree renders under it wherever it sits
+      // and has no row of its own to file.
+      await report(folderDialogs.browser, opened(43, { parent_id: 9 }))
+
+      expect(setFolderGroup).not.toHaveBeenCalled()
+    })
+
+    it("keeps the folder at the top level when the group is gone by the time it opens", async () => {
+      render(tree())
+      act(() => {
+        fireEvent.click(groupRow().getByLabelText("Open Folder"))
+      })
+      // Deleted from another window while the dialog was open.
+      act(() => {
+        useAppWorkspaceStore.setState({ folderGroups: [] })
+      })
+
+      await report(folderDialogs.browser, opened(42))
+
+      expect(setFolderGroup).not.toHaveBeenCalled()
+    })
+
+    it("says so when the folder cannot be filed, and leaves the group shut", async () => {
+      const toastError = vi.spyOn(toast, "error").mockImplementation(() => 0)
+      setFolderGroup.mockImplementationOnce(() =>
+        Promise.reject(new Error("boom"))
+      )
+      try {
+        render(tree())
+        act(() => {
+          fireEvent.click(document.querySelector('[data-folder-group-id="7"]')!)
+        })
+        act(() => {
+          fireEvent.click(groupRow().getByLabelText("Open Folder"))
+        })
+
+        await report(folderDialogs.browser, opened(42))
+
+        expect(toastError).toHaveBeenCalledWith("Failed to move folder: boom")
+        // Nothing landed, so there is nothing to open the group for.
+        expect(document.querySelector('[data-folder-id="5"]')).toBeNull()
+      } finally {
+        toastError.mockRestore()
+      }
+    })
+  })
+})
+
+describe("SidebarConversationList — tag filter", () => {
+  // Rendered with its own filter prop; the provider stays mounted so `t` is
+  // stable, exactly like `tree()`.
+  const filterHarness: { set: (f: TagFilter) => void } = { set: () => {} }
+  function FilteredHarness({ initial }: { initial: TagFilter }) {
+    const [filter, setFilter] = useState(initial)
+    useEffect(() => {
+      filterHarness.set = setFilter
+    }, [])
+    return (
+      <SidebarConversationList
+        showCompleted
+        sortMode="created"
+        tagFilter={filter}
+      />
+    )
+  }
+  const filtered = (initial: TagFilter) => (
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <FilteredHarness initial={initial} />
+    </NextIntlClientProvider>
+  )
+
+  beforeEach(() => {
+    probes.card = 0
+    probes.folder = 0
+    store.activeTabId = null
+    store.tabSpec = []
+    const folders = [folder(1, "Folder 1"), folder(2, "Folder 2")]
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations: [
+        conv(11, 1, { tag_ids: [5] }),
+        conv(12, 1),
+        conv(21, 2, { tag_ids: [6] }),
+        conv(31, 9, { kind: "chat" }),
+      ],
+    })
+  })
+
+  const shownIds = (container: HTMLElement) =>
+    [...container.querySelectorAll("[data-conversation-id]")].map((el) =>
+      Number(el.getAttribute("data-conversation-id"))
+    )
+
+  it("shows only matching conversations and drops folders with no match", () => {
+    const { container, getByText } = render(
+      filtered({ tagIds: [5], mode: "any" })
+    )
+    expect(shownIds(container)).toEqual([11])
+    expect(container.querySelector('[data-folder-id="1"]')).not.toBeNull()
+    expect(container.querySelector('[data-folder-id="2"]')).toBeNull()
+    // The Chat section is still there, saying why it is empty.
+    expect(getByText("No conversations with these tags")).toBeTruthy()
+  })
+
+  it("matches all selected tags in all mode", () => {
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(11, 1, { tag_ids: [5, 6] }),
+        conv(12, 1, { tag_ids: [5] }),
+      ],
+    })
+    const { container } = render(filtered({ tagIds: [5, 6], mode: "all" }))
+    expect(shownIds(container)).toEqual([11])
+  })
+
+  it("puts every folder back once the filter is cleared", () => {
+    const { container } = render(filtered({ tagIds: [5], mode: "any" }))
+    act(() => filterHarness.set({ tagIds: [], mode: "any" }))
+    expect(shownIds(container).sort()).toEqual([11, 12, 21, 31])
+    expect(container.querySelector('[data-folder-id="2"]')).not.toBeNull()
+  })
+
+  it("still re-renders only the changed card under an active filter", () => {
+    render(filtered({ tagIds: [5, 6], mode: "any" }))
+    const prev = useAppWorkspaceStore.getState().conversations
+    const next = prev.slice()
+    const idx = next.findIndex((c) => c.id === 21)
+    next[idx] = { ...next[idx], status: "completed" }
+    probes.card = 0
+    probes.folder = 0
+    act(() => {
+      useAppWorkspaceStore.setState({ conversations: next })
+    })
+    expect(probes.card).toBe(1)
+    expect(probes.folder).toBe(0)
+  })
+})
+
+describe("SidebarConversationList — folder header and folder-tabs mode", () => {
+  beforeEach(() => {
+    const folders = [folder(1, "Folder 1"), folder(2, "Folder 2")]
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations: [conv(11, 1), conv(21, 2)],
+    })
+    store.activeTabId = null
+    store.tabSpec = []
+    resetFolderTabsStore()
+  })
+  afterEach(() => resetFolderTabsStore())
+
+  const header = (folderId: number) =>
+    document.querySelector(`[data-folder-id="${folderId}"]`) as HTMLElement
+  const disclosureButtons = () =>
+    document.querySelectorAll('[aria-label="Expand or collapse folder"]')
+
+  it("normal mode keeps the row button as the disclosure, with no extra button", () => {
+    render(tree())
+    const before = header(1).getAttribute("aria-expanded")
+    expect(before === "true" || before === "false").toBe(true)
+    expect(header(1)).not.toHaveAttribute("aria-current")
+    expect(header(1).parentElement).not.toHaveAttribute("data-scope-selected")
+    expect(disclosureButtons()).toHaveLength(0)
+    act(() => {
+      fireEvent.click(header(1))
+    })
+    expect(header(1)).toHaveAttribute(
+      "aria-expanded",
+      before === "true" ? "false" : "true"
+    )
+    expect(useFolderTabsStore.getState().scope).toBe("global")
+  })
+
+  it("folder-tabs mode: the row selects the folder, a separate chevron button toggles it", () => {
+    act(() => {
+      useFolderTabsStore.setState({ enabled: true, scope: 2 })
+    })
+    render(tree())
+    expect(header(1)).not.toHaveAttribute("aria-expanded")
+    expect(header(2)).toHaveAttribute("aria-current", "true")
+    // The folder on screen wears the selected-row tint, not only the ARIA.
+    const row = (folderId: number) => header(folderId).parentElement!
+    expect(row(2)).toHaveAttribute("data-scope-selected", "true")
+    expect(row(2).className).toContain("bg-sidebar-primary/8")
+    expect(row(1)).not.toHaveAttribute("data-scope-selected")
+    expect(row(1).className).not.toContain("bg-sidebar-primary/8")
+    act(() => {
+      fireEvent.click(header(1))
+    })
+    expect(useFolderTabsStore.getState().scope).toBe(1)
+    expect(header(1)).toHaveAttribute("aria-current", "true")
+    expect(row(1)).toHaveAttribute("data-scope-selected", "true")
+    expect(row(2)).not.toHaveAttribute("data-scope-selected")
+    // The row's own disclosure button sits right after the row button.
+    const toggle = () => header(1).nextElementSibling as HTMLElement
+    expect(toggle()).toHaveAttribute("aria-label", "Expand or collapse folder")
+    expect(disclosureButtons()).toHaveLength(2)
+    const before = toggle().getAttribute("aria-expanded")
+    expect(before === "true" || before === "false").toBe(true)
+    act(() => {
+      fireEvent.click(toggle())
+    })
+    expect(toggle()).toHaveAttribute(
+      "aria-expanded",
+      before === "true" ? "false" : "true"
+    )
+    expect(useFolderTabsStore.getState().scope).toBe(1)
   })
 })

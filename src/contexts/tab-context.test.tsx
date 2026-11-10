@@ -24,6 +24,10 @@ import {
   useTabStore,
   type OpenedDraftTarget,
 } from "@/stores/tab-store"
+import {
+  resetFolderTabsStore,
+  useFolderTabsStore,
+} from "@/stores/folder-tabs-store"
 import { leafIds } from "@/lib/tab-group-layout"
 import {
   buildNewConversationDraftStorageKey,
@@ -189,6 +193,7 @@ const defaultConversationsMock: DbConversationSummary[] = [
 // slices via `useAppWorkspaceStore.setState` (e.g. an empty root list for the
 // loaded-but-empty case).
 function seedWorkspaceStore() {
+  resetFolderTabsStore()
   resetAppWorkspaceStore()
   useAppWorkspaceStore.setState({
     conversations: defaultConversationsMock,
@@ -1798,7 +1803,9 @@ describe("TabProvider sub-session tabs", () => {
       latestContext?.openTab(1, 99, "codex", true)
     })
     await act(async () => {})
-    expect(getFolderConversationMock).toHaveBeenCalledWith(99)
+    // Only the summary is consumed, so the seed asks for the smallest window
+    // rather than transferring the child's full transcript.
+    expect(getFolderConversationMock).toHaveBeenCalledWith(99, { tailTurns: 1 })
     expect(
       latestContext?.tabs.find((tab) => tab.conversationId === 99)?.title
     ).toBe("Review the auth module")
@@ -2213,6 +2220,87 @@ describe("TabProvider tab groups", () => {
       store().reorderGroupTabs(g1, [g1Tabs[0]])
     })
     expect(store().rawTabs).toBe(before)
+  })
+
+  /**
+   * The unsplit strip's reorder, which has to take the same care its
+   * split-group sibling above already takes.
+   *
+   * `Reorder.Group` emits the order of the items it has measured since its own
+   * last render, filtered by REFERENCE against its current `values`. The filter
+   * can only remove, and the tab objects it holds are the ones the strip
+   * rendered with — so the list it hands back is a request to MOVE tabs, not a
+   * new tab set. Adopting it wholesale closed whichever tab was missing from it
+   * and rolled the rest back to whatever the strip last rendered.
+   */
+  describe("reorderTabs", () => {
+    it("keeps a tab the reorder callback left out", async () => {
+      await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(1, 3)])
+      const rendered = store().tabs
+
+      act(() => {
+        store().reorderTabs([rendered[2], rendered[1]])
+      })
+
+      // The omitted tab is still open — and still the one being looked at.
+      expect(store().rawTabs.map((t) => t.id)).toContain("conv-1-codex-1")
+      expect(store().activeTabId).toBe("conv-1-codex-1")
+      expect(store().rawTabs).toHaveLength(3)
+    })
+
+    it("does not roll a tab back to what the strip rendered with", async () => {
+      await renderWithTabs([tabItem(1, 1, true)])
+      act(() => {
+        store().openNewConversationTab(1, "/repo")
+      })
+      const draftId = store().rawTabs.find((t) => t.conversationId == null)!.id
+      // What the strip was holding when the drag began.
+      const rendered = store().tabs
+
+      // The draft's first message lands mid-drag: it binds to a real
+      // conversation, and its transcript now lives under a virtual runtime id.
+      act(() => {
+        store().bindConversationTab(draftId, 7, "codex", "sent", -42)
+      })
+      act(() => {
+        store().reorderTabs([rendered[1], rendered[0]])
+      })
+
+      expect(store().rawTabs.map((t) => t.id)).toEqual([
+        draftId,
+        "conv-1-codex-1",
+      ])
+      const moved = store().rawTabs.find((t) => t.id === draftId)!
+      expect(moved.conversationId).toBe(7)
+      expect(moved.runtimeConversationId).toBe(-42)
+    })
+
+    it("still moves the tab on a complete permutation", async () => {
+      await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(1, 3)])
+      const rendered = store().tabs
+
+      act(() => {
+        store().reorderTabs([rendered[1], rendered[2], rendered[0]])
+      })
+
+      expect(store().rawTabs.map((t) => t.id)).toEqual([
+        "conv-1-codex-2",
+        "conv-1-codex-3",
+        "conv-1-codex-1",
+      ])
+    })
+
+    it("refuses a list that names one tab twice", async () => {
+      await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
+      const rendered = store().tabs
+      const before = store().rawTabs
+
+      act(() => {
+        store().reorderTabs([rendered[1], rendered[1]])
+      })
+
+      expect(store().rawTabs).toBe(before)
+    })
   })
 
   it("per-group draft singleton: each group reuses its own draft", async () => {
@@ -2786,4 +2874,140 @@ describe("TabProvider tab groups", () => {
       expect(isReparentUnmount(store(), "conv-1-codex-1", home)).toBe(false)
     })
   })
+})
+
+describe("Folder-tabs preference hydration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    saveOpenedTabsMock.mockResolvedValue({
+      accepted: true,
+      version: 1,
+      tabs: [],
+    })
+    getFolderConversationMock.mockReset()
+    getFolderConversationMock.mockReturnValue(new Promise(() => {}))
+    subscribeMock.mockImplementation(() => Promise.resolve(() => {}))
+    onTransportReconnectMock.mockReturnValue(() => {})
+  })
+
+  it("waits for the restored active conversation before choosing the initial scope", async () => {
+    seedWorkspaceStore()
+    useAppWorkspaceStore.setState({ foldersHydrated: false })
+    setActiveFolderIdMock.mockImplementation((id: number | null) => {
+      useAppWorkspaceStore.setState({ activeFolderId: id })
+    })
+    localStorage.setItem("workspace:tabs-follow-folder:local", "true")
+    let resolveSnapshot!: (value: unknown) => void
+    listOpenedTabsMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSnapshot = resolve
+      })
+    )
+    renderTabs()
+    expect(useFolderTabsStore.getState().enabled).toBe(false)
+    await act(async () => {
+      resolveSnapshot({
+        version: 1,
+        items: [
+          {
+            folder_id: 2,
+            conversation_id: 21,
+            agent_type: "codex",
+            is_pinned: true,
+            is_active: true,
+            position: 0,
+          },
+        ],
+      })
+    })
+    expect(useFolderTabsStore.getState().enabled).toBe(false)
+    act(() => useAppWorkspaceStore.setState({ foldersHydrated: true }))
+    await waitFor(() =>
+      expect(useFolderTabsStore.getState().enabled).toBe(true)
+    )
+    expect(useFolderTabsStore.getState().scope).toBe(2)
+    expect(useTabStore.getState().activeTabId).toBe("conv-2-codex-21")
+    expect(useAppWorkspaceStore.getState().activeFolderId).toBe(2)
+    resetFolderTabsStore()
+    setActiveFolderIdMock.mockReset()
+  })
+
+  it("follows a switch made in another window, by what is stored when the event arrives", async () => {
+    seedWorkspaceStore()
+    setActiveFolderIdMock.mockImplementation((id: number | null) => {
+      useAppWorkspaceStore.setState({ activeFolderId: id })
+    })
+    listOpenedTabsMock.mockResolvedValue({
+      version: 1,
+      items: [
+        {
+          folder_id: 2,
+          conversation_id: 21,
+          agent_type: "codex",
+          is_pinned: true,
+          is_active: true,
+          position: 0,
+        },
+      ],
+    })
+    renderTabs()
+    await waitFor(() => expect(useTabStore.getState().tabsHydrated).toBe(true))
+    await act(async () => {})
+    expect(useAppWorkspaceStore.getState().activeFolderId).toBe(2)
+    const key = "workspace:tabs-follow-folder:local"
+    const otherWindowWrote = (newValue: string | null, eventKey = key) =>
+      act(() => {
+        window.dispatchEvent(
+          new StorageEvent("storage", { key: eventKey, newValue })
+        )
+      })
+    expect(useFolderTabsStore.getState().enabled).toBe(false)
+
+    localStorage.setItem(key, "true")
+    otherWindowWrote("true")
+    expect(useFolderTabsStore.getState().enabled).toBe(true)
+    // This window keeps its own folder.
+    expect(useFolderTabsStore.getState().scope).toBe(2)
+
+    // A queued event carrying an older value: what is stored now wins.
+    otherWindowWrote("false")
+    expect(useFolderTabsStore.getState().enabled).toBe(true)
+
+    // Someone else's key, and an unreadable store, change nothing.
+    localStorage.setItem(key, "false")
+    otherWindowWrote("x", "workspace:something-else")
+    expect(useFolderTabsStore.getState().enabled).toBe(true)
+    const unreadable = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new DOMException("denied", "SecurityError")
+      })
+    otherWindowWrote("false")
+    unreadable.mockRestore()
+    expect(useFolderTabsStore.getState().enabled).toBe(true)
+
+    otherWindowWrote("false")
+    expect(useFolderTabsStore.getState().enabled).toBe(false)
+    resetFolderTabsStore()
+    setActiveFolderIdMock.mockReset()
+  })
+})
+
+it("leaves an empty folder scope empty after the final tab closes", async () => {
+  seedWorkspaceStore()
+  listOpenedTabsMock.mockReturnValue(new Promise(() => {}))
+  renderTabs()
+  act(() => {
+    useTabStore.getState().openTab(1, 11, "codex", true)
+    useTabStore.setState({ tabsHydrated: true })
+    useFolderTabsStore.getState().setEnabled(true)
+    useFolderTabsStore.getState().activateScope(1)
+  })
+  await act(async () => {
+    useTabStore.getState().closeAllTabs()
+  })
+  expect(useTabStore.getState().rawTabs).toEqual([])
+  act(() => useFolderTabsStore.getState().activateScope(2))
+  expect(useTabStore.getState().rawTabs).toEqual([])
+  expect(useTabStore.getState().activeTabId).toBeNull()
 })

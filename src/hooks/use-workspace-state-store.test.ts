@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 import { getWorkspaceStateStore } from "@/hooks/use-workspace-state-store"
 import * as api from "@/lib/api"
 
@@ -18,9 +26,9 @@ vi.mock("@/lib/platform", () => ({
 }))
 
 const mockedApi = api as unknown as {
-  startWorkspaceStateStream: ReturnType<typeof vi.fn>
-  stopWorkspaceStateStream: ReturnType<typeof vi.fn>
-  getWorkspaceSnapshot: ReturnType<typeof vi.fn>
+  startWorkspaceStateStream: Mock
+  stopWorkspaceStateStream: Mock
+  getWorkspaceSnapshot: Mock
 }
 
 function fullSnapshot(rootPath: string, seq = 0) {

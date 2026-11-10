@@ -357,16 +357,94 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl crate::acp::browser_tools::BrowserToolAccess for Stub {
+        async fn list_tabs(&self) -> crate::acp::browser_tools::BrowserTabsOutcome {
+            Default::default()
+        }
+        async fn snapshot(
+            &self,
+            tab_id: &str,
+            _max_chars: Option<usize>,
+        ) -> crate::acp::browser_tools::BrowserSnapshotOutcome {
+            crate::acp::browser_tools::BrowserSnapshotOutcome::refused(
+                tab_id,
+                crate::acp::browser_tools::ERROR_UNAVAILABLE,
+                "stub",
+            )
+        }
+
+        async fn console(
+            &self,
+            tab_id: &str,
+            _query: crate::browser::console::ConsoleQuery,
+        ) -> crate::acp::browser_tools::BrowserConsoleOutcome {
+            crate::acp::browser_tools::BrowserConsoleOutcome::refused(
+                tab_id,
+                crate::acp::browser_tools::ERROR_UNAVAILABLE,
+                "stub",
+            )
+        }
+
+        async fn eval(
+            &self,
+            tab_id: &str,
+            _request: crate::browser::eval::EvalRequest,
+        ) -> crate::acp::browser_tools::BrowserEvalOutcome {
+            crate::acp::browser_tools::BrowserEvalOutcome::refused(
+                tab_id,
+                crate::acp::browser_tools::ERROR_UNAVAILABLE,
+                "stub",
+            )
+        }
+
+        async fn tab_op(
+            &self,
+            op: crate::acp::browser_tools::BrowserTabOp,
+        ) -> crate::acp::browser_tools::BrowserTabOutcome {
+            crate::acp::browser_tools::BrowserTabOutcome::refused(
+                op.tab_id(),
+                crate::acp::browser_tools::ERROR_UNAVAILABLE,
+                "stub",
+            )
+        }
+
+        async fn capture(
+            &self,
+            tab_id: &str,
+            _request: crate::browser::capture::CaptureRequest,
+        ) -> crate::acp::browser_tools::BrowserCaptureOutcome {
+            crate::acp::browser_tools::BrowserCaptureOutcome::refused(
+                tab_id,
+                crate::acp::browser_tools::ERROR_UNAVAILABLE,
+                "stub",
+            )
+        }
+
+        async fn act(
+            &self,
+            tab_id: &str,
+            _request: crate::browser::agent::ActionRequest,
+        ) -> crate::acp::browser_tools::BrowserActOutcome {
+            crate::acp::browser_tools::BrowserActOutcome::refused(
+                tab_id,
+                crate::acp::browser_tools::ERROR_UNAVAILABLE,
+                crate::acp::browser_tools::NO_BROWSER_NOTE,
+            )
+        }
+    }
+
     /// A temp directory short enough to bind a socket inside, whatever the
     /// ambient `$TMPDIR` happens to be.
     ///
     /// `tempfile::tempdir()` honours `$TMPDIR`, and these tests then add
     /// `/.tmpXXXXXX/codeg-delegation-*.sock` on top — about 38 bytes. That is
-    /// fine against the ~20-byte default and fatal against codeg's own
-    /// per-session `TMPDIR`, which is 72 bytes (`/var/folders/…/T/codeg-acp/
-    /// <pid>-<hex>`): the composed path reaches 110 and `sun_path` caps at 104
-    /// on macOS. The whole suite went red inside a codeg session and green
-    /// outside it, for reasons having nothing to do with the code under test.
+    /// fine against a stock temp directory and was fatal against the 72-byte
+    /// per-session `TMPDIR` codeg exported before #754 (`/var/folders/…/T/
+    /// codeg-acp/<pid>-<hex>`): the composed path reached 110 and `sun_path`
+    /// caps at 104 on macOS. The whole suite went red inside a codeg session
+    /// and green outside it, for reasons having nothing to do with the code
+    /// under test — and a hand-set `TMPDIR` can still do the same.
     ///
     /// Rooting in `/tmp` — the same move `scratch_dir`'s socket tests make —
     /// keeps the result near 40 bytes no matter what the environment says.
@@ -419,6 +497,9 @@ mod tests {
             Arc::new(Stub),
             Arc::new(Stub),
             Arc::new(Stub),
+            Arc::new(Stub),
+            Arc::new(crate::acp::computer_tools::NoComputerDesktop),
+            Arc::new(crate::acp::result_tool::NoResultTool),
         );
         DelegationService::new(listener, socket_path)
     }

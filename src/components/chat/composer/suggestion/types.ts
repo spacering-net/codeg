@@ -46,13 +46,18 @@ export interface MentionUiLabels {
  * can hit the file tree / conversations / git log / skills APIs. The optional
  * AbortSignal is aborted when a newer query supersedes this one.
  *
+ * `kinds` lists the tabs the panel is showing (the user can hide some). A group
+ * outside it is never displayed, so an implementation may skip loading its
+ * source and return it empty; omitted means every kind is wanted.
+ *
  * Phase 2 ships the panel against this interface; Phase 3 supplies the real
  * implementation (wired to the live data hooks) when the composer replaces the
  * textarea in message-input.
  */
 export type ReferenceSearch = (
   query: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  kinds?: readonly ReferenceKind[]
 ) => SuggestionGroup[] | Promise<SuggestionGroup[]>
 
 /** State the suggestion plugin pushes to React while the `@` panel is open. */

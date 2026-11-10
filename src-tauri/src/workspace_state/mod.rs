@@ -786,26 +786,14 @@ fn normalize_git_status_path(path: &str) -> String {
     normalized.trim_end_matches('/').to_string()
 }
 
+/// The path `git status` gives the file numstat counted: for a rename, its new
+/// side (see [`folders::numstat_rename_sides`]).
 fn normalize_numstat_path(path: &str) -> String {
     let trimmed = path.trim().replace('\\', "/");
-
-    if let (Some(open), Some(close)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if open < close {
-            let prefix = &trimmed[..open];
-            let suffix = &trimmed[close + 1..];
-            let inner = &trimmed[open + 1..close];
-            if let Some(idx) = inner.find(" => ") {
-                let right = &inner[idx + 4..];
-                return format!("{prefix}{right}{suffix}");
-            }
-        }
+    match folders::numstat_rename_sides(&trimmed) {
+        Some((_, new)) => new,
+        None => trimmed,
     }
-
-    if let Some(index) = trimmed.rfind(" => ") {
-        return trimmed[index + 4..].to_string();
-    }
-
-    trimmed
 }
 
 fn parse_numstat_value(raw: &str) -> i32 {
@@ -814,8 +802,12 @@ fn parse_numstat_value(raw: &str) -> i32 {
 
 async fn git_numstat_map(path: &str) -> HashMap<String, (i32, i32)> {
     async fn run_numstat(path: &str, args: &[&str]) -> Option<HashMap<String, (i32, i32)>> {
+        // Unquoted paths, as `folders::git_status` asks for: these keys are
+        // looked up by its paths, and by default git prints a non-ASCII one
+        // C-quoted and octal-escaped (`"docs/\351\234\200..."`).
         let output = crate::process::tokio_command("git")
             .arg("--no-optional-locks")
+            .args(["-c", "core.quotePath=false"])
             .args(args)
             .current_dir(path)
             .output()
@@ -1507,7 +1499,7 @@ pub async fn stop_workspace_state_stream_core(
         // between start and stop bookkeeping) must not underflow and wedge
         // the stream in permanent full-scan mode.
         if wants_tree_git {
-            let _ = entry.full_subscribers.fetch_update(
+            let _ = entry.full_subscribers.try_update(
                 Ordering::AcqRel,
                 Ordering::Acquire,
                 |count| count.checked_sub(1),
@@ -2227,5 +2219,139 @@ mod tests {
         // `.git/index` is git-metadata → drives a git-status refresh, exactly
         // like a normal repo's in-tree `.git/index`.
         assert!(is_git_metadata_rel_path(".git/index"));
+    }
+
+    /// Git with a fixed identity and no user config, like the work-task git
+    /// tests: the fixture must mean the same to this helper and to the code
+    /// under test.
+    fn git_run(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if args.first() == Some(&"init") {
+            git_run(dir, &["config", "core.autocrlf", "false"]);
+        }
+    }
+
+    #[test]
+    fn normalize_numstat_path_reads_the_new_side_of_a_rename() {
+        assert_eq!(normalize_numstat_path("src/main.rs"), "src/main.rs");
+        assert_eq!(normalize_numstat_path("old.rs => new.rs"), "new.rs");
+        assert_eq!(
+            normalize_numstat_path("src/{old => new}/main.rs"),
+            "src/new/main.rs"
+        );
+        assert_eq!(
+            normalize_numstat_path("src/{ => sub}/main.rs"),
+            "src/sub/main.rs"
+        );
+        // Moved up a directory: git leaves the new side empty.
+        assert_eq!(
+            normalize_numstat_path("src/{sub => }/main.rs"),
+            "src/main.rs"
+        );
+    }
+
+    /// The Git panel finds a file's counts under the path `git status` gave
+    /// it, so numstat has to spell that path the same way. By default git
+    /// prints a non-ASCII path C-quoted and octal-escaped, and such a file
+    /// showed no counts at all.
+    #[tokio::test]
+    async fn collect_git_snapshot_counts_a_non_ascii_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root.to_str().expect("utf-8 path");
+        git_run(root, &["init", "-q", "-b", "main"]);
+        // Git's default, set repo-local so the git the code under test runs
+        // reads it too: a developer's global `core.quotePath=false` must not
+        // hide the bug.
+        git_run(root, &["config", "core.quotePath", "true"]);
+        std::fs::create_dir(root.join("docs")).expect("mkdir");
+        std::fs::write(root.join("docs").join("需求.md"), "one\n").expect("write");
+        std::fs::write(root.join("plain.txt"), "one\n").expect("write");
+        git_run(root, &["add", "-A"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+
+        std::fs::write(root.join("docs").join("需求.md"), "one\ntwo\n").expect("write");
+        std::fs::write(root.join("plain.txt"), "one\ntwo\n").expect("write");
+
+        let entries = collect_git_snapshot(path).await.expect("git snapshot");
+        let modified = |file: &str| WorkspaceGitEntry {
+            path: file.to_string(),
+            status: "M".to_string(),
+            additions: 1,
+            deletions: 0,
+        };
+        assert_eq!(
+            entries,
+            vec![modified("docs/需求.md"), modified("plain.txt")]
+        );
+    }
+
+    /// A staged rename is counted under its new path, which `git status` and
+    /// numstat each write their own way: status quotes a side with a space in
+    /// it (`"d/old name.txt" -> "d/new name.txt"`), numstat factors the shared
+    /// part out into braces (`d/{old name.txt => new name.txt}`) and keeps both
+    /// slashes around a side a move up a directory empties
+    /// (`docs/{sub => }/moved.txt`), and by default both octal-escape a
+    /// non-ASCII name.
+    #[tokio::test]
+    async fn collect_git_snapshot_counts_a_staged_rename() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root.to_str().expect("utf-8 path");
+        git_run(root, &["init", "-q", "-b", "main"]);
+        // Git's defaults, repo-local so the git the code under test runs reads
+        // them too, whatever the developer's global config says.
+        git_run(root, &["config", "core.quotePath", "true"]);
+        git_run(root, &["config", "diff.renames", "true"]);
+        git_run(root, &["config", "status.renames", "true"]);
+        std::fs::create_dir_all(root.join("docs").join("sub")).expect("mkdir");
+        std::fs::create_dir(root.join("d")).expect("mkdir");
+        let five = "1\n2\n3\n4\n5\n";
+        std::fs::write(root.join("docs/sub/moved.txt"), five).expect("write");
+        std::fs::write(root.join("d/old name.txt"), five).expect("write");
+        std::fs::write(root.join("d/旧.txt"), five).expect("write");
+        git_run(root, &["add", "-A"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+
+        for (from, to) in [
+            ("docs/sub/moved.txt", "docs/moved.txt"),
+            ("d/old name.txt", "d/new name.txt"),
+            ("d/旧.txt", "d/新.txt"),
+        ] {
+            git_run(root, &["mv", from, to]);
+            std::fs::write(root.join(to), format!("{five}6\n")).expect("write");
+        }
+        git_run(root, &["add", "-A"]);
+
+        let entries = collect_git_snapshot(path).await.expect("git snapshot");
+        let renamed = |file: &str| WorkspaceGitEntry {
+            path: file.to_string(),
+            status: "R".to_string(),
+            additions: 1,
+            deletions: 0,
+        };
+        assert_eq!(
+            entries,
+            vec![
+                renamed("d/new name.txt"),
+                renamed("d/新.txt"),
+                renamed("docs/moved.txt"),
+            ]
+        );
     }
 }

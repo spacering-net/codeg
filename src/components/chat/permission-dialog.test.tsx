@@ -269,6 +269,64 @@ describe("PermissionDialog", () => {
     expect(pre?.textContent).toContain("world")
   })
 
+  it("frames a Claude Code sandbox network request by its host, not as raw JSON", () => {
+    // claude-agent-acp 0.98.0's request, recorded, with the tool name the
+    // connection store copies over from the live call it is about.
+    const permission: PendingPermission = {
+      request_id: "req-net",
+      tool_call: {
+        toolCallId: "344c0506-799d-474e-bc8a-3ad269fa228a",
+        title: "example.com",
+        rawInput: { host: "example.com" },
+        _meta: {
+          permission: { version: 1, title: "example.com" },
+          claudeCode: { toolName: "SandboxNetworkAccess" },
+        },
+        kind: "other",
+      },
+      options: [
+        { option_id: "allow-once", name: "Yes", kind: "allow_once" },
+        { option_id: "reject", name: "No", kind: "reject_once" },
+      ],
+    }
+    const { container } = renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={() => {}}
+        agentType="claude_code"
+      />
+    )
+    expect(
+      screen.getByText("Network request outside the sandbox")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Allow this connection?")).toBeInTheDocument()
+    expect(screen.getByText("Host")).toBeInTheDocument()
+    expect(screen.getByText("example.com")).toBeInTheDocument()
+    expect(screen.getByText("network")).toBeInTheDocument()
+    // Not the request's internals.
+    expect(container.querySelector("pre")).toBeNull()
+    expect(container.textContent).not.toContain("toolCallId")
+  })
+
+  it("keeps a host-only request from anything else on the JSON preview", () => {
+    const permission: PendingPermission = {
+      request_id: "req-host",
+      tool_call: {
+        toolCallId: "t1",
+        title: "ping",
+        rawInput: { host: "example.com" },
+      },
+      options: baseOptions,
+    }
+    const { container } = renderWithIntl(
+      <PermissionDialog permission={permission} onRespond={() => {}} />
+    )
+    expect(
+      screen.queryByText("Network request outside the sandbox")
+    ).not.toBeInTheDocument()
+    expect(container.querySelector("pre")?.textContent).toContain("example.com")
+  })
+
   it("renders the agent description from ACP content text instead of raw JSON", () => {
     // Kimi Code carries the request description in the ACP `content` array
     // (`{ type: "content", content: { type: "text", text } }`) and populates

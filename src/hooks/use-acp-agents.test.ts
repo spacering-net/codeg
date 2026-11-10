@@ -54,7 +54,6 @@ function makeAgent(agentType: AgentType, sortOrder: number): AcpAgentInfo {
     env: {},
     config_json: null,
     config_file_path: null,
-    opencode_auth_json: null,
     codex_auth_json: null,
     codex_config_toml: null,
     codex_model_catalog: null,

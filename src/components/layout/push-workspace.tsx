@@ -840,7 +840,8 @@ function PushCommitFilesTree({
         title={file.path}
       >
         <>
-          <span className="size-4 shrink-0" />
+          {/* Leading glyph == the status letter, in the same column as a
+              sibling folder's chevron (no spacer in front of it). */}
           <CommitFileInfo className="flex-1 min-w-0 gap-1.5">
             <CommitFileStatus status={mapFileStatus(file.status)}>
               {file.status}

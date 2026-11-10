@@ -30,8 +30,14 @@ interface AgentPlanOverlayProps {
   isStreaming?: boolean
 }
 
-function getLatestPlanEntries(message: LiveMessage | null): PlanEntryInfo[] {
-  if (!message) return []
+const NO_PLAN_ENTRIES: PlanEntryInfo[] = []
+
+/** The entries of the live reply's latest plan block; a shared empty array
+ *  when it has none, so a caller's memo sees no change. */
+export function getLatestPlanEntries(
+  message: LiveMessage | null
+): PlanEntryInfo[] {
+  if (!message) return NO_PLAN_ENTRIES
 
   for (let i = message.content.length - 1; i >= 0; i -= 1) {
     const block = message.content[i]
@@ -40,7 +46,7 @@ function getLatestPlanEntries(message: LiveMessage | null): PlanEntryInfo[] {
     }
   }
 
-  return []
+  return NO_PLAN_ENTRIES
 }
 
 function StatusIcon({
@@ -185,43 +191,67 @@ export const AgentPlanOverlay = memo(function AgentPlanOverlay({
           </Button>
         </div>
 
-        <div className="max-h-96 overflow-y-auto p-3 space-y-2">
-          {resolvedEntries.map((entry, index) => (
-            <div
-              key={`${entry.content}-${index}`}
-              className="rounded-lg border bg-transparent px-2.5 py-2"
-            >
-              <div className="flex items-start gap-2">
-                <StatusIcon status={entry.status} isStreaming={isStreaming} />
-                <p
-                  className={cn(
-                    "min-w-0 flex-1 text-sm leading-5 break-words [overflow-wrap:anywhere]",
-                    entry.status === "completed"
-                      ? "text-muted-foreground line-through"
-                      : "text-foreground"
-                  )}
-                >
-                  {entry.content}
-                </p>
-              </div>
-              <div className="mt-2 flex items-center gap-1.5 pl-5">
-                <Badge variant="outline" className="h-5 text-3xs uppercase">
-                  {t(getStatusKey(entry.status))}
-                </Badge>
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "h-5 text-3xs uppercase",
-                    getPriorityClassName(entry.priority)
-                  )}
-                >
-                  {t(getPriorityKey(entry.priority))}
-                </Badge>
-              </div>
-            </div>
-          ))}
-        </div>
+        <AgentPlanEntryList
+          entries={resolvedEntries}
+          isStreaming={isStreaming}
+          className="max-h-96 overflow-y-auto p-3"
+        />
       </div>
     </div>
   )
 })
+
+/**
+ * The plan's entries, one card each: status icon, text, status and priority.
+ * The body of the inline overlay's card.
+ */
+function AgentPlanEntryList({
+  entries,
+  isStreaming,
+  className,
+}: {
+  entries: readonly PlanEntryInfo[]
+  /** The agent is replying: an in-progress entry spins. */
+  isStreaming: boolean
+  className?: string
+}) {
+  const t = useTranslations("Folder.chat.agentPlanOverlay")
+  return (
+    <div className={cn("space-y-2", className)}>
+      {entries.map((entry, index) => (
+        <div
+          key={`${entry.content}-${index}`}
+          className="rounded-lg border bg-transparent px-2.5 py-2"
+        >
+          <div className="flex items-start gap-2">
+            <StatusIcon status={entry.status} isStreaming={isStreaming} />
+            <p
+              className={cn(
+                "min-w-0 flex-1 text-sm leading-5 break-words [overflow-wrap:anywhere]",
+                entry.status === "completed"
+                  ? "text-muted-foreground line-through"
+                  : "text-foreground"
+              )}
+            >
+              {entry.content}
+            </p>
+          </div>
+          <div className="mt-2 flex items-center gap-1.5 ps-5">
+            <Badge variant="outline" className="h-5 text-3xs uppercase">
+              {t(getStatusKey(entry.status))}
+            </Badge>
+            <Badge
+              variant="outline"
+              className={cn(
+                "h-5 text-3xs uppercase",
+                getPriorityClassName(entry.priority)
+              )}
+            >
+              {t(getPriorityKey(entry.priority))}
+            </Badge>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}

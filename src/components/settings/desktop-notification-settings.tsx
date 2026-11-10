@@ -5,9 +5,11 @@
  * interrupt, whether its body may carry agent output, and which events raise
  * one at all.
  *
- * Shaped like its neighbour `notification-sound-settings.tsx` (same section
- * grammar, same localStorage-backed write-through with no Save button) because
- * the two are read as one pair: "how does Codeg get my attention".
+ * Shaped like its neighbours `window-attention-settings.tsx` and
+ * `notification-sound-settings.tsx` (same section grammar, same
+ * localStorage-backed write-through with no Save button) because the three are
+ * read as one group: "how does Codeg get my attention". The event list is
+ * shared with the taskbar section, labels included (`notify-event-labels.ts`).
  *
  * The permission card is where they diverge, and it is the reason this section
  * exists. Permission is only a real, three-valued thing in a browser; on the
@@ -32,6 +34,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { useNotifyEventLabel } from "@/components/settings/notify-event-labels"
 import { SettingCard, SettingRow } from "@/components/shared/setting-card"
 import { SettingsSection } from "@/components/shared/settings-section"
 import { Button } from "@/components/ui/button"
@@ -49,7 +52,6 @@ import {
   NOTIFY_WHEN_IDS,
   saveDesktopNotificationPrefs,
   useDesktopNotificationPrefs,
-  type NotifyEventId,
   type NotifyWhen,
 } from "@/lib/desktop-notification-prefs"
 import {
@@ -65,23 +67,6 @@ import { cn } from "@/lib/utils"
 
 // Literal message keys per id — next-intl only resolves literal keys, so the
 // lookup tables keep the rows data-driven without losing key checking.
-//
-// The first four reuse the chat-channel Events tab's names, exactly as the
-// sound panel does, so one trigger reads identically everywhere it is
-// configurable. The last two have no channel counterpart (they are app-level,
-// not ACP events) and carry their own labels.
-const CHANNEL_EVENT_LABEL_KEYS = {
-  turn_complete: "turnComplete",
-  permission_request: "permissionRequest",
-  question_request: "questionRequest",
-  error: "error",
-} as const
-
-const LOCAL_EVENT_LABEL_KEYS = {
-  background_task: "eventBackgroundTask",
-  work_task: "eventWorkTask",
-} as const
-
 const WHEN_LABEL_KEYS = {
   always: "whenAlways",
   unfocused: "whenUnfocused",
@@ -107,7 +92,7 @@ const PERMISSION_HINT_KEYS = {
 
 export function DesktopNotificationSettingsSection() {
   const t = useTranslations("DesktopNotificationSettings")
-  const tEvents = useTranslations("ChatChannelSettings.events")
+  const eventLabel = useNotifyEventLabel()
 
   const prefs = useDesktopNotificationPrefs()
 
@@ -196,17 +181,6 @@ export function DesktopNotificationSettingsSection() {
       })
     }
   }, [t])
-
-  const eventLabel = (eventId: NotifyEventId): string =>
-    eventId in CHANNEL_EVENT_LABEL_KEYS
-      ? tEvents(
-          CHANNEL_EVENT_LABEL_KEYS[
-            eventId as keyof typeof CHANNEL_EVENT_LABEL_KEYS
-          ]
-        )
-      : t(
-          LOCAL_EVENT_LABEL_KEYS[eventId as keyof typeof LOCAL_EVENT_LABEL_KEYS]
-        )
 
   return (
     // The master switch is the section's heading row: with notifications off

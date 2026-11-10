@@ -184,6 +184,122 @@ describe("InstantCollapsible", () => {
     expect(screen.getByTestId("body")).toBeInTheDocument()
   })
 
+  it("holds the exit's last keyframe until the content unmounts", () => {
+    mockExitAnimation()
+
+    render(
+      <Collapsible defaultOpen>
+        <CollapsibleTrigger>toggle</CollapsibleTrigger>
+        <CollapsibleContent>
+          <div data-testid="body" />
+        </CollapsibleContent>
+      </Collapsible>
+    )
+
+    const content = screen.getByTestId("body").parentElement as HTMLElement
+    expect(content.style.animationFillMode).toBe("")
+
+    // `animate-out` ends with fill-mode none, which would snap the content
+    // back to full opacity for a frame before it unmounts.
+    fireEvent.click(screen.getByRole("button", { name: "toggle" }))
+    expect(content.style.animationFillMode).toBe("forwards")
+
+    // The unmount lands after the event, so the hold must still be in place
+    // when the event has gone all the way through.
+    const seen: Array<{ connected: boolean; fillMode: string }> = []
+    const record = () =>
+      seen.push({
+        connected: content.isConnected,
+        fillMode: content.style.animationFillMode,
+      })
+    document.addEventListener("animationend", record)
+    try {
+      fireEvent.animationEnd(content)
+    } finally {
+      document.removeEventListener("animationend", record)
+    }
+    expect(seen).toEqual([{ connected: true, fillMode: "forwards" }])
+    expect(screen.queryByTestId("body")).not.toBeInTheDocument()
+  })
+
+  it("unmounts at once when the exit animation is cancelled", () => {
+    mockExitAnimation()
+
+    render(
+      <Collapsible defaultOpen>
+        <CollapsibleTrigger>toggle</CollapsibleTrigger>
+        <CollapsibleContent>
+          <div data-testid="body" />
+        </CollapsibleContent>
+      </Collapsible>
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "toggle" }))
+    const content = screen.getByTestId("body").parentElement as HTMLElement
+
+    // A cancelled animation leaves no keyframe to hold, so the content must
+    // be gone before the event finishes dispatching, not a task later.
+    const seen: boolean[] = []
+    const record = () => seen.push(content.isConnected)
+    document.addEventListener("animationcancel", record)
+    try {
+      fireEvent(content, new Event("animationcancel", { bubbles: true }))
+    } finally {
+      document.removeEventListener("animationcancel", record)
+    }
+    expect(seen).toEqual([false])
+    expect(screen.queryByTestId("body")).not.toBeInTheDocument()
+  })
+
+  it("hands the content its own fill mode back when reopened mid-exit", () => {
+    mockExitAnimation()
+
+    render(
+      <Collapsible defaultOpen>
+        <CollapsibleTrigger>toggle</CollapsibleTrigger>
+        <CollapsibleContent style={{ animationFillMode: "backwards" }}>
+          <div data-testid="body" />
+        </CollapsibleContent>
+      </Collapsible>
+    )
+
+    const trigger = screen.getByRole("button", { name: "toggle" })
+    const content = screen.getByTestId("body").parentElement as HTMLElement
+
+    fireEvent.click(trigger)
+    expect(content.style.animationFillMode).toBe("forwards")
+
+    // React leaves the unchanged style prop alone, so the enter animation
+    // only gets "backwards" back because the exit restores it.
+    fireEvent.click(trigger)
+    expect(content).toHaveAttribute("data-state", "open")
+    expect(content.style.animationFillMode).toBe("backwards")
+  })
+
+  it("still delivers the exit's animationend to the content's onAnimationEnd", () => {
+    mockExitAnimation()
+    const onAnimationEnd = vi.fn()
+
+    render(
+      <Collapsible defaultOpen>
+        <CollapsibleTrigger>toggle</CollapsibleTrigger>
+        <CollapsibleContent onAnimationEnd={onAnimationEnd}>
+          <div data-testid="body" />
+        </CollapsibleContent>
+      </Collapsible>
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "toggle" }))
+    const content = screen.getByTestId("body").parentElement as HTMLElement
+
+    // The unmount must not land inside the native listener: React dispatches
+    // the same event to onAnimationEnd afterwards, from the root, and finds
+    // nothing there once the node is gone.
+    fireEvent.animationEnd(content)
+    expect(onAnimationEnd).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId("body")).not.toBeInTheDocument()
+  })
+
   it("ignores bubbling child animation ends while exiting", () => {
     mockExitAnimation()
 

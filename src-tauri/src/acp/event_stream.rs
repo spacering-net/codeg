@@ -177,6 +177,17 @@ impl RecentEventsBuffer {
         )
     }
 
+    /// Every buffered event with seq greater than `since_seq`, gap or not:
+    /// for a consumer that has its own way to cover what is older (a backstop
+    /// scan) and wants what is left rather than nothing.
+    pub fn retained_after(&self, since_seq: u64) -> Vec<Arc<EventEnvelope>> {
+        self.events
+            .iter()
+            .filter(|e| e.seq > since_seq)
+            .map(|e| e.envelope.clone())
+            .collect()
+    }
+
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.events.len()
@@ -199,7 +210,10 @@ impl RecentEventsBuffer {
 /// because this feeds the per-event size cap: an escape-heavy payload (tool
 /// output full of quotes/newlines, say) serializes much larger than its raw byte
 /// length and must still be recognized as oversized.
-fn json_str_len(s: &str) -> usize {
+///
+/// Shared with `SessionState::snapshot_tool_calls`, which spends a byte budget
+/// over the same payloads and has to size them the same way.
+pub(super) fn json_str_len(s: &str) -> usize {
     let mut extra = 0usize;
     for b in s.bytes() {
         match b {
@@ -243,7 +257,7 @@ fn number_size(n: &serde_json::Number) -> usize {
 /// adds: brackets/braces, the `:` after each key, and the `,` BETWEEN elements.
 /// Computed without serializing and never undercounting, so it stays a safe
 /// proxy for the per-event size cap even for dense arrays/objects.
-fn json_value_size(value: &serde_json::Value) -> usize {
+pub(super) fn json_value_size(value: &serde_json::Value) -> usize {
     match value {
         serde_json::Value::Null => 4,
         serde_json::Value::Bool(b) => {
@@ -271,11 +285,11 @@ fn json_value_size(value: &serde_json::Value) -> usize {
     }
 }
 
-fn opt_str_size(s: &Option<String>) -> usize {
+pub(super) fn opt_str_size(s: &Option<String>) -> usize {
     s.as_ref().map_or(0, |v| json_str_len(v))
 }
 
-fn opt_json_size(v: &Option<serde_json::Value>) -> usize {
+pub(super) fn opt_json_size(v: &Option<serde_json::Value>) -> usize {
     v.as_ref().map_or(0, json_value_size)
 }
 
@@ -290,20 +304,27 @@ fn opt_json_size(v: &Option<serde_json::Value>) -> usize {
 /// allocation — far cheaper than the full-envelope `serde_json::to_vec` this
 /// replaced — and image events are infrequent (not on the per-token path).
 fn images_size(images: &Option<Vec<ToolCallImageInfo>>) -> usize {
-    images.as_ref().map_or(0, |imgs| {
-        // `PER_IMAGE_STRUCT` conservatively bounds each object's keys/braces and
-        // the trailing comma; `+ 2` is the array brackets.
-        const PER_IMAGE_STRUCT: usize = 48;
-        2 + imgs
-            .iter()
-            .map(|img| {
-                PER_IMAGE_STRUCT
-                    + json_str_len(&img.data)
-                    + json_str_len(&img.mime_type)
-                    + opt_str_size(&img.uri)
-            })
-            .sum::<usize>()
-    })
+    images
+        .as_ref()
+        .map_or(0, |imgs| images_slice_size(imgs.as_slice()))
+}
+
+/// [`images_size`] over a plain slice. Split out so
+/// `SessionState::snapshot_tool_calls`, whose `ToolCallState.images` is a bare
+/// `Vec`, sizes an image list exactly the way the per-event cap does.
+pub(super) fn images_slice_size(images: &[ToolCallImageInfo]) -> usize {
+    // `PER_IMAGE_STRUCT` conservatively bounds each object's keys/braces and
+    // the trailing comma; `+ 2` is the array brackets.
+    const PER_IMAGE_STRUCT: usize = 48;
+    2 + images
+        .iter()
+        .map(|img| {
+            PER_IMAGE_STRUCT
+                + json_str_len(&img.data)
+                + json_str_len(&img.mime_type)
+                + opt_str_size(&img.uri)
+        })
+        .sum::<usize>()
 }
 
 /// Byte size of a single user-message block, including its `{"type":..,..}`
@@ -442,8 +463,8 @@ fn estimate_envelope_size(envelope: &EventEnvelope) -> usize {
                     .iter()
                     .map(|s| {
                         // Keys + braces + commas for every field (task_id,
-                        // status, summary, tool_use_id, result) plus the
-                        // element comma — generously fixed so `estimate >=
+                        // status, summary, tool_use_id, result, interim) plus
+                        // the element comma — generously fixed so `estimate >=
                         // serialized` holds for every present/absent optional
                         // combination.
                         128 + json_str_len(&s.task_id)
@@ -482,6 +503,8 @@ fn content_block_size(block: &crate::models::message::ContentBlock) -> usize {
     match block {
         // `{"type":"text","text":…}` / `{"type":"thinking","text":…}`
         CB::Text { text } | CB::Thinking { text } => 32 + json_str_len(text),
+        // `{"type":"turn_error","message":…}`
+        CB::TurnError { message } => 40 + json_str_len(message),
         CB::Image {
             data,
             mime_type,
@@ -517,9 +540,12 @@ fn content_block_size(block: &crate::models::message::ContentBlock) -> usize {
             is_error: _,
             agent_stats,
             images,
+            exit_code,
         } => {
             128 + opt_str_size(tool_use_id)
                 + opt_str_size(output_preview)
+                // `,"exit_code":` plus up to 20 digits and a sign.
+                + exit_code.map_or(0, |_| 40)
                 + agent_stats.as_ref().map_or(0, agent_stats_size)
                 + images
                     .iter()
@@ -534,11 +560,15 @@ fn content_block_size(block: &crate::models::message::ContentBlock) -> usize {
 }
 
 /// Structural size for a `ToolResult`'s `agent_stats` object: a dozen optional
-/// numeric scalars (each ≤ ~40 B serialized with its key) plus the nested
-/// `tool_calls` array — 640 generously covers skeleton + every scalar.
+/// numeric scalars (each ≤ ~40 B serialized with its key), the optional
+/// strings, and the two nested arrays — `tool_calls` and `timeline`, the
+/// child's whole thinking/text activity, which is why every entry is counted.
+/// 640 generously covers skeleton + every scalar + every key.
 fn agent_stats_size(stats: &crate::models::message::AgentExecutionStats) -> usize {
     640 + opt_str_size(&stats.agent_type)
         + opt_str_size(&stats.status)
+        + opt_str_size(&stats.recovered_result)
+        + opt_str_size(&stats.child_session_id)
         + stats
             .tool_calls
             .iter()
@@ -547,6 +577,13 @@ fn agent_stats_size(stats: &crate::models::message::AgentExecutionStats) -> usiz
                     + opt_str_size(&c.input_preview)
                     + opt_str_size(&c.output_preview)
             })
+            .sum::<usize>()
+        // `{"type":…,"text":…}` or `{"type":…,"childIndex":<≤20 digits>}`
+        // plus the element comma: 64 covers keys, braces and the index.
+        + stats
+            .timeline
+            .iter()
+            .map(|e| 64 + json_str_len(&e.entry_type) + opt_str_size(&e.text))
             .sum::<usize>()
 }
 
@@ -945,8 +982,8 @@ mod tests {
         // nested tool calls, result images, plus settled entries — and assert
         // the structural estimate still covers the exact serialized length.
         use crate::models::message::{
-            AgentExecutionStats, AgentToolCall, ContentBlock, ImageData, MessageTurn, TurnRole,
-            TurnUsage,
+            AgentExecutionStats, AgentTimelineEntry, AgentToolCall, ContentBlock, ImageData,
+            MessageTurn, TurnRole, TurnUsage,
         };
 
         let image = ImageData {
@@ -963,6 +1000,9 @@ mod tests {
                 },
                 ContentBlock::Thinking {
                     text: "思考\n".repeat(100),
+                },
+                ContentBlock::TurnError {
+                    message: "stream \"disconnected\"\n".repeat(50),
                 },
                 ContentBlock::Image {
                     data: "AAAA".repeat(32),
@@ -1003,9 +1043,35 @@ mod tests {
                             output_preview: Some("line\n".repeat(40)),
                             is_error: false,
                         }],
+                        // The child's whole thinking/text activity rides
+                        // here (up to 16,384 characters per entry, any number
+                        // of entries), and so can the recovered report: both
+                        // must be counted, escape-aware like every other
+                        // string.
+                        timeline: (0..40)
+                            .map(|i| match i % 3 {
+                                0 => AgentTimelineEntry {
+                                    entry_type: "thinking".into(),
+                                    text: Some("思考 \"why\"\n\t".repeat(60)),
+                                    child_index: None,
+                                },
+                                1 => AgentTimelineEntry {
+                                    entry_type: "text".into(),
+                                    text: Some("report \\ line\n".repeat(60)),
+                                    child_index: None,
+                                },
+                                _ => AgentTimelineEntry {
+                                    entry_type: "tool_call".into(),
+                                    text: None,
+                                    child_index: Some(usize::MAX),
+                                },
+                            })
+                            .collect(),
+                        recovered_result: Some("The \"full\" report\n\t".repeat(400)),
                         child_session_id: Some("019fe6bf-0bcb-70c2-a02d-e5c006dfc32a".into()),
                     }),
                     images: vec![image],
+                    exit_code: Some(i64::MIN),
                 },
             ],
             timestamp: chrono::Utc::now(),
@@ -1036,6 +1102,9 @@ mod tests {
                         // Escape-heavy + large, to exercise the estimate's
                         // coverage of the (previously omitted) `result` field.
                         result: Some("Build \"log\"\n\t".repeat(2048)),
+                        // Serialized only when set: the fixed per-entry
+                        // overhead must cover its key too.
+                        interim: true,
                     },
                     crate::acp::types::BackgroundSettledInfo {
                         task_id: "bipkee1pw".into(),
@@ -1043,6 +1112,7 @@ mod tests {
                         summary: None,
                         tool_use_id: None,
                         result: None,
+                        interim: false,
                     },
                 ],
                 watermark: u64::MAX,
@@ -1063,6 +1133,59 @@ mod tests {
             },
         });
         assert_ge_serialized(&env);
+    }
+
+    #[test]
+    fn agent_stats_estimate_counts_each_variable_field_on_its_own() {
+        // The test above has fixed budgets to spare; here each variable-size
+        // field of `agent_stats` stands alone at a size no budget absorbs, so
+        // leaving any one of them out of the estimate fails by name.
+        use crate::models::message::{AgentExecutionStats, AgentTimelineEntry};
+
+        let big = "a \"quoted\" \\ line\n\t".repeat(200);
+        let entry = |entry_type: &str, text: Option<String>| AgentTimelineEntry {
+            entry_type: entry_type.into(),
+            text,
+            child_index: None,
+        };
+        let cases = [
+            (
+                "timeline text",
+                AgentExecutionStats {
+                    timeline: vec![entry("thinking", Some(big.clone()))],
+                    ..Default::default()
+                },
+            ),
+            (
+                "timeline type",
+                AgentExecutionStats {
+                    timeline: vec![entry(&big, None)],
+                    ..Default::default()
+                },
+            ),
+            (
+                "recovered_result",
+                AgentExecutionStats {
+                    recovered_result: Some(big.clone()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "child_session_id",
+                AgentExecutionStats {
+                    child_session_id: Some(big.clone()),
+                    ..Default::default()
+                },
+            ),
+        ];
+        let undercounted: Vec<&str> = cases
+            .iter()
+            .filter(|(_, stats)| {
+                agent_stats_size(stats) < serde_json::to_string(stats).unwrap().len()
+            })
+            .map(|(field, _)| *field)
+            .collect();
+        assert!(undercounted.is_empty(), "undercounted: {undercounted:?}");
     }
 
     #[test]

@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest"
+import { render } from "@testing-library/react"
+import { NextIntlClientProvider } from "next-intl"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { extractLiveEditStats } from "./live-turn-stats"
+import enMessages from "@/i18n/messages/en.json"
+import { extractLiveEditStats, LiveTurnStats } from "./live-turn-stats"
 import type {
   LiveContentBlock,
   LiveMessage,
@@ -101,5 +104,39 @@ describe("extractLiveEditStats", () => {
     const added = toolBlock(writeInput("p\nq", "z.ts"))
     const after = extractLiveEditStats(msg([shared, added]))
     expect(after).toEqual({ files: 2, additions: 5, deletions: 0 })
+  })
+})
+
+describe("LiveTurnStats", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // That the agent is at work, and at what — thinking, running a step,
+  // writing — is the transcript's to say: its header reads "Working", the step
+  // shimmers and a ring turns at the foot of its rail. The row above the
+  // composer keeps only its figures: no word, and no pulsing agent mark.
+  it("opens on the time, with no mark or word for what the agent is doing", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(65_000)
+    for (const content of [
+      [{ type: "thinking", text: "Checking the logs" } as LiveContentBlock],
+      [textBlock("Writing the fix")],
+    ]) {
+      const view = render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <LiveTurnStats message={msg(content)} />
+        </NextIntlClientProvider>
+      )
+      const row = view.container.firstElementChild!.firstElementChild!
+      expect(row.children).toHaveLength(1)
+      expect(
+        row.firstElementChild!.querySelector("svg.lucide-timer")
+      ).toBeTruthy()
+      expect(row.querySelectorAll("svg")).toHaveLength(1)
+      expect(row.querySelector(".animate-pulse")).toBeNull()
+      expect(row.textContent).toBe("1m 5s")
+      view.unmount()
+    }
   })
 })

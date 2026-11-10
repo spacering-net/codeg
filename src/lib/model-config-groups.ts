@@ -13,12 +13,18 @@ export interface ModelOptionGroup {
   options: SessionConfigSelectOptionInfo[]
 }
 
+// The id every agent codeg ships publishes its model selector under. ACP
+// reserves none, so this is a convention rather than a guarantee — the backend
+// pairs it with the `model` category for the same reason
+// (`connection.rs::is_model_config_option`).
+export const MODEL_CONFIG_OPTION_ID = "model"
+
 // Only the model picker groups by `/` prefix — never the mode picker or any
 // other agent config option. The backend ships the model option with
 // `id === "model"` and no category; Codex's approval-preset option uses
 // `category === "mode"`. Match on either signal so a future relabel stays safe.
 export function isModelConfigOption(option: SessionConfigOptionInfo): boolean {
-  return option.id === "model" || option.category === "model"
+  return option.id === MODEL_CONFIG_OPTION_ID || option.category === "model"
 }
 
 // The namespace before the FIRST "/", or `null` when there is no usable prefix

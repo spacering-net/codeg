@@ -4,13 +4,13 @@ import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it, vi } from "vitest"
 
 /**
- * Codex unified-exec session cards (`wait` / `write_stdin`).
+ * Codex unified-exec session rows (`wait` / `write_stdin`).
  *
  * Both address a background shell started by an earlier `exec_command`, by a
- * session id — no command of their own. That left `wait` titled "wait" and
- * `write_stdin` (which aliased to "bash") titled "bash", over a dump of
+ * session id — no command of their own. That once left `wait` titled "wait"
+ * and `write_stdin` (which aliased to "bash") titled "bash", over a dump of
  * `cell_id / yield_time_ms / max_tokens`. The history parser now resolves the
- * id back to the command as `session_command`; these tests pin the card that
+ * id back to the command as `session_command`; these tests pin the row that
  * reads it. See `src/lib/shell-session-tool.ts`.
  */
 
@@ -35,14 +35,23 @@ import { ContentPartsRenderer } from "./content-parts-renderer"
 import enMessages from "@/i18n/messages/en.json"
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
 
+/** Render, and open the row when it has a panel to open. */
 function renderParts(parts: AdaptedContentPart[]) {
   const result = render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <ContentPartsRenderer parts={parts} role="assistant" />
     </NextIntlClientProvider>
   )
-  fireEvent.click(screen.getAllByRole("button")[0])
+  const [header] = screen.queryAllByRole("button")
+  if (header) fireEvent.click(header)
   return result
+}
+
+/** The row reads `<verb> <target>`: the verb, then what it acted on. */
+function expectRow(verb: string, target: string) {
+  const row = screen.getByText(target).closest("li")
+  expect(row).not.toBeNull()
+  expect(row!.textContent).toContain(`${verb}${target}`)
 }
 
 function sessionPart(
@@ -87,9 +96,7 @@ describe("codex shell-session cards", () => {
       ),
     ])
 
-    expect(
-      screen.getByText("Wait cargo test --features test-utils")
-    ).toBeInTheDocument()
+    expectRow("Wait", "cargo test --features test-utils")
     expect(container.textContent).toContain("test result: ok. 1962 passed")
     // The command names the card; reprinting it as a shell prompt would read
     // as a re-run of the command rather than a poll on its session.
@@ -103,7 +110,7 @@ describe("codex shell-session cards", () => {
       sessionPart("wait", { cell_id: "7106", yield_time_ms: 30000 }, "still…"),
     ])
 
-    expect(screen.getByText("Wait cell 7106")).toBeInTheDocument()
+    expectRow("Wait", "session 7106")
   })
 
   it("renders a terminating wait as a terminate, not a wait", () => {
@@ -115,7 +122,7 @@ describe("codex shell-session cards", () => {
       ),
     ])
 
-    expect(screen.getByText("Terminate pnpm dev")).toBeInTheDocument()
+    expectRow("Stop", "pnpm dev")
   })
 
   it("treats an empty write_stdin as the poll it is", () => {
@@ -127,7 +134,7 @@ describe("codex shell-session cards", () => {
       ),
     ])
 
-    expect(screen.getByText("Wait pnpm test")).toBeInTheDocument()
+    expectRow("Wait", "pnpm test")
     expect(container.textContent).toContain("RUN  v2.1.9")
     // Regression: `write_stdin` aliased to "bash", whose title derivation found
     // no command in `{session_id, chars}` and fell back to the raw tool name.
@@ -143,13 +150,13 @@ describe("codex shell-session cards", () => {
       }),
     ])
 
-    expect(screen.getByText("Stdin ^C")).toBeInTheDocument()
+    expectRow("Send keys", "^C")
   })
 
   it("names the session a command left running next to its title", () => {
-    // One session is polled by any number of `wait` cards, and this echo is
+    // One session is polled by any number of `wait` rows, and this echo is
     // the shape the parser cannot resolve — so both ends have to show the id
-    // for them to be matched up: "Wait cell 17983" against this card.
+    // for them to be matched up: "Wait session 17983" against this row.
     renderParts([
       execPart(
         "npx --yes playwright@1.62.1 install chromium",

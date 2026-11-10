@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  browserTabBackendId,
   buildFileTabId,
   parseFileTabId,
   type FileTabIdParts,
@@ -98,5 +99,22 @@ describe("file-tab-id build↔parse round-trip", () => {
     })
     // 2 fixed prefix segments + folderId + 2 encoded tokens = 5 segments.
     expect(id.split(":")).toHaveLength(5)
+  })
+})
+
+describe("browser tab ids", () => {
+  it("round-trips the backend tab id, including adopted popups", () => {
+    for (const id of ["b7e2c1d0-1a2b-4c3d-9e8f-0a1b2c3d4e5f", "abc-p1", "t1"]) {
+      const tabId = buildFileTabId({ kind: "browser", id })
+      expect(tabId).toBe(`browser:${id}`)
+      expect(parseFileTabId(tabId)).toEqual({ kind: "browser", id })
+      expect(browserTabBackendId(tabId)).toBe(id)
+    }
+  })
+
+  it("rejects malformed browser ids and non-browser tabs", () => {
+    expect(parseFileTabId("browser:")).toBeNull()
+    expect(parseFileTabId("browser:a:b")).toBeNull()
+    expect(browserTabBackendId("file:%2Frepo%2Fa.ts")).toBeNull()
   })
 })

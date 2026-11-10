@@ -8,6 +8,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleX,
+  Clock,
   FolderX,
   GitMerge,
   Loader2,
@@ -18,7 +19,11 @@ import { Button } from "@/components/ui/button"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import { formatScheduleFull, formatScheduleShort } from "@/lib/task-schedule"
 import { cn } from "@/lib/utils"
-import { isMergeQueued, worktreeWasRemoved } from "./task-acceptance"
+import {
+  isDeferred,
+  isMergeQueued,
+  worktreeWasRemoved,
+} from "./task-acceptance"
 import { buildTaskActions, type TaskActionItem } from "./task-actions"
 import type { TaskActionHandlers } from "./task-actions"
 import type { WorkTask } from "@/lib/types"
@@ -66,6 +71,11 @@ export function statusLabelKey(status: WorkTask["status"]): StatusLabelKey {
  * attention statuses an outlined amber pill, `done` a bare green check,
  * `failed` a tinted red pill, the rest a muted pill.
  *
+ * A task put aside to handle later reads as exactly that — a muted pill with a
+ * clock, whatever its review or failure underneath (the tooltip still names
+ * it): it waits under Done, where an amber "to review" would claim it needs
+ * the user right now, which is the very thing they just said it does not.
+ *
  * The label truncates inside whatever width it is given (with the full text on
  * `title`): the list view puts the chip in a fixed status column, and locales
  * whose "awaiting input" runs to twenty characters must not blow that column
@@ -80,14 +90,21 @@ export function StatusChip({
 }) {
   const t = useTranslations("Tasks")
   // An interrupted failure (restart) reads differently from an agent failure.
-  const label =
+  const statusLabel =
     task.status === "failed" && task.failure_reason === "interrupted"
       ? t("statusInterrupted")
       : t(statusLabelKey(task.status))
+  const deferred = isDeferred(task)
+  const label = deferred ? t("statusDeferred") : statusLabel
 
   let tone: string
   let icon: React.ReactNode = null
-  switch (task.status) {
+  switch (deferred ? "deferred" : task.status) {
+    case "deferred":
+      tone =
+        "gap-1 rounded-full bg-muted px-2 py-1 text-[0.625rem] text-muted-foreground"
+      icon = <Clock className="size-2.5 shrink-0" aria-hidden="true" />
+      break
     case "queued":
     case "preparing":
     case "running":
@@ -129,7 +146,8 @@ export function StatusChip({
         tone,
         className
       )}
-      title={label}
+      // A deferred chip keeps what it is deferring in its tooltip.
+      title={deferred ? `${label} · ${statusLabel}` : label}
     >
       {icon}
       <span className="truncate">{label}</span>
@@ -145,10 +163,12 @@ export function StatusChip({
  * `failed` reads red rather than the attention column's amber, and `canceled`
  * stays neutral instead of inheriting Done's green (a green bar on a row that
  * says "已取消" is a lie the board gets away with only because its column
- * heading says "Done" once, at the top).
+ * heading says "Done" once, at the top). A task put aside to handle later is
+ * neutral for the same reason — filed under Done, finished it is not.
  */
 export function statusAccent(task: WorkTask): string {
   if (task.archived_at != null) return "bg-muted-foreground/20"
+  if (isDeferred(task)) return "bg-muted-foreground/35"
   switch (task.status) {
     case "todo":
     case "queued":
@@ -204,6 +224,10 @@ export function liveNote(
   if (task.compacting) return t("compactingNote")
   return task.latest_progress ?? null
 }
+
+/** Item links a card made from several issues shows before folding the rest
+ *  into a count — the same four its title names. */
+const SOURCE_LINKS_SHOWN = 4
 
 interface TaskCardProps extends TaskActionHandlers {
   task: WorkTask
@@ -403,6 +427,10 @@ export function TaskCard({
   // `task.source_meta?.url` does not survive into the callback.
   const source = task.source_meta
   const sourceUrl = source?.url ?? null
+  // A task made from several issues links each of them — the first few, then
+  // a count — rather than only the one its snapshot leads with.
+  const combinedItems =
+    source?.items != null && source.items.length > 1 ? source.items : null
 
   const { primary, secondaries } = buildTaskActions(task, t, handlers)
 
@@ -492,7 +520,29 @@ export function TaskCard({
           meta line's own mt-1.5) keeps it reading as part of that block.
           inline-block, not block, so the hit area hugs the text — a
           full-width anchor would swallow clicks meant for the card. */}
-      {sourceUrl && source ? (
+      {combinedItems && source ? (
+        <div className="mt-1 flex min-w-0 items-baseline gap-x-1 font-mono text-[0.625rem] text-primary/80">
+          {combinedItems.slice(0, SOURCE_LINKS_SHOWN).map((item) => (
+            <BrowserLink
+              key={item.number}
+              href={item.url}
+              onClick={(e) => e.stopPropagation()}
+              className="shrink-0 hover:underline"
+              title={`${item.url} · ${item.title}`}
+            >
+              #{item.number}
+            </BrowserLink>
+          ))}
+          {combinedItems.length > SOURCE_LINKS_SHOWN ? (
+            <span className="shrink-0">
+              +{combinedItems.length - SOURCE_LINKS_SHOWN}
+            </span>
+          ) : null}
+          <span className="min-w-0 truncate" title={source.owner_repo}>
+            · {source.owner_repo}
+          </span>
+        </div>
+      ) : sourceUrl && source ? (
         <div className="mt-1 min-w-0">
           <BrowserLink
             href={sourceUrl}
@@ -538,11 +588,17 @@ export function TaskCard({
           it by the same 12px the buttons clear the card's left, right and
           bottom edges, so the footer sits on one even inset. */}
       {primary || secondaries.length > 0 ? (
-        <div className="mt-3 flex items-center gap-1.5 border-t border-border/60 pt-3">
+        <div className="mt-3 flex items-center gap-1 border-t border-border/60 pt-3">
           {primary ? (
+            // The one thing in the row that may give way: a failed card carries
+            // four round secondaries, and on the narrowest board a long
+            // locale's "retry" would push them out of the card. The label
+            // truncates instead (spelled out whole on hover).
             <Button
               type="button"
               size="xs"
+              className="min-w-0 shrink"
+              title={primary.hint ?? primary.label}
               onClick={(e) => {
                 // The card itself opens the detail sheet — keep actions local.
                 e.stopPropagation()
@@ -550,18 +606,23 @@ export function TaskCard({
               }}
             >
               <primary.icon className="size-3" aria-hidden="true" />
-              {primary.label}
+              <span className="truncate">{primary.label}</span>
             </Button>
           ) : null}
-          <div className="flex-1" />
           {/* Secondaries are icon-only and round: they are one-per-status at
               most, so a "…" menu just hid them behind an extra click. The
               session viewer always sorts last, anchoring the corner. They
               fade in on hover (opacity only — the row keeps its height, so
-              nothing reflows) and on keyboard focus. */}
-          {secondaries.map((item) => (
-            <CardIconAction key={item.label} item={item} />
-          ))}
+              nothing reflows) and on keyboard focus. One cluster pushed to the
+              end, spaced like the list row's buttons: every pixel it does not
+              take is left to the primary's label. */}
+          {secondaries.length > 0 ? (
+            <div className="ms-auto flex shrink-0 items-center gap-1">
+              {secondaries.map((item) => (
+                <CardIconAction key={item.label} item={item} />
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -575,7 +636,7 @@ function CardIconAction({ item }: { item: TaskActionItem }) {
       size="icon-xs"
       variant="outline"
       className="rounded-full opacity-0 transition-opacity focus-visible:opacity-100 group-focus-within/card:opacity-100 group-hover/card:opacity-100"
-      title={item.label}
+      title={item.hint ?? item.label}
       aria-label={item.label}
       onClick={(e) => {
         // The card itself opens the detail sheet — keep actions local.

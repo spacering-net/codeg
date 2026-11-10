@@ -39,6 +39,8 @@ interface ChatInputProps {
   onConfigOptionChange?: (configId: string, valueId: string) => void
   agentType?: AgentType | null
   availableCommands?: AvailableCommandInfo[] | null
+  /** Pass-through: see `MessageInput.promptSuggestion`. */
+  promptSuggestion?: string | null
   attachmentTabId?: string | null
   /** Pass-through: see `MessageInput`. */
   folderPickerOverride?: ConversationFolderPickerOverride
@@ -118,6 +120,7 @@ export const ChatInput = memo(function ChatInput({
   onConfigOptionChange,
   agentType,
   availableCommands,
+  promptSuggestion,
   attachmentTabId,
   folderPickerOverride,
   draftStorageKey,
@@ -221,6 +224,7 @@ export const ChatInput = memo(function ChatInput({
         onConfigOptionChange={onConfigOptionChange}
         agentType={agentType}
         availableCommands={availableCommands}
+        promptSuggestion={promptSuggestion}
         commandsLoading={commandsLoading}
         attachmentTabId={attachmentTabId}
         folderPickerOverride={folderPickerOverride}
@@ -248,7 +252,11 @@ export const ChatInput = memo(function ChatInput({
               ? t("agentResponding", { agent: agentName ?? "Agent" })
               : t("sendMessage")
         }
-        className={cn(tall ? "min-h-30" : "min-h-24", "max-h-60")}
+        // The floor goes through `tall`, not through a `min-h-*` here: the box
+        // and its editable area carry two halves of the same number, and only
+        // MessageInput knows the action row that divides them.
+        tall={tall}
+        className="max-h-60"
       />
     </div>
   )

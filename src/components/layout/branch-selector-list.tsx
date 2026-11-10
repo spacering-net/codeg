@@ -178,7 +178,7 @@ interface ActionBubble {
 // `overrides`/`defaultCollapsedGroups` split below); rows toggle either.
 // Clicking a leaf opens a right-side action bubble — a plain DOM element inside
 // this single Popover layer, never a nested Radix layer (that silently drops
-// selection on WKWebView; see session-selectors-panel.tsx).
+// selection on WKWebView; see session-settings-picker.tsx).
 export function BranchSelectorList({
   operations,
   worktreeNodes,

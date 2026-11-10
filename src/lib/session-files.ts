@@ -749,8 +749,118 @@ function extractUserMessage(turn: MessageTurn): string {
   return "User message"
 }
 
+/** One file written by one of a turn's tool calls, before it joins a group. */
+interface TurnFileChange {
+  /** The group-independent part of `FileChangeStat.id`. */
+  idPrefix: string
+  path: string
+  additions: number
+  deletions: number
+  diff: string | null
+}
+
+/**
+ * Per-turn-object memo of `turnFileChanges`. Parsing a tool call's input and
+ * building its diff is the expensive part of grouping, and the message
+ * navigator regroups the whole conversation (history above the loaded window
+ * included) on every streaming update while it is open. Keyed by identity,
+ * which is sound because a turn is never edited in place: every update
+ * (metadata backfill, background-task settlement, a refetch) replaces the
+ * turn object, and the streaming turn is rebuilt per batch.
+ */
+const turnFileChangesCache = new WeakMap<MessageTurn, TurnFileChange[]>()
+
+function turnFileChanges(turn: MessageTurn): TurnFileChange[] {
+  const cached = turnFileChangesCache.get(turn)
+  if (cached) return cached
+
+  const changes: TurnFileChange[] = []
+  for (const block of turn.blocks) {
+    if (block.type !== "tool_use") continue
+
+    const normalized = normalizeToolName(block.tool_name)
+    if (!WRITE_OPS.has(normalized)) continue
+
+    const filePaths = extractFilePaths(block.input_preview)
+    if (filePaths.length === 0) continue
+
+    for (const [fileIndex, filePath] of filePaths.entries()) {
+      const normalizedPath = normalizePath(filePath)
+      const diff = computeLineDiff(
+        normalized,
+        block.input_preview,
+        normalizedPath
+      )
+      const toolOutput = findToolResultOutput(turn.blocks, block.tool_use_id)
+      const diffChunk = buildDiffChunk(
+        normalized,
+        block.input_preview,
+        normalizedPath,
+        toolOutput
+      )
+
+      changes.push({
+        idPrefix: `${turn.id}:${block.tool_use_id ?? "tool"}:${fileIndex}`,
+        path: normalizedPath,
+        additions: diff?.additions ?? 0,
+        deletions: diff?.deletions ?? 0,
+        diff: diffChunk?.trim() ? diffChunk.trim() : null,
+      })
+    }
+  }
+  turnFileChangesCache.set(turn, changes)
+  return changes
+}
+
+/**
+ * Parses the file changes of `turns` into `turnFileChanges`' cache ahead of a
+ * grouping, a slice of about `sliceMs` at a time with the main thread let go
+ * in between: the history above a long conversation's loaded window (the
+ * message navigator's outline) can hold thousands of edits, and parsing them
+ * where the navigator groups them — in a render — freezes the page for as
+ * long. `done` runs once every turn is parsed; at once when the first slice
+ * gets through them all.
+ */
+export function warmTurnFileChanges(
+  turns: readonly MessageTurn[],
+  done: () => void,
+  sliceMs = 8
+): void {
+  let index = 0
+  const slice = () => {
+    const until = performance.now() + sliceMs
+    while (index < turns.length) {
+      const turn = turns[index++]
+      if (turn.role === "assistant") {
+        try {
+          turnFileChanges(turn)
+        } catch {
+          // Left to the grouping, which meets it where it always has.
+        }
+      }
+      if (index < turns.length && performance.now() >= until) {
+        setTimeout(slice, 0)
+        return
+      }
+    }
+    done()
+  }
+  slice()
+}
+
+/**
+ * Group the files each user message led to: one group per user turn, holding
+ * the edit/write/apply_patch changes of the assistant turns that follow it.
+ *
+ * The message navigator also runs this over the backend's outline of the
+ * history above the loaded window (`nav_outline_turns` in
+ * `src-tauri/src/commands/turn_window.rs`), which keeps only what this reads.
+ * Reading more of a turn here means keeping more of it there; the shared
+ * vector in `src-tauri/tests/fixtures/nav_outline_vector.json` fails both
+ * sides' tests until they agree again.
+ */
 export function extractSessionFilesGrouped(
-  turns: MessageTurn[],
+  turns: readonly MessageTurn[],
   opts: { includeEmpty?: boolean } = {}
 ): UserMessageGroup[] {
   const { includeEmpty = false } = opts
@@ -782,38 +892,14 @@ export function extractSessionFilesGrouped(
 
     if (turn.role !== "assistant") continue
 
-    for (const block of turn.blocks) {
-      if (block.type !== "tool_use") continue
-
-      const normalized = normalizeToolName(block.tool_name)
-      if (!WRITE_OPS.has(normalized)) continue
-
-      const filePaths = extractFilePaths(block.input_preview)
-      if (filePaths.length === 0) continue
-
-      for (const [fileIndex, filePath] of filePaths.entries()) {
-        const normalizedPath = normalizePath(filePath)
-        const diff = computeLineDiff(
-          normalized,
-          block.input_preview,
-          normalizedPath
-        )
-        const toolOutput = findToolResultOutput(turn.blocks, block.tool_use_id)
-        const diffChunk = buildDiffChunk(
-          normalized,
-          block.input_preview,
-          normalizedPath,
-          toolOutput
-        )
-
-        currentFiles.push({
-          id: `${turn.id}:${block.tool_use_id ?? "tool"}:${fileIndex}:${currentFiles.length}`,
-          path: normalizedPath,
-          additions: diff?.additions ?? 0,
-          deletions: diff?.deletions ?? 0,
-          diff: diffChunk?.trim() ? diffChunk.trim() : null,
-        })
-      }
+    for (const change of turnFileChanges(turn)) {
+      currentFiles.push({
+        id: `${change.idPrefix}:${currentFiles.length}`,
+        path: change.path,
+        additions: change.additions,
+        deletions: change.deletions,
+        diff: change.diff,
+      })
     }
   }
 

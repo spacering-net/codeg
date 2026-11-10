@@ -632,6 +632,31 @@ fn redact_token(msg: String, token: &str) -> String {
     }
 }
 
+/// Byte offset of the first case-insensitive `at_bot` in `text`, or `None`.
+///
+/// Searches `text` itself, so the offset it returns is a real byte offset into
+/// `text`. Searching a `to_lowercase()` copy instead is what this used to do,
+/// and it is unsound: lowercasing is not length preserving, so one character
+/// before the mention silently shifts every later offset. `İ` (U+0130, two
+/// bytes) lowercases to two code points (three bytes), the Kelvin sign `K`
+/// (three bytes) lowercases to `k` (one byte), and `ẞ` (three bytes) lowercases
+/// to `ß` (two). Slicing `text` at an offset found that way then lands in the
+/// middle of a character, or past the end, and panics.
+///
+/// `eq_ignore_ascii_case` is the whole comparison because a Telegram bot
+/// username is ASCII by definition (letters, digits and underscores, ending in
+/// `bot`), so there is no non-ASCII folding to do on the needle.
+///
+/// `str::get` rather than indexing: it answers `None` for an end offset that is
+/// out of range or not on a character boundary, which is exactly the case that
+/// used to panic.
+fn find_bot_mention(text: &str, at_bot: &str) -> Option<usize> {
+    text.char_indices().map(|(i, _)| i).find(|&i| {
+        text.get(i..i + at_bot.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(at_bot))
+    })
+}
+
 /// Strip `@bot_username` from text (case-insensitive).
 /// Handles Telegram convention: `/command@botname args` → `/command args`
 fn strip_bot_mention(text: &str, bot_username: &str) -> String {
@@ -639,15 +664,16 @@ fn strip_bot_mention(text: &str, bot_username: &str) -> String {
         return text.to_string();
     }
     let at_bot = format!("@{}", bot_username);
-    let text_lower = text.to_lowercase();
-    let at_bot_lower = at_bot.to_lowercase();
-    if let Some(pos) = text_lower.find(&at_bot_lower) {
-        let mut result = String::with_capacity(text.len());
-        result.push_str(&text[..pos]);
-        result.push_str(&text[pos + at_bot.len()..]);
-        result.trim().to_string()
-    } else {
-        text.to_string()
+    match find_bot_mention(text, &at_bot) {
+        // `find_bot_mention` only reports an offset whose end is a character
+        // boundary, so both slices below are in range and aligned.
+        Some(pos) => {
+            let mut result = String::with_capacity(text.len());
+            result.push_str(&text[..pos]);
+            result.push_str(&text[pos + at_bot.len()..]);
+            result.trim().to_string()
+        }
+        None => text.to_string(),
     }
 }
 
@@ -728,7 +754,10 @@ fn telegram_should_process_text_message(
     }
 
     let at_bot = format!("@{}", bot_username);
-    text.to_lowercase().contains(&at_bot.to_lowercase())
+    // Same matcher `strip_bot_mention` uses, so a mention this accepts is one
+    // that will actually be stripped, and neither allocates a lowercased copy
+    // of every group message on the long-poll path.
+    find_bot_mention(text, &at_bot).is_some()
 }
 
 fn json_scalar_to_string(value: &serde_json::Value) -> Option<String> {
@@ -964,6 +993,60 @@ mod tests {
             "codeg_bot",
             false
         ));
+    }
+
+    #[test]
+    fn strip_bot_mention_removes_the_mention_in_either_case() {
+        assert_eq!(
+            strip_bot_mention("/task@codeg_bot build", "codeg_bot"),
+            "/task build"
+        );
+        assert_eq!(
+            strip_bot_mention("/task@CodeG_Bot build", "codeg_bot"),
+            "/task build"
+        );
+        assert_eq!(strip_bot_mention("/task build", "codeg_bot"), "/task build");
+        assert_eq!(strip_bot_mention("/task@codeg_bot", ""), "/task@codeg_bot");
+    }
+
+    /// The long-poll loop runs unattended, and any member of a bound group
+    /// chooses the text it parses. Finding the mention in a `to_lowercase()`
+    /// copy and then slicing the original panicked on every case below, because
+    /// lowercasing is not length preserving: `İ` grows by a byte, `K` shrinks
+    /// by two, `ẞ` shrinks by one. The offsets then land mid character or past
+    /// the end of the string.
+    #[test]
+    fn strip_bot_mention_survives_text_whose_lowercase_is_a_different_length() {
+        // capital I with dot above, 2 bytes -> 3
+        assert_eq!(
+            strip_bot_mention("\u{130}@codeg_bot hi", "codeg_bot"),
+            "\u{130} hi"
+        );
+        // Kelvin sign, 3 bytes -> 1
+        assert_eq!(
+            strip_bot_mention("\u{212A}@codeg_bot hi", "codeg_bot"),
+            "\u{212A} hi"
+        );
+        // capital sharp s, 3 bytes -> 2
+        assert_eq!(
+            strip_bot_mention("\u{1E9E}@codeg_bot hi", "codeg_bot"),
+            "\u{1E9E} hi"
+        );
+        // Enough drift to run the old offset off the end of the string.
+        assert_eq!(
+            strip_bot_mention("\u{130}\u{130}@codeg_bot", "codeg_bot"),
+            "\u{130}\u{130}"
+        );
+        assert_eq!(
+            strip_bot_mention("\u{212A}\u{212A}@codeg_bot x", "codeg_bot"),
+            "\u{212A}\u{212A} x"
+        );
+        // A mention whose tail is a wide character is not a mention, and
+        // deciding that must not slice through the character.
+        assert_eq!(
+            strip_bot_mention("@codeg_bo\u{65E5}", "codeg_bot"),
+            "@codeg_bo\u{65E5}"
+        );
     }
 
     #[test]

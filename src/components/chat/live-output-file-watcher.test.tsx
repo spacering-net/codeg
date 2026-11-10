@@ -41,7 +41,10 @@ vi.mock("@/contexts/workspace-context", () => ({
 
 import { LiveOutputFileWatcher } from "./live-output-file-watcher"
 import type { AsyncTaskRecord, FileEditContent } from "@/lib/types"
-import type { FileWorkspaceTab } from "@/contexts/workspace-context"
+import type {
+  FileLikeWorkspaceTab,
+  FileWorkspaceTab,
+} from "@/contexts/workspace-context"
 
 const LOG_PATH = "/private/tmp/claude-501/t1.output"
 const POLL = 2000
@@ -60,7 +63,9 @@ function liveTask(overrides: Partial<AsyncTaskRecord> = {}): AsyncTaskRecord {
   }
 }
 
-function fileTab(overrides: Partial<FileWorkspaceTab> = {}): FileWorkspaceTab {
+function fileTab(
+  overrides: Partial<FileLikeWorkspaceTab> = {}
+): FileWorkspaceTab {
   return {
     id: `file:${LOG_PATH}`,
     kind: "file",

@@ -12,7 +12,7 @@ use crate::models::{
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     merge_context_window_stats, relocate_orphaned_tool_results, structurize_read_tool_output,
-    title_from_user_text, truncate_str, AgentParser, ParseError,
+    title_from_user_text, truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 /// Caps mirroring the Grok parser: bound a single tool output / input preview
@@ -25,9 +25,14 @@ const CURSOR_TOOL_INPUT_CAP: usize = 8_000;
 /// The CLI's chat store (`chats/`) and `cli-config.json` live under this path;
 /// the user-level `mcp.json` does NOT (the CLI hardcodes `~/.cursor/mcp.json`).
 pub(crate) fn resolve_cursor_config_dir() -> PathBuf {
+    resolve_cursor_config_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The config home of the Cursor CLI launched with `env`.
+pub(crate) fn resolve_cursor_config_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_cursor_config_from(
-        std::env::var_os("CURSOR_CONFIG_DIR"),
-        std::env::var_os("XDG_CONFIG_HOME"),
+        env.var_os("CURSOR_CONFIG_DIR"),
+        env.var_os("XDG_CONFIG_HOME"),
         dirs::home_dir(),
     )
 }
@@ -99,7 +104,13 @@ pub struct CursorParser {
 
 impl CursorParser {
     pub fn new() -> Self {
-        let config_dir = resolve_cursor_config_dir();
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Cursor CLI launched with `env`. The turn-timing
+    /// journal is codeg's own and does not move with it.
+    pub fn for_env(env: &AgentEnv) -> Self {
+        let config_dir = resolve_cursor_config_dir_for_env(env);
         Self {
             chats_dir: config_dir.join("chats"),
             acp_sessions_dir: config_dir.join("acp-sessions"),
@@ -1041,7 +1052,12 @@ fn build_turns(
             agent_message_id: None,
             });
             let tool_id = format!("cursor-shell-{i}");
-            let (preview, exit_code) = output.unwrap_or((None, 0));
+            // proto3 leaves a zero exit code off the wire, so a present result
+            // without field 3 exited 0; no result at all is unknown.
+            let (preview, exit_code) = match output {
+                Some((preview, code)) => (preview, Some(i64::from(code))),
+                None => (None, None),
+            };
             if store_clock {
                 store_clocked.insert(turns.len());
             }
@@ -1061,9 +1077,10 @@ fn build_turns(
                     ContentBlock::ToolResult {
                         tool_use_id: Some(tool_id),
                         output_preview: preview,
-                        is_error: exit_code != 0,
+                        is_error: exit_code.is_some_and(|code| code != 0),
                         agent_stats: None,
                         images: Vec::new(),
+                        exit_code,
                     },
                 ],
                 timestamp: ts,
@@ -1119,6 +1136,47 @@ fn build_turns(
 /// SUFFIX whose stale tail hash-collides with the store's newest turn. Both
 /// are documented in `turn_timings`' module docs; the latter is pinned by
 /// `accepted_residual_missing_tail_lines_can_misattribute_span`.
+/// The hashes a stored user turn's text may have been journaled under.
+///
+/// The connection hashes the prompt's own text blocks BEFORE it appends
+/// codeg's internal frames (the `@agent` / `@assistant` routing frames, the
+/// assistant brief), while Cursor stores the prompt it received: the user's
+/// text, then each frame, joined by whatever its ACP server puts between
+/// blocks. So the user's text is everything before the first frame, less one
+/// joiner — the very string seen between two frames when there are several,
+/// otherwise each of the usual ones in turn. Text without a frame keeps its
+/// single exact hash.
+fn user_prompt_hashes(text: &str) -> Vec<String> {
+    use crate::acp::agent_mentions::internal_frame_spans;
+    use crate::turn_timings::prompt_hash;
+    let spans = internal_frame_spans(text);
+    let Some(&(first_start, first_end)) = spans.first() else {
+        return vec![prompt_hash(text)];
+    };
+    let prefix = &text[..first_start];
+    let mut joiners: Vec<&str> = Vec::new();
+    if let Some(&(second_start, _)) = spans.get(1) {
+        joiners.push(&text[first_end..second_start]);
+    }
+    joiners.extend(["\n\n", "\r\n", "\n", " "]);
+    let mut candidates: Vec<&str> = vec![prefix];
+    candidates.extend(
+        joiners
+            .iter()
+            .filter(|j| !j.is_empty())
+            .filter_map(|j| prefix.strip_suffix(*j)),
+    );
+    candidates.push(prefix.trim_end());
+    let mut hashes: Vec<String> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let hash = prompt_hash(candidate);
+        if !hashes.contains(&hash) {
+            hashes.push(hash);
+        }
+    }
+    hashes
+}
+
 fn apply_turn_timing_journal(
     turns: &mut [MessageTurn],
     journal: &[crate::turn_timings::TurnTiming],
@@ -1168,7 +1226,7 @@ fn apply_turn_timing_journal(
     if journal.len() > user_indices.len() {
         return;
     }
-    let user_hash = |turns: &[MessageTurn], user_idx: usize| -> String {
+    let user_hash = |turns: &[MessageTurn], user_idx: usize| -> Vec<String> {
         let text: String = turns[user_idx]
             .blocks
             .iter()
@@ -1177,16 +1235,15 @@ fn apply_turn_timing_journal(
                 _ => None,
             })
             .collect();
-        crate::turn_timings::prompt_hash(&text)
+        user_prompt_hashes(&text)
     };
     let mut j = journal.len();
     for (pos, &user_idx) in user_indices.iter().enumerate().rev() {
         if j == 0 {
             break;
         }
-        let turn_sha = user_hash(turns, user_idx);
         let entry = &journal[j - 1];
-        if turn_sha != entry.prompt_sha {
+        if !user_hash(turns, user_idx).contains(&entry.prompt_sha) {
             break;
         }
         // Same-hash-run equality guard (see the doc comment). Runs are counted
@@ -1201,7 +1258,7 @@ fn apply_turn_timing_journal(
         let store_run = user_indices[..=pos]
             .iter()
             .rev()
-            .take_while(|&&u| user_hash(turns, u) == entry.prompt_sha)
+            .take_while(|&&u| user_hash(turns, u).contains(&entry.prompt_sha))
             .count();
         if (journal_run > 1 || store_run > 1) && journal_run != store_run {
             break;
@@ -1315,7 +1372,13 @@ fn decode_step(
 }
 
 /// `agent.v1.ToolCall` oneof field number → tool name, for every variant the
-/// 2026.07.16 CLI models. Undecoded variants still render a named card.
+/// 2026.11.05-86047df CLI models, plus the ones earlier builds stored and
+/// later ones dropped (`update_pr_code_tour` = 50, which the 2026.07.16 CLI
+/// modeled, and the `pi_*` tools 61–67, which 2026.10.22-27dcf5f removed), so
+/// older transcripts keep their cards. Undecoded variants still render a named
+/// card; a number missing here drops the call from the history altogether,
+/// although the live session showed it. 86047df adds `manage_access` (95) and
+/// `execute` (1000, a call that runs model-written `code`).
 fn tool_name_for_field(no: u32) -> Option<&'static str> {
     Some(match no {
         1 => "shell",
@@ -1376,6 +1439,30 @@ fn tool_name_for_field(no: u32) -> Option<&'static str> {
         67 => "pi_ls",
         68 => "connect_scm",
         69 => "search_conversations",
+        70 => "create_goal",
+        71 => "update_goal",
+        73 => "get_agent_status",
+        74 => "send_to_agent",
+        75 => "read_agent_transcript",
+        76 => "create_agent",
+        77 => "stop_agent",
+        79 => "write_canvas",
+        80 => "read_canvas",
+        81 => "generate_video",
+        82 => "x_search",
+        83 => "get_origin_pr_code_tour",
+        84 => "update_origin_pr_code_tour",
+        85 => "list_tracked_tasks",
+        86 => "create_tracked_tasks",
+        87 => "update_tracked_tasks",
+        88 => "delete_tracked_tasks",
+        89 => "update_tracked_task_statuses",
+        90 => "create_project",
+        91 => "update_tracked_task_tags",
+        93 => "stop_project_updates",
+        94 => "start_project_updates",
+        95 => "manage_access",
+        1000 => "execute",
         _ => return None,
     })
 }
@@ -1385,6 +1472,8 @@ struct DecodedTool {
     input: Option<Value>,
     output: Option<String>,
     is_error: bool,
+    /// A shell call's exit code, when its result carried one.
+    exit_code: Option<i64>,
 }
 
 /// Decode one `agent.v1.ToolCall` into a ToolUse + ToolResult block pair.
@@ -1429,6 +1518,7 @@ fn decode_tool_call(
         is_error: tool.is_error,
         agent_stats: None,
         images: Vec::new(),
+        exit_code: tool.exit_code,
     });
 }
 
@@ -1448,6 +1538,7 @@ fn decode_tool_variant(
         input: None,
         output: None,
         is_error: false,
+        exit_code: None,
     };
 
     match field_no {
@@ -1485,6 +1576,7 @@ fn decode_tool_variant(
                                 .unwrap_or(0);
                             tool.output = out;
                             tool.is_error = no == 2 || exit_code != 0;
+                            tool.exit_code = Some(i64::from(exit_code));
                             break;
                         }
                         3 => {
@@ -2152,13 +2244,19 @@ mod tests {
                     tool_use_id: Some(id),
                     output_preview,
                     is_error,
+                    exit_code,
                     ..
-                } if id == "tc-shell-1" => Some((output_preview.clone(), *is_error)),
+                } if id == "tc-shell-1" => Some((output_preview.clone(), *is_error, *exit_code)),
                 _ => None,
             })
             .expect("shell result present");
         assert_eq!(shell_result.0.as_deref(), Some("build ok"));
         assert!(!shell_result.1);
+        assert_eq!(
+            shell_result.2,
+            Some(0),
+            "a shell result carries its exit code"
+        );
 
         // edit tool: diff is surfaced
         let edit_result = assistant
@@ -2830,6 +2928,81 @@ mod tests {
             detail.turns[0].timestamp.timestamp_millis(),
             1_784_000_000_000
         );
+    }
+
+    /// A routed or briefed prompt reaches Cursor with codeg's internal frames
+    /// appended after the user's text, while the connection journaled the hash
+    /// of the user's text alone. The pairing must see through the frames —
+    /// whatever Cursor put between the prompt's blocks — or every such turn
+    /// loses its clock.
+    #[test]
+    fn a_turn_carrying_internal_frames_still_pairs_with_its_journal_line() {
+        use crate::acp::agent_mentions::{
+            append_agent_routes, append_assistant_routes, render_assistant_brief,
+        };
+        use crate::acp::types::PromptInputBlock;
+
+        let visible = "ask [@Codex](codeg://agent/codex) and [@Reviewer](codeg://assistant/3) ";
+        let mut prompt = vec![PromptInputBlock::Text {
+            text: visible.into(),
+        }];
+        append_agent_routes(&mut prompt, true);
+        append_assistant_routes(&mut prompt, true);
+        prompt.push(PromptInputBlock::Text {
+            text: render_assistant_brief("Reviewer", "Cite line numbers.").unwrap(),
+        });
+        let parts: Vec<String> = prompt
+            .iter()
+            .map(|b| match b {
+                PromptInputBlock::Text { text } => text.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(parts.len(), 4, "the fixture must carry every frame kind");
+
+        for joiner in ["", "\n", "\n\n", " "] {
+            let tmp = tempfile::tempdir().unwrap();
+            let session_dir = tmp.path().join("acp-sessions").join("acp-frames");
+            std::fs::create_dir_all(&session_dir).unwrap();
+            let mut store = StoreBuilder::create(&session_dir.join("store.db"));
+            let turn = put_text_only_turn(&mut store, &parts.join(joiner), "done");
+            let mut state = Vec::new();
+            field_bytes(8, &turn, &mut state);
+            let root_id = store.put_blob(&state);
+            store.put_meta(&serde_json::json!({
+                "agentId": "acp-frames",
+                "latestRootBlobId": hex_encode(&root_id),
+                "createdAt": 1_784_000_000_000_u64,
+            }));
+            crate::turn_timings::append_turn_timing_in(
+                &tmp.path().join("turn-timings"),
+                crate::turn_timings::CURSOR_JOURNAL_AGENT,
+                "acp-frames",
+                &crate::turn_timings::TurnTiming {
+                    v: crate::turn_timings::TURN_TIMING_SCHEMA_VERSION,
+                    ord: 1,
+                    conn: "conn-1".into(),
+                    // What the connection hashes: the user's own text blocks.
+                    prompt_sha: crate::turn_timings::prompt_hash(visible),
+                    started_at_ms: 1_784_000_100_000,
+                    ended_at_ms: 1_784_000_104_000,
+                },
+            );
+
+            let parser = crate::parsers::sanitized(CursorParser::with_base_dir(
+                tmp.path().join("chats"),
+            ));
+            let detail = parser.get_conversation("acp-frames").unwrap();
+            assert_eq!(
+                detail.turns[1].duration_ms,
+                Some(4_000),
+                "joiner {joiner:?} must still pair"
+            );
+            let ContentBlock::Text { text } = &detail.turns[0].blocks[0] else {
+                panic!("user text");
+            };
+            assert_eq!(text, visible.trim_end(), "the frames are gone from the bubble");
+        }
     }
 
     /// Builds one `[user text → shell tool (f59/f60 stamps) → assistant
@@ -3713,5 +3886,90 @@ mod tests {
         assert!(matches!(image_only.role, TurnRole::User));
         assert_eq!(image_only.blocks.len(), 1);
         assert!(matches!(&image_only.blocks[0], ContentBlock::Image { .. }));
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_config_dir_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("CURSOR_CONFIG_DIR", "/relocated/cursor")]);
+        let parser = CursorParser::for_env(&env);
+        let config_dir = PathBuf::from("/relocated/cursor");
+        assert_eq!(parser.chats_dir, config_dir.join("chats"));
+        assert_eq!(parser.acp_sessions_dir, config_dir.join("acp-sessions"));
+
+        // Removed for the child, `CURSOR_CONFIG_DIR` gives way to the XDG home.
+        let env = AgentEnv::with_overrides(&[
+            ("CURSOR_CONFIG_DIR", ""),
+            ("XDG_CONFIG_HOME", "/relocated/xdg"),
+        ]);
+        assert_eq!(
+            CursorParser::for_env(&env).chats_dir,
+            PathBuf::from("/relocated/xdg").join("cursor").join("chats")
+        );
+    }
+
+    /// The tool variants of `agent.v1.ToolCall` as the 2026.11.05-86047df CLI
+    /// declares it (read off its bundled descriptor). Fields 54, 57, 59 and 60
+    /// of that message are not tools.
+    const CLI_86047DF_TOOL_FIELDS: &[u32] = &[
+        1, 3, 4, 5, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30,
+        31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 48, 49, 51, 52, 53, 55, 56,
+        58, 68, 69, 70, 71, 73, 74, 75, 76, 77, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91,
+        93, 94, 95, 1000,
+    ];
+
+    /// A variant without a name is dropped from the history, so every one the
+    /// pinned CLI declares needs one, and so do the ones older builds stored.
+    #[test]
+    fn names_every_tool_variant_the_cli_declares() {
+        let dropped_since = [50, 61, 62, 63, 64, 65, 66, 67];
+        for no in CLI_86047DF_TOOL_FIELDS.iter().chain(&dropped_since) {
+            assert!(
+                tool_name_for_field(*no).is_some(),
+                "ToolCall field {no} has no name"
+            );
+        }
+        for no in [54, 57, 59, 60] {
+            assert!(
+                tool_name_for_field(no).is_none(),
+                "ToolCall field {no} is not a tool"
+            );
+        }
+    }
+
+    /// Calls of variants newer than the table's first version reach the
+    /// history as named cards rather than vanishing.
+    #[test]
+    fn a_newer_tool_variant_reaches_the_history() {
+        let conn = Connection::open_in_memory().unwrap();
+        let state = DecodedState::default();
+        for (no, name) in [
+            (81, "generate_video"),
+            (94, "start_project_updates"),
+            (95, "manage_access"),
+            (1000, "execute"),
+        ] {
+            let mut args = Vec::new();
+            field_str(1, "x", &mut args);
+            let mut call = Vec::new();
+            field_bytes(1, &args, &mut call);
+            let mut tool = Vec::new();
+            field_bytes(no, &call, &mut tool);
+            field_str(57, &format!("tc-{no}"), &mut tool);
+            let mut blocks = Vec::new();
+            decode_tool_call(&conn, &tool, &state, &mut blocks);
+            match &blocks[..] {
+                [ContentBlock::ToolUse {
+                    tool_use_id,
+                    tool_name,
+                    ..
+                }, ContentBlock::ToolResult { .. }] => {
+                    assert_eq!(tool_name, name);
+                    assert_eq!(tool_use_id.as_deref(), Some(format!("tc-{no}").as_str()));
+                }
+                other => panic!("ToolCall field {no} decoded to {other:?}"),
+            }
+        }
     }
 }

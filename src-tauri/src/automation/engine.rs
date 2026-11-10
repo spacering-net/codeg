@@ -59,6 +59,18 @@ const RUN_RETENTION_DAYS: i64 = 30;
 
 static ENGINE: OnceLock<Arc<AutomationEngine>> = OnceLock::new();
 
+/// The summary of a run that queued work task `id`; the task's id has no
+/// column of its own, so [`queued_task_id`] reads it back from here.
+pub(crate) fn queued_task_summary(id: i32, title: &str) -> String {
+    format!("queued task #{id}: {title}")
+}
+
+/// The work task a run queued, from its summary.
+pub(crate) fn queued_task_id(summary: &str) -> Option<i32> {
+    let rest = summary.strip_prefix("queued task #")?;
+    rest.split(':').next()?.parse().ok()
+}
+
 /// The process-global engine, set once at boot by [`build_engine`]. Read by the
 /// manual "run now" / cancel commands (and, later, the scheduler).
 pub fn engine() -> Option<Arc<AutomationEngine>> {
@@ -405,7 +417,7 @@ impl AutomationEngine {
             AutomationRunStatus::Succeeded,
             None,
             None,
-            Some(format!("queued task #{}: {}", info.id, info.title)),
+            Some(queued_task_summary(info.id, &info.title)),
         )
         .await
         .map_err(|e| e.to_string())?;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   adoptUnknownAsyncTasks,
+  autonomousTurnCause,
   isAsyncTaskTerminal,
   liveAsyncTasks,
   mergeAsyncTasks,
@@ -89,6 +90,34 @@ describe("upsertAsyncTask", () => {
     expect(tasks[0].summary).toBe("all green")
     // Still the announced task, not a nameless re-creation.
     expect(tasks[0].name).toBe("pnpm test")
+  })
+
+  it("clears a Grok workflow's agent with the empty string, not absence", () => {
+    // Grok restates its whole run on every frame, so each one is a spawn and
+    // an agent that finished comes back as "" — absent would still mean
+    // unchanged, and the finished agent would stick to the row.
+    const frame = (rest: Partial<AsyncTaskDelta>) =>
+      delta("wf_1", true, {
+        name: "deep-research",
+        task_type: "workflow",
+        can_stop: false,
+        state: "running",
+        ...rest,
+      })
+    let tasks = upsertAsyncTask(
+      [],
+      frame({ phase: "Research", current_agent: "researcher-2" })
+    )
+    expect(tasks[0]).toMatchObject({
+      phase: "Research",
+      current_agent: "researcher-2",
+    })
+    tasks = upsertAsyncTask(
+      tasks,
+      frame({ phase: "Verify", current_agent: "" })
+    )
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]).toMatchObject({ phase: "Verify", current_agent: "" })
   })
 })
 
@@ -181,5 +210,42 @@ describe("liveAsyncTasks", () => {
     // classify would silently drop work that is still running.
     expect(liveAsyncTasks([{ ...rows[0], state: "throttled" }])).toHaveLength(1)
     expect(isAsyncTaskTerminal({ ...rows[0], state: "throttled" })).toBe(false)
+  })
+})
+
+describe("autonomousTurnCause", () => {
+  it("reads claude-agent-acp 0.97.0's fixed descriptions", () => {
+    expect(
+      autonomousTurnCause("Claude Code started a turn without a prompt.")
+    ).toEqual({ kind: "unknown" })
+    expect(autonomousTurnCause("A scheduled task fired.")).toEqual({
+      kind: "scheduledTask",
+    })
+    expect(autonomousTurnCause("A scheduled wakeup fired.")).toEqual({
+      kind: "scheduledWakeup",
+      at: null,
+    })
+    expect(
+      autonomousTurnCause(
+        "A scheduled wakeup fired (set for 2026-10-26T14:30:00.000Z)."
+      )
+    ).toEqual({
+      kind: "scheduledWakeup",
+      at: new Date("2026-10-26T14:30:00.000Z"),
+    })
+  })
+
+  it("passes Claude Code's own words through", () => {
+    // The summary of the notification that woke the session, as recorded.
+    const summary = 'Background command "pnpm build" completed (exit code 0)'
+    expect(autonomousTurnCause(summary)).toEqual({
+      kind: "text",
+      text: summary,
+    })
+    // A wakeup time that does not parse keeps the wakeup, without a time.
+    expect(
+      autonomousTurnCause("A scheduled wakeup fired (set for soon).")
+    ).toEqual({ kind: "scheduledWakeup", at: null })
+    expect(autonomousTurnCause("   ")).toEqual({ kind: "unknown" })
   })
 })

@@ -9,21 +9,37 @@ import {
   useState,
   type ReactNode,
 } from "react"
+import { detectPlatform } from "@/hooks/use-platform"
 import {
   loadPersistedPanelState,
   savePersistedPanelState,
 } from "@/lib/panel-state-storage"
+import { isDesktop } from "@/lib/platform"
+import { MAC_TRAFFIC_LIGHT_INSET } from "@/lib/window-chrome"
 
 const STORAGE_KEY = "workspace:left-sidebar"
 
 const DEFAULT_WIDTH = 320
-// The sidebar header is the window's top-left edge; its top-left is reserved for
-// the fixed window-chrome overlay (macOS traffic-light inset + toggle + remote)
-// and its top-right holds the view-options control, so it needs more minimum
-// room than the old 200.
-const MIN_WIDTH = 300
+// The sidebar header is the window's top-left edge: its top-left is reserved
+// for the fixed window-chrome overlay (sidebar toggle + search) and its
+// top-right holds the view controls, so it needs more room than the old 200.
+const BASE_MIN_WIDTH = 224
 const MAX_WIDTH = 900
 const DEFAULT_IS_OPEN = true
+
+/**
+ * The narrowest the sidebar may be dragged. On the macOS desktop app the native
+ * traffic lights sit at the header's far left, ahead of the chrome overlay, so
+ * only there does the minimum add their inset (224 + 76 = 300). Windows, Linux
+ * and the browser have no traffic lights: sized for them anyway, the column
+ * bottomed out 76px wider than anything in it needs, which is why it read as
+ * so much wider than on macOS. Both minimums leave the header the same room
+ * for the overlay and the view controls.
+ */
+export function resolveSidebarMinWidth(): number {
+  const macTrafficLights = isDesktop() && detectPlatform() === "macos"
+  return BASE_MIN_WIDTH + (macTrafficLights ? MAC_TRAFFIC_LIGHT_INSET : 0)
+}
 
 interface SidebarContextValue {
   isOpen: boolean
@@ -45,8 +61,8 @@ export function useSidebarContext() {
   return ctx
 }
 
-function clampWidth(width: number) {
-  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, width))
+function clampWidth(width: number, minWidth: number) {
+  return Math.max(minWidth, Math.min(MAX_WIDTH, width))
 }
 
 interface SidebarProviderProps {
@@ -58,12 +74,18 @@ export function SidebarProvider({ children }: SidebarProviderProps) {
   const [isOpen, setIsOpen] = useState(DEFAULT_IS_OPEN)
   const [width, setWidthState] = useState(DEFAULT_WIDTH)
   const [restored, setRestored] = useState(false)
+  // Platform-derived minimum (see resolveSidebarMinWidth); stable for the
+  // session.
+  const minWidth = useMemo(() => resolveSidebarMinWidth(), [])
 
   const toggle = useCallback(() => setIsOpen((prev) => !prev), [])
 
-  const setWidth = useCallback((w: number) => {
-    setWidthState(clampWidth(w))
-  }, [])
+  const setWidth = useCallback(
+    (w: number) => {
+      setWidthState(clampWidth(w, minWidth))
+    },
+    [minWidth]
+  )
 
   useEffect(() => {
     const stored = loadPersistedPanelState(storageKey)
@@ -73,9 +95,9 @@ export function SidebarProvider({ children }: SidebarProviderProps) {
     // Hydrate from localStorage after mount to keep SSR/CSR markup consistent.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsOpen(isMobileViewport ? false : (stored?.isOpen ?? defaultOpen))
-    setWidthState(clampWidth(stored?.width ?? DEFAULT_WIDTH))
+    setWidthState(clampWidth(stored?.width ?? DEFAULT_WIDTH, minWidth))
     setRestored(true)
-  }, [storageKey])
+  }, [storageKey, minWidth])
 
   useEffect(() => {
     if (!restored) return
@@ -87,12 +109,12 @@ export function SidebarProvider({ children }: SidebarProviderProps) {
       isOpen,
       restored,
       width,
-      minWidth: MIN_WIDTH,
+      minWidth,
       maxWidth: MAX_WIDTH,
       toggle,
       setWidth,
     }),
-    [isOpen, restored, width, toggle, setWidth]
+    [isOpen, restored, width, minWidth, toggle, setWidth]
   )
 
   return (

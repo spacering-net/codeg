@@ -1,0 +1,22 @@
+{
+  "//": [
+    "What `next build` type-checks (next.config.ts points typescript.tsconfigPath",
+    "here): tsconfig.json without the *.test.ts(x) files. Next runs tsc over the",
+    "whole program and fails on an error in any file, and the test files are",
+    "about two fifths of it; with them in, the check outgrew the 2 GB heap Node",
+    "gets on 7 GB machines such as the macOS release runners. Leaving them out",
+    "means nothing type-checks the tests: vitest strips types without checking",
+    "them and the ESLint setup is not type-aware. Editors keep using",
+    "tsconfig.json, tests and all.",
+    "`exclude` replaces tsconfig.json's list instead of adding to it, so the",
+    "first three entries must stay in step with that file."
+  ],
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "src-tauri",
+    "browser-agent",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ]
+}

@@ -31,6 +31,7 @@ export interface ExportLabels {
   system: string
   toolResult: string
   toolError: string
+  turnFailed: string
   statusLabels: Record<string, string>
 }
 
@@ -217,6 +218,11 @@ function blocksToMarkdown(
           }
           return lines.join("\n\n")
         }
+        case "turn_error":
+          return `> **${labels.turnFailed}**\n>\n${block.message
+            .split("\n")
+            .map((line) => `> ${line}`)
+            .join("\n")}`
         default:
           return ""
       }
@@ -261,6 +267,8 @@ function blocksToHtml(blocks: ContentBlock[], labels: ExportLabels): string {
           parts.push("</div>")
           return parts.join("")
         }
+        case "turn_error":
+          return `<div class="turn-error"><strong>${escapeHtml(labels.turnFailed)}</strong><br>${escapeHtml(block.message).replace(/\n/g, "<br>")}</div>`
         default:
           return ""
       }
@@ -374,6 +382,8 @@ details[open]>.tool-summary::before{transform:rotate(90deg)}
 .tool-content{padding:4px 12px 8px;font-size:0.8125rem;color:#4b5563;border-top:1px solid #e5e7eb;line-height:1.5}
 .tool-result.error{border-color:#fca5a5;background:#fef2f2}
 .tool-result.error .tool-summary{color:#dc2626}
+.turn-error{color:#6b7280;font-size:0.8125rem;white-space:pre-wrap;word-break:break-word}
+.turn-error strong{color:#dc2626}
 pre{margin:0;white-space:pre-wrap;word-break:break-word;font-size:0.8125rem}
 .image-block{margin:8px 0}
 .footer{margin-top:24px;padding-top:12px;font-size:0.75rem;color:#9ca3af;text-align:center}

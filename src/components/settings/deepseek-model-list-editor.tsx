@@ -26,8 +26,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { FetchedModelPicker } from "@/components/settings/provider-models"
+import { useProviderModels } from "@/hooks/use-provider-models"
 import { loadDeepSeekModelCatalog, updateDeepSeekModelCatalog } from "@/lib/api"
-import type { DeepSeekCatalogModel, DeepSeekModelCatalog } from "@/lib/types"
+import type {
+  DeepSeekCatalogModel,
+  DeepSeekModelCatalog,
+  ListedProviderModel,
+} from "@/lib/types"
 
 /** Launch default the agent starts every new session on when the raw env
  *  editor sets nothing (`readEnv` in deepseek-acp). A catalog that drops it is
@@ -201,6 +207,32 @@ function parseCount(raw: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+/** The rows for the ids picked from the endpoint's list: a row that stays
+ *  keeps every field it had, a new one takes the name and context window the
+ *  endpoint lists, and a row still being typed (no id yet) is left alone. */
+export function rowsForPicks(
+  rows: DeepSeekCatalogModel[],
+  ids: string[],
+  listed: ListedProviderModel[]
+): DeepSeekCatalogModel[] {
+  const byId = new Map<string, DeepSeekCatalogModel>()
+  for (const row of rows) {
+    const id = row.id.trim()
+    if (id && !byId.has(id)) byId.set(id, row)
+  }
+  const picked = ids.map((id) => {
+    const kept = byId.get(id)
+    if (kept) return kept
+    const info = listed.find((m) => m.id === id)
+    return {
+      id,
+      ...(info?.displayName ? { name: info.displayName } : {}),
+      ...(info?.contextWindow ? { contextWindow: info.contextWindow } : {}),
+    }
+  })
+  return [...picked, ...rows.filter((row) => !row.id.trim())]
+}
+
 /**
  * Editor for the DeepSeek Harness **deployment** model catalog:
  * `llm-deepseek.models` in `$DSH_HOME/settings.yaml`, which the agent's
@@ -215,11 +247,24 @@ function parseCount(raw: string): number | undefined {
  */
 export function DeepSeekModelListEditor({
   launchModel,
+  endpoint,
 }: {
   /** `DEEPSEEK_ACP_MODEL` from the agent's env, when it sets one. */
   launchModel?: string
+  /** The endpoint and key the agent's env routes to, to import its models. */
+  endpoint?: { baseUrl: string; apiKey: string }
 }) {
   const t = useTranslations("DeepSeekModelEditor")
+  // The endpoint's own models (it speaks OpenAI Chat Completions).
+  const providerModels = useProviderModels(
+    endpoint
+      ? {
+          protocol: "openai",
+          baseUrl: endpoint.baseUrl,
+          apiKey: endpoint.apiKey,
+        }
+      : null
+  )
 
   const [catalog, setCatalog] = useState<DeepSeekModelCatalog | null>(null)
   const [draft, setDraft] = useState<DeepSeekCatalogModel[]>([])
@@ -650,20 +695,35 @@ export function DeepSeekModelListEditor({
             </div>
           )}
 
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs"
-            disabled={saving}
-            onClick={() => {
-              setDraft((prev) => [...prev, { id: "" }])
-              setExpanded(null)
-            }}
-          >
-            <Plus className="mr-1 h-3.5 w-3.5" />
-            {t("addModel")}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              disabled={saving}
+              onClick={() => {
+                setDraft((prev) => [...prev, { id: "" }])
+                setExpanded(null)
+              }}
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              {t("addModel")}
+            </Button>
+            {endpoint && (
+              <FetchedModelPicker
+                state={providerModels}
+                configured={draft.map((m) => m.id.trim()).filter(Boolean)}
+                onConfirm={(ids) => {
+                  setDraft((prev) =>
+                    rowsForPicks(prev, ids, providerModels.models)
+                  )
+                  setExpanded(null)
+                }}
+                disabled={saving}
+              />
+            )}
+          </div>
 
           {issue && (
             <p className="text-2xs text-destructive">{issueMessage(issue)}</p>

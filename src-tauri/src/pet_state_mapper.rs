@@ -145,7 +145,7 @@ impl PetGlobalState {
                     self.pending_permissions
                         .insert(request_id.clone(), conn.clone());
                 }
-                AcpEvent::PermissionResolved { request_id } => {
+                AcpEvent::PermissionResolved { request_id, .. } => {
                     self.pending_permissions.remove(request_id);
                 }
                 // Same bound as the root-session arms below: a permission can't
@@ -193,7 +193,7 @@ impl PetGlobalState {
                 self.pending_permissions
                     .insert(request_id.clone(), conn.clone());
             }
-            AcpEvent::PermissionResolved { request_id } => {
+            AcpEvent::PermissionResolved { request_id, .. } => {
                 // User answered (allow/reject) or chat-channel auto-approve
                 // ran. responder.respond() is RPC-only with no follow-up
                 // event of its own, so the connection emits this synthetic
@@ -296,9 +296,8 @@ fn is_acp_event_relevant(payload: &AcpEvent) -> bool {
 /// renderer receives exactly one completion cue.
 fn classify_turn_complete(stop_reason: &str) -> Option<PetState> {
     match stop_reason {
-        "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty" | "auth_required" => {
-            Some(PetState::Failed)
-        }
+        "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty" | "auth_required"
+        | "rejected" => Some(PetState::Failed),
         // `end_turn` is covered by PendingReview; `cancelled` and future reasons stay silent.
         _ => None,
     }
@@ -828,6 +827,8 @@ mod tests {
             "c1",
             AcpEvent::PermissionResolved {
                 request_id: "r1".into(),
+                option_id: None,
+                origin: None,
             },
         ));
         assert!(s.pending_permissions.is_empty());
@@ -856,6 +857,8 @@ mod tests {
             "c1",
             AcpEvent::PermissionResolved {
                 request_id: "r-stale".into(),
+                option_id: None,
+                origin: None,
             },
         ));
         assert_eq!(s.pending_permissions.len(), 1);
@@ -917,6 +920,8 @@ mod tests {
                 agent_type: crate::models::agent::AgentType::Codex,
                 task_preview: "run the tests".into(),
                 task_id: "task-pet-1".into(),
+                assistant_id: None,
+                assistant_name: None,
             },
         )
     }
@@ -934,6 +939,8 @@ mod tests {
                     duration_ms: 0,
                     text_preview: None,
                 },
+                assistant_id: None,
+                assistant_name: None,
             },
         )
     }
@@ -1134,6 +1141,8 @@ mod tests {
             "child",
             AcpEvent::PermissionResolved {
                 request_id: "r1".into(),
+                option_id: None,
+                origin: None,
             },
         ));
         assert_eq!(compute_pet_state(&s), PetState::Idle);
@@ -1164,6 +1173,8 @@ mod tests {
             "child",
             AcpEvent::PermissionResolved {
                 request_id: "r1".into(),
+                option_id: None,
+                origin: None,
             },
         ));
         assert_eq!(compute_pet_state(&s), PetState::Idle);
@@ -1219,6 +1230,8 @@ mod tests {
             },
             AcpEvent::PermissionResolved {
                 request_id: "r1".into(),
+                option_id: None,
+                origin: None,
             },
             AcpEvent::TurnComplete {
                 session_id: "s".into(),

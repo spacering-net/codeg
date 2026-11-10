@@ -1,6 +1,5 @@
 import type { ConversationFolderPickerOverride } from "@/components/chat/conversation-context-bar"
-import { useMemo, type ReactNode } from "react"
-import { useTranslations } from "next-intl"
+import type { ReactNode } from "react"
 import type {
   AgentType,
   ConnectionStatus,
@@ -16,42 +15,43 @@ import type {
   SessionFailureRecord,
   SessionModeInfo,
   AvailableCommandInfo,
+  RemoteControlInfo,
 } from "@/lib/types"
-import type { SessionFailureAction } from "@/lib/session-failures"
-import { SessionFailureBanner } from "@/components/chat/session-failure-banner"
+import { ComposerStatusStrips } from "@/components/chat/composer-status-strips"
 import { AsyncTaskStrip } from "@/components/chat/async-task-strip"
 import { LiveOutputFileWatcher } from "@/components/chat/live-output-file-watcher"
+import { RemoteControlStrip } from "@/components/chat/remote-control-strip"
 import type {
   PendingPermission,
   PendingQuestion,
   ClaudeApiRetryState,
 } from "@/contexts/acp-connections-context"
 import type { QueuedMessage } from "@/hooks/use-message-queue"
-import { Loader2 } from "lucide-react"
 import { ChatInput } from "@/components/chat/chat-input"
+import { ChatWidthHandles } from "@/components/chat/chat-width-handles"
+import { chatGutterStyle } from "@/lib/chat-content-width"
+import { cn } from "@/lib/utils"
 import type { ComposerInjectContent } from "@/components/chat/message-input"
 import { PermissionDialog } from "@/components/chat/permission-dialog"
 import { QuestionDialog } from "@/components/chat/question-dialog"
 import { AskQuestionCard } from "@/components/chat/ask-question-card"
 import { PlanApprovalCard } from "@/components/chat/plan-approval-card"
+import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
 
 interface ConversationShellProps {
   status: ConnectionStatus | null
   promptCapabilities: PromptCapabilitiesInfo
   defaultPath?: string
   agentName?: string
-  error: string | null
+  /** The in-flight retry line under the composer (see
+   *  `ComposerStatusStrips`). The session's errors are notifications, raised by
+   *  the connections provider — none is drawn here. */
   claudeApiRetry: ClaudeApiRetryState | null
-  /** AIR typed session failures for this connection (active + resolved; the
-   *  banner splits them itself). Omit/empty renders nothing. */
+  /** AIR typed session failures for this connection (active + resolved); the
+   *  dock draws only the in-flight retry incidents. Omit/empty renders
+   *  nothing. */
   sessionFailures?: SessionFailureRecord[]
-  /** Wires the failure strips' suggested actions (retry/login/new_session);
-   *  omitted for read-only surfaces — the buttons are then hidden. */
-  onSessionFailureAction?: (
-    action: SessionFailureAction,
-    failure: SessionFailureRecord
-  ) => void
-  /** Closes a failure strip, taking every record it stands for. Passed for
+  /** Closes an incident strip, taking every record it stands for. Passed for
    *  every surface with a live store — dismissing is client-local, so viewers
    *  get it too. */
   onSessionFailureDismiss?: (ids: string[]) => void
@@ -61,6 +61,12 @@ interface ConversationShellProps {
   /** Stops one async task. Omitted for read-only surfaces — the stop buttons
    *  are then hidden, which is right: a viewer has no connection to ask. */
   onStopAsyncTask?: (taskId: string) => Promise<boolean>
+  /** Claude Code's Remote Control while it is on; its strip shows the
+   *  session's link and QR code. Omit/`null` renders nothing. */
+  remoteControl?: RemoteControlInfo | null
+  /** Turns Remote Control off (sends `/remote-control off`). Omitted for
+   *  surfaces without a connection of their own — the button is then hidden. */
+  onRemoteControlOff?: () => void
   pendingPermission: PendingPermission | null
   pendingQuestion: PendingQuestion | null
   /** Awaiting-answer multiple-choice `ask_user_question`. */
@@ -91,6 +97,9 @@ interface ConversationShellProps {
   onConfigOptionChange?: (configId: string, valueId: string) => void
   agentType?: AgentType | null
   availableCommands?: AvailableCommandInfo[] | null
+  /** The prompt the agent predicts the user will send next; the empty
+   *  composer offers it (see `MessageInput.promptSuggestion`). */
+  promptSuggestion?: string | null
   attachmentTabId?: string | null
   /** Pass-through: see `MessageInput`. */
   folderPickerOverride?: ConversationFolderPickerOverride
@@ -152,6 +161,12 @@ interface ConversationShellProps {
    *  once the composer has taken it. */
   injectContent?: ComposerInjectContent | null
   onInjectConsumed?: () => void
+  /** Give the chat column drag handles on its edges (`ChatWidthHandles`) and
+   *  the window-edge gutter they need. Only for the conversation tab: a canvas
+   *  card renders this shell inside the board's zoom transform, where the
+   *  handles' layout maths would be off by the zoom factor, and a card has no
+   *  window edge to keep clear. */
+  resizableWidth?: boolean
 }
 
 export function ConversationShell({
@@ -159,13 +174,13 @@ export function ConversationShell({
   promptCapabilities,
   defaultPath,
   agentName,
-  error,
   claudeApiRetry,
   sessionFailures,
-  onSessionFailureAction,
   onSessionFailureDismiss,
   asyncTasks,
   onStopAsyncTask,
+  remoteControl,
+  onRemoteControlOff,
   pendingPermission,
   pendingQuestion,
   pendingAskQuestion,
@@ -188,6 +203,7 @@ export function ConversationShell({
   onConfigOptionChange,
   agentType,
   availableCommands,
+  promptSuggestion,
   attachmentTabId,
   folderPickerOverride,
   draftStorageKey,
@@ -216,91 +232,36 @@ export function ConversationShell({
   topBanner,
   injectContent,
   onInjectConsumed,
+  resizableWidth = false,
 }: ConversationShellProps) {
-  const tAcp = useTranslations("Folder.chat.acpConnections")
-  const retryLineText = useMemo(() => {
-    const retry = claudeApiRetry
-    if (!retry) return null
-
-    const retryAttempt =
-      retry.attempt !== null && retry.attempt !== undefined
-        ? Math.trunc(retry.attempt)
-        : null
-    const retryMax =
-      retry.maxRetries !== null && retry.maxRetries !== undefined
-        ? Math.trunc(retry.maxRetries)
-        : null
-    const retryDelaySeconds =
-      retry.retryDelayMs !== null && retry.retryDelayMs !== undefined
-        ? (retry.retryDelayMs / 1000).toFixed(1)
-        : null
-    // `null` only for a source that reports no cause at all (pi, #525) — see
-    // `ClaudeApiRetryState.reportsError`. Claude and codex keep the fallback.
-    const errorLabel =
-      retry.error ??
-      (retry.reportsError ? tAcp("claudeApiRetry.fallbackError") : null)
-    const statusLabel =
-      retry.errorStatus !== null && retry.errorStatus !== undefined
-        ? tAcp("claudeApiRetry.httpStatus", {
-            status: Math.trunc(retry.errorStatus),
-          })
-        : ""
-    const retryLabel =
-      retryAttempt !== null && retryMax !== null
-        ? tAcp("claudeApiRetry.retryingWithMax", {
-            attempt: retryAttempt,
-            max: retryMax,
-          })
-        : retryAttempt !== null
-          ? tAcp("claudeApiRetry.retryingAttempt", {
-              attempt: retryAttempt,
-            })
-          : tAcp("claudeApiRetry.retrying")
-    const delayLabel =
-      retryDelaySeconds !== null
-        ? tAcp("claudeApiRetry.nextRetryIn", {
-            seconds: retryDelaySeconds,
-          })
-        : null
-
-    // With no cause AND no HTTP status there is nothing to put before the
-    // separator, and the shared template would render a dangling "· 正在重试".
-    // Take the prefix-less pair instead — the counters carry the whole message.
-    if (errorLabel === null && statusLabel === "") {
-      return delayLabel !== null
-        ? tAcp("claudeApiRetry.lineNoErrorWithDelay", {
-            retry: retryLabel,
-            delay: delayLabel,
-          })
-        : tAcp("claudeApiRetry.lineNoError", { retry: retryLabel })
-    }
-
-    return delayLabel !== null
-      ? tAcp("claudeApiRetry.lineWithDelay", {
-          error: errorLabel ?? "",
-          status: statusLabel,
-          retry: retryLabel,
-          delay: delayLabel,
-        })
-      : tAcp("claudeApiRetry.line", {
-          error: errorLabel ?? "",
-          status: statusLabel,
-          retry: retryLabel,
-        })
-  }, [claudeApiRetry, tAcp])
-
   return (
-    <div className="relative flex h-full min-h-0 flex-col">
+    // The gutter keeps the chat column (transcript and composer alike) off
+    // the window edge, so its width handles stay grabbable at any width.
+    <div
+      className="relative flex h-full min-h-0 flex-col"
+      style={resizableWidth ? chatGutterStyle : undefined}
+    >
       {topBanner}
 
       {/* Above the transcript, not down in the composer dock: this is the state
           of work running RIGHT NOW, and pinning it here keeps it still while the
           messages scroll under it — the stop button doesn't move out from under
           the pointer. The dock below is for things that come and go with the
-          turn (retry line, last error). */}
+          turn or the connection (`ComposerStatusStrips`). */}
+      {remoteControl && (
+        <RemoteControlStrip
+          remoteControl={remoteControl}
+          onTurnOff={onRemoteControlOff}
+          canTurnOff={status === "connected"}
+        />
+      )}
       {asyncTasks && asyncTasks.length > 0 && (
         <>
-          <AsyncTaskStrip tasks={asyncTasks} onStop={onStopAsyncTask} />
+          <AsyncTaskStrip
+            tasks={asyncTasks}
+            onStop={onStopAsyncTask}
+            agentName={agentName}
+          />
           {/* Null-rendering leaf: keeps the output tabs the strip's button
               opens fresh while their task is still writing (temp-dir logs
               sit outside the notify-watched roots, so nothing else does). */}
@@ -308,13 +269,21 @@ export function ConversationShell({
         </>
       )}
 
-      <div className="flex-1 min-h-0">{children}</div>
+      <div className={cn("flex-1 min-h-0", resizableWidth && "relative")}>
+        {children}
+        {resizableWidth && <ChatWidthHandles />}
+      </div>
 
-      <PermissionDialog
-        permission={pendingPermission}
-        onRespond={onRespondPermission}
-        agentType={agentType}
-      />
+      {/* Below the transcript, so outside its image scope: a request or a
+          plan names local images the way a reply does, against the same
+          folder. */}
+      <MarkdownImageProvider rootPath={defaultPath ?? null}>
+        <PermissionDialog
+          permission={pendingPermission}
+          onRespond={onRespondPermission}
+          agentType={agentType}
+        />
+      </MarkdownImageProvider>
 
       <QuestionDialog question={pendingQuestion} onAnswer={onAnswerQuestion} />
 
@@ -324,7 +293,7 @@ export function ConversationShell({
           to the input width. */}
       <div>
         {pendingAskQuestion && pendingAskQuestion.questions.length > 0 && (
-          <div className="mx-auto w-full max-w-3xl px-4">
+          <div className="mx-auto w-full chat-content-w px-4">
             <AskQuestionCard
               question={pendingAskQuestion}
               onAnswer={onAnswerAskQuestion}
@@ -332,29 +301,33 @@ export function ConversationShell({
           </div>
         )}
         {pendingPlanApproval && (
-          <div className="mx-auto w-full max-w-3xl px-4">
+          <div className="mx-auto w-full chat-content-w px-4">
             {/* key on approval_id so the card always remounts (fresh in-flight /
                 feedback state) if the slot is ever reused for a new approval. */}
-            <PlanApprovalCard
-              key={pendingPlanApproval.approval_id}
-              approval={pendingPlanApproval}
-              onAnswer={onAnswerPlanApproval}
-            />
+            <MarkdownImageProvider rootPath={defaultPath ?? null}>
+              <PlanApprovalCard
+                key={pendingPlanApproval.approval_id}
+                approval={pendingPlanApproval}
+                onAnswer={onAnswerPlanApproval}
+              />
+            </MarkdownImageProvider>
           </div>
         )}
 
         {composerBanner && (
-          <div className="mx-auto w-full max-w-3xl px-4 pb-2">
+          <div className="mx-auto w-full chat-content-w px-4 pb-2">
             {composerBanner}
           </div>
         )}
 
         {!hideInput && feedbackList && (
-          <div className="mx-auto w-full max-w-3xl px-4">{feedbackList}</div>
+          <div className="mx-auto w-full chat-content-w px-4">
+            {feedbackList}
+          </div>
         )}
 
         {!hideInput && (
-          <div className="mx-auto w-full max-w-3xl">
+          <div className="mx-auto w-full chat-content-w">
             <ChatInput
               status={status}
               promptCapabilities={promptCapabilities}
@@ -373,6 +346,7 @@ export function ConversationShell({
               onConfigOptionChange={onConfigOptionChange}
               agentType={agentType}
               availableCommands={availableCommands}
+              promptSuggestion={promptSuggestion}
               attachmentTabId={attachmentTabId}
               folderPickerOverride={folderPickerOverride}
               draftStorageKey={draftStorageKey}
@@ -402,30 +376,12 @@ export function ConversationShell({
         )}
       </div>
 
-      {sessionFailures && sessionFailures.length > 0 && (
-        <SessionFailureBanner
-          failures={sessionFailures}
-          onAction={onSessionFailureAction}
-          onDismiss={onSessionFailureDismiss}
-        />
-      )}
-
-      {retryLineText && (
-        <div className="border-t border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">
-          <div className="flex items-center gap-2 font-medium">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
-              {retryLineText}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div className="px-4 py-2 text-xs text-destructive bg-destructive/5 border-t border-destructive/20">
-          {error}
-        </div>
-      )}
+      <ComposerStatusStrips
+        status={status}
+        claudeApiRetry={claudeApiRetry}
+        sessionFailures={sessionFailures}
+        onSessionFailureDismiss={onSessionFailureDismiss}
+      />
     </div>
   )
 }

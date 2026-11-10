@@ -39,8 +39,8 @@ expression: detail
           "input_preview": null,
           "meta": {
             "contextCompaction": {
-              "trigger": "automatic",
-              "version": 1
+              "version": 1,
+              "trigger": "automatic"
             }
           }
         },
@@ -63,12 +63,12 @@ expression: detail
           "type": "tool_use",
           "tool_use_id": "question:2",
           "tool_name": "question",
-          "input_preview": "{\"questions\":[{\"header\":\"Release\",\"multiSelect\":false,\"multiple\":false,\"options\":[{\"description\":\"Publish\",\"label\":\"Yes\"},{\"description\":\"Hold\",\"label\":\"Not yet\"}],\"question\":\"Ship it now?\"}]}"
+          "input_preview": "{\"questions\":[{\"question\":\"Ship it now?\",\"header\":\"Release\",\"multiple\":false,\"options\":[{\"label\":\"Yes\",\"description\":\"Publish\"},{\"label\":\"Not yet\",\"description\":\"Hold\"}],\"multiSelect\":false}]}"
         },
         {
           "type": "tool_result",
           "tool_use_id": "question:2",
-          "output_preview": "{\"answers\":[{\"header\":\"Release\",\"question\":\"Ship it now?\",\"selected\":[\"Not yet\"]}],\"declined\":false}",
+          "output_preview": "{\"declined\":false,\"answers\":[{\"header\":\"Release\",\"question\":\"Ship it now?\",\"selected\":[\"Not yet\"]}]}",
           "is_error": false
         }
       ],

@@ -19,6 +19,19 @@
 //! carry the capability). Because the page has no external JS and the shim runs
 //! before officecli's scripts, every request flows back through the proxy.
 //!
+//! ## A hidden preview holds no event stream
+//!
+//! A browser allows only a handful of connections per server (six over
+//! HTTP/1.1), and the preview frames' requests all share one pool: with an
+//! event stream held open per preview, a seventh preview never connects, and
+//! every request a frame makes waits, the shown preview's included. The app
+//! keeps the file column's office previews mounted out of sight, as many as
+//! are open, so the shim also lets go of a page's stream while the app says
+//! its preview is hidden, and takes it up again when it is shown, catching up
+//! on what changed meanwhile (`office_watch_shim.js`; the app's side is
+//! `OfficePreview`). A hidden preview keeps its watch by renewing its hold
+//! (`office_watch::renew_office_watch_core`) instead of by a stream.
+//!
 //! ## Auth + SSRF + token isolation
 //!
 //! An iframe navigation can't carry a Bearer header, so this route lives in the
@@ -54,8 +67,9 @@ use crate::office_watch::{
 
 /// Releases a watch's SSE lease when the proxied `/events` response body is
 /// dropped — i.e. when the browser disconnects (tab close, refresh, network
-/// loss). This is the reliable signal the pool's sweep uses to reap a web
-/// preview whose `stop_office_watch` may never have arrived.
+/// loss, or the shim letting go for a hidden preview). Once no lease is left
+/// and no other sign of life follows, the pool's sweep drops the web pages'
+/// hold even if their `stop_office_watch` never arrived.
 struct SseLeaseGuard {
     port: u16,
 }
@@ -80,26 +94,40 @@ static OFFICE_PROXY_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 
 /// JS shim injected at the top of officecli's `<head>`. Patches the three URL
 /// entry points so every root-absolute request is re-prefixed through the proxy
-/// and carries the capability. `__PFX__`/`__CAP__` are substituted per request
-/// (never `format!`'d, to avoid escaping the JS braces). The `rw()` guard is
-/// idempotent so officecli's own `fetch('/')` re-fetch can't double-prefix.
-const SHIM_TEMPLATE: &str = r#"<script>(function(){
-var P="__PFX__",C="__CAP__";
-function rw(u){
-  if(typeof u!=="string"||u.charAt(0)!=="/")return u;
-  if(u===P||u.indexOf(P+"/")===0)return u;
-  return P+u+(u.indexOf("?")>=0?"&":"?")+"cap="+C;
+/// and carries the capability, and holds the page's event stream only while
+/// the app shows the preview (see the module docs). `__PFX__`/`__CAP__`/
+/// `__VER__` are substituted per request (never `format!`'d, to avoid escaping
+/// the JS braces). The `rw()` guard is idempotent so officecli's own
+/// `fetch('/')` re-fetch can't double-prefix.
+const SHIM_JS: &str = include_str!("office_watch_shim.js");
+
+/// The shim for a page the proxy serves under `prefix` with capability `cap`,
+/// as the `<script>` to inject. `version` is the document version the page
+/// shows at least (see [`upstream_version`]); unknown, the shim catches the
+/// page up the first time it is shown again.
+fn shim_for(prefix: &str, cap: &str, version: Option<u64>) -> String {
+    let version = version.map_or_else(|| "-1".to_string(), |v| v.to_string());
+    let js = SHIM_JS
+        .replace("__PFX__", prefix)
+        .replace("__CAP__", cap)
+        .replace("__VER__", &version);
+    format!("<script>{js}</script>")
 }
-var of=window.fetch;
-if(of)window.fetch=function(i,init){
-  try{ if(typeof i==="string")i=rw(i); else if(i&&typeof i.url==="string")i=new Request(rw(i.url),i); }catch(e){}
-  return of.call(this,i,init);
-};
-var OE=window.EventSource;
-if(OE)window.EventSource=function(u,cfg){return new OE(rw(u),cfg);};
-var xo=XMLHttpRequest.prototype.open;
-XMLHttpRequest.prototype.open=function(m,u){ try{arguments[1]=rw(u);}catch(e){} return xo.apply(this,arguments); };
-})();</script>"#;
+
+/// The watch's document version, from its `GET /api/status`. Asked before the
+/// page itself is fetched, so it can only be older than what the page shows:
+/// the shim takes it as the version it starts from, and an edit landing in
+/// between costs one needless catch-up, never a missed one.
+async fn upstream_version(port: u16) -> Option<u64> {
+    let resp = OFFICE_PROXY_CLIENT
+        .get(format!("http://127.0.0.1:{port}/api/status"))
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+        .ok()?;
+    let status: serde_json::Value = resp.json().await.ok()?;
+    status.get("version")?.as_u64()
+}
 
 /// Request headers we forward downstream → upstream. Deliberately excludes Host,
 /// Authorization, Cookie, and hop-by-hop headers. `content-type` is forwarded so
@@ -216,9 +244,17 @@ async fn proxy_inner(
         return (StatusCode::UNAUTHORIZED, "invalid capability").into_response();
     }
 
-    // Mark this as a web/remote (proxied) watch and bump its activity clock so
-    // the pool's sweep treats it under the SSE-lease rule, not the desktop rule.
+    // A page loading or talking to its watch is a sign of life, which keeps the
+    // web pages' hold on it ("Who holds a watch" in `office_watch`).
     note_proxy_request(port);
+
+    // The version the document page will show at least, asked before the page
+    // itself is (the shim catches the page up from it, see `upstream_version`).
+    let version = if method == Method::GET && rest.is_empty() {
+        upstream_version(port).await
+    } else {
+        None
+    };
 
     // 2. Build the upstream URL, stripping `cap` so it never reaches officecli.
     let upstream = format!("http://127.0.0.1:{port}/{rest}{}", query_without(&raw, "cap"));
@@ -264,10 +300,7 @@ async fn proxy_inner(
             Ok(b) => b,
             Err(_) => return (StatusCode::BAD_GATEWAY, "watch upstream read error").into_response(),
         };
-        let prefix = format!("/api/office-watch-proxy/{port}");
-        let shim = SHIM_TEMPLATE
-            .replace("__PFX__", &prefix)
-            .replace("__CAP__", &cap);
+        let shim = shim_for(&format!("/api/office-watch-proxy/{port}"), &cap, version);
         let html = inject_shim(&String::from_utf8_lossy(&bytes), &shim);
         return builder
             .header("cache-control", "no-store")
@@ -339,13 +372,19 @@ mod tests {
     }
 
     #[test]
-    fn shim_template_substitutes_both_placeholders() {
-        let shim = SHIM_TEMPLATE
-            .replace("__PFX__", "/api/office-watch-proxy/26315")
-            .replace("__CAP__", "deadbeef");
-        assert!(shim.contains("var P=\"/api/office-watch-proxy/26315\""));
-        assert!(shim.contains("C=\"deadbeef\""));
+    fn shim_substitutes_every_placeholder() {
+        let shim = shim_for("/api/office-watch-proxy/26315", "deadbeef", Some(7));
+        assert!(shim.contains("const P = \"/api/office-watch-proxy/26315\""));
+        assert!(shim.contains("const C = \"deadbeef\""));
+        assert!(shim.contains("Number(\"7\")"));
         assert!(!shim.contains("__PFX__"));
         assert!(!shim.contains("__CAP__"));
+        assert!(!shim.contains("__VER__"));
+        // Unknown, the version the page starts from is below any real one.
+        assert!(shim_for("/p", "c", None).contains("Number(\"-1\")"));
+        // One script element, which nothing inside ends early.
+        assert!(shim.starts_with("<script>"));
+        assert_eq!(shim.matches("</script").count(), 1);
+        assert!(shim.ends_with("</script>"));
     }
 }

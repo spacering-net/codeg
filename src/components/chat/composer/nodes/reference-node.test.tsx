@@ -131,6 +131,35 @@ describe("Reference node", () => {
     expect(badge).toHaveAccessibleName("agent: Claude Code")
   })
 
+  it("deletes a just-inserted badge on one Backspace", async () => {
+    const { ref, container } = await mountEditor()
+    const editor = editorOf(ref)
+    // How every insertion path leaves it: badge, separating space, caret after
+    // both (see `insertFileReferences`).
+    act(() => {
+      editor.chain().focus().insertReference(fileRef).insertContent(" ").run()
+    })
+    await waitFor(() =>
+      expect(container.querySelector("[data-reference-badge]")).not.toBeNull()
+    )
+
+    // Through the keymap, not the command: a shortcut the editor never receives
+    // is the bug this guards.
+    act(() => {
+      editor.view.dom.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Backspace",
+          keyCode: 8,
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+
+    expect(findReference(editor.getJSON())).toBeUndefined()
+    expect(ref.current?.isEmpty()).toBe(true)
+  })
+
   it("round-trips through HTML (renderHTML → parseHTML)", async () => {
     const { ref } = await mountEditor()
     const editor = editorOf(ref)
@@ -149,6 +178,22 @@ describe("Reference node", () => {
       uri: "codeg://commit/repo@abc1234def",
     })
     expect(node?.attrs?.meta).toMatchObject({ shortHash: "abc1234" })
+  })
+
+  it("keeps an assistant reference through copy and paste", () => {
+    const html =
+      '<p><span data-reference data-ref-type="assistant" ' +
+      'data-ref-id="3" data-label="Reviewer" ' +
+      'data-uri="codeg://assistant/3" ' +
+      'data-meta="{&quot;assistantId&quot;:3}"></span></p>'
+    const node = findReference(generateJSON(html, buildComposerExtensions()))
+    expect(node?.attrs).toMatchObject({
+      refType: "assistant",
+      id: "3",
+      label: "Reviewer",
+      uri: "codeg://assistant/3",
+      meta: { assistantId: 3 },
+    })
   })
 
   describe("untrusted HTML parse hardening", () => {

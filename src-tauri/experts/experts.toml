@@ -1,4 +1,5 @@
-# Expert skills metadata. Bundled alongside skills/ and loaded at runtime.
+# Expert skills metadata for the bundled obra/superpowers v7.0.1 skills.
+# Bundled alongside skills/ and loaded at runtime; see NOTICE.md for provenance.
 # Category values must match ExpertCategory enum in commands/experts.rs.
 # Icons are lucide-react icon names referenced by the frontend.
 # display_name and description fall back to "en" when a locale is missing.
@@ -55,16 +56,16 @@ pt = "Escrever planos"
 ar = "كتابة الخطط"
 
 [expert.description]
-en = "Creates bite-sized implementation plans with explicit code and file paths."
-"zh-CN" = "为多步骤任务编写细粒度实现计划，明确代码与文件路径。"
-"zh-TW" = "為多步驟任務編寫細粒度實作計畫，明確程式碼與檔案路徑。"
-ja = "コードとファイルパスを明示した、粒度の細かい実装計画を作成します。"
-ko = "명시적인 코드와 파일 경로를 포함한 세분화된 구현 계획을 작성합니다."
-es = "Crea planes de implementación pequeños y concretos, con código y rutas de archivos explícitos."
-de = "Erstellt feingranulare Implementierungspläne mit expliziten Codeblöcken und Dateipfaden."
-fr = "Crée des plans d'implémentation à granularité fine avec code et chemins de fichiers explicites."
-pt = "Cria planos de implementação granulares com código e caminhos de arquivo explícitos."
-ar = "ينشئ خطط تنفيذ مفصلة مع رمز ومسارات ملفات واضحة."
+en = "Creates concise implementation plans with explicit interfaces, file paths, and verification steps."
+"zh-CN" = "编写精简的实现计划，明确接口、文件路径与验证步骤。"
+"zh-TW" = "撰寫精簡的實作計畫，明確介面、檔案路徑與驗證步驟。"
+ja = "インターフェース、ファイルパス、検証手順を明示した簡潔な実装計画を作成します。"
+ko = "인터페이스, 파일 경로, 검증 단계를 명시한 간결한 구현 계획을 작성합니다."
+es = "Crea planes de implementación concisos con interfaces, rutas de archivos y pasos de verificación explícitos."
+de = "Erstellt kompakte Implementierungspläne mit klaren Schnittstellen, Dateipfaden und Prüfschritten."
+fr = "Crée des plans d'implémentation concis avec interfaces, chemins de fichiers et étapes de vérification explicites."
+pt = "Cria planos de implementação concisos com interfaces, caminhos de arquivo e etapas de verificação explícitos."
+ar = "ينشئ خطط تنفيذ موجزة بواجهات ومسارات ملفات وخطوات تحقق واضحة."
 
 
 [[expert]]
@@ -86,16 +87,16 @@ pt = "Executar planos"
 ar = "تنفيذ الخطط"
 
 [expert.description]
-en = "Executes a written implementation plan in a separate session with review checkpoints."
-"zh-CN" = "在独立会话中执行既定实现计划，并带有审核检查点。"
-"zh-TW" = "在獨立工作階段中執行既定實作計畫，並帶有審核檢查點。"
-ja = "別セッションで実装計画を実行し、レビューのチェックポイントを設けます。"
-ko = "별도의 세션에서 검토 체크포인트와 함께 구현 계획을 실행합니다."
-es = "Ejecuta un plan de implementación en una sesión separada con puntos de revisión."
-de = "Führt einen geschriebenen Implementierungsplan in einer separaten Sitzung mit Review-Checkpoints aus."
-fr = "Exécute un plan d'implémentation écrit dans une session séparée avec des points de contrôle."
-pt = "Executa um plano de implementação em uma sessão separada com pontos de revisão."
-ar = "ينفذ خطة التنفيذ المكتوبة في جلسة منفصلة مع نقاط مراجعة."
+en = "Executes a plan directly in the current session with per-task verification, a progress ledger, and a final review."
+"zh-CN" = "在当前会话直接执行计划，逐任务验证、记录进度，并在最后统一审核。"
+"zh-TW" = "在目前工作階段直接執行計畫，逐項驗證、記錄進度，並在最後統一審核。"
+ja = "現在のセッションで計画を直接実行し、タスクごとの検証、進捗記録、最終レビューを行います。"
+ko = "현재 세션에서 계획을 직접 실행하며 작업별 검증, 진행 기록, 최종 검토를 수행합니다."
+es = "Ejecuta un plan en la sesión actual con verificación por tarea, registro de progreso y revisión final."
+de = "Führt einen Plan direkt in der aktuellen Sitzung aus, mit Prüfung je Aufgabe, Fortschrittsprotokoll und Abschlussreview."
+fr = "Exécute un plan dans la session actuelle avec vérification par tâche, journal de progression et revue finale."
+pt = "Executa um plano na sessão atual com verificação por tarefa, registro de progresso e revisão final."
+ar = "ينفذ الخطة مباشرة في الجلسة الحالية مع تحقق لكل مهمة وسجل تقدم ومراجعة نهائية."
 
 
 [[expert]]
@@ -117,16 +118,16 @@ pt = "Desenvolvimento guiado por subagentes"
 ar = "تطوير بقيادة العملاء الفرعيين"
 
 [expert.description]
-en = "Dispatches fresh subagents per task with two-stage review to execute plans."
-"zh-CN" = "为每个任务派发全新子代理，通过两阶段审核执行实施计划。"
-"zh-TW" = "為每個任務派發全新子代理，透過兩階段審核執行實作計畫。"
-ja = "タスクごとに新しいサブエージェントを割り当て、二段階レビューで計画を実行します。"
-ko = "작업마다 새로운 서브에이전트를 배정하고 2단계 검토를 거쳐 계획을 실행합니다."
-es = "Despacha nuevos subagentes por tarea con revisión en dos etapas para ejecutar planes."
-de = "Weist pro Aufgabe frische Subagenten zu und führt Pläne mit zweistufigem Review aus."
-fr = "Distribue de nouveaux sous-agents par tâche avec une revue en deux étapes pour exécuter les plans."
-pt = "Despacha novos subagentes por tarefa com revisão em duas etapas para executar os planos."
-ar = "يرسل عملاء فرعيين جددًا لكل مهمة مع مراجعة على مرحلتين لتنفيذ الخطط."
+en = "Dispatches fresh subagents per task, reviews spec compliance and code quality, then reviews the whole branch."
+"zh-CN" = "为每个任务派发全新子代理，审核规格符合性与代码质量，最后审核整个分支。"
+"zh-TW" = "為每個任務派發全新子代理，審核規格符合性與程式碼品質，最後審核整個分支。"
+ja = "タスクごとに新しいサブエージェントを割り当て、仕様適合性とコード品質を確認し、最後にブランチ全体をレビューします。"
+ko = "작업마다 새로운 서브에이전트를 배정하고 명세 준수와 코드 품질을 검토한 뒤 전체 브랜치를 검토합니다."
+es = "Despacha nuevos subagentes por tarea, revisa el cumplimiento de la especificación y la calidad, y luego toda la rama."
+de = "Weist pro Aufgabe frische Subagenten zu, prüft Spezifikation und Codequalität und begutachtet abschließend den ganzen Branch."
+fr = "Distribue de nouveaux sous-agents par tâche, vérifie la conformité et la qualité du code, puis révise toute la branche."
+pt = "Despacha novos subagentes por tarefa, revisa conformidade e qualidade do código e depois toda a branch."
+ar = "يرسل عملاء فرعيين جددًا لكل مهمة ويراجع مطابقة المواصفات وجودة الكود ثم يراجع الفرع بالكامل."
 
 
 [[expert]]
@@ -437,3 +438,34 @@ de = "Skill-Dokumente vor dem Deployment mittels TDD erstellen, bearbeiten und v
 fr = "Créer, éditer et vérifier les documents de compétences via TDD avant le déploiement."
 pt = "Cria, edita e verifica documentos de habilidades via TDD antes do deploy."
 ar = "إنشاء وتحرير والتحقق من مستندات المهارات عبر التطوير الموجه بالاختبارات قبل النشر."
+
+
+[[expert]]
+id = "diagnosing-superpowers"
+category = "meta"
+icon = "Bug"
+sort_order = 220
+
+[expert.display_name]
+en = "Diagnosing Superpowers"
+"zh-CN" = "Superpowers 会话诊断"
+"zh-TW" = "Superpowers 工作階段診斷"
+ja = "Superpowers セッションの診断"
+ko = "Superpowers 세션 진단"
+es = "Diagnóstico de Superpowers"
+de = "Superpowers-Diagnose"
+fr = "Diagnostic de Superpowers"
+pt = "Diagnóstico do Superpowers"
+ar = "تشخيص Superpowers"
+
+[expert.description]
+en = "Investigates session problems with transcript evidence; exports redacted bundles or files issues only on request and approval."
+"zh-CN" = "基于会话记录调查重复工作、计划偏离与异常开销；按需经确认后导出脱敏材料或提交问题。"
+"zh-TW" = "依據工作階段紀錄調查重複工作、計畫偏離與異常開銷；按需經確認後匯出脫敏資料或回報問題。"
+ja = "会話記録を根拠に問題を調査し、依頼と承認がある場合にのみ匿名化した資料の出力や問題報告を行います。"
+ko = "대화 기록을 근거로 세션 문제를 조사하며 요청과 승인 후에만 비식별 자료를 내보내거나 이슈를 등록합니다."
+es = "Investiga problemas con pruebas de la sesión; exporta datos redactados o crea incidencias solo con solicitud y aprobación."
+de = "Untersucht Sitzungsprobleme anhand von Protokollbelegen; exportiert bereinigte Daten oder erstellt Issues nur auf Anfrage und nach Freigabe."
+fr = "Analyse les problèmes à partir des traces de session ; exporte des données expurgées ou crée un ticket sur demande et après approbation."
+pt = "Investiga problemas com evidências da sessão; exporta dados expurgados ou abre issues apenas mediante solicitação e aprovação."
+ar = "يفحص مشكلات الجلسة بأدلة من السجل؛ ولا يصدر حزمًا منقحة أو يفتح بلاغات إلا عند الطلب والموافقة."

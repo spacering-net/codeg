@@ -115,6 +115,9 @@ pub struct FolderCommandInfo {
     pub name: String,
     pub command: String,
     pub sort_order: i32,
+    /// Run by the desktop app on its own machine, detached, instead of in a
+    /// terminal on the folder's host.
+    pub run_local: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

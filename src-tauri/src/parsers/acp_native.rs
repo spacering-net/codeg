@@ -29,40 +29,78 @@
 //! `session/load` replay have no such line (the agent replays only
 //! notifications), so there the boundary falls back to "a user message chunk
 //! starts a new turn" — which is exactly how the replay is structured.
+//!
+//! What a live transcript holds between a turn end and the next prompt is work
+//! the agent did on its own — a background job's follow-up, say. It projects
+//! as an assistant turn of its own, starting at its first update; the one
+//! exception is an update for a call an earlier turn started, which completes
+//! that turn's card instead (see `apply_update`).
+//!
+//! A message codeg delivered into a running turn (a native steer) is recorded
+//! as a prompt marked [`TranscriptEntry::steer`]. It splits the turn like a
+//! prompt does, into the reply before it, the message, and the reply to it,
+//! but the turn goes on to the same turn end.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeZone, Utc};
-use sacp::schema::{SessionUpdate, ToolCallContent};
+use agent_client_protocol::schema::v1::{SessionUpdate, ToolCallContent};
 use serde::Deserialize as _;
 
 use crate::acp::connection::{
     extract_tool_call_images, json_value_to_text, serialize_tool_call_content,
     synthesize_edit_input_from_diffs,
 };
+use crate::acp::types::PromptInputBlock;
 use crate::acp_transcript::{self, EntryKind, Transcript, TranscriptEntry};
 use crate::models::agent::AgentType;
 use crate::models::conversation::{ConversationDetail, ConversationSummary, SessionStats};
 use crate::models::message::{ContentBlock, ImageData, MessageTurn, TurnRole, TurnUsage};
-use crate::parsers::{AgentParser, ParseError};
+use crate::parsers::{
+    user_turn_block, user_turn_block_from_wire, AgentEnv, AgentParser, ParseError,
+};
 
 pub struct AcpNativeParser {
     agent_type: AgentType,
     root: PathBuf,
+    trae_sessions: Option<PathBuf>,
 }
 
 impl AcpNativeParser {
     pub fn new(agent_type: AgentType) -> Self {
+        Self::for_env(agent_type, &AgentEnv::inherited())
+    }
+
+    pub fn for_env(agent_type: AgentType, env: &AgentEnv) -> Self {
         Self {
             agent_type,
             root: crate::paths::codeg_acp_transcripts_root(),
+            trae_sessions: crate::acp::trae::uses_trae_rollouts(agent_type)
+                .then(|| crate::acp::trae::resolve_trae_sessions_dir_for_env(env)),
         }
     }
 
     /// Root-injectable constructor for tests.
     pub fn new_in(agent_type: AgentType, root: PathBuf) -> Self {
-        Self { agent_type, root }
+        Self {
+            agent_type,
+            root,
+            trae_sessions: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_in_with_trae_sessions(
+        agent_type: AgentType,
+        root: PathBuf,
+        trae_sessions: PathBuf,
+    ) -> Self {
+        Self {
+            agent_type,
+            root,
+            trae_sessions: Some(trae_sessions),
+        }
     }
 
     /// Directory name for this agent's transcripts: its ACP registry id.
@@ -108,10 +146,30 @@ impl AgentParser for AcpNativeParser {
         if transcript.header.is_none() && transcript.is_empty() {
             return Err(ParseError::ConversationNotFound(conversation_id.to_string()));
         }
-        let turns = project_turns(&transcript.entries);
+        let mut turns = project_turns(&transcript.entries);
+        let native_usage = self.trae_sessions.as_deref().and_then(|sessions| {
+            // Every session of the chain spent tokens under its own id.
+            let mut native_session_ids = vec![conversation_id.to_string()];
+            native_session_ids.extend(acp_transcript::continuation_ancestors_in(
+                &self.root,
+                dir,
+                conversation_id,
+            ));
+            super::trae_usage::enrich_turns(sessions, &native_session_ids, &mut turns)
+        });
         let (used, size) = latest_context_window(&transcript.entries);
+        let stats = session_stats(&turns);
+        let stats = if stats
+            .as_ref()
+            .and_then(|stats| stats.total_usage.as_ref())
+            .is_none()
+        {
+            session_stats_with_native_usage(stats, native_usage)
+        } else {
+            stats
+        };
         let session_stats = crate::parsers::merge_context_window_stats(
-            session_stats(&turns),
+            stats,
             used,
             size,
         );
@@ -186,6 +244,14 @@ fn first_prompt_title(entries: &[TranscriptEntry]) -> Option<String> {
 }
 
 /// Concatenate the text of a recorded `session/prompt` content-block array.
+///
+/// Prose ONLY. An attachment-only prompt yields nothing here on purpose: this
+/// string is the *authoritative* parsed title, and
+/// `commands::conversations` writes it over any unlocked title the row
+/// already has — including one the agent itself published over
+/// `session_info_update`. Naming such a conversation after its attachment is
+/// worth doing, but as a seed for a row that has no title at all; that lives
+/// in `acp::manager`'s first-prompt seed (`attachment_names_from_prompt`).
 fn prompt_text(payload: &serde_json::Value) -> String {
     payload
         .as_array()
@@ -199,46 +265,70 @@ fn prompt_text(payload: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
-/// Blocks for a user turn recorded from a `session/prompt` payload. Text and
-/// images are kept; resource links degrade to their text form, which is what
-/// the composer serialized them from.
+/// Blocks for a user turn recorded from a `session/prompt` payload.
 fn prompt_blocks(payload: &serde_json::Value) -> Vec<ContentBlock> {
     let Some(items) = payload.as_array() else {
         return Vec::new();
     };
-    let mut blocks = Vec::new();
-    for item in items {
-        match item.get("type").and_then(|t| t.as_str()) {
-            Some("image") => {
-                let data = item.get("data").and_then(|d| d.as_str()).unwrap_or_default();
-                let mime_type = item
-                    .get("mimeType")
-                    .or_else(|| item.get("mime_type"))
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("image/png");
-                if !data.is_empty() {
-                    blocks.push(ContentBlock::Image {
-                        data: data.to_string(),
-                        mime_type: mime_type.to_string(),
-                        uri: item
-                            .get("uri")
-                            .and_then(|u| u.as_str())
-                            .map(str::to_string),
-                    });
-                }
-            }
-            _ => {
-                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                    if !text.is_empty() {
-                        blocks.push(ContentBlock::Text {
-                            text: text.to_string(),
-                        });
-                    }
-                }
-            }
+    items.iter().filter_map(user_turn_block_from_wire).collect()
+}
+
+/// The replayed counterpart of [`crate::acp::types::prompt_block_from_wire`]:
+/// a `session/load`
+/// chunk arrives already deserialized, so it is converted straight across
+/// rather than being serialized back to JSON only to be re-read. Consumes the
+/// block, so an embedded image's base64 moves instead of being copied twice.
+fn prompt_block_from_content(content: agent_client_protocol::schema::v1::ContentBlock) -> Option<PromptInputBlock> {
+    use agent_client_protocol::schema::v1::{ContentBlock as Wire, EmbeddedResourceResource as Res};
+    let non_empty = |s: String| (!s.is_empty()).then_some(s);
+    match content {
+        Wire::Text(t) => Some(PromptInputBlock::Text {
+            text: non_empty(t.text)?,
+        }),
+        Wire::Image(i) => Some(PromptInputBlock::Image {
+            data: non_empty(i.data)?,
+            mime_type: i.mime_type,
+            uri: i.uri.and_then(non_empty),
+        }),
+        Wire::ResourceLink(l) => {
+            let uri = non_empty(l.uri)?;
+            Some(PromptInputBlock::ResourceLink {
+                name: non_empty(l.name).unwrap_or_else(|| uri.clone()),
+                uri,
+                mime_type: l.mime_type,
+                description: l.description,
+            })
         }
+        Wire::Resource(r) => {
+            let (uri, mime_type, text, blob) = match r.resource {
+                Res::TextResourceContents(t) => (t.uri, t.mime_type, non_empty(t.text), None),
+                Res::BlobResourceContents(b) => (b.uri, b.mime_type, None, non_empty(b.blob)),
+                // A shape this build does not know: it has no uri to show and
+                // no bytes this can render.
+                _ => return None,
+            };
+            let is_image = mime_type.as_deref().is_some_and(|m| m.starts_with("image/"));
+            if uri.is_empty() && !(is_image && blob.is_some()) {
+                return None;
+            }
+            Some(PromptInputBlock::Resource {
+                uri,
+                mime_type,
+                text,
+                blob,
+            })
+        }
+        // Audio, and any kind a newer schema adds: nothing to render.
+        _ => None,
     }
-    blocks
+}
+
+/// Where tool calls are projected: a turn's blocks, plus the index of each
+/// call's `ToolUse` and `ToolResult` among them.
+struct ToolCards<'a> {
+    blocks: &'a mut Vec<ContentBlock>,
+    tool_use_index: &'a mut HashMap<String, usize>,
+    tool_result_index: &'a mut HashMap<String, usize>,
 }
 
 /// Accumulated state of one assistant turn under construction.
@@ -265,6 +355,17 @@ impl PendingTurn {
             started_at_ms: at_ms,
             last_at_ms: at_ms,
             ..Default::default()
+        }
+    }
+
+    /// This turn's tool-call cards, for [`upsert_tool_call`] to project into —
+    /// which gives the turn content.
+    fn tool_cards(&mut self) -> ToolCards<'_> {
+        self.has_content = true;
+        ToolCards {
+            blocks: &mut self.blocks,
+            tool_use_index: &mut self.tool_use_index,
+            tool_result_index: &mut self.tool_result_index,
         }
     }
 
@@ -332,8 +433,9 @@ pub fn is_recorded_update(update: &SessionUpdate) -> bool {
 /// not the per-turn input/output counts `MessageTurn::usage` holds — so it
 /// feeds the session footer's context-window trio, exactly like the built-in
 /// parsers derive it from their own stores, and never a turn's token usage.
-/// (A turn's usage stays `None` for custom agents: ACP has no channel for it,
-/// and inventing one from occupancy deltas would be a guess rendered as fact.)
+/// (A turn's usage comes only from its recorded prompt response or ZCode's
+/// native turn metrics, see `acp::zcode_turn`; otherwise it stays `None`.
+/// Inventing one from occupancy deltas would be a guess rendered as fact.)
 ///
 /// Matched on the raw payload rather than by deserializing: the answer is
 /// almost always in the last few entries, and a string compare per entry costs
@@ -368,12 +470,42 @@ pub fn project_turns(entries: &[TranscriptEntry]) -> Vec<MessageTurn> {
     // time-to-first-token is part of how long the agent took, and this matches
     // what `turn_timings` records for built-ins.
     let mut turn_start_hint: Option<u64> = None;
+    // True when the last block of the open user turn is PROSE — text a
+    // `user_message_chunk` streamed — so the next text chunk may be appended to
+    // it. False after an attachment marker or an image, which are one block per
+    // prompt block in the live projection and must stay that way here: gluing
+    // the next chunk's prose onto `[uri](uri)` would render one run-on
+    // paragraph where the live path renders two.
+    let mut user_prose_open = false;
+    // True from a recorded turn end to the next recorded prompt: the gap
+    // between two prompted turns, where everything recorded is work the agent
+    // did on its own. Never set in a replay, which has no turn ends.
+    let mut between_turns = false;
+    // Index in `turns` of the user turn of the prompt being answered: set by a
+    // recorded prompt, kept across the messages delivered into its turn (a
+    // steer), cleared at its turn end. Bounds how far back the turn end and a
+    // tool call's update may reach (see `apply_update`). Never set in a replay.
+    let mut prompt_start: Option<usize> = None;
+    // True from a steer to the end of the turn it was delivered into: the part
+    // under construction started at the steer, not at the turn's prompt.
+    let mut steered = false;
     let mut seq = 0usize;
 
     for entry in entries {
         match entry.k {
             EntryKind::Prompt => {
+                between_turns = false;
                 flush(&mut pending, &mut turns, &mut seq);
+                // A steer is a user message of its own, so it splits the turn
+                // like a prompt — the shape Claude Code's history draws, and
+                // the live view's — but the turn goes on: same prompt, same
+                // turn end.
+                if entry.steer {
+                    steered = true;
+                } else {
+                    steered = false;
+                    prompt_start = Some(turns.len());
+                }
                 let blocks = prompt_blocks(&entry.p);
                 turns.push(MessageTurn {
                     id: format!("acp-{seq}"),
@@ -389,15 +521,60 @@ pub fn project_turns(entries: &[TranscriptEntry]) -> Vec<MessageTurn> {
                 seq += 1;
                 prompt_just_recorded = true;
                 turn_start_hint = Some(entry.t);
+                // A recorded prompt is a COMPLETE message, never a half-streamed
+                // one, so nothing may be appended to its trailing block.
+                user_prose_open = false;
             }
             EntryKind::TurnEnd => {
                 if let Some(p) = pending.as_mut() {
-                    apply_turn_end(p, &entry.p);
+                    // After a steer, the part being closed started at the
+                    // steer, while `durationMs` spans the whole turn from its
+                    // prompt; the part's own span (`flush`) is the honest one.
+                    apply_turn_end(p, &entry.p, !steered);
                     p.last_at_ms = entry.t;
+                } else {
+                    // Nothing came after the last user message of this turn —
+                    // a steer, or one the agent relayed from another client
+                    // (claude-agent-acp forwards Remote Control messages as
+                    // `user_message_chunk`). The usage and model the turn end
+                    // reports go on the part before it — never on a reply to an
+                    // earlier prompt.
+                    if let Some(last) = turns
+                        .iter_mut()
+                        .skip(prompt_start.unwrap_or(usize::MAX))
+                        .rev()
+                        .find(|turn| matches!(turn.role, TurnRole::Assistant))
+                    {
+                        let (model, usage) = turn_end_model_and_usage(&entry.p);
+                        if model.is_some() {
+                            last.model = model;
+                        }
+                        if usage.is_some() {
+                            last.usage = usage;
+                        }
+                    }
+                }
+                // A paid attempt can finish without emitting any text or
+                // tools. Keep its reported usage without inventing content,
+                // and never attach an unprompted footer to an earlier turn.
+                if pending.is_none()
+                    && prompt_start.is_some()
+                    && !turns.iter().skip(prompt_start.unwrap_or(usize::MAX))
+                        .any(|turn| matches!(turn.role, TurnRole::Assistant))
+                    && turn_end_model_and_usage(&entry.p).1.is_some()
+                {
+                    let mut turn = PendingTurn::new(turn_start_hint.unwrap_or(entry.t));
+                    apply_turn_end(&mut turn, &entry.p, !steered);
+                    turn.last_at_ms = entry.t;
+                    pending = Some(turn);
                 }
                 flush(&mut pending, &mut turns, &mut seq);
                 prompt_just_recorded = false;
                 turn_start_hint = None;
+                user_prose_open = false;
+                between_turns = true;
+                steered = false;
+                prompt_start = None;
             }
             EntryKind::Update => {
                 // Deserialized from a BORROWED `&Value`, not a cloned one: this
@@ -415,11 +592,14 @@ pub fn project_turns(entries: &[TranscriptEntry]) -> Vec<MessageTurn> {
                 apply_update(
                     update,
                     entry.t,
+                    between_turns,
+                    prompt_start,
                     &mut pending,
                     &mut turns,
                     &mut seq,
                     &mut prompt_just_recorded,
                     &mut turn_start_hint,
+                    &mut user_prose_open,
                 );
             }
         }
@@ -430,7 +610,7 @@ pub fn project_turns(entries: &[TranscriptEntry]) -> Vec<MessageTurn> {
 
 fn flush(pending: &mut Option<PendingTurn>, turns: &mut Vec<MessageTurn>, seq: &mut usize) {
     let Some(p) = pending.take() else { return };
-    if !p.has_content {
+    if !p.has_content && p.usage.is_none() {
         return;
     }
     turns.push(MessageTurn {
@@ -449,36 +629,59 @@ fn flush(pending: &mut Option<PendingTurn>, turns: &mut Vec<MessageTurn>, seq: &
     *seq += 1;
 }
 
-fn apply_turn_end(pending: &mut PendingTurn, payload: &serde_json::Value) {
-    if let Some(ms) = payload.get("durationMs").and_then(|v| v.as_u64()) {
-        pending.duration_ms = Some(ms);
-    }
-    if let Some(model) = payload.get("model").and_then(|v| v.as_str()) {
-        if !model.is_empty() {
-            pending.model = Some(model.to_string());
+/// Close the open part of a turn with what its turn end reports. `whole_turn`
+/// is false when the part started at a steer rather than at the turn's prompt:
+/// the recorded duration then spans more than this part and is left out.
+fn apply_turn_end(pending: &mut PendingTurn, payload: &serde_json::Value, whole_turn: bool) {
+    if whole_turn {
+        if let Some(ms) = payload.get("durationMs").and_then(|v| v.as_u64()) {
+            pending.duration_ms = Some(ms);
         }
     }
-    if let Some(usage) = payload.get("usage") {
-        if let Some(parsed) = parse_usage(usage) {
-            pending.usage = Some(parsed);
-        }
+    let (model, usage) = turn_end_model_and_usage(payload);
+    if model.is_some() {
+        pending.model = model;
+    }
+    if usage.is_some() {
+        pending.usage = usage;
     }
 }
 
-/// Read an ACP usage object. Field names follow the `unstable_session_usage`
+/// The model and the usage a turn end reports, when it reports them.
+fn turn_end_model_and_usage(payload: &serde_json::Value) -> (Option<String>, Option<TurnUsage>) {
+    let model = payload
+        .get("model")
+        .and_then(|v| v.as_str())
+        .filter(|model| !model.is_empty())
+        .map(str::to_string);
+    let usage = payload.get("usage").and_then(parse_usage);
+    (model, usage)
+}
+
+/// Read an ACP usage object. Field names follow `unstable_end_turn_token_usage`
 /// shape, with snake_case accepted as well since agents differ.
 fn parse_usage(value: &serde_json::Value) -> Option<TurnUsage> {
-    let get = |camel: &str, snake: &str| -> u64 {
-        value
-            .get(camel)
-            .or_else(|| value.get(snake))
+    let get = |keys: &[&str]| -> u64 {
+        keys.iter()
+            .find_map(|key| value.get(*key))
             .and_then(|v| v.as_u64())
             .unwrap_or(0)
     };
-    let input = get("inputTokens", "input_tokens");
-    let output = get("outputTokens", "output_tokens");
-    let cache_create = get("cacheCreationInputTokens", "cache_creation_input_tokens");
-    let cache_read = get("cacheReadInputTokens", "cache_read_input_tokens");
+    let input = get(&["inputTokens", "input_tokens"]);
+    let output = get(&["outputTokens", "output_tokens"]);
+    // ACP usage is cache-exclusive. Accept its canonical cache names first,
+    // retaining the older spellings for transcripts already on disk. Aliases
+    // name the same bucket; adding them would double-count a cache hit.
+    let cache_create = get(&[
+        "cachedWriteTokens",
+        "cacheCreationInputTokens",
+        "cache_creation_input_tokens",
+    ]);
+    let cache_read = get(&[
+        "cachedReadTokens",
+        "cacheReadInputTokens",
+        "cache_read_input_tokens",
+    ]);
     if input == 0 && output == 0 && cache_create == 0 && cache_read == 0 {
         return None;
     }
@@ -494,11 +697,14 @@ fn parse_usage(value: &serde_json::Value) -> Option<TurnUsage> {
 fn apply_update(
     update: SessionUpdate,
     at_ms: u64,
+    between_turns: bool,
+    prompt_start: Option<usize>,
     pending: &mut Option<PendingTurn>,
     turns: &mut Vec<MessageTurn>,
     seq: &mut usize,
     prompt_just_recorded: &mut bool,
     turn_start_hint: &mut Option<u64>,
+    user_prose_open: &mut bool,
 ) {
     // Opening a turn consumes the prompt's timestamp, so the turn's span covers
     // time-to-first-token; without a recorded prompt (replay) it starts here.
@@ -516,44 +722,56 @@ fn apply_update(
             if *prompt_just_recorded {
                 return;
             }
-            let text = content_block_text(&chunk.content);
-            if text.is_empty() {
+            let Some(input) = prompt_block_from_content(chunk.content) else {
                 return;
-            }
+            };
+            // Resource/image chunks append in order to the same user turn;
+            // incoming text chunks retain the existing text-coalescing behavior,
+            // but only onto prose — an attachment marker is one block per prompt
+            // block in the live projection, and appending to it would glue the
+            // next sentence onto the end of a markdown link.
+            let is_text = matches!(input, PromptInputBlock::Text { .. });
+            let block = user_turn_block(&input);
+            let coalesce = is_text && *user_prose_open;
             flush(pending, turns, seq);
             *turn_start_hint = Some(at_ms);
             match turns.last_mut() {
                 // Consecutive replay chunks belong to one user message.
-                Some(last)
-                    if matches!(last.role, TurnRole::User)
-                        && matches!(last.blocks.last(), Some(ContentBlock::Text { .. })) =>
-                {
-                    if let Some(ContentBlock::Text { text: existing }) = last.blocks.last_mut() {
-                        existing.push_str(&text);
+                Some(last) if matches!(last.role, TurnRole::User) => {
+                    if let (
+                        true,
+                        Some(ContentBlock::Text { text: existing }),
+                        ContentBlock::Text { text },
+                    ) = (coalesce, last.blocks.last_mut(), &block)
+                    {
+                        existing.push_str(text);
+                    } else {
+                        last.blocks.push(block);
                     }
                 }
                 _ => {
                     turns.push(MessageTurn {
                         id: format!("acp-{seq}"),
                         role: TurnRole::User,
-                        blocks: vec![ContentBlock::Text { text }],
+                        blocks: vec![block],
                         timestamp: epoch_ms_to_utc(at_ms),
                         usage: None,
                         duration_ms: None,
                         model: None,
                         completed_at: None,
-                    agent_message_id: None,
+                        agent_message_id: None,
                     });
                     *seq += 1;
                 }
             }
+            *user_prose_open = is_text;
         }
         SessionUpdate::AgentMessageChunk(chunk) => {
             *prompt_just_recorded = false;
             let p = open_turn!();
             p.last_at_ms = at_ms;
             match &chunk.content {
-                sacp::schema::ContentBlock::Image(image) => {
+                agent_client_protocol::schema::v1::ContentBlock::Image(image) => {
                     p.has_content = true;
                     p.blocks.push(ContentBlock::Image {
                         data: image.data.clone(),
@@ -581,7 +799,7 @@ fn apply_update(
             let id = tc.tool_call_id.to_string();
             let status = format!("{:?}", tc.status).to_lowercase();
             upsert_tool_call(
-                p,
+                p.tool_cards(),
                 &id,
                 Some(tc.title.clone()),
                 tc.raw_input.as_ref(),
@@ -592,13 +810,59 @@ fn apply_update(
             );
         }
         SessionUpdate::ToolCallUpdate(tcu) => {
+            let id = tcu.tool_call_id.to_string();
+            let status = tcu.fields.status.map(|s| format!("{s:?}").to_lowercase());
+            // An update for a call the open part of the turn did not start can
+            // still belong to a card already drawn:
+            //
+            // * Between turns, a call an EARLIER turn started, finishing after
+            //   that turn ended (a command that went to the background, say).
+            //   Its card is in the turn that opened it, and the live view draws
+            //   nothing for the update itself, so it completes that card rather
+            //   than opening a turn with a second card for the same call.
+            // * Inside a turn, a call this prompt's turn started before a
+            //   message split it — a steer, or a user chunk echoed mid-turn: a
+            //   command the steer sent to the background reporting back, or a
+            //   streamed call the steer cut off failing at the turn's end. The
+            //   live view keeps one card per call across such a split and
+            //   updates it in place, so the update goes back to that card.
+            //
+            // Inside a turn the search never reaches past the prompt that
+            // opened it: the live view draws an update from an earlier turn's
+            // call as a card of the running turn, so there it stays one.
+            let held_by_open_turn = pending
+                .as_ref()
+                .is_some_and(|p| p.tool_use_index.contains_key(&id));
+            let reach = if between_turns { Some(0) } else { prompt_start };
+            if let Some(reach) = reach.filter(|_| !held_by_open_turn) {
+                let closed = turns
+                    .iter_mut()
+                    .skip(reach)
+                    .rev()
+                    .find_map(|turn| closed_tool_card(turn, &id).map(|slots| (turn, slots)));
+                if let Some((turn, (mut uses, mut results))) = closed {
+                    upsert_tool_call(
+                        ToolCards {
+                            blocks: &mut turn.blocks,
+                            tool_use_index: &mut uses,
+                            tool_result_index: &mut results,
+                        },
+                        &id,
+                        tcu.fields.title.clone(),
+                        tcu.fields.raw_input.as_ref(),
+                        tcu.fields.content.as_deref().unwrap_or(&[]),
+                        tcu.fields.raw_output.as_ref(),
+                        status.as_deref(),
+                        tcu.meta.clone().map(serde_json::Value::Object),
+                    );
+                    return;
+                }
+            }
             *prompt_just_recorded = false;
             let p = open_turn!();
             p.last_at_ms = at_ms;
-            let id = tcu.tool_call_id.to_string();
-            let status = tcu.fields.status.map(|s| format!("{s:?}").to_lowercase());
             upsert_tool_call(
-                p,
+                p.tool_cards(),
                 &id,
                 tcu.fields.title.clone(),
                 tcu.fields.raw_input.as_ref(),
@@ -626,16 +890,47 @@ fn apply_update(
 
 /// Text of an ACP content block. Non-text blocks that still carry a textual
 /// projection (resource links, embedded text resources) degrade to it.
-fn content_block_text(block: &sacp::schema::ContentBlock) -> String {
+fn content_block_text(block: &agent_client_protocol::schema::v1::ContentBlock) -> String {
     match block {
-        sacp::schema::ContentBlock::Text(t) => t.text.clone(),
-        sacp::schema::ContentBlock::ResourceLink(link) => link.uri.clone(),
-        sacp::schema::ContentBlock::Resource(res) => match &res.resource {
-            sacp::schema::EmbeddedResourceResource::TextResourceContents(t) => t.text.clone(),
+        agent_client_protocol::schema::v1::ContentBlock::Text(t) => t.text.clone(),
+        agent_client_protocol::schema::v1::ContentBlock::ResourceLink(link) => link.uri.clone(),
+        agent_client_protocol::schema::v1::ContentBlock::Resource(res) => match &res.resource {
+            agent_client_protocol::schema::v1::EmbeddedResourceResource::TextResourceContents(t) => t.text.clone(),
             _ => String::new(),
         },
         _ => String::new(),
     }
+}
+
+/// Where `id`'s card sits in a turn that is already closed, as the index maps
+/// [`upsert_tool_call`] patches through — `None` when the turn has no card for
+/// it. A closed turn keeps no index of its own, and only an update for a call
+/// the open part did not start ever asks, so the turn's blocks are searched
+/// instead.
+fn closed_tool_card(
+    turn: &MessageTurn,
+    id: &str,
+) -> Option<(HashMap<String, usize>, HashMap<String, usize>)> {
+    let mut uses = HashMap::new();
+    let mut results = HashMap::new();
+    for (index, block) in turn.blocks.iter().enumerate() {
+        match block {
+            ContentBlock::ToolUse {
+                tool_use_id: Some(use_id),
+                ..
+            } if use_id == id => {
+                uses.insert(id.to_string(), index);
+            }
+            ContentBlock::ToolResult {
+                tool_use_id: Some(result_id),
+                ..
+            } if result_id == id => {
+                results.insert(id.to_string(), index);
+            }
+            _ => {}
+        }
+    }
+    (!uses.is_empty()).then_some((uses, results))
 }
 
 /// Insert or patch one tool call's `ToolUse` / `ToolResult` pair.
@@ -644,7 +939,7 @@ fn content_block_text(block: &sacp::schema::ContentBlock) -> String {
 /// looks identical whether it is streaming or reloaded from disk.
 #[allow(clippy::too_many_arguments)]
 fn upsert_tool_call(
-    pending: &mut PendingTurn,
+    cards: ToolCards<'_>,
     id: &str,
     title: Option<String>,
     raw_input: Option<&serde_json::Value>,
@@ -653,9 +948,12 @@ fn upsert_tool_call(
     status: Option<&str>,
     meta: Option<serde_json::Value>,
 ) {
-    pending.has_content = true;
-    let own_input =
-        json_value_to_text(&raw_input.cloned()).filter(|t| !t.trim().is_empty());
+    let ToolCards {
+        blocks,
+        tool_use_index,
+        tool_result_index,
+    } = cards;
+    let own_input = json_value_to_text(&raw_input.cloned()).filter(|t| !t.trim().is_empty());
     let synthesized_edit = if own_input.is_none() {
         synthesize_edit_input_from_diffs(content)
     } else {
@@ -670,14 +968,14 @@ fn upsert_tool_call(
         .collect();
     let is_error = status == Some("failed");
 
-    match pending.tool_use_index.get(id).copied() {
+    match tool_use_index.get(id).copied() {
         Some(idx) => {
             if let Some(ContentBlock::ToolUse {
                 tool_name,
                 input_preview: existing_input,
                 meta: existing_meta,
                 ..
-            }) = pending.blocks.get_mut(idx)
+            }) = blocks.get_mut(idx)
             {
                 if let Some(t) = title.filter(|t| !t.is_empty()) {
                     *tool_name = t;
@@ -691,8 +989,8 @@ fn upsert_tool_call(
             }
         }
         None => {
-            pending.tool_use_index.insert(id.to_string(), pending.blocks.len());
-            pending.blocks.push(ContentBlock::ToolUse {
+            tool_use_index.insert(id.to_string(), blocks.len());
+            blocks.push(ContentBlock::ToolUse {
                 tool_use_id: Some(id.to_string()),
                 // ACP has no tool *name* channel — `title` is what the agent
                 // chose to display, and it is what the frontend classifier
@@ -710,14 +1008,14 @@ fn upsert_tool_call(
     if output.is_none() && images.is_empty() && !is_error {
         return;
     }
-    match pending.tool_result_index.get(id).copied() {
+    match tool_result_index.get(id).copied() {
         Some(idx) => {
             if let Some(ContentBlock::ToolResult {
                 output_preview,
                 is_error: existing_error,
                 images: existing_images,
                 ..
-            }) = pending.blocks.get_mut(idx)
+            }) = blocks.get_mut(idx)
             {
                 if output.is_some() {
                     *output_preview = output;
@@ -729,15 +1027,14 @@ fn upsert_tool_call(
             }
         }
         None => {
-            pending
-                .tool_result_index
-                .insert(id.to_string(), pending.blocks.len());
-            pending.blocks.push(ContentBlock::ToolResult {
+            tool_result_index.insert(id.to_string(), blocks.len());
+            blocks.push(ContentBlock::ToolResult {
                 tool_use_id: Some(id.to_string()),
                 output_preview: output,
                 is_error,
                 agent_stats: None,
                 images,
+                exit_code: None,
             });
         }
     }
@@ -746,7 +1043,7 @@ fn upsert_tool_call(
 /// ACP plans are cumulative snapshots: each `plan` update replaces the previous
 /// one. Model that as a single synthetic `TodoWrite` tool call whose input the
 /// frontend already renders as a plan card.
-fn upsert_plan(pending: &mut PendingTurn, plan: &sacp::schema::Plan) {
+fn upsert_plan(pending: &mut PendingTurn, plan: &agent_client_protocol::schema::v1::Plan) {
     let todos: Vec<serde_json::Value> = plan
         .entries
         .iter()
@@ -819,13 +1116,54 @@ fn session_stats(turns: &[MessageTurn]) -> Option<SessionStats> {
     })
 }
 
+/// Preserve native usage from a TRAE turn that produced no renderable
+/// assistant message. Normally `trae_usage::enrich_turns` attaches every
+/// native turn to an ACP turn and the regular aggregation above wins.
+///
+/// Without native usage the stats stand as they are: most ACP agents report
+/// no tokens, and their footer still has the turns' durations to show.
+fn session_stats_with_native_usage(
+    stats: Option<SessionStats>,
+    native_usage: Option<TurnUsage>,
+) -> Option<SessionStats> {
+    let Some(usage) = native_usage else {
+        return stats;
+    };
+    let total_tokens = usage
+        .input_tokens
+        .saturating_add(usage.output_tokens)
+        .saturating_add(usage.cache_creation_input_tokens)
+        .saturating_add(usage.cache_read_input_tokens);
+    match stats {
+        Some(mut stats) => {
+            stats.total_usage = Some(usage);
+            stats.total_tokens = Some(total_tokens);
+            Some(stats)
+        }
+        None => Some(SessionStats {
+            total_usage: Some(usage),
+            total_tokens: Some(total_tokens),
+            total_duration_ms: 0,
+            context_window_used_tokens: None,
+            context_window_max_tokens: None,
+            context_window_usage_percent: None,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acp::types::prompt_block_from_wire;
     use crate::acp_transcript::{TranscriptEntry, TranscriptHeader};
 
     fn entry(t: u64, k: EntryKind, p: serde_json::Value) -> TranscriptEntry {
-        TranscriptEntry { t, k, p }
+        TranscriptEntry {
+            t,
+            k,
+            p,
+            steer: false,
+        }
     }
 
     fn update(t: u64, p: serde_json::Value) -> TranscriptEntry {
@@ -845,6 +1183,366 @@ mod tests {
             "sessionUpdate": kind,
             "content": { "type": "text", "text": text }
         })
+    }
+
+    #[test]
+    fn reported_usage_survives_a_turn_without_output_but_not_an_orphan_footer() {
+        let footer = entry(200, EntryKind::TurnEnd, serde_json::json!({
+            "stopReason":"end_turn", "durationMs":100,
+            "usage":{"inputTokens":3,"outputTokens":0,"cachedReadTokens":4,"totalTokens":7}
+        }));
+        let turns = project_turns(&[prompt(100, "attempt"), footer.clone()]);
+        assert_eq!(turns.len(), 2);
+        assert!(turns[1].blocks.is_empty());
+        assert_eq!(turns[1].usage.as_ref().unwrap().input_tokens, 3);
+        assert_eq!(turns[1].usage.as_ref().unwrap().cache_read_input_tokens, 4);
+        assert_eq!(turns[1].duration_ms, Some(100));
+        assert!(project_turns(&[footer]).is_empty());
+    }
+
+    /// A message typed in another client of the session reaches codeg as a
+    /// `user_message_chunk` while the prompt is still open. It closes the
+    /// reply so far, and when nothing follows it the turn end's usage still
+    /// belongs to that reply.
+    #[test]
+    fn a_relayed_user_message_does_not_drop_the_turn_end_usage() {
+        let turns = project_turns(&[
+            prompt(100, "P"),
+            update(150, text_chunk("agent_message_chunk", "Reply")),
+            update(200, text_chunk("user_message_chunk", "Remote follow-up")),
+            entry(
+                300,
+                EntryKind::TurnEnd,
+                serde_json::json!({
+                    "stopReason": "end_turn", "model": "opus",
+                    "usage": {"inputTokens": 4000, "outputTokens": 10, "totalTokens": 4010}
+                }),
+            ),
+        ]);
+        assert_eq!(roles(&turns), ["User", "Assistant", "User"]);
+        assert_eq!(turns[1].usage.as_ref().map(|u| u.input_tokens), Some(4000));
+        assert_eq!(turns[1].model.as_deref(), Some("opus"));
+        assert_eq!(turns[2].usage, None);
+    }
+
+    fn attachment_prompt() -> serde_json::Value {
+        serde_json::json!([
+            {"type":"text", "text":"Review these files"},
+            {"type":"resource_link", "name":"report.pdf", "uri":"file:///tmp/report.pdf", "mimeType":"application/pdf"},
+            {"type":"resource", "resource":{"uri":"attachment:///note.txt", "mimeType":"text/plain", "text":"private file contents"}},
+            {"type":"resource", "resource":{"uri":"attachment:///data.bin", "mimeType":"application/octet-stream", "blob":"c2VjcmV0"}},
+            {"type":"resource", "resource":{"uri":"attachment:///plot.png", "mimeType":"image/png", "blob":"aW1hZ2U="}},
+            {"type":"image", "data":"bmF0aXZl", "mimeType":"image/jpeg", "uri":"file:///tmp/photo.jpg"}
+        ])
+    }
+
+    #[test]
+    fn recorded_prompt_preserves_attachment_markers_and_images() {
+        let turns = project_turns(&[entry(1, EntryKind::Prompt, attachment_prompt())]);
+        assert_eq!(turns.len(), 1);
+        let blocks = &turns[0].blocks;
+        assert_eq!(blocks.len(), 6);
+        for (index, expected) in [
+            (1, "[report.pdf](file:///tmp/report.pdf)"),
+            // The attachment a text resource is shown as — without its body.
+            (
+                2,
+                "attachment:///note.txt\n<context ref=\"attachment:///note.txt\">\n\n</context>",
+            ),
+            (3, "[attachment:///data.bin](attachment:///data.bin)"),
+        ] {
+            assert!(matches!(&blocks[index], ContentBlock::Text { text } if text == expected));
+        }
+        assert!(
+            matches!(&blocks[4], ContentBlock::Image { data, mime_type, uri }
+            if data == "aW1hZ2U=" && mime_type == "image/png" && uri.as_deref() == Some("attachment:///plot.png"))
+        );
+        assert!(
+            matches!(&blocks[5], ContentBlock::Image { data, mime_type, .. }
+            if data == "bmF0aXZl" && mime_type == "image/jpeg")
+        );
+        let text = prompt_text(&attachment_prompt());
+        assert_eq!(text, "Review these files");
+    }
+
+    #[test]
+    fn replayed_attachments_match_recorded_prompt_and_stay_in_one_user_turn() {
+        let payload = attachment_prompt();
+        let mut entries = vec![];
+        for (i, content) in payload.as_array().unwrap().iter().enumerate() {
+            entries.push(update(
+                i as u64 + 1,
+                serde_json::json!({
+                    "sessionUpdate":"user_message_chunk", "content":content
+                }),
+            ));
+        }
+        entries.push(update(10, text_chunk("user_message_chunk", "after ")));
+        entries.push(update(11, text_chunk("user_message_chunk", "images")));
+        entries.push(update(12, text_chunk("agent_message_chunk", "done")));
+        let turns = project_turns(&entries);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].blocks.len(), 7);
+        let expected = prompt_blocks(&payload);
+        assert_eq!(
+            serde_json::to_value(&turns[0].blocks[..6]).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        assert!(
+            matches!(&turns[0].blocks[6], ContentBlock::Text { text } if text == "after images")
+        );
+        assert!(matches!(turns[1].role, TurnRole::Assistant));
+    }
+
+    #[test]
+    fn recorded_attachment_echoes_do_not_duplicate_user_turns() {
+        let payload = attachment_prompt();
+        let mut entries = vec![entry(1, EntryKind::Prompt, payload.clone())];
+        for content in payload.as_array().unwrap() {
+            entries.push(update(
+                2,
+                serde_json::json!({"sessionUpdate":"user_message_chunk", "content":content}),
+            ));
+        }
+        entries.push(update(3, text_chunk("agent_message_chunk", "done")));
+        let turns = project_turns(&entries);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].blocks.len(), 6);
+    }
+
+    /// A recorded prompt is read as raw JSON (it must survive bytes written by
+    /// older builds) while a `session/load` chunk arrives already typed. Two
+    /// readers, one meaning: the same content has to produce the same block
+    /// whichever door it comes through, or history would contradict itself
+    /// depending on whether codeg recorded the turn or the agent replayed it.
+    #[test]
+    fn the_typed_and_raw_readers_agree_on_the_same_content() {
+        for item in attachment_prompt().as_array().expect("an array") {
+            let typed = agent_client_protocol::schema::v1::ContentBlock::deserialize(item)
+                .expect("every block in the fixture is valid ACP");
+            assert_eq!(
+                prompt_block_from_content(typed),
+                prompt_block_from_wire(item),
+                "{item}"
+            );
+        }
+        // And on content neither door should let through.
+        for junk in [
+            serde_json::json!({"type":"text", "text":""}),
+            serde_json::json!({"type":"image", "data":"", "mimeType":"image/png"}),
+            serde_json::json!({"type":"resource_link", "uri":"", "name":"x"}),
+            serde_json::json!({"type":"audio", "data":"QUJD", "mimeType":"audio/wav"}),
+        ] {
+            assert_eq!(prompt_block_from_wire(&junk), None, "{junk}");
+            if let Ok(typed) = agent_client_protocol::schema::v1::ContentBlock::deserialize(&junk) {
+                assert_eq!(prompt_block_from_content(typed), None, "{junk}");
+            }
+        }
+    }
+
+    /// The parsed title is the AUTHORITATIVE one — `commands::conversations`
+    /// writes it over any unlocked title the row holds, including one the agent
+    /// published itself. So it stays prose-only: an attachment-only prompt
+    /// reports no title here and is named by the first-prompt SEED instead
+    /// (`acp::manager::delegation_child_title_seed`), which only ever fills a
+    /// row that has no title at all.
+    #[test]
+    fn the_parsed_title_is_prose_only_and_never_an_attachment_name() {
+        let attachments_only = serde_json::json!([
+            {"type":"resource_link", "name":"report.pdf", "uri":"file:///tmp/report.pdf"},
+            {"type":"image", "data":"aW1n", "mimeType":"image/png"}
+        ]);
+        assert_eq!(
+            first_prompt_title(&[entry(1, EntryKind::Prompt, attachments_only)]),
+            None
+        );
+        assert_eq!(
+            first_prompt_title(&[entry(1, EntryKind::Prompt, attachment_prompt())]).as_deref(),
+            Some("Review these files")
+        );
+    }
+
+    /// An everyday file name is not a safe Markdown fragment. The marker is
+    /// escaped the way the composer escapes its own `@`-file links, so the
+    /// frontend's reference-link parser recovers the real path instead of
+    /// showing raw `[…](…)` source with the link broken at the first space.
+    #[test]
+    fn markers_for_awkward_paths_stay_well_formed_links() {
+        let blocks = prompt_blocks(&serde_json::json!([
+            {"type":"resource_link", "name":"b (1).ts", "uri":"file:///a/b (1).ts"},
+            {"type":"resource", "resource":{"uri":"file:///a/c).ts", "mimeType":"text/plain"}}
+        ]));
+        assert_eq!(blocks.len(), 2);
+        assert!(
+            matches!(&blocks[0], ContentBlock::Text { text } if text == "[b \\(1\\).ts](<file:///a/b (1).ts>)")
+        );
+        assert!(
+            matches!(&blocks[1], ContentBlock::Text { text } if text == "[file:///a/c\\).ts](<file:///a/c).ts>)")
+        );
+    }
+
+    /// A replay whose user message puts the attachment BEFORE the prose (the
+    /// order an agent that front-loads file context stores it in). The marker is
+    /// a whole block, so the sentence after it must not be glued onto the end of
+    /// its markdown link — the live projection emits one block per prompt block,
+    /// and the transcript has to read the same way.
+    #[test]
+    fn replayed_prose_after_an_attachment_marker_stays_its_own_block() {
+        let entries = vec![
+            update(
+                1,
+                serde_json::json!({
+                    "sessionUpdate":"user_message_chunk",
+                    "content":{"type":"resource", "resource":{
+                        "uri":"file:///tmp/note.txt", "mimeType":"text/plain", "text":"body"
+                    }}
+                }),
+            ),
+            update(2, text_chunk("user_message_chunk", "what does ")),
+            update(3, text_chunk("user_message_chunk", "this do?")),
+            update(4, text_chunk("agent_message_chunk", "reading it")),
+        ];
+        let turns = project_turns(&entries);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].blocks.len(), 2);
+        assert!(
+            matches!(&turns[0].blocks[0], ContentBlock::Text { text } if text == "file:///tmp/note.txt\n<context ref=\"file:///tmp/note.txt\">\n\n</context>")
+        );
+        // The two prose chunks still coalesce with each other.
+        assert!(
+            matches!(&turns[0].blocks[1], ContentBlock::Text { text } if text == "what does this do?")
+        );
+    }
+
+    /// The regression the attachment fix turns on: a user message carrying only
+    /// an attachment used to project to nothing, so it neither ended the
+    /// previous assistant turn nor appeared at all — the next reply merged into
+    /// the previous one.
+    #[test]
+    fn an_attachment_only_replayed_chunk_ends_the_previous_assistant_turn() {
+        let entries = vec![
+            update(1, text_chunk("agent_message_chunk", "first reply")),
+            update(
+                2,
+                serde_json::json!({
+                    "sessionUpdate":"user_message_chunk",
+                    "content":{"type":"resource", "resource":{
+                        "uri":"file:///tmp/data.bin",
+                        "mimeType":"application/octet-stream",
+                        "blob":"c2VjcmV0"
+                    }}
+                }),
+            ),
+            update(3, text_chunk("agent_message_chunk", "second reply")),
+        ];
+        let turns = project_turns(&entries);
+        assert_eq!(turns.len(), 3);
+        assert!(matches!(turns[0].role, TurnRole::Assistant));
+        assert!(matches!(turns[1].role, TurnRole::User));
+        assert_eq!(turns[1].blocks.len(), 1);
+        assert!(matches!(turns[2].role, TurnRole::Assistant));
+        assert!(
+            matches!(&turns[2].blocks[0], ContentBlock::Text { text } if text == "second reply")
+        );
+    }
+
+    /// The live user turn is projected by `acp::types::user_blocks_from_prompt`;
+    /// this parser re-derives the same mapping from the recorded wire bytes.
+    /// They are two implementations of one contract — a viewer watching live and
+    /// a reader after a refresh must see the same message — so pin them
+    /// together over the block shapes codeg's composer actually sends.
+    #[test]
+    fn history_projection_matches_the_live_user_message_projection() {
+        use crate::acp::types::{user_blocks_from_prompt, PromptInputBlock, UserMessageBlock};
+
+        let sent = vec![
+            PromptInputBlock::Text {
+                text: "Review these files".into(),
+            },
+            PromptInputBlock::ResourceLink {
+                uri: "file:///tmp/report.pdf".into(),
+                name: "report.pdf".into(),
+                mime_type: Some("application/pdf".into()),
+                description: None,
+            },
+            // A path-less pasted text file: embedded body, synthetic uri.
+            PromptInputBlock::Resource {
+                uri: "clipboard://note.txt-1".into(),
+                mime_type: Some("text/plain".into()),
+                text: Some("private file contents".into()),
+                blob: None,
+            },
+            PromptInputBlock::Resource {
+                uri: "clipboard://data.bin-2".into(),
+                mime_type: Some("application/octet-stream".into()),
+                text: None,
+                blob: Some("c2VjcmV0".into()),
+            },
+            // How an `image: false` / `embedded_context: true` agent carries an
+            // image — promoted back to a thumbnail on BOTH sides.
+            PromptInputBlock::Resource {
+                uri: "clipboard://plot.png-3".into(),
+                mime_type: Some("image/png".into()),
+                text: None,
+                blob: Some("aW1hZ2U=".into()),
+            },
+            PromptInputBlock::Image {
+                data: "bmF0aXZl".into(),
+                mime_type: "image/jpeg".into(),
+                uri: Some("file:///tmp/photo.jpg".into()),
+            },
+        ];
+        // Exactly what `record_prompt` writes: the wire blocks `session/prompt`
+        // carried, serialized.
+        let recorded =
+            serde_json::to_value(crate::acp::connection::map_prompt_blocks(sent.clone()))
+                .expect("wire blocks serialize");
+
+        // `uri` is dropped on both sides: the broadcast carries an image by its
+        // bytes alone, so it is not a projection difference to compare.
+        let live: Vec<(&str, String, String)> = user_blocks_from_prompt(&sent)
+            .iter()
+            .map(|b| match b {
+                UserMessageBlock::Text { text } => ("text", text.clone(), String::new()),
+                UserMessageBlock::Image { data, mime_type } => {
+                    ("image", data.clone(), mime_type.clone())
+                }
+            })
+            .collect();
+        let history: Vec<(&str, String, String)> = prompt_blocks(&recorded)
+            .iter()
+            .map(|b| match b {
+                ContentBlock::Text { text } => ("text", text.clone(), String::new()),
+                ContentBlock::Image {
+                    data, mime_type, ..
+                } => ("image", data.clone(), mime_type.clone()),
+                other => panic!("a user turn may only hold text and images, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(history, live);
+    }
+
+    #[test]
+    fn attachment_only_history_is_not_empty_and_malformed_resources_are_ignored() {
+        let blocks = prompt_blocks(&serde_json::json!([
+            {"type":"resource_link", "uri":"file:///tmp/unnamed", "name":""},
+            {"type":"resource", "resource":{"uri":"attachment:///empty.png", "mimeType":"image/png", "blob":""}},
+            {"type":"image", "data":"legacy", "mime_type":"image/jpeg"},
+            {"type":"resource"},
+            {"type":"resource", "resource":{"blob":"do not expose"}},
+            {"type":"resource_link", "name":"missing uri"},
+            {"type":"image", "data":""}
+        ]));
+        assert_eq!(blocks.len(), 3);
+        assert!(
+            matches!(&blocks[0], ContentBlock::Text { text } if text == "[file:///tmp/unnamed](file:///tmp/unnamed)")
+        );
+        assert!(
+            matches!(&blocks[1], ContentBlock::Text { text } if text == "[attachment:///empty.png](attachment:///empty.png)")
+        );
+        assert!(
+            matches!(&blocks[2], ContentBlock::Image { mime_type, .. } if mime_type == "image/jpeg")
+        );
     }
 
     #[test]
@@ -955,6 +1653,176 @@ mod tests {
             }
             other => panic!("expected tool result, got {other:?}"),
         }
+    }
+
+    fn turn_end(t: u64) -> TranscriptEntry {
+        entry(
+            t,
+            EntryKind::TurnEnd,
+            serde_json::json!({"stopReason": "end_turn"}),
+        )
+    }
+
+    fn started_job(t: u64) -> TranscriptEntry {
+        update(
+            t,
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "job-1",
+                "title": "Bash",
+                "kind": "execute",
+                "status": "in_progress",
+                "rawInput": { "command": "sleep 30 && echo done" }
+            }),
+        )
+    }
+
+    fn job_done(t: u64, id: &str) -> TranscriptEntry {
+        update(
+            t,
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": id,
+                "status": "completed",
+                "content": [
+                    { "type": "content", "content": { "type": "text", "text": "done" } }
+                ]
+            }),
+        )
+    }
+
+    /// `(kind, id, text)` per block: enough to tell which card a result joined.
+    fn block_outline(turn: &MessageTurn) -> Vec<(&'static str, String, String)> {
+        turn.blocks
+            .iter()
+            .map(|b| match b {
+                ContentBlock::Text { text } => ("text", String::new(), text.clone()),
+                ContentBlock::ToolUse {
+                    tool_use_id,
+                    tool_name,
+                    ..
+                } => (
+                    "call",
+                    tool_use_id.clone().unwrap_or_default(),
+                    tool_name.clone(),
+                ),
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    output_preview,
+                    ..
+                } => (
+                    "result",
+                    tool_use_id.clone().unwrap_or_default(),
+                    output_preview.clone().unwrap_or_default(),
+                ),
+                other => panic!("unexpected block {other:?}"),
+            })
+            .collect()
+    }
+
+    /// Issue #903: what the agent does between a turn end and the next prompt
+    /// (a background job's follow-up) is a turn of its own, spanning its own
+    /// updates — not part of the turn before, nor of the prompt after.
+    #[test]
+    fn a_turn_the_agent_runs_between_prompts_is_its_own_turn() {
+        let turns = project_turns(&[
+            prompt(1_000, "start the job"),
+            update(1_100, text_chunk("agent_message_chunk", "Started.")),
+            turn_end(1_200),
+            update(5_000, text_chunk("agent_message_chunk", "The job ")),
+            update(5_400, text_chunk("agent_message_chunk", "finished.")),
+            prompt(9_000, "thanks"),
+            update(9_100, text_chunk("agent_message_chunk", "Welcome.")),
+        ]);
+        let roles: Vec<String> = turns.iter().map(|t| format!("{:?}", t.role)).collect();
+        assert_eq!(
+            roles,
+            ["User", "Assistant", "Assistant", "User", "Assistant"]
+        );
+        let own = &turns[2];
+        assert_eq!(
+            block_outline(own),
+            [("text", String::new(), "The job finished.".to_string())]
+        );
+        assert_eq!(own.timestamp, epoch_ms_to_utc(5_000));
+        assert_eq!(own.completed_at, Some(epoch_ms_to_utc(5_400)));
+        assert_eq!(own.duration_ms, Some(400));
+    }
+
+    /// A call that outlives its turn (a command moved to the background)
+    /// reports its completion between turns. That completes the card its turn
+    /// drew — the live view draws nothing for the update — instead of opening a
+    /// turn with a second card for the same call; and it neither stretches the
+    /// closed turn nor starts the agent's next one.
+    #[test]
+    fn a_late_completion_between_turns_completes_the_card_its_turn_drew() {
+        let turns = project_turns(&[
+            prompt(1_000, "run it in the background"),
+            started_job(1_100),
+            update(1_200, text_chunk("agent_message_chunk", "Started.")),
+            turn_end(1_300),
+            job_done(5_000, "job-1"),
+            update(5_100, text_chunk("agent_message_chunk", "It finished.")),
+            prompt(9_000, "thanks"),
+        ]);
+        assert_eq!(turns.len(), 4, "{turns:#?}");
+        assert_eq!(
+            block_outline(&turns[1]),
+            [
+                ("call", "job-1".to_string(), "Bash".to_string()),
+                ("text", String::new(), "Started.".to_string()),
+                ("result", "job-1".to_string(), "done".to_string()),
+            ]
+        );
+        assert_eq!(turns[1].completed_at, Some(epoch_ms_to_utc(1_300)));
+        assert_eq!(
+            block_outline(&turns[2]),
+            [("text", String::new(), "It finished.".to_string())]
+        );
+        assert_eq!(turns[2].timestamp, epoch_ms_to_utc(5_100));
+    }
+
+    /// The between-turns rule is scoped to where the live view draws nothing.
+    /// Inside a later turn it draws the update as a card of the running turn,
+    /// so history does too; and a call no turn ever drew still gets its card.
+    #[test]
+    fn a_completion_for_a_card_no_closed_turn_holds_draws_where_it_lands() {
+        let in_a_later_turn = project_turns(&[
+            prompt(1_000, "run it in the background"),
+            started_job(1_100),
+            turn_end(1_300),
+            prompt(2_000, "and now?"),
+            job_done(2_100, "job-1"),
+            update(2_200, text_chunk("agent_message_chunk", "Done.")),
+            turn_end(2_300),
+        ]);
+        assert_eq!(
+            block_outline(&in_a_later_turn[1]),
+            [("call", "job-1".to_string(), "Bash".to_string())]
+        );
+        assert_eq!(
+            block_outline(&in_a_later_turn[3]),
+            [
+                ("call", "job-1".to_string(), "tool".to_string()),
+                ("result", "job-1".to_string(), "done".to_string()),
+                ("text", String::new(), "Done.".to_string()),
+            ]
+        );
+
+        let never_drawn = project_turns(&[
+            prompt(1_000, "hi"),
+            update(1_100, text_chunk("agent_message_chunk", "Hello.")),
+            turn_end(1_200),
+            job_done(5_000, "job-9"),
+        ]);
+        assert_eq!(never_drawn.len(), 3, "{never_drawn:#?}");
+        assert_eq!(
+            block_outline(&never_drawn[2]),
+            [
+                ("call", "job-9".to_string(), "tool".to_string()),
+                ("result", "job-9".to_string(), "done".to_string()),
+            ]
+        );
     }
 
     /// A `delegate_to_agent` call from the codeg-mcp companion must replay
@@ -1157,6 +2025,282 @@ mod tests {
         }
     }
 
+    /// A message codeg delivered into the running turn (a native steer).
+    fn steer(t: u64, text: &str) -> TranscriptEntry {
+        TranscriptEntry {
+            steer: true,
+            ..prompt(t, text)
+        }
+    }
+
+    fn reported_turn_end(t: u64, duration_ms: u64) -> TranscriptEntry {
+        entry(
+            t,
+            EntryKind::TurnEnd,
+            serde_json::json!({
+                "stopReason": "end_turn",
+                "durationMs": duration_ms,
+                "model": "claude-sonnet-5-5",
+                "usage": { "inputTokens": 10, "outputTokens": 5 }
+            }),
+        )
+    }
+
+    fn roles(turns: &[MessageTurn]) -> Vec<String> {
+        turns.iter().map(|t| format!("{:?}", t.role)).collect()
+    }
+
+    /// #892: a steer splits its turn into the reply before it, the steer as a
+    /// user turn, and the reply to it — the shape Claude Code's own history
+    /// draws. The turn end's `durationMs` spans the whole turn from its prompt,
+    /// so the part after the steer is timed from the steer instead; the usage
+    /// and model the turn end reports go on that part as they would on the
+    /// whole turn.
+    #[test]
+    fn a_steer_splits_its_turn_and_times_each_part_by_its_own_span() {
+        let turns = project_turns(&[
+            prompt(1_000, "build the page"),
+            update(1_500, text_chunk("agent_message_chunk", "Building.")),
+            steer(2_000, "make it blue"),
+            update(2_600, text_chunk("agent_message_chunk", "Blue it is.")),
+            reported_turn_end(3_000, 1_990),
+        ]);
+        assert_eq!(roles(&turns), ["User", "Assistant", "User", "Assistant"]);
+        assert_eq!(
+            block_outline(&turns[2]),
+            [("text", String::new(), "make it blue".to_string())]
+        );
+        assert_eq!(turns[2].timestamp, epoch_ms_to_utc(2_000));
+        assert_eq!(turns[1].duration_ms, Some(500));
+        assert_eq!(turns[1].usage, None);
+        assert_eq!(turns[3].duration_ms, Some(1_000));
+        assert_eq!(turns[3].completed_at, Some(epoch_ms_to_utc(3_000)));
+        assert_eq!(turns[3].model.as_deref(), Some("claude-sonnet-5-5"));
+        assert_eq!(turns[3].usage.as_ref().map(|u| u.output_tokens), Some(5));
+
+        // Each steer starts a part of its own.
+        let twice = project_turns(&[
+            prompt(1_000, "build the page"),
+            update(1_200, text_chunk("agent_message_chunk", "Building.")),
+            steer(2_000, "make it blue"),
+            update(2_300, text_chunk("agent_message_chunk", "Blue.")),
+            steer(3_000, "and bigger"),
+            update(3_400, text_chunk("agent_message_chunk", "Bigger.")),
+            reported_turn_end(4_000, 2_990),
+        ]);
+        let durations: Vec<Option<u64>> = twice.iter().map(|t| t.duration_ms).collect();
+        assert_eq!(
+            durations,
+            [None, Some(200), None, Some(300), None, Some(1_000)]
+        );
+
+        // Without a steer the turn end's duration stands.
+        let plain = project_turns(&[
+            prompt(1_000, "build the page"),
+            update(1_500, text_chunk("agent_message_chunk", "Built.")),
+            reported_turn_end(3_000, 1_990),
+        ]);
+        assert_eq!(plain[1].duration_ms, Some(1_990));
+    }
+
+    /// A steer that lands after the reply's last frame leaves nothing for the
+    /// turn end to close. Its usage and model then go on the reply before the
+    /// steer — and never on the reply to an earlier prompt.
+    #[test]
+    fn a_turn_end_after_a_trailing_steer_reports_on_the_reply_before_it() {
+        let turns = project_turns(&[
+            prompt(1_000, "build the page"),
+            update(1_500, text_chunk("agent_message_chunk", "Built.")),
+            steer(2_000, "make it blue"),
+            steer(2_100, "and bigger"),
+            reported_turn_end(2_500, 1_490),
+        ]);
+        assert_eq!(roles(&turns), ["User", "Assistant", "User", "User"]);
+        assert_eq!(turns[1].duration_ms, Some(500));
+        assert_eq!(turns[1].model.as_deref(), Some("claude-sonnet-5-5"));
+        assert_eq!(turns[1].usage.as_ref().map(|u| u.input_tokens), Some(10));
+
+        let silent = project_turns(&[
+            prompt(1_000, "hello"),
+            update(1_100, text_chunk("agent_message_chunk", "Hi.")),
+            turn_end(1_200),
+            prompt(2_000, "build the page"),
+            steer(2_500, "make it blue"),
+            reported_turn_end(3_000, 990),
+        ]);
+        // The second prompt's reported spend belongs to its own empty result,
+        // never to the reply produced for the first prompt.
+        assert_eq!(roles(&silent), ["User", "Assistant", "User", "User", "Assistant"]);
+        assert_eq!(silent[1].usage, None);
+        assert_eq!(silent[1].model, None);
+        assert!(silent[4].blocks.is_empty());
+        assert_eq!(silent[4].usage.as_ref().map(|usage| usage.input_tokens), Some(10));
+    }
+
+    /// A call the reply started before a steer can report after it: a command
+    /// the steer sent to the background reporting back, or a streamed call the
+    /// steer cut off failing at the turn's end. The live view keeps one card per
+    /// call and updates it in place, so the update goes back to that card
+    /// instead of drawing a second one after the steer.
+    #[test]
+    fn an_update_after_a_steer_goes_back_to_the_card_before_it() {
+        let backgrounded = project_turns(&[
+            prompt(1_000, "build the page"),
+            started_job(1_100),
+            update(1_200, text_chunk("agent_message_chunk", "Building.")),
+            steer(2_000, "make it blue"),
+            job_done(2_100, "job-1"),
+            update(2_200, text_chunk("agent_message_chunk", "Blue it is.")),
+            turn_end(3_000),
+        ]);
+        assert_eq!(
+            roles(&backgrounded),
+            ["User", "Assistant", "User", "Assistant"]
+        );
+        assert_eq!(
+            block_outline(&backgrounded[1]),
+            [
+                ("call", "job-1".to_string(), "Bash".to_string()),
+                ("text", String::new(), "Building.".to_string()),
+                ("result", "job-1".to_string(), "done".to_string()),
+            ]
+        );
+        assert_eq!(
+            block_outline(&backgrounded[3]),
+            [("text", String::new(), "Blue it is.".to_string())]
+        );
+
+        let cut_off = project_turns(&[
+            prompt(1_000, "build the page"),
+            started_job(1_100),
+            steer(2_000, "make it blue"),
+            update(2_200, text_chunk("agent_message_chunk", "Blue it is.")),
+            update(
+                2_900,
+                serde_json::json!({
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "job-1",
+                    "status": "failed",
+                    "content": [{ "type": "content", "content": {
+                        "type": "text", "text": "Claude stopped this tool call before it ran."
+                    } }]
+                }),
+            ),
+            turn_end(3_000),
+        ]);
+        assert_eq!(
+            block_outline(&cut_off[1]),
+            [
+                ("call", "job-1".to_string(), "Bash".to_string()),
+                (
+                    "result",
+                    "job-1".to_string(),
+                    "Claude stopped this tool call before it ran.".to_string()
+                ),
+            ]
+        );
+        assert_eq!(
+            block_outline(&cut_off[3]),
+            [("text", String::new(), "Blue it is.".to_string())]
+        );
+    }
+
+    /// The reach back stops at the prompt that opened the running turn: an
+    /// update from an earlier turn's call is drawn by the live view as a card
+    /// of the running turn, so it stays one. A user chunk the agent echoes
+    /// mid-turn splits a turn the way a steer does, and the update goes back
+    /// across it as well — the live view draws no user chunk at all and keeps
+    /// the card where it was. A replay records no prompts, so nothing reaches
+    /// back there.
+    #[test]
+    fn an_update_reaches_back_only_within_the_running_prompts_turn() {
+        let earlier_turn = project_turns(&[
+            prompt(1_000, "run it in the background"),
+            started_job(1_100),
+            turn_end(1_300),
+            prompt(2_000, "make it blue"),
+            steer(2_100, "and bigger"),
+            job_done(2_200, "job-1"),
+            turn_end(2_300),
+        ]);
+        assert_eq!(
+            block_outline(&earlier_turn[1]),
+            [("call", "job-1".to_string(), "Bash".to_string())]
+        );
+        assert_eq!(
+            block_outline(&earlier_turn[4]),
+            [
+                ("call", "job-1".to_string(), "tool".to_string()),
+                ("result", "job-1".to_string(), "done".to_string()),
+            ]
+        );
+
+        let echoed = project_turns(&[
+            prompt(1_000, "build the page"),
+            started_job(1_100),
+            update(1_200, text_chunk("user_message_chunk", "make it blue")),
+            update(1_300, text_chunk("agent_message_chunk", "Blue it is.")),
+            job_done(1_400, "job-1"),
+            turn_end(1_500),
+        ]);
+        assert_eq!(roles(&echoed), ["User", "Assistant", "User", "Assistant"]);
+        assert_eq!(
+            block_outline(&echoed[1]),
+            [
+                ("call", "job-1".to_string(), "Bash".to_string()),
+                ("result", "job-1".to_string(), "done".to_string()),
+            ]
+        );
+
+        let replay = project_turns(&[
+            update(1_000, text_chunk("user_message_chunk", "build the page")),
+            started_job(1_100),
+            update(1_200, text_chunk("user_message_chunk", "make it blue")),
+            job_done(1_300, "job-1"),
+        ]);
+        assert_eq!(roles(&replay), ["User", "Assistant", "User", "Assistant"]);
+        assert_eq!(
+            block_outline(&replay[3]),
+            [
+                ("call", "job-1".to_string(), "tool".to_string()),
+                ("result", "job-1".to_string(), "done".to_string()),
+            ]
+        );
+    }
+
+    /// A transcript written before steers were marked has no mid-turn prompt
+    /// to mark — but an unmarked prompt still opens a turn of its own, as it
+    /// always did.
+    #[test]
+    fn an_unmarked_prompt_still_opens_a_turn() {
+        let turns = project_turns(&[
+            prompt(1_000, "first"),
+            update(1_100, text_chunk("agent_message_chunk", "One.")),
+            prompt(2_000, "second"),
+            update(2_100, text_chunk("agent_message_chunk", "Two.")),
+            reported_turn_end(3_000, 777),
+        ]);
+        assert_eq!(roles(&turns), ["User", "Assistant", "User", "Assistant"]);
+        assert_eq!(turns[3].duration_ms, Some(777));
+    }
+
+    /// The marker is a field only a steer carries: an ordinary entry writes it
+    /// not at all, so files stay as they were, and a reader that predates it
+    /// reads a steer as an ordinary prompt.
+    #[test]
+    fn the_steer_marker_is_written_only_on_steers() {
+        let plain = serde_json::to_value(prompt(1, "hi")).unwrap();
+        assert!(plain.get("s").is_none(), "{plain}");
+        let marked = serde_json::to_value(steer(1, "hi")).unwrap();
+        assert_eq!(marked["s"], serde_json::json!(true));
+        let read: TranscriptEntry = serde_json::from_value(marked).unwrap();
+        assert!(read.steer);
+        let legacy: TranscriptEntry =
+            serde_json::from_str(r#"{"t":1,"k":"prompt","p":[{"type":"text","text":"hi"}]}"#)
+                .unwrap();
+        assert!(!legacy.steer);
+    }
+
     #[test]
     fn turn_end_usage_feeds_turn_and_session_stats() {
         let entries = vec![
@@ -1184,6 +2328,40 @@ mod tests {
         let stats = session_stats(&turns).expect("stats");
         assert_eq!(stats.total_tokens, Some(15));
         assert_eq!(stats.total_duration_ms, 42);
+    }
+
+    #[test]
+    fn acp_cache_counters_have_precedence_and_are_not_subtracted_twice() {
+        let usage = parse_usage(&serde_json::json!({
+            "inputTokens":180,"outputTokens":350,"cachedReadTokens":900,"cachedWriteTokens":120,
+            "cacheReadInputTokens":9999,"cacheCreationInputTokens":9999,"thoughtTokens":200
+        }))
+        .unwrap();
+        assert_eq!(usage.input_tokens, 180);
+        assert_eq!(usage.output_tokens, 350);
+        assert_eq!(usage.cache_read_input_tokens, 900);
+        assert_eq!(usage.cache_creation_input_tokens, 120);
+        let cache_only = parse_usage(&serde_json::json!({"cachedReadTokens":42})).unwrap();
+        assert_eq!(cache_only.cache_read_input_tokens, 42);
+        assert_eq!(cache_only.input_tokens, 0);
+        let canonical_zero = parse_usage(
+            &serde_json::json!({"outputTokens":1,"cachedReadTokens":0,"cacheReadInputTokens":9999}),
+        )
+        .unwrap();
+        assert_eq!(canonical_zero.cache_read_input_tokens, 0);
+        for legacy in [
+            serde_json::json!({"cacheReadInputTokens":2,"cacheCreationInputTokens":3}),
+            serde_json::json!({"cache_read_input_tokens":2,"cache_creation_input_tokens":3}),
+        ] {
+            let usage = parse_usage(&legacy).unwrap();
+            assert_eq!(
+                (
+                    usage.cache_read_input_tokens,
+                    usage.cache_creation_input_tokens
+                ),
+                (2, 3)
+            );
+        }
     }
 
     /// The write-side whitelist and the read-side match arms are two
@@ -1337,6 +2515,173 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[tokio::test]
+    async fn custom_traecli_history_is_enriched_from_its_native_usage_record() {
+        let transcript_dir = tempfile::tempdir().unwrap();
+        let native_dir = tempfile::tempdir().unwrap();
+        let session_id = "01a13673-cfd5-7c23-bc00-ce5be75fd42b";
+        let agent = AgentType::custom("traecli").unwrap();
+        let agent_dir = crate::acp::registry::registry_id_for(agent);
+
+        let header = TranscriptHeader::new(
+            "custom:traecli",
+            session_id,
+            "/workspace",
+            1_791_914_922_197,
+        );
+        acp_transcript::record_header_in(transcript_dir.path(), agent_dir, &header)
+            .await
+            .unwrap();
+        for (kind, payload) in [
+            (
+                EntryKind::Prompt,
+                serde_json::json!([{"type":"text","text":"hello"}]),
+            ),
+            (
+                EntryKind::Update,
+                serde_json::json!({
+                    "sessionUpdate":"agent_message_chunk",
+                    "content":{"type":"text","text":"done"}
+                }),
+            ),
+            (
+                EntryKind::Update,
+                serde_json::json!({
+                    "sessionUpdate":"usage_update",
+                    "used":20_584,
+                    "size":760_000
+                }),
+            ),
+            (
+                EntryKind::TurnEnd,
+                serde_json::json!({
+                    "stopReason":"end_turn",
+                    "durationMs":3_497,
+                    "model":"gpt-5.6-sol"
+                }),
+            ),
+        ] {
+            acp_transcript::record_entry_in(
+                transcript_dir.path(),
+                agent_dir,
+                session_id,
+                kind,
+                payload,
+            )
+            .await
+            .unwrap();
+        }
+
+        let day = native_dir.path().join("2026/10/14");
+        std::fs::create_dir_all(&day).unwrap();
+        let rollout = day.join(format!(
+            "rollout-2026-10-14T02-08-42-{session_id}.jsonl"
+        ));
+        std::fs::write(
+            rollout,
+            serde_json::json!({
+                "timestamp":"2026-10-13T18:08:45.732Z",
+                "type":"token_usage_record",
+                "payload":{
+                    "thread_id":session_id,
+                    "session_id":session_id,
+                    "turn_id":"turn-1",
+                    "response_id":"resp-1",
+                    "usage":{
+                        "input_tokens":20_454,
+                        "cache_creation_input_tokens":128,
+                        "cached_input_tokens":19_968,
+                        "output_tokens":130,
+                        "reasoning_output_tokens":24,
+                        "total_tokens":20_584
+                    }
+                }
+            })
+            .to_string()
+                + "\n",
+        )
+        .unwrap();
+
+        let parser = AcpNativeParser::new_in_with_trae_sessions(
+            agent,
+            transcript_dir.path().to_path_buf(),
+            native_dir.path().to_path_buf(),
+        );
+        let detail = parser.get_conversation(session_id).unwrap();
+        let usage = detail.turns[1].usage.as_ref().unwrap();
+        assert_eq!(usage.input_tokens, 358);
+        assert_eq!(usage.cache_creation_input_tokens, 128);
+        assert_eq!(usage.cache_read_input_tokens, 19_968);
+        assert_eq!(usage.output_tokens, 130);
+        let stats = detail.session_stats.unwrap();
+        assert_eq!(stats.total_tokens, Some(20_584));
+        assert_eq!(stats.context_window_used_tokens, Some(20_584));
+        assert_eq!(stats.context_window_max_tokens, Some(760_000));
+    }
+
+    /// A turn end that reports a duration but no tokens — what most ACP agents
+    /// send — keeps its duration in the session footer, whether or not the
+    /// agent has a native store to read usage from.
+    #[tokio::test]
+    async fn a_duration_only_turn_keeps_its_session_stats() {
+        async fn record_duration_only_turn(root: &Path, agent: AgentType, session_id: &str) {
+            let agent_dir = crate::acp::registry::registry_id_for(agent);
+            let header =
+                TranscriptHeader::new(&agent.as_wire(), session_id, "/workspace", 1_791_914_922_197);
+            acp_transcript::record_header_in(root, agent_dir, &header)
+                .await
+                .unwrap();
+            for (kind, payload) in [
+                (
+                    EntryKind::Prompt,
+                    serde_json::json!([{"type":"text","text":"hello"}]),
+                ),
+                (
+                    EntryKind::Update,
+                    serde_json::json!({
+                        "sessionUpdate":"agent_message_chunk",
+                        "content":{"type":"text","text":"done"}
+                    }),
+                ),
+                (
+                    EntryKind::TurnEnd,
+                    serde_json::json!({"stopReason":"end_turn","durationMs":3_000}),
+                ),
+            ] {
+                acp_transcript::record_entry_in(root, agent_dir, session_id, kind, payload)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let session_id = "01a13673-cfd5-7c23-bc00-ce5be75fd42c";
+        let plain = AgentType::custom("plain-agent").unwrap();
+        let traecli = AgentType::custom("traecli").unwrap();
+        let transcripts = tempfile::tempdir().unwrap();
+        // TRAE's native store, holding no rollout for this session.
+        let native = tempfile::tempdir().unwrap();
+        record_duration_only_turn(transcripts.path(), plain, session_id).await;
+        record_duration_only_turn(transcripts.path(), traecli, session_id).await;
+
+        for parser in [
+            AcpNativeParser::new_in(plain, transcripts.path().to_path_buf()),
+            AcpNativeParser::new_in_with_trae_sessions(
+                traecli,
+                transcripts.path().to_path_buf(),
+                native.path().to_path_buf(),
+            ),
+        ] {
+            let stats = parser
+                .get_conversation(session_id)
+                .unwrap()
+                .session_stats
+                .expect("a duration-only turn still has session stats");
+            assert_eq!(stats.total_duration_ms, 3_000);
+            assert!(stats.total_usage.is_none());
+            assert_eq!(stats.total_tokens, None);
+        }
+    }
+
     #[test]
     fn a_session_opened_but_never_used_is_not_listed() {
         // Opening a conversation writes the ACP header before the user has
@@ -1450,5 +2795,268 @@ mod tests {
         let old = parser.get_conversation("sess-old").expect("still readable");
         assert_eq!(old.turns.len(), 2);
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod zcode_history_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn zcode_attachment_bytes_survive_recording_echo_and_cold_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = crate::acp::registry::registry_id_for(AgentType::ZCode);
+        let wire = crate::acp::connection::map_prompt_blocks(vec![
+            PromptInputBlock::Text {
+                text: "Read these attachments".into(),
+            },
+            PromptInputBlock::Image {
+                data: "cGl4ZWxz".into(),
+                mime_type: "image/png".into(),
+                uri: None,
+            },
+            PromptInputBlock::Resource {
+                uri: "clipboard:///report.pdf".into(),
+                mime_type: Some("application/pdf".into()),
+                text: None,
+                blob: Some("JVBERi0xLjQ=".into()),
+            },
+        ]);
+        let payload = serde_json::to_value(&wire).unwrap();
+        assert_eq!(payload[1]["data"], "cGl4ZWxz");
+        assert_eq!(payload[2]["resource"]["blob"], "JVBERi0xLjQ=");
+        acp_transcript::record_header_in(
+            dir.path(),
+            agent,
+            &acp_transcript::TranscriptHeader::new("zcode", "attachments", "/workspace", 1),
+        )
+        .await
+        .unwrap();
+        acp_transcript::record_entry_in(
+            dir.path(),
+            agent,
+            "attachments",
+            EntryKind::Prompt,
+            payload.clone(),
+        )
+        .await
+        .unwrap();
+        for content in payload.as_array().unwrap() {
+            acp_transcript::record_entry_in(
+                dir.path(),
+                agent,
+                "attachments",
+                EntryKind::Update,
+                serde_json::json!({"sessionUpdate":"user_message_chunk", "content":content}),
+            )
+            .await
+            .unwrap();
+        }
+        acp_transcript::record_entry_in(
+            dir.path(), agent, "attachments", EntryKind::Update,
+            serde_json::json!({"sessionUpdate":"agent_message_chunk", "content":{"type":"text","text":"Read both"}}),
+        ).await.unwrap();
+        acp_transcript::record_entry_in(
+            dir.path(),
+            agent,
+            "attachments",
+            EntryKind::TurnEnd,
+            serde_json::json!({"stopReason":"end_turn"}),
+        )
+        .await
+        .unwrap();
+        let parser = AcpNativeParser::new_in(AgentType::ZCode, dir.path().to_path_buf());
+        let cold = parser.get_conversation("attachments").unwrap();
+        assert_eq!(
+            cold.turns.len(),
+            2,
+            "the prompt echo must not duplicate attachments"
+        );
+        assert_eq!(cold.turns[0].blocks.len(), 3);
+        assert!(
+            matches!(&cold.turns[0].blocks[1], ContentBlock::Image { data, mime_type, uri }
+            if data == "cGl4ZWxz" && mime_type == "image/png" && uri.is_none())
+        );
+        assert!(
+            matches!(&cold.turns[0].blocks[2], ContentBlock::Text { text }
+            if text.contains("report.pdf") && !text.contains("JVBERi0xLjQ="))
+        );
+        let stored = acp_transcript::read_transcript_in(dir.path(), agent, "attachments");
+        assert_eq!(
+            stored
+                .entries
+                .iter()
+                .find(|e| e.k == EntryKind::Prompt)
+                .unwrap()
+                .p,
+            payload
+        );
+    }
+
+    #[tokio::test]
+    async fn zcode_history_survives_reopen_and_keeps_tools_usage_and_continuations() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let agent = crate::acp::registry::registry_id_for(AgentType::ZCode);
+        let header = acp_transcript::TranscriptHeader::new("zcode", "old", "/workspace", 1000);
+        acp_transcript::record_header_in(root, agent, &header)
+            .await
+            .unwrap();
+        for (kind, payload) in [
+            (
+                EntryKind::Prompt,
+                serde_json::json!([{"type":"text","text":"Read marker"}]),
+            ),
+            (
+                EntryKind::Update,
+                serde_json::json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Read marker"}}),
+            ),
+            (
+                EntryKind::Update,
+                serde_json::json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"consider"}}),
+            ),
+            (
+                EntryKind::Update,
+                serde_json::json!({"sessionUpdate":"tool_call","toolCallId":"read-1","title":"Read","kind":"read","status":"in_progress","rawInput":{"path":"marker.txt"}}),
+            ),
+            (
+                EntryKind::Update,
+                serde_json::json!({"sessionUpdate":"tool_call_update","toolCallId":"read-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"MARKER"}}]}),
+            ),
+            (
+                EntryKind::Update,
+                serde_json::json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"MARKER"}}),
+            ),
+            (
+                EntryKind::TurnEnd,
+                serde_json::json!({"stopReason":"end_turn","model":"glm-test","usage":{"inputTokens":10,"outputTokens":5}}),
+            ),
+        ] {
+            acp_transcript::record_entry_in(root, agent, "old", kind, payload)
+                .await
+                .unwrap();
+        }
+        let reopened = AcpNativeParser::new_in(AgentType::ZCode, root.to_path_buf());
+        let before = reopened.get_conversation("old").unwrap();
+        assert_eq!(before.summary.agent_type, AgentType::ZCode);
+        assert_eq!(
+            before.turns.len(),
+            2,
+            "echoed prompts must not duplicate user turns"
+        );
+        let serialized = serde_json::to_string(&before.turns).unwrap();
+        assert!(serialized.contains("consider"));
+        assert!(before.turns[1].blocks.iter().any(|block| matches!(
+            block,
+            ContentBlock::ToolUse { tool_use_id, tool_name, .. }
+                if tool_use_id.as_deref() == Some("read-1") && tool_name == "Read"
+        )));
+        assert!(before.turns[1].blocks.iter().any(|block| matches!(
+            block,
+            ContentBlock::ToolResult { tool_use_id, output_preview, is_error, .. }
+                if tool_use_id.as_deref() == Some("read-1")
+                    && !is_error
+                    && output_preview.as_ref().is_some_and(|output| output.contains("MARKER"))
+        )));
+        assert_eq!(before.turns[1].usage.as_ref().unwrap().input_tokens, 10);
+        let continued = acp_transcript::TranscriptHeader::new("zcode", "new", "/workspace", 2000)
+            .continuing("old");
+        acp_transcript::record_header_in(root, agent, &continued)
+            .await
+            .unwrap();
+        acp_transcript::record_entry_in(
+            root,
+            agent,
+            "new",
+            EntryKind::Prompt,
+            serde_json::json!([{"type":"text","text":"Continue"}]),
+        )
+        .await
+        .unwrap();
+        let parser = AcpNativeParser::new_in(AgentType::ZCode, root.to_path_buf());
+        assert_eq!(parser.get_conversation("new").unwrap().turns.len(), 3);
+        let summaries = parser.list_conversations().unwrap();
+        assert_eq!(summaries.len(), 1, "continuation history should list once");
+        assert_eq!(summaries[0].id, "new");
+    }
+}
+
+#[cfg(test)]
+mod zcode_legacy_history_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn zcode_legacy_histories_and_builtin_history_stay_separate_for_identical_session_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let cases = [
+            (AgentType::custom("zcode").unwrap(), "zcode", "LEGACY_ZCODE"),
+            (
+                AgentType::custom("zcode-acp").unwrap(),
+                "zcode-acp",
+                "LEGACY_ACP",
+            ),
+            (
+                AgentType::ZCode,
+                crate::acp::registry::registry_id_for(AgentType::ZCode),
+                "BUILTIN_ZCODE",
+            ),
+        ];
+        for (agent, dir, marker) in cases {
+            for (sid, previous) in [("previous", None), ("same-id", Some("previous"))] {
+                let mut header = acp_transcript::TranscriptHeader::new(
+                    &agent.as_wire(),
+                    sid,
+                    "/workspace",
+                    1000,
+                );
+                if let Some(previous) = previous {
+                    header = header.continuing(previous);
+                }
+                acp_transcript::record_header_in(root, dir, &header)
+                    .await
+                    .unwrap();
+                acp_transcript::record_entry_in(
+                    root,
+                    dir,
+                    sid,
+                    EntryKind::Prompt,
+                    serde_json::json!([{"type":"text","text":format!("{marker}:{sid}")}]),
+                )
+                .await
+                .unwrap();
+                acp_transcript::record_entry_in(
+                    root,
+                    dir,
+                    sid,
+                    EntryKind::TurnEnd,
+                    serde_json::json!({"stopReason":"end_turn"}),
+                )
+                .await
+                .unwrap();
+            }
+        }
+        for (agent, _, marker) in cases {
+            let parser = AcpNativeParser::new_in(agent, root.to_path_buf());
+            let listed = parser.list_conversations().unwrap();
+            assert_eq!(listed.len(), 1, "only the continuation head is listed");
+            assert_eq!(listed[0].id, "same-id");
+            assert_eq!(listed[0].agent_type, agent);
+            let detail = parser.get_conversation("same-id").unwrap();
+            let turns = serde_json::to_string(&detail.turns).unwrap();
+            assert!(turns.contains(&format!("{marker}:previous")));
+            assert!(turns.contains(&format!("{marker}:same-id")));
+            for (_, _, other) in cases {
+                if other != marker {
+                    assert!(
+                        !turns.contains(other),
+                        "{agent} must not read {other}'s history"
+                    );
+                }
+            }
+            let old = parser.get_conversation("previous").unwrap();
+            assert_eq!(old.summary.agent_type, agent);
+            assert_eq!(old.turns.len(), 1, "old external IDs remain readable");
+        }
     }
 }

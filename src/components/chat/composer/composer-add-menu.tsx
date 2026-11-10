@@ -33,7 +33,10 @@ import { isImeCompositionKey } from "@/lib/ime-composition"
 import { cn } from "@/lib/utils"
 import type { AvailableCommandInfo } from "@/lib/types"
 
-import { commandInvocationToken } from "@/components/chat/composer/invocation-reference"
+import {
+  commandInputHint,
+  commandInvocationToken,
+} from "@/components/chat/composer/invocation-reference"
 import type { ComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import type { ComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
 
@@ -296,6 +299,7 @@ export function ComposerAddMenu({
                   >
                     <DropdownRadioItemContent
                       label={commandInvocationToken(cmd.name)}
+                      hint={commandInputHint(cmd)}
                       description={cmd.description}
                     />
                   </DropdownMenuItem>

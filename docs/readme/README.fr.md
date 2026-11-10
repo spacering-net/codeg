@@ -1,32 +1,44 @@
-# Codeg
+<h1 align="center">
+  <a href="https://docs.codeg.app"><img src="../../public/icon.svg" alt="Codeg logo" width="64" align="absmiddle" /></a> Codeg
+</h1>
 
-[![Release](https://img.shields.io/github/v/release/xintaofei/codeg)](https://github.com/xintaofei/codeg/releases)
-[![Docs](https://img.shields.io/badge/docs-docs.codeg.app-3451b2)](https://docs.codeg.app)
-[![License](https://img.shields.io/github/license/xintaofei/codeg)](../../LICENSE)
-
-<p>
-  <a href="../../README.md">English</a> |
-  <a href="./README.zh-CN.md">简体中文</a> |
-  <a href="./README.zh-TW.md">繁體中文</a> |
-  <a href="./README.ja.md">日本語</a> |
-  <a href="./README.ko.md">한국어</a> |
-  <a href="./README.es.md">Español</a> |
-  <a href="./README.de.md">Deutsch</a> |
-  <strong>Français</strong> |
-  <a href="./README.pt.md">Português</a> |
-  <a href="./README.ar.md">العربية</a>
+<p align="center">
+  <a href="https://github.com/spacering-net/codeg"><img src="https://img.shields.io/github/stars/spacering-net/codeg?style=flat&color=e91e63" alt="GitHub stars" /></a>
+  <a href="https://github.com/spacering-net/codeg/releases/latest"><img src="https://img.shields.io/github/v/release/spacering-net/codeg?style=flat&color=e91e63" alt="Latest release" /></a>
+  <a href="https://github.com/spacering-net/codeg/releases"><img src="https://img.shields.io/github/downloads/spacering-net/codeg/total?style=flat&color=e91e63" alt="Total downloads" /></a>
+  <a href="../../LICENSE"><img src="https://img.shields.io/github/license/spacering-net/codeg?style=flat&color=e91e63" alt="License" /></a>
+  <a href="https://docs.codeg.app"><img src="https://img.shields.io/badge/docs-docs.codeg.app-3451b2?style=flat" alt="Documentation" /></a>
+  <a href="https://docs.codeg.app/getting-started/installation"><img src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Docker%20%7C%20iOS%20%7C%20Android-03a9f4?style=flat" alt="Platforms: macOS, Windows, Linux, Docker, iOS, Android" /></a>
 </p>
 
-Codeg (Code Generation) est un espace de travail de programmation multi-agents : faites tourner tous vos agents de codage IA au même endroit — et laissez-les travailler ensemble.
+<p align="center">
+  <sub><a href="../../README.md">English</a> · <a href="./README.zh-CN.md">简体中文</a> · <a href="./README.zh-TW.md">繁體中文</a> · <a href="./README.ja.md">日本語</a> · <a href="./README.ko.md">한국어</a> · <a href="./README.es.md">Español</a> · <a href="./README.de.md">Deutsch</a> · <strong>Français</strong> · <a href="./README.pt.md">Português</a> · <a href="./README.ar.md">العربية</a></sub>
+</p>
 
-Il regroupe les sessions de toutes les CLI d'agents supportées dans un espace de travail unique et consultable, et permet à un agent principal de déléguer à des sous-agents d'autres types au sein d'une même tâche. Le travail que vous préférez ne pas surveiller part sur un tableau de tâches à faire : chaque tâche sur sa propre branche, exécutée sans surveillance, en attente de votre relecture avant d'atterrir. Codeg fonctionne en application de bureau, en serveur autonome ou en conteneur Docker, avec des clients natifs iOS et Android pour les moments où vous n'êtes pas à votre bureau ; quinze agents sont intégrés, et vous pouvez enregistrer vous-même n'importe quel autre agent compatible ACP.
+<p align="center">
+  <strong>L'espace de travail de programmation multi-agents.</strong><br/>
+  Faites tourner tous vos agents de codage IA au même endroit — et laissez-les travailler ensemble.
+</p>
 
-![Espace de travail](../images/workspace-light.png#gh-light-mode-only)
-![Espace de travail](../images/workspace-dark.png#gh-dark-mode-only)
+<h3 align="center"><a href="https://github.com/spacering-net/codeg/releases/latest"><ins>Télécharger Codeg</ins></a> · <a href="https://docs.codeg.app"><ins>Documentation</ins></a></h3>
 
-## 📖 Documentation
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../images/workspace-dark.png" />
+    <img src="../images/workspace-light.png" alt="L'espace de travail Codeg : une conversation avec un agent, à côté de ses diffs en direct et des fichiers du projet" width="960" />
+  </picture>
+</p>
 
-**La documentation complète se trouve sur [docs.codeg.app](https://docs.codeg.app)** — [Démarrage](https://docs.codeg.app/getting-started/) · [Guide](https://docs.codeg.app/guide/) · [Référence](https://docs.codeg.app/reference/)
+<table>
+  <tr>
+    <td width="50%" valign="top">🧩 <strong>Une interface pour tous les agents</strong><br/>Vingt agents intégrés, et tout agent ACP peut s'y ajouter — tous affichés sous la même forme de conversation structurée, pas dans un terminal.</td>
+    <td width="50%" valign="top">🔎 <strong>Des sessions qui voyagent</strong><br/>Importez, fouillez et reprenez l'historique que chaque agent conserve sur le disque, puis confiez-le à un autre agent.</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🤝 <strong>Des agents qui travaillent ensemble</strong><br/>Déléguez d'un agent à l'autre avec un <code>@</code>, ou mettez en file des tâches à faire qui s'exécutent sans surveillance dans leurs propres worktrees.</td>
+    <td width="50%" valign="top">🌍 <strong>Où que vous travailliez</strong><br/>Application de bureau, serveur auto-hébergé ou Docker, iPhone, iPad et Android — et Telegram, Lark ou WeChat.</td>
+  </tr>
+</table>
 
 ## 💖 Sponsors
 
@@ -40,31 +52,10 @@ Il regroupe les sessions de toutes les CLI d'agents supportées dans un espace d
   </tr>
   <tr>
     <td align="center" width="220">
-      <a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE" target="_blank"><img src="../images/sui-xiang.jpg" alt="随想AI中转站" width="200" /></a><br/>
-      <strong><a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE">随想AI中转站</a></strong>
-    </td>
-    <td>Merci à 随想AI中转站 pour son parrainage de ce projet ! 随想AI中转站 est un fournisseur de relais d'API fiable et efficace, proposant des services de relais pour Claude, Codex, Gemini et plus encore. Les nouveaux comptes reçoivent 0,5 ¥ de crédit de test à chaque pointage quotidien après <a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE">inscription</a> ; les recharges sont créditées à 1:1, sans abonnement, avec paiement à l'usage. La redondance multi-lignes, la reprise après sinistre inter-régions et le basculement automatique garantissent des connexions SSE de longue durée sans interruption.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
       <a href="https://hezu.ink/sign-up?aff=0wVz" target="_blank"><img src="../images/hezu-ink.jpg" alt="合租巴士" width="200" /></a><br/>
       <strong><a href="https://hezu.ink/sign-up?aff=0wVz">合租巴士</a></strong>
     </td>
     <td>Merci à 合租巴士 pour son parrainage de ce projet ! 合租巴士 est une plateforme de relais d'IA fiable et efficace, offrant un relais très stable pour les principaux modèles tels que Codex et Claude Code. Le ratio de recharge est transparent (1:1), avec des subventions de taux Codex dès 0,08. <a href="https://hezu.ink/sign-up?aff=0wVz">Rejoignez le groupe depuis le site officiel pour obtenir 5 USD de crédit d'essai</a>.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta" target="_blank"><img src="../images/onehop.jpg" alt="OneHop" width="120" /></a><br/>
-      <strong><a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta">OneHop</a></strong>
-    </td>
-    <td>Merci à OneHop pour son parrainage de ce projet ! OneHop offre aux utilisateurs de Codeg une seule clé API compatible avec OpenAI pour des centaines de modèles de premier plan, dont GPT, Claude, Gemini, DeepSeek, Kimi et Qwen. Changez de modèle sans gérer plusieurs comptes de fournisseurs ni modifier votre code à répétition, et ne payez que ce que vous utilisez. <a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta">Inscrivez-vous via Codeg</a> pour recevoir 1 USD de crédit, puis rejoignez la communauté OneHop et participez à l'activité de bienvenue pour obtenir 5 USD supplémentaires, soit jusqu'à 6 USD de crédit d'essai au total.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://console.lqapi.xyz/sign-up?aff=KPy9" target="_blank"><img src="../images/lq-router.png" alt="LQ router" width="160" /></a><br/>
-      <strong><a href="https://console.lqapi.xyz/sign-up?aff=KPy9">LQ router</a></strong>
-    </td>
-    <td>Merci au service de relais LQ router pour son parrainage de ce projet ! LQ router est un service de relais IA professionnel de niveau entreprise qui offre aux entreprises comme aux développeurs indépendants un accès stable, performant et économique aux API de modèles d'IA. La plateforme prend en charge les principaux modèles, notamment GPT, Claude, Grok et Gemini, avec des coefficients de facturation GPT Pro descendant jusqu'à 0,1×. <a href="https://console.lqapi.xyz/sign-up?aff=KPy9">Rejoignez le groupe depuis le site officiel et recevez 1 USD de crédit d'essai</a>.</td>
   </tr>
   <tr>
     <td align="center" width="220">
@@ -84,136 +75,293 @@ Il regroupe les sessions de toutes les CLI d'agents supportées dans un espace d
       Inscrivez-vous par <strong>e-mail</strong> via le lien ci-dessus, effectuez la vérification d'identité, puis <a href="https://f.howxm.com/xs/u/HVFW5X8EIYV1">recevez 50 ¥ de crédits de calcul</a>.
     </td>
   </tr>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG" target="_blank"><img src="../images/sidrune-ai.png" alt="Sidrune AI" width="200" /></a><br/>
+      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">Sidrune AI</a></strong>
+    </td>
+    <td>Merci à Sidrune AI pour son parrainage de ce projet ! Sidrune AI donne accès à GPT, Claude et à d'autres grands modèles d'IA via une seule API. Les nouveaux utilisateurs qui s'inscrivent via <a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">notre lien dédié</a> avec le code promo <code>SDRCODEG</code> reçoivent 3 USD de crédits d'API.</td>
+  </tr>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA" target="_blank"><img src="../images/beeapi.jpg" alt="BeeAPI" width="200" /></a><br/>
+      <strong><a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a></strong>
+    </td>
+    <td>Merci à <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a> pour son parrainage de ce projet ! BeeAPI est une plateforme professionnelle de relais et d'agrégation d'API d'IA multimodèles, qui réunit de nombreux fournisseurs et les principaux modèles d'IA. Elle prend en charge la comparaison des prix entre fournisseurs, le routage intelligent par groupes ainsi qu'un accès et une facturation unifiés via API, pour appeler les services d'IA de manière plus souple, plus stable et à moindre coût.</td>
+  </tr>
 </table>
 
 > Vous souhaitez devenir sponsor de Codeg ? [Contactez-nous par e-mail.](mailto:itpkcn@gmail.com)
 
-## 🤖 Agents supportés
+## ✨ Fonctionnalités
 
-Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity
+<table>
+<tr>
+<td width="50%" valign="middle">
 
-Codeg installe, épingle et met à jour la plupart d'entre eux pour vous. Voir [Agents supportés](https://docs.codeg.app/guide/supported-agents) pour la liste complète, les prérequis d'exécution de chacun et l'emplacement de ses sessions sur le disque.
+### Une interface pour tous les agents
 
-Pas dans la liste ? Ajoutez-le vous-même. Choisissez un agent dans le registre public ACP ou collez son JSON de distribution : Codeg l'installe, vérifie qu'il démarre et le traite comme un agent intégré — il apparaît dans le sélecteur, accepte la délégation `@` et les skills, et ses conversations sont enregistrées et consultables même quand l'agent ne conserve aucun historique. → [Agents personnalisés](https://docs.codeg.app/guide/custom-agents)
+20 agents intégrés et tout agent ACP, dans un même chat avec cartes d'outils, diffs et réponses interactives.
 
-## 🤝 Collaboration multi-agents
+[Documentation →](https://docs.codeg.app/guide/supported-agents) · [Agents personnalisés →](https://docs.codeg.app/guide/custom-agents) · [Rendu d'interface →](https://docs.codeg.app/guide/skills#cards-tables-and-charts-in-replies)
 
-La collaboration multi-agents, réduite à une seule touche : tapez `@`, choisissez un agent, envoyez. Codeg s'occupe de l'orchestration — il lance chaque agent mentionné dans sa propre session, lui confie la tâche et renvoie son travail dans le fil où vous êtes déjà. Mentionnez-en deux et ils avancent côte à côte : Claude Code rédige pendant que Codex relit. Aucun changement de contexte, aucun copier-coller entre terminaux.
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/agents-dark.gif" />
+  <img src="../images/features/agents-light.gif" alt="Une interface pour tous les agents" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-Et quand un agent lance ses propres sous-agents — Claude Code, Codex, Grok et OpenCode le font tous — chaque enfant a sa carte, qui se remplit pendant qu'il travaille au lieu d'arriver d'un bloc à la fin. Ouvrez-la pour lire la session de l'enfant lui-même.
+### Chaque session, à portée de recherche
 
-![Délégation d'une tâche à des sous-agents depuis une seule conversation Codeg](../images/collaboration-light.gif#gh-light-mode-only)
-![Délégation d'une tâche à des sous-agents depuis une seule conversation Codeg](../images/collaboration-dark.gif#gh-dark-mode-only)
+Importez, recherchez et reprenez vos sessions. Partagez-les avec `@` et classez-les par étiquettes.
 
-## ✅ Tâches à faire
+[Documentation →](https://docs.codeg.app/guide/aggregation) · [Étiquettes →](https://docs.codeg.app/guide/workspace#tag-conversations)
 
-Tout travail n'exige pas que vous le regardiez. Notez-le — un titre, une description, l'agent qui doit l'exécuter — et Codeg lui confie **sa propre copie du code** : un worktree git à côté de votre projet, sur sa propre branche. Plusieurs tournent à la fois sans se toucher, ni toucher l'arbre dans lequel vous travaillez. Programmez-en une pour ce soir, ou laissez un dossier vider sa file tout seul, dans la limite de parallélisme que vous fixez.
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/sessions-dark.gif" />
+  <img src="../images/features/sessions-light.gif" alt="Chaque session, à portée de recherche" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-Une tâche terminée ne se fusionne pas toute seule. Elle passe dans la colonne de relecture et attend : lisez le diff, renvoyez-la pour un tour de plus, ou acceptez-la — et c'est l'agent qui la fait atterrir, en ramenant d'abord votre branche de base dans son worktree et en y résolvant les conflits. Ensuite Codeg ne le croit pas sur parole : il vérifie git lui-même, et une fusion qu'il ne peut pas confirmer retourne en relecture au lieu d'annoncer un succès.
+### Collaboration multi-agents
 
-![Le tableau des tâches à faire, où les tâches passent de À faire à En cours puis à Terminé](../images/task-light.png#gh-light-mode-only)
-![Le tableau des tâches à faire, où les tâches passent de À faire à En cours puis à Terminé](../images/task-dark.png#gh-dark-mode-only)
+Déléguez avec `@`. Les agents travaillent en parallèle et leurs progrès s'affichent dans votre conversation.
 
-## 🪟 Vue divisée
+[Documentation →](https://docs.codeg.app/guide/multi-agent)
 
-Une seule barre d'onglets ne suffit pas toujours. Faites un clic droit sur un onglet de conversation pour diviser la vue **à droite** ou **vers le bas**, autant de fois que vous voulez : deux volets côte à côte, une pile de trois, une grille. Chaque groupe est un espace de travail à part entière — ses onglets, son en-tête, son propre bouton de nouvelle conversation — Claude Code peut donc refactoriser dans un volet pendant que Codex relit un diff dans le suivant.
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/multi-agent-dark.gif" />
+  <img src="../images/features/multi-agent-light.gif" alt="Collaboration multi-agents" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-Faites glisser un onglet d'un groupe à l'autre : sa session continue de streamer pendant le déménagement. Faites glisser la séparation entre deux groupes pour changer le partage de l'espace. Votre disposition est mémorisée par espace de travail, brouillons compris : rouvrez Codeg et la division revient, avec le texte jamais envoyé toujours dans le champ.
+### Des tâches à faire exécutées sans surveillance
 
-![Division de la zone de conversation en une grille de groupes d'onglets](../images/split-light.gif#gh-light-mode-only)
-![Division de la zone de conversation en une grille de groupes d'onglets](../images/split-dark.gif#gh-dark-mode-only)
+Planifiez des tâches dans des worktrees dédiés. Les agents travaillent, vous validez les modifications.
 
-## 📄 Documents Office
+[Documentation →](https://docs.codeg.app/guide/tasks) · [Traitement automatique →](https://docs.codeg.app/guide/repository#let-it-pick-items-up-by-itself)
 
-Demandez une présentation, un rapport ou un classeur : l'agent produit un vrai `.pptx` / `.docx` / `.xlsx` — pendant que le volet de droite le rend en direct. Chaque modification arrive d'elle-même dans l'aperçu : les diapositives se remplissent, les tableaux prennent forme, les chiffres se posent dans les cellules. La diapositive 4 ne vous plaît pas ? Dites-le au message suivant — l'agent modifie le même fichier sur place et l'aperçu suit. Aucun export, aucune application Office externe, aucune sortie de Codeg.
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/todos-dark.gif" />
+  <img src="../images/features/todos-light.gif" alt="Des tâches à faire exécutées sans surveillance" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-![Un agent modifiant un document Office à côté de son aperçu en direct](../images/office-light.png#gh-light-mode-only)
-![Un agent modifiant un document Office à côté de son aperçu en direct](../images/office-dark.png#gh-dark-mode-only)
+### Canevas infini
 
-## 💻 Espace de travail
+Disposez chats, fichiers, terminaux et notes sur un canevas infini. Gardez tous vos agents en vue.
 
-Un seul espace de travail, tous les agents. Quel que soit celui qui travaille — Claude Code, Codex, Cursor —, il le fait dans le même éditeur, avec les mêmes diffs en direct et le même client git ; et ce qu'il produit, ce sont de vrais fichiers de votre dépôt, qui changent sous vos yeux. Rattachez d'autres répertoires — une bibliothèque partagée, un service voisin, le dépôt de documentation — et l'arborescence, la recherche et l'agent lui-même les traitent comme un seul espace de travail.
+[Documentation →](https://docs.codeg.app/guide/canvas)
 
-**Sessions.** Récupérez l'historique que vous avez déjà : les sessions passées de tous les agents installés, importées en un clic et reprenables là où vous les aviez laissées. Une fois dedans, elles cessent d'être des silos séparés — mentionnez une ancienne session avec `@` et l'agent auquel vous parlez peut la lire, même si un autre agent l'a écrite ; l'exécution Codex d'aujourd'hui repart donc de là où la session Claude Code de la semaine dernière s'est arrêtée. Aussi longue que devienne une conversation, elle s'ouvre sur ses derniers tours et charge le reste au fur et à mesure que vous remontez.
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/canvas-dark.gif" />
+  <img src="../images/features/canvas-light.gif" alt="Canevas infini" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-**Fichiers.** Les modifications de l'agent apparaissent sous forme de diffs à côté de la conversation, au fur et à mesure. Ouvrez n'importe quel fichier dans un vrai éditeur avec coloration syntaxique, envoyez un fichier — ou juste une sélection — directement à l'agent avec `⌘L`, et prévisualisez Markdown, HTML, images et documents Office dans le même volet.
+### Bureau, serveur, mobile et chat
 
-**Git.** Un client complet, pas un simple indicateur d'état : committez directement depuis l'onglet Modifications — un message, Entrée — avec pull, fetch, push et remise à côté, et un historique qui montre quels commits sont poussés. Créez des branches, fusionnez, rebasez, réinitialisez ou comparez avec une autre branche, et mettez à jour ou poussez n'importe quelle branche sans basculer dessus. Les conflits ouvrent un éditeur de fusion à trois volets où vous acceptez bloc par bloc ou tapez vous-même la résolution. Et les worktrees réduisent le travail en parallèle à une seule action — une nouvelle branche, son propre répertoire et une conversation toute neuve enracinée dedans, pour qu'une flotte d'agents construise des fonctionnalités différentes en même temps sans se marcher sur les fichiers.
+Bureau, serveur, Docker ou mobile : retrouvez aussi vos agents sur Telegram, Lark et WeChat.
 
-**Quand ça se passe mal.** Un tour qui échoue ne dit pas seulement que quelque chose a raté : sur Claude Code et Codex, il en nomme le type — problème de connexion, problème d'accès, limite atteinte, requête refusée, problème de service — et accroche sous le compositeur un bandeau ne portant que ce qui aiderait vraiment : Réessayer, Se connecter ou une nouvelle session. Les tentatives que l'agent fait de lui-même s'affichent en ambre et se résument en une seule ligne « Rétabli ». Et l'indicateur de connexion sous le compositeur est un bouton : cliquez pour connaître l'état réel de la session, avec une Reconnexion qui reprend au lieu de repartir de zéro.
+[Documentation →](https://docs.codeg.app/getting-started/deployment) · [Espaces de travail distants →](https://docs.codeg.app/guide/workspace#desktop-and-browser) · [Applications mobiles →](https://docs.codeg.app/getting-started/installation#mobile-apps) · [Canaux de chat →](https://docs.codeg.app/guide/chat-channels)
 
-## 📱 iPhone, iPad et Android
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/anywhere-dark.gif" />
+  <img src="../images/features/anywhere-light.gif" alt="Bureau, serveur, mobile et chat" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-Quittez votre bureau, pas votre travail. Les clients natifs iOS et Android se connectent au Codeg que vous faites déjà tourner — le **Service web** de votre application de bureau, ou votre propre `codeg-server` — et de là vous lancez des sessions, suivez en direct les réponses et les appels d'outils, répondez aux demandes d'autorisation et parcourez projets et branches. Rien ne migre sur le téléphone : vos fichiers, les CLI des agents et les conversations restent sur la machine qui exécute Codeg, et le jeton d'accès est gardé dans le Trousseau iOS ou protégé par Android Keystore. Les deux clients sont open source ([iOS](https://github.com/xintaofei/codeg-ios), [Android](https://github.com/xintaofei/codeg-android)) ; l'appairage tient en trois étapes, détaillées dans [Applications mobiles](https://docs.codeg.app/getting-started/installation#mobile-apps).
+### Documents Office et recherche
 
-| iPhone et iPad | Android |
-| :---: | :---: |
-| <img src="../images/mobile-ios.jpg" alt="Démarrage d'une session depuis le client Codeg pour iOS" width="248" /> | <img src="../images/mobile-android.jpg" alt="La réponse d'un agent qui arrive en direct dans le client Codeg pour Android" width="248" /> |
+Créez des fichiers Office avec aperçu en direct et ouvrez des PDF. Des skills de recherche pour chaque agent.
 
-## ✨ Points forts
+[Documentation →](https://docs.codeg.app/guide/office) · [Recherche →](https://docs.codeg.app/guide/research)
 
-- **[Agrégation des conversations](https://docs.codeg.app/guide/aggregation)** — importez les sessions de tous les agents supportés dans un espace de travail unifié et consultable, et reprenez-les là où vous vous étiez arrêté
-- **[Collaboration multi-agents](https://docs.codeg.app/guide/multi-agent)** — mentionnez un agent avec `@` pour déléguer : les sous-agents de types différents s'exécutent chacun dans sa session, en parallèle, au sein d'une même tâche
-- **[Tâches à faire](https://docs.codeg.app/guide/tasks)** — notez ce qu'il y a à faire et les agents vident la file, chaque tâche dans son propre worktree, pour n'atterrir sur votre branche qu'après votre relecture
-- **[Agents personnalisés](https://docs.codeg.app/guide/custom-agents)** — enregistrez n'importe quel autre agent compatible ACP depuis le registre public ou son JSON de distribution ; Codeg l'installe, enregistre son historique et le traite comme un agent intégré
-- **[L'espace de travail](https://docs.codeg.app/guide/workspace)** — toute la boucle d'ingénierie à côté de l'agent : arborescence, éditeur et diff, changements git, commit, terminal intégré et [plusieurs dossiers réunis en un seul espace de travail](https://docs.codeg.app/guide/workspace#work-across-several-folders)
-- **[Vue divisée](https://docs.codeg.app/guide/workspace#split-the-conversation-view-into-groups)** — divisez la zone de conversation en autant de groupes d'onglets que vous voulez, faites glisser onglets et séparations entre eux, et retrouvez la disposition — brouillons compris — au redémarrage
-- **[Git et worktrees](https://docs.codeg.app/guide/git)** — relisez et validez vos changements, gérez vos comptes Git distants et travaillez en parallèle grâce aux flux `git worktree` intégrés
-- **[Utilisation des tokens](https://docs.codeg.app/guide/token-usage)** — derrière le compteur de la barre d'état, un rapport complet : tendances et taux de succès du cache, carte de chaleur d'activité, et répartitions par dossier, agent, modèle et session
-- **[Canaux de discussion](https://docs.codeg.app/guide/chat-channels)** — pilotez vos agents depuis Telegram, Lark (Feishu) et WeChat : créez des tâches, approuvez des permissions, suivez l'avancement en direct
-- **[Automatisations](https://docs.codeg.app/guide/automations)** — enregistrez un compositeur entièrement configuré comme une automatisation réutilisable, exécutée sans interface, selon un planning cron ou à la demande — en lançant une session, ou en déposant une tâche à faire que vous relirez plus tard
-- **[Documents Office](https://docs.codeg.app/guide/office)** — créez, analysez, relisez et modifiez des `.docx` / `.xlsx` / `.pptx` via l'`officecli` intégré, avec aperçu en direct dans l'onglet
-- **[Recherche scientifique](https://docs.codeg.app/guide/research)** — des compétences de recherche intégrées (formulation d'hypothèses, plan d'expérience, statistiques, visualisation, évaluation critique, recherche bibliographique) que n'importe quel agent peut invoquer
-- **[Project Boot](https://docs.codeg.app/guide/project-boot)** — créez visuellement de nouveaux projets, avec aperçu en direct, puis ouvrez-les directement dans l'espace de travail
-- **[MCP](https://docs.codeg.app/guide/mcp) & [Skills](https://docs.codeg.app/guide/skills)** — scan des serveurs locaux, recherche et installation depuis le registre, et compétences gérées au niveau global ou projet
-- **[À votre image](https://docs.codeg.app/reference/settings/appearance)** — recolorez n'importe lequel des douze thèmes token par token, réglez l'arrondi des angles pour toute l'app, importez et exportez des thèmes en JSON shadcn, ou écrivez votre propre CSS
-- **[Bureau, serveur et Docker](https://docs.codeg.app/getting-started/deployment)** — une application de bureau native, un `codeg-server` autonome accessible depuis n'importe quel navigateur, ou `docker compose up`
-- **[iPhone, iPad et Android](https://docs.codeg.app/getting-started/installation#mobile-apps)** — des clients mobiles natifs reliés à votre poste ou à votre serveur : lancez des sessions, recevez les réponses en flux, approuvez les permissions et parcourez vos projets où que vous soyez
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/office-dark.gif" />
+  <img src="../images/features/office-light.gif" alt="Documents Office et recherche" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-## 📦 Installation et exécution
+### Utilisation du navigateur et de l'ordinateur
 
-**Bureau** — téléchargez l'installateur macOS, Windows ou Linux depuis les [Releases](https://github.com/xintaofei/codeg/releases), puis suivez l'[Installation](https://docs.codeg.app/getting-started/installation).
+Partagez pages et erreurs du navigateur de bureau. Computer Use (aperçu) pilote les fenêtres partagées.
+
+[Documentation →](https://docs.codeg.app/guide/browser) · [Utilisation de l'ordinateur →](https://docs.codeg.app/guide/computer-use)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/browser-dark.gif" />
+  <img src="../images/features/browser-light.gif" alt="Utilisation du navigateur et de l'ordinateur" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Ligne de commande et CI
+
+`codeg-cli` relie scripts et CI à un Codeg déjà lancé et affiche les réponses ou événements JSON.
+
+[Documentation →](https://docs.codeg.app/guide/command-line)
+
+</td>
+<td width="50%" valign="middle">
+
+```bash
+codeg-cli -a codex \
+  -p "Review the latest commit"
+
+git diff | codeg-cli -a codex \
+  -p "Review this diff"
+```
+
+</td>
+</tr>
+</table>
+
+**Également inclus :**
+
+- **[Toute la boucle d'ingénierie](https://docs.codeg.app/guide/workspace)** — éditeur de code, diffs en direct, [Git et worktrees](https://docs.codeg.app/guide/git), éditeur de fusion à trois volets, terminaux et vues partagées
+- **[Panneau du dépôt](https://docs.codeg.app/guide/repository)** — issues, pull requests, vérifications et fusions pour GitHub, GitLab, Gitea et Forgejo ; toute issue ou PR peut devenir une tâche à faire
+- **[Automatisations](https://docs.codeg.app/guide/automations)** — enregistrez une zone de saisie configurée et exécutez-la sans interface, selon une planification cron ou à la demande
+- **[Utilisation des tokens](https://docs.codeg.app/guide/token-usage)** — tendances, taux de succès du cache, carte de chaleur d'activité, utilisation par dossier, agent, modèle et session, et ce que cela coûterait aux prix catalogue de l'API
+- **[Bifurquer et réorienter](https://docs.codeg.app/guide/workspace#follow-along-%E2%80%94-the-conversation)** — sur les agents qui le prennent en charge, faites bifurquer une conversation depuis une réponse terminée, ou envoyez un message dans un tour encore en cours
+- **[Compétences](https://docs.codeg.app/guide/skills) et [MCP](https://docs.codeg.app/guide/mcp)** — packs de compétences par agent, scan MCP local, recherche et installation depuis le registre
+- **[Lanceur de projet](https://docs.codeg.app/guide/project-boot)** — créez visuellement le squelette d'un nouveau projet, avec un aperçu en direct
+- **[Notifications](https://docs.codeg.app/reference/settings/general#desktop-notifications)** — notifications du bureau, sons, et un bouton de barre des tâches qui clignote ou une icône du Dock qui rebondit quand un tour se termine ou qu'un agent a besoin de vous
+- **[À votre image](https://docs.codeg.app/reference/settings/appearance)** — douze thèmes que vous pouvez recolorer token par token, fonds d'écran, rayon des coins, largeur du chat, CSS personnalisé et une mascotte de bureau — dans n'importe laquelle des dix langues de l'interface
+- **[Sauvegarde et synchronisation](https://docs.codeg.app/reference/settings/system#backup-restore)** — sauvegardes chiffrées et synchronisation de la configuration entre machines, via un fichier ou votre propre serveur WebDAV
+- **[Schéma d'URL](../../docs/url-scheme.md)** — `codeg://session/<id>` ouvre une conversation depuis une autre application (bureau)
+- **Et plus encore** — presque chaque version apporte du nouveau ; les [notes de version](https://github.com/spacering-net/codeg/releases) en donnent la liste complète
+
+## 🤖 Agents pris en charge
+
+Codeg communique avec chaque agent via l'[Agent Client Protocol](https://agentclientprotocol.com) : chacun bénéficie ainsi de la même interface structurée. Vingt sont intégrés, et Codeg installe, épingle et met à jour la plupart d'entre eux pour vous :
+
+<p>
+  <a href="https://www.anthropic.com/claude-code"><kbd><img src="../images/agents/claude-code.svg" alt="" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
+  <a href="https://github.com/openai/codex"><kbd><img src="../images/agents/codex.svg" alt="" width="16" valign="middle" /> Codex</kbd></a> &nbsp;
+  <a href="https://github.com/google-gemini/gemini-cli"><kbd><img src="../images/agents/gemini-cli.svg" alt="" width="16" valign="middle" /> Gemini CLI</kbd></a> &nbsp;
+  <a href="https://openclaw.ai"><kbd><img src="../images/agents/openclaw.svg" alt="" width="16" valign="middle" /> OpenClaw</kbd></a> &nbsp;
+  <a href="https://opencode.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/opencode-dark.svg" /><img src="../images/agents/opencode.svg" alt="" width="16" valign="middle" /></picture> OpenCode</kbd></a> &nbsp;
+  <a href="https://cline.bot"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cline-dark.svg" /><img src="../images/agents/cline.svg" alt="" width="16" valign="middle" /></picture> Cline</kbd></a> &nbsp;
+  <a href="https://hermes-agent.nousresearch.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/hermes-agent-dark.svg" /><img src="../images/agents/hermes-agent.svg" alt="" width="16" valign="middle" /></picture> Hermes Agent</kbd></a> &nbsp;
+  <a href="https://www.codebuddy.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/codebuddy-dark.svg" /><img src="../images/agents/codebuddy.svg" alt="" width="16" valign="middle" /></picture> CodeBuddy</kbd></a> &nbsp;
+  <a href="https://www.kimi.com/code"><kbd><img src="../images/agents/kimi-code.svg" alt="" width="16" valign="middle" /> Kimi Code</kbd></a> &nbsp;
+  <a href="../agents/minimax-code.md"><kbd><img src="../images/agents/minimax-code.svg" alt="" width="16" valign="middle" /> MiniMax Code</kbd></a> &nbsp;
+  <a href="https://pi.dev"><kbd><img src="../images/agents/pi.svg" alt="" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
+  <a href="https://x.ai/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/grok-dark.svg" /><img src="../images/agents/grok.svg" alt="" width="16" valign="middle" /></picture> Grok</kbd></a> &nbsp;
+  <a href="https://cursor.com/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cursor-dark.svg" /><img src="../images/agents/cursor.svg" alt="" width="16" valign="middle" /></picture> Cursor</kbd></a> &nbsp;
+  <a href="https://deepseek-harness.github.io/deepseek-harness/"><kbd><img src="../images/agents/deepseek-harness.svg" alt="" width="16" valign="middle" /> DeepSeek Harness</kbd></a> &nbsp;
+  <a href="https://qoder.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/qoder-dark.svg" /><img src="../images/agents/qoder.svg" alt="" width="16" valign="middle" /></picture> Qoder</kbd></a> &nbsp;
+  <a href="https://antigravity.google"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/google-antigravity-dark.svg" /><img src="../images/agents/google-antigravity.svg" alt="" width="16" valign="middle" /></picture> Google Antigravity</kbd></a> &nbsp;
+  <a href="https://kiro.dev/cli/"><kbd><img src="../images/agents/kiro.svg" alt="" width="16" valign="middle" /> Kiro CLI</kbd></a> &nbsp;
+  <a href="../agents/zcode.md"><kbd><img src="../images/agents/zcode.svg" alt="" width="16" valign="middle" /> ZCode</kbd></a> &nbsp;
+  <a href="https://docs.trae.cn/cli_about-trae-code-cli-2"><kbd><img src="../images/agents/trae.svg" alt="" width="16" valign="middle" /> TRAE CLI</kbd></a> &nbsp;
+  <a href="https://commandcode.ai"><kbd><img src="../images/agents/command-code.svg" alt="" width="16" valign="middle" /> Command Code</kbd></a> &nbsp;
+  <a href="https://docs.codeg.app/guide/custom-agents"><kbd>+ tout agent ACP</kbd></a>
+</p>
+
+Pas dans la liste ? Choisissez n'importe quel agent dans le registre public ACP ou collez son JSON de distribution — Codeg l'installe, vérifie qu'il démarre et le traite comme un agent intégré. Prérequis d'exécution et emplacement des sessions de chaque agent : [Agents pris en charge](https://docs.codeg.app/guide/supported-agents).
+
+## 📦 Installation
+
+**Bureau** — les installateurs pour macOS, Windows et Linux se trouvent dans les [Releases](https://github.com/spacering-net/codeg/releases/latest) ; les étapes de mise en place sont dans [Installation](https://docs.codeg.app/getting-started/installation).
 
 **Serveur** — faites tourner Codeg sans interface et accédez-y depuis n'importe quel navigateur. Sous Linux ou macOS :
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xintaofei/codeg/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/spacering-net/codeg/main/install.sh | bash
 CODEG_STATIC_DIR=/usr/local/share/codeg/web codeg-server
 ```
 
 Sous Windows, dans PowerShell :
 
 ```powershell
-irm https://raw.githubusercontent.com/xintaofei/codeg/main/install.ps1 | iex
-$env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg\web"; codeg-server
+irm https://raw.githubusercontent.com/spacering-net/codeg/main/install.ps1 | iex
+$env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg-server\web"; codeg-server
 ```
 
 **Docker** — le même serveur, dans un conteneur :
 
 ```bash
-docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/xintaofei/codeg:latest
+docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/spacering-net/codeg:latest
 ```
 
-**Mobile** — installez l'[app iOS](https://apps.apple.com/app/codeg-client/id6785199071) ou l'[APK Android](https://github.com/xintaofei/codeg-android/releases/latest), puis pointez-la vers le **Service web** de votre application de bureau ou vers votre propre `codeg-server` : URL, jeton, c'est prêt. Les étapes d'appairage sont dans [Applications mobiles](https://docs.codeg.app/getting-started/installation#mobile-apps).
+Dans les deux cas, ouvrez `http://<host>:3080` dans un navigateur et saisissez le jeton d'accès que le serveur affiche au démarrage (pour le conteneur, `docker logs` le montre), ou définissez `CODEG_TOKEN` pour choisir le vôtre.
 
-Compose, binaires précompilés, compilation depuis les sources et mises à jour sur place sont traités dans [Déploiement](https://docs.codeg.app/getting-started/deployment) ; les variables d'environnement dans [Configuration](https://docs.codeg.app/getting-started/configuration). Pour compiler Codeg lui-même : [Développement](https://docs.codeg.app/reference/development) et [Architecture](https://docs.codeg.app/reference/architecture).
+**Mobile** — installez l'[app iOS](https://apps.apple.com/app/codeg-client/id6785199071) ou l'[APK Android](https://github.com/xintaofei/codeg-android/releases/latest), puis pointez-la vers le **Service Web** de votre application de bureau ou vers votre propre `codeg-server` : URL, jeton, c'est prêt. Les étapes d'appairage sont dans [Applications mobiles](https://docs.codeg.app/getting-started/installation#mobile-apps).
 
-## 🔒 Confidentialité et sécurité
+Compose, binaires précompilés, compilation depuis les sources et mises à jour sur place sont traités dans [Déploiement](https://docs.codeg.app/getting-started/deployment) ; les variables d'environnement dans [Configuration](https://docs.codeg.app/getting-started/configuration).
 
-- Local d'abord par défaut pour l'analyse, le stockage et les opérations sur les projets — les accès réseau n'ont lieu que sur des actions que vous déclenchez
-- Les modes web et serveur sont protégés par une authentification par jeton
-- Prise en charge du proxy système pour les environnements d'entreprise
+## 👥 Communauté et support
 
-Détails dans [Confidentialité et sécurité](https://docs.codeg.app/reference/privacy).
+- **WeChat** — scannez le QR code et rejoignez notre groupe pour des discussions, des retours et des mises à jour :
 
-## 👥 Communauté
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../images/weixin-dark.jpg" />
+    <img src="../images/weixin-light.jpg" alt="WeChat" width="200" />
+  </picture>
 
-- Scannez le QR code ci-dessous pour rejoindre notre groupe WeChat pour des discussions, des retours et des mises à jour
+- **Issues** — un bug trouvé ou une fonctionnalité manquante ? [Ouvrez une issue](https://github.com/spacering-net/codeg/issues).
+- **Confidentialité** — local d'abord : l'analyse, le stockage et les opérations sur les projets restent sur votre machine, et les modes web et serveur sont protégés par une authentification par jeton. Détails dans [Confidentialité et sécurité](https://docs.codeg.app/reference/privacy).
+- **LinuxDO** — merci à la communauté [LinuxDO](https://linux.do) pour son soutien.
+- **Soutenez-nous** — [mettez une étoile au dépôt](https://github.com/spacering-net/codeg) pour suivre le projet.
 
-<img src="../images/weixin-light.jpg#gh-light-mode-only" alt="WeChat" width="240" />
-<img src="../images/weixin-dark.jpg#gh-dark-mode-only" alt="WeChat" width="240" />
+## 🤝 Contribuer
 
-- Merci à la communauté [LinuxDO](https://linux.do) pour son soutien
+Les issues et les pull requests sont les bienvenues. Pour compiler Codeg vous-même, commencez par [Développement](https://docs.codeg.app/reference/development) et [Architecture](https://docs.codeg.app/reference/architecture).
+
+<a href="https://github.com/spacering-net/codeg/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=spacering-net/codeg" alt="Contributeurs de Codeg" />
+</a>
+
+## ⭐ Historique des étoiles
+
+<a href="https://www.star-history.com/?repos=spacering-net%2Fcodeg&type=date&releases=&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&theme=dark&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&legend=bottom-right" />
+ </picture>
+</a>
 
 ## 🙏 Remerciements
 
@@ -221,6 +369,8 @@ Détails dans [Confidentialité et sécurité](https://docs.codeg.app/reference/
 - [Superpowers](https://github.com/obra/superpowers) — alimente le module de compétences d'experts de Codeg
 - [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) — alimente le flux de travail des documents Office de Codeg
 - [scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills) — alimente les compétences de Recherche scientifique de Codeg (sous-ensemble sous licence MIT)
+- [json-render](https://github.com/vercel-labs/json-render) — alimente les cartes, tableaux et graphiques du Rendu d'interface de Codeg
+- [cua-driver](https://github.com/trycua/cua) — alimente l'Utilisation de l'ordinateur de Codeg
 
 ## 📜 Licence
 

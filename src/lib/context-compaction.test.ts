@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  COMPACTION_SUMMARY_META_KEY,
   contextCompactionPayload,
+  contextCompactionSummary,
   isContextCompactionMeta,
 } from "./context-compaction"
 
@@ -76,5 +78,47 @@ describe("contextCompactionPayload", () => {
     expect(contextCompactionPayload({ contextCompaction: false })).toBeNull()
     expect(contextCompactionPayload({})).toBeNull()
     expect(contextCompactionPayload(null)).toBeNull()
+  })
+})
+
+describe("contextCompactionSummary", () => {
+  const claimed = {
+    contextCompaction: { version: 1 },
+    [COMPACTION_SUMMARY_META_KEY]: true,
+  }
+
+  it("returns the output of a call the backend claimed", () => {
+    expect(contextCompactionSummary(claimed, "We refactored the parser.")).toBe(
+      "We refactored the parser."
+    )
+  })
+
+  it("ignores output the backend did not claim as a summary", () => {
+    // claude's LEGACY call parks its metadata object on the same channel.
+    expect(
+      contextCompactionSummary(
+        { contextCompaction: { version: 1 } },
+        '{"trigger":"manual","preTokens":191322}'
+      )
+    ).toBeNull()
+    // The grok bridge's boolean marker never carries one either.
+    expect(
+      contextCompactionSummary({ contextCompaction: true }, "text")
+    ).toBeNull()
+  })
+
+  it("requires the claim on a compaction call, and a non-blank output", () => {
+    expect(
+      contextCompactionSummary({ [COMPACTION_SUMMARY_META_KEY]: true }, "x")
+    ).toBeNull()
+    expect(
+      contextCompactionSummary(
+        { ...claimed, [COMPACTION_SUMMARY_META_KEY]: "true" },
+        "x"
+      )
+    ).toBeNull()
+    expect(contextCompactionSummary(claimed, null)).toBeNull()
+    expect(contextCompactionSummary(claimed, undefined)).toBeNull()
+    expect(contextCompactionSummary(claimed, "  \n ")).toBeNull()
   })
 })

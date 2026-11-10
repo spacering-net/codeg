@@ -54,6 +54,7 @@ import {
   WORKSPACE_DOWNLOAD_CANCELLED,
 } from "@/lib/api"
 import { isDesktop, isRemoteDesktopMode } from "@/lib/transport"
+import { FileTreeCopySubContent } from "@/components/layout/file-tree-copy-menu"
 import { emitAttachFileToSession } from "@/lib/session-attachment-events"
 import {
   resolveFileTreeDropZone,
@@ -114,7 +115,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { joinFsPath } from "@/lib/path-utils"
 import { toErrorMessage } from "@/lib/app-error"
-import { cn, copyTextFromMenu } from "@/lib/utils"
+import { cn } from "@/lib/utils"
 
 function parentDir(filePath: string): string {
   const slashIndex = filePath.lastIndexOf("/")
@@ -133,20 +134,6 @@ function parentDir(filePath: string): string {
 
 function baseName(path: string): string {
   return path.split(/[/\\]/).pop() || path
-}
-
-async function copyPathToClipboard(
-  absolutePath: string,
-  messages: { success: string; failure: string }
-) {
-  // copyTextFromMenu defers the write until this context menu has closed, so
-  // the execCommand clipboard fallback works in non-secure web contexts.
-  const ok = await copyTextFromMenu(absolutePath)
-  if (ok) {
-    toast.success(messages.success)
-  } else {
-    toast.error(messages.failure)
-  }
 }
 
 const FILE_TREE_ROOT_PATH = "__workspace_root__"
@@ -862,16 +849,16 @@ function RenderNode({
               onOpenCode={() => void handleOpenInCode()}
             />
           </ContextMenuSub>
-          <ContextMenuItem
-            onSelect={() =>
-              void copyPathToClipboard(absolutePath, {
-                success: t("toasts.pathCopied"),
-                failure: t("toasts.copyPathFailed"),
-              })
-            }
-          >
-            {t("copyPath")}
-          </ContextMenuItem>
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>{t("copy")}</ContextMenuSubTrigger>
+            <FileTreeCopySubContent
+              name={node.name}
+              relativePath={node.path}
+              absolutePath={absolutePath}
+              kind="file"
+              remote={webMode}
+            />
+          </ContextMenuSub>
           {webMode && (
             <>
               <ContextMenuItem
@@ -1112,16 +1099,16 @@ function RenderNode({
             onOpenCode={() => void handleOpenInCode()}
           />
         </ContextMenuSub>
-        <ContextMenuItem
-          onSelect={() =>
-            void copyPathToClipboard(absolutePath, {
-              success: t("toasts.pathCopied"),
-              failure: t("toasts.copyPathFailed"),
-            })
-          }
-        >
-          {t("copyPath")}
-        </ContextMenuItem>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>{t("copy")}</ContextMenuSubTrigger>
+          <FileTreeCopySubContent
+            name={node.name}
+            relativePath={node.path}
+            absolutePath={absolutePath}
+            kind="dir"
+            remote={webMode}
+          />
+        </ContextMenuSub>
         {webMode && (
           <>
             <ContextMenuItem onSelect={() => onRequestUpload(node.path)}>
@@ -2630,11 +2617,12 @@ export function FileTreeTab() {
 
       const selected = directoryGitSelectedPaths.has(node.path)
       return (
+        // No padding override: the row keeps the primitive's own px-2 so the
+        // checkbox lands in the column a sibling folder spends on its chevron.
         <FileTreeFile
           key={node.path}
           path={node.path}
           name={node.name}
-          className="gap-1 px-1.5 py-1"
           title={node.path}
         >
           <button
@@ -2909,7 +2897,13 @@ export function FileTreeTab() {
               ref={treeContainerRef}
               keyboardNavigation
               onKeyDown={handleTreeKeyDown}
-              className="border-0 rounded-none bg-transparent w-max min-w-full px-1.5 focus:outline-none focus-visible:outline-none"
+              // `px-1.5 pt-1.5` inset the row highlight from the panel's sides
+              // and from the title strip above, so a selected root row doesn't
+              // sit flush against the strip. Rows repeat the top inset as a
+              // scroll margin: keyboard navigation scrolls the focused row to
+              // the nearest edge, which would otherwise scroll the padding
+              // away when stepping back up to the root.
+              className="border-0 rounded-none bg-transparent w-max min-w-full px-1.5 pt-1.5 focus:outline-none focus-visible:outline-none [&_[data-tree-row-path]]:scroll-mt-1.5"
               expanded={expandedPaths}
               onExpandedChange={setExpandedPaths}
               selectedPath={focusedTreePath}
@@ -3080,16 +3074,21 @@ export function FileTreeTab() {
                           }}
                         />
                       </ContextMenuSub>
-                      <ContextMenuItem
-                        onSelect={() =>
-                          void copyPathToClipboard(folder.path, {
-                            success: t("toasts.pathCopied"),
-                            failure: t("toasts.copyPathFailed"),
-                          })
-                        }
-                      >
-                        {t("copyPath")}
-                      </ContextMenuItem>
+                      <ContextMenuSub>
+                        <ContextMenuSubTrigger>
+                          {t("copy")}
+                        </ContextMenuSubTrigger>
+                        <FileTreeCopySubContent
+                          name={rootNodeName}
+                          // The root's path relative to itself. "." is the
+                          // only spelling that stays pasteable (`git add .`);
+                          // the literal answer, "", would copy nothing at all.
+                          relativePath="."
+                          absolutePath={folder.path}
+                          kind="dir"
+                          remote={webMode}
+                        />
+                      </ContextMenuSub>
                       {webMode && (
                         <>
                           <ContextMenuItem

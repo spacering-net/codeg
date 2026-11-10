@@ -18,9 +18,9 @@ import {
   Pin,
   PinOff,
   CheckCircle2,
-  FolderX,
   Info,
   ChevronRight,
+  SquareTerminal,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -67,7 +67,15 @@ import { Input } from "@/components/ui/input"
 import { ConversationStatusDot } from "./conversation-status-dot"
 import { SessionDetailsDialog } from "./session-details-dialog"
 import { SidebarConversationHoverDetails } from "./sidebar-conversation-hover-details"
+import { ConversationTagChips } from "./conversation-tag-chip"
+import {
+  ConversationTagContextSubmenu,
+  NewConversationTagDialog,
+} from "./conversation-tag-picker"
 import { AgentIcon } from "@/components/agent-icon"
+import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
+import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
+import { useAssistant } from "@/stores/assistants-store"
 
 /**
  * Horizontal indent added per delegation-nesting level. Chosen so a child's
@@ -131,6 +139,12 @@ function resolveAttachTabId(): string | null {
   if (!activeTab || activeTab.kind !== "conversation") return null
   return activeTab.id
 }
+
+/** Chips drawn inline — the branch chip included — before the rest fold into
+ *  "+N". Two is what a default-width sidebar can afford beside a
+ *  still-readable title; the chips shrink (and truncate) before the title
+ *  gives up its minimum. */
+const CARD_TAG_LIMIT = 2
 
 /** How long the pointer must rest on a row before its details bubble opens.
  *  Long enough that sweeping the pointer down the list stays quiet. */
@@ -220,6 +234,17 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const [renameValue, setRenameValue] = useState("")
   const [attachTabId, setAttachTabId] = useState<string | null>(null)
   const [hoverOpen, setHoverOpen] = useState(false)
+  const [newTagOpen, setNewTagOpen] = useState(false)
+  // Subscribes to tag DEFINITIONS only (rare), and re-resolves only when this
+  // row's own `tag_ids` array changes — a status event elsewhere never lands.
+  const tags = useResolvedTags(conversation.tag_ids)
+  // Delegation sub-sessions (a child of another conversation) don't get the
+  // hover quick actions: pinning a sub-agent run to the root Pinned section or
+  // hand-toggling its status doesn't fit — its lifecycle is the sub-agent's. The
+  // time / running badge then stays visible on hover (nothing swaps in for it).
+  // Nor a branch chip, like they get no tags: their parent row carries it.
+  const isSubsession = conversation.parent_id != null
+  const branch = useBranchChip(isSubsession ? null : conversation.git_branch)
 
   const handleClick = useCallback(() => {
     onSelect(conversation.id, conversation.agent_type, conversation.folder_id)
@@ -306,11 +331,6 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const isCancelled = status === "cancelled"
   const isPinned = conversation.pinned_at != null
   const isCompleted = status === "completed"
-  // Delegation sub-sessions (a child of another conversation) don't get the
-  // hover quick actions: pinning a sub-agent run to the root Pinned section or
-  // hand-toggling its status doesn't fit — its lifecycle is the sub-agent's. The
-  // time / running badge then stays visible on hover (nothing swaps in for it).
-  const isSubsession = conversation.parent_id != null
 
   return (
     <>
@@ -410,10 +430,17 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       }}
                       aria-hidden
                     >
-                      <AgentIcon
-                        agentType={conversation.agent_type}
-                        className="h-[0.75rem] w-[0.75rem]"
-                      />
+                      {conversation.assistant_id != null ? (
+                        <SubsessionAssistantAvatar
+                          id={conversation.assistant_id}
+                          name={conversation.assistant_name ?? ""}
+                        />
+                      ) : (
+                        <AgentIcon
+                          agentType={conversation.agent_type}
+                          className="h-[0.75rem] w-[0.75rem]"
+                        />
+                      )}
                       <ConversationStatusDot
                         status={status}
                         size="sm"
@@ -421,32 +448,51 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       />
                     </div>
 
+                    {/* Grows into the free width only as far as its own text
+                    (`max-w-max`), so the chips sit right after the title
+                    rather than at the far end. A long title still yields
+                    first: its basis is zero, so the chips take their width
+                    before it takes the rest. */}
                     <span
                       className={cn(
-                        "relative min-w-0 flex-1 truncate text-[0.875rem] font-normal",
+                        "relative min-w-0 max-w-max flex-1 truncate text-[0.875rem] font-normal",
                         isOpenInTab && "text-primary"
                       )}
                     >
                       {formatConversationTitle(conversation.title) ||
                         t("untitledConversation")}
                     </span>
-                    {/* Re-parented out of a removed worktree: history loads fine,
-                    but "continue" may need a fresh session (the agent's files
-                    were keyed to the old path). */}
-                    {conversation.origin_cwd ? (
+                    {/* Inline, inside the row's fixed 2rem height: the list's
+                    virtualizer and rail geometry assume one line per row. The
+                    full set of tags is in the hover bubble. Capped so the
+                    title keeps 3.5rem (the cap counts the 0.375rem between
+                    them): on a narrow sidebar the chips — not the title — give
+                    way. A floor on the title would do the same, but would also
+                    hold a short title's box open and push the chips off it. */}
+                    <ConversationTagChips
+                      tags={tags}
+                      branch={branch}
+                      max={CARD_TAG_LIMIT}
+                      size="xs"
+                      className="relative -ml-[0.25rem] max-w-[calc(100%-3.875rem)] shrink overflow-hidden"
+                    />
+                    {/* Started by `codeg-cli`: told apart from the window's
+                    own, and found again with the Recent filter. */}
+                    {conversation.source === "cli" ? (
                       <span
-                        className="inline-flex shrink-0 items-center"
-                        title={tSidebar("worktreeRemovedBadge")}
+                        className="ml-auto inline-flex shrink-0 items-center"
+                        title={tSidebar("cliBadge")}
                       >
-                        <FolderX
+                        <SquareTerminal
                           className="h-3 w-3 text-muted-foreground/60"
                           aria-hidden
                         />
-                        <span className="sr-only">
-                          {tSidebar("worktreeRemovedBadge")}
-                        </span>
+                        <span className="sr-only">{tSidebar("cliBadge")}</span>
                       </span>
                     ) : null}
+                    {/* No mark for a conversation re-parented out of a removed
+                    worktree (`origin_cwd`): the row stays quiet about it, and
+                    the hover bubble names the original path instead. */}
                   </button>
 
                   {/* Expand/collapse affordance for delegation children. It overlays
@@ -529,10 +575,16 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                           className="relative inline-flex shrink-0 items-center justify-center"
                           title={tSidebar("statusRunningBadge")}
                         >
-                          <Loader2
-                            className="h-3.5 w-3.5 animate-spin text-amber-600 dark:text-amber-400"
+                          {/* The turn is on a span, not the icon: an SVG
+                              element's transform animates on the main thread,
+                              laying the page out every frame for as long as
+                              the conversation runs. */}
+                          <span
+                            className="inline-flex animate-spin"
                             aria-hidden
-                          />
+                          >
+                            <Loader2 className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                          </span>
                           <span className="sr-only">
                             {tSidebar("statusRunningBadge")}
                           </span>
@@ -671,6 +723,17 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
               {t("attachToCurrentSession")}
             </ContextMenuItem>
             <ContextMenuSeparator />
+            {/* Sub-sessions opt out like they do of pinning: a sub-agent run
+                is not a conversation the user files away, and the sidebar
+                filter only ever matches root rows. */}
+            {!isSubsession && (
+              <ConversationTagContextSubmenu
+                conversationId={conversation.id}
+                folderId={conversation.folder_id}
+                tagIds={conversation.tag_ids}
+                onNewTag={() => setNewTagOpen(true)}
+              />
+            )}
             <ContextMenuSub>
               <ContextMenuSubTrigger>
                 <Circle className="h-4 w-4" />
@@ -771,6 +834,32 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
           summary={conversation}
         />
       )}
+
+      {/* A sibling of the menu, mounted only while open: the menu unmounts
+          its content on select, and one dormant dialog per sidebar row would
+          be all cost. */}
+      {newTagOpen && (
+        <NewConversationTagDialog
+          open
+          onOpenChange={setNewTagOpen}
+          conversationId={conversation.id}
+          folderId={conversation.folder_id}
+        />
+      )}
     </>
   )
 })
+
+/** A sub-session run as an assistant shows the assistant's avatar where the
+ *  agent icon goes: its current look from the store, or the generic assistant
+ *  glyph for a row the store does not hold. */
+function SubsessionAssistantAvatar({ id, name }: { id: number; name: string }) {
+  const assistant = useAssistant(id)
+  return (
+    <AssistantAvatar
+      avatar={assistant?.avatar ?? null}
+      name={assistant?.name ?? name}
+      size={14}
+    />
+  )
+}

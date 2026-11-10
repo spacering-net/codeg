@@ -32,6 +32,7 @@ export function useExportLabels(): ExportLabels {
       system: tExport("system"),
       toolResult: tExport("toolResult"),
       toolError: tExport("toolError"),
+      turnFailed: tExport("turnFailed"),
       statusLabels: {
         in_progress: tStatus("in_progress"),
         pending_review: tStatus("pending_review"),

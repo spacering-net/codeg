@@ -1,6 +1,6 @@
 /**
  * Small, dependency-light lifecycle predicates for an adapted tool-call part,
- * shared by the generic tool-group filter (`dropEmptyInFlightToolCalls`) and the
+ * shared by the generic empty-call filter (`dropEmptyInFlightToolCalls`) and the
  * specialized lane row-builders (`buildDelegationTaskRows`,
  * `buildBackgroundTaskRows`). Kept in its own module — with a TYPE-ONLY import
  * of `AdaptedToolCallPart` (erased at runtime) — so `background-task.ts` can use
@@ -21,6 +21,12 @@ export function toolStatusUnsettled(
   if (status == null) return false
   const s = status.trim().toLowerCase()
   return s !== "completed" && s !== "failed"
+}
+
+/** Whether a forwarded ACP tool status is present and terminal — what a
+ *  report closing its tool call carries. */
+export function toolStatusTerminal(status: string | null | undefined): boolean {
+  return status != null && !toolStatusUnsettled(status)
 }
 
 /**

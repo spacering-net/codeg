@@ -274,7 +274,8 @@ fn compact_turns(turns: &[MessageTurn], max: u32) -> SessionMessages {
     }
 }
 
-/// One turn → role + truncated text (Text/Thinking blocks) + tool names.
+/// One turn → role + truncated text (Text/Thinking blocks, and a failed
+/// turn's account of the failure) + tool names.
 fn compact_turn(turn: &MessageTurn) -> SessionMessageItem {
     let role = match turn.role {
         TurnRole::User => "user",
@@ -287,7 +288,9 @@ fn compact_turn(turn: &MessageTurn) -> SessionMessageItem {
     let mut tools: Vec<String> = Vec::new();
     for block in &turn.blocks {
         match block {
-            ContentBlock::Text { text } | ContentBlock::Thinking { text } => {
+            ContentBlock::Text { text }
+            | ContentBlock::Thinking { text }
+            | ContentBlock::TurnError { message: text } => {
                 let t = text.trim();
                 if !t.is_empty() {
                     parts.push(t);
@@ -477,6 +480,20 @@ mod tests {
         assert_eq!(item.role, "assistant");
         assert_eq!(item.text, "hello\nhmm");
         assert_eq!(item.tools, vec!["Read".to_string()]); // deduped
+    }
+
+    /// A failed turn reads as its system line, so an agent looking at the
+    /// session sees that the turn failed, and why.
+    #[test]
+    fn compact_turn_keeps_a_failed_turn_s_account() {
+        let item = compact_turn(&turn(
+            TurnRole::System,
+            vec![ContentBlock::TurnError {
+                message: "API Error: 503".into(),
+            }],
+        ));
+        assert_eq!(item.role, "system");
+        assert_eq!(item.text, "API Error: 503");
     }
 
     #[test]

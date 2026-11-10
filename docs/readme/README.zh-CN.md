@@ -1,32 +1,44 @@
-# Codeg
+<h1 align="center">
+  <a href="https://docs.codeg.app"><img src="../../public/icon.svg" alt="Codeg logo" width="64" align="absmiddle" /></a> Codeg
+</h1>
 
-[![Release](https://img.shields.io/github/v/release/xintaofei/codeg)](https://github.com/xintaofei/codeg/releases)
-[![Docs](https://img.shields.io/badge/docs-docs.codeg.app-3451b2)](https://docs.codeg.app)
-[![License](https://img.shields.io/github/license/xintaofei/codeg)](../../LICENSE)
-
-<p>
-  <a href="../../README.md">English</a> |
-  <strong>简体中文</strong> |
-  <a href="./README.zh-TW.md">繁體中文</a> |
-  <a href="./README.ja.md">日本語</a> |
-  <a href="./README.ko.md">한국어</a> |
-  <a href="./README.es.md">Español</a> |
-  <a href="./README.de.md">Deutsch</a> |
-  <a href="./README.fr.md">Français</a> |
-  <a href="./README.pt.md">Português</a> |
-  <a href="./README.ar.md">العربية</a>
+<p align="center">
+  <a href="https://github.com/spacering-net/codeg"><img src="https://img.shields.io/github/stars/spacering-net/codeg?style=flat&color=e91e63" alt="GitHub stars" /></a>
+  <a href="https://github.com/spacering-net/codeg/releases/latest"><img src="https://img.shields.io/github/v/release/spacering-net/codeg?style=flat&color=e91e63" alt="Latest release" /></a>
+  <a href="https://github.com/spacering-net/codeg/releases"><img src="https://img.shields.io/github/downloads/spacering-net/codeg/total?style=flat&color=e91e63" alt="Total downloads" /></a>
+  <a href="../../LICENSE"><img src="https://img.shields.io/github/license/spacering-net/codeg?style=flat&color=e91e63" alt="License" /></a>
+  <a href="https://docs.codeg.app"><img src="https://img.shields.io/badge/docs-docs.codeg.app-3451b2?style=flat" alt="Documentation" /></a>
+  <a href="https://docs.codeg.app/zh/getting-started/installation"><img src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Docker%20%7C%20iOS%20%7C%20Android-03a9f4?style=flat" alt="Platforms: macOS, Windows, Linux, Docker, iOS, Android" /></a>
 </p>
 
-Codeg（Code Generation）是一个多智能体编码工作台：把所有 AI 编码智能体收进同一个地方 —— 并让它们协同工作。
+<p align="center">
+  <sub><a href="../../README.md">English</a> · <strong>简体中文</strong> · <a href="./README.zh-TW.md">繁體中文</a> · <a href="./README.ja.md">日本語</a> · <a href="./README.ko.md">한국어</a> · <a href="./README.es.md">Español</a> · <a href="./README.de.md">Deutsch</a> · <a href="./README.fr.md">Français</a> · <a href="./README.pt.md">Português</a> · <a href="./README.ar.md">العربية</a></sub>
+</p>
 
-它将所有受支持智能体 CLI 的会话聚合进一个可搜索的工作区，让主智能体在同一个任务内委派给其它类型的子智能体。不想守着做完的活，可以写进待办任务：每个任务待在自己的分支上无人值守地跑，做完了等你验收才落地。Codeg 可作为桌面应用、独立服务器或 Docker 容器运行，还有原生 iOS 与 Android 客户端，让你离开电脑后也能接手正在跑的任务；内置十五个智能体，你也可以自行注册任何其它兼容 ACP 的智能体。
+<p align="center">
+  <strong>多智能体编码工作台。</strong><br/>
+  把所有 AI 编码智能体收进同一个地方 —— 并让它们协同工作。
+</p>
 
-![工作区](../images/workspace-light.png#gh-light-mode-only)
-![工作区](../images/workspace-dark.png#gh-dark-mode-only)
+<h3 align="center"><a href="https://github.com/spacering-net/codeg/releases/latest"><ins>下载 Codeg</ins></a> · <a href="https://docs.codeg.app/zh"><ins>使用文档</ins></a></h3>
 
-## 📖 文档
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../images/workspace-dark.png" />
+    <img src="../images/workspace-light.png" alt="Codeg 工作区：与智能体的对话、实时 diff 与项目文件并排呈现" width="960" />
+  </picture>
+</p>
 
-**完整文档见 [docs.codeg.app](https://docs.codeg.app)** — [快速开始](https://docs.codeg.app/zh/getting-started/) · [指南](https://docs.codeg.app/zh/guide/) · [参考](https://docs.codeg.app/zh/reference/)
+<table>
+  <tr>
+    <td width="50%" valign="top">🧩 <strong>一个界面，容纳所有智能体</strong><br/>内置二十个智能体，任何兼容 ACP 的智能体都能加入——全部呈现为同一套结构化对话，而不是一个终端。</td>
+    <td width="50%" valign="top">🔎 <strong>会话随你流转</strong><br/>导入、搜索、续接每个智能体留在磁盘上的历史，还能把它交给另一个智能体接着做。</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🤝 <strong>智能体协同工作</strong><br/>一个 <code>@</code> 就能跨智能体委派，也可以把待办任务排进队列，在各自的工作树里无人值守地跑。</td>
+    <td width="50%" valign="top">🌍 <strong>随时随地</strong><br/>桌面应用、自托管服务器或 Docker，iPhone、iPad 与 Android——还有 Telegram、飞书和微信。</td>
+  </tr>
+</table>
 
 ## 💖 赞助
 
@@ -40,31 +52,10 @@ Codeg（Code Generation）是一个多智能体编码工作台：把所有 AI �
   </tr>
   <tr>
     <td align="center" width="220">
-      <a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE" target="_blank"><img src="../images/sui-xiang.jpg" alt="随想AI中转站" width="200" /></a><br/>
-      <strong><a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE">随想AI中转站</a></strong>
-    </td>
-    <td>感谢随想AI中转站对本项目的赞助！随想AI中转站是一家可靠高效的 API 中继服务提供商，提供 Claude、Codex、Gemini 等的中继服务。新账户<a href="https://sui-xiang.com/register?aff=JPFCRHHBE8HE">注册</a>后每日签到就送 0.5 元测试额度，充值额度 1:1，无需订阅，按量付费。多线路冗余、跨区域容灾、自动故障切换，长链路 SSE 不中断。</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
       <a href="https://hezu.ink/sign-up?aff=0wVz" target="_blank"><img src="../images/hezu-ink.jpg" alt="合租巴士" width="200" /></a><br/>
       <strong><a href="https://hezu.ink/sign-up?aff=0wVz">合租巴士</a></strong>
     </td>
     <td>感谢合租巴士对本项目的赞助！合租巴士是一家可靠高效的 AI 中转服务平台，主要提供 Codex、Claude Code 等主流模型的高稳定中转能力，充值比例透明（1:1），Codex 倍率补贴低至 0.08。<a href="https://hezu.ink/sign-up?aff=0wVz">官网进群送 5 刀体验金</a>。</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta" target="_blank"><img src="../images/onehop.jpg" alt="OneHop" width="120" /></a><br/>
-      <strong><a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta">OneHop</a></strong>
-    </td>
-    <td>感谢 OneHop 对本项目的赞助！OneHop 让 Codeg 用户仅用一个 OpenAI 兼容的 API 密钥即可调用数百款领先模型，包括 GPT、Claude、Gemini、DeepSeek、Kimi 和 Qwen。无需管理多个供应商账号或反复修改代码即可切换模型，且按用量付费。<a href="https://onehop.ai/platform/login?ref=CODEG&utm_source=github&utm_medium=readme_sponsor&utm_campaign=codeg&utm_content=sponsor_cta">通过 Codeg 注册</a>即可获得 1 美元额度，再加入 OneHop 社区并参与欢迎活动可额外获得 5 美元——最高共计 6 美元测试额度。</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://console.lqapi.xyz/sign-up?aff=KPy9" target="_blank"><img src="../images/lq-router.png" alt="LQ router" width="160" /></a><br/>
-      <strong><a href="https://console.lqapi.xyz/sign-up?aff=KPy9">LQ router</a></strong>
-    </td>
-    <td>感谢 LQ router 中转站对本项目的赞助！LQ router 是一家专业的企业级 AI 中转站，为企业和个人开发者提供稳定、高效、低成本的 AI 模型 API 接入服务。平台支持 GPT、Claude、Grok、Gemini 等主流模型，GPT Pro 倍率低至 0.1。<a href="https://console.lqapi.xyz/sign-up?aff=KPy9">官网进群赠送1美金体验额度</a>。</td>
   </tr>
   <tr>
     <td align="center" width="220">
@@ -84,136 +75,293 @@ Codeg（Code Generation）是一个多智能体编码工作台：把所有 AI �
       通过上面链接<strong>邮箱</strong>注册并实名后<a href="https://f.howxm.com/xs/u/HVFW5X8EIYV1">领取50元算力金</a>。
     </td>
   </tr>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG" target="_blank"><img src="../images/sidrune-ai.png" alt="Sidrune AI" width="200" /></a><br/>
+      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">Sidrune AI</a></strong>
+    </td>
+    <td>感谢 Sidrune AI 对本项目的赞助！Sidrune AI 通过一个 API 接入 GPT、Claude 等主流 AI 模型。新用户通过<a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">我们的专属链接</a>注册时使用优惠码 <code>SDRCODEG</code>，即送 3 美元 API 额度。</td>
+  </tr>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA" target="_blank"><img src="../images/beeapi.jpg" alt="BeeAPI" width="200" /></a><br/>
+      <strong><a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a></strong>
+    </td>
+    <td>感谢 <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a> 对本项目的赞助！BeeAPI 是专业的多模型 AI API 中转与聚合平台，汇集多家服务商及多种主流 AI 模型，支持多商家比价、多分组智能路由、统一 API 接入与计费，帮助用户更灵活、稳定、低成本地调用 AI 服务。</td>
+  </tr>
 </table>
 
 > 想成为 Codeg 赞助商？[欢迎通过邮件与我们联系。](mailto:itpkcn@gmail.com)
 
-## 🤖 支持的 Agent
+## ✨ 功能特性
 
-Claude Code · Codex · Gemini · OpenClaw · OpenCode · Cline · Hermes · CodeBuddy · Kimi Code · Pi · Grok · Cursor · DeepSeek Harness · Qoder · Google Antigravity
+<table>
+<tr>
+<td width="50%" valign="middle">
 
-其中大部分 Codeg 都能替你安装、锁定版本并更新。完整名单、各自的运行环境要求以及会话在磁盘上的存放位置，见 [支持的智能体](https://docs.codeg.app/zh/guide/supported-agents)。
+### 一个界面，容纳所有智能体
 
-名单之外的呢？自己加就行。从公开的 ACP 注册表里挑一个，或者粘贴它的 distribution JSON，Codeg 会安装它、预检它能否启动，然后像对待内置智能体一样对待它——出现在选择器里，接受 `@` 委派与技能配置；即便这个智能体本身不留下任何历史，它的会话也会被记录下来并可搜索。→ [自定义智能体](https://docs.codeg.app/zh/guide/custom-agents)
+二十个内置智能体，兼容任意 ACP 智能体。工具卡片、实时 diff 与交互式回复，尽在同一界面。
 
-## 🤝 多智能体协作
+[文档 →](https://docs.codeg.app/zh/guide/supported-agents) · [自定义智能体 →](https://docs.codeg.app/zh/guide/custom-agents) · [界面渲染 →](https://docs.codeg.app/zh/guide/skills#cards-tables-and-charts-in-replies)
 
-多智能体协作，从此只需一个按键：输入 `@`，选中智能体，发送。剩下的调度全交给 Codeg —— 它把每个被提及的智能体拉起为独立会话，交付任务，再把工作实时汇流回你正在进行的对话。提及两个，它们就并肩开工：Claude Code 起草，Codex 同步评审。不用来回切换上下文，也不必在多个终端之间复制粘贴。
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/agents-dark.gif" />
+  <img src="../images/features/agents-light.gif" alt="一个界面，容纳所有智能体" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-如果智能体自己派出了子智能体——Claude Code、Codex、Grok 与 OpenCode 都会——每个子智能体都有一张边跑边填的卡片，而不是等结束后一次性出现。点开就能读它自己的那个会话。
+### 每个会话，都搜得到
 
-![在单个 Codeg 会话中将任务委派给子智能体](../images/collaboration-light.gif#gh-light-mode-only)
-![在单个 Codeg 会话中将任务委派给子智能体](../images/collaboration-dark.gif#gh-dark-mode-only)
+一键导入、搜索和续聊历史会话。用 `@` 跨智能体分享上下文，用标签整理对话。
 
-## ✅ 待办任务
+[文档 →](https://docs.codeg.app/zh/guide/aggregation) · [标签 →](https://docs.codeg.app/zh/guide/workspace#tag-conversations)
 
-不是每件事都得你盯着做完。写下来就行——标题、说明、用哪个智能体跑——Codeg 会给它**一份独立的代码副本**：项目旁边的一个 git 工作树，跑在自己的分支上。几个任务同时开工也互不干扰，更不会碰你手头那份代码。可以约在今晚开始，也可以让某个文件夹自己按并发上限一件件处理下去。
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/sessions-dark.gif" />
+  <img src="../images/features/sessions-light.gif" alt="每个会话，都搜得到" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-做完的任务不会自己合并。它会移到待验收那一栏等着你：看 diff、打回去再做一轮，或者点通过——然后由智能体来落地，先把基础分支并进它的工作树、在那里解完冲突。之后 Codeg 不听智能体一面之词，而是自己去核对 git：确认不了的合并会退回待验收，而不是报一句成功。
+### 多智能体协作
 
-![待办任务看板：任务从「待办」经「进行中」走到「完成」](../images/task-light.png#gh-light-mode-only)
-![待办任务看板：任务从「待办」经「进行中」走到「完成」](../images/task-dark.png#gh-dark-mode-only)
+用 `@` 委派任务，让多个智能体并行协作，进度实时汇入当前对话。
 
-## 🪟 分屏
+[文档 →](https://docs.codeg.app/zh/guide/multi-agent)
 
-一条标签栏不总是够用。右键点击会话标签，即可把视图**向右**或**向下**拆分，想拆几次就拆几次：左右两栏、上下三格，或者一整片网格。每个分组都是独立的工作区——自己的标签、自己的标题栏、自己的新建会话按钮——所以左边这格可以让 Claude Code 重构，右边那格让 Codex 审阅 diff。
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/multi-agent-dark.gif" />
+  <img src="../images/features/multi-agent-light.gif" alt="多智能体协作" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-把标签从一个分组拖到另一个分组，它的会话在搬家途中也不会中断；拖动两个分组之间的分隔条，就能改变它们分配空间的方式。布局会按工作区记住，草稿也包含在内：重新打开 Codeg，拆分原样回来，没发出去的文字还在输入框里。
+### 无人值守的待办任务
 
-![把会话区拆分成标签分组构成的网格](../images/split-light.gif#gh-light-mode-only)
-![把会话区拆分成标签分组构成的网格](../images/split-dark.gif#gh-dark-mode-only)
+任务独享工作树，可立即执行或定时启动。智能体完成工作，你来验收改动。
 
-## 📄 Office 文档
+[文档 →](https://docs.codeg.app/zh/guide/tasks) · [自动处理 →](https://docs.codeg.app/zh/guide/repository#let-it-pick-items-up-by-itself)
 
-让智能体做一份演示、一份报告或一张表，它交付的是真正的 `.pptx` / `.docx` / `.xlsx` —— 右侧面板同时实时渲染。每一次改动都会自己落进预览：幻灯片逐页成形，表格逐步铺开，数字落入单元格。第 4 页不满意？下一条消息说一声就行 —— 智能体原地改同一个文件，预览随即跟上。无需导出，无需外部 Office 应用，全程不用离开 Codeg。
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/todos-dark.gif" />
+  <img src="../images/features/todos-light.gif" alt="无人值守的待办任务" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-![智能体编辑 Office 文档，旁边是实时预览](../images/office-light.png#gh-light-mode-only)
-![智能体编辑 Office 文档，旁边是实时预览](../images/office-dark.png#gh-dark-mode-only)
+### 无限画布
 
-## 💻 工作区
+在无限画布上摆放对话、文件、终端与便签，让多个智能体的工作一目了然。
 
-一个工作区，容纳所有智能体。无论正在干活的是 Claude Code、Codex 还是 Cursor，它们都在同一个编辑器、同一套实时 diff、同一个 Git 客户端里工作，而产出的是你仓库里真实的文件，就在你眼前变化。还可以把别的目录挂进来——共用的库、隔壁的服务、文档仓库——文件树、搜索与智能体本身都把它们当作同一个工作区。
+[文档 →](https://docs.codeg.app/zh/guide/canvas)
 
-**会话**：把你已有的历史一并接管 —— 所有已安装智能体的过往会话，一键导入，并可从中断处继续。进来之后它们不再是彼此隔绝的孤岛 —— `@` 提及一个旧会话，你正在对话的智能体就能读到它，哪怕那是另一个智能体留下的，于是今天的 Codex 能接着上周 Claude Code 停下的地方往下做。无论一个会话攒得多长，打开时都先呈现最近几轮，剩下的随你往上翻再逐段补齐。
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/canvas-dark.gif" />
+  <img src="../images/features/canvas-light.gif" alt="无限画布" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-**文件**：智能体的改动会以 diff 的形式，随着落盘即时呈现在对话旁边。任意文件都能在带语法高亮的真实编辑器里打开，用 `⌘L` 把整个文件（或仅一段选区）直接交给智能体，Markdown、HTML、图片与 Office 文档也都在同一面板内预览。
+### 桌面、服务器、手机与聊天
 
-**Git**：一个完整的客户端，而不只是状态展示 —— 在「更改」标签页里直接提交（写一句话，回车即可），旁边就是拉取、抓取、推送与贮藏，历史里还标着每条提交推没推出去。新建分支、合并、变基、重置、与另一个分支比较，也能不切过去就更新或推送任意分支。遇到冲突会打开三栏合并编辑器，逐块采纳或自己动手写。而工作树把并行开发压缩成一个动作 —— 新分支、独立目录，外加一个扎根其中的新会话，于是一队智能体可以同时开发不同功能，谁也不碰谁的文件。
+支持桌面、服务器、Docker 与移动端，也能通过 Telegram、飞书和微信与智能体对话。
 
-**出问题的时候**：回合失败了不会只说一句「出错了」—— Claude Code 与 Codex 会说清是哪一类：连接问题、登录问题、额度用尽、请求被拒、服务异常 —— 并在输入框下方留一条提示，只放真正帮得上忙的按钮：重试、去登录，或者新建会话。智能体自己在重试时显示为琥珀色，回合正常结束后收敛成一行「已恢复」。输入框下面那个连接状态图标也是个按钮：点开就能看到这个会话的真实状态，还有一个会恢复而不是重开的「重新连接」。
+[文档 →](https://docs.codeg.app/zh/getting-started/deployment) · [远端工作区 →](https://docs.codeg.app/zh/guide/workspace#desktop-and-browser) · [移动应用 →](https://docs.codeg.app/zh/getting-started/installation#mobile-apps) · [消息渠道 →](https://docs.codeg.app/zh/guide/chat-channels)
 
-## 📱 iPhone、iPad 与 Android
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/anywhere-dark.gif" />
+  <img src="../images/features/anywhere-light.gif" alt="桌面、服务器、手机与聊天" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-离开电脑，任务也不必停下。原生 iOS 与 Android 客户端连接的就是你自己在跑的那个 Codeg —— 桌面应用的 **Web 服务**，或者你自己的 `codeg-server` —— 在手机上发起会话、看着回复与工具调用实时流回、处理权限审批、浏览项目与分支。手机上不会多出任何东西：文件、智能体 CLI 与会话仍留在运行 Codeg 的那台机器上，访问令牌则交由 iOS Keychain 或 Android Keystore 保管。两个客户端均已开源（[iOS](https://github.com/xintaofei/codeg-ios)、[Android](https://github.com/xintaofei/codeg-android)）；三步即可完成配对，见 [移动应用](https://docs.codeg.app/zh/getting-started/installation#mobile-apps)。
+### Office 文档与科学研究
 
-| iPhone 与 iPad | Android |
-| :---: | :---: |
-| <img src="../images/mobile-ios.jpg" alt="在 Codeg iOS 客户端中发起会话" width="248" /> | <img src="../images/mobile-android.jpg" alt="智能体回复实时流入 Codeg Android 客户端" width="248" /> |
+生成 Office 文档并实时预览，直接查看 PDF。内置科研技能，任意智能体都能调用。
 
-## ✨ 核心亮点
+[文档 →](https://docs.codeg.app/zh/guide/office) · [科学研究 →](https://docs.codeg.app/zh/guide/research)
 
-- **[会话聚合](https://docs.codeg.app/zh/guide/aggregation)** — 把所有受支持智能体的会话导入统一、可搜索的工作区，并从上次中断处继续
-- **[多智能体协作](https://docs.codeg.app/zh/guide/multi-agent)** — `@` 提及任意智能体即可委派：不同类型的子智能体各自作为独立会话，在同一个任务内并行运行
-- **[待办任务](https://docs.codeg.app/zh/guide/tasks)** — 把要做的事写下来，智能体一件件做完；每个任务在自己的工作树里跑，只有你验收之后才会合进你的分支
-- **[自定义智能体](https://docs.codeg.app/zh/guide/custom-agents)** — 从公开注册表或 distribution JSON 注册任何其它兼容 ACP 的智能体；Codeg 负责安装、记录历史，并像内置智能体一样对待它
-- **[工作区](https://docs.codeg.app/zh/guide/workspace)** — 智能体旁边就是完整的工程闭环：文件树、编辑器与 diff、Git 变更、提交、内置终端，以及[挂进同一个工作区的多个文件夹](https://docs.codeg.app/zh/guide/workspace#work-across-several-folders)
-- **[分屏](https://docs.codeg.app/zh/guide/workspace#split-the-conversation-view-into-groups)** — 把会话区拆成任意多个标签分组，在分组之间拖动标签与分隔条，重启后布局（含草稿）原样回来
-- **[Git 与 Worktree](https://docs.codeg.app/zh/guide/git)** — 查看并提交变更、管理 Git 远程账号，用内置 `git worktree` 流程并行开发
-- **[Token 用量](https://docs.codeg.app/zh/guide/token-usage)** — 状态栏计数器背后是一整份报告：趋势与缓存命中率、活跃热力图，以及按文件夹、智能体、模型与会话的分项
-- **[消息渠道](https://docs.codeg.app/zh/guide/chat-channels)** — 在 Telegram、飞书、微信里直接驱动智能体：创建任务、批准权限、实时接收进展
-- **[自动化](https://docs.codeg.app/zh/guide/automations)** — 把配置好的输入框存成可复用的自动化任务，按 cron 计划或手动触发、无界面运行——可以开一个会话，也可以留一条待办任务等你验收
-- **[Office 文档](https://docs.codeg.app/zh/guide/office)** — 通过内置 `officecli` 创建、分析、校对和编辑 `.docx` / `.xlsx` / `.pptx`，并在标签页内实时预览
-- **[科学研究](https://docs.codeg.app/zh/guide/research)** — 内置科研技能（假设生成、实验设计、统计、可视化、批判性评估、文献检索），任意智能体均可调用
-- **[项目启动器](https://docs.codeg.app/zh/guide/project-boot)** — 可视化创建新项目并实时预览，创建完直接在工作区打开
-- **[MCP](https://docs.codeg.app/zh/guide/mcp) & [技能](https://docs.codeg.app/zh/guide/skills)** — 本地服务器扫描 + 市场搜索/安装，技能支持全局与项目级管理
-- **[外观自定义](https://docs.codeg.app/zh/reference/settings/appearance)** — 十二套主题都能逐个色彩 token 重新调色、全局设定圆角大小、以 shadcn JSON 导入导出主题，或者干脆自己写 CSS
-- **[桌面端、服务器与 Docker](https://docs.codeg.app/zh/getting-started/deployment)** — 原生桌面应用、可用浏览器访问的独立 `codeg-server`，或者 `docker compose up`
-- **[iPhone、iPad 与 Android](https://docs.codeg.app/zh/getting-started/installation#mobile-apps)** — 原生移动客户端连接你的桌面端或服务器：随时随地发起会话、接收流式回复、批准权限、浏览项目
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/office-dark.gif" />
+  <img src="../images/features/office-light.gif" alt="Office 文档与科学研究" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-## 📦 安装与运行
+### 浏览器与电脑操作
 
-**桌面端** — 从 [Releases](https://github.com/xintaofei/codeg/releases) 下载 macOS、Windows 或 Linux 的安装包，再按 [安装](https://docs.codeg.app/zh/getting-started/installation) 操作。
+从桌面内置浏览器分享页面与报错，用电脑操作（预览版）让智能体操作共享窗口。
+
+[文档 →](https://docs.codeg.app/zh/guide/browser) · [电脑操作 →](https://docs.codeg.app/zh/guide/computer-use)
+
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/features/browser-dark.gif" />
+  <img src="../images/features/browser-light.gif" alt="浏览器与电脑操作" width="100%" />
+</picture>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### 命令行与 CI
+
+`codeg-cli` 将脚本与 CI 接入正在运行的 Codeg，输出智能体回复或 JSON 事件。
+
+[文档 →](https://docs.codeg.app/zh/guide/command-line)
+
+</td>
+<td width="50%" valign="middle">
+
+```bash
+codeg-cli -a codex \
+  -p "Review the latest commit"
+
+git diff | codeg-cli -a codex \
+  -p "Review this diff"
+```
+
+</td>
+</tr>
+</table>
+
+**还有这些：**
+
+- **[完整的工程闭环](https://docs.codeg.app/zh/guide/workspace)** — 代码编辑器、实时 diff、[Git 与工作树](https://docs.codeg.app/zh/guide/git)、三栏合并编辑器、终端与分屏
+- **[仓库面板](https://docs.codeg.app/zh/guide/repository)** — GitHub、GitLab、Gitea 与 Forgejo 的议题、拉取请求、检查与合并；任意议题或 PR 都能变成待办任务
+- **[自动化](https://docs.codeg.app/zh/guide/automations)** — 把配置好的输入框存成自动化，按 cron 计划或手动触发、无界面运行
+- **[Token 用量](https://docs.codeg.app/zh/guide/token-usage)** — 趋势与缓存命中率、活跃热力图、按文件夹、智能体、模型与会话的分项统计，以及按 API 标价估算的花费
+- **[分叉与插话](https://docs.codeg.app/zh/guide/workspace#follow-along-%E2%80%94-the-conversation)** — 在支持的智能体上，从已完成的回复分叉出新会话，或者在回合进行中插进一条消息
+- **[技能](https://docs.codeg.app/zh/guide/skills) 与 [MCP](https://docs.codeg.app/zh/guide/mcp)** — 按智能体启用的技能包、本地 MCP 扫描，以及注册表搜索与安装
+- **[项目启动器](https://docs.codeg.app/zh/guide/project-boot)** — 可视化创建新项目，并实时预览
+- **[通知与提醒](https://docs.codeg.app/zh/reference/settings/general#desktop-notifications)** — 回合结束或智能体需要你时，发出桌面通知和提示音，并让任务栏按钮闪烁、Dock 图标跳动
+- **[外观自定义](https://docs.codeg.app/zh/reference/settings/appearance)** — 十二套主题都能逐个色彩 token 重新调色，还有壁纸、圆角、聊天区域宽度、自定义 CSS 与桌面宠物——界面支持十种语言
+- **[备份与同步](https://docs.codeg.app/zh/reference/settings/system#backup-restore)** — 可加密的备份，以及通过文件或你自己的 WebDAV 服务器在多台机器之间同步配置
+- **[URL Scheme](../../docs/url-scheme.md)** — 用 `codeg://session/<id>` 从其它应用直接打开一个会话（桌面端）
+- **还有更多** — 几乎每个版本都有新东西；完整清单见 [发布说明](https://github.com/spacering-net/codeg/releases)
+
+## 🤖 支持的智能体
+
+Codeg 通过 [Agent Client Protocol](https://agentclientprotocol.com) 与每个智能体对话，所以它们拿到的都是同一套结构化界面。内置二十个，其中大部分 Codeg 都能替你安装、锁定版本并更新：
+
+<p>
+  <a href="https://www.anthropic.com/claude-code"><kbd><img src="../images/agents/claude-code.svg" alt="" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
+  <a href="https://github.com/openai/codex"><kbd><img src="../images/agents/codex.svg" alt="" width="16" valign="middle" /> Codex</kbd></a> &nbsp;
+  <a href="https://github.com/google-gemini/gemini-cli"><kbd><img src="../images/agents/gemini-cli.svg" alt="" width="16" valign="middle" /> Gemini CLI</kbd></a> &nbsp;
+  <a href="https://openclaw.ai"><kbd><img src="../images/agents/openclaw.svg" alt="" width="16" valign="middle" /> OpenClaw</kbd></a> &nbsp;
+  <a href="https://opencode.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/opencode-dark.svg" /><img src="../images/agents/opencode.svg" alt="" width="16" valign="middle" /></picture> OpenCode</kbd></a> &nbsp;
+  <a href="https://cline.bot"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cline-dark.svg" /><img src="../images/agents/cline.svg" alt="" width="16" valign="middle" /></picture> Cline</kbd></a> &nbsp;
+  <a href="https://hermes-agent.nousresearch.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/hermes-agent-dark.svg" /><img src="../images/agents/hermes-agent.svg" alt="" width="16" valign="middle" /></picture> Hermes Agent</kbd></a> &nbsp;
+  <a href="https://www.codebuddy.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/codebuddy-dark.svg" /><img src="../images/agents/codebuddy.svg" alt="" width="16" valign="middle" /></picture> CodeBuddy</kbd></a> &nbsp;
+  <a href="https://www.kimi.com/code"><kbd><img src="../images/agents/kimi-code.svg" alt="" width="16" valign="middle" /> Kimi Code</kbd></a> &nbsp;
+  <a href="../agents/minimax-code.md"><kbd><img src="../images/agents/minimax-code.svg" alt="" width="16" valign="middle" /> MiniMax Code</kbd></a> &nbsp;
+  <a href="https://pi.dev"><kbd><img src="../images/agents/pi.svg" alt="" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
+  <a href="https://x.ai/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/grok-dark.svg" /><img src="../images/agents/grok.svg" alt="" width="16" valign="middle" /></picture> Grok</kbd></a> &nbsp;
+  <a href="https://cursor.com/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cursor-dark.svg" /><img src="../images/agents/cursor.svg" alt="" width="16" valign="middle" /></picture> Cursor</kbd></a> &nbsp;
+  <a href="https://deepseek-harness.github.io/deepseek-harness/"><kbd><img src="../images/agents/deepseek-harness.svg" alt="" width="16" valign="middle" /> DeepSeek Harness</kbd></a> &nbsp;
+  <a href="https://qoder.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/qoder-dark.svg" /><img src="../images/agents/qoder.svg" alt="" width="16" valign="middle" /></picture> Qoder</kbd></a> &nbsp;
+  <a href="https://antigravity.google"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/google-antigravity-dark.svg" /><img src="../images/agents/google-antigravity.svg" alt="" width="16" valign="middle" /></picture> Google Antigravity</kbd></a> &nbsp;
+  <a href="https://kiro.dev/cli/"><kbd><img src="../images/agents/kiro.svg" alt="" width="16" valign="middle" /> Kiro CLI</kbd></a> &nbsp;
+  <a href="../agents/zcode.md"><kbd><img src="../images/agents/zcode.svg" alt="" width="16" valign="middle" /> ZCode</kbd></a> &nbsp;
+  <a href="https://docs.trae.cn/cli_about-trae-code-cli-2"><kbd><img src="../images/agents/trae.svg" alt="" width="16" valign="middle" /> TRAE CLI</kbd></a> &nbsp;
+  <a href="https://commandcode.ai"><kbd><img src="../images/agents/command-code.svg" alt="" width="16" valign="middle" /> Command Code</kbd></a> &nbsp;
+  <a href="https://docs.codeg.app/zh/guide/custom-agents"><kbd>+ 任意 ACP 智能体</kbd></a>
+</p>
+
+名单之外的呢？从公开的 ACP 注册表里挑一个，或者粘贴它的 distribution JSON——Codeg 会安装它、预检它能否启动，然后像对待内置智能体一样对待它。各自的运行环境要求以及会话在磁盘上的存放位置，见 [支持的智能体](https://docs.codeg.app/zh/guide/supported-agents)。
+
+## 📦 安装
+
+**桌面端** — macOS、Windows 与 Linux 的安装包都在 [Releases](https://github.com/spacering-net/codeg/releases/latest)，安装步骤见 [安装](https://docs.codeg.app/zh/getting-started/installation)。
 
 **服务器** — 无界面运行 Codeg，用任意浏览器访问。Linux 或 macOS：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xintaofei/codeg/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/spacering-net/codeg/main/install.sh | bash
 CODEG_STATIC_DIR=/usr/local/share/codeg/web codeg-server
 ```
 
 Windows（PowerShell）：
 
 ```powershell
-irm https://raw.githubusercontent.com/xintaofei/codeg/main/install.ps1 | iex
-$env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg\web"; codeg-server
+irm https://raw.githubusercontent.com/spacering-net/codeg/main/install.ps1 | iex
+$env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg-server\web"; codeg-server
 ```
 
 **Docker** — 同一个服务器，装进一个容器：
 
 ```bash
-docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/xintaofei/codeg:latest
+docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/spacering-net/codeg:latest
 ```
+
+无论哪种方式，都在浏览器里打开 `http://<host>:3080`，输入服务器启动时打印的访问令牌（容器用 `docker logs` 查看）；也可以用 `CODEG_TOKEN` 自己指定。
 
 **移动端** — 安装 [iOS 应用](https://apps.apple.com/app/codeg-client/id6785199071) 或 [Android APK](https://github.com/xintaofei/codeg-android/releases/latest)，再把它指向桌面应用的 **Web 服务**或你自己的 `codeg-server`：填地址、填令牌，完成。配对步骤见 [移动应用](https://docs.codeg.app/zh/getting-started/installation#mobile-apps)。
 
-Compose、预编译二进制、源码构建与就地升级见 [部署](https://docs.codeg.app/zh/getting-started/deployment)；环境变量见 [配置](https://docs.codeg.app/zh/getting-started/configuration)。想构建 Codeg 本身：[开发](https://docs.codeg.app/zh/reference/development) 与 [架构](https://docs.codeg.app/zh/reference/architecture)。
+Compose、预编译二进制、源码构建与就地升级见 [部署](https://docs.codeg.app/zh/getting-started/deployment)；环境变量见 [配置](https://docs.codeg.app/zh/getting-started/configuration)。
 
-## 🔒 隐私与安全
+## 👥 社区与支持
 
-- 默认本地优先：解析、存储与项目操作都在本地完成 —— 仅在用户主动触发时才访问网络
-- Web 模式与服务器模式均使用基于令牌的身份认证
-- 支持系统代理，适配企业网络环境
+- **微信** — 扫描下方二维码加入我们的微信群，参与讨论、反馈与更新：
 
-详见 [隐私与安全](https://docs.codeg.app/zh/reference/privacy)。
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../images/weixin-dark.jpg" />
+    <img src="../images/weixin-light.jpg" alt="WeChat" width="200" />
+  </picture>
 
-## 👥 交流
+- **问题反馈** — 遇到 bug，或者缺了什么功能？[提交 issue](https://github.com/spacering-net/codeg/issues)。
+- **隐私** — 默认本地优先：解析、存储与项目操作都在你的机器上完成，Web 模式与服务器模式均使用令牌认证。详见 [隐私与安全](https://docs.codeg.app/zh/reference/privacy)。
+- **LinuxDO** — 感谢 [LinuxDO](https://linux.do) 社区的支持。
+- **支持我们** — [给仓库点个 Star](https://github.com/spacering-net/codeg)，关注后续进展。
 
-- 扫描下方二维码加入我们的微信群，参与讨论、反馈与更新
+## 🤝 参与贡献
 
-<img src="../images/weixin-light.jpg#gh-light-mode-only" alt="WeChat" width="240" />
-<img src="../images/weixin-dark.jpg#gh-dark-mode-only" alt="WeChat" width="240" />
+欢迎提交 issue 与 pull request。想自己构建 Codeg，可以从 [开发](https://docs.codeg.app/zh/reference/development) 与 [架构](https://docs.codeg.app/zh/reference/architecture) 开始。
 
-- 感谢 [LinuxDO](https://linux.do) 社区的支持
+<a href="https://github.com/spacering-net/codeg/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=spacering-net/codeg" alt="Codeg 贡献者" />
+</a>
+
+## ⭐ Star 历史
+
+<a href="https://www.star-history.com/?repos=spacering-net%2Fcodeg&type=date&releases=&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&theme=dark&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=spacering-net/codeg&type=date&legend=bottom-right" />
+ </picture>
+</a>
 
 ## 🙏 鸣谢
 
@@ -221,6 +369,8 @@ Compose、预编译二进制、源码构建与就地升级见 [部署](https://d
 - [Superpowers](https://github.com/obra/superpowers)：为 Codeg 的专家技能模块提供支持
 - [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI)：为 Codeg 的 Office 文档工作流提供支持
 - [scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills)：为 Codeg 的科学研究技能提供支持（MIT 许可的子集）
+- [json-render](https://github.com/vercel-labs/json-render)：为 Codeg 的界面渲染（卡片、表格与图表）提供支持
+- [cua-driver](https://github.com/trycua/cua)：为 Codeg 的电脑操作提供支持
 
 ## 📜 许可证
 

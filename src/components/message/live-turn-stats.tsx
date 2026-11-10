@@ -13,14 +13,10 @@ import {
   estimateChangedLineStats,
 } from "@/lib/line-change-stats"
 import { FilePenLine, Plane, Timer } from "lucide-react"
-import type { AgentType } from "@/lib/types"
-import { AgentIcon } from "@/components/agent-icon"
 import { useTokenOutputSpeed } from "@/hooks/use-token-output-speed"
 
 interface LiveTurnStatsProps {
   message: LiveMessage
-  agentType: AgentType
-  isStreaming?: boolean
 }
 
 interface LineChangeStats {
@@ -307,11 +303,15 @@ export function extractLiveEditStats(message: LiveMessage): LiveEditStats {
   return { files: files.size, additions, deletions }
 }
 
-export function LiveTurnStats({
-  message,
-  agentType,
-  isStreaming = true,
-}: LiveTurnStatsProps) {
+/**
+ * The running turn's figures above the composer: how long the turn has run,
+ * the files it has changed and how fast it is writing. That the agent is at
+ * work, and at what — thinking, running a step, writing — the transcript's own
+ * timeline says ("Working" on the reply's header, a shimmer on the step, a
+ * turning ring at the foot of its rail), so this row carries neither a word
+ * for it nor a pulsing mark.
+ */
+export function LiveTurnStats({ message }: LiveTurnStatsProps) {
   const locale = useLocale()
   const t = useTranslations("Folder.chat.liveTurnStats")
   const [elapsed, setElapsed] = useState(() => Date.now() - message.startedAt)
@@ -333,31 +333,11 @@ export function LiveTurnStats({
     return () => clearInterval(timer)
   }, [message.startedAt])
 
-  const hasThinkingBlock = message.content.some((b) => b.type === "thinking")
-
-  // Only active streams should show thinking/streaming state.
-  const lastBlock = message.content[message.content.length - 1]
-  const isThinking =
-    isStreaming &&
-    hasThinkingBlock &&
-    message.content.length <= 1 &&
-    lastBlock?.type === "thinking"
-
   const elapsedLabel = formatElapsedLabel(elapsed, t)
 
   return (
     <div className="@container/turnstats shrink-0">
       <div className="flex min-h-8 flex-wrap items-center justify-center gap-x-3 gap-y-1 px-4 py-1 text-xs leading-none text-muted-foreground">
-        <AgentIcon
-          agentType={agentType}
-          className="h-3.5 w-3.5 animate-pulse"
-        />
-        {isThinking ? (
-          <span>{t("thinking")}</span>
-        ) : (
-          <span>{t("streaming")}</span>
-        )}
-        <span className="text-border leading-none">|</span>
         <span className="inline-flex items-center gap-1 leading-none">
           <Timer className="h-3 w-3 shrink-0" />
           {elapsedLabel}

@@ -24,8 +24,9 @@ function escapeMarkdownText(text: string): string {
 const AUTOLINK_TRIGGER = /(?:https?|ftp|mailto):|www\.|@/i
 
 // Slug shape of a real command / skill / expert id: alphanumeric ends with
-// interior `._-/` separators only. See {@link isLiteralInvocationToken}.
-const SAFE_INVOCATION_TOKEN = /^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?$/
+// interior `._-/:` separators only, `:` for a namespaced command such as
+// Qoder's `sites:sites-building`. See {@link isLiteralInvocationToken}.
+const SAFE_INVOCATION_TOKEN = /^[A-Za-z0-9](?:[A-Za-z0-9._/:-]*[A-Za-z0-9])?$/
 
 /**
  * Whether `token` can be emitted raw after a `/` / `$` prefix without any
@@ -93,7 +94,8 @@ function escapeLinkDestination(uri: string): string {
  * References with a URI render as a Markdown link `[label](uri)` — matching how
  * the backend's `user_blocks_from_prompt` already folds ResourceLinks into
  * `[name](uri)`. Agents render as `[@label](codeg://agent/…)` when they carry a
- * routing uri, or as plain `@label` otherwise. Skills render as the `/id`
+ * routing uri, or as plain `@label` otherwise; assistants the same way, as
+ * `[@label](codeg://assistant/<id>)`. Skills render as the `/id`
  * invocation token (the stable id, never the possibly-localized display label).
  * Every interpolated label/uri is escaped — and free-standing URL/email-like
  * text is code-spanned — so a crafted reference cannot inject Markdown
@@ -101,11 +103,14 @@ function escapeLinkDestination(uri: string): string {
  */
 export function referenceToMarkdown(attrs: ReferenceAttrs): string {
   switch (attrs.refType) {
-    case "agent": {
+    case "agent":
+    case "assistant": {
       // With a routing uri → `[@label](uri)` (the `@` lives inside the link
       // text, where GFM cannot autolink it). Without one → plain `@label`, with
       // the `@` kept OUTSIDE inlineText so a URL-like label is still code-spanned
       // rather than the whole `@…` string being treated as autolink-triggering.
+      // An assistant's `codeg://assistant/<id>` link is what the backend reads
+      // its routing from (`agent_mentions.rs`), exactly as for an agent.
       const text = collapseNewlines(attrs.label || attrs.id)
       return attrs.uri
         ? `[@${escapeMarkdownText(text)}](${escapeLinkDestination(attrs.uri)})`

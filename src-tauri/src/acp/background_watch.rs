@@ -18,7 +18,9 @@
 //!   `task.status` reached a terminal state, or a `TaskStop`/`KillShell`
 //!   call. Background shells almost never emit a `<task-notification>` (they
 //!   are collected inline via `TaskOutput` or just left running), so those
-//!   two extra signals are what keep the count from stranding. Entries are
+//!   two extra signals are what keep the count from stranding. A notification
+//!   whose note says the sub-agent will notify again (it is waiting on
+//!   background work of its own, or being resumed) settles nothing. Entries are
 //!   re-armed when the main agent resumes a settled sub-agent via
 //!   `SendMessage`, and expired past
 //!   [`background_keepalive_max_age`]. The outstanding count is mirrored into
@@ -45,7 +47,11 @@
 //!   event ever follows. These bytes are already being tailed, so the records
 //!   are folded here and handed to [`publish_native_title`] — the same path a
 //!   live ACP title takes. Not activity: it rides alongside the activity event
-//!   rather than inside it (see `run_watch`).
+//!   rather than inside it (see `run_watch`). This watch is also the only
+//!   live writer of a Claude title: the adapter's own `session_info_update`
+//!   title is held for it, and it drops that title while it reads the
+//!   transcript (`session_title::release_held_wire_title`; the module docs
+//!   of `acp::session_title` say why).
 //!
 //! The watcher is connection-scoped on purpose: background work cannot outlive
 //! the agent CLI process, whose lifetime IS the connection's. Poll ticks are
@@ -54,23 +60,25 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
 use crate::acp::session_state::{background_keepalive_max_age, SessionState};
-use crate::acp::session_title::publish_native_title;
+use crate::acp::session_title::{publish_native_title, release_held_wire_title};
 use crate::acp::types::{AcpEvent, BackgroundSettledInfo, ConnectionStatus};
 use crate::models::agent::AgentType;
 use crate::models::message::MessageTurn;
 use crate::parsers::claude::{
-    capture_tag, capture_title_record, find_session_file, group_into_turns, is_meta_message,
-    slash_command_display, task_notification_result_regex, task_notification_status_regex,
+    capture_tag, capture_title_record, claude_uri_link, find_clear_rollover_successor,
+    find_session_file_in, group_into_turns, is_compact_command, is_meta_message,
+    queued_human_prompt, queued_task_notification, slash_command_display,
+    task_notification_is_interim, task_notification_result_regex, task_notification_status_regex,
     task_notification_summary_regex, task_notification_task_id_regex,
-    task_notification_tool_use_id_regex, ClaudeRecordAccumulator, BACKGROUND_RESULT_MAX_CHARS,
-    CONTEXT_CONTINUATION_PREFIX,
+    task_notification_tool_use_id_regex, unescape_task_notification_text, ClaudeRecordAccumulator,
+    BACKGROUND_RESULT_MAX_CHARS, CONTEXT_CONTINUATION_PREFIX,
 };
 use crate::parsers::truncate_str;
 use crate::web::event_bridge::{emit_with_state, EventEmitter};
@@ -147,6 +155,157 @@ fn reconstructed_slash_command_fingerprint(text: &str) -> Option<String> {
     }
 }
 
+/// The first text claude-agent-acp writes into the transcript's user record
+/// for a prompt, trimmed, once for each way an adapter generation writes it.
+///
+/// `promptToClaude` takes the blocks in order: a text block as it is; a text
+/// resource or a resource link as the link [`claude_uri_link`] renders, with a
+/// resource's body moved to a `<context>` block at the END of the record; an
+/// image as no text at all. A BLOB resource is where the generations part:
+///
+/// * up to 0.98.0 the adapter dropped it whole, so it wrote no text either;
+/// * from 0.99.0 (#1460) one whose MIME type the adapter can send
+///   ([`claude_forwards_blob_mime`]) is written as its link, followed by an
+///   image or document block (or, for a text type, its decoded body in a
+///   `<context>` block); a blob of any other type is still dropped.
+///
+/// A PDF pasted with nothing typed is the prompt they disagree on: the
+/// composer drops the embedded badge from the prose and appends the blob
+/// alone, so 0.99.0 opens the record with the `clipboard://` link and 0.98.0
+/// leaves it without initiating text. Both are returned, so the prompt is
+/// recognized whichever adapter the connection runs; a custom version or one
+/// found on PATH can be older than the pin.
+fn first_transcript_texts(blocks: &[crate::acp::types::PromptInputBlock]) -> Vec<String> {
+    let mut texts: Vec<String> = Vec::with_capacity(2);
+    for forwards_blobs in [true, false] {
+        if let Some(text) = first_transcript_text(blocks, forwards_blobs) {
+            if !texts.contains(&text) {
+                texts.push(text);
+            }
+        }
+    }
+    texts
+}
+
+/// How Claude Code records an MCP prompt that the first text block invokes
+/// the way claude-agent-acp's `/` menu names it, `/mcp:<server>:<prompt>
+/// <args>`; `None` for any other text. The ledger keeps it beside the text as
+/// sent, which the record does not contain, as `LedgerEntry::recorded_command`.
+///
+/// The adapter's `promptToClaude` rewrites that block, matched by
+/// `^\/mcp:([^:\s]+):(\S+)(?:\s+([\s\S]*))?$` (0.100.0, #1495; earlier
+/// releases took one line only and left a prompt spanning lines as typed,
+/// which the plain fingerprint matches), to `/<server>:<prompt> (MCP)
+/// <args>`, the name Claude Code lists the prompt under. Claude Code records
+/// the command by its own name, `mcp__<server>__<prompt>`, with the server
+/// name normalized as MCP tool names are (`normalizeNameForMCP`: each UTF-16
+/// unit outside `[A-Za-z0-9_-]` becomes `_`; its extra rule for a
+/// `claude.ai ` server cannot apply, since the name holds no whitespace) and
+/// the prompt name as it is. The arguments go into `<command-args>`, so
+/// `/mcp:probe:greet world` is recorded as `/mcp__probe__greet` with `world`,
+/// which `slash_command_display` reads back as `/mcp__probe__greet world`.
+fn claude_mcp_prompt_transcript_text(text: &str) -> Option<String> {
+    use crate::acp::js_text::is_js_whitespace;
+    let (server, rest) = text.strip_prefix("/mcp:")?.split_once(':')?;
+    if server.is_empty() || server.contains(is_js_whitespace) {
+        return None;
+    }
+    let prompt_end = rest.find(is_js_whitespace).unwrap_or(rest.len());
+    let (prompt, args) = rest.split_at(prompt_end);
+    if prompt.is_empty() {
+        return None;
+    }
+    let mut recorded = String::from("/mcp__");
+    for c in server.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            recorded.push(c);
+        } else {
+            recorded.extend(std::iter::repeat_n('_', c.len_utf16()));
+        }
+    }
+    recorded.push_str("__");
+    recorded.push_str(prompt);
+    let args = args.trim_matches(is_js_whitespace);
+    if !args.is_empty() {
+        recorded.push(' ');
+        recorded.push_str(args);
+    }
+    Some(recorded)
+}
+
+/// [`first_transcript_texts`] for one adapter generation: `forwards_blobs`
+/// picks 0.99.0's rule for blob resources, and `false` the earlier one. A
+/// resource is read in the wire form `connection::map_prompt_blocks` gives it:
+/// a text resource whenever `text` is set or neither field is (an empty text
+/// resource, which still writes its link), a blob resource for `blob` alone.
+fn first_transcript_text(
+    blocks: &[crate::acp::types::PromptInputBlock],
+    forwards_blobs: bool,
+) -> Option<String> {
+    use crate::acp::types::PromptInputBlock;
+    blocks.iter().find_map(|block| {
+        let text = match block {
+            PromptInputBlock::Text { text } => text.trim().to_string(),
+            PromptInputBlock::Resource {
+                uri,
+                mime_type,
+                text: None,
+                blob: Some(_),
+            } => {
+                if !(forwards_blobs && claude_forwards_blob_mime(mime_type.as_deref())) {
+                    return None;
+                }
+                claude_uri_link(uri)
+            }
+            PromptInputBlock::Resource { uri, .. } | PromptInputBlock::ResourceLink { uri, .. } => {
+                claude_uri_link(uri)
+            }
+            PromptInputBlock::Image { .. } => return None,
+        };
+        (!text.is_empty()).then_some(text)
+    })
+}
+
+/// claude-agent-acp's `isSupportedBlobMimeType` (`src/blob-resources.ts`,
+/// 0.99.0): the blob types it forwards to Claude. The MIME type is compared
+/// without its parameters or case (`text/plain; charset=utf-8` is
+/// `text/plain`), and `image/jpg`, which some clients send, counts as
+/// `image/jpeg`. Images it can show (PNG, JPEG, GIF, WebP) become image
+/// blocks, a PDF a document block, and text types (`text/*`, the listed
+/// `application/*` ones, any `+json` or `+xml`) are decoded and sent like a
+/// text resource. A blob without a MIME type is never forwarded.
+fn claude_forwards_blob_mime(mime_type: Option<&str>) -> bool {
+    use crate::acp::js_text::is_js_whitespace;
+    let Some(base) = mime_type
+        .and_then(|mime| mime.split(';').next())
+        .map(|base| base.trim_matches(is_js_whitespace).to_ascii_lowercase())
+        .filter(|base| !base.is_empty())
+    else {
+        return false;
+    };
+    matches!(
+        base.as_str(),
+        "image/png"
+            | "image/jpeg"
+            | "image/jpg"
+            | "image/gif"
+            | "image/webp"
+            | "application/pdf"
+            | "application/json"
+            | "application/xml"
+            | "application/javascript"
+            | "application/typescript"
+            | "application/x-yaml"
+            | "application/yaml"
+            | "application/toml"
+            | "application/x-sh"
+            | "application/sql"
+            | "application/graphql"
+    ) || base.starts_with("text/")
+        || base.ends_with("+json")
+        || base.ends_with("+xml")
+}
+
 /// Fingerprints of prompts codeg itself sent on this connection, so the
 /// watcher can tell wire-rendered foreground turns apart from out-of-turn
 /// activity. Shared between the connection loop (writer, on every
@@ -155,41 +314,159 @@ fn reconstructed_slash_command_fingerprint(text: &str) -> Option<String> {
 /// from a blocking context.
 pub(crate) struct PromptLedger {
     entries: Mutex<VecDeque<LedgerEntry>>,
+    /// When this connection last sent `/clear` — the one thing that makes a
+    /// transcript rollover attributable to THIS session rather than to any of
+    /// the other transcripts sharing the project directory. See
+    /// [`Self::clear_rollover_expected`].
+    ///
+    /// Stamped twice over: the `Instant` ages the expectation out, the
+    /// `SystemTime` is what a re-arm compares against the session's own
+    /// change instant to tell a `/clear` sent for the session being left from
+    /// one sent for the session being entered (a connection outlives a fork,
+    /// and the watcher learns of the switch up to a poll late).
+    clear_sent_at: Mutex<Option<(Instant, std::time::SystemTime)>>,
 }
 
 struct LedgerEntry {
-    fingerprint: String,
+    /// What the prompt's initiating text starts with, one per adapter
+    /// generation that writes it differently ([`first_transcript_texts`]).
+    /// Any of them matching consumes the entry, so each sent prompt is still
+    /// matched once.
+    fingerprints: Vec<String>,
+    /// The command Claude Code records for an MCP prompt the entry invokes
+    /// ([`claude_mcp_prompt_transcript_text`]). Claude Code writes it only as
+    /// a command record, so it is matched only against a reconstructed
+    /// command, exactly, and never by the verbatim prefix rule.
+    recorded_command: Option<String>,
     recorded_at: Instant,
 }
+
+/// How long after sending `/clear` the watcher keeps looking for the
+/// successor transcript. Deliberately the same span the detector itself
+/// allows between the two files (`CLEAR_ROLLOVER_MAX_GAP_SECS`): a gate that
+/// outlived the detector's window would leave a stretch where the watcher
+/// still hunts but can no longer accept the answer.
+const CLEAR_ROLLOVER_EXPECT_WINDOW: Duration =
+    Duration::from_secs(crate::parsers::claude::CLEAR_ROLLOVER_MAX_GAP_SECS as u64);
+
+/// How far after a session change a `/clear` may still be one that was typed
+/// into the NEW session. Bounds a comparison that crosses the wall clock: the
+/// real gap is the watcher's poll lag (at most `POLL_IDLE` plus scheduling),
+/// so this is an order of magnitude of headroom and no more.
+const REARM_CLEAR_GRACE: Duration = Duration::from_secs(30);
 
 impl PromptLedger {
     pub(crate) fn shared() -> Arc<Self> {
         Arc::new(Self {
             entries: Mutex::new(VecDeque::new()),
+            clear_sent_at: Mutex::new(None),
         })
     }
 
+    /// True while a `/clear` sent on this connection could still be followed
+    /// by its successor transcript appearing on disk.
+    ///
+    /// Nothing on disk links a rollover back to the session it came from (the
+    /// successor's first records carry a fresh uuid, `parentUuid: null`, and
+    /// no reference to the file it replaced), so without this the only
+    /// available evidence — "a sibling with a `/clear` head appeared right
+    /// about when our file went quiet" — is equally true of every OTHER
+    /// conversation open on the same folder. codeg is a multi-agent
+    /// workbench; two Claude sessions in one project directory is the normal
+    /// case, not the exotic one. Knowing that WE asked for the clear is what
+    /// keeps this session from adopting a stranger's transcript.
+    fn clear_rollover_expected(&self) -> bool {
+        let at = self.clear_sent_at.lock().unwrap_or_else(|p| p.into_inner());
+        at.is_some_and(|(t, _)| t.elapsed() < CLEAR_ROLLOVER_EXPECT_WINDOW)
+    }
+
+    /// Consume the expectation once its successor has been adopted, so a
+    /// later sibling rollover inside the same window is not also taken.
+    fn consume_clear_request(&self) {
+        *self.clear_sent_at.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+
+    /// Drop an expectation that belongs to a session this connection has
+    /// LEFT. Called on a fork/re-resume re-arm: an unconsumed `/clear` from
+    /// the outgoing session would otherwise authorize a rollover hunt against
+    /// the incoming one's transcript, which never cleared.
+    ///
+    /// `changed_at` is when the session id actually changed. A `/clear`
+    /// recorded after it was typed into the NEW session — the watcher simply
+    /// had not polled yet — and must survive. Without a change instant to
+    /// compare against there is nothing to tell the two apart, so the
+    /// expectation is dropped: a missed adoption still recovers on reopen,
+    /// where adopting a stranger's transcript would not.
+    ///
+    /// The window is bounded rather than open-ended because the comparison
+    /// crosses the wall clock, which can step backwards under it. The gap
+    /// this admits is only ever the watcher's own poll lag (`POLL_IDLE` plus
+    /// scheduling), so anything further out is not a late-polled `/clear` —
+    /// it is a clock that moved, and it resolves to the safe answer.
+    fn expire_clear_request_before(&self, changed_at: Option<std::time::SystemTime>) {
+        let mut slot = self.clear_sent_at.lock().unwrap_or_else(|p| p.into_inner());
+        let belongs_to_new_session =
+            slot.zip(changed_at)
+                .is_some_and(|((_, sent_at), changed_at)| {
+                    sent_at
+                        .duration_since(changed_at)
+                        .is_ok_and(|since_change| since_change <= REARM_CLEAR_GRACE)
+                });
+        if !belongs_to_new_session {
+            *slot = None;
+        }
+    }
+
+    #[cfg(test)]
+    fn note_clear_for_test(&self) {
+        *self.clear_sent_at.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some((Instant::now(), std::time::SystemTime::now()));
+    }
+
     /// Record the fingerprint of a prompt codeg is about to send: the first
-    /// text block, trimmed. Attachment/resource blocks are excluded on
-    /// purpose — the CLI may persist those differently, while the leading
-    /// text lands verbatim at the start of the transcript's user record.
+    /// text the Claude adapter writes into the transcript's user record for
+    /// it, trimmed — which is what that record's initiating text starts with.
+    ///
+    /// Almost always the prompt's first text block: the prose lands verbatim.
+    /// A prompt that opens with an attachment instead has nothing typed before
+    /// it — a page the built-in browser handed over, sent on its own — and
+    /// there the adapter writes the attachment's link first. Leaving such a
+    /// prompt unrecorded classified its own turn as out-of-turn, so the overlay
+    /// rendered the prompt and its reply a second time, under the live copy.
+    ///
+    /// The adapter generations disagree on one shape, a prompt that opens with
+    /// a blob resource (see [`first_transcript_texts`]); its entry then holds
+    /// both readings and is consumed by whichever the transcript shows.
     pub(crate) fn record_prompt_blocks(&self, blocks: &[crate::acp::types::PromptInputBlock]) {
-        let text = blocks.iter().find_map(|b| match b {
-            crate::acp::types::PromptInputBlock::Text { text } => {
-                let t = text.trim();
-                (!t.is_empty()).then(|| t.to_string())
-            }
-            _ => None,
-        });
-        let Some(fingerprint) = text else {
-            // A prompt with no text (image-only) can't be fingerprinted; its
-            // turn will classify as out-of-turn and reconcile via refetch.
-            tracing::debug!("[bg-watch] prompt without text block — no fingerprint recorded");
+        let fingerprints = first_transcript_texts(blocks);
+        if fingerprints.is_empty() {
+            // Nothing the adapter writes as text (an image-only prompt): its
+            // record carries no initiating text, so it cannot start a turn of
+            // its own here either.
+            tracing::debug!("[bg-watch] prompt without text — no fingerprint recorded");
             return;
-        };
+        }
+        // `/clear` is a CLI-local command: the adapter forwards it like any
+        // other prompt and Claude answers it by starting a new session on a
+        // new transcript file. This is the only notice codeg gets.
+        if fingerprints
+            .iter()
+            .any(|fingerprint| fingerprint == "/clear" || fingerprint.starts_with("/clear "))
+        {
+            *self.clear_sent_at.lock().unwrap_or_else(|p| p.into_inner()) =
+                Some((Instant::now(), std::time::SystemTime::now()));
+        }
+        let recorded_command = blocks
+            .iter()
+            .find_map(|block| match block {
+                crate::acp::types::PromptInputBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .and_then(claude_mcp_prompt_transcript_text);
         let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         entries.push_back(LedgerEntry {
-            fingerprint,
+            fingerprints,
+            recorded_command,
             recorded_at: Instant::now(),
         });
         while entries.len() > LEDGER_CAP {
@@ -218,15 +495,24 @@ impl PromptLedger {
         }
         let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         entries.retain(|e| e.recorded_at.elapsed() < LEDGER_TTL);
-        if let Some(pos) = entries.iter().position(|e| match initiator {
-            TurnInitiatorText::Verbatim(_) => {
-                text == e.fingerprint || text.starts_with(e.fingerprint.as_str())
-            }
+        let matches = |fingerprint: &str| match initiator {
+            TurnInitiatorText::Verbatim(_) => text == fingerprint || text.starts_with(fingerprint),
             TurnInitiatorText::ReconstructedSlashCommand(_) => {
-                text == e.fingerprint
-                    || reconstructed_slash_command_fingerprint(&e.fingerprint).as_deref()
-                        == Some(text)
+                text == fingerprint
+                    || reconstructed_slash_command_fingerprint(fingerprint).as_deref() == Some(text)
             }
+        };
+        let matches_recorded_command = |command: &str| {
+            matches!(initiator, TurnInitiatorText::ReconstructedSlashCommand(_))
+                && reconstructed_slash_command_fingerprint(command).as_deref() == Some(text)
+        };
+        if let Some(pos) = entries.iter().position(|e| {
+            e.fingerprints
+                .iter()
+                .any(|fingerprint| matches(fingerprint))
+                || e.recorded_command
+                    .as_deref()
+                    .is_some_and(matches_recorded_command)
         }) {
             entries.remove(pos);
             return true;
@@ -258,6 +544,12 @@ impl Drop for BackgroundWatchGuard {
 
 /// Arm the transcript watcher for a Claude connection; other agents have no
 /// transcript-notification mechanism and get no watcher (returns `None`).
+///
+/// `projects_dir` is where THIS launch's CLI writes its transcripts — the
+/// `projects` dir under the `CLAUDE_CONFIG_DIR` of the environment it was
+/// started with (`parsers::claude::resolve_claude_projects_dir_for_env`), which
+/// the agent's settings can move away from the one codeg's own environment
+/// names.
 pub(crate) fn spawn_if_claude(
     conn_id: &str,
     agent_type: AgentType,
@@ -265,15 +557,57 @@ pub(crate) fn spawn_if_claude(
     emitter: EventEmitter,
     cwd: String,
     ledger: Arc<PromptLedger>,
+    projects_dir: PathBuf,
 ) -> Option<BackgroundWatchGuard> {
     if agent_type != AgentType::ClaudeCode {
         return None;
     }
     let conn_id = conn_id.to_string();
     let handle = tokio::spawn(async move {
-        run_watch(conn_id, state, emitter, cwd, ledger).await;
+        run_watch(conn_id, state, emitter, cwd, ledger, projects_dir).await;
     });
     Some(BackgroundWatchGuard(handle))
+}
+
+/// Wait out `delay` before the next poll, or less if `wake` is notified.
+async fn wait_for_poll(delay: Duration, wake: &tokio::sync::Notify) {
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => {}
+        _ = wake.notified() => {}
+    }
+}
+
+/// Publish what a tick learned about the session's title.
+///
+/// A title the transcript just named the session goes out exactly like a live
+/// ACP one (same skip-cache, same lifecycle write). It is held rather than
+/// dropped while the conversation row is still unbound: unlike a live ACP
+/// title there is no resend to COUNT on. These bytes are read exactly once,
+/// and while the CLI does re-emit the record on its own metadata flushes,
+/// nothing guarantees another one lands after the row binds — a session that
+/// ends right there would keep its first-prompt name.
+///
+/// Then the title the adapter published, which the notification loop held for
+/// this watch: dropped while the transcript titles the session, published only
+/// while there is no transcript to read. Settled after the tick, so a
+/// transcript that exists has had its lookup this poll.
+///
+/// The read guard is released before `publish_native_title` asks for the
+/// write lock, and both halves short-circuit so a settled session takes no
+/// write lock at all.
+async fn publish_tick_titles(
+    ws: &mut WatchState,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+) {
+    let title_is_publishable =
+        ws.pending_title.is_some() && state.read().await.conversation_id.is_some();
+    if title_is_publishable {
+        if let Some(title) = ws.pending_title.take() {
+            publish_native_title(state, emitter, title).await;
+        }
+    }
+    release_held_wire_title(state, emitter, ws.reads_transcript()).await;
 }
 
 async fn run_watch(
@@ -282,6 +616,7 @@ async fn run_watch(
     emitter: EventEmitter,
     cwd: String,
     ledger: Arc<PromptLedger>,
+    projects_dir: PathBuf,
 ) {
     let mut ws = WatchState::new();
     // Wall-clock boundary between pre-existing transcript history (renders
@@ -297,8 +632,11 @@ async fn run_watch(
     // lingered, able to swallow a later same-text cron refire.
     let spawn_epoch = std::time::SystemTime::now();
     let mut first_arm_done = false;
+    // A wire title the notification loop holds for this watch wakes it, so the
+    // title is settled within a tick of arriving (`publish_tick_titles`).
+    let wire_title_wake = Arc::clone(&state.read().await.wire_title_wake);
     loop {
-        tokio::time::sleep(ws.poll_delay()).await;
+        wait_for_poll(ws.poll_delay(), &wire_title_wake).await;
 
         let (session_id, session_changed_at, is_prompting, turn_ended_abnormally) = {
             let s = state.read().await;
@@ -328,6 +666,14 @@ async fn run_watch(
             } else {
                 spawn_epoch
             };
+            if first_arm_done {
+                // An unconsumed `/clear` from the session being LEFT must not
+                // authorize a rollover hunt against the one being entered,
+                // which never cleared. One typed into the new session between
+                // the switch and this poll survives — same `session_changed_at`
+                // the epoch above is taken from.
+                ledger.expire_clear_request_before(session_changed_at);
+            }
             first_arm_done = true;
             ws.rearm(session_id.clone(), epoch);
         }
@@ -335,12 +681,14 @@ async fn run_watch(
         // File I/O + JSON parsing + turn grouping are blocking work; a large
         // tail after a long foreground turn must not stall the runtime.
         let ledger_ref = Arc::clone(&ledger);
+        let projects_for_tick = projects_dir.clone();
         let cwd_for_tick = cwd.clone();
         let conn_for_tick = conn_id.clone();
         let joined = tokio::task::spawn_blocking(move || {
             let mut ws = ws;
             let event = ws.tick(
                 &ledger_ref,
+                &projects_for_tick,
                 &cwd_for_tick,
                 &conn_for_tick,
                 is_prompting,
@@ -364,29 +712,26 @@ async fn run_watch(
             }
         };
 
-        // Publish a title the transcript just named the session, exactly like
-        // a live ACP one (same skip-cache, same lifecycle write). Deliberately
-        // OUTSIDE the activity emit below: a tick whose tail is nothing but an
-        // `ai-title` record produces no turns, no settlements and no
-        // accounting change, so `tick` correctly returns `None` — which is the
-        // common case for a title generated after the last turn ended.
-        //
-        // Held rather than dropped while the conversation row is still
-        // unbound: unlike a live ACP title there is no resend to COUNT on.
-        // These bytes are read exactly once, and while the CLI does re-emit the
-        // record on its own metadata flushes, nothing guarantees another one
-        // lands after the row binds — a session that ends right there would
-        // keep its first-prompt name.
-        //
-        // Bound to a `let` so the read guard is released before
-        // `publish_native_title` asks for the write lock, and short-circuited
-        // on `pending_title` so a settled session never takes the lock at all.
-        let title_is_publishable =
-            ws.pending_title.is_some() && state.read().await.conversation_id.is_some();
-        if title_is_publishable {
-            if let Some(title) = ws.pending_title.take() {
-                publish_native_title(&state, &emitter, title).await;
-            }
+        // Deliberately OUTSIDE the activity emit below: a tick whose tail is
+        // nothing but an `ai-title` record produces no turns, no settlements
+        // and no accounting change, so `tick` correctly returns `None` — which
+        // is the common case for a title generated after the last turn ended.
+        publish_tick_titles(&mut ws, &state, &emitter).await;
+
+        if let Some(new_id) = ws.pending_transcript_id.take() {
+            tracing::info!(
+                "[bg-watch] transcript rollover connection={} to={}",
+                conn_id,
+                new_id
+            );
+            emit_with_state(
+                &state,
+                &emitter,
+                AcpEvent::TranscriptRolledOver {
+                    transcript_id: new_id,
+                },
+            )
+            .await;
         }
 
         if let Some(event) = event {
@@ -512,6 +857,24 @@ pub(crate) struct WatchState {
     /// an unrelated initiator, and the safe failure is the pre-fix duplicate,
     /// never a hidden turn.
     foreground_submission_id: Option<String>,
+    /// The records of a compaction read in `Foreground` mode, held back until
+    /// the transcript says whose it is (see [`is_held_compaction_record`]).
+    ///
+    /// Claude Code writes a `/compact` in this order: the `compact_boundary`
+    /// record, the continuation summary, the `<local-command-caveat>`, and only
+    /// then the command's own echo. Which turn the compaction belongs to is
+    /// known only at the echo: a `/compact` codeg sent matches the ledger, and
+    /// the wire renders it. One the ledger does not hold is out-of-turn — the
+    /// one claude-agent-acp 0.101.0 sends itself when a large session has sat
+    /// idle for 54 minutes (#1522), with no prompt open — and opens an episode.
+    /// That episode is handed these records first, so the overlay draws the
+    /// divider and its summary exactly as the history parse will, instead of
+    /// the echo alone (which the parser drops when no divider precedes it) —
+    /// unless codeg is prompting when the echo is read: a prompt sent while
+    /// the compaction ran takes its remaining frames into the wire's turn. Any
+    /// other record ends the hold: an `assistant` record is the turn going on
+    /// after the CLI compacted it automatically, which the wire renders.
+    held_compaction: Vec<serde_json::Value>,
     /// `Prompting` state for the tick currently being processed. Set once at
     /// `tick()` entry from the caller-supplied snapshot so `account()` (called
     /// per transcript line within the same tick) can read it without an extra
@@ -554,6 +917,20 @@ pub(crate) struct WatchState {
     /// when a title RECORD actually changed the resolution, so a session with
     /// a settled name costs nothing per tick.
     pending_title: Option<String>,
+    /// Transcript uuid of a Claude `/clear` rollover this watch just adopted.
+    /// The ACP session id is unchanged, so this is the id `conversation.external_id`
+    /// must be re-pointed at. Consumed by `run_watch` after the tick.
+    pending_transcript_id: Option<String>,
+    /// The last read of `file` failed (it exists but cannot be read). Cleared
+    /// by the next read that succeeds and by adopting a file.
+    read_failed: bool,
+    /// Transcript uuid this watch rolled over ONTO, kept for as long as the
+    /// watch lives. `find_session_file_in` resolves the ACP session id, which
+    /// after a `/clear` names the abandoned file — so a re-locate (the stat
+    /// error path below nulls `file`) has to ask for this id instead, or the
+    /// watch would silently fall back onto the dead transcript. Cleared by
+    /// `rearm`: a fork/resume is a different session, not this chain.
+    rolled_over_id: Option<String>,
 }
 
 impl WatchState {
@@ -572,6 +949,7 @@ impl WatchState {
             was_prompting: false,
             foreground_awaiting_reply: false,
             foreground_submission_id: None,
+            held_compaction: Vec::new(),
             currently_prompting: false,
             turn_origin_task_ids: HashMap::new(),
             last_disk_activity: None,
@@ -585,6 +963,9 @@ impl WatchState {
             custom_title: None,
             ai_title: None,
             pending_title: None,
+            pending_transcript_id: None,
+            read_failed: false,
+            rolled_over_id: None,
         }
     }
 
@@ -593,6 +974,16 @@ impl WatchState {
     /// precedence `parsers::claude` applies when it resolves the whole file.
     fn resolved_title(&self) -> Option<String> {
         self.custom_title.clone().or_else(|| self.ai_title.clone())
+    }
+
+    /// Whether this watch reads the session's transcript, the file whose title
+    /// records the history parser resolves too: it has the file and its last
+    /// read of it did not fail. Until it does (it retries the lookup every
+    /// tick), or for good when the agent writes where codeg does not look, or
+    /// while the file cannot be read, the adapter's wire title is the only one
+    /// codeg has (`session_title::release_held_wire_title`).
+    pub(crate) fn reads_transcript(&self) -> bool {
+        self.file.is_some() && !self.read_failed
     }
 
     /// Fold one transcript record into the title slots, queueing the result
@@ -650,6 +1041,30 @@ impl WatchState {
         self.epoch = Some(epoch);
     }
 
+    /// Switch onto a `/clear` successor transcript without changing the ACP
+    /// session id (the adapter keeps that id). The new file is a fresh
+    /// conversation, so the episode/title/offset state resets; overlay events
+    /// still carry the original session id so the frontend can map them.
+    ///
+    /// Task accounting crosses over for the same reason it crosses a fork
+    /// (see `rearm`): `/clear` replaces Claude's context, it does not stop the
+    /// delegations and background shells already running — dropping them would
+    /// zero `outstanding`, release the frontend's sweep exemption, and let
+    /// closing the tab kill work that is still in flight.
+    fn adopt_rollover(&mut self, new_id: String, f: PathBuf) {
+        let session_id = self.session_id.take();
+        let tasks = std::mem::take(&mut self.tasks);
+        let settled_ids = std::mem::take(&mut self.settled_ids);
+        *self = Self::new();
+        self.session_id = session_id;
+        self.tasks = tasks;
+        self.settled_ids = settled_ids;
+        self.pending_transcript_id = Some(new_id.clone());
+        self.rolled_over_id = Some(new_id);
+        self.epoch = Some(std::time::UNIX_EPOCH);
+        self.adopt_file(f);
+    }
+
     fn poll_delay(&self) -> Duration {
         let recently_active = self
             .last_disk_activity
@@ -671,9 +1086,13 @@ impl WatchState {
     /// `turn_ended_abnormally` is a snapshot of `SessionState::
     /// last_turn_ended_abnormally` taken at the same instant — meaningful only
     /// on the tick that observes the falling edge (see below).
+    ///
+    /// `projects_dir` is where the transcript is looked for (see
+    /// [`spawn_if_claude`]).
     pub(crate) fn tick(
         &mut self,
         ledger: &PromptLedger,
+        projects_dir: &Path,
         cwd: &str,
         conn_id: &str,
         is_prompting: bool,
@@ -737,9 +1156,12 @@ impl WatchState {
         let expired_any = self.tasks.len() != before;
 
         // Locate the transcript (it may not exist yet for a brand-new
-        // session; retry every tick until it does).
+        // session; retry every tick until it does). After a `/clear` the ACP
+        // session id names the ABANDONED file, so the lookup asks for the id
+        // this watch rolled onto instead.
         if self.file.is_none() {
-            if let Some(f) = find_session_file(&session_id) {
+            let lookup_id = self.rolled_over_id.clone().unwrap_or_else(|| session_id.clone());
+            if let Some(f) = find_session_file_in(projects_dir, &lookup_id) {
                 self.adopt_file(f);
             }
             if let Some(f) = &self.file {
@@ -752,6 +1174,33 @@ impl WatchState {
                         self.committed,
                         f.display()
                     );
+                }
+            }
+        }
+
+        // `/clear` leaves the original `{session_id}.jsonl` in place and
+        // writes a sibling uuid file. Look for that successor ONLY while a
+        // `/clear` this connection sent is still outstanding: the on-disk
+        // evidence alone cannot tell our own rollover from the rollover of
+        // any other conversation open on the same folder, and adopting a
+        // stranger's transcript would re-point this row's `external_id` at a
+        // session it does not own (see `PromptLedger::clear_rollover_expected`).
+        if ledger.clear_rollover_expected() {
+            if let Some(current) = self.file.clone() {
+                if let Some((new_id, new_path)) =
+                    find_clear_rollover_successor(&current, &session_id)
+                {
+                    if self.file.as_ref() != Some(&new_path) {
+                        tracing::info!(
+                            "[bg-watch] /clear rollover connection={} from={} to={} file={}",
+                            conn_id,
+                            session_id,
+                            new_id,
+                            new_path.display()
+                        );
+                        ledger.consume_clear_request();
+                        self.adopt_rollover(new_id, new_path);
+                    }
                 }
             }
         }
@@ -785,10 +1234,12 @@ impl WatchState {
             self.committed = meta.len();
             self.carry.clear();
             self.episode = None;
+            self.held_compaction.clear();
             self.mode = Mode::Foreground;
         } else if !unchanged {
             match self.read_new_lines(&path) {
                 Ok(lines) => {
+                    self.read_failed = false;
                     if !lines.is_empty() {
                         self.last_disk_activity = Some(Instant::now());
                     }
@@ -809,7 +1260,15 @@ impl WatchState {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("[bg-watch] read failed for {}: {e}", path.display());
+                    // Retried on every tick (`last_stat` forgotten), so a file
+                    // that becomes readable again without changing length or
+                    // mtime (a permission fix) is read on the next tick. Logged
+                    // once per run of failures.
+                    if !self.read_failed {
+                        tracing::warn!("[bg-watch] read failed for {}: {e}", path.display());
+                    }
+                    self.read_failed = true;
+                    self.last_stat = None;
                     return None;
                 }
             }
@@ -886,6 +1345,9 @@ impl WatchState {
             // on the next unrelated append.
             self.seed_titles_from_history(&f, self.committed);
         }
+        self.read_failed = false;
+        // Records held from another file belong to none of this one's turns.
+        self.held_compaction.clear();
         self.file = Some(f);
     }
 
@@ -945,38 +1407,89 @@ impl WatchState {
 
     /// Read bytes appended since `committed`, returning COMPLETE lines only;
     /// a trailing partial line stays in `carry` until its newline arrives.
+    ///
+    /// Linear in the bytes read: each line is copied out of `carry` once, then
+    /// the unread tail moves to a buffer of its own. One append can be large —
+    /// a resume replays the surviving history into the same file — and
+    /// splitting `carry` line by line instead gave every line a buffer as big
+    /// as everything still unread, about bytes × lines / 2 in all (#885).
     fn read_new_lines(&mut self, path: &PathBuf) -> std::io::Result<Vec<String>> {
         let mut f = std::fs::File::open(path)?;
         f.seek(SeekFrom::Start(self.committed + self.carry.len() as u64))?;
-        let mut fresh = Vec::new();
-        f.read_to_end(&mut fresh)?;
-        if fresh.is_empty() {
-            return Ok(Vec::new());
-        }
-        self.carry.extend_from_slice(&fresh);
+        // Straight into `carry`. Bytes read before an error stay there, so the
+        // next call returns their complete lines even if nothing new arrives.
+        f.read_to_end(&mut self.carry)?;
 
         let mut lines = Vec::new();
-        while let Some(nl) = self.carry.iter().position(|b| *b == b'\n') {
-            let rest = self.carry.split_off(nl + 1);
-            let mut line_bytes = std::mem::replace(&mut self.carry, rest);
-            line_bytes.pop(); // the '\n'
-            self.committed += nl as u64 + 1;
+        let mut consumed = 0;
+        for line in self.carry.split_inclusive(|b| *b == b'\n') {
+            let Some(body) = line.strip_suffix(b"\n") else {
+                break; // the partial tail
+            };
+            consumed += line.len();
             // Mirror the detail parser: a non-UTF-8 line is skipped, but its
             // bytes still count toward the watermark.
-            if let Ok(line) = String::from_utf8(line_bytes) {
-                lines.push(line);
+            if let Ok(text) = std::str::from_utf8(body) {
+                lines.push(text.to_owned());
             }
         }
+        self.committed += consumed as u64;
+        // Not `drain`: that would keep the whole batch's allocation alive
+        // behind a partial line for as long as the session is watched.
+        self.carry = self.carry[consumed..].to_vec();
         Ok(lines)
     }
 
+    /// An interim `<task-notification>` ([`task_notification_is_interim`]):
+    /// the sub-agent stopped while background work of its own still runs, or
+    /// is being resumed with messages that came too late, and it notifies again
+    /// when it is done. It is still alive in this CLI, so it stays in the count
+    /// that keeps the connection out of the idle sweeps, and is not settled
+    /// (the next, final notification settles it). One this watch never saw
+    /// launch is counted from here: the CLI just said it runs, and the
+    /// max-age valve still bounds a final notification that never comes.
+    fn keep_interim_task(&mut self, id: &str) {
+        let known = self.tasks.contains_key(id);
+        self.tasks
+            .entry(id.to_string())
+            .or_insert_with(|| TaskEntry {
+                kind: "agent",
+                started_at: Instant::now(),
+            });
+        tracing::info!("[bg-watch] interim notification task={id} known={known}, kept outstanding");
+    }
+
     /// Task accounting for one record: launch acks; settlements via a
-    /// `<task-notification>` record, a `TaskOutput` result reaching a terminal
-    /// `task.status`, or a `TaskStop`/`KillShell` call; and `SendMessage`
-    /// re-arms of settled sub-agents.
+    /// `<task-notification>` record or one folded into a running turn, a
+    /// `TaskOutput` result reaching a terminal `task.status`, or a
+    /// `TaskStop`/`KillShell` call; and `SendMessage` re-arms of settled
+    /// sub-agents. An interim notification settles nothing
+    /// ([`Self::keep_interim_task`]).
     fn account(&mut self, value: &serde_json::Value, settled: &mut Vec<BackgroundSettledInfo>) {
         let record_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
         match record_type {
+            // A task that settled while a turn ran: its notification is folded
+            // into that turn (see `queued_task_notification`), and this is the
+            // usual way a background task ends. Missed, the task kept the
+            // connection exempt from the idle sweeps until its keep-alive
+            // expired. Like a `TaskOutput` collection, it only leaves the
+            // count, with no `settled` push: the agent takes the result inline,
+            // so there is nothing to announce out of turn, and the launch card
+            // gets its final state from the detail parse.
+            "attachment" => {
+                if let Some(raw) = queued_task_notification(value) {
+                    if let Some(id) = capture_tag(task_notification_task_id_regex(), raw) {
+                        if task_notification_is_interim(raw) {
+                            self.keep_interim_task(&id);
+                        } else {
+                            if self.tasks.remove(&id).is_some() {
+                                tracing::info!("[bg-watch] settled task={id} folded into a turn");
+                            }
+                            self.settled_ids.insert(id);
+                        }
+                    }
+                }
+            }
             "user" => {
                 if let Some(tur) = value.get("toolUseResult") {
                     if tur.get("status").and_then(|s| s.as_str()) == Some("async_launched") {
@@ -1073,32 +1586,49 @@ impl WatchState {
                         let task_id = capture_tag(task_notification_task_id_regex(), trimmed);
                         let status = capture_tag(task_notification_status_regex(), trimmed)
                             .unwrap_or_else(|| "completed".into());
-                        let summary = capture_tag(task_notification_summary_regex(), trimmed);
+                        let summary = capture_tag(task_notification_summary_regex(), trimmed)
+                            .map(|s| unescape_task_notification_text(&s));
                         // The notification is self-contained: its `<tool-use-id>`
                         // is the launching tool call's id and `<result>` is the
                         // sub-agent's report. Carrying both lets the frontend flip
                         // the launch card in-memory (rewriting its marker) with no
-                        // `refetchDetail` — see `BackgroundSettledInfo`'s doc.
-                        // Absent for a background shell (no such tags → `None`).
+                        // `refetchDetail` — see `BackgroundSettledInfo`'s doc. A
+                        // background shell's notification names its `Bash` call
+                        // as well (with no `<result>`); the frontend leaves that
+                        // card alone.
                         let tool_use_id =
                             capture_tag(task_notification_tool_use_id_regex(), trimmed);
-                        // Same cap the cold-parse fold applies, so the live card
-                        // matches and a pathological report can't blow the
-                        // event-stream size budget.
-                        let result = capture_tag(task_notification_result_regex(), trimmed)
-                            .map(|r| truncate_str(&r, BACKGROUND_RESULT_MAX_CHARS));
+                        // Unescaped and capped as the cold-parse fold does, so
+                        // the live card matches and a pathological report can't
+                        // blow the event-stream size budget.
+                        let result =
+                            capture_tag(task_notification_result_regex(), trimmed).map(|r| {
+                                truncate_str(
+                                    &unescape_task_notification_text(&r),
+                                    BACKGROUND_RESULT_MAX_CHARS,
+                                )
+                            });
                         if let Some(id) = task_id {
-                            let known = self.tasks.remove(&id).is_some();
-                            self.settled_ids.insert(id.clone());
-                            tracing::info!(
-                                "[bg-watch] settled task={id} status={status} known={known}"
-                            );
+                            // An interim notification still flips the card, to
+                            // its interim result, so the live card reads as the
+                            // detail parse does; but the task is not settled.
+                            let interim = task_notification_is_interim(trimmed);
+                            if interim {
+                                self.keep_interim_task(&id);
+                            } else {
+                                let known = self.tasks.remove(&id).is_some();
+                                self.settled_ids.insert(id.clone());
+                                tracing::info!(
+                                    "[bg-watch] settled task={id} status={status} known={known}"
+                                );
+                            }
                             settled.push(BackgroundSettledInfo {
                                 task_id: id,
                                 status,
                                 summary,
                                 tool_use_id,
                                 result,
+                                interim,
                             });
                         }
                     }
@@ -1190,6 +1720,39 @@ impl WatchState {
             self.foreground_awaiting_reply = false;
         }
 
+        // A compaction read while the wire owns the transcript waits for its
+        // `/compact` echo to say whose it is (see `held_compaction`); any other
+        // record ends the wait, and the records go wherever this one does.
+        if matches!(self.mode, Mode::Foreground)
+            && is_held_compaction_record(value, !self.held_compaction.is_empty())
+        {
+            self.held_compaction.push(value.clone());
+            return;
+        }
+        let held_compaction = std::mem::take(&mut self.held_compaction);
+
+        // A message folded into the running turn continues that turn and never
+        // starts one. Matched against the ledger — a prompt codeg sent that
+        // Claude Code folded into a turn it started on its own, or a steer — it
+        // hands the rest of the turn to the wire, so an open episode closes as
+        // for any codeg-sent prompt. Unmatched, it stays with whatever turn is
+        // running, the overlay's or the wire's. The steer arm records its
+        // fingerprint only once the adapter answers `injected`, so the CLI can
+        // write the attachment before the ledger has it; taken for an
+        // out-of-turn start, it would draw the rest of a wire-rendered turn in
+        // the overlay as well.
+        if let Some(text) = folded_prompt_text(value) {
+            if ledger.consume_matching(&TurnInitiatorText::Verbatim(text)) {
+                tracing::debug!("[bg-watch] folded prompt matched ledger");
+                self.collect_changed_turns(cwd, changed_turns);
+                self.episode = None;
+                self.mode = Mode::Foreground;
+                self.foreground_awaiting_reply = true;
+                self.foreground_submission_id = None;
+                return;
+            }
+        }
+
         if let Some(initiator) = turn_initiator_text(value) {
             let initiator_text = initiator.as_str();
             if ledger.consume_matching(&initiator) {
@@ -1231,17 +1794,37 @@ impl WatchState {
                 .episode
                 .as_ref()
                 .is_some_and(|e| e.acc.messages.len() >= MAX_EPISODE_MESSAGES);
-            if matches!(self.mode, Mode::Foreground) || self.episode.is_none() || rotate {
+            let from_foreground = matches!(self.mode, Mode::Foreground);
+            if from_foreground || self.episode.is_none() || rotate {
                 if rotate {
                     self.collect_changed_turns(cwd, changed_turns);
                 }
                 // Any stable, strictly-increasing base works — turn ids only
                 // need to be unique and stable within the watch.
+                let mut acc = ClaudeRecordAccumulator::new(
+                    self.file.clone().unwrap_or_else(|| PathBuf::from("")),
+                );
+                // A `/compact` nobody sent through codeg was written after its
+                // own boundary and summary: the episode reads them first, so
+                // the divider (and the echo the parser places at it) is drawn
+                // as the history parse draws it. Only the echo claims them —
+                // another initiator after a held compaction (none is known to
+                // occur) leaves them to the wire, as before. So does a prompt
+                // codeg sent while the compaction ran: its turn takes the
+                // compaction's remaining frames, and the composer draws the
+                // card there.
+                if from_foreground
+                    && !self.currently_prompting
+                    && matches!(&initiator, TurnInitiatorText::ReconstructedSlashCommand(display)
+                        if is_compact_command(display))
+                {
+                    for record in held_compaction {
+                        acc.feed_value(record);
+                    }
+                }
                 self.episode = Some(Episode {
                     start_offset: self.next_episode_base(),
-                    acc: ClaudeRecordAccumulator::new(
-                        self.file.clone().unwrap_or_else(|| PathBuf::from("")),
-                    ),
+                    acc,
                     emitted_hashes: HashMap::new(),
                     origin_task_id: task_notification_origin_id(initiator_text),
                 });
@@ -1306,8 +1889,11 @@ impl WatchState {
         crate::parsers::resolve_patch_line_numbers(&mut turns, Some(cwd));
         // Same last step as the detail parse, so an overlay turn carries the
         // same elapsed time the reply will show once it settles. An episode
-        // that opens mid-reply simply has no boundary for its first turn.
-        crate::parsers::backfill_turn_durations(&mut turns, &[]);
+        // opened by a `<task-notification>` was fed that record first, so its
+        // first turn is measured from the notification; one that opens
+        // mid-reply simply has no boundary for its first turn.
+        let turn_starts = episode.acc.chronological_turn_starts();
+        crate::parsers::backfill_turn_durations(&mut turns, &turn_starts);
         for (idx, mut turn) in turns.into_iter().enumerate() {
             turn.id = format!("bg-{}-{}", episode.start_offset, idx);
             let hash = hash_turn(&turn);
@@ -1338,7 +1924,13 @@ fn user_record_text(value: &serde_json::Value) -> Option<String> {
     if value.get("type").and_then(|t| t.as_str()) != Some("user") {
         return None;
     }
-    let content = value.get("message")?.get("content")?;
+    content_text(value.get("message")?.get("content")?)
+}
+
+/// The text of a user `content` value — a record's `message.content`, or the
+/// prompt of a message folded into a running turn: the bare string form, or
+/// the concatenated text blocks of the array form.
+fn content_text(content: &serde_json::Value) -> Option<String> {
     if let Some(s) = content.as_str() {
         return Some(s.to_string());
     }
@@ -1363,10 +1955,20 @@ fn user_record_text(value: &serde_json::Value) -> Option<String> {
 ///   but always STRING content, so it still initiates);
 /// * auto-compaction continuation summaries land MID-turn while the wire is
 ///   still rendering it — never a boundary;
+/// * `turnCompanion` records are written on the running turn's behalf and
+///   continue it, whatever their shape — including the `isMeta` STRING note
+///   the Read tool leaves after an image larger than the display limit
+///   (CLI 2.1.293), which otherwise reads exactly like a cron prompt;
 /// * everything else user-typed/injected (real prompts, `<task-notification>`
 ///   records, cron prompts) initiates.
+///
+/// A message folded into the running turn is an attachment, not a `user`
+/// record, and never initiates: see [`folded_prompt_text`].
 fn turn_initiator_text(value: &serde_json::Value) -> Option<TurnInitiatorText> {
     if value.get("type").and_then(|t| t.as_str()) != Some("user") {
+        return None;
+    }
+    if value.get("turnCompanion").and_then(|v| v.as_bool()) == Some(true) {
         return None;
     }
     let content = value.get("message")?.get("content")?;
@@ -1399,6 +2001,47 @@ fn turn_initiator_text(value: &serde_json::Value) -> Option<TurnInitiatorText> {
         return None;
     }
     Some(TurnInitiatorText::Verbatim(text))
+}
+
+/// Whether `value` is one of the records a compaction writes ahead of its
+/// `/compact` echo (see `WatchState::held_compaction`). A `compact_boundary`
+/// record starts the run. While one is `holding`, the continuation summary,
+/// the `<local-command-caveat>` the CLI writes before a local command's echo,
+/// and every record that is neither `user` nor `assistant` (attachments, the
+/// CLI's bookkeeping) join it. Anything else — an `assistant` record, the echo,
+/// a prompt — ends it.
+fn is_held_compaction_record(value: &serde_json::Value, holding: bool) -> bool {
+    let record_type = value.get("type").and_then(|t| t.as_str());
+    if record_type == Some("system")
+        && value.get("subtype").and_then(|s| s.as_str()) == Some("compact_boundary")
+    {
+        return true;
+    }
+    if !holding {
+        return false;
+    }
+    match record_type {
+        Some("assistant") => false,
+        Some("user") => {
+            if value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true) {
+                return true;
+            }
+            let text = user_record_text(value).unwrap_or_default();
+            let text = text.trim_start();
+            text.starts_with(CONTEXT_CONTINUATION_PREFIX)
+                || (is_meta_message(value) && text.starts_with("<local-command-caveat>"))
+        }
+        _ => true,
+    }
+}
+
+/// The text of a message the user sent mid-turn, which Claude Code folded into
+/// the running turn and recorded as an attachment ([`queued_human_prompt`]).
+/// `None` for any other record, and for one with no text (an image on its
+/// own): there is nothing to match, as an image-only prompt leaves no
+/// fingerprint either.
+fn folded_prompt_text(value: &serde_json::Value) -> Option<String> {
+    content_text(queued_human_prompt(value)?).filter(|text| !text.trim().is_empty())
 }
 
 /// The submission a record belongs to. Claude Code stamps every user record it
@@ -1618,8 +2261,19 @@ mod tests {
         format!(r#"{{"type":"custom-title","customTitle":"{title}","sessionId":"s1"}}"#)
     }
 
+    /// A projects dir that does not exist: a tick with no transcript adopted
+    /// yet looks one up there, so these tests never read a real config dir.
+    const NO_PROJECTS_DIR: &str = "/nonexistent/codeg-test/claude-projects";
+
     fn tick_now(ws: &mut WatchState, ledger: &PromptLedger) -> Option<AcpEvent> {
-        ws.tick(ledger, "/tmp", "conn-test", false, false)
+        ws.tick(
+            ledger,
+            Path::new(NO_PROJECTS_DIR),
+            "/tmp",
+            "conn-test",
+            false,
+            false,
+        )
     }
 
     /// Like `tick_now`, but with the connection snapshotted as `Prompting` —
@@ -1627,7 +2281,14 @@ mod tests {
     /// plan), which engages while the connection is prompting and, with no
     /// time limit, for as long afterward as no new turn has started.
     fn tick_prompting(ws: &mut WatchState, ledger: &PromptLedger) -> Option<AcpEvent> {
-        ws.tick(ledger, "/tmp", "conn-test", true, false)
+        ws.tick(
+            ledger,
+            Path::new(NO_PROJECTS_DIR),
+            "/tmp",
+            "conn-test",
+            true,
+            false,
+        )
     }
 
     /// Like `tick_now`, but reporting the just-ended turn as having stopped
@@ -1635,7 +2296,14 @@ mod tests {
     /// path that lets a held turn's launched ids stop being suppression-
     /// eligible immediately instead of waiting for the next turn.
     fn tick_abnormal_end(ws: &mut WatchState, ledger: &PromptLedger) -> Option<AcpEvent> {
-        ws.tick(ledger, "/tmp", "conn-test", false, true)
+        ws.tick(
+            ledger,
+            Path::new(NO_PROJECTS_DIR),
+            "/tmp",
+            "conn-test",
+            false,
+            true,
+        )
     }
 
     fn unpack(
@@ -1883,10 +2551,227 @@ mod tests {
         assert_eq!(settled.len(), 1);
     }
 
+    fn clear_command(session_id: &str, ts: &str) -> String {
+        format!(
+            r#"{{"type":"user","timestamp":"{ts}","uuid":"u-clear","sessionId":"{session_id}","message":{{"role":"user","content":"<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}}}}"#
+        )
+    }
+
+    fn dated_user(session_id: &str, uuid: &str, ts: &str, text: &str) -> String {
+        format!(
+            r#"{{"type":"user","timestamp":"{ts}","uuid":"{uuid}","sessionId":"{session_id}","message":{{"role":"user","content":[{{"type":"text","text":"{text}"}}]}}}}"#
+        )
+    }
+
+    fn dated_assistant(session_id: &str, uuid: &str, ts: &str, text: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":"{ts}","uuid":"{uuid}","sessionId":"{session_id}","message":{{"role":"assistant","content":[{{"type":"text","text":"{text}"}}]}}}}"#
+        )
+    }
+
+    /// `/clear` keeps the ACP session id but writes a NEW sibling jsonl.
+    /// The watcher must leave the frozen file and tail the successor so
+    /// post-clear out-of-turn records (and the reopen reader, via the
+    /// pending transcript id) are not stranded on a file nobody writes to.
+    #[test]
+    fn clear_rollover_adopts_the_new_transcript_while_acp_id_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old-sess.jsonl");
+        let new = dir.path().join("new-sess.jsonl");
+        write_lines(
+            &old,
+            &[
+                &dated_user("old-sess", "u1", "2026-09-01T10:00:00Z", "hello before"),
+                &dated_assistant("old-sess", "a1", "2026-09-01T10:00:05Z", "hi before"),
+            ],
+        );
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("old-sess", old.clone());
+        let _ = tick_now(&mut ws, &ledger);
+
+        write_lines(
+            &new,
+            &[
+                &clear_command("new-sess", "2026-09-01T10:00:06Z"),
+                &dated_user("new-sess", "u2", "2026-09-01T10:01:00Z", "hello after"),
+                &cron_prompt("autonomous after clear"),
+                &dated_assistant("new-sess", "a2", "2026-09-01T10:02:00Z", "hi after"),
+            ],
+        );
+
+        // The rollover is only ours to take because THIS connection sent the
+        // `/clear` that caused it.
+        ledger.record_prompt_blocks(&[crate::acp::types::PromptInputBlock::Text {
+            text: "/clear".to_string(),
+        }]);
+        let event = tick_now(&mut ws, &ledger);
+        assert_eq!(
+            ws.file.as_ref(),
+            Some(&new),
+            "watcher must follow the /clear successor file"
+        );
+        assert_eq!(
+            ws.session_id.as_deref(),
+            Some("old-sess"),
+            "ACP session id is unchanged; overlay mapping still uses it"
+        );
+        assert_eq!(
+            ws.pending_transcript_id.as_deref(),
+            Some("new-sess"),
+            "the new transcript uuid is what conversation.external_id must bind"
+        );
+
+        let (turns, ..) = unpack(event.expect("post-clear tail must produce activity"));
+        let blob = serde_json::to_string(&turns).unwrap();
+        // Both halves of the post-clear exchange, not `a || b`: either one
+        // alone would also be satisfied by a watcher that adopted the file
+        // and then read only part of it.
+        assert!(
+            blob.contains("hello after") && blob.contains("hi after"),
+            "the whole post-clear tail must surface, not just one record: {blob}"
+        );
+        assert!(
+            !blob.contains("hello before"),
+            "pre-clear content stays on the abandoned file"
+        );
+    }
+
+    /// Every conversation opened on one folder shares a project directory, so
+    /// a `/clear` successor written by a DIFFERENT session sits right next to
+    /// ours and looks identical on disk: fresh uuid, `/clear` head, starting
+    /// when our own file happens to have gone quiet. Adopting it would tail a
+    /// stranger's transcript and re-point this row's `external_id` at a
+    /// session another row owns. The only thing that separates the two cases
+    /// is whether WE asked for the clear.
+    #[test]
+    fn clear_rollover_ignores_a_sibling_session_we_did_not_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old-sess.jsonl");
+        write_lines(
+            &old,
+            &[
+                &dated_user("old-sess", "u1", "2026-09-01T10:00:00Z", "hello before"),
+                &dated_assistant("old-sess", "a1", "2026-09-01T10:00:05Z", "hi before"),
+            ],
+        );
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("old-sess", old.clone());
+        let _ = tick_now(&mut ws, &ledger);
+
+        // A neighbouring conversation clears six seconds later — well inside
+        // every timing tolerance the detector has.
+        write_lines(
+            &dir.path().join("other-sess.jsonl"),
+            &[
+                &clear_command("other-sess", "2026-09-01T10:00:06Z"),
+                &dated_user("other-sess", "u2", "2026-09-01T10:01:00Z", "not ours"),
+            ],
+        );
+
+        let event = tick_now(&mut ws, &ledger);
+        assert_eq!(
+            ws.file.as_ref(),
+            Some(&old),
+            "a rollover this connection never asked for is not ours to adopt"
+        );
+        assert!(ws.pending_transcript_id.is_none(), "no re-point may be emitted");
+        assert!(
+            event.is_none(),
+            "and none of the stranger's records may surface as our activity"
+        );
+    }
+
+    /// One connection outlives a fork, and the watcher learns of the session
+    /// switch up to a poll late — so at re-arm time an unconsumed `/clear`
+    /// may belong to either side of it. The session's own change instant is
+    /// what separates them: a `/clear` typed into the new session before the
+    /// watcher noticed the switch still has a successor to adopt.
+    #[test]
+    fn clear_rollover_expectation_survives_a_rearm_it_postdates() {
+        let ledger = PromptLedger::shared();
+
+        let changed_a_second_ago = std::time::SystemTime::now() - Duration::from_secs(1);
+        ledger.note_clear_for_test();
+        ledger.expire_clear_request_before(Some(changed_a_second_ago));
+        assert!(
+            ledger.clear_rollover_expected(),
+            "a /clear typed after the session changed belongs to the new session"
+        );
+
+        let changes_in_a_second = std::time::SystemTime::now() + Duration::from_secs(1);
+        ledger.expire_clear_request_before(Some(changes_in_a_second));
+        assert!(
+            !ledger.clear_rollover_expected(),
+            "one that predates the switch belonged to the session being left"
+        );
+
+        ledger.note_clear_for_test();
+        ledger.expire_clear_request_before(None);
+        assert!(
+            !ledger.clear_rollover_expected(),
+            "with nothing to compare against, a missed adoption beats a wrong one"
+        );
+
+        // The comparison crosses the wall clock, and a backward step under it
+        // would otherwise make the OLD session's expectation look newer than
+        // the switch. A gap no poll lag can explain resolves the safe way.
+        ledger.note_clear_for_test();
+        let changed_long_before = std::time::SystemTime::now() - REARM_CLEAR_GRACE * 2;
+        ledger.expire_clear_request_before(Some(changed_long_before));
+        assert!(
+            !ledger.clear_rollover_expected(),
+            "a gap wider than the watcher's poll lag is a moved clock, not a late /clear"
+        );
+    }
+
+    /// The successor's `/clear` record and the predecessor's last record are
+    /// written by one process milliseconds apart, and the CLI's timestamps are
+    /// not ordered across the two files (measured on 2.1.270: the successor's
+    /// caveat record is stamped 6ms BEFORE the command record that follows
+    /// it). A detector that demands `successor >= predecessor` to the
+    /// millisecond therefore drops real rollovers — and drops them for good,
+    /// since every later tick re-compares the same two files.
+    #[test]
+    fn clear_rollover_tolerates_a_successor_stamped_just_before_us() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old-sess.jsonl");
+        let new = dir.path().join("new-sess.jsonl");
+        write_lines(
+            &old,
+            &[
+                &dated_user("old-sess", "u1", "2026-09-01T10:00:00Z", "hello before"),
+                &dated_assistant("old-sess", "a1", "2026-09-01T10:00:05.900Z", "hi before"),
+            ],
+        );
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("old-sess", old.clone());
+        let _ = tick_now(&mut ws, &ledger);
+
+        write_lines(
+            &new,
+            &[
+                // 400ms BEFORE the last record of the file it replaces.
+                &clear_command("new-sess", "2026-09-01T10:00:05.500Z"),
+                &dated_user("new-sess", "u2", "2026-09-01T10:01:00Z", "hello after"),
+            ],
+        );
+        ledger.note_clear_for_test();
+
+        let _ = tick_now(&mut ws, &ledger);
+        assert_eq!(
+            ws.file.as_ref(),
+            Some(&new),
+            "a few hundred ms of clock skew between the two files is normal"
+        );
+    }
+
     /// A `_session/steering` injection reaches the agent outside
-    /// `session/prompt`, but the CLI still writes it to the transcript as a
-    /// user record — which starts a new turn as far as `group_into_turns` is
-    /// concerned. Since claude-agent-acp #958 the owning prompt stays in
+    /// `session/prompt`, but the CLI still writes it to the transcript — as a
+    /// user record when it runs as a turn of its own, the shape here, and as an
+    /// attachment when it is folded into the running turn (see
+    /// `a_steer_folded_into_the_running_turn_classifies_foreground`) — which
+    /// starts a new turn as far as `group_into_turns` is concerned. Since
+    /// claude-agent-acp #958 the owning prompt stays in
     /// flight across the steered work, so every update of that turn is
     /// already streaming over the wire; surfacing it as overlay activity too
     /// double-renders it and shuffles the transcript as the upserts land
@@ -1948,6 +2833,300 @@ mod tests {
             !turns.is_empty(),
             "same-text refire must surface — the steer's entry was consumed, not left standing"
         );
+    }
+
+    /// Real-shape message folded into the running turn (CLI 2.1.293): a
+    /// `queued_command` attachment rather than a user record, with no
+    /// `promptId`.
+    fn folded_prompt(uuid: &str, text: &str) -> String {
+        format!(
+            r#"{{"type":"attachment","timestamp":"2026-07-07T03:48:30.000Z","uuid":"{uuid}","renderedRole":"system","attachment":{{"type":"queued_command","prompt":[{{"type":"text","text":"{text}"}}],"source_uuid":"s-{uuid}","delivery_id":"d-{uuid}","commandMode":"prompt","origin":{{"kind":"human"}},"timestamp":"2026-07-07T03:48:30.000Z","humanTurn":true}}}}"#
+        )
+    }
+
+    /// A steer that lands while a tool runs is folded into the running turn and
+    /// recorded as an attachment. It matches the ledger like the user-record
+    /// shape and consumes its fingerprint. Left standing, the entry took an
+    /// autonomous re-fire of the same words within the ledger's lifetime for
+    /// codeg's own, and that turn never surfaced.
+    #[test]
+    fn a_steer_folded_into_the_running_turn_classifies_foreground() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("build a test page");
+        write_lines(
+            &path,
+            &[
+                &user_prompt_array("u1", "build a test page"),
+                &assistant_text("a1", "working"),
+            ],
+        );
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(event.is_none() || unpack(event.unwrap()).0.is_empty());
+
+        ledger.record_text("make it cyberpunk");
+        write_lines(
+            &path,
+            &[
+                &folded_prompt("q1", "make it cyberpunk"),
+                &assistant_text("a2", "restyling"),
+            ],
+        );
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(
+            event.is_none() || unpack(event.unwrap()).0.is_empty(),
+            "the steered work is wire-rendered — it must not surface as overlay activity"
+        );
+
+        write_lines(
+            &path,
+            &[
+                &cron_prompt("make it cyberpunk"),
+                &assistant_text("a3", "again"),
+            ],
+        );
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("turns event"));
+        assert!(
+            !turns.is_empty(),
+            "same-text refire must surface — the folded steer consumed its entry"
+        );
+    }
+
+    /// #893 once claude-agent-acp answers a folded prompt (0.87.0+): a
+    /// background task's notification starts a turn Claude Code runs on its
+    /// own, which surfaces as overlay activity, and the user's prompt is folded
+    /// into that turn. From there the wire renders the turn as the reply to the
+    /// prompt, so the episode closes at the attachment and the reply stays off
+    /// the overlay rather than rendering twice.
+    #[test]
+    fn a_prompt_folded_into_an_autonomous_turn_takes_the_rest_off_the_overlay() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        write_lines(
+            &path,
+            &[
+                &notification("bm1", "completed"),
+                &assistant_text("a1", "checking the result"),
+            ],
+        );
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("the autonomous turn surfaces"));
+        assert!(serde_json::to_string(&turns)
+            .unwrap()
+            .contains("checking the result"));
+
+        ledger.record_text("question B");
+        write_lines(
+            &path,
+            &[
+                &folded_prompt("q1", "question B"),
+                &assistant_text("a2", "answer to B"),
+            ],
+        );
+        let blob = tick_prompting(&mut ws, &ledger)
+            .map(|event| serde_json::to_string(&unpack(event).0).unwrap())
+            .unwrap_or_default();
+        assert!(
+            !blob.contains("question B") && !blob.contains("answer to B"),
+            "the folded prompt and its reply are the wire's: {blob}"
+        );
+        assert!(matches!(ws.mode, Mode::Foreground));
+    }
+
+    /// An `advisor` server-tool call and its `advisor_tool_result` are separate
+    /// assistant records (Claude Code 2.1.310), so a tick can read the call
+    /// before the result is flushed. The next tick re-emits the call's turn
+    /// with the result beside it, and leaves no turn holding only the result.
+    #[test]
+    fn an_advisor_result_read_a_tick_after_its_call_joins_the_call() {
+        use crate::models::message::ContentBlock;
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let assistant_block = |uuid: &str, block: &str| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"2026-07-07T03:49:05.000Z","uuid":"{uuid}","message":{{"id":"msg_adv","role":"assistant","model":"claude-sonnet-5","content":[{block}]}}}}"#
+            )
+        };
+        let advice = "ADVICE: check the edge cases first.";
+
+        write_lines(
+            &path,
+            &[
+                &cron_prompt("review the plan"),
+                &assistant_block(
+                    "a-call",
+                    r#"{"type":"server_tool_use","id":"srvtoolu_adv","name":"advisor","input":{}}"#,
+                ),
+            ],
+        );
+        let (turns, ..) =
+            unpack(tick_now(&mut ws, &ledger).expect("the out-of-turn turn surfaces"));
+        let blob = serde_json::to_string(&turns).unwrap();
+        assert!(
+            blob.contains("srvtoolu_adv") && !blob.contains(advice),
+            "{blob}"
+        );
+
+        write_lines(
+            &path,
+            &[
+                &assistant_block(
+                    "a-result",
+                    &format!(
+                        r#"{{"type":"advisor_tool_result","tool_use_id":"srvtoolu_adv","content":{{"type":"advisor_result","text":"{advice}","stop_reason":"end_turn"}}}}"#
+                    ),
+                ),
+                &assistant_text("a-after", "advisor consulted"),
+            ],
+        );
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("the result tick re-emits"));
+        let call_turn = turns
+            .iter()
+            .find(|turn| {
+                turn.blocks.iter().any(|b| {
+                    matches!(b, ContentBlock::ToolUse { tool_use_id: Some(id), .. } if id == "srvtoolu_adv")
+                })
+            })
+            .expect("the call's turn is re-emitted");
+        assert!(
+            call_turn.blocks.iter().any(|b| matches!(
+                b,
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview: Some(text),
+                    is_error: false,
+                    ..
+                } if id == "srvtoolu_adv" && text == advice
+            )),
+            "{:?}",
+            call_turn.blocks
+        );
+        assert!(
+            turns.iter().all(|turn| !turn
+                .blocks
+                .iter()
+                .all(|b| matches!(b, ContentBlock::ToolResult { .. }))),
+            "{turns:?}"
+        );
+    }
+
+    /// A folded message carries no `promptId`, so matching one leaves no
+    /// submission to group by. An initiator that lands before the reply — a
+    /// cron prompt here, which carries no id either — is out-of-turn as usual,
+    /// not swallowed as part of the folded message's submission.
+    #[test]
+    fn an_initiator_after_a_folded_prompt_is_not_taken_for_its_submission() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("question B");
+        write_lines(
+            &path,
+            &[
+                &folded_prompt("q1", "question B"),
+                &cron_prompt("scheduled check"),
+                &assistant_text("a1", "cron reply"),
+            ],
+        );
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("the cron turn surfaces"));
+        let blob = serde_json::to_string(&turns).unwrap();
+        assert!(blob.contains("cron reply"), "{blob}");
+        assert!(!blob.contains("question B"), "{blob}");
+    }
+
+    /// A folded message the ledger does not hold continues whatever turn is
+    /// running. The steer arm records a steer only once the adapter answers
+    /// `injected`, so the CLI can write the attachment first: inside a
+    /// codeg-sent turn the rest of that turn stays the wire's instead of being
+    /// drawn in the overlay too. Inside an overlay episode it is part of the
+    /// episode, drawn as the user turn it is.
+    #[test]
+    fn a_folded_message_the_ledger_does_not_hold_continues_the_running_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("build a test page");
+        write_lines(
+            &path,
+            &[
+                &user_prompt_array("u1", "build a test page"),
+                &assistant_text("a1", "working"),
+                &folded_prompt("q1", "make it cyberpunk"),
+                &assistant_text("a2", "restyling"),
+            ],
+        );
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(
+            event.is_none() || unpack(event.unwrap()).0.is_empty(),
+            "a steer the ledger got late must not pull the turn into the overlay"
+        );
+        assert!(matches!(ws.mode, Mode::Foreground));
+
+        write_lines(
+            &path,
+            &[
+                &notification("bm1", "completed"),
+                &assistant_text("a3", "checking"),
+                &folded_prompt("q2", "typed elsewhere"),
+                &assistant_text("a4", "reply elsewhere"),
+            ],
+        );
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("overlay activity"));
+        let blob = serde_json::to_string(&turns).unwrap();
+        assert!(
+            blob.contains("checking")
+                && blob.contains("typed elsewhere")
+                && blob.contains("reply elsewhere"),
+            "{blob}"
+        );
+    }
+
+    /// Only a message the user typed has text to match: an image sent on its
+    /// own has none (an image-only prompt records no fingerprint either), and
+    /// the other `queued_command` attachments are not the user's. None of them
+    /// initiates a turn.
+    #[test]
+    fn only_a_folded_message_the_user_typed_has_text_to_match() {
+        let image_only: serde_json::Value = serde_json::from_str(
+            r#"{"type":"attachment","uuid":"q1","attachment":{"type":"queued_command","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true,"prompt":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUJD"}}]}}"#,
+        )
+        .unwrap();
+        let blank: serde_json::Value = serde_json::from_str(
+            r#"{"type":"attachment","uuid":"q2","attachment":{"type":"queued_command","commandMode":"prompt","origin":{"kind":"human"},"prompt":"  "}}"#,
+        )
+        .unwrap();
+        let notification: serde_json::Value = serde_json::from_str(
+            r#"{"type":"attachment","uuid":"q3","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>b1</task-id>\n</task-notification>"}}"#,
+        )
+        .unwrap();
+        let typed: serde_json::Value =
+            serde_json::from_str(&folded_prompt("q4", "make it cyberpunk")).unwrap();
+        for record in [&image_only, &blank, &notification] {
+            assert_eq!(folded_prompt_text(record), None, "{record}");
+        }
+        assert_eq!(
+            folded_prompt_text(&typed).as_deref(),
+            Some("make it cyberpunk")
+        );
+        for record in [&image_only, &blank, &notification, &typed] {
+            assert_eq!(turn_initiator_text(record), None, "{record}");
+        }
     }
 
     /// A slash command sent from codeg writes MORE than its own record: the
@@ -2035,6 +3214,336 @@ mod tests {
             "the wire renders this turn — a rebuilt separator must not turn it \
              into an overlay copy"
         );
+    }
+
+    /// The records Claude Code 2.1.318 writes for one `/compact`, in file
+    /// order, as a live transcript has them (claude-agent-acp 0.101.0): the
+    /// boundary, the continuation summary, the caveat, the command's echo and
+    /// its output. The echo's timestamp precedes the boundary's, but it is
+    /// written after it.
+    fn compact_records(tag: &str, prompt_id: &str) -> Vec<String> {
+        vec![
+            format!(
+                r#"{{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","isMeta":false,"timestamp":"2026-11-05T23:39:59.760Z","uuid":"b-{tag}","level":"info","compactMetadata":{{"trigger":"manual","preTokens":251005,"durationMs":18,"postTokens":2644,"cumulativeDroppedTokens":248361}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"timestamp":"2026-11-05T23:39:59.761Z","uuid":"s-{tag}","message":{{"role":"user","content":"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nPROBE SUMMARY: the user said hello.\n\nContinue the conversation from where it left off without asking the user any further questions."}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","isMeta":true,"timestamp":"2026-11-05T23:39:59.740Z","uuid":"c-{tag}","message":{{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>"}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","timestamp":"2026-11-05T23:39:59.740Z","uuid":"e-{tag}","message":{{"role":"user","content":"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","repeatsCompactSummary":true,"timestamp":"2026-11-05T23:39:59.872Z","uuid":"o-{tag}","message":{{"role":"user","content":"<local-command-stdout>Compacted PostCompact [callback] completed successfully</local-command-stdout>"}}}}"#
+            ),
+        ]
+    }
+
+    /// What a turn shows, without the ids and times that name its position.
+    fn shown(turns: &[MessageTurn]) -> Vec<serde_json::Value> {
+        turns
+            .iter()
+            .map(|t| serde_json::json!({ "role": t.role, "blocks": t.blocks }))
+            .collect()
+    }
+
+    /// claude-agent-acp 0.101.0 (#1522) sends `/compact` itself when a large
+    /// session has sat idle for 54 minutes: no prompt is open and codeg's
+    /// ledger holds nothing. The wire carries the compaction's frames outside
+    /// any turn, which the composer does not draw, so the overlay is the only
+    /// live view of it, and it must draw what reopening the conversation will:
+    /// the divider with its summary and the echo the parser places above it —
+    /// not the echo alone, which is all an episode opened at the echo saw.
+    #[test]
+    fn a_compact_nobody_sent_through_codeg_surfaces_with_its_divider() {
+        use crate::models::message::{ContentBlock, TurnRole};
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("hello idle");
+        write_lines(
+            &path,
+            &[
+                &user_prompt_array("u1", "hello idle"),
+                &assistant_text("a1", "ok"),
+            ],
+        );
+        assert!(tick_now(&mut ws, &ledger).is_none());
+
+        let records = compact_records("idle", "p-idle");
+        let lines: Vec<&str> = records.iter().map(String::as_str).collect();
+        write_lines(&path, &lines);
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("the idle compaction surfaces"));
+
+        let mut history = ClaudeRecordAccumulator::new(path.clone());
+        for line in &lines {
+            history.feed_line(line);
+        }
+        let history = group_into_turns(history.messages);
+        assert_eq!(
+            shown(&turns),
+            shown(&history),
+            "the overlay draws what history does"
+        );
+        assert_eq!(turns.len(), 2, "{turns:#?}");
+        assert!(matches!(turns[0].role, TurnRole::User));
+        assert!(matches!(
+            turns[0].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == "/compact"
+        ));
+        let divider = serde_json::to_string(&turns[1].blocks).unwrap();
+        assert!(divider.contains("\"preTokens\":251005"), "{divider}");
+        assert!(
+            divider.contains("PROBE SUMMARY: the user said hello."),
+            "{divider}"
+        );
+    }
+
+    /// The same records split across two reads: the hold outlives the tick.
+    #[test]
+    fn a_held_compaction_waits_across_ticks_for_its_echo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        let records = compact_records("split", "p-split");
+        let lines: Vec<&str> = records.iter().map(String::as_str).collect();
+        write_lines(&path, &lines[..3]);
+        assert!(tick_now(&mut ws, &ledger).is_none(), "nothing is known yet");
+        write_lines(&path, &lines[3..]);
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("surfaces at the echo"));
+        assert_eq!(turns.len(), 2, "{turns:#?}");
+        assert!(serde_json::to_string(&turns[1].blocks)
+            .unwrap()
+            .contains("\"preTokens\":251005"));
+    }
+
+    /// A `/compact` codeg sent stays on the wire, whichever tick reads its
+    /// records — the ledger claims the echo, and the held records go with it.
+    #[test]
+    fn a_compact_codeg_sent_never_reaches_the_overlay() {
+        for split in [5, 3] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = temp_session(&dir);
+            write_lines(&path, &[]);
+            let ledger = PromptLedger::shared();
+            let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+            ledger.record_text("/compact");
+            let records = compact_records("sent", "p-sent");
+            let lines: Vec<&str> = records.iter().map(String::as_str).collect();
+            write_lines(&path, &lines[..split]);
+            let first = tick_prompting(&mut ws, &ledger);
+            write_lines(&path, &lines[split..]);
+            let second = tick_now(&mut ws, &ledger);
+            for event in [first, second].into_iter().flatten() {
+                assert!(
+                    unpack(event).0.is_empty(),
+                    "split at {split}: the wire renders a /compact codeg sent"
+                );
+            }
+        }
+    }
+
+    /// The CLI compacts a long turn by itself: the boundary and the summary land
+    /// mid-turn and the reply goes on. That compaction is the wire's.
+    #[test]
+    fn an_automatic_compaction_inside_a_codeg_turn_stays_on_the_wire() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("refactor the parser");
+        let records = compact_records("auto", "p-auto");
+        write_lines(
+            &path,
+            &[
+                &user_prompt_array("u1", "refactor the parser"),
+                &assistant_text("a1", "Reading the files."),
+                &records[0].replace("\"manual\"", "\"auto\""),
+                &records[1],
+                &assistant_text("a2", "Continuing after the compaction."),
+            ],
+        );
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(event.is_none() || unpack(event.unwrap()).0.is_empty());
+        assert!(ws.held_compaction.is_empty(), "the reply ended the hold");
+    }
+
+    /// A prompt sent while the adapter's own compaction runs takes the
+    /// compaction's remaining frames into its turn, which the composer draws:
+    /// the overlay stays out of it rather than drawing the divider again.
+    #[test]
+    fn a_compact_read_while_codeg_prompts_is_left_to_the_wire() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("back again");
+        let records = compact_records("race", "p-race");
+        let mut lines: Vec<&str> = records.iter().map(String::as_str).collect();
+        let prompt = user_prompt_array("u2", "back again");
+        let reply = assistant_text("a2", "Picking up from the summary.");
+        lines.extend([prompt.as_str(), reply.as_str()]);
+        write_lines(&path, &lines);
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(
+            event.is_none() || unpack(event.unwrap()).0.is_empty(),
+            "the turn on the wire draws this compaction"
+        );
+    }
+
+    /// Only a `/compact` echo claims a held compaction: another initiator after
+    /// one opens its episode without it, as before.
+    #[test]
+    fn a_held_compaction_is_not_handed_to_another_initiator() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        let records = compact_records("other", "p-other");
+        write_lines(
+            &path,
+            &[
+                &records[0],
+                &records[1],
+                &cron_prompt("keep going"),
+                &assistant_text("a2", "resuming"),
+            ],
+        );
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("the cron turn surfaces"));
+        assert!(
+            !serde_json::to_string(&turns).unwrap().contains("preTokens"),
+            "{turns:#?}"
+        );
+    }
+
+    /// An MCP prompt sent the way the `/` menu offers it, `/mcp:<server>:<prompt>`,
+    /// is recorded under Claude Code's own name for the command. The records are
+    /// the ones claude-agent-acp 0.100.0 and Claude Code 2.1.316 wrote for a
+    /// probe server `probe` with a prompt `greet`, the second one for arguments
+    /// that span lines, which 0.100.0 (#1495) rewrites too.
+    #[test]
+    fn an_mcp_prompt_matches_the_ledger_under_claude_codes_command_name() {
+        for (sent, recorded_args) in [
+            ("/mcp:probe:greet world", "world"),
+            ("/mcp:probe:greet line1\nline2", "line1\\nline2"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = temp_session(&dir);
+            let ledger = PromptLedger::shared();
+            ledger.record_text(sent);
+
+            let mut ws = WatchState::new();
+            ws.session_id = Some("s1".into());
+            ws.epoch = Some(epoch("2020-01-01T00:00:00Z"));
+            ws.adopt_file(path.clone());
+
+            let command = format!(
+                r#"{{"type":"user","timestamp":"2026-07-07T03:50:00.000Z","uuid":"u-cmd","promptId":"p1","message":{{"role":"user","content":"<command-message>mcp__probe__greet</command-message>\n<command-name>/mcp__probe__greet</command-name>\n<command-args>{recorded_args}</command-args>"}}}}"#
+            );
+            let expansion = r#"{"type":"user","timestamp":"2026-07-07T03:50:00.100Z","uuid":"u-exp","parentUuid":"u-cmd","promptId":"p1","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"PROMPT_GREET for world"}]}}"#;
+            write_lines(
+                &path,
+                &[&command, expansion, &assistant_text("a1", "Hello.")],
+            );
+            let event = tick_prompting(&mut ws, &ledger);
+            assert!(
+                event.is_none() || unpack(event.unwrap()).0.is_empty(),
+                "{sent:?}: the wire renders this turn — the command record under \
+                 Claude Code's name must not surface an overlay copy"
+            );
+        }
+    }
+
+    /// The adapter's pattern decides what is an MCP prompt invocation, and the
+    /// CLI's normalization what its record is named.
+    #[test]
+    fn claude_mcp_prompt_transcript_text_mirrors_the_adapter_and_the_cli() {
+        let read = claude_mcp_prompt_transcript_text;
+        assert_eq!(
+            read("/mcp:probe:greet world").as_deref(),
+            Some("/mcp__probe__greet world")
+        );
+        assert_eq!(
+            read("/mcp:probe:greet").as_deref(),
+            Some("/mcp__probe__greet")
+        );
+        assert_eq!(
+            read("/mcp:probe:greet \t ").as_deref(),
+            Some("/mcp__probe__greet")
+        );
+        assert_eq!(
+            read("/mcp:probe:greet  two  words \n").as_deref(),
+            Some("/mcp__probe__greet two  words")
+        );
+        assert_eq!(
+            read("/mcp:probe:greet line1\nline2").as_deref(),
+            Some("/mcp__probe__greet line1\nline2")
+        );
+        // The server name is normalized per UTF-16 unit, the prompt name kept,
+        // colons and all, up to the first whitespace.
+        assert_eq!(
+            read("/mcp:my.server-1:do.it x").as_deref(),
+            Some("/mcp__my_server-1__do.it x")
+        );
+        assert_eq!(read("/mcp:caf\u{e9}:p").as_deref(), Some("/mcp__caf___p"));
+        assert_eq!(read("/mcp:\u{1F600}:p").as_deref(), Some("/mcp______p"));
+        assert_eq!(read("/mcp:srv:a:b c").as_deref(), Some("/mcp__srv__a:b c"));
+        // What the adapter leaves as it is.
+        for text in [
+            " /mcp:probe:greet x",
+            "/mcp:probe",
+            "/mcp::greet",
+            "/mcp:probe:",
+            "/mcp:probe: x",
+            "/mcp:pro be:greet",
+            "/probe:greet (MCP) x",
+            "/mcp__probe__greet x",
+        ] {
+            assert_eq!(read(text), None, "{text:?}");
+        }
+    }
+
+    /// Claude Code writes an MCP prompt's own name only in a command record,
+    /// so that form consumes the entry only as a rebuilt command, exactly: a
+    /// literal prompt that merely starts with it stays a turn of its own.
+    #[test]
+    fn an_mcp_prompts_recorded_command_matches_only_a_command_record() {
+        let ledger = PromptLedger::shared();
+        ledger.record_text("/mcp:probe:greet world");
+        for initiator in [
+            TurnInitiatorText::Verbatim("/mcp__probe__greet worldly".into()),
+            TurnInitiatorText::Verbatim("/mcp__probe__greet world".into()),
+            TurnInitiatorText::ReconstructedSlashCommand("/mcp__probe__greet worldly".into()),
+        ] {
+            assert!(!ledger.consume_matching(&initiator), "{initiator:?}");
+        }
+        let command =
+            TurnInitiatorText::ReconstructedSlashCommand("/mcp__probe__greet world".into());
+        assert!(ledger.consume_matching(&command));
+        assert!(!ledger.consume_matching(&command), "consumed once");
+
+        // The text as sent still matches as before: 0.99.1 leaves a prompt
+        // whose arguments span lines as typed.
+        let ledger = PromptLedger::shared();
+        ledger.record_text("/mcp:probe:greet line1\nline2");
+        assert!(ledger.consume_matching(&TurnInitiatorText::Verbatim(
+            "/mcp:probe:greet line1\nline2".into()
+        )));
     }
 
     #[test]
@@ -2357,6 +3866,239 @@ mod tests {
         // response is the rendered out-of-turn content.
         assert_eq!(turns.len(), 1);
         assert!(turns[0].id.starts_with("bg-"));
+    }
+
+    /// The overlay reply to a notification is timed from that notification,
+    /// as its settled copy is: the episode's accumulator is fed the initiator
+    /// itself, so the reply's first turn has a boundary to measure from.
+    #[test]
+    fn an_overlay_reply_to_a_notification_is_timed_from_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&agent_ack("agent1")]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let _ = tick_now(&mut ws, &ledger); // consume the ack
+
+        write_lines(
+            &path,
+            &[
+                &notification("agent1", "completed"),
+                &assistant_text("a1", "Build finished cleanly."),
+            ],
+        );
+        let (turns, _, _, _) = unpack(tick_now(&mut ws, &ledger).expect("settle event"));
+        assert_eq!(turns.len(), 1);
+        // 03:47:00 (notification) → 03:47:08 (reply).
+        assert_eq!(turns[0].duration_ms, Some(8_000));
+    }
+
+    /// Real-shape notification of a task that settled while a turn ran (CLI
+    /// 2.1.293): folded into that turn as a `queued_command` attachment, not a
+    /// user record.
+    fn folded_notification(task_id: &str) -> String {
+        let inner = format!(
+            "<task-notification>\\n<task-id>{task_id}</task-id>\\n<tool-use-id>toolu_01</tool-use-id>\\n<status>completed</status>\\n<summary>Agent \\\"Run pnpm build\\\" finished</summary>\\n<result>Build OK</result>\\n</task-notification>"
+        );
+        format!(
+            r#"{{"type":"attachment","timestamp":"2026-07-07T03:47:00.000Z","uuid":"q-note-{task_id}","attachment":{{"type":"queued_command","prompt":"{inner}","commandMode":"task-notification","origin":{{"kind":"task-notification","producer":"session-task"}},"timestamp":"2026-07-07T03:47:00.000Z"}}}}"#
+        )
+    }
+
+    /// Most tasks settle while a turn is running, and their notification is
+    /// folded into it. That still settles the count — it used to keep the
+    /// connection exempt from the idle sweeps until the keep-alive expired —
+    /// but, like a `TaskOutput` collection, announces nothing: the agent takes
+    /// the result inline. Nor does it start a turn.
+    #[test]
+    fn a_notification_folded_into_a_turn_settles_the_count_quietly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&agent_ack("agent1"), &bash_ack("bash1")]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).expect("launch event"));
+        assert_eq!(outstanding, 2);
+
+        write_lines(
+            &path,
+            &[
+                &folded_notification("agent1"),
+                &folded_notification("bash1"),
+            ],
+        );
+        let (turns, outstanding, settled, _) =
+            unpack(tick_prompting(&mut ws, &ledger).expect("settle event"));
+        assert_eq!(outstanding, 0);
+        assert!(settled.is_empty());
+        assert!(turns.is_empty());
+        assert!(matches!(ws.mode, Mode::Foreground));
+        // A settled sub-agent can still be resumed and re-armed.
+        assert!(ws.settled_ids.contains("agent1"));
+    }
+
+    /// The `<task-notification>` CLI 2.1.300 writes for a background sub-agent
+    /// that ended its run while a background command of its own still runs
+    /// (measured live), and the final one it writes once the agent is done.
+    fn agent_notification_text(task_id: &str, interim: bool) -> String {
+        let (summary, note) = if interim {
+            (
+                "Agent \"probe sub bg bash\" is waiting on its own background work",
+                "This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.",
+            )
+        } else {
+            (
+                "Agent \"probe sub bg bash\" finished",
+                "A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.",
+            )
+        };
+        format!(
+            "<task-notification>\n<task-id>{task_id}</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n<status>completed</status>\n<summary>{summary}</summary>\n<note>{note}</note>\n<result>ok</result>\n</task-notification>"
+        )
+    }
+
+    fn agent_notification_record(uuid: &str, task_id: &str, interim: bool) -> String {
+        serde_json::json!({
+            "type": "user", "timestamp": "2026-07-07T03:47:00.000Z", "uuid": uuid,
+            "isSidechain": false,
+            "message": {"role": "user", "content": agent_notification_text(task_id, interim)},
+        })
+        .to_string()
+    }
+
+    fn folded_agent_notification(uuid: &str, task_id: &str, interim: bool) -> String {
+        serde_json::json!({
+            "type": "attachment", "timestamp": "2026-07-07T03:47:00.000Z", "uuid": uuid,
+            "attachment": {
+                "type": "queued_command",
+                "prompt": agent_notification_text(task_id, interim),
+                "commandMode": "task-notification",
+                "origin": {"kind": "task-notification", "producer": "session-task"},
+            },
+        })
+        .to_string()
+    }
+
+    /// A sub-agent that ended its run while background work of its own runs is
+    /// still alive in this CLI: its interim notification flips the card (to
+    /// the interim result, marked so) but keeps it in the count that holds off
+    /// the idle sweeps, and only the final notification settles it.
+    #[test]
+    fn an_interim_notification_keeps_the_task_outstanding_until_the_final_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&agent_ack("agent1")]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).expect("launch event"));
+        assert_eq!(outstanding, 1);
+
+        write_lines(
+            &path,
+            &[
+                &agent_notification_record("u-interim", "agent1", true),
+                &assistant_text("a1", "Noted."),
+            ],
+        );
+        let (_, outstanding, settled, _) =
+            unpack(tick_now(&mut ws, &ledger).expect("interim event"));
+        assert_eq!(outstanding, 1);
+        assert_eq!(settled.len(), 1);
+        assert!(settled[0].interim);
+        assert_eq!(settled[0].status, "completed");
+        assert_eq!(settled[0].result.as_deref(), Some("ok"));
+        assert!(!ws.settled_ids.contains("agent1"));
+
+        write_lines(
+            &path,
+            &[
+                &agent_notification_record("u-final", "agent1", false),
+                &assistant_text("a2", "It is done."),
+            ],
+        );
+        let (_, outstanding, settled, _) = unpack(tick_now(&mut ws, &ledger).expect("final event"));
+        assert_eq!(outstanding, 0);
+        assert_eq!(settled.len(), 1);
+        assert!(!settled[0].interim);
+        assert_eq!(
+            settled[0].summary.as_deref(),
+            Some("Agent \"probe sub bg bash\" finished")
+        );
+        assert!(ws.settled_ids.contains("agent1"));
+    }
+
+    /// Folded into a running turn, an interim notification settles the count
+    /// no more than it does on its own.
+    #[test]
+    fn an_interim_notification_folded_into_a_turn_keeps_the_task_outstanding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&agent_ack("agent1")]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let _ = tick_now(&mut ws, &ledger);
+
+        write_lines(&path, &[&folded_agent_notification("q1", "agent1", true)]);
+        // Nothing to announce and the count unchanged: no event at all.
+        assert!(tick_prompting(&mut ws, &ledger).is_none());
+        assert!(ws.tasks.contains_key("agent1"));
+        assert!(!ws.settled_ids.contains("agent1"));
+
+        write_lines(&path, &[&folded_agent_notification("q2", "agent1", false)]);
+        let (_, outstanding, ..) = unpack(tick_prompting(&mut ws, &ledger).expect("final event"));
+        assert_eq!(outstanding, 0);
+        assert!(ws.settled_ids.contains("agent1"));
+    }
+
+    /// The settlement carries the summary and report as the agent wrote them:
+    /// Claude Code escapes `&`, `<` and `>` inside the notification (measured
+    /// on CLI 2.1.296 and 2.1.300), and the live card must read as the detail
+    /// parse does.
+    #[test]
+    fn a_settlement_carries_the_notification_text_unescaped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&agent_ack("agent1")]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let _ = tick_now(&mut ws, &ledger);
+
+        let raw = "<task-notification>\n<task-id>agent1</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n<status>completed</status>\n<summary>Agent \"probe &lt;x&gt; &amp; \"y\"\" finished</summary>\n<result>Found it: `Vec&lt;String&gt;` &amp; `a &amp;&amp; b`</result>\n</task-notification>";
+        let record = serde_json::json!({
+            "type": "user", "timestamp": "2026-07-07T03:47:00.000Z", "uuid": "u-esc",
+            "message": {"role": "user", "content": raw},
+        })
+        .to_string();
+        write_lines(&path, &[&record]);
+        let (_, _, settled, _) = unpack(tick_now(&mut ws, &ledger).expect("settle event"));
+        assert_eq!(
+            settled[0].summary.as_deref(),
+            Some("Agent \"probe <x> & \"y\"\" finished")
+        );
+        assert_eq!(
+            settled[0].result.as_deref(),
+            Some("Found it: `Vec<String>` & `a && b`")
+        );
+    }
+
+    /// The CLI says the sub-agent runs on: one whose launch this watch never
+    /// read is counted from its interim notification.
+    #[test]
+    fn an_interim_notification_counts_a_task_whose_launch_was_not_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        write_lines(
+            &path,
+            &[&agent_notification_record("u-interim", "agentX", true)],
+        );
+        let (_, outstanding, settled, _) =
+            unpack(tick_now(&mut ws, &ledger).expect("interim event"));
+        assert_eq!(outstanding, 1);
+        assert!(settled[0].interim);
     }
 
     /// A `<task-notification>`
@@ -2790,6 +4532,122 @@ mod tests {
         );
     }
 
+    /// Real-shape image-resize note (CLI 2.1.293): the Read tool's result for
+    /// an image larger than the model's display limit is followed by this
+    /// record, written on the running turn's behalf. `isMeta` with STRING
+    /// content — the cron prompt's shape — but marked `turnCompanion` and
+    /// stamped with the running submission's `promptId`.
+    fn image_resize_note(uuid: &str, prompt_id: &str) -> String {
+        format!(
+            r#"{{"type":"user","timestamp":"2026-07-07T03:48:05.000Z","uuid":"{uuid}","promptId":"{prompt_id}","isMeta":true,"turnCompanion":true,"userType":"external","message":{{"role":"user","content":"[Image: original 2880x1800, displayed at 2000x1250. Multiply coordinates by 1.44 to map to original image.]"}}}}"#
+        )
+    }
+
+    /// Reading a large image mid-turn puts that note in the middle of a
+    /// wire-rendered turn. Read as an initiator, it opened an episode, and the
+    /// overlay drew everything the turn wrote after the image a second time,
+    /// under the live copy.
+    #[test]
+    fn an_image_resize_note_mid_turn_stays_foreground() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("look at the screenshot");
+        // The prompt carries the submission's `promptId` like every record
+        // after it, so the submission window keyed on that id opens here — and
+        // the Read call, the model's first record, closes it before the note.
+        let prompt = r#"{"type":"user","timestamp":"2026-07-07T03:48:00.000Z","uuid":"u1","promptId":"p1","message":{"role":"user","content":[{"type":"text","text":"look at the screenshot"}]}}"#;
+        let read_call = r#"{"type":"assistant","timestamp":"2026-07-07T03:48:04.000Z","uuid":"a-read","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"/tmp/shot.png"}}]}}"#;
+        let read_result = r#"{"type":"user","timestamp":"2026-07-07T03:48:05.000Z","uuid":"u-read","promptId":"p1","message":{"role":"user","content":[{"tool_use_id":"toolu_read","type":"tool_result","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}}"#;
+        write_lines(&path, &[prompt, read_call, read_result]);
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(event.is_none() || unpack(event.unwrap()).0.is_empty());
+
+        write_lines(
+            &path,
+            &[
+                &image_resize_note("m1", "p1"),
+                &assistant_text("a2", "the header is misaligned"),
+            ],
+        );
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(
+            event.is_none() || unpack(event.unwrap()).0.is_empty(),
+            "the note continues the wire-rendered turn — nothing after it may surface as overlay"
+        );
+
+        // The cron shape without the companion mark still starts a turn.
+        write_lines(
+            &path,
+            &[
+                &cron_prompt("check the build"),
+                &assistant_text("a3", "checking"),
+            ],
+        );
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("turns event"));
+        assert!(
+            !turns.is_empty(),
+            "a cron prompt (isMeta string, no turnCompanion) still surfaces"
+        );
+    }
+
+    /// The other half of the rule: in a turn Claude Code started on its own,
+    /// which only the overlay renders, the note stays with THAT turn. The
+    /// episode is at its rotation threshold when the note lands, so a note
+    /// still read as a turn boundary would re-base the episode right there and
+    /// draw the rest of the reply as a separate card.
+    #[test]
+    fn an_image_resize_note_mid_autonomous_turn_stays_in_its_episode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        let mut lines = vec![cron_prompt("check the screenshot")];
+        for i in 0..MAX_EPISODE_MESSAGES {
+            lines.push(assistant_text(&format!("a-{i}"), "chunk"));
+        }
+        lines.push(r#"{"type":"assistant","timestamp":"2026-07-07T03:49:04.000Z","uuid":"a-read","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"/tmp/shot.png"}}]}}"#.to_string());
+        lines.push(r#"{"type":"user","timestamp":"2026-07-07T03:49:05.000Z","uuid":"u-read","promptId":"p-cron","message":{"role":"user","content":[{"tool_use_id":"toolu_read","type":"tool_result","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}}"#.to_string());
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        write_lines(&path, &refs);
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("the autonomous turn surfaces"));
+        let episode_of = |id: &str| id.rsplit_once('-').map(|(episode, _)| episode.to_string());
+        let episode = episode_of(&turns[0].id);
+        assert!(episode.is_some(), "overlay turn ids are bg-<base>-<index>");
+
+        write_lines(
+            &path,
+            &[
+                &image_resize_note("m1", "p-cron"),
+                &assistant_text("a-reply", "the header is misaligned"),
+            ],
+        );
+        let (turns, ..) =
+            unpack(tick_now(&mut ws, &ledger).expect("the reply after the note surfaces"));
+        let rendered = serde_json::to_string(&turns).unwrap();
+        assert!(
+            rendered.contains("the header is misaligned"),
+            "what the turn writes after the note still renders in the overlay"
+        );
+        assert!(
+            !rendered.contains("Multiply coordinates"),
+            "the note itself is the model's to read, never drawn: {rendered}"
+        );
+        for turn in &turns {
+            assert_eq!(
+                episode_of(&turn.id),
+                episode,
+                "the note must not re-base the episode: {}",
+                turn.id
+            );
+        }
+    }
+
     #[test]
     fn growing_turn_reemits_with_same_id_and_partial_lines_carry() {
         let dir = tempfile::tempdir().unwrap();
@@ -2829,6 +4687,78 @@ mod tests {
         assert_eq!(turns2.len(), 1);
         assert_ne!(turns2[0].id, id1);
         assert!(turns2[0].id.starts_with("bg-"));
+    }
+
+    /// One large append (a resume replaying hundreds of records of history in
+    /// a single write) must be read in memory linear in its size (#885).
+    /// Splitting `carry` one line at a time left every returned line holding a
+    /// buffer as large as everything still unread when it was split, about
+    /// bytes × lines / 2 in all: a 15 MB append took the app past 13 GB. The
+    /// rest of the reader's contract is pinned alongside: complete lines only,
+    /// a non-UTF-8 line skipped but counted, the partial tail kept for later.
+    #[test]
+    fn a_large_append_reads_in_memory_linear_in_its_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        let record = assistant_text("a-replay", &"x".repeat(7_000));
+        write_lines(&path, &[record.as_str(); 300]);
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            f.write_all(b"\xff\xfe not utf-8\n").unwrap();
+        }
+        write_lines(&path, &[&record]);
+        let (head, tail) = record.split_at(record.len() / 2);
+        append_raw(&path, head);
+
+        let lines = ws.read_new_lines(&path).unwrap();
+        assert_eq!(lines.len(), 301, "every complete UTF-8 line, nothing else");
+        assert!(lines.iter().all(|line| *line == record));
+        let bytes: usize = lines.iter().map(String::len).sum();
+        let held: usize = lines.iter().map(String::capacity).sum();
+        assert!(
+            held <= 2 * bytes,
+            "the lines must hold about their own bytes: {held} held for {bytes}"
+        );
+        // The watermark covers every complete line, the skipped one included.
+        // Only the partial tail stays, and not in a buffer sized to the batch.
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(ws.committed, file_len - head.len() as u64);
+        assert_eq!(ws.carry, head.as_bytes());
+        assert!(
+            ws.carry.capacity() < bytes / 4,
+            "carry kept {} bytes of capacity after the batch",
+            ws.carry.capacity()
+        );
+
+        // The tail completes on a later append and reads as one line.
+        append_raw(&path, &format!("{tail}\n"));
+        assert_eq!(ws.read_new_lines(&path).unwrap(), vec![record.clone()]);
+        assert!(ws.carry.is_empty());
+        assert_eq!(ws.committed, std::fs::metadata(&path).unwrap().len());
+    }
+
+    /// A read that fails partway leaves what it did read in `carry`. The next
+    /// call must return the complete lines among those bytes even when the
+    /// file has not grown since, rather than hold them until another append.
+    #[test]
+    fn lines_a_failed_read_left_in_carry_surface_without_a_new_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        let record = assistant_text("a1", "kept");
+        write_lines(&path, &[&record]);
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        // What a read that failed after reaching EOF leaves behind.
+        ws.carry = std::fs::read(&path).unwrap();
+
+        assert_eq!(ws.read_new_lines(&path).unwrap(), vec![record]);
+        assert!(ws.carry.is_empty());
+        assert_eq!(ws.committed, std::fs::metadata(&path).unwrap().len());
     }
 
     #[test]
@@ -2873,6 +4803,313 @@ mod tests {
         assert_eq!(outstanding, 1, "resumed sub-agent re-arms the keep-alive");
     }
 
+    /// A page the built-in browser handed over, as codeg sends it with nothing
+    /// typed: the page's block as an embedded resource, its screenshot after.
+    fn page_prompt(uri: &str) -> Vec<crate::acp::types::PromptInputBlock> {
+        use crate::acp::types::PromptInputBlock;
+        vec![
+            PromptInputBlock::Resource {
+                uri: uri.to_string(),
+                mime_type: Some("text/markdown".into()),
+                text: Some("Captured from a web page in the built-in browser.".into()),
+                blob: None,
+            },
+            PromptInputBlock::Image {
+                data: "iVBORw0KGgo=".into(),
+                mime_type: "image/png".into(),
+                uri: None,
+            },
+        ]
+    }
+
+    /// The records Claude Code writes for [`page_prompt`], shaped after a real
+    /// transcript: the address where the badge was, the picture, the block at
+    /// the end — then the picture's own `isMeta` record, then the reply.
+    fn page_prompt_records(uri: &str) -> Vec<String> {
+        vec![
+            format!(
+                r#"{{"type":"user","timestamp":"2026-09-24T00:56:17.303Z","uuid":"u-page","promptId":"p-page","message":{{"role":"user","content":[{{"type":"text","text":"{uri}"}},{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}}},{{"type":"text","text":"\n<context ref=\"{uri}\">\nCaptured from a web page in the built-in browser.\n</context>"}}]}}}}"#
+            ),
+            r#"{"type":"user","timestamp":"2026-09-24T00:56:17.303Z","uuid":"u-meta","promptId":"p-page","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"[Image: source: /private/tmp/claude-501/shot.png]"}]}}"#
+                .to_string(),
+            assistant_text("a-page", "That is the Google doodle."),
+        ]
+    }
+
+    /// Sent with nothing typed, a page has no text block to fingerprint. Its
+    /// own turn then classified as out-of-turn, and the overlay drew the
+    /// prompt and the reply a second time under the live copy.
+    #[test]
+    fn a_page_sent_with_nothing_typed_stays_a_foreground_turn() {
+        let uri = "https://www.google.com/";
+        let records = page_prompt_records(uri);
+        let refs: Vec<&str> = records.iter().map(String::as_str).collect();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        ledger.record_prompt_blocks(&page_prompt(uri));
+        write_lines(&path, &refs);
+        assert!(
+            tick_now(&mut ws, &ledger).is_none(),
+            "the prompt codeg sent must not come back as an overlay turn"
+        );
+
+        // The same records with nothing recorded are what the watcher treats
+        // as out-of-turn — which is what the fingerprint above prevents.
+        let other = tempfile::tempdir().unwrap();
+        let other_path = temp_session(&other);
+        write_lines(&other_path, &[]);
+        let empty = PromptLedger::shared();
+        let mut unrecorded = WatchState::with_file_for_test("s2", other_path.clone());
+        write_lines(&other_path, &refs);
+        let (turns, ..) = unpack(tick_now(&mut unrecorded, &empty).expect("surfaces"));
+        assert!(!turns.is_empty());
+    }
+
+    #[test]
+    fn a_prompt_is_fingerprinted_by_the_first_text_the_adapter_writes() {
+        use crate::acp::types::PromptInputBlock;
+        let ledger = PromptLedger::shared();
+        let initiator = |text: &str| TurnInitiatorText::Verbatim(text.to_string());
+
+        // An attachment first: its link, the way `formatUriAsLink` writes it.
+        ledger.record_prompt_blocks(&page_prompt("https://example.com/a?b=1"));
+        assert!(ledger.consume_matching(&initiator(
+            "https://example.com/a?b=1\n\n<context ref=\"https://example.com/a?b=1\">"
+        )));
+        ledger.record_prompt_blocks(&[PromptInputBlock::ResourceLink {
+            uri: "file:///repo/src/app.ts".into(),
+            name: "whatever the composer called it".into(),
+            mime_type: None,
+            description: None,
+        }]);
+        assert!(ledger.consume_matching(&initiator("[@app.ts](file:///repo/src/app.ts)")));
+
+        // Typed text first is still the text, whatever follows it.
+        let mut typed = vec![PromptInputBlock::Text {
+            text: "  what is this ".into(),
+        }];
+        typed.extend(page_prompt("https://example.com/"));
+        ledger.record_prompt_blocks(&typed);
+        assert!(ledger.consume_matching(&initiator("what is this\nhttps://example.com/")));
+
+        // Nothing the adapter writes as text leaves nothing to record: an
+        // image, and a blob resource no adapter forwards.
+        ledger.record_prompt_blocks(&[
+            PromptInputBlock::Image {
+                data: "iVBORw0KGgo=".into(),
+                mime_type: "image/png".into(),
+                uri: None,
+            },
+            PromptInputBlock::Resource {
+                uri: "clipboard://bundle.zip-1".into(),
+                mime_type: Some("application/zip".into()),
+                text: None,
+                blob: Some("UEsFBg==".into()),
+            },
+        ]);
+        assert!(ledger.entries.lock().unwrap().is_empty());
+
+        // A resource with neither field still travels as a text resource (an
+        // empty one, see `map_prompt_blocks`), which writes its link.
+        ledger.record_prompt_blocks(&[PromptInputBlock::Resource {
+            uri: "clipboard://empty.txt-1".into(),
+            mime_type: None,
+            text: None,
+            blob: None,
+        }]);
+        assert!(ledger.consume_matching(&initiator(
+            "clipboard://empty.txt-1\n\n<context ref=\"clipboard://empty.txt-1\">\n\n</context>"
+        )));
+    }
+
+    /// A PDF pasted into the composer, as codeg sends it: the embedded badge is
+    /// dropped from the prose and the bytes ride as a blob resource after it.
+    fn pdf_blob(uri: &str) -> crate::acp::types::PromptInputBlock {
+        crate::acp::types::PromptInputBlock::Resource {
+            uri: uri.to_string(),
+            mime_type: Some("application/pdf".into()),
+            text: None,
+            blob: Some("JVBERi0xLjQK".into()),
+        }
+    }
+
+    /// The record Claude Code 2.1.312 writes for a PDF sent with nothing typed
+    /// through claude-agent-acp 0.99.0, from a real transcript: the link where
+    /// the badge was, then the document block. 0.98.0 dropped the blob and
+    /// wrote no user record at all.
+    fn pdf_prompt_record(uri: &str) -> String {
+        format!(
+            r#"{{"type":"user","timestamp":"2026-10-29T02:10:00.000Z","uuid":"u-pdf","promptId":"p-pdf","message":{{"role":"user","content":[{{"type":"text","text":"{uri}"}},{{"type":"document","source":{{"type":"base64","media_type":"application/pdf","data":"JVBERi0xLjQK"}}}}]}}}}"#
+        )
+    }
+
+    /// claude-agent-acp 0.99.0 (#1460) writes a forwarded blob's link into the
+    /// record, so a PDF sent with nothing typed now opens its record with that
+    /// link. Unrecorded, the turn read as out-of-turn and the overlay drew the
+    /// prompt and the reply a second time.
+    #[test]
+    fn a_pdf_sent_with_nothing_typed_stays_a_foreground_turn() {
+        let uri = "clipboard://report.pdf-1";
+        let records = [
+            pdf_prompt_record(uri),
+            assistant_text("a-pdf", "It is a one-page PDF."),
+        ];
+        let refs: Vec<&str> = records.iter().map(String::as_str).collect();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        ledger.record_prompt_blocks(&[pdf_blob(uri)]);
+        write_lines(&path, &refs);
+        assert!(
+            tick_now(&mut ws, &ledger).is_none(),
+            "the prompt codeg sent must not come back as an overlay turn"
+        );
+
+        // The same records with nothing recorded are what the watcher treats
+        // as out-of-turn, which is what the fingerprint prevents.
+        let other = tempfile::tempdir().unwrap();
+        let other_path = temp_session(&other);
+        write_lines(&other_path, &[]);
+        let empty = PromptLedger::shared();
+        let mut unrecorded = WatchState::with_file_for_test("s2", other_path.clone());
+        write_lines(&other_path, &refs);
+        let (turns, ..) = unpack(tick_now(&mut unrecorded, &empty).expect("surfaces"));
+        assert!(!turns.is_empty());
+    }
+
+    /// A prompt that opens with a blob is read both ways, so it is matched
+    /// whichever adapter generation wrote the record, and only once.
+    #[test]
+    fn a_prompt_opening_with_a_blob_matches_either_adapter_generation() {
+        use crate::acp::types::PromptInputBlock;
+        let initiator = |text: &str| TurnInitiatorText::Verbatim(text.to_string());
+        let uri = "clipboard://report.pdf-1";
+        let blob_first = || {
+            vec![
+                pdf_blob(uri),
+                PromptInputBlock::Text {
+                    text: "what is in the attachment?".into(),
+                },
+            ]
+        };
+
+        // 0.99.0: the link, then the typed text (real record, joined).
+        let ledger = PromptLedger::shared();
+        ledger.record_prompt_blocks(&blob_first());
+        assert!(ledger.consume_matching(&initiator(
+            "clipboard://report.pdf-1\nwhat is in the attachment?"
+        )));
+        // One prompt, one match: the other reading went with the entry.
+        assert!(!ledger.consume_matching(&initiator("what is in the attachment?")));
+
+        // 0.98.0 dropped the blob, so its record opens with the typed text.
+        let ledger = PromptLedger::shared();
+        ledger.record_prompt_blocks(&blob_first());
+        assert!(ledger.consume_matching(&initiator("what is in the attachment?")));
+        assert!(ledger.entries.lock().unwrap().is_empty());
+
+        // A blob 0.99.0 still drops does not open the record; the forwarded one
+        // after it does.
+        let ledger = PromptLedger::shared();
+        let mut mixed = vec![PromptInputBlock::Resource {
+            uri: "clipboard://bundle.zip-1".into(),
+            mime_type: Some("application/zip".into()),
+            text: None,
+            blob: Some("UEsFBg==".into()),
+        }];
+        mixed.extend(blob_first());
+        ledger.record_prompt_blocks(&mixed);
+        assert!(ledger.consume_matching(&initiator(
+            "clipboard://report.pdf-1\nwhat is in the attachment?"
+        )));
+
+        // Typed text first reads the same on both, and is recorded once.
+        let ledger = PromptLedger::shared();
+        ledger.record_prompt_blocks(&[
+            PromptInputBlock::Text {
+                text: "summarize it".into(),
+            },
+            pdf_blob(uri),
+        ]);
+        assert_eq!(
+            ledger.entries.lock().unwrap()[0].fingerprints,
+            vec!["summarize it".to_string()]
+        );
+    }
+
+    /// `isSupportedBlobMimeType` in claude-agent-acp 0.99.0's
+    /// `src/blob-resources.ts`.
+    #[test]
+    fn forwarded_blob_types_follow_claude_agent_acp() {
+        for mime in [
+            "application/pdf",
+            "image/png",
+            "image/jpeg",
+            "image/jpg",
+            "image/gif",
+            "image/webp",
+            "IMAGE/PNG",
+            "text/plain",
+            "text/csv; charset=iso-8859-1",
+            " text/markdown ",
+            "application/json",
+            "application/xml",
+            "application/javascript",
+            "application/typescript",
+            "application/x-yaml",
+            "application/yaml",
+            "application/toml",
+            "application/x-sh",
+            "application/sql",
+            "application/graphql",
+            "application/ld+json",
+            "image/svg+xml",
+            "\u{FEFF}application/pdf",
+        ] {
+            assert!(claude_forwards_blob_mime(Some(mime)), "{mime}");
+        }
+        for mime in [
+            "application/zip",
+            "application/octet-stream",
+            "image/bmp",
+            "image/heic",
+            "audio/mpeg",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "",
+            "  ",
+            "; charset=utf-8",
+        ] {
+            assert!(!claude_forwards_blob_mime(Some(mime)), "{mime}");
+        }
+        assert!(!claude_forwards_blob_mime(None));
+    }
+
+    #[test]
+    fn claude_links_follow_format_uri_as_link() {
+        assert_eq!(claude_uri_link("https://a.test/x"), "https://a.test/x");
+        assert_eq!(
+            claude_uri_link("file:///repo/a b.ts"),
+            "[@a b.ts](file:///repo/a b.ts)"
+        );
+        // A trailing slash leaves no last segment; the whole path names it.
+        assert_eq!(claude_uri_link("file:///repo/dir/"), "[@/repo/dir/](file:///repo/dir/)");
+        assert_eq!(
+            claude_uri_link("zed://agent/thread/42"),
+            "[@42](zed://agent/thread/42)"
+        );
+        assert_eq!(
+            claude_uri_link("clipboard://notes.md-1"),
+            "clipboard://notes.md-1"
+        );
+    }
+
     #[test]
     fn ledger_prefix_matches_and_consumes_once() {
         let ledger = PromptLedger::shared();
@@ -2905,6 +5142,38 @@ mod tests {
         assert_eq!(
             turn_initiator_text(&cron).as_ref().map(|text| text.as_str()),
             Some("check weather")
+        );
+
+        // `turnCompanion` records continue the running turn whatever their
+        // shape. The Read tool's image-resize note and the query loop's
+        // recovery nudges are all `isMeta` STRING records — the cron prompt's
+        // shape — told apart by the mark alone (texts as CLI 2.1.293 writes
+        // them).
+        for content in [
+            "[Image: original 2880x1800, displayed at 2000x1250. Multiply coordinates by 1.44 to map to original image.]",
+            "Output token limit hit. Resume directly \u{2014} no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.",
+            "[Your previous response had no visible output. Please continue and produce a user-visible response.]",
+            "Your response above was cut off mid-stream. Resume directly from where it stops \u{2014} no apology, no recap. If none of it survived, answer the request from the start.",
+        ] {
+            let companion = serde_json::json!({
+                "type": "user",
+                "isMeta": true,
+                "turnCompanion": true,
+                "promptId": "p1",
+                "message": {"role": "user", "content": content},
+            });
+            assert!(turn_initiator_text(&companion).is_none(), "{content}");
+        }
+        // Only the mark set to `true` counts.
+        let unmarked = serde_json::json!({
+            "type": "user",
+            "isMeta": true,
+            "turnCompanion": false,
+            "message": {"role": "user", "content": "check weather"},
+        });
+        assert_eq!(
+            turn_initiator_text(&unmarked),
+            Some(TurnInitiatorText::Verbatim("check weather".into()))
         );
 
         // context-continuation summary: never a boundary.
@@ -2976,6 +5245,228 @@ mod tests {
         write_lines(&path, &[&ai_title("Fix the signup flow")]);
         let _ = tick_now(&mut ws, &ledger);
         assert_eq!(ws.pending_title.take().as_deref(), Some("Fix the signup flow"));
+    }
+
+    /// `reads_transcript` decides whether the adapter's held title may reach
+    /// the row (`session_title::release_held_wire_title`): only while this
+    /// watch has no transcript whose records title the session. A file it
+    /// adopted counts; one that went away stops counting until the lookup
+    /// finds a transcript again.
+    #[test]
+    fn reads_transcript_only_while_it_holds_a_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+
+        assert!(!WatchState::new().reads_transcript(), "nothing located yet");
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        assert!(ws.reads_transcript());
+
+        write_lines(&path, &[&ai_title("Fix the login flow")]);
+        let _ = tick_now(&mut ws, &ledger);
+        assert!(ws.reads_transcript());
+
+        // The tick that finds the file gone drops it (and does not look it up
+        // again before the next tick, so this test reads no real config dir).
+        std::fs::remove_file(&path).unwrap();
+        let _ = tick_now(&mut ws, &ledger);
+        assert!(!ws.reads_transcript());
+    }
+
+    /// A transcript that exists but cannot be read titles nothing (the history
+    /// parser cannot read it either), so it does not count as read and the
+    /// held wire title stays the only title codeg has. The read is retried
+    /// every tick, so the file counts again on the tick after it becomes
+    /// readable, even when only its permissions changed (its length and mtime
+    /// did not, so the stat gate alone would never read it again).
+    #[cfg(unix)]
+    #[test]
+    fn a_transcript_that_cannot_be_read_is_not_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&ai_title("Fix the login flow")]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&path).is_ok() {
+            // Running as root: permissions do not stop the read.
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            return;
+        }
+        let _ = tick_now(&mut ws, &ledger);
+        assert!(!ws.reads_transcript(), "a failed read is not a read");
+        let _ = tick_now(&mut ws, &ledger);
+        assert!(!ws.reads_transcript(), "nor is a failed retry");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let _ = tick_now(&mut ws, &ledger);
+        assert!(ws.reads_transcript());
+        assert_eq!(
+            ws.pending_title.take().as_deref(),
+            Some("Fix the login flow"),
+            "the retry read the file"
+        );
+    }
+
+    fn bound_claude_state() -> Arc<RwLock<SessionState>> {
+        let mut st = SessionState::new(
+            "conn-test".to_string(),
+            AgentType::ClaudeCode,
+            None,
+            "win".to_string(),
+            None,
+        );
+        st.conversation_id = Some(7);
+        Arc::new(RwLock::new(st))
+    }
+
+    /// Titles published on this connection so far, oldest first.
+    async fn published_titles(state: &Arc<RwLock<SessionState>>) -> Vec<String> {
+        state
+            .read()
+            .await
+            .recent_events_after(0)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|e| match &e.payload {
+                AcpEvent::NativeSessionTitle { title } => Some(title.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A wake ends the wait for the next poll at once: here only the wake can
+    /// end an hour's wait inside the test's five seconds.
+    #[tokio::test]
+    async fn a_wake_ends_the_wait_for_the_next_poll() {
+        let wake = tokio::sync::Notify::new();
+        wake.notify_one();
+        let waited = tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_poll(Duration::from_secs(3600), &wake),
+        )
+        .await;
+        assert!(waited.is_ok());
+    }
+
+    /// A tick looks for the transcript in the projects dir the watch was armed
+    /// with — the one under the launch's `CLAUDE_CONFIG_DIR` — so a session
+    /// whose config dir the agent's settings moved is still tailed (#948).
+    #[test]
+    fn a_tick_finds_the_transcript_in_the_projects_dir_it_is_given() {
+        let projects = tempfile::tempdir().unwrap();
+        let project = projects.path().join("-Users-test-proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let transcript = project.join("s-relocated.jsonl");
+        write_lines(&transcript, &[&ai_title("Relocated")]);
+
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::new();
+        ws.rearm("s-relocated".to_string(), epoch("2030-01-01T00:00:00Z"));
+        let _ = ws.tick(
+            &ledger,
+            Path::new(NO_PROJECTS_DIR),
+            "/tmp",
+            "conn-test",
+            false,
+            false,
+        );
+        assert_eq!(ws.file, None, "nothing to find in a dir without it");
+
+        let _ = ws.tick(&ledger, projects.path(), "/tmp", "conn-test", false, false);
+        assert_eq!(ws.file.as_deref(), Some(transcript.as_path()));
+    }
+
+    /// The real watch loop settles a held wire title on the wake that holding
+    /// it sends, not on its poll. The clock is paused and this test never
+    /// sleeps, so the clock cannot auto-advance and the loop's poll delay
+    /// never elapses: only the wake can make it poll. The session id is one
+    /// `find_session_file_in` refuses before it lists any directory, so the
+    /// loop finds no transcript (and this test reads no real config dir): the
+    /// held title is the only one, and the loop publishes it.
+    #[tokio::test(start_paused = true)]
+    async fn the_watch_loop_settles_a_held_title_on_its_wake() {
+        let state = bound_claude_state();
+        state.write().await.external_id = Some("../no-transcript".into());
+        let guard = spawn_if_claude(
+            "conn-test",
+            AgentType::ClaudeCode,
+            Arc::clone(&state),
+            EventEmitter::Noop,
+            "/tmp".into(),
+            PromptLedger::shared(),
+            PathBuf::from(NO_PROJECTS_DIR),
+        )
+        .expect("a Claude connection gets a watcher");
+
+        crate::acp::session_title::accept_wire_title(
+            &state,
+            &EventEmitter::Noop,
+            AgentType::ClaudeCode,
+            "Fix the login flow".into(),
+        )
+        .await;
+
+        // Real time (`std::time::Instant`), which the paused clock does not
+        // stop: a bound for a loop that never polls, not a latency budget.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while published_titles(&state).await.is_empty() {
+            assert!(Instant::now() < deadline, "the loop never published it");
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            published_titles(&state).await,
+            vec!["Fix the login flow".to_string()]
+        );
+        assert!(state.read().await.held_wire_title.is_none());
+        drop(guard);
+    }
+
+    /// The adapter's title for an untitled session (its newest `last-prompt`
+    /// record), held by the notification loop, never reaches the row while
+    /// this watch reads the transcript; the transcript's own title does.
+    #[tokio::test]
+    async fn a_tick_that_reads_the_transcript_drops_the_held_wire_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let state = bound_claude_state();
+        state.write().await.held_wire_title = Some("now update the tests".into());
+
+        let _ = tick_now(&mut ws, &ledger);
+        publish_tick_titles(&mut ws, &state, &EventEmitter::Noop).await;
+        assert!(published_titles(&state).await.is_empty());
+        assert!(state.read().await.held_wire_title.is_none());
+
+        write_lines(&path, &[&ai_title("Fix the login flow")]);
+        let _ = tick_now(&mut ws, &ledger);
+        publish_tick_titles(&mut ws, &state, &EventEmitter::Noop).await;
+        assert_eq!(
+            published_titles(&state).await,
+            vec!["Fix the login flow".to_string()]
+        );
+    }
+
+    /// With no transcript to read, the held wire title is the only one codeg
+    /// gets, so the watch publishes it.
+    #[tokio::test]
+    async fn a_tick_without_a_transcript_publishes_the_held_wire_title() {
+        let mut ws = WatchState::new();
+        let state = bound_claude_state();
+        state.write().await.held_wire_title = Some("Fix the login flow".into());
+
+        publish_tick_titles(&mut ws, &state, &EventEmitter::Noop).await;
+
+        assert_eq!(
+            published_titles(&state).await,
+            vec!["Fix the login flow".to_string()]
+        );
+        assert!(state.read().await.held_wire_title.is_none());
     }
 
     /// `customTitle ?? aiTitle` — Claude Code's own precedence, and the one

@@ -13,11 +13,12 @@ import {
 import { useReferenceSearch } from "@/components/chat/composer/use-reference-search"
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
 import { docToPromptBlocks } from "@/components/chat/composer/to-prompt-blocks"
-import { isComposerChromeClick } from "@/components/chat/composer/composer-commands"
+import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import {
   AgentConfigSection,
   effectiveSelections,
   snapshotLabels,
+  useBooleanOptionLabels,
 } from "./agent-config-section"
 import { BranchPicker } from "@/components/shared/branch-picker"
 import {
@@ -53,6 +54,10 @@ interface AutomationEditorProps {
   /** When present (the create-from-gallery flow), renders a "← Templates" link
    *  back to the picker. */
   onBackToTemplates?: () => void
+  /** The folder a BLANK create starts in — the one the page's list is narrowed
+   *  to. A template draft and an edit carry their own folder; without either,
+   *  the first folder. */
+  defaultFolderId?: number | null
 }
 
 const CRON_PRESETS = [
@@ -74,6 +79,7 @@ export function AutomationEditor({
   onSubmit,
   onCancel,
   onBackToTemplates,
+  defaultFolderId = null,
 }: AutomationEditorProps) {
   const t = useTranslations("Automations")
   const folders = useAppWorkspaceStore((s) => s.folders)
@@ -90,7 +96,9 @@ export function AutomationEditor({
   // even before the user types — defaultText applies without firing onChange).
   const [prompt, setPrompt] = useState(automation?.config?.display_text ?? "")
   const [folderId, setFolderId] = useState<number | null>(
-    automation?.root_folder_id ?? folders[0]?.id ?? null
+    (automation == null ? defaultFolderId : automation.root_folder_id) ??
+      folders[0]?.id ??
+      null
   )
   const [isolation, setIsolation] = useState<AutomationIsolation>(
     automation?.isolation ?? "worktree_per_run"
@@ -120,6 +128,7 @@ export function AutomationEditor({
   const [cronBuilderOpen, setCronBuilderOpen] = useState(false)
 
   const editorRef = useRef<RichComposerHandle>(null)
+  const chromeFocus = useComposerChromeFocus(editorRef)
   // The composer's outer box, so the `@` panel spans it like the `/` menu does.
   const composerBoxRef = useRef<HTMLDivElement>(null)
   // True once the user explicitly picks an agent. A system fallback (saved agent
@@ -162,7 +171,13 @@ export function AutomationEditor({
   // One transient probe feeds both the config selectors and the `/` command menu
   // (the snapshot carries available_commands). `$` Codex skills load separately
   // (filesystem scan) inside the invocations hook.
-  const agentOptions = useAgentOptions(agentType, folderPath)
+  const agentOptions = useAgentOptions(
+    agentType,
+    folderPath,
+    true,
+    configValues
+  )
+  const booleanLabels = useBooleanOptionLabels()
   const invocations = useComposerInvocations({
     editorRef,
     agentType,
@@ -260,7 +275,7 @@ export function AutomationEditor({
       const label_snapshot = {
         agent_label: getAgentLabel(agentType) ?? agentType,
         ...(folderName ? { folder_label: folderName } : {}),
-        ...snapshotLabels(snapshot, mode_id, config_values),
+        ...snapshotLabels(snapshot, mode_id, config_values, booleanLabels),
       }
 
       // Enqueue-task automations never run in place: canonicalize the
@@ -357,16 +372,13 @@ export function AutomationEditor({
           config bottom bar, matching the new-conversation input. */}
       <div
         ref={composerBoxRef}
-        // Clicking the box's blank chrome (padding, the dead space below a short
-        // prompt, the config-bar gaps) focuses the editor at the click point —
-        // same affordance as the chat composer. Interactive controls, badges and
-        // the editor surface exclude themselves via NON_CHROME_SELECTOR;
-        // `codeg-composer-chrome` paints the text I-beam over the dead space.
-        onMouseDown={(e) => {
-          if (!isComposerChromeClick(e.target)) return
-          e.preventDefault()
-          editorRef.current?.focusAtCoords(e.clientX, e.clientY)
-        }}
+        // Clicking or tapping the box's blank chrome (padding, the dead space
+        // below a short prompt, the config-bar gaps) focuses the editor at that
+        // point — same affordance as the chat composer. Interactive controls,
+        // badges and the editor surface exclude themselves via
+        // NON_CHROME_SELECTOR; `codeg-composer-chrome` paints the text I-beam
+        // over the dead space.
+        {...chromeFocus}
         className="codeg-composer-chrome relative rounded-xl border border-input bg-background transition-colors focus-within:border-ring focus-within:ring-[3px] focus-within:ring-inset focus-within:ring-ring/50"
       >
         <ComposerInvocationsPopup inv={invocations} />
@@ -393,6 +405,7 @@ export function AutomationEditor({
             agentType={agentOptions.snapshotAgentType}
             snapshot={agentOptions.snapshot}
             loading={agentOptions.loading}
+            stale={!agentOptions.current}
             error={agentOptions.error}
             onReload={agentOptions.reload}
             modeId={modeId}

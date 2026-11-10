@@ -44,9 +44,9 @@ import { relaunchApp } from "@/lib/updater"
 import { toErrorMessage } from "@/lib/app-error"
 import { CloseBehaviorSettingsSection } from "@/components/settings/close-behavior-settings"
 import { DesktopNotificationSettingsSection } from "@/components/settings/desktop-notification-settings"
+import { MentionPanelSettingsSection } from "@/components/settings/mention-panel-settings"
 import { NotificationSoundSettingsSection } from "@/components/settings/notification-sound-settings"
-import { DelegationSettingsSection } from "@/components/settings/delegation-settings"
-import { AgentToolsSettingsSection } from "@/components/settings/agent-tools-settings"
+import { WindowAttentionSettingsSection } from "@/components/settings/window-attention-settings"
 
 const TERMINAL_SHELL_OPTION_SYSTEM = "system"
 const TERMINAL_SHELL_OPTION_CUSTOM = "custom"
@@ -183,8 +183,10 @@ export function GeneralSettings() {
     })
   }, [loadSettings])
 
+  /// Resolves to whether the row was actually written, so the caller can put
+  /// back whatever it moved ahead of the save.
   const persistTerminalShell = useCallback(
-    async (defaultShell: string | null) => {
+    async (defaultShell: string | null): Promise<boolean> => {
       setSavingTerminal(true)
       try {
         const result = await updateSystemTerminalSettings({
@@ -194,34 +196,47 @@ export function GeneralSettings() {
           colorize_command_output: colorizeCommandOutput,
         })
         // Record the persisted shell BEFORE anything else that can throw. The
-        // row is already written at this point, so every later failure in this
-        // block is cosmetic — except leaving this stale, which would have the
-        // color toggle send the superseded shell back and undo the save that
-        // just succeeded.
+        // row is already written at this point, so every later failure is
+        // cosmetic — except leaving this stale, which would have the color
+        // toggle send the superseded shell back and undo the save that just
+        // succeeded.
         setStoredDefaultShell(result.default_shell)
-        // Re-fetch options to refresh `exists` flags (e.g. user just installed
-        // pwsh, or backend filter dropped a cross-platform stale value).
-        const refreshedShells = await getAvailableTerminalShells()
-        setAvailableShells(refreshedShells)
-        const nextSelectedId = resolveSelectedShellId(
-          result.default_shell,
-          refreshedShells.options
-        )
-        setSelectedShellId(nextSelectedId)
-        if (nextSelectedId === TERMINAL_SHELL_OPTION_CUSTOM) {
-          setCustomShellPath(result.default_shell ?? "")
-          setCustomPathExists(
-            result.default_shell
-              ? await probeTerminalShellPath(result.default_shell)
-              : null
+
+        // Everything below only refreshes what is on screen. It is scoped
+        // separately because a failure here is NOT a failed save: reporting it
+        // as one sends the user to re-save a setting that is already stored.
+        try {
+          // Re-fetch options to refresh `exists` flags (e.g. user just
+          // installed pwsh, or backend filter dropped a cross-platform stale
+          // value) and the shell the new selection resolves to.
+          const refreshedShells = await getAvailableTerminalShells()
+          setAvailableShells(refreshedShells)
+          const nextSelectedId = resolveSelectedShellId(
+            result.default_shell,
+            refreshedShells.options
           )
-        } else {
-          setCustomShellPath("")
-          setCustomPathExists(null)
+          setSelectedShellId(nextSelectedId)
+          if (nextSelectedId === TERMINAL_SHELL_OPTION_CUSTOM) {
+            setCustomShellPath(result.default_shell ?? "")
+            setCustomPathExists(
+              result.default_shell
+                ? await probeTerminalShellPath(result.default_shell)
+                : null
+            )
+          } else {
+            setCustomShellPath("")
+            setCustomPathExists(null)
+          }
+        } catch (err) {
+          // The stored row is correct and already in effect; only the line
+          // under the picker is a revision behind until the page is reopened.
+          console.error("[Settings] refresh terminal shells failed:", err)
         }
+        return true
       } catch (err) {
         const message = toErrorMessage(err)
         toast.error(t("terminalSaveFailed", { message }))
+        return false
       } finally {
         setSavingTerminal(false)
       }
@@ -261,6 +276,7 @@ export function GeneralSettings() {
 
   const onShellSelectChange = useCallback(
     (nextId: string) => {
+      const previousId = selectedShellId
       setSelectedShellId(nextId)
       if (nextId === TERMINAL_SHELL_OPTION_CUSTOM) {
         // Don't persist yet — wait for user to type a path and press Save.
@@ -269,9 +285,15 @@ export function GeneralSettings() {
         return
       }
       const matched = availableShells?.options.find((opt) => opt.id === nextId)
-      void persistTerminalShell(matched?.value ?? null)
+      void persistTerminalShell(matched?.value ?? null).then((saved) => {
+        // The row moves ahead of the save so the picker feels immediate; a
+        // rejected save has to put it back. Left alone it would name a shell
+        // that nothing uses — not the line under it, not a new terminal tab,
+        // not an agent's command — while the toast that said so scrolls away.
+        if (!saved) setSelectedShellId(previousId)
+      })
     },
-    [availableShells, persistTerminalShell]
+    [availableShells, persistTerminalShell, selectedShellId]
   )
 
   const onCustomPathSave = useCallback(() => {
@@ -493,17 +515,18 @@ export function GeneralSettings() {
           </SettingsSection>
         )}
 
+        <MentionPanelSettingsSection />
+
         <CloseBehaviorSettingsSection />
 
-        {/* The two halves of "how Codeg gets my attention", adjacent on
-            purpose: one leaves the window, one does not. */}
+        {/* "How Codeg gets my attention", adjacent on purpose: a banner in
+            the OS notification centre, the window's own taskbar entry or Dock
+            icon, and a sound from inside the window. */}
         <DesktopNotificationSettingsSection />
 
+        <WindowAttentionSettingsSection />
+
         <NotificationSoundSettingsSection />
-
-        <DelegationSettingsSection />
-
-        <AgentToolsSettingsSection />
       </div>
     </ScrollArea>
   )

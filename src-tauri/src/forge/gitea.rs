@@ -40,12 +40,12 @@ use serde::Deserialize;
 use super::auth::ResolvedAuth;
 use super::deliver::{ForgePr, NewPullRequest};
 use super::{
-    sanitize_web_url, truncate_chars, urlencode_query, validate_state_filter, ForgeChangeDetail,
-    ForgeChangedFile, ForgeChangedFileList, ForgeCheck, ForgeCheckList, ForgeCheckState,
-    ForgeComment, ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList, ForgeIssueRow,
-    ForgeItemKind, ForgeLabel, ForgeLabelList, ForgeMergeMethod, ForgeMergeOptions,
-    ForgeMergeStrategy, ForgeStateAction, ForgeTab, ListIssuesRequest, ResolvedNewIssue, BODY_CAP,
-    LABEL_PAGE_SIZE,
+    sanitize_web_url, scan_timestamp, truncate_chars, urlencode_query, validate_state_filter,
+    ForgeChangeDetail, ForgeChangedFile, ForgeChangedFileList, ForgeCheck, ForgeCheckList,
+    ForgeCheckState, ForgeComment, ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList,
+    ForgeIssueRow, ForgeItemKind, ForgeLabel, ForgeLabelList, ForgeMergeMethod, ForgeMergeOptions,
+    ForgeMergeStrategy, ForgeStateAction, ForgeTab, ListIssuesRequest, OpenItemsScan,
+    ResolvedNewIssue, ScanCursor, BODY_CAP, LABEL_PAGE_SIZE, SCAN_MAX_PAGES,
 };
 
 // ── reads ───────────────────────────────────────────────────────────────────
@@ -118,6 +118,69 @@ pub async fn list_issues(
         has_next,
         // No partial-result flag; only GitHub search has one.
         incomplete: false,
+    })
+}
+
+/// Rows per scan page. Gitea clamps `limit` to its own `MAX_RESPONSE_ITEMS`
+/// (50 by default), so asking for the hundred the other forges serve would
+/// only make the echoed page size a lie.
+const SCAN_PAGE_LIMIT: u32 = 50;
+
+/// Every OPEN item of the wanted kinds updated at or after `since` (every open
+/// item when `None`) — what an auto-processing scan reads — starting from
+/// where `from` says (see `github::list_open_items`).
+///
+/// `type=` keeps one kind per request, as on the workbench list, and `since`
+/// ("only items updated after the given time") filters server-side. There is
+/// no order to ask for (module note 1): Gitea lists newest-CREATED first, so
+/// an item updated mid-read does not move at all and a new one lands at the
+/// front — either way nothing unread is pushed into a page already read (see
+/// [`ScanCursor`]).
+pub async fn list_open_items(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    issues: bool,
+    pulls: bool,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    from: &ScanCursor,
+) -> Result<OpenItemsScan, ForgeError> {
+    let repo = repo_ref(owner_repo)?;
+    let mut rows = Vec::new();
+    let mut cursor = ScanCursor::default();
+    for (wanted, kind, collection, is_pr) in [
+        (issues, "issues", "issues", false),
+        (pulls, "pulls", "pulls", true),
+    ] {
+        if !wanted {
+            continue;
+        }
+        let repo = &repo;
+        super::scan_collection(collection, from, &mut cursor, &mut rows, SCAN_MAX_PAGES, |page| {
+            let mut url = format!(
+                "{}/repos/{repo}/issues?state=open&type={kind}&page={page}&limit={SCAN_PAGE_LIMIT}",
+                auth.api_base
+            );
+            if let Some(since) = since {
+                url.push_str(&format!("&since={}", urlencode_query(&scan_timestamp(since))));
+            }
+            async move {
+                let response = api_get(auth, &url).await?;
+                let has_next = has_next_link(response.headers());
+                let raw: Vec<RawIssue> = response
+                    .json()
+                    .await
+                    .map_err(|e| ForgeError::Network(format!("bad list payload: {e}")))?;
+                Ok((
+                    raw.into_iter().map(|item| item.into_row(is_pr)).collect(),
+                    has_next,
+                ))
+            }
+        })
+        .await?;
+    }
+    Ok(OpenItemsScan {
+        rows,
+        resume: cursor.has_more().then_some(cursor),
     })
 }
 
@@ -2560,4 +2623,167 @@ mod tests {
             Err(ForgeError::Invalid(_))
         ));
     }
+}
+
+/// `list_open_items` — the auto-processing scan's read.
+#[cfg(test)]
+mod open_items_tests {
+    use super::*;
+    use crate::forge::ForgeProvider;
+    use axum::extract::Query;
+    use axum::http::HeaderMap;
+    use axum::routing::get;
+    use axum::Json;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: ForgeProvider::Gitea,
+            server_host: "gitea.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec![],
+        }
+    }
+
+    /// The issues feed, split by `type=` as Gitea does it: one page each,
+    /// with a `next` link on the first page of issues only.
+    #[tokio::test]
+    async fn the_scan_asks_each_kind_with_type_and_since() {
+        let seen: Arc<Mutex<Vec<HashMap<String, String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let app = axum::Router::new().route(
+            "/repos/team/tool/issues",
+            get(move |Query(q): Query<HashMap<String, String>>| {
+                let log = log.clone();
+                async move {
+                    let page: u32 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+                    let pulls = q.get("type").map(String::as_str) == Some("pulls");
+                    log.lock().unwrap().push(q);
+                    let mut headers = HeaderMap::new();
+                    if !pulls && page == 1 {
+                        headers.insert(
+                            "link",
+                            "<https://gitea.test/x?page=2>; rel=\"next\"".parse().unwrap(),
+                        );
+                    }
+                    let number = if pulls { 100 } else { i64::from(page) };
+                    let mut row = serde_json::json!({
+                        "number": number,
+                        "title": format!("item {number}"),
+                        "state": "open",
+                        "labels": [],
+                        "user": { "login": "alice" },
+                        "updated_at": "2026-10-14T17:00:00+08:00",
+                        "html_url": format!("https://gitea.test/team/tool/issues/{number}"),
+                    });
+                    if pulls {
+                        row["pull_request"] =
+                            serde_json::json!({ "merged": false, "draft": false });
+                    }
+                    (headers, Json(serde_json::json!([row])))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let since = chrono::DateTime::parse_from_rfc3339("2026-10-14T08:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let auth = auth_for(format!("http://{addr}"));
+        let fresh = ScanCursor::default();
+        let scan = list_open_items(&auth, "Team/Tool", true, true, Some(since), &fresh)
+            .await
+            .expect("listed");
+        assert_eq!(scan.resume, None, "read to its end");
+        let rows: Vec<(i64, bool)> = scan.rows.iter().map(|r| (r.number, r.is_pr)).collect();
+        assert_eq!(rows, vec![(1, false), (2, false), (100, true)]);
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 3);
+        for q in &seen {
+            assert_eq!(q.get("state").map(String::as_str), Some("open"));
+            assert_eq!(q.get("since").map(String::as_str), Some("2026-10-14T08:00:00Z"));
+            // Gitea's own ceiling, not the hundred the other forges serve.
+            assert_eq!(q.get("limit").map(String::as_str), Some("50"));
+        }
+        assert_eq!(seen[0].get("type").map(String::as_str), Some("issues"));
+        assert_eq!(seen[2].get("type").map(String::as_str), Some("pulls"));
+    }
+
+    /// The case the continuation overlap exists for: between two scans of a
+    /// sweep, an item that was already read is closed. Everything behind it
+    /// shifts up a place, so the first unread item now sits on the last page
+    /// the first scan read. Carrying on from the cursor alone would skip it
+    /// for good; re-reading the overlap page finds it.
+    #[tokio::test]
+    async fn a_closure_between_scans_does_not_lose_the_next_unread_item() {
+        // One item per page; page N holds the N-th still-open item.
+        let open: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new((1..=150).collect()));
+        let list = open.clone();
+        let app = axum::Router::new().route(
+            "/repos/team/tool/issues",
+            get(move |Query(q): Query<HashMap<String, String>>| {
+                let list = list.clone();
+                async move {
+                    let page: usize = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+                    let items = list.lock().unwrap().clone();
+                    let mut headers = HeaderMap::new();
+                    if page < items.len() {
+                        headers.insert(
+                            "link",
+                            "<https://gitea.test/x?page=next>; rel=\"next\"".parse().unwrap(),
+                        );
+                    }
+                    let rows: Vec<serde_json::Value> = items
+                        .get(page - 1)
+                        .map(|number| {
+                            serde_json::json!({
+                                "number": number,
+                                "title": format!("item {number}"),
+                                "state": "open",
+                                "labels": [],
+                                "user": { "login": "alice" },
+                                "html_url": format!("https://gitea.test/team/tool/issues/{number}"),
+                            })
+                        })
+                        .into_iter()
+                        .collect();
+                    (headers, Json(serde_json::Value::Array(rows)))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let auth = auth_for(format!("http://{addr}"));
+
+        let first = list_open_items(&auth, "team/tool", true, false, None, &ScanCursor::default())
+            .await
+            .expect("listed");
+        let read: Vec<i64> = first.rows.iter().map(|r| r.number).collect();
+        assert_eq!(read.len(), SCAN_MAX_PAGES as usize);
+        let cursor = first.resume.expect("cut short");
+
+        // An item the first scan already read is closed in between.
+        open.lock().unwrap().retain(|&n| n != 7);
+        let next_unread = i64::from(SCAN_MAX_PAGES) + 1;
+
+        let second = list_open_items(&auth, "team/tool", true, false, None, &cursor)
+            .await
+            .expect("listed");
+        let numbers: Vec<i64> = second.rows.iter().map(|r| r.number).collect();
+        assert!(
+            numbers.contains(&next_unread),
+            "item {next_unread} shifted onto a page already read and was skipped: {numbers:?}"
+        );
+        assert_eq!(second.resume, None, "the rest of the window was read");
+    }
+
 }

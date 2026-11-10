@@ -14,11 +14,15 @@
 //! - [`budget`] caps how much the file sink may write per day, so no log
 //!   firehose can fill the user's disk before the next rotation.
 //! - [`throttle`] collapses bursts of a near-duplicate line to one per window.
+//! - [`panic_hook`] makes a panic leave a record behind instead of a silent
+//!   abort, writing it to the file sink synchronously so it survives the death
+//!   of the process.
 
 pub mod budget;
 pub mod hub;
 pub mod init;
 pub mod layer;
+pub mod panic_hook;
 pub mod throttle;
 
 use serde::{Deserialize, Serialize};

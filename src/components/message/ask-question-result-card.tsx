@@ -4,8 +4,9 @@
  * Read-only inline view of the codeg-mcp `ask_user_question` tool in the message
  * stream (historical transcripts + the in-flight tool marker).
  *
- * The answered / declined record is collapsed by default into a capsule that
- * summarizes the picks; expanding it reveals the live `AskQuestionCard` in its
+ * Drawn on the activity timeline's rail: the answered / declined record is a
+ * plain row (the rail's ring carries the icon) that summarizes the picks;
+ * expanding it reveals the live `AskQuestionCard` in its
  * `readOnly` mode, so the layout (tabs, headers, option cards) stays identical
  * to the interactive card the user actually answered — it just renders the
  * selection as disabled and drops the footer. The Q&A is reconstructed from the
@@ -16,14 +17,10 @@
 
 import { useMemo, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
-import {
-  ChevronDown,
-  ChevronUp,
-  Loader2,
-  MessageCircleQuestionMark,
-} from "lucide-react"
+import { Loader2, MessageCircleQuestionMark } from "lucide-react"
 
 import { AskQuestionCard } from "@/components/chat/ask-question-card"
+import { RowChevron } from "@/components/message/activity/activity-row"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import {
@@ -56,7 +53,12 @@ export function AskQuestionResultCard({
   const [expanded, setExpanded] = useState(false)
 
   const questions = useMemo(() => parseAskQuestionInput(input), [input])
-  const outcome = useMemo(() => parseAskQuestionOutcome(output), [output])
+  // The asked questions let a CLI answer sentence be read by their exact text
+  // (it escapes nothing) and split a multi-select answer back into its labels.
+  const outcome = useMemo(
+    () => parseAskQuestionOutcome(output, questions),
+    [output, questions]
+  )
 
   const isError = !!errorText?.trim()
   const isRunning = state === "input-available" || state === "input-streaming"
@@ -217,7 +219,7 @@ export function AskQuestionResultCard({
     )
   }
 
-  // Answered / declined. Collapsed by default into a capsule that summarizes the
+  // Answered / declined. Collapsed by default into a row that summarizes the
   // picks; expanding reveals the live card (so the layout matches exactly).
   const picks = (outcome?.answers ?? [])
     .flatMap((a) => a.selected)
@@ -228,34 +230,29 @@ export function AskQuestionResultCard({
       ? picks.join(", ")
       : t("noSelection")
 
+  // Laid out like the timeline's other rows: the chevron follows the label.
   const capsule = (
     <button
       type="button"
       onClick={() => setExpanded((v) => !v)}
       aria-expanded={expanded}
       data-testid="ask-question-result-card"
-      className={cn(
-        "flex w-fit max-w-full items-center gap-2 rounded-full border border-primary/30 bg-card ws-msg-card px-3 py-1.5 text-left transition-colors hover:bg-muted/40",
-        !expanded && "mb-2"
-      )}
+      className="activity-row-toggle group/row flex w-full min-w-0 cursor-pointer items-start gap-1 rounded-sm py-0.5 text-start text-sm leading-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <MessageCircleQuestionMark className="size-4 shrink-0 text-primary" />
-      <span className="min-w-0 flex-1 truncate text-xs">
-        <span className="mr-1 text-muted-foreground">{t("answeredLabel")}</span>
-        <span className="text-foreground/90">{summary}</span>
+      <span className="min-w-0 truncate">
+        <span className="me-1 font-medium text-muted-foreground">
+          {t("answeredLabel")}
+        </span>
+        <span className="text-muted-foreground">{summary}</span>
       </span>
-      {expanded ? (
-        <ChevronUp className="size-3.5 shrink-0 text-muted-foreground" />
-      ) : (
-        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-      )}
+      <RowChevron open={expanded} />
     </button>
   )
 
   if (!expanded) return capsule
 
   return (
-    <div className="mb-2 space-y-1.5">
+    <div className="space-y-1">
       {capsule}
       <AskQuestionCard
         readOnly

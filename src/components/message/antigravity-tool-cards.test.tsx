@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest"
  * Antigravity's terminal and MCP tool calls, on both the live and the reload
  * path.
  *
- * Both used to land on the generic tool shell. The terminal card, because
+ * Both once landed on the generic tool shell. The terminal card, because
  * neither spelling of its arguments (`command_line` live, PascalCase
  * `CommandLine` in the trajectory and in permission frames) was a command key,
  * and its live *title* is the command string itself — so the card was named
@@ -38,25 +38,45 @@ vi.mock("@/components/ai-elements/message", () => ({
   ),
 }))
 
-// The delegation card reads its binding from the delegation provider and the
-// child's live state from the connections store — neither exists outside the
-// workspace tree, and neither is what this file is about. Stub it to a
-// sentinel: what is under test is WHICH card the tool call reaches. The card's
-// own behavior has its own test file.
-vi.mock("./delegated-sub-thread", () => ({
-  DelegatedSubThread: () => <div data-testid="delegated-sub-thread" />,
-}))
-
 import { ContentPartsRenderer } from "./content-parts-renderer"
+import {
+  StaticConnectionStoreProvider,
+  type ConnectionStoreApi,
+} from "@/contexts/acp-connections-context"
+import {
+  StaticDelegationProvider,
+  type DelegationContextValue,
+} from "@/contexts/delegation-context"
 import enMessages from "@/i18n/messages/en.json"
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
 import { parseInput as parseDelegationInput } from "@/lib/delegation-card"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
 
+// The delegation row reads its binding from the delegation provider and the
+// child's live state from the connections store; outside the workspace tree
+// both are empty — what is under test is WHICH row the tool call reaches.
+const STORE: ConnectionStoreApi = {
+  getConnection: () => undefined,
+  getConnectPending: () => undefined,
+  getConnectError: () => undefined,
+  getActiveKey: () => null,
+  subscribeKey: () => () => {},
+  subscribeActiveKey: () => () => {},
+}
+const DELEGATION: DelegationContextValue = {
+  findByParentToolUseId: () => undefined,
+  findByChildConversationId: () => undefined,
+  findByTaskId: () => undefined,
+}
+
 function renderParts(parts: AdaptedContentPart[]) {
   const result = render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <ContentPartsRenderer parts={parts} role="assistant" />
+      <StaticConnectionStoreProvider store={STORE}>
+        <StaticDelegationProvider value={DELEGATION}>
+          <ContentPartsRenderer parts={parts} role="assistant" />
+        </StaticDelegationProvider>
+      </StaticConnectionStoreProvider>
     </NextIntlClientProvider>
   )
   const toggles = screen.queryAllByRole("button")
@@ -130,10 +150,11 @@ describe("Antigravity run_command renders as a terminal", () => {
   })
 })
 
-describe("Antigravity MCP calls reach their dedicated cards", () => {
+describe("Antigravity MCP calls reach their dedicated rows", () => {
   it("reads the delegated task out of the unwrapped envelope", () => {
-    // `{arguments: {…}, prompt: …}` is what `unwrap_mcp_tool_call` puts on the
-    // live wire and what `parsers/antigravity.rs` now emits for history. The
+    // `{arguments: {…}, prompt: …}` is what the live stream carries (1.1 sent it
+    // as-is; 1.2's flattened copy is folded back in `acp/connection.rs`) and
+    // what `parsers/antigravity.rs` now emits for history. The
     // card's argument walker peels `arguments`; the RAW envelope it replaces
     // (`{Arguments, ServerName, ToolName}`) is not a shape it can read, which
     // is why the unwrap has to happen in the parser.
@@ -157,7 +178,7 @@ describe("Antigravity MCP calls reach their dedicated cards", () => {
     ).toMatchObject({ agentType: null, task: null })
   })
 
-  it("routes an unwrapped delegate_to_agent to the delegation card", () => {
+  it("routes an unwrapped delegate_to_agent to the delegation row", () => {
     // `<server>_<tool>` + `{arguments: {…}}` is what the live stream sends and
     // what the history parser now emits; both must resolve to the same card.
     expect(normalizeToolName("codeg-mcp_delegate_to_agent")).toBe(
@@ -179,13 +200,17 @@ describe("Antigravity MCP calls reach their dedicated cards", () => {
       },
     ])
 
-    // The delegation card, not the generic tool shell it used to land on.
-    expect(screen.getByTestId("delegated-sub-thread")).toBeInTheDocument()
+    // The delegation row — the agent it went to and the task it was handed —
+    // not the generic tool shell it once landed on.
+    expect(
+      screen.getByRole("img", { name: /^Delegated task/ })
+    ).toBeInTheDocument()
+    expect(container.textContent).toContain("run pnpm build")
     expect(container.textContent).not.toContain("call_mcp_tool")
     expect(container.textContent).not.toContain("ServerName")
   })
 
-  it("routes an unwrapped get_delegation_status poll to the status card", () => {
+  it("routes an unwrapped get_delegation_status poll to the status row", () => {
     const { container } = renderParts([
       {
         type: "tool-call",
@@ -212,10 +237,9 @@ describe("Antigravity MCP calls reach their dedicated cards", () => {
       },
     ])
 
-    // The status card, reading the task id out of the peeled `arguments` — not
+    // The status row, reading the task id out of the peeled `arguments` — not
     // the generic tool shell, and not an empty render (which asserting only on
     // ABSENT strings would have accepted).
-    expect(screen.getByTestId("delegation-status-card")).toBeInTheDocument()
     expect(container.textContent).toContain("71718410")
     expect(container.textContent).toContain("Build finished.")
     expect(container.textContent).not.toContain("wait_ms")

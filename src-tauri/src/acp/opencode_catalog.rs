@@ -1,14 +1,15 @@
-//! OpenCode provider catalog backed by [models.dev](https://models.dev).
+//! OpenCode provider catalog backed by the models.dev registry.
 //!
-//! OpenCode resolves its built-in providers and their model lists from the
-//! models.dev registry (`https://models.dev/api.json`). To drive a guided
-//! "connect a provider" experience we mirror that catalog here, normalized to
-//! a slim shape the frontend can render.
+//! OpenCode resolves its built-in providers and their model lists from its
+//! own copy of the models.dev registry, `https://models.opencode.ai/api.json`
+//! (`OPENCODE_MODELS_URL` overrides it; the two serve the same document).
+//! To drive a guided "connect a provider" experience we mirror that catalog
+//! here, normalized to a slim shape the frontend can render.
 //!
 //! Resolution order (most fresh first):
-//! 1. live fetch of `models.dev/api.json` (when forced, or when the cache is
+//! 1. live fetch of that `api.json` (when forced, or when the cache is
 //!    stale), normalized and written back to the on-disk cache;
-//! 2. the on-disk cache under `<data_dir>/cache/opencode/models-dev.json`;
+//! 2. the on-disk cache under `<data_dir>/cache/opencode/models-dev-v2.json`;
 //! 3. the snapshot bundled into the binary, so the catalog is always available
 //!    offline.
 
@@ -19,8 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_error::AppCommandError;
 
-/// models.dev JSON API — the same source OpenCode itself reads.
-pub const MODELS_DEV_URL: &str = "https://models.dev/api.json";
+/// The registry's JSON API, where OpenCode itself reads it (its default
+/// `OPENCODE_MODELS_URL` plus `/api.json`).
+pub const MODELS_DEV_URL: &str = "https://models.opencode.ai/api.json";
 
 /// Cache lifetime before we attempt a fresh fetch. Stale cache is still used as
 /// a fallback when the network is unavailable.
@@ -53,6 +55,10 @@ pub struct CatalogModel {
     pub cost_in: Option<f64>,
     #[serde(default)]
     pub cost_out: Option<f64>,
+    #[serde(default)]
+    pub cost_cache_read: Option<f64>,
+    #[serde(default)]
+    pub cost_cache_write: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +155,14 @@ pub fn normalize_models_dev(raw: &str) -> Result<Vec<CatalogProvider>, AppComman
                         .get("cost")
                         .and_then(|v| v.get("output"))
                         .and_then(|v| v.as_f64()),
+                    cost_cache_read: m
+                        .get("cost")
+                        .and_then(|v| v.get("cache_read"))
+                        .and_then(|v| v.as_f64()),
+                    cost_cache_write: m
+                        .get("cost")
+                        .and_then(|v| v.get("cache_write"))
+                        .and_then(|v| v.as_f64()),
                 });
             }
         }
@@ -180,8 +194,21 @@ pub fn bundled_catalog() -> Vec<CatalogProvider> {
     serde_json::from_str::<Vec<CatalogProvider>>(BUNDLED_SNAPSHOT).unwrap_or_default()
 }
 
+fn cache_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("cache").join("opencode")
+}
+
 fn cache_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("cache").join("opencode").join("models-dev.json")
+    // v2: cache_read / cache_write joined the slim shape. A new filename so
+    // an existing 24h cache is not served without those fields until it ages
+    // out, which would leave cache tokens unpriced on Token Usage.
+    cache_dir(data_dir).join("models-dev-v2.json")
+}
+
+/// The pre-v2 cache. Nothing reads it any more, so [`write_cache`] removes it
+/// rather than leaving a megabyte-sized orphan in the data dir.
+fn legacy_cache_path(data_dir: &Path) -> PathBuf {
+    cache_dir(data_dir).join("models-dev.json")
 }
 
 fn read_cache(data_dir: &Path, require_fresh: bool) -> Option<Vec<CatalogProvider>> {
@@ -208,7 +235,9 @@ fn write_cache(data_dir: &Path, providers: &[CatalogProvider]) {
         }
     }
     if let Ok(text) = serde_json::to_string(providers) {
-        let _ = std::fs::write(&path, text);
+        if std::fs::write(&path, text).is_ok() {
+            let _ = std::fs::remove_file(legacy_cache_path(data_dir));
+        }
     }
 }
 
@@ -279,6 +308,70 @@ mod tests {
     }
 
     #[test]
+    fn bundled_snapshot_carries_cache_prices() {
+        // The snapshot is all an install that cannot reach models.dev ever
+        // sees, and Token Usage prices cache reads and writes (usually the
+        // bulk of an agent's tokens) from these two fields. A snapshot
+        // regenerated without them leaves that spend unpriced offline.
+        let catalog = bundled_catalog();
+        let anthropic = catalog
+            .iter()
+            .find(|p| p.id == "anthropic")
+            .expect("snapshot must include the anthropic provider");
+        // Values, not just presence: Anthropic bills a cache read below and a
+        // cache write above the plain input rate.
+        assert!(
+            anthropic.models.iter().any(|m| matches!(
+                (m.cost_in, m.cost_cache_read, m.cost_cache_write),
+                (Some(input), Some(read), Some(write)) if read < input && write > input
+            )),
+            "bundled snapshot has no cache read/write prices; regenerate it from models.dev"
+        );
+    }
+
+    #[test]
+    fn bundled_snapshot_prices_claude_fable_5_2() {
+        // Claude Code 2.1.321 (claude-agent-acp 0.102.0) makes Fable 5.2 the
+        // `fable` model, so an offline install must price it too: $8/$40 per
+        // Mtok, $0.20 cache reads and $10 cache writes, as models.dev lists it.
+        let catalog = bundled_catalog();
+        let fable = catalog
+            .iter()
+            .find(|p| p.id == "anthropic")
+            .and_then(|p| p.models.iter().find(|m| m.id == "claude-fable-5-2"))
+            .expect("snapshot must list claude-fable-5-2 under anthropic");
+        assert_eq!(
+            (
+                fable.cost_in,
+                fable.cost_out,
+                fable.cost_cache_read,
+                fable.cost_cache_write
+            ),
+            (Some(8.0), Some(40.0), Some(0.2), Some(10.0))
+        );
+        assert_eq!(fable.context, Some(1_000_000));
+    }
+
+    #[test]
+    fn write_cache_replaces_the_legacy_cache() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let legacy = legacy_cache_path(dir.path());
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, "[]").unwrap();
+
+        let providers = normalize_models_dev(
+            r#"{"demo":{"id":"demo","name":"Demo","models":{"m":{"id":"m","cost":{"input":1,"output":2,"cache_read":0.1,"cache_write":1.25}}}}}"#,
+        )
+        .expect("normalize");
+        write_cache(dir.path(), &providers);
+
+        assert!(!legacy.exists(), "the pre-v2 cache should be removed");
+        let cached = read_cache(dir.path(), true).expect("fresh v2 cache");
+        assert_eq!(cached[0].models[0].cost_cache_read, Some(0.1));
+        assert_eq!(cached[0].models[0].cost_cache_write, Some(1.25));
+    }
+
+    #[test]
     fn oauth_classification_matches_opencode() {
         assert!(is_oauth_provider("openai"));
         assert!(is_oauth_provider("github-copilot"));
@@ -303,7 +396,17 @@ mod tests {
                         "reasoning": true,
                         "tool_call": true,
                         "limit": { "context": 128000, "output": 8192 },
-                        "cost": { "input": 1.5, "output": 6.0 }
+                        "cost": {
+                            "input": 1.5,
+                            "output": 6.0,
+                            "cache_read": 0.15,
+                            "cache_write": 1.875
+                        }
+                    },
+                    "demo-free": {
+                        "id": "demo-free",
+                        "name": "Demo Free",
+                        "cost": { "input": 0.0, "output": 0.0 }
                     }
                 }
             }
@@ -316,14 +419,27 @@ mod tests {
         assert_eq!(p.npm.as_deref(), Some("@ai-sdk/openai-compatible"));
         assert_eq!(p.env, vec!["DEMO_API_KEY".to_string()]);
         assert_eq!(p.auth_kind, "api");
-        assert_eq!(p.models.len(), 1);
-        let m = &p.models[0];
-        assert_eq!(m.id, "demo-large");
+        assert_eq!(p.models.len(), 2);
+        let m = p
+            .models
+            .iter()
+            .find(|m| m.id == "demo-large")
+            .expect("demo-large");
         assert!(m.reasoning);
         assert!(m.tool_call);
         assert_eq!(m.context, Some(128000));
         assert_eq!(m.cost_in, Some(1.5));
         assert_eq!(m.cost_out, Some(6.0));
+        assert_eq!(m.cost_cache_read, Some(0.15));
+        assert_eq!(m.cost_cache_write, Some(1.875));
+        let free = p
+            .models
+            .iter()
+            .find(|m| m.id == "demo-free")
+            .expect("demo-free");
+        assert_eq!(free.cost_in, Some(0.0));
+        assert_eq!(free.cost_cache_read, None);
+        assert_eq!(free.cost_cache_write, None);
     }
 
     #[test]

@@ -6,7 +6,12 @@ import { describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import type { ReferenceSearch } from "@/components/chat/composer/suggestion/types"
-import type { AgentSkillItem, AgentType, PromptInputBlock } from "@/lib/types"
+import type {
+  AgentSkillItem,
+  AgentType,
+  AvailableCommandInfo,
+  PromptInputBlock,
+} from "@/lib/types"
 
 import {
   TaskMessageComposer,
@@ -14,14 +19,17 @@ import {
 } from "./task-message-composer"
 
 // The `/` menu's source: the agent-options probe (a transient CLI session).
+// A test may swap the list it reports (and must put it back).
+const probe = vi.hoisted(() => {
+  const commands: AvailableCommandInfo[] = [
+    { name: "review", description: "Review the working diff" },
+    { name: "commit", description: "Commit the change" },
+  ]
+  return { defaults: commands, commands }
+})
 vi.mock("@/components/automations/use-agent-options", () => ({
   useAgentOptions: () => ({
-    snapshot: {
-      available_commands: [
-        { name: "review", description: "Review the working diff" },
-        { name: "commit", description: "Commit the change" },
-      ],
-    },
+    snapshot: { available_commands: probe.commands },
     loading: false,
     error: null,
     reload: vi.fn(),
@@ -29,7 +37,8 @@ vi.mock("@/components/automations/use-agent-options", () => ({
   }),
 }))
 
-// Codex's `$` skills: a filesystem scan in production.
+// Skills read from disk in production: Codex's under `$`, Antigravity's under
+// `/` (its server never advertises them).
 const SKILL: AgentSkillItem = {
   id: "deploy",
   name: "Deploy",
@@ -57,7 +66,7 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 
 vi.mock("@/hooks/use-agent-skills", () => ({
   useAgentSkills: (agentType: AgentType | null) =>
-    agentType === "codex" ? [SKILL] : [],
+    agentType === "codex" || agentType === "antigravity" ? [SKILL] : [],
 }))
 
 // The `@` panel's data sources all hit the transport; the panel itself is what
@@ -133,6 +142,70 @@ describe("TaskMessageComposer", () => {
     expect(onChange).toHaveBeenCalled()
   })
 
+  // claude-agent-acp 0.99.1 marks skills among the commands, every one only
+  // once it has read Claude Code's skill list (then a bundled skill comes
+  // without a path). The rows show the marks only for such a list, and the
+  // icon column is read off the whole list, not the rows a filter leaves.
+  it("shows the skills of a fully marked list with the skill icon", async () => {
+    probe.commands = [
+      {
+        name: "review",
+        description: "Review the working diff",
+        skill: true,
+        skill_path: "/p/review/SKILL.md",
+      },
+      { name: "simplify", description: "Simplify the code", skill: true },
+      { name: "commit", description: "Commit the change" },
+    ]
+    try {
+      const { editor } = await mount()
+      const kind = (token: string) =>
+        (
+          screen.getByText(token).closest("button") as HTMLElement
+        ).querySelector<HTMLElement>("[data-command-kind]")?.dataset.commandKind
+      act(() => {
+        editor.commands.insertContent("/")
+      })
+      await screen.findByText("/simplify", {}, { timeout: 5000 })
+      expect(kind("/review")).toBe("skill")
+      expect(kind("/simplify")).toBe("skill")
+      expect(kind("/commit")).toBe("command")
+
+      act(() => {
+        editor.commands.setContent("")
+        editor.commands.insertContent("/com")
+      })
+      await waitFor(() => expect(screen.queryByText("/simplify")).toBeNull())
+      expect(kind("/commit")).toBe("command")
+    } finally {
+      probe.commands = probe.defaults
+    }
+  })
+
+  // What the probe gets: it never prompts, so it only sees the first list,
+  // where only the skills found on disk are marked.
+  it("keeps the rows plain for a partly marked list", async () => {
+    probe.commands = [
+      {
+        name: "review",
+        description: "Review the working diff",
+        skill: true,
+        skill_path: "/p/review/SKILL.md",
+      },
+      { name: "simplify", description: "Simplify the code" },
+    ]
+    try {
+      const { editor } = await mount()
+      act(() => {
+        editor.commands.insertContent("/")
+      })
+      await screen.findByText("/simplify", {}, { timeout: 5000 })
+      expect(document.querySelector("[data-command-kind]")).toBeNull()
+    } finally {
+      probe.commands = probe.defaults
+    }
+  })
+
   it("references a file through the @ panel", async () => {
     const { editor } = await mount()
     act(() => {
@@ -172,6 +245,28 @@ describe("TaskMessageComposer", () => {
       )
     })
     await waitFor(() => expect(editor.getText()).toContain("$deploy"))
+  })
+
+  it("offers Antigravity's skills on `/`, after its commands", async () => {
+    const { editor } = await mount({ agentType: "antigravity" })
+    act(() => {
+      editor.commands.insertContent("/")
+    })
+    await screen.findByText("Deploy", {}, { timeout: 5000 })
+    expect(screen.getByText("/review")).toBeInTheDocument()
+
+    act(() => {
+      editor.commands.setContent("")
+      editor.commands.insertContent("/dep")
+    })
+    const row = await screen.findByText("Deploy", {}, { timeout: 5000 })
+    act(() => {
+      row.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true })
+      )
+    })
+    await waitFor(() => expect(editor.getText()).toContain("/deploy"))
+    expect(editor.getText()).not.toContain("$deploy")
   })
 
   it("seeds a stored prompt back into the box, attachments included", async () => {

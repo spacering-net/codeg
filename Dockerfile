@@ -6,10 +6,10 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY src/ ./src/
 COPY public/ ./public/
-COPY next.config.ts tsconfig.json postcss.config.mjs components.json ./
+COPY next.config.ts tsconfig.json tsconfig.build.json postcss.config.mjs components.json ./
 RUN pnpm build
 
-# Stage 2: Build Rust server binary + codeg-mcp companion
+# Stage 2: Build Rust server binary + codeg-mcp companion + codeg-cli
 FROM rust:slim-bookworm AS backend
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/src-tauri
@@ -17,8 +17,9 @@ COPY src-tauri/ ./
 # codeg-mcp is the stdio MCP companion the runtime injects per session
 # (see acp/delegation/companion.rs). It must ship next to codeg-server so
 # `locate_codeg_mcp_binary()` finds it via the exe-sibling lookup.
-RUN cargo build --release --bin codeg-server --no-default-features \
- && cargo build --release --bin codeg-mcp --no-default-features
+RUN cargo build --release --bin codeg-server --no-default-features --features server-bin \
+ && cargo build --release --bin codeg-mcp --no-default-features --features mcp-bin \
+ && cargo build --release --bin codeg-cli --no-default-features --features cli-bin
 
 # Stage 3: Runtime
 FROM node:24-bookworm-slim
@@ -42,6 +43,9 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=backend /app/src-tauri/target/release/codeg-server /usr/local/bin/codeg-server
 COPY --from=backend /app/src-tauri/target/release/codeg-mcp /usr/local/bin/codeg-mcp
+# codeg-cli: `docker exec <container> codeg-cli run …` finds this server through
+# its discovery file under CODEG_DATA_DIR (/data/cli).
+COPY --from=backend /app/src-tauri/target/release/codeg-cli /usr/local/bin/codeg-cli
 COPY --from=frontend /app/out /app/web
 
 ENV CODEG_STATIC_DIR=/app/web
@@ -56,6 +60,10 @@ ENV CODEG_RUNTIME=docker
 ENV CODEG_RESTART_DELAY_MS=2000
 
 EXPOSE 3080
+# Port bridge for dev servers (CODEG_BRIDGE_PORTS; default CODEG_PORT+1..+10).
+# Not needed when CODEG_BRIDGE_HOST_PATTERN names the dev servers by hostname
+# instead: those answer on 3080, and no range has to be guessed in advance.
+EXPOSE 3081-3090
 VOLUME /data
 
 # Run under the built-in supervisor (PID 1) so an in-place upgrade can swap

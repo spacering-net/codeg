@@ -10,4 +10,4 @@ The app may connect to user-configured third-party services, such as code hostin
 
 If you contact the developer for support, information you provide in that communication may be used to respond to your request.
 
-Contact: https://github.com/xintaofei/codeg/issues
+Contact: https://github.com/spacering-net/codeg/issues

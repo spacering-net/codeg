@@ -7,6 +7,7 @@ import {
   draftRidesBlocks,
   extractUserImagesFromDraft,
   extractUserResourcesFromDraft,
+  promptDraftTitleSeed,
 } from "./prompt-draft"
 
 function draft(blocks: PromptInputBlock[]): PromptDraft {
@@ -121,5 +122,37 @@ describe("extractUserResourcesFromDraft", () => {
         mime_type: "text/plain",
       },
     ])
+  })
+})
+
+describe("promptDraftTitleSeed", () => {
+  // A page handed over with nothing typed: the badge's link alone runs past
+  // the cut, and a link cut in half no longer reads as a badge's name.
+  it("names a new conversation after the badge, not half its link", () => {
+    const displayText =
+      "[Marked-up screenshot](codeg://embedded/https%3A%2F%2Fwww.google.com%2Fsearch%3Fq%3Dcodeg#2f5c8f1a-1b2c-4d5e-8f90-a1b2c3d4e5f6)"
+    expect(promptDraftTitleSeed({ blocks: [], displayText }, "Attached")).toBe(
+      "Marked-up screenshot"
+    )
+  })
+
+  it("keeps what was typed around a badge and cuts only the result", () => {
+    const displayText = `[app.ts](file:///repo/src/app.ts) ${"x".repeat(100)}`
+    const title = promptDraftTitleSeed({ blocks: [], displayText }, "Attached")
+    expect(title.startsWith("app.ts xxx")).toBe(true)
+    expect(title).toHaveLength(80)
+  })
+
+  it("falls back when nothing was typed or attached inline", () => {
+    expect(
+      promptDraftTitleSeed({ blocks: [], displayText: "  " }, "Attached")
+    ).toBe("Attached")
+    // …or when all there was folds away to nothing.
+    expect(
+      promptDraftTitleSeed(
+        { blocks: [], displayText: "[ ](https://x.test)" },
+        "Attached"
+      )
+    ).toBe("Attached")
   })
 })

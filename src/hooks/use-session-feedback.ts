@@ -33,6 +33,7 @@ import { toast } from "sonner"
 import { useAcpEvent } from "@/contexts/acp-connections-context"
 import { acpGetSessionSnapshot, submitSessionFeedback } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { notify } from "@/lib/notify"
 import { isNoActiveTurnRejection } from "@/lib/turn-busy"
 import type {
   ConnectionStatus,
@@ -400,7 +401,12 @@ export function useSessionFeedback({
           setDialogOpen(false)
           toast.info(t("turnEndedResent"))
         } else {
-          toast.error(t("submitFailed"), { description: toErrorMessage(err) })
+          notify({
+            level: "error",
+            key: `feedback-submit-failed:${connectionId}`,
+            title: t("submitFailed"),
+            description: toErrorMessage(err),
+          })
         }
       } finally {
         setSubmitting(false)

@@ -29,8 +29,15 @@ import {
   type FontSize,
 } from "@/lib/font-presets"
 import {
+  applyChatContentWidth,
+  commitChatContentWidth,
+  readChatContentWidth,
+} from "@/lib/chat-content-width"
+import {
   STORAGE_KEY_THEME_COLOR,
   STORAGE_KEY_ZOOM_LEVEL,
+  STORAGE_KEY_CHAT_ANIMATIONS,
+  STORAGE_KEY_CHAT_CONTENT_WIDTH,
   STORAGE_KEY_WELCOME_QUICK_ACTIONS,
   STORAGE_KEY_UI_FONT,
   STORAGE_KEY_UI_FONT_CUSTOM,
@@ -66,6 +73,7 @@ import {
   type CustomTheme,
   type CustomThemeToken,
 } from "@/lib/custom-style"
+import { readableAccent } from "@/lib/readable-accent"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import {
   isShortcutRecorderArmed,
@@ -117,6 +125,22 @@ type AppearanceContextValue = {
   /** 新会话欢迎页是否显示「模式选择区域」（QuickActions 快捷卡片），默认开启 */
   showWelcomeQuickActions: boolean
   setShowWelcomeQuickActions: (on: boolean) => void
+  /** 聊天区域动画总开关，默认开启；关闭时 <html> 带 data-chat-animations="off" */
+  chatAnimations: boolean
+  setChatAnimations: (on: boolean) => void
+  /**
+   * 聊天内容宽度（100% 缩放下的 px，落到 CSS 时换成 rem，随缩放变化），
+   * null = 内置默认（48rem）。拖拽手柄与外观设置页共用；set 会持久化并落到
+   * <html>，preview 只改 DOM（拖拽过程中逐帧用，不触发重渲染）。
+   */
+  chatContentWidth: number | null
+  setChatContentWidth: (px: number | null) => void
+  previewChatContentWidth: (px: number | null) => void
+  /**
+   * 同一个值，但在变化的那一刻就是新的（state 要等 React 提交才更新）。拖拽没存
+   * 宽度就结束时，手柄用它把已存的宽度放回 <html>。
+   */
+  getChatContentWidth: () => number | null
   /** 界面字体（普通组件，驱动 --font-sans） */
   uiFont: FontSelection
   setUiFont: (id: string, custom?: string) => void
@@ -190,6 +214,18 @@ type AppearanceContextValue = {
 export const AppearanceContext = createContext<AppearanceContextValue | null>(
   null
 )
+
+/**
+ * The chat-animations flag on its own, for the transcript's JS-driven motion
+ * (`useChatAnimationsEnabled`). `AppearanceContext`'s value is rebuilt on every
+ * provider render — a theme change, every tick of a settings slider relayed
+ * from the settings window — and the readers of this flag sit on the hot path
+ * (`MessageListView`, every `Shimmer`, each reply's stats row), mostly behind
+ * `memo` boundaries the big context would cut through. A bare boolean only
+ * re-renders them when the flag itself flips. Defaults to on, which is also
+ * what a tree with no provider gets.
+ */
+export const ChatAnimationsContext = createContext<boolean>(true)
 
 function persist(key: string, value: string) {
   try {
@@ -370,6 +406,29 @@ export function AppearanceProvider({
   const [showWelcomeQuickActions, setShowWelcomeQuickActionsState] =
     useState<boolean>(() => readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true))
 
+  // 聊天区域动画开关：默认开启，键缺失即回退为 true。DOM 属性由 inline 脚本预置，
+  // 这里的 effect 只负责让后续切换/跨窗口同步落到 <html>。
+  const [chatAnimations, setChatAnimationsState] = useState<boolean>(() =>
+    readBool(STORAGE_KEY_CHAT_ANIMATIONS, true)
+  )
+  useEffect(() => {
+    if (chatAnimations) {
+      document.documentElement.removeAttribute("data-chat-animations")
+    } else {
+      document.documentElement.setAttribute("data-chat-animations", "off")
+    }
+  }, [chatAnimations])
+
+  // 聊天内容宽度：DOM 变量由 inline 脚本预置，这里持有状态供设置页回显。
+  const [chatContentWidth, setChatContentWidthState] = useState<number | null>(
+    () => readChatContentWidth()
+  )
+  // 与 state 同值，但写入即生效：别的窗口改了宽度、本窗口的 state 还没提交时，
+  // 取消拖拽若按渲染时的旧值复原，会把新宽度盖掉，且之后 state 提交时没有任何
+  // 地方再把新值写回 <html>。
+  const chatContentWidthRef = useRef(chatContentWidth)
+  const getChatContentWidth = useCallback(() => chatContentWidthRef.current, [])
+
   // 字体偏好的初始值从 localStorage 读 id/custom（视觉已由 inline 脚本就位，
   // 这里只是回填选中态，不会造成闪烁）。
   const [uiFont, setUiFontState] = useState<FontSelection>(() =>
@@ -517,6 +576,17 @@ export function AppearanceProvider({
   const setShowWelcomeQuickActions = useCallback((on: boolean) => {
     setShowWelcomeQuickActionsState(on)
     persist(STORAGE_KEY_WELCOME_QUICK_ACTIONS, on ? "1" : "0")
+  }, [])
+
+  const setChatAnimations = useCallback((on: boolean) => {
+    setChatAnimationsState(on)
+    persist(STORAGE_KEY_CHAT_ANIMATIONS, on ? "1" : "0")
+  }, [])
+
+  const setChatContentWidth = useCallback((px: number | null) => {
+    chatContentWidthRef.current = px
+    setChatContentWidthState(px)
+    commitChatContentWidth(px)
   }, [])
 
   const setUiFont = useCallback((id: string, custom = "") => {
@@ -803,6 +873,16 @@ export function AppearanceProvider({
           ? customTheme.dark
           : customTheme.light
     applyTokenOverrides(document.documentElement, active)
+    // The timeline's accent follows a primary set here, held to a readable
+    // lightness like each preset's (globals.css); without one, the preset's.
+    const accent = active.primary
+      ? readableAccent(active.primary, isDarkMode)
+      : null
+    if (accent) {
+      document.documentElement.style.setProperty("--activity-accent", accent)
+    } else {
+      document.documentElement.style.removeProperty("--activity-accent")
+    }
   }, [customStyleSuppressed, customThemeEnabled, customTheme, isDarkMode])
 
   useEffect(() => {
@@ -955,6 +1035,15 @@ export function AppearanceProvider({
           readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true)
         )
       }
+      if (e.key === STORAGE_KEY_CHAT_CONTENT_WIDTH) {
+        const next = readChatContentWidth()
+        chatContentWidthRef.current = next
+        setChatContentWidthState(next)
+        applyChatContentWidth(next)
+      }
+      if (e.key === STORAGE_KEY_CHAT_ANIMATIONS) {
+        setChatAnimationsState(readBool(STORAGE_KEY_CHAT_ANIMATIONS, true))
+      }
       if (e.key && FONT_KEYS.has(e.key)) {
         rehydrateFonts()
       }
@@ -1059,6 +1148,12 @@ export function AppearanceProvider({
         setZoomLevel,
         showWelcomeQuickActions,
         setShowWelcomeQuickActions,
+        chatAnimations,
+        setChatAnimations,
+        chatContentWidth,
+        setChatContentWidth,
+        previewChatContentWidth: applyChatContentWidth,
+        getChatContentWidth,
         uiFont,
         setUiFont,
         editorFont,
@@ -1105,7 +1200,9 @@ export function AppearanceProvider({
         safeStyleRequested,
       }}
     >
-      {children}
+      <ChatAnimationsContext.Provider value={chatAnimations}>
+        {children}
+      </ChatAnimationsContext.Provider>
     </AppearanceContext.Provider>
   )
 }

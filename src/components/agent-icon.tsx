@@ -440,6 +440,49 @@ const AntigravityMonoIcon = memo(function AntigravityMonoIcon({
   )
 })
 
+const ZCodeColorIcon = memo(function ZCodeColorIcon({
+  size = "1em",
+}: IconProps) {
+  // ZCode's Z mark, white on a dark squircle like the official app icon
+  // (zai-org/ZCode public/logo/icons, also zcode.z.ai's favicon). The three
+  // paths are the logo inlined in zcode.z.ai's header, verbatim in its
+  // 256×218 viewBox; the transform scales the mark to the app icon's
+  // proportion (68.75% of the icon's width) and centers it in the 24-box. The
+  // plate keeps the app icon's top-to-bottom #151718 → #000000 gradient on the
+  // 5.3 corner of the other plated marks (Kimi Code, Pi).
+  const id = useId()
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 24 24"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>ZCode</title>
+      <rect width="24" height="24" rx="5.3" fill={`url(#${id})`} />
+      <g fill="#FFFFFF" transform="translate(3.75 4.9831) scale(0.064453)">
+        <path d="M134.4 0.130152L116.48 25.6022C113.665 29.5699 109.054 32.0019 104.064 32.0019H6.3999V0C6.3999 0.130149 134.4 0.130152 134.4 0.130152Z" />
+        <path d="M256 0.130127L102.401 217.732H0L153.599 0.130127H256Z" />
+        <path d="M121.601 217.732L139.65 192.134C142.465 188.166 147.076 185.734 152.067 185.734H249.604V217.736H121.601V217.732Z" />
+      </g>
+      <defs>
+        <linearGradient
+          gradientUnits="userSpaceOnUse"
+          id={id}
+          x1="12"
+          x2="12"
+          y1="0"
+          y2="24"
+        >
+          <stop stopColor="#151718" />
+          <stop offset="1" stopColor="#000000" />
+        </linearGradient>
+      </defs>
+    </svg>
+  )
+})
+
 const CursorMonoIcon = memo(function CursorMonoIcon({
   size = "1em",
 }: IconProps) {
@@ -461,6 +504,106 @@ const CursorMonoIcon = memo(function CursorMonoIcon({
   )
 })
 
+const KiroColorIcon = memo(function KiroColorIcon({ size = "1em" }: IconProps) {
+  // Kiro's ghost mark from the official app icon (kiro.dev/icon.svg), drawn
+  // bare in the brand purple (#9046FF) with its two eyes cut out, so it sits
+  // at the same weight as the other frameless marks instead of carrying the
+  // icon's rounded plate. The paths are the icon's own, translated so the
+  // glyph's 655×796 mask box starts at the origin.
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="-70 0 796 796"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>Kiro CLI</title>
+      <g transform="translate(-272.637 -202.793)">
+        <path
+          fill="#9046FF"
+          fillRule="evenodd"
+          d="M398.554 818.914C316.315 1001.03 491.477 1046.74 620.672 940.156C658.687 1059.66 801.052 970.473 852.234 877.795C964.787 673.567 919.318 465.357 907.64 422.374C827.637 129.443 427.623 128.946 358.8 423.865C342.651 475.544 342.402 534.18 333.458 595.051C328.986 625.86 325.507 645.488 313.83 677.785C306.873 696.424 297.68 712.819 282.773 740.645C259.915 783.881 269.604 867.113 387.87 823.883L399.051 818.914H398.554ZM636.123 549.353C603.328 549.353 598.359 510.097 598.359 486.742C598.359 465.623 602.086 448.977 609.293 438.293C615.504 428.852 624.697 424.131 636.123 424.131C647.555 424.131 657.492 428.852 664.447 438.541C672.398 449.474 676.623 466.12 676.623 486.742C676.623 525.998 661.471 549.353 636.375 549.353H636.123ZM771.24 549.353C738.445 549.353 733.477 510.097 733.477 486.742C733.477 465.623 737.203 448.977 744.41 438.293C750.621 428.852 759.814 424.131 771.24 424.131C782.672 424.131 792.609 428.852 799.564 438.541C807.516 449.474 811.74 466.12 811.74 486.742C811.74 525.998 796.588 549.353 771.492 549.353H771.24Z"
+        />
+      </g>
+    </svg>
+  )
+})
+
+const TraeColorIcon = memo(function TraeColorIcon({ size = "1em" }: IconProps) {
+  // TRAE's mark — the notched frame with two diamond eyes — in the brand green
+  // (#32F08C) on a black squircle, the way TRAE's own favicon renders it (the
+  // green alone is too faint on a light background). Vector from LobeHub's
+  // MIT-licensed `trae.svg`; its 24-unit glyph spans y 3.4–20.541, so the
+  // transform scales it to 70% and centers it in the box.
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 24 24"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>TRAE CLI</title>
+      <rect width="24" height="24" rx="5.3" fill="#000000" />
+      <path
+        transform="translate(3.6 3.62) scale(0.7)"
+        fill="#32F08C"
+        fillRule="evenodd"
+        d="M24 20.541H3.428v-3.426H0V3.4h24V20.54zM3.428 17.115h17.144V6.827H3.428v10.288zm8.573-5.196l-2.425 2.424-2.424-2.424 2.424-2.424 2.425 2.424zm6.857-.001l-2.424 2.423-2.425-2.423 2.425-2.425 2.424 2.425z"
+      />
+    </svg>
+  )
+})
+
+const CommandCodeColorIcon = memo(function CommandCodeColorIcon({
+  size = "1em",
+}: IconProps) {
+  // Command Code's mark — the ⌘ key glyph in a squircle — the way its app icon
+  // draws it: white on black. Both paths are the vector Command Code's own
+  // VS Code extension ships (`icons/icon-dark.svg`, bundled with the
+  // `command-code` npm package): the squircle's outer edge, filled, and the
+  // glyph unchanged.
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 144 144"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>Command Code</title>
+      <path
+        fill="#000000"
+        d="M10.3193 10.3193C0 20.6387 0 37.2474 0 70.4648V73.1398C0 106.357 0 122.966 10.3193 133.285C20.6387 143.605 37.2474 143.605 70.4648 143.605H73.1398C106.357 143.605 122.966 143.605 133.285 133.285C143.605 122.966 143.605 106.357 143.605 73.1399V70.4648C143.605 37.2474 143.605 20.6387 133.285 10.3193C122.966 0 106.357 0 73.1399 0H70.4648C37.2474 0 20.6387 0 10.3193 10.3193Z"
+      />
+      <path
+        fill="#FFFFFF"
+        d="M98.8049 27.6163C89.3295 27.6163 81.6214 35.3243 81.6214 44.7997V52.1641H61.9832V44.7997C61.9832 35.3243 54.2752 27.6163 44.7997 27.6163C35.3243 27.6163 27.6163 35.3243 27.6163 44.7997C27.6163 54.2752 35.3243 61.9832 44.7997 61.9832H52.1641V81.6214H44.7997C35.3243 81.6214 27.6163 89.3295 27.6163 98.8049C27.6163 108.28 35.3243 115.988 44.7997 115.988C54.2752 115.988 61.9832 108.28 61.9832 98.8049V91.4406H81.6214V98.8049C81.6214 108.28 89.3295 115.988 98.8049 115.988C108.28 115.988 115.988 108.28 115.988 98.8049C115.988 89.3295 108.28 81.6214 98.8049 81.6214H91.4406V61.9832H98.8049C108.28 61.9832 115.988 54.2752 115.988 44.7997C115.988 35.3243 108.28 27.6163 98.8049 27.6163ZM91.4406 52.1641V44.7997C91.4406 40.7248 94.73 37.4354 98.8049 37.4354C102.88 37.4354 106.169 40.7248 106.169 44.7997C106.169 48.8747 102.88 52.1641 98.8049 52.1641H91.4406ZM44.7997 52.1641C40.7248 52.1641 37.4354 48.8747 37.4354 44.7997C37.4354 40.7248 40.7248 37.4354 44.7997 37.4354C48.8747 37.4354 52.1641 40.7248 52.1641 44.7997V52.1641H44.7997ZM61.9832 81.6214V61.9832H81.6214V81.6214H61.9832ZM98.8049 106.169C94.73 106.169 91.4406 102.88 91.4406 98.8049V91.4406H98.8049C102.88 91.4406 106.169 94.73 106.169 98.8049C106.169 102.88 102.88 106.169 98.8049 106.169ZM44.7997 106.169C40.7248 106.169 37.4354 102.88 37.4354 98.8049C37.4354 94.73 40.7248 91.4406 44.7997 91.4406H52.1641V98.8049C52.1641 102.88 48.8747 106.169 44.7997 106.169Z"
+      />
+    </svg>
+  )
+})
+
+// A compact typographic mark, not a claim to reproduce MiniMax's wordmark.
+const MiniMaxCodeColorIcon = memo(function MiniMaxCodeColorIcon({
+  size = "1em",
+}: IconProps) {
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 24 24"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>MiniMax Code</title>
+      <rect width="24" height="24" rx="6" fill="#F23F5D" />
+      <path d="M5 17V7h3l4 6 4-6h3v10h-3v-5l-4 6-4-6v5H5Z" fill="#FFFFFF" />
+    </svg>
+  )
+})
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyIcon = React.ComponentType<any>
 
@@ -470,8 +613,13 @@ const COLOR_ICONS: Partial<Record<AgentType, AnyIcon>> = {
   gemini: GeminiCliColorIcon,
   open_claw: OpenClawColorIcon,
   kimi_code: KimiCodeColorIcon,
+  minimax_code: MiniMaxCodeColorIcon,
   pi: PiColorIcon,
   deepseek: DeepSeekColorIcon,
+  kiro: KiroColorIcon,
+  zcode: ZCodeColorIcon,
+  trae: TraeColorIcon,
+  command_code: CommandCodeColorIcon,
 }
 
 const MONO_ICONS: Partial<Record<AgentType, AnyIcon>> = {
@@ -491,10 +639,20 @@ const MONO_ICONS: Partial<Record<AgentType, AnyIcon>> = {
 const AGENT_TEXT_COLORS: Partial<Record<AgentType, string>> = {}
 
 export function AgentIcon({ agentType, className }: AgentIconProps) {
+  // The mark fills its box — unless the icon sits in a control that sizes
+  // every SVG without a `size-*` class itself (Button, SelectItem, menu
+  // items), which can leave it smaller or larger than the box. Centered, it
+  // still shares the box's center line with the label beside it, rather than
+  // hanging off the box's top corner.
   const ColorIcon = COLOR_ICONS[agentType]
   if (ColorIcon) {
     return (
-      <span className={cn("inline-flex shrink-0", className)}>
+      <span
+        className={cn(
+          "inline-flex shrink-0 items-center justify-center",
+          className
+        )}
+      >
         <ColorIcon size="100%" />
       </span>
     )
@@ -510,7 +668,7 @@ export function AgentIcon({ agentType, className }: AgentIconProps) {
     return (
       <span
         className={cn(
-          "inline-flex shrink-0 text-foreground",
+          "inline-flex shrink-0 items-center justify-center text-foreground",
           AGENT_TEXT_COLORS[agentType],
           className
         )}

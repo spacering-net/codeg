@@ -7,6 +7,27 @@ import {
   openLinkWithSafety,
   useStreamdownLinkSafety,
 } from "@/components/ai-elements/link-safety"
+import { setBrowserCapabilitiesForTests } from "@/lib/browser/browser-api"
+
+/** A desktop whose backend has answered: no built-in browser here. Set in
+ *  the desktop cases — until the backend has answered, a web click on the
+ *  desktop is held back rather than routed (`useOpenUrlTarget`). */
+const DESKTOP_WITHOUT_BROWSER = {
+  available: false,
+  surface: null,
+  platform: "macos",
+  channel: "degraded" as const,
+  reasons: ["child surface not compiled"],
+  isolatedStorage: false,
+  proxy: { url: null, applies: "unsupported" as const, reason: null },
+  downloadsDir: "",
+  docGuest: false,
+  profiles: false,
+  signInUserAgent: false,
+  ownedWindowControls: false,
+  remoteEgress: false,
+  policy: { enabled: true, managedRules: [], managedSource: null },
+}
 
 const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(),
@@ -34,6 +55,10 @@ vi.mock("@/lib/platform", () => ({
 vi.mock("@/lib/transport", () => ({
   isDesktop: mocks.isDesktop,
   getActiveRemoteConnectionId: mocks.getActiveRemoteConnectionId,
+  // A desktop window bound to a remote server — mirrors the real helper.
+  isRemoteDesktopMode: () =>
+    mocks.isDesktop() && mocks.getActiveRemoteConnectionId() !== null,
+  getServerBaseUrl: () => "https://dev.example.com",
 }))
 
 vi.mock("@/contexts/active-folder-context", () => ({
@@ -45,6 +70,7 @@ vi.mock("@/contexts/active-folder-context", () => ({
 }))
 
 vi.mock("@/contexts/workspace-context", () => ({
+  useOptionalWorkspaceActions: () => null,
   useWorkspaceActions: () => ({
     openFilePreview: mocks.openFilePreview,
   }),
@@ -86,6 +112,7 @@ describe("link safety direct opening", () => {
     mocks.toastError.mockReset()
     mocks.isDesktop.mockReset()
     mocks.isDesktop.mockReturnValue(false)
+    setBrowserCapabilitiesForTests(null)
     mocks.getActiveRemoteConnectionId.mockReset()
     mocks.getActiveRemoteConnectionId.mockReturnValue(null)
     mocks.openFilePreview.mockResolvedValue(undefined)
@@ -265,6 +292,7 @@ describe("link safety direct opening", () => {
     // canonicalize.
     mocks.isDesktop.mockReturnValue(true)
     mocks.openUrl.mockResolvedValue(undefined)
+    setBrowserCapabilitiesForTests(DESKTOP_WITHOUT_BROWSER)
 
     render(<LinkSafetyHarness url="//cdn.example.com/app.js" />)
 
@@ -283,6 +311,7 @@ describe("link safety direct opening", () => {
   it("routes desktop external links through the platform opener instead of streamdown", async () => {
     mocks.isDesktop.mockReturnValue(true)
     mocks.openUrl.mockResolvedValue(undefined)
+    setBrowserCapabilitiesForTests(DESKTOP_WITHOUT_BROWSER)
 
     render(<LinkSafetyHarness url="https://example.com/docs" />)
 
@@ -302,6 +331,7 @@ describe("link safety direct opening", () => {
     mocks.isDesktop.mockReturnValue(true)
     mocks.getActiveRemoteConnectionId.mockReturnValue("conn-7")
     mocks.openUrl.mockResolvedValue(undefined)
+    setBrowserCapabilitiesForTests(DESKTOP_WITHOUT_BROWSER)
 
     render(<LinkSafetyHarness url="https://example.com/docs" />)
 

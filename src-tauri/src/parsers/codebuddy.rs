@@ -19,13 +19,19 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, is_safe_subagent_id, latest_turn_total_usage_tokens,
     merge_context_window_stats, relocate_orphaned_tool_results, resolve_patch_line_numbers,
-    structurize_read_tool_output, title_from_user_text, truncate_str, AgentParser, ParseError,
+    structurize_read_tool_output, title_from_user_text, truncate_str, AgentEnv, AgentParser,
+    ParseError,
 };
 
 /// Resolve CodeBuddy's config dir, honoring `CODEBUDDY_CONFIG_DIR`, else
 /// `~/.codebuddy` (mirrors `resolve_claude_config_dir`).
 pub(crate) fn resolve_codebuddy_config_dir() -> PathBuf {
-    resolve_codebuddy_config_dir_from(std::env::var_os("CODEBUDDY_CONFIG_DIR"), dirs::home_dir())
+    resolve_codebuddy_config_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The config dir of the CodeBuddy launched with `env`.
+pub(crate) fn resolve_codebuddy_config_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_codebuddy_config_dir_from(env.var_os("CODEBUDDY_CONFIG_DIR"), dirs::home_dir())
 }
 
 fn resolve_codebuddy_config_dir_from(
@@ -52,8 +58,13 @@ pub struct CodeBuddyParser {
 
 impl CodeBuddyParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the CodeBuddy launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_codebuddy_config_dir().join("projects"),
+            base_dir: resolve_codebuddy_config_dir_for_env(env).join("projects"),
         }
     }
 
@@ -62,6 +73,23 @@ impl CodeBuddyParser {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
+    }
+
+    /// The images a prompt record carried, read from the blob store beside the
+    /// `projects` dir this parser reads ([`read_prompt_image`]).
+    fn prompt_images(&self, value: &Value) -> Vec<ContentBlock> {
+        let (Some(config_dir), Some(items)) = (
+            self.base_dir.parent(),
+            value.get("content").and_then(Value::as_array),
+        ) else {
+            return Vec::new();
+        };
+        let blobs = config_dir.join("blobs");
+        items
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("image_blob_ref"))
+            .filter_map(|item| read_prompt_image(&blobs, item))
+            .collect()
     }
 
     fn parse_summary(&self, path: &Path) -> Option<ConversationSummary> {
@@ -117,7 +145,7 @@ impl CodeBuddyParser {
                     "user" if !is_injected_user_record(&value) => {
                         message_count += 1;
                         if first_user_text.is_none() {
-                            let text = collect_text(&value, "input_text");
+                            let text = shown_user_text(collect_text(&value, "input_text"));
                             if !text.trim().is_empty() {
                                 first_user_text = Some(title_from_user_text(text.trim()));
                             }
@@ -231,19 +259,29 @@ impl CodeBuddyParser {
                             // no fallback title.
                             capture_task_notification(&text, &mut background_notifications);
                         } else {
+                            let text = shown_user_text(text);
                             message_count += 1;
                             if first_user_text.is_none() && !text.trim().is_empty() {
                                 first_user_text = Some(title_from_user_text(text.trim()));
                             }
+                            // The typed text, then the prompt's images: what
+                            // CodeBuddy's own replay shows for the record.
+                            let mut content = Vec::new();
                             if !text.trim().is_empty() {
-                                messages.push(text_message(
+                                content.push(ContentBlock::Text { text });
+                            }
+                            content.extend(self.prompt_images(&value));
+                            if !content.is_empty() {
+                                let mut message = text_message(
                                     format!("cb-user-{idx}"),
                                     MessageRole::User,
-                                    text,
+                                    String::new(),
                                     ts,
                                     None,
                                     None,
-                                ));
+                                );
+                                message.content = content;
+                                messages.push(message);
                             }
                         }
                     }
@@ -298,7 +336,11 @@ impl CodeBuddyParser {
                             meta: None,
                         }],
                         timestamp: ts,
-                        usage: None,
+                        // A model request's usage is written on the LAST item of
+                        // its response, which is a `function_call` whenever the
+                        // request ends in a tool call. Each request carries it
+                        // once, so reading it here counts nothing twice.
+                        usage: usage_from_raw(&value),
                         duration_ms: None,
                         model: None,
                         completed_at: Some(ts),
@@ -336,6 +378,7 @@ impl CodeBuddyParser {
                             is_error: tool_is_error(&value),
                             agent_stats,
                             images: Vec::new(),
+                            exit_code: None,
                         }],
                         timestamp: ts,
                         usage: None,
@@ -539,9 +582,73 @@ impl CodeBuddyTitles {
 /// was nothing to summarize. Showing one of these as the session name is worse
 /// than falling through to the first user message.
 fn is_placeholder_title(text: &str) -> bool {
-    text == "(No content)"
-        || text == "/compact"
-        || (text.starts_with("<image_local_path>") && text.ends_with("</image_local_path>"))
+    text == "(No content)" || text == "/compact" || is_image_local_path_block(text)
+}
+
+/// CodeBuddy's `isImageLocalPathBlock`: the text item its prompt converter adds
+/// after each image a prompt carried, telling the model where it saved the file
+/// (`<image_local_path>…/clipboard-….png</image_local_path>`). The person never
+/// typed it, and CodeBuddy's own replay leaves it out.
+fn is_image_local_path_block(text: &str) -> bool {
+    let text = text.trim();
+    text.starts_with("<image_local_path>") && text.ends_with("</image_local_path>")
+}
+
+/// The extension CodeBuddy's blob store gives a file of `mime` (the image
+/// entries of `PathUtils.MIME_EXT_MAP`); any other type is stored as `.bin`.
+fn blob_extension(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        _ => "bin",
+    }
+}
+
+/// One `image_blob_ref` item of a prompt, read back from CodeBuddy's blob store
+/// under the checks its own `BlobStore.read` makes: the id is a lowercase
+/// 64-digit hex digest, the file is the one `getBlobPath` names
+/// (`blobs/<first two digits>/<id>.<ext>`), its length matches the recorded
+/// `size` when there is one, and its SHA-256 is the id. The record's
+/// `blob_path` is never read, so a record cannot point the parser at another
+/// file. A blob that is gone or fails a check is left out, as CodeBuddy's
+/// replay leaves it out.
+fn read_prompt_image(blobs: &Path, item: &Value) -> Option<ContentBlock> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use sha2::{Digest, Sha256};
+
+    let id = item.get("blob_id")?.as_str()?;
+    if id.len() != 64 || !id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return None;
+    }
+    let mime = item.get("mime")?.as_str()?;
+    if !mime.starts_with("image/") {
+        return None;
+    }
+    let path = blobs
+        .join(&id[..2])
+        .join(format!("{id}.{}", blob_extension(mime)));
+    let bytes = fs::read(path).ok()?;
+    if let Some(size) = item.get("size") {
+        if size.as_u64() != Some(bytes.len() as u64) {
+            return None;
+        }
+    }
+    if format!("{:x}", Sha256::digest(&bytes)) != id {
+        return None;
+    }
+    Some(ContentBlock::Image {
+        data: STANDARD.encode(&bytes),
+        mime_type: mime.to_string(),
+        uri: item
+            .get("original_filename")
+            .and_then(Value::as_str)
+            .map(String::from),
+    })
 }
 
 /// Record types that carry actual conversation content, as opposed to the
@@ -581,17 +688,46 @@ fn call_id(value: &Value) -> Option<String> {
         .map(String::from)
 }
 
+/// What a prompt record shows: the text the person typed.
+///
+/// A prompt command is persisted as the command tags Claude Code introduced
+/// followed by the prompt it expands to: `<command-message>init
+/// </command-message> <command-name>/init</command-name>`, plus ` <command-args>
+/// …</command-args>` when it has arguments, then a line break and the expansion.
+/// CodeBuddy's custom commands, MCP prompts and workflows were already stored
+/// this way in 2.164.0, and since 2.167.0 its built-in ones such as `/init` are
+/// too, where they used to be stored as the bare expansion. CodeBuddy's own
+/// history replay shows the invocation alone, and so does this; the expansion is
+/// written for the model. Only a record that OPENS with the tags is one, so a
+/// prompt that merely mentions them is left as typed.
+fn shown_user_text(text: String) -> String {
+    let head = text.trim_start();
+    if head.starts_with("<command-message>") || head.starts_with("<command-name>") {
+        if let Some(display) = crate::parsers::claude::slash_command_display(head) {
+            return display;
+        }
+    }
+    text
+}
+
 /// Concatenate the `text` of every `content[]` item of the given `item_type`
-/// (`input_text` for user turns, `output_text` for assistant turns).
+/// (`input_text` for user turns, `output_text` for assistant turns), leaving
+/// out the note a prompt carries for each of its images
+/// ([`is_image_local_path_block`]).
 fn collect_text(value: &Value, item_type: &str) -> String {
     let mut out = String::new();
     if let Some(items) = value.get("content").and_then(|c| c.as_array()) {
         for item in items {
-            if item.get("type").and_then(|t| t.as_str()) == Some(item_type) {
-                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                    out.push_str(text);
-                }
+            if item.get("type").and_then(|t| t.as_str()) != Some(item_type) {
+                continue;
             }
+            let Some(text) = item.get("text").and_then(|t| t.as_str()) else {
+                continue;
+            };
+            if item_type == "input_text" && is_image_local_path_block(text) {
+                continue;
+            }
+            out.push_str(text);
         }
     }
     out
@@ -616,21 +752,35 @@ fn reasoning_text(value: &Value) -> String {
     String::new()
 }
 
-/// Map CodeBuddy's `providerData.rawUsage` (OpenAI completions shape) onto
-/// `TurnUsage`. `prompt_tokens` already includes the cached prefix, so subtract
-/// `cached_tokens` to get the non-cached input.
+/// Map CodeBuddy's `providerData.rawUsage` onto `TurnUsage`.
+///
+/// CodeBuddy writes one of two shapes there. A Chat Completions model gets the
+/// provider's own usage object, taken off the raw stream: `prompt_tokens` /
+/// `completion_tokens`, the cached count under
+/// `prompt_tokens_details.cached_tokens`. A Responses-API model (a custom model
+/// can be one since 2.163.0) carries no usage on its raw stream events, so the
+/// record gets the agents SDK's `response_done` usage instead: `inputTokens` /
+/// `outputTokens`, the cached count under `inputTokensDetails.cached_tokens`.
+/// The API's own spelling of those (`input_tokens`, `output_tokens`,
+/// `input_tokens_details`) is accepted as well, as the SDK's `Usage` reader
+/// accepts it. Either input count already includes the cached prefix, so the
+/// cached tokens are subtracted to get the non-cached input.
 fn usage_from_raw(value: &Value) -> Option<TurnUsage> {
     let raw = value.get("providerData")?.get("rawUsage")?;
-    let prompt = raw.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0);
-    let completion = raw
-        .get("completion_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let cached = raw
-        .get("prompt_tokens_details")
-        .and_then(|d| d.get("cached_tokens"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+    let first = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| raw.get(*key).and_then(Value::as_u64))
+    };
+    let prompt = first(&["prompt_tokens", "inputTokens", "input_tokens"]).unwrap_or(0);
+    let completion = first(&["completion_tokens", "outputTokens", "output_tokens"]).unwrap_or(0);
+    let cached = [
+        "prompt_tokens_details",
+        "inputTokensDetails",
+        "input_tokens_details",
+    ]
+    .iter()
+    .find_map(|key| raw.get(*key)?.get("cached_tokens").and_then(Value::as_u64))
+    .unwrap_or(0);
     if prompt == 0 && completion == 0 && cached == 0 {
         return None;
     }
@@ -818,7 +968,19 @@ fn tool_is_error(value: &Value) -> bool {
 /// marks every one of them `providerData.isMeta: true` — the
 /// `<task-notification>` a finished background worker enqueues
 /// (`BackgroundTaskNotifier::enqueueAndScheduleDrain` calls
-/// `kQ(xml, {isMeta: true})`), a `/goal` kick-off, and the like.
+/// `kQ(xml, {isMeta: true})`), a `/goal` kick-off, and the like. Since 2.159.0
+/// that includes an ACP `session/prompt` sent with
+/// `_meta["codebuddy.ai"].isMeta` (advertised as
+/// `agentCapabilities.metaPromptSupport`; per the 2.159.0 changelog it reaches
+/// the model but is not shown, broadcast or replayed as a user message):
+/// `markAcpMetaPromptItems` stamps the same flag on its user items. codeg never
+/// sends one, but another client's would land here. It also covers the
+/// task-list reminders CodeBuddy 2.162.0 through 2.164.0 persisted for the
+/// model: a `<system-reminder>` text flagged `{isMeta, skipRun,
+/// startsNewUserRequest: false, taskReminderKind: "task" | "todo",
+/// taskReminderAnchorId}` that it leaves out of its own replay. 2.167.0 stopped
+/// writing them (and dropped the `CODEBUDDY_DISABLE_TASK_REMINDERS` switch), but
+/// the ones already on disk stay there.
 ///
 /// CodeBuddy's OWN renderer skips exactly these records when it replays a
 /// session (`"message" === type && "user" === role && (isMeta ||
@@ -1081,6 +1243,8 @@ fn agent_stats_from_subagent(
         lines_removed: None,
         other_tool_count: None,
         tool_calls,
+        timeline: Vec::new(),
+        recovered_result: None,
         // CodeBuddy's sub-agent transcript is a file under the parent session,
         // not a session of its own.
         child_session_id: None,
@@ -1301,6 +1465,370 @@ mod tests {
         assert_eq!(usage.input_tokens, 24049 - 12800);
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Each model request's usage is written once, on the last item of its
+    /// response, and when the request ends in a tool call that item is the
+    /// `function_call`. The figures are from a real session: one tool round,
+    /// then the answer. Both requests must count.
+    #[test]
+    fn usage_written_on_a_function_call_counts() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-fc-usage-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-fc-usage";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"message","role":"user","timestamp":1781821844178i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"what is this app?"}]}),
+                json!({"type":"function_call","timestamp":1781821845000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Read","callId":"call_1","arguments":"{\"file_path\":\"/Users/demo/app/README.md\"}",
+                       "providerData":{"messageId":"m1","rawUsage":{"prompt_tokens":12995,"completion_tokens":267,"total_tokens":13262,
+                         "prompt_tokens_details":{"cached_tokens":0}}}}),
+                json!({"type":"function_call_result","timestamp":1781821846000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Read","callId":"call_1","status":"completed","output":{"type":"text","text":"# demo"},
+                       "providerData":{"messageId":"m1"}}),
+                json!({"type":"message","role":"assistant","timestamp":1781821847000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"output_text","text":"A demo app."}],
+                       "providerData":{"messageId":"m2","rawUsage":{"prompt_tokens":13388,"completion_tokens":52,"total_tokens":13440,
+                         "prompt_tokens_details":{"cached_tokens":12992}}}}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let usage = detail
+            .session_stats
+            .as_ref()
+            .and_then(|s| s.total_usage.as_ref())
+            .expect("usage");
+        assert_eq!(usage.output_tokens, 267 + 52);
+        assert_eq!(usage.cache_read_input_tokens, 12992);
+        assert_eq!(usage.input_tokens, 12995 + (13388 - 12992));
+
+        // And it is attributed to the turn that made the tool call.
+        let tool_turn = detail
+            .turns
+            .iter()
+            .find(|t| {
+                t.blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            })
+            .expect("tool-call turn");
+        let tool_usage = tool_turn.usage.as_ref().expect("tool-call turn usage");
+        assert_eq!(
+            (tool_usage.input_tokens, tool_usage.output_tokens),
+            (12995, 267)
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// CodeBuddy's TUI starts new sessions in PTC mode since 2.168.2: the
+    /// model's only direct tool is `REPL`, whose JavaScript calls the other
+    /// tools. These records are a real 2.168.2 session (ids and paths
+    /// shortened, `providerData` trimmed) that ran one PTC step, was reopened
+    /// by a host without `mainAgentSupport` (which gets standard mode) and
+    /// continued there. The Read and Bash the code called left no records,
+    /// and `session-meta` still says `ptc` after the standard turn; only each
+    /// record's `providerData.agent` (`ptc`, then `cli`) tells the turns apart.
+    #[test]
+    fn ptc_session_shows_each_repl_step_as_one_tool_card() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-ptc-{}", uuid::Uuid::new_v4()));
+        let sid = "01a1490d-c719-7ac6-9dca-77bf22758389";
+        let code = "const r = await Read({ file_path: \"/Users/demo/app/notes.txt\" });\n\
+                    const b = await Bash({ command: \"echo ptc-ok | tee ptc-marker.txt\", description: \"probe echo\" });\n\
+                    return { read: JSON.stringify(r).slice(0, 300), bash: JSON.stringify(b).slice(0, 300) };";
+        let arguments =
+            serde_json::to_string(&json!({"code": code, "description": "read notes and run echo"}))
+                .expect("serialize arguments");
+        let output = r#"{"result":{"read":"\"TEXTFILE_MARKER line one\\nline two\\n\"","bash":"{\"stdout\":\"ptc-ok\\n\",\"stderr\":\"\",\"exitCode\":0,\"signal\":null}"},"stdout":"","stderr":""}"#;
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"session-meta","id":"m1","sessionId":sid,"timestamp":1792227002225i64,
+                       "meta":{"codebuddy.ai/mainAgent":"ptc"}}),
+                json!({"id":"u1","timestamp":1792227002501i64,"type":"message","role":"user","sessionId":sid,"cwd":"/Users/demo/app",
+                       "content":[{"type":"input_text","text":"PLEASE_PTC read notes and echo"}],"providerData":{"agent":"ptc"}}),
+                json!({"type":"file-history-snapshot","timestamp":1792227002510i64,"messageId":"u1","snapshot":{},
+                       "isSnapshotUpdate":false,"cwd":"/Users/demo/app"}),
+                json!({"id":"c1","parentId":"u1","timestamp":1792227002817i64,"type":"function_call","sessionId":sid,"cwd":"/Users/demo/app",
+                       "callId":"call_ptc_1","name":"REPL","arguments":arguments,
+                       "providerData":{"agent":"ptc","messageId":"r1","requestModelName":"Auto","argumentsDisplayText":code,
+                         "rawUsage":{"prompt_tokens":1001,"completion_tokens":11,"total_tokens":1012}}}),
+                json!({"id":"c2","parentId":"c1","timestamp":1792227002991i64,"type":"function_call_result","sessionId":sid,"cwd":"/Users/demo/app",
+                       "name":"REPL","callId":"call_ptc_1","status":"completed","output":{"type":"text","text":output},
+                       "providerData":{"agent":"ptc","messageId":"r1","requestModelName":"Auto",
+                         "toolResult":{"title":"read notes and run echo","content":output,
+                           "renderer":{"type":"text","value":"· 1s\n{}"}}}}),
+                json!({"id":"a1","parentId":"c2","timestamp":1792227003016i64,"type":"message","role":"assistant","status":"completed",
+                       "sessionId":sid,"cwd":"/Users/demo/app",
+                       "content":[{"providerData":{"annotations":[]},"type":"output_text","text":"FINAL_ANSWER: done after tool result"}],
+                       "providerData":{"agent":"ptc","messageId":"r2","requestModelName":"Auto",
+                         "rawUsage":{"prompt_tokens":1002,"completion_tokens":12,"total_tokens":1014}}}),
+                json!({"type":"session-meta","id":"m2","sessionId":sid,"timestamp":1792227032000i64,
+                       "meta":{"codebuddy.ai/mainAgent":"ptc","codebuddy.ai/hostKind":"unopted"}}),
+                json!({"type":"session-meta","id":"m3","sessionId":sid,"timestamp":1792227032000i64,
+                       "meta":{"codebuddy.ai/mainAgent":"ptc","codebuddy.ai/hostKind":"unopted"}}),
+                json!({"id":"u2","parentId":"a1","timestamp":1792227036112i64,"type":"message","role":"user","sessionId":sid,"cwd":"/Users/demo/app",
+                       "content":[{"type":"input_text","text":"PLEASE_PTC again"}],"providerData":{"agent":"cli"}}),
+                json!({"id":"a2","parentId":"u2","timestamp":1792227036201i64,"type":"message","role":"assistant","status":"completed",
+                       "sessionId":sid,"cwd":"/Users/demo/app",
+                       "content":[{"type":"output_text","text":"hello from fake model"}],
+                       "providerData":{"agent":"cli","messageId":"r3","requestModelName":"Auto",
+                         "rawUsage":{"prompt_tokens":1002,"completion_tokens":12,"total_tokens":1014,
+                           "prompt_tokens_details":{"cached_tokens":100}}}}),
+                json!({"id":"s1","timestamp":1792227036204i64,"type":"summary","summary":"PLEASE_PTC read notes and echo"}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let summaries = parser.list_conversations().expect("list");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].message_count, 4);
+
+        let detail = parser.get_conversation(sid).expect("detail");
+        let blocks = || detail.turns.iter().flat_map(|t| t.blocks.iter());
+
+        let tool_uses: Vec<_> = blocks()
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_use_id,
+                    tool_name,
+                    input_preview,
+                    ..
+                } => Some((
+                    tool_use_id.as_deref(),
+                    tool_name.as_str(),
+                    input_preview.as_deref(),
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_uses.len(), 1, "one card for the step: {tool_uses:?}");
+        let (id, name, input) = tool_uses[0];
+        assert_eq!((id, name), (Some("call_ptc_1"), "REPL"));
+        let input: Value = serde_json::from_str(input.expect("input")).expect("JSON input");
+        assert_eq!(input["code"], code);
+        assert_eq!(input["description"], "read notes and run echo");
+
+        let results: Vec<_> = blocks()
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    output_preview,
+                    is_error,
+                    ..
+                } => Some((tool_use_id.as_deref(), output_preview.as_deref(), *is_error)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results, vec![(Some("call_ptc_1"), Some(output), false)]);
+
+        // The prompts and answers of both turns, and nothing from `session-meta`.
+        let texts: Vec<(&str, &str)> = detail
+            .turns
+            .iter()
+            .flat_map(|t| {
+                let role = if matches!(t.role, TurnRole::User) {
+                    "user"
+                } else {
+                    "assistant"
+                };
+                t.blocks.iter().filter_map(move |b| match b {
+                    ContentBlock::Text { text } => Some((role, text.as_str())),
+                    _ => None,
+                })
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                ("user", "PLEASE_PTC read notes and echo"),
+                ("assistant", "FINAL_ANSWER: done after tool result"),
+                ("user", "PLEASE_PTC again"),
+                ("assistant", "hello from fake model"),
+            ]
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A Responses-API model's record carries the agents SDK's `response_done`
+    /// usage, which is what CodeBuddy stores when the raw stream reports none.
+    #[test]
+    fn responses_api_usage_is_read() {
+        let record = json!({"providerData":{"rawUsage":{
+            "inputTokens":5000,"outputTokens":120,"totalTokens":5120,
+            "inputTokensDetails":{"cached_tokens":4096},
+            "outputTokensDetails":{"reasoning_tokens":64},
+            "requestUsageEntries":[{"inputTokens":5000,"outputTokens":120,"totalTokens":5120}]
+        }}});
+        let usage = usage_from_raw(&record).expect("usage");
+        assert_eq!(usage.input_tokens, 5000 - 4096);
+        assert_eq!(usage.output_tokens, 120);
+        assert_eq!(usage.cache_read_input_tokens, 4096);
+
+        let api_spelling = json!({"providerData":{"rawUsage":{
+            "input_tokens":900,"output_tokens":30,"input_tokens_details":{"cached_tokens":512}
+        }}});
+        let usage = usage_from_raw(&api_spelling).expect("usage");
+        assert_eq!(usage.input_tokens, 900 - 512);
+        assert_eq!(usage.output_tokens, 30);
+        assert_eq!(usage.cache_read_input_tokens, 512);
+
+        // Through the parser, as the session's usage.
+        let root =
+            std::env::temp_dir().join(format!("codeg-cb-responses-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-responses";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"message","role":"user","timestamp":1781821844178i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"hi"}]}),
+                json!({"type":"message","role":"assistant","timestamp":1781821845000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"output_text","text":"Hello."}],
+                       "providerData":{"messageId":"m1","rawUsage":{
+                         "inputTokens":5000,"outputTokens":120,"totalTokens":5120,
+                         "inputTokensDetails":{"cached_tokens":4096},"outputTokensDetails":{"reasoning_tokens":64}}}}),
+            ],
+        );
+        let detail = CodeBuddyParser::with_base_dir(root.clone())
+            .get_conversation(sid)
+            .expect("detail");
+        let usage = detail
+            .session_stats
+            .as_ref()
+            .and_then(|s| s.total_usage.as_ref())
+            .expect("usage");
+        assert_eq!(
+            (
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_input_tokens
+            ),
+            (5000 - 4096, 120, 4096)
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 2.162.0 persists the task-list reminders it adds for the model as
+    /// `<system-reminder>` user records flagged `isMeta`. The record below has
+    /// the shape its reminder factory builds; it is no prompt, so it adds no
+    /// user turn and no message count.
+    #[test]
+    fn task_list_reminders_are_not_prompts() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-reminder-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-reminder";
+        let reminder = "<system-reminder>\nThe TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using the TodoWrite tool to track progress. Make sure that you NEVER mention this reminder to the user\n\n</system-reminder>";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"id":"u1","type":"message","role":"user","timestamp":1781821844178i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"fix the bug"}]}),
+                json!({"id":"a1","type":"message","role":"assistant","timestamp":1781821845000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"output_text","text":"Fixed."}]}),
+                json!({"id":"r1","type":"message","role":"user","timestamp":1781821846000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":reminder}],
+                       "providerData":{"isMeta":true,"skipRun":true,"startsNewUserRequest":false,
+                         "taskReminderKind":"todo","taskReminderAnchorId":"a1"}}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let summaries = parser.list_conversations().expect("list");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].message_count, 2);
+
+        let detail = parser.get_conversation(sid).expect("detail");
+        assert_eq!(detail.summary.message_count, 2);
+        let user_texts: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_texts, vec!["fix the bug"]);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // Since 2.167.0 `/init` is stored the way custom commands already were:
+    // the command tags, then the prompt they expand to. The bubble shows what
+    // was typed, as CodeBuddy's own replay does; a prompt that only mentions the
+    // tags stays as typed.
+    #[test]
+    fn prompt_commands_show_as_typed() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-command-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-command";
+        let user = |id: &str, ts: i64, text: &str| {
+            json!({"id":id,"type":"message","role":"user","timestamp":ts,"cwd":"/Users/demo/app",
+                   "sessionId":sid,"content":[{"type":"input_text","text":text}]})
+        };
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                user(
+                    "u1",
+                    1781821844178,
+                    "<command-message>init</command-message> <command-name>/init</command-name>\n\
+                     Please analyze this codebase and create a CODEBUDDY.md file",
+                ),
+                json!({"id":"a1","type":"message","role":"assistant","timestamp":1781821845000i64,
+                       "cwd":"/Users/demo/app","sessionId":sid,"content":[{"type":"output_text","text":"Created."}]}),
+                user(
+                    "u2",
+                    1781821846000,
+                    "<command-message>review</command-message> <command-name>/review</command-name> \
+                     <command-args>src/main.rs</command-args>\nReview the file for bugs",
+                ),
+                user(
+                    "u3",
+                    1781821847000,
+                    "why does <command-name>/x</command-name> appear here?",
+                ),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let summaries = parser.list_conversations().expect("list");
+        let detail = parser.get_conversation(sid).expect("detail");
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(summaries[0].title.as_deref(), Some("/init"));
+        assert_eq!(detail.summary.title.as_deref(), Some("/init"));
+        let user_texts: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            user_texts,
+            vec![
+                "/init",
+                "/review src/main.rs",
+                "why does <command-name>/x</command-name> appear here?",
+            ]
+        );
     }
 
     /// Parse one session through BOTH title paths (list + detail) and assert
@@ -2410,5 +2938,174 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_config_dir_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("CODEBUDDY_CONFIG_DIR", "/relocated/codebuddy")]);
+        assert_eq!(
+            CodeBuddyParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/codebuddy").join("projects")
+        );
+    }
+
+    const PROMPT_IMAGE_BYTES: &[u8] = b"\x89PNG\r\n\x1a\nnot-really-pixels";
+
+    /// CodeBuddy names a blob by the SHA-256 of its bytes.
+    fn prompt_image_blob_id() -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(PROMPT_IMAGE_BYTES))
+    }
+
+    /// A config dir whose blob store holds the prompt image, laid out the way
+    /// CodeBuddy's `getBlobPath` writes it.
+    fn home_with_prompt_image(tag: &str) -> PathBuf {
+        let home = std::env::temp_dir().join(format!("codeg-cb-{tag}-{}", uuid::Uuid::new_v4()));
+        let id = prompt_image_blob_id();
+        let blob_dir = home.join("blobs").join(&id[..2]);
+        std::fs::create_dir_all(&blob_dir).expect("create blob dir");
+        std::fs::write(blob_dir.join(format!("{id}.png")), PROMPT_IMAGE_BYTES).expect("write blob");
+        home
+    }
+
+    fn prompt_record(sid: &str, timestamp: i64, content: Value) -> Value {
+        json!({"type":"message","role":"user","timestamp":timestamp,"cwd":"/Users/demo/app",
+               "sessionId":sid,"content":content})
+    }
+
+    fn user_blocks(detail: &ConversationDetail) -> Vec<Vec<ContentBlock>> {
+        detail
+            .turns
+            .iter()
+            .filter(|turn| matches!(turn.role, TurnRole::User))
+            .map(|turn| turn.blocks.clone())
+            .collect()
+    }
+
+    // CodeBuddy stores an image a prompt carried as an `image_blob_ref`, then
+    // adds a text item telling the model where it saved the file. Its own
+    // replay shows the typed text and the image and drops that note. Reading
+    // every `input_text` showed the note as part of what the person typed, and
+    // in the title, and never showed the image. The records are a real 2.170.0
+    // prompt with its paths trimmed; `blob_path` points nowhere on purpose,
+    // because the store location is CodeBuddy's, not the record's.
+    #[test]
+    fn a_prompt_image_shows_as_the_image_not_as_its_saved_path() {
+        let home = home_with_prompt_image("image");
+        let sid = "sess-image";
+        let image_ref = json!({"type":"image_blob_ref","blob_id":prompt_image_blob_id(),
+            "mime":"image/png","size":PROMPT_IMAGE_BYTES.len(),
+            "blob_path":"/moved/away/blobs/24/elsewhere.png"});
+        let saved_path = json!({"type":"input_text",
+            "text":"<image_local_path>/tmp/workbuddy-clipboard-images/clipboard-1.png</image_local_path>"});
+        write_session(
+            &home.join("projects"),
+            "Users-demo-app",
+            sid,
+            &[
+                prompt_record(
+                    sid,
+                    1792505064302,
+                    json!([{"type":"input_text","text":"hello image"}, image_ref, saved_path]),
+                ),
+                json!({"type":"message","role":"assistant","timestamp":1792505064496i64,
+                       "cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"output_text","text":"hello from fake"}]}),
+                // An image with no typed text keeps its bubble: the image is it.
+                prompt_record(sid, 1792505065000, json!([image_ref, saved_path])),
+            ],
+        );
+        let parser = CodeBuddyParser::with_base_dir(home.join("projects"));
+
+        let summaries = parser.list_conversations().expect("list");
+        assert_eq!(summaries[0].title.as_deref(), Some("hello image"));
+        // Both prompts still count, the image-only one included.
+        assert_eq!(summaries[0].message_count, 3);
+
+        let detail = parser.get_conversation(sid).expect("detail");
+        assert_eq!(detail.summary.title.as_deref(), Some("hello image"));
+        assert_eq!(detail.summary.message_count, 3);
+        let encoded = {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            STANDARD.encode(PROMPT_IMAGE_BYTES)
+        };
+        let users = user_blocks(&detail);
+        assert_eq!(users.len(), 2, "{users:?}");
+        assert!(
+            matches!(
+                users[0].as_slice(),
+                [ContentBlock::Text { text }, ContentBlock::Image { data, mime_type, .. }]
+                    if text == "hello image" && *data == encoded && mime_type == "image/png"
+            ),
+            "{:?}",
+            users[0]
+        );
+        assert!(
+            matches!(
+                users[1].as_slice(),
+                [ContentBlock::Image { data, .. }] if *data == encoded
+            ),
+            "{:?}",
+            users[1]
+        );
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    // A blob is read the way CodeBuddy's own store reads it, and only then: a
+    // lowercase 64-digit hex id, the file its `getBlobPath` names, the recorded
+    // size when there is one, and bytes whose SHA-256 is the id. So a record
+    // cannot point the parser at another file, and a blob CodeBuddy would
+    // refuse is not shown. The typed text still is.
+    #[test]
+    fn a_blob_ref_reads_nothing_outside_the_image_store() {
+        let home = home_with_prompt_image("blob-guard");
+        let id = prompt_image_blob_id();
+        std::fs::write(home.join("secret.png"), b"not for the history view").unwrap();
+        // The same bytes stored under a non-image type (which CodeBuddy files
+        // as `.bin`) are still not an image.
+        std::fs::write(
+            home.join("blobs").join(&id[..2]).join(format!("{id}.bin")),
+            PROMPT_IMAGE_BYTES,
+        )
+        .unwrap();
+        // A file at a well-formed id whose bytes are not that id's.
+        let forged = "0".repeat(64);
+        std::fs::create_dir_all(home.join("blobs").join("00")).unwrap();
+        std::fs::write(
+            home.join("blobs").join("00").join(format!("{forged}.png")),
+            PROMPT_IMAGE_BYTES,
+        )
+        .unwrap();
+        let sid = "sess-guard";
+        write_session(
+            &home.join("projects"),
+            "Users-demo-app",
+            sid,
+            &[prompt_record(
+                sid,
+                1792505064302,
+                json!([
+                    {"type":"input_text","text":"look"},
+                    {"type":"image_blob_ref","blob_id":"../../secret","mime":"image/png",
+                     "blob_path":home.join("secret.png")},
+                    {"type":"image_blob_ref","blob_id":id.to_uppercase(),"mime":"image/png"},
+                    {"type":"image_blob_ref","blob_id":id,"mime":"application/octet-stream"},
+                    {"type":"image_blob_ref","blob_id":id,"mime":"image/png","size":1},
+                    {"type":"image_blob_ref","blob_id":forged,"mime":"image/png"},
+                ]),
+            )],
+        );
+        let detail = CodeBuddyParser::with_base_dir(home.join("projects"))
+            .get_conversation(sid)
+            .expect("detail");
+        let users = user_blocks(&detail);
+        assert!(
+            matches!(users.as_slice(), [blocks] if matches!(blocks.as_slice(),
+                [ContentBlock::Text { text }] if text == "look")),
+            "{users:?}"
+        );
+        std::fs::remove_dir_all(&home).ok();
     }
 }

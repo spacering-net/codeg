@@ -1,7 +1,7 @@
 /**
  * Parsing helper for the codeg-mcp `check_user_feedback` tool result, shared by
- * the in-stream `FeedbackCheckResultCard` capsule and the adapter pass that
- * hides no-op checks (`dropHiddenFeedbackChecks`).
+ * the timeline's feedback-check row and the adapter pass that hides no-op
+ * checks (`dropHiddenFeedbackChecks`).
  *
  * The tool polls for live-steering notes the user sent mid-turn. Its result is
  * persisted differently per host:

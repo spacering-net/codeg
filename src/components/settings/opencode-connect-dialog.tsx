@@ -25,12 +25,22 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import { FetchedModelPicker } from "@/components/settings/provider-models"
+import { useProviderModels } from "@/hooks/use-provider-models"
 import {
   DEFAULT_OPENAI_COMPATIBLE_NPM,
-  applyApiKeyConnect,
   customProviderIdIssue,
+  keyConnectableIntegrations,
+  keyMethodOf,
+  openCodeModelsProtocol,
+  visibleKeyFields,
+  type CustomProviderInput,
 } from "@/lib/opencode-connect"
-import type { OpenCodeCatalogProvider } from "@/lib/types"
+import type {
+  OpenCodeCatalogProvider,
+  OpenCodeFormField,
+  OpenCodeIntegration,
+} from "@/lib/types"
 
 const NPM_OPTIONS = [
   DEFAULT_OPENAI_COMPATIBLE_NPM,
@@ -45,34 +55,57 @@ const NPM_OPTIONS = [
   "@ai-sdk/deepseek",
 ]
 
+/** What the connect dialog asks the panel to do. */
+export interface OpenCodeConnectRequest {
+  providerId: string
+  /** The key to store in OpenCode; "" leaves the stored credentials alone. */
+  apiKey: string
+  /** Answers to the key method's extra fields (Azure's resource name, …). */
+  answer?: Record<string, string>
+  /** `undefined` leaves the base URL override alone, "" clears it, anything
+   *  else sets it. */
+  baseUrlOverride?: string
+  /** Replace the provider's stored credentials instead of adding another. */
+  replace: boolean
+}
+
 export interface OpenCodeConnectDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** OpenCode's integrations; the ones an API key connects are offered. */
+  integrations: OpenCodeIntegration[]
+  integrationsLoading: boolean
+  /** Why OpenCode could not be asked (not installed, too old, …). */
+  integrationsError: string | null
+  /** models.dev, for the docs link and model count. */
   catalog: OpenCodeCatalogProvider[]
-  catalogLoading: boolean
-  configText: string
-  authJsonText: string
-  /** When set, the dialog edits this already-connected (catalog) provider. */
+  /** When set, the dialog edits this already-connected provider. */
   editProviderId?: string | null
-  onConnect: (
-    next: { configText: string; authJsonText: string },
-    providerId: string
-  ) => Promise<void>
+  /** The base URL override the config holds for `editProviderId`; "" when it
+   *  has none (a custom provider's is edited in its own block). A plain value,
+   *  so a parent re-render does not reset what the user is typing. */
+  editBaseUrl?: string
+  /** Whether the provider's base URL is edited here (models.dev providers)
+   *  rather than in its own block (custom providers). */
+  baseUrlEditable?: (providerId: string) => boolean
+  onConnect: (request: OpenCodeConnectRequest) => Promise<void>
 }
 
 /**
- * Connect (or edit) a well-known provider from the models.dev catalog: an
- * API key (and optional base-URL override) saved to auth.json / opencode.json.
- * Custom / OpenAI-compatible providers are added via OpenCodeCustomProviderDialog.
+ * Connect (or edit) a provider OpenCode knows: an API key stored in OpenCode's
+ * own credential store, any extra fields its key method asks for, and for a
+ * models.dev provider an optional base-URL override in the config.
  */
 export function OpenCodeConnectDialog({
   open,
   onOpenChange,
+  integrations,
+  integrationsLoading,
+  integrationsError,
   catalog,
-  catalogLoading,
-  configText,
-  authJsonText,
   editProviderId,
+  editBaseUrl = "",
+  baseUrlEditable,
   onConnect,
 }: OpenCodeConnectDialogProps) {
   const t = useTranslations("AcpAgentSettings")
@@ -80,7 +113,9 @@ export function OpenCodeConnectDialog({
   const [selected, setSelected] = useState("")
   const [providerQuery, setProviderQuery] = useState("")
   const [apiKey, setApiKey] = useState("")
+  const [answers, setAnswers] = useState<Record<string, string>>({})
   const [baseUrlOverride, setBaseUrlOverride] = useState("")
+  const [initialBaseUrl, setInitialBaseUrl] = useState("")
   const [revealKey, setRevealKey] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -89,7 +124,9 @@ export function OpenCodeConnectDialog({
     setSelected("")
     setProviderQuery("")
     setApiKey("")
+    setAnswers({})
     setBaseUrlOverride("")
+    setInitialBaseUrl("")
     setRevealKey(false)
     setError(null)
   }
@@ -101,71 +138,88 @@ export function OpenCodeConnectDialog({
   }
 
   const isEditMode = Boolean(editProviderId)
+  const connectable = useMemo(
+    () => keyConnectableIntegrations(integrations),
+    [integrations]
+  )
+  const integration = useMemo(
+    () => integrations.find((i) => i.id === selected) ?? null,
+    [integrations, selected]
+  )
   const catalogProvider = useMemo(
     () => catalog.find((p) => p.id === selected) ?? null,
     [catalog, selected]
   )
-  const isWellKnown = Boolean(catalogProvider)
+  const keyMethod = integration ? keyMethodOf(integration) : null
+  const fields = useMemo(() => visibleKeyFields(keyMethod), [keyMethod])
+  const showBaseUrl = selected
+    ? (baseUrlEditable?.(selected) ?? Boolean(catalogProvider))
+    : false
 
-  const filteredCatalog = useMemo(() => {
+  const filtered = useMemo(() => {
     const q = providerQuery.trim().toLowerCase()
-    if (!q) return catalog
-    return catalog.filter(
-      (p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
+    if (!q) return connectable
+    return connectable.filter(
+      (i) => i.name.toLowerCase().includes(q) || i.id.toLowerCase().includes(q)
     )
-  }, [catalog, providerQuery])
+  }, [connectable, providerQuery])
 
-  // In edit mode, pre-fill the form from the provider's current credential and
-  // base URL. configText/authJsonText only change on save (which closes the
-  // dialog), so this initializes once per edit session without clobbering input.
+  // Edit mode starts from the provider's base URL. The key is never shown:
+  // OpenCode keeps it, and codeg only ever writes one.
   useEffect(() => {
     if (!open || !editProviderId) return
-    let key = ""
-    let baseUrl = ""
-    try {
-      const auth = JSON.parse(authJsonText || "{}")
-      const entry = auth?.[editProviderId]
-      if (entry && typeof entry.key === "string") key = entry.key
-    } catch {
-      /* ignore malformed auth.json */
-    }
-    try {
-      const config = JSON.parse(configText || "{}")
-      const baseURL = config?.provider?.[editProviderId]?.options?.baseURL
-      if (typeof baseURL === "string") baseUrl = baseURL
-    } catch {
-      /* ignore malformed opencode.json */
-    }
     setSelected(editProviderId)
-    setApiKey(key)
-    setBaseUrlOverride(baseUrl)
-  }, [open, editProviderId, authJsonText, configText])
+    setBaseUrlOverride(editBaseUrl)
+    setInitialBaseUrl(editBaseUrl)
+  }, [open, editProviderId, editBaseUrl])
+
+  const missingField = fields.some(
+    (field) => field.required && !(answers[field.key] ?? "").trim()
+  )
+  const hasKey = Boolean(apiKey.trim())
+  const baseUrlChanged =
+    showBaseUrl && baseUrlOverride.trim() !== initialBaseUrl.trim()
 
   const canSubmit = useMemo(() => {
-    if (submitting) return false
-    if (isEditMode) return Boolean(apiKey.trim())
-    if (isWellKnown) return Boolean(apiKey.trim())
-    return false
-  }, [apiKey, isEditMode, isWellKnown, submitting])
+    if (submitting || !selected) return false
+    if (hasKey) return Boolean(keyMethod) && !missingField
+    // Editing just the base URL needs no key.
+    return isEditMode && baseUrlChanged
+  }, [
+    submitting,
+    selected,
+    hasKey,
+    keyMethod,
+    missingField,
+    isEditMode,
+    baseUrlChanged,
+  ])
 
   const handleConnect = async () => {
     if (!canSubmit) return
     setSubmitting(true)
     setError(null)
     try {
-      const providerId = selected
-      const next = applyApiKeyConnect({
-        configText,
-        authJsonText,
-        providerId,
-        apiKey,
-        // Edit: pass the field verbatim ("" clears the override). Connect: an
-        // empty field means "leave the base URL untouched" (omit it).
-        baseUrlOverride: isEditMode
-          ? baseUrlOverride
-          : baseUrlOverride.trim() || undefined,
+      const answer = Object.fromEntries(
+        fields
+          .map((field) => [field.key, (answers[field.key] ?? "").trim()])
+          .filter(([, value]) => value)
+      )
+      await onConnect({
+        providerId: selected,
+        apiKey: hasKey ? apiKey.trim() : "",
+        answer: Object.keys(answer).length > 0 ? answer : undefined,
+        // Connect: an empty field leaves the base URL alone. Edit: the field
+        // is taken as it stands ("" clears the override).
+        baseUrlOverride: !showBaseUrl
+          ? undefined
+          : isEditMode
+            ? baseUrlChanged
+              ? baseUrlOverride
+              : undefined
+            : baseUrlOverride.trim() || undefined,
+        replace: isEditMode,
       })
-      await onConnect(next, providerId)
       reset()
       onOpenChange(false)
     } catch (err) {
@@ -193,7 +247,13 @@ export function OpenCodeConnectDialog({
         </DialogHeader>
 
         <div className="space-y-3">
-          {!isEditMode && (
+          {integrationsError && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+              {integrationsError}
+            </div>
+          )}
+
+          {!isEditMode && !integrationsError && (
             <div className="space-y-1.5">
               <label className="text-2xs text-muted-foreground">
                 {t("openCode.connect.pick")}
@@ -202,38 +262,46 @@ export function OpenCodeConnectDialog({
                 value={providerQuery}
                 onChange={(e) => setProviderQuery(e.target.value)}
                 placeholder={
-                  catalogLoading
+                  integrationsLoading
                     ? t("openCode.connect.loading")
                     : t("openCode.connect.search")
                 }
               />
               <div className="max-h-56 space-y-0.5 overflow-y-auto rounded-md border bg-background/40 p-1">
-                {filteredCatalog.map((provider) => (
+                {filtered.map((item) => (
                   <button
-                    key={provider.id}
+                    key={item.id}
                     type="button"
-                    onClick={() => setSelected(provider.id)}
+                    onClick={() => {
+                      setSelected(item.id)
+                      setAnswers({})
+                    }}
                     className={cn(
                       "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-accent",
-                      selected === provider.id &&
-                        "bg-accent text-accent-foreground"
+                      selected === item.id && "bg-accent text-accent-foreground"
                     )}
                   >
-                    <span className="truncate">{provider.name}</span>
-                    {provider.auth_kind === "oauth" && (
+                    <span className="truncate">{item.name}</span>
+                    {item.connections.length > 0 && (
                       <Badge
                         variant="outline"
                         className="px-1 text-[0.5625rem]"
                       >
-                        OAuth
+                        {t("openCode.connect.connectedBadge")}
                       </Badge>
                     )}
                     <span className="ml-auto shrink-0 pl-2 text-3xs text-muted-foreground">
-                      {provider.id}
+                      {item.id}
                     </span>
                   </button>
                 ))}
-                {!catalogLoading && filteredCatalog.length === 0 && (
+                {integrationsLoading && filtered.length === 0 && (
+                  <div className="flex items-center justify-center gap-1.5 px-2.5 py-2 text-2xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {t("openCode.connect.loading")}
+                  </div>
+                )}
+                {!integrationsLoading && filtered.length === 0 && (
                   <div className="px-2.5 py-2 text-center text-2xs text-muted-foreground">
                     {t("openCode.noMatchingModels")}
                   </div>
@@ -242,17 +310,12 @@ export function OpenCodeConnectDialog({
             </div>
           )}
 
-          {(isWellKnown || isEditMode) && (
+          {selected && (
             <div className="space-y-3 rounded-md border bg-muted/20 p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-medium">
-                  {catalogProvider?.name ?? selected}
+                  {integration?.name ?? catalogProvider?.name ?? selected}
                 </span>
-                {catalogProvider?.auth_kind === "oauth" && (
-                  <Badge variant="outline" className="text-3xs">
-                    OAuth
-                  </Badge>
-                )}
                 {catalogProvider && (
                   <span className="text-2xs text-muted-foreground">
                     {t("openCode.connect.modelsAvailable", {
@@ -271,33 +334,52 @@ export function OpenCodeConnectDialog({
                 )}
               </div>
 
-              {catalogProvider?.auth_kind === "oauth" && (
+              {integration && !keyMethod && (
                 <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
-                  {t("openCode.connect.oauthApiKeyNote")}
+                  {t("openCode.connect.noKeyMethod")}
                 </p>
               )}
 
-              <ApiKeyField
-                value={apiKey}
-                onChange={setApiKey}
-                reveal={revealKey}
-                onToggleReveal={() => setRevealKey((v) => !v)}
-                label={t("openCode.connect.apiKey")}
-                hint={t("openCode.connect.apiKeyHint")}
-                showLabel={t("actions.showKey")}
-                hideLabel={t("actions.hideKey")}
-              />
-
-              <div className="space-y-1.5">
-                <label className="text-2xs text-muted-foreground">
-                  {t("openCode.connect.baseUrlOptional")}
-                </label>
-                <Input
-                  value={baseUrlOverride}
-                  onChange={(e) => setBaseUrlOverride(e.target.value)}
-                  placeholder="https://proxy.example/v1"
+              {(keyMethod || isEditMode) && (
+                <ApiKeyField
+                  value={apiKey}
+                  onChange={setApiKey}
+                  reveal={revealKey}
+                  onToggleReveal={() => setRevealKey((v) => !v)}
+                  label={keyMethod?.label ?? t("openCode.connect.apiKey")}
+                  hint={
+                    isEditMode
+                      ? t("openCode.connect.apiKeyEditHint")
+                      : t("openCode.connect.apiKeyHint")
+                  }
+                  showLabel={t("actions.showKey")}
+                  hideLabel={t("actions.hideKey")}
                 />
-              </div>
+              )}
+
+              {fields.map((field) => (
+                <FormFieldInput
+                  key={field.key}
+                  field={field}
+                  value={answers[field.key] ?? ""}
+                  onChange={(value) =>
+                    setAnswers((prev) => ({ ...prev, [field.key]: value }))
+                  }
+                />
+              ))}
+
+              {showBaseUrl && (
+                <div className="space-y-1.5">
+                  <label className="text-2xs text-muted-foreground">
+                    {t("openCode.connect.baseUrlOptional")}
+                  </label>
+                  <Input
+                    value={baseUrlOverride}
+                    onChange={(e) => setBaseUrlOverride(e.target.value)}
+                    placeholder="https://proxy.example/v1"
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -338,34 +420,73 @@ export function OpenCodeConnectDialog({
   )
 }
 
+/** One extra field a key method asks for. OpenCode's key forms use strings
+ *  (with optional choices); anything else is entered as text. */
+function FormFieldInput({
+  field,
+  value,
+  onChange,
+}: {
+  field: OpenCodeFormField
+  value: string
+  onChange: (value: string) => void
+}) {
+  const label = `${field.title ?? field.key}${field.required ? " *" : ""}`
+  return (
+    <div className="space-y-1.5">
+      <label className="text-2xs text-muted-foreground">{label}</label>
+      {field.options && field.options.length > 0 ? (
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder={field.placeholder} />
+          </SelectTrigger>
+          <SelectContent align="start">
+            {field.options.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label ?? option.value}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={
+            field.placeholder ??
+            (typeof field.default === "string" ? field.default : undefined)
+          }
+        />
+      )}
+      {field.description && (
+        <p className="text-3xs text-muted-foreground">{field.description}</p>
+      )}
+    </div>
+  )
+}
+
 export interface OpenCodeCustomProviderDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Provider ids already defined (config blocks + auth.json keys). */
+  /** Provider ids the config already declares. */
   existingProviderIds: string[]
   /** Ids present in the models.dev catalog — rejected here (use Connect). */
   catalogIds: string[]
-  configText: string
-  authJsonText: string
-  onConnect: (
-    next: { configText: string; authJsonText: string },
-    providerId: string
-  ) => Promise<void>
+  onSubmit: (input: CustomProviderInput & { apiKey: string }) => Promise<void>
 }
 
 /**
- * Define a custom OpenAI-compatible provider: a `provider.<id>` block (npm /
- * baseURL / models) in opencode.json plus an API key in auth.json. Ids that
- * belong to the models.dev catalog are rejected — those go through Connect.
+ * Define a custom provider: a `providers.<id>` block (package, base URL,
+ * models) in OpenCode's config, then its API key in OpenCode's credential
+ * store. Ids that belong to the models.dev catalog are rejected — those go
+ * through Connect.
  */
 export function OpenCodeCustomProviderDialog({
   open,
   onOpenChange,
   existingProviderIds,
   catalogIds,
-  configText,
-  authJsonText,
-  onConnect,
+  onSubmit,
 }: OpenCodeCustomProviderDialogProps) {
   const t = useTranslations("AcpAgentSettings")
 
@@ -405,6 +526,14 @@ export function OpenCodeCustomProviderDialog({
     [customModels]
   )
 
+  // The provider's own models, asked the way its AI SDK package talks to it.
+  const modelsProtocol = openCodeModelsProtocol(customNpm)
+  const providerModels = useProviderModels(
+    modelsProtocol
+      ? { protocol: modelsProtocol, baseUrl: customBaseUrl, apiKey }
+      : null
+  )
+
   const customIdIssue = useMemo(
     () =>
       customProviderIdIssue({ id: customId, existingProviderIds, catalogIds }),
@@ -437,20 +566,14 @@ export function OpenCodeCustomProviderDialog({
     setSubmitting(true)
     setError(null)
     try {
-      const providerId = customId.trim()
-      const next = applyApiKeyConnect({
-        configText,
-        authJsonText,
-        providerId,
-        apiKey,
-        custom: {
-          name: customName,
-          npm: customNpm,
-          baseUrl: customBaseUrl,
-          modelIds: customModelIds,
-        },
+      await onSubmit({
+        id: customId.trim(),
+        name: customName,
+        npm: customNpm,
+        baseUrl: customBaseUrl,
+        modelIds: customModelIds,
+        apiKey: apiKey.trim(),
       })
-      await onConnect(next, providerId)
       reset()
       onOpenChange(false)
     } catch (err) {
@@ -500,7 +623,7 @@ export function OpenCodeCustomProviderDialog({
           </div>
           <div className="space-y-1.5">
             <label className="text-2xs text-muted-foreground">
-              provider.npm
+              {t("openCode.connect.package")}
             </label>
             <Select value={customNpm} onValueChange={setCustomNpm}>
               <SelectTrigger className="w-full">
@@ -517,7 +640,7 @@ export function OpenCodeCustomProviderDialog({
           </div>
           <div className="space-y-1.5">
             <label className="text-2xs text-muted-foreground">
-              provider.options.baseURL
+              settings.baseURL
             </label>
             <Input
               value={customBaseUrl}
@@ -538,13 +661,22 @@ export function OpenCodeCustomProviderDialog({
             />
           </div>
           <div className="space-y-1.5 md:col-span-2">
-            <label className="text-2xs text-muted-foreground">
-              {t("openCode.connect.modelsList")}
-            </label>
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-2xs text-muted-foreground">
+                {t("openCode.connect.modelsList")}
+              </label>
+              {modelsProtocol && (
+                <FetchedModelPicker
+                  state={providerModels}
+                  configured={customModelIds}
+                  onConfirm={(ids) => setCustomModels(ids.join("\n"))}
+                />
+              )}
+            </div>
             <Textarea
               value={customModels}
               onChange={(e) => setCustomModels(e.target.value)}
-              placeholder={"gpt-4o\nclaude-sonnet-5"}
+              placeholder={"gpt-6-astra\nclaude-sonnet-5-5"}
               className="min-h-20 font-mono text-xs"
             />
             <p className="text-3xs text-muted-foreground">

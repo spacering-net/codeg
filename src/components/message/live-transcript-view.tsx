@@ -22,7 +22,13 @@
  * next mount starts from a fresh persisted fetch.
  */
 
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react"
 
 import {
   MessageListView,
@@ -31,18 +37,15 @@ import {
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import { useConversationRuntimeActions } from "@/stores/conversation-runtime-store"
 import {
-  useAcpActions,
+  extractPermissionToolCallId,
   useConnectionStore,
   type ConnectionState,
 } from "@/contexts/acp-connections-context"
-import { PermissionDialog } from "@/components/chat/permission-dialog"
-import { AskQuestionCard } from "@/components/chat/ask-question-card"
-import { PlanApprovalCard } from "@/components/chat/plan-approval-card"
-import {
-  type AgentType,
-  type PlanApprovalAnswer,
-  type QuestionAnswer,
-} from "@/lib/types"
+import { ConnectionBlockingPrompts } from "@/components/chat/connection-blocking-prompts"
+import { ActivityLiveProvider } from "@/components/message/activity/activity-live-context"
+import { EMPTY_TOOL_APPROVALS } from "@/lib/activity/approval"
+import { blockingPrompts } from "@/lib/blocking-prompts"
+import type { AgentType } from "@/lib/types"
 
 export function useConnectionStateById(
   connectionId: string | null
@@ -224,6 +227,9 @@ export function LiveTranscriptView({
 }: LiveTranscriptViewProps) {
   const conn = useConnectionStateById(connectionId)
   const connStatus = conn?.status ?? null
+  // The agent behind this transcript: the host's word for it, else the viewed
+  // connection's own.
+  const transcriptAgent = agentType ?? conn?.agentType ?? null
   const isStreaming = connStatus === "prompting"
 
   const { refetchDetail, setLiveOwnsActiveTurn } =
@@ -267,96 +273,67 @@ export function LiveTranscriptView({
   // The session runs with the user's configured permission level, so it may
   // raise a permission request; it may also call the codeg-mcp
   // `ask_user_question` tool or (Grok) `exit_plan_mode`. All three are
-  // blocking prompts resolved WITHOUT driving a new turn — route the answers
-  // through the viewed connection id. The legacy free-text `pendingQuestion`
-  // path is intentionally NOT hosted here: it is answered by sending a prompt,
-  // which a read-only viewer deliberately cannot do.
-  const { respondPermission, answerQuestion, answerPlanApproval } =
-    useAcpActions()
-  const pendingPermission = conn?.pendingPermission ?? null
-  const onRespondPermission = useCallback(
-    (requestId: string, optionId: string) => {
-      if (!connectionId) return
-      void respondPermission(connectionId, requestId, optionId)
-    },
-    [connectionId, respondPermission]
-  )
+  // blocking prompts resolved WITHOUT driving a new turn — answered through
+  // the viewed connection id. The legacy free-text `pendingQuestion` path is
+  // intentionally NOT hosted here: it is answered by sending a prompt, which a
+  // read-only viewer deliberately cannot do.
+  const prompts = blockingPrompts(conn)
 
-  const pendingAskQuestion = conn?.pendingAskQuestion ?? null
-  const onAnswerAskQuestion = useCallback(
-    (questionId: string, answer: QuestionAnswer) => {
-      if (!connectionId) return
-      return answerQuestion(connectionId, questionId, answer)
-    },
-    [connectionId, answerQuestion]
+  // The viewed connection's own live state for the activity timeline — this
+  // view mounts inside another conversation's panel, whose pending approval
+  // and answers are not this transcript's.
+  const awaitingToolCallId = extractPermissionToolCallId(
+    conn?.pendingPermission?.tool_call
   )
-
-  const pendingPlanApproval = conn?.pendingPlanApproval ?? null
-  const onAnswerPlanApproval = useCallback(
-    (approvalId: string, answer: PlanApprovalAnswer) => {
-      if (!connectionId) return
-      return answerPlanApproval(connectionId, approvalId, answer)
-    },
-    [connectionId, answerPlanApproval]
+  const awaitingUser = prompts !== null
+  const approvals = conn?.toolApprovals ?? EMPTY_TOOL_APPROVALS
+  const activityLive = useMemo(
+    () => ({ awaitingToolCallId, awaitingUser, approvals }),
+    [awaitingToolCallId, awaitingUser, approvals]
   )
 
   return (
     // Sized as a flex child: fills the host column's remaining height under
     // its header (h-full here would overflow by the header's height).
     <div className="flex min-h-0 flex-1 flex-col">
-      {pendingPermission && (
-        <div className="border-b border-border px-4 py-3">
-          <PermissionDialog
-            permission={pendingPermission}
-            onRespond={onRespondPermission}
-            agentType={agentType}
-          />
-        </div>
-      )}
-      {connectionId &&
-        pendingAskQuestion &&
-        pendingAskQuestion.questions.length > 0 && (
-          <div className="border-b border-border px-4 py-3">
-            <AskQuestionCard
-              question={pendingAskQuestion}
-              onAnswer={onAnswerAskQuestion}
-            />
-          </div>
-        )}
-      {connectionId && pendingPlanApproval && (
-        <div className="border-b border-border px-4 py-3">
-          <PlanApprovalCard
-            key={pendingPlanApproval.approval_id}
-            approval={pendingPlanApproval}
-            onAnswer={onAnswerPlanApproval}
-          />
-        </div>
+      {connectionId && prompts && (
+        <ConnectionBlockingPrompts
+          connectionId={connectionId}
+          prompts={prompts}
+          agentType={agentType}
+          itemClassName="border-b border-border px-4 py-3"
+        />
       )}
       {/* No padding of its own. `MessageListView` insets its own content —
-          every virtualized row is wrapped in `mx-auto max-w-3xl px-4` and the
+          every virtualized row is wrapped in `mx-auto chat-content-w px-4` and the
           virtualizer adds 16px above the first row and below the last — so a
           padded wrapper here doubled it, and in a panel this narrow the two
           layers cost the transcript a visible chunk of its width. This is
           exactly how the main conversation panel mounts the same component. */}
       <div className="min-h-0 flex-1">
-        <MessageListView
-          conversationId={conversationId}
-          // The viewed connection's own cwd. A delegation child runs in a
-          // scratch dir whose folder row this client may not have seen yet
-          // (it is created closed, without a folder-change broadcast), so the
-          // folder lookup would come up empty; `undefined` when there is no
-          // live connection keeps that lookup as the fallback.
-          imageRoot={conn?.workingDir ?? undefined}
-          agentType={agentType ?? "claude_code"}
-          connStatus={connStatus}
-          isActive={false}
-          detailLoading={detailLoading}
-          detailError={error}
-          acpLoadError={acpLoadError}
-          hideEmptyState={false}
-          showMessageNav={false}
-          userTurnHeader={userTurnHeader}
-        />
+        <ActivityLiveProvider value={activityLive}>
+          <MessageListView
+            conversationId={conversationId}
+            // The viewed connection's own cwd. A delegation child runs in a
+            // scratch dir whose folder row this client may not have seen yet
+            // (it is created closed, without a folder-change broadcast), so the
+            // folder lookup would come up empty; `undefined` when there is no
+            // live connection keeps that lookup as the fallback.
+            imageRoot={conn?.workingDir ?? undefined}
+            agentType={transcriptAgent ?? "claude_code"}
+            // With no agent known, that default is a guess, and what it last
+            // advertised in this folder says nothing about this transcript:
+            // `[]` badges no command at all rather than another agent's.
+            availableCommands={transcriptAgent ? conn?.availableCommands : []}
+            connStatus={connStatus}
+            isActive={false}
+            detailLoading={detailLoading}
+            detailError={error}
+            acpLoadError={acpLoadError}
+            hideEmptyState={false}
+            userTurnHeader={userTurnHeader}
+          />
+        </ActivityLiveProvider>
       </div>
     </div>
   )

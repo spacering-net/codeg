@@ -66,6 +66,11 @@ export function onTransportReconnect(
   return getTransport().onReconnect?.(callback) ?? null
 }
 
+/** Includes first server readiness after a page started while offline. */
+export function onTransportReady(callback: () => void): UnsubscribeFn | null {
+  return getTransport().onReady?.(callback) ?? null
+}
+
 /**
  * Per-connection Subscribe-with-Snapshot stream. Returns `null` only on
  * the desktop Tauri transport (which uses local IPC and is race-free, so
@@ -124,15 +129,45 @@ export async function openPath(path: string): Promise<void> {
   }
 }
 
+/** The directory a native path lives in, or null when what is left is a root
+ *  rather than a folder — `\`, `\\server` with no share, `C:`.
+ *
+ *  A backslash ends a component only in a path that announces itself as a
+ *  Windows one (a drive or a UNC share): these paths come from whichever host
+ *  owns the workspace, so a Windows path has to be understood on macOS — but
+ *  a POSIX file may legitimately be named `report\2026.pdf`, and cutting
+ *  there would name a folder the file is not in. Windows takes either
+ *  separator, so an absolute Windows path is cut at whichever comes last. */
+function containingDirectory(path: string): string | null {
+  const windows = /^([A-Za-z]:|\\\\)/.test(path)
+  const cut = windows
+    ? Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))
+    : path.lastIndexOf("/")
+  if (cut < 0) return null
+  const dir = path.slice(0, cut)
+  return /^([\\/]{0,2}|[\\/]{2}[^\\/]+|[A-Za-z]:)$/.test(dir) ? null : dir
+}
+
 /**
  * Reveal a file/directory in the system file manager (desktop only).
  * No-op in web mode.
+ *
+ * Falls back to opening the containing folder: the plugin resolves the path
+ * before handing it to the shell, which on Windows turns a network location
+ * into the extended `\\?\UNC\…` form that `ILCreateFromPath` refuses — so
+ * "show in folder" is otherwise dead for anyone whose downloads land on a
+ * share or a redirected folder. The fallback loses the selection, not the
+ * errand.
  */
 export async function revealItemInDir(path: string): Promise<void> {
-  if (isDesktop() && getActiveRemoteConnectionId() === null) {
-    const { revealItemInDir: tauriReveal } =
-      await import("@tauri-apps/plugin-opener")
-    await tauriReveal(path)
+  if (!isDesktop() || getActiveRemoteConnectionId() !== null) return
+  const opener = await import("@tauri-apps/plugin-opener")
+  try {
+    await opener.revealItemInDir(path)
+  } catch (error) {
+    const dir = containingDirectory(path)
+    if (!dir) throw error
+    await opener.openPath(dir)
   }
 }
 
@@ -147,7 +182,14 @@ export async function openFileDialog(options?: {
 }): Promise<string | string[] | null> {
   if (isDesktop() && getActiveRemoteConnectionId() === null) {
     const { open } = await import("@tauri-apps/plugin-dialog")
-    return open(options ?? {})
+    // The macOS panel's own "New Folder" button. The plugin turns it on by
+    // default today; asking for it keeps folder pickers able to make the
+    // folder they are about to pick. Windows and Linux dialogs always have it.
+    return open(
+      options?.directory
+        ? { ...options, canCreateDirectories: true }
+        : (options ?? {})
+    )
   }
   // Web fallback: for directory selection, prompt for server-side path.
   // For file selection, use a hidden file input.

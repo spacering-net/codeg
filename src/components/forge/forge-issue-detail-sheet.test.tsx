@@ -67,6 +67,7 @@ vi.mock("@/components/ai-elements/message", () => ({
   ),
 }))
 const forgeListComments = vi.hoisted(() => vi.fn())
+const forgeIssueDetail = vi.hoisted(() => vi.fn())
 const forgeCreateComment = vi.hoisted(() => vi.fn())
 const forgeSetItemState = vi.hoisted(() => vi.fn())
 const forgeChangeDetail = vi.hoisted(() => vi.fn())
@@ -76,6 +77,7 @@ const forgeMergeChange = vi.hoisted(() => vi.fn())
 const forgeIdentity = vi.hoisted(() => vi.fn())
 vi.mock("@/lib/api", () => ({
   forgeListComments,
+  forgeIssueDetail,
   forgeCreateComment,
   forgeSetItemState,
   forgeChangeDetail,
@@ -263,6 +265,19 @@ function pane() {
   return within(screen.getByRole("tabpanel"))
 }
 
+/**
+ * Waits for the merge box to be able to act.
+ *
+ * Its button is on screen from the panel's first render, locked until the
+ * change and the repository's merge options have both come back — so finding
+ * it says nothing about either, and a click on it before then is dropped.
+ */
+async function mergeReady() {
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Merge" })).toBeEnabled()
+  )
+}
+
 function taskLink(status: WorkTaskStatus): ForgeTaskLink {
   return {
     source_key: "github:github.com/o/r/issue/42",
@@ -282,6 +297,8 @@ function mount(
     onRowUpdated?: (updated: ForgeIssueRow) => void
     onCommentPosted?: (item: { isPr: boolean; number: number }) => void
     folderId?: number | null
+    /** CNB mode — see `useIssueBody`. */
+    issueBodyOnDemand?: boolean
   } = {}
 ) {
   const onOpenChange = handlers.onOpenChange ?? vi.fn()
@@ -294,6 +311,7 @@ function mount(
         row={item}
         link={link}
         folderId={handlers.folderId === undefined ? 7 : handlers.folderId}
+        issueBodyOnDemand={handlers.issueBodyOnDemand ?? false}
         onOpenChange={onOpenChange}
         onStart={onStart}
         onRowUpdated={onRowUpdated}
@@ -319,6 +337,9 @@ beforeEach(() => {
   // case that is about the header or the footer. The tests that are about the
   // discussion say what comes back for themselves.
   forgeListComments.mockReturnValue(new Promise(() => {}))
+  // The description read a CNB issue's panel makes (see `useIssueBody`). Still
+  // in flight unless a case says otherwise, for the same reason as the thread.
+  forgeIssueDetail.mockReturnValue(new Promise(() => {}))
   // Same rule for the change section: a pull request always asks for both, and
   // a request that resolved would update state after a test about something
   // else had finished. The cases that are ABOUT the change say so themselves.
@@ -344,6 +365,40 @@ describe("ForgeIssueDetailSheet", () => {
     mount(row())
     expect(screen.getByTestId("markdown")).toHaveTextContent("## Steps")
     expect(screen.queryByText("No description")).not.toBeInTheDocument()
+  })
+
+  /**
+   * CNB's issue list carries no body (its pull list does), so the panel reads
+   * the item itself when it opens. Until that answer arrives it must draw
+   * NOTHING where the description goes: "No description" is a claim, and
+   * flashing it over an issue that has one is worse than an empty slot.
+   */
+  it("says nothing about the description until a CNB row's read lands", () => {
+    mount(row({ body: null }), null, { issueBodyOnDemand: true })
+    expect(forgeIssueDetail).toHaveBeenCalledWith(7, 42)
+    expect(screen.queryByTestId("markdown")).not.toBeInTheDocument()
+    expect(screen.queryByText("No description")).not.toBeInTheDocument()
+  })
+
+  it("draws the description a CNB row's read brings back", async () => {
+    forgeIssueDetail.mockResolvedValue(row({ body: "## From the item" }))
+    mount(row({ body: null }), null, { issueBodyOnDemand: true })
+    await waitFor(() =>
+      expect(screen.getByTestId("markdown")).toHaveTextContent(
+        "## From the item"
+      )
+    )
+    expect(screen.queryByText("No description")).not.toBeInTheDocument()
+  })
+
+  /**
+   * Every other forge ships the body with the row, and must not pay for a
+   * second read (or have its genuinely empty description withheld).
+   */
+  it("keeps the row's own answer when the list carries a body", () => {
+    mount(row({ body: "" }))
+    expect(forgeIssueDetail).not.toHaveBeenCalled()
+    expect(screen.getByText("No description")).toBeInTheDocument()
   })
 
   /**
@@ -967,8 +1022,10 @@ describe("ForgeIssueDetailSheet writes", () => {
         body: "looks fixed",
       })
     )
-    expect(await screen.findByText("looks fixed")).toBeInTheDocument()
-    expect(screen.getByText("alice")).toBeInTheDocument()
+    // By its author: until the post lands, the draft is text in the box too,
+    // so "looks fixed" alone would find the box.
+    expect(await screen.findByText("alice")).toBeInTheDocument()
+    expect(screen.getByText("looks fixed")).toBeInTheDocument()
     // The draft is cleared only once it exists somewhere else.
     expect(box).toHaveValue("")
     // The ITEM, not a row: a snapshot taken at submit time could carry this
@@ -1110,6 +1167,18 @@ describe("ForgeIssueDetailSheet change section", () => {
       ...overrides,
     }
   }
+
+  /** The trigger refuses a merged change, and the panel's own read can know
+   *  it merged before the list row it was opened from does — Start goes as
+   *  soon as either says so. */
+  it("stops offering Start once the change is read back as merged", async () => {
+    forgeChangeDetail.mockResolvedValue(change({ state: "merged" }))
+    mount(row({ is_pr: true, state: "open" }))
+    expect(await screen.findByText("main")).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Start" })).toBeNull()
+    )
+  })
 
   it("is asked for only on a proposed change", async () => {
     mount(row({ is_pr: false }))
@@ -1962,7 +2031,7 @@ describe("ForgeIssueDetailSheet merge box", () => {
 
     forgeChangeDetail.mockResolvedValue(change())
     mount(row({ is_pr: true }))
-    expect(await screen.findByRole("button", { name: "Merge" })).toBeEnabled()
+    await mergeReady()
     expect(forgeMergeOptions).toHaveBeenCalledWith(7)
   })
 
@@ -2029,7 +2098,7 @@ describe("ForgeIssueDetailSheet merge box", () => {
       change({ checks: { checks: [], available: false, partial: false } })
     )
     mount(row({ is_pr: true }))
-    await screen.findByRole("button", { name: "Merge" })
+    await mergeReady()
     expect(pane().queryByText("All checks have passed")).toBeNull()
     expect(pane().queryByText("Some checks were not successful")).toBeNull()
   })
@@ -2042,10 +2111,12 @@ describe("ForgeIssueDetailSheet merge box", () => {
       change({ mergeable: null, merge_state: "unknown" })
     )
     mount(row({ is_pr: true }))
+    await mergeReady()
+    // Read only once the change is in: with nothing known yet, the box says
+    // this too.
     expect(
-      await pane().findByText("Checking whether it can be merged…")
+      pane().getByText("Checking whether it can be merged…")
     ).toBeInTheDocument()
-    expect(mergeButton()).toBeEnabled()
   })
 
   it.each([
@@ -2069,7 +2140,15 @@ describe("ForgeIssueDetailSheet merge box", () => {
       forgeChangeDetail.mockResolvedValue(change(detailOverrides))
       mount(row({ is_pr: true, ...rowOverrides }))
 
-      await screen.findByRole("button", { name: "Merge" })
+      // Both answers first: until the change and the repository's options are
+      // back the button is locked whatever they say, and a row that is already
+      // a draft puts its reason up before either.
+      await screen.findByRole("button", { name: "Choose a merge method" })
+      await waitFor(() =>
+        expect(
+          pane().queryByText("Checking whether it can be merged…")
+        ).toBeNull()
+      )
       expect(mergeButton()).toBeDisabled()
       // The reason is on the strip beside it, not only in a tooltip: a
       // disabled button with no explanation reads as a broken one.
@@ -2086,7 +2165,7 @@ describe("ForgeIssueDetailSheet merge box", () => {
       options({ methods: ["squash"], default_method: "squash" })
     )
     mount(row({ is_pr: true }))
-    await screen.findByRole("button", { name: "Merge" })
+    await mergeReady()
     // One method left: there is nothing to choose, so there is no chooser.
     expect(
       screen.queryByRole("button", { name: "Choose a merge method" })
@@ -2095,7 +2174,7 @@ describe("ForgeIssueDetailSheet merge box", () => {
 
     forgeMergeOptions.mockResolvedValue(options())
     mount(row({ is_pr: true }))
-    await screen.findByRole("button", { name: "Merge" })
+    await mergeReady()
     await user.click(
       screen.getByRole("button", { name: "Choose a merge method" })
     )
@@ -2116,7 +2195,7 @@ describe("ForgeIssueDetailSheet merge box", () => {
     forgeMergeChange.mockResolvedValue(merged)
     const { onRowUpdated } = mount(row({ is_pr: true }))
 
-    await screen.findByRole("button", { name: "Merge" })
+    await mergeReady()
     await user.click(
       screen.getByRole("button", { name: "Choose a merge method" })
     )
@@ -2172,7 +2251,7 @@ describe("ForgeIssueDetailSheet merge box", () => {
     )
     const { onRowUpdated } = mount(row({ is_pr: true }))
 
-    await screen.findByRole("button", { name: "Merge" })
+    await mergeReady()
     await user.click(mergeButton())
     await user.click(
       await screen.findByRole("button", { name: "Create a merge commit" })
@@ -2196,7 +2275,7 @@ describe("ForgeIssueDetailSheet merge box", () => {
     forgeMergeChange.mockResolvedValue(row({ is_pr: true, state: "merged" }))
     mount(row({ is_pr: true }))
 
-    await screen.findByRole("button", { name: "Merge" })
+    await mergeReady()
     await user.click(mergeButton())
     await screen.findByText("Merge this change?")
 
@@ -2333,7 +2412,7 @@ describe("ForgeIssueDetailSheet merge box honesty", () => {
       merge_strategy: "fast_forward",
     })
     mount(row({ is_pr: true }))
-    await screen.findByRole("button", { name: "Merge" })
+    await mergeReady()
     await user.click(
       screen.getByRole("button", { name: "Choose a merge method" })
     )
@@ -2355,7 +2434,7 @@ describe("ForgeIssueDetailSheet merge box honesty", () => {
       merge_strategy: "rebase_merge",
     })
     mount(row({ is_pr: true }))
-    await screen.findByRole("button", { name: "Merge" })
+    await mergeReady()
     await user.click(
       screen.getByRole("button", { name: "Choose a merge method" })
     )
@@ -2398,7 +2477,10 @@ describe("ForgeIssueDetailSheet merge box honesty", () => {
     // Same rule for the draft flag, which the list can also be behind on.
     forgeChangeDetail.mockResolvedValue(change({ draft: true }))
     mount(row({ is_pr: true, draft: false }))
-    await screen.findByRole("button", { name: "Merge" })
+    // By its reason: the button is locked until the change has loaded anyway.
+    await screen.findByText(
+      "This is a draft — mark it ready for review before merging."
+    )
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: /^(Merge|Merging…)$/ })
@@ -2414,7 +2496,7 @@ describe("ForgeIssueDetailSheet merge box honesty", () => {
     forgeMergeChange.mockResolvedValue(null)
     const { onRowUpdated } = mount(row({ is_pr: true }))
 
-    await screen.findByRole("button", { name: "Merge" })
+    await mergeReady()
     await user.click(screen.getByRole("button", { name: /^(Merge|Merging…)$/ }))
     await user.click(
       await screen.findByRole("button", { name: "Create a merge commit" })
