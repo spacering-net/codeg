@@ -7865,8 +7865,21 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&db_path).unwrap().modified().unwrap(),
             old,
-            "store.db mtime is unchanged, so a db-only cache would skip the retry"
+            "store.db was rewritten, then its mtime was put back"
         );
+        // The model is already in the new store.db. A cache that ignores
+        // mtime would read it now. The restored mtime must keep this a miss.
+        backfill_cursor_models(&db.conn, &EventEmitter::Noop)
+            .await
+            .unwrap();
+        let still_cached = conversation_service::get_by_id(&db.conn, conv_id)
+            .await
+            .unwrap();
+        assert!(
+            still_cached.model.as_deref().unwrap_or("").trim().is_empty(),
+            "same mtime must not look the store up again"
+        );
+
         let wal = db_path.with_file_name("store.db-wal");
         std::fs::write(&wal, b"wal").unwrap();
         std::fs::File::options()
