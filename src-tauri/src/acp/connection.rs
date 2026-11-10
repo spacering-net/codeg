@@ -1992,7 +1992,7 @@ fn current_config_option_values(
         .collect()
 }
 
-fn current_model_id_from_opts(opts: &[SessionConfigOptionInfo]) -> Option<String> {
+pub(crate) fn current_model_id_from_opts(opts: &[SessionConfigOptionInfo]) -> Option<String> {
     opts.iter()
         .find(|o| o.category.as_deref() == Some("model"))
         .and_then(|o| {

@@ -333,18 +333,26 @@ pub(crate) async fn handle_event(
             else {
                 return Ok(());
             };
-            let (conversation_id, agent_type, external_id, last_text, claimed) = {
+            let (conversation_id, agent_type, external_id, last_text, claimed, selector_model) = {
                 let mut snap = state_arc.write().await;
                 // Re-entrant for this worker: a retry of this same envelope
                 // claims again and goes on. Only a CLI run's fallback that
                 // already wrote this turn's status makes it skip.
                 let claimed = snap.claim_turn_status(envelope.seq, TurnStatusWriter::Lifecycle);
+                // Same snapshot as the ids above. Live Cursor turns already
+                // know the selected model; the seed below does not open the
+                // store.
+                let selector_model = snap
+                    .config_options
+                    .as_deref()
+                    .and_then(crate::acp::connection::current_model_id_from_opts);
                 (
                     snap.conversation_id,
                     snap.agent_type,
                     snap.external_id.clone(),
                     snap.last_assistant_text.clone(),
                     claimed,
+                    selector_model,
                 )
             };
             // No conversation row bound (defensive — should never happen in
@@ -354,22 +362,20 @@ pub(crate) async fn handle_event(
                 return Ok(());
             };
             // The turn status goes out FIRST: it carries only the id and the
-            // status, and a Cursor row with no model would otherwise wait on
-            // database reads plus a store walk of up to 4,000 blobs before the
-            // client learns the turn completed. The model arrives through its
-            // own upsert right after.
+            // status. The model chip is a separate upsert after that write.
             if claimed {
                 write_turn_status(db_conn, &state_arc, &emitter, cid, stop_reason).await?;
             }
             // Cursor does not put the model on the conversation row. The
-            // store has it once the turn is written; copy it onto the chip so
-            // the sidebar letter appears without reopening the conversation.
-            crate::commands::conversations::remember_cursor_session_model(
+            // selector already names it; copy that onto an empty chip. No
+            // store read, and no model when the selector is absent.
+            crate::commands::conversations::seed_cursor_model_from_selector(
                 db_conn,
                 &emitter,
                 cid,
                 agent_type,
                 external_id.as_deref(),
+                selector_model.as_deref(),
             )
             .await;
 
@@ -5224,5 +5230,88 @@ mod tests {
 
         drop(bus);
         let _ = dispatcher.await;
+    }
+
+    fn cursor_model_selector(current: &str) -> crate::acp::types::SessionConfigOptionInfo {
+        crate::acp::types::SessionConfigOptionInfo {
+            id: "model".into(),
+            name: "Model".into(),
+            description: None,
+            category: Some("model".into()),
+            kind: crate::acp::types::SessionConfigKindInfo::Select(
+                crate::acp::types::SessionConfigSelectInfo {
+                    current_value: current.into(),
+                    options: Vec::new(),
+                    groups: Vec::new(),
+                },
+            ),
+            recommended_value: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_event_seeds_an_empty_cursor_model_from_config_options() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/cursor-model-seed").await;
+        let conv =
+            conversation_service::create(&db.conn, folder_id, AgentType::Cursor, None, None)
+                .await
+                .unwrap();
+        conversation_service::bind_external_id(&db.conn, conv.id, "cursor-sess-1", &[])
+            .await
+            .unwrap();
+
+        let mgr = ConnectionManager::new();
+        let conn = fake_connection_with_state("c1", Some(conv.id));
+        let state = conn.state.clone();
+        {
+            let mut snap = state.write().await;
+            snap.agent_type = AgentType::Cursor;
+            snap.external_id = Some("cursor-sess-1".into());
+            snap.config_options = None;
+        }
+        mgr.connections.lock().await.insert("c1".to_string(), conn);
+        let turn = |seq| EventEnvelope {
+            seq,
+            connection_id: "c1".to_string(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "cursor-sess-1".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "cursor".into(),
+            },
+        };
+
+        handle_event(&db.conn, &mgr, &turn(1), None).await.unwrap();
+        let blank = conversation_service::get_by_id(&db.conn, conv.id)
+            .await
+            .unwrap();
+        assert!(
+            blank.model.as_deref().unwrap_or("").trim().is_empty(),
+            "no selector means no model is invented"
+        );
+        assert_eq!(
+            read_row_status(&db, conv.id).await,
+            ConversationStatus::PendingReview,
+            "turn status is written before the model seed"
+        );
+
+        state.write().await.config_options = Some(vec![cursor_model_selector("grok-4.7-high")]);
+        handle_event(&db.conn, &mgr, &turn(2), None).await.unwrap();
+        let seeded = conversation_service::get_by_id(&db.conn, conv.id)
+            .await
+            .unwrap();
+        assert_eq!(seeded.model.as_deref(), Some("grok-4.7-high"));
+
+        state.write().await.config_options =
+            Some(vec![cursor_model_selector("grok-4.7-xhigh-fast")]);
+        handle_event(&db.conn, &mgr, &turn(3), None).await.unwrap();
+        let kept = conversation_service::get_by_id(&db.conn, conv.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            kept.model.as_deref(),
+            Some("grok-4.7-high"),
+            "a later selector does not overwrite a chip that is already filled"
+        );
     }
 }

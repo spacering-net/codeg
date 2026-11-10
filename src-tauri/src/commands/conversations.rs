@@ -61,12 +61,11 @@ pub(crate) async fn list_all_conversations_core(
         }
     };
     // Cursor's conversation row is created before the store names a model, and
-    // current stores have no `lastUsedModel`. Fill the blank chip from the
-    // fingerprint still linked in that session — in the BACKGROUND, off the
-    // request path: a store walk is up to 4,000 blob reads per session, and
-    // search hits this endpoint after every 300 ms debounce, so an unresolved
-    // store must never delay unrelated list results. Once a row has a model
-    // the query finds nothing and no store is opened again.
+    // current stores have no `lastUsedModel`. Fill a blank chip from the
+    // assistant message's `modelName`, in the background, off the request
+    // path. Search hits this endpoint after every 300 ms debounce, so an
+    // unresolved store must never delay unrelated list results. Once a row
+    // has a model the query finds nothing and no store is opened again.
     schedule_cursor_model_backfill(conn, emitter);
     list_all_conversations_core_with_codex_titles(
         conn,
@@ -81,8 +80,10 @@ pub(crate) async fn list_all_conversations_core(
 /// Shared state for the background Cursor model backfill. `running` makes the
 /// scheduled pass single-flight (a 300 ms-debounced search must not stack
 /// walks). `failed_at_mtime` is the negative cache: a session whose store
-/// gave no model is not walked again until the store file changes — without
-/// it every list request would re-scan the same unresolvable history.
+/// gave no model is not walked again until `store.db` or `store.db-wal`
+/// changes — without it every list request would re-read the same
+/// unresolvable history. A lookup whose mtime could not be read is not
+/// cached, so a transient stat failure is retried next time.
 #[derive(Default)]
 struct CursorModelBackfillState {
     running: bool,
@@ -149,7 +150,8 @@ async fn backfill_cursor_models(
             }
             match parser.model_for_session(&external_id) {
                 Some(model) => found.push((id, external_id, model)),
-                None => failed.push((external_id, mtime)),
+                None if mtime.is_some() => failed.push((external_id, mtime)),
+                None => {}
             }
         }
         (found, failed)
@@ -188,16 +190,19 @@ async fn backfill_cursor_models(
     Ok(())
 }
 
-/// After a Cursor turn, copy the model named in that session's store onto the
+/// After a Cursor turn, copy the model the user had selected onto the
 /// conversation row when the row still has none, and broadcast the sidebar
-/// chip. A no-op for every other agent, and for a Cursor row that already
-/// has a model.
-pub(crate) async fn remember_cursor_session_model(
+/// chip. The model comes from the in-memory selector (`config_options`), not
+/// from the session store. A no-op for every other agent, when there is no
+/// selector, and for a Cursor row that already has a model. Filling an empty
+/// column does not follow a later switch.
+pub(crate) async fn seed_cursor_model_from_selector(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
     conversation_id: i32,
     agent_type: AgentType,
     external_id: Option<&str>,
+    model: Option<&str>,
 ) {
     if agent_type != AgentType::Cursor {
         return;
@@ -205,44 +210,16 @@ pub(crate) async fn remember_cursor_session_model(
     let Some(external_id) = external_id.map(str::trim).filter(|id| !id.is_empty()) else {
         return;
     };
-    let summary = match conversation_service::get_by_id(conn, conversation_id).await {
-        Ok(summary) => summary,
-        Err(_) => return,
-    };
-    if summary
-        .model
-        .as_deref()
-        .is_some_and(|model| !model.trim().is_empty())
-    {
-        return;
-    }
-    let cursor_env = agent_setting_service::load_agent_env(conn, AgentType::Cursor).await;
-    let session_id = external_id.to_string();
-    let model = match tokio::task::spawn_blocking(move || {
-        CursorParser::for_env(&cursor_env).model_for_session(&session_id)
-    })
-    .await
-    {
-        Ok(model) => model,
-        Err(error) => {
-            tracing::warn!(
-                conversation_id,
-                error = %error,
-                "cursor model chip: failed to read the session store"
-            );
-            return;
-        }
-    };
-    let Some(model) = model else {
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
         return;
     };
     // Match the external id in the same UPDATE: a row rebound to another
-    // session while the store was read must not inherit the old model.
+    // session must not inherit this session's model.
     match conversation_service::seed_model_if_empty_for_session(
         conn,
         conversation_id,
         external_id,
-        &model,
+        model,
     )
     .await
     {
@@ -7796,5 +7773,120 @@ mod tests {
             outline.prefix_hash,
             crate::commands::turn_window::prefix_fingerprint(&[])
         );
+    }
+
+    #[tokio::test]
+    async fn backfill_retries_a_failed_lookup_when_only_the_wal_mtime_changes() {
+        let db = fresh_in_memory_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let session = "0198c9aa-aaaa-bbbb-cccc-walretry0001";
+        let config_dir = tmp.path().to_str().unwrap();
+        save_agent_env_json(
+            &db,
+            AgentType::Cursor,
+            &serde_json::json!({ "CURSOR_CONFIG_DIR": config_dir }).to_string(),
+        )
+        .await;
+        let loaded = agent_setting_service::load_agent_env(&db.conn, AgentType::Cursor).await;
+        assert_eq!(
+            loaded.var("CURSOR_CONFIG_DIR").as_deref(),
+            Some(config_dir),
+            "the lookup must stay inside the temp dir"
+        );
+
+        let folder_id = seed_folder(&db, "/tmp/cursor-wal-retry").await;
+        let conv_id = create_conversation_core(&db.conn, folder_id, AgentType::Cursor, None)
+            .await
+            .unwrap();
+        conversation_service::bind_external_id(&db.conn, conv_id, session, &[])
+            .await
+            .unwrap();
+        let missing_id = create_conversation_core(&db.conn, folder_id, AgentType::Cursor, None)
+            .await
+            .unwrap();
+        conversation_service::bind_external_id(
+            &db.conn,
+            missing_id,
+            "missing-session-not-on-disk",
+            &[],
+        )
+        .await
+        .unwrap();
+        cursor_model_backfill_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .failed_at_mtime
+            .remove(session);
+
+        let db_path =
+            crate::parsers::cursor::write_model_session_for_test(tmp.path(), session, None);
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&db_path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let old = std::fs::metadata(&db_path).unwrap().modified().unwrap();
+
+        backfill_cursor_models(&db.conn, &EventEmitter::Noop)
+            .await
+            .unwrap();
+        let missed = conversation_service::get_by_id(&db.conn, conv_id)
+            .await
+            .unwrap();
+        assert!(missed.model.as_deref().unwrap_or("").trim().is_empty());
+        assert!(
+            !cursor_model_backfill_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .failed_at_mtime
+                .contains_key("missing-session-not-on-disk"),
+            "a lookup with no readable mtime must not stay cached"
+        );
+        assert_eq!(
+            cursor_model_backfill_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .failed_at_mtime
+                .get(session)
+                .cloned(),
+            Some(Some(old))
+        );
+
+        let db_path =
+            crate::parsers::cursor::write_model_session_for_test(tmp.path(), session, Some("grok-4.7-high"));
+        std::fs::File::options()
+            .write(true)
+            .open(&db_path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&db_path).unwrap().modified().unwrap(),
+            old,
+            "store.db mtime is unchanged, so a db-only cache would skip the retry"
+        );
+        let wal = db_path.with_file_name("store.db-wal");
+        std::fs::write(&wal, b"wal").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&wal)
+            .unwrap()
+            .set_modified(old + std::time::Duration::from_secs(60))
+            .unwrap();
+
+        backfill_cursor_models(&db.conn, &EventEmitter::Noop)
+            .await
+            .unwrap();
+        let seeded = conversation_service::get_by_id(&db.conn, conv_id)
+            .await
+            .unwrap();
+        assert_eq!(seeded.model.as_deref(), Some("grok-4.7-high"));
+        cursor_model_backfill_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .failed_at_mtime
+            .remove(session);
     }
 }
