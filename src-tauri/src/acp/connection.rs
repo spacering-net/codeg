@@ -11925,9 +11925,10 @@ fn strip_context_lane_suffix(value: &str) -> Option<&str> {
 /// * Only when [`config_option_rejects_value`] proves the exact value gone, so
 ///   a pick the agent still offers is never touched.
 /// * Only onto exactly ONE row that names the model. The catalog name carries
-///   the version, so a pick is never moved onto another model: once the
+///   the version, so this never moves a pick onto another model: once the
 ///   `fable` row moves on to a newer Fable, a saved `claude-fable-5-1` stops
-///   healing and is skipped like any other retired pick.
+///   healing here. Moving it on to the newer model is a separate rule, the one
+///   Claude Code itself follows (see [`heal_superseded_model_pick`]).
 /// * Only the catalog's `claude-<family>-<version>` form has a catalog name to
 ///   look for (see [`claude_catalog_label`]); any other value can only match a
 ///   row labelled with that value itself.
@@ -11983,6 +11984,19 @@ fn description_leads_with(description: &str, name: &str) -> bool {
 /// in that `claude-<family>-<version>` form — an alias, a gateway id, or the
 /// retired `claude-3-7-sonnet-…` order.
 fn claude_catalog_label(id: &str) -> Option<String> {
+    let (family, version) = claude_catalog_id_parts(id)?;
+    let (initial, tail) = family.split_at(1);
+    Some(format!(
+        "{}{tail} {}",
+        initial.to_ascii_uppercase(),
+        version.join(".")
+    ))
+}
+
+/// The family and version parts of a catalog-form Claude id:
+/// `claude-fable-5-1` → (`fable`, [`5`, `1`]), a trailing snapshot date left
+/// out. `None` for any other id (see [`claude_catalog_label`]).
+fn claude_catalog_id_parts(id: &str) -> Option<(&str, Vec<&str>)> {
     let mut parts = id.strip_prefix("claude-")?.split('-');
     let family = parts
         .next()
@@ -11999,36 +12013,133 @@ fn claude_catalog_label(id: &str) -> Option<String> {
     if version.is_empty() || !version.iter().all(numeric) {
         return None;
     }
-    let (initial, tail) = family.split_at(1);
-    Some(format!(
-        "{}{tail} {}",
-        initial.to_ascii_uppercase(),
-        version.join(".")
-    ))
+    Some((family, version))
 }
 
-/// The spelling the model selector lists now for a saved pick it no longer
-/// lists, by the two renames Claude Code has made: a retired `[1m]` lane
+/// The version a catalog name gives for `family`: `Fable 5.2` → `[5, 2]` for
+/// `fable`. `None` when `label` is not `<Family> <version>` for that family.
+fn catalog_name_version(label: &str, family: &str) -> Option<Vec<u32>> {
+    let label = label.trim();
+    let head = label.get(..family.len())?;
+    if !head.eq_ignore_ascii_case(family) {
+        return None;
+    }
+    label[family.len()..]
+        .strip_prefix(' ')?
+        .split('.')
+        .map(|part| {
+            ((1..=2).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| part.parse().ok())
+                .flatten()
+        })
+        .collect()
+}
+
+/// Whether version `a` is newer than `b`, a missing part counting as 0:
+/// 5.2 is newer than 5.1 and than 5, and 5.0 is not newer than 5.
+fn catalog_version_is_newer(a: &[u32], b: &[u32]) -> bool {
+    let len = a.len().max(b.len());
+    let part = |v: &[u32], i: usize| v.get(i).copied().unwrap_or(0);
+    (0..len)
+        .map(|i| (part(a, i), part(b, i)))
+        .find(|(x, y)| x != y)
+        .is_some_and(|(x, y)| x > y)
+}
+
+/// The family alias row a saved CONCRETE Claude model id moves to when the
+/// model selector no longer offers that model and its family's alias row now
+/// runs a NEWER one: `claude-fable-5-1` → the `fable` row labelled `Fable 5.2`.
+///
+/// Claude Code CLI 2.1.321 (claude-agent-acp 0.102.0) is what makes this
+/// reachable. It makes Fable 5.2 the `fable` model, and through an
+/// `ANTHROPIC_BASE_URL` gateway its selector lists the `fable` row
+/// (`{value: "fable", name: "Fable 5.2"}`) and no Fable 5.1 row at all
+/// (measured live). A user who saved `claude-fable-5-1` (a pick from before
+/// the row was spelled `fable`, or the row a reopened Fable session listed on
+/// 0.101.0) would otherwise have it refused by [`config_option_rejects_value`]
+/// on every connect and land on the default model, Opus on the measured
+/// gateway. The CLI's own changelog for 2.1.321 moves a saved Fable 5.1 pick
+/// to `fable` in the same way, and the adapter's alias rows run their family's
+/// newest model.
+///
+/// Deliberately narrow:
+///
+/// * Only the model selector, only for Claude Code, and only when
+///   [`config_option_rejects_value`] proves the exact value gone. Where the CLI
+///   still lists `claude-fable-5-1` as its own row (a claude.ai login), the pick
+///   stays on Fable 5.1.
+/// * Only after [`heal_respelled_model_pick`] found no row naming the same
+///   model.
+/// * Only onto the ONE row whose value is the family alias (`fable`), and only
+///   when its label, or the first segment of its description, names a newer
+///   version of the same family. Never onto an older model or another family,
+///   and never onto a row pinned through `ANTHROPIC_DEFAULT_*_MODEL`, which is
+///   labelled with the pinned id rather than a catalog name.
+fn heal_superseded_model_pick(option: &SessionConfigOption, value: &str) -> Option<String> {
+    if !is_model_config_option(option) || !config_option_rejects_value(option, value) {
+        return None;
+    }
+    let (family, saved) = claude_catalog_id_parts(value)?;
+    let saved: Vec<u32> = saved
+        .iter()
+        .map(|part| part.parse().ok())
+        .collect::<Option<_>>()?;
+    let SessionConfigKind::Select(select) = &option.kind else {
+        return None;
+    };
+    let rows: Vec<&SessionConfigSelectOption> = match &select.options {
+        SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
+        SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .flat_map(|group| group.options.iter())
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut aliases = rows
+        .into_iter()
+        .filter(|row| row.value.to_string().eq_ignore_ascii_case(family));
+    let row = aliases.next()?;
+    if aliases.next().is_some() {
+        return None;
+    }
+    let description_lead = row
+        .description
+        .as_deref()
+        .and_then(|description| description.trim_start().split_once(" \u{b7} "))
+        .map(|(lead, _)| lead);
+    let runs_newer = std::iter::once(row.name.as_str())
+        .chain(description_lead)
+        .filter_map(|label| catalog_name_version(label, family))
+        .any(|version| catalog_version_is_newer(&version, &saved));
+    runs_newer.then(|| row.value.to_string())
+}
+
+/// The row the model selector lists now for a saved pick it no longer lists,
+/// by the two renames Claude Code has made: a retired `[1m]` lane
 /// ([`heal_retired_context_lane_pick`]), a concrete id re-spelled as its family
 /// alias ([`heal_respelled_model_pick`]), or both at once — a gateway's
 /// `claude-fable-5-1[1m]` lost its lane on 2.1.285 and the plain row was
-/// re-spelled `fable` on 2.1.287.
+/// re-spelled `fable` on 2.1.287. Failing those, a concrete id whose family
+/// alias row now runs a newer model moves on to that row, as Claude Code moves
+/// it ([`heal_superseded_model_pick`]).
 fn heal_retired_model_pick(option: &SessionConfigOption, value: &str) -> Option<String> {
     heal_retired_context_lane_pick(option, value)
         .or_else(|| heal_respelled_model_pick(option, value))
+        .or_else(|| heal_superseded_model_pick(option, value))
         .or_else(|| {
             let twin = strip_context_lane_suffix(value)?;
             if !config_option_rejects_value(option, value) {
                 return None;
             }
             heal_respelled_model_pick(option, twin)
+                .or_else(|| heal_superseded_model_pick(option, twin))
         })
 }
 
 /// [`heal_retired_model_pick`] over a whole preference set, against the
 /// options the session was established with. Every other entry is returned
-/// unchanged, and so is every entry for an agent other than Claude Code: both
-/// renames are claude-agent-acp's spellings, and it is the only agent whose
+/// unchanged, and so is every entry for an agent other than Claude Code: every
+/// heal reads claude-agent-acp's spellings, and it is the only agent whose
 /// renames of them have been observed.
 fn heal_retired_model_picks(
     agent_type: AgentType,
@@ -12049,7 +12160,7 @@ fn heal_retired_model_picks(
                 Some(twin) => {
                     tracing::info!(
                         "[ACP] preferred config '{config_id}'='{value_id}' is no longer \
-                         offered; replaying '{twin}', the spelling the agent lists now"
+                         offered; replaying '{twin}', the row the agent lists for it now"
                     );
                     (config_id.clone(), twin)
                 }
@@ -37855,6 +37966,198 @@ mod tests {
             heal_respelled_model_pick(&selector(serde_json::json!([])), "claude-fable-5-1"),
             None
         );
+    }
+
+    /// The model selector claude-agent-acp 0.102.0 answers `session/new` with
+    /// through an `ANTHROPIC_BASE_URL` gateway, verbatim (measured live).
+    /// Claude Code 2.1.321 makes Fable 5.2 the `fable` model, and lists no
+    /// Fable 5.1 row.
+    fn gateway_model_selector_2_1_321() -> SessionConfigOption {
+        serde_json::from_value(serde_json::json!({
+            "id": "model",
+            "name": "Model",
+            "description": "AI model to use",
+            "category": "model",
+            "type": "select",
+            "currentValue": "opus",
+            "_meta": {"jetbrains": {"air": {"version": 1, "recommendedValue": "opus"}}},
+            "options": [
+                {"value": "opus", "name": "Opus 5.5", "description": "Opus 5.5 · Best for everyday, complex tasks · $4/$20 per Mtok"},
+                {"value": "fable", "name": "Fable 5.2", "description": "Fable 5.2 · Most capable for your hardest and longest-running tasks · $8/$40 per Mtok"},
+                {"value": "sonnet", "name": "Sonnet 5.5", "description": "Sonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok"},
+                {"value": "haiku", "name": "Haiku 5.5", "description": "Haiku 5.5 · Fastest for quick answers · $0.10/$0.50 per Mtok ($0.50/$2.50 for prompts over 100k)"},
+            ],
+        }))
+        .expect("parses")
+    }
+
+    #[test]
+    fn a_gateway_on_claude_code_2_1_321_moves_a_fable_5_1_pick_to_fable() {
+        let gateway = gateway_model_selector_2_1_321();
+        // Not the same model, so the respelling heal leaves it…
+        assert_eq!(
+            heal_respelled_model_pick(&gateway, "claude-fable-5-1"),
+            None
+        );
+        // …and the family's alias row, which now runs Fable 5.2, takes it.
+        for saved in ["claude-fable-5-1", "claude-fable-5-1[1m]", "claude-fable-5"] {
+            assert_eq!(
+                heal_retired_model_pick(&gateway, saved).as_deref(),
+                Some("fable"),
+                "{saved}"
+            );
+        }
+        // The same rule for the other families.
+        assert_eq!(
+            heal_retired_model_pick(&gateway, "claude-sonnet-5").as_deref(),
+            Some("sonnet")
+        );
+        assert_eq!(
+            heal_retired_model_pick(&gateway, "claude-haiku-4-5-20251001").as_deref(),
+            Some("haiku")
+        );
+        // The model the row runs heals as a respelling, as before.
+        assert_eq!(
+            heal_retired_model_pick(&gateway, "claude-fable-5-2").as_deref(),
+            Some("fable")
+        );
+        // Listed picks are left alone.
+        for listed in ["fable", "opus", "sonnet", "haiku"] {
+            assert_eq!(heal_retired_model_pick(&gateway, listed), None, "{listed}");
+        }
+        let preferred = BTreeMap::from([("model".to_string(), "claude-fable-5-1".to_string())]);
+        assert_eq!(
+            heal_retired_model_picks(
+                AgentType::ClaudeCode,
+                std::slice::from_ref(&gateway),
+                &preferred
+            ),
+            BTreeMap::from([("model".to_string(), "fable".to_string())])
+        );
+        assert_eq!(
+            heal_retired_model_picks(AgentType::Codex, &[gateway], &preferred),
+            preferred
+        );
+    }
+
+    #[test]
+    fn a_superseded_pick_moves_only_forward_onto_its_own_family_alias() {
+        let selector = |rows: serde_json::Value| -> SessionConfigOption {
+            serde_json::from_value(serde_json::json!({
+                "type": "select",
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "currentValue": "opus",
+                "options": rows,
+            }))
+            .expect("parses")
+        };
+        // A claude.ai login still lists Fable 5.1 as its own row: it stays.
+        let first_party = selector(serde_json::json!([
+            {"value": "fable", "name": "Fable", "description": "Fable 5.2 · Most capable for your hardest and longest-running tasks"},
+            {"value": "claude-fable-5-1", "name": "Fable 5.1"},
+        ]));
+        assert_eq!(
+            heal_retired_model_pick(&first_party, "claude-fable-5-1"),
+            None
+        );
+        // The built-in row names its model in the description's first segment.
+        let built_in = selector(serde_json::json!([
+            {"value": "opus", "name": "Opus", "description": "Opus 5.5 · Best for everyday, complex tasks"},
+            {"value": "fable", "name": "Fable", "description": "Fable 5.2 · Most capable for your hardest and longest-running tasks"},
+        ]));
+        assert_eq!(
+            heal_superseded_model_pick(&built_in, "claude-fable-5-1").as_deref(),
+            Some("fable")
+        );
+        // Never back to an older model, nor across to the same version.
+        let older = selector(serde_json::json!([
+            {"value": "fable", "name": "Fable 5"},
+        ]));
+        assert_eq!(heal_superseded_model_pick(&older, "claude-fable-5-1"), None);
+        let same = selector(serde_json::json!([
+            {"value": "fable", "name": "Fable 5.0"},
+        ]));
+        assert_eq!(heal_superseded_model_pick(&same, "claude-fable-5"), None);
+        // A row pinned through `ANTHROPIC_DEFAULT_FABLE_MODEL` names no catalog
+        // version, so nothing says it is newer.
+        let pinned = selector(serde_json::json!([
+            {"value": "fable", "name": "my-gateway/fable-next", "description": "Custom Fable model"},
+        ]));
+        assert_eq!(
+            heal_superseded_model_pick(&pinned, "claude-fable-5-1"),
+            None
+        );
+        // Only the family's own alias row: a newer row of another family, or a
+        // row whose value is not the alias, does not take the pick.
+        let other = selector(serde_json::json!([
+            {"value": "opus", "name": "Opus 5.5"},
+            {"value": "gw/fable", "name": "Fable 5.2"},
+            {"value": "claude-fable-5-2", "name": "Fable 5.2"},
+        ]));
+        assert_eq!(heal_superseded_model_pick(&other, "claude-fable-5-1"), None);
+        // A label or description that is not exactly `<Family> <version>`.
+        for (name, description) in [
+            ("Fable 5.2 preview", None),
+            ("Fable", Some("Fable 5.2 is coming · soon")),
+            ("Fable", Some("Fable 5.2")),
+            ("Fabled 5.2", None),
+        ] {
+            let lookalike = selector(serde_json::json!([
+                {"value": "fable", "name": name, "description": description},
+            ]));
+            assert_eq!(
+                heal_superseded_model_pick(&lookalike, "claude-fable-5-1"),
+                None,
+                "{name} / {description:?}"
+            );
+        }
+        // An id outside the catalog form, and any selector but the model's.
+        assert_eq!(
+            heal_superseded_model_pick(&gateway_model_selector_2_1_321(), "gw/fable-5-1"),
+            None
+        );
+        let effort: SessionConfigOption = serde_json::from_value(serde_json::json!({
+            "type": "select",
+            "id": "effort",
+            "name": "Effort",
+            "category": "thought_level",
+            "currentValue": "high",
+            "options": [{"value": "fable", "name": "Fable 5.2"}],
+        }))
+        .expect("parses");
+        assert_eq!(
+            heal_superseded_model_pick(&effort, "claude-fable-5-1"),
+            None
+        );
+        // An empty list proves nothing.
+        assert_eq!(
+            heal_superseded_model_pick(&selector(serde_json::json!([])), "claude-fable-5-1"),
+            None
+        );
+    }
+
+    #[test]
+    fn catalog_versions_compare_part_by_part() {
+        assert_eq!(catalog_name_version("Fable 5.2", "fable"), Some(vec![5, 2]));
+        assert_eq!(catalog_name_version(" sonnet 5 ", "sonnet"), Some(vec![5]));
+        for label in [
+            "Fable",
+            "Fable 5.",
+            "Fable 5.200",
+            "Fable 5.2b",
+            "Opus 5.5",
+            "Fable  5.2",
+        ] {
+            assert_eq!(catalog_name_version(label, "fable"), None, "{label}");
+        }
+        assert!(catalog_version_is_newer(&[5, 2], &[5, 1]));
+        assert!(catalog_version_is_newer(&[5, 2], &[5]));
+        assert!(catalog_version_is_newer(&[5, 10], &[5, 2]));
+        assert!(catalog_version_is_newer(&[6], &[5, 5]));
+        assert!(!catalog_version_is_newer(&[5, 0], &[5]));
+        assert!(!catalog_version_is_newer(&[5, 1], &[5, 2]));
     }
 
     #[test]

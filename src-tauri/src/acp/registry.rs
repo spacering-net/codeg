@@ -3162,9 +3162,64 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     and 2.1.318 stops rewriting `~/.claude.json` on every SDK run.
             //     A TaskCreate plan entry now takes the subject and description
             //     Claude Code saved.
+            //
+            // 0.102.0 (after 0.101.1) moves the Claude Agent SDK to 0.3.321
+            // (Claude Code 2.1.318 → 2.1.321) and the ACP SDK to 2.5.0;
+            // `engines.node` stays ">=22". Measured live against the local fake
+            // Anthropic API with codeg's exact `clientCapabilities`, 0.101.0 and
+            // 0.102.0 side by side:
+            //
+            // (ggggg) **Fable 5.2 is the `fable` model**. The CLI's catalog adds
+            // `claude-fable-5-2` and `claude-mythos-5-2` (both native 1M, so
+            // `parsers::infer_context_window_max_tokens` already gives them 1M),
+            // and `latest_per_family.fable` moves from 5.1 to 5.2; Opus, Sonnet
+            // and Haiku stay 5.5. Through a gateway the `fable` row keeps its
+            // value and now reads `Fable 5.2 · … · $8/$40 per Mtok`, so a saved
+            // `fable` follows it, and no Fable 5.1 row is listed: a saved
+            // `claude-fable-5-1` moves on to `fable`, as the CLI moves its own
+            // saved Fable 5.1 picks (`heal_superseded_model_pick` in
+            // `connection.rs`), where it used to be skipped onto Opus. A resumed or
+            // loaded Fable session now lists the row as `fable` too (#1548);
+            // 0.101.0 listed `claude-fable-5-1` there and no `fable` row, so a
+            // saved `fable` was refused on every reopen of a Fable session. The
+            // settings placeholders and the bundled models.dev snapshot name
+            // Fable 5.2.
+            //
+            // (hhhhh) **History parses the summary framing of CLI 2.1.293 and
+            // later.** Not an adapter change, found while checking #1536: from
+            // 2.1.312 a persisted compaction summary has a `<system-reminder>`
+            // block before its `Summary:` line, and from 2.1.293 it ends with a
+            // line about the messages kept after it. Both stayed in a reopened
+            // divider's summary; `parsers::claude::continuation_summary_text` now
+            // takes them off (268 summaries on the measuring machine come out
+            // clean). The adapter's `session/load` replay reads the new framing
+            // too (#1536).
+            //
+            // (iiiii) Nothing to change in codeg, each checked:
+            //   * #1556, #1552 and #1550 are ACP v2 work; codeg speaks v1.
+            //   * #1554 sends the checklist as a plan operation only to a client
+            //     that declares `plan`, which codeg does not. A `/clear` still
+            //     sends the same empty legacy `plan` it sent on 0.101.0, with or
+            //     without a checklist before it.
+            //   * #1540 announces a subagent's background Bash as an AIR async
+            //     task where Claude Code sends no `tool_use_result`. With the fake
+            //     API (which sends one) both pins send the same frames, which
+            //     codeg already shows. #1455 only moves the end of an autonomous
+            //     turn's async task past owed idles.
+            //   * #1534 relays an early rate limit in `_meta["_claude/rateLimit"]`
+            //     of the turn's first `usage_update`, which codeg does not read.
+            //   * #1376 reports a setup-token login as `Claude subscription ·
+            //     OAuth token`; a gateway session with `ANTHROPIC_AUTH_TOKEN`
+            //     now reports the same where 0.101.0 said `Not logged in`. codeg
+            //     only logs `_auth/status_update` (`handle_auth_status_update`).
+            //   * #1362 changes transcript notices for a client without
+            //     `session.notices`; codeg declares it.
+            //   * Per its changelog, CLI 2.1.321 groups older models under "More
+            //     models" in its own `/model` picker; the ACP model rows are the
+            //     same four through a gateway.
             distribution: AgentDistribution::Npx {
-                version: "0.101.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.101.0",
+                version: "0.102.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.102.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -8220,8 +8275,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.101.0",
-            "@agentclientprotocol/claude-agent-acp@0.101.0",
+            "0.102.0",
+            "@agentclientprotocol/claude-agent-acp@0.102.0",
             Some("22.0.0"),
         );
         assert_npx_version(

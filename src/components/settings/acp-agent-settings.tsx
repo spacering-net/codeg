@@ -13017,7 +13017,7 @@ base_url = "https://api.openai.com/v1"`}
                                 )
                               }}
                               state={claudeProviderModels}
-                              placeholder="claude-fable-5-1"
+                              placeholder="claude-fable-5-2"
                             />
                           </div>
                         </div>
