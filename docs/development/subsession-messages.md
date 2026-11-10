@@ -51,7 +51,18 @@
 不使用 `resume_delegation` 携带新指令。子会话完成不会主动启动空闲父会话的
 下一轮推理。
 
+`manage_subsession_messages(action=list)` 只列出 `send_to_subsession` 创建的
+后续消息。首次委派的结果仍通过 `get_delegation_status` 查询。
+
 ## 验证
 
-只使用 `codeg-server` 的 HTTP/WebSocket 服务、MCP 伴生进程及 ACP 协议测试
-代理验证。遵守 `AGENTS.md`，禁止编译或使用桌面端作为测试对象。
+只使用 `codeg-server` 的浏览器页面、HTTP/WebSocket 服务及 MCP 伴生进程
+验证。遵守 `AGENTS.md`，禁止编译或使用桌面端作为测试对象。
+
+浏览器验收包含两类代理：可控 ACP 测试代理用于排队、编辑、取消和立即发送；
+真实 Claude Code ACP 代理用于验证模型实际调用工具、完成首次委派，再向
+同一子会话发送后续消息并查询结果，确认跨轮上下文保留。
+
+本机系统代理可能导致 forge 测试访问 `127.0.0.1` 时出现 Windows 10053
+连接中止。遇到此问题，在测试进程中设置 `NO_PROXY=127.0.0.1,localhost,::1`
+后重跑；不需要修改系统代理或业务代码。
