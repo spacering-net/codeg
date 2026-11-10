@@ -24,6 +24,11 @@ const api = vi.hoisted(() => ({
   personalAgentGet: vi.fn(),
   getDelegationSettings: vi.fn(async () => ({ enabled: true })),
   openSettingsWindow: vi.fn(async () => {}),
+  personalAgentTemplates: vi.fn(async () => []),
+  personalAgentBotCopy: vi.fn(),
+  personalAgentBotCreate: vi.fn(),
+  personalAgentBotImpact: vi.fn(),
+  personalAgentBotDelete: vi.fn(),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
@@ -40,10 +45,14 @@ vi.mock("@/components/settings/assistants-panel", () => ({
   AssistantsPanel: () => <div data-testid="executors-list" />,
 }))
 
-const ctx = vi.hoisted(() => ({ snapshot: null as unknown }))
+const ctx = vi.hoisted(() => ({
+  snapshot: null as unknown,
+  botId: null as number | null,
+}))
 vi.mock("@/contexts/personal-agent-context", () => ({
-  useBotId: () => null,
+  useBotId: () => ctx.botId,
   usePersonalAgent: () => ({
+    botId: ctx.botId,
     snapshot: ctx.snapshot,
     refresh: vi.fn(),
     dispatchById: new Map(),
@@ -115,6 +124,7 @@ function draw() {
 
 beforeEach(() => {
   ctx.snapshot = snapshot()
+  ctx.botId = null
   usePersonalAgentUi.getState().openSettings("identity")
 })
 
@@ -261,5 +271,27 @@ describe("the settings view", () => {
     draw()
     fireEvent.click(document.querySelector("[data-pa-settings-back]")!)
     expect(usePersonalAgentUi.getState().settings).toBeNull()
+  })
+
+  it("saves a work assistant's own items to it when the page shows it", async () => {
+    // The page shows work assistant #7: its own pages are its.
+    ctx.botId = 7
+    const worker = snapshot() as unknown as {
+      agent: Record<string, unknown>
+    }
+    worker.agent = { ...worker.agent, id: 7, kind: "worker", name: "Reviewer" }
+    ctx.snapshot = worker
+    usePersonalAgentUi.getState().openSettings("advanced")
+    draw()
+    expect(screen.getByText("This assistant · Reviewer")).toBeInTheDocument()
+    const field = screen.getByLabelText("Dispatched conversations at once")
+    fireEvent.change(field, { target: { value: "5" } })
+    fireEvent.blur(field)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "own.dispatch_concurrency", value: 5 }],
+        7
+      )
+    )
   })
 })

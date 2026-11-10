@@ -610,7 +610,18 @@ pub async fn personal_agent_save_core(
     bot_id: Option<i32>,
     draft: PersonalAgentDraft,
 ) -> Result<PersonalAgentInfo, AppCommandError> {
-    engine(bot_id).await?.save(draft).await.map_err(refused)
+    let engine = engine(bot_id).await?;
+    let saved = engine.save(draft).await.map_err(refused)?;
+    // The primary set up: the executor configs there were become work
+    // assistants, if they have not yet (4.15) — before the save answers, so
+    // the page that set it up finds them.
+    if saved.kind == crate::db::entities::personal_agent::BotKind::Primary {
+        let n = engine.make_workers_from_executors().await;
+        if n > 0 {
+            tracing::info!("[personal-agent] made {n} work assistants from the executor configs");
+        }
+    }
+    Ok(saved)
 }
 
 pub async fn personal_agent_send_core(
@@ -816,6 +827,143 @@ pub async fn personal_agent_set_workdir_core(
     engine(bot_id)
         .await?
         .set_workdir(path, locale.as_deref())
+        .await
+        .map_err(refused)
+}
+
+// ── work assistants (4.12–4.15) ─────────────────────────────────────────────
+
+/// The templates, in the owner's language (`locale`, the page's).
+pub async fn personal_agent_templates_core(
+    locale: Option<String>,
+) -> Result<Vec<crate::models::personal_agent_bots::TemplateView>, AppCommandError> {
+    let locale = crate::personal_agent::templates::template_locale(locale.as_deref().unwrap_or("en"));
+    Ok(crate::personal_agent::bot_templates::views(locale))
+}
+
+/// A work assistant made from the page.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BotMade {
+    pub bot: Option<crate::models::personal_agent::BotSummary>,
+    pub executor_assistant_id: Option<i32>,
+    pub template: String,
+    /// The agent's options could not be read: the page opens the executor
+    /// config editor, prefilled with the template, and makes it again with
+    /// the selection.
+    pub options_unavailable: Option<OptionsUnavailable>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OptionsUnavailable {
+    pub agent_type: crate::models::AgentType,
+    pub why: String,
+}
+
+fn made_answer(
+    r: Result<crate::personal_agent::bots::Made, crate::personal_agent::bots::CreateError>,
+) -> Result<BotMade, AppCommandError> {
+    use crate::personal_agent::bots::CreateError;
+    match r {
+        Ok(m) => Ok(BotMade {
+            bot: Some(bot_summary(&m.bot)),
+            executor_assistant_id: Some(m.executor.id),
+            template: m.template.to_string(),
+            options_unavailable: None,
+        }),
+        Err(CreateError::OptionsUnavailable {
+            agent_type,
+            why,
+            template,
+        }) => Ok(BotMade {
+            bot: None,
+            executor_assistant_id: None,
+            template: template.to_string(),
+            options_unavailable: Some(OptionsUnavailable { agent_type, why }),
+        }),
+        Err(CreateError::Refused(e)) => Err(refused(e)),
+    }
+}
+
+/// [+] with a name (4.12): made at once, with its executor config.
+pub async fn personal_agent_bot_create_core(
+    draft: crate::models::personal_agent_bots::BotCreateDraft,
+) -> Result<BotMade, AppCommandError> {
+    use crate::personal_agent::bots::{BotSpec, ExecutorSpec};
+    let engine = engine(None).await?;
+    let mut spec = BotSpec::named(draft.name);
+    spec.uid = draft.uid;
+    spec.template = draft.template;
+    spec.avatar = draft.avatar;
+    spec.locale = draft.locale;
+    if let Some(id) = draft.executor_assistant_id {
+        spec.executor = if draft.executor_made_for_it {
+            ExecutorSpec::Adopt(id)
+        } else {
+            ExecutorSpec::Existing(id)
+        };
+    } else if let Some(config) = draft.executor_config {
+        spec.executor = ExecutorSpec::Config(config);
+    }
+    made_answer(engine.create_bot(spec).await)
+}
+
+/// Copy a work assistant (4.14).
+pub async fn personal_agent_bot_copy_core(
+    bot_id: i32,
+    name: String,
+    locale: Option<String>,
+) -> Result<BotMade, AppCommandError> {
+    let engine = engine(None).await?;
+    made_answer(engine.copy_bot(bot_id, &name, locale.as_deref()).await)
+}
+
+/// What deleting a work assistant touches, for the confirmation.
+pub async fn personal_agent_bot_impact_core(
+    bot_id: i32,
+) -> Result<crate::models::personal_agent_bots::BotImpact, AppCommandError> {
+    engine(None).await?.bot_impact(bot_id).await.map_err(refused)
+}
+
+/// Delete a work assistant (4.14).
+pub async fn personal_agent_bot_delete_core(
+    bot_id: i32,
+    options: crate::models::personal_agent_bots::BotDeleteOptions,
+) -> Result<(), AppCommandError> {
+    let primary = engine(None).await?;
+    let worker = match crate::personal_agent::host::host() {
+        Some(h) => h.existing_worker(bot_id).await,
+        None => None,
+    };
+    primary
+        .delete_bot(bot_id, &options, worker)
+        .await
+        .map_err(refused)
+}
+
+/// [Change role] on a new work assistant's opening card.
+pub async fn personal_agent_bot_set_template_core(
+    bot_id: i32,
+    template: String,
+) -> Result<TimelineRow, AppCommandError> {
+    engine(Some(bot_id))
+        .await?
+        .set_bot_template(&template)
+        .await
+        .map_err(refused)
+}
+
+/// An answer on a choice card: one of its choices (`key`, with
+/// `project_id` when it asks for one) or the owner's own words (`text`).
+pub async fn personal_agent_choice_answer_core(
+    bot_id: Option<i32>,
+    notice_id: i32,
+    key: Option<String>,
+    text: Option<String>,
+    project_id: Option<i32>,
+) -> Result<TimelineRow, AppCommandError> {
+    engine(bot_id)
+        .await?
+        .answer_choice(notice_id, key.as_deref(), text.as_deref(), project_id)
         .await
         .map_err(refused)
 }
@@ -1106,4 +1254,68 @@ pub async fn personal_agent_set_workdir(
     locale: Option<String>,
 ) -> Result<PersonalAgentInfo, AppCommandError> {
     personal_agent_set_workdir_core(bot_id, path, locale).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_templates(
+    locale: Option<String>,
+) -> Result<Vec<crate::models::personal_agent_bots::TemplateView>, AppCommandError> {
+    personal_agent_templates_core(locale).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_bot_create(
+    draft: crate::models::personal_agent_bots::BotCreateDraft,
+) -> Result<BotMade, AppCommandError> {
+    personal_agent_bot_create_core(draft).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_bot_copy(
+    bot_id: i32,
+    name: String,
+    locale: Option<String>,
+) -> Result<BotMade, AppCommandError> {
+    personal_agent_bot_copy_core(bot_id, name, locale).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_bot_impact(
+    bot_id: i32,
+) -> Result<crate::models::personal_agent_bots::BotImpact, AppCommandError> {
+    personal_agent_bot_impact_core(bot_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_bot_delete(
+    bot_id: i32,
+    options: crate::models::personal_agent_bots::BotDeleteOptions,
+) -> Result<(), AppCommandError> {
+    personal_agent_bot_delete_core(bot_id, options).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_bot_set_template(
+    bot_id: i32,
+    template: String,
+) -> Result<TimelineRow, AppCommandError> {
+    personal_agent_bot_set_template_core(bot_id, template).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_choice_answer(
+    bot_id: Option<i32>,
+    notice_id: i32,
+    key: Option<String>,
+    text: Option<String>,
+    project_id: Option<i32>,
+) -> Result<TimelineRow, AppCommandError> {
+    personal_agent_choice_answer_core(bot_id, notice_id, key, text, project_id).await
 }

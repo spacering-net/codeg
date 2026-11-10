@@ -10,7 +10,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::agent::AgentType;
-use super::assistant::{AssistantAgentConfig, AssistantAvatar, AssistantLabelSnapshot};
+use super::assistant::{AssistantAgentConfig, AssistantLabelSnapshot};
+use super::personal_agent_bots::BotAvatar;
 use super::system::AppLocale;
 use crate::acp::delegation::types::AgentDelegationDefaults;
 use crate::db::entities::personal_agent_batch::BatchKind;
@@ -216,7 +217,7 @@ pub struct PersonalAgentInfo {
     pub id: i32,
     /// Empty means "use the localized default name".
     pub name: String,
-    pub avatar: AssistantAvatar,
+    pub avatar: BotAvatar,
     pub agent_type: AgentType,
     pub agent_options: AgentDelegationDefaults,
     pub label_snapshot: AssistantLabelSnapshot,
@@ -245,7 +246,7 @@ pub struct PersonalAgentDraft {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub avatar: Option<AssistantAvatar>,
+    pub avatar: Option<BotAvatar>,
     #[serde(default)]
     pub agent_config: Option<AssistantAgentConfig>,
     #[serde(default)]
@@ -356,6 +357,22 @@ pub struct DispatchExecutorSnapshot {
     pub label_snapshot: Option<AssistantLabelSnapshot>,
     #[serde(default)]
     pub instructions: String,
+    /// What the execution is told about the assistant that handed it out
+    /// (4.4), frozen with the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatcher: Option<String>,
+}
+
+impl DispatchExecutorSnapshot {
+    /// The standing instructions the execution gets: the executor config's,
+    /// then who handed the work out.
+    pub fn brief_text(&self) -> String {
+        match self.dispatcher.as_deref().filter(|d| !d.trim().is_empty()) {
+            Some(d) if self.instructions.trim().is_empty() => d.to_string(),
+            Some(d) => format!("{}\n\n{d}", self.instructions.trim_end()),
+            None => self.instructions.clone(),
+        }
+    }
 }
 
 /// One message of a thread between assistants, as the exchange sheet shows
@@ -552,7 +569,7 @@ pub struct BotSummary {
     pub kind: crate::db::entities::personal_agent::BotKind,
     pub uid: Option<String>,
     pub name: String,
-    pub avatar: AssistantAvatar,
+    pub avatar: BotAvatar,
     pub template: Option<String>,
     pub executor_assistant_id: Option<i32>,
     pub created_at: DateTime<Utc>,

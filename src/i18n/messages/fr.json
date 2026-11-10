@@ -8083,7 +8083,8 @@
         "default": "par défaut"
       },
       "targetLoading": "Chargement des réglages de cet assistant…",
-      "targetFailed": "Impossible de lire les réglages de cet assistant."
+      "targetFailed": "Impossible de lire les réglages de cet assistant.",
+      "brain": "Cerveau"
     },
     "statusWord": {
       "idle": "Inactif",
@@ -8357,6 +8358,130 @@
       "withdrawn": "Plus nécessaire",
       "resolved": "Réglé"
     },
-    "addExecutor": "Ajouter une configuration d'exécution"
+    "addExecutor": "Ajouter une configuration d'exécution",
+    "bots": {
+      "new": "Nouvel assistant de travail",
+      "copyName": "{name} (copie)",
+      "copied": "Copie créée : {name}",
+      "openConversation": "Ouvrir",
+      "more": "Plus",
+      "settings": "Réglages",
+      "copy": "Dupliquer",
+      "deleteAction": "Supprimer…",
+      "fromTemplate": "À partir d'un modèle",
+      "reviewAgentHint": "Choisissez un agent différent de celui de votre développeur : celui qui vérifie le travail ne doit pas être celui qui l'a écrit.",
+      "face": {
+        "change": "Changer l'avatar",
+        "shape": "Forme",
+        "color": "Couleur",
+        "upload": "Importer une image",
+        "tooLarge": "L'image est trop lourde.",
+        "unreadable": "Impossible de lire ce fichier comme une image.",
+        "shapes": {
+          "blob": "Tache",
+          "pebble": "Galet",
+          "squircle": "Carré arrondi",
+          "pill": "Pilule",
+          "wedge": "Coin",
+          "hexagon": "Hexagone",
+          "cloud": "Nuage",
+          "drop": "Goutte",
+          "bean": "Haricot",
+          "egg": "Œuf",
+          "shield": "Bouclier",
+          "burst": "Éclat"
+        },
+        "colors": {
+          "black": "Noir",
+          "brown": "Marron",
+          "red": "Rouge",
+          "orange": "Orange",
+          "yellow": "Jaune",
+          "green": "Vert",
+          "teal": "Bleu canard",
+          "blue": "Bleu",
+          "purple": "Violet",
+          "magenta": "Magenta",
+          "gray": "Gris"
+        }
+      },
+      "create": {
+        "title": "Nouvel assistant de travail",
+        "description": "Juste un nom. Son rôle est déduit du nom, son cerveau est celui de l'assistant principal, et une configuration d'exécution est créée avec lui.",
+        "name": "Nom",
+        "namePlaceholder": "ex. : Relecture de code",
+        "hint": "Vous pouvez changer son rôle sur sa première carte, et tout le reste dans ses réglages.",
+        "cancel": "Annuler",
+        "create": "Créer",
+        "editorNote": "codeg n'a pas pu lire les options de cet agent ({why}), choisissez-les donc ici ; l'assistant de travail est créé avec cette configuration d'exécution."
+      },
+      "roster": {
+        "title": "Assistants",
+        "add": "Nouvel assistant de travail",
+        "addShort": "Nouveau"
+      },
+      "choice": {
+        "other": "Autre",
+        "otherPlaceholder": "Votre réponse…",
+        "send": "Envoyer",
+        "answered": "Votre choix : {choice}",
+        "answeredOwn": "Vous avez écrit : {text}",
+        "noProjects": "Aucun projet n'est ouvert dans codeg.",
+        "brainSame": "Cerveau identique à celui de l'assistant principal",
+        "brainOwn": "Cerveau : {agent}",
+        "executorBound": "configuration d'exécution {name}",
+        "executorFilled": "configuration d'exécution sur {agent}, {count, plural, one {# option choisie} other {# options choisies}} pour vous",
+        "executorMade": "configuration d'exécution sur {agent}",
+        "joiner": " ; ",
+        "editBrain": "Modifier le cerveau",
+        "editExecutor": "Modifier la configuration d'exécution",
+        "changeRole": "Changer de rôle",
+        "brainItem": "Cerveau · {name}",
+        "from": {
+          "given": "comme demandé",
+          "other_config": "d'une autre configuration",
+          "agent": "valeur par défaut de l'agent"
+        },
+        "nothingPicked": "Rien à choisir pour cet agent."
+      },
+      "changed": {
+        "applied": "Assistant de travail créé",
+        "made": "{count, plural, one {Un assistant de travail créé} other {# assistants de travail créés}} à partir de vos configurations d'exécution",
+        "madeHint": "Chacun reprend le rôle auquel sa configuration d'exécution était destinée, et la garde. Annuler l'un d'eux supprime l'assistant ; la configuration d'exécution reste.",
+        "show": "Créer un assistant de travail ? (vous avez demandé à voir d'abord ce type de modification)",
+        "suggested": "Suggestion : un nouvel assistant de travail",
+        "dismissed": "Non créé",
+        "undone": "Annulé",
+        "executorFilled": "configuration d'exécution sur {agent}, {count, plural, one {# option choisie} other {# options choisies}} pour vous",
+        "executorMade": "configuration d'exécution sur {agent}",
+        "executorBound": "garde {name}",
+        "open": "Ouvrir",
+        "undoOne": "Annuler",
+        "undoneOne": "Annulé",
+        "quote": "Vous avez dit : « {quote} »",
+        "reason": "Pourquoi : {reason}",
+        "accept": "Le créer",
+        "dismiss": "Pas maintenant",
+        "undo": "Annuler",
+        "undoAll": "Tout annuler"
+      },
+      "delete": {
+        "title": "Supprimer {name} ?",
+        "description": "Sa mémoire et sa conversation sont supprimées avec lui. L'assistant principal ne peut pas être supprimé.",
+        "running": "{count, plural, one {# travail qu'il a confié est} other {# travaux qu'il a confiés sont}} toujours en cours :",
+        "handOver": "Les confier à l'assistant principal pour qu'il en assure le suivi (recommandé)",
+        "stop": "Les arrêter",
+        "messages": "{count, plural, one {# message qui lui est adressé est resté sans réponse : il retourne à son expéditeur.} other {# messages qui lui sont adressés sont restés sans réponse : ils retournent à leurs expéditeurs.}}",
+        "division": "C'est le premier choix pour {kinds} : cela repasse en Auto.",
+        "listJoiner": ", ",
+        "dropExecutor": "Supprimer aussi sa configuration d'exécution {name}",
+        "executorKept": "Conservée par défaut : elle reste mentionnable avec @ et utilisable par codeg-cli.",
+        "executorShared": "Conservée : elle est aussi utilisée par {names}.",
+        "dropWorkdir": "Supprimer aussi son répertoire de travail",
+        "workdirCustom": "Vous avez choisi ce répertoire, codeg n'y touche donc pas.",
+        "cancel": "Annuler",
+        "confirm": "Supprimer"
+      }
+    }
   }
 }

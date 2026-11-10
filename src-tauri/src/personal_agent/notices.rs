@@ -451,6 +451,9 @@ impl PersonalAgentEngine {
             NoticeKind::Stopped => return self.act_on_stopped(&notice, action).await,
             // A settings change answers its own way (13.3).
             NoticeKind::Changed => return self.act_on_changed(&notice, action).await,
+            NoticeKind::Choice => {
+                return Err("a choice card is answered with its choices".into());
+            }
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.

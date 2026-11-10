@@ -59,7 +59,8 @@ use crate::models::personal_agent::{
     TurnInfo, UsageReading,
 };
 use crate::models::system::{AppLocale, LanguageMode};
-use crate::models::{AgentType, AssistantAgentConfig, AssistantAvatar, AssistantLabelSnapshot};
+use crate::models::personal_agent_bots::BotAvatar;
+use crate::models::{AgentType, AssistantAgentConfig, AssistantLabelSnapshot};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 use crate::work_task::compact;
 
@@ -3015,6 +3016,11 @@ impl PersonalAgentEngine {
             None => workdir::read_text(workdir, workdir::USER_FILE),
         };
         let memory = workdir::read_text(workdir, workdir::MEMORY_FILE);
+        let new_bot = if seg.seq == 1 && row.kind == BotKind::Worker {
+            self.new_bot_note(row).await
+        } else {
+            None
+        };
         cards::handoff_card(&cards::HandoffInput {
             segment_seq: seg.seq,
             reason: seg.start_reason,
@@ -3032,6 +3038,7 @@ impl PersonalAgentEngine {
             recent: &recent,
             assistants: &assistants,
             division: division.as_deref(),
+            new_bot: new_bot.as_deref(),
             budget_chars: budget as usize,
         })
     }
@@ -3787,7 +3794,7 @@ impl PersonalAgentEngine {
             write.name = Some(name);
         }
         if let Some(avatar) = draft.avatar.as_ref() {
-            crate::db::service::assistant_service::validate_avatar(avatar).map_err(|e| e.to_string())?;
+            avatar.validate()?;
             write.avatar_json = Some(serde_json::to_string(avatar).map_err(|e| e.to_string())?);
         }
         let old_config = existing.as_ref().and_then(brain_of);
@@ -4013,7 +4020,7 @@ impl PersonalAgentEngine {
     /// from it carries one, else the one the settings remember, else the UI
     /// language the owner picked in codeg's settings (in "follow the system"
     /// mode only the UI knows it), else English.
-    async fn owner_locale(&self, row: &agent_entity::Model, ui: Option<&str>) -> AppLocale {
+    pub(super) async fn owner_locale(&self, row: &agent_entity::Model, ui: Option<&str>) -> AppLocale {
         if let Some(tag) = ui.map(str::trim).filter(|t| !t.is_empty()) {
             return super::templates::template_locale(tag);
         }
@@ -4288,7 +4295,7 @@ pub(super) fn to_info(row: &agent_entity::Model, workdir: &std::path::Path) -> O
     Some(PersonalAgentInfo {
         id: row.id,
         name: row.name.clone(),
-        avatar: serde_json::from_str::<AssistantAvatar>(&row.avatar).unwrap_or(AssistantAvatar::Emoji {
+        avatar: serde_json::from_str::<BotAvatar>(&row.avatar).unwrap_or(BotAvatar::Emoji {
             emoji: "🧭".into(),
             color: "violet".into(),
         }),

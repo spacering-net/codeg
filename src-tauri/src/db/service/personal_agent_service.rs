@@ -85,6 +85,10 @@ pub async fn list_bots(conn: &DatabaseConnection) -> Result<Vec<agent::Model>, D
 /// A worker to make: its identity and brain, the profile it is bound to.
 #[derive(Debug, Clone)]
 pub struct NewWorker {
+    /// Its uid when the caller has one ready (the page previewed its face
+    /// with it); a fresh one otherwise.
+    pub uid: Option<String>,
+    pub notify: bool,
     pub name: String,
     pub avatar_json: String,
     pub agent_type: String,
@@ -122,7 +126,7 @@ pub async fn create_worker(
         created_at: Set(now),
         updated_at: Set(now),
         kind: Set(BotKind::Worker),
-        uid: Set(Some(new_bot_uid())),
+        uid: Set(Some(new.uid.unwrap_or_else(new_bot_uid))),
         template: Set(new.template),
         executor_assistant_id: Set(new.executor_assistant_id),
         sort_order: Set(last + 1),
@@ -131,10 +135,69 @@ pub async fn create_worker(
         hidden: Set(false),
         muted: Set(false),
         unread_mark: Set(false),
-        notify: Set(true),
+        notify: Set(new.notify),
         deleted_at: Set(None),
     };
     Ok(row.insert(conn).await?)
+}
+
+/// Whether any assistant, deleted or not, has `uid`.
+pub async fn uid_taken(conn: &DatabaseConnection, uid: &str) -> Result<bool, DbError> {
+    Ok(agent::Entity::find()
+        .filter(agent::Column::Uid.eq(uid))
+        .count(conn)
+        .await?
+        > 0)
+}
+
+/// Set the template a worker is made from.
+pub async fn set_bot_template(
+    conn: &DatabaseConnection,
+    id: i32,
+    template: &str,
+) -> Result<(), DbError> {
+    agent::Entity::update_many()
+        .col_expr(agent::Column::Template, Expr::value(template))
+        .col_expr(agent::Column::UpdatedAt, Expr::value(Utc::now()))
+        .col_expr(
+            agent::Column::Revision,
+            Expr::col(agent::Column::Revision).add(1),
+        )
+        .filter(agent::Column::Id.eq(id))
+        .filter(agent::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Hand dispatches, and the matters that follow them, to assistant `bot`
+/// (a deleted worker's work, to the primary).
+pub async fn move_dispatches_to(
+    conn: &DatabaseConnection,
+    ids: &[i32],
+    bot: i32,
+) -> Result<(), DbError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    use sea_orm::TransactionTrait;
+    require_bot(bot)?;
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    dispatch::Entity::update_many()
+        .col_expr(dispatch::Column::BotId, Expr::value(bot))
+        .col_expr(dispatch::Column::UpdatedAt, Expr::value(now))
+        .filter(dispatch::Column::Id.is_in(ids.to_vec()))
+        .exec(&txn)
+        .await?;
+    item::Entity::update_many()
+        .col_expr(item::Column::BotId, Expr::value(bot))
+        .col_expr(item::Column::UpdatedAt, Expr::value(now))
+        .filter(item::Column::DispatchId.is_in(ids.to_vec()))
+        .exec(&txn)
+        .await?;
+    txn.commit().await?;
+    Ok(())
 }
 
 /// A stable id naming an assistant's directory: 32 hex digits.
@@ -2415,6 +2478,23 @@ pub async fn notice_by_subject(
         .filter(notice::Column::SubjectKey.eq(subject))
         .filter(notice::Column::BatchId.is_in(scope.to_vec()))
         .order_by_asc(notice::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// `bot`'s card of `kind` with `subject`, whenever it was raised (the
+/// newest).
+pub async fn notice_of_subject(
+    conn: &DatabaseConnection,
+    bot: i32,
+    kind: NoticeKind,
+    subject: &str,
+) -> Result<Option<notice::Model>, DbError> {
+    Ok(notice::Entity::find()
+        .filter(notice::Column::BotId.eq(bot))
+        .filter(notice::Column::Kind.eq(kind))
+        .filter(notice::Column::SubjectKey.eq(subject))
+        .order_by_desc(notice::Column::Id)
         .one(conn)
         .await?)
 }

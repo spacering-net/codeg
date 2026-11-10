@@ -1891,11 +1891,45 @@ export interface PersonalAgentSettings {
   locale?: AppLocale | null
 }
 
+/** The shapes codeg draws an assistant as (10.6). */
+export type BotShape =
+  | "blob"
+  | "pebble"
+  | "squircle"
+  | "pill"
+  | "wedge"
+  | "hexagon"
+  | "cloud"
+  | "drop"
+  | "bean"
+  | "egg"
+  | "shield"
+  | "burst"
+
+export type BotColor =
+  | "black"
+  | "brown"
+  | "red"
+  | "orange"
+  | "yellow"
+  | "green"
+  | "teal"
+  | "blue"
+  | "purple"
+  | "magenta"
+  | "gray"
+
+/** An assistant's avatar: a face (shape and colour), or one of the executor
+ *  configs' avatars, which the assistants made before 1.6 carry. */
+export type BotAvatar =
+  | { kind: "face"; shape: BotShape; color: BotColor }
+  | AssistantAvatar
+
 export interface PersonalAgentInfo {
   id: number
   /** Empty: use the localized default name. */
   name: string
-  avatar: AssistantAvatar
+  avatar: BotAvatar
   agent_type: AgentType
   agent_options: AgentDelegationDefaults
   label_snapshot: AssistantLabelSnapshot
@@ -1919,7 +1953,7 @@ export type PersonalAgentBotKind = "primary" | "worker"
 
 export interface PersonalAgentDraft {
   name?: string
-  avatar?: AssistantAvatar
+  avatar?: BotAvatar
   agent_config?: AssistantAgentConfig
   settings?: PersonalAgentSettings
   locale?: string
@@ -2062,7 +2096,7 @@ export interface DispatchExecutorSnapshot {
 export interface BotFace {
   id: number
   name: string
-  avatar: AssistantAvatar | null
+  avatar: BotAvatar | null
   kind: "primary" | "worker"
 }
 
@@ -2290,10 +2324,81 @@ export interface PersonalAgentBotSummary {
   kind: PersonalAgentBotKind
   uid: string | null
   name: string
-  avatar: AssistantAvatar
+  avatar: BotAvatar
   template: string | null
   executor_assistant_id: number | null
   created_at: string
+}
+
+/** Where a value codeg picked for the owner came from (10.5). */
+export type PickedFrom = "given" | "other_config" | "agent"
+
+export interface PickedOption {
+  id: string
+  name: string
+  value: string
+  value_label: string
+  from: PickedFrom
+}
+
+/** A work assistant's template, in the owner's language (4.13). */
+export interface BotTemplate {
+  id: string
+  name: string
+  job: string
+  description: string
+  instructions: string
+  opener: string
+  options: string[]
+  other: string
+  modes: DispatchMode[] | null
+  division: string | null
+  project_option: number | null
+}
+
+export interface BotCreateDraft {
+  name: string
+  /** The uid the page previewed the default face with. */
+  uid?: string | null
+  template?: string | null
+  avatar?: BotAvatar | null
+  executor_config?: AssistantAgentConfig | null
+  executor_assistant_id?: number | null
+  /** That executor config was made for it just now, in the editor. */
+  executor_made_for_it?: boolean
+  locale?: string | null
+}
+
+/** A work assistant made — or, when the agent's options could not be read,
+ *  what the editor opens with instead. */
+export interface BotMade {
+  bot: PersonalAgentBotSummary | null
+  executor_assistant_id: number | null
+  template: string
+  options_unavailable: { agent_type: AgentType; why: string } | null
+}
+
+/** What deleting a work assistant touches (4.14). */
+export interface BotImpact {
+  bot_id: number
+  name: string
+  running: {
+    dispatch_id: number
+    title: string
+    mode: DispatchMode
+    state: DispatchState
+  }[]
+  unanswered_messages: number
+  executor: { id: number; name: string; shared_with: string[] } | null
+  division: string[]
+  workdir: string
+  workdir_custom: boolean
+}
+
+export interface BotDeleteOptions {
+  hand_over: boolean
+  delete_executor: boolean
+  delete_workdir: boolean
 }
 
 export interface ExecutorWork {

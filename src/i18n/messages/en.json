@@ -8083,7 +8083,8 @@
       },
       "tabPersona": "Persona & memory",
       "targetLoading": "Loading this assistant's settings…",
-      "targetFailed": "Could not read this assistant's settings."
+      "targetFailed": "Could not read this assistant's settings.",
+      "brain": "Brain"
     },
     "statusWord": {
       "idle": "Idle",
@@ -8357,6 +8358,130 @@
       "withdrawn": "No longer asked",
       "resolved": "Settled"
     },
-    "addExecutor": "Add an executor config"
+    "addExecutor": "Add an executor config",
+    "bots": {
+      "new": "New work assistant",
+      "copyName": "{name} (copy)",
+      "copied": "Made {name}, a copy",
+      "openConversation": "Open",
+      "more": "More",
+      "settings": "Settings",
+      "copy": "Copy",
+      "deleteAction": "Delete…",
+      "fromTemplate": "From a template",
+      "reviewAgentHint": "Pick a different agent from your developer's: the one checking the work should not be the one who wrote it.",
+      "face": {
+        "change": "Change the avatar",
+        "shape": "Shape",
+        "color": "Colour",
+        "upload": "Upload a picture",
+        "tooLarge": "That picture is too large.",
+        "unreadable": "That file could not be read as a picture.",
+        "shapes": {
+          "blob": "Blob",
+          "pebble": "Pebble",
+          "squircle": "Rounded square",
+          "pill": "Pill",
+          "wedge": "Wedge",
+          "hexagon": "Hexagon",
+          "cloud": "Cloud",
+          "drop": "Drop",
+          "bean": "Bean",
+          "egg": "Egg",
+          "shield": "Shield",
+          "burst": "Burst"
+        },
+        "colors": {
+          "black": "Black",
+          "brown": "Brown",
+          "red": "Red",
+          "orange": "Orange",
+          "yellow": "Yellow",
+          "green": "Green",
+          "teal": "Teal",
+          "blue": "Blue",
+          "purple": "Purple",
+          "magenta": "Magenta",
+          "gray": "Gray"
+        }
+      },
+      "create": {
+        "title": "New work assistant",
+        "description": "Just a name. Its role is read from the name, its brain is the same as the primary assistant's, and an executor config is made with it.",
+        "name": "Name",
+        "namePlaceholder": "e.g. Code review",
+        "hint": "You can change its role on its first card, and everything else in its settings.",
+        "cancel": "Cancel",
+        "create": "Create",
+        "editorNote": "codeg could not read this agent's options ({why}), so pick them here; the work assistant is made with this executor config."
+      },
+      "roster": {
+        "title": "Assistants",
+        "add": "New work assistant",
+        "addShort": "New"
+      },
+      "choice": {
+        "other": "Other",
+        "otherPlaceholder": "Write your own…",
+        "send": "Send",
+        "answered": "You picked: {choice}",
+        "answeredOwn": "You wrote: {text}",
+        "noProjects": "No projects are open in codeg.",
+        "brainSame": "Brain same as the primary assistant's",
+        "brainOwn": "Brain: {agent}",
+        "executorBound": "executor config {name}",
+        "executorFilled": "executor config on {agent}, {count, plural, one {# option} other {# options}} picked for you",
+        "executorMade": "executor config on {agent}",
+        "joiner": "; ",
+        "editBrain": "Change brain",
+        "editExecutor": "Change executor config",
+        "changeRole": "Change role",
+        "brainItem": "Brain · {name}",
+        "from": {
+          "given": "as said",
+          "other_config": "from another config",
+          "agent": "agent's default"
+        },
+        "nothingPicked": "Nothing to pick for this agent."
+      },
+      "changed": {
+        "applied": "Made a work assistant",
+        "made": "Made {count, plural, one {a work assistant} other {# work assistants}} from your executor configs",
+        "madeHint": "Each takes the job its executor config was for, and keeps its executor config. Undoing one deletes the assistant; the executor config stays.",
+        "show": "Make a work assistant? (you asked to see such changes first)",
+        "suggested": "Suggestion: a new work assistant",
+        "dismissed": "Not made",
+        "undone": "Undone",
+        "executorFilled": "executor config on {agent}, {count, plural, one {# option} other {# options}} picked for you",
+        "executorMade": "executor config on {agent}",
+        "executorBound": "keeps {name}",
+        "open": "Open",
+        "undoOne": "Undo",
+        "undoneOne": "Undone",
+        "quote": "You said: “{quote}”",
+        "reason": "Why: {reason}",
+        "accept": "Make it",
+        "dismiss": "Not now",
+        "undo": "Undo",
+        "undoAll": "Undo all"
+      },
+      "delete": {
+        "title": "Delete {name}?",
+        "description": "Its memory and conversation go with it. The primary assistant can't be deleted.",
+        "running": "{count, plural, one {# piece of work it handed out is} other {# pieces of work it handed out are}} still running:",
+        "handOver": "Hand them to the primary assistant to follow (recommended)",
+        "stop": "Stop them",
+        "messages": "{count, plural, one {# message to it has} other {# messages to it have}} not been answered: they go back to their senders.",
+        "division": "It is the first pick for {kinds}: that goes back to auto.",
+        "listJoiner": ", ",
+        "dropExecutor": "Also delete its executor config {name}",
+        "executorKept": "Kept by default: it can still be @-mentioned and used by codeg-cli.",
+        "executorShared": "Kept: {names} use it too.",
+        "dropWorkdir": "Also delete its working directory",
+        "workdirCustom": "You picked this directory, so codeg leaves it alone.",
+        "cancel": "Cancel",
+        "confirm": "Delete"
+      }
+    }
   }
 }

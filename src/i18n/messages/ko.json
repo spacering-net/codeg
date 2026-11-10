@@ -8083,7 +8083,8 @@
         "default": "기본값"
       },
       "targetLoading": "이 어시스턴트의 설정을 불러오는 중…",
-      "targetFailed": "이 어시스턴트의 설정을 불러올 수 없습니다."
+      "targetFailed": "이 어시스턴트의 설정을 불러올 수 없습니다.",
+      "brain": "두뇌"
     },
     "statusWord": {
       "idle": "대기 중",
@@ -8357,6 +8358,130 @@
       "withdrawn": "더 이상 필요 없음",
       "resolved": "처리됨"
     },
-    "addExecutor": "실행 구성 추가"
+    "addExecutor": "실행 구성 추가",
+    "bots": {
+      "new": "새 작업 어시스턴트",
+      "copyName": "{name} (사본)",
+      "copied": "복제본 {name}을(를) 만들었습니다",
+      "openConversation": "열기",
+      "more": "더 보기",
+      "settings": "설정",
+      "copy": "복제",
+      "deleteAction": "삭제…",
+      "fromTemplate": "템플릿에서 만들기",
+      "reviewAgentHint": "개발자와 다른 에이전트를 고르세요. 작업을 검토하는 쪽이 작성한 쪽과 같아서는 안 됩니다.",
+      "face": {
+        "change": "아바타 변경",
+        "shape": "모양",
+        "color": "색상",
+        "upload": "이미지 업로드",
+        "tooLarge": "이미지가 너무 큽니다.",
+        "unreadable": "이 파일을 이미지로 읽을 수 없습니다.",
+        "shapes": {
+          "blob": "덩어리",
+          "pebble": "조약돌",
+          "squircle": "둥근 사각형",
+          "pill": "알약",
+          "wedge": "쐐기",
+          "hexagon": "육각형",
+          "cloud": "구름",
+          "drop": "물방울",
+          "bean": "콩",
+          "egg": "달걀",
+          "shield": "방패",
+          "burst": "스타버스트"
+        },
+        "colors": {
+          "black": "검정",
+          "brown": "갈색",
+          "red": "빨강",
+          "orange": "주황",
+          "yellow": "노랑",
+          "green": "초록",
+          "teal": "청록",
+          "blue": "파랑",
+          "purple": "보라",
+          "magenta": "마젠타",
+          "gray": "회색"
+        }
+      },
+      "create": {
+        "title": "새 작업 어시스턴트",
+        "description": "이름만 있으면 됩니다. 역할은 이름에서 추론하고, 두뇌는 메인 어시스턴트와 같게 하며, 실행 구성도 함께 만듭니다.",
+        "name": "이름",
+        "namePlaceholder": "예: 코드 리뷰",
+        "hint": "역할은 첫 카드에서, 나머지는 설정에서 바꿀 수 있습니다.",
+        "cancel": "취소",
+        "create": "만들기",
+        "editorNote": "codeg가 이 에이전트의 옵션을 읽지 못했습니다({why}). 여기서 골라 주세요. 작업 어시스턴트는 이 실행 구성으로 만들어집니다."
+      },
+      "roster": {
+        "title": "어시스턴트",
+        "add": "새 작업 어시스턴트",
+        "addShort": "새로 만들기"
+      },
+      "choice": {
+        "other": "기타",
+        "otherPlaceholder": "직접 입력…",
+        "send": "보내기",
+        "answered": "선택: {choice}",
+        "answeredOwn": "직접 입력: {text}",
+        "noProjects": "codeg에 열려 있는 프로젝트가 없습니다.",
+        "brainSame": "두뇌는 메인 어시스턴트와 같음",
+        "brainOwn": "두뇌: {agent}",
+        "executorBound": "실행 구성: {name}",
+        "executorFilled": "실행 구성: {agent}, 옵션 {count}개 자동 선택",
+        "executorMade": "실행 구성: {agent}",
+        "joiner": "; ",
+        "editBrain": "두뇌 변경",
+        "editExecutor": "실행 구성 변경",
+        "changeRole": "역할 변경",
+        "brainItem": "두뇌 · {name}",
+        "from": {
+          "given": "말씀하신 대로",
+          "other_config": "다른 실행 구성에서",
+          "agent": "에이전트 기본값"
+        },
+        "nothingPicked": "이 에이전트에는 고를 항목이 없습니다."
+      },
+      "changed": {
+        "applied": "작업 어시스턴트를 만듦",
+        "made": "실행 구성으로 작업 어시스턴트 {count}명을 만듦",
+        "madeHint": "각자 원래 실행 구성이 맡던 일을 이어받고, 그 실행 구성도 그대로 씁니다. 하나를 되돌리면 그 어시스턴트만 삭제되고 실행 구성은 남습니다.",
+        "show": "작업 어시스턴트를 만들까요? (이런 변경은 먼저 확인하도록 설정하셨습니다)",
+        "suggested": "제안: 새 작업 어시스턴트",
+        "dismissed": "만들지 않음",
+        "undone": "되돌림",
+        "executorFilled": "실행 구성: {agent}, 옵션 {count}개 자동 선택",
+        "executorMade": "실행 구성: {agent}",
+        "executorBound": "{name} 유지",
+        "open": "열기",
+        "undoOne": "되돌리기",
+        "undoneOne": "되돌림",
+        "quote": "말씀하신 내용: “{quote}”",
+        "reason": "이유: {reason}",
+        "accept": "만들기",
+        "dismiss": "하지 않기",
+        "undo": "되돌리기",
+        "undoAll": "모두 되돌리기"
+      },
+      "delete": {
+        "title": "{name}을(를) 삭제할까요?",
+        "description": "메모리와 대화도 함께 삭제됩니다. 메인 어시스턴트는 삭제할 수 없습니다.",
+        "running": "맡긴 작업 {count}건이 아직 실행 중입니다:",
+        "handOver": "메인 어시스턴트에게 넘겨 계속 챙기게 하기(권장)",
+        "stop": "중지하기",
+        "messages": "이 어시스턴트에게 온 메시지 {count}건에 아직 답하지 않았습니다. 보낸 쪽으로 돌려보냅니다.",
+        "division": "{kinds}의 1순위입니다. 해당 항목은 “자동”으로 돌아갑니다.",
+        "listJoiner": ", ",
+        "dropExecutor": "실행 구성 {name}도 삭제",
+        "executorKept": "기본적으로 유지됩니다. 계속 @로 호출할 수 있고 codeg-cli에서도 쓸 수 있습니다.",
+        "executorShared": "유지됩니다. {names}도 사용 중입니다.",
+        "dropWorkdir": "작업 디렉터리도 삭제",
+        "workdirCustom": "직접 고른 디렉터리이므로 codeg는 건드리지 않습니다.",
+        "cancel": "취소",
+        "confirm": "삭제"
+      }
+    }
   }
 }

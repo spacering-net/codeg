@@ -8083,7 +8083,8 @@
         "default": "Standard"
       },
       "targetLoading": "Einstellungen dieses Assistenten werden geladen …",
-      "targetFailed": "Die Einstellungen dieses Assistenten konnten nicht gelesen werden."
+      "targetFailed": "Die Einstellungen dieses Assistenten konnten nicht gelesen werden.",
+      "brain": "Gehirn"
     },
     "statusWord": {
       "idle": "Bereit",
@@ -8357,6 +8358,130 @@
       "withdrawn": "Nicht mehr nötig",
       "resolved": "Erledigt"
     },
-    "addExecutor": "Ausführungskonfiguration hinzufügen"
+    "addExecutor": "Ausführungskonfiguration hinzufügen",
+    "bots": {
+      "new": "Neuer Arbeitsassistent",
+      "copyName": "{name} (Kopie)",
+      "copied": "Kopie erstellt: {name}",
+      "openConversation": "Öffnen",
+      "more": "Mehr",
+      "settings": "Einstellungen",
+      "copy": "Duplizieren",
+      "deleteAction": "Löschen…",
+      "fromTemplate": "Aus Vorlage",
+      "reviewAgentHint": "Wähle einen anderen Agenten als den deines Entwicklers: Wer die Arbeit prüft, sollte nicht derjenige sein, der sie geschrieben hat.",
+      "face": {
+        "change": "Avatar ändern",
+        "shape": "Form",
+        "color": "Farbe",
+        "upload": "Bild hochladen",
+        "tooLarge": "Das Bild ist zu groß.",
+        "unreadable": "Die Datei konnte nicht als Bild gelesen werden.",
+        "shapes": {
+          "blob": "Klecks",
+          "pebble": "Kiesel",
+          "squircle": "Abgerundetes Quadrat",
+          "pill": "Pille",
+          "wedge": "Keil",
+          "hexagon": "Sechseck",
+          "cloud": "Wolke",
+          "drop": "Tropfen",
+          "bean": "Bohne",
+          "egg": "Ei",
+          "shield": "Schild",
+          "burst": "Zackenstern"
+        },
+        "colors": {
+          "black": "Schwarz",
+          "brown": "Braun",
+          "red": "Rot",
+          "orange": "Orange",
+          "yellow": "Gelb",
+          "green": "Grün",
+          "teal": "Petrol",
+          "blue": "Blau",
+          "purple": "Lila",
+          "magenta": "Magenta",
+          "gray": "Grau"
+        }
+      },
+      "create": {
+        "title": "Neuer Arbeitsassistent",
+        "description": "Nur ein Name. Seine Rolle wird aus dem Namen abgeleitet, sein Gehirn ist das des Hauptassistenten, und eine Ausführungskonfiguration wird gleich mit erstellt.",
+        "name": "Name",
+        "namePlaceholder": "z. B. Code-Review",
+        "hint": "Die Rolle kannst du auf seiner ersten Karte ändern, alles andere in seinen Einstellungen.",
+        "cancel": "Abbrechen",
+        "create": "Erstellen",
+        "editorNote": "codeg konnte die Optionen dieses Agenten nicht lesen ({why}), wähle sie also hier; der Arbeitsassistent wird mit dieser Ausführungskonfiguration erstellt."
+      },
+      "roster": {
+        "title": "Assistenten",
+        "add": "Neuer Arbeitsassistent",
+        "addShort": "Neu"
+      },
+      "choice": {
+        "other": "Andere",
+        "otherPlaceholder": "Eigene Antwort schreiben…",
+        "send": "Senden",
+        "answered": "Deine Wahl: {choice}",
+        "answeredOwn": "Du hast geschrieben: {text}",
+        "noProjects": "In codeg sind keine Projekte geöffnet.",
+        "brainSame": "Gehirn wie beim Hauptassistenten",
+        "brainOwn": "Gehirn: {agent}",
+        "executorBound": "Ausführungskonfiguration {name}",
+        "executorFilled": "Ausführungskonfiguration auf {agent}, {count, plural, one {# Option} other {# Optionen}} für dich gewählt",
+        "executorMade": "Ausführungskonfiguration auf {agent}",
+        "joiner": "; ",
+        "editBrain": "Gehirn ändern",
+        "editExecutor": "Ausführungskonfiguration ändern",
+        "changeRole": "Rolle ändern",
+        "brainItem": "Gehirn · {name}",
+        "from": {
+          "given": "wie gesagt",
+          "other_config": "aus einer anderen Konfiguration",
+          "agent": "Standard des Agenten"
+        },
+        "nothingPicked": "Für diesen Agenten gibt es nichts auszuwählen."
+      },
+      "changed": {
+        "applied": "Arbeitsassistent erstellt",
+        "made": "{count, plural, one {Ein Arbeitsassistent} other {# Arbeitsassistenten}} aus deinen Ausführungskonfigurationen erstellt",
+        "madeHint": "Jeder übernimmt die Aufgabe, für die seine Ausführungskonfiguration gedacht war, und behält sie. Machst du einen rückgängig, wird nur der Assistent gelöscht; die Ausführungskonfiguration bleibt.",
+        "show": "Einen Arbeitsassistenten erstellen? (Du wolltest solche Änderungen zuerst sehen)",
+        "suggested": "Vorschlag: ein neuer Arbeitsassistent",
+        "dismissed": "Nicht erstellt",
+        "undone": "Rückgängig gemacht",
+        "executorFilled": "Ausführungskonfiguration auf {agent}, {count, plural, one {# Option} other {# Optionen}} für dich gewählt",
+        "executorMade": "Ausführungskonfiguration auf {agent}",
+        "executorBound": "behält {name}",
+        "open": "Öffnen",
+        "undoOne": "Rückgängig",
+        "undoneOne": "Rückgängig gemacht",
+        "quote": "Du hast gesagt: „{quote}“",
+        "reason": "Warum: {reason}",
+        "accept": "Erstellen",
+        "dismiss": "Nicht jetzt",
+        "undo": "Rückgängig",
+        "undoAll": "Alle rückgängig machen"
+      },
+      "delete": {
+        "title": "{name} löschen?",
+        "description": "Sein Gedächtnis und seine Unterhaltung werden mitgelöscht. Der Hauptassistent kann nicht gelöscht werden.",
+        "running": "{count, plural, one {# von ihm vergebene Aufgabe läuft} other {# von ihm vergebene Aufgaben laufen}} noch:",
+        "handOver": "An den Hauptassistenten übergeben, der sie weiterverfolgt (empfohlen)",
+        "stop": "Anhalten",
+        "messages": "{count, plural, one {# Nachricht an ihn ist noch unbeantwortet: Sie geht an den Absender zurück.} other {# Nachrichten an ihn sind noch unbeantwortet: Sie gehen an ihre Absender zurück.}}",
+        "division": "Er ist die erste Wahl für {kinds}: Das fällt auf Auto zurück.",
+        "listJoiner": ", ",
+        "dropExecutor": "Auch seine Ausführungskonfiguration {name} löschen",
+        "executorKept": "Standardmäßig behalten: Sie kann weiterhin per @ erwähnt und von codeg-cli verwendet werden.",
+        "executorShared": "Behalten: Sie wird auch von {names} verwendet.",
+        "dropWorkdir": "Auch sein Arbeitsverzeichnis löschen",
+        "workdirCustom": "Dieses Verzeichnis hast du gewählt, daher lässt codeg es unangetastet.",
+        "cancel": "Abbrechen",
+        "confirm": "Löschen"
+      }
+    }
   }
 }

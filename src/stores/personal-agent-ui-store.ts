@@ -91,6 +91,10 @@ interface PersonalAgentUiState {
   settings: SettingsOpen | null
   openSettings: (page?: SettingsPage, bot?: number | null) => void
   closeSettings: () => void
+  /** The assistant the page shows (`null`: the primary), picked in the
+   *  roster. Switching closes what was open about the other one. */
+  viewBot: number | null
+  setViewBot: (bot: number | null) => void
 }
 
 export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
@@ -113,4 +117,11 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   openSettings: (page = "identity", bot = null) =>
     set({ settings: { page, bot } }),
   closeSettings: () => set({ settings: null }),
+  viewBot: null,
+  setViewBot: (viewBot) =>
+    set((s) =>
+      s.viewBot === viewBot
+        ? s
+        : { viewBot, settings: null, workOpen: false, watching: false }
+    ),
 }))

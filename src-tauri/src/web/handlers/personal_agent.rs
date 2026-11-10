@@ -233,6 +233,119 @@ pub async fn personal_agent_settings_patch(
     ))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplatesParams {
+    #[serde(default)]
+    pub locale: Option<String>,
+}
+
+pub async fn personal_agent_templates(
+    Json(params): Json<TemplatesParams>,
+) -> Result<Json<Vec<crate::models::personal_agent_bots::TemplateView>>, AppCommandError> {
+    Ok(Json(pa::personal_agent_templates_core(params.locale).await?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotCreateParams {
+    pub draft: crate::models::personal_agent_bots::BotCreateDraft,
+}
+
+pub async fn personal_agent_bot_create(
+    Json(params): Json<BotCreateParams>,
+) -> Result<Json<pa::BotMade>, AppCommandError> {
+    Ok(Json(pa::personal_agent_bot_create_core(params.draft).await?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotCopyParams {
+    pub bot_id: i32,
+    pub name: String,
+    #[serde(default)]
+    pub locale: Option<String>,
+}
+
+pub async fn personal_agent_bot_copy(
+    Json(params): Json<BotCopyParams>,
+) -> Result<Json<pa::BotMade>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_bot_copy_core(params.bot_id, params.name, params.locale).await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotIdParams {
+    pub bot_id: i32,
+}
+
+pub async fn personal_agent_bot_impact(
+    Json(params): Json<BotIdParams>,
+) -> Result<Json<crate::models::personal_agent_bots::BotImpact>, AppCommandError> {
+    Ok(Json(pa::personal_agent_bot_impact_core(params.bot_id).await?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotDeleteParams {
+    pub bot_id: i32,
+    #[serde(default)]
+    pub options: crate::models::personal_agent_bots::BotDeleteOptions,
+}
+
+pub async fn personal_agent_bot_delete(
+    Json(params): Json<BotDeleteParams>,
+) -> Result<Json<()>, AppCommandError> {
+    pa::personal_agent_bot_delete_core(params.bot_id, params.options).await?;
+    Ok(Json(()))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotTemplateParams {
+    pub bot_id: i32,
+    pub template: String,
+}
+
+pub async fn personal_agent_bot_set_template(
+    Json(params): Json<BotTemplateParams>,
+) -> Result<Json<TimelineRow>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_bot_set_template_core(params.bot_id, params.template).await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChoiceAnswerParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub notice_id: i32,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<i32>,
+}
+
+pub async fn personal_agent_choice_answer(
+    Json(params): Json<ChoiceAnswerParams>,
+) -> Result<Json<TimelineRow>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_choice_answer_core(
+            params.bot_id,
+            params.notice_id,
+            params.key,
+            params.text,
+            params.project_id,
+        )
+        .await?,
+    ))
+}
+
 pub async fn personal_agent_stop_all(
     Json(params): Json<BotParams>,
 ) -> Result<Json<()>, AppCommandError> {

@@ -1409,7 +1409,7 @@ impl PersonalAgentEngine {
     /// conversation by stopping its turn. False when it is past stopping
     /// (done, merging). What it reports afterwards updates its card and
     /// wakes nobody.
-    async fn stop_dispatch(&self, d: &dispatch_entity::Model) -> bool {
+    pub(super) async fn stop_dispatch(&self, d: &dispatch_entity::Model) -> bool {
         if !LIVE.contains(&d.state) {
             return false;
         }

@@ -78,7 +78,11 @@ import {
   useAssistantsStore,
   useAssistantsSync,
 } from "@/stores/assistants-store"
-import { AssistantEditorDialog, NAME_MAX } from "./assistant-editor-dialog"
+import {
+  AssistantEditorDialog,
+  NAME_MAX,
+  type AssistantPrefill,
+} from "./assistant-editor-dialog"
 import { PanelNotice } from "./panel-notice"
 
 export interface AssistantsPanelProps {
@@ -104,8 +108,14 @@ export interface AssistantsPanelProps {
    *  turns it off at once. */
   disableImpact?: (assistant: AssistantInfo) => ReactNode | null
   /** A section of the host's in the editor, and where it saves. */
-  editorSection?: (assistant: AssistantInfo | null) => ReactNode
+  editorSection?: (
+    assistant: AssistantInfo | null,
+    prefill: AssistantPrefill | null
+  ) => ReactNode
   onEditorSaved?: (assistant: AssistantInfo) => void
+  /** More ways to start a new one, beside [New] (the templates): each
+   *  opens the editor with what it fills in. */
+  createMenu?: (open: (prefill: AssistantPrefill) => void) => ReactNode
 }
 
 /** The shared surface of the list, its loading placeholder and nothing else:
@@ -170,6 +180,7 @@ export function AssistantsPanel({
   disableImpact,
   editorSection,
   onEditorSaved,
+  createMenu,
 }: AssistantsPanelProps) {
   // The settings window has no workspace layout to keep this store live.
   useAssistantsSync()
@@ -186,6 +197,7 @@ export function AssistantsPanel({
   const [editor, setEditor] = useState<{
     key: number
     assistant: AssistantInfo | null
+    prefill: AssistantPrefill | null
   } | null>(null)
   const editorSeq = useRef(0)
   // What the confirmation shows. The target outlives `open`, so the dialog
@@ -346,9 +358,12 @@ export function AssistantsPanel({
       )
   }, [t, tErr])
 
-  const openEditor = (assistant: AssistantInfo | null) => {
+  const openEditor = (
+    assistant: AssistantInfo | null,
+    prefill: AssistantPrefill | null = null
+  ) => {
     editorSeq.current += 1
-    setEditor({ key: editorSeq.current, assistant })
+    setEditor({ key: editorSeq.current, assistant, prefill })
   }
 
   const empty = hydrated && shown.length === 0
@@ -367,15 +382,18 @@ export function AssistantsPanel({
         {/* The empty state carries its own, larger way in — two "New" buttons
             on one screen would only compete. */}
         {empty ? null : (
-          <Button
-            size="sm"
-            variant="outline"
-            className="shrink-0"
-            onClick={() => openEditor(null)}
-          >
-            <Plus aria-hidden />
-            {t("create")}
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            {createMenu?.((prefill) => openEditor(null, prefill))}
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0"
+              onClick={() => openEditor(null)}
+            >
+              <Plus aria-hidden />
+              {t("create")}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -466,10 +484,13 @@ export function AssistantsPanel({
               {t("empty")}
             </p>
           </div>
-          <Button size="sm" onClick={() => openEditor(null)}>
-            <Plus aria-hidden />
-            {t("create")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => openEditor(null)}>
+              <Plus aria-hidden />
+              {t("create")}
+            </Button>
+            {createMenu?.((prefill) => openEditor(null, prefill))}
+          </div>
         </div>
       ) : null}
 
@@ -511,7 +532,8 @@ export function AssistantsPanel({
             if (!open) setEditor(null)
           }}
           assistant={editor.assistant}
-          extraSection={editorSection?.(editor.assistant)}
+          prefill={editor.prefill}
+          extraSection={editorSection?.(editor.assistant, editor.prefill)}
           onSaved={onEditorSaved}
         />
       ) : null}

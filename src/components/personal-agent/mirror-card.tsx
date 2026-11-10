@@ -11,7 +11,6 @@
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { AskQuestionCard } from "@/components/chat/ask-question-card"
 import { PermissionDialog } from "@/components/chat/permission-dialog"
 import { useBotId } from "@/contexts/personal-agent-context"
@@ -22,12 +21,13 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import type {
   AgentType,
-  AssistantAvatar as AvatarValue,
+  BotAvatar as AvatarValue,
   PermissionOptionInfo,
   QuestionSpec,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { BotAvatar } from "./bot-avatar"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
@@ -89,7 +89,7 @@ export function MirrorCard({ item }: { item: MirrorItem }) {
         )}
       >
         <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <AssistantAvatar avatar={avatar} name={name} size={16} />
+          <BotAvatar avatar={avatar} name={name} size={16} />
           <span className="font-medium">{heading}</span>
         </p>
         {forRow != null ? (

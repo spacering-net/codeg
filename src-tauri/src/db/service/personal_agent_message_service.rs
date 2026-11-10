@@ -554,6 +554,20 @@ pub async fn withdraw_message(
     Ok(true)
 }
 
+/// Messages to `bot` in one of `states`, oldest first.
+pub async fn messages_to(
+    conn: &DatabaseConnection,
+    bot: i32,
+    states: &[MessageState],
+) -> Result<Vec<message::Model>, DbError> {
+    Ok(message::Entity::find()
+        .filter(message::Column::ToBotId.eq(bot))
+        .filter(message::Column::State.is_in(states.to_vec()))
+        .order_by_asc(message::Column::Id)
+        .all(conn)
+        .await?)
+}
+
 /// Messages `bot` sent from batch `batch_id`.
 pub async fn messages_sent_in(
     conn: &DatabaseConnection,

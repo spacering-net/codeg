@@ -117,7 +117,8 @@ vi.mock("@/contexts/tasks-view-context", () => ({
   }),
 }))
 vi.mock("@/contexts/personal-agent-context", () => ({
-  usePersonalAgent: () => ({
+  // The sidebar is about the primary, whichever assistant the page shows.
+  usePrimaryAgent: () => ({
     needsOwner: mockState.personalAgentNeedsOwner,
     snapshot: {
       agent: null,

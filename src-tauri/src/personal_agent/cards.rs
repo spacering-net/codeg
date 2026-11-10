@@ -129,6 +129,9 @@ pub struct HandoffInput<'a> {
     pub assistants: &'a [AssistantLine],
     /// The owner's division of work, when they set one.
     pub division: Option<&'a str>,
+    /// A work assistant's first session: it was just made, as what, and
+    /// what the owner picked on its opening card (4.12).
+    pub new_bot: Option<&'a str>,
     pub budget_chars: usize,
 }
 
@@ -245,7 +248,7 @@ number as `[#ID]`; when you answer one that is not the newest, write `[[quote:#I
 answer (it is shown as a quote, not as text). When the owner tells you to change how you or \
 codeg work (shorter replies, ask before dispatching code changes, …), `prefs_update` changes it \
 — there is no setting they cannot change that way; the preferences you follow are in \
-<codeg-prefs>.";
+<codeg-prefs>. When they ask for a new work assistant, `bot_create` makes it.";
 
 /// How the agent's memory works, in every handoff card — the skill says it
 /// at length, but not every agent loads skills, nor reads one before it
@@ -389,6 +392,10 @@ pub fn handoff_card(input: &HandoffInput<'_>) -> Card {
     let name = name_line(id.name)
         .map(|l| format!("{l}\n"))
         .unwrap_or_default();
+    let name = match input.new_bot {
+        Some(note) => format!("{name}{note}\n"),
+        None => name,
+    };
     let text = format!(
         "<codeg-context kind=\"handoff\">\n\
 {who}, continuing one long-running timeline. This is the \
@@ -693,6 +700,7 @@ mod tests {
             recent,
             assistants,
             division: None,
+            new_bot: None,
             budget_chars: budget,
         }
     }

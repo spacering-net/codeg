@@ -18,7 +18,6 @@ import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import { ArrowLeft } from "lucide-react"
 
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -39,6 +38,7 @@ import {
   type SettingsPage,
 } from "@/stores/personal-agent-ui-store"
 
+import { BotAvatar } from "../bot-avatar"
 import { useBotName } from "../shared"
 import { IdentityPage } from "./identity-page"
 import { AdvancedPage, ExecutionPage, PersonaPage } from "./own-pages"
@@ -57,8 +57,13 @@ export function SettingsView() {
   const settings = usePersonalAgentUi((s) => s.settings)
   const openSettings = usePersonalAgentUi((s) => s.openSettings)
   const closeSettings = usePersonalAgentUi((s) => s.closeSettings)
-  const { snapshot: pageSnapshot } = usePersonalAgent()
-  const bot = settings?.bot ?? null
+  const { snapshot: pageSnapshot, botId: pageBot } = usePersonalAgent()
+  /** Another assistant than the page's, picked in the team's list. */
+  const bot =
+    settings?.bot != null && settings.bot !== pageBot ? settings.bot : null
+  /** Whose own pages these are, for what they save: the picked one, else
+   *  the page's own (a work assistant's page is its own). */
+  const target = bot ?? pageBot
   const { snapshot, failed } = useTargetSnapshot(bot)
   const botName = useBotName()
   const [delegation, setDelegation] = useState<boolean | null>(null)
@@ -136,24 +141,24 @@ export function SettingsView() {
       case "identity":
         return (
           <IdentityPage
-            key={`${bot ?? "page"}-${agent?.id ?? 0}`}
+            key={`${target ?? "page"}-${agent?.id ?? 0}`}
             agent={agent}
-            bot={bot}
+            bot={target}
             disabled={readOnly}
           />
         )
       case "persona":
-        return agent ? <PersonaPage bot={bot} /> : null
+        return agent ? <PersonaPage bot={target} /> : null
       case "execution":
         return agent && worker ? (
-          <ExecutionPage agent={agent} bot={bot} disabled={readOnly} />
+          <ExecutionPage agent={agent} bot={target} disabled={readOnly} />
         ) : null
       case "advanced":
         return agent ? (
-          <AdvancedPage agent={agent} bot={bot} disabled={readOnly} />
+          <AdvancedPage agent={agent} bot={target} disabled={readOnly} />
         ) : null
       case "workers":
-        return <WorkersPage />
+        return <WorkersPage readOnly={accountLocked} readOnlyWhy={accountWhy} />
       case "executors":
         return (
           <ExecutorsPage
@@ -221,7 +226,7 @@ export function SettingsView() {
                 {i === 0 ? (
                   <p className="flex items-center gap-1.5 px-2 pb-1 text-xs font-medium text-muted-foreground">
                     {agent ? (
-                      <AssistantAvatar
+                      <BotAvatar
                         avatar={agent.avatar}
                         name={targetName}
                         size={16}

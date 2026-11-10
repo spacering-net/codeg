@@ -116,14 +116,18 @@ fn tool_key(raw: &str) -> Option<String> {
         return Some(format!("prefs.{k}"));
     }
     let k = k.strip_prefix("own.").unwrap_or(k);
-    OWN_ITEMS.contains(&k).then(|| format!("own.{k}"))
+    (OWN_ITEMS.contains(&k) || k == BRAIN_ITEM).then(|| format!("own.{k}"))
 }
+
+/// The assistant's brain, as a setting: its agent and options (13.3).
+const BRAIN_ITEM: &str = "brain";
 
 /// Every key the tool takes, for a refusal.
 fn tool_keys() -> String {
     let mut keys: Vec<&str> = prefs::PREFS.iter().map(|s| s.key).collect();
     keys.push(prefs::AUTOMATION_KEY);
     keys.extend(OWN_ITEMS);
+    keys.push(BRAIN_ITEM);
     keys.join(", ")
 }
 
@@ -238,6 +242,14 @@ impl PersonalAgentEngine {
             let (from, to) = if let Some(item) = c.key.strip_prefix("prefs.") {
                 let to = check_pref(item, &c.value)?;
                 (stored_prefs.get(item).cloned().unwrap_or(Value::Null), to)
+            } else if c.key == format!("own.{BRAIN_ITEM}") {
+                let row = own.as_ref().ok_or("set the assistant up first")?;
+                let from = super::engine::brain_of(row).ok_or("set the assistant up first")?;
+                let to = self.plan_brain(&from, &c.value).await?;
+                (
+                    serde_json::to_value(&from).map_err(|e| e.to_string())?,
+                    serde_json::to_value(&to).map_err(|e| e.to_string())?,
+                )
             } else if let Some(item) = c.key.strip_prefix("own.") {
                 if !OWN_ITEMS.contains(&item) {
                     return Err(format!("no setting `{item}`"));
@@ -315,6 +327,45 @@ impl PersonalAgentEngine {
         Ok(out)
     }
 
+    /// What a change of the brain comes to: a whole selection as given (an
+    /// undo, a card's), or `{agent_type, options}` with the rest filled in
+    /// as a new assistant's are (10.5 "fill five") — this brain's own
+    /// choices first when it stays on the same agent.
+    async fn plan_brain(
+        &self,
+        current: &crate::models::AssistantAgentConfig,
+        value: &Value,
+    ) -> Result<crate::models::AssistantAgentConfig, String> {
+        if value.get("label_snapshot").is_some() {
+            let whole: crate::models::AssistantAgentConfig =
+                serde_json::from_value(value.clone()).map_err(|e| format!("not a brain: {e}"))?;
+            super::bots::check_brain(&whole)?;
+            return Ok(whole);
+        }
+        let agent_type = match value.get("agent_type").and_then(|a| a.as_str()) {
+            Some(a) => crate::models::AgentType::from_wire(a).ok_or_else(|| format!("no agent `{a}`"))?,
+            None => current.agent_type,
+        };
+        let given = super::options::Partial::from_json(value.get("options"))?;
+        let extra: Vec<_> = (agent_type == current.agent_type)
+            .then(|| current.agent_options.clone())
+            .into_iter()
+            .collect();
+        let (config, _) = self
+            .fill_options(agent_type, &given, &extra)
+            .await
+            .map_err(|e| match e {
+                super::bots::FillError::Unavailable(why) => format!(
+                    "codeg could not read the options of {} ({why}); the owner can switch the brain \
+                     in this assistant's settings",
+                    crate::acp::registry::get_agent_meta(agent_type).name
+                ),
+                super::bots::FillError::Refused(e) => e,
+            })?;
+        super::bots::check_brain(&config)?;
+        Ok(config)
+    }
+
     /// A division pick names someone who is there.
     async fn check_pick(&self, pick: &str) -> Result<(), String> {
         let Some((kind, uid)) = pick.split_once(':') else {
@@ -353,7 +404,19 @@ impl PersonalAgentEngine {
         }
         let mut account = Map::new();
         let mut own = Map::new();
-        for a in applied {
+        // The brain is the row's own columns, written as the identity page
+        // writes them: a switch of agent starts a new session.
+        let brain_key = format!("own.{BRAIN_ITEM}");
+        if let Some(b) = applied.iter().find(|a| a.key == brain_key) {
+            let config: crate::models::AssistantAgentConfig =
+                serde_json::from_value(b.to.clone()).map_err(|e| e.to_string())?;
+            self.save(crate::models::personal_agent::PersonalAgentDraft {
+                agent_config: Some(config),
+                ..Default::default()
+            })
+            .await?;
+        }
+        for a in applied.iter().filter(|a| a.key != brain_key) {
             let path: Vec<&str> = if let Some(rest) = a.key.strip_prefix("team.usage.") {
                 vec!["team", "usage", rest]
             } else {
@@ -869,6 +932,10 @@ impl PersonalAgentEngine {
         action: &str,
     ) -> Result<TimelineRow, String> {
         let payload: Value = serde_json::from_str(&notice.payload).unwrap_or(Value::Null);
+        // Work assistants made, or to make (4.12, 4.15).
+        if payload.get("what").and_then(|w| w.as_str()) == Some("bots") {
+            return self.act_on_bots_card(notice, action).await;
+        }
         let why = payload.get("why").and_then(|w| w.as_str()).unwrap_or("");
         if why == "line" {
             return Err(

@@ -48,7 +48,6 @@ import { Tabs as TabsPrimitive } from "radix-ui"
 import { toast } from "sonner"
 
 import { AgentIcon } from "@/components/agent-icon"
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import {
   CopyPropertyButton,
   PropertyRow,
@@ -109,6 +108,8 @@ import {
   useWorkMeta,
   workTargetOf,
 } from "./shared"
+
+import { BotAvatar } from "./bot-avatar"
 
 /** Run-log lines the status tab lists. */
 const RUN_LOG_LINES = 50
@@ -1010,7 +1011,7 @@ function AgentCard({
     <section className="min-w-0 rounded-lg border border-border/70 bg-muted/40 p-3">
       <div className="flex min-w-0 items-center gap-3">
         {agent ? (
-          <AssistantAvatar
+          <BotAvatar
             avatar={agent.avatar}
             name={name}
             size={IDENTITY_AVATAR_SIZE}

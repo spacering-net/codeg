@@ -45,6 +45,7 @@ import type { PersonalAgentInfo } from "@/lib/types"
 import { useAssistants } from "@/stores/assistants-store"
 
 import { PersonaFiles } from "../persona-files"
+import { useBotTemplates } from "../use-templates"
 import { PageHead } from "./pref-pages"
 import { useSettingsPatch } from "./use-settings"
 
@@ -288,8 +289,10 @@ export function AdvancedPage({ agent, bot, disabled }: OwnPageProps) {
 export function ExecutionPage({ agent, bot, disabled }: OwnPageProps) {
   const t = useTranslations("PersonalAgent.settings")
   const assistants = useAssistants()
+  const templates = useBotTemplates()
   const [saving, setSaving] = useState(false)
   const bound = assistants.find((a) => a.id === agent.executor_assistant_id)
+  const role = templates?.find((x) => x.id === agent.template)
   const bind = async (id: number) => {
     setSaving(true)
     try {
@@ -349,7 +352,7 @@ export function ExecutionPage({ agent, bot, disabled }: OwnPageProps) {
           description={t("execution.templateHint")}
           control={
             <span className="text-xs text-muted-foreground">
-              {agent.template ?? t("execution.noTemplate")}
+              {role?.name ?? agent.template ?? t("execution.noTemplate")}
             </span>
           }
         />

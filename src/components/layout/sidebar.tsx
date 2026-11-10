@@ -25,13 +25,13 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
+import { BotAvatar } from "@/components/personal-agent/bot-avatar"
 import { UserRoundStar } from "@/components/icons/user-round-star"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
-import { usePersonalAgent } from "@/contexts/personal-agent-context"
+import { usePrimaryAgent } from "@/contexts/personal-agent-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import {
@@ -197,13 +197,17 @@ export function Sidebar() {
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
   const { needsOwner: personalAgentNeedsOwner, snapshot: personalAgentState } =
-    usePersonalAgent()
+    usePrimaryAgent()
   // Once set up, the agent's row is the agent: its avatar and name.
   const personalAgent = personalAgentState?.agent ?? null
   const personalAgentLabel = personalAgent?.name.trim() || t("personalAgent")
   // What the assistants said that the owner has not seen — none while the
   // page shows the newest to them (it is marked seen as it lands).
-  const personalAgentWatching = usePersonalAgentUi((s) => s.watching)
+  // Only while the page shows the primary: another assistant's newest
+  // being seen is not the primary's.
+  const personalAgentWatching = usePersonalAgentUi(
+    (s) => s.watching && s.viewBot == null
+  )
   const personalAgentUnseen = personalAgentWatching
     ? 0
     : (personalAgentState?.status.unseen ?? 0)
@@ -631,7 +635,7 @@ export function Sidebar() {
             icon={UserRoundStar}
             leading={
               personalAgent ? (
-                <AssistantAvatar
+                <BotAvatar
                   avatar={personalAgent.avatar}
                   name={personalAgentLabel}
                   size={NAV_AVATAR_SIZE}

@@ -12,7 +12,6 @@ import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import { ArrowLeftRight, Loader2 } from "lucide-react"
 
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import {
   Dialog,
   DialogContent,
@@ -27,6 +26,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { BotFace, ThreadView, TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { BotAvatar } from "./bot-avatar"
 import { useMessageTime } from "./message-actions"
 import { bubbleCorners } from "./message-row"
 import {
@@ -107,11 +107,7 @@ function SheetBody({ row }: { row: TimelineRow }) {
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2 text-sm">
           {mine ? (
-            <AssistantAvatar
-              avatar={mine.avatar}
-              name={botName(mine)}
-              size={20}
-            />
+            <BotAvatar avatar={mine.avatar} name={botName(mine)} size={20} />
           ) : null}
           <span>
             {t("sheetTitle", {
@@ -120,7 +116,7 @@ function SheetBody({ row }: { row: TimelineRow }) {
             })}
           </span>
           {theirs ? (
-            <AssistantAvatar
+            <BotAvatar
               avatar={theirs.avatar}
               name={botName(theirs)}
               size={20}
@@ -151,7 +147,7 @@ function SheetBody({ row }: { row: TimelineRow }) {
                     own ? "flex-row-reverse" : "flex-row"
                   )}
                 >
-                  <AssistantAvatar
+                  <BotAvatar
                     avatar={who?.avatar ?? null}
                     name={who ? botName(who) : ""}
                     size={24}

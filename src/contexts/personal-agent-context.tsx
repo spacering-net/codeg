@@ -201,6 +201,18 @@ export function PersonalAgentProvider({
    *  assistant — keyed by it, so another assistant starts afresh. */
   botId?: number | null
 }) {
+  const value = usePersonalAgentStore(botId)
+  return (
+    <PersonalAgentContext.Provider value={value}>
+      {children}
+    </PersonalAgentContext.Provider>
+  )
+}
+
+/** One assistant's store: its snapshot and timeline, kept current. */
+function usePersonalAgentStore(
+  botId: number | null
+): PersonalAgentContextValue {
   const [snapshot, setSnapshot] = useState<PersonalAgentSnapshot | null>(null)
   /** The primary's id, once its snapshot says (for the primary's store). */
   const primaryId = useRef<number | null>(null)
@@ -564,9 +576,96 @@ export function PersonalAgentProvider({
     ]
   )
 
+  return value
+}
+
+/** The primary's store, where the page shows another assistant: the
+ *  sidebar and the other places that are about the primary read it. */
+const PrimaryAgentContext = createContext<PersonalAgentContextValue | null>(
+  null
+)
+
+/** The primary assistant's store, whichever assistant the page shows. */
+export function usePrimaryAgent() {
+  const own = useContext(PrimaryAgentContext)
+  const ctx = useContext(PersonalAgentContext)
+  const value = own ?? ctx
+  if (!value) {
+    throw new Error("usePrimaryAgent must be used within PersonalAgentProvider")
+  }
+  return value
+}
+
+/** A store not loaded yet: what the page shows while it is. */
+function pendingStore(botId: number): PersonalAgentContextValue {
+  return {
+    botId,
+    snapshot: null,
+    rows: [],
+    hasOlder: false,
+    loading: true,
+    loadOlder: async () => {},
+    loadSince: async () => "loaded",
+    refresh: async () => {},
+    dispatchVersion: 0,
+    itemVersion: 0,
+    needsOwner: false,
+    liveReplies: new Map(),
+    dispatchById: new Map(),
+    quoted: new Map(),
+    requestQuoted: () => {},
+  }
+}
+
+/** Holds the viewed assistant's store and hands it up; renders nothing. */
+function ViewedStore({
+  botId,
+  onValue,
+}: {
+  botId: number
+  onValue: (v: { bot: number; value: PersonalAgentContextValue }) => void
+}) {
+  const value = usePersonalAgentStore(botId)
+  useEffect(() => onValue({ bot: botId, value }), [botId, value, onValue])
+  return null
+}
+
+/**
+ * Inside the primary's provider: the assistant the page shows (`viewBot`,
+ * picked in the roster) is what `usePersonalAgent` reads below — its own
+ * store, made afresh for each assistant — while `usePrimaryAgent` keeps
+ * reading the primary's. The tree under it never changes shape, so
+ * switching assistants remounts nothing of the workspace.
+ */
+export function ViewedPersonalAgentProvider({
+  viewBot,
+  children,
+}: {
+  /** The work assistant shown; `null` (or the primary's id) is the primary. */
+  viewBot: number | null
+  children: ReactNode
+}) {
+  const primary = useContext(PersonalAgentContext)
+  const [viewed, setViewed] = useState<{
+    bot: number
+    value: PersonalAgentContextValue
+  } | null>(null)
+  const primaryId = primary?.snapshot?.agent?.id ?? null
+  const other = viewBot != null && viewBot !== primaryId ? viewBot : null
+  const value =
+    other == null
+      ? primary
+      : viewed?.bot === other
+        ? viewed.value
+        : pendingStore(other)
   return (
-    <PersonalAgentContext.Provider value={value}>
-      {children}
-    </PersonalAgentContext.Provider>
+    <PrimaryAgentContext.Provider value={primary}>
+      {other != null ? (
+        <ViewedStore key={other} botId={other} onValue={setViewed} />
+      ) : null}
+      <PersonalAgentContext.Provider value={value}>
+        {children}
+      </PersonalAgentContext.Provider>
+    </PrimaryAgentContext.Provider>
   )
 }

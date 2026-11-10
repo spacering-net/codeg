@@ -41,6 +41,11 @@ import type {
   PersonalAgentSnapshot,
   PersonalAgentApplied,
   PersonalAgentBotSummary,
+  BotCreateDraft,
+  BotDeleteOptions,
+  BotImpact,
+  BotMade,
+  BotTemplate,
   PersonalAgentSettingChange,
   ExecutorView,
   PersonalAgentStats,
@@ -2601,6 +2606,74 @@ export async function personalAgentBots(): Promise<PersonalAgentBotSummary[]> {
   return getTransport().call("personal_agent_bots", {})
 }
 
+/** The work assistants' templates, in `locale`. */
+export async function personalAgentTemplates(
+  locale: string
+): Promise<BotTemplate[]> {
+  return getTransport().call("personal_agent_templates", { locale })
+}
+
+/** Make a work assistant from a name (4.12). */
+export async function personalAgentBotCreate(
+  draft: BotCreateDraft
+): Promise<BotMade> {
+  return getTransport().call("personal_agent_bot_create", { draft })
+}
+
+/** Copy a work assistant (4.14). */
+export async function personalAgentBotCopy(
+  botId: number,
+  name: string,
+  locale: string
+): Promise<BotMade> {
+  return getTransport().call("personal_agent_bot_copy", {
+    botId,
+    name,
+    locale,
+  })
+}
+
+/** What deleting a work assistant touches. */
+export async function personalAgentBotImpact(
+  botId: number
+): Promise<BotImpact> {
+  return getTransport().call("personal_agent_bot_impact", { botId })
+}
+
+export async function personalAgentBotDelete(
+  botId: number,
+  options: BotDeleteOptions
+): Promise<void> {
+  return getTransport().call("personal_agent_bot_delete", { botId, options })
+}
+
+/** [Change role] on a new work assistant's opening card. */
+export async function personalAgentBotSetTemplate(
+  botId: number,
+  template: string
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_bot_set_template", {
+    botId,
+    template,
+  })
+}
+
+/** An answer on a choice card: a choice's key (with `projectId` when it asks
+ *  for one), or the owner's own words. */
+export async function personalAgentChoiceAnswer(
+  noticeId: number,
+  answer: { key?: string; text?: string; projectId?: number | null },
+  bot?: number | null
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_choice_answer", {
+    noticeId,
+    key: answer.key ?? null,
+    text: answer.text ?? null,
+    projectId: answer.projectId ?? null,
+    botId: bot ?? null,
+  })
+}
+
 /** Every executor config as the assistants use it. */
 export async function personalAgentExecutors(): Promise<ExecutorView[]> {
   return getTransport().call("personal_agent_executors", {})
@@ -2671,8 +2744,8 @@ export async function personalAgentMarkSeen(
 export async function personalAgentNoticeAct(
   noticeId: number,
   /** `accept` / `dismiss`; a stop card's `stop:<message id>`; a changed
-   *  card's `undo`. */
-  action: "accept" | "dismiss" | "undo" | `stop:${number}`,
+   *  card's `undo`, or `undo:<assistant id>` for one assistant it made. */
+  action: "accept" | "dismiss" | "undo" | `undo:${number}` | `stop:${number}`,
   bot?: number | null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_notice_act", {

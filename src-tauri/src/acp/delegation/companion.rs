@@ -296,7 +296,7 @@ impl CompanionFeatures {
             "create_work_task" => self.taskboard,
             "assistant_list" | "project_list" | "dispatch" | "dispatch_followup"
             | "item_list" | "item_read" | "item_update" | "timeline_read" | "bot_list"
-            | "bot_message" | "prefs_update" => self.personal_agent,
+            | "bot_message" | "prefs_update" | "bot_create" => self.personal_agent,
             "browser_list_tabs" | "browser_snapshot" | "browser_console_messages"
             | "browser_screenshot" | "browser_click" | "browser_hover" | "browser_type"
             | "browser_press_key" | "browser_select_option" | "browser_open_tab"
@@ -1502,7 +1502,7 @@ async fn build_tools_call_spawn(
         }
         "assistant_list" | "project_list" | "dispatch" | "dispatch_followup" | "item_list"
         | "item_read" | "item_update" | "timeline_read" | "bot_list" | "bot_message"
-        | "prefs_update" => {
+        | "prefs_update" | "bot_create" => {
             // Shape only: the app owns every rule (which assistants exist,
             // which projects may be targeted, which states allow a
             // follow-up), so the companion forwards the arguments as given.
@@ -5784,7 +5784,7 @@ mod tests {
         computer_clipboard: false,
     };
 
-    const PERSONAL_AGENT_TOOLS: [&str; 11] = [
+    const PERSONAL_AGENT_TOOLS: [&str; 12] = [
         "assistant_list",
         "project_list",
         "dispatch",
@@ -5796,6 +5796,7 @@ mod tests {
         "bot_list",
         "bot_message",
         "prefs_update",
+        "bot_create",
     ];
 
     #[tokio::test]

@@ -38,6 +38,8 @@ vi.mock("@/lib/platform", () => ({
 import {
   PersonalAgentProvider,
   usePersonalAgent,
+  usePrimaryAgent,
+  ViewedPersonalAgentProvider,
 } from "./personal-agent-context"
 
 type Ctx = ReturnType<typeof usePersonalAgent>
@@ -385,5 +387,56 @@ describe("PersonalAgentProvider, dispatch cards", () => {
     expect(api.personalAgentDispatches).toHaveBeenCalledTimes(2)
     await act(flush)
     expect(ctx!.dispatchById.get(7)?.state).toBe("completed")
+  })
+})
+
+describe("ViewedPersonalAgentProvider", () => {
+  /** The page reads the assistant the roster picked; the sidebar keeps
+   *  reading the primary's — and switching remounts nothing below. */
+  it("hands the page the viewed assistant's store and keeps the primary's beside it", async () => {
+    api.personalAgentGet.mockImplementation(async (bot: number | null) => ({
+      ...snapshot("here"),
+      agent: { id: bot ?? 1, name: bot == null ? "Nova" : "Reviewer" },
+    }))
+    api.personalAgentTimeline.mockResolvedValue(page([]))
+    const seen: { page: Ctx | null; primary: Ctx | null; mounts: number } = {
+      page: null,
+      primary: null,
+      mounts: 0,
+    }
+    function Reader() {
+      const page = usePersonalAgent()
+      const primary = usePrimaryAgent()
+      useEffect(() => {
+        seen.page = page
+        seen.primary = primary
+      })
+      useEffect(() => {
+        seen.mounts += 1
+      }, [])
+      return null
+    }
+    const tree = (viewBot: number | null) => (
+      <PersonalAgentProvider>
+        <ViewedPersonalAgentProvider viewBot={viewBot}>
+          <Reader />
+        </ViewedPersonalAgentProvider>
+      </PersonalAgentProvider>
+    )
+    const { rerender } = render(tree(null))
+    await act(flush)
+    expect(seen.page!.botId).toBeNull()
+    expect(seen.page!.snapshot?.agent?.name).toBe("Nova")
+    rerender(tree(9))
+    // Until its own store is read, the page waits: never the primary's.
+    expect(seen.page!.botId).toBe(9)
+    await act(flush)
+    expect(seen.page!.snapshot?.agent?.name).toBe("Reviewer")
+    expect(seen.primary!.botId).toBeNull()
+    expect(seen.primary!.snapshot?.agent?.name).toBe("Nova")
+    expect(api.personalAgentGet).toHaveBeenCalledWith(9)
+    rerender(tree(null))
+    expect(seen.page!.snapshot?.agent?.name).toBe("Nova")
+    expect(seen.mounts).toBe(1)
   })
 })

@@ -30,7 +30,6 @@ import {
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { UserRoundStar } from "@/components/icons/user-round-star"
 import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { LiveTranscriptView } from "@/components/message/live-transcript-view"
@@ -73,7 +72,9 @@ import {
   usePersonalAgentUi,
 } from "@/stores/personal-agent-ui-store"
 
+import { BotAvatar } from "./bot-avatar"
 import { PersonalAgentAuxPanel } from "./aux-panel"
+import { PersonalAgentRoster } from "./roster"
 import { PersonalAgentComposer } from "./composer"
 import { usePersonalAgentAttachment } from "./live-turn"
 import { MessageList } from "./message-list"
@@ -105,7 +106,7 @@ export function PersonalAgentPageTitle() {
       // The messages carry no avatar of the agent's own: it is here, once.
       leading={
         agent ? (
-          <AssistantAvatar
+          <BotAvatar
             avatar={agent.avatar}
             name={title}
             size={TITLE_AVATAR_SIZE}
@@ -314,38 +315,48 @@ export function PersonalAgentPage() {
   ) : (
     <div className="flex h-full min-h-0 flex-col">
       {band ? <PageBand band={band} /> : null}
-      {readOnly || noAssistants ? (
-        <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col gap-1 px-4 pt-2">
-          {readOnly ? (
-            <p className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
-              {t("readOnly")}
-            </p>
+      <div className="flex min-h-0 flex-1">
+        {isMobile ? null : (
+          <PersonalAgentRoster compact={false} readOnly={readOnly} />
+        )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {isMobile ? (
+            <PersonalAgentRoster compact readOnly={readOnly} />
           ) : null}
-          {noAssistants ? (
-            <p className="flex items-center justify-between gap-2 rounded-lg bg-muted px-3 py-1.5 text-xs text-muted-foreground">
-              <span>{t("noAssistants")}</span>
-              <Button
-                size="xs"
-                variant="outline"
-                className="shrink-0 bg-background"
-                data-pa-add-executor
-                onClick={() => openSettings("executors")}
-              >
-                {t("addExecutor")}
-              </Button>
-            </p>
+          {readOnly || noAssistants ? (
+            <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col gap-1 px-4 pt-2">
+              {readOnly ? (
+                <p className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
+                  {t("readOnly")}
+                </p>
+              ) : null}
+              {noAssistants ? (
+                <p className="flex items-center justify-between gap-2 rounded-lg bg-muted px-3 py-1.5 text-xs text-muted-foreground">
+                  <span>{t("noAssistants")}</span>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="shrink-0 bg-background"
+                    data-pa-add-executor
+                    onClick={() => openSettings("executors")}
+                  >
+                    {t("addExecutor")}
+                  </Button>
+                </p>
+              ) : null}
+            </div>
           ) : null}
+          <MessageList jumpRef={jumpRef} sentRef={sentRef} />
+          <PersonalAgentComposer
+            agent={agent}
+            agentName={agentName}
+            status={snapshot.status}
+            quoting={quoting}
+            onClearQuote={() => setQuoting(null)}
+            onSent={() => sentRef.current?.()}
+          />
         </div>
-      ) : null}
-      <MessageList jumpRef={jumpRef} sentRef={sentRef} />
-      <PersonalAgentComposer
-        agent={agent}
-        agentName={agentName}
-        status={snapshot.status}
-        quoting={quoting}
-        onClearQuote={() => setQuoting(null)}
-        onSent={() => sentRef.current?.()}
-      />
+      </div>
     </div>
   )
   const aux = (

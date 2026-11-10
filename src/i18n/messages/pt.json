@@ -8083,7 +8083,8 @@
         "default": "padrão"
       },
       "targetLoading": "Carregando as configurações deste assistente…",
-      "targetFailed": "Não foi possível ler as configurações deste assistente."
+      "targetFailed": "Não foi possível ler as configurações deste assistente.",
+      "brain": "Cérebro"
     },
     "statusWord": {
       "idle": "Ocioso",
@@ -8357,6 +8358,130 @@
       "withdrawn": "Não é mais necessária",
       "resolved": "Resolvida"
     },
-    "addExecutor": "Adicionar uma configuração de execução"
+    "addExecutor": "Adicionar uma configuração de execução",
+    "bots": {
+      "new": "Novo assistente de trabalho",
+      "copyName": "{name} (cópia)",
+      "copied": "Cópia criada: {name}",
+      "openConversation": "Abrir",
+      "more": "Mais",
+      "settings": "Configurações",
+      "copy": "Duplicar",
+      "deleteAction": "Excluir…",
+      "fromTemplate": "A partir de um modelo",
+      "reviewAgentHint": "Escolha um agente diferente do seu desenvolvedor: quem revisa o trabalho não deve ser quem o escreveu.",
+      "face": {
+        "change": "Alterar o avatar",
+        "shape": "Formato",
+        "color": "Cor",
+        "upload": "Enviar uma imagem",
+        "tooLarge": "A imagem é grande demais.",
+        "unreadable": "Não foi possível ler o arquivo como imagem.",
+        "shapes": {
+          "blob": "Mancha",
+          "pebble": "Seixo",
+          "squircle": "Quadrado arredondado",
+          "pill": "Pílula",
+          "wedge": "Cunha",
+          "hexagon": "Hexágono",
+          "cloud": "Nuvem",
+          "drop": "Gota",
+          "bean": "Feijão",
+          "egg": "Ovo",
+          "shield": "Escudo",
+          "burst": "Explosão"
+        },
+        "colors": {
+          "black": "Preto",
+          "brown": "Marrom",
+          "red": "Vermelho",
+          "orange": "Laranja",
+          "yellow": "Amarelo",
+          "green": "Verde",
+          "teal": "Verde-azulado",
+          "blue": "Azul",
+          "purple": "Roxo",
+          "magenta": "Magenta",
+          "gray": "Cinza"
+        }
+      },
+      "create": {
+        "title": "Novo assistente de trabalho",
+        "description": "Só um nome. A função é deduzida do nome, o cérebro é o mesmo do assistente principal e uma configuração de execução é criada junto.",
+        "name": "Nome",
+        "namePlaceholder": "ex.: Revisão de código",
+        "hint": "Você pode trocar a função no primeiro cartão dele, e todo o resto nas configurações dele.",
+        "cancel": "Cancelar",
+        "create": "Criar",
+        "editorNote": "O codeg não conseguiu ler as opções deste agente ({why}), então escolha-as aqui; o assistente de trabalho é criado com esta configuração de execução."
+      },
+      "roster": {
+        "title": "Assistentes",
+        "add": "Novo assistente de trabalho",
+        "addShort": "Novo"
+      },
+      "choice": {
+        "other": "Outro",
+        "otherPlaceholder": "Escreva sua resposta…",
+        "send": "Enviar",
+        "answered": "Você escolheu: {choice}",
+        "answeredOwn": "Você escreveu: {text}",
+        "noProjects": "Nenhum projeto aberto no codeg.",
+        "brainSame": "Cérebro igual ao do assistente principal",
+        "brainOwn": "Cérebro: {agent}",
+        "executorBound": "configuração de execução {name}",
+        "executorFilled": "configuração de execução em {agent}, {count, plural, one {# opção escolhida} other {# opções escolhidas}} para você",
+        "executorMade": "configuração de execução em {agent}",
+        "joiner": "; ",
+        "editBrain": "Alterar o cérebro",
+        "editExecutor": "Alterar a configuração de execução",
+        "changeRole": "Trocar a função",
+        "brainItem": "Cérebro · {name}",
+        "from": {
+          "given": "como você disse",
+          "other_config": "de outra configuração",
+          "agent": "padrão do agente"
+        },
+        "nothingPicked": "Nada a escolher para este agente."
+      },
+      "changed": {
+        "applied": "Assistente de trabalho criado",
+        "made": "{count, plural, one {Um assistente de trabalho criado} other {# assistentes de trabalho criados}} a partir das suas configurações de execução",
+        "madeHint": "Cada um assume o trabalho a que sua configuração de execução se destinava e continua com ela. Desfazer um exclui o assistente; a configuração de execução fica.",
+        "show": "Criar um assistente de trabalho? (você pediu para ver esse tipo de alteração antes)",
+        "suggested": "Sugestão: um novo assistente de trabalho",
+        "dismissed": "Não criado",
+        "undone": "Desfeito",
+        "executorFilled": "configuração de execução em {agent}, {count, plural, one {# opção escolhida} other {# opções escolhidas}} para você",
+        "executorMade": "configuração de execução em {agent}",
+        "executorBound": "mantém {name}",
+        "open": "Abrir",
+        "undoOne": "Desfazer",
+        "undoneOne": "Desfeito",
+        "quote": "Você disse: “{quote}”",
+        "reason": "Por quê: {reason}",
+        "accept": "Criar",
+        "dismiss": "Agora não",
+        "undo": "Desfazer",
+        "undoAll": "Desfazer tudo"
+      },
+      "delete": {
+        "title": "Excluir {name}?",
+        "description": "A memória e a conversa dele são excluídas junto. O assistente principal não pode ser excluído.",
+        "running": "{count, plural, one {# trabalho que ele delegou ainda está} other {# trabalhos que ele delegou ainda estão}} em andamento:",
+        "handOver": "Passá-los ao assistente principal para acompanhar (recomendado)",
+        "stop": "Pará-los",
+        "messages": "{count, plural, one {# mensagem para ele ainda não foi respondida: ela volta para quem a enviou.} other {# mensagens para ele ainda não foram respondidas: elas voltam para quem as enviou.}}",
+        "division": "É a primeira opção para {kinds}: isso volta para Auto.",
+        "listJoiner": ", ",
+        "dropExecutor": "Excluir também a configuração de execução {name}",
+        "executorKept": "Mantida por padrão: ainda pode ser mencionada com @ e usada pelo codeg-cli.",
+        "executorShared": "Mantida: também é usada por {names}.",
+        "dropWorkdir": "Excluir também o diretório de trabalho dele",
+        "workdirCustom": "Você escolheu este diretório, então o codeg não mexe nele.",
+        "cancel": "Cancelar",
+        "confirm": "Excluir"
+      }
+    }
   }
 }

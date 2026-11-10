@@ -8083,7 +8083,8 @@
       },
       "tabPersona": "人设与记忆",
       "targetLoading": "正在读取这个助手的设置…",
-      "targetFailed": "读不到这个助手的设置。"
+      "targetFailed": "读不到这个助手的设置。",
+      "brain": "大脑"
     },
     "statusWord": {
       "idle": "空闲",
@@ -8357,6 +8358,130 @@
       "withdrawn": "已不再需要",
       "resolved": "已处理"
     },
-    "addExecutor": "添加执行配置"
+    "addExecutor": "添加执行配置",
+    "bots": {
+      "new": "新建工作助手",
+      "copyName": "{name} 副本",
+      "copied": "已复制成 {name}",
+      "openConversation": "打开",
+      "more": "更多",
+      "settings": "设置",
+      "copy": "复制",
+      "deleteAction": "删除…",
+      "fromTemplate": "从模板新建",
+      "reviewAgentHint": "选一个和研发不同的 agent：检查的不该是写的那个。",
+      "face": {
+        "change": "换头像",
+        "shape": "形状",
+        "color": "颜色",
+        "upload": "上传图片",
+        "tooLarge": "图片太大了。",
+        "unreadable": "这个文件读不成图片。",
+        "shapes": {
+          "blob": "团块",
+          "pebble": "卵石",
+          "squircle": "圆角方",
+          "pill": "药片",
+          "wedge": "楔形",
+          "hexagon": "六边形",
+          "cloud": "云朵",
+          "drop": "水滴",
+          "bean": "豆子",
+          "egg": "蛋",
+          "shield": "盾",
+          "burst": "星芒"
+        },
+        "colors": {
+          "black": "黑",
+          "brown": "棕",
+          "red": "红",
+          "orange": "橙",
+          "yellow": "黄",
+          "green": "绿",
+          "teal": "青",
+          "blue": "蓝",
+          "purple": "紫",
+          "magenta": "品红",
+          "gray": "灰"
+        }
+      },
+      "create": {
+        "title": "新建工作助手",
+        "description": "只要名字。岗位按名字推断，大脑和主助手一样，执行配置一并建好。",
+        "name": "名字",
+        "namePlaceholder": "比如：代码评审",
+        "hint": "岗位可以在它的第一张卡上换，其余的在它的设置里改。",
+        "cancel": "取消",
+        "create": "建好",
+        "editorNote": "codeg 读不到这个 agent 的选项（{why}），请在这里选好；工作助手会用这个执行配置建成。"
+      },
+      "roster": {
+        "title": "助手",
+        "add": "新建工作助手",
+        "addShort": "新建"
+      },
+      "choice": {
+        "other": "其他",
+        "otherPlaceholder": "自己写…",
+        "send": "发送",
+        "answered": "你选了：{choice}",
+        "answeredOwn": "你写了：{text}",
+        "noProjects": "codeg 里还没有打开的项目。",
+        "brainSame": "大脑和主助手一样",
+        "brainOwn": "大脑用 {agent}",
+        "executorBound": "执行配置用 {name}",
+        "executorFilled": "执行配置用 {agent}，补了 {count} 项选项",
+        "executorMade": "执行配置用 {agent}",
+        "joiner": "；",
+        "editBrain": "改大脑",
+        "editExecutor": "改执行配置",
+        "changeRole": "换个岗位",
+        "brainItem": "大脑 · {name}",
+        "from": {
+          "given": "照你说的",
+          "other_config": "沿用别的执行配置",
+          "agent": "agent 自己的默认值"
+        },
+        "nothingPicked": "这个 agent 没有要选的项。"
+      },
+      "changed": {
+        "applied": "建好了一个工作助手",
+        "made": "把你的执行配置建成了 {count} 个工作助手",
+        "madeHint": "各管原来那个执行配置的活，执行配置照旧绑着。撤销一个只删那个工作助手，执行配置留下。",
+        "show": "要建这个工作助手吗？（你要求这类改动先给你看）",
+        "suggested": "建议：新建一个工作助手",
+        "dismissed": "没建",
+        "undone": "已撤销",
+        "executorFilled": "执行配置用 {agent}，补了 {count} 项选项",
+        "executorMade": "执行配置用 {agent}",
+        "executorBound": "沿用 {name}",
+        "open": "打开",
+        "undoOne": "撤销",
+        "undoneOne": "已撤销",
+        "quote": "你说：「{quote}」",
+        "reason": "理由：{reason}",
+        "accept": "建",
+        "dismiss": "不用",
+        "undo": "撤销",
+        "undoAll": "全部撤销"
+      },
+      "delete": {
+        "title": "删除 {name}？",
+        "description": "它的记忆和对话一起删掉。主助手不能删。",
+        "running": "它派出的 {count} 件活还在跑：",
+        "handOver": "交给主助手接着跟（推荐）",
+        "stop": "停下",
+        "messages": "发给它的 {count} 条消息还没回：退回给发信的助手。",
+        "division": "它是{kinds}的首选：删除后改为「自动」。",
+        "listJoiner": "、",
+        "dropExecutor": "一起删掉它的执行配置 {name}",
+        "executorKept": "默认留下：会话里照样能 @，codeg-cli 照样能用。",
+        "executorShared": "留下：{names} 也绑着它。",
+        "dropWorkdir": "一起删掉它的工作目录",
+        "workdirCustom": "这个目录是你选的，codeg 不动它。",
+        "cancel": "取消",
+        "confirm": "删除"
+      }
+    }
   }
 }

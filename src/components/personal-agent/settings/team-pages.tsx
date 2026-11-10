@@ -14,25 +14,33 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import {
   AlertTriangle,
   Bot,
   Briefcase,
-  ChevronRight,
   Layers,
+  Loader2,
+  MoreHorizontal,
+  Plus,
   Users,
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { AssistantsPanel } from "@/components/settings/assistants-panel"
 import {
   SettingCard,
   SettingNote,
   SettingRow,
 } from "@/components/shared/setting-card"
+import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Popover,
   PopoverContent,
@@ -48,7 +56,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { openSettingsWindow, personalAgentSettingsPatch } from "@/lib/api"
+import {
+  openSettingsWindow,
+  personalAgentBotCopy,
+  personalAgentSettingsPatch,
+} from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type {
   AssistantInfo,
@@ -64,6 +76,10 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useAssistants } from "@/stores/assistants-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
+import { BotAvatar } from "../bot-avatar"
+import { BotDeleteDialog } from "../bot-delete-dialog"
+import { NewBotDialog } from "../new-bot-dialog"
+import { useBotTemplates } from "../use-templates"
 import { canOpenWork, useBotName, useOpenWork } from "../shared"
 import { PageHead } from "./pref-pages"
 import { useBots, useExecutors, useSettingsPatch } from "./use-settings"
@@ -109,16 +125,65 @@ function useProjects() {
 
 // ── work assistants ─────────────────────────────────────────────────────────
 
-export function WorkersPage() {
+export function WorkersPage({
+  readOnly,
+  readOnlyWhy,
+}: {
+  /** Making, copying and deleting need the engine here and the primary
+   *  set up. */
+  readOnly: boolean
+  readOnlyWhy: string | null
+}) {
   const t = useTranslations("PersonalAgent.settings")
+  const tb = useTranslations("PersonalAgent.bots")
+  const locale = useLocale()
   const bots = useBots()
   const assistants = useAssistants()
   const botName = useBotName()
+  const templates = useBotTemplates()
   const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  const closeSettings = usePersonalAgentUi((s) => s.closeSettings)
+  const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
+  const [adding, setAdding] = useState(false)
+  const [deleting, setDeleting] = useState<number | null>(null)
+  const [copying, setCopying] = useState<number | null>(null)
   const workers = (bots ?? []).filter((b) => b.kind === "worker")
+  const goTo = (id: number) => {
+    setViewBot(id)
+    closeSettings()
+  }
+  const copy = async (w: PersonalAgentBotSummary) => {
+    setCopying(w.id)
+    try {
+      const made = await personalAgentBotCopy(
+        w.id,
+        tb("copyName", { name: botName(w) }),
+        locale
+      )
+      if (made.bot) toast.message(tb("copied", { name: made.bot.name }))
+    } catch (e) {
+      toast.error(toErrorMessage(e))
+    } finally {
+      setCopying(null)
+    }
+  }
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="workers">
       <PageHead title={t("nav.workers")} description={t("pages.workers")} />
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {readOnly ? readOnlyWhy : null}
+        </p>
+        <Button
+          size="sm"
+          disabled={readOnly}
+          onClick={() => setAdding(true)}
+          data-pa-new-worker
+        >
+          <Plus aria-hidden />
+          {tb("new")}
+        </Button>
+      </div>
       {bots != null && workers.length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border/70 px-6 py-8 text-center">
           <Users className="size-5 text-muted-foreground" aria-hidden />
@@ -133,43 +198,99 @@ export function WorkersPage() {
             const bound = assistants.find(
               (a) => a.id === w.executor_assistant_id
             )
+            const role = templates?.find((x) => x.id === w.template)?.name
             return (
-              <button
+              <div
                 key={w.id}
-                type="button"
                 data-pa-worker={w.id}
-                onClick={() => openSettings("identity", w.id)}
-                className="flex w-full items-center gap-3 px-3 py-2.5 text-start transition-colors hover:bg-muted/60"
+                className="flex w-full items-center gap-3 px-3 py-2.5"
               >
-                <AssistantAvatar
-                  avatar={w.avatar}
-                  name={botName(w)}
-                  size={32}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">
-                    {botName(w)}
+                <button
+                  type="button"
+                  onClick={() => openSettings("identity", w.id)}
+                  className="flex min-w-0 flex-1 items-center gap-3 text-start"
+                >
+                  <BotAvatar avatar={w.avatar} name={botName(w)} size={32} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">
+                      {botName(w)}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {[
+                        role ?? w.template,
+                        bound
+                          ? t("team.boundTo", { name: bound.name })
+                          : t("team.unbound"),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
                   </span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {[
-                      w.template,
-                      bound
-                        ? t("team.boundTo", { name: bound.name })
-                        : t("team.unbound"),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </span>
-                </span>
-                <ChevronRight
-                  className="size-4 shrink-0 text-muted-foreground rtl:rotate-180"
-                  aria-hidden
-                />
-              </button>
+                </button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => goTo(w.id)}
+                  data-pa-worker-open={w.id}
+                >
+                  {tb("openConversation")}
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={tb("more")}
+                      data-pa-worker-menu={w.id}
+                    >
+                      {copying === w.id ? (
+                        <Loader2 className="animate-spin" aria-hidden />
+                      ) : (
+                        <MoreHorizontal aria-hidden />
+                      )}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      onSelect={() => openSettings("identity", w.id)}
+                    >
+                      {tb("settings")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={readOnly || copying != null}
+                      onSelect={() => void copy(w)}
+                      data-pa-worker-copy={w.id}
+                    >
+                      {tb("copy")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={readOnly}
+                      variant="destructive"
+                      onSelect={() => setDeleting(w.id)}
+                      data-pa-worker-delete={w.id}
+                    >
+                      {tb("deleteAction")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             )
           })}
         </SettingCard>
       )}
+      <NewBotDialog
+        open={adding}
+        onOpenChange={setAdding}
+        onMade={(made) => {
+          if (made.bot) goTo(made.bot.id)
+        }}
+      />
+      <BotDeleteDialog
+        botId={deleting}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null)
+        }}
+      />
     </div>
   )
 }
@@ -476,8 +597,10 @@ export function ExecutorsPage({
   delegationEnabled: boolean | null
 }) {
   const t = useTranslations("PersonalAgent.settings")
+  const tb = useTranslations("PersonalAgent.bots")
   const views = useExecutors()
   const impact = useImpact(views)
+  const templates = useBotTemplates()
   const [editorRef, setEditorRef] = useState<UsageEditorHandle | null>(null)
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="executors">
@@ -491,24 +614,76 @@ export function ExecutorsPage({
           void openSettingsWindow("collaboration").catch(() => {})
         }
         rowExtra={(a) => <ExecutorLine assistant={a} view={views.get(a.id)} />}
+        createMenu={(open) => (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!templates}
+                data-pa-executor-templates
+              >
+                {tb("fromTemplate")}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              {(templates ?? [])
+                .filter((tpl) => tpl.id !== "blank")
+                .map((tpl) => (
+                  <DropdownMenuItem
+                    key={tpl.id}
+                    data-pa-executor-template={tpl.id}
+                    className="flex flex-col items-start gap-0.5"
+                    onSelect={() =>
+                      open({
+                        name: tpl.name,
+                        description: tpl.description,
+                        instructions: tpl.instructions,
+                        template: tpl.id,
+                      })
+                    }
+                  >
+                    <span className="text-sm">{tpl.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {tpl.job}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         deleteImpact={(a) => impact(a, true)}
         disableImpact={(a) => impact(a, false)}
-        editorSection={(a) => (
-          <div className="space-y-2">
-            <p className="px-1 text-xs font-medium text-muted-foreground">
-              {t("usage.title")}
-            </p>
-            <UsageEditor
-              ref={setEditorRef}
-              initial={
-                (a && account?.team.usage[a.uid]) ||
-                (a ? (views.get(a.id)?.usage ?? DEFAULT_USAGE) : DEFAULT_USAGE)
-              }
-              readOnly={usageReadOnly}
-              readOnlyWhy={usageReadOnlyWhy}
-            />
-          </div>
-        )}
+        editorSection={(a, prefill) => {
+          // A new one from a template (10.5 "fill one"): its usage.
+          const fromTemplate =
+            (!a && templates?.find((x) => x.id === prefill?.template)) || null
+          return (
+            <div className="space-y-2">
+              <p className="px-1 text-xs font-medium text-muted-foreground">
+                {t("usage.title")}
+              </p>
+              {fromTemplate?.id === "review" ? (
+                <p className="px-1 text-xs leading-5 text-muted-foreground">
+                  {tb("reviewAgentHint")}
+                </p>
+              ) : null}
+              <UsageEditor
+                ref={setEditorRef}
+                initial={
+                  (a && account?.team.usage[a.uid]) ||
+                  (a
+                    ? (views.get(a.id)?.usage ?? DEFAULT_USAGE)
+                    : fromTemplate?.modes
+                      ? { ...DEFAULT_USAGE, modes: fromTemplate.modes }
+                      : DEFAULT_USAGE)
+                }
+                readOnly={usageReadOnly}
+                readOnlyWhy={usageReadOnlyWhy}
+              />
+            </div>
+          )
+        }}
         onEditorSaved={(a) => editorRef?.save(a)}
       />
     </div>

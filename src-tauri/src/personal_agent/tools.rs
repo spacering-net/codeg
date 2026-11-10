@@ -112,10 +112,31 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 );
             }
             let team = engine.account().await.team;
+            // Whose each one is: the work assistants bound to it (4.4).
+            let me = engine.bot().await;
+            let bots = svc::list_bots(&db.conn).await.unwrap_or_default();
             let mut rows: Vec<Value> = Vec::new();
             let mut open_lines = Vec::new();
             let mut closed_lines = Vec::new();
             for a in &assistants {
+                let owners: Vec<&crate::db::entities::personal_agent::Model> = bots
+                    .iter()
+                    .filter(|b| b.executor_assistant_id == Some(a.id))
+                    .collect();
+                let whose = if owners.iter().any(|b| b.id == me) {
+                    " [yours: your dispatches run here when you leave assistant_id out]".to_string()
+                } else if owners.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " [{}'s: message it to get work done here]",
+                        owners
+                            .iter()
+                            .map(|b| super::messages::display_name(b))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
                 let model = a
                     .label_snapshot
                     .options
@@ -134,6 +155,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "dispatch": usage.dispatch,
                     "modes": usage.modes,
                     "projects": usage.projects,
+                    "bound_to": owners.iter().map(|b| b.id).collect::<Vec<_>>(),
                 }));
                 let what = if a.description.trim().is_empty() {
                     String::new()
@@ -141,7 +163,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     format!(" — {}", a.description.trim())
                 };
                 let line = format!(
-                    "#{} {} ({}){what}{}",
+                    "#{} {} ({}){what}{}{whose}",
                     a.id,
                     a.name,
                     a.label_snapshot.agent,
@@ -217,8 +239,13 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 Some("session") => DispatchMode::Session,
                 _ => return ToolOutcome::refused("`mode` must be task, chat or session"),
             };
-            let Some(assistant_id) = int(&args, "assistant_id").and_then(as_i32) else {
-                return ToolOutcome::refused("`assistant_id` is required; use assistant_list");
+            // A work assistant's own executor config when it names none (4.4).
+            let assistant_id = match int(&args, "assistant_id").and_then(as_i32) {
+                Some(id) => id,
+                None => match engine.default_executor().await {
+                    Ok(id) => id,
+                    Err(e) => return ToolOutcome::refused(e),
+                },
             };
             let report = match string(&args, "deliverable").as_deref() {
                 None | Some("change") => false,
@@ -253,9 +280,17 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 Some((batch_id, scope)) => DispatchAuth::Ledgered { batch_id, scope },
                 None => DispatchAuth::Direct,
             };
+            // Work already going on the same line: a reminder, not a refusal.
+            let note = engine.same_line_note(valid.mode, valid.folder_id).await;
             // The owner may have asked to confirm such dispatches first.
             match engine.dispatch_or_confirm(valid, auth).await {
-                Ok(Ok(made)) => dispatched(&made.dispatch, made.earlier),
+                Ok(Ok(made)) => {
+                    let mut out = dispatched(&made.dispatch, made.earlier);
+                    if let (false, Some(n)) = (made.earlier, note) {
+                        out.text = format!("{}\n{n}", out.text);
+                    }
+                    out
+                }
                 Ok(Err(card)) => card.outcome("dispatch"),
                 Err(e) => ToolOutcome::refused(e),
             }
@@ -286,6 +321,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             }
         }
         "prefs_update" => engine.prefs_update_call(&args).await,
+        "bot_create" => engine.bot_create_call(&args).await,
         "bot_list" => {
             let (text, data) = engine.roster_text().await;
             ToolOutcome::ok(text, data)

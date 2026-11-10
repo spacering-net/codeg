@@ -16,10 +16,10 @@ import { useState } from "react"
 import { useFormatter, useTranslations } from "next-intl"
 import { ArrowDownLeft, ArrowUpRight, ChevronDown } from "lucide-react"
 
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
-import type { AssistantAvatar as AvatarValue, TimelineRow } from "@/lib/types"
+import type { BotAvatar as AvatarValue, TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { BotAvatar } from "./bot-avatar"
 import { ExchangeSheet } from "./exchange-sheet"
 import type { MessageItem } from "./message-items"
 import { num, str, useBotName } from "./shared"
@@ -82,7 +82,7 @@ function Line({
   const Icon = out ? ArrowUpRight : ArrowDownLeft
   const who = () => (
     <span className="inline-flex min-w-0 items-center gap-1">
-      <AssistantAvatar avatar={peer.avatar} name={peerName} size={16} />
+      <BotAvatar avatar={peer.avatar} name={peerName} size={16} />
       <span className="min-w-0 truncate font-medium text-foreground/80">
         {peerName}
       </span>

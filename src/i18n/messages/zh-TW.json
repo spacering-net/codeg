@@ -8083,7 +8083,8 @@
         "default": "預設"
       },
       "targetLoading": "正在讀取這個助手的設定…",
-      "targetFailed": "讀不到這個助手的設定。"
+      "targetFailed": "讀不到這個助手的設定。",
+      "brain": "大腦"
     },
     "statusWord": {
       "idle": "閒置",
@@ -8357,6 +8358,130 @@
       "withdrawn": "已不再需要",
       "resolved": "已處理"
     },
-    "addExecutor": "新增執行配置"
+    "addExecutor": "新增執行配置",
+    "bots": {
+      "new": "新增工作助手",
+      "copyName": "{name} 副本",
+      "copied": "已複製成 {name}",
+      "openConversation": "開啟",
+      "more": "更多",
+      "settings": "設定",
+      "copy": "複製",
+      "deleteAction": "刪除…",
+      "fromTemplate": "從範本新增",
+      "reviewAgentHint": "選一個和研發不同的 agent：檢查的不該是寫的那個。",
+      "face": {
+        "change": "換頭像",
+        "shape": "形狀",
+        "color": "顏色",
+        "upload": "上傳圖片",
+        "tooLarge": "圖片太大了。",
+        "unreadable": "這個檔案無法讀取成圖片。",
+        "shapes": {
+          "blob": "團塊",
+          "pebble": "卵石",
+          "squircle": "圓角方",
+          "pill": "藥丸",
+          "wedge": "楔形",
+          "hexagon": "六邊形",
+          "cloud": "雲朵",
+          "drop": "水滴",
+          "bean": "豆子",
+          "egg": "蛋",
+          "shield": "盾牌",
+          "burst": "星芒"
+        },
+        "colors": {
+          "black": "黑",
+          "brown": "棕",
+          "red": "紅",
+          "orange": "橙",
+          "yellow": "黃",
+          "green": "綠",
+          "teal": "青",
+          "blue": "藍",
+          "purple": "紫",
+          "magenta": "洋紅",
+          "gray": "灰"
+        }
+      },
+      "create": {
+        "title": "新增工作助手",
+        "description": "只要名字。職務按名字推斷，大腦和主助手一樣，執行配置一併建立。",
+        "name": "名字",
+        "namePlaceholder": "例如：程式碼審查",
+        "hint": "職務可以在它的第一張卡片上換，其餘的在它的設定裡改。",
+        "cancel": "取消",
+        "create": "建立",
+        "editorNote": "codeg 讀不到這個 agent 的選項（{why}），請在這裡選好；工作助手會用這個執行配置建立。"
+      },
+      "roster": {
+        "title": "助手",
+        "add": "新增工作助手",
+        "addShort": "新增"
+      },
+      "choice": {
+        "other": "其他",
+        "otherPlaceholder": "自己寫…",
+        "send": "傳送",
+        "answered": "你選了：{choice}",
+        "answeredOwn": "你寫了：{text}",
+        "noProjects": "codeg 裡還沒有開啟的專案。",
+        "brainSame": "大腦和主助手一樣",
+        "brainOwn": "大腦用 {agent}",
+        "executorBound": "執行配置用 {name}",
+        "executorFilled": "執行配置用 {agent}，補了 {count} 項選項",
+        "executorMade": "執行配置用 {agent}",
+        "joiner": "；",
+        "editBrain": "改大腦",
+        "editExecutor": "改執行配置",
+        "changeRole": "換個職務",
+        "brainItem": "大腦 · {name}",
+        "from": {
+          "given": "照你說的",
+          "other_config": "沿用別的執行配置",
+          "agent": "agent 自己的預設值"
+        },
+        "nothingPicked": "這個 agent 沒有要選的項目。"
+      },
+      "changed": {
+        "applied": "建好了一個工作助手",
+        "made": "把你的執行配置建成了 {count} 個工作助手",
+        "madeHint": "各管原來那個執行配置的工作，執行配置照舊綁著。復原一個只刪那個工作助手，執行配置留下。",
+        "show": "要建立這個工作助手嗎？（你要求這類改動先給你看）",
+        "suggested": "建議：新增一個工作助手",
+        "dismissed": "沒建立",
+        "undone": "已復原",
+        "executorFilled": "執行配置用 {agent}，補了 {count} 項選項",
+        "executorMade": "執行配置用 {agent}",
+        "executorBound": "沿用 {name}",
+        "open": "開啟",
+        "undoOne": "復原",
+        "undoneOne": "已復原",
+        "quote": "你說：「{quote}」",
+        "reason": "理由：{reason}",
+        "accept": "建立",
+        "dismiss": "不用",
+        "undo": "復原",
+        "undoAll": "全部復原"
+      },
+      "delete": {
+        "title": "刪除 {name}？",
+        "description": "它的記憶和對話會一起刪除。主助手不能刪除。",
+        "running": "它派出的 {count} 項工作還在執行：",
+        "handOver": "交給主助手接著跟進（建議）",
+        "stop": "停下",
+        "messages": "發給它的 {count} 則訊息還沒回覆：退回給發訊息的助手。",
+        "division": "它是{kinds}的首選：刪除後改為「自動」。",
+        "listJoiner": "、",
+        "dropExecutor": "一起刪除它的執行配置 {name}",
+        "executorKept": "預設保留：會話裡照樣能 @，codeg-cli 照樣能用。",
+        "executorShared": "保留：{names} 也綁著它。",
+        "dropWorkdir": "一起刪除它的工作目錄",
+        "workdirCustom": "這個目錄是你選的，codeg 不會動它。",
+        "cancel": "取消",
+        "confirm": "刪除"
+      }
+    }
   }
 }

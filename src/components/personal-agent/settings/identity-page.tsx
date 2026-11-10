@@ -30,7 +30,6 @@ import {
   EMPTY_SELECTION,
   type AssistantSelection,
 } from "@/components/settings/assistant-agent-config"
-import { AssistantAvatarPicker } from "@/components/settings/assistant-avatar-picker"
 import {
   RequiredOptionsSection,
   useRequiredOptionsGate,
@@ -51,18 +50,19 @@ import { getAgentLabel } from "@/lib/custom-agents"
 import type {
   AgentType,
   AssistantAgentConfig,
-  AssistantAvatar,
+  BotAvatar,
   PersonalAgentInfo,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { BotFacePicker } from "../bot-face-picker"
 import { PageHead } from "./pref-pages"
 
-/** What a new agent starts with — the backend's own default. */
-const DEFAULT_AVATAR: AssistantAvatar = {
-  kind: "emoji",
-  emoji: "🧭",
-  color: "violet",
+/** What the primary assistant starts with (10.6): a black blob. */
+const DEFAULT_AVATAR: BotAvatar = {
+  kind: "face",
+  shape: "blob",
+  color: "black",
 }
 
 export function IdentityPage({
@@ -87,7 +87,7 @@ export function IdentityPage({
   const { agents } = useAcpAgents()
 
   const [name, setName] = useState(agent?.name ?? "")
-  const [avatar, setAvatar] = useState<AssistantAvatar>(
+  const [avatar, setAvatar] = useState<BotAvatar>(
     agent?.avatar ?? DEFAULT_AVATAR
   )
   const [agentType, setAgentType] = useState<AgentType | null>(
@@ -288,8 +288,8 @@ export function IdentityPage({
             name in effect — the default one while the field is empty. */}
         <div className="flex items-start gap-3 p-3">
           <div className="mt-0.5 shrink-0">
-            <AssistantAvatarPicker
-              avatar={avatar}
+            <BotFacePicker
+              value={avatar}
               name={name.trim() || tPage("title")}
               onChange={setAvatar}
               disabled={disabled || saving}

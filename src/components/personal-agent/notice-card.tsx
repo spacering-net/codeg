@@ -30,6 +30,7 @@ import { useTranslations } from "next-intl"
 import {
   CircleHelp,
   Lightbulb,
+  UserPlus,
   Loader2,
   OctagonX,
   Repeat,
@@ -41,6 +42,7 @@ import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentNoticeAct } from "@/lib/api"
 import type {
   AgentType,
+  AssistantLabelSnapshot,
   BotFace,
   PersonalAgentPrefKey,
   TimelineRow,
@@ -52,6 +54,8 @@ import {
   type SettingsPage,
 } from "@/stores/personal-agent-ui-store"
 
+import { BotAvatar } from "./bot-avatar"
+import { ChoiceCard } from "./choice-card"
 import { CollapsedText } from "./event-card"
 import { ExchangeSheet } from "./exchange-sheet"
 import type { MessageItem } from "./message-items"
@@ -89,11 +93,23 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   }
   if (kind === "loop") return <LoopCard item={item} />
   if (kind === "stopped") return <StoppedCard item={item} />
-  if (kind === "changed") return <ChangedCard item={item} />
+  if (kind === "changed") {
+    return str(item.row.data, "what") === "bots" ? (
+      <BotsChangedCard item={item} />
+    ) : (
+      <ChangedCard item={item} />
+    )
+  }
+  if (kind === "choice") return <ChoiceCard item={item} />
   return null
 }
 
-type Choice = "accept" | "dismiss" | "undo" | `stop:${number}`
+type Choice =
+  | "accept"
+  | "dismiss"
+  | "undo"
+  | `undo:${number}`
+  | `stop:${number}`
 
 /** Answer a card; the error to show when the answer did not go through. */
 function useAnswer(noticeId: number) {
@@ -579,6 +595,7 @@ function StoppedCard({ item }: { item: NoticeItem }) {
 
 /** The settings page an item is on. */
 function pageOf(key: string): SettingsPage {
+  if (key === "own.brain") return "identity"
   if (key.startsWith("own.")) return "advanced"
   if (key.startsWith("team.division.")) return "division"
   if (key.startsWith("team.usage.")) return "executors"
@@ -617,6 +634,7 @@ function useChangeText() {
     handoff_budget_chars: ts("handoffBudget"),
     dispatch_concurrency: ts("concurrency"),
     skill_enabled: ts("skill"),
+    brain: ts("brain"),
   }
   const byUid = (uid: string) =>
     assistants.find((a) => a.uid === uid)?.name ?? uid
@@ -634,6 +652,20 @@ function useChangeText() {
     return key
   }
   const value = (key: string, v: unknown): string => {
+    if (key === "own.brain" && v && typeof v === "object") {
+      // "Codex · GPT-5.5 · High": the agent and the picks, as saved.
+      const snap = (v as { label_snapshot?: AssistantLabelSnapshot })
+        .label_snapshot
+      if (snap) {
+        return [
+          snap.agent,
+          snap.mode,
+          ...snap.options.map((o) => o.value_label),
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      }
+    }
     if (key.startsWith("prefs.") && typeof v === "string") {
       return tp(`${key.slice(6)}.${v}` as "reply_length.short")
     }
@@ -783,6 +815,209 @@ function ChangedCard({ item }: { item: NoticeItem }) {
           ) : null}
         </div>
       ) : null}
+    </CardFrame>
+  )
+}
+
+interface MadeBot {
+  bot_id: number
+  name: string
+  face: BotFace | null
+  template_name: string | null
+  executor_name: string | null
+  executor_agent: string | null
+  executor_created: boolean
+  picked: { from: string }[]
+  state: "made" | "undone"
+}
+
+function madeBots(v: unknown): MadeBot[] {
+  return Array.isArray(v)
+    ? v.filter(
+        (b): b is MadeBot =>
+          b != null && typeof b === "object" && typeof b.bot_id === "number"
+      )
+    : []
+}
+
+/** Work assistants made from the conversation (4.12) or on the way up from
+ *  the executor configs (4.15), each with [Undo] — or one to make, waiting
+ *  on the owner: [Make it] [Not now]. */
+function BotsChangedCard({ item }: { item: NoticeItem }) {
+  const t = useTranslations("PersonalAgent.bots.changed")
+  const { readOnly } = usePageScope()
+  const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
+  const row = item.row
+  const data = row.data
+  const state = str(data, "state") ?? "open"
+  const why = str(data, "why") ?? "asked"
+  const bots = madeBots(data?.bots)
+  const pending = obj(data?.pending)
+  const quote = str(data, "quote")
+  const reason = str(data, "reason")
+  const error = str(data, "error")
+  const { busy, failed, answer } = useAnswer(Number(row.ref_id))
+  const live = bots.filter((b) => b.state !== "undone")
+  const heading =
+    state === "open"
+      ? why === "suggest"
+        ? t("suggested")
+        : t("show")
+      : state === "dismissed"
+        ? t("dismissed")
+        : state === "undone"
+          ? t("undone")
+          : why === "made"
+            ? t("made", { count: bots.length })
+            : t("applied")
+  const text = bots.map((b) => b.name).join(", ") || str(pending, "name") || ""
+  return (
+    <CardFrame
+      item={item}
+      icon={UserPlus}
+      heading={heading}
+      text={text}
+      failed={
+        failed ?? (state === "open" || state === "applied" ? error : null)
+      }
+    >
+      {why === "made" ? (
+        <p className="mb-2 text-xs text-muted-foreground">{t("madeHint")}</p>
+      ) : null}
+      {state === "open" || (state === "dismissed" && bots.length === 0) ? (
+        <p className="text-sm font-medium break-words" data-pa-bot-pending>
+          {str(pending, "name")}
+        </p>
+      ) : (
+        <ul className="space-y-1.5" data-pa-bots-made>
+          {bots.map((b) => {
+            const filled = b.picked.filter((p) => p.from !== "given").length
+            return (
+              <li
+                key={b.bot_id}
+                data-pa-bot-made={b.bot_id}
+                data-state={b.state}
+                className="flex items-center gap-2"
+              >
+                <BotAvatar
+                  avatar={b.face?.avatar ?? null}
+                  name={b.name}
+                  size={24}
+                />
+                <span className="min-w-0 flex-1">
+                  <span
+                    className={cn(
+                      "block truncate text-sm font-medium",
+                      b.state === "undone" &&
+                        "text-muted-foreground line-through"
+                    )}
+                  >
+                    {b.name}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {[
+                      b.template_name,
+                      b.executor_name
+                        ? b.executor_created
+                          ? filled > 0
+                            ? t("executorFilled", {
+                                agent: b.executor_agent ?? "",
+                                count: filled,
+                              })
+                            : t("executorMade", {
+                                agent: b.executor_agent ?? "",
+                              })
+                          : t("executorBound", { name: b.executor_name })
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </span>
+                {b.state !== "undone" ? (
+                  <span className="flex shrink-0 items-center gap-1">
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => setViewBot(b.bot_id)}
+                    >
+                      {t("open")}
+                    </Button>
+                    {bots.length > 1 && state === "applied" ? (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={readOnly || busy != null}
+                        onClick={() => void answer(`undo:${b.bot_id}`)}
+                        data-pa-undo-bot={b.bot_id}
+                      >
+                        {busy === `undo:${b.bot_id}` ? (
+                          <Loader2
+                            className="size-3 animate-spin"
+                            aria-hidden
+                          />
+                        ) : null}
+                        {t("undoOne")}
+                      </Button>
+                    ) : null}
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    {t("undoneOne")}
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {quote ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t("quote", { quote })}
+        </p>
+      ) : null}
+      {reason ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t("reason", { reason })}
+        </p>
+      ) : null}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {state === "open" ? (
+          <>
+            <Button
+              size="sm"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("accept")}
+            >
+              {busy === "accept" ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : null}
+              {t("accept")}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("dismiss")}
+            >
+              {t("dismiss")}
+            </Button>
+          </>
+        ) : state === "applied" && live.length > 0 ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={readOnly || busy != null}
+            onClick={() => void answer("undo")}
+            data-pa-undo-bots
+          >
+            {busy === "undo" ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            ) : null}
+            {bots.length > 1 ? t("undoAll") : t("undo")}
+          </Button>
+        ) : null}
+      </div>
     </CardFrame>
   )
 }

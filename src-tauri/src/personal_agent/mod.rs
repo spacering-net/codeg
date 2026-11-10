@@ -22,6 +22,8 @@
 //! The engine runs in the process that holds the work-task engine, next to
 //! it; any other process on the same data dir sees the page read-only.
 
+pub mod bot_templates;
+pub mod bots;
 pub mod cards;
 pub mod compaction;
 pub mod dispatch;
@@ -30,6 +32,7 @@ pub mod host;
 pub mod ledger;
 pub mod messages;
 pub mod notices;
+pub mod options;
 pub mod prefs;
 pub mod templates;
 pub mod tools;

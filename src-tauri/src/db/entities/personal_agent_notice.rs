@@ -29,6 +29,10 @@ pub enum NoticeKind {
     /// inferred it.
     #[sea_orm(string_value = "changed")]
     Changed,
+    /// Choices put to the owner — a new work assistant's opening card
+    /// (4.12): a question, its lettered answers and one of their own.
+    #[sea_orm(string_value = "choice")]
+    Choice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

@@ -80,6 +80,19 @@ export interface AssistantEditorDialogProps {
   /** A section of the host's own, after the editor's (the assistants
    *  page's "how the assistants use it"); it saves through `onSaved`. */
   extraSection?: ReactNode
+  /** What a new one starts with (a template's words, an agent picked). */
+  prefill?: AssistantPrefill | null
+}
+
+/** A new assistant's starting fields. */
+export interface AssistantPrefill {
+  name?: string
+  description?: string
+  instructions?: string
+  avatar?: AssistantAvatar
+  agentType?: AgentType | null
+  /** Where it came from, for the host's own section (a template's id). */
+  template?: string
 }
 
 export function AssistantEditorDialog({
@@ -88,6 +101,7 @@ export function AssistantEditorDialog({
   assistant,
   onSaved,
   extraSection,
+  prefill,
 }: AssistantEditorDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -103,6 +117,7 @@ export function AssistantEditorDialog({
             onClose={() => onOpenChange(false)}
             onSaved={onSaved}
             extraSection={extraSection}
+            prefill={assistant ? null : (prefill ?? null)}
           />
         ) : null}
       </DialogContent>
@@ -115,11 +130,13 @@ function AssistantEditorBody({
   onClose,
   onSaved,
   extraSection,
+  prefill,
 }: {
   assistant: AssistantInfo | null
   onClose: () => void
   onSaved?: (assistant: AssistantInfo) => void
   extraSection?: ReactNode
+  prefill: AssistantPrefill | null
 }) {
   const t = useTranslations("AcpAgentSettings.multiAgent.assistants")
   const tm = useTranslations("AcpAgentSettings.multiAgent")
@@ -128,18 +145,24 @@ function AssistantEditorBody({
   const update = useAssistantsStore((s) => s.update)
   const editing = assistant !== null
 
-  const [name, setName] = useState(assistant?.name ?? "")
-  const [description, setDescription] = useState(assistant?.description ?? "")
+  const [name, setName] = useState(assistant?.name ?? prefill?.name ?? "")
+  const [description, setDescription] = useState(
+    assistant?.description ?? prefill?.description ?? ""
+  )
   const [avatar, setAvatar] = useState<AssistantAvatar>(
-    assistant?.avatar ?? defaultAvatarFor("")
+    assistant?.avatar ??
+      prefill?.avatar ??
+      defaultAvatarFor(prefill?.name ?? "")
   )
   // A new assistant's monogram follows its name until the user picks one.
-  const [avatarTouched, setAvatarTouched] = useState(editing)
+  const [avatarTouched, setAvatarTouched] = useState(
+    editing || prefill?.avatar != null
+  )
   const [instructions, setInstructions] = useState(
-    assistant?.instructions ?? ""
+    assistant?.instructions ?? prefill?.instructions ?? ""
   )
   const [agentType, setAgentType] = useState<AgentType | null>(
-    assistant?.agent_type ?? null
+    assistant?.agent_type ?? prefill?.agentType ?? null
   )
   const [selection, setSelection] = useState<AssistantSelection>(
     assistant ? selectionFromOptions(assistant.agent_options) : EMPTY_SELECTION

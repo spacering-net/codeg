@@ -126,7 +126,7 @@ pub enum FollowupAuth {
 }
 
 /// The states in which a dispatch still holds or waits for its executor.
-const LIVE_STATES: &[DispatchState] = &[
+pub(super) const LIVE_STATES: &[DispatchState] = &[
     DispatchState::Queued,
     DispatchState::Running,
     DispatchState::WaitingInput,
@@ -140,6 +140,10 @@ const FOLLOWUP_FROM: &[DispatchState] = &[
     DispatchState::Canceled,
     DispatchState::Interrupted,
 ];
+
+/// Held while a dispatched session's route changes hands: its registration
+/// (`register_conn`) and a deleted assistant's hand-over to the primary.
+pub(super) static ROUTES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A dispatched conversation's connection, as the engine tracks it.
 #[derive(Debug, Clone, Copy)]
@@ -260,6 +264,7 @@ pub fn executor_of(d: &dispatch_entity::Model) -> DispatchExecutorSnapshot {
         agent_options: Default::default(),
         label_snapshot: None,
         instructions: String::new(),
+        dispatcher: None,
     })
 }
 
@@ -341,6 +346,7 @@ impl PersonalAgentEngine {
             agent_options: assistant.agent_options.clone(),
             label_snapshot: Some(assistant.label_snapshot.clone()),
             instructions: assistant.instructions.clone(),
+            dispatcher: Some(self.dispatcher_brief().await),
         };
         let on_done = req
             .on_done
@@ -570,7 +576,7 @@ impl PersonalAgentEngine {
         let folder_id = d.folder_id.ok_or("a task dispatch without a project")?;
         let mut blocks = vec![serde_json::json!({ "type": "text", "text": d.prompt })];
         if let Some(brief) =
-            crate::acp::agent_mentions::render_assistant_brief(&executor.name, &executor.instructions)
+            crate::acp::agent_mentions::render_assistant_brief(&executor.name, &executor.brief_text())
         {
             blocks.push(serde_json::json!({ "type": "text", "text": brief }));
         }
@@ -736,26 +742,88 @@ impl PersonalAgentEngine {
 
     /// Route `conn_id`'s events to dispatch `id`, no round open yet.
     pub(super) async fn track_conn(&self, conn_id: &str, id: i32) {
-        self.state.lock().await.dispatch_conns.insert(
-            conn_id.to_string(),
+        self.register_conn(
+            conn_id,
             DispatchConn {
                 id,
                 round_since: None,
             },
-        );
+        )
+        .await;
+    }
+
+    /// Route a dispatched session to the engine of the assistant the
+    /// dispatch belongs to NOW: one handed to the primary while it was
+    /// still starting (its assistant deleted, 4.14) goes there, not to the
+    /// retired engine that started it.
+    async fn register_conn(&self, conn_id: &str, conn: DispatchConn) {
+        // The owner read and the route written as one step against a
+        // hand-over (`delete_bot`), which moves both under the same lock.
+        let _routes = ROUTES.lock().await;
+        let owner = svc::get_dispatch(&self.db.conn, conn.id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|d| d.bot_id);
+        let me = self.bot().await;
+        if let (Some(owner), Some(host)) = (owner.filter(|o| *o != me), self.host_ref()) {
+            // An engine already running (never one made here: making one
+            // boots it, which registers routes of its own under this lock).
+            let engine = if host.primary().serves(owner).await {
+                Some(host.primary())
+            } else {
+                host.existing_worker(owner).await
+            };
+            if let Some(engine) = engine {
+                engine
+                    .adopt_dispatch_conns(vec![(conn_id.to_string(), conn)])
+                    .await;
+                return;
+            }
+        }
+        self.state
+            .lock()
+            .await
+            .dispatch_conns
+            .insert(conn_id.to_string(), conn);
+    }
+
+    /// Let go of the sessions of dispatches `ids` (their assistant is
+    /// deleted): what routes them, for the engine taking them over.
+    pub(super) async fn take_dispatch_conns(&self, ids: &[i32]) -> Vec<(String, DispatchConn)> {
+        let mut st = self.state.lock().await;
+        let keys: Vec<String> = st
+            .dispatch_conns
+            .iter()
+            .filter(|(_, c)| ids.contains(&c.id))
+            .map(|(k, _)| k.clone())
+            .collect();
+        keys.into_iter()
+            .filter_map(|k| st.dispatch_conns.remove(&k).map(|c| (k, c)))
+            .collect()
+    }
+
+    /// Take over dispatched sessions another engine let go of.
+    pub(super) async fn adopt_dispatch_conns(&self, conns: Vec<(String, DispatchConn)>) {
+        let mut st = self.state.lock().await;
+        for (k, c) in conns {
+            st.dispatch_conns.insert(k, c);
+        }
     }
 
     /// Open a round on `conn_id`, just before its prompt goes out.
     pub(super) async fn open_round(&self, conn_id: &str, id: i32) {
         let since = self.current_seq(conn_id).await;
-        self.state.lock().await.dispatch_conns.insert(
-            conn_id.to_string(),
+        self.register_conn(
+            conn_id,
             DispatchConn {
                 id,
                 round_since: Some(since),
             },
-        );
+        )
+        .await;
     }
+
 
     /// Close the round open on `conn_id` when `seq` (a completion's; `None`
     /// for the backstop, which checked the session itself) belongs to it.
@@ -830,7 +898,8 @@ impl PersonalAgentEngine {
         let snapshot = AssistantRunSnapshot {
             name: executor.name.clone(),
             agent_options: executor.agent_options.clone(),
-            instructions: executor.instructions.clone(),
+            // A resumed conversation is told who handed it out again.
+            instructions: executor.brief_text(),
         };
         let _ = crate::db::service::conversation_service::set_dispatch_provenance(
             &self.db.conn,
@@ -898,7 +967,7 @@ impl PersonalAgentEngine {
         }
         let suffix = crate::acp::agent_mentions::render_assistant_brief(
             &executor.name,
-            &executor.instructions,
+            &executor.brief_text(),
         )
         .map(|text| vec![PromptInputBlock::Text { text }])
         .unwrap_or_default();

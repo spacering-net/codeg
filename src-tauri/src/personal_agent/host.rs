@@ -192,6 +192,15 @@ impl EngineHost {
                 driver.abort();
             }
         }
+        // On the way up from v2.0: the executor configs there were become
+        // work assistants, once (4.15) — when the primary is set up.
+        let primary = self.primary.clone();
+        tokio::spawn(async move {
+            let n = primary.make_workers_from_executors().await;
+            if n > 0 {
+                tracing::info!("[personal-agent] made {n} work assistants from the executor configs");
+            }
+        });
     }
 
     /// Hand one bus event to the engine whose connection it is about: an
@@ -238,6 +247,11 @@ impl EngineHost {
             return None;
         }
         Some(self.ensure_worker(id).await)
+    }
+
+    /// Worker `id`'s engine when one is running — none is made for asking.
+    pub async fn existing_worker(&self, id: i32) -> Option<Arc<PersonalAgentEngine>> {
+        self.workers.lock().await.get(&id).map(|r| r.engine.clone())
     }
 
     /// The engine whose current session `conn_id` is, for a tool call made
