@@ -130,8 +130,16 @@ describe("diskSkillTrigger", () => {
     expect(diskSkillTrigger("open_code")).toBe("/")
   })
 
+  // Custom ACP agents (e.g. user-configured Antigravity, or agents with declared
+  // skill directories) do not advertise skills as ACP commands; their skills
+  // live on disk and are invoked via `/`.
+  it("lists custom ACP agents' disk skills under `/`", () => {
+    expect(diskSkillTrigger("custom:antigravity-b")).toBe("/")
+    expect(diskSkillTrigger("custom:my-agent")).toBe("/")
+  })
+
   it("scans nothing for an agent that advertises its skills as commands", () => {
-    for (const agent of ["claude_code", "kimi_code", "gemini", "custom:x"]) {
+    for (const agent of ["claude_code", "kimi_code", "gemini"]) {
       expect(diskSkillTrigger(agent)).toBeNull()
     }
     expect(diskSkillTrigger(null)).toBeNull()

@@ -1,8 +1,9 @@
 import type { KnownInvocations } from "@/lib/invocation-token"
-import type {
-  AgentSkillItem,
-  AgentType,
-  AvailableCommandInfo,
+import {
+  isCustomAgentType,
+  type AgentSkillItem,
+  type AgentType,
+  type AvailableCommandInfo,
 } from "@/lib/types"
 
 import type { ReferenceAttrs } from "./types"
@@ -36,12 +37,22 @@ export type InvocationPrefix = "/" | "$"
  *   configured and MCP-prompt ones), while it still loads every skill, names
  *   each to the model and gives the model a `skill` tool to load one by id. A
  *   `/<skill>` the user sends reaches the model as written.
+ * - Custom ACP agents: `/`, the same way. Custom agents (including user-configured
+ *   Antigravity instances or agents with a declared skill store) do not advertise
+ *   skills as ACP commands; their skills live on disk and are invoked via `/<skill>`.
  */
 export function diskSkillTrigger(
   agentType: AgentType | null | undefined
 ): InvocationPrefix | null {
+  if (!agentType) return null
   if (agentType === "codex") return "$"
-  if (agentType === "antigravity" || agentType === "open_code") return "/"
+  if (
+    agentType === "antigravity" ||
+    agentType === "open_code" ||
+    isCustomAgentType(agentType)
+  ) {
+    return "/"
+  }
   return null
 }
 
