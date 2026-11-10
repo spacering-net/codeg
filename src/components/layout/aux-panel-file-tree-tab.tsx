@@ -31,6 +31,11 @@ import { useWorkspaceStateStore } from "@/hooks/use-workspace-state-store"
 import { detectPlatform } from "@/hooks/use-platform"
 import { findOwningFolder } from "@/lib/file-open-target"
 import { AuxPanelNoFolderEmpty } from "@/components/layout/aux-panel-no-folder-empty"
+import {
+  FileTreeSearch,
+  isFindShortcut,
+  type FileTreeSearchHandle,
+} from "@/components/layout/file-tree-search"
 import { WorkspaceDegradedBanner } from "@/components/layout/workspace-degraded-banner"
 import { WorkspaceUploadDialog } from "@/components/layout/workspace-upload-dialog"
 import { OpenInSubContent } from "@/components/layout/open-in-menu"
@@ -1760,6 +1765,73 @@ export function FileTreeTab() {
     [filePathSet, openFilePreview, isMobile, setAuxOpen]
   )
 
+  // Expand every folder above `path` (and `path` itself when `includeSelf`), so
+  // a file or folder picked in the search shows in the tree once it is cleared.
+  const expandTreeAncestors = useCallback(
+    (path: string, includeSelf: boolean) => {
+      setExpandedPaths((prev) => {
+        const next = new Set(prev)
+        next.add(FILE_TREE_ROOT_PATH)
+        let idx = path.indexOf("/")
+        while (idx !== -1) {
+          next.add(path.slice(0, idx))
+          idx = path.indexOf("/", idx + 1)
+        }
+        if (includeSelf) next.add(path)
+        return next.size === prev.size ? prev : next
+      })
+    },
+    []
+  )
+
+  const tabRootRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<FileTreeSearchHandle>(null)
+  // True while the search box has text: its results replace the tree.
+  const [searchActive, setSearchActive] = useState(false)
+
+  // Cmd/Ctrl+F anywhere in the tab moves focus to the search box. Keys from a
+  // row's dialog bubble here through the React tree but are not inside the
+  // tab's DOM, so they are left alone.
+  const handleFindShortcut = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!isFindShortcut(event)) return
+      if (!tabRootRef.current?.contains(event.target as Node)) return
+      event.preventDefault()
+      searchRef.current?.focus()
+    },
+    []
+  )
+
+  // A search result opens exactly like a click on its row (plus the line, for
+  // a content hit).
+  const handleSearchOpenFile = useCallback(
+    (path: string, line?: number) => {
+      if (!folder) return
+      expandTreeAncestors(path, false)
+      void openFilePreview(path, { folderId: folder.id, line })
+      if (isMobile) setAuxOpen(false)
+    },
+    [expandTreeAncestors, folder, openFilePreview, isMobile, setAuxOpen]
+  )
+
+  const handleSearchRevealDir = useCallback(
+    (path: string) => {
+      expandTreeAncestors(path, true)
+      setFocusedTreePath(path)
+      // The tree is shown again on this render; focus and scroll to the row
+      // once it is on screen.
+      requestAnimationFrame(() => {
+        treeContainerRef.current?.focus({ preventScroll: true })
+        treeContainerRef.current
+          ?.querySelector<HTMLElement>(
+            `[data-tree-row-path="${CSS.escape(path)}"]`
+          )
+          ?.scrollIntoView({ block: "nearest" })
+      })
+    },
+    [expandTreeAncestors]
+  )
+
   // ─── File-tree keyboard navigation (IDEA-style project tree) ───
   // Flatten what is actually on screen (root + descendants of expanded dirs) so
   // arrow keys can move by visible row.
@@ -2885,13 +2957,31 @@ export function FileTreeTab() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div
+      ref={tabRootRef}
+      className="flex flex-col h-full"
+      onKeyDown={handleFindShortcut}
+    >
       {workspaceState.degraded && (
         <WorkspaceDegradedBanner onRetry={workspaceState.restart} />
       )}
+      <FileTreeSearch
+        ref={searchRef}
+        rootPath={folder.path}
+        onOpenFile={handleSearchOpenFile}
+        onRevealDir={handleSearchRevealDir}
+        onActiveChange={setSearchActive}
+      />
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <ScrollArea className="flex-1 min-h-0 pb-1" x="scroll">
+          {/* Hidden, not unmounted, while a search shows its results: the
+                tree comes back with its scroll position and expansion.
+                `hidden!` because OverlayScrollbars styles its host
+                `display: flex` at the same specificity as `.hidden`. */}
+          <ScrollArea
+            className={cn("flex-1 min-h-0 pb-1", searchActive && "hidden!")}
+            x="scroll"
+          >
             <FileTree
               key={folder?.path ?? "file-tree-empty"}
               ref={treeContainerRef}

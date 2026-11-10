@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
+  fileMatchHighlights,
   rankFileMatches,
   scoreFileMatch,
+  sliceHighlightRanges,
   type FileSearchCandidate,
 } from "@/lib/file-search-match"
 
@@ -100,5 +102,51 @@ describe("rankFileMatches", () => {
     const paths = Array.from({ length: 50 }, (_, i) => `src/item-${i}.ts`)
     const ranked = rankPaths("item", paths, 10)
     expect(ranked).toHaveLength(10)
+  })
+})
+
+describe("fileMatchHighlights", () => {
+  const marked = (query: string, path: string) =>
+    fileMatchHighlights(query, path)
+      .map(([s, e]) => path.slice(s, e))
+      .join("|")
+
+  it("highlights a name substring in the basename, not an earlier dir", () => {
+    // "app" also occurs in the directory; the name hit is what ranked the row.
+    expect(fileMatchHighlights("app", "app/src/App.tsx")).toEqual([[8, 11]])
+  })
+
+  it("falls back to a path substring", () => {
+    expect(marked("src/ap", "app/src/App.tsx")).toBe("src/Ap")
+  })
+
+  it("marks the characters of a subsequence, merging adjacent ones", () => {
+    expect(marked("fsm", "lib/file-search-match.ts")).toBe("f|s|m")
+    expect(marked("abt", "abc/tab.ts")).toBe("ab|t")
+  })
+
+  it("is case-insensitive and trims the query", () => {
+    expect(marked("  README ", "docs/readme.md")).toBe("readme")
+  })
+
+  it("returns nothing for a blank or non-matching query", () => {
+    expect(fileMatchHighlights("   ", "a.ts")).toEqual([])
+    expect(fileMatchHighlights("zzz", "a.ts")).toEqual([])
+  })
+})
+
+describe("sliceHighlightRanges", () => {
+  it("clips and rebases ranges to a window", () => {
+    expect(
+      sliceHighlightRanges(
+        [
+          [0, 2],
+          [4, 9],
+          [12, 14],
+        ],
+        5,
+        10
+      )
+    ).toEqual([[0, 4]])
   })
 })
