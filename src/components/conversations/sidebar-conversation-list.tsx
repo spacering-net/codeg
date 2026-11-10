@@ -23,9 +23,7 @@ import {
   ChevronsUp,
   Download,
   ExternalLink,
-  FolderClosed,
   FolderGit2,
-  FolderOpen,
   FolderOpenDot,
   FolderRoot,
   Layers,
@@ -107,6 +105,7 @@ import {
   SubsessionAncestorRails,
   CONV_RAIL_DEPTH_STEP,
 } from "./sidebar-conversation-card"
+import { ProjectIcon } from "./project-icon"
 import {
   applyLayoutMove,
   buildDragSlots,
@@ -342,7 +341,7 @@ const FolderHeader = memo(function FolderHeader({
   /**
    * Which glyph + label this header renders:
    * - `repo` (default): a top-level repo / plain folder / repo container — the
-   *   FolderOpen/FolderClosed glyph and the repo-name alias label.
+   *   project initial icon and the repo-name alias label.
    * - `worktree`: a git worktree sub-group — the FolderGit2 glyph and the same
    *   `alias [ name ]` label as a repo, with the branch standing in for the
    *   alias (see {@link worktreeHeaderAlias}).
@@ -479,7 +478,7 @@ const FolderHeader = memo(function FolderHeader({
                   isDragging ? "cursor-grabbing" : "cursor-grab"
                 )}
                 style={{
-                  paddingLeft: `calc(var(--conv-rail-axis) + 0.875rem + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
+                  paddingLeft: `calc(var(--conv-rail-axis) + ${variant === "repo" ? "1rem" : "0.875rem"} + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
                 }}
               >
                 {/* Connector spine (Show worktrees): a depth-1 sub-group header
@@ -496,8 +495,8 @@ const FolderHeader = memo(function FolderHeader({
                   style={{
                     top: "50%",
                     left: `calc(var(--conv-rail-axis) + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
-                    width: "0.875rem",
-                    height: "0.875rem",
+                    width: variant === "repo" ? "1.25rem" : "0.875rem",
+                    height: variant === "repo" ? "1.25rem" : "0.875rem",
                     transform: "translate(-50%, -50%)",
                   }}
                 >
@@ -505,10 +504,11 @@ const FolderHeader = memo(function FolderHeader({
                     <FolderGit2 className="h-[0.875rem] w-[0.875rem]" />
                   ) : variant === "root" ? (
                     <FolderRoot className="h-[0.875rem] w-[0.875rem]" />
-                  ) : expanded ? (
-                    <FolderOpen className="h-[0.875rem] w-[0.875rem]" />
                   ) : (
-                    <FolderClosed className="h-[0.875rem] w-[0.875rem]" />
+                    <ProjectIcon
+                      projectId={folderId}
+                      name={folderAlias?.trim() || folderName}
+                    />
                   )}
                 </span>
                 <div className="flex min-w-0 flex-1 items-center gap-[0.5rem]">
@@ -1030,6 +1030,7 @@ export function SidebarConversationList({
         color: string
         defaultAgentType: AgentType | null
         gitBranch: string | null
+        parentId: number | null
       }
     >()
     for (const f of allFolders)
@@ -1040,6 +1041,7 @@ export function SidebarConversationList({
         color: f.color,
         defaultAgentType: f.default_agent_type,
         gitBranch: f.git_branch,
+        parentId: f.parent_id,
       })
     return map
   }, [allFolders])
@@ -3253,12 +3255,27 @@ export function SidebarConversationList({
       )
     }
     const conv = row.conversation
+    const sessionFolder = folderIndex.get(conv.folder_id)
+    const projectId = sessionFolder?.parentId ?? conv.folder_id
+    const project = folderIndex.get(projectId) ?? sessionFolder
     // No folder tint reaches this row: a card always renders in the app theme,
     // whichever colour its folder carries. The colour is a label for the FOLDER,
     // not a skin for the sessions inside it.
     return (
       <SidebarConversationCard
         conversation={conv}
+        recent={row.recent === true}
+        projectId={projectId}
+        projectName={
+          conv.kind === "chat"
+            ? t("sectionChats")
+            : project?.alias?.trim() || project?.name
+        }
+        branchName={
+          conv.git_branch ||
+          branches.get(conv.folder_id) ||
+          sessionFolder?.gitBranch
+        }
         isSelected={
           selectedConversation?.agentType === conv.agent_type &&
           selectedConversation?.id === conv.id
@@ -3268,7 +3285,12 @@ export function SidebarConversationList({
         // Recent's and Chat's own rows read their last activity even while the
         // rest of the sidebar is sorted by creation time, and sub-sessions
         // their creation time even while it is sorted by activity.
-        timeLabel={formatRelative(conversationRowTimestamp(row, sortMode), now)}
+        timeLabel={formatRelative(
+          row.recent
+            ? conv.updated_at
+            : conversationRowTimestamp(row, sortMode),
+          now
+        )}
         onSelect={handleSelect}
         onDoubleClick={handleDoubleClick}
         onRename={handleRename}
