@@ -257,6 +257,8 @@ async fn needs_of(
             since: r.created_at,
             row_id: Some(r.id),
             count: 1,
+            mirror: data.get("mirror_of").is_some_and(|m| !m.is_null()),
+            dispatch_id: None,
         });
     }
     let open = svc::notices_in_state(&db.conn, bot, NoticeState::Open)
@@ -297,6 +299,8 @@ async fn needs_of(
             since: n.created_at,
             row_id: n.timeline_id,
             count: 1,
+            mirror: false,
+            dispatch_id: None,
         });
     }
     for w in hand
@@ -312,6 +316,8 @@ async fn needs_of(
                 .unwrap_or_else(Utc::now),
             row_id: None,
             count: 1,
+            mirror: false,
+            dispatch_id: Some(w.dispatch_id),
         });
     }
     needs.sort_by_key(|n| n.since);
@@ -326,15 +332,21 @@ pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbF
         .unwrap_or_default();
     let hand_since: HashMap<i32, DateTime<Utc>> =
         dispatches.iter().map(|d| (d.id, d.updated_at)).collect();
+    let tasks = super::ladder::tasks_of(db, &dispatches).await;
     let mut hand: Vec<HandWork> = dispatches
         .into_iter()
-        .map(|d| HandWork {
-            dispatch_id: d.id,
-            title: d.title,
-            mode: d.mode,
-            state: d.state,
-            work_task_id: d.work_task_id,
-            conversation_id: d.conversation_id,
+        .map(|d| {
+            let ladder =
+                super::ladder::ladder_of(&d, d.work_task_id.and_then(|id| tasks.get(&id)));
+            HandWork {
+                dispatch_id: d.id,
+                title: d.title,
+                mode: d.mode,
+                state: d.state,
+                work_task_id: d.work_task_id,
+                conversation_id: d.conversation_id,
+                ladder,
+            }
         })
         .collect();
     hand.reverse();
@@ -500,8 +512,17 @@ pub(super) fn finish(
 /// The state as the database alone tells it: a process that does not run
 /// the assistants.
 pub async fn live_from_db(db: &AppDatabase, row: &agent_entity::Model) -> BotLive {
+    live_from_db_with_needs(db, row).await.0
+}
+
+/// [`live_from_db`], with everything that waits on the owner, oldest first.
+pub async fn live_from_db_with_needs(
+    db: &AppDatabase,
+    row: &agent_entity::Model,
+) -> (BotLive, Vec<NeedsYou>) {
     let facts = db_facts(db, row).await;
-    finish(row, facts, None, None, Utc::now())
+    let needs = facts.needs.clone();
+    (finish(row, facts, None, None, Utc::now()), needs)
 }
 
 /// The names steps may refer to by id.
@@ -712,7 +733,14 @@ impl EngineHost {
     /// The live state of assistant `bot` (not deleted), as this process —
     /// the one running it — knows it.
     pub async fn live_of(&self, row: &agent_entity::Model) -> BotLive {
+        self.live_with_needs(row).await.0
+    }
+
+    /// [`Self::live_of`], with everything that waits on the owner (the state
+    /// carries the oldest only), oldest first.
+    pub async fn live_with_needs(&self, row: &agent_entity::Model) -> (BotLive, Vec<NeedsYou>) {
         let facts = db_facts(&self.db, row).await;
+        let needs = facts.needs.clone();
         let engine = if row.kind == BotKind::Primary {
             Some(self.primary())
         } else {
@@ -730,13 +758,14 @@ impl EngineHost {
                 work_activity: None,
             }),
         };
-        finish(
+        let live = finish(
             row,
             facts,
             engine_facts,
             self.live.flash_of(row.id),
             Utc::now(),
-        )
+        );
+        (live, needs)
     }
 
     /// Something of assistant `bot` changed: push its state, at most every
@@ -954,11 +983,23 @@ impl PersonalAgentEngine {
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("no matter #{item_id}"))?;
+        // Handed-out work settles itself as the work ends — except a pull
+        // request codeg does not follow yet (8.5): the owner closes that one
+        // once it is merged, or drops it.
         if item.kind == ItemKind::Dispatch {
-            return Err(
-                "a piece of handed-out work is settled when the work ends; stop it on its card"
-                    .into(),
-            );
+            let live = match item.dispatch_id {
+                Some(id) => svc::get_dispatch(&self.db.conn, id)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .is_some_and(|d| super::dispatch::LIVE_STATES.contains(&d.state)),
+                None => false,
+            };
+            if live || act == "later" {
+                return Err(
+                    "a piece of handed-out work is settled when the work ends; stop it on its card"
+                        .into(),
+                );
+            }
         }
         if matches!(item.status, ItemStatus::Done | ItemStatus::Dropped) {
             return Err(format!("matter #{item_id} is already settled"));

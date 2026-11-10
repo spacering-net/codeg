@@ -8496,7 +8496,8 @@
           "stopAll": "إيقاف كل شيء",
           "delete": "حذف…",
           "open": "فتح"
-        }
+        },
+        "mergeable": "#{id} جاهزة للدمج: {title}"
       },
       "choice": {
         "other": "غير ذلك",
@@ -8705,6 +8706,29 @@
         "empty": "لا شيء قيد التشغيل الآن",
         "open": "فتح"
       }
+    },
+    "ladder": {
+      "working": "قيد العمل",
+      "waiting_you": "بانتظارك",
+      "mergeable": "جاهزة للدمج",
+      "merging": "جارٍ الدمج",
+      "pr_open": "تم فتح PR",
+      "merged": "تم الدمج",
+      "done": "مكتملة",
+      "failed": "فشلت",
+      "paused": "مؤجلة",
+      "canceled": "ملغاة",
+      "handed_over": "انتقلت إليك"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>، {files, plural, zero {لا ملفات} one {ملف واحد} two {ملفان} few {# ملفات} many {# ملفًا} other {# ملف}}",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "عرض PR",
+      "openSession": "فتح المحادثة",
+      "stop": "إيقاف",
+      "prOpened": "تم فتح PR",
+      "prNotTracked": "لا تتم متابعة حالة PR بعد",
+      "pastStopping": "فات أوان الإيقاف: انتهت أو قيد الدمج"
     }
   }
 }

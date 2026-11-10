@@ -10,6 +10,7 @@ pub mod message;
 pub mod model_provider;
 pub mod personal_agent;
 pub mod personal_agent_bots;
+pub mod personal_agent_overview;
 pub mod personal_agent_prefs;
 pub mod personal_agent_roster;
 pub mod pet;

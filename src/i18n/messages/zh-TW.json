@@ -8496,7 +8496,8 @@
           "stopAll": "全部停下",
           "delete": "刪除…",
           "open": "開啟"
-        }
+        },
+        "mergeable": "#{id} 可以合併了：{title}"
       },
       "choice": {
         "other": "其他",
@@ -8705,6 +8706,29 @@
         "empty": "目前沒有在跑的工作",
         "open": "開啟"
       }
+    },
+    "ladder": {
+      "working": "在做",
+      "waiting_you": "等你處理",
+      "mergeable": "可合併",
+      "merging": "正在合併",
+      "pr_open": "已提 PR",
+      "merged": "已合併",
+      "done": "已完成",
+      "failed": "失敗",
+      "paused": "暫停",
+      "canceled": "已取消",
+      "handed_over": "已接手"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>，{files} 個檔案",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "檢視 PR",
+      "openSession": "開啟會話",
+      "stop": "停止",
+      "prOpened": "已提 PR",
+      "prNotTracked": "PR 狀態還沒追蹤",
+      "pastStopping": "已經做完或正在合併，停不下來了"
     }
   }
 }

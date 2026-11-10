@@ -8496,7 +8496,8 @@
           "stopAll": "Stop everything",
           "delete": "Delete…",
           "open": "Open"
-        }
+        },
+        "mergeable": "#{id} ready to merge: {title}"
       },
       "choice": {
         "other": "Other",
@@ -8705,6 +8706,29 @@
         "empty": "Nothing running right now",
         "open": "Open"
       }
+    },
+    "ladder": {
+      "working": "Working",
+      "waiting_you": "Waiting for you",
+      "mergeable": "Ready to merge",
+      "merging": "Merging",
+      "pr_open": "PR opened",
+      "merged": "Merged",
+      "done": "Done",
+      "failed": "Failed",
+      "paused": "Set aside",
+      "canceled": "Canceled",
+      "handed_over": "Taken over"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# file} other {# files}}",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "View PR",
+      "openSession": "Open session",
+      "stop": "Stop",
+      "prOpened": "PR opened",
+      "prNotTracked": "PR status not tracked yet",
+      "pastStopping": "Too late to stop: it has finished or is merging"
     }
   }
 }

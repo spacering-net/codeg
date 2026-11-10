@@ -400,6 +400,33 @@ fn prune_reaped(draining: &mut DrainingChildren) {
     });
 }
 
+/// What waits on the owner in a live session.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionWait {
+    /// `permission` | `question` | `plan`.
+    pub kind: &'static str,
+    /// The tool call's title, the question, the plan's first line.
+    pub text: String,
+    pub since: chrono::DateTime<chrono::Utc>,
+}
+
+/// One live session at a glance ([`ConnectionManager::session_glances`]).
+#[derive(Debug, Clone)]
+pub struct SessionGlance {
+    pub connection_id: String,
+    pub conversation_id: Option<i32>,
+    pub folder_id: Option<i32>,
+    pub agent_type: AgentType,
+    pub status: ConnectionStatus,
+    /// An assistant's own brain session.
+    pub personal_agent: bool,
+    pub wait: Option<SessionWait>,
+    /// A turn runs.
+    pub running: bool,
+    pub turn_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_activity_at: chrono::DateTime<chrono::Utc>,
+}
+
 pub struct ConnectionManager {
     pub(crate) connections: Arc<Mutex<HashMap<String, AgentConnection>>>,
     /// Connections whose teardown was requested but whose child process has
@@ -3382,6 +3409,81 @@ impl ConnectionManager {
                 // needs the DB. Filled by `pet_list_active_sessions_core`.
                 parent: None,
                 assistant_name: None,
+            });
+        }
+        out
+    }
+
+    /// A glance at every live session (the assistants' `session_list` and
+    /// `overview`, plan 8.1): what waits on the owner — an approval, an
+    /// answer, a plan — and what runs. The handles are taken under the map
+    /// lock and each state is read after it is let go, so one busy session
+    /// holds up nobody.
+    pub async fn session_glances(&self) -> Vec<SessionGlance> {
+        let handles: Vec<(String, std::sync::Arc<tokio::sync::RwLock<crate::acp::SessionState>>)> = {
+            let connections = self.connections.lock().await;
+            connections
+                .iter()
+                .map(|(id, c)| (id.clone(), c.state.clone()))
+                .collect()
+        };
+        let mut out = Vec::with_capacity(handles.len());
+        for (id, state) in handles {
+            let s = state.read().await;
+            let wait = if let Some(p) = &s.pending_permission {
+                let title = p
+                    .tool_call
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or("a tool call");
+                Some(SessionWait {
+                    kind: "permission",
+                    text: title.chars().take(200).collect(),
+                    since: p.created_at,
+                })
+            } else if let Some(q) = &s.pending_question {
+                Some(SessionWait {
+                    kind: "question",
+                    text: q
+                        .questions
+                        .first()
+                        .map(|x| x.question.chars().take(200).collect())
+                        .unwrap_or_default(),
+                    since: q.created_at,
+                })
+            } else {
+                s.pending_plan_approval.as_ref().map(|p| SessionWait {
+                    kind: "plan",
+                    text: p
+                        .plan_markdown
+                        .lines()
+                        .map(|l| l.trim().trim_start_matches('#').trim())
+                        .find(|l| !l.is_empty())
+                        .unwrap_or("")
+                        .chars()
+                        .take(200)
+                        .collect(),
+                    since: p.created_at,
+                })
+            };
+            let running = s.turn_in_flight || matches!(s.status, ConnectionStatus::Prompting);
+            out.push(SessionGlance {
+                connection_id: id,
+                conversation_id: s.conversation_id,
+                folder_id: s.folder_id,
+                agent_type: s.agent_type,
+                status: s.status.clone(),
+                personal_agent: s.personal_agent,
+                wait,
+                running,
+                turn_started_at: if running {
+                    s.pending_user_message_started_at
+                } else {
+                    None
+                },
+                last_activity_at: s.last_activity_at,
             });
         }
         out

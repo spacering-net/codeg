@@ -440,6 +440,19 @@ pub struct DispatchInfo {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+    /// Where it stands on the PR ladder (8.5).
+    pub ladder: super::personal_agent_overview::Ladder,
+    /// The kanban task behind a task dispatch, while it exists.
+    pub task: Option<super::personal_agent_overview::TaskFacts>,
+}
+
+/// Where a conversation opens: its project and the agent that reads it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationTarget {
+    pub conversation_id: i32,
+    pub folder_id: i32,
+    pub agent_type: String,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

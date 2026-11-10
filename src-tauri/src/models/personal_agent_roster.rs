@@ -106,6 +106,13 @@ pub struct NeedsYou {
     /// The timeline row of the card, to scroll to.
     pub row_id: Option<i32>,
     pub count: u32,
+    /// A copy of another assistant's question or permission request, shown
+    /// where what it is for began (4.11): the same request as the asker's.
+    #[serde(skip)]
+    pub mirror: bool,
+    /// The handed-out work that asks (`input`).
+    #[serde(skip)]
+    pub dispatch_id: Option<i32>,
 }
 
 /// One step, as the page says it in a short line (8.4). The same shape says
@@ -173,6 +180,8 @@ pub struct HandWork {
     pub state: DispatchState,
     pub work_task_id: Option<i32>,
     pub conversation_id: Option<i32>,
+    /// Where it stands on the PR ladder (8.5).
+    pub ladder: super::personal_agent_overview::Ladder,
 }
 
 /// A message of its another assistant has not answered yet.

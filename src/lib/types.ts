@@ -2166,6 +2166,55 @@ export interface DispatchInfo {
   created_at: string
   updated_at: string
   finished_at: string | null
+  /** Where it stands on the PR ladder (8.5). */
+  ladder: Ladder
+  /** The kanban task behind a task dispatch, while it exists. */
+  task: TaskFacts | null
+}
+
+/** Where a conversation opens: its project and the agent that reads it. */
+export interface ConversationTarget {
+  conversation_id: number
+  folder_id: number
+  agent_type: AgentType
+  title: string | null
+}
+
+/** A rung of the PR ladder (8.5), as codeg reads it from the dispatch and its
+ *  kanban task. Code-changing work is finished at `merged`. */
+export type Ladder =
+  | "working"
+  | "waiting_you"
+  | "mergeable"
+  | "merging"
+  | "pr_open"
+  | "merged"
+  | "done"
+  | "failed"
+  | "paused"
+  | "canceled"
+  | "handed_over"
+
+/** The kanban task behind a task dispatch, as its card shows it. */
+export interface TaskFacts {
+  task_id: number
+  status: WorkTaskStatus
+  /** The project it belongs to. */
+  folder_id: number
+  branch: string | null
+  base_branch: string | null
+  files_changed: number | null
+  additions: number | null
+  deletions: number | null
+  /** The pull request its latest delivery reached. */
+  pr_url: string | null
+  pr_number: number | null
+  completion_kind: "merged" | "delivered_pr" | "accepted_without_merge" | null
+  conversation_id: number | null
+  /** Its live round's connection, while it has one. */
+  connection_id: string | null
+  started_at: string | null
+  finished_at: string | null
 }
 
 export type ItemKind = "dispatch" | "reminder" | "followup" | "question"
@@ -2433,6 +2482,8 @@ export interface BotHandWork {
   state: DispatchState
   work_task_id: number | null
   conversation_id: number | null
+  /** Where it stands on the PR ladder (8.5). */
+  ladder: Ladder
 }
 
 export interface BotAwaitedReply {

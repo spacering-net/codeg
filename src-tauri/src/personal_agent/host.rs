@@ -102,6 +102,8 @@ pub async fn run(host: Arc<EngineHost>) {
             ticker.repush_busy();
         }
     });
+    // The usage figures are caught up while nothing runs (8.1).
+    tokio::spawn(host.clone().usage_sync_loop());
 
     loop {
         match rx.recv().await {

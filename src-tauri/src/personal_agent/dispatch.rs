@@ -1168,16 +1168,19 @@ impl PersonalAgentEngine {
             _ => {}
         }
         let executor = executor_of(d);
-        let round = match d.mode {
-            DispatchMode::Task => match d.work_task_id {
-                Some(tid) => crate::db::service::work_task_service::get_model(&self.db.conn, tid)
+        let task = match (d.mode, d.work_task_id) {
+            (DispatchMode::Task, Some(tid)) => {
+                crate::db::service::work_task_service::get_model(&self.db.conn, tid)
                     .await
-                    .map(|t| t.run_seq)
-                    .unwrap_or(0),
-                None => 0,
-            },
+                    .ok()
+            }
+            _ => None,
+        };
+        let round = match d.mode {
+            DispatchMode::Task => task.as_ref().map(|t| t.run_seq).unwrap_or(0),
             _ => d.turns,
         };
+        let ladder = super::ladder::ladder_of(d, task.as_ref());
         let source_key = format!("dispatch:{}:{}:{}:{}", d.id, round, enum_str(&d.state), cause);
         let mut summary = format!(
             "Dispatch #{} \"{}\" ({} · executor {}) {}.",
@@ -1192,6 +1195,15 @@ impl PersonalAgentEngine {
         }
         if let Some(n) = note.as_deref() {
             summary.push_str(&format!(" ({n})"));
+        }
+        // A pull request is not the end of code work: merged is (8.5).
+        if ladder == crate::models::personal_agent_overview::Ladder::PrOpen {
+            let pr = task.as_ref().map(super::ladder::pr_of).and_then(|(url, _)| url);
+            summary.push_str(&format!(
+                " It was delivered as a pull request{}, not merged: codeg does not follow PR \
+                 status yet, so its matter stays open until the owner closes it.",
+                pr.map(|u| format!(" ({u})")).unwrap_or_default()
+            ));
         }
         // Waking the agent for a state it has to interpret; a dispatch taken
         // over by the owner only rides along with the next delivery.
@@ -1231,6 +1243,8 @@ impl PersonalAgentEngine {
         card.data = Some(serde_json::json!({
             "mode": d.mode,
             "state": d.state,
+            // Where it stood on the PR ladder when the news came (8.5).
+            "ladder": ladder,
             "title": d.title,
             "executor": executor.name,
             "executor_id": executor.assistant_id,
@@ -1318,6 +1332,13 @@ impl PersonalAgentEngine {
             let (status, waits_for) = match d.state {
                 DispatchState::WaitingInput | DispatchState::Review => {
                     (ItemStatus::Waiting, Some(WaitsFor::Owner))
+                }
+                // Code work is done when merged (8.5): a pull request waits on
+                // its merge, which codeg does not follow yet.
+                DispatchState::Completed
+                    if ladder == crate::models::personal_agent_overview::Ladder::PrOpen =>
+                {
+                    (ItemStatus::Waiting, Some(WaitsFor::External))
                 }
                 DispatchState::Completed | DispatchState::Canceled | DispatchState::HandedOver => {
                     (ItemStatus::Done, None)

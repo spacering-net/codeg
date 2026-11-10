@@ -211,8 +211,12 @@ pub async fn personal_agent_dispatches_core(
         }
     };
     let mut folder_names: HashMap<i32, Option<String>> = HashMap::new();
+    let tasks = crate::personal_agent::ladder::tasks_of(db, &rows).await;
     let mut out = Vec::with_capacity(rows.len());
     for d in rows {
+        let task = d.work_task_id.and_then(|id| tasks.get(&id));
+        let ladder = crate::personal_agent::ladder::ladder_of(&d, task);
+        let task = task.map(crate::personal_agent::ladder::task_facts);
         let folder_name = match d.folder_id {
             Some(fid) => {
                 if let std::collections::hash_map::Entry::Vacant(slot) = folder_names.entry(fid) {
@@ -253,6 +257,8 @@ pub async fn personal_agent_dispatches_core(
             created_at: d.created_at,
             updated_at: d.updated_at,
             finished_at: d.finished_at,
+            ladder,
+            task,
         });
     }
     Ok(out)
@@ -569,6 +575,38 @@ pub async fn personal_agent_item_act_core(
         None => None,
     };
     Ok(item_info(item, dispatch_state))
+}
+
+/// The owner's [Stop] on a task card (8.5, 4.10): this one piece of work,
+/// where it runs. False when it is past stopping (done, merging).
+pub async fn personal_agent_dispatch_stop_core(
+    bot_id: Option<i32>,
+    dispatch_id: i32,
+) -> Result<bool, AppCommandError> {
+    let engine = engine(bot_id).await?;
+    engine.stop_one(dispatch_id).await.map_err(refused)
+}
+
+/// Where a conversation opens (a session link in a reply): its project and
+/// agent. Any conversation of codeg's but an assistant's own brain session.
+pub async fn personal_agent_conversation_target_core(
+    db: &AppDatabase,
+    conversation_id: i32,
+) -> Result<crate::models::personal_agent::ConversationTarget, AppCommandError> {
+    use crate::db::entities::conversation;
+    use sea_orm::EntityTrait;
+    let row = conversation::Entity::find_by_id(conversation_id)
+        .one(&db.conn)
+        .await
+        .map_err(|e| AppCommandError::database_error(e.to_string()))?
+        .filter(|c| c.deleted_at.is_none() && c.kind != conversation::ConversationKind::Personal)
+        .ok_or_else(|| refused(format!("no conversation #{conversation_id}")))?;
+    Ok(crate::models::personal_agent::ConversationTarget {
+        conversation_id: row.id,
+        folder_id: row.folder_id,
+        agent_type: row.agent_type,
+        title: row.title,
+    })
 }
 
 fn bot_summary(
@@ -1122,6 +1160,24 @@ pub async fn personal_agent_item_act(
     act: String,
 ) -> Result<ItemInfo, AppCommandError> {
     personal_agent_item_act_core(&db, bot_id, item_id, act).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_dispatch_stop(
+    bot_id: Option<i32>,
+    dispatch_id: i32,
+) -> Result<bool, AppCommandError> {
+    personal_agent_dispatch_stop_core(bot_id, dispatch_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_conversation_target(
+    db: State<'_, AppDatabase>,
+    conversation_id: i32,
+) -> Result<crate::models::personal_agent::ConversationTarget, AppCommandError> {
+    personal_agent_conversation_target_core(&db, conversation_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

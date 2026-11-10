@@ -1,15 +1,15 @@
 use std::collections::HashSet;
 
 use chrono::{Local, NaiveDate, Timelike, Utc};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::DatabaseConnection;
 use tokio::task::JoinHandle;
 
 use super::i18n::Lang;
 use super::manager::ChatChannelManager;
 use super::message_formatter::{self, DailyReportData};
-use crate::db::entities::conversation;
 use crate::db::service::{
     app_metadata_service, chat_channel_message_log_service, chat_channel_service,
+    day_activity_service,
 };
 
 const MESSAGE_LANGUAGE_KEY: &str = "chat_message_language";
@@ -112,49 +112,25 @@ async fn load_lang(db: &DatabaseConnection) -> Lang {
 }
 
 async fn generate_daily_report(db: &DatabaseConnection) -> DailyReportData {
-    let now = Utc::now();
-    let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
-
-    let rows = conversation::Entity::find()
-        .filter(conversation::Column::DeletedAt.is_null())
-        .filter(conversation::Column::CreatedAt.gte(today_start))
-        .order_by_desc(conversation::Column::CreatedAt)
-        .all(db)
-        .await
-        .unwrap_or_default();
-
-    let mut by_agent: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    let mut folder_ids: HashSet<i32> = HashSet::new();
-    let mut activities: Vec<String> = Vec::new();
-
-    for conv in &rows {
-        *by_agent.entry(conv.agent_type.clone()).or_insert(0) += 1;
-        folder_ids.insert(conv.folder_id);
-        if let Some(title) = &conv.title {
-            if activities.len() < 10 {
-                activities.push(title.clone());
-            }
-        }
-    }
-
-    // Resolve folder names
-    let mut project_names: Vec<String> = Vec::new();
-    for fid in &folder_ids {
-        if let Ok(Some(folder)) = crate::db::entities::folder::Entity::find_by_id(*fid)
-            .one(db)
-            .await
-        {
-            project_names.push(folder.name);
-        }
-    }
-
-    let conversations_by_agent: Vec<(String, u32)> = by_agent.into_iter().collect();
-
+    // The local day the report is sent on (18 #1): it fires on the local
+    // clock, so it counts the local day too.
+    let day = day_activity_service::local_today();
+    let activity = day_activity_service::day_activity(db, day, 10).await;
+    let activity = activity.unwrap_or_else(|_| day_activity_service::DayActivity {
+        date: day,
+        start: Utc::now(),
+        end: Utc::now(),
+        total: 0,
+        by_agent: Vec::new(),
+        by_project: Vec::new(),
+        outside_projects: 0,
+        titles: Vec::new(),
+    });
     DailyReportData {
-        date: now.format("%Y-%m-%d").to_string(),
-        total_conversations: rows.len() as u32,
-        conversations_by_agent,
-        projects_involved: project_names,
-        key_activities: activities,
+        date: activity.date.format("%Y-%m-%d").to_string(),
+        total_conversations: activity.total,
+        conversations_by_agent: activity.by_agent,
+        projects_involved: activity.by_project.into_iter().map(|(name, _)| name).collect(),
+        key_activities: activity.titles,
     }
 }

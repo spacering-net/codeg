@@ -1103,65 +1103,14 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// `bot_list`: every assistant not deleted (hidden ones too, which take
-    /// messages all the same).
-    pub async fn roster_text(&self) -> (String, Value) {
-        let me = self.bot().await;
-        let bots = svc::list_bots(&self.db.conn).await.unwrap_or_default();
-        let mut lines = Vec::new();
-        let mut rows = Vec::new();
-        for b in bots {
-            let role = self.role_line(&b);
-            let (busy, open) = match self.peer(b.id).await {
-                Some(e) => (e.busy().await, e.open_work().await),
-                None => (false, 0),
-            };
-            let status = if busy { "working" } else { "idle" };
-            let you = if b.id == me { " (you)" } else { "" };
-            let what = if role.is_empty() {
-                String::new()
-            } else {
-                format!(" — {role}")
-            };
-            lines.push(format!(
-                "#{} {}{you}{what} · {status} · {open} open matter(s)",
-                b.id,
-                display_name(&b)
-            ));
-            rows.push(json!({
-                "id": b.id,
-                "name": b.name,
-                "kind": b.kind,
-                "role": role,
-                "status": status,
-                "open": open,
-                "you": b.id == me,
-            }));
-        }
-        (lines.join("\n"), json!({ "assistants": rows }))
-    }
-
     /// An assistant's role in one line: its persona's first line.
-    fn role_line(&self, b: &agent_entity::Model) -> String {
+    pub(super) fn role_line(&self, b: &agent_entity::Model) -> String {
         let soul = super::workdir::read_text(&self.workdir_of(b), super::workdir::SOUL_FILE);
         soul.lines()
             .map(|l| l.trim().trim_start_matches('#').trim())
             .find(|l| !l.is_empty())
             .map(|l| first_line(l, 120))
             .unwrap_or_default()
-    }
-
-    /// Open matters on this assistant's list.
-    async fn open_work(&self) -> usize {
-        svc::list_items(
-            &self.db.conn,
-            self.bot().await,
-            &[ItemStatus::Open, ItemStatus::Waiting],
-            200,
-        )
-        .await
-        .map(|v| v.len())
-        .unwrap_or(0)
     }
 
     // ── loop cards ──────────────────────────────────────────────────────────
@@ -1404,6 +1353,16 @@ impl PersonalAgentEngine {
             .await;
             self.emit_for(m.from_bot_id, PersonalAgentChange::Item { id: item.id });
         }
+    }
+
+    /// The owner's [Stop] on one piece of work's card (8.5): just that one
+    /// (4.10). False when it is past stopping.
+    pub async fn stop_one(&self, id: i32) -> Result<bool, String> {
+        let d = svc::get_dispatch_of(&self.db.conn, self.bot().await, id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no dispatch #{id} of this assistant"))?;
+        Ok(self.stop_dispatch(&d).await)
     }
 
     /// Stop one dispatch where it is: a task through the board, a

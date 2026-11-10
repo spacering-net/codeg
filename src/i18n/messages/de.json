@@ -8496,7 +8496,8 @@
           "stopAll": "Alles anhalten",
           "delete": "Löschen…",
           "open": "Öffnen"
-        }
+        },
+        "mergeable": "#{id} bereit zum Mergen: {title}"
       },
       "choice": {
         "other": "Andere",
@@ -8705,6 +8706,29 @@
         "empty": "Gerade läuft nichts",
         "open": "Öffnen"
       }
+    },
+    "ladder": {
+      "working": "In Arbeit",
+      "waiting_you": "Wartet auf dich",
+      "mergeable": "Bereit zum Mergen",
+      "merging": "Wird gemergt",
+      "pr_open": "PR erstellt",
+      "merged": "Gemergt",
+      "done": "Fertig",
+      "failed": "Fehlgeschlagen",
+      "paused": "Zurückgestellt",
+      "canceled": "Abgebrochen",
+      "handed_over": "Übernommen"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# Datei} other {# Dateien}}",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "PR anzeigen",
+      "openSession": "Konversation öffnen",
+      "stop": "Stoppen",
+      "prOpened": "PR erstellt",
+      "prNotTracked": "PR-Status wird noch nicht verfolgt",
+      "pastStopping": "Nicht mehr zu stoppen: fertig oder wird gemergt"
     }
   }
 }

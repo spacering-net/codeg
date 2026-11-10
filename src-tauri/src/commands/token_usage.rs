@@ -165,9 +165,9 @@ const TOP_CONVERSATIONS: usize = 8;
 /// counters predate it, since a custom/BYO model has always exposed them and
 /// the parser reads every session under `~/.qoder/projects`, not just the ones
 /// codeg launched.
-const FACT_SCHEMA_VERSION: &str = "9";
+pub(crate) const FACT_SCHEMA_VERSION: &str = "9";
 
-const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
+pub(crate) const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
 
 /// Serializes syncs. `try_lock` rather than queueing: a second sync racing the
 /// first would re-parse the same files for no benefit, and the caller can just

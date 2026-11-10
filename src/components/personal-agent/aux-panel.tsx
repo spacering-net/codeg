@@ -14,9 +14,12 @@
  *   - its open matters, as the workspace's task tab shows a board: sections
  *     by whom each piece waits on — the owner first, then the work still
  *     moving, what the agent has to pick up, what comes later — each piece
- *     once, as a card. A piece of handed-out work opens its session in the
- *     drawer; a reminder, a follow-up or a question jumps to the message it
- *     came from, and the owner can settle it there: done, later, dropped;
+ *     once, as a card. A piece of handed-out work says where it stands on
+ *     the PR ladder and opens its session in the drawer; a task carries its
+ *     task card (8.5), and an entry whose work has ended (a pull request
+ *     codeg does not follow yet) the owner closes there: done or dropped. A
+ *     reminder, a follow-up or a question jumps to the message it came
+ *     from, and the owner can settle it there: done, later, dropped;
  *   - its numbers: the last two weeks in four figures, then the charts;
  *   - "Notify me", and the way to its settings.
  *   The rail counts what waits on the owner.
@@ -128,7 +131,6 @@ import {
 
 import {
   canOpenWork,
-  DispatchStateChip,
   ExecutorAvatar,
   num,
   str,
@@ -140,6 +142,7 @@ import {
 } from "./shared"
 
 import { BotAvatar } from "./bot-avatar"
+import { LadderChip, TaskStrip } from "./task-strip"
 
 /** Run-log lines the status tab lists. */
 const RUN_LOG_LINES = 50
@@ -615,6 +618,7 @@ function WorkCard({
   notes = [],
   onOpen,
   openLabel,
+  extra,
   actions,
 }: {
   mark: ReactNode
@@ -624,6 +628,8 @@ function WorkCard({
   notes?: string[]
   onOpen?: (() => void) | null
   openLabel?: string
+  /** More under it, before the buttons: a task's card (8.5). */
+  extra?: ReactNode
   /** Buttons under it, apart from what opening it does. */
   actions?: ReactNode
 }) {
@@ -657,7 +663,7 @@ function WorkCard({
   // all but vanishing white on white.
   const shape =
     "flex w-full min-w-0 flex-col rounded-xl border border-foreground/15 bg-card ws-msg-card p-3 text-start"
-  if (actions) {
+  if (actions || extra) {
     return (
       <div className={shape}>
         {onOpen ? (
@@ -672,7 +678,10 @@ function WorkCard({
         ) : (
           body
         )}
-        <div className="mt-2 flex flex-wrap gap-1">{actions}</div>
+        {extra}
+        {actions ? (
+          <div className="mt-2 flex flex-wrap gap-1">{actions}</div>
+        ) : null}
       </div>
     )
   }
@@ -698,12 +707,15 @@ function DispatchCard({
   d,
   notes,
   now,
+  actions,
 }: {
   d: DispatchInfo
   /** What its entry says beyond the title: how the agent sums it up now,
    *  what it will do once the work is done. */
   notes?: string[]
   now: number
+  /** Settling its entry, once the work no longer moves. */
+  actions?: ReactNode
 }) {
   const t = useTranslations("PersonalAgent")
   const openWork = useOpenWork()
@@ -720,7 +732,7 @@ function DispatchCard({
         />
       }
       title={d.title}
-      chip={<DispatchStateChip state={d.state} />}
+      chip={<LadderChip ladder={d.ladder ?? null} />}
       meta={[
         meta({
           executor: d.executor.name,
@@ -734,8 +746,25 @@ function DispatchCard({
       notes={notes}
       onOpen={canOpen ? () => openWork(target) : null}
       openLabel={canOpen ? t("timeline.viewSession") : undefined}
+      extra={d.task ? <TaskStrip d={d} /> : undefined}
+      actions={actions}
     />
   )
+}
+
+/** The way to settle a matter on the panel: done, dropped, or — for one
+ *  that is not handed-out work — later. */
+function useSettle(item: ItemInfo | null) {
+  const { botId } = usePersonalAgent()
+  const [acting, setActing] = useState(false)
+  const settle = (act: "done" | "drop" | "later") => {
+    if (!item) return
+    setActing(true)
+    personalAgentItemAct(botId, item.id, act)
+      .catch((e) => toast.error(toErrorMessage(e)))
+      .finally(() => setActing(false))
+  }
+  return { acting, settle }
 }
 
 /** A reminder, a follow-up or a question: its kind's icon, and the way to
@@ -752,18 +781,11 @@ function ItemCard({
   const t = useTranslations("PersonalAgent")
   const td = useTranslations("PersonalAgent.detail.item")
   const { jumpTo, readOnly } = usePageScope()
-  const { botId } = usePersonalAgent()
   const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
-  const [acting, setActing] = useState(false)
+  const { acting, settle } = useSettle(item)
   const Icon =
     item.kind === "dispatch" ? ListTodo : (KIND_ICON[item.kind] ?? ListTodo)
   const origin = item.origin_timeline_id
-  const settle = (act: "done" | "drop" | "later") => {
-    setActing(true)
-    personalAgentItemAct(botId, item.id, act)
-      .catch((e) => toast.error(toErrorMessage(e)))
-      .finally(() => setActing(false))
-  }
   const actions =
     readOnly || item.kind === "dispatch" ? null : (
       <>
@@ -836,6 +858,9 @@ function MatterCard({
   now: number
 }) {
   const t = useTranslations("PersonalAgent")
+  const td = useTranslations("PersonalAgent.detail.item")
+  const { readOnly } = usePageScope()
+  const { acting, settle } = useSettle(m.item)
   if (m.dispatch) {
     const summary = m.item?.summary?.trim()
     const onDone = m.item?.on_done ?? m.dispatch.on_done
@@ -843,7 +868,36 @@ function MatterCard({
       summary && summary !== m.dispatch.title ? summary : null,
       onDone ? t("items.onDone", { text: onDone }) : null,
     ].filter((n): n is string => n != null)
-    return <DispatchCard d={m.dispatch} notes={notes} now={now} />
+    // Handed-out work settles itself as it ends — but for a pull request
+    // codeg does not follow yet, which the owner closes once merged.
+    const settled = m.item != null && !MOVING.has(m.dispatch.state)
+    const actions =
+      settled && !readOnly ? (
+        <>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={acting}
+            onClick={() => settle("done")}
+            data-pa-item-act="done"
+          >
+            {td("done")}
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={acting}
+            className="text-muted-foreground"
+            onClick={() => settle("drop")}
+            data-pa-item-act="drop"
+          >
+            {td("drop")}
+          </Button>
+        </>
+      ) : undefined
+    return (
+      <DispatchCard d={m.dispatch} notes={notes} now={now} actions={actions} />
+    )
   }
   return m.item ? (
     <ItemCard item={m.item} inDrawer={inDrawer} now={now} />
@@ -2084,7 +2138,7 @@ function WorkspaceTab({ work }: { work: ReturnType<typeof useWork> }) {
                 <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-medium">
                   #{d.id} {d.title}
                 </span>
-                <DispatchStateChip state={d.state} />
+                <LadderChip ladder={d.ladder ?? null} />
                 {canOpenWork(target) ? (
                   <Button
                     size="xs"

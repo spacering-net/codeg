@@ -1,7 +1,7 @@
 "use client"
 
 import type { ComponentProps, MouseEvent, ReactNode } from "react"
-import { useCallback, useState } from "react"
+import { useCallback, useContext, useState } from "react"
 import { FileText, Globe, Mail, Phone, type LucideIcon } from "lucide-react"
 import type { Components, LinkSafetyModalProps } from "streamdown"
 
@@ -17,6 +17,7 @@ import {
   parseLocalFileTarget,
   useStreamdownLinkSafety,
 } from "./link-safety"
+import { SessionLinkOpenerContext } from "./session-link-opener"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -75,6 +76,7 @@ export function MarkdownLink({
   const openUrlTarget = useOpenUrlTarget()
   const tLink = useTranslations("Browser.link")
   const [modalOpen, setModalOpen] = useState(false)
+  const openSession = useContext(SessionLinkOpenerContext)
 
   // Deliberately NOT async: `openLinkWithSafety` opens the tab inside this
   // handler's own call stack, because awaiting the (synchronous) safety verdict
@@ -114,6 +116,28 @@ export function MarkdownLink({
   // text is the label.
   if (href.toLowerCase().startsWith("codeg:")) {
     const reference = parseCodegReferenceUri(href, nodeText(children))
+    // A session link opens its conversation where the page says how (a
+    // `SessionLinkOpenerContext`); elsewhere it stays the inert badge.
+    const sessionId =
+      reference?.refType === "session" && /^\d+$/.test(reference.id)
+        ? Number(reference.id)
+        : null
+    if (reference && openSession && sessionId != null) {
+      return (
+        <button
+          type="button"
+          data-session-link={sessionId}
+          title={reference.label}
+          onClick={(event) => {
+            event.preventDefault()
+            openSession(sessionId)
+          }}
+          className="inline-flex max-w-full -translate-y-[1.5px] cursor-pointer appearance-none items-center rounded-sm align-middle leading-none hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <ReferenceBadge data={reference} />
+        </button>
+      )
+    }
     if (reference) return <ReferenceBadge data={reference} />
   }
 

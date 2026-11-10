@@ -857,6 +857,36 @@ pub async fn forge_change_detail_core(
     })
 }
 
+/// One proposed change's detail at recorded coordinates — the repository a
+/// task delivered to, which the project's `origin` may no longer be (a fork
+/// switched for upstream): read there, with the account that delivered.
+pub async fn forge_change_detail_at_core(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+    number: i64,
+) -> Result<forge::ForgeChangeDetail, AppCommandError> {
+    let query = forge::ChangeQuery {
+        number,
+        account_id: None,
+    };
+    let number = query.resolve().map_err(AppCommandError::from)?;
+    let account = Some(target.account_id.as_str()).filter(|a| !a.is_empty());
+    let auth =
+        forge::resolve_forge_auth(&db.conn, target.provider, &target.server_host, account).await?;
+    Ok(match target.provider {
+        ForgeProvider::GitHub => {
+            forge::github::change_detail(&auth, &target.owner_repo, number).await?
+        }
+        ForgeProvider::GitLab => {
+            forge::gitlab::change_detail(&auth, &target.owner_repo, number).await?
+        }
+        ForgeProvider::Gitea => {
+            forge::gitea::change_detail(&auth, &target.owner_repo, number).await?
+        }
+        ForgeProvider::Cnb => forge::cnb::change_detail(&auth, &target.owner_repo, number).await?,
+    })
+}
+
 /// One page of the files a proposed change touches.
 ///
 /// Paged rather than whole: a large change lists thousands of files, and the

@@ -280,6 +280,37 @@ pub async fn personal_agent_item_act(
     ))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DispatchStopParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub dispatch_id: i32,
+}
+
+pub async fn personal_agent_dispatch_stop(
+    Json(params): Json<DispatchStopParams>,
+) -> Result<Json<bool>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_dispatch_stop_core(params.bot_id, params.dispatch_id).await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTargetParams {
+    pub conversation_id: i32,
+}
+
+pub async fn personal_agent_conversation_target(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ConversationTargetParams>,
+) -> Result<Json<crate::models::personal_agent::ConversationTarget>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_conversation_target_core(&state.db, params.conversation_id).await?,
+    ))
+}
+
 pub async fn personal_agent_executors(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<Vec<crate::models::personal_agent::ExecutorView>>, AppCommandError> {

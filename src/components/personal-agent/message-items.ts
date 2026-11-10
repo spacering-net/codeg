@@ -67,7 +67,13 @@ export type MessageItem =
       /** The owner messages the turn carried. */
       owners: TimelineRow[]
     })
-  | (ItemBase & { kind: "event"; row: TimelineRow })
+  | (ItemBase & {
+      kind: "event"
+      row: TimelineRow
+      /** The latest news of its work among the rows held: it carries the
+       *  work's task card (8.5); earlier news keeps how it stood then. */
+      latest: boolean
+    })
   /** A native card codeg wrote itself (a proposal): on the assistants'
    *  side, standing alone. */
   | (ItemBase & { kind: "notice"; row: TimelineRow })
@@ -248,6 +254,7 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
         tail: false,
         quotesPrevious: false,
         row: r,
+        latest: false,
       }
     } else if (r.kind === "notice") {
       item = {
@@ -306,6 +313,16 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
     const next = items[i + 1]
     item.tail = next == null || isLine(next) || sideOf(next) !== sideOf(item)
   })
+  // The latest news of each piece of work: the highest row id, wherever a
+  // page put it.
+  const latestNews = new Map<number, Extract<MessageItem, { kind: "event" }>>()
+  for (const item of items) {
+    if (item.kind !== "event" || item.row.dispatch_id == null) continue
+    const held = latestNews.get(item.row.dispatch_id)
+    if (!held || held.row.id < item.row.id)
+      latestNews.set(item.row.dispatch_id, item)
+  }
+  for (const item of latestNews.values()) item.latest = true
   return items
 }
 

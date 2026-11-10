@@ -199,6 +199,7 @@ describe("the roster", () => {
             state: "running",
             work_task_id: 7,
             conversation_id: null,
+            ladder: "working",
           },
         ],
       }),
@@ -239,6 +240,45 @@ describe("the roster", () => {
       face(3).querySelector("[data-bot-dot]")?.getAttribute("data-bot-dot")
     ).toBe("waiting")
     expect(face(3).getAttribute("aria-label")).toBe("Rev, waiting for you")
+  })
+
+  it("puts work the owner can merge before what it is doing, in a calm tone", async () => {
+    const hand = (id: number, ladder: "working" | "mergeable") => ({
+      dispatch_id: id,
+      title: `Task ${id}`,
+      mode: "task" as const,
+      state:
+        ladder === "mergeable" ? ("review" as const) : ("running" as const),
+      work_task_id: id,
+      conversation_id: null,
+      ladder,
+    })
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova"),
+      entry(2, "Dev", {
+        work: "busy",
+        face: "working",
+        expires_at: iso(30_000),
+        activity: {
+          step: {
+            n: 1,
+            kind: "edit",
+            target: "a.rs",
+            started_at: iso(-1000),
+            status: "in_progress",
+          },
+        },
+        work_on_hand: [hand(233, "working"), hand(234, "mergeable")],
+      }),
+    ])
+    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    await screen.findByText("Dev")
+    const line = document.querySelector(
+      "[data-pa-roster-bot='2'] [data-pa-roster-line]"
+    )!
+    expect(line.textContent).toBe("#234 ready to merge: Task 234")
+    expect(line.getAttribute("data-pa-roster-line")).toBe("ready")
+    expect(line.className).toContain("text-teal-700")
   })
 
   it("follows each one's state as it is pushed, and lets a stale one rest", async () => {

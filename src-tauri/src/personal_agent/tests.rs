@@ -6085,3 +6085,508 @@ async fn an_assistants_state_is_pushed_one_computation_at_a_time_and_after_its_l
     assert!(last_touch.elapsed() >= std::time::Duration::from_millis(900));
 }
 
+
+// ── 1.8: seeing all of codeg, the PR ladder ────────────────────────────────
+
+use crate::db::entities::work_task::{self as work_task_entity, WorkTaskStatus};
+use crate::models::personal_agent_overview::Ladder;
+
+/// A board task in `folder`, put in `status` with what the board records.
+async fn board_task(
+    engine: &PersonalAgentEngine,
+    folder: i32,
+    title: &str,
+    status: WorkTaskStatus,
+    patch: impl FnOnce(&mut work_task_entity::ActiveModel),
+) -> work_task_entity::Model {
+    use sea_orm::{ActiveModelTrait, Set};
+    let task = crate::db::service::work_task_service::create(
+        &engine.db.conn,
+        crate::models::WorkTaskDraft {
+            folder_id: folder,
+            title: title.into(),
+            config: serde_json::json!({ "display_text": title, "prompt_blocks": [{ "type": "text", "text": title }] }),
+        },
+    )
+    .await
+    .unwrap();
+    let row = crate::db::service::work_task_service::get_model(&engine.db.conn, task.id).await.unwrap();
+    let mut am: work_task_entity::ActiveModel = row.into();
+    am.status = Set(status);
+    patch(&mut am);
+    am.update(&engine.db.conn).await.unwrap()
+}
+
+/// A task dispatch of `engine`'s on board task `task`, in `state`.
+async fn task_dispatch(
+    engine: &PersonalAgentEngine,
+    executor: i32,
+    folder: i32,
+    task: i32,
+    title: &str,
+    state: DispatchState,
+) -> crate::db::entities::personal_agent_dispatch::Model {
+    use sea_orm::{ActiveModelTrait, Set};
+    let d = svc::create_dispatch(
+        &engine.db.conn,
+        NewDispatch {
+            bot_id: engine.bot().await,
+            mode: DispatchMode::Task,
+            executor_assistant_id: executor,
+            executor_snapshot_json: "{}".into(),
+            folder_id: Some(folder),
+            deliverable: Some("change".into()),
+            title: title.into(),
+            prompt: title.into(),
+            origin_batch_id: None,
+            on_done: None,
+            lineage: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
+    let d = svc::update_dispatch(
+        &engine.db.conn,
+        d.id,
+        None,
+        DispatchWrite {
+            work_task_id: Some(task),
+            state: Some(state),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let t = crate::db::service::work_task_service::get_model(&engine.db.conn, task).await.unwrap();
+    let mut am: work_task_entity::ActiveModel = t.into();
+    am.personal_agent_dispatch_id = Set(Some(d.id));
+    am.update(&engine.db.conn).await.unwrap();
+    d
+}
+
+#[tokio::test]
+async fn the_overview_says_how_every_assistant_is_and_what_waits_on_the_owner() {
+    use sea_orm::Set;
+    let (host, w, tmp) = hosted().await;
+    let engine = host.primary();
+    let conn = &engine.db.conn;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("my-app").to_string_lossy()).await;
+
+    // The primary's task, in review: ready to merge, with its branch and diff.
+    let review = board_task(&engine, project, "Fix cold start", WorkTaskStatus::Review, |t| {
+        t.work_branch = Set(Some("pa/fix-cold-start".into()));
+        t.additions = Set(Some(214));
+        t.deletions = Set(Some(37));
+        t.files_changed = Set(Some(6));
+    })
+    .await;
+    let d = task_dispatch(&engine, coder, project, review.id, "Fix cold start", DispatchState::Review).await;
+    // The owner's own: one failed, one set aside, one running.
+    let failed = board_task(&engine, project, "Bump deps", WorkTaskStatus::Failed, |t| {
+        t.last_error = Set(Some("tests failed".into()));
+    })
+    .await;
+    let aside = board_task(&engine, project, "Later thing", WorkTaskStatus::Review, |t| {
+        t.deferred_at = Set(Some(chrono::Utc::now()));
+    })
+    .await;
+    let running = board_task(&engine, project, "Refactor parser", WorkTaskStatus::Running, |t| {
+        t.started_at = Set(Some(chrono::Utc::now() - chrono::Duration::minutes(14)));
+    })
+    .await;
+
+    // A session of the owner's asks a question; an assistant's own brain
+    // asks for a permission — that one is not the owner's session.
+    let owned = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    crate::db::service::conversation_service::update_title(conn, owned, "Explore auth".into()).await.unwrap();
+    engine
+        .manager
+        .insert_test_connection_live("c-owner", AgentType::Codex, None, EventEmitter::Noop)
+        .await;
+    {
+        let st = engine.manager.get_state("c-owner").await.unwrap();
+        let mut s = st.write().await;
+        s.conversation_id = Some(owned);
+        s.folder_id = Some(project);
+        s.pending_question = Some(crate::acp::question::PendingQuestionState {
+            question_id: "q1".into(),
+            questions: vec![crate::acp::question::QuestionSpec {
+                id: "a".into(),
+                question: "Keep the old API?".into(),
+                header: "API".into(),
+                multi_select: false,
+                options: vec![],
+                is_secret: false,
+            }],
+            created_at: chrono::Utc::now(),
+        });
+    }
+    let brain_conv = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::ClaudeCode).await;
+    engine
+        .manager
+        .insert_test_connection_live("c-brain", AgentType::ClaudeCode, None, EventEmitter::Noop)
+        .await;
+    {
+        let st = engine.manager.get_state("c-brain").await.unwrap();
+        let mut s = st.write().await;
+        s.conversation_id = Some(brain_conv);
+        s.personal_agent = true;
+        s.pending_question = Some(crate::acp::question::PendingQuestionState {
+            question_id: "q2".into(),
+            questions: vec![],
+            created_at: chrono::Utc::now(),
+        });
+    }
+    // The worker waits on the owner for an approval.
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let mut ask = NewRow::new(TimelineKind::Permission, "git push --force");
+    ask.ref_id = Some("p9".into());
+    ask.data = Some(serde_json::json!({ "state": "pending" }));
+    svc::insert_row(conn, w, ask).await.unwrap();
+
+    let out = call_tool(&engine, "overview", serde_json::json!({})).await;
+    assert!(out.ok, "{}", out.text);
+    let text = &out.text;
+    // One line per assistant, with what it is on and where it stands.
+    assert!(text.contains(&format!("#{} \"Fix cold start\" (ready to merge (in review))", d.id)), "{text}");
+    assert!(text.contains("Dev") && text.contains("asks for approval: \"git push --force\""), "{text}");
+    // What waits on the owner anywhere: each once, with numbers and links.
+    assert!(text.contains(&format!("board task #{} \"Fix cold start\"", review.id)), "{text}");
+    assert!(text.contains("branch pa/fix-cold-start · +214 −37 in 6 files"), "{text}");
+    assert!(text.contains(&format!("handed out by the primary assistant as #{}", d.id)) || text.contains(&format!("as #{}", d.id)), "{text}");
+    assert!(text.contains(&format!("board task #{} \"Bump deps\"", failed.id)) && text.contains("failed: \"tests failed\""), "{text}");
+    assert!(!text.contains("Later thing"), "set aside for later is not waiting: {text}");
+    assert!(text.contains(&format!("[Explore auth](codeg://session/{owned})")), "{text}");
+    assert!(text.contains("asks: \"Keep the old API?\""), "{text}");
+    assert!(!text.contains(&format!("codeg://session/{brain_conv}")), "an assistant's own session is not listed: {text}");
+    // What runs.
+    assert!(text.contains(&format!("board task #{} \"Refactor parser\"", running.id)) && text.contains("running for 14 min"), "{text}");
+    let waiting = out.data["waiting_on_owner"].as_array().unwrap();
+    // The worker's ask, the two board tasks, the owner's session.
+    assert_eq!(waiting.len(), 4, "{waiting:#?}");
+    let _ = (aside, worker);
+
+    // session_list: the owner's, not an assistant's own; waiting first.
+    let out = call_tool(&engine, "session_list", serde_json::json!({ "state": "waiting" })).await;
+    assert!(out.text.contains(&format!("codeg://session/{owned}")), "{}", out.text);
+    assert!(!out.text.contains(&format!("codeg://session/{brain_conv}")), "{}", out.text);
+    let out = call_tool(&engine, "session_list", serde_json::json!({ "state": "running" })).await;
+    assert!(!out.text.contains(&format!("codeg://session/{owned}")), "waiting is not running: {}", out.text);
+    let out = call_tool(&engine, "session_list", serde_json::json!({ "state": "nope" })).await;
+    assert!(!out.ok);
+
+    // board_status: by project and state, set aside apart.
+    let out = call_tool(&engine, "board_status", serde_json::json!({ "project_id": project })).await;
+    assert!(out.ok, "{}", out.text);
+    assert!(out.text.contains("Set aside for later (1)"), "{}", out.text);
+    assert!(out.text.contains("Waiting on the owner (2)"), "{}", out.text);
+    let out = call_tool(&engine, "board_status", serde_json::json!({ "project_id": 9999 })).await;
+    assert!(!out.ok);
+
+    // bot_list says the same of each assistant.
+    let out = call_tool(&engine, "bot_list", serde_json::json!({})).await;
+    assert!(out.text.contains("(you)") && out.text.contains("ready to merge"), "{}", out.text);
+
+    // automation_status with none set up.
+    let out = call_tool(&engine, "automation_status", serde_json::json!({})).await;
+    assert!(out.ok && out.text.contains("No automations"), "{}", out.text);
+
+    // pr_status needs a pull request to read.
+    let out = call_tool(&engine, "pr_status", serde_json::json!({ "dispatch_id": d.id })).await;
+    assert!(!out.ok && out.text.contains("no pull request"), "{}", out.text);
+    let out = call_tool(&engine, "pr_status", serde_json::json!({})).await;
+    assert!(!out.ok && out.text.contains("dispatch_id"), "{}", out.text);
+}
+
+#[tokio::test]
+async fn code_work_is_done_when_merged_and_a_pull_request_waits_for_its_merge() {
+    use sea_orm::Set;
+    let (engine, tmp) = configured().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("repo").to_string_lossy()).await;
+    let conn = &engine.db.conn;
+    let bot = engine.bot().await;
+    let matter = |dispatch: i32| async move {
+        svc::item_of_dispatch(conn, dispatch).await.unwrap().unwrap()
+    };
+    let item_for = |d: i32| async move {
+        svc::create_item(conn, bot, ItemKind::Dispatch, Some(d), ItemStatus::Open, None, "work".into(), None, None)
+            .await
+            .unwrap()
+    };
+
+    // In review: ready to merge, and the matter stays open on the owner.
+    let t = board_task(&engine, project, "Fix", WorkTaskStatus::Review, |_| {}).await;
+    let d = task_dispatch(&engine, coder, project, t.id, "Fix", DispatchState::Review).await;
+    item_for(d.id).await;
+    engine.record_progress(&d, None, None, "task").await;
+    let m = matter(d.id).await;
+    assert_eq!((m.status, m.waits_for), (ItemStatus::Waiting, Some(WaitsFor::Owner)));
+    // A live piece of work is not settled from the panel.
+    assert!(engine.settle_item(m.id, "done").await.is_err());
+
+    // Delivered as a pull request: not done — it waits for the merge, the
+    // event says so, and the card has the PR.
+    let pr = board_task(&engine, project, "Ship", WorkTaskStatus::Done, |t| {
+        t.completion_kind = Set(Some("delivered_pr".into()));
+        t.delivery = Set(Some(
+            r#"{"provider":"github","server_host":"github.com","account_id":"a","owner_repo":"o/r","pr_url":"https://github.com/o/r/pull/9","pr_number":9}"#.into(),
+        ));
+    })
+    .await;
+    let d2 = task_dispatch(&engine, coder, project, pr.id, "Ship", DispatchState::Completed).await;
+    item_for(d2.id).await;
+    engine.record_progress(&d2, None, None, "task").await;
+    let m2 = matter(d2.id).await;
+    assert_eq!((m2.status, m2.waits_for), (ItemStatus::Waiting, Some(WaitsFor::External)));
+    let ev = svc::pending_events(conn, bot).await.unwrap();
+    assert!(ev.iter().any(|e| e.summary.contains("pull request (https://github.com/o/r/pull/9), not merged")), "{ev:#?}");
+    let infos = crate::commands::personal_agent::personal_agent_dispatches_core(&engine.db, Some(bot), None, None, Some(vec![d2.id]))
+        .await
+        .unwrap();
+    assert_eq!(infos[0].ladder, Ladder::PrOpen);
+    let facts = infos[0].task.as_ref().unwrap();
+    assert_eq!((facts.pr_url.as_deref(), facts.pr_number), (Some("https://github.com/o/r/pull/9"), Some(9)));
+    // The owner closes it once merged (codeg does not follow PRs yet), but
+    // not "later".
+    assert!(engine.settle_item(m2.id, "later").await.is_err());
+    assert_eq!(engine.settle_item(m2.id, "done").await.unwrap().status, ItemStatus::Done);
+
+    // Merged: done.
+    let merged = board_task(&engine, project, "Land", WorkTaskStatus::Done, |t| {
+        t.completion_kind = Set(Some("merged".into()));
+    })
+    .await;
+    let d3 = task_dispatch(&engine, coder, project, merged.id, "Land", DispatchState::Completed).await;
+    item_for(d3.id).await;
+    engine.record_progress(&d3, None, None, "task").await;
+    assert_eq!(matter(d3.id).await.status, ItemStatus::Done);
+    let rows = svc::rows_since(conn, bot, chrono::Utc::now() - chrono::Duration::hours(1)).await.unwrap();
+    let card = rows
+        .iter()
+        .rfind(|r| r.kind == TimelineKind::Result && r.dispatch_id == Some(d3.id))
+        .unwrap();
+    assert_eq!(data_of(card)["ladder"], "merged", "the card says where it stood");
+
+    // The owner stops one piece from its card: just that one.
+    let one = session_dispatch(&engine, DispatchState::Running, "c-one").await;
+    let other = session_dispatch(&engine, DispatchState::Running, "c-other").await;
+    assert!(engine.stop_one(one).await.unwrap());
+    assert_eq!(dispatch_state(&engine, one).await.state, DispatchState::Canceled);
+    assert_eq!(dispatch_state(&engine, other).await.state, DispatchState::Running);
+    assert!(!engine.stop_one(one).await.unwrap(), "past stopping");
+    assert!(engine.stop_one(99_999).await.is_err());
+}
+
+#[tokio::test]
+async fn usage_and_activity_are_read_by_the_local_day() {
+    use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+    let (engine, tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let now = chrono::Utc::now();
+
+    // Today: one of the owner's, one of the assistant's own brain (not the
+    // owner's activity); yesterday: one more.
+    let mine = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    let brain_conv = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::ClaudeCode).await;
+    let old = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    let yesterday = crate::db::service::day_activity_service::local_today() - chrono::Duration::days(1);
+    let (y_start, _) = crate::db::service::day_activity_service::local_day_bounds(yesterday);
+    for (id, kind, at) in [
+        (brain_conv, crate::db::entities::conversation::ConversationKind::Personal, now),
+        (old, crate::db::entities::conversation::ConversationKind::Regular, y_start + chrono::Duration::hours(1)),
+    ] {
+        let row = crate::db::entities::conversation::Entity::find_by_id(id).one(conn).await.unwrap().unwrap();
+        let mut am: crate::db::entities::conversation::ActiveModel = row.into();
+        am.kind = Set(kind);
+        am.created_at = Set(at);
+        am.updated_at = Set(at);
+        am.update(conn).await.unwrap();
+    }
+    let out = call_tool(&engine, "activity_summary", serde_json::json!({})).await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(out.data["total"], 1, "{}", out.text);
+    assert_eq!(out.data["by_agent"][0][0], "codex");
+    let out = call_tool(&engine, "activity_summary", serde_json::json!({ "day": "yesterday" })).await;
+    assert_eq!(out.data["total"], 1, "{}", out.text);
+    let out = call_tool(&engine, "activity_summary", serde_json::json!({ "day": "2999-01-01" })).await;
+    assert!(!out.ok);
+
+    // Tokens: the assistant's own session, work it handed out, the owner's.
+    let seg = open_segment(&engine).await;
+    svc::set_segment_session(conn, seg, Some(brain_conv), None).await.unwrap();
+    let handed = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::ClaudeCode).await;
+    let id = session_dispatch(&engine, DispatchState::Completed, "c-x").await;
+    svc::update_dispatch(conn, id, None, DispatchWrite { conversation_id: Some(handed), ..Default::default() })
+        .await
+        .unwrap();
+    for (conv, tokens) in [(brain_conv, 1000), (handed, 5000), (mine, 20_000)] {
+        crate::db::entities::token_usage_turn::ActiveModel {
+            conversation_id: Set(conv),
+            turn_key: Set(format!("t{conv}")),
+            occurred_at: Set(now),
+            model: Set(Some("m".into())),
+            input_tokens: Set(tokens),
+            output_tokens: Set(0),
+            cache_creation_tokens: Set(0),
+            cache_read_tokens: Set(0),
+            total_tokens: Set(tokens),
+            duration_ms: Set(0),
+            ..Default::default()
+        }
+        .insert(conn)
+        .await
+        .unwrap();
+    }
+    // Every conversation counted as of now: no sync is started.
+    crate::db::service::app_metadata_service::upsert_value(
+        conn,
+        crate::commands::token_usage::FACT_SCHEMA_VERSION_KEY,
+        crate::commands::token_usage::FACT_SCHEMA_VERSION,
+    )
+    .await
+    .unwrap();
+    for c in crate::db::entities::conversation::Entity::find().all(conn).await.unwrap() {
+        crate::db::entities::token_usage_sync::ActiveModel {
+            conversation_id: Set(c.id),
+            source_updated_at: Set(c.updated_at),
+            turn_count: Set(1),
+            total_tokens: Set(0),
+            synced_at: Set(now),
+        }
+        .insert(conn)
+        .await
+        .unwrap();
+    }
+    let out = call_tool(&engine, "usage_summary", serde_json::json!({ "days": 1 })).await;
+    assert!(out.ok, "{}", out.text);
+    let by = &out.data["by_assistant"][0];
+    assert_eq!((by["own_tokens"].as_u64(), by["handed_out_tokens"].as_u64()), (Some(1000), Some(5000)), "{}", out.text);
+    assert_eq!(out.data["rest_tokens"], 20_000, "{}", out.text);
+    assert!(out.text.contains("synced up to"), "{}", out.text);
+    assert!(!out.text.contains("not counted yet"), "{}", out.text);
+}
+
+/// A live connection of a session of the owner's (or handed-out work's) on
+/// conversation `conversation`, waiting for a permission.
+async fn waiting_session(engine: &PersonalAgentEngine, conn: &str, conversation: i32, folder: i32, title: &str) {
+    engine
+        .manager
+        .insert_test_connection_live(conn, AgentType::Codex, None, EventEmitter::Noop)
+        .await;
+    let st = engine.manager.get_state(conn).await.unwrap();
+    let mut s = st.write().await;
+    s.conversation_id = Some(conversation);
+    s.folder_id = Some(folder);
+    s.pending_permission = Some(crate::acp::session_state::PendingPermissionState {
+        request_id: format!("r-{conn}"),
+        tool_call_id: "t".into(),
+        tool_call: serde_json::json!({ "title": title }),
+        options: vec![],
+        created_at: chrono::Utc::now(),
+        queued: 0,
+    });
+}
+
+#[tokio::test]
+async fn the_overview_lists_each_request_once_and_misses_none() {
+    let (host, w, tmp) = hosted().await;
+    let engine = host.primary();
+    let conn = &engine.db.conn;
+    let primary = engine.bot().await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+
+    // Handed-out work asking for input: its assistant's line says so, its
+    // session is not listed again.
+    let asking = session_dispatch(&engine, DispatchState::WaitingInput, "c-asking").await;
+    let asking_conv = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    svc::update_dispatch(conn, asking, None, DispatchWrite { conversation_id: Some(asking_conv), ..Default::default() })
+        .await
+        .unwrap();
+    waiting_session(&engine, "c-asking", asking_conv, project, "npm install").await;
+    // Work the owner took over: its session waits on the owner like any.
+    let taken = session_dispatch(&engine, DispatchState::HandedOver, "c-taken").await;
+    let taken_conv = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    svc::update_dispatch(conn, taken, None, DispatchWrite { conversation_id: Some(taken_conv), ..Default::default() })
+        .await
+        .unwrap();
+    waiting_session(&engine, "c-taken", taken_conv, project, "git push").await;
+    // A worker's question, shown on the primary's timeline too (4.11).
+    let mut own = NewRow::new(TimelineKind::Question, "Which branch?");
+    own.ref_id = Some("q-w".into());
+    own.data = Some(serde_json::json!({ "state": "pending" }));
+    let own = svc::insert_row(conn, w, own).await.unwrap();
+    let mut mirror = NewRow::new(TimelineKind::Question, "Which branch?");
+    mirror.ref_id = Some("q-w".into());
+    mirror.data = Some(serde_json::json!({ "state": "pending", "mirror_of": { "bot_id": w, "row_id": own.id } }));
+    svc::insert_row(conn, primary, mirror).await.unwrap();
+
+    let out = call_tool(&engine, "overview", serde_json::json!({})).await;
+    let text = &out.text;
+    let waiting = out.data["waiting_on_owner"].as_array().unwrap();
+    let questions = waiting.iter().filter(|n| n["text"] == "Which branch?").count();
+    assert_eq!(questions, 1, "one request, listed once: {text}");
+    assert_eq!(waiting.iter().filter(|n| n["kind"] == "input").count(), 1, "{text}");
+    assert!(!text.contains(&format!("codeg://session/{asking_conv}")), "its ask is its assistant's line: {text}");
+    assert!(text.contains(&format!("codeg://session/{taken_conv}")) && text.contains("\"git push\""), "{text}");
+    assert_eq!(waiting.len(), 3, "{waiting:#?}");
+    // Each assistant still says what waits on the owner from it.
+    assert!(text.contains("Dev") && text.contains("asks the owner: \"Which branch?\""), "{text}");
+}
+
+#[tokio::test]
+async fn an_assistants_usage_counts_its_work_all_the_way_down_and_nothing_deleted() {
+    use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+    let (engine, tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let now = chrono::Utc::now();
+    let handed = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::ClaudeCode).await;
+    let child = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    let grandchild = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    let gone = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    for (id, parent, deleted) in [(child, Some(handed), false), (grandchild, Some(child), false), (gone, None, true)] {
+        let row = crate::db::entities::conversation::Entity::find_by_id(id).one(conn).await.unwrap().unwrap();
+        let mut am: crate::db::entities::conversation::ActiveModel = row.into();
+        am.parent_id = Set(parent);
+        if deleted {
+            am.deleted_at = Set(Some(now));
+        }
+        am.update(conn).await.unwrap();
+    }
+    let a = session_dispatch(&engine, DispatchState::Completed, "c-a").await;
+    svc::update_dispatch(conn, a, None, DispatchWrite { conversation_id: Some(handed), ..Default::default() })
+        .await
+        .unwrap();
+    let b = session_dispatch(&engine, DispatchState::Completed, "c-b").await;
+    svc::update_dispatch(conn, b, None, DispatchWrite { conversation_id: Some(gone), ..Default::default() })
+        .await
+        .unwrap();
+    for (conv, tokens) in [(handed, 100), (child, 2000), (grandchild, 30_000), (gone, 400_000)] {
+        crate::db::entities::token_usage_turn::ActiveModel {
+            conversation_id: Set(conv),
+            turn_key: Set(format!("t{conv}")),
+            occurred_at: Set(now - chrono::Duration::seconds(5)),
+            model: Set(None),
+            input_tokens: Set(tokens),
+            output_tokens: Set(0),
+            cache_creation_tokens: Set(0),
+            cache_read_tokens: Set(0),
+            total_tokens: Set(tokens),
+            duration_ms: Set(0),
+            ..Default::default()
+        }
+        .insert(conn)
+        .await
+        .unwrap();
+    }
+    let out = call_tool(&engine, "usage_summary", serde_json::json!({ "days": 1 })).await;
+    assert!(out.ok, "{}", out.text);
+    let by = &out.data["by_assistant"][0];
+    assert_eq!(by["handed_out_tokens"].as_u64(), Some(32_100), "a delegation's sessions are the work's: {}", out.text);
+    assert_eq!(out.data["totals"]["total_tokens"], 32_100, "a deleted conversation counts nowhere: {}", out.text);
+    assert_eq!(out.data["rest_tokens"], 0, "{}", out.text);
+}

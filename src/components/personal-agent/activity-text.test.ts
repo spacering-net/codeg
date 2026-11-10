@@ -54,7 +54,9 @@ describe("what it is doing", () => {
     expect(doingText(zh, step({ kind: "message", target: "阿审" }))).toBe(
       "正在问 阿审"
     )
-    expect(doingText(en, step({ kind: "test" }))).toBe("Running the tests")
+    expect(doingText(en, step({ kind: "test" }), { now: NOW + 1000 })).toBe(
+      "Running the tests"
+    )
   })
 
   it("keeps one wording of a vague step through a turn, and turns to waiting on a long command", () => {

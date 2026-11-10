@@ -8496,7 +8496,8 @@
           "stopAll": "모두 멈추기",
           "delete": "삭제…",
           "open": "열기"
-        }
+        },
+        "mergeable": "#{id} 병합 가능: {title}"
       },
       "choice": {
         "other": "기타",
@@ -8705,6 +8706,29 @@
         "empty": "지금 실행 중인 것 없음",
         "open": "열기"
       }
+    },
+    "ladder": {
+      "working": "작업 중",
+      "waiting_you": "내 응답 대기",
+      "mergeable": "병합 가능",
+      "merging": "병합 중",
+      "pr_open": "PR 생성됨",
+      "merged": "병합됨",
+      "done": "완료",
+      "failed": "실패",
+      "paused": "보류",
+      "canceled": "취소됨",
+      "handed_over": "직접 맡음"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>, 파일 {files}개",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "PR 보기",
+      "openSession": "대화 열기",
+      "stop": "중지",
+      "prOpened": "PR 생성됨",
+      "prNotTracked": "PR 상태는 아직 추적하지 않음",
+      "pastStopping": "이미 끝났거나 병합 중이라 중지할 수 없습니다"
     }
   }
 }

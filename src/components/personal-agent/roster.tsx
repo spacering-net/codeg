@@ -130,14 +130,15 @@ function useFolded(): [ReadonlySet<string>, (name: string) => void] {
   return [folded, toggle]
 }
 
-/** The one line a row says (10.1): what waits on the owner, what it is
- *  doing, whom it waits for; its last words otherwise. */
+/** The one line a row says (10.1): what waits on the owner, work of its
+ *  they can merge, what it is doing, whom it waits for; its last words
+ *  otherwise. */
 export function rowLine(
   t: Translate,
   entry: RosterEntry,
   view: BotView,
   now: number
-): { text: string; tone: "needs" | "busy" | "plain" } | null {
+): { text: string; tone: "needs" | "ready" | "busy" | "plain" } | null {
   const live = entry.live
   if (!live) return null
   const needs = live.needs
@@ -155,6 +156,18 @@ export function rowLine(
         ? t(`needs.${ask}`, { text: needs.text })
         : t(`needs.${ask}Plain`),
       tone: "needs",
+    }
+  }
+  // The piece of its work the owner most needs to know of next: one they
+  // can merge (8.5).
+  const ready = live.work_on_hand.find((w) => w.ladder === "mergeable")
+  if (ready) {
+    return {
+      text: t("bots.roster.mergeable", {
+        id: ready.dispatch_id,
+        title: ready.title,
+      }),
+      tone: "ready",
     }
   }
   if (view.busy && live.activity) {
@@ -374,7 +387,7 @@ export function PersonalAgentRoster({
                   #{w.dispatch_id} {w.title}
                   <span className="text-muted-foreground">
                     {" · "}
-                    {tt(`state.${w.state}`)}
+                    {tt(`ladder.${w.ladder ?? "working"}`)}
                   </span>
                 </li>
               ))}
@@ -573,9 +586,11 @@ export function PersonalAgentRoster({
                 "truncate text-xs",
                 shownLine.tone === "needs"
                   ? "text-orange-700 dark:text-orange-300"
-                  : shownLine.tone === "busy"
-                    ? "activity-shimmer text-muted-foreground"
-                    : "text-muted-foreground"
+                  : shownLine.tone === "ready"
+                    ? "text-teal-700 dark:text-teal-300"
+                    : shownLine.tone === "busy"
+                      ? "activity-shimmer text-muted-foreground"
+                      : "text-muted-foreground"
               )}
             >
               {shownLine.text}
@@ -818,9 +833,11 @@ export function PersonalAgentRoster({
                             "max-w-full truncate text-xs",
                             primaryLine.tone === "needs"
                               ? "text-orange-700 dark:text-orange-300"
-                              : primaryLine.tone === "busy"
-                                ? "activity-shimmer text-muted-foreground"
-                                : "text-muted-foreground"
+                              : primaryLine.tone === "ready"
+                                ? "text-teal-700 dark:text-teal-300"
+                                : primaryLine.tone === "busy"
+                                  ? "activity-shimmer text-muted-foreground"
+                                  : "text-muted-foreground"
                           )}
                         >
                           {primaryLine.text}

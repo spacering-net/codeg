@@ -8496,7 +8496,8 @@
           "stopAll": "Tout arrêter",
           "delete": "Supprimer…",
           "open": "Ouvrir"
-        }
+        },
+        "mergeable": "#{id} prête à fusionner : {title}"
       },
       "choice": {
         "other": "Autre",
@@ -8705,6 +8706,29 @@
         "empty": "Rien en cours pour le moment",
         "open": "Ouvrir"
       }
+    },
+    "ladder": {
+      "working": "En cours",
+      "waiting_you": "Vous attend",
+      "mergeable": "Prête à fusionner",
+      "merging": "Fusion en cours",
+      "pr_open": "PR ouverte",
+      "merged": "Fusionnée",
+      "done": "Terminée",
+      "failed": "Échouée",
+      "paused": "Mise de côté",
+      "canceled": "Annulée",
+      "handed_over": "Reprise par vous"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# fichier} other {# fichiers}}",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "Voir la PR",
+      "openSession": "Ouvrir la conversation",
+      "stop": "Arrêter",
+      "prOpened": "PR ouverte",
+      "prNotTracked": "Statut de la PR pas encore suivi",
+      "pastStopping": "Trop tard pour arrêter : terminée ou en cours de fusion"
     }
   }
 }

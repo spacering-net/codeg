@@ -1902,6 +1902,8 @@ mod tauri_app {
                 crate::commands::personal_agent::personal_agent_output_read,
                 crate::commands::personal_agent::personal_agent_turn_steps,
                 crate::commands::personal_agent::personal_agent_item_act,
+                crate::commands::personal_agent::personal_agent_dispatch_stop,
+                crate::commands::personal_agent::personal_agent_conversation_target,
                 crate::commands::personal_agent::personal_agent_executors,
                 crate::commands::personal_agent::personal_agent_settings_patch,
                 crate::commands::personal_agent::personal_agent_templates,

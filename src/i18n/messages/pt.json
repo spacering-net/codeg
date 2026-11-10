@@ -8496,7 +8496,8 @@
           "stopAll": "Parar tudo",
           "delete": "Excluir…",
           "open": "Abrir"
-        }
+        },
+        "mergeable": "#{id} pronta para mesclar: {title}"
       },
       "choice": {
         "other": "Outro",
@@ -8705,6 +8706,29 @@
         "empty": "Nada em execução agora",
         "open": "Abrir"
       }
+    },
+    "ladder": {
+      "working": "Em andamento",
+      "waiting_you": "Aguardando você",
+      "mergeable": "Pronta para mesclar",
+      "merging": "Mesclando",
+      "pr_open": "PR aberto",
+      "merged": "Mesclada",
+      "done": "Concluída",
+      "failed": "Falhou",
+      "paused": "Adiada",
+      "canceled": "Cancelada",
+      "handed_over": "Assumida por você"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# arquivo} other {# arquivos}}",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "Ver PR",
+      "openSession": "Abrir conversa",
+      "stop": "Parar",
+      "prOpened": "PR aberto",
+      "prNotTracked": "O status do PR ainda não é acompanhado",
+      "pastStopping": "Não dá mais para parar: terminou ou está sendo mesclada"
     }
   }
 }

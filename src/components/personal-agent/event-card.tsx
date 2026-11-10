@@ -8,7 +8,8 @@
  * where, how it stood when the news came, and the way to its session. Under
  * it, the note it ended with, and its result as the message's text: markdown
  * at the size of a reply's, cut at a few lines and faded, with the way to
- * read the rest under it. It quotes the reply that dispatched (or last
+ * read the rest under it. The latest news of a task carries its task card
+ * (`TaskStrip`, 8.5) under the row. It quotes the reply that dispatched (or last
  * continued) the work, unless that is the message right above. Unread until
  * the assistant starts on it.
  */
@@ -41,6 +42,7 @@ import {
   useWorkMeta,
   workTargetOf,
 } from "./shared"
+import { asLadder, LadderChip, TaskStrip } from "./task-strip"
 import { WORK_WELL, WorkRow } from "./work-card"
 
 type EventItem = Extract<MessageItem, { kind: "event" }>
@@ -112,6 +114,8 @@ export function EventCard({ item }: { item: EventItem }) {
   // How the work stood when the news came, not how it stands now: the news
   // from before a follow-up still says the work went to review.
   const state = asDispatchState(data?.state)
+  // Where it stood on the PR ladder then (8.5); older news says its state.
+  const newsLadder = asLadder(data?.ladder)
   const executor = info?.executor.name ?? str(data, "executor")
   const agentType =
     info?.executor.agent_type ?? (str(data, "agent_type") as AgentType | null)
@@ -165,10 +169,21 @@ export function EventCard({ item }: { item: EventItem }) {
               mode: info?.mode ?? asMode(data?.mode),
               folder: info?.folder_name ?? null,
             })}
-            chip={<DispatchStateChip state={state} />}
+            chip={
+              newsLadder ? (
+                <LadderChip ladder={newsLadder} />
+              ) : (
+                <DispatchStateChip state={state} />
+              )
+            }
             onOpen={canOpenWork(target) ? () => openWork(target) : null}
           />
         </div>
+        {/* The task card, on the latest news of its work: where it stands
+            now, said again on the strip when the row above says otherwise. */}
+        {item.latest && info?.task ? (
+          <TaskStrip d={info} chip={newsLadder !== info.ladder} />
+        ) : null}
         {note ? (
           <p className="mt-2 text-xs break-words text-muted-foreground">
             {note}

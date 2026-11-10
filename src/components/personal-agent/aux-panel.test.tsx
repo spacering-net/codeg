@@ -26,6 +26,7 @@ const api = vi.hoisted(() => ({
   personalAgentStats: vi.fn(),
   personalAgentResumeAutoCompact: vi.fn(),
   personalAgentItemAct: vi.fn(async () => ({})),
+  personalAgentDispatchStop: vi.fn(async () => true),
   personalAgentOutputs: vi.fn(),
   personalAgentOutputRead: vi.fn(),
   personalAgentRosterAct: vi.fn(async () => {}),
@@ -131,6 +132,8 @@ function dispatch(patch: Partial<DispatchInfo>): DispatchInfo {
     created_at: "2026-11-04T09:00:00Z",
     updated_at: "2026-11-04T10:00:00Z",
     finished_at: null,
+    ladder: "working",
+    task: null,
     ...patch,
   }
 }
@@ -608,6 +611,96 @@ describe("the details' matters", () => {
     expect(within(reminder).queryByRole("button", { name: "Later" })).toBeNull()
     fireEvent.click(within(reminder).getByRole("button", { name: "Drop" }))
     expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 15, "drop")
+  })
+
+  it("carries a task's card, and lets the owner close a pull request codeg does not follow", async () => {
+    const facts = {
+      task_id: 7,
+      status: "review" as const,
+      folder_id: 2,
+      branch: "pa/fix-login",
+      base_branch: "main",
+      files_changed: 6,
+      additions: 214,
+      deletions: 37,
+      pr_url: null,
+      pr_number: null,
+      completion_kind: null,
+      conversation_id: 30,
+      connection_id: null,
+      started_at: "2026-11-04T09:00:00Z",
+      finished_at: null,
+    }
+    api.personalAgentDispatches.mockResolvedValue([
+      dispatch({
+        id: 1,
+        title: "Fix the login",
+        state: "review",
+        ladder: "mergeable",
+        task: facts,
+      }),
+      dispatch({
+        id: 2,
+        title: "Ship the notes",
+        state: "completed",
+        ladder: "pr_open",
+        task: {
+          ...facts,
+          task_id: 8,
+          status: "done",
+          completion_kind: "delivered_pr",
+          pr_url: "https://github.com/o/r/pull/9",
+          pr_number: 9,
+        },
+        work_task_id: 8,
+      }),
+    ])
+    api.personalAgentItems.mockResolvedValue([
+      item({
+        id: 11,
+        dispatch_id: 1,
+        waits_for: "owner",
+        status: "waiting",
+        dispatch_state: "review",
+      }),
+      item({
+        id: 12,
+        dispatch_id: 2,
+        waits_for: "external",
+        status: "waiting",
+        dispatch_state: "completed",
+      }),
+    ])
+    const { container } = draw()
+    await screen.findByText("Fix the login")
+    const card = (title: string) =>
+      screen.getByText(title).closest<HTMLElement>(".ws-msg-card")!
+    // In review: ready to merge, with its branch, project and diff, and the
+    // way to stop it — no way to close its entry by hand.
+    const review = card("Fix the login")
+    expect(review.querySelector("[data-pa-ladder]")?.textContent).toBe(
+      "Ready to merge"
+    )
+    const strip = review.querySelector("[data-pa-task-strip]")!
+    expect(strip.textContent).toContain("pa/fix-login")
+    expect(strip.textContent).toContain("my-app")
+    expect(strip.querySelector("[data-pa-task-diff]")?.textContent).toBe(
+      "+214 −37, 6 files"
+    )
+    expect(within(review).queryByRole("button", { name: "Done" })).toBeNull()
+    fireEvent.click(within(review).getByRole("button", { name: "Stop" }))
+    expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(null, 1)
+    // Delivered as a pull request: said so, not stoppable, and its entry the
+    // owner's to close.
+    const pr = card("Ship the notes")
+    expect(pr.querySelector("[data-pa-task-pr]")?.textContent).toBe(
+      "PR opened · PR status not tracked yet"
+    )
+    expect(within(pr).getByRole("button", { name: "View PR" })).toBeTruthy()
+    expect(within(pr).queryByRole("button", { name: "Stop" })).toBeNull()
+    fireEvent.click(within(pr).getByRole("button", { name: "Done" }))
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 12, "done")
+    expect(container.querySelector("[data-pa-group='external']")).toBeTruthy()
   })
 
   it("ends with the switch to be told and the way to its settings", async () => {

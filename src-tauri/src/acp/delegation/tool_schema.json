@@ -1610,7 +1610,7 @@
   },
   {
     "name": "bot_list",
-    "description": "List the owner's assistants you can write to with bot_message — the primary assistant and the workers — with what each is for, whether it is working now, and how many open matters it has. Hidden assistants are listed too (they take messages); deleted ones are not.",
+    "description": "List the owner's assistants — the primary assistant and the workers — with what each is for and how it is now: working (and on what) or idle, what of its waits on the owner, the work on its hands with where each piece stands (working, waiting for the owner, ready to merge, PR opened, …), the replies it awaits and what the owner has not read. You can write to any of them with bot_message. Hidden assistants are listed too (they take messages); deleted ones are not. To see how everything in codeg stands, call `overview` instead.",
     "inputSchema": {
       "type": "object",
       "properties": {}
@@ -1808,6 +1808,117 @@
         "for": {
           "type": "string",
           "description": "The owner's message this follows, as the delivery numbers it (#58). Needed only when the turn carries inputs from more than one source."
+        }
+      }
+    }
+  },
+  {
+    "name": "overview",
+    "description": "How everything in codeg stands, in one call — what to read first whenever the owner asks how things are going (\"what's going on?\", \"where are we?\"), before you message any assistant about its progress. It lists every assistant (its job, whether it is working and on what, the work on its hands and where each piece stands), everything that waits on the owner anywhere in codeg (questions, approvals and cards of the assistants; board tasks awaiting input, in review or failed; every other session waiting for an approval, an answer or a plan approval, the owner's own included), and what runs (board tasks, sessions, automation runs). Answer from these facts: one line per assistant, then what needs the owner; copy the numbers and ids as given (#234, board task #12), and give sessions as the links it writes. Read-only; returns at once.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "board_status",
+    "description": "The kanban board: per project, how many tasks are in each state, and the tasks that wait on the owner (awaiting input, in review, failed — as the sidebar badge counts them), the running ones (for how long, their branch, lines changed, PR), the ones finished in the last 24 hours and the ones set aside, each with the assistant that handed it out. Archived tasks are left out. Read-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "integer",
+          "description": "Only this project (from project_list)."
+        }
+      }
+    }
+  },
+  {
+    "name": "session_list",
+    "description": "codeg's sessions (conversations with an agent), the owner's own included and your and the other assistants' own sessions left out, each with a link that opens it: `[title](codeg://session/<id>)` — give the owner these links. `state`: `live` (default) every open session, those waiting on the owner first; `waiting` only those waiting for the owner's approval, answer or plan approval; `running` only those with a turn running; `recent` every conversation active in the last 24 hours, open or not. Sessions that assistants handed out say which assistant and dispatch. Read-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "live",
+            "waiting",
+            "running",
+            "recent"
+          ],
+          "description": "Which sessions; default live."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Rows to return; default 30."
+        }
+      }
+    }
+  },
+  {
+    "name": "automation_status",
+    "description": "Every automation of codeg's: on or off, its schedule and next run, the run in progress (with a link to its session), how its last run went, and failures the owner has not seen. Read-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "pr_status",
+    "description": "A pull request as its forge shows it now: open, closed or merged, whether it can be merged, its head, and its checks (passed, failed — by name — and pending). Name it by the work that made it (`dispatch_id`, or the board's `task_id`) or by `project_id` and `number`. Reads the forge (a few seconds); codeg does not follow pull requests on its own yet.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "dispatch_id": {
+          "type": "integer",
+          "description": "The dispatch whose task delivered it."
+        },
+        "task_id": {
+          "type": "integer",
+          "description": "The board task that delivered it."
+        },
+        "project_id": {
+          "type": "integer",
+          "description": "With `number`: the project whose repository it is in."
+        },
+        "number": {
+          "type": "integer",
+          "description": "With `project_id`: the pull request's number."
+        },
+        "full": {
+          "type": "boolean",
+          "description": "Comments and logs in full (not available yet)."
+        }
+      }
+    }
+  },
+  {
+    "name": "usage_summary",
+    "description": "Tokens used over the last `days` local days (today included): the total and its parts, by day, by agent, by project, and by assistant (its own sessions, and the work it handed out), and the rest (the owner's own sessions, automations, the board's own tasks). Says up to when the figures are synced; when conversations changed since, a sync starts and the answer says to ask again shortly. Tokens only, no prices. Read-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 90,
+          "description": "How many local days back, today included; default 7."
+        }
+      }
+    }
+  },
+  {
+    "name": "activity_summary",
+    "description": "What the owner did in codeg on one local day: the conversations opened, by agent and by project, and the latest of them. Your and the other assistants' own sessions are not counted. Read-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "day": {
+          "type": "string",
+          "description": "`today` (default), `yesterday`, or a date as YYYY-MM-DD."
         }
       }
     }

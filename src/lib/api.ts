@@ -32,6 +32,7 @@ import type {
   AssistantDraft,
   AssistantInfo,
   AssistantPatch,
+  ConversationTarget,
   DispatchInfo,
   DispatchMode,
   ItemInfo,
@@ -2649,6 +2650,28 @@ export async function personalAgentItemAct(
   act: "done" | "drop" | "later"
 ): Promise<ItemInfo> {
   return getTransport().call("personal_agent_item_act", { botId, itemId, act })
+}
+
+/** Stop one piece of handed-out work from its card (8.5). False when it
+ *  is past stopping. */
+export async function personalAgentDispatchStop(
+  botId: number | null | undefined,
+  dispatchId: number
+): Promise<boolean> {
+  return getTransport().call("personal_agent_dispatch_stop", {
+    botId,
+    dispatchId,
+  })
+}
+
+/** Where a conversation opens: its project and agent (a session link in a
+ *  reply). */
+export async function personalAgentConversationTarget(
+  conversationId: number
+): Promise<ConversationTarget> {
+  return getTransport().call("personal_agent_conversation_target", {
+    conversationId,
+  })
 }
 
 /** The work assistants' templates, in `locale`. */

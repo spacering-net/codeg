@@ -8496,7 +8496,8 @@
           "stopAll": "すべて停止",
           "delete": "削除…",
           "open": "開く"
-        }
+        },
+        "mergeable": "#{id} マージできます：{title}"
       },
       "choice": {
         "other": "その他",
@@ -8705,6 +8706,29 @@
         "empty": "今は実行中のものはありません",
         "open": "開く"
       }
+    },
+    "ladder": {
+      "working": "作業中",
+      "waiting_you": "あなたの対応待ち",
+      "mergeable": "マージ可能",
+      "merging": "マージ中",
+      "pr_open": "PR 作成済み",
+      "merged": "マージ済み",
+      "done": "完了",
+      "failed": "失敗",
+      "paused": "保留",
+      "canceled": "キャンセル",
+      "handed_over": "引き継ぎ済み"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>、{files} ファイル",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "PR を表示",
+      "openSession": "会話を開く",
+      "stop": "停止",
+      "prOpened": "PR 作成済み",
+      "prNotTracked": "PR の状態はまだ追跡していません",
+      "pastStopping": "完了済みかマージ中のため停止できません"
     }
   }
 }

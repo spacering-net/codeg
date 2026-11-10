@@ -354,3 +354,21 @@ describe("newLineIndex", () => {
     expect(newLineIndex(items, 9)).toBe(-1)
   })
 })
+
+describe("the news of a piece of work", () => {
+  it("marks the latest news of each piece of work, wherever it sits", () => {
+    const items = buildMessageItems([
+      row(1, "result", { dispatch_id: 5 }),
+      row(2, "result", { dispatch_id: 6 }),
+      row(3, "owner", { body: "ok" }),
+      row(4, "result", { dispatch_id: 5 }),
+      row(5, "result", {}),
+    ])
+    const latest = Object.fromEntries(
+      items.flatMap((i) => (i.kind === "event" ? [[i.row.id, i.latest]] : []))
+    )
+    // #5's second card carries its task card; #6's only one does; a card of
+    // no dispatch carries none.
+    expect(latest).toEqual({ 1: false, 2: true, 4: true, 5: false })
+  })
+})
