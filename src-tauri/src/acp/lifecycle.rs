@@ -339,9 +339,8 @@ pub(crate) async fn handle_event(
                 // claims again and goes on. Only a CLI run's fallback that
                 // already wrote this turn's status makes it skip.
                 let claimed = snap.claim_turn_status(envelope.seq, TurnStatusWriter::Lifecycle);
-                // Same snapshot as the ids above. Live Cursor turns already
-                // know the selected model; the seed below does not open the
-                // store.
+                // Same snapshot as the ids above: the fallback for a store
+                // that names no model.
                 let selector_model = snap
                     .config_options
                     .as_deref()
@@ -366,10 +365,10 @@ pub(crate) async fn handle_event(
             if claimed {
                 write_turn_status(db_conn, &state_arc, &emitter, cid, stop_reason).await?;
             }
-            // Cursor does not put the model on the conversation row. The
-            // selector already names it; copy that onto an empty chip. No
-            // store read, and no model when the selector is absent.
-            crate::commands::conversations::seed_cursor_model_from_selector(
+            // Cursor does not put the model on the conversation row. Copy the
+            // model this turn recorded in the store onto an empty chip, or the
+            // selector's when the store names none.
+            crate::commands::conversations::seed_cursor_model_after_turn(
                 db_conn,
                 &emitter,
                 cid,
@@ -5249,69 +5248,174 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn handle_event_seeds_an_empty_cursor_model_from_config_options() {
-        let db = test_helpers::fresh_in_memory_db().await;
-        let folder_id = test_helpers::seed_folder(&db, "/tmp/cursor-model-seed").await;
-        let conv =
-            conversation_service::create(&db.conn, folder_id, AgentType::Cursor, None, None)
-                .await
-                .unwrap();
-        conversation_service::bind_external_id(&db.conn, conv.id, "cursor-sess-1", &[])
+    /// Points the Cursor agent at `config_dir` so the turn-end store lookup
+    /// never reads the real `~/.cursor`.
+    async fn point_cursor_at(db: &crate::db::AppDatabase, config_dir: &std::path::Path) {
+        use crate::db::service::agent_setting_service;
+        agent_setting_service::ensure_defaults(
+            &db.conn,
+            &[agent_setting_service::AgentDefaultInput {
+                agent_type: AgentType::Cursor,
+                registry_id: AgentType::Cursor.to_string(),
+                default_sort_order: 0,
+            }],
+        )
+        .await
+        .expect("seed agent setting");
+        agent_setting_service::update(
+            &db.conn,
+            AgentType::Cursor,
+            agent_setting_service::AgentSettingsUpdate {
+                enabled: true,
+                env_json: Some(
+                    serde_json::json!({ "CURSOR_CONFIG_DIR": config_dir.to_str().unwrap() })
+                        .to_string(),
+                ),
+                model_provider_id: None,
+            },
+        )
+        .await
+        .expect("save env_json");
+        let loaded = agent_setting_service::load_agent_env(&db.conn, AgentType::Cursor).await;
+        assert_eq!(
+            loaded.var("CURSOR_CONFIG_DIR").as_deref(),
+            config_dir.to_str(),
+            "the lookup must stay inside the temp dir"
+        );
+    }
+
+    fn cursor_turn_complete(connection_id: &str, session_id: &str, seq: u64) -> EventEnvelope {
+        EventEnvelope {
+            seq,
+            connection_id: connection_id.to_string(),
+            payload: AcpEvent::TurnComplete {
+                session_id: session_id.into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "cursor".into(),
+            },
+        }
+    }
+
+    async fn bound_cursor_row(
+        db: &crate::db::AppDatabase,
+        folder_id: i32,
+        mgr: &ConnectionManager,
+        connection_id: &str,
+        session_id: &str,
+    ) -> (i32, Arc<RwLock<SessionState>>) {
+        let conv = conversation_service::create(&db.conn, folder_id, AgentType::Cursor, None, None)
             .await
             .unwrap();
-
-        let mgr = ConnectionManager::new();
-        let conn = fake_connection_with_state("c1", Some(conv.id));
+        conversation_service::bind_external_id(&db.conn, conv.id, session_id, &[])
+            .await
+            .unwrap();
+        let conn = fake_connection_with_state(connection_id, Some(conv.id));
         let state = conn.state.clone();
         {
             let mut snap = state.write().await;
             snap.agent_type = AgentType::Cursor;
-            snap.external_id = Some("cursor-sess-1".into());
+            snap.external_id = Some(session_id.into());
             snap.config_options = None;
         }
-        mgr.connections.lock().await.insert("c1".to_string(), conn);
-        let turn = |seq| EventEnvelope {
-            seq,
-            connection_id: "c1".to_string(),
-            payload: AcpEvent::TurnComplete {
-                session_id: "cursor-sess-1".into(),
-                stop_reason: "end_turn".into(),
-                agent_type: "cursor".into(),
-            },
-        };
-
-        handle_event(&db.conn, &mgr, &turn(1), None).await.unwrap();
-        let blank = conversation_service::get_by_id(&db.conn, conv.id)
+        mgr.connections
+            .lock()
             .await
-            .unwrap();
-        assert!(
-            blank.model.as_deref().unwrap_or("").trim().is_empty(),
-            "no selector means no model is invented"
+            .insert(connection_id.to_string(), conn);
+        (conv.id, state)
+    }
+
+    async fn row_model(db: &crate::db::AppDatabase, conv_id: i32) -> Option<String> {
+        conversation_service::get_by_id(&db.conn, conv_id)
+            .await
+            .unwrap()
+            .model
+            .filter(|model| !model.trim().is_empty())
+    }
+
+    #[tokio::test]
+    async fn handle_event_seeds_an_empty_cursor_model_from_the_store_then_the_selector() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let config_dir = tempfile::tempdir().unwrap();
+        point_cursor_at(&db, config_dir.path()).await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/cursor-model-seed").await;
+        let mgr = ConnectionManager::new();
+
+        // Row A: its store records the variant that ran.
+        let session_a = "cursor-sess-store";
+        let (conv_a, state_a) = bound_cursor_row(&db, folder_id, &mgr, "c1", session_a).await;
+
+        handle_event(
+            &db.conn,
+            &mgr,
+            &cursor_turn_complete("c1", session_a, 1),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            row_model(&db, conv_a).await,
+            None,
+            "no store and no selector means no model is invented"
         );
         assert_eq!(
-            read_row_status(&db, conv.id).await,
+            read_row_status(&db, conv_a).await,
             ConversationStatus::PendingReview,
             "turn status is written before the model seed"
         );
 
-        state.write().await.config_options = Some(vec![cursor_model_selector("grok-4.7-high")]);
-        handle_event(&db.conn, &mgr, &turn(2), None).await.unwrap();
-        let seeded = conversation_service::get_by_id(&db.conn, conv.id)
-            .await
-            .unwrap();
-        assert_eq!(seeded.model.as_deref(), Some("grok-4.7-high"));
-
-        state.write().await.config_options =
-            Some(vec![cursor_model_selector("grok-4.7-xhigh-fast")]);
-        handle_event(&db.conn, &mgr, &turn(3), None).await.unwrap();
-        let kept = conversation_service::get_by_id(&db.conn, conv.id)
-            .await
-            .unwrap();
-        assert_eq!(
-            kept.model.as_deref(),
+        crate::parsers::cursor::write_model_session_for_test(
+            config_dir.path(),
+            session_a,
             Some("grok-4.7-high"),
-            "a later selector does not overwrite a chip that is already filled"
         );
+        // The parameterized picker names only the base model.
+        state_a.write().await.config_options = Some(vec![cursor_model_selector("grok-4.7")]);
+        handle_event(
+            &db.conn,
+            &mgr,
+            &cursor_turn_complete("c1", session_a, 2),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            row_model(&db, conv_a).await.as_deref(),
+            Some("grok-4.7-high"),
+            "the store's variant wins over the selector's base id, matching the backfill"
+        );
+
+        crate::parsers::cursor::write_model_session_for_test(
+            config_dir.path(),
+            session_a,
+            Some("grok-4.7-xhigh-fast"),
+        );
+        handle_event(
+            &db.conn,
+            &mgr,
+            &cursor_turn_complete("c1", session_a, 3),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            row_model(&db, conv_a).await.as_deref(),
+            Some("grok-4.7-high"),
+            "a later model does not overwrite a chip that is already filled"
+        );
+
+        // Row B: its store names no model, so the selector fills the chip.
+        let session_b = "cursor-sess-selector";
+        let (conv_b, state_b) = bound_cursor_row(&db, folder_id, &mgr, "c2", session_b).await;
+        crate::parsers::cursor::write_model_session_for_test(config_dir.path(), session_b, None);
+        state_b.write().await.config_options = Some(vec![cursor_model_selector("grok-4.7")]);
+        handle_event(
+            &db.conn,
+            &mgr,
+            &cursor_turn_complete("c2", session_b, 1),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(row_model(&db, conv_b).await.as_deref(), Some("grok-4.7"));
     }
 }

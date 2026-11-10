@@ -190,19 +190,27 @@ async fn backfill_cursor_models(
     Ok(())
 }
 
-/// After a Cursor turn, copy the model the user had selected onto the
-/// conversation row when the row still has none, and broadcast the sidebar
-/// chip. The model comes from the in-memory selector (`config_options`), not
-/// from the session store. A no-op for every other agent, when there is no
-/// selector, and for a Cursor row that already has a model. Filling an empty
-/// column does not follow a later switch.
-pub(crate) async fn seed_cursor_model_from_selector(
+/// After a Cursor turn, copy the session's model onto the conversation row
+/// when the row still has none, and broadcast the sidebar chip.
+///
+/// The store comes first, read with the same parser as history and the
+/// background backfill, so a live row and a backfilled row carry the same
+/// id. Cursor's selector names only the base model (`grok-4.7`) in the
+/// parameterized picker codeg asks for, while each reply records the variant
+/// that ran (`grok-4.7-high`). Cursor writes the reply's blobs before it
+/// answers the prompt, so the store already has this turn. That lookup reads
+/// the newest message refs only, never the blob graph. The selector is the
+/// fallback for a store that names no model.
+///
+/// A no-op for every other agent, and for a Cursor row that already has a
+/// model: filling an empty column does not follow a later switch.
+pub(crate) async fn seed_cursor_model_after_turn(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
     conversation_id: i32,
     agent_type: AgentType,
     external_id: Option<&str>,
-    model: Option<&str>,
+    selector_model: Option<&str>,
 ) {
     if agent_type != AgentType::Cursor {
         return;
@@ -210,7 +218,42 @@ pub(crate) async fn seed_cursor_model_from_selector(
     let Some(external_id) = external_id.map(str::trim).filter(|id| !id.is_empty()) else {
         return;
     };
-    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+    // Every later turn of a session lands here too; once the chip is filled
+    // there is nothing to look up.
+    match conversation_service::get_by_id(conn, conversation_id).await {
+        Ok(summary)
+            if summary
+                .model
+                .as_deref()
+                .is_some_and(|model| !model.trim().is_empty()) =>
+        {
+            return;
+        }
+        Ok(_) => {}
+        Err(_) => return,
+    }
+    let cursor_env = agent_setting_service::load_agent_env(conn, AgentType::Cursor).await;
+    let session_id = external_id.to_string();
+    let store_model = match tokio::task::spawn_blocking(move || {
+        CursorParser::for_env(&cursor_env).model_for_session(&session_id)
+    })
+    .await
+    {
+        Ok(model) => model,
+        Err(error) => {
+            tracing::warn!(
+                conversation_id,
+                error = %error,
+                "cursor model chip: failed to read the session store"
+            );
+            None
+        }
+    };
+    let selector_model = selector_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string);
+    let Some(model) = store_model.or(selector_model) else {
         return;
     };
     // Match the external id in the same UPDATE: a row rebound to another
@@ -219,7 +262,7 @@ pub(crate) async fn seed_cursor_model_from_selector(
         conn,
         conversation_id,
         external_id,
-        model,
+        &model,
     )
     .await
     {

@@ -527,9 +527,10 @@ fn resolved_session_model(conn: &Connection, meta: &ChatMeta) -> Option<String> 
     assistant_model_from_root(conn, &root)
 }
 
-/// How many field-1 message refs to read from the end of a root. The latest
-/// assistant message is last, so a cap keeps the tail and never a fingerprint
-/// walk. Real sessions are far smaller than this.
+/// How many field-1 message refs, counted from the end of a root, a lookup may
+/// read. The latest assistant message is last, so the cap keeps the tail; it
+/// only bounds a session whose recent messages name no model at all. Real
+/// sessions are far smaller than this.
 const ASSISTANT_MESSAGE_REF_CAP: usize = 4_000;
 
 fn assistant_model_from_root(conn: &Connection, root: &[u8]) -> Option<String> {
@@ -550,22 +551,16 @@ fn assistant_model_from_root(conn: &Connection, root: &[u8]) -> Option<String> {
             _ => {}
         }
     }
-    if refs.len() > ASSISTANT_MESSAGE_REF_CAP {
-        let start = refs.len() - ASSISTANT_MESSAGE_REF_CAP;
-        refs.drain(0..start);
-    }
-    let mut found = None;
-    for id in refs {
-        if let Some(model) =
-            read_blob(conn, id).and_then(|blob| model_name_of_assistant_message(&blob))
-        {
-            found = Some(model);
-        }
-    }
+    // Newest first: the inline field-4 message, then the field-1 refs from
+    // the end. The first message that names a model is the answer, so a
+    // normal session reads one or two blobs rather than its whole history.
     if let Some(model) = inline.and_then(model_name_of_assistant_message) {
-        found = Some(model);
+        return Some(model);
     }
-    found
+    refs.iter()
+        .rev()
+        .take(ASSISTANT_MESSAGE_REF_CAP)
+        .find_map(|id| read_blob(conn, id).and_then(|blob| model_name_of_assistant_message(&blob)))
 }
 
 /// Model id on one assistant message. Only `reasoning` / `redacted-reasoning`
