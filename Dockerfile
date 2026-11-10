@@ -3,6 +3,9 @@ FROM node:24-alpine AS frontend
 RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# pnpm applies `patchedDependencies` during install, so the patch files must
+# be in the image before it runs.
+COPY patches/ ./patches/
 RUN pnpm install --frozen-lockfile
 COPY src/ ./src/
 COPY public/ ./public/
