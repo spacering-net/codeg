@@ -716,7 +716,9 @@ pub enum AcpEvent {
         /// Stable machine-readable identifier: `"resource_not_found"` for
         /// JSON-RPC -32002, `"session_busy"` for codex-acp's typed
         /// `data.reason: "thread_active_writer"` (2.1.0+; matched on the wire
-        /// message before that), or `"session_unavailable"` /
+        /// message before that), `"provider_mismatch"` for codex 0.166's
+        /// refusal of a thread bound to another model provider (`message` is
+        /// then codex's own sentence), or `"session_unavailable"` /
         /// `"session_archived"` matched on the wire message. See
         /// `classify_session_load_error`.
         code: String,
@@ -778,6 +780,27 @@ pub enum AcpEvent {
         /// `transcript_watermark` catches up (`>=`), closing the emit/refetch
         /// race without cross-namespace id dedup.
         watermark: u64,
+    },
+    /// A live progress tick for a background sub-agent whose launch card has
+    /// already left the live message: its launching turn ended (the usual case
+    /// — a background launch returns at once and the turn answers), or a later
+    /// turn is running. A `ToolCallUpdate` cannot reach that card, since the
+    /// frontend diverts out-of-turn wire updates and `SessionState` would
+    /// recreate a ghost live message for one. The frontend merges `meta` into
+    /// the launch card's own `meta` in memory, the way a settle rewrites its
+    /// lifecycle marker. Nothing is persisted: the tick is the only record.
+    ///
+    /// Grok only (`subagent_progress`): its background children report while
+    /// they run, and almost always after the parent's turn has ended.
+    BackgroundTaskProgress {
+        session_id: String,
+        /// The launching tool call — the card to update.
+        tool_use_id: String,
+        /// The sub-agent's own id.
+        task_id: String,
+        /// Keys to merge into the card's `meta` (for Grok,
+        /// `grokSubagentSession` + `grokSubagentProgress`).
+        meta: serde_json::Value,
     },
     /// A `delegate_to_agent` MCP tool call from the parent agent has spawned a
     /// child sub-session and the child's prompt is in flight. Emitted as soon

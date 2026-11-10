@@ -7,6 +7,7 @@ pub mod codebuddy;
 pub mod codex;
 pub mod codex_code_mode;
 mod codex_desktop_attachments;
+mod codex_async_questions;
 mod codex_file_citations;
 pub mod cursor;
 pub mod deepseek;
@@ -2571,7 +2572,8 @@ mod tests {
         );
         // Natively 1M models need no marker: Claude Code's baked catalog
         // (CLI 2.1.293) flags Opus from 4.7, Sonnet from 5, Haiku from 5.5 and
-        // every Fable and Mythos as `native_1m`.
+        // every Fable and Mythos as `native_1m` (CLI 2.1.321 adds Fable 5.2 and
+        // Mythos 5.2, both `native_1m`).
         for model in [
             "claude-haiku-5-5",
             "claude-sonnet-5",
@@ -2583,7 +2585,9 @@ mod tests {
             "claude-opus-5-5",
             "claude-fable-5",
             "claude-fable-5-1",
+            "claude-fable-5-2",
             "claude-mythos-5-1",
+            "claude-mythos-5-2",
             "anthropic/claude-opus-4.7",
             "claude-opus-4-7@20260101",
         ] {

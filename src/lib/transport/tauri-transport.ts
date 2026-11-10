@@ -1,6 +1,9 @@
 import type { CallOptions, Transport, UnsubscribeFn } from "./types"
 
 type TauriEventListenersWindow = {
+  __TAURI_INTERNALS__?: {
+    unregisterCallback?: (callbackId: number) => void
+  }
   __TAURI_EVENT_PLUGIN_INTERNALS__?: {
     unregisterListener?: (event: string, eventId: number) => void
   }
@@ -20,17 +23,14 @@ export class TauriTransport implements Transport {
     return invoke(command, args)
   }
 
-  // Bypasses `@tauri-apps/api/event#listen` to sidestep an intermittent race:
-  // Tauri's Rust `listen_js` schedules a fire-and-forget eval that populates
-  // `window.__TAURI_EVENT_LISTENERS__[event][eventId]` and, separately, returns
-  // `eventId` via the invoke response. On WKWebView the two can arrive out of
-  // order. When cleanup fires before the eval lands, the built-in `_unlisten`
-  // throws synchronously on `listeners[eventId].handlerId` — and because that
-  // throw happens BEFORE `await invoke('plugin:event|unlisten')`, the backend
-  // listener is never removed (handler + payload buffering leak).
+  // Tauri registers a callback before awaiting the native listener. The
+  // listener's registration eval can arrive after its invoke response; cleanup
+  // then cannot find handlerId in the event registry. A rejected listen never
+  // populates that registry either. Retain our callback ID so both paths can
+  // release the callback and everything captured by the subscriber.
   //
-  // We own the eventId here so we can always issue the backend unlisten, even
-  // when the client-side registry entry hasn't appeared yet.
+  // Native unlisten must still run if the event registry is absent or its
+  // cleanup throws, as happened in older Tauri releases.
   async subscribe<T>(
     event: string,
     handler: (payload: T) => void
@@ -39,16 +39,28 @@ export class TauriTransport implements Transport {
     const handlerId = transformCallback((e: { payload: T }) => {
       handler(e.payload)
     })
-    const eventId = await invoke<number>("plugin:event|listen", {
-      event,
-      target: { kind: "Any" },
-      handler: handlerId,
-    })
+    const releaseCallback = () => {
+      const internals = (window as unknown as TauriEventListenersWindow)
+        .__TAURI_INTERNALS__
+      internals?.unregisterCallback?.(handlerId)
+    }
+    let eventId: number
+    try {
+      eventId = await invoke<number>("plugin:event|listen", {
+        event,
+        target: { kind: "Any" },
+        handler: handlerId,
+      })
+    } catch (error) {
+      releaseCallback()
+      throw error
+    }
 
     let unlistened = false
     return () => {
       if (unlistened) return
       unlistened = true
+      releaseCallback()
       try {
         const internals = (window as unknown as TauriEventListenersWindow)
           .__TAURI_EVENT_PLUGIN_INTERNALS__

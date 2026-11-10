@@ -415,6 +415,16 @@ type Action =
       settlement: PendingBackgroundSettlement
     }
   | {
+      // A background sub-agent's live progress tick, out of its launching turn
+      // (`background_task_progress`): merge `meta` into its launch card's
+      // `meta` in memory, wherever the card sits now. Ephemeral — a later
+      // detail fetch drops it until the next tick re-applies it.
+      type: "APPLY_BACKGROUND_TASK_PROGRESS"
+      conversationId: number
+      toolUseId: string
+      meta: Record<string, unknown>
+    }
+  | {
       // A stopped turn with the reports the agent sent after it ended folded
       // in (`ConnectionState.cancelledTurn`): settle the promoted cards of the
       // calls it left open (`applyLateToolCallReports`), or hold the reports
@@ -2115,6 +2125,33 @@ function applyBackgroundSettlementToTurns(
   return { turns: changed ? nextTurns : turns, matched, changed }
 }
 
+/**
+ * Merge a background sub-agent's progress `meta` into its launch card's
+ * `tool_use` block (`APPLY_BACKGROUND_TASK_PROGRESS`). Keys the tick carries
+ * replace the card's; every other key (`x.ai/tool`, …) stays. `turns` keeps its
+ * original reference when no block matched.
+ */
+function applyBackgroundProgressToTurns(
+  turns: MessageTurn[],
+  toolUseId: string,
+  meta: Record<string, unknown>
+): { turns: MessageTurn[]; changed: boolean } {
+  let changed = false
+  const nextTurns = turns.map((turn) => {
+    let turnChanged = false
+    const nextBlocks = turn.blocks.map((block) => {
+      if (block.type !== "tool_use" || block.tool_use_id !== toolUseId) {
+        return block
+      }
+      turnChanged = true
+      changed = true
+      return { ...block, meta: { ...(block.meta ?? {}), ...meta } }
+    })
+    return turnChanged ? { ...turn, blocks: nextBlocks } : turn
+  })
+  return { turns: changed ? nextTurns : turns, changed }
+}
+
 type ToolUseBlock = Extract<ContentBlock, { type: "tool_use" }>
 type ToolResultBlock = Extract<ContentBlock, { type: "tool_result" }>
 
@@ -2673,6 +2710,42 @@ function reducer(
       }))
     }
 
+    case "APPLY_BACKGROUND_TASK_PROGRESS": {
+      // Same three homes as a settle (see RESOLVE_BACKGROUND_TASK). Never
+      // queued: a tick that finds no card (the launch turn still live, or a
+      // closed tab) is simply superseded by the next one.
+      const current = state.byConversationId.get(action.conversationId)
+      if (!current) return state
+      const opt = applyBackgroundProgressToTurns(
+        current.optimisticTurns,
+        action.toolUseId,
+        action.meta
+      )
+      const local = applyBackgroundProgressToTurns(
+        current.localTurns,
+        action.toolUseId,
+        action.meta
+      )
+      const detailTurns = current.detail?.turns
+      const detailRes = detailTurns
+        ? applyBackgroundProgressToTurns(
+            detailTurns,
+            action.toolUseId,
+            action.meta
+          )
+        : null
+      if (!opt.changed && !local.changed && !detailRes?.changed) return state
+      return updateSessionInState(state, action.conversationId, (s) => ({
+        ...s,
+        optimisticTurns: opt.turns,
+        localTurns: local.turns,
+        detail:
+          detailRes && detailRes.changed && s.detail
+            ? { ...s.detail, turns: detailRes.turns }
+            : s.detail,
+      }))
+    }
+
     case "APPLY_CANCELLED_TURN_REPORTS": {
       // Only meaningful for an open session: a closed tab renders from the
       // disk parse, which records how each call ended.
@@ -3158,6 +3231,11 @@ export interface RuntimeActions {
   resolveBackgroundTask: (
     conversationId: number,
     settlement: PendingBackgroundSettlement
+  ) => void
+  applyBackgroundTaskProgress: (
+    conversationId: number,
+    toolUseId: string,
+    meta: Record<string, unknown>
   ) => void
   /** Settle a stopped turn's cards from the reports the agent sent after the
    *  turn ended (see `APPLY_CANCELLED_TURN_REPORTS`). */
@@ -5002,6 +5080,13 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
         type: "RESOLVE_BACKGROUND_TASK",
         conversationId,
         settlement,
+      }),
+    applyBackgroundTaskProgress: (conversationId, toolUseId, meta) =>
+      dispatch({
+        type: "APPLY_BACKGROUND_TASK_PROGRESS",
+        conversationId,
+        toolUseId,
+        meta,
       }),
     applyCancelledTurnReports: (conversationId, reports) =>
       dispatch({

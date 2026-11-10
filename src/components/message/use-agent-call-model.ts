@@ -226,10 +226,26 @@ export function useAgentCallModel(
   )
   const outcomeError = taskOutcome?.error ?? null
   const outcomeBackground = taskOutcome?.isBackground === true
+  // Grok live sub-agent ticker — the only live signal of the child's work
+  // (grok forwards no child chunks/tool calls). Shown while the child runs:
+  // in-turn for a blocking spawn, alongside the "running in background" state
+  // for a background one (its ticks reach the promoted card out of turn, as
+  // `background_task_progress`). Frozen values disappear with those states.
+  const grokProgress = useMemo(
+    () => parseGrokSubagentProgress(part.meta),
+    [part.meta]
+  )
+  // Running in the background: the launch ack still stands for the card, or
+  // the card holds the cold parse's pending marker but its child has ticked
+  // since — first-hand word that it still runs, which the transcript alone
+  // can't give.
   const isLiveBackgroundLaunch =
-    backgroundLifecycle === null &&
-    part.state === "output-available" &&
-    isAsyncLaunchAckText(part.output)
+    (backgroundLifecycle === null &&
+      part.state === "output-available" &&
+      isAsyncLaunchAckText(part.output)) ||
+    (backgroundLifecycle !== null &&
+      backgroundLifecycle.status == null &&
+      grokProgress !== null)
   const backgroundSettled = backgroundLifecycle?.status != null
   const backgroundFailed =
     backgroundSettled && backgroundLifecycle?.status !== "completed"
@@ -365,7 +381,9 @@ export function useAgentCallModel(
           backgroundLifecycle.interim
           ? tBg("cardInterim")
           : tBg("cardCompleted")
-        : tBg("cardLaunchedPending")
+        : isLiveBackgroundLaunch
+          ? tBg("cardRunning")
+          : tBg("cardLaunchedPending")
     : isLiveBackgroundLaunch
       ? tBg("cardRunning")
       : outcomeError
@@ -388,15 +406,6 @@ export function useAgentCallModel(
   const adaptedToolCalls = useMemo(
     () => adaptToolCalls(agentStats?.tool_calls ?? [], part.toolCallId),
     [agentStats?.tool_calls, part.toolCallId]
-  )
-
-  // Grok live sub-agent ticker — the only live signal of the child's work
-  // (grok forwards no child chunks/tool calls). Shown while the child runs:
-  // in-turn for a blocking spawn, alongside the "running in background" state
-  // for a background one. Frozen values disappear with those states.
-  const grokProgress = useMemo(
-    () => parseGrokSubagentProgress(part.meta),
-    [part.meta]
   )
 
   // The child's own session, when it has one (grok, codex). Available live —

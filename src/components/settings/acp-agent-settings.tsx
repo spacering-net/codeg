@@ -16778,7 +16778,7 @@ supports_websockets = true`}
                                 )
                               }}
                               state={claudeProviderModels}
-                              placeholder="claude-fable-5-1"
+                              placeholder="claude-fable-5-2"
                             />
                           </div>
                         </div>

@@ -2166,12 +2166,26 @@ fn agent_debug_callback(
 /// codeg's own question and result tools ([`codeg_tool_auto_allow_option`]),
 /// and the history parser. So codeg turns lazy loading off, as it was through
 /// 1.1.83 (which takes the flag too). An option `qoder --acp` does not know
-/// makes it exit, but each release tried from 1.1.0 to 1.1.84 (1.1.0, 1.1.30,
-/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84) takes `--settings`, and
-/// 1.1.30 and 1.1.64 open sessions with this one as without it.
-const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
+/// makes it exit, but each release tried from 1.1.0 to 1.1.86 (1.1.0, 1.1.30,
+/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86) takes `--settings`,
+/// and 1.1.30 and 1.1.64 open sessions with this one as without it.
+pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
-/// The arguments codeg adds after an npx agent's registry `args`.
+/// The arguments codeg adds after an npx agent's registry `args`: for Qoder,
+/// `--settings` with its value inline as JSON on every platform.
+///
+/// Inline JSON survives a launch only when argv reaches the CLI verbatim. On
+/// Windows that means not going through the cmd wrappers `qoder` resolves to:
+/// the official installer's `qoder.cmd` forwards `%*` to a PowerShell `-File`
+/// script, whose command-line parser strips the JSON's embedded quotes as
+/// string delimiters (reproduced on a live 1.1.84): the CLI receives
+/// `{mcp:{lazyLoad:false}}`, calls it invalid JSON, and exits ~1s into the
+/// handshake — codeg sees `initialize` fail on a closed transport. So on
+/// Windows [`crate::acp::qoder`] resolves the wrapper to the real CLI first
+/// (the native `qodercli.exe`, or Node running the npm package's entry) and
+/// spawns that directly, which delivers the JSON as one untouched argv entry.
+///
+/// [`crate::acp::qoder`] is the Windows-only resolver the launch below uses.
 fn npx_launch_extra_args(agent_type: AgentType) -> &'static [&'static str] {
     match agent_type {
         AgentType::Qoder => &["--settings", QODER_LAUNCH_SETTINGS],
@@ -2285,8 +2299,28 @@ async fn build_agent(
             for (k, v) in &merged_env {
                 parts.push(format!("{k}={v}"));
             }
-            let bridge_command = crate::commands::acp::resolve_npx_command_for(agent_type, cmd)
-                .await
+            let resolved_command =
+                crate::commands::acp::resolve_npx_command_for(agent_type, cmd).await;
+            let qoder_direct = if agent_type == AgentType::Qoder && cfg!(windows) {
+                // Windows reaches Qoder through cmd wrappers that would strip
+                // the inline `--settings` JSON's quotes (see
+                // `npx_launch_extra_args`); resolve the wrapper to the real
+                // CLI and spawn that directly. A wrapper codeg cannot place a
+                // CLI behind is a clear error, never a silent fall back onto
+                // the fragile wrapper.
+                match resolved_command {
+                    Some(ref path) => {
+                        let launch_env = merged_env.iter().cloned().collect();
+                        let launch = crate::acp::qoder::resolve_launch(path, &launch_env)
+                            .map_err(|error| AcpError::SdkNotInstalled(error.to_string()))?;
+                        Some(launch)
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
+            let bridge_command = resolved_command
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| {
                     crate::process::normalized_program(cmd)
@@ -2304,6 +2338,11 @@ async fn build_agent(
                 // bypassing npm shims that might select an older Node on PATH.
                 parts.push(runtime.node.to_string_lossy().into_owned());
                 parts.push(entry.to_string_lossy().into_owned());
+            } else if let Some(launch) = &qoder_direct {
+                parts.push(launch.program.to_string_lossy().into_owned());
+                for arg in &launch.prefix_args {
+                    parts.push(arg.to_string_lossy().into_owned());
+                }
             } else {
                 parts.push(bridge_command);
             }
@@ -7111,13 +7150,14 @@ pub(crate) fn claude_raw_sdk_session_meta(
 ///   process, where the agent's own OS sandbox and permission rules already
 ///   apply (#436). Withholding one without the other buys nothing: the agent
 ///   just reaches the same file through the channel it kept.
-/// - Codex, DeepSeek, Qoder and OpenCode only: form elicitation, so their
+/// - Codex, DeepSeek, Qoder, OpenCode and MiniMax only: form elicitation, so their
 ///   native questions (codex's Plan-mode `request_user_input`, DeepSeek's
 ///   `ask_user_question` and plan review, Qoder's `AskUserQuestion`,
-///   OpenCode's `question`) are delivered as `elicitation/create` (handled by
-///   `handle_elicitation_request`). Without it codex silently answers `{}`,
+///   OpenCode's `question` and MiniMax's `ask_user`) use `elicitation/create`
+///   (handled by `handle_elicitation_request`). Without it codex silently answers `{}`,
 ///   DeepSeek falls back to permission buttons, Qoder withholds the tool from
-///   the model, and OpenCode tells the model the question could not be shown.
+///   the model, OpenCode tells the model the question could not be shown, and
+///   MiniMax dismisses every `ask_user` questionnaire unseen.
 ///   NOTE this reroutes codex's WHOLE form-elicitation surface — MCP
 ///   tool-call approvals and MCP-server forms included — so the handler must
 ///   cover every shape (`classify_elicitation`). URL elicitation is
@@ -7185,10 +7225,21 @@ fn build_client_capabilities(
     // answer, so the user never sees the question. Its only other form, the
     // web-search provider choice, is declined unshown
     // (`handle_elicitation_request`). Agents without the bit fall back to their
-    // own `request_permission` button path.
+    // own `request_permission` button path. MiniMax Code (`mcode acp`, same
+    // code in 0.7.2 and main) puts its `ask_user` questionnaire to the client
+    // as one form, a field per step plus an `<id>__other` text companion
+    // (`packages/tui/src/acp/interactions.ts`). Its permission fallback answers
+    // only a first step that allows no typed answer, and `ask_user` allows one
+    // on every step, so without the bit each questionnaire is dismissed unseen
+    // and the turn ends on the tool's "waiting for the local user" result
+    // (#1110). Questionnaires are its only form.
     if matches!(
         agent_type,
-        AgentType::Codex | AgentType::DeepSeek | AgentType::Qoder | AgentType::OpenCode
+        AgentType::Codex
+            | AgentType::DeepSeek
+            | AgentType::Qoder
+            | AgentType::OpenCode
+            | AgentType::MiniMaxCode
     ) {
         client_capabilities = client_capabilities
             .elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()));
@@ -9866,12 +9917,20 @@ async fn run_connection(
                             tracing::warn!(
                                 "[ACP] session/load failed ({err_str}); surfacing as session_load_failed={code}"
                             );
+                            // A provider refusal carries codex's own sentence
+                            // in `details`, which names both providers; the
+                            // banner quotes that rather than the error dump.
+                            let message = if code == "provider_mismatch" {
+                                error_details_text(&e).unwrap_or(err_str)
+                            } else {
+                                err_str
+                            };
                             emit_with_state(
                                 &state,
                                 &emitter_clone,
                                 AcpEvent::SessionLoadFailed {
                                     session_id: sid.clone(),
-                                    message: err_str,
+                                    message,
                                     code: code.to_string(),
                                 },
                             )
@@ -11097,6 +11156,7 @@ async fn handle_elicitation_request(
                 crate::acp::question::ElicitationPeer::Codex(s.codex_user_input_shape)
             }
             AgentType::OpenCode => crate::acp::question::ElicitationPeer::OpenCode,
+            AgentType::MiniMaxCode => crate::acp::question::ElicitationPeer::MiniMax,
             _ => crate::acp::question::ElicitationPeer::Other,
         };
         // Qoder announces its AskUserQuestion as a stream `tool_call` under
@@ -11217,10 +11277,19 @@ async fn handle_elicitation_request(
             // register_question consumes the specs; `questions` keeps its copy
             // to correlate the answer back to each field when building the
             // response.
-            let Some(registered) = question_access
-                .register_question(connection_id, questions.specs.clone())
-                .await
-            else {
+            // codex's async question (codex-acp 2.6.0) did not stop the turn,
+            // so it must not stop the next question either: it gives way to
+            // one the agent asks while it is still open.
+            let registered = if questions.async_delivery {
+                question_access
+                    .register_yielding_question(connection_id, questions.specs.clone())
+                    .await
+            } else {
+                question_access
+                    .register_question(connection_id, questions.specs.clone())
+                    .await
+            };
+            let Some(registered) = registered else {
                 // Connection gone, or an ask is already pending on this connection.
                 let _ = responder.respond(unanswered());
                 return;
@@ -11242,6 +11311,16 @@ async fn handle_elicitation_request(
             let cancellation = responder.cancellation();
             let withdraw_access = Arc::clone(question_access);
             let withdraw_conn = connection_id.to_string();
+            // The id of the answered card synthesized below. An async question's
+            // form names no call (codex records it as a `request_user_input_async`
+            // call the stream never shows), so its card gets an id of its own;
+            // a reload renders the same card from the rollout
+            // (`parsers::codex_async_questions`).
+            let card_id = questions.tool_call_id.clone().or_else(|| {
+                questions
+                    .async_delivery
+                    .then(|| format!("codex-async-question-{}", registered.question_id))
+            });
             let question_id = registered.question_id;
             let answer_rx = registered.answer_rx;
             tokio::spawn(async move {
@@ -11275,11 +11354,7 @@ async fn handle_elicitation_request(
                         // (`codex.rs`, same id) replaces rather than duplicates it.
                         // Not for an agent that streams the ask itself (Qoder; see
                         // `synthesizes_answer_card`).
-                        if let Some(tool_call_id) = questions
-                            .tool_call_id
-                            .clone()
-                            .filter(|_| synthesizes_answer_card)
-                        {
+                        if let Some(tool_call_id) = card_id.filter(|_| synthesizes_answer_card) {
                             emit_with_state(
                                 &card_state,
                                 &card_emitter,
@@ -11326,8 +11401,10 @@ async fn handle_elicitation_request(
                         }
                         response
                     }
-                    // Sender dropped: canceled or the connection tore down.
-                    // Decline so codex proceeds with its own judgment.
+                    // Sender dropped: canceled, the connection tore down, or an
+                    // async question gave way to a newer one. Decline so codex
+                    // proceeds with its own judgment (for an async question
+                    // codex-acp then sends nothing at all).
                     Some(Err(_)) => crate::acp::question::elicitation_decline_response(),
                 };
                 let _ = responder.respond(serde_json::to_value(response).unwrap_or_default());
@@ -11918,9 +11995,10 @@ fn strip_context_lane_suffix(value: &str) -> Option<&str> {
 /// * Only when [`config_option_rejects_value`] proves the exact value gone, so
 ///   a pick the agent still offers is never touched.
 /// * Only onto exactly ONE row that names the model. The catalog name carries
-///   the version, so a pick is never moved onto another model: once the
+///   the version, so this never moves a pick onto another model: once the
 ///   `fable` row moves on to a newer Fable, a saved `claude-fable-5-1` stops
-///   healing and is skipped like any other retired pick.
+///   healing here. Moving it on to the newer model is a separate rule, the one
+///   Claude Code itself follows (see [`heal_superseded_model_pick`]).
 /// * Only the catalog's `claude-<family>-<version>` form has a catalog name to
 ///   look for (see [`claude_catalog_label`]); any other value can only match a
 ///   row labelled with that value itself.
@@ -11976,6 +12054,19 @@ fn description_leads_with(description: &str, name: &str) -> bool {
 /// in that `claude-<family>-<version>` form — an alias, a gateway id, or the
 /// retired `claude-3-7-sonnet-…` order.
 fn claude_catalog_label(id: &str) -> Option<String> {
+    let (family, version) = claude_catalog_id_parts(id)?;
+    let (initial, tail) = family.split_at(1);
+    Some(format!(
+        "{}{tail} {}",
+        initial.to_ascii_uppercase(),
+        version.join(".")
+    ))
+}
+
+/// The family and version parts of a catalog-form Claude id:
+/// `claude-fable-5-1` → (`fable`, [`5`, `1`]), a trailing snapshot date left
+/// out. `None` for any other id (see [`claude_catalog_label`]).
+fn claude_catalog_id_parts(id: &str) -> Option<(&str, Vec<&str>)> {
     let mut parts = id.strip_prefix("claude-")?.split('-');
     let family = parts
         .next()
@@ -11992,36 +12083,133 @@ fn claude_catalog_label(id: &str) -> Option<String> {
     if version.is_empty() || !version.iter().all(numeric) {
         return None;
     }
-    let (initial, tail) = family.split_at(1);
-    Some(format!(
-        "{}{tail} {}",
-        initial.to_ascii_uppercase(),
-        version.join(".")
-    ))
+    Some((family, version))
 }
 
-/// The spelling the model selector lists now for a saved pick it no longer
-/// lists, by the two renames Claude Code has made: a retired `[1m]` lane
+/// The version a catalog name gives for `family`: `Fable 5.2` → `[5, 2]` for
+/// `fable`. `None` when `label` is not `<Family> <version>` for that family.
+fn catalog_name_version(label: &str, family: &str) -> Option<Vec<u32>> {
+    let label = label.trim();
+    let head = label.get(..family.len())?;
+    if !head.eq_ignore_ascii_case(family) {
+        return None;
+    }
+    label[family.len()..]
+        .strip_prefix(' ')?
+        .split('.')
+        .map(|part| {
+            ((1..=2).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| part.parse().ok())
+                .flatten()
+        })
+        .collect()
+}
+
+/// Whether version `a` is newer than `b`, a missing part counting as 0:
+/// 5.2 is newer than 5.1 and than 5, and 5.0 is not newer than 5.
+fn catalog_version_is_newer(a: &[u32], b: &[u32]) -> bool {
+    let len = a.len().max(b.len());
+    let part = |v: &[u32], i: usize| v.get(i).copied().unwrap_or(0);
+    (0..len)
+        .map(|i| (part(a, i), part(b, i)))
+        .find(|(x, y)| x != y)
+        .is_some_and(|(x, y)| x > y)
+}
+
+/// The family alias row a saved CONCRETE Claude model id moves to when the
+/// model selector no longer offers that model and its family's alias row now
+/// runs a NEWER one: `claude-fable-5-1` → the `fable` row labelled `Fable 5.2`.
+///
+/// Claude Code CLI 2.1.321 (claude-agent-acp 0.102.0) is what makes this
+/// reachable. It makes Fable 5.2 the `fable` model, and through an
+/// `ANTHROPIC_BASE_URL` gateway its selector lists the `fable` row
+/// (`{value: "fable", name: "Fable 5.2"}`) and no Fable 5.1 row at all
+/// (measured live). A user who saved `claude-fable-5-1` (a pick from before
+/// the row was spelled `fable`, or the row a reopened Fable session listed on
+/// 0.101.0) would otherwise have it refused by [`config_option_rejects_value`]
+/// on every connect and land on the default model, Opus on the measured
+/// gateway. The CLI's own changelog for 2.1.321 moves a saved Fable 5.1 pick
+/// to `fable` in the same way, and the adapter's alias rows run their family's
+/// newest model.
+///
+/// Deliberately narrow:
+///
+/// * Only the model selector, only for Claude Code, and only when
+///   [`config_option_rejects_value`] proves the exact value gone. Where the CLI
+///   still lists `claude-fable-5-1` as its own row (a claude.ai login), the pick
+///   stays on Fable 5.1.
+/// * Only after [`heal_respelled_model_pick`] found no row naming the same
+///   model.
+/// * Only onto the ONE row whose value is the family alias (`fable`), and only
+///   when its label, or the first segment of its description, names a newer
+///   version of the same family. Never onto an older model or another family,
+///   and never onto a row pinned through `ANTHROPIC_DEFAULT_*_MODEL`, which is
+///   labelled with the pinned id rather than a catalog name.
+fn heal_superseded_model_pick(option: &SessionConfigOption, value: &str) -> Option<String> {
+    if !is_model_config_option(option) || !config_option_rejects_value(option, value) {
+        return None;
+    }
+    let (family, saved) = claude_catalog_id_parts(value)?;
+    let saved: Vec<u32> = saved
+        .iter()
+        .map(|part| part.parse().ok())
+        .collect::<Option<_>>()?;
+    let SessionConfigKind::Select(select) = &option.kind else {
+        return None;
+    };
+    let rows: Vec<&SessionConfigSelectOption> = match &select.options {
+        SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
+        SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .flat_map(|group| group.options.iter())
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut aliases = rows
+        .into_iter()
+        .filter(|row| row.value.to_string().eq_ignore_ascii_case(family));
+    let row = aliases.next()?;
+    if aliases.next().is_some() {
+        return None;
+    }
+    let description_lead = row
+        .description
+        .as_deref()
+        .and_then(|description| description.trim_start().split_once(" \u{b7} "))
+        .map(|(lead, _)| lead);
+    let runs_newer = std::iter::once(row.name.as_str())
+        .chain(description_lead)
+        .filter_map(|label| catalog_name_version(label, family))
+        .any(|version| catalog_version_is_newer(&version, &saved));
+    runs_newer.then(|| row.value.to_string())
+}
+
+/// The row the model selector lists now for a saved pick it no longer lists,
+/// by the two renames Claude Code has made: a retired `[1m]` lane
 /// ([`heal_retired_context_lane_pick`]), a concrete id re-spelled as its family
 /// alias ([`heal_respelled_model_pick`]), or both at once — a gateway's
 /// `claude-fable-5-1[1m]` lost its lane on 2.1.285 and the plain row was
-/// re-spelled `fable` on 2.1.287.
+/// re-spelled `fable` on 2.1.287. Failing those, a concrete id whose family
+/// alias row now runs a newer model moves on to that row, as Claude Code moves
+/// it ([`heal_superseded_model_pick`]).
 fn heal_retired_model_pick(option: &SessionConfigOption, value: &str) -> Option<String> {
     heal_retired_context_lane_pick(option, value)
         .or_else(|| heal_respelled_model_pick(option, value))
+        .or_else(|| heal_superseded_model_pick(option, value))
         .or_else(|| {
             let twin = strip_context_lane_suffix(value)?;
             if !config_option_rejects_value(option, value) {
                 return None;
             }
             heal_respelled_model_pick(option, twin)
+                .or_else(|| heal_superseded_model_pick(option, twin))
         })
 }
 
 /// [`heal_retired_model_pick`] over a whole preference set, against the
 /// options the session was established with. Every other entry is returned
-/// unchanged, and so is every entry for an agent other than Claude Code: both
-/// renames are claude-agent-acp's spellings, and it is the only agent whose
+/// unchanged, and so is every entry for an agent other than Claude Code: every
+/// heal reads claude-agent-acp's spellings, and it is the only agent whose
 /// renames of them have been observed.
 fn heal_retired_model_picks(
     agent_type: AgentType,
@@ -12042,7 +12230,7 @@ fn heal_retired_model_picks(
                 Some(twin) => {
                     tracing::info!(
                         "[ACP] preferred config '{config_id}'='{value_id}' is no longer \
-                         offered; replaying '{twin}', the spelling the agent lists now"
+                         offered; replaying '{twin}', the row the agent lists for it now"
                     );
                     (config_id.clone(), twin)
                 }
@@ -13620,7 +13808,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.181.0) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.182.0) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -13706,7 +13894,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.181.0) answers the next prompt it runs `cancelled` even though that
+/// 2.182.0) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
@@ -13816,10 +14004,55 @@ fn classify_session_load_failure(
     if message.contains("This session is in use by another") {
         return Some("session_busy");
     }
+    if codex_thread_provider_refused(message) {
+        return Some("provider_mismatch");
+    }
     if SESSION_GONE_MARKERS.iter().any(|s| message.contains(s)) {
         return Some("session_unavailable");
     }
     None
+}
+
+/// The agent's own words for an error: `data.details` (where codex-acp and the
+/// ACP SDK put the text of an internal error), when it is a non-blank string.
+fn error_details_text(e: &agent_client_protocol::Error) -> Option<String> {
+    e.data
+        .as_ref()?
+        .get("details")?
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Whether codex refused to open a thread because the model provider it was
+/// started with is not the one codex is configured with now.
+///
+/// codex 0.166 (openai/codex#57840, shipped with codex-acp 2.6.0) keeps a
+/// thread bound to its provider: `thread/resume` and every later input fail
+/// until the configured provider is that one again. codeg's own Codex settings
+/// switch the root `model_provider` between `openai` (the ChatGPT login) and
+/// `codeg` (a custom endpoint), so every conversation started on the other side
+/// meets this. codex types the refusal as `ModelProviderError` in the JSON-RPC
+/// `data`, but codex-acp passes `thread/resume` errors on as a bare -32603 with
+/// only the text in `data.details`, so the text is all there is to match. These
+/// are the four `Display` sentences of `ModelProviderError` (rust-v0.166.0):
+///
+/// * "This chat uses {p}, but your current provider is {q}. Switch to {p} to continue."
+/// * "This chat uses model provider “{p}”, which is no longer configured. …"
+/// * "This chat uses model provider “{p}”, but your organization requires “{q}”. …"
+/// * "This chat’s model provider settings no longer match your organization’s
+///   requirements. …"
+///
+/// The session is intact: switching the provider back opens it, which is why
+/// this must not fall through to `session/new`. That would rebind the row to an
+/// empty session on the new provider and drop the only pointer to the history.
+fn codex_thread_provider_refused(message: &str) -> bool {
+    (message.contains("This chat uses ")
+        && (message.contains(", but your current provider is ")
+            || message.contains("which is no longer configured")
+            || message.contains("but your organization requires")))
+        || message.contains("This chat\u{2019}s model provider settings no longer match")
 }
 
 /// [`classify_session_load_failure`] for the error itself: the structured
@@ -14162,7 +14395,9 @@ async fn defer_to_connection_report(
 /// loses nothing; a busy session is still there, and starting over would replace
 /// a live history with an empty session for a lock that clears on its own.
 fn recovers_load_failure_locally(agent_type: AgentType, classified: Option<&'static str>) -> bool {
-    if classified == Some("session_busy") {
+    // Both leave the session intact, and the banner's Reload opens it once the
+    // holder lets go (busy) or the provider is switched back (provider_mismatch).
+    if matches!(classified, Some("session_busy" | "provider_mismatch")) {
         return false;
     }
     classified.is_some() && transcript_dir_for(agent_type).is_some()
@@ -21273,12 +21508,17 @@ pub(crate) fn grok_failed_compaction_meta(update: &serde_json::Value) -> serde_j
 ///   (`meta.grokSubagentProgress`) so the running Agent card can show a live
 ///   "N tools · M turns · ctx%" line. Replacing the block's meta is safe for
 ///   this call: its classification rides `rawInput.subagent_type`, not meta.
-///   GATED on `turn_active`: after `TurnComplete` the frontend diverts wire
-///   tool updates out of the transcript anyway, while the backend
-///   `SessionState` apply arm would lazily RECREATE `live_message` for the
-///   update — resurrecting a ghost pending card into every later
-///   snapshot/attach. An out-of-turn tick is therefore dropped whole (the
-///   `subagent_finished` settle below is the out-of-turn-safe channel).
+///   Only while the card is in the live message (its launching turn is the
+///   one Prompting): after `TurnComplete` the frontend diverts wire tool
+///   updates out of the transcript anyway, while the backend `SessionState`
+///   apply arm would lazily RECREATE `live_message` for the update —
+///   resurrecting a ghost pending card into every later snapshot/attach. Any
+///   other tick for a BACKGROUND child — and that is nearly all of them, since
+///   grok 1.0.77 measured: the launch returns at once, the turn answers, and
+///   the child's ticks (about every 10 s) all land after `TurnComplete` — goes
+///   out as `BackgroundTaskProgress` instead, which the frontend patches onto
+///   the promoted card in memory. A blocking child's tick out of its turn is
+///   dropped (its turn was cancelled; no card takes it).
 /// * `subagent_finished` for a spawn whose CALL already settled (= a
 ///   BACKGROUND child; the launch ack was its final wire output) settles via
 ///   the same `BackgroundActivity` channel Claude's async sub-agents use: the
@@ -21426,14 +21666,17 @@ fn map_grok_subagent_notification_inner(
             Some(events)
         }
         "subagent_progress" => {
-            if !turn_active {
-                return None;
-            }
             let call_id = cb_state.grok_subagent_to_call.get(subagent_id)?.clone();
-            // Launch-turn-specific gate on top of Prompting: a tick for a
-            // PRIOR turn's background child must not be appended into the
-            // CURRENT turn's live message (see `grok_progress_eligible`).
-            if !cb_state.grok_progress_eligible.contains(&call_id) {
+            // The card is still in the live message only while its launching
+            // turn runs: Prompting, plus the launch-turn-specific gate (a tick
+            // for a PRIOR turn's background child must not be appended into
+            // the CURRENT turn's live message, see `grok_progress_eligible`).
+            let card_is_live = turn_active && cb_state.grok_progress_eligible.contains(&call_id);
+            // Otherwise only a background child's card can still take a tick —
+            // its launch call settled with the ack and the card sits in
+            // promoted history. A blocking spawn's tick out of its turn (the
+            // turn was cancelled) has no card to land on.
+            if !card_is_live && !cb_state.grok_settled_spawn_ids.contains(&call_id) {
                 return None;
             }
             let mut progress = serde_json::Map::new();
@@ -21455,6 +21698,22 @@ fn map_grok_subagent_notification_inner(
             // block's meta wholesale, so a progress-only payload would drop the
             // "open the child's session" affordance mid-run.
             let child_session_id = cb_state.grok_call_child_session.get(&call_id).cloned();
+            let meta = grok_subagent_meta(
+                subagent_id,
+                child_session_id.as_deref(),
+                Some(serde_json::Value::Object(progress)),
+            );
+            if !card_is_live {
+                // Out of the launching turn: the frontend patches the promoted
+                // card in memory (see `AcpEvent::BackgroundTaskProgress`).
+                let session_id = params.get("sessionId").and_then(|v| v.as_str())?;
+                return Some(vec![AcpEvent::BackgroundTaskProgress {
+                    session_id: session_id.to_string(),
+                    tool_use_id: call_id,
+                    task_id: subagent_id.to_string(),
+                    meta,
+                }]);
+            }
             Some(vec![AcpEvent::ToolCallUpdate {
                 tool_call_id: call_id,
                 title: None,
@@ -21464,11 +21723,7 @@ fn map_grok_subagent_notification_inner(
                 raw_output: None,
                 raw_output_append: None,
                 locations: None,
-                meta: Some(grok_subagent_meta(
-                    subagent_id,
-                    child_session_id.as_deref(),
-                    Some(serde_json::Value::Object(progress)),
-                )),
+                meta: Some(meta),
                 images: None,
             }])
         }
@@ -30666,6 +30921,56 @@ mod tests {
     /// a thread the first still held. 2.1.0 (#564) types it; the verdict must
     /// come from that type, because the raw text it still carries in `details`
     /// is codex's wording and carries no stability promise.
+    /// codex 0.166 refuses to resume a thread whose provider is not the
+    /// configured one, and codex-acp 2.6.0 forwards the refusal as a bare
+    /// -32603 with codex's sentence in `details` (measured live: a thread made
+    /// on provider `fake`, reopened after config.toml moved to `fake2`, answers
+    /// both `session/load` and `session/resume` this way).
+    #[test]
+    fn classify_load_error_reads_codex_provider_refusals() {
+        let error = |details: &str| -> agent_client_protocol::Error {
+            serde_json::from_value(serde_json::json!({
+                "code": -32603,
+                "message": "Internal error",
+                "data": { "details": details }
+            }))
+            .expect("an ACP error body")
+        };
+        for details in [
+            "This chat uses fake, but your current provider is fake2. Switch to fake to continue.",
+            "This chat uses model provider \u{201c}codeg\u{201d}, which is no longer configured. \
+             Restore this provider\u{2019}s configuration to continue.",
+            "This chat uses model provider \u{201c}openai\u{201d}, but your organization requires \
+             \u{201c}azure\u{201d}. Contact your administrator or start a new chat using the \
+             required provider.",
+            "This chat\u{2019}s model provider settings no longer match your organization\u{2019}s \
+             requirements. Contact your administrator or start a new chat using the current \
+             provider settings.",
+        ] {
+            assert_eq!(
+                classify_session_load_error(&error(details)),
+                Some("provider_mismatch"),
+                "{details}"
+            );
+        }
+        // Nothing else reads as one: a chat that merely mentions a provider.
+        assert_eq!(
+            classify_session_load_error(&error("This chat uses a lot of tokens")),
+            None
+        );
+        // The banner quotes codex's sentence, not the error dump.
+        assert_eq!(
+            error_details_text(&error(" This chat uses a, but your current provider is b. ")).as_deref(),
+            Some("This chat uses a, but your current provider is b.")
+        );
+        // Kept, never recovered locally, like a busy session.
+        let custom = AgentType::custom("glm-acp-agent").expect("valid id");
+        assert!(!recovers_load_failure_locally(
+            custom,
+            Some("provider_mismatch")
+        ));
+    }
+
     #[test]
     fn classify_load_error_reads_codex_thread_active_writer_reason() {
         let error = |body: serde_json::Value| -> agent_client_protocol::Error {
@@ -32678,6 +32983,12 @@ mod tests {
         assert!(opencode["session"]["compaction"].is_object(), "{opencode}");
         assert!(opencode["session"].get("notices").is_none(), "{opencode}");
 
+        // MiniMax: native ask_user questionnaires use the form bridge, not
+        // the limited permission-button fallback. URL forms stay disabled.
+        let minimax = caps_of(AgentType::MiniMaxCode);
+        assert!(minimax["elicitation"]["form"].is_object(), "{minimax}");
+        assert!(minimax["elicitation"].get("url").is_none());
+
         // Cursor: parameterized model picker only (no elicitation / AIR).
         let cursor = caps_of(AgentType::Cursor);
         assert_eq!(
@@ -33982,23 +34293,51 @@ mod tests {
             "context_usage_pct": 12.5,
             "tools_used": ["read_file"]
         }));
-        // Out-of-turn tick: dropped whole. A post-TurnComplete ToolCallUpdate
-        // would resurrect a ghost `live_message` in the SessionState snapshot
-        // (the apply arm lazily creates it), while the frontend diverts it out
-        // of the transcript anyway.
-        assert!(
-            map_grok_subagent_notification(&progress, AgentType::Grok, false, &mut cb).is_empty(),
-            "progress must not emit outside an active turn"
+        // Out-of-turn tick (grok's usual timing for a background child: the
+        // launch returns at once and the turn answers): NOT a ToolCallUpdate —
+        // after TurnComplete that would resurrect a ghost `live_message` in
+        // the SessionState snapshot (the apply arm lazily creates it), while
+        // the frontend diverts it out of the transcript anyway — but the
+        // out-of-turn-safe BackgroundTaskProgress the frontend patches onto
+        // the promoted launch card.
+        let assert_background_tick = |events: Vec<AcpEvent>, why: &str| match events.as_slice() {
+            [AcpEvent::BackgroundTaskProgress {
+                session_id,
+                tool_use_id,
+                task_id,
+                meta,
+            }] => {
+                assert_eq!(session_id, "sess-1", "{why}");
+                assert_eq!(tool_use_id, "call-1", "{why}");
+                assert_eq!(task_id, "sub-1", "{why}");
+                assert_eq!(
+                    meta.pointer("/grokSubagentProgress/toolCallCount")
+                        .and_then(|v| v.as_u64()),
+                    Some(7),
+                    "{why}"
+                );
+                assert_eq!(
+                    meta.pointer("/grokSubagentSession/childSessionId")
+                        .and_then(|v| v.as_str()),
+                    Some("sub-1"),
+                    "{why}"
+                );
+            }
+            other => panic!("{why}: expected one BackgroundTaskProgress, got {other:?}"),
+        };
+        assert_background_tick(
+            map_grok_subagent_notification(&progress, AgentType::Grok, false, &mut cb),
+            "a tick outside any turn",
         );
         // Cross-turn tick: the launch turn ended and a LATER turn is Prompting
-        // (turn_active=true) — the per-turn eligibility clear must still drop
-        // it, or the old tool id would be appended into the NEW turn's live
-        // message as a ghost card.
+        // (turn_active=true) — the per-turn eligibility clear must still keep
+        // it off the wire-update path, or the old tool id would be appended
+        // into the NEW turn's live message as a ghost card.
         let eligibility_backup = cb.grok_progress_eligible.clone();
         cb.grok_progress_eligible.clear();
-        assert!(
-            map_grok_subagent_notification(&progress, AgentType::Grok, true, &mut cb).is_empty(),
-            "a prior turn's background child must not tick into a later turn"
+        assert_background_tick(
+            map_grok_subagent_notification(&progress, AgentType::Grok, true, &mut cb),
+            "a prior turn's background child ticking during a later turn",
         );
         cb.grok_progress_eligible = eligibility_backup;
         match map_grok_subagent_notification(&progress, AgentType::Grok, true, &mut cb).as_slice() {
@@ -34071,8 +34410,13 @@ mod tests {
             other => panic!("expected BackgroundActivity, got {other:?}"),
         }
         // Lifecycle over: a duplicate finished no longer routes anywhere.
+        assert!(map_grok_subagent_notification(&finished, AgentType::Grok, false, &mut cb)
+            .is_empty());
+        // Nor does a straggling tick: it must not paint progress back onto a
+        // card that has already settled.
         assert!(
-            map_grok_subagent_notification(&finished, AgentType::Grok, false, &mut cb).is_empty()
+            map_grok_subagent_notification(&progress, AgentType::Grok, false, &mut cb).is_empty(),
+            "a tick after the finish has no card to update"
         );
     }
 
@@ -34108,6 +34452,19 @@ mod tests {
             }
             other => panic!("expected one ToolCallUpdate, got {other:?}"),
         }
+        // A blocking child's tick outside its launch turn (the turn was
+        // cancelled under it) has no card to land on: its call never settled
+        // into history as a background launch, so nothing is emitted at all.
+        let progress = grok_subagent_notif(serde_json::json!({
+            "sessionUpdate": "subagent_progress",
+            "subagent_id": "sub-1",
+            "duration_ms": 1000,
+            "tool_call_count": 1
+        }));
+        assert!(
+            map_grok_subagent_notification(&progress, AgentType::Grok, false, &mut cb).is_empty(),
+            "a blocking child's out-of-turn tick is dropped"
+        );
         let finished = grok_subagent_notif(serde_json::json!({
             "sessionUpdate": "subagent_finished",
             "subagent_id": "sub-1",
@@ -37949,6 +38306,198 @@ mod tests {
             heal_respelled_model_pick(&selector(serde_json::json!([])), "claude-fable-5-1"),
             None
         );
+    }
+
+    /// The model selector claude-agent-acp 0.102.0 answers `session/new` with
+    /// through an `ANTHROPIC_BASE_URL` gateway, verbatim (measured live).
+    /// Claude Code 2.1.321 makes Fable 5.2 the `fable` model, and lists no
+    /// Fable 5.1 row.
+    fn gateway_model_selector_2_1_321() -> SessionConfigOption {
+        serde_json::from_value(serde_json::json!({
+            "id": "model",
+            "name": "Model",
+            "description": "AI model to use",
+            "category": "model",
+            "type": "select",
+            "currentValue": "opus",
+            "_meta": {"jetbrains": {"air": {"version": 1, "recommendedValue": "opus"}}},
+            "options": [
+                {"value": "opus", "name": "Opus 5.5", "description": "Opus 5.5 · Best for everyday, complex tasks · $4/$20 per Mtok"},
+                {"value": "fable", "name": "Fable 5.2", "description": "Fable 5.2 · Most capable for your hardest and longest-running tasks · $8/$40 per Mtok"},
+                {"value": "sonnet", "name": "Sonnet 5.5", "description": "Sonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok"},
+                {"value": "haiku", "name": "Haiku 5.5", "description": "Haiku 5.5 · Fastest for quick answers · $0.10/$0.50 per Mtok ($0.50/$2.50 for prompts over 100k)"},
+            ],
+        }))
+        .expect("parses")
+    }
+
+    #[test]
+    fn a_gateway_on_claude_code_2_1_321_moves_a_fable_5_1_pick_to_fable() {
+        let gateway = gateway_model_selector_2_1_321();
+        // Not the same model, so the respelling heal leaves it…
+        assert_eq!(
+            heal_respelled_model_pick(&gateway, "claude-fable-5-1"),
+            None
+        );
+        // …and the family's alias row, which now runs Fable 5.2, takes it.
+        for saved in ["claude-fable-5-1", "claude-fable-5-1[1m]", "claude-fable-5"] {
+            assert_eq!(
+                heal_retired_model_pick(&gateway, saved).as_deref(),
+                Some("fable"),
+                "{saved}"
+            );
+        }
+        // The same rule for the other families.
+        assert_eq!(
+            heal_retired_model_pick(&gateway, "claude-sonnet-5").as_deref(),
+            Some("sonnet")
+        );
+        assert_eq!(
+            heal_retired_model_pick(&gateway, "claude-haiku-4-5-20251001").as_deref(),
+            Some("haiku")
+        );
+        // The model the row runs heals as a respelling, as before.
+        assert_eq!(
+            heal_retired_model_pick(&gateway, "claude-fable-5-2").as_deref(),
+            Some("fable")
+        );
+        // Listed picks are left alone.
+        for listed in ["fable", "opus", "sonnet", "haiku"] {
+            assert_eq!(heal_retired_model_pick(&gateway, listed), None, "{listed}");
+        }
+        let preferred = BTreeMap::from([("model".to_string(), "claude-fable-5-1".to_string())]);
+        assert_eq!(
+            heal_retired_model_picks(
+                AgentType::ClaudeCode,
+                std::slice::from_ref(&gateway),
+                &preferred
+            ),
+            BTreeMap::from([("model".to_string(), "fable".to_string())])
+        );
+        assert_eq!(
+            heal_retired_model_picks(AgentType::Codex, &[gateway], &preferred),
+            preferred
+        );
+    }
+
+    #[test]
+    fn a_superseded_pick_moves_only_forward_onto_its_own_family_alias() {
+        let selector = |rows: serde_json::Value| -> SessionConfigOption {
+            serde_json::from_value(serde_json::json!({
+                "type": "select",
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "currentValue": "opus",
+                "options": rows,
+            }))
+            .expect("parses")
+        };
+        // A claude.ai login still lists Fable 5.1 as its own row: it stays.
+        let first_party = selector(serde_json::json!([
+            {"value": "fable", "name": "Fable", "description": "Fable 5.2 · Most capable for your hardest and longest-running tasks"},
+            {"value": "claude-fable-5-1", "name": "Fable 5.1"},
+        ]));
+        assert_eq!(
+            heal_retired_model_pick(&first_party, "claude-fable-5-1"),
+            None
+        );
+        // The built-in row names its model in the description's first segment.
+        let built_in = selector(serde_json::json!([
+            {"value": "opus", "name": "Opus", "description": "Opus 5.5 · Best for everyday, complex tasks"},
+            {"value": "fable", "name": "Fable", "description": "Fable 5.2 · Most capable for your hardest and longest-running tasks"},
+        ]));
+        assert_eq!(
+            heal_superseded_model_pick(&built_in, "claude-fable-5-1").as_deref(),
+            Some("fable")
+        );
+        // Never back to an older model, nor across to the same version.
+        let older = selector(serde_json::json!([
+            {"value": "fable", "name": "Fable 5"},
+        ]));
+        assert_eq!(heal_superseded_model_pick(&older, "claude-fable-5-1"), None);
+        let same = selector(serde_json::json!([
+            {"value": "fable", "name": "Fable 5.0"},
+        ]));
+        assert_eq!(heal_superseded_model_pick(&same, "claude-fable-5"), None);
+        // A row pinned through `ANTHROPIC_DEFAULT_FABLE_MODEL` names no catalog
+        // version, so nothing says it is newer.
+        let pinned = selector(serde_json::json!([
+            {"value": "fable", "name": "my-gateway/fable-next", "description": "Custom Fable model"},
+        ]));
+        assert_eq!(
+            heal_superseded_model_pick(&pinned, "claude-fable-5-1"),
+            None
+        );
+        // Only the family's own alias row: a newer row of another family, or a
+        // row whose value is not the alias, does not take the pick.
+        let other = selector(serde_json::json!([
+            {"value": "opus", "name": "Opus 5.5"},
+            {"value": "gw/fable", "name": "Fable 5.2"},
+            {"value": "claude-fable-5-2", "name": "Fable 5.2"},
+        ]));
+        assert_eq!(heal_superseded_model_pick(&other, "claude-fable-5-1"), None);
+        // A label or description that is not exactly `<Family> <version>`.
+        for (name, description) in [
+            ("Fable 5.2 preview", None),
+            ("Fable", Some("Fable 5.2 is coming · soon")),
+            ("Fable", Some("Fable 5.2")),
+            ("Fabled 5.2", None),
+        ] {
+            let lookalike = selector(serde_json::json!([
+                {"value": "fable", "name": name, "description": description},
+            ]));
+            assert_eq!(
+                heal_superseded_model_pick(&lookalike, "claude-fable-5-1"),
+                None,
+                "{name} / {description:?}"
+            );
+        }
+        // An id outside the catalog form, and any selector but the model's.
+        assert_eq!(
+            heal_superseded_model_pick(&gateway_model_selector_2_1_321(), "gw/fable-5-1"),
+            None
+        );
+        let effort: SessionConfigOption = serde_json::from_value(serde_json::json!({
+            "type": "select",
+            "id": "effort",
+            "name": "Effort",
+            "category": "thought_level",
+            "currentValue": "high",
+            "options": [{"value": "fable", "name": "Fable 5.2"}],
+        }))
+        .expect("parses");
+        assert_eq!(
+            heal_superseded_model_pick(&effort, "claude-fable-5-1"),
+            None
+        );
+        // An empty list proves nothing.
+        assert_eq!(
+            heal_superseded_model_pick(&selector(serde_json::json!([])), "claude-fable-5-1"),
+            None
+        );
+    }
+
+    #[test]
+    fn catalog_versions_compare_part_by_part() {
+        assert_eq!(catalog_name_version("Fable 5.2", "fable"), Some(vec![5, 2]));
+        assert_eq!(catalog_name_version(" sonnet 5 ", "sonnet"), Some(vec![5]));
+        for label in [
+            "Fable",
+            "Fable 5.",
+            "Fable 5.200",
+            "Fable 5.2b",
+            "Opus 5.5",
+            "Fable  5.2",
+        ] {
+            assert_eq!(catalog_name_version(label, "fable"), None, "{label}");
+        }
+        assert!(catalog_version_is_newer(&[5, 2], &[5, 1]));
+        assert!(catalog_version_is_newer(&[5, 2], &[5]));
+        assert!(catalog_version_is_newer(&[5, 10], &[5, 2]));
+        assert!(catalog_version_is_newer(&[6], &[5, 5]));
+        assert!(!catalog_version_is_newer(&[5, 0], &[5]));
+        assert!(!catalog_version_is_newer(&[5, 1], &[5, 2]));
     }
 
     #[test]
@@ -44099,7 +44648,9 @@ mod tests {
     }
 
     /// The launch `build_agent` assembles for Qoder carries the settings right
-    /// after the registry's `--acp`.
+    /// after the registry's `--acp`. On Windows, where a Qoder installation
+    /// resolves, the launch names the real program rather than a cmd wrapper,
+    /// whose reparsing would strip the settings' quotes (see `acp::qoder`).
     #[tokio::test]
     async fn qoder_launch_carries_the_lazy_loading_settings() {
         let tail = Arc::new(StderrTail::new());
@@ -44119,6 +44670,85 @@ mod tests {
             "--acp", "--settings", QODER_LAUNCH_SETTINGS
         );
         assert!(launch.contains(&expected), "{launch}");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn qoder_build_and_spawn_preserve_argv_and_the_workspace() {
+        use tokio::io::AsyncReadExt;
+
+        let node = crate::commands::acp::resolve_command_on_path("node")
+            .expect("the fixture needs a real node");
+        let root = tempfile::tempdir().unwrap();
+        let tricky = root.path().join("Qoder A&%USERNAME% 中文");
+        let shim = crate::acp::qoder::tests::npm_fixture(&tricky, false);
+        let bin = shim.parent().unwrap();
+        let entry = bin.join("node_modules/@qoder-ai/qodercli/bundle/qodercli.js");
+        std::fs::write(
+            &entry,
+            "console.log(JSON.stringify({argv: process.argv.slice(2), cwd: process.cwd(), program: process.execPath}));\n",
+        )
+        .unwrap();
+        let node_dir = tricky.join("Node");
+        std::fs::create_dir_all(&node_dir).unwrap();
+        let native_node = node_dir.join("node.exe");
+        std::fs::copy(std::fs::canonicalize(node).unwrap(), &native_node).unwrap();
+        std::fs::write(bin.join("node.js"), "// npm must exclude this from lookup").unwrap();
+        let workspace = tricky.join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let dispatcher = crate::acp::qoder::tests::dispatcher_fixture(root.path());
+
+        // Both an npm qoder shim and the official dispatcher -> npm qodercli
+        // path go through the production builder and AcpAgent spawn.
+        for first_dir in [bin, dispatcher.parent().unwrap()] {
+            let path = std::env::join_paths([first_dir, bin, &node_dir]).unwrap();
+            let env = BTreeMap::from([
+                ("Path".into(), path.to_string_lossy().into_owned()),
+                ("PATHEXT".into(), ".EXE;.JS;.CMD".into()),
+                ("QODER_CLI_BIN".into(), String::new()),
+            ]);
+            temp_env::async_with_vars([("PATH", Some(path.as_os_str()))], async {
+                let tail = Arc::new(StderrTail::new());
+                let (agent, _) =
+                    build_agent(AgentType::Qoder, &env, &workspace, &tail, None, false)
+                        .await
+                        .unwrap();
+                let (stdin, mut stdout, mut stderr, mut child) = agent.spawn_process().unwrap();
+                drop(stdin);
+                let output = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                    let mut out = Vec::new();
+                    let mut err = Vec::new();
+                    let (out_result, err_result, status) = tokio::join!(
+                        stdout.read_to_end(&mut out),
+                        stderr.read_to_end(&mut err),
+                        child.wait()
+                    );
+                    out_result.unwrap();
+                    err_result.unwrap();
+                    (status.unwrap(), out, err)
+                })
+                .await;
+                if output.is_err() {
+                    let _ = child.kill().await;
+                }
+                let (status, out, err) = output.expect("the fixture exits");
+                assert!(status.success(), "{}", String::from_utf8_lossy(&err));
+                let received: serde_json::Value = serde_json::from_slice(&out).unwrap();
+                assert_eq!(
+                    received["argv"],
+                    serde_json::json!(["--acp", "--settings", QODER_LAUNCH_SETTINGS])
+                );
+                assert_eq!(
+                    std::fs::canonicalize(received["cwd"].as_str().unwrap()).unwrap(),
+                    std::fs::canonicalize(&workspace).unwrap()
+                );
+                assert_eq!(
+                    std::fs::canonicalize(received["program"].as_str().unwrap()).unwrap(),
+                    std::fs::canonicalize(&native_node).unwrap()
+                );
+            })
+            .await;
+        }
     }
 
     /// Only an update carrying a title and nothing else is a Kimi status.
@@ -50595,6 +51225,45 @@ mod tests {
                 .any(|e| matches!(e, AcpEvent::ToolCall { .. })),
             "{events:?}"
         );
+    }
+
+    /// MiniMax's native ask_user is scoped to the session. Reply with option
+    /// IDs rather than their display labels so the runtime resumes the pending
+    /// questionnaire (not a new user prompt).
+    #[tokio::test]
+    async fn a_minimax_ask_returns_option_ids_without_a_synthesized_card() {
+        let (reply, events, _) = answer_form_elicitation(
+            AgentType::MiniMaxCode,
+            serde_json::json!({
+                "mode": "form",
+                "sessionId": "s1",
+                // MiniMax's wire shape for one `ask_user` step (header is
+                // never sent; every step with options gets an Other field).
+                "message": "MiniMax Code needs your input",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "overwrite": {
+                            "type": "string",
+                            "title": "现有文档都有正文，新版精读如何写入？",
+                            "oneOf": [
+                                {"const": "replace", "title": "覆盖为新版精读", "description": "先导出备份旧文到本地，再全文替换"},
+                                {"const": "append", "title": "保留旧正文，追加在文末"}
+                            ]
+                        },
+                        "overwrite__other": {
+                            "type": "string",
+                            "title": "现有文档都有正文，新版精读如何写入？ — Other",
+                            "description": "Others..."
+                        }
+                    }
+                }
+            }),
+        )
+        .await;
+        assert_eq!(reply["action"], "accept", "{reply}");
+        assert_eq!(reply["content"], serde_json::json!({"overwrite": "replace"}));
+        assert!(!events.iter().any(|e| matches!(e, AcpEvent::ToolCall { .. })));
     }
 
     /// codex never streams `request_user_input`, so it keeps the card.

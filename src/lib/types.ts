@@ -3285,7 +3285,13 @@ export type AcpEvent =
       message: string
       /**
        * Stable backend identifier: `"resource_not_found"`,
-       * `"session_unavailable"`, `"session_archived"`, or `"session_busy"`.
+       * `"session_unavailable"`, `"session_archived"`, `"session_busy"`, or
+       * `"provider_mismatch"`.
+       *
+       * `"provider_mismatch"` does not mean gone either: codex (0.166+) keeps a
+       * conversation on the model provider it started with and refuses it under
+       * any other, and switching back opens it. `message` is then codex's own
+       * sentence, which names both providers.
        *
        * The first three mean the session is gone. `"session_busy"` does not —
        * another live holder has it open (another Codex client — the app, the
@@ -3343,6 +3349,19 @@ export type AcpEvent =
       outstanding: number
       settled?: BackgroundSettledInfo[]
       watermark: number
+    }
+  /**
+   * A live progress tick for a background sub-agent whose launch card has left
+   * the live message (Grok: its launching turn ended, or a later turn runs).
+   * `meta` is merged into the launch card's own `meta` in memory, the way a
+   * settle rewrites its lifecycle marker; nothing is persisted.
+   */
+  | {
+      type: "background_task_progress"
+      session_id: string
+      tool_use_id: string
+      task_id: string
+      meta: Record<string, unknown>
     }
   /**
    * A `delegate_to_agent` MCP tool call from the parent agent has spawned a

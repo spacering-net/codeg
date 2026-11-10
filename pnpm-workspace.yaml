@@ -33,3 +33,8 @@ minimumReleaseAgeExclude:
   - '@tauri-apps/plugin-dialog@2.8.3'
   - '@tauri-apps/plugin-opener@2.7.2'
   - '@tauri-apps/plugin-updater@2.14.0'
+
+patchedDependencies:
+  '@tauri-apps/api@2.12.4': patches/@tauri-apps__api@2.12.4.patch
+  overlayscrollbars@2.15.1: patches/overlayscrollbars@2.15.1.patch
+  streamdown@2.7.1: patches/streamdown@2.7.1.patch
