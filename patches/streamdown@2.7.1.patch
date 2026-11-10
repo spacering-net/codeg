@@ -1,0 +1,23 @@
+diff --git a/dist/highlighted-body-JLMTFACH.js b/dist/highlighted-body-JLMTFACH.js
+index 4aa2fedc6052d65b7cb966ce40786674ec9c9633..edec7aad4b6141c89627b96eedc6d2f2a9aa98fb 100644
+--- a/dist/highlighted-body-JLMTFACH.js
++++ b/dist/highlighted-body-JLMTFACH.js
+@@ -1,2 +1,2 @@
+ "use client";
+-import {B,f,c}from'./chunk-7TTQLYRW.js';import {useContext,useState,useEffect}from'react';import {jsx}from'react/jsx-runtime';var T=({code:s,isIncomplete:l=false,language:e,maxHeight:d,raw:t,className:a,startLine:c$1,lineNumbers:p,...f$1})=>{let{shikiTheme:r}=useContext(B),o=f(),[H,i]=useState(t);return useEffect(()=>{if(!o){i(t);return}let n=true,u=o.highlight({code:s,isIncomplete:l,language:e,themes:r},B=>{n&&i(B);});return u&&i(u),()=>{n=false;}},[s,l,e,r,o,t]),jsx(c,{className:a,language:e,lineNumbers:p,maxHeight:d,result:H,startLine:c$1,...f$1})};export{T as HighlightedCodeBlockBody};
+\ No newline at end of file
++import {B,f,c}from'./chunk-7TTQLYRW.js';import {useContext,useState,useEffect}from'react';import {jsx}from'react/jsx-runtime';var T=({code:s,isIncomplete:l=false,language:e,maxHeight:d,raw:t,className:a,startLine:c$1,lineNumbers:p,...f$1})=>{let{shikiTheme:r}=useContext(B),o=f(),[H,i]=useState(t);return useEffect(()=>{if(!o){i(t);return}let n=true,abort=new AbortController(),u=o.highlight({code:s,isIncomplete:l,language:e,themes:r,signal:abort.signal},B=>{n&&i(B);});return u&&i(u),()=>{n=false;abort.abort();}},[s,l,e,r,o,t]),jsx(c,{className:a,language:e,lineNumbers:p,maxHeight:d,result:H,startLine:c$1,...f$1})};export{T as HighlightedCodeBlockBody};
+\ No newline at end of file
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index d201fee607ae5238f102ed23463967ae6c18ac2c..89731cacb33f834a39947ddbdd39dce5ded7dd7e 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -182,6 +182,8 @@ interface HighlightResult {
+  * Options for highlighting code
+  */
+ interface HighlightOptions {
++    /** Aborted when the code view changes or unmounts. */
++    signal?: AbortSignal;
+     code: string;
+     /**
+      * Whether the code block is still streaming. Its result is superseded by

@@ -37,3 +37,4 @@ minimumReleaseAgeExclude:
 patchedDependencies:
   '@tauri-apps/api@2.12.4': patches/@tauri-apps__api@2.12.4.patch
   overlayscrollbars@2.15.1: patches/overlayscrollbars@2.15.1.patch
+  streamdown@2.7.1: patches/streamdown@2.7.1.patch
