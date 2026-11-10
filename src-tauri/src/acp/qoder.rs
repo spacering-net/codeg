@@ -818,7 +818,14 @@ pub(crate) mod tests {
         let node_dir = tricky.join("Node");
         std::fs::create_dir_all(&node_dir).unwrap();
         let native_node = node_dir.join("node.exe");
-        std::fs::copy(std::fs::canonicalize(node).unwrap(), &native_node).unwrap();
+        let real_node = std::fs::canonicalize(node).unwrap();
+        // A copy is self-contained only on Windows: Homebrew's macOS node
+        // loads `@rpath/libnode.dylib` relative to its real location, which a
+        // symlink keeps and a copy loses.
+        #[cfg(windows)]
+        std::fs::copy(&real_node, &native_node).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_node, &native_node).unwrap();
         let workspace = tricky.join("Workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         let mut env = empty_env();
