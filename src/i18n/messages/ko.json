@@ -3549,7 +3549,7 @@
         "attachLocalUpload": "로컬 파일 첨부",
         "attachServerFile": "서버 파일 첨부",
         "attachUploadTooLarge": "{names}이(가) {limit}MB 업로드 한도를 초과하여 건너뛰었습니다.",
-        "attachUploadFailed": "{names} 업로드 실패.",
+        "attachUploadFailed": "{names} 업로드 실패. 이유: {reason}",
         "attachUploadNotAFile": "{names} 은(는) 일반 파일이 아니므로(디렉터리 또는 특수 파일) 건너뛰었습니다.",
         "attachUploadQuotaExceeded": "서버 업로드 저장 공간이 부족하여 {names} 을(를) 업로드하지 못했습니다.",
         "attachUploadInProgress": "이미지가 아직 업로드 중입니다. 잠시 후 다시 시도하세요.",
