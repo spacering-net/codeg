@@ -105,6 +105,8 @@ export interface SuggestionPopupProps {
   countLabel?: (count: number) => string
   /** Non-selectable hint shown under a tab whose matches were capped. */
   moreLabel?: string
+  /** A row closing the assistants tab, opening where they are managed. */
+  manageAssistants?: { label: string; open: () => void }
   /** Localized per-kind tab labels (English fallbacks apply when omitted). */
   tabLabels?: Record<ReferenceKind, string>
   /**
@@ -156,6 +158,7 @@ export const SuggestionPopup = forwardRef<
     moreLabel = "More results — keep typing to filter",
     tabLabels = DEFAULT_TAB_LABELS,
     tabs = MENTION_TAB_KINDS,
+    manageAssistants,
     anchorRef,
     onActiveOptionChange,
   },
@@ -659,6 +662,22 @@ export const SuggestionPopup = forwardRef<
               {moreLabel}
             </div>
           )}
+          {manageAssistants && activeGroup?.kind === "assistant" ? (
+            // Not an option: a way out of the panel, to where the
+            // assistants are managed.
+            <button
+              type="button"
+              data-mention-manage-assistants
+              className="mt-0.5 flex w-full items-center rounded-md border-t border-border/50 px-2 py-1.5 text-start text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+              onMouseDown={(event) => {
+                event.preventDefault()
+                onClose()
+                manageAssistants.open()
+              }}
+            >
+              {manageAssistants.label}
+            </button>
+          ) : null}
         </div>
       </div>
       {/* Announce loading / active tab + result count / empty state to screen

@@ -1395,7 +1395,7 @@
   },
   {
     "name": "assistant_list",
-    "description": "List the role assistants you may hand work to: id, name, when to use it, and the agent and model it runs on. These are the only executors `dispatch` accepts — never a bare agent type, never yourself. An empty list means the owner has configured none: tell them to add one under Settings → Collaboration → Assistants.",
+    "description": "List the role assistants you may hand work to: id, name, when to use it, and the agent and model it runs on. These are the only executors `dispatch` accepts — never a bare agent type, never yourself. Each entry also says how the owner lets you use it (whether you may dispatch to it at all, the modes it takes, the projects it works on — dispatch refuses what does not fit) and the owner's division of work (who takes which kind of work first). An empty list means the owner has configured none: tell them to add one on the assistants page under Settings → Team → Executor configs.",
     "inputSchema": {
       "type": "object",
       "properties": {}
@@ -1411,7 +1411,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Hand a piece of work to a role assistant. ASYNCHRONOUS: returns at once with the dispatch id; progress reaches you later as events, and codeg puts a result card on the owner's timeline without waiting for you. Three modes: `task` — a kanban task in the project's own worktree, which lands as the board's settings say: merged on its own when the project has auto-merge on, by the owner otherwise (use it for any code change); `chat` — a chat conversation outside any project (research, writing, analysis); `session` — a conversation in the project's CURRENT checkout, for reading and investigating, or an in-place change the owner explicitly asked for. `task` and `session` need `project_id`. The executor runs with the assistant's own agent, options and standing instructions, frozen at dispatch. Write `prompt` so the executor can work without seeing this conversation.",
+    "description": "Hand a piece of work to a role assistant. ASYNCHRONOUS: returns at once with the dispatch id; progress reaches you later as events, and codeg puts a result card on the owner's timeline without waiting for you. Three modes: `task` — a kanban task in the project's own worktree, which lands as the board's settings say: merged on its own when the project has auto-merge on, by the owner otherwise (use it for any code change); `chat` — a chat conversation outside any project (research, writing, analysis); `session` — a conversation in the project's CURRENT checkout, for reading and investigating, or an in-place change the owner explicitly asked for. `task` and `session` need `project_id`. The executor runs with the assistant's own agent, options and standing instructions, frozen at dispatch. Write `prompt` so the executor can work without seeing this conversation. When the owner asked to confirm dispatches first (their preferences say which), the dispatch goes to them as a card holding exactly this content, and runs once they confirm; the answer says so, and you hear how they answered — do not dispatch it again meanwhile.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -1470,7 +1470,7 @@
   },
   {
     "name": "dispatch_followup",
-    "description": "Continue a dispatch. For a task in review: send `message` with an `intent` (revise / continue / question / verify). For a failed or interrupted task: retry it, with `message` as the note. For a chat or session dispatch: append `message` as the next turn, only while that conversation is idle, not waiting on a question or permission, and not taken over by the owner. Returns at once; the new round reports back as events.",
+    "description": "Continue a dispatch. For a task in review: send `message` with an `intent` (revise / continue / question / verify). For a failed or interrupted task: retry it, with `message` as the note. For a chat or session dispatch: append `message` as the next turn, only while that conversation is idle, not waiting on a question or permission, and not taken over by the owner. Returns at once; the new round reports back as events. When the owner asked to see follow-ups and retries first, it goes to them as a card and is sent once they confirm.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -1646,6 +1646,57 @@
         "for": {
           "type": "string",
           "description": "The input of this turn the message is for — its id as the delivery shows it (#58, m12, #61). The message carries where that input came from. Needed only when the turn carries inputs from more than one source; not needed with `reply_to`."
+        }
+      }
+    }
+  },
+  {
+    "name": "prefs_update",
+    "description": "Change one of the owner's settings from the conversation: their preferences (how you reply, cards, what you do when unsure, which actions go to them first, how assistants hand each other work, loop rounds) or one of your own settings (auto-compaction, compact command, handoff budget, dispatch concurrency, the built-in skill). When the owner SAYS so (\"keep replies short\", \"ask me before you dispatch code changes\"), call it with `quote` — their words — and it is changed at once: codeg shows the owner a card with the old and new value that undoes it (or, when they asked to see such changes first, the card comes first and nothing changes until they confirm). There is no setting the owner cannot change this way. When you only INFER it would suit them (they keep asking for shorter answers), set `suggest: true` with a `reason`: it goes on a card, and changes only if they accept; one they declined is not to be suggested again for seven days. Values: reply_length short|medium|long; cards prefer|decisions|never; when_unsure assume|ask; chat_changes apply|show; confirm_dispatch never|code|always; followups auto|ask; messages auto|ask; worker_handoff message|direct; loop_rounds 0-1000 (0: no limit); automation_level standard|ask_more (sets confirm_dispatch, followups, messages and chat_changes at once); auto_compact_percent 0-100; compact_command a command or null; handoff_budget_chars 4000-200000; dispatch_concurrency 0-64; skill_enabled true|false.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "changes"
+      ],
+      "properties": {
+        "changes": {
+          "type": "array",
+          "minItems": 1,
+          "description": "What to change, each as {key, value}.",
+          "items": {
+            "type": "object",
+            "required": [
+              "key",
+              "value"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "The setting, e.g. \"reply_length\"."
+              },
+              "value": {
+                "description": "Its new value."
+              }
+            }
+          }
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "The owner's own words this change follows. Required unless `suggest`."
+        },
+        "suggest": {
+          "type": "boolean",
+          "description": "true when you only infer the change: it becomes a suggestion card."
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "With `suggest`: why you think it fits the owner."
+        },
+        "for": {
+          "type": "string",
+          "description": "The owner's message this follows, as the delivery numbers it (#58), so the card quotes it. Needed only when the turn carries inputs from more than one source."
         }
       }
     }

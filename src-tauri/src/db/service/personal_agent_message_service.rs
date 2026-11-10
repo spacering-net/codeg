@@ -108,6 +108,9 @@ pub struct NewMessage {
     pub receiver_line: serde_json::Value,
     /// For a call made in a delivery: where its ledger entry goes.
     pub ledger: Option<LedgerSlot>,
+    /// The card whose answer sends it: its ledger entry names it, so a
+    /// restart settles the card as the entry stands.
+    pub ledger_notice: Option<i32>,
     pub ledger_payload: Option<serde_json::Value>,
 }
 
@@ -183,7 +186,7 @@ pub async fn send_message(
             payload: Set(new.ledger_payload.as_ref().map(|p| p.to_string())),
             observed: Set(None),
             target: Set(None),
-            notice_id: Set(None),
+            notice_id: Set(new.ledger_notice),
             attempted_at: Set(None),
             detail: Set(None),
         }

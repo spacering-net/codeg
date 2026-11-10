@@ -900,8 +900,13 @@
           "avatarTooLarge": "頭像圖片太大。",
           "invalidAgentOptions": "智慧體的選項沒有選齊。請重新開啟助手，把每一項都選上。",
           "notFound": "這個助手已經不存在了。"
-        }
-      }
+        },
+        "disableTitle": "停用「{name}」？",
+        "disableConfirm": "停用"
+      },
+      "assistantsMoved": "助手設定：已移到助手頁面",
+      "assistantsMovedHint": "在助手頁面的「設定 → 團隊 → 執行配置」裡管理；會話裡 @ 的就是它們。",
+      "assistantsMovedOpen": "開啟"
     },
     "actions": {
       "saveSystemInstructions": "儲存系統級提示詞",
@@ -1987,18 +1992,7 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "協作",
-    "sectionDescription": "智能體之間如何協同，以及它們能在對話中動用 codeg 的哪些工具。",
-    "personalAgent": {
-      "title": "個人助手",
-      "workdir": "工作目錄",
-      "workdirHint": "存放人設、規則和記憶的目錄，由 git 管理。目前：{current}。更換後會新起會話，舊目錄原樣保留。",
-      "notConfigured": "請先在個人助手頁面完成設定。",
-      "placeholder": "預設：資料目錄下的 personal-agent",
-      "useDefault": "使用預設",
-      "apply": "更換",
-      "saved": "工作目錄已更換。",
-      "readOnly": "個人助手在另一個 codeg 處理程序中執行，請在那裡修改。"
-    }
+    "sectionDescription": "智能體之間如何協同，以及它們能在對話中動用 codeg 的哪些工具。"
   },
   "LoginPage": {
     "documentTitle": "登入 - codeg",
@@ -3528,7 +3522,8 @@
         "mentionGroupSession": "工作階段",
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
-        "mentionGroupAssistant": "助手"
+        "mentionGroupAssistant": "助手",
+        "mentionManageAssistants": "管理執行配置…"
       },
       "messageQueue": {
         "addToQueue": "加入佇列",
@@ -7678,14 +7673,15 @@
   "PersonalAgent": {
     "title": "個人助手",
     "readOnly": "個人助手在同一資料目錄的另一個 codeg 處理程序中執行，本頁在這裡為唯讀。",
-    "noAssistants": "還沒有角色助手：個人助手只把工作派給它們。請到「設定 → 協作 → 助手」新增。",
+    "noAssistants": "還沒有可派活的執行配置：個人助手派活只交給它們。",
     "viewSession": "檢視底層會話",
     "viewSessionHint": "目前會話段的完整記錄，即時更新。",
     "sessionTitle": "第 {seq} 段 · 完整記錄",
     "setup": {
       "title": "設定你的個人助手",
       "description": "個人助手負責理解你的意圖、把工作派給你設定的角色助手、跟進並記住。先選擇它執行的 agent。",
-      "action": "選擇 agent"
+      "action": "選擇 agent",
+      "manageExecutors": "管理執行配置"
     },
     "errors": {
       "engineElsewhere": "個人助手在同一資料目錄的另一個 codeg 處理程序中執行，本頁在這裡為唯讀。"
@@ -7853,13 +7849,8 @@
       }
     },
     "settings": {
-      "title": "個人助手設定",
       "setupTitle": "設定你的個人助手",
-      "description": "它執行在什麼上、何時壓縮上下文、它是誰。",
       "setupDescription": "選擇個人助手執行的 agent 和全部選項。之後可以切換，時間軸保持連續。",
-      "tabBrain": "大腦",
-      "tabCompaction": "壓縮",
-      "tabDispatch": "派活",
       "tabPersona": "人設與記憶",
       "name": "名稱",
       "nameHint": "它在頁面和訊息裡顯示的名字和頭像；助手也知道自己叫這個名字。名字留空則使用預設名稱。",
@@ -7903,7 +7894,196 @@
       "deleteEntry": "刪除",
       "confirmDelete": "確定刪除",
       "confirmDeleteHint": "刪除這個條目和索引裡指向它的那一行？",
-      "entryDeleted": "已刪除 {name}。"
+      "entryDeleted": "已刪除 {name}。",
+      "saved": "已儲存。",
+      "saveFailed": "儲存失敗",
+      "restoreDefaults": "恢復本頁預設",
+      "back": "返回對話",
+      "viewTitle": "設定",
+      "backToOwn": "回到本頁的助手",
+      "editingOther": "正在修改「{name}」自己的設定。",
+      "readOnly": "助手在另一個 codeg 處理程序中執行，這裡的設定唯讀；執行配置本身仍可編輯。",
+      "setUpFirst": "請先設定主助手。",
+      "nav": {
+        "thisAssistant": "這個助手",
+        "allAssistants": "全部助手",
+        "team": "團隊",
+        "prefs": "偏好",
+        "identity": "身分與大腦",
+        "persona": "人設與記憶",
+        "execution": "執行方式",
+        "advanced": "進階",
+        "workers": "工作助手",
+        "executors": "執行配置",
+        "division": "分工",
+        "communication": "溝通",
+        "automation": "派活與自動"
+      },
+      "pages": {
+        "identity": "它的名字和頭像，以及它跑在哪個 agent 上——模式和權限也在這裡選，codeg 照著用。",
+        "persona": "它是誰、守什麼規矩、記得什麼：都是它工作目錄裡的檔案。",
+        "execution": "它預設派給哪個執行配置，以及它是按哪個範本建立的。",
+        "advanced": "壓縮、交接卡、同時派幾件、內建技能和工作目錄。",
+        "workers": "你的工作助手，各有各的職務、記憶和對話。點一個開啟它自己的設定。",
+        "executors": "助手派活交給的對象：一個 agent，加上它的選項和常駐指令。",
+        "division": "每類工作先交給誰。除非你點名要誰，或者首選當時接不了，助手都照這裡分。",
+        "communication": "助手怎麼和你說話。每個助手都照這一份。",
+        "communicationNote": "語氣與稱呼不在這一頁：寫在各助手的 SOUL.md 和主助手的 USER.md 裡。",
+        "automation": "助手自己做什麼、先問你什麼。預設一律自動，做了都出卡告訴你；每一項「先問我」都由你開啟。",
+        "automationNote": "要你確認的，會出一張卡，卡上就是要執行的完整內容，點了才執行。"
+      },
+      "prefs": {
+        "default": "（預設）",
+        "reply_length": {
+          "title": "回覆長短",
+          "hint": "助手回覆的長短。",
+          "short": "簡短",
+          "medium": "適中",
+          "long": "詳細"
+        },
+        "cards": {
+          "title": "用卡片回覆",
+          "hint": "助手回覆時用不用卡片（介面渲染）。",
+          "prefer": "盡量用卡片",
+          "decisions": "只在要你決定時用",
+          "never": "不用卡片"
+        },
+        "when_unsure": {
+          "title": "拿不準你的意思時",
+          "hint": "助手替你辦事時怎麼理解你的話。執行者的提問另計。",
+          "assume": "按最合理的理解先做，寫明假設",
+          "ask": "先問我"
+        },
+        "chat_changes": {
+          "title": "你在對話裡要改的",
+          "hint": "你讓助手改的設定。",
+          "apply": "直接改，出卡可復原",
+          "show": "先給我看"
+        },
+        "confirm_dispatch": {
+          "title": "派活前確認",
+          "hint": "要確認時出「等你確認」卡，卡上是完整的派活內容，點了才派。",
+          "never": "不用，直接派",
+          "code": "改程式碼的先確認",
+          "always": "每次都確認"
+        },
+        "followups": {
+          "title": "自己派出的工作的續作與重試",
+          "hint": "助手續作或重試它派出的工作時。",
+          "auto": "直接做",
+          "ask": "先問我"
+        },
+        "messages": {
+          "title": "給別的助手傳訊息",
+          "hint": "一個助手寫給另一個助手時。",
+          "auto": "直接傳送",
+          "ask": "先問我"
+        },
+        "worker_handoff": {
+          "title": "主助手把活交給工作助手",
+          "hint": "工作該歸某個工作助手時。",
+          "message": "傳訊息給它，由它負責到底",
+          "direct": "直接派給它的執行配置"
+        },
+        "loop_rounds": {
+          "title": "助手之間來回沒進展時停下",
+          "hint": "同一對助手來回幾輪（每輪兩則訊息）沒有進展就停；繞成一圈立刻停。0 表示不限。"
+        },
+        "automation_level": {
+          "title": "自動程度",
+          "standard": "標準",
+          "ask_more": "多問我",
+          "custom": "自訂",
+          "standardHint": "一切自動，做了都出卡告訴你。",
+          "ask_moreHint": "續作與重試、給別的助手傳訊息、對話裡的改動、改程式碼的派活，都先出卡，你點了才做。",
+          "customHint": "下面有幾項是你自己調過的。",
+          "confirmTitle": "切換到「{level}」？",
+          "confirmBody": "會覆蓋你改過的 {count} 項。",
+          "confirm": "切換"
+        }
+      },
+      "workdir": {
+        "title": "工作目錄",
+        "hint": "它存放人設、規則和記憶的地方，用 git 管理。目前是：{current}。換目錄會新開一個會話，舊目錄原樣保留。",
+        "placeholder": "預設：在資料目錄裡",
+        "useDefault": "用預設",
+        "apply": "遷移",
+        "saved": "工作目錄已遷移。"
+      },
+      "execution": {
+        "executor": "執行配置",
+        "executorHint": "它預設派給的執行配置。",
+        "executorGone": "它綁定的執行配置已刪除，請另選一個。",
+        "pick": "選一個",
+        "template": "範本",
+        "templateHint": "建立它時用的職務範本。",
+        "noTemplate": "空白"
+      },
+      "team": {
+        "noWorkers": "還沒有工作助手",
+        "noWorkersHint": "工作助手各管一攤——寫程式、審查——並負責到底。",
+        "boundTo": "派給 {name}",
+        "unbound": "沒綁定執行配置",
+        "sameBatch": "會話裡 @ 的助手和這裡的執行配置是同一批，這裡改了，兩邊同時生效。",
+        "delegationOff": "多智慧體協同已關閉：會話裡暫時不能 @ 它們；助手派活不受影響。",
+        "openCollaboration": "開啟協作設定",
+        "auto": "自動",
+        "divisionNote": "首選是工作助手的，主助手傳訊息給它；是執行配置的，直接派。"
+      },
+      "usage": {
+        "title": "助手怎麼用它",
+        "dispatch": "助手可以派活給它",
+        "dispatchHint": "關掉後會話裡照樣能 @ 它，只是助手不派給它。",
+        "modes": "可用的方式",
+        "modesHint": "其他方式的派活會被拒絕，並說明原因。",
+        "projects": "適用專案",
+        "projectsHint": "聊天會話不帶專案，不受這一項限制。",
+        "allProjects": "全部專案",
+        "saveFailed": "助手的用法沒儲存成功",
+        "notForDispatch": "不給助手派活",
+        "onlyModes": "只接{modes}",
+        "onlyProjects": "僅 {count} 個專案"
+      },
+      "executor": {
+        "running": "在做 {count} 件",
+        "fortnight": "兩週派 {dispatches} 件 · 完成 {completed} 件",
+        "boundBy": "綁在 {name}",
+        "firstFor": "{kinds}的首選",
+        "failing": "最近 {count} 次派給它的工作都失敗了：{error}",
+        "impactWorkerDelete": "它綁在「{name}」上：刪了，「{name}」要重新選一個。",
+        "impactWorkerOff": "它綁在「{name}」上：停用期間「{name}」無法派給它。",
+        "impactDivisionDelete": "分工裡「{kinds}」的首選是它：刪除後改為「自動」。",
+        "impactDivisionOff": "分工裡「{kinds}」的首選是它：停用期間助手會另挑。",
+        "impactRunning": "有 {count} 件派給它的工作在跑，不受影響。"
+      },
+      "division": {
+        "code": "寫程式",
+        "codeHint": "改專案程式碼。",
+        "review": "審查",
+        "reviewHint": "讀改動、指出問題。",
+        "test": "測試",
+        "testHint": "寫測試、跑測試。",
+        "fix_ci": "修 CI",
+        "fix_ciHint": "管線失敗；也是沒人負責的 PR 歸誰。",
+        "docs": "文件",
+        "docsHint": "寫文件、改文件。",
+        "release": "發布",
+        "releaseHint": "版本、更新日誌、發布。",
+        "research": "調查",
+        "researchHint": "查資料、做調查。",
+        "check": "檢查",
+        "checkHint": "驗收前檢查做完的工作。只列出開了工作會話的。"
+      },
+      "changed": {
+        "usageOf": "助手怎麼用「{name}」",
+        "usageDefault": "預設",
+        "usageSet": "已設定",
+        "on": "開",
+        "off": "關",
+        "default": "預設"
+      },
+      "targetLoading": "正在讀取這個助手的設定…",
+      "targetFailed": "讀不到這個助手的設定。"
     },
     "statusWord": {
       "idle": "閒置",
@@ -8130,6 +8310,30 @@
         "onIt": "{name} 已經在看「{text}」",
         "stopToo": "也停下 {name} 的這一件",
         "alsoStopped": "也停下了"
+      },
+      "confirm": {
+        "open": "等你確認",
+        "acted": "已確認，已送出",
+        "dismissed": "沒送出",
+        "accept": "確認，送出",
+        "dismiss": "不送了",
+        "messageTo": "傳給 {name} 的訊息"
+      },
+      "changed": {
+        "applied": "已按你的話改了",
+        "accepted": "已改",
+        "undone": "已復原",
+        "dismissed": "沒改",
+        "suggested": "建議改一項設定",
+        "show": "按你的話要改 · 等你確認",
+        "line": "{name} 按你的話改了",
+        "quote": "你說：「{quote}」",
+        "reason": "理由：{reason}",
+        "kept": "這幾項之後又改過，沒有復原：{items}",
+        "accept": "改成這樣",
+        "dismiss": "不用",
+        "undo": "復原",
+        "seeSettings": "去設定裡看"
       }
     },
     "exchange": {
@@ -8152,6 +8356,7 @@
       "skipped": "已略過",
       "withdrawn": "已不再需要",
       "resolved": "已處理"
-    }
+    },
+    "addExecutor": "新增執行配置"
   }
 }

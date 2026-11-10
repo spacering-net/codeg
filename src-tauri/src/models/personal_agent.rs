@@ -117,6 +117,40 @@ impl AccountSettings {
     }
 }
 
+/// The keys of the settings JSON that are the assistant's own
+/// (`PersonalAgentSettings`).
+pub const OWN_KEYS: &[&str] = &[
+    "auto_compact_percent",
+    "compact_command",
+    "compact_command_agent",
+    "handoff_budget_chars",
+    "dispatch_concurrency",
+    "skill_enabled",
+    "locale",
+];
+
+/// The same as [`merge_settings_json`], as a JSON merge patch the database
+/// applies in one statement (`personal_agent_service::patch_settings`): a
+/// save of the page never takes back an item another window changed
+/// meanwhile.
+pub fn settings_patch(own: &PersonalAgentSettings, primary: bool) -> serde_json::Value {
+    let mut patch = serde_json::Map::new();
+    for k in OWN_KEYS {
+        patch.insert((*k).to_string(), serde_json::Value::Null);
+    }
+    if let Ok(serde_json::Value::Object(m)) = serde_json::to_value(own) {
+        for (k, v) in m {
+            patch.insert(k, v);
+        }
+    }
+    if !primary {
+        for k in ACCOUNT_KEYS {
+            patch.insert((*k).to_string(), serde_json::Value::Null);
+        }
+    }
+    serde_json::Value::Object(patch)
+}
+
 /// The settings JSON to store on an assistant's row: `own` for its own keys,
 /// over what the row has. On the primary's row (`primary`), the account's
 /// keys `own` does not speak for — those another part of codeg keeps — stay
@@ -132,17 +166,8 @@ pub fn merge_settings_json(existing: &str, own: &PersonalAgentSettings, primary:
     };
     // Its own keys are what `own` says — one it leaves out (an unset locale)
     // is gone.
-    let own_keys = [
-        "auto_compact_percent",
-        "compact_command",
-        "compact_command_agent",
-        "handoff_budget_chars",
-        "dispatch_concurrency",
-        "skill_enabled",
-        "locale",
-    ];
-    for k in own_keys {
-        map.remove(k);
+    for k in OWN_KEYS {
+        map.remove(*k);
     }
     for (k, v) in written {
         map.insert(k, v);
@@ -230,6 +255,10 @@ pub struct PersonalAgentDraft {
     /// in the settings (`PersonalAgentSettings::locale`).
     #[serde(default)]
     pub locale: Option<String>,
+    /// A work assistant's executor config: the one it dispatches to by
+    /// default (4.4). Refused for the primary.
+    #[serde(default)]
+    pub executor_assistant_id: Option<i32>,
 }
 
 /// One timeline row.
@@ -511,6 +540,61 @@ pub struct PersonalAgentStatus {
 pub struct PersonalAgentSnapshot {
     pub agent: Option<PersonalAgentInfo>,
     pub status: PersonalAgentStatus,
+    /// The account's preferences and team (on the primary's row), the same
+    /// for every assistant.
+    pub account: super::personal_agent_prefs::AccountView,
+}
+
+/// One of the owner's assistants, as the roster and the settings list it.
+#[derive(Debug, Clone, Serialize)]
+pub struct BotSummary {
+    pub id: i32,
+    pub kind: crate::db::entities::personal_agent::BotKind,
+    pub uid: Option<String>,
+    pub name: String,
+    pub avatar: AssistantAvatar,
+    pub template: Option<String>,
+    pub executor_assistant_id: Option<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A piece of work an executor config is running.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecutorWork {
+    pub dispatch_id: i32,
+    pub bot_id: Option<i32>,
+    pub title: String,
+    pub mode: DispatchMode,
+    pub state: DispatchState,
+    pub work_task_id: Option<i32>,
+    pub conversation_id: Option<i32>,
+}
+
+/// The last dispatches to an executor config all failed: the latest one.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecutorFailing {
+    pub dispatch_id: i32,
+    pub bot_id: Option<i32>,
+    pub title: String,
+    pub error: Option<String>,
+    pub count: u32,
+}
+
+/// An executor config as the assistants use it (10.5, 补齐四 and 六): what
+/// it is running, whether it keeps failing, its last two weeks, which work
+/// assistants it is bound to, which kinds of work name it first, and how
+/// the assistants may use it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecutorView {
+    pub assistant_id: i32,
+    pub uid: String,
+    pub running: Vec<ExecutorWork>,
+    pub failing: Option<ExecutorFailing>,
+    pub dispatches_14d: u32,
+    pub completed_14d: u32,
+    pub workers: Vec<BotSummary>,
+    pub division: Vec<String>,
+    pub usage: super::personal_agent_prefs::ExecutorUsage,
 }
 
 /// One of the persona/memory files of the working directory.

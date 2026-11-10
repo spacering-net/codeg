@@ -1923,6 +1923,8 @@ export interface PersonalAgentDraft {
   agent_config?: AssistantAgentConfig
   settings?: PersonalAgentSettings
   locale?: string
+  /** A work assistant's executor config. */
+  executor_assistant_id?: number
 }
 
 export type SegmentReason =
@@ -2216,6 +2218,113 @@ export interface PersonalAgentStatus {
 export interface PersonalAgentSnapshot {
   agent: PersonalAgentInfo | null
   status: PersonalAgentStatus
+  /** The account's preferences and team: the same for every assistant. */
+  account: PersonalAgentAccount
+}
+
+/** The owner's preferences (13.5): the items whose feature exists. */
+export interface PersonalAgentPrefs {
+  reply_length: "short" | "medium" | "long"
+  cards: "prefer" | "decisions" | "never"
+  when_unsure: "assume" | "ask"
+  chat_changes: "apply" | "show"
+  confirm_dispatch: "never" | "code" | "always"
+  followups: "auto" | "ask"
+  messages: "auto" | "ask"
+  worker_handoff: "message" | "direct"
+  /** 0 = no limit. */
+  loop_rounds: number
+}
+
+export type PersonalAgentPrefKey = keyof PersonalAgentPrefs
+
+/** How the assistants may use an executor config (10.5). */
+export interface ExecutorUsage {
+  dispatch: boolean
+  modes: DispatchMode[]
+  /** `null`: every project. */
+  projects: number[] | null
+}
+
+/** The kinds of work the division names a first pick for. */
+export type DivisionKind =
+  | "code"
+  | "review"
+  | "test"
+  | "fix_ci"
+  | "docs"
+  | "release"
+  | "research"
+  | "check"
+
+export interface PersonalAgentTeam {
+  /** A kind of work → `bot:<uid>` or `assistant:<uid>`; left out = auto. */
+  division: Partial<Record<DivisionKind, string>>
+  /** By executor config uid; left out = the default. */
+  usage: Record<string, ExecutorUsage>
+}
+
+export interface PersonalAgentAccount {
+  prefs: PersonalAgentPrefs
+  team: PersonalAgentTeam
+  /** What the items add up to: a preset, or `custom`. */
+  automation_level: "standard" | "ask_more" | "custom"
+}
+
+/** One item to change: `prefs.<item>`, `prefs.automation_level`,
+ *  `own.<item>`, `team.division.<kind>`, `team.usage.<uid>`. */
+export interface PersonalAgentSettingChange {
+  key: string
+  value: unknown
+}
+
+export interface PersonalAgentApplied {
+  key: string
+  from: unknown
+  to: unknown
+}
+
+/** One of the owner's assistants, as the roster lists it. */
+export interface PersonalAgentBotSummary {
+  id: number
+  kind: PersonalAgentBotKind
+  uid: string | null
+  name: string
+  avatar: AssistantAvatar
+  template: string | null
+  executor_assistant_id: number | null
+  created_at: string
+}
+
+export interface ExecutorWork {
+  dispatch_id: number
+  bot_id: number | null
+  title: string
+  mode: DispatchMode
+  state: DispatchState
+  work_task_id: number | null
+  conversation_id: number | null
+}
+
+export interface ExecutorFailing {
+  dispatch_id: number
+  bot_id: number | null
+  title: string
+  error: string | null
+  count: number
+}
+
+/** An executor config as the assistants use it. */
+export interface ExecutorView {
+  assistant_id: number
+  uid: string
+  running: ExecutorWork[]
+  failing: ExecutorFailing | null
+  dispatches_14d: number
+  completed_14d: number
+  workers: PersonalAgentBotSummary[]
+  division: DivisionKind[]
+  usage: ExecutorUsage
 }
 
 /** One of the personal agent's files: a fixed one (`SOUL.md`, `AGENTS.md`,

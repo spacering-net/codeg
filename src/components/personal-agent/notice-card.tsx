@@ -27,18 +27,37 @@
 
 import { useState } from "react"
 import { useTranslations } from "next-intl"
-import { CircleHelp, Lightbulb, Loader2, OctagonX, Repeat } from "lucide-react"
+import {
+  CircleHelp,
+  Lightbulb,
+  Loader2,
+  OctagonX,
+  Repeat,
+  SlidersHorizontal,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentNoticeAct } from "@/lib/api"
-import type { AgentType, BotFace, TimelineRow } from "@/lib/types"
+import type {
+  AgentType,
+  BotFace,
+  PersonalAgentPrefKey,
+  TimelineRow,
+} from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { useAssistants } from "@/stores/assistants-store"
+import {
+  usePersonalAgentUi,
+  type SettingsPage,
+} from "@/stores/personal-agent-ui-store"
 
 import { CollapsedText } from "./event-card"
 import { ExchangeSheet } from "./exchange-sheet"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
+import { QuoteBar } from "./quote-bar"
+import { COMMUNICATION_ITEMS } from "./settings/pref-pages"
 import {
   AGENT_SURFACE,
   asMode,
@@ -70,10 +89,11 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   }
   if (kind === "loop") return <LoopCard item={item} />
   if (kind === "stopped") return <StoppedCard item={item} />
+  if (kind === "changed") return <ChangedCard item={item} />
   return null
 }
 
-type Choice = "accept" | "dismiss" | `stop:${number}`
+type Choice = "accept" | "dismiss" | "undo" | `stop:${number}`
 
 /** Answer a card; the error to show when the answer did not go through. */
 function useAnswer(noticeId: number) {
@@ -133,26 +153,41 @@ function ActionCard({
   const openable = target != null && canOpenWork(target)
   const intent = str(display, "intent")
   const text = str(display, "prompt") ?? str(display, "message")
+  // Held for the owner's confirmation by their settings, not suggested.
+  const confirm = !uncertain && str(data, "why") === "confirm"
+  const isMessage = action === "message"
+  const tc = (k: "open" | "acted" | "dismissed" | "accept" | "dismiss") =>
+    t(`confirm.${k}` as "confirm.open")
 
-  const heading = uncertain
+  const heading = confirm
     ? state === "acting"
-      ? t("uncertain.acting")
-      : state === "acted"
-        ? t("uncertain.acted")
-        : state === "dismissed"
-          ? t("uncertain.dismissed")
-          : state === "resolved"
-            ? t("uncertain.resolved")
-            : t("uncertain.open")
-    : state === "acting"
       ? t("acting")
       : state === "acted"
-        ? t("acted")
+        ? tc("acted")
         : state === "dismissed"
-          ? t("dismissed")
+          ? tc("dismissed")
           : state === "unknown"
             ? t("unknown")
-            : t("open")
+            : tc("open")
+    : uncertain
+      ? state === "acting"
+        ? t("uncertain.acting")
+        : state === "acted"
+          ? t("uncertain.acted")
+          : state === "dismissed"
+            ? t("uncertain.dismissed")
+            : state === "resolved"
+              ? t("uncertain.resolved")
+              : t("uncertain.open")
+      : state === "acting"
+        ? t("acting")
+        : state === "acted"
+          ? t("acted")
+          : state === "dismissed"
+            ? t("dismissed")
+            : state === "unknown"
+              ? t("unknown")
+              : t("open")
   // Waiting for the owner: open, or — a run cut off with no telling — not
   // sure it ran, which can be run again or let be.
   const answerable = state === "open" || state === "unknown"
@@ -196,25 +231,34 @@ function ActionCard({
           <span className="font-medium">{heading}</span>
         </p>
         {hint ? <p className="mb-2.5 text-sm break-words">{hint}</p> : null}
-        <div className={WORK_WELL}>
-          <WorkRow
-            executorId={num(display, "executor_id")}
-            executor={executor}
-            agentType={agentType}
-            title={
-              action === "followup"
-                ? t("followupOf", { title: str(display, "title") ?? "" })
-                : (str(display, "title") ?? row.body)
-            }
-            meta={meta({
-              executor,
-              mode,
-              folder: str(display, "project"),
-            })}
-            chip={null}
-            onOpen={openable ? () => openWork(target) : null}
-          />
-        </div>
+        {isMessage ? (
+          <p
+            className="mb-1 text-xs text-muted-foreground"
+            data-pa-confirm-message
+          >
+            {t("confirm.messageTo", { name: str(display, "to_name") ?? "" })}
+          </p>
+        ) : (
+          <div className={WORK_WELL}>
+            <WorkRow
+              executorId={num(display, "executor_id")}
+              executor={executor}
+              agentType={agentType}
+              title={
+                action === "followup"
+                  ? t("followupOf", { title: str(display, "title") ?? "" })
+                  : (str(display, "title") ?? row.body)
+              }
+              meta={meta({
+                executor,
+                mode,
+                folder: str(display, "project"),
+              })}
+              chip={null}
+              onOpen={openable ? () => openWork(target) : null}
+            />
+          </div>
+        )}
         {action === "followup" && intent && INTENTS.has(intent) ? (
           <p className="mt-2 text-xs text-muted-foreground">
             {t(`intent.${intent}` as "intent.revise")}
@@ -244,7 +288,9 @@ function ActionCard({
                 ? t("uncertain.again")
                 : state === "unknown"
                   ? t("again")
-                  : t("accept")}
+                  : confirm
+                    ? tc("accept")
+                    : t("accept")}
             </Button>
             <Button
               size="sm"
@@ -252,7 +298,11 @@ function ActionCard({
               disabled={readOnly || busy != null}
               onClick={() => void answer("dismiss")}
             >
-              {uncertain ? t("uncertain.dismiss") : t("dismiss")}
+              {uncertain
+                ? t("uncertain.dismiss")
+                : confirm
+                  ? tc("dismiss")
+                  : t("dismiss")}
             </Button>
           </div>
         ) : null}
@@ -521,6 +571,216 @@ function StoppedCard({ item }: { item: NoticeItem }) {
               </li>
             ))}
           </ul>
+        </div>
+      ) : null}
+    </CardFrame>
+  )
+}
+
+/** The settings page an item is on. */
+function pageOf(key: string): SettingsPage {
+  if (key.startsWith("own.")) return "advanced"
+  if (key.startsWith("team.division.")) return "division"
+  if (key.startsWith("team.usage.")) return "executors"
+  const item = key.replace(/^prefs\./, "")
+  return COMMUNICATION_ITEMS.includes(item as PersonalAgentPrefKey)
+    ? "communication"
+    : "automation"
+}
+
+interface Change {
+  key: string
+  from: unknown
+  to: unknown
+}
+
+function changesOf(v: unknown): Change[] {
+  return Array.isArray(v)
+    ? v.filter(
+        (c): c is Change =>
+          c != null &&
+          typeof c === "object" &&
+          typeof (c as Change).key === "string"
+      )
+    : []
+}
+
+/** An item's name and its values, as the settings view words them. */
+function useChangeText() {
+  const ts = useTranslations("PersonalAgent.settings")
+  const tp = useTranslations("PersonalAgent.settings.prefs")
+  const tk = useTranslations("PersonalAgent.settings.division")
+  const assistants = useAssistants()
+  const ownLabel: Record<string, string> = {
+    auto_compact_percent: ts("autoCompact"),
+    compact_command: ts("compactCommand"),
+    handoff_budget_chars: ts("handoffBudget"),
+    dispatch_concurrency: ts("concurrency"),
+    skill_enabled: ts("skill"),
+  }
+  const byUid = (uid: string) =>
+    assistants.find((a) => a.uid === uid)?.name ?? uid
+  const label = (key: string): string => {
+    if (key.startsWith("prefs.")) {
+      return tp(`${key.slice(6)}.title` as "reply_length.title")
+    }
+    if (key.startsWith("own.")) return ownLabel[key.slice(4)] ?? key
+    if (key.startsWith("team.division.")) {
+      return tk(key.slice(14) as "code")
+    }
+    if (key.startsWith("team.usage.")) {
+      return ts("changed.usageOf", { name: byUid(key.slice(11)) })
+    }
+    return key
+  }
+  const value = (key: string, v: unknown): string => {
+    if (key.startsWith("prefs.") && typeof v === "string") {
+      return tp(`${key.slice(6)}.${v}` as "reply_length.short")
+    }
+    if (key.startsWith("team.division.")) {
+      if (typeof v !== "string") return ts("team.auto")
+      const [kind, uid] = v.split(":")
+      return kind === "assistant" ? byUid(uid ?? "") : (uid ?? v)
+    }
+    if (key.startsWith("team.usage.")) {
+      return v == null ? ts("changed.usageDefault") : ts("changed.usageSet")
+    }
+    if (typeof v === "boolean") return v ? ts("changed.on") : ts("changed.off")
+    if (v == null) return ts("changed.default")
+    return String(v)
+  }
+  return { label, value }
+}
+
+/** A change to the settings from the conversation (13.3): made as the owner
+ *  said, with [Undo]; or put in front of them first — they asked to see
+ *  such changes first, or the assistant only inferred it — with [Change
+ *  it] [Not now]. In the primary's conversation, one line for what a work
+ *  assistant changed of everyone's. */
+function ChangedCard({ item }: { item: NoticeItem }) {
+  const t = useTranslations("PersonalAgent.notice.changed")
+  const { readOnly } = usePageScope()
+  const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  const botName = useBotName()
+  const { label, value } = useChangeText()
+  const row = item.row
+  const data = row.data
+  const state = str(data, "state") ?? "open"
+  const why = str(data, "why") ?? "asked"
+  const changes = changesOf(data?.changes)
+  const quote = str(data, "quote")
+  const reason = str(data, "reason")
+  const forRow = num(data, "for_row")
+  const kept = Array.isArray(data?.kept) ? (data.kept as string[]) : []
+  const error = str(data, "error")
+  const { busy, failed, answer } = useAnswer(Number(row.ref_id))
+  const from =
+    data?.from_bot && typeof data.from_bot === "object"
+      ? (data.from_bot as { id?: number; name?: string; kind?: string })
+      : null
+  const heading =
+    why === "line"
+      ? t("line", { name: botName(from) })
+      : state === "applied"
+        ? why === "asked"
+          ? t("applied")
+          : t("accepted")
+        : state === "undone"
+          ? t("undone")
+          : state === "dismissed"
+            ? t("dismissed")
+            : why === "suggest"
+              ? t("suggested")
+              : t("show")
+  const text = changes
+    .map(
+      (c) => `${label(c.key)}: ${value(c.key, c.from)} → ${value(c.key, c.to)}`
+    )
+    .join("\n")
+  return (
+    <CardFrame
+      item={item}
+      icon={SlidersHorizontal}
+      heading={heading}
+      text={text}
+      failed={
+        failed ?? (state === "open" || state === "applied" ? error : null)
+      }
+    >
+      <ul className="space-y-1" data-pa-changes>
+        {changes.map((c) => (
+          <li key={c.key} className="text-sm break-words">
+            <span className="text-muted-foreground">{label(c.key)}</span>{" "}
+            <span className="line-through decoration-muted-foreground/60">
+              {value(c.key, c.from)}
+            </span>
+            {" → "}
+            <span className="font-medium">{value(c.key, c.to)}</span>
+          </li>
+        ))}
+      </ul>
+      {forRow != null ? (
+        <QuoteBar targetId={forRow} tone="light" className="mt-2" />
+      ) : quote ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t("quote", { quote })}
+        </p>
+      ) : null}
+      {reason ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t("reason", { reason })}
+        </p>
+      ) : null}
+      {kept.length > 0 ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t("kept", { items: kept.map(label).join("、") })}
+        </p>
+      ) : null}
+      {why !== "line" ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {state === "open" ? (
+            <>
+              <Button
+                size="sm"
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("accept")}
+              >
+                {busy === "accept" ? (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                ) : null}
+                {t("accept")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("dismiss")}
+              >
+                {t("dismiss")}
+              </Button>
+            </>
+          ) : state === "applied" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("undo")}
+            >
+              {busy === "undo" ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : null}
+              {t("undo")}
+            </Button>
+          ) : null}
+          {changes.length > 0 ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => openSettings(pageOf(changes[0].key))}
+            >
+              {t("seeSettings")}
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </CardFrame>

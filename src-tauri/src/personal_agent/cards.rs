@@ -127,6 +127,8 @@ pub struct HandoffInput<'a> {
     pub items: &'a [ItemLine],
     pub recent: &'a [RecentLine],
     pub assistants: &'a [AssistantLine],
+    /// The owner's division of work, when they set one.
+    pub division: Option<&'a str>,
     pub budget_chars: usize,
 }
 
@@ -212,8 +214,8 @@ fn render_recent(recent: &[RecentLine]) -> String {
 
 fn render_assistants(assistants: &[AssistantLine]) -> String {
     if assistants.is_empty() {
-        return "(none configured — tell the owner to add one under Settings → Collaboration → \
-                Assistants)"
+        return "(none — tell the owner to add one on the assistants page, under Settings → \
+                Team → Executor configs)"
             .to_string();
     }
     assistants
@@ -240,7 +242,10 @@ one: hand it work that is its job and it sees it through; its answer comes back 
 <codeg-message>. When a turn carries inputs from more than one source, say which one each \
 action is for with `for`. You never do long work yourself. Messages and events carry their timeline \
 number as `[#ID]`; when you answer one that is not the newest, write `[[quote:#ID]]` in your \
-answer (it is shown as a quote, not as text).";
+answer (it is shown as a quote, not as text). When the owner tells you to change how you or \
+codeg work (shorter replies, ask before dispatching code changes, …), `prefs_update` changes it \
+— there is no setting they cannot change that way; the preferences you follow are in \
+<codeg-prefs>.";
 
 /// How the agent's memory works, in every handoff card — the skill says it
 /// at length, but not every agent loads skills, nor reads one before it
@@ -413,8 +418,12 @@ from the owner.\n\n\
         tools = section(
             "Tools",
             &format!(
-                "{TOOL_NOTES}\nRole assistants you may dispatch to:\n{}",
-                render_assistants(input.assistants)
+                "{TOOL_NOTES}\nExecutor configs you may dispatch to:\n{}{}",
+                render_assistants(input.assistants),
+                input
+                    .division
+                    .map(|d| format!("\n\n{d}"))
+                    .unwrap_or_default()
             )
         ),
     );
@@ -683,6 +692,7 @@ mod tests {
             items,
             recent,
             assistants,
+            division: None,
             budget_chars: budget,
         }
     }

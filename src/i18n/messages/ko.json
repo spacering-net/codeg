@@ -900,8 +900,13 @@
           "avatarTooLarge": "아바타 이미지가 너무 큽니다.",
           "invalidAgentOptions": "에이전트 옵션이 모두 선택되지 않았습니다. 어시스턴트를 다시 열어 모든 항목을 선택하세요.",
           "notFound": "이 어시스턴트는 더 이상 존재하지 않습니다."
-        }
-      }
+        },
+        "disableTitle": "{name}을(를) 사용 중지할까요?",
+        "disableConfirm": "사용 중지"
+      },
+      "assistantsMoved": "어시스턴트 구성: 어시스턴트 페이지로 이동했습니다",
+      "assistantsMovedHint": "어시스턴트 페이지의 설정 → 팀 → 실행 구성에서 관리합니다. 대화에서 @로 호출하는 것도 같은 것입니다.",
+      "assistantsMovedOpen": "열기"
     },
     "actions": {
       "saveSystemInstructions": "시스템 지침 저장",
@@ -1987,18 +1992,7 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "협업",
-    "sectionDescription": "에이전트끼리 어떻게 협업하는지와, 대화 안에서 사용할 수 있는 codeg 자체 도구의 범위를 설정합니다.",
-    "personalAgent": {
-      "title": "개인 에이전트",
-      "workdir": "작업 디렉터리",
-      "workdirHint": "페르소나, 규칙, 메모리를 보관하는 곳으로 git으로 관리됩니다. 현재: {current}. 옮기면 새 세션이 시작되며, 이전 디렉터리는 그대로 남습니다.",
-      "notConfigured": "먼저 개인 에이전트 페이지에서 설정하세요.",
-      "placeholder": "기본값: 데이터 디렉터리의 personal-agent",
-      "useDefault": "기본값 사용",
-      "apply": "이동",
-      "saved": "작업 디렉터리를 옮겼습니다.",
-      "readOnly": "개인 에이전트가 다른 codeg 프로세스에서 실행 중입니다. 그곳에서 변경하세요."
-    }
+    "sectionDescription": "에이전트끼리 어떻게 협업하는지와, 대화 안에서 사용할 수 있는 codeg 자체 도구의 범위를 설정합니다."
   },
   "LoginPage": {
     "documentTitle": "로그인 - codeg",
@@ -3528,7 +3522,8 @@
         "mentionGroupSession": "세션",
         "mentionGroupCommit": "커밋",
         "mentionGroupSkill": "스킬",
-        "mentionGroupAssistant": "어시스턴트"
+        "mentionGroupAssistant": "어시스턴트",
+        "mentionManageAssistants": "실행 구성 관리…"
       },
       "messageQueue": {
         "addToQueue": "대기열에 추가",
@@ -7678,14 +7673,15 @@
   "PersonalAgent": {
     "title": "개인 에이전트",
     "readOnly": "개인 에이전트가 이 데이터 디렉터리를 사용하는 다른 codeg 프로세스에서 실행 중이므로 여기서는 이 페이지가 읽기 전용입니다.",
-    "noAssistants": "아직 역할별 어시스턴트가 없습니다. 개인 에이전트는 작업을 어시스턴트에게 맡깁니다. 설정 → 협업 → 어시스턴트에서 추가하세요.",
+    "noAssistants": "어시스턴트가 배정할 수 있는 실행 구성이 아직 없습니다. 개인 에이전트는 이들에게만 작업을 맡깁니다.",
     "viewSession": "세션 보기",
     "viewSessionHint": "현재 세션의 전체 기록을 실시간으로 보여 줍니다.",
     "sessionTitle": "세션 {seq} · 전체 기록",
     "setup": {
       "title": "개인 에이전트 설정하기",
       "description": "개인 에이전트는 원하는 바를 파악해 설정해 둔 어시스턴트에게 작업을 맡기고, 진행 상황을 챙기며 기억합니다. 먼저 실행할 에이전트를 고르세요.",
-      "action": "에이전트 선택"
+      "action": "에이전트 선택",
+      "manageExecutors": "실행 구성 관리"
     },
     "errors": {
       "engineElsewhere": "개인 에이전트가 이 데이터 디렉터리를 사용하는 다른 codeg 프로세스에서 실행 중입니다. 여기서는 이 페이지가 읽기 전용입니다."
@@ -7853,13 +7849,8 @@
       }
     },
     "settings": {
-      "title": "개인 에이전트 설정",
       "setupTitle": "개인 에이전트 설정하기",
-      "description": "무엇으로 실행할지, 언제 컨텍스트를 압축할지, 어떤 존재인지 정합니다.",
       "setupDescription": "개인 에이전트가 실행될 에이전트와 모든 옵션을 고르세요. 나중에 바꿔도 타임라인은 그대로 이어집니다.",
-      "tabBrain": "두뇌",
-      "tabCompaction": "압축",
-      "tabDispatch": "배정",
       "tabPersona": "페르소나와 메모리",
       "name": "이름",
       "nameHint": "페이지와 메시지에 표시되는 이름과 아바타입니다. 에이전트도 자기 이름을 압니다. 이름을 비워 두면 기본 이름을 씁니다.",
@@ -7903,7 +7894,196 @@
       "deleteEntry": "삭제",
       "confirmDelete": "삭제",
       "confirmDeleteHint": "이 항목과 색인의 해당 줄을 삭제할까요?",
-      "entryDeleted": "{name}을(를) 삭제했습니다."
+      "entryDeleted": "{name}을(를) 삭제했습니다.",
+      "saved": "저장했습니다.",
+      "saveFailed": "저장하지 못했습니다",
+      "restoreDefaults": "기본값으로 복원",
+      "back": "대화로 돌아가기",
+      "viewTitle": "설정",
+      "backToOwn": "이 페이지의 어시스턴트로 돌아가기",
+      "editingOther": "{name}의 자체 설정을 편집하고 있습니다.",
+      "readOnly": "어시스턴트가 다른 codeg 프로세스에서 실행 중이라 여기서는 설정이 읽기 전용입니다. 실행 구성 자체는 계속 편집할 수 있습니다.",
+      "setUpFirst": "먼저 메인 어시스턴트를 설정하세요.",
+      "nav": {
+        "thisAssistant": "이 어시스턴트",
+        "allAssistants": "모든 어시스턴트",
+        "team": "팀",
+        "prefs": "환경설정",
+        "identity": "정체성과 두뇌",
+        "persona": "페르소나와 메모리",
+        "execution": "실행",
+        "advanced": "고급",
+        "workers": "작업 어시스턴트",
+        "executors": "실행 구성",
+        "division": "업무 분담",
+        "communication": "소통",
+        "automation": "배정 및 자동화"
+      },
+      "pages": {
+        "identity": "사용할 이름과 사진, 그리고 실행할 에이전트(모드와 권한 포함)입니다. codeg는 고른 그대로 실행합니다.",
+        "persona": "누구인지, 지키는 규칙, 기억하는 것입니다. 모두 작업 디렉터리에 있는 파일입니다.",
+        "execution": "기본으로 배정할 실행 구성과, 만들 때 사용한 템플릿입니다.",
+        "advanced": "압축, 인계 카드, 동시에 실행할 수, 내장 스킬, 작업 디렉터리입니다.",
+        "workers": "작업 어시스턴트 목록입니다. 각자 고유한 업무, 메모리, 대화를 가집니다. 하나를 클릭하면 해당 설정이 열립니다.",
+        "executors": "어시스턴트가 작업을 맡기는 대상입니다. 에이전트와 그 옵션, 상시 지침으로 구성됩니다.",
+        "division": "작업 종류별로 누가 먼저 맡을지 정합니다. 다른 대상을 직접 지정하거나 1순위가 그때 맡을 수 없는 경우가 아니면 어시스턴트는 이를 따릅니다.",
+        "communication": "어시스턴트가 사용자와 대화하는 방식입니다. 모든 어시스턴트가 같은 설정을 따릅니다.",
+        "communicationNote": "말투와 호칭은 여기서 정하지 않습니다. 각 어시스턴트의 SOUL.md와 메인 어시스턴트의 USER.md에 적으세요.",
+        "automation": "어시스턴트가 스스로 하는 일과 먼저 물어보는 일입니다. 기본적으로 모두 자동으로 실행하고 카드로 알려 줍니다. 각 “먼저 묻기”는 직접 켜면 됩니다.",
+        "automationNote": "확인을 기다리는 일은 실행할 내용이 그대로 담긴 카드로 표시되며, 클릭하면 실행됩니다."
+      },
+      "prefs": {
+        "default": "(기본값)",
+        "reply_length": {
+          "title": "답변 길이",
+          "hint": "어시스턴트의 답변 길이입니다.",
+          "short": "짧게",
+          "medium": "보통",
+          "long": "자세히"
+        },
+        "cards": {
+          "title": "카드로 답변",
+          "hint": "어시스턴트가 카드(UI-render 스킬)로 답할지 여부입니다.",
+          "prefer": "도움이 될 때마다",
+          "decisions": "결정이 필요할 때만",
+          "never": "카드 사용 안 함"
+        },
+        "when_unsure": {
+          "title": "의도가 분명하지 않을 때",
+          "hint": "어시스턴트가 대신 일할 때 사용자의 말을 어떻게 해석할지입니다. 실행자의 질문은 별도입니다.",
+          "assume": "가장 그럴듯한 쪽으로 진행하고 가정을 밝히기",
+          "ask": "먼저 묻기"
+        },
+        "chat_changes": {
+          "title": "대화에서 요청한 변경",
+          "hint": "어시스턴트에게 바꾸라고 한 설정입니다.",
+          "apply": "바로 변경(카드에서 되돌리기 가능)",
+          "show": "먼저 보여 주기"
+        },
+        "confirm_dispatch": {
+          "title": "배정 전 확인",
+          "hint": "확인을 기다리는 배정은 모든 내용이 담긴 카드로 표시되며, 클릭하면 보내집니다.",
+          "never": "아니요, 바로 배정",
+          "code": "코드 변경은 먼저 확인",
+          "always": "매번"
+        },
+        "followups": {
+          "title": "직접 배정한 작업의 후속 조치와 재시도",
+          "hint": "어시스턴트가 맡긴 작업을 이어 가거나 재시도할 때입니다.",
+          "auto": "바로 실행",
+          "ask": "먼저 묻기"
+        },
+        "messages": {
+          "title": "다른 어시스턴트에게 보내는 메시지",
+          "hint": "한 어시스턴트가 다른 어시스턴트에게 쓸 때입니다.",
+          "auto": "바로 보내기",
+          "ask": "먼저 묻기"
+        },
+        "worker_handoff": {
+          "title": "메인 어시스턴트가 작업 어시스턴트에게 넘기기",
+          "hint": "작업이 작업 어시스턴트의 몫일 때입니다.",
+          "message": "메시지를 보내고 끝까지 맡기기",
+          "direct": "그 실행 구성에 바로 배정"
+        },
+        "loop_rounds": {
+          "title": "진전 없는 대화를 멈추는 기준",
+          "hint": "두 어시스턴트가 진전 없이 주고받을 수 있는 라운드 수(라운드당 메시지 2개)입니다. 순환은 즉시 멈춥니다. 0이면 제한이 없습니다."
+        },
+        "automation_level": {
+          "title": "자동화 수준",
+          "standard": "표준",
+          "ask_more": "더 자주 묻기",
+          "custom": "사용자 지정",
+          "standardHint": "모두 자동으로 실행하고 카드로 알려 줍니다.",
+          "ask_moreHint": "후속 조치와 재시도, 다른 어시스턴트에게 보내는 메시지, 대화에서 요청한 변경, 코드를 바꾸는 배정은 먼저 카드로 확인을 받습니다.",
+          "customHint": "아래 항목 중 일부를 직접 조정했습니다.",
+          "confirmTitle": "“{level}”(으)로 전환할까요?",
+          "confirmBody": "직접 바꾼 항목 {count}개를 덮어씁니다.",
+          "confirm": "전환"
+        }
+      },
+      "workdir": {
+        "title": "작업 디렉터리",
+        "hint": "페르소나, 규칙, 메모리를 보관하는 곳으로 git으로 관리됩니다. 현재: {current}. 옮기면 새 세션이 시작되며 기존 디렉터리는 그대로 남습니다.",
+        "placeholder": "기본값: 데이터 디렉터리 안",
+        "useDefault": "기본값 사용",
+        "apply": "옮기기",
+        "saved": "작업 디렉터리를 옮겼습니다."
+      },
+      "execution": {
+        "executor": "실행 구성",
+        "executorHint": "기본으로 배정하는 대상입니다.",
+        "executorGone": "연결된 실행 구성이 삭제되었습니다. 다른 것을 고르세요.",
+        "pick": "선택",
+        "template": "템플릿",
+        "templateHint": "만들 때 염두에 둔 업무입니다.",
+        "noTemplate": "빈 템플릿"
+      },
+      "team": {
+        "noWorkers": "아직 작업 어시스턴트가 없습니다",
+        "noWorkersHint": "작업 어시스턴트는 코드 작성, 리뷰 같은 한 가지 업무를 맡아 끝까지 처리합니다.",
+        "boundTo": "{name}에 배정",
+        "unbound": "실행 구성 없음",
+        "sameBatch": "대화에서 @로 호출하는 어시스턴트와 이 실행 구성은 같은 것입니다. 여기서 바꾸면 양쪽 모두 바뀝니다.",
+        "delegationOff": "다중 에이전트 협업이 꺼져 있어 지금은 대화에서 @로 호출할 수 없습니다. 어시스턴트의 배정에는 영향이 없습니다.",
+        "openCollaboration": "협업 설정 열기",
+        "auto": "자동",
+        "divisionNote": "1순위가 작업 어시스턴트이면 메인 어시스턴트가 메시지를 보내고, 실행 구성이면 바로 배정합니다."
+      },
+      "usage": {
+        "title": "어시스턴트의 사용 방식",
+        "dispatch": "어시스턴트가 배정할 수 있음",
+        "dispatchHint": "꺼도 대화에서는 계속 @로 호출할 수 있습니다. 어시스턴트가 배정하지 않을 뿐입니다.",
+        "modes": "받는 모드",
+        "modesHint": "다른 모드의 배정은 이유와 함께 거절됩니다.",
+        "projects": "프로젝트",
+        "projectsHint": "채팅에는 프로젝트가 없으므로 이 설정 때문에 거절되지 않습니다.",
+        "allProjects": "모든 프로젝트",
+        "saveFailed": "어시스턴트의 사용 방식을 저장하지 못했습니다",
+        "notForDispatch": "어시스턴트 배정에는 사용 안 함",
+        "onlyModes": "{modes}만",
+        "onlyProjects": "프로젝트 {count}개만"
+      },
+      "executor": {
+        "running": "{count}개 실행 중",
+        "fortnight": "2주: {dispatches}건 배정 · {completed}건 완료",
+        "boundBy": "{name} 전용",
+        "firstFor": "{kinds} 1순위",
+        "failing": "최근 {count}건의 배정이 모두 실패했습니다: {error}",
+        "impactWorkerDelete": "{name}의 실행 구성입니다. {name}에게 다른 실행 구성이 필요해집니다.",
+        "impactWorkerOff": "{name}의 실행 구성입니다. 사용 중지된 동안 {name}은(는) 여기에 배정할 수 없습니다.",
+        "impactDivisionDelete": "{kinds}의 1순위입니다. 해당 항목은 “자동”으로 돌아갑니다.",
+        "impactDivisionOff": "{kinds}의 1순위입니다. 사용 중지된 동안 어시스턴트가 다른 대상을 고릅니다.",
+        "impactRunning": "실행 중인 작업 {count}개는 계속 진행됩니다."
+      },
+      "division": {
+        "code": "코드 작성",
+        "codeHint": "프로젝트 코드 변경.",
+        "review": "리뷰",
+        "reviewHint": "변경 사항을 읽고 문제점을 짚어 냅니다.",
+        "test": "테스트",
+        "testHint": "테스트 작성과 실행.",
+        "fix_ci": "CI 수정",
+        "fix_ciHint": "실패한 파이프라인. 담당자가 없는 PR을 누가 맡을지도 여기서 정해집니다.",
+        "docs": "문서",
+        "docsHint": "문서 작성과 업데이트.",
+        "release": "릴리스",
+        "releaseHint": "버전, 변경 로그, 배포.",
+        "research": "조사",
+        "researchHint": "알아보기.",
+        "check": "검사",
+        "checkHint": "완료된 작업을 승인하기 전에 검사합니다. 작업 세션을 받는 것만 표시됩니다."
+      },
+      "changed": {
+        "usageOf": "어시스턴트의 {name} 사용 방식",
+        "usageDefault": "기본값",
+        "usageSet": "설정됨",
+        "on": "켜짐",
+        "off": "꺼짐",
+        "default": "기본값"
+      },
+      "targetLoading": "이 어시스턴트의 설정을 불러오는 중…",
+      "targetFailed": "이 어시스턴트의 설정을 불러올 수 없습니다."
     },
     "statusWord": {
       "idle": "대기 중",
@@ -8130,6 +8310,30 @@
         "onIt": "{name}이(가) “{text}” 처리 중",
         "stopToo": "{name}의 것도 멈추기",
         "alsoStopped": "함께 멈춤"
+      },
+      "confirm": {
+        "open": "확인 대기",
+        "acted": "확인함 · 보냈습니다",
+        "dismissed": "보내지 않음",
+        "accept": "진행",
+        "dismiss": "보내지 않기",
+        "messageTo": "{name}에게 보낼 메시지"
+      },
+      "changed": {
+        "applied": "말씀하신 대로 변경함",
+        "accepted": "변경함",
+        "undone": "되돌림",
+        "dismissed": "변경하지 않음",
+        "suggested": "변경 제안",
+        "show": "말씀하신 대로 변경 예정 · 확인 대기",
+        "line": "{name}이(가) 말씀하신 대로 변경했습니다",
+        "quote": "말씀하신 내용: “{quote}”",
+        "reason": "이유: {reason}",
+        "kept": "그 뒤 다시 바뀌어 그대로 둔 항목: {items}",
+        "accept": "변경하기",
+        "dismiss": "하지 않기",
+        "undo": "되돌리기",
+        "seeSettings": "설정에서 보기"
       }
     },
     "exchange": {
@@ -8152,6 +8356,7 @@
       "skipped": "건너뜀",
       "withdrawn": "더 이상 필요 없음",
       "resolved": "처리됨"
-    }
+    },
+    "addExecutor": "실행 구성 추가"
   }
 }

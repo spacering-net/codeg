@@ -120,14 +120,20 @@ export function withoutEntryLine(index: string, entry: string): string {
     .join("\n")
 }
 
-export function PersonaFiles() {
+export function PersonaFiles({
+  botId: forBot,
+}: {
+  /** Whose files: left out, the page's own assistant's. */
+  botId?: number | null
+} = {}) {
   const t = useTranslations("PersonalAgent.settings")
   const [files, setFiles] = useState<PersonalAgentFile[] | null>(null)
   const [active, setActive] = useState("SOUL.md")
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [confirming, setConfirming] = useState(false)
-  const botId = useBotId()
+  const pageBot = useBotId()
+  const botId = forBot ?? pageBot
   useEffect(() => {
     let cancelled = false
     personalAgentFiles(botId)

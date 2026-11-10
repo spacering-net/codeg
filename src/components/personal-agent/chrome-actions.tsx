@@ -88,11 +88,7 @@ export function PersonalAgentChromeActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-52">
           <DropdownMenuItem
-            onClick={() =>
-              window.dispatchEvent(
-                new Event(PERSONAL_AGENT_EVENTS.openSettings)
-              )
-            }
+            onClick={() => usePersonalAgentUi.getState().openSettings()}
           >
             <Settings2 className="size-4" />
             {t("settings")}

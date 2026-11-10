@@ -4685,3 +4685,460 @@ async fn the_owners_stop_takes_a_follow_up_the_turn_sent() {
     primary.stop().await.unwrap();
     assert_eq!(dispatch_state(&primary, d).await.state, DispatchState::Canceled);
 }
+
+// ── 1.5: settings and preferences ───────────────────────────────────────────
+
+use super::prefs::SettingChange;
+
+fn change(key: &str, value: serde_json::Value) -> SettingChange {
+    SettingChange {
+        key: key.into(),
+        value,
+    }
+}
+
+async fn call_tool(engine: &Arc<PersonalAgentEngine>, name: &str, args: serde_json::Value) -> super::tools::ToolOutcome {
+    super::tools::call_for_test(engine, name, args).await
+}
+
+/// The newest card of `kind` on the assistant's timeline.
+async fn last_card(engine: &PersonalAgentEngine, kind: &str) -> crate::db::entities::personal_agent_timeline::Model {
+    notice_rows(engine)
+        .await
+        .into_iter()
+        .rfind(|r| data_of(r)["notice"] == kind)
+        .unwrap_or_else(|| panic!("no {kind} card"))
+}
+
+fn card_id(row: &crate::db::entities::personal_agent_timeline::Model) -> i32 {
+    row.ref_id.as_deref().unwrap().parse().unwrap()
+}
+
+#[tokio::test]
+async fn two_windows_changing_different_items_both_keep_theirs() {
+    let (engine, _tmp) = configured().await;
+    let (one, two) = (
+        [change("prefs.reply_length", json!("short"))],
+        [change("own.dispatch_concurrency", json!(5))],
+    );
+    let (a, b) = tokio::join!(engine.apply_settings(&one), engine.apply_settings(&two));
+    assert_eq!(a.unwrap()[0].from, json!("medium"));
+    b.unwrap();
+    let prefs = engine.prefs().await;
+    assert_eq!(prefs.reply_length, crate::models::personal_agent_prefs::ReplyLength::Short);
+    assert_eq!(engine.snapshot().await.agent.unwrap().settings.dispatch_concurrency, 5);
+    // The identity page's save brings no settings: it takes nothing back.
+    engine
+        .save(PersonalAgentDraft {
+            name: Some("Nova".into()),
+            locale: Some("en".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Short);
+    assert_eq!(engine.snapshot().await.agent.unwrap().settings.dispatch_concurrency, 5);
+    // A save with settings rewrites the assistant's own, never the account's.
+    engine
+        .save(PersonalAgentDraft {
+            settings: Some(PersonalAgentSettings::default()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Short);
+    // Nothing that is already so is a change; what is not a setting is refused.
+    assert!(engine.apply_settings(&[change("prefs.reply_length", json!("short"))]).await.unwrap().is_empty());
+    assert!(engine.apply_settings(&[change("prefs.reply_length", json!("tiny"))]).await.is_err());
+    assert!(engine.apply_settings(&[change("own.auto_compact_percent", json!(101))]).await.is_err());
+    assert!(engine.apply_settings(&[change("prefs.nope", json!(1))]).await.is_err());
+    assert_eq!(engine.snapshot().await.account.prefs.reply_length, crate::models::personal_agent_prefs::ReplyLength::Short);
+}
+
+#[tokio::test]
+async fn the_brain_is_given_the_preferences_and_told_what_changed() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "c-prefs").await;
+    engine.send_owner_message("hello".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains("<codeg-prefs>") && prompt.contains("replies: medium"), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "c-prefs", text("Hi."), true).await;
+    emit(&engine, &state, "c-prefs", turn_complete("end_turn"), true).await;
+
+    // Unchanged: not said again.
+    engine.send_owner_message("again".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(!prompt.contains("<codeg-prefs>"), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "c-prefs", turn_complete("end_turn"), true).await;
+
+    // Changed: the next delivery says what, and gives the whole set.
+    engine
+        .apply_settings(&[change("prefs.reply_length", json!("short"))])
+        .await
+        .unwrap();
+    engine.send_owner_message("and now?".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (prompt, _) = take_prompt(&mut rx);
+    assert!(prompt.contains("kind=\"prefs-update\""), "{prompt}");
+    assert!(prompt.contains("The owner changed their preferences: replies → short"), "{prompt}");
+}
+
+#[tokio::test]
+async fn dispatches_that_change_code_wait_for_the_owner_when_they_asked() {
+    let (engine, tmp) = configured().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("repo").to_string_lossy()).await;
+    engine
+        .apply_settings(&[change("prefs.confirm_dispatch", json!("code"))])
+        .await
+        .unwrap();
+    let seg = open_segment(&engine).await;
+    let owner = engine.send_owner_message("fix the login".into(), Vec::new(), None).await.unwrap();
+    let batch = turn_with(&engine, seg, "c-1", &[owner.id], &[]).await;
+    let args = json!({
+        "mode": "task", "assistant_id": coder, "project_id": project,
+        "title": "Fix the login", "prompt": "The login rejects valid passwords.",
+    });
+    let out = call_tool(&engine, "dispatch", args.clone()).await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(out.data["state"], "awaiting_owner");
+    assert!(all_dispatches(&engine).await.is_empty(), "nothing runs before the owner says so");
+    let card = last_card(&engine, "proposal").await;
+    assert_eq!(data_of(&card)["why"], "confirm");
+    assert_eq!(data_of(&card)["display"]["prompt"], "The login rejects valid passwords.");
+    // The same call again in this turn (a re-delivery): the same card.
+    let again = call_tool(&engine, "dispatch", args).await;
+    assert_eq!(again.data["notice_id"], out.data["notice_id"]);
+    assert_eq!(again.data["earlier"], true);
+    // A chat touches no project: it goes out at once.
+    let chat = call_tool(&engine, "dispatch", json!({
+        "mode": "chat", "assistant_id": coder, "title": "Research", "prompt": "Find out X.",
+    }))
+    .await;
+    assert!(chat.data["dispatch_id"].is_number(), "{}", chat.text);
+    // The owner confirms: exactly that, filed under their message.
+    let row = engine.act_on_notice(card_id(&card), "accept").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "acted");
+    let made: Vec<_> = all_dispatches(&engine).await.into_iter().filter(|d| d.mode == DispatchMode::Task).collect();
+    assert_eq!(made.len(), 1);
+    assert_eq!(made[0].prompt, "The login rejects valid passwords.");
+    assert_eq!(made[0].for_input.as_deref(), Some(format!("owner:{}", owner.id).as_str()));
+    let told = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert!(told.iter().any(|e| e.summary.contains("The owner confirmed your dispatch")), "{told:?}");
+    let _ = batch;
+}
+
+#[tokio::test]
+async fn follow_ups_and_messages_wait_for_the_owner_when_they_asked() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    primary
+        .apply_settings(&[change("prefs.automation_level", json!("ask_more"))])
+        .await
+        .unwrap();
+    let account = primary.account().await;
+    assert_eq!(account.automation_level, "ask_more");
+    assert!(account.prefs.confirms(DispatchMode::Task));
+
+    let out = say(&primary, json!({ "to": "Dev", "text": "Take the release notes." })).await;
+    assert_eq!(out.data["state"], "awaiting_owner", "{}", out.text);
+    assert!(pending_message_events(&primary, w).await.is_empty(), "nothing reaches Dev yet");
+    let card = last_card(&primary, "proposal").await;
+    assert_eq!(data_of(&card)["action"], "message");
+    assert_eq!(data_of(&card)["display"]["message"], "Take the release notes.");
+    let row = primary.act_on_notice(card_id(&card), "accept").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "acted");
+    let id = row.data.as_ref().unwrap()["result"]["message_id"].as_i64().unwrap() as i32;
+    let m = message(&primary, id).await;
+    assert_eq!((m.body.as_str(), m.to_bot_id), ("Take the release notes.", w));
+    assert_eq!(pending_message_events(&primary, w).await.len(), 1, "now Dev is woken");
+
+    // A follow-up of its own dispatch: on a card too.
+    let coder = role_assistant(&primary, "Coder", true).await;
+    let d = primary
+        .dispatch(DispatchRequest {
+            mode: DispatchMode::Chat,
+            assistant_id: coder,
+            title: "Research".into(),
+            prompt: "Find out X.".into(),
+            project_id: None,
+            report: false,
+            on_done: None,
+        })
+        .await
+        .unwrap();
+    let out = call_tool(&primary, "dispatch_followup", json!({ "dispatch_id": d.id, "message": "Also Y." })).await;
+    assert_eq!(out.data["state"], "awaiting_owner", "{}", out.text);
+    let card = last_card(&primary, "proposal").await;
+    assert_eq!(data_of(&card)["action"], "followup");
+    primary.act_on_notice(card_id(&card), "dismiss").await.unwrap();
+    let told = svc::pending_events(&primary.db.conn, primary.bot().await).await.unwrap();
+    assert!(told.iter().any(|e| e.summary.contains("declined your follow-up")), "{told:?}");
+}
+
+#[tokio::test]
+async fn the_owners_words_change_a_setting_at_once_and_the_card_undoes_it() {
+    let (engine, _tmp) = configured().await;
+    let out = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "reply_length", "value": "short" }, { "key": "auto_compact_percent", "value": 70 }],
+        "quote": "keep it short",
+    }))
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(out.data["state"], "applied");
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Short);
+    assert_eq!(engine.snapshot().await.agent.unwrap().settings.auto_compact_percent, 70);
+    let card = last_card(&engine, "changed").await;
+    let d = data_of(&card);
+    assert_eq!((d["why"].as_str(), d["state"].as_str()), (Some("asked"), Some("applied")));
+    assert_eq!(d["quote"], "keep it short");
+    assert_eq!(d["changes"][0], json!({ "key": "prefs.reply_length", "from": "medium", "to": "short" }));
+    // Changed again since: undo leaves that one, takes the other back.
+    engine.apply_settings(&[change("own.auto_compact_percent", json!(80))]).await.unwrap();
+    let row = engine.act_on_notice(card_id(&card), "undo").await.unwrap();
+    let d = row.data.unwrap();
+    assert_eq!(d["state"], "undone");
+    assert_eq!(d["kept"], json!(["own.auto_compact_percent"]));
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Medium);
+    assert_eq!(engine.snapshot().await.agent.unwrap().settings.auto_compact_percent, 80);
+    assert!(engine.act_on_notice(card_id(&card), "undo").await.is_err(), "once");
+    // A change needs the owner's words, or it is only a suggestion.
+    let out = call_tool(&engine, "prefs_update", json!({ "changes": [{ "key": "cards", "value": "never" }] })).await;
+    assert!(!out.ok && out.text.contains("quote"), "{}", out.text);
+    let out = call_tool(&engine, "prefs_update", json!({ "changes": [{ "key": "colour", "value": "red" }], "quote": "x" })).await;
+    assert!(!out.ok && out.text.contains("reply_length"), "the keys are listed: {}", out.text);
+}
+
+#[tokio::test]
+async fn shown_first_or_suggested_a_change_waits_and_a_no_holds_for_a_week() {
+    let (engine, _tmp) = configured().await;
+    engine.apply_settings(&[change("prefs.chat_changes", json!("show"))]).await.unwrap();
+    let out = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "confirm_dispatch", "value": "always" }], "quote": "ask me before every dispatch",
+    }))
+    .await;
+    assert_eq!(out.data["state"], "open", "{}", out.text);
+    assert_eq!(engine.prefs().await.confirm_dispatch, crate::models::personal_agent_prefs::ConfirmDispatch::Never);
+    let card = last_card(&engine, "changed").await;
+    assert_eq!(data_of(&card)["why"], "show");
+    engine.act_on_notice(card_id(&card), "accept").await.unwrap();
+    assert_eq!(engine.prefs().await.confirm_dispatch, crate::models::personal_agent_prefs::ConfirmDispatch::Always);
+
+    // The assistant's own inference: a suggestion, which a no mutes.
+    let out = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "reply_length", "value": "short" }], "suggest": true, "reason": "you trim every answer",
+    }))
+    .await;
+    assert_eq!(out.data["state"], "open", "{}", out.text);
+    let card = last_card(&engine, "changed").await;
+    assert_eq!(data_of(&card)["why"], "suggest");
+    engine.act_on_notice(card_id(&card), "dismiss").await.unwrap();
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Medium);
+    let again = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "reply_length", "value": "long" }], "suggest": true, "reason": "maybe longer",
+    }))
+    .await;
+    assert!(!again.ok && again.text.contains("turned down"), "{}", again.text);
+    // What the owner says is never held back by it.
+    let said = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "reply_length", "value": "short" }], "quote": "short please",
+    }))
+    .await;
+    assert!(said.ok, "{}", said.text);
+}
+
+#[tokio::test]
+async fn a_work_assistants_change_of_the_account_is_recorded_for_the_primary() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let out = call_tool(&worker, "prefs_update", json!({
+        "changes": [{ "key": "reply_length", "value": "long" }], "quote": "go into detail",
+    }))
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(primary.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Long, "every assistant reads one set");
+    assert_eq!(data_of(&last_card(&worker, "changed").await)["why"], "asked");
+    let line = last_card(&primary, "changed").await;
+    assert_eq!(data_of(&line)["why"], "line");
+    assert_eq!(data_of(&line)["from_bot"]["id"], w);
+    assert!(primary.act_on_notice(card_id(&line), "undo").await.is_err(), "the record has nothing to act on");
+    // Its own settings are its own.
+    call_tool(&worker, "prefs_update", json!({
+        "changes": [{ "key": "dispatch_concurrency", "value": 9 }], "quote": "nine at once",
+    }))
+    .await;
+    assert_eq!(worker.snapshot().await.agent.unwrap().settings.dispatch_concurrency, 9);
+    assert_eq!(primary.snapshot().await.agent.unwrap().settings.dispatch_concurrency, 3);
+    assert_eq!(rows_of(&primary, primary.bot().await, TimelineKind::Notice).await.len(), 1, "no record of a worker's own");
+}
+
+#[tokio::test]
+async fn how_the_owner_lets_an_executor_config_be_used_is_checked_at_dispatch() {
+    let (engine, tmp) = configured().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let reviewer = role_assistant(&engine, "Reviewer", true).await;
+    let uid = |id: i32| {
+        let engine = engine.clone();
+        async move { crate::db::service::assistant_service::get(&engine.db.conn, id).await.unwrap().unwrap().uid }
+    };
+    let (coder_uid, reviewer_uid) = (uid(coder).await, uid(reviewer).await);
+    let a = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("a").to_string_lossy()).await;
+    let b = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("b").to_string_lossy()).await;
+    engine
+        .apply_settings(&[
+            change(&format!("team.usage.{coder_uid}"), json!({ "dispatch": true, "modes": ["task"], "projects": [a] })),
+            change(&format!("team.usage.{reviewer_uid}"), json!({ "dispatch": false })),
+            change("team.division.review", json!(format!("assistant:{coder_uid}"))),
+        ])
+        .await
+        .unwrap();
+    let err = engine.dispatch(request(DispatchMode::Session, coder, Some(a))).await.unwrap_err();
+    assert!(err.contains("takes only task"), "{err}");
+    let err = engine.dispatch(request(DispatchMode::Task, coder, Some(b))).await.unwrap_err();
+    assert!(err.contains("works only on projects"), "{err}");
+    let err = engine.dispatch(request(DispatchMode::Task, reviewer, Some(a))).await.unwrap_err();
+    assert!(err.contains("does not let the assistants dispatch"), "{err}");
+    engine.dispatch(request(DispatchMode::Task, coder, Some(a))).await.unwrap();
+    let list = call_tool(&engine, "assistant_list", json!({})).await;
+    assert!(list.text.contains("[takes only task; only on projects"), "{}", list.text);
+    assert!(list.text.contains("Not for your dispatches"), "{}", list.text);
+    assert!(list.text.contains("- review → Coder (executor config"), "{}", list.text);
+    // A pick must be someone who is there.
+    assert!(engine.apply_settings(&[change("team.division.review", json!("bot:nobody"))]).await.is_err());
+
+    // Deleting it puts its kinds of work back to auto.
+    crate::commands::assistants::assistant_delete_core(&crate::web::event_bridge::EventEmitter::Noop, &engine.db, coder)
+        .await
+        .unwrap();
+    let team = engine.account().await.team;
+    assert!(team.division.is_empty(), "{team:?}");
+    assert!(!team.usage.contains_key(&coder_uid));
+    assert!(team.usage.contains_key(&reviewer_uid));
+}
+
+#[tokio::test]
+async fn the_executor_view_shows_what_each_runs_and_what_keeps_failing() {
+    let (engine, _tmp) = configured().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let mut ids = Vec::new();
+    for _ in 0..4 {
+        let d = engine
+            .dispatch(DispatchRequest {
+                mode: DispatchMode::Chat,
+                assistant_id: coder,
+                title: "Research".into(),
+                prompt: "Find out X.".into(),
+                project_id: None,
+                report: false,
+                on_done: None,
+            })
+            .await
+            .unwrap();
+        ids.push(d.id);
+    }
+    for (i, id) in ids.iter().enumerate() {
+        let state = if i == 0 { DispatchState::Running } else { DispatchState::Failed };
+        svc::update_dispatch(
+            &engine.db.conn,
+            *id,
+            None,
+            DispatchWrite {
+                state: Some(state),
+                error: Some(Some(format!("boom {i}"))),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let view = crate::commands::personal_agent::personal_agent_executors_core(&engine.db).await.unwrap();
+    let v = view.iter().find(|v| v.assistant_id == coder).unwrap();
+    assert_eq!(v.running.len(), 1);
+    assert_eq!(v.running[0].dispatch_id, ids[0]);
+    let failing = v.failing.as_ref().expect("the last three failed");
+    assert_eq!(failing.dispatch_id, ids[3]);
+    assert_eq!(failing.error.as_deref(), Some("boom 3"));
+    assert_eq!(v.dispatches_14d, 4);
+}
+
+#[tokio::test]
+async fn a_replayed_turn_gets_what_it_got_whatever_the_owner_switched_since() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let seg = open_segment(&primary).await;
+    let owner = primary.send_owner_message("tell Dev, and research X".into(), Vec::new(), None).await.unwrap();
+    turn_with(&primary, seg, "c-replay", &[owner.id], &[]).await;
+    let coder = role_assistant(&primary, "Coder", true).await;
+    let research = json!({ "mode": "chat", "assistant_id": coder, "title": "Research X", "prompt": "Find out X." });
+    let note = json!({ "to": "Dev", "text": "Take the release notes." });
+
+    // Asked first: on cards, which the owner confirms.
+    primary
+        .apply_settings(&[change("prefs.messages", json!("ask")), change("prefs.confirm_dispatch", json!("always"))])
+        .await
+        .unwrap();
+    let held = say(&primary, note.clone()).await;
+    assert_eq!(held.data["state"], "awaiting_owner", "{}", held.text);
+    primary.act_on_notice(held.data["notice_id"].as_i64().unwrap() as i32, "accept").await.unwrap();
+    let held_d = call_tool(&primary, "dispatch", research.clone()).await;
+    assert_eq!(held_d.data["state"], "awaiting_owner", "{}", held_d.text);
+    primary.act_on_notice(held_d.data["notice_id"].as_i64().unwrap() as i32, "accept").await.unwrap();
+    assert_eq!(pending_message_events(&primary, w).await.len(), 1);
+    assert_eq!(all_dispatches(&primary).await.len(), 1);
+
+    // The owner stops asking first; the turn is delivered again and makes the
+    // same calls: the cards are the answer, nothing goes out twice.
+    primary
+        .apply_settings(&[change("prefs.messages", json!("auto")), change("prefs.confirm_dispatch", json!("never"))])
+        .await
+        .unwrap();
+    let again = say(&primary, note).await;
+    assert_eq!((again.data["earlier"].as_bool(), again.data["notice_id"].clone()), (Some(true), held.data["notice_id"].clone()));
+    let again_d = call_tool(&primary, "dispatch", research.clone()).await;
+    assert_eq!(again_d.data["earlier"], true, "{}", again_d.text);
+    assert_eq!(pending_message_events(&primary, w).await.len(), 1, "the message went once");
+    assert_eq!(all_dispatches(&primary).await.len(), 1, "the dispatch ran once");
+
+    // The other way round: made directly, then the owner asks to confirm —
+    // the replay gets the dispatch it made, and no card.
+    let direct = json!({ "mode": "chat", "assistant_id": coder, "title": "Research Y", "prompt": "Find out Y." });
+    let made = call_tool(&primary, "dispatch", direct.clone()).await;
+    let id = made.data["dispatch_id"].clone();
+    assert!(id.is_number(), "{}", made.text);
+    primary.apply_settings(&[change("prefs.confirm_dispatch", json!("always"))]).await.unwrap();
+    let cards_before = notice_rows(&primary).await.len();
+    let replay = call_tool(&primary, "dispatch", direct).await;
+    assert_eq!((replay.data["dispatch_id"].clone(), replay.data["earlier"].clone()), (id, json!(true)), "{}", replay.text);
+    assert_eq!(notice_rows(&primary).await.len(), cards_before, "no card for what already ran");
+}
+
+#[tokio::test]
+async fn a_replayed_settings_change_never_overwrites_a_newer_edit() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let owner = engine.send_owner_message("keep it short".into(), Vec::new(), None).await.unwrap();
+    turn_with(&engine, seg, "c-prefs-replay", &[owner.id], &[]).await;
+    let ask = json!({ "changes": [{ "key": "reply_length", "value": "short" }], "quote": "keep it short" });
+    let first = call_tool(&engine, "prefs_update", ask.clone()).await;
+    assert_eq!(first.data["state"], "applied", "{}", first.text);
+    // The owner changes it again on the page.
+    engine.apply_settings(&[change("prefs.reply_length", json!("long"))]).await.unwrap();
+    let cards = notice_rows(&engine).await.len();
+    let replay = call_tool(&engine, "prefs_update", ask).await;
+    assert!(replay.ok && replay.text.starts_with("Already done"), "{}", replay.text);
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Long, "the newer edit stays");
+    assert_eq!(notice_rows(&engine).await.len(), cards, "no second card");
+    // A call that came to nothing is answered the same way when replayed.
+    let noop = json!({ "changes": [{ "key": "reply_length", "value": "long" }], "quote": "long is fine" });
+    assert!(call_tool(&engine, "prefs_update", noop.clone()).await.text.starts_with("Nothing to change"));
+    engine.apply_settings(&[change("prefs.reply_length", json!("medium"))]).await.unwrap();
+    let replay = call_tool(&engine, "prefs_update", noop).await;
+    assert!(replay.text.starts_with("Already done"), "{}", replay.text);
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Medium);
+}

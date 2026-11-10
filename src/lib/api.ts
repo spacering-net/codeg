@@ -39,6 +39,10 @@ import type {
   PersonalAgentFile,
   PersonalAgentInfo,
   PersonalAgentSnapshot,
+  PersonalAgentApplied,
+  PersonalAgentBotSummary,
+  PersonalAgentSettingChange,
+  ExecutorView,
   PersonalAgentStats,
   TimelineChanges,
   TimelineCursor,
@@ -2580,6 +2584,28 @@ export async function personalAgentStopAll(bot?: number | null): Promise<void> {
   return getTransport().call("personal_agent_stop_all", { botId: bot ?? null })
 }
 
+/** Change settings item by item: the account's preferences and team, or
+ *  assistant `bot`'s own. Returns what changed. */
+export async function personalAgentSettingsPatch(
+  changes: PersonalAgentSettingChange[],
+  bot?: number | null
+): Promise<PersonalAgentApplied[]> {
+  return getTransport().call("personal_agent_settings_patch", {
+    changes,
+    botId: bot ?? null,
+  })
+}
+
+/** The owner's assistants, primary first. */
+export async function personalAgentBots(): Promise<PersonalAgentBotSummary[]> {
+  return getTransport().call("personal_agent_bots", {})
+}
+
+/** Every executor config as the assistants use it. */
+export async function personalAgentExecutors(): Promise<ExecutorView[]> {
+  return getTransport().call("personal_agent_executors", {})
+}
+
 /** A thread between assistants, as assistant `bot` sees it. */
 export async function personalAgentThread(
   threadId: number,
@@ -2644,8 +2670,9 @@ export async function personalAgentMarkSeen(
  *  is still on its way. */
 export async function personalAgentNoticeAct(
   noticeId: number,
-  /** `accept` / `dismiss`; a stop card's `stop:<message id>`. */
-  action: "accept" | "dismiss" | `stop:${number}`,
+  /** `accept` / `dismiss`; a stop card's `stop:<message id>`; a changed
+   *  card's `undo`. */
+  action: "accept" | "dismiss" | "undo" | `stop:${number}`,
   bot?: number | null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_notice_act", {

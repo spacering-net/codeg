@@ -129,6 +129,11 @@ pub struct SegmentState {
     /// `USER.md`) it was last given; a change is sent at the next delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_digest: Option<String>,
+    /// The owner's preferences as this segment's agent was last given them
+    /// (`<codeg-prefs>`); a change is sent at the next delivery, with what
+    /// changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefs_given: Option<crate::models::personal_agent_prefs::Prefs>,
 }
 
 impl SegmentState {
@@ -2508,6 +2513,32 @@ impl PersonalAgentEngine {
                 owner_given = true;
             }
         }
+        // The owner's preferences: whole with a handoff or a state card;
+        // otherwise, when they changed since the agent was last given them,
+        // what changed and the whole set anew (13.2).
+        let prefs_now = self.prefs().await;
+        let worker_bot = row.kind == BotKind::Worker;
+        let mut prefs_handed = false;
+        if carried.handoff || carried.state_card {
+            cards_text.push(crate::models::personal_agent_prefs::prefs_block(&prefs_now, worker_bot));
+            prefs_handed = true;
+        } else if seg_state.prefs_given.as_ref() != Some(&prefs_now) {
+            use crate::models::personal_agent_prefs as p;
+            match &seg_state.prefs_given {
+                Some(old) => {
+                    let changes = p::prefs_changes(old, &prefs_now, worker_bot);
+                    if !changes.is_empty() {
+                        cards_text.push(p::prefs_update_card(&changes, &prefs_now, worker_bot));
+                    }
+                }
+                // A segment from before codeg passed them on.
+                None => cards_text.push(format!(
+                    "<codeg-context kind=\"prefs\">\n{}\n</codeg-context>",
+                    p::prefs_block(&prefs_now, worker_bot)
+                )),
+            }
+            prefs_handed = true;
+        }
         // What this delivery re-delivers: events an interrupted turn had
         // been handed, messages the owner sent again after one. Their
         // batches' ledger entries count as this one's.
@@ -2794,6 +2825,10 @@ impl PersonalAgentEngine {
             self.update_segment_state(session.segment.id, |s| s.owner_digest = owner_digest.clone())
                 .await;
         }
+        if prefs_handed {
+            self.update_segment_state(session.segment.id, |s| s.prefs_given = Some(prefs_now.clone()))
+                .await;
+        }
         self.emit(PersonalAgentChange::Status);
         Ok(())
     }
@@ -2940,18 +2975,31 @@ impl PersonalAgentEngine {
                 },
             })
             .collect();
-        let assistants: Vec<AssistantLine> =
-            crate::db::service::assistant_service::list_live_enabled(&self.db.conn)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|a| AssistantLine {
-                    id: a.id,
-                    name: a.name,
-                    description: a.description,
-                    agent: a.label_snapshot.agent,
-                })
-                .collect();
+        // The ones open to the assistants' dispatches, with how the owner
+        // lets them be used.
+        let team = self.account().await.team;
+        let mut assistants: Vec<AssistantLine> = Vec::new();
+        for a in crate::db::service::assistant_service::list_live_enabled(&self.db.conn)
+            .await
+            .unwrap_or_default()
+        {
+            let usage = team.usage_of(&a.uid);
+            if !usage.dispatch {
+                continue;
+            }
+            let description = match self.usage_note(&usage).await {
+                Some(n) if a.description.trim().is_empty() => format!("[{n}]"),
+                Some(n) => format!("{} [{n}]", a.description.trim()),
+                None => a.description,
+            };
+            assistants.push(AssistantLine {
+                id: a.id,
+                name: a.name,
+                description,
+                agent: a.label_snapshot.agent,
+            });
+        }
+        let division = self.division_text().await;
         let previous = svc::list_segments(&self.db.conn, self.bot().await)
             .await
             .unwrap_or_default()
@@ -2983,6 +3031,7 @@ impl PersonalAgentEngine {
             items,
             recent: &recent,
             assistants: &assistants,
+            division: division.as_deref(),
             budget_chars: budget as usize,
         })
     }
@@ -3755,6 +3804,7 @@ impl PersonalAgentEngine {
             .map(super::templates::template_locale)
             .or(remembered);
         let new_config = draft.agent_config.clone();
+        let mut compact_cleared = false;
         if let Some(config) = new_config.as_ref() {
             crate::db::service::assistant_service::validate_agent_config(config)
                 .map_err(|e| e.to_string())?;
@@ -3779,6 +3829,7 @@ impl PersonalAgentEngine {
             {
                 settings.compact_command = None;
                 settings.compact_command_agent = None;
+                compact_cleared = true;
             }
         } else if existing.is_none() {
             return Err("pick the agent the personal agent runs on".into());
@@ -3791,15 +3842,49 @@ impl PersonalAgentEngine {
             settings.compact_command_agent = effective_agent.map(|a| a.as_wire().into_owned());
         }
         let worker = existing.as_ref().is_some_and(|r| r.kind == BotKind::Worker);
+        if let Some(id) = draft.executor_assistant_id {
+            if !worker {
+                return Err("only a work assistant is bound to an executor config".into());
+            }
+            crate::db::service::assistant_service::get(&self.db.conn, id)
+                .await
+                .map_err(|e| e.to_string())?
+                .filter(|a| a.is_live())
+                .ok_or_else(|| format!("no executor config #{id}"))?;
+            write.executor_assistant_id = Some(id);
+        }
         if worker {
             // The owner's language is the account's, on the primary's row.
             settings.locale = None;
         }
-        write.settings_json = Some(crate::models::personal_agent::merge_settings_json(
-            existing.as_ref().map(|r| r.settings.as_str()).unwrap_or("{}"),
-            &settings,
-            !worker,
-        ));
+        // Over what is stored at the moment of writing, not what was read:
+        // a preference changed meanwhile stays. A save that brings no
+        // settings writes only what it changes — the owner's language, a
+        // compact command the switch of brain cleared — so an item another
+        // window changed meanwhile is not taken back.
+        if existing.is_some() {
+            let full = crate::models::personal_agent::settings_patch(&settings, !worker);
+            write.settings_patch = Some(if draft.settings.is_some() {
+                full
+            } else {
+                let mut keys: Vec<&str> = vec!["locale"];
+                if compact_cleared {
+                    keys.extend(["compact_command", "compact_command_agent"]);
+                }
+                if worker {
+                    keys.extend(crate::models::personal_agent::ACCOUNT_KEYS);
+                }
+                let mut patch = serde_json::Map::new();
+                for k in keys {
+                    patch.insert(k.to_string(), full.get(k).cloned().unwrap_or(serde_json::Value::Null));
+                }
+                serde_json::Value::Object(patch)
+            });
+        } else {
+            write.settings_json = Some(crate::models::personal_agent::merge_settings_json(
+                "{}", &settings, !worker,
+            ));
+        }
         let first_save = existing.is_none();
         let renamed = existing
             .as_ref()
@@ -4130,7 +4215,12 @@ impl PersonalAgentEngine {
                 );
             }
         }
-        PersonalAgentSnapshot { agent, status }
+        let account = self.account().await;
+        PersonalAgentSnapshot {
+            agent,
+            status,
+            account,
+        }
     }
 }
 
@@ -4369,7 +4459,15 @@ pub async fn snapshot_any(
         EngineHost::Elsewhere
     };
     let status = status_from_db(db, row.as_ref(), host, data_dir).await;
-    PersonalAgentSnapshot { agent, status }
+    let account = match svc::primary_bot(&db.conn).await.ok().flatten() {
+        Some(p) => crate::models::personal_agent_prefs::AccountView::from_settings(&p.settings),
+        None => crate::models::personal_agent_prefs::AccountView::from_settings("{}"),
+    };
+    PersonalAgentSnapshot {
+        agent,
+        status,
+        account,
+    }
 }
 
 /// Whether a connection id belongs to a conversation the personal agent

@@ -48,7 +48,7 @@ use crate::models::personal_agent::{PersonalAgentChange, TimelineRow};
 pub const MAX_MESSAGE_CHARS: usize = 20_000;
 /// Rounds a pair may go back and forth on a thread with no progress when the
 /// owner set none.
-pub const DEFAULT_LOOP_ROUNDS: u32 = 3;
+pub use crate::models::personal_agent_prefs::DEFAULT_LOOP_ROUNDS;
 /// How far back a resent message is followed to its first copy.
 const RESEND_CHAIN_MAX: usize = 64;
 
@@ -196,6 +196,34 @@ pub struct MessageCall {
     pub reply_to: Option<String>,
     pub wants_reply: Option<bool>,
     pub for_input: Option<String>,
+}
+
+/// A `bot_message` call made concrete (`resolve_message`): what a card
+/// asking the owner first keeps, and sends as it is.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedMessage {
+    pub to: i32,
+    /// The receiver's name when it was resolved, for the card.
+    #[serde(default)]
+    pub to_name: String,
+    pub body: String,
+    pub reply_to: Option<i32>,
+    pub wants_reply: bool,
+    pub thread: Option<i32>,
+    #[serde(default)]
+    pub lineage: svc::Lineage,
+}
+
+/// How a message is recorded in the ledger.
+#[derive(Debug, Clone)]
+pub enum MessageAuth {
+    /// A delivery's tool call: one per batch and key, across the batches it
+    /// re-delivers.
+    Ledgered { batch_id: i32, scope: Vec<i32> },
+    /// The owner said so on card `notice_id`.
+    Card { notice_id: i32 },
+    /// Outside any delivery and any card.
+    Direct,
 }
 
 /// What a `bot_message` call came to.
@@ -502,15 +530,7 @@ impl PersonalAgentEngine {
     /// The pair limit on a thread: messages between two assistants with no
     /// progress (twice the owner's rounds); 0 is none.
     async fn loop_limit(&self) -> u32 {
-        let rounds = svc::primary_bot(&self.db.conn)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|p| serde_json::from_str::<Value>(&p.settings).ok())
-            .and_then(|s| s.pointer("/prefs/loop_rounds").and_then(|v| v.as_u64()))
-            .map(|r| r.min(1_000) as u32)
-            .unwrap_or(DEFAULT_LOOP_ROUNDS);
-        rounds * 2
+        self.prefs().await.loop_rounds * 2
     }
 
     /// Send a message to another assistant, as `bot_message` does: checked,
@@ -518,6 +538,18 @@ impl PersonalAgentEngine {
     /// call the ledger holds (a re-delivered turn) sends nothing and gets
     /// the message sent then.
     pub async fn send_message(self: &Arc<Self>, call: MessageCall) -> Result<MessageSent, String> {
+        let resolved = self.resolve_message(call).await?;
+        let auth = match self.ledger_batch().await {
+            Some((batch_id, scope)) => MessageAuth::Ledgered { batch_id, scope },
+            None => MessageAuth::Direct,
+        };
+        self.send_resolved(resolved, auth).await
+    }
+
+    /// A `bot_message` call made concrete: who it goes to, what it
+    /// answers, what it is for and the thread it goes on — what a card
+    /// keeps, so the message sent is the one shown.
+    pub async fn resolve_message(&self, call: MessageCall) -> Result<ResolvedMessage, String> {
         let me = self
             .agent_row()
             .await
@@ -593,55 +625,119 @@ impl PersonalAgentEngine {
             (Some(m), _) => m.thread_id,
             (None, t) => t,
         };
-        let reply_to = answered.as_ref().map(|m| m.id);
-        let key = message_key(to.id, &body, reply_to, lineage.for_input.as_deref());
-        let ledger = self.ledger_batch().await;
+        Ok(ResolvedMessage {
+            to: to.id,
+            to_name: display_name(&to),
+            body,
+            reply_to: answered.as_ref().map(|m| m.id),
+            wants_reply,
+            thread,
+            lineage,
+        })
+    }
+
+    /// The ledger key of a resolved message.
+    pub(super) fn resolved_key(m: &ResolvedMessage) -> String {
+        message_key(m.to, &m.body, m.reply_to, m.lineage.for_input.as_deref())
+    }
+
+    /// The message a re-delivered turn's same call sent, when there is one.
+    pub(super) async fn sent_before(
+        &self,
+        m: &ResolvedMessage,
+        scope: &[i32],
+    ) -> Result<Option<MessageSent>, String> {
+        let key = Self::resolved_key(m);
+        let earlier = svc::ledger_entries(&self.db.conn, scope, &key)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|e| e.state == crate::db::entities::personal_agent_action::ActionState::Committed);
+        match earlier {
+            Some(entry) => {
+                let to = svc::get_bot_any(&self.db.conn, m.to)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or("the receiver is gone")?;
+                self.earlier_message(&entry, &to).await.map(Some)
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Send a resolved message: checked against the thread, written with
+    /// all it sets going, the receiver woken.
+    pub async fn send_resolved(
+        self: &Arc<Self>,
+        m: ResolvedMessage,
+        auth: MessageAuth,
+    ) -> Result<MessageSent, String> {
+        let me = self
+            .agent_row()
+            .await
+            .ok_or("configure the assistant first")?;
+        let to = svc::get_bot_any(&self.db.conn, m.to)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("the receiver is gone")?;
+        if to.deleted_at.is_some() {
+            return Err(format!(
+                "{} was deleted and takes no more messages; use bot_list",
+                display_name(&to)
+            ));
+        }
+        let key = Self::resolved_key(&m);
         // A repeat costs nothing to find before anything is checked or
         // written: the message was sent, whatever the thread says now.
-        if let Some((_, scope)) = &ledger {
-            if let Some(earlier) = svc::ledger_entries(&self.db.conn, scope, &key)
-                .await
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .find(|e| {
-                    e.state == crate::db::entities::personal_agent_action::ActionState::Committed
-                })
-            {
-                return self.earlier_message(&earlier, &to).await;
+        if let MessageAuth::Ledgered { scope, .. } = &auth {
+            if let Some(earlier) = self.sent_before(&m, scope).await? {
+                return Ok(earlier);
             }
         }
-        if let Some(t) = thread {
-            self.check_thread(t, me.id, to.id, answered.is_none(), &body)
+        if let Some(t) = m.thread {
+            self.check_thread(t, me.id, to.id, m.reply_to.is_none(), &m.body)
                 .await?;
         }
-        let excerpt = first_line(&body, 80);
+        let excerpt = first_line(&m.body, 80);
+        let (ledger, ledger_notice, sent_batch_id) = match &auth {
+            MessageAuth::Ledgered { batch_id, .. } => (
+                Some(LedgerSlot::in_batch(*batch_id, key.clone(), super::ledger::fresh_op_id())),
+                None,
+                Some(*batch_id),
+            ),
+            MessageAuth::Card { notice_id } => (
+                Some(LedgerSlot::outside(super::ledger::card_op_id(*notice_id, 1))),
+                Some(*notice_id),
+                None,
+            ),
+            MessageAuth::Direct => (None, None, None),
+        };
         let new = msvc::NewMessage {
             from: me.id,
             to: to.id,
-            body: body.clone(),
-            wants_reply,
-            reply_to,
-            thread: match thread {
+            body: m.body.clone(),
+            wants_reply: m.wants_reply,
+            reply_to: m.reply_to,
+            thread: match m.thread {
                 Some(t) => msvc::ThreadPick::On(t),
                 None => msvc::ThreadPick::New,
             },
-            origin_bot_id: lineage.origin_bot_id,
-            origin_row_id: lineage.origin_row_id,
-            for_input: lineage.for_input.clone(),
-            sent_batch_id: ledger.as_ref().map(|(b, _)| *b),
+            origin_bot_id: m.lineage.origin_bot_id,
+            origin_row_id: m.lineage.origin_row_id,
+            for_input: m.lineage.for_input.clone(),
+            sent_batch_id,
             sent_segment_id: self.state.lock().await.connection_segment,
             summary: format!("{} wrote to you: {excerpt}", display_name(&me)),
             waiting_summary: format!("Waiting for {}'s answer: {excerpt}", display_name(&to)),
             sender_line: json!({ "peer": bot_face(&to) }),
             receiver_line: json!({ "peer": bot_face(&me) }),
-            ledger: ledger
-                .as_ref()
-                .map(|(b, _)| LedgerSlot::in_batch(*b, key.clone(), super::ledger::fresh_op_id())),
+            ledger,
+            ledger_notice,
             ledger_payload: Some(json!({
                 "to": to.id,
-                "text": body,
-                "reply_to": reply_to,
-                "for": lineage.for_input,
+                "text": m.body,
+                "reply_to": m.reply_to,
+                "for": m.lineage.for_input,
             })),
         };
         let sent = match msvc::send_message(&self.db.conn, new)

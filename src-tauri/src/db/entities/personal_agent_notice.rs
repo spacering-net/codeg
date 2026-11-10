@@ -23,6 +23,12 @@ pub enum NoticeKind {
     /// circle, and was stopped: the owner lets it go on or takes it over.
     #[sea_orm(string_value = "loop")]
     Loop,
+    /// A change to the settings, from the conversation: made as the owner
+    /// said (it can be undone), or put in front of them first — because
+    /// they asked to see such changes first, or because the assistant only
+    /// inferred it.
+    #[sea_orm(string_value = "changed")]
+    Changed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
@@ -59,6 +65,9 @@ pub enum NoticeState {
     Muted,
     #[sea_orm(string_value = "expired")]
     Expired,
+    /// What it made was taken back by the owner.
+    #[sea_orm(string_value = "undone")]
+    Undone,
 }
 
 /// The state of one native card. The card on the timeline is a row of kind

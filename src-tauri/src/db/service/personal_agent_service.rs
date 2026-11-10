@@ -18,8 +18,8 @@
 use chrono::{DateTime, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, Condition, DatabaseConnection,
-    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, Condition, ConnectionTrait,
+    DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
 };
 
 use crate::db::entities::personal_agent_action::{self as action, ActionState};
@@ -171,6 +171,46 @@ pub struct AgentWrite {
     pub agent_options_json: Option<String>,
     pub label_snapshot_json: Option<String>,
     pub settings_json: Option<String>,
+    /// A JSON merge patch (RFC 7396) applied to the stored settings in the
+    /// same statement, so keys it leaves out — another window's, another
+    /// part of codeg's — stay as they are. Wins over `settings_json` on an
+    /// update; an insert takes `settings_json`.
+    pub settings_patch: Option<serde_json::Value>,
+    /// A work assistant's executor config.
+    pub executor_assistant_id: Option<i32>,
+}
+
+/// The SQL that applies a merge patch to the stored settings: whatever is
+/// stored that is not an object reads as an empty one.
+const SETTINGS_PATCH_SQL: &str =
+    "json_patch(CASE WHEN json_valid(settings) AND json_type(settings) = 'object' THEN settings ELSE '{}' END, ?)";
+
+/// Apply a JSON merge patch to an assistant's settings, in one statement:
+/// two windows changing different items both keep theirs. A `null` in the
+/// patch removes the key. Returns the row as stored, `None` when it is gone.
+pub async fn patch_settings(
+    conn: &impl ConnectionTrait,
+    id: i32,
+    patch: &serde_json::Value,
+) -> Result<Option<agent::Model>, DbError> {
+    let res = agent::Entity::update_many()
+        .col_expr(
+            agent::Column::Settings,
+            Expr::cust_with_values(SETTINGS_PATCH_SQL, [patch.to_string()]),
+        )
+        .col_expr(agent::Column::UpdatedAt, Expr::value(Utc::now()))
+        .col_expr(
+            agent::Column::Revision,
+            Expr::col(agent::Column::Revision).add(1),
+        )
+        .filter(agent::Column::Id.eq(id))
+        .filter(agent::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    if res.rows_affected == 0 {
+        return Ok(None);
+    }
+    Ok(agent::Entity::find_by_id(id).one(conn).await?)
 }
 
 /// Insert the primary assistant's row, or update the one that exists.
@@ -261,7 +301,15 @@ pub async fn save_bot(
     if let Some(v) = write.label_snapshot_json {
         update = update.col_expr(agent::Column::LabelSnapshot, Expr::value(v));
     }
-    if let Some(v) = write.settings_json {
+    if let Some(v) = write.executor_assistant_id {
+        update = update.col_expr(agent::Column::ExecutorAssistantId, Expr::value(Some(v)));
+    }
+    if let Some(patch) = write.settings_patch {
+        update = update.col_expr(
+            agent::Column::Settings,
+            Expr::cust_with_values(SETTINGS_PATCH_SQL, [patch.to_string()]),
+        );
+    } else if let Some(v) = write.settings_json {
         update = update.col_expr(agent::Column::Settings, Expr::value(v));
     }
     update.exec(conn).await?;
@@ -1775,7 +1823,7 @@ pub struct NewDispatch {
 /// owner's message), or the assistant alone (nobody started it) — the thread
 /// between assistants it is on, and the input an action was taken for
 /// (`<kind>:<id>`, the logical input: a resent message's first copy).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Lineage {
     pub origin_bot_id: Option<i32>,
     pub origin_row_id: Option<i32>,
@@ -2012,6 +2060,50 @@ pub struct NewOp {
     pub payload: serde_json::Value,
     pub target: Option<serde_json::Value>,
     pub notice_id: Option<i32>,
+}
+
+/// Record an operation that ran in-process and is done (`committed`), with
+/// the answer it gave (`detail`) and what that answer carried (`observed`):
+/// a re-delivered turn's same call reads it back instead of running again.
+/// `Earlier` when its slot is taken.
+pub async fn record_done_op(
+    conn: &DatabaseConnection,
+    bot_id: i32,
+    slot: &LedgerSlot,
+    kind: &str,
+    payload: serde_json::Value,
+    answer: &str,
+    observed: serde_json::Value,
+) -> Result<Ledgered<action::Model>, DbError> {
+    require_bot(bot_id)?;
+    let now = Utc::now();
+    let inserted = action::ActiveModel {
+        id: NotSet,
+        bot_id: Set(Some(bot_id)),
+        batch_id: Set(slot.batch_id),
+        key: Set(slot.key.clone()),
+        kind: Set(kind.to_string()),
+        state: Set(ActionState::Committed),
+        ref_id: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        op_id: Set(Some(slot.op_id.clone())),
+        payload: Set(Some(payload.to_string())),
+        observed: Set(Some(observed.to_string())),
+        target: Set(None),
+        notice_id: Set(None),
+        attempted_at: Set(None),
+        detail: Set(Some(answer.to_string())),
+    }
+    .insert(conn)
+    .await;
+    match inserted {
+        Ok(e) => Ok(Ledgered::New(e)),
+        Err(e) if is_unique_violation(&e) => {
+            Ok(Ledgered::Earlier(Box::new(colliding_entry(conn, slot).await?)))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Write an operation's intent (`prepared`) before it runs. `Earlier` when
@@ -2305,6 +2397,45 @@ pub async fn move_notice(
     Ok(res.rows_affected == 1)
 }
 
+/// The card of `kind` raised under `subject` by one of the batches in
+/// `scope`: what a re-delivered turn raised already.
+pub async fn notice_by_subject(
+    conn: &DatabaseConnection,
+    bot: i32,
+    kind: NoticeKind,
+    subject: &str,
+    scope: &[i32],
+) -> Result<Option<notice::Model>, DbError> {
+    if scope.is_empty() {
+        return Ok(None);
+    }
+    Ok(notice::Entity::find()
+        .filter(notice::Column::BotId.eq(bot))
+        .filter(notice::Column::Kind.eq(kind))
+        .filter(notice::Column::SubjectKey.eq(subject))
+        .filter(notice::Column::BatchId.is_in(scope.to_vec()))
+        .order_by_asc(notice::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// The cards of `kind`, of any assistant, that moved to one of `states`
+/// since `since`.
+pub async fn notices_since(
+    conn: &DatabaseConnection,
+    kind: NoticeKind,
+    states: &[NoticeState],
+    since: DateTime<Utc>,
+) -> Result<Vec<notice::Model>, DbError> {
+    Ok(notice::Entity::find()
+        .filter(notice::Column::Kind.eq(kind))
+        .filter(notice::Column::State.is_in(states.to_vec()))
+        .filter(notice::Column::UpdatedAt.gte(since))
+        .order_by_asc(notice::Column::Id)
+        .all(conn)
+        .await?)
+}
+
 pub async fn notices_in_state(
     conn: &DatabaseConnection,
     bot: i32,
@@ -2440,6 +2571,18 @@ pub async fn list_dispatches(
         query = query.filter(dispatch::Column::Mode.eq(m));
     }
     Ok(query.limit(limit).all(conn).await?)
+}
+
+/// Every assistant's dispatches, newest first, up to `limit`.
+pub async fn dispatches_to_executors(
+    conn: &DatabaseConnection,
+    limit: u64,
+) -> Result<Vec<dispatch::Model>, DbError> {
+    Ok(dispatch::Entity::find()
+        .order_by_desc(dispatch::Column::Id)
+        .limit(limit)
+        .all(conn)
+        .await?)
 }
 
 /// Dispatches by id, newest first.

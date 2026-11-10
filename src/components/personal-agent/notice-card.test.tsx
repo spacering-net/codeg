@@ -291,3 +291,97 @@ describe("cards about assistants working together", () => {
     ).toBeNull()
   })
 })
+
+// ── 1.5: settings changed from the conversation, and confirm-first cards ──
+
+describe("a settings change card", () => {
+  const changed = (data: Record<string, unknown>) =>
+    card({
+      notice: "changed",
+      display: undefined,
+      changes: [{ key: "prefs.reply_length", from: "medium", to: "short" }],
+      ...data,
+    })
+
+  it("says what changed and undoes it", async () => {
+    api.personalAgentNoticeAct.mockResolvedValue({})
+    draw(changed({ state: "applied", why: "asked", quote: "keep it short" }))
+    expect(screen.getByText("Changed, as you said")).toBeInTheDocument()
+    expect(screen.getByText("Reply length")).toBeInTheDocument()
+    expect(screen.getByText("Medium")).toBeInTheDocument()
+    expect(screen.getByText("Short")).toBeInTheDocument()
+    expect(screen.getByText("You said: “keep it short”")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "undo", null)
+    )
+  })
+
+  it("asks first for a suggestion, with its reason", async () => {
+    api.personalAgentNoticeAct.mockResolvedValue({})
+    draw(changed({ state: "open", why: "suggest", reason: "you trim answers" }))
+    expect(screen.getByText("A suggested change")).toBeInTheDocument()
+    expect(screen.getByText("Why: you trim answers")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Change it" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept", null)
+    )
+  })
+
+  it("is only a record in the primary's conversation", () => {
+    draw(
+      changed({
+        state: "applied",
+        why: "line",
+        from_bot: { id: 5, name: "Dev", kind: "worker" },
+      })
+    )
+    expect(screen.getByText("Dev changed, as you told it")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "See in settings" })).toBeNull()
+  })
+
+  it("lists what an undo had to leave", () => {
+    draw(
+      changed({
+        state: "undone",
+        why: "asked",
+        kept: ["prefs.reply_length"],
+      })
+    )
+    expect(screen.getByText("Undone")).toBeInTheDocument()
+    expect(
+      screen.getByText("Changed again since, so left as they are: Reply length")
+    ).toBeInTheDocument()
+  })
+})
+
+describe("a card held for the owner's confirmation", () => {
+  it("says it waits for them and sends exactly what it shows", async () => {
+    api.personalAgentNoticeAct.mockResolvedValue({})
+    draw(card({ state: "open", why: "confirm" }))
+    expect(
+      screen.getByText("Waiting for your confirmation")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Find out X.")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Go ahead" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept", null)
+    )
+  })
+
+  it("shows a message to another assistant as the message", () => {
+    draw(
+      card({
+        state: "open",
+        why: "confirm",
+        action: "message",
+        display: { to: 5, to_name: "Dev", message: "Take the release notes." },
+      })
+    )
+    expect(screen.getByText("Message to Dev")).toBeInTheDocument()
+    expect(screen.getByText("Take the release notes.")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Don't" })).toBeInTheDocument()
+  })
+})

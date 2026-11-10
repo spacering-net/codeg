@@ -1052,11 +1052,7 @@ function AgentCard({
             className="inline-flex size-6 shrink-0 items-center justify-center self-start rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             title={to("editBrain")}
             aria-label={to("editBrain")}
-            onClick={() =>
-              window.dispatchEvent(
-                new Event(PERSONAL_AGENT_EVENTS.openSettings)
-              )
-            }
+            onClick={() => usePersonalAgentUi.getState().openSettings()}
           >
             <Settings2 className="size-3.5" aria-hidden />
           </button>

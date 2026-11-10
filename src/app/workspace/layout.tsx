@@ -100,6 +100,7 @@ import {
   PetFocusBridge,
 } from "@/components/workspace/deep-link-bootstrap"
 import { WorkspaceOpenFolderListener } from "@/components/workspace/workspace-open-folder-listener"
+import { PersonalAgentOpenBridge } from "@/components/personal-agent/open-bridge"
 import { WorkspaceRestoreNotices } from "@/components/workspace/workspace-restore-notices"
 import { HeavyPluginsWarmup } from "@/components/ai-elements/heavy-plugins-warmup"
 import {
@@ -1588,6 +1589,9 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                                           listener calls openConversations() to
                                           surface a launcher-opened folder. */}
                                       <WorkspaceOpenFolderListener />
+                                      {/* Another window's "open the
+                                          assistants page's settings". */}
+                                      <PersonalAgentOpenBridge />
                                       <FolderLayoutShell>
                                         {children}
                                       </FolderLayoutShell>

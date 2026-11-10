@@ -39,6 +39,9 @@ export interface MentionUiLabels {
   more: string
   /** Builds the live-region result-count announcement (supports plurals). */
   count: (count: number) => string
+  /** The row closing the assistants tab: where the assistants (executor
+   *  configs) are managed. */
+  manageAssistants?: { label: string; open: () => void }
 }
 
 /**

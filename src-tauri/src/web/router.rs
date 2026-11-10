@@ -426,6 +426,18 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_stop_all),
         )
         .route(
+            "/personal_agent_bots",
+            post(handlers::personal_agent::personal_agent_bots),
+        )
+        .route(
+            "/personal_agent_executors",
+            post(handlers::personal_agent::personal_agent_executors),
+        )
+        .route(
+            "/personal_agent_settings_patch",
+            post(handlers::personal_agent::personal_agent_settings_patch),
+        )
+        .route(
             "/personal_agent_thread",
             post(handlers::personal_agent::personal_agent_thread),
         )

@@ -6,7 +6,9 @@
  *
  *   * "Multi-Agent Collaboration" — whether an agent may hand a sub-task to
  *     another agent at all, how deep the chain may go, and what each agent is
- *     spawned with (`delegation-settings.tsx`).
+ *     spawned with (`delegation-settings.tsx`). The assistants themselves
+ *     (executor configs) moved to the assistants page; a row there opens
+ *     them.
  *   * "In-conversation tools" — the tool groups codeg-mcp injects when an
  *     agent starts: feedback, ask-user-question, session info, the built-in
  *     browser, computer use and the create-from-chat writers
@@ -25,7 +27,6 @@ import { useTranslations } from "next-intl"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { DelegationSettingsSection } from "@/components/settings/delegation-settings"
 import { AgentToolsSettingsSection } from "@/components/settings/agent-tools-settings"
-import { PersonalAgentWorkdirSettings } from "@/components/settings/personal-agent-workdir-settings"
 
 export function CollaborationSettings() {
   const t = useTranslations("CollaborationSettings")
@@ -43,11 +44,6 @@ export function CollaborationSettings() {
         <DelegationSettingsSection />
 
         <AgentToolsSettingsSection />
-
-        <section className="space-y-2">
-          <h2 className="text-sm font-semibold">{t("personalAgent.title")}</h2>
-          <PersonalAgentWorkdirSettings />
-        </section>
       </div>
     </ScrollArea>
   )

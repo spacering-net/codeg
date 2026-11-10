@@ -8,7 +8,7 @@
  * and an edit leaves that state alone.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { AlignLeft, Bot, Loader2, ScrollText } from "lucide-react"
 
@@ -77,6 +77,9 @@ export interface AssistantEditorDialogProps {
   assistant: AssistantInfo | null
   /** Called with the saved row. */
   onSaved?: (assistant: AssistantInfo) => void
+  /** A section of the host's own, after the editor's (the assistants
+   *  page's "how the assistants use it"); it saves through `onSaved`. */
+  extraSection?: ReactNode
 }
 
 export function AssistantEditorDialog({
@@ -84,6 +87,7 @@ export function AssistantEditorDialog({
   onOpenChange,
   assistant,
   onSaved,
+  extraSection,
 }: AssistantEditorDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -98,6 +102,7 @@ export function AssistantEditorDialog({
             assistant={assistant}
             onClose={() => onOpenChange(false)}
             onSaved={onSaved}
+            extraSection={extraSection}
           />
         ) : null}
       </DialogContent>
@@ -109,10 +114,12 @@ function AssistantEditorBody({
   assistant,
   onClose,
   onSaved,
+  extraSection,
 }: {
   assistant: AssistantInfo | null
   onClose: () => void
   onSaved?: (assistant: AssistantInfo) => void
+  extraSection?: ReactNode
 }) {
   const t = useTranslations("AcpAgentSettings.multiAgent.assistants")
   const tm = useTranslations("AcpAgentSettings.multiAgent")
@@ -562,6 +569,7 @@ function AssistantEditorBody({
               ) : null}
             </SettingRow>
           </SettingCard>
+          {extraSection}
         </div>
 
         <DialogFooter className="items-center gap-3 px-4 py-4 sm:justify-between sm:px-6">

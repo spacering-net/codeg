@@ -78,19 +78,11 @@ import { PersonalAgentComposer } from "./composer"
 import { usePersonalAgentAttachment } from "./live-turn"
 import { MessageList } from "./message-list"
 import { replyState } from "./message-items"
-import {
-  PersonalAgentSettingsDialog,
-  type SettingsTab,
-} from "./settings-dialog"
+import { SettingsView } from "./settings/settings-view"
 import { PageScopeContext, useStatusWord, type PageScope } from "./shared"
 import { PersonalAgentWorkDrawer } from "./work-drawer"
 
 export { PersonalAgentChromeActions } from "./chrome-actions"
-
-/** Asks the open page to show its settings (the menu lives in the window
- *  chrome, a different branch of the tree). */
-export const OPEN_PERSONAL_AGENT_SETTINGS_EVENT =
-  PERSONAL_AGENT_EVENTS.openSettings
 
 /** While the page is open the agent's session is kept warm: the idle sweep
  *  would otherwise end it between messages, and the next one would wait for
@@ -191,8 +183,8 @@ export function PersonalAgentPage() {
   const auxOpen = usePersonalAgentUi((s) => s.auxOpen)
   const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
   const setWorkOpen = usePersonalAgentUi((s) => s.setWorkOpen)
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("brain")
+  const settingsOpen = usePersonalAgentUi((s) => s.settings != null)
+  const openSettings = usePersonalAgentUi((s) => s.openSettings)
   const [sessionOpen, setSessionOpen] = useState(false)
   const [confirmNew, setConfirmNew] = useState(false)
   const [quoting, setQuoting] = useState<number | null>(null)
@@ -208,20 +200,11 @@ export function PersonalAgentPage() {
   useEffect(() => () => setWorkOpen(false), [setWorkOpen])
 
   useEffect(() => {
-    const openSettings = () => {
-      setSettingsTab("brain")
-      setSettingsOpen(true)
-    }
     const openSession = () => setSessionOpen(true)
     const newSession = () => setConfirmNew(true)
-    window.addEventListener(PERSONAL_AGENT_EVENTS.openSettings, openSettings)
     window.addEventListener(PERSONAL_AGENT_EVENTS.openSession, openSession)
     window.addEventListener(PERSONAL_AGENT_EVENTS.newSession, newSession)
     return () => {
-      window.removeEventListener(
-        PERSONAL_AGENT_EVENTS.openSettings,
-        openSettings
-      )
       window.removeEventListener(PERSONAL_AGENT_EVENTS.openSession, openSession)
       window.removeEventListener(PERSONAL_AGENT_EVENTS.newSession, newSession)
     }
@@ -274,6 +257,14 @@ export function PersonalAgentPage() {
     )
   }
 
+  if (!agent && settingsOpen) {
+    return (
+      <UnderBand band={band}>
+        <SettingsView />
+      </UnderBand>
+    )
+  }
+
   if (!agent) {
     return (
       <UnderBand band={band}>
@@ -286,29 +277,41 @@ export function PersonalAgentPage() {
             {t("setup.description")}
           </p>
           {snapshot.status.engine === "here" ? (
-            <Button
-              onClick={() => {
-                setSettingsTab("brain")
-                setSettingsOpen(true)
-              }}
-            >
+            <Button onClick={() => openSettings("identity")}>
               {t("setup.action")}
             </Button>
           ) : (
             <p className="text-xs text-muted-foreground">{t("readOnly")}</p>
           )}
-          <PersonalAgentSettingsDialog
-            open={settingsOpen}
-            onOpenChange={setSettingsOpen}
-            agent={null}
-          />
+          {/* Executor configs are not the assistant's: someone who only
+              @-delegates manages them here too. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            data-pa-manage-executors
+            onClick={() => openSettings("executors")}
+          >
+            {t("setup.manageExecutors")}
+          </Button>
         </div>
       </UnderBand>
     )
   }
 
-  const noAssistants = assistants.filter((a) => a.enabled).length === 0
-  const conversation = (
+  // Only those the assistants may dispatch to count.
+  const noAssistants =
+    assistants.filter(
+      (a) =>
+        a.enabled && snapshot.account?.team.usage[a.uid]?.dispatch !== false
+    ).length === 0
+  const conversation = settingsOpen ? (
+    <div className="flex h-full min-h-0 flex-col">
+      {band ? <PageBand band={band} /> : null}
+      <div className="min-h-0 flex-1">
+        <SettingsView />
+      </div>
+    </div>
+  ) : (
     <div className="flex h-full min-h-0 flex-col">
       {band ? <PageBand band={band} /> : null}
       {readOnly || noAssistants ? (
@@ -319,8 +322,17 @@ export function PersonalAgentPage() {
             </p>
           ) : null}
           {noAssistants ? (
-            <p className="rounded-lg bg-muted px-3 py-1.5 text-xs text-muted-foreground">
-              {t("noAssistants")}
+            <p className="flex items-center justify-between gap-2 rounded-lg bg-muted px-3 py-1.5 text-xs text-muted-foreground">
+              <span>{t("noAssistants")}</span>
+              <Button
+                size="xs"
+                variant="outline"
+                className="shrink-0 bg-background"
+                data-pa-add-executor
+                onClick={() => openSettings("executors")}
+              >
+                {t("addExecutor")}
+              </Button>
             </p>
           ) : null}
         </div>
@@ -392,12 +404,6 @@ export function PersonalAgentPage() {
           </DrawerContent>
         </Drawer>
       ) : null}
-      <PersonalAgentSettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        agent={agent}
-        initialTab={settingsTab}
-      />
       <PersonalAgentWorkDrawer />
       <AlertDialog open={confirmNew} onOpenChange={setConfirmNew}>
         <AlertDialogContent>

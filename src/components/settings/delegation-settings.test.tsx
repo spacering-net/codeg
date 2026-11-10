@@ -308,22 +308,19 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
   const tab = (name: RegExp) => screen.getByRole("tab", { name })
   const dotOn = (name: RegExp) =>
     within(tab(name)).queryByRole("img", { name: "Unsaved changes" })
-  const offNotice = /Multi-Agent Collaboration is off/
-
-  it("shows the save bar on the first two tabs only", async () => {
+  it("shows the save bar on both tabs; the assistants moved to their page", async () => {
     mockGetDelegationSettings.mockResolvedValue(settings({ enabled: true }))
     const user = userEvent.setup()
     renderWithIntl()
     await screen.findByLabelText("Enable delegation")
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument()
+    expect(
+      screen.getByText("Assistant configs: moved to the assistants page")
+    ).toBeInTheDocument()
 
     await user.click(tab(/^Agent defaults/))
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument()
-
-    // Every assistant change is written at once.
-    await user.click(tab(/^Assistants/))
-    await screen.findByText(/No assistants yet/)
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
+    expect(screen.queryByRole("tab", { name: /^Assistants/ })).toBeNull()
   })
 
   it("explains the disabled agent defaults while the switch is off, and leads to it", async () => {
@@ -344,7 +341,7 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
     expect(screen.queryByText(notice)).toBeNull()
   })
 
-  it("marks a tab with unsaved changes, and the assistants tab points back to it", async () => {
+  it("marks a tab with unsaved changes", async () => {
     mockGetDelegationSettings.mockResolvedValue(settings({ enabled: true }))
     const user = userEvent.setup()
     renderWithIntl()
@@ -356,12 +353,8 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
     expect(dotOn(/^General/)).not.toBeNull()
     expect(dotOn(/^Agent defaults/)).toBeNull()
 
-    await user.click(tab(/^Assistants/))
-    expect(
-      await screen.findByText("General has unsaved changes.")
-    ).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Go back" }))
-    expect(tab(/^General/)).toHaveAttribute("data-state", "active")
+    await user.click(tab(/^Agent defaults/))
+    await user.click(tab(/^General/))
     expect(screen.getByLabelText("Maximum delegation depth")).toHaveValue(4)
 
     // Putting the value back clears the mark.
@@ -371,24 +364,19 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
     expect(dotOn(/^General/)).toBeNull()
   })
 
-  it("tells the assistants tab what is saved, not what the form holds", async () => {
+  it("compares the form with what is saved, not with what it first read", async () => {
     mockGetDelegationSettings.mockResolvedValue(settings({ enabled: true }))
-    const user = userEvent.setup()
     renderWithIntl()
     await loaded()
     const toggle = screen.getByLabelText("Enable delegation")
 
-    // Switched off but not saved: assistants can still be delegated to.
+    // Switched off but not saved: an unsaved change.
     fireEvent.click(toggle)
-    await user.click(tab(/^Assistants/))
-    await screen.findByText("General has unsaved changes.")
-    expect(screen.queryByText(offNotice)).toBeNull()
+    expect(dotOn(/^General/)).not.toBeNull()
 
-    // Switched off elsewhere: now they cannot.
+    // Switched off elsewhere: the form now matches what is saved.
     act(() => delegationHandler?.(settings({ enabled: false })))
-    expect(await screen.findByText(offNotice)).toBeInTheDocument()
-    // …and the form now matches what is saved.
-    expect(screen.queryByText("General has unsaved changes.")).toBeNull()
+    await waitFor(() => expect(dotOn(/^General/)).toBeNull())
   })
 
   it("keeps a broadcast that overtook the first load", async () => {
@@ -398,7 +386,6 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
         answerLoad = resolve
       })
     )
-    const user = userEvent.setup()
     renderWithIntl()
     await waitFor(() => expect(delegationHandler).toBeDefined())
 
@@ -415,10 +402,7 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
     )
     expect(screen.getByLabelText("Maximum delegation depth")).toHaveValue(3)
     expect(dotOn(/^General/)).toBeNull()
-    await user.click(tab(/^Assistants/))
-    await screen.findByText(/No assistants yet/)
-    expect(screen.queryByText(offNotice)).toBeNull()
-    expect(screen.queryByText(/unsaved changes/)).toBeNull()
+    expect(dotOn(/^Agent defaults/)).toBeNull()
   })
 
   /** A broadcast that landed while a save was out can be OLDER than the save:
@@ -433,7 +417,6 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
         answerSave = resolve
       })
     )
-    const user = userEvent.setup()
     renderWithIntl()
     await loaded()
     const depth = screen.getByLabelText("Maximum delegation depth")
@@ -456,10 +439,7 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
       "checked"
     )
     expect(dotOn(/^General/)).toBeNull()
-    await user.click(tab(/^Assistants/))
-    await screen.findByText(/No assistants yet/)
-    expect(screen.queryByText(offNotice)).toBeNull()
-    expect(screen.queryByText(/unsaved changes/)).toBeNull()
+    expect(dotOn(/^Agent defaults/)).toBeNull()
   })
 
   it("keeps a broadcast that overtook a save's reply", async () => {
@@ -470,7 +450,6 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
         answerSave = resolve
       })
     )
-    const user = userEvent.setup()
     renderWithIntl()
     await loaded()
     const depth = screen.getByLabelText("Maximum delegation depth")
@@ -491,7 +470,5 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
       "unchecked"
     )
     expect(dotOn(/^General/)).toBeNull()
-    await user.click(tab(/^Assistants/))
-    expect(await screen.findByText(offNotice)).toBeInTheDocument()
   })
 })

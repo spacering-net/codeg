@@ -513,11 +513,16 @@ impl PersonalAgentEngine {
         if let Some(card) = running_card {
             match outcome {
                 OpOutcome::Committed => {
+                    let made = if op.kind == "message" {
+                        "message_id"
+                    } else {
+                        "dispatch_id"
+                    };
                     let result = op
                         .ref_id
                         .as_deref()
                         .and_then(|r| r.parse::<i32>().ok())
-                        .map(|id| json!({ "dispatch_id": id }))
+                        .map(|id| json!({ made: id }))
                         .unwrap_or(Value::Null);
                     self.settle_card_state(
                         card.id,

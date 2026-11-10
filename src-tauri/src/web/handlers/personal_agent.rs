@@ -205,6 +205,34 @@ pub async fn personal_agent_cancel(
     Ok(Json(()))
 }
 
+pub async fn personal_agent_bots(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<Vec<crate::models::personal_agent::BotSummary>>, AppCommandError> {
+    Ok(Json(pa::personal_agent_bots_core(&state.db).await?))
+}
+
+pub async fn personal_agent_executors(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<Vec<crate::models::personal_agent::ExecutorView>>, AppCommandError> {
+    Ok(Json(pa::personal_agent_executors_core(&state.db).await?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsPatchParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub changes: Vec<crate::personal_agent::prefs::SettingChange>,
+}
+
+pub async fn personal_agent_settings_patch(
+    Json(params): Json<SettingsPatchParams>,
+) -> Result<Json<Vec<crate::personal_agent::prefs::Applied>>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_settings_patch_core(params.bot_id, params.changes).await?,
+    ))
+}
+
 pub async fn personal_agent_stop_all(
     Json(params): Json<BotParams>,
 ) -> Result<Json<()>, AppCommandError> {

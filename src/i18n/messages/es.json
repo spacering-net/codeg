@@ -900,8 +900,13 @@
           "avatarTooLarge": "La imagen del avatar es demasiado grande.",
           "invalidAgentOptions": "Las opciones del agente no están completas. Vuelve a abrir el asistente y elige todas.",
           "notFound": "Este asistente ya no existe."
-        }
-      }
+        },
+        "disableTitle": "¿Desactivar {name}?",
+        "disableConfirm": "Desactivar"
+      },
+      "assistantsMoved": "Configuraciones de asistentes: movidas a la página de asistentes",
+      "assistantsMovedHint": "Gestiónalas en la página de asistentes, en Ajustes → Equipo → Configuraciones de ejecución. Las que mencionas con @ en las conversaciones son las mismas.",
+      "assistantsMovedOpen": "Abrir"
     },
     "actions": {
       "saveSystemInstructions": "Guardar instrucciones del sistema",
@@ -1987,18 +1992,7 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "Colaboración",
-    "sectionDescription": "Cómo colaboran los agentes entre sí y a qué herramientas propias de codeg pueden acceder dentro de una conversación.",
-    "personalAgent": {
-      "title": "Agente personal",
-      "workdir": "Directorio de trabajo",
-      "workdirHint": "Donde guarda su personalidad, sus reglas y su memoria, bajo git. Ahora: {current}. Moverlo inicia una sesión nueva; el directorio anterior se queda como está.",
-      "notConfigured": "Primero configura el agente personal en su página.",
-      "placeholder": "Predeterminado: personal-agent del directorio de datos",
-      "useDefault": "Usar predeterminado",
-      "apply": "Mover",
-      "saved": "Directorio de trabajo movido.",
-      "readOnly": "El agente personal se ejecuta en otro proceso de codeg; cámbialo allí."
-    }
+    "sectionDescription": "Cómo colaboran los agentes entre sí y a qué herramientas propias de codeg pueden acceder dentro de una conversación."
   },
   "LoginPage": {
     "documentTitle": "Iniciar sesión - codeg",
@@ -3528,7 +3522,8 @@
         "mentionGroupSession": "Sesiones",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Habilidades",
-        "mentionGroupAssistant": "Asistentes"
+        "mentionGroupAssistant": "Asistentes",
+        "mentionManageAssistants": "Gestionar configuraciones de ejecución…"
       },
       "messageQueue": {
         "addToQueue": "Agregar a la cola",
@@ -7678,14 +7673,15 @@
   "PersonalAgent": {
     "title": "Agente personal",
     "readOnly": "El agente personal se ejecuta en otro proceso de codeg con este directorio de datos, así que aquí esta página es de solo lectura.",
-    "noAssistants": "Aún no hay asistentes de rol: el agente personal les asigna su trabajo. Añade uno en Configuración → Colaboración → Asistentes.",
+    "noAssistants": "Todavía no hay configuraciones de ejecución a las que los asistentes puedan asignar trabajo: el agente personal se lo asigna a ellas.",
     "viewSession": "Ver sesión",
     "viewSessionHint": "La transcripción completa de la sesión actual, en directo.",
     "sessionTitle": "Sesión {seq} · transcripción completa",
     "setup": {
       "title": "Configura tu agente personal",
       "description": "Tu agente personal entiende lo que quieres, asigna el trabajo a los asistentes que configuraste, le da seguimiento y lo recuerda. Para empezar, elige el agente sobre el que funciona.",
-      "action": "Elegir su agente"
+      "action": "Elegir su agente",
+      "manageExecutors": "Gestionar configuraciones de ejecución"
     },
     "errors": {
       "engineElsewhere": "El agente personal se ejecuta en otro proceso de codeg con este directorio de datos; aquí esta página es de solo lectura."
@@ -7853,13 +7849,8 @@
       }
     },
     "settings": {
-      "title": "Configuración del agente personal",
       "setupTitle": "Configura tu agente personal",
-      "description": "Sobre qué funciona, cuándo se compacta su contexto y quién es.",
       "setupDescription": "Elige el agente sobre el que funciona tu agente personal, con todas sus opciones. Puedes cambiarlo más adelante; la línea de tiempo continúa.",
-      "tabBrain": "Cerebro",
-      "tabCompaction": "Compactación",
-      "tabDispatch": "Asignación",
       "tabPersona": "Personalidad y memoria",
       "name": "Nombre",
       "nameHint": "El nombre y la imagen con los que aparece en su página y en sus mensajes; el agente también conoce su nombre. Si dejas el nombre vacío, se usa el predeterminado.",
@@ -7903,7 +7894,196 @@
       "deleteEntry": "Eliminar",
       "confirmDelete": "Eliminar",
       "confirmDeleteHint": "¿Eliminar esta entrada y su línea del índice?",
-      "entryDeleted": "Se eliminó {name}."
+      "entryDeleted": "Se eliminó {name}.",
+      "saved": "Guardado.",
+      "saveFailed": "No se pudo guardar",
+      "restoreDefaults": "Restablecer valores predeterminados",
+      "back": "Volver a la conversación",
+      "viewTitle": "Ajustes",
+      "backToOwn": "Volver al asistente de esta página",
+      "editingOther": "Estás editando los ajustes propios de {name}.",
+      "readOnly": "Los asistentes se ejecutan en otro proceso de codeg, así que aquí sus ajustes son de solo lectura. Las configuraciones de ejecución en sí se pueden seguir editando.",
+      "setUpFirst": "Primero configura el asistente principal.",
+      "nav": {
+        "thisAssistant": "Este asistente",
+        "allAssistants": "Todos los asistentes",
+        "team": "Equipo",
+        "prefs": "Preferencias",
+        "identity": "Identidad y cerebro",
+        "persona": "Personalidad y memoria",
+        "execution": "Ejecución",
+        "advanced": "Avanzado",
+        "workers": "Asistentes de trabajo",
+        "executors": "Configuraciones de ejecución",
+        "division": "Reparto del trabajo",
+        "communication": "Comunicación",
+        "automation": "Asignación y automatización"
+      },
+      "pages": {
+        "identity": "El nombre y la imagen con los que se presenta, y el agente sobre el que funciona, modo y permisos incluidos: codeg lo ejecuta tal como lo elijas.",
+        "persona": "Quién es, las reglas que sigue y lo que recuerda: archivos en su directorio de trabajo.",
+        "execution": "La configuración de ejecución a la que asigna trabajo por defecto y la plantilla a partir de la que se creó.",
+        "advanced": "Compactación, tarjeta de traspaso, cuánto ejecuta a la vez, su habilidad integrada y su directorio de trabajo.",
+        "workers": "Tus asistentes de trabajo, cada uno con su propia función, memoria y conversación. Haz clic en uno para abrir sus ajustes.",
+        "executors": "A quién asignan trabajo los asistentes: un agente, con sus opciones e instrucciones permanentes.",
+        "division": "Quién se encarga primero de cada tipo de trabajo. Los asistentes lo siguen salvo que nombres a otro o que la primera opción no pueda asumirlo en ese momento.",
+        "communication": "Cómo te hablan los asistentes. Todos siguen lo mismo.",
+        "communicationNote": "El tono y cómo se dirigen a ti no están aquí: escríbelos en el SOUL.md de cada asistente y en el USER.md del principal.",
+        "automation": "Lo que los asistentes hacen por su cuenta y lo que te preguntan antes. Por defecto todo se hace solo y te lo cuentan en una tarjeta; cada «pregúntame antes» lo activas tú.",
+        "automationNote": "Lo que espera por ti va en una tarjeta con exactamente lo que se ejecutará, y se ejecuta cuando haces clic."
+      },
+      "prefs": {
+        "default": "(predeterminado)",
+        "reply_length": {
+          "title": "Longitud de las respuestas",
+          "hint": "Lo largas que son las respuestas de los asistentes.",
+          "short": "Cortas",
+          "medium": "Medias",
+          "long": "Detalladas"
+        },
+        "cards": {
+          "title": "Responder con tarjetas",
+          "hint": "Si los asistentes responden con tarjetas (la habilidad UI-render).",
+          "prefer": "Siempre que ayude",
+          "decisions": "Solo cuando decides tú",
+          "never": "Sin tarjetas"
+        },
+        "when_unsure": {
+          "title": "Cuando no está claro qué quieres decir",
+          "hint": "Cómo interpretan los asistentes tus palabras cuando actúan por ti. Las preguntas de un ejecutor van aparte.",
+          "assume": "Hacer lo más probable y decir la suposición",
+          "ask": "Pregúntame antes"
+        },
+        "chat_changes": {
+          "title": "Cambios que pides en la conversación",
+          "hint": "Ajustes que le pides a un asistente que cambie.",
+          "apply": "Cambiar enseguida; la tarjeta permite deshacer",
+          "show": "Enséñamelo antes"
+        },
+        "confirm_dispatch": {
+          "title": "Confirmar antes de asignar",
+          "hint": "Una asignación que espera por ti es una tarjeta con todo su contenido; sale cuando haces clic.",
+          "never": "No, asignar directamente",
+          "code": "Primero los cambios de código",
+          "always": "Siempre"
+        },
+        "followups": {
+          "title": "Seguimientos y reintentos de sus asignaciones",
+          "hint": "Cuando un asistente continúa o reintenta un trabajo que asignó.",
+          "auto": "Hacerlo directamente",
+          "ask": "Pregúntame antes"
+        },
+        "messages": {
+          "title": "Mensajes a otros asistentes",
+          "hint": "Cuando un asistente escribe a otro.",
+          "auto": "Enviar directamente",
+          "ask": "Pregúntame antes"
+        },
+        "worker_handoff": {
+          "title": "El principal pasa trabajo a un asistente de trabajo",
+          "hint": "Cuando el trabajo le corresponde a un asistente de trabajo.",
+          "message": "Escribirle; él se encarga hasta el final",
+          "direct": "Asignarlo a su configuración de ejecución"
+        },
+        "loop_rounds": {
+          "title": "Detener intercambios sin avances tras",
+          "hint": "Rondas (de dos mensajes cada una) que dos asistentes pueden ir y venir sin avanzar; un círculo se detiene enseguida. 0 es sin límite."
+        },
+        "automation_level": {
+          "title": "Nivel de automatización",
+          "standard": "Estándar",
+          "ask_more": "Pregúntame más",
+          "custom": "Personalizado",
+          "standardHint": "Todo se hace solo y te lo cuentan en una tarjeta.",
+          "ask_moreHint": "Los seguimientos y reintentos, los mensajes a otros asistentes, los cambios que pides en la conversación y las asignaciones que cambian código te llegan primero como tarjeta.",
+          "customHint": "Algunos de los elementos de abajo están ajustados a tu manera.",
+          "confirmTitle": "¿Cambiar a «{level}»?",
+          "confirmBody": "{count, plural, one {Esto sobrescribe # elemento que cambiaste.} other {Esto sobrescribe # elementos que cambiaste.}}",
+          "confirm": "Cambiar"
+        }
+      },
+      "workdir": {
+        "title": "Directorio de trabajo",
+        "hint": "Donde guarda su personalidad, reglas y memoria, bajo git. Ahora: {current}. Moverlo inicia una sesión nueva; el directorio anterior se queda como está.",
+        "placeholder": "Predeterminado: en el directorio de datos",
+        "useDefault": "Usar el predeterminado",
+        "apply": "Mover",
+        "saved": "Directorio de trabajo movido."
+      },
+      "execution": {
+        "executor": "Configuración de ejecución",
+        "executorHint": "A la que asigna trabajo por defecto.",
+        "executorGone": "Su configuración de ejecución se eliminó: elige otra.",
+        "pick": "Elige una",
+        "template": "Plantilla",
+        "templateHint": "La función para la que se creó.",
+        "noTemplate": "En blanco"
+      },
+      "team": {
+        "noWorkers": "Todavía no hay asistentes de trabajo",
+        "noWorkersHint": "Un asistente de trabajo asume una función (escribir código, revisar) y la lleva hasta el final.",
+        "boundTo": "asigna a {name}",
+        "unbound": "sin configuración de ejecución",
+        "sameBatch": "Los asistentes que mencionas con @ en una conversación y estas configuraciones de ejecución son los mismos: si cambias uno aquí, cambian ambos.",
+        "delegationOff": "La colaboración multiagente está desactivada: por ahora no se pueden mencionar con @ en las conversaciones. Las asignaciones de los asistentes no se ven afectadas.",
+        "openCollaboration": "Abrir los ajustes de Colaboración",
+        "auto": "Auto",
+        "divisionNote": "Si la primera opción es un asistente de trabajo, el principal le escribe; si es una configuración de ejecución, le asigna el trabajo directamente."
+      },
+      "usage": {
+        "title": "Cómo la usan los asistentes",
+        "dispatch": "Los asistentes pueden asignarle trabajo",
+        "dispatchHint": "Desactivada, se puede seguir mencionando con @ en las conversaciones; solo que los asistentes no le asignan trabajo.",
+        "modes": "Modos que acepta",
+        "modesHint": "Una asignación en otro modo se rechaza, indicando el motivo.",
+        "projects": "Proyectos",
+        "projectsHint": "Un chat no lleva proyecto, así que esto nunca lo rechaza.",
+        "allProjects": "Todos los proyectos",
+        "saveFailed": "No se pudo guardar cómo la usan los asistentes",
+        "notForDispatch": "no para las asignaciones de los asistentes",
+        "onlyModes": "solo {modes}",
+        "onlyProjects": "{count, plural, one {solo en # proyecto} other {solo en # proyectos}}"
+      },
+      "executor": {
+        "running": "{count} en curso",
+        "fortnight": "2 semanas: {dispatches} asignadas · {completed} completadas",
+        "boundBy": "de {name}",
+        "firstFor": "primera opción para {kinds}",
+        "failing": "Las últimas {count} asignaciones que recibió fallaron todas: {error}",
+        "impactWorkerDelete": "Es la configuración de ejecución de {name}: {name} necesitará otra.",
+        "impactWorkerOff": "Es la configuración de ejecución de {name}: {name} no podrá asignarle trabajo mientras esté desactivada.",
+        "impactDivisionDelete": "Es la primera opción para {kinds}: eso vuelve a Auto.",
+        "impactDivisionOff": "Es la primera opción para {kinds}: los asistentes eligen otra mientras esté desactivada.",
+        "impactRunning": "{count, plural, one {# trabajo que ejecuta sigue en marcha.} other {# trabajos que ejecuta siguen en marcha.}}"
+      },
+      "division": {
+        "code": "Escribir código",
+        "codeHint": "Cambios en el código de un proyecto.",
+        "review": "Revisión",
+        "reviewHint": "Leer un cambio y decir qué tiene de malo.",
+        "test": "Pruebas",
+        "testHint": "Escribir y ejecutar pruebas.",
+        "fix_ci": "Arreglar CI",
+        "fix_ciHint": "Un pipeline que falla, y quién se hace cargo de un PR del que nadie se ocupa.",
+        "docs": "Documentación",
+        "docsHint": "Escribir y actualizar documentación.",
+        "release": "Lanzamientos",
+        "releaseHint": "Versiones, registros de cambios, publicación.",
+        "research": "Investigación",
+        "researchHint": "Averiguar cosas.",
+        "check": "Comprobación",
+        "checkHint": "Comprobar el trabajo terminado antes de aceptarlo. Solo se muestran las que aceptan sesiones de trabajo."
+      },
+      "changed": {
+        "usageOf": "Cómo usan los asistentes {name}",
+        "usageDefault": "predeterminado",
+        "usageSet": "ajustado",
+        "on": "activado",
+        "off": "desactivado",
+        "default": "predeterminado"
+      },
+      "targetLoading": "Cargando los ajustes de este asistente…",
+      "targetFailed": "No se pudieron leer los ajustes de este asistente."
     },
     "statusWord": {
       "idle": "Inactivo",
@@ -8130,6 +8310,30 @@
         "onIt": "{name} está con «{text}»",
         "stopToo": "Detener también lo de {name}",
         "alsoStopped": "También detenido"
+      },
+      "confirm": {
+        "open": "Esperando tu confirmación",
+        "acted": "Confirmado, ya salió",
+        "dismissed": "No enviado",
+        "accept": "Adelante",
+        "dismiss": "No",
+        "messageTo": "Mensaje para {name}"
+      },
+      "changed": {
+        "applied": "Cambiado, como dijiste",
+        "accepted": "Cambiado",
+        "undone": "Deshecho",
+        "dismissed": "Sin cambios",
+        "suggested": "Un cambio sugerido",
+        "show": "Por cambiar, como dijiste · esperándote",
+        "line": "{name} lo cambió, como le dijiste",
+        "quote": "Dijiste: «{quote}»",
+        "reason": "Por qué: {reason}",
+        "kept": "Cambiados de nuevo desde entonces, así que se dejaron como están: {items}",
+        "accept": "Cambiarlo",
+        "dismiss": "Ahora no",
+        "undo": "Deshacer",
+        "seeSettings": "Ver en los ajustes"
       }
     },
     "exchange": {
@@ -8152,6 +8356,7 @@
       "skipped": "Omitida",
       "withdrawn": "Ya no hace falta",
       "resolved": "Resuelta"
-    }
+    },
+    "addExecutor": "Añadir una configuración de ejecución"
   }
 }

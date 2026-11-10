@@ -766,6 +766,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
             listboxLabel={mentionUiLabels?.listbox}
             moreLabel={mentionUiLabels?.more}
             countLabel={mentionUiLabels?.count}
+            manageAssistants={mentionUiLabels?.manageAssistants}
             tabLabels={tabLabels}
             tabs={mentionTabs}
           />

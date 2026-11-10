@@ -331,6 +331,9 @@ impl PersonalAgentEngine {
         if req.report && req.mode != DispatchMode::Task {
             return Err("`deliverable` applies to task dispatches only".into());
         }
+        // How the owner lets the assistants use it (a chat takes no project,
+        // so no project list refuses one).
+        self.check_usage(&assistant, req.mode, folder_id).await?;
         let snapshot = DispatchExecutorSnapshot {
             assistant_id: assistant.id,
             name: assistant.name.clone(),

@@ -463,7 +463,148 @@ pub async fn personal_agent_stats_core(
     })
 }
 
+/// The owner's assistants, primary first: what the settings' list of work
+/// assistants and the division read. Read-only.
+pub async fn personal_agent_bots_core(
+    db: &AppDatabase,
+) -> Result<Vec<crate::models::personal_agent::BotSummary>, AppCommandError> {
+    Ok(svc::list_bots(&db.conn)
+        .await?
+        .into_iter()
+        .map(|b| bot_summary(&b))
+        .collect())
+}
+
+fn bot_summary(
+    b: &crate::db::entities::personal_agent::Model,
+) -> crate::models::personal_agent::BotSummary {
+    crate::models::personal_agent::BotSummary {
+        id: b.id,
+        kind: b.kind,
+        uid: b.uid.clone(),
+        name: b.name.clone(),
+        avatar: serde_json::from_str(&b.avatar).unwrap_or_else(|_| {
+            serde_json::from_str(r#"{"kind":"emoji","emoji":"🧭","color":"violet"}"#)
+                .expect("the default avatar")
+        }),
+        template: b.template.clone(),
+        executor_assistant_id: b.executor_assistant_id,
+        created_at: b.created_at,
+    }
+}
+
+/// How many of the latest finished dispatches to an executor config have
+/// to have failed for it to be marked (10.5, 补齐四).
+const FAILING_RUN: usize = 3;
+
+/// Every live executor config as the assistants use it: what it runs now,
+/// whether its last dispatches all failed, its last two weeks, the work
+/// assistants bound to it, the kinds of work that name it first, and how
+/// the assistants may use it. Read-only, across every assistant.
+pub async fn personal_agent_executors_core(
+    db: &AppDatabase,
+) -> Result<Vec<crate::models::personal_agent::ExecutorView>, AppCommandError> {
+    use crate::models::personal_agent::{ExecutorFailing, ExecutorView, ExecutorWork};
+    use crate::models::personal_agent_prefs::AccountView;
+    let assistants = crate::db::service::assistant_service::list_all(&db.conn).await?;
+    let account = match svc::primary_bot(&db.conn).await? {
+        Some(p) => AccountView::from_settings(&p.settings),
+        None => AccountView::from_settings("{}"),
+    };
+    let bots = svc::list_bots(&db.conn).await?;
+    let recent = svc::dispatches_to_executors(&db.conn, 5_000).await?;
+    let since = Utc::now() - Duration::days(14);
+    let live = [
+        DispatchState::Queued,
+        DispatchState::Running,
+        DispatchState::WaitingInput,
+        DispatchState::Review,
+    ];
+    let mut out = Vec::new();
+    for a in assistants.into_iter().filter(|a| a.is_live()) {
+        let mine: Vec<_> = recent
+            .iter()
+            .filter(|d| d.executor_assistant_id == a.id)
+            .collect();
+        let running = mine
+            .iter()
+            .filter(|d| live.contains(&d.state))
+            .map(|d| ExecutorWork {
+                dispatch_id: d.id,
+                bot_id: d.bot_id,
+                title: d.title.clone(),
+                mode: d.mode,
+                state: d.state,
+                work_task_id: d.work_task_id,
+                conversation_id: d.conversation_id,
+            })
+            .collect();
+        // The latest ones that ended, newest first: all failed?
+        let ended: Vec<_> = mine
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d.state,
+                    DispatchState::Completed | DispatchState::Failed | DispatchState::Canceled
+                )
+            })
+            .take(FAILING_RUN)
+            .collect();
+        let failing = (ended.len() == FAILING_RUN
+            && ended.iter().all(|d| d.state == DispatchState::Failed))
+        .then(|| ExecutorFailing {
+            dispatch_id: ended[0].id,
+            bot_id: ended[0].bot_id,
+            title: ended[0].title.clone(),
+            error: ended[0].error.clone(),
+            count: FAILING_RUN as u32,
+        });
+        let fortnight: Vec<_> = mine.iter().filter(|d| d.created_at >= since).collect();
+        let division = account
+            .team
+            .division
+            .iter()
+            .filter(|(_, pick)| pick.as_str() == format!("assistant:{}", a.uid))
+            .map(|(kind, _)| kind.clone())
+            .collect();
+        out.push(ExecutorView {
+            assistant_id: a.id,
+            uid: a.uid.clone(),
+            running,
+            failing,
+            dispatches_14d: fortnight.len() as u32,
+            completed_14d: fortnight
+                .iter()
+                .filter(|d| d.state == DispatchState::Completed)
+                .count() as u32,
+            workers: bots
+                .iter()
+                .filter(|b| b.executor_assistant_id == Some(a.id))
+                .map(bot_summary)
+                .collect(),
+            division,
+            usage: account.team.usage_of(&a.uid),
+        });
+    }
+    Ok(out)
+}
+
 // ── actions (engine only) ───────────────────────────────────────────────────
+
+/// Change settings item by item (13.1): the account's preferences and team
+/// onto the primary's row, the assistant's own onto its row, each as a
+/// merge patch — two windows changing different items both keep theirs.
+/// Returns what changed, item by item.
+pub async fn personal_agent_settings_patch_core(
+    bot_id: Option<i32>,
+    changes: Vec<crate::personal_agent::prefs::SettingChange>,
+) -> Result<Vec<crate::personal_agent::prefs::Applied>, AppCommandError> {
+    engine(bot_id)
+        .await?
+        .apply_settings(&changes)
+        .await
+        .map_err(refused)
+}
 
 pub async fn personal_agent_save_core(
     bot_id: Option<i32>,
@@ -680,6 +821,31 @@ pub async fn personal_agent_set_workdir_core(
 }
 
 // ── Tauri commands ──────────────────────────────────────────────────────────
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_bots(
+    db: State<'_, AppDatabase>,
+) -> Result<Vec<crate::models::personal_agent::BotSummary>, AppCommandError> {
+    personal_agent_bots_core(&db).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_executors(
+    db: State<'_, AppDatabase>,
+) -> Result<Vec<crate::models::personal_agent::ExecutorView>, AppCommandError> {
+    personal_agent_executors_core(&db).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_settings_patch(
+    bot_id: Option<i32>,
+    changes: Vec<crate::personal_agent::prefs::SettingChange>,
+) -> Result<Vec<crate::personal_agent::prefs::Applied>, AppCommandError> {
+    personal_agent_settings_patch_core(bot_id, changes).await
+}
 
 #[cfg(feature = "tauri-runtime")]
 fn data_dir_of(app: &tauri::AppHandle) -> Result<PathBuf, AppCommandError> {

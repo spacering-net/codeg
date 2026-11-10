@@ -304,6 +304,14 @@ impl SettingsWindowState {
             .ok()
             .and_then(|mut owners| owners.remove(settings_label))
     }
+
+    /// The window a settings window was opened from, left in place.
+    fn owner_of(&self, settings_label: &str) -> Option<String> {
+        self.owner_by_settings_label
+            .lock()
+            .ok()
+            .and_then(|owners| owners.get(settings_label).cloned())
+    }
 }
 
 impl Default for SettingsWindowState {
@@ -1781,6 +1789,33 @@ pub async fn resize_pet_panel(app: AppHandle, height: f64) -> Result<(), AppComm
     let _ = panel.set_position(LogicalPosition::new(panel_x, panel_y));
     let _ = panel.show();
     let _ = panel.set_focus();
+    Ok(())
+}
+
+/// From the settings window: bring the workspace window it was opened from
+/// to the front, on the assistants page with its settings open at `page`
+/// (the executor configs, from Collaboration's "moved to the assistants
+/// page"). An event, not a reload, so the workspace keeps its state; the
+/// workspace's `PersonalAgentOpenBridge` takes it.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn open_personal_agent_page(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, SettingsWindowState>,
+    page: String,
+) -> Result<(), AppCommandError> {
+    let owner = state
+        .owner_of(window.label())
+        .filter(|label| app.get_webview_window(label).is_some())
+        .unwrap_or_else(|| "main".to_string());
+    show_and_focus_window(&app, &owner);
+    app.emit_to(
+        owner.as_str(),
+        "workspace://open-personal-agent",
+        serde_json::json!({ "page": page }),
+    )
+    .map_err(|e| AppCommandError::window("Failed to signal the workspace window", e.to_string()))?;
     Ok(())
 }
 

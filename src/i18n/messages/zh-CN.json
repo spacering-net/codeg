@@ -900,8 +900,13 @@
           "avatarTooLarge": "头像图片太大。",
           "invalidAgentOptions": "智能体的选项没有选齐。请重新打开助手，把每一项都选上。",
           "notFound": "这个助手已经不存在了。"
-        }
-      }
+        },
+        "disableTitle": "停用「{name}」？",
+        "disableConfirm": "停用"
+      },
+      "assistantsMoved": "助手配置：已移到助手页面",
+      "assistantsMovedHint": "在助手页面的「设置 → 团队 → 执行配置」里管理；会话里 @ 的就是它们。",
+      "assistantsMovedOpen": "打开"
     },
     "actions": {
       "dragSort": "拖拽排序",
@@ -1987,18 +1992,7 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "协作",
-    "sectionDescription": "智能体之间如何协同，以及它们能在会话中动用 codeg 的哪些工具。",
-    "personalAgent": {
-      "title": "个人助手",
-      "workdir": "工作目录",
-      "workdirHint": "存放人设、规则和记忆的目录，由 git 管理。当前：{current}。更换后会新起会话，旧目录原样保留。",
-      "notConfigured": "请先在个人助手页面完成设置。",
-      "placeholder": "默认：数据目录下的 personal-agent",
-      "useDefault": "使用默认",
-      "apply": "更换",
-      "saved": "工作目录已更换。",
-      "readOnly": "个人助手在另一个 codeg 进程里运行，请在那里修改。"
-    }
+    "sectionDescription": "智能体之间如何协同，以及它们能在会话中动用 codeg 的哪些工具。"
   },
   "LoginPage": {
     "documentTitle": "登录 - codeg",
@@ -3528,7 +3522,8 @@
         "mentionGroupSession": "会话",
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
-        "mentionGroupAssistant": "助手"
+        "mentionGroupAssistant": "助手",
+        "mentionManageAssistants": "管理执行配置…"
       },
       "messageQueue": {
         "addToQueue": "加入队列",
@@ -7678,14 +7673,15 @@
   "PersonalAgent": {
     "title": "个人助手",
     "readOnly": "个人助手在同一数据目录的另一个 codeg 进程里运行，本页在这里只读。",
-    "noAssistants": "还没有岗位助手：个人助手派活只交给它们。请到「设置 → 协作 → 助手」添加。",
+    "noAssistants": "还没有可派活的执行配置：个人助手派活只交给它们。",
     "viewSession": "查看底层会话",
     "viewSessionHint": "当前会话段的完整记录，实时更新。",
     "sessionTitle": "第 {seq} 段 · 完整记录",
     "setup": {
       "title": "设置你的个人助手",
       "description": "个人助手负责理解你的意图、把活派给你配置的岗位助手、跟进并记住。先选它运行的 agent。",
-      "action": "选择 agent"
+      "action": "选择 agent",
+      "manageExecutors": "管理执行配置"
     },
     "errors": {
       "engineElsewhere": "个人助手在同一数据目录的另一个 codeg 进程里运行，本页在这里只读。"
@@ -7853,14 +7849,8 @@
       }
     },
     "settings": {
-      "title": "个人助手设置",
       "setupTitle": "设置你的个人助手",
-      "description": "它运行在什么上、什么时候压缩上下文、它是谁。",
       "setupDescription": "选择个人助手运行的 agent 和全部选项。以后可以切换，时间线保持连续。",
-      "tabBrain": "大脑",
-      "tabCompaction": "压缩",
-      "tabDispatch": "派活",
-      "tabPersona": "人设与记忆",
       "name": "名称",
       "nameHint": "它在页面和消息里显示的名字和头像；助手也知道自己叫这个名字。名字留空则用默认名称。",
       "namePlaceholder": "个人助手",
@@ -7903,7 +7893,197 @@
       "deleteEntry": "删除",
       "confirmDelete": "确定删除",
       "confirmDeleteHint": "删除这个条目和索引里指向它的那一行？",
-      "entryDeleted": "已删除 {name}。"
+      "entryDeleted": "已删除 {name}。",
+      "saved": "已保存。",
+      "saveFailed": "保存失败",
+      "restoreDefaults": "恢复本页默认",
+      "back": "返回对话",
+      "viewTitle": "设置",
+      "backToOwn": "回到本页的助手",
+      "editingOther": "正在改「{name}」自己的设置。",
+      "readOnly": "助手在另一个 codeg 进程里运行，这里的设置只读；执行配置本身仍可编辑。",
+      "setUpFirst": "请先设置主助手。",
+      "nav": {
+        "thisAssistant": "这个助手",
+        "allAssistants": "全部助手",
+        "team": "团队",
+        "prefs": "偏好",
+        "identity": "身份与大脑",
+        "persona": "人设与记忆",
+        "execution": "执行方式",
+        "advanced": "高级",
+        "workers": "工作助手",
+        "executors": "执行配置",
+        "division": "分工",
+        "communication": "沟通",
+        "automation": "派活与自动"
+      },
+      "pages": {
+        "identity": "它的名字和头像，以及它跑在哪个 agent 上——模式和权限也在这里选，codeg 照着用。",
+        "persona": "它是谁、守什么规矩、记得什么：都是它工作目录里的文件。",
+        "execution": "它默认派给哪个执行配置，以及它是按哪个模板建的。",
+        "advanced": "压缩、交接卡、同时派几件、内置技能和工作目录。",
+        "workers": "你的工作助手，各有各的岗位、记忆和对话。点一个打开它自己的设置。",
+        "executors": "助手派活交给的对象：一个 agent，加上它的选项和常驻指令。",
+        "division": "每类活先交给谁。除非你点名要谁，或者首选当时接不了，助手都照这里分。",
+        "communication": "助手怎么和你说话。每个助手都照这一份。",
+        "communicationNote": "语气与称呼不在这一页：写在各助手的 SOUL.md 和主助手的 USER.md 里。",
+        "automation": "助手自己做什么、先问你什么。默认一律自动，做了都出卡告诉你；每一项「先问我」都由你打开。",
+        "automationNote": "要你确认的，出一张卡，卡上就是要执行的完整内容，点了才执行。"
+      },
+      "prefs": {
+        "default": "（默认）",
+        "reply_length": {
+          "title": "回复长短",
+          "hint": "助手回复的长短。",
+          "short": "简短",
+          "medium": "适中",
+          "long": "详细"
+        },
+        "cards": {
+          "title": "用卡片回复",
+          "hint": "助手回复时用不用卡片（界面渲染）。",
+          "prefer": "尽量用卡片",
+          "decisions": "只在要你决定时用",
+          "never": "不用卡片"
+        },
+        "when_unsure": {
+          "title": "拿不准你的意思时",
+          "hint": "助手替你办事时怎么理解你的话。执行会话的提问另算。",
+          "assume": "按最合理的理解先做，写明假设",
+          "ask": "先问你"
+        },
+        "chat_changes": {
+          "title": "你在对话里要改的",
+          "hint": "你让助手改的设置。",
+          "apply": "直接改，出卡可撤销",
+          "show": "先给我看"
+        },
+        "confirm_dispatch": {
+          "title": "派活前确认",
+          "hint": "要确认时出「等你确认」卡，卡上是完整的派活内容，点了才派。",
+          "never": "不用，直接派",
+          "code": "改代码的先确认",
+          "always": "每次都确认"
+        },
+        "followups": {
+          "title": "自己派出的活的续作与重试",
+          "hint": "助手续作或重试它派出的活时。",
+          "auto": "直接做",
+          "ask": "先问我"
+        },
+        "messages": {
+          "title": "给别的助手发消息",
+          "hint": "一个助手写给另一个助手时。",
+          "auto": "直接发",
+          "ask": "先问我"
+        },
+        "worker_handoff": {
+          "title": "主助手把活交给工作助手",
+          "hint": "活该归某个工作助手时。",
+          "message": "发消息给它，由它负责到底",
+          "direct": "直接派给它的执行配置"
+        },
+        "loop_rounds": {
+          "title": "助手之间来回没进展时停下",
+          "hint": "同一对助手来回几轮（每轮两条消息）没有进展就停；成环立刻停。0 是不限。"
+        },
+        "automation_level": {
+          "title": "自动程度",
+          "standard": "标准",
+          "ask_more": "多问我",
+          "custom": "自定义",
+          "standardHint": "一切自动，做了都出卡告诉你。",
+          "ask_moreHint": "续作与重试、给别的助手发消息、对话里的改动、改代码的派活，都先出卡，你点了才做。",
+          "customHint": "下面有几项是你自己调过的。",
+          "confirmTitle": "切到「{level}」？",
+          "confirmBody": "会覆盖你改过的 {count} 项。",
+          "confirm": "切换"
+        }
+      },
+      "workdir": {
+        "title": "工作目录",
+        "hint": "它存放人设、规则和记忆的地方，用 git 管着。现在是：{current}。换目录会新起一个会话，旧目录原样保留。",
+        "placeholder": "默认：在数据目录里",
+        "useDefault": "用默认",
+        "apply": "迁移",
+        "saved": "工作目录已迁移。"
+      },
+      "execution": {
+        "executor": "执行配置",
+        "executorHint": "它默认派给的执行配置。",
+        "executorGone": "它绑的执行配置已删除，请另选一个。",
+        "pick": "选一个",
+        "template": "模板",
+        "templateHint": "建它时用的岗位模板。",
+        "noTemplate": "空白"
+      },
+      "team": {
+        "noWorkers": "还没有工作助手",
+        "noWorkersHint": "工作助手各管一摊——写代码、评审——并负责到底。",
+        "boundTo": "派给 {name}",
+        "unbound": "没绑执行配置",
+        "sameBatch": "会话里 @ 的助手和这里的执行配置是同一批，这里改了，两边同时生效。",
+        "delegationOff": "多智能体协同关着：会话里暂时不能 @ 它们；助手派活不受影响。",
+        "openCollaboration": "打开协作设置",
+        "auto": "自动",
+        "divisionNote": "首选是工作助手的，主助手发消息给它；是执行配置的，直接派。"
+      },
+      "usage": {
+        "title": "助手怎么用它",
+        "dispatch": "助手可以派活给它",
+        "dispatchHint": "关掉后会话里照样能 @ 它，只是助手不派给它。",
+        "modes": "可用的方式",
+        "modesHint": "别的方式的派活会被拒绝，并说明原因。",
+        "projects": "适用项目",
+        "projectsHint": "聊天不带项目，不受这一项限制。",
+        "allProjects": "全部项目",
+        "saveFailed": "助手的用法没保存上",
+        "notForDispatch": "不给助手派活",
+        "onlyModes": "只接{modes}",
+        "onlyProjects": "仅 {count} 个项目"
+      },
+      "executor": {
+        "running": "在做 {count} 件",
+        "fortnight": "两周派 {dispatches} 件 · 完成 {completed} 件",
+        "boundBy": "绑在 {name}",
+        "firstFor": "{kinds}的首选",
+        "failing": "最近 {count} 次派给它的活都失败了：{error}",
+        "impactWorkerDelete": "它绑在「{name}」上：删了，「{name}」要重新选一个。",
+        "impactWorkerOff": "它绑在「{name}」上：停用期间「{name}」派不了给它。",
+        "impactDivisionDelete": "分工里「{kinds}」的首选是它：删除后改为「自动」。",
+        "impactDivisionOff": "分工里「{kinds}」的首选是它：停用期间助手会另挑。",
+        "impactRunning": "有 {count} 件派给它的活在跑，不受影响。"
+      },
+      "division": {
+        "code": "写代码",
+        "codeHint": "改项目代码。",
+        "review": "评审",
+        "reviewHint": "读改动、指出问题。",
+        "test": "测试",
+        "testHint": "写测试、跑测试。",
+        "fix_ci": "修 CI",
+        "fix_ciHint": "流水线失败；也是没人负责的 PR 归谁。",
+        "docs": "文档",
+        "docsHint": "写文档、改文档。",
+        "release": "发布",
+        "releaseHint": "版本、更新日志、发布。",
+        "research": "调研",
+        "researchHint": "查资料、做调研。",
+        "check": "检查",
+        "checkHint": "验收前检查做完的活。只列出开了工作会话的。"
+      },
+      "changed": {
+        "usageOf": "助手怎么用「{name}」",
+        "usageDefault": "默认",
+        "usageSet": "已设置",
+        "on": "开",
+        "off": "关",
+        "default": "默认"
+      },
+      "tabPersona": "人设与记忆",
+      "targetLoading": "正在读取这个助手的设置…",
+      "targetFailed": "读不到这个助手的设置。"
     },
     "statusWord": {
       "idle": "空闲",
@@ -8130,6 +8310,30 @@
         "onIt": "{name} 已经在看“{text}”",
         "stopToo": "也停下 {name} 的这一件",
         "alsoStopped": "也停下了"
+      },
+      "confirm": {
+        "open": "等你确认",
+        "acted": "已确认，已发出",
+        "dismissed": "没发",
+        "accept": "确认，发出",
+        "dismiss": "不发了",
+        "messageTo": "发给 {name} 的消息"
+      },
+      "changed": {
+        "applied": "已按你的话改了",
+        "accepted": "已改",
+        "undone": "已撤销",
+        "dismissed": "没改",
+        "suggested": "建议改一项设置",
+        "show": "按你的话要改 · 等你确认",
+        "line": "{name} 按你的话改了",
+        "quote": "你说：「{quote}」",
+        "reason": "理由：{reason}",
+        "kept": "这几项之后又改过，没有撤回：{items}",
+        "accept": "改成这样",
+        "dismiss": "不用",
+        "undo": "撤销",
+        "seeSettings": "去设置里看"
       }
     },
     "exchange": {
@@ -8152,6 +8356,7 @@
       "skipped": "已跳过",
       "withdrawn": "已不再需要",
       "resolved": "已处理"
-    }
+    },
+    "addExecutor": "添加执行配置"
   }
 }

@@ -369,6 +369,38 @@ describe("SuggestionPopup", () => {
     expect(screen.queryByText("Codex Helper")).toBeNull()
   })
 
+  it("closes the assistants tab with the way to where they are managed", async () => {
+    const assistantRef = {
+      refType: "assistant" as const,
+      id: "7",
+      label: "Reviewer Helper",
+      uri: "codeg://assistant/7",
+      meta: null,
+    }
+    const open = vi.fn()
+    const { onClose } = mountPopup({
+      search: () => [
+        ...groups,
+        {
+          kind: "assistant",
+          label: "Assistants",
+          items: [{ reference: assistantRef }],
+        },
+      ],
+      manageAssistants: { label: "Manage executor configs…", open },
+    })
+    await screen.findByText("Codex Helper")
+    // Not under another tab.
+    expect(screen.queryByText("Manage executor configs…")).toBeNull()
+    act(() => {
+      fireEvent.click(screen.getByRole("tab", { name: /Assistants/ }))
+    })
+    const manage = await screen.findByText("Manage executor configs…")
+    fireEvent.mouseDown(manage)
+    expect(onClose).toHaveBeenCalled()
+    expect(open).toHaveBeenCalled()
+  })
+
   it("closes on Escape and reports the key as consumed", async () => {
     const { ref, onClose } = mountPopup()
     await screen.findByText("Codex Helper")

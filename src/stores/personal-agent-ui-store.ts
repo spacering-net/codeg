@@ -19,10 +19,29 @@ export type AuxTab = "status" | "work" | "stats"
 
 /** Window events the chrome sends the page. */
 export const PERSONAL_AGENT_EVENTS = {
-  openSettings: "codeg:open-personal-agent-settings",
   openSession: "codeg:open-personal-agent-session",
   newSession: "codeg:personal-agent-new-session",
 } as const
+
+/** The pages of the settings view (13.1): the assistant's own, then the
+ *  ones every assistant shares. */
+export type SettingsPage =
+  | "identity"
+  | "persona"
+  | "execution"
+  | "advanced"
+  | "workers"
+  | "executors"
+  | "division"
+  | "communication"
+  | "automation"
+
+/** The settings view, while it is open: on which page, and — for the
+ *  assistant's own pages — whose (`null`: the page's own assistant). */
+export interface SettingsOpen {
+  page: SettingsPage
+  bot: number | null
+}
 
 /** A piece of handed-out work, as the card that opens it knows it: the
  *  drawer reads the dispatch's newer state by its id when it has it. */
@@ -66,6 +85,12 @@ interface PersonalAgentUiState {
   workOpen: boolean
   openWork: (target: WorkTarget) => void
   setWorkOpen: (open: boolean) => void
+  /** The settings view, open in place of the conversation; kept here so a
+   *  request made before the page mounts (another window's "open the
+   *  executor configs") finds it open. */
+  settings: SettingsOpen | null
+  openSettings: (page?: SettingsPage, bot?: number | null) => void
+  closeSettings: () => void
 }
 
 export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
@@ -84,4 +109,8 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   workOpen: false,
   openWork: (work) => set({ work, workOpen: true }),
   setWorkOpen: (workOpen) => set({ workOpen }),
+  settings: null,
+  openSettings: (page = "identity", bot = null) =>
+    set({ settings: { page, bot } }),
+  closeSettings: () => set({ settings: null }),
 }))

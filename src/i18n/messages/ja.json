@@ -900,8 +900,13 @@
           "avatarTooLarge": "アバター画像が大きすぎます。",
           "invalidAgentOptions": "エージェントのオプションが揃っていません。アシスタントを開き直して、すべての項目を選んでください。",
           "notFound": "このアシスタントはもう存在しません。"
-        }
-      }
+        },
+        "disableTitle": "{name} を無効にしますか？",
+        "disableConfirm": "無効にする"
+      },
+      "assistantsMoved": "アシスタントの設定：アシスタントのページに移動しました",
+      "assistantsMovedHint": "アシスタントのページの「設定 → チーム → 実行設定」で管理します。会話で @ するものも同じです。",
+      "assistantsMovedOpen": "開く"
     },
     "actions": {
       "saveSystemInstructions": "システム指示を保存",
@@ -1987,18 +1992,7 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "コラボレーション",
-    "sectionDescription": "エージェント同士の連携と、会話の中から使える codeg 自身のツールの範囲を設定します。",
-    "personalAgent": {
-      "title": "パーソナルエージェント",
-      "workdir": "作業ディレクトリ",
-      "workdirHint": "ペルソナ、ルール、メモリを保存する場所で、git で管理されます。現在：{current}。移動すると新しいセッションが始まり、元のディレクトリはそのまま残ります。",
-      "notConfigured": "先にパーソナルエージェントのページで設定してください。",
-      "placeholder": "既定：データディレクトリ内の personal-agent",
-      "useDefault": "既定を使う",
-      "apply": "移動",
-      "saved": "作業ディレクトリを移動しました。",
-      "readOnly": "パーソナルエージェントは別の codeg プロセスで動作しています。変更はそちらで行ってください。"
-    }
+    "sectionDescription": "エージェント同士の連携と、会話の中から使える codeg 自身のツールの範囲を設定します。"
   },
   "LoginPage": {
     "documentTitle": "ログイン - codeg",
@@ -3528,7 +3522,8 @@
         "mentionGroupSession": "セッション",
         "mentionGroupCommit": "コミット",
         "mentionGroupSkill": "スキル",
-        "mentionGroupAssistant": "アシスタント"
+        "mentionGroupAssistant": "アシスタント",
+        "mentionManageAssistants": "実行設定を管理…"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",
@@ -7678,14 +7673,15 @@
   "PersonalAgent": {
     "title": "パーソナルエージェント",
     "readOnly": "パーソナルエージェントはこのデータディレクトリを使う別の codeg プロセスで動作しているため、ここではこのページは読み取り専用です。",
-    "noAssistants": "アシスタントがまだありません。パーソナルエージェントは作業をアシスタントに依頼します。「設定 → コラボレーション → アシスタント」で追加してください。",
+    "noAssistants": "アシスタントが依頼できる実行設定がまだありません。パーソナルエージェントは作業をこれらに依頼します。",
     "viewSession": "セッションを表示",
     "viewSessionHint": "現在のセッションの全記録をリアルタイムで表示します。",
     "sessionTitle": "セッション {seq} · 全記録",
     "setup": {
       "title": "パーソナルエージェントを設定",
       "description": "パーソナルエージェントは、あなたの意図をくみ取り、設定済みのアシスタントに作業を依頼し、進み具合を追いかけて覚えておきます。まずは動かすエージェントを選んでください。",
-      "action": "エージェントを選ぶ"
+      "action": "エージェントを選ぶ",
+      "manageExecutors": "実行設定を管理"
     },
     "errors": {
       "engineElsewhere": "パーソナルエージェントはこのデータディレクトリを使う別の codeg プロセスで動作しています。ここではこのページは読み取り専用です。"
@@ -7853,13 +7849,8 @@
       }
     },
     "settings": {
-      "title": "パーソナルエージェントの設定",
       "setupTitle": "パーソナルエージェントを設定",
-      "description": "動かすエージェント、コンテキストを圧縮するタイミング、そして人物像を設定します。",
       "setupDescription": "パーソナルエージェントを動かすエージェントと、そのすべてのオプションを選びます。後から切り替えても、タイムラインはそのまま続きます。",
-      "tabBrain": "頭脳",
-      "tabCompaction": "圧縮",
-      "tabDispatch": "依頼",
       "tabPersona": "ペルソナとメモリ",
       "name": "名前",
       "nameHint": "ページとメッセージに表示される名前とアイコンです。エージェント自身もこの名前を知っています。名前が空欄なら既定の名前を使います。",
@@ -7903,7 +7894,196 @@
       "deleteEntry": "削除",
       "confirmDelete": "削除する",
       "confirmDeleteHint": "この項目と索引の行を削除しますか？",
-      "entryDeleted": "{name} を削除しました。"
+      "entryDeleted": "{name} を削除しました。",
+      "saved": "保存しました。",
+      "saveFailed": "保存できませんでした",
+      "restoreDefaults": "既定に戻す",
+      "back": "会話に戻る",
+      "viewTitle": "設定",
+      "backToOwn": "このページのアシスタントに戻る",
+      "editingOther": "{name} 自身の設定を編集しています。",
+      "readOnly": "アシスタントは別の codeg プロセスで動作しているため、ここでは設定は読み取り専用です。実行設定そのものは引き続き編集できます。",
+      "setUpFirst": "先にメインアシスタントを設定してください。",
+      "nav": {
+        "thisAssistant": "このアシスタント",
+        "allAssistants": "すべてのアシスタント",
+        "team": "チーム",
+        "prefs": "環境設定",
+        "identity": "アイデンティティと頭脳",
+        "persona": "ペルソナとメモリ",
+        "execution": "実行",
+        "advanced": "詳細設定",
+        "workers": "作業アシスタント",
+        "executors": "実行設定",
+        "division": "役割分担",
+        "communication": "コミュニケーション",
+        "automation": "依頼と自動化"
+      },
+      "pages": {
+        "identity": "名乗る名前とアイコン、そして動かすエージェント（モードと権限も含む）。codeg は選んだとおりに動かします。",
+        "persona": "何者か、守るルール、覚えていること。どれも作業ディレクトリ内のファイルです。",
+        "execution": "既定の依頼先となる実行設定と、作成元のテンプレート。",
+        "advanced": "圧縮、引き継ぎカード、同時に動かす数、組み込みスキル、作業ディレクトリ。",
+        "workers": "あなたの作業アシスタントです。それぞれが専用の役割、メモリ、会話を持ちます。クリックすると個別の設定を開きます。",
+        "executors": "アシスタントが作業を依頼する先です。エージェントとそのオプション、常設の指示をまとめたものです。",
+        "division": "作業の種類ごとに、まず誰に任せるか。あなたが別の誰かを指名した場合や、第一候補がその時点で引き受けられない場合を除き、アシスタントはこれに従います。",
+        "communication": "アシスタントがあなたとどう話すか。すべてのアシスタントが同じ設定に従います。",
+        "communicationNote": "口調や呼び方はここにはありません。各アシスタントの SOUL.md と、メインアシスタントの USER.md に書いてください。",
+        "automation": "アシスタントが自分で行うことと、先にあなたに確認すること。既定ではすべて自動で行い、カードで知らせます。「先に確認して」は項目ごとにあなたがオンにします。",
+        "automationNote": "あなたの確認を待つものは、実行する内容をそのまま載せたカードになり、クリックすると実行されます。"
+      },
+      "prefs": {
+        "default": "（既定）",
+        "reply_length": {
+          "title": "返信の長さ",
+          "hint": "アシスタントの返信の長さ。",
+          "short": "短め",
+          "medium": "普通",
+          "long": "詳しく"
+        },
+        "cards": {
+          "title": "カードで返信",
+          "hint": "アシスタントがカード（UI-render スキル）で答えるかどうか。",
+          "prefer": "役立つときはいつでも",
+          "decisions": "あなたが決めるときだけ",
+          "never": "カードを使わない"
+        },
+        "when_unsure": {
+          "title": "意図がはっきりしないとき",
+          "hint": "あなたの代わりに動くとき、アシスタントがあなたの言葉をどう解釈するか。実行者からの質問は別扱いです。",
+          "assume": "最もありそうな解釈で進め、前提を明記する",
+          "ask": "先に確認して"
+        },
+        "chat_changes": {
+          "title": "会話で頼んだ変更",
+          "hint": "アシスタントに変更するよう伝えた設定。",
+          "apply": "すぐ変更（カードで元に戻せる）",
+          "show": "先に見せて"
+        },
+        "confirm_dispatch": {
+          "title": "依頼前に確認",
+          "hint": "確認待ちの依頼は、内容をすべて載せたカードになり、クリックすると送られます。",
+          "never": "いいえ、直接依頼する",
+          "code": "コード変更は先に確認",
+          "always": "毎回"
+        },
+        "followups": {
+          "title": "自分の依頼のフォローアップと再試行",
+          "hint": "アシスタントが依頼した作業を続けたり再試行したりするとき。",
+          "auto": "直接行う",
+          "ask": "先に確認して"
+        },
+        "messages": {
+          "title": "他のアシスタントへのメッセージ",
+          "hint": "あるアシスタントが別のアシスタントに書くとき。",
+          "auto": "直接送る",
+          "ask": "先に確認して"
+        },
+        "worker_handoff": {
+          "title": "メインアシスタントから作業アシスタントへの引き渡し",
+          "hint": "その作業が作業アシスタントの担当であるとき。",
+          "message": "メッセージを送り、最後まで任せる",
+          "direct": "その実行設定に直接依頼する"
+        },
+        "loop_rounds": {
+          "title": "進展のないやり取りを止める往復数",
+          "hint": "2 つのアシスタントが進展なしに往復できるラウンド数（1 ラウンド＝メッセージ 2 通）。堂々巡りはすぐに止めます。0 で無制限。"
+        },
+        "automation_level": {
+          "title": "自動化レベル",
+          "standard": "標準",
+          "ask_more": "もっと確認して",
+          "custom": "カスタム",
+          "standardHint": "すべて自動で行い、カードで知らせます。",
+          "ask_moreHint": "フォローアップと再試行、他のアシスタントへのメッセージ、会話で頼んだ変更、コードを変更する依頼は、まずカードであなたに確認します。",
+          "customHint": "下の項目のいくつかを個別に設定しています。",
+          "confirmTitle": "「{level}」に切り替えますか？",
+          "confirmBody": "変更した {count} 項目が上書きされます。",
+          "confirm": "切り替える"
+        }
+      },
+      "workdir": {
+        "title": "作業ディレクトリ",
+        "hint": "ペルソナ、ルール、メモリを保存する場所で、git で管理されます。現在：{current}。移動すると新しいセッションが始まり、元のディレクトリはそのまま残ります。",
+        "placeholder": "既定：データディレクトリ内",
+        "useDefault": "既定を使う",
+        "apply": "移動",
+        "saved": "作業ディレクトリを移動しました。"
+      },
+      "execution": {
+        "executor": "実行設定",
+        "executorHint": "既定の依頼先です。",
+        "executorGone": "実行設定が削除されました。別のものを選んでください。",
+        "pick": "選択してください",
+        "template": "テンプレート",
+        "templateHint": "作成時に想定した役割。",
+        "noTemplate": "空白"
+      },
+      "team": {
+        "noWorkers": "作業アシスタントはまだいません",
+        "noWorkersHint": "作業アシスタントはコードを書く、レビューするなど 1 つの役割を担い、最後までやり遂げます。",
+        "boundTo": "{name} に依頼",
+        "unbound": "実行設定なし",
+        "sameBatch": "会話で @ するアシスタントとこれらの実行設定は同じものです。ここで変更すると両方に反映されます。",
+        "delegationOff": "マルチエージェント連携がオフのため、今は会話で @ で呼び出せません。アシスタントの依頼には影響しません。",
+        "openCollaboration": "コラボレーション設定を開く",
+        "auto": "自動",
+        "divisionNote": "第一候補が作業アシスタントならメインアシスタントがメッセージを送り、実行設定なら直接依頼します。"
+      },
+      "usage": {
+        "title": "アシスタントでの使われ方",
+        "dispatch": "アシスタントからの依頼を受ける",
+        "dispatchHint": "オフにしても会話で @ で呼び出せます。アシスタントが依頼しなくなるだけです。",
+        "modes": "受け付けるモード",
+        "modesHint": "他のモードの依頼は、理由を添えて断られます。",
+        "projects": "プロジェクト",
+        "projectsHint": "チャットはプロジェクトを持たないため、この設定で断られることはありません。",
+        "allProjects": "すべてのプロジェクト",
+        "saveFailed": "アシスタントでの使われ方を保存できませんでした",
+        "notForDispatch": "アシスタントの依頼には使わない",
+        "onlyModes": "{modes} のみ",
+        "onlyProjects": "{count} 件のプロジェクトのみ"
+      },
+      "executor": {
+        "running": "{count} 件実行中",
+        "fortnight": "2 週間：依頼 {dispatches} 件 · 完了 {completed} 件",
+        "boundBy": "{name} 用",
+        "firstFor": "{kinds} の第一候補",
+        "failing": "直近 {count} 件の依頼がすべて失敗しました：{error}",
+        "impactWorkerDelete": "{name} の実行設定です。{name} には別の実行設定が必要になります。",
+        "impactWorkerOff": "{name} の実行設定です。無効の間、{name} はここに依頼できません。",
+        "impactDivisionDelete": "{kinds} の第一候補です。その分は「自動」に戻ります。",
+        "impactDivisionOff": "{kinds} の第一候補です。無効の間、アシスタントは別の候補を選びます。",
+        "impactRunning": "実行中の {count} 件の作業はそのまま続きます。"
+      },
+      "division": {
+        "code": "コードを書く",
+        "codeHint": "プロジェクトのコードの変更。",
+        "review": "レビュー",
+        "reviewHint": "変更を読んで問題点を指摘する。",
+        "test": "テスト",
+        "testHint": "テストを書いて実行する。",
+        "fix_ci": "CI の修正",
+        "fix_ciHint": "失敗したパイプライン。担当者のいない PR を誰が引き受けるかもここで決まります。",
+        "docs": "ドキュメント",
+        "docsHint": "ドキュメントの作成と更新。",
+        "release": "リリース",
+        "releaseHint": "バージョン、変更履歴、公開。",
+        "research": "調査",
+        "researchHint": "調べもの。",
+        "check": "チェック",
+        "checkHint": "完了した作業を受け入れる前にチェックする。作業セッションを受け付けるものだけが表示されます。"
+      },
+      "changed": {
+        "usageOf": "アシスタントでの {name} の使われ方",
+        "usageDefault": "既定",
+        "usageSet": "設定済み",
+        "on": "オン",
+        "off": "オフ",
+        "default": "既定"
+      },
+      "targetLoading": "このアシスタントの設定を読み込み中…",
+      "targetFailed": "このアシスタントの設定を読み込めませんでした。"
     },
     "statusWord": {
       "idle": "待機中",
@@ -8130,6 +8310,30 @@
         "onIt": "{name} が「{text}」に対応中",
         "stopToo": "{name} の分も止める",
         "alsoStopped": "こちらも停止"
+      },
+      "confirm": {
+        "open": "あなたの確認待ち",
+        "acted": "確認済み・送信しました",
+        "dismissed": "送信しませんでした",
+        "accept": "送信する",
+        "dismiss": "やめる",
+        "messageTo": "{name} へのメッセージ"
+      },
+      "changed": {
+        "applied": "指示どおりに変更しました",
+        "accepted": "変更しました",
+        "undone": "元に戻しました",
+        "dismissed": "変更しませんでした",
+        "suggested": "変更の提案",
+        "show": "指示どおりに変更予定 · あなたの確認待ち",
+        "line": "{name} が指示どおりに変更しました",
+        "quote": "あなたの発言：「{quote}」",
+        "reason": "理由：{reason}",
+        "kept": "その後また変更されたため、そのままにした項目：{items}",
+        "accept": "変更する",
+        "dismiss": "やめておく",
+        "undo": "元に戻す",
+        "seeSettings": "設定で見る"
       }
     },
     "exchange": {
@@ -8152,6 +8356,7 @@
       "skipped": "スキップ済み",
       "withdrawn": "不要になりました",
       "resolved": "解決済み"
-    }
+    },
+    "addExecutor": "実行設定を追加"
   }
 }

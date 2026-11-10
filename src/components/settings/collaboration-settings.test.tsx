@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it, vi } from "vitest"
 
@@ -24,9 +24,11 @@ vi.mock("@/lib/api", () => ({
     work_tasks_enabled: false,
   })),
   setChatAuthoringSettings: vi.fn(async (v: unknown) => v),
-  // Never settles: the row renders its control before the snapshot arrives.
-  personalAgentGet: vi.fn(() => new Promise(() => {})),
-  personalAgentSetWorkdir: vi.fn(async () => ({})),
+}))
+
+const openPage = vi.hoisted(() => vi.fn(async () => {}))
+vi.mock("@/lib/personal-agent-open", () => ({
+  openPersonalAgentPage: openPage,
 }))
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
@@ -78,6 +80,18 @@ describe("CollaborationSettings", () => {
     expect(screen.getByLabelText("Get session info")).toBeInTheDocument()
     expect(screen.getByLabelText("Create automations")).toBeInTheDocument()
     expect(screen.getByLabelText("Create to-do tasks")).toBeInTheDocument()
-    expect(screen.getByLabelText("Working directory")).toBeInTheDocument()
+  })
+
+  it("points to the assistants page for the executor configs, which moved there", async () => {
+    renderSettings()
+    await screen.findByRole("heading", { name: "Multi-Agent Collaboration" })
+    // The tab and the personal agent's working directory are gone from here.
+    expect(screen.queryByRole("tab", { name: "Assistants" })).toBeNull()
+    expect(screen.queryByLabelText("Working directory")).toBeNull()
+    expect(
+      screen.getByText("Assistant configs: moved to the assistants page")
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Open" }))
+    expect(openPage).toHaveBeenCalledWith("executors")
   })
 })

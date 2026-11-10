@@ -20,6 +20,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
+  type ReactNode,
   useCallback,
   useMemo,
   useRef,
@@ -85,11 +86,26 @@ export interface AssistantsPanelProps {
    *  assistant cannot be delegated to. `null` until known. */
   delegationEnabled: boolean | null
   /** Tabs of this section with unsaved changes, by display name. */
-  unsavedTabs: string[]
+  unsavedTabs?: string[]
   /** Go back to the first tab with unsaved changes. */
   onShowUnsaved?: () => void
   /** Go to the tab that holds the multi-agent switch. */
   onShowGeneral?: () => void
+  /** What the switch being off means, when the host says it its own way. */
+  delegationOffText?: string
+  /** The label of the action going to the switch. */
+  delegationOffAction?: string
+  /** A line of the host's under a row's agent: what it is doing, and how
+   *  the assistants use it. */
+  rowExtra?: (assistant: AssistantInfo) => ReactNode
+  /** What deleting it takes with it, said in the confirmation. */
+  deleteImpact?: (assistant: AssistantInfo) => ReactNode
+  /** What turning it off means, when that is worth a confirmation; `null`
+   *  turns it off at once. */
+  disableImpact?: (assistant: AssistantInfo) => ReactNode | null
+  /** A section of the host's in the editor, and where it saves. */
+  editorSection?: (assistant: AssistantInfo | null) => ReactNode
+  onEditorSaved?: (assistant: AssistantInfo) => void
 }
 
 /** The shared surface of the list, its loading placeholder and nothing else:
@@ -144,9 +160,16 @@ function selectionSummary(
 
 export function AssistantsPanel({
   delegationEnabled,
-  unsavedTabs,
+  unsavedTabs = [],
   onShowUnsaved,
   onShowGeneral,
+  delegationOffText,
+  delegationOffAction,
+  rowExtra,
+  deleteImpact,
+  disableImpact,
+  editorSection,
+  onEditorSaved,
 }: AssistantsPanelProps) {
   // The settings window has no workspace layout to keep this store live.
   useAssistantsSync()
@@ -237,7 +260,9 @@ export function AssistantsPanel({
     [assistants, persistOrder]
   )
 
-  const toggle = useCallback(
+  /** An executor config the host warned about turning off. */
+  const [disabling, setDisabling] = useState<AssistantInfo | null>(null)
+  const setEnabled = useCallback(
     (assistant: AssistantInfo, enabled: boolean) => {
       useAssistantsStore
         .getState()
@@ -249,6 +274,16 @@ export function AssistantsPanel({
         )
     },
     [t, tErr]
+  )
+  const toggle = useCallback(
+    (assistant: AssistantInfo, enabled: boolean) => {
+      if (!enabled && disableImpact?.(assistant) != null) {
+        setDisabling(assistant)
+        return
+      }
+      setEnabled(assistant, enabled)
+    },
+    [disableImpact, setEnabled]
   )
 
   const duplicate = useCallback(
@@ -356,12 +391,13 @@ export function AssistantsPanel({
                 className="bg-background"
                 onClick={onShowGeneral}
               >
-                {t("delegationOffAction", { tab: tm("tabGeneral") })}
+                {delegationOffAction ??
+                  t("delegationOffAction", { tab: tm("tabGeneral") })}
               </Button>
             ) : null
           }
         >
-          {t("delegationOff")}
+          {delegationOffText ?? t("delegationOff")}
         </PanelNotice>
       ) : null}
 
@@ -461,6 +497,7 @@ export function AssistantsPanel({
               onEdit={() => openEditor(assistant)}
               onDuplicate={() => duplicate(assistant)}
               onDelete={() => askDelete(assistant)}
+              extra={rowExtra?.(assistant)}
             />
           ))}
         </Reorder.Group>
@@ -474,8 +511,41 @@ export function AssistantsPanel({
             if (!open) setEditor(null)
           }}
           assistant={editor.assistant}
+          extraSection={editorSection?.(editor.assistant)}
+          onSaved={onEditorSaved}
         />
       ) : null}
+
+      <AlertDialog
+        open={disabling != null}
+        onOpenChange={(open) => {
+          if (!open) setDisabling(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("disableTitle", { name: disabling?.name ?? "" })}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-1.5">
+                {disabling ? disableImpact?.(disabling) : null}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (disabling) setEnabled(disabling, false)
+                setDisabling(null)
+              }}
+            >
+              {t("disableConfirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={deletion.open}
@@ -497,8 +567,11 @@ export function AssistantsPanel({
             <AlertDialogTitle>
               {t("deleteTitle", { name: deletion.target?.name ?? "" })}
             </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("deleteDescription")}
+            <AlertDialogDescription asChild>
+              <div className="space-y-1.5">
+                <p>{t("deleteDescription")}</p>
+                {deletion.target ? deleteImpact?.(deletion.target) : null}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -527,6 +600,8 @@ interface AssistantRowProps {
   onEdit: () => void
   onDuplicate: () => void
   onDelete: () => void
+  /** The host's line under the agent's. */
+  extra?: ReactNode
 }
 
 function AssistantRow({
@@ -542,6 +617,7 @@ function AssistantRow({
   onEdit,
   onDuplicate,
   onDelete,
+  extra,
 }: AssistantRowProps) {
   const t = useTranslations("AcpAgentSettings.multiAgent.assistants")
   const dragControls = useDragControls()
@@ -676,6 +752,7 @@ function AssistantRow({
               </Badge>
             ) : null}
           </div>
+          {extra}
         </div>
       </div>
 

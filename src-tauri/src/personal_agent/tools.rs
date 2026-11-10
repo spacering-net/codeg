@@ -106,43 +106,75 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 .unwrap_or_default();
             if assistants.is_empty() {
                 return ToolOutcome::ok(
-                    "No role assistants are configured. Tell the owner to add one under Settings → \
-                     Collaboration → Assistants.",
+                    "No executor configs are set up. Tell the owner to add one on the assistants \
+                     page, under Settings → Team → Executor configs.",
                     json!({ "assistants": [] }),
                 );
             }
-            let rows: Vec<Value> = assistants
-                .iter()
-                .map(|a| {
-                    let model = a
-                        .label_snapshot
-                        .options
-                        .iter()
-                        .find(|o| o.id == "model")
-                        .map(|o| o.value_label.clone());
-                    json!({
-                        "id": a.id,
-                        "name": a.name,
-                        "when_to_use": a.description,
-                        "agent": a.label_snapshot.agent,
-                        "agent_type": a.agent_type,
-                        "model": model,
-                    })
-                })
-                .collect();
-            let text = assistants
-                .iter()
-                .map(|a| {
-                    let what = if a.description.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!(" — {}", a.description.trim())
-                    };
-                    format!("#{} {} ({}){what}", a.id, a.name, a.label_snapshot.agent)
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            ToolOutcome::ok(text, json!({ "assistants": rows }))
+            let team = engine.account().await.team;
+            let mut rows: Vec<Value> = Vec::new();
+            let mut open_lines = Vec::new();
+            let mut closed_lines = Vec::new();
+            for a in &assistants {
+                let model = a
+                    .label_snapshot
+                    .options
+                    .iter()
+                    .find(|o| o.id == "model")
+                    .map(|o| o.value_label.clone());
+                let usage = team.usage_of(&a.uid);
+                let note = engine.usage_note(&usage).await;
+                rows.push(json!({
+                    "id": a.id,
+                    "name": a.name,
+                    "when_to_use": a.description,
+                    "agent": a.label_snapshot.agent,
+                    "agent_type": a.agent_type,
+                    "model": model,
+                    "dispatch": usage.dispatch,
+                    "modes": usage.modes,
+                    "projects": usage.projects,
+                }));
+                let what = if a.description.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", a.description.trim())
+                };
+                let line = format!(
+                    "#{} {} ({}){what}{}",
+                    a.id,
+                    a.name,
+                    a.label_snapshot.agent,
+                    note.as_deref()
+                        .filter(|_| usage.dispatch)
+                        .map(|n| format!(" [{n}]"))
+                        .unwrap_or_default()
+                );
+                if usage.dispatch {
+                    open_lines.push(line);
+                } else {
+                    closed_lines.push(line);
+                }
+            }
+            let mut text = if open_lines.is_empty() {
+                "None of the executor configs is open to your dispatches.".to_string()
+            } else {
+                open_lines.join("\n")
+            };
+            if !closed_lines.is_empty() {
+                text.push_str(&format!(
+                    "\n\nNot for your dispatches (the owner keeps these for @ in conversations):\n{}",
+                    closed_lines.join("\n")
+                ));
+            }
+            let division = engine.division_text().await;
+            if let Some(d) = &division {
+                text.push_str(&format!("\n\n{d}"));
+            }
+            ToolOutcome::ok(
+                text,
+                json!({ "assistants": rows, "division": team.division }),
+            )
         }
         "project_list" => {
             let folders = crate::db::service::folder_service::list_all_folder_details(&db.conn)
@@ -221,8 +253,10 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 Some((batch_id, scope)) => DispatchAuth::Ledgered { batch_id, scope },
                 None => DispatchAuth::Direct,
             };
-            match engine.record_dispatch(valid, auth).await {
-                Ok(made) => dispatched(&made.dispatch, made.earlier),
+            // The owner may have asked to confirm such dispatches first.
+            match engine.dispatch_or_confirm(valid, auth).await {
+                Ok(Ok(made)) => dispatched(&made.dispatch, made.earlier),
+                Ok(Err(card)) => card.outcome("dispatch"),
                 Err(e) => ToolOutcome::refused(e),
             }
         }
@@ -243,13 +277,15 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 None => FollowupAuth::Direct,
             };
             match engine
-                .followup_call(id, message, string(&args, "intent"), auth)
+                .followup_or_confirm(id, message, string(&args, "intent"), auth)
                 .await
             {
-                Ok(text) => ToolOutcome::ok(text, json!({ "dispatch_id": id })),
+                Ok(Ok(text)) => ToolOutcome::ok(text, json!({ "dispatch_id": id })),
+                Ok(Err(card)) => card.outcome("follow-up"),
                 Err(e) => ToolOutcome::refused(e),
             }
         }
+        "prefs_update" => engine.prefs_update_call(&args).await,
         "bot_list" => {
             let (text, data) = engine.roster_text().await;
             ToolOutcome::ok(text, data)
@@ -262,8 +298,10 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 wants_reply: args.get("wants_reply").and_then(|v| v.as_bool()),
                 for_input: reference(&args, "for"),
             };
-            match engine.send_message(call).await {
-                Ok(sent) => {
+            match engine.message_or_confirm(call).await {
+                Ok(Err(card)) => card.outcome("message"),
+                Err(e) => ToolOutcome::refused(e),
+                Ok(Ok(sent)) => {
                     let m = &sent.message;
                     let thread = m.thread_id.map(|t| format!(" on thread t{t}")).unwrap_or_default();
                     let text = if sent.earlier {
@@ -291,7 +329,6 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                         }),
                     )
                 }
-                Err(e) => ToolOutcome::refused(e),
             }
         }
         "item_list" => {

@@ -900,8 +900,13 @@
           "avatarTooLarge": "The avatar image is too large.",
           "invalidAgentOptions": "The agent's options aren't complete. Reopen the assistant and pick every option.",
           "notFound": "This assistant no longer exists."
-        }
-      }
+        },
+        "disableTitle": "Turn off {name}?",
+        "disableConfirm": "Turn off"
+      },
+      "assistantsMoved": "Assistant configs: moved to the assistants page",
+      "assistantsMovedHint": "Manage them on the assistants page, under Settings → Team → Executor configs. The ones you @ in conversations are the same.",
+      "assistantsMovedOpen": "Open"
     },
     "actions": {
       "dragSort": "Drag to reorder",
@@ -1987,18 +1992,7 @@
   },
   "CollaborationSettings": {
     "sectionTitle": "Collaboration",
-    "sectionDescription": "How agents work with each other, and which of codeg's own tools they can reach from inside a conversation.",
-    "personalAgent": {
-      "title": "Personal agent",
-      "workdir": "Working directory",
-      "workdirHint": "Where it keeps its persona, rules and memory, under git. Now: {current}. Moving it starts a new session; the old directory is left as it is.",
-      "notConfigured": "Set up the personal agent on its page first.",
-      "placeholder": "Default: the data directory's personal-agent",
-      "useDefault": "Use default",
-      "apply": "Move",
-      "saved": "Working directory moved.",
-      "readOnly": "The personal agent runs in another codeg process; change it there."
-    }
+    "sectionDescription": "How agents work with each other, and which of codeg's own tools they can reach from inside a conversation."
   },
   "LoginPage": {
     "documentTitle": "Login - codeg",
@@ -3528,7 +3522,8 @@
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Skills",
-        "mentionGroupAssistant": "Assistants"
+        "mentionGroupAssistant": "Assistants",
+        "mentionManageAssistants": "Manage executor configs…"
       },
       "messageQueue": {
         "addToQueue": "Queue message",
@@ -7678,14 +7673,15 @@
   "PersonalAgent": {
     "title": "Personal agent",
     "readOnly": "The personal agent runs in another codeg process on this data directory, so this page is read-only here.",
-    "noAssistants": "No role assistants yet: the personal agent hands its work to them. Add one under Settings → Collaboration → Assistants.",
+    "noAssistants": "No executor configs the assistants can dispatch to yet: the personal agent hands its work to them.",
     "viewSession": "View session",
     "viewSessionHint": "The current session's full transcript, live.",
     "sessionTitle": "Session {seq} · full transcript",
     "setup": {
       "title": "Set up your personal agent",
       "description": "Your personal agent understands what you want, hands the work to the assistants you configured, follows it up and remembers. Pick the agent it runs on to start.",
-      "action": "Choose its agent"
+      "action": "Choose its agent",
+      "manageExecutors": "Manage executor configs"
     },
     "errors": {
       "engineElsewhere": "The personal agent runs in another codeg process on this data directory; this page is read-only here."
@@ -7853,14 +7849,8 @@
       }
     },
     "settings": {
-      "title": "Personal agent settings",
       "setupTitle": "Set up your personal agent",
-      "description": "What it runs on, when its context is compacted, and who it is.",
       "setupDescription": "Pick the agent your personal agent runs on, with every option. You can switch it later; the timeline carries on.",
-      "tabBrain": "Brain",
-      "tabCompaction": "Compaction",
-      "tabDispatch": "Dispatch",
-      "tabPersona": "Persona & memory",
       "name": "Name",
       "nameHint": "The name and picture it goes by on its page and in its messages; the agent knows the name too. An empty name uses the default.",
       "namePlaceholder": "Personal agent",
@@ -7903,7 +7893,197 @@
       "deleteEntry": "Delete",
       "confirmDelete": "Delete",
       "confirmDeleteHint": "Delete this entry and its index line?",
-      "entryDeleted": "Deleted {name}."
+      "entryDeleted": "Deleted {name}.",
+      "saved": "Saved.",
+      "saveFailed": "Could not save",
+      "restoreDefaults": "Restore defaults",
+      "back": "Back to the conversation",
+      "viewTitle": "Settings",
+      "backToOwn": "Back to this page's assistant",
+      "editingOther": "You are editing {name}'s own settings.",
+      "readOnly": "The assistants run in another codeg process, so their settings are read-only here. Executor configs themselves can still be edited.",
+      "setUpFirst": "Set up the primary assistant first.",
+      "nav": {
+        "thisAssistant": "This assistant",
+        "allAssistants": "All assistants",
+        "team": "Team",
+        "prefs": "Preferences",
+        "identity": "Identity & brain",
+        "persona": "Persona & memory",
+        "execution": "Execution",
+        "advanced": "Advanced",
+        "workers": "Work assistants",
+        "executors": "Executor configs",
+        "division": "Division of work",
+        "communication": "Communication",
+        "automation": "Dispatch & automation"
+      },
+      "pages": {
+        "identity": "The name and picture it goes by, and the agent it runs on — its mode and permissions included: codeg runs it as you pick.",
+        "persona": "Who it is, the rules it keeps and what it remembers: files in its working directory.",
+        "execution": "The executor config it dispatches to by default, and the template it was made from.",
+        "advanced": "Compaction, the handoff card, how much it runs at once, its built-in skill and its working directory.",
+        "workers": "Your work assistants, each with its own job, memory and conversation. Click one to open its own settings.",
+        "executors": "What the assistants hand work to: an agent, with its options and standing instructions.",
+        "division": "Who takes each kind of work first. The assistants go by it unless you name someone else, or the pick cannot take it right then.",
+        "communication": "How the assistants talk to you. Every assistant follows the same.",
+        "communicationNote": "Tone and how they address you are not here: write them in each assistant's SOUL.md, and in the primary's USER.md.",
+        "automation": "What the assistants do on their own, and what they ask you first. By default everything runs on its own and tells you on a card; each “ask me first” is yours to turn on.",
+        "automationNote": "What waits for you goes on a card holding exactly what will run, and runs when you click."
+      },
+      "prefs": {
+        "default": "(default)",
+        "reply_length": {
+          "title": "Reply length",
+          "hint": "How long the assistants' replies are.",
+          "short": "Short",
+          "medium": "Medium",
+          "long": "Detailed"
+        },
+        "cards": {
+          "title": "Reply with cards",
+          "hint": "Whether the assistants answer with cards (the UI-render skill).",
+          "prefer": "Whenever it helps",
+          "decisions": "Only when you decide",
+          "never": "No cards"
+        },
+        "when_unsure": {
+          "title": "When unsure what you mean",
+          "hint": "How the assistants read your words when they act for you. An executor's questions are separate.",
+          "assume": "Do the likeliest, say the assumption",
+          "ask": "Ask me first"
+        },
+        "chat_changes": {
+          "title": "Changes you ask for in chat",
+          "hint": "Settings you tell an assistant to change.",
+          "apply": "Change at once, the card can undo",
+          "show": "Show me first"
+        },
+        "confirm_dispatch": {
+          "title": "Confirm before dispatching",
+          "hint": "A dispatch waiting for you is a card holding all of it; it goes out when you click.",
+          "never": "No, dispatch directly",
+          "code": "Code changes first",
+          "always": "Every time"
+        },
+        "followups": {
+          "title": "Follow-ups and retries of their dispatches",
+          "hint": "When an assistant continues or retries work it handed out.",
+          "auto": "Do it directly",
+          "ask": "Ask me first"
+        },
+        "messages": {
+          "title": "Messages to other assistants",
+          "hint": "When one assistant writes to another.",
+          "auto": "Send directly",
+          "ask": "Ask me first"
+        },
+        "worker_handoff": {
+          "title": "Primary hands work to a work assistant",
+          "hint": "When the work is a work assistant's to do.",
+          "message": "Message it; it sees it through",
+          "direct": "Dispatch to its executor config"
+        },
+        "loop_rounds": {
+          "title": "Stop exchanges going nowhere after",
+          "hint": "Rounds (two messages each) two assistants may go back and forth without progress; a circle stops at once. 0 is no limit."
+        },
+        "automation_level": {
+          "title": "Automation level",
+          "standard": "Standard",
+          "ask_more": "Ask me more",
+          "custom": "Custom",
+          "standardHint": "Everything runs on its own and tells you on a card.",
+          "ask_moreHint": "Follow-ups and retries, messages to other assistants, changes you ask for in chat and code-changing dispatches go to you as a card first.",
+          "customHint": "Some of the items below are set your own way.",
+          "confirmTitle": "Switch to “{level}”?",
+          "confirmBody": "{count, plural, one {This overwrites # item you changed.} other {This overwrites # items you changed.}}",
+          "confirm": "Switch"
+        }
+      },
+      "workdir": {
+        "title": "Working directory",
+        "hint": "Where it keeps its persona, rules and memory, under git. Now: {current}. Moving it starts a new session; the old directory is left as it is.",
+        "placeholder": "Default: in the data directory",
+        "useDefault": "Use default",
+        "apply": "Move",
+        "saved": "Working directory moved."
+      },
+      "execution": {
+        "executor": "Executor config",
+        "executorHint": "The one it dispatches to by default.",
+        "executorGone": "Its executor config was deleted: pick another.",
+        "pick": "Pick one",
+        "template": "Template",
+        "templateHint": "The job it was made for.",
+        "noTemplate": "Blank"
+      },
+      "team": {
+        "noWorkers": "No work assistants yet",
+        "noWorkersHint": "A work assistant takes one job — writing code, reviewing — and sees it through.",
+        "boundTo": "dispatches to {name}",
+        "unbound": "no executor config",
+        "sameBatch": "The assistants you @ in a conversation and these executor configs are the same ones: change one here and both change.",
+        "delegationOff": "Multi-agent collaboration is off: they cannot be @-mentioned in conversations for now. The assistants' dispatches are not affected.",
+        "openCollaboration": "Open Collaboration settings",
+        "auto": "Auto",
+        "divisionNote": "With a work assistant as the pick, the primary writes to it; with an executor config, it dispatches to it directly."
+      },
+      "usage": {
+        "title": "How the assistants use it",
+        "dispatch": "The assistants may dispatch to it",
+        "dispatchHint": "Off, it can still be @-mentioned in conversations; the assistants just do not dispatch to it.",
+        "modes": "Modes it takes",
+        "modesHint": "A dispatch in another mode is refused, with the reason.",
+        "projects": "Projects",
+        "projectsHint": "A chat takes no project, so this never refuses one.",
+        "allProjects": "Every project",
+        "saveFailed": "Could not save how the assistants use it",
+        "notForDispatch": "not for the assistants' dispatches",
+        "onlyModes": "only {modes}",
+        "onlyProjects": "{count, plural, one {only on # project} other {only on # projects}}"
+      },
+      "executor": {
+        "running": "{count} running",
+        "fortnight": "2 weeks: {dispatches} dispatched · {completed} done",
+        "boundBy": "{name}'s",
+        "firstFor": "first for {kinds}",
+        "failing": "The last {count} dispatches to it all failed: {error}",
+        "impactWorkerDelete": "It is {name}'s executor config: {name} will need another.",
+        "impactWorkerOff": "It is {name}'s executor config: {name} cannot dispatch to it while it is off.",
+        "impactDivisionDelete": "It is the first pick for {kinds}: that goes back to Auto.",
+        "impactDivisionOff": "It is the first pick for {kinds}: the assistants pick another while it is off.",
+        "impactRunning": "{count, plural, one {# piece of work it runs goes on.} other {# pieces of work it runs go on.}}"
+      },
+      "division": {
+        "code": "Writing code",
+        "codeHint": "Changes to a project's code.",
+        "review": "Review",
+        "reviewHint": "Reading a change and saying what is wrong with it.",
+        "test": "Testing",
+        "testHint": "Writing and running tests.",
+        "fix_ci": "Fixing CI",
+        "fix_ciHint": "A failing pipeline — and who owns a PR nobody does.",
+        "docs": "Docs",
+        "docsHint": "Writing and updating docs.",
+        "release": "Releases",
+        "releaseHint": "Versions, changelogs, publishing.",
+        "research": "Research",
+        "researchHint": "Finding things out.",
+        "check": "Checking",
+        "checkHint": "Checking finished work before it is accepted. Only those that take work sessions are listed."
+      },
+      "changed": {
+        "usageOf": "How the assistants use {name}",
+        "usageDefault": "default",
+        "usageSet": "set",
+        "on": "on",
+        "off": "off",
+        "default": "default"
+      },
+      "tabPersona": "Persona & memory",
+      "targetLoading": "Loading this assistant's settings…",
+      "targetFailed": "Could not read this assistant's settings."
     },
     "statusWord": {
       "idle": "Idle",
@@ -8130,6 +8310,30 @@
         "onIt": "{name} is on “{text}”",
         "stopToo": "Stop {name}'s too",
         "alsoStopped": "Stopped too"
+      },
+      "confirm": {
+        "open": "Waiting for your confirmation",
+        "acted": "Confirmed, it went out",
+        "dismissed": "Not sent",
+        "accept": "Go ahead",
+        "dismiss": "Don't",
+        "messageTo": "Message to {name}"
+      },
+      "changed": {
+        "applied": "Changed, as you said",
+        "accepted": "Changed",
+        "undone": "Undone",
+        "dismissed": "Not changed",
+        "suggested": "A suggested change",
+        "show": "To change, as you said · waiting for you",
+        "line": "{name} changed, as you told it",
+        "quote": "You said: “{quote}”",
+        "reason": "Why: {reason}",
+        "kept": "Changed again since, so left as they are: {items}",
+        "accept": "Change it",
+        "dismiss": "Not now",
+        "undo": "Undo",
+        "seeSettings": "See in settings"
       }
     },
     "exchange": {
@@ -8152,6 +8356,7 @@
       "skipped": "Skipped",
       "withdrawn": "No longer asked",
       "resolved": "Settled"
-    }
+    },
+    "addExecutor": "Add an executor config"
   }
 }

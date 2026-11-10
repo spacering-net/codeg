@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 use super::dispatch::{executor_of, DispatchAuth, DispatchRequest, FollowupAuth, ValidDispatch};
 use super::engine::{enum_str, PersonalAgentEngine};
 use super::ledger;
+use super::messages::{MessageAuth, ResolvedMessage};
 use crate::db::entities::personal_agent_dispatch::DispatchMode;
 use crate::db::entities::personal_agent_notice::{
     self as notice_entity, NoticeKind, NoticeLevel, NoticeState,
@@ -43,6 +44,10 @@ use crate::models::personal_agent::{PersonalAgentChange, TimelineRow};
 pub enum ProposalAction {
     Dispatch {
         request: DispatchRequest,
+        /// The input it is for, and what it inherits from it: a dispatch
+        /// the owner confirms is filed where the call would have filed it.
+        #[serde(default)]
+        lineage: svc::Lineage,
     },
     Followup {
         dispatch_id: i32,
@@ -50,6 +55,37 @@ pub enum ProposalAction {
         #[serde(default)]
         intent: Option<String>,
     },
+    /// A message to another assistant, resolved when it was asked for.
+    Message { message: ResolvedMessage },
+}
+
+/// What a call that the owner's settings send to them first came to.
+#[derive(Debug, Clone)]
+pub struct Confirming {
+    pub notice_id: i32,
+    /// A re-delivered turn's same call: the card it raised then.
+    pub earlier: bool,
+}
+
+impl Confirming {
+    /// The tool's answer.
+    pub fn outcome(&self, what: &str) -> super::tools::ToolOutcome {
+        let text = if self.earlier {
+            format!(
+                "Already with the owner: the turn this delivery repeats put this same {what} on                  card #{} for them to confirm; nothing new was raised.",
+                self.notice_id
+            )
+        } else {
+            format!(
+                "Waiting for the owner: they asked to confirm such actions first, so the {what}                  is on card #{} exactly as you wrote it, and runs once they confirm. You will                  hear how they answered; do not send it again meanwhile.",
+                self.notice_id
+            )
+        };
+        super::tools::ToolOutcome::ok(
+            text,
+            json!({ "notice_id": self.notice_id, "state": "awaiting_owner", "earlier": self.earlier }),
+        )
+    }
 }
 
 impl PersonalAgentEngine {
@@ -60,6 +96,216 @@ impl PersonalAgentEngine {
         v: &ValidDispatch,
         batch_id: Option<i32>,
         detail: Option<String>,
+    ) -> Result<i32, String> {
+        self.dispatch_card(v, batch_id, detail, None, "proposal").await
+    }
+
+    /// Record a checked dispatch — or, when the owner asked to confirm
+    /// dispatches like it first (13.5), put it on a card holding exactly
+    /// it. A re-delivered turn's same call gets what the first one got: the
+    /// dispatch it made, or the card it raised.
+    pub async fn dispatch_or_confirm(
+        self: &Arc<Self>,
+        v: ValidDispatch,
+        auth: DispatchAuth,
+    ) -> Result<Result<super::dispatch::DispatchMade, Confirming>, String> {
+        let key = ledger::dispatch_key(v.snapshot.assistant_id, v.mode, v.folder_id, &v.title);
+        let subject = format!("confirm:{key}");
+        // What the turn this delivery repeats did stands, whatever the
+        // owner's setting says now: the card it raised (and what that card
+        // ran), or the dispatch it made.
+        if let DispatchAuth::Ledgered { scope, .. } = &auth {
+            if let Some(card) = self.card_for_subject(&subject, scope).await {
+                return Ok(Err(Confirming {
+                    notice_id: card,
+                    earlier: true,
+                }));
+            }
+            if svc::ledger_entries(&self.db.conn, scope, &key)
+                .await
+                .map_err(|e| e.to_string())?
+                .iter()
+                .any(|e| e.state == crate::db::entities::personal_agent_action::ActionState::Committed)
+            {
+                // Recording it again answers with it, and makes nothing.
+                return self.record_dispatch(v, auth.clone()).await.map(Ok);
+            }
+        }
+        if !self.prefs().await.confirms(v.mode) {
+            return self.record_dispatch(v, auth).await.map(Ok);
+        }
+        let batch = match &auth {
+            DispatchAuth::Ledgered { batch_id, .. } => Some(*batch_id),
+            _ => self.current_batch().await,
+        };
+        let notice_id = self
+            .dispatch_card(&v, batch, None, Some(subject), "confirm")
+            .await?;
+        Ok(Err(Confirming {
+            notice_id,
+            earlier: false,
+        }))
+    }
+
+    /// A proposal card one of the batches in `scope` raised under `subject`.
+    async fn card_for_subject(&self, subject: &str, scope: &[i32]) -> Option<i32> {
+        svc::notice_by_subject(
+            &self.db.conn,
+            self.bot().await,
+            NoticeKind::Proposal,
+            subject,
+            scope,
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|n| n.id)
+    }
+
+    /// Send a follow-up — or, when the owner asked to see follow-ups and
+    /// retries first, put it on a card. A re-delivered turn's same call gets
+    /// what the first one got, whatever the setting says now.
+    pub async fn followup_or_confirm(
+        self: &Arc<Self>,
+        dispatch_id: i32,
+        message: String,
+        intent: Option<String>,
+        auth: FollowupAuth,
+    ) -> Result<Result<String, Confirming>, String> {
+        use crate::models::personal_agent_prefs::AskFirst;
+        let key = ledger::followup_key(dispatch_id, intent.as_deref());
+        let subject = format!("confirm:{key}");
+        if let FollowupAuth::Ledgered { scope, .. } = &auth {
+            if let Some(card) = self.card_for_subject(&subject, scope).await {
+                return Ok(Err(Confirming {
+                    notice_id: card,
+                    earlier: true,
+                }));
+            }
+            // The first one went out directly: the ledger answers for it.
+            if !svc::ledger_entries(&self.db.conn, scope, &key)
+                .await
+                .map_err(|e| e.to_string())?
+                .is_empty()
+            {
+                return self
+                    .followup_call(dispatch_id, message, intent, auth.clone())
+                    .await
+                    .map(Ok);
+            }
+        }
+        if self.prefs().await.followups != AskFirst::Ask {
+            return self
+                .followup_call(dispatch_id, message, intent, auth)
+                .await
+                .map(Ok);
+        }
+        let batch = match &auth {
+            FollowupAuth::Ledgered { batch_id, .. } => Some(*batch_id),
+            _ => self.current_batch().await,
+        };
+        let d = svc::get_dispatch_of(&self.db.conn, self.bot().await, dispatch_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("dispatch #{dispatch_id} does not exist"))?;
+        if message.trim().is_empty() {
+            return Err("`message` is required".into());
+        }
+        let executor = executor_of(&d);
+        let display = json!({
+            "dispatch_id": d.id,
+            "title": d.title,
+            "executor": executor.name,
+            "executor_id": executor.assistant_id,
+            "agent_type": executor.agent_type,
+            "mode": d.mode,
+            "message": message,
+            "intent": intent,
+        });
+        let notice_id = self
+            .raise_proposal(
+                ProposalAction::Followup {
+                    dispatch_id,
+                    message,
+                    intent,
+                },
+                display,
+                d.title.clone(),
+                batch,
+                None,
+                Some(subject),
+                "confirm",
+            )
+            .await?;
+        Ok(Err(Confirming {
+            notice_id,
+            earlier: false,
+        }))
+    }
+
+    /// Send a message to another assistant — or, when the owner asked to
+    /// see such messages first, put it on a card, resolved as it is. A
+    /// re-delivered turn's same call gets what the first one got, whatever
+    /// the setting says now.
+    pub async fn message_or_confirm(
+        self: &Arc<Self>,
+        call: super::messages::MessageCall,
+    ) -> Result<Result<super::messages::MessageSent, Confirming>, String> {
+        use crate::models::personal_agent_prefs::AskFirst;
+        let resolved = self.resolve_message(call).await?;
+        let ledger = self.ledger_batch().await;
+        let subject = format!("confirm:{}", Self::resolved_key(&resolved));
+        if let Some((_, scope)) = &ledger {
+            if let Some(card) = self.card_for_subject(&subject, scope).await {
+                return Ok(Err(Confirming {
+                    notice_id: card,
+                    earlier: true,
+                }));
+            }
+            if let Some(sent) = self.sent_before(&resolved, scope).await? {
+                return Ok(Ok(sent));
+            }
+        }
+        if self.prefs().await.messages != AskFirst::Ask {
+            let auth = match ledger {
+                Some((batch_id, scope)) => MessageAuth::Ledgered { batch_id, scope },
+                None => MessageAuth::Direct,
+            };
+            return self.send_resolved(resolved, auth).await.map(Ok);
+        }
+        let display = json!({
+            "to": resolved.to,
+            "to_name": resolved.to_name,
+            "message": resolved.body,
+            "reply_to": resolved.reply_to,
+            "wants_reply": resolved.wants_reply,
+        });
+        let title = format!("To {}", resolved.to_name);
+        let notice_id = self
+            .raise_proposal(
+                ProposalAction::Message { message: resolved },
+                display,
+                title,
+                ledger.map(|(b, _)| b),
+                None,
+                Some(subject),
+                "confirm",
+            )
+            .await?;
+        Ok(Err(Confirming {
+            notice_id,
+            earlier: false,
+        }))
+    }
+
+    /// A card holding a checked dispatch.
+    async fn dispatch_card(
+        &self,
+        v: &ValidDispatch,
+        batch_id: Option<i32>,
+        detail: Option<String>,
+        subject: Option<String>,
+        why: &str,
     ) -> Result<i32, String> {
         let project = match v.folder_id {
             Some(id) => crate::db::service::folder_service::get_folder_by_id(&self.db.conn, id)
@@ -83,11 +329,14 @@ impl PersonalAgentEngine {
         self.raise_proposal(
             ProposalAction::Dispatch {
                 request: v.to_request(),
+                lineage: v.lineage.clone(),
             },
             display,
             v.title.clone(),
             batch_id,
             detail,
+            subject,
+            why,
         )
         .await
     }
@@ -126,10 +375,15 @@ impl PersonalAgentEngine {
             d.title.clone(),
             batch_id,
             None,
+            None,
+            "proposal",
         )
         .await
     }
 
+    /// `why`: `proposal` (the assistant's suggestion) or `confirm` (the
+    /// owner asked to confirm such actions first).
+    #[allow(clippy::too_many_arguments)]
     async fn raise_proposal(
         &self,
         action: ProposalAction,
@@ -137,6 +391,8 @@ impl PersonalAgentEngine {
         title: String,
         batch_id: Option<i32>,
         detail: Option<String>,
+        subject: Option<String>,
+        why: &str,
     ) -> Result<i32, String> {
         let payload = serde_json::to_value(&action).map_err(|e| e.to_string())?;
         let action_name = payload
@@ -151,6 +407,7 @@ impl PersonalAgentEngine {
             "notice": "proposal",
             "state": "open",
             "action": action_name,
+            "why": why,
             "display": display,
             "detail": detail,
         }));
@@ -159,7 +416,7 @@ impl PersonalAgentEngine {
             self.bot().await,
             NewNotice {
                 kind: NoticeKind::Proposal,
-                subject_key: None,
+                subject_key: subject,
                 level: NoticeLevel::Normal,
                 batch_id,
                 payload,
@@ -192,6 +449,8 @@ impl PersonalAgentEngine {
         match notice.kind {
             NoticeKind::Loop => return self.act_on_loop(&notice, action).await,
             NoticeKind::Stopped => return self.act_on_stopped(&notice, action).await,
+            // A settings change answers its own way (13.3).
+            NoticeKind::Changed => return self.act_on_changed(&notice, action).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.
@@ -227,7 +486,13 @@ impl PersonalAgentEngine {
             .await?;
         // Phase two: run it under the card's own operation id.
         let ran = match &proposal {
-            ProposalAction::Dispatch { request } => match self.validate_dispatch(request).await {
+            ProposalAction::Dispatch { request, lineage } => match self
+                .validate_dispatch(request)
+                .await
+                .map(|mut v| {
+                    v.lineage = lineage.clone();
+                    v
+                }) {
                 Ok(valid) => match self
                     .record_dispatch(valid, DispatchAuth::Card { notice_id })
                     .await
@@ -281,6 +546,27 @@ impl PersonalAgentEngine {
                 )
                 .await
                 .map(|_| Some(json!({ "dispatch_id": dispatch_id })))
+            }
+            ProposalAction::Message { message } => {
+                match self
+                    .send_resolved(message.clone(), MessageAuth::Card { notice_id })
+                    .await
+                {
+                    Ok(sent) => {
+                        let result = json!({ "message_id": sent.message.id });
+                        self.settle_card_state(
+                            notice_id,
+                            &[NoticeState::Acting],
+                            NoticeState::Acted,
+                            "acted",
+                            result.clone(),
+                            None,
+                        )
+                        .await;
+                        Ok(Some(result))
+                    }
+                    Err(e) => Err(e),
+                }
             }
         };
         match ran {
@@ -368,7 +654,8 @@ impl PersonalAgentEngine {
         result: Option<&Value>,
     ) {
         let what = match proposal {
-            ProposalAction::Dispatch { request } => {
+            ProposalAction::Message { message } => format!("message to {}", message.to_name),
+            ProposalAction::Dispatch { request, .. } => {
                 format!(
                     "dispatch \"{}\" ({})",
                     request.title,
@@ -379,6 +666,12 @@ impl PersonalAgentEngine {
                 format!("follow-up of dispatch #{dispatch_id}")
             }
         };
+        // Held for the owner's confirmation by their settings, rather than
+        // suggested.
+        let confirm = notice
+            .subject_key
+            .as_deref()
+            .is_some_and(|k| k.starts_with("confirm:"));
         let summary = match (notice.kind, verdict) {
             (NoticeKind::Uncertain, "approved") => format!(
                 "The owner had your {what} sent again (codeg could not tell whether the first \
@@ -388,6 +681,16 @@ impl PersonalAgentEngine {
                 "The owner let your {what} be: codeg could not tell whether it reached it, and \
                  it was not sent again."
             ),
+            (_, "approved") if confirm => match (proposal, result) {
+                (ProposalAction::Dispatch { .. }, Some(r)) if r.get("dispatch_id").is_some() => format!(
+                    "The owner confirmed your {what}; it now runs as dispatch #{}.",
+                    r["dispatch_id"]
+                ),
+                (ProposalAction::Message { .. }, Some(r)) if r.get("message_id").is_some() => {
+                    format!("The owner confirmed your {what}; it was sent as m{}.", r["message_id"])
+                }
+                _ => format!("The owner confirmed your {what}; it went out."),
+            },
             (_, "approved") => {
                 match result.and_then(|r| r.get("dispatch_id")) {
                     Some(id) if matches!(proposal, ProposalAction::Dispatch { .. }) => {
@@ -396,6 +699,9 @@ impl PersonalAgentEngine {
                     _ => format!("The owner approved your proposed {what}."),
                 }
             }
+            _ if confirm => format!(
+                "The owner declined your {what} (held for their confirmation); it did not go out."
+            ),
             _ => format!("The owner declined your proposed {what}; it did not run."),
         };
         let _ = svc::insert_event(

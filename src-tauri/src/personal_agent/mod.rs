@@ -11,9 +11,9 @@
 //!   fills up is compacted in place: before a delivery, at or above the
 //!   configured threshold, codeg sends the agent's compact command, the way
 //!   the kanban does before a resumed task round.
-//! - It hands work only to the role assistants of 协作 → 助手, as a kanban
-//!   task, a chat conversation, or a work conversation in a project's
-//!   checkout. That work is owned by the runtime, not by its session, so a
+//! - It hands work only to the executor configs (the assistants page →
+//!   Settings → Team), as a kanban task, a chat conversation, or a work
+//!   conversation in a project's checkout. That work is owned by the runtime, not by its session, so a
 //!   segment switch never touches it; progress comes back as events.
 //! - codeg keeps only the interaction (owner messages, reply text, questions
 //!   and answers, permission choices, dispatch and result cards), the states,
@@ -30,6 +30,7 @@ pub mod host;
 pub mod ledger;
 pub mod messages;
 pub mod notices;
+pub mod prefs;
 pub mod templates;
 pub mod tools;
 pub mod workdir;
