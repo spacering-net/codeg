@@ -713,6 +713,12 @@ pub struct ListIssuesRequest {
     pub state: String,
     #[serde(default)]
     pub assigned_me: bool,
+    /// Only the changes whose review is requested of the signed-in account —
+    /// set by codeg itself (the personal agent looking for a first thing to
+    /// help with), never by a client. GitHub and GitLab filter by it; the
+    /// others refuse it rather than list everything.
+    #[serde(default)]
+    pub review_requested_me: bool,
     /// Label names, ANDed. Already normalized (see [`normalize_labels`]).
     #[serde(default)]
     pub labels: Vec<String>,
@@ -742,6 +748,7 @@ impl ListIssuesRequest {
             tab: filters.tab,
             state: filters.state,
             assigned_me: filters.assigned_me,
+            review_requested_me: false,
             labels: normalize_labels(filters.labels),
             search: normalize_search(filters.search.as_deref()),
             sort: filters.sort,
@@ -2168,6 +2175,7 @@ mod tests {
             tab: ForgeTab::Issues,
             state: "open".into(),
             assigned_me: false,
+            review_requested_me: false,
             labels: vec![],
             search: None,
             sort: ForgeSort::default(),

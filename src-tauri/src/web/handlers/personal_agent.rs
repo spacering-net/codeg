@@ -557,6 +557,8 @@ pub struct ChoiceAnswerParams {
     pub text: Option<String>,
     #[serde(default)]
     pub project_id: Option<i32>,
+    #[serde(default)]
+    pub answers: Option<Vec<crate::personal_agent::meet::ChoicePick>>,
 }
 
 pub async fn personal_agent_choice_answer(
@@ -569,8 +571,34 @@ pub async fn personal_agent_choice_answer(
             params.key,
             params.text,
             params.project_id,
+            params.answers,
         )
         .await?,
+    ))
+}
+
+pub async fn personal_agent_meet_projects(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<Vec<crate::personal_agent::meet::MeetProject>>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_meet_projects_core(&state.db).await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarterParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub notice_id: i32,
+    pub folder_ids: Vec<i32>,
+}
+
+pub async fn personal_agent_starter(
+    Json(params): Json<StarterParams>,
+) -> Result<Json<TimelineRow>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_starter_core(params.bot_id, params.notice_id, params.folder_ids).await?,
     ))
 }
 

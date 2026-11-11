@@ -159,6 +159,23 @@ pub async fn resolve_forge_auth(
     })
 }
 
+/// Whether [`resolve_forge_auth`] would find an account for `host` without
+/// one pinned — read off the stored accounts only, without touching the
+/// keyring (a list of projects asks it of each).
+pub async fn has_account(
+    conn: &DatabaseConnection,
+    provider: ForgeProvider,
+    server_host: &str,
+) -> bool {
+    let host = server_host.trim().to_ascii_lowercase();
+    match load_accounts(conn).await {
+        Ok(settings) => {
+            unpinned_account(&serving_accounts(&settings.accounts, &host, provider)).is_some()
+        }
+        Err(_) => false,
+    }
+}
+
 /// The accounts on `host` that may be spent against `provider`, in stored
 /// order — what [`resolve_forge_auth`] chooses among.
 fn serving_accounts<'a>(

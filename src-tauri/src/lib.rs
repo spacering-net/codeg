@@ -1920,6 +1920,8 @@ mod tauri_app {
                 crate::commands::personal_agent::personal_agent_bot_delete,
                 crate::commands::personal_agent::personal_agent_bot_set_template,
                 crate::commands::personal_agent::personal_agent_choice_answer,
+                crate::commands::personal_agent::personal_agent_meet_projects,
+                crate::commands::personal_agent::personal_agent_starter,
                 crate::commands::personal_agent::personal_agent_thread,
                 crate::commands::personal_agent::personal_agent_compact,
                 crate::commands::personal_agent::personal_agent_new_session,

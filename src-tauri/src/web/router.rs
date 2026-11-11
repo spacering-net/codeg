@@ -522,6 +522,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_choice_answer),
         )
         .route(
+            "/personal_agent_meet_projects",
+            post(handlers::personal_agent::personal_agent_meet_projects),
+        )
+        .route(
+            "/personal_agent_starter",
+            post(handlers::personal_agent::personal_agent_starter),
+        )
+        .route(
             "/personal_agent_thread",
             post(handlers::personal_agent::personal_agent_thread),
         )

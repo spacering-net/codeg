@@ -8757,7 +8757,10 @@
         "accept": "만들기",
         "dismiss": "하지 않기",
         "undo": "되돌리기",
-        "undoAll": "모두 되돌리기"
+        "undoAll": "모두 되돌리기",
+        "teamSuggested": "제안: 작업 어시스턴트 팀",
+        "teamFor": "고른 프로젝트용: {projects}",
+        "teamMake": "만들기{count, plural, =0 {} other { (#명)}}"
       },
       "delete": {
         "title": "{name}을(를) 삭제할까요?",
@@ -9114,6 +9117,104 @@
       "item": {
         "notify": "{time} 알림",
         "act": "{time}에 실행"
+      }
+    },
+    "meet": {
+      "name": {
+        "heading": "처음 인사",
+        "call": "어떻게 불러 드릴까요?",
+        "name": "제 이름을 지어 주실래요?",
+        "systemUser": "이 컴퓨터의 사용자 이름",
+        "currentName": "지금 이름",
+        "answered": "“{call}”(이)라고 부를게요. 저는 “{name}”입니다",
+        "answeredName": "저는 “{name}”입니다",
+        "skipped": "호칭은 건너뛰었어요"
+      },
+      "connect": {
+        "heading": "내 프로젝트",
+        "about1": "자리를 비운 동안에도 맡긴 작업과 PR을 지켜볼게요.",
+        "about2": "저장소를 연결하면 PR, CI, 이슈를 볼 수 있어요.",
+        "prompt": "프로젝트를 연결하면 바로 도울 일을 하나 찾아볼게요.",
+        "loading": "프로젝트를 읽는 중…",
+        "none": "codeg에 열린 프로젝트가 아직 없어요.",
+        "onForge": "{forge}에 있음",
+        "noAccount": "{forge}에 있음, 계정 미연결",
+        "noForge": "코드 호스팅 없음",
+        "connectAccount": "계정 연결",
+        "skipHint": "건너뛰어도 그대로 쓸 수 있어요.",
+        "connect": "연결{count, plural, =0 {} other { (#개)}}",
+        "openFolder": "프로젝트 폴더 열기",
+        "skip": "건너뛰기",
+        "connected": "연결함: {projects}",
+        "joiner": ", ",
+        "skipped": "지금은 건너뛰었어요. 프로젝트 얘기는 언제든 해 주세요."
+      },
+      "starter": {
+        "heading": "이것부터 도와드릴 수 있어요",
+        "lookingHeading": "바로 하나",
+        "noneHeading": "지금은 없어요",
+        "looking": "바로 도울 일을 하나 찾는 중…",
+        "none": "지금은 빨간 게 없어요. 계속 지켜볼게요.",
+        "noMore": "지금은 다른 게 없어요. 계속 지켜볼게요.",
+        "handed": "맡았어요: {what}",
+        "dismissed": "지금은 됐어요: {what}",
+        "handIt": "맡기기",
+        "next": "다른 것",
+        "notNow": "지금은 됐어요",
+        "lead": {
+          "pr_ci": "PR #{number}의 CI가 빨갛습니다({checks}) — {project}: {title}",
+          "review": "PR #{number}이(가) 리뷰를 기다려요 — {project}: {title}",
+          "issue": "이슈 #{number}이(가) 배정됐어요 — {project}: {title}",
+          "task": "보드 작업 “{title}”이(가) 실패했고 맡은 사람이 없어요",
+          "worktree": "워크트리 {title}에 하루 넘게 커밋하지 않은 변경이 있어요"
+        },
+        "hand": {
+          "pr_ci": "{project}의 PR #{number} CI를 고쳐 줘: {url}",
+          "review": "{project}의 PR #{number}을(를) 리뷰해 줘: {url}",
+          "issue": "{project}의 이슈 #{number}을(를) 처리해 줘: {url}",
+          "task": "실패한 보드 작업 “{title}”(#{task})을(를) 처리해 줘",
+          "worktree": "워크트리 {path}의 커밋하지 않은 변경을 봐 줘"
+        }
+      },
+      "promises": {
+        "heading": "제가 알아서 할 일",
+        "intro": "얼마나 먼저 나설까요? 아래는 모두 켜져 있어요. 직접 하고 싶은 건 꺼 주세요.",
+        "items": {
+          "proactive": {
+            "title": "필요할 때 알려 드리기",
+            "hint": "질문, 승인, 끝난 작업, 설정한 알림을 오는 대로요."
+          },
+          "exec_questions": {
+            "title": "맡긴 세션의 질문에 대신 답하기",
+            "hint": "답할 수 있는 건 답하고, 애매한 건 넘겨 드려요."
+          },
+          "exec_plans": {
+            "title": "맡긴 세션의 계획을 대신 승인하기",
+            "hint": "요청과 맞는지 보고, 불분명한 건 넘겨 드려요."
+          },
+          "followups": {
+            "title": "맡긴 작업 후속 처리와 재시도",
+            "hint": "한 번 더 돌아야 하면 바로 이어서 해요."
+          },
+          "interrupt_retry": {
+            "title": "재시작으로 끊긴 작업 재시도",
+            "hint": "codeg가 멈출 때 돌던 작업을 돌아오면 다시 시작해요."
+          },
+          "presence": {
+            "title": "생활 패턴 익히기",
+            "hint": "codeg에 있는 시간을 보고 알맞은 때 연락해요."
+          }
+        },
+        "later": "아침 브리핑, 마무리, PR 지켜보기, 자동 검수도 준비되면 여기에 추가돼요.",
+        "team": "팀 꾸리기",
+        "teamSuggested": "팀을 제안함",
+        "prefs": "환경설정 조정",
+        "pet": "바탕화면에 띄우기",
+        "petFailed": "데스크톱 동반자를 열 수 없어요",
+        "done": "완료",
+        "folded": "제가 알아서 할 일 · 방해 정도: {level}",
+        "collapse": "접기",
+        "unavailable": "어시스턴트가 실행되는 쪽에서 바꿀 수 있어요."
       }
     }
   }

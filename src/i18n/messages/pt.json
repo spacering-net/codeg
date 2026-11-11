@@ -8757,7 +8757,10 @@
         "accept": "Criar",
         "dismiss": "Agora não",
         "undo": "Desfazer",
-        "undoAll": "Desfazer tudo"
+        "undoAll": "Desfazer tudo",
+        "teamSuggested": "Sugestão: uma equipe de assistentes de trabalho",
+        "teamFor": "Para {projects}",
+        "teamMake": "Criar{count, plural, =0 {} one { # assistente} other { # assistentes}}"
       },
       "delete": {
         "title": "Excluir {name}?",
@@ -9114,6 +9117,104 @@
       "item": {
         "notify": "Lembrete às {time}",
         "act": "Faz às {time}"
+      }
+    },
+    "meet": {
+      "name": {
+        "heading": "Prazer",
+        "call": "Como devo te chamar?",
+        "name": "Quer me dar um nome?",
+        "systemUser": "Seu nome de usuário neste computador",
+        "currentName": "Meu nome agora",
+        "answered": "Vou te chamar de “{call}”; eu sou “{name}”",
+        "answeredName": "Eu sou “{name}”",
+        "skipped": "Pulamos como nos chamar"
+      },
+      "connect": {
+        "heading": "Seus projetos",
+        "about1": "Enquanto você está fora, fico de olho no trabalho que distribuí e nos seus PRs.",
+        "about2": "Com seus repositórios conectados, vejo PRs, CI e issues.",
+        "prompt": "Conecte seus projetos e eu acho já uma coisa em que posso ajudar.",
+        "loading": "Lendo seus projetos…",
+        "none": "O codeg ainda não tem nenhum projeto aberto.",
+        "onForge": "No {forge}",
+        "noAccount": "No {forge}, sem conta conectada",
+        "noForge": "Sem hospedagem de código",
+        "connectAccount": "Conectar conta",
+        "skipHint": "Dá para pular; tudo funciona do mesmo jeito.",
+        "connect": "Conectar{count, plural, =0 {} one { # projeto} other { # projetos}}",
+        "openFolder": "Abrir uma pasta de projeto",
+        "skip": "Pular",
+        "connected": "Conectados: {projects}",
+        "joiner": ", ",
+        "skipped": "Pulado por enquanto. Me fale de um projeto quando quiser."
+      },
+      "starter": {
+        "heading": "Posso começar ajudando com isto",
+        "lookingHeading": "Uma coisa já",
+        "noneHeading": "Nada pendente",
+        "looking": "Procurando uma coisa em que posso ajudar já…",
+        "none": "Nada está vermelho agora; vou ficar de olho.",
+        "noMore": "Nada mais por agora; vou ficar de olho.",
+        "handed": "Comigo: {what}",
+        "dismissed": "Agora não: {what}",
+        "handIt": "Deixa comigo",
+        "next": "Outra coisa",
+        "notNow": "Agora não",
+        "lead": {
+          "pr_ci": "O CI do PR #{number} está vermelho ({checks}) — {project}: {title}",
+          "review": "O PR #{number} espera sua revisão — {project}: {title}",
+          "issue": "A issue #{number} está atribuída a você — {project}: {title}",
+          "task": "A tarefa do quadro “{title}” falhou e ninguém está cuidando",
+          "worktree": "A worktree {title} tem mudanças sem commit há mais de um dia"
+        },
+        "hand": {
+          "pr_ci": "Corrija o CI do PR #{number} em {project}: {url}",
+          "review": "Revise o PR #{number} em {project}: {url}",
+          "issue": "Cuide da issue #{number} em {project}: {url}",
+          "task": "Cuide da tarefa do quadro que falhou “{title}” (#{task})",
+          "worktree": "Veja as mudanças sem commit na worktree {path}"
+        }
+      },
+      "promises": {
+        "heading": "O que vou fazer por conta própria",
+        "intro": "Quanto devo tomar a iniciativa? Tudo isto vem ligado; desligue o que preferir fazer você.",
+        "items": {
+          "proactive": {
+            "title": "Avisar quando algo precisar de você",
+            "hint": "Perguntas, aprovações, trabalho concluído e seus lembretes, assim que chegam."
+          },
+          "exec_questions": {
+            "title": "Responder às perguntas das sessões que distribuo",
+            "hint": "Respondo o que posso e passo para você o que não tenho certeza."
+          },
+          "exec_plans": {
+            "title": "Aprovar os planos das sessões que distribuo",
+            "hint": "Confiro cada plano com o que você pediu; os duvidosos vão para você."
+          },
+          "followups": {
+            "title": "Acompanhar e repetir meu próprio trabalho",
+            "hint": "Se o trabalho distribuído precisar de outra rodada, eu começo."
+          },
+          "interrupt_retry": {
+            "title": "Repetir o trabalho cortado por um reinício",
+            "hint": "O trabalho que rodava quando o codeg parou recomeça."
+          },
+          "presence": {
+            "title": "Aprender seus horários",
+            "hint": "Pelo seu tempo no codeg, para te procurar na hora certa."
+          }
+        },
+        "later": "Resumos da manhã, fechamentos, acompanhamento de PRs e verificações automáticas entram aqui quando ficarem prontos.",
+        "team": "Montar uma equipe",
+        "teamSuggested": "Equipe sugerida",
+        "prefs": "Ajustar preferências",
+        "pet": "Me pôr na área de trabalho",
+        "petFailed": "Não foi possível abrir o companheiro de área de trabalho",
+        "done": "Concluído",
+        "folded": "O que vou fazer por conta própria · interrupções: {level}",
+        "collapse": "Recolher",
+        "unavailable": "Isso se muda onde o assistente roda."
       }
     }
   }

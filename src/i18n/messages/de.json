@@ -8757,7 +8757,10 @@
         "accept": "Erstellen",
         "dismiss": "Nicht jetzt",
         "undo": "Rückgängig",
-        "undoAll": "Alle rückgängig machen"
+        "undoAll": "Alle rückgängig machen",
+        "teamSuggested": "Vorschlag: ein Team aus Arbeitsassistenten",
+        "teamFor": "Für {projects}",
+        "teamMake": "Anlegen{count, plural, =0 {} one { (# Assistent)} other { (# Assistenten)}}"
       },
       "delete": {
         "title": "{name} löschen?",
@@ -9114,6 +9117,104 @@
       "item": {
         "notify": "Erinnerung um {time}",
         "act": "Erledigt es um {time}"
+      }
+    },
+    "meet": {
+      "name": {
+        "heading": "Kennenlernen",
+        "call": "Wie soll ich dich nennen?",
+        "name": "Gibst du mir einen Namen?",
+        "systemUser": "Dein Benutzername auf diesem Computer",
+        "currentName": "Mein Name jetzt",
+        "answered": "Ich nenne dich „{call}“; ich bin „{name}“",
+        "answeredName": "Ich bin „{name}“",
+        "skipped": "Anrede übersprungen"
+      },
+      "connect": {
+        "heading": "Deine Projekte",
+        "about1": "Während du weg bist, behalte ich die vergebene Arbeit und deine PRs im Blick.",
+        "about2": "Mit verbundenen Repositorys sehe ich PRs, CI und Issues.",
+        "prompt": "Verbinde deine Projekte, und ich suche sofort etwas, wobei ich helfen kann.",
+        "loading": "Deine Projekte werden gelesen …",
+        "none": "In codeg ist noch kein Projekt geöffnet.",
+        "onForge": "Auf {forge}",
+        "noAccount": "Auf {forge}, kein Konto verbunden",
+        "noForge": "Kein Code-Hosting",
+        "connectAccount": "Konto verbinden",
+        "skipHint": "Du kannst das überspringen; alles funktioniert trotzdem.",
+        "connect": "Verbinden{count, plural, =0 {} one { (# Projekt)} other { (# Projekte)}}",
+        "openFolder": "Projektordner öffnen",
+        "skip": "Überspringen",
+        "connected": "Verbunden: {projects}",
+        "joiner": ", ",
+        "skipped": "Vorerst übersprungen. Erzähl mir jederzeit von einem Projekt."
+      },
+      "starter": {
+        "heading": "Dabei kann ich zuerst helfen",
+        "lookingHeading": "Eine Sache sofort",
+        "noneHeading": "Nichts offen",
+        "looking": "Ich suche etwas, wobei ich sofort helfen kann …",
+        "none": "Gerade ist nichts rot; ich behalte es im Blick.",
+        "noMore": "Gerade gibt es nichts weiter; ich behalte es im Blick.",
+        "handed": "Übernommen: {what}",
+        "dismissed": "Nicht jetzt: {what}",
+        "handIt": "Übernimm das",
+        "next": "Etwas anderes",
+        "notNow": "Nicht jetzt",
+        "lead": {
+          "pr_ci": "Das CI von PR #{number} ist rot ({checks}) — {project}: {title}",
+          "review": "PR #{number} wartet auf dein Review — {project}: {title}",
+          "issue": "Issue #{number} ist dir zugewiesen — {project}: {title}",
+          "task": "Die Board-Aufgabe „{title}“ ist fehlgeschlagen, und niemand kümmert sich",
+          "worktree": "Der Worktree {title} hat seit über einem Tag nicht committete Änderungen"
+        },
+        "hand": {
+          "pr_ci": "Repariere das CI von PR #{number} in {project}: {url}",
+          "review": "Prüfe PR #{number} in {project}: {url}",
+          "issue": "Kümmere dich um Issue #{number} in {project}: {url}",
+          "task": "Kümmere dich um die fehlgeschlagene Board-Aufgabe „{title}“ (#{task})",
+          "worktree": "Sieh dir die nicht committeten Änderungen im Worktree {path} an"
+        }
+      },
+      "promises": {
+        "heading": "Was ich von selbst tue",
+        "intro": "Wie sehr soll ich mich melden? All das ist eingeschaltet; schalte aus, was du lieber selbst machst.",
+        "items": {
+          "proactive": {
+            "title": "Dir sagen, wenn etwas dich braucht",
+            "hint": "Fragen, Freigaben, fertige Arbeit und deine Erinnerungen, sobald sie kommen."
+          },
+          "exec_questions": {
+            "title": "Fragen der vergebenen Sitzungen beantworten",
+            "hint": "Ich beantworte, was ich kann, und reiche Unklares an dich weiter."
+          },
+          "exec_plans": {
+            "title": "Pläne der vergebenen Sitzungen freigeben",
+            "hint": "Ich prüfe jeden Plan gegen deinen Auftrag; unklare kommen zu dir."
+          },
+          "followups": {
+            "title": "Eigene Arbeit nachverfolgen und wiederholen",
+            "hint": "Braucht vergebene Arbeit eine weitere Runde, starte ich sie."
+          },
+          "interrupt_retry": {
+            "title": "Durch Neustart unterbrochene Arbeit wiederholen",
+            "hint": "Arbeit, die lief, als codeg stoppte, beginnt neu."
+          },
+          "presence": {
+            "title": "Deine Zeiten lernen",
+            "hint": "Aus deiner Zeit in codeg, damit ich dich passend erreiche."
+          }
+        },
+        "later": "Morgenbriefing, Tagesabschluss, PR-Betreuung und automatische Abnahme kommen hier dazu, sobald sie fertig sind.",
+        "team": "Ein Team bilden",
+        "teamSuggested": "Team vorgeschlagen",
+        "prefs": "Einstellungen anpassen",
+        "pet": "Auf den Desktop",
+        "petFailed": "Der Desktop-Begleiter ließ sich nicht öffnen",
+        "done": "Fertig",
+        "folded": "Was ich von selbst tue · Störungen: {level}",
+        "collapse": "Einklappen",
+        "unavailable": "Das lässt sich dort ändern, wo der Assistent läuft."
       }
     }
   }

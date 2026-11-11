@@ -8757,7 +8757,10 @@
         "accept": "Le créer",
         "dismiss": "Pas maintenant",
         "undo": "Annuler",
-        "undoAll": "Tout annuler"
+        "undoAll": "Tout annuler",
+        "teamSuggested": "Suggestion : une équipe d'assistants de travail",
+        "teamFor": "Pour {projects}",
+        "teamMake": "Créer{count, plural, =0 {} one { # assistant} other { # assistants}}"
       },
       "delete": {
         "title": "Supprimer {name} ?",
@@ -9114,6 +9117,104 @@
       "item": {
         "notify": "Rappel à {time}",
         "act": "Le fait à {time}"
+      }
+    },
+    "meet": {
+      "name": {
+        "heading": "Faisons connaissance",
+        "call": "Comment dois-je t'appeler ?",
+        "name": "Tu me donnes un nom ?",
+        "systemUser": "Ton nom d'utilisateur sur cet ordinateur",
+        "currentName": "Mon nom actuel",
+        "answered": "Je t'appellerai « {call} » ; je suis « {name} »",
+        "answeredName": "Je suis « {name} »",
+        "skipped": "Noms passés"
+      },
+      "connect": {
+        "heading": "Tes projets",
+        "about1": "Pendant ton absence, je garde un œil sur le travail confié et sur tes PR.",
+        "about2": "Tes dépôts connectés, je vois les PR, la CI et les tickets.",
+        "prompt": "Connecte tes projets et je trouve tout de suite une chose où t'aider.",
+        "loading": "Lecture de tes projets…",
+        "none": "Aucun projet n'est encore ouvert dans codeg.",
+        "onForge": "Sur {forge}",
+        "noAccount": "Sur {forge}, aucun compte connecté",
+        "noForge": "Pas d'hébergement de code",
+        "connectAccount": "Connecter un compte",
+        "skipHint": "Tu peux passer ; tout fonctionne quand même.",
+        "connect": "Connecter{count, plural, =0 {} one { # projet} other { # projets}}",
+        "openFolder": "Ouvrir un dossier de projet",
+        "skip": "Passer",
+        "connected": "Connectés : {projects}",
+        "joiner": ", ",
+        "skipped": "Passé pour l'instant. Parle-moi d'un projet quand tu veux."
+      },
+      "starter": {
+        "heading": "Je peux d'abord t'aider sur ceci",
+        "lookingHeading": "Une chose tout de suite",
+        "noneHeading": "Rien en attente",
+        "looking": "Je cherche une chose où t'aider tout de suite…",
+        "none": "Rien n'est en rouge pour l'instant ; je surveille.",
+        "noMore": "Rien d'autre pour l'instant ; je surveille.",
+        "handed": "Je m'en charge : {what}",
+        "dismissed": "Pas maintenant : {what}",
+        "handIt": "Confie-le-moi",
+        "next": "Autre chose",
+        "notNow": "Pas maintenant",
+        "lead": {
+          "pr_ci": "La CI de la PR #{number} est rouge ({checks}) — {project} : {title}",
+          "review": "La PR #{number} attend ta revue — {project} : {title}",
+          "issue": "Le ticket #{number} t'est assigné — {project} : {title}",
+          "task": "La tâche du tableau « {title} » a échoué et personne ne s'en occupe",
+          "worktree": "L'arbre de travail {title} a des modifications non validées depuis plus d'un jour"
+        },
+        "hand": {
+          "pr_ci": "Répare la CI de la PR #{number} de {project} : {url}",
+          "review": "Relis la PR #{number} de {project} : {url}",
+          "issue": "Traite le ticket #{number} de {project} : {url}",
+          "task": "Traite la tâche du tableau en échec « {title} » (#{task})",
+          "worktree": "Regarde les modifications non validées de l'arbre de travail {path}"
+        }
+      },
+      "promises": {
+        "heading": "Ce que je ferai de moi-même",
+        "intro": "À quel point dois-je prendre les devants ? Tout ceci est activé ; désactive ce que tu préfères faire toi-même.",
+        "items": {
+          "proactive": {
+            "title": "Te prévenir quand quelque chose a besoin de toi",
+            "hint": "Questions, validations, travail terminé et tes rappels, dès qu'ils arrivent."
+          },
+          "exec_questions": {
+            "title": "Répondre aux questions des sessions confiées",
+            "hint": "Je réponds à ce que je peux et je te passe ce dont je ne suis pas sûr."
+          },
+          "exec_plans": {
+            "title": "Valider les plans des sessions confiées",
+            "hint": "Je compare chaque plan à ta demande ; les flous te reviennent."
+          },
+          "followups": {
+            "title": "Suivre et relancer mon propre travail",
+            "hint": "Si un travail confié demande un autre tour, je le lance."
+          },
+          "interrupt_retry": {
+            "title": "Relancer le travail coupé par un redémarrage",
+            "hint": "Le travail en cours quand codeg s'est arrêté reprend."
+          },
+          "presence": {
+            "title": "Apprendre tes horaires",
+            "hint": "D'après ta présence dans codeg, pour te joindre au bon moment."
+          }
+        },
+        "later": "Briefings du matin, bilans, suivi des PR et validations automatiques s'ajouteront ici dès qu'ils seront prêts.",
+        "team": "Former une équipe",
+        "teamSuggested": "Équipe suggérée",
+        "prefs": "Ajuster les préférences",
+        "pet": "Me mettre sur le bureau",
+        "petFailed": "Impossible d'ouvrir le compagnon de bureau",
+        "done": "Terminé",
+        "folded": "Ce que je ferai de moi-même · dérangement : {level}",
+        "collapse": "Replier",
+        "unavailable": "Cela se change là où tourne l'assistant."
       }
     }
   }

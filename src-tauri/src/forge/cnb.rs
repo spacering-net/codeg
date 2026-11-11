@@ -73,6 +73,11 @@ pub async fn list_issues(
         url.push_str("&state=");
         url.push_str(state);
     }
+    if req.review_requested_me {
+        return Err(ForgeError::Invalid(
+            "CNB cannot list pull requests by requested reviewer".into(),
+        ));
+    }
     if req.assigned_me {
         let login = current_login(auth).await?;
         url.push_str(&format!("&assignees={}", urlencode_query(&login)));

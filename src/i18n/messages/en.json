@@ -8757,7 +8757,10 @@
         "accept": "Make it",
         "dismiss": "Not now",
         "undo": "Undo",
-        "undoAll": "Undo all"
+        "undoAll": "Undo all",
+        "teamSuggested": "Suggestion: a team of work assistants",
+        "teamFor": "For {projects}",
+        "teamMake": "Make {count, plural, =0 {} one {# assistant} other {# assistants}}"
       },
       "delete": {
         "title": "Delete {name}?",
@@ -9114,6 +9117,104 @@
       "item": {
         "notify": "Reminder at {time}",
         "act": "Does it at {time}"
+      }
+    },
+    "meet": {
+      "name": {
+        "heading": "Getting to know you",
+        "call": "What should I call you?",
+        "name": "Want to give me a name?",
+        "systemUser": "Your user name on this computer",
+        "currentName": "My name now",
+        "answered": "I'll call you “{call}”; I'm “{name}”",
+        "answeredName": "I'm “{name}”",
+        "skipped": "Skipped what to call each other"
+      },
+      "connect": {
+        "heading": "Your projects",
+        "about1": "While you're away, I keep an eye on the work I handed out and on your PRs.",
+        "about2": "With your repositories connected, I can see PRs, CI and issues.",
+        "prompt": "Connect your projects, and I'll find one thing I can help with right away.",
+        "loading": "Reading your projects…",
+        "none": "codeg has no project open yet.",
+        "onForge": "On {forge}",
+        "noAccount": "On {forge}, no account connected",
+        "noForge": "No code host",
+        "connectAccount": "Connect account",
+        "skipHint": "You can skip this; everything works without it.",
+        "connect": "Connect {count, plural, =0 {} one {# project} other {# projects}}",
+        "openFolder": "Open a project folder",
+        "skip": "Skip",
+        "connected": "Connected: {projects}",
+        "joiner": ", ",
+        "skipped": "Skipped for now. Tell me about a project any time."
+      },
+      "starter": {
+        "heading": "I can help with this first",
+        "lookingHeading": "One thing at once",
+        "noneHeading": "Nothing waiting",
+        "looking": "Looking for one thing I can help with right away…",
+        "none": "Nothing is red right now; I'll keep an eye on it.",
+        "noMore": "Nothing else right now; I'll keep an eye on it.",
+        "handed": "Handed to me: {what}",
+        "dismissed": "Not now: {what}",
+        "handIt": "Hand it to me",
+        "next": "Another one",
+        "notNow": "Not now",
+        "lead": {
+          "pr_ci": "PR #{number}'s CI is red ({checks}) — {project}: {title}",
+          "review": "PR #{number} waits on your review — {project}: {title}",
+          "issue": "Issue #{number} is assigned to you — {project}: {title}",
+          "task": "The board task “{title}” failed and no one is on it",
+          "worktree": "The worktree {title} has changes not committed for over a day"
+        },
+        "hand": {
+          "pr_ci": "Fix the CI of PR #{number} in {project}: {url}",
+          "review": "Review PR #{number} in {project}: {url}",
+          "issue": "Handle issue #{number} in {project}: {url}",
+          "task": "Handle the failed board task “{title}” (#{task})",
+          "worktree": "Look at the uncommitted changes in the worktree {path}"
+        }
+      },
+      "promises": {
+        "heading": "What I'll do on my own",
+        "intro": "How much should I reach out? Each of these is on; switch off what you'd rather do yourself.",
+        "items": {
+          "proactive": {
+            "title": "Tell you when something needs you",
+            "hint": "Questions, approvals, finished work and your reminders, as they come."
+          },
+          "exec_questions": {
+            "title": "Answer the questions of the sessions I hand out",
+            "hint": "I answer what I can and pass you what I'm unsure of."
+          },
+          "exec_plans": {
+            "title": "Approve the plans of the sessions I hand out",
+            "hint": "I check each plan against what you asked for; the unclear ones come to you."
+          },
+          "followups": {
+            "title": "Follow up and retry my own work",
+            "hint": "When work I handed out needs another round, I start it."
+          },
+          "interrupt_retry": {
+            "title": "Retry work a restart cut off",
+            "hint": "Work that was running when codeg stopped starts again."
+          },
+          "presence": {
+            "title": "Learn your hours",
+            "hint": "From when you're in codeg, so I reach you at the right time."
+          }
+        },
+        "later": "Morning briefs, wrap-ups, PR watching and automatic checks join here as they arrive.",
+        "team": "Build a team",
+        "teamSuggested": "Team suggested",
+        "prefs": "Adjust preferences",
+        "pet": "Put me on the desktop",
+        "petFailed": "Could not open the desktop companion",
+        "done": "Done",
+        "folded": "What I'll do on my own · disturbance: {level}",
+        "collapse": "Fold",
+        "unavailable": "These can be changed where the assistant runs."
       }
     }
   }

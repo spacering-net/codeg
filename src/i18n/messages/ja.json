@@ -8757,7 +8757,10 @@
         "accept": "作成する",
         "dismiss": "やめておく",
         "undo": "元に戻す",
-        "undoAll": "すべて元に戻す"
+        "undoAll": "すべて元に戻す",
+        "teamSuggested": "提案：作業アシスタントのチーム",
+        "teamFor": "選んだプロジェクト向け：{projects}",
+        "teamMake": "作る{count, plural, =0 {} other {（# 人）}}"
       },
       "delete": {
         "title": "{name} を削除しますか？",
@@ -9114,6 +9117,104 @@
       "item": {
         "notify": "{time} にリマインド",
         "act": "{time} に実行"
+      }
+    },
+    "meet": {
+      "name": {
+        "heading": "はじめまして",
+        "call": "何とお呼びすればいいですか？",
+        "name": "私に名前をつけますか？",
+        "systemUser": "このコンピューターでのユーザー名",
+        "currentName": "今の名前",
+        "answered": "「{call}」とお呼びします。私は「{name}」です",
+        "answeredName": "私は「{name}」です",
+        "skipped": "呼び方はスキップしました"
+      },
+      "connect": {
+        "heading": "あなたのプロジェクト",
+        "about1": "あなたがいない間も、任せた作業と PR を見ておきます。",
+        "about2": "リポジトリをつなぐと、PR・CI・Issue を見られます。",
+        "prompt": "プロジェクトをつなげば、すぐに手伝えることを一つ探します。",
+        "loading": "プロジェクトを読み込み中…",
+        "none": "codeg で開いているプロジェクトはまだありません。",
+        "onForge": "{forge} 上",
+        "noAccount": "{forge} 上、アカウント未接続",
+        "noForge": "コードホスティングなし",
+        "connectAccount": "アカウントを接続",
+        "skipHint": "スキップしても、そのまま使えます。",
+        "connect": "つなぐ{count, plural, =0 {} other {（# 件）}}",
+        "openFolder": "プロジェクトフォルダーを開く",
+        "skip": "スキップ",
+        "connected": "つなぎました：{projects}",
+        "joiner": "、",
+        "skipped": "今はスキップしました。プロジェクトのことはいつでも教えてください。"
+      },
+      "starter": {
+        "heading": "まずこれを手伝えます",
+        "lookingHeading": "すぐに一つ",
+        "noneHeading": "今は何もありません",
+        "looking": "すぐに手伝えることを一つ探しています…",
+        "none": "今は赤いものはありません。見ておきます。",
+        "noMore": "今はほかにありません。見ておきます。",
+        "handed": "引き受けました：{what}",
+        "dismissed": "今はいい：{what}",
+        "handIt": "任せる",
+        "next": "別のもの",
+        "notNow": "今はいい",
+        "lead": {
+          "pr_ci": "PR #{number} の CI が赤です（{checks}）— {project}：{title}",
+          "review": "PR #{number} があなたのレビュー待ちです — {project}：{title}",
+          "issue": "Issue #{number} があなたに割り当てられています — {project}：{title}",
+          "task": "ボードのタスク「{title}」が失敗し、誰も対応していません",
+          "worktree": "ワークツリー {title} に一日以上コミットされていない変更があります"
+        },
+        "hand": {
+          "pr_ci": "{project} の PR #{number} の CI を直して：{url}",
+          "review": "{project} の PR #{number} をレビューして：{url}",
+          "issue": "{project} の Issue #{number} に対応して：{url}",
+          "task": "失敗したボードのタスク「{title}」（#{task}）に対応して",
+          "worktree": "ワークツリー {path} のコミットされていない変更を見て"
+        }
+      },
+      "promises": {
+        "heading": "自分から行うこと",
+        "intro": "どのくらい積極的に動きましょうか？ 以下はすべてオンです。自分でやりたいものはオフにしてください。",
+        "items": {
+          "proactive": {
+            "title": "あなたが必要なときに知らせる",
+            "hint": "質問・承認・終わった作業・設定したリマインダーを、届いたらすぐに。"
+          },
+          "exec_questions": {
+            "title": "任せたセッションの質問に答える",
+            "hint": "答えられるものは答え、迷うものはあなたに回します。"
+          },
+          "exec_plans": {
+            "title": "任せたセッションのプランを承認する",
+            "hint": "依頼内容と照らして確認し、はっきりしないものはあなたに回します。"
+          },
+          "followups": {
+            "title": "任せた作業のフォローと再試行",
+            "hint": "もう一巡必要なとき、そのまま続けます。"
+          },
+          "interrupt_retry": {
+            "title": "再起動で中断した作業を再試行",
+            "hint": "codeg が止まったときに動いていた作業を、戻ったらやり直します。"
+          },
+          "presence": {
+            "title": "あなたの生活リズムを学ぶ",
+            "hint": "codeg にいる時間から、ちょうどよいときに連絡します。"
+          }
+        },
+        "later": "朝のまとめ・締めくくり・PR の見守り・自動検収も、できあがりしだいここに加わります。",
+        "team": "チームを作る",
+        "teamSuggested": "チームを提案済み",
+        "prefs": "設定を調整",
+        "pet": "デスクトップに出す",
+        "petFailed": "デスクトップの相棒を開けませんでした",
+        "done": "完了",
+        "folded": "自分から行うこと · 通知の多さ：{level}",
+        "collapse": "たたむ",
+        "unavailable": "アシスタントが動いている側で変更できます。"
       }
     }
   }

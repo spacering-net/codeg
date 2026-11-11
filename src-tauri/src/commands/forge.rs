@@ -622,6 +622,25 @@ pub async fn forge_list_issues_core(
     })
 }
 
+/// Open pull requests whose review is requested of the signed-in account —
+/// codeg's own question (the personal agent's first thing to help with,
+/// 5.4), not one the workbench asks. A forge that cannot filter so says so.
+pub async fn forge_list_review_requested_core(
+    db: &AppDatabase,
+    folder_id: i32,
+    filters: ListFilters,
+) -> Result<ForgeIssueList, AppCommandError> {
+    let (remote, auth) = resolve_folder_repo(db, folder_id, filters.account_id.as_deref()).await?;
+    let mut request = ListIssuesRequest::new(remote.owner_repo, filters);
+    request.review_requested_me = true;
+    Ok(match remote.provider {
+        ForgeProvider::GitHub => forge::github::list_issues(&auth, &request).await?,
+        ForgeProvider::GitLab => forge::gitlab::list_issues(&auth, &request).await?,
+        ForgeProvider::Gitea => forge::gitea::list_issues(&auth, &request).await?,
+        ForgeProvider::Cnb => forge::cnb::list_issues(&auth, &request).await?,
+    })
+}
+
 /// One issue, read in full — for the description its list row does not carry.
 ///
 /// Only CNB needs this: its issue list omits `body` (its pull list carries

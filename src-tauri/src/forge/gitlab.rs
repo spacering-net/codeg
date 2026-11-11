@@ -75,6 +75,16 @@ pub async fn list_issues(
         let login = current_login(auth).await?;
         url.push_str(&format!("&assignee_username={}", urlencode_query(&login)));
     }
+    if req.review_requested_me {
+        // The reviewers of a merge request; an issue has none.
+        if req.tab != super::ForgeTab::Prs {
+            return Err(ForgeError::Invalid(
+                "only a merge request has reviewers".into(),
+            ));
+        }
+        let login = current_login(auth).await?;
+        url.push_str(&format!("&reviewer_username={}", urlencode_query(&login)));
+    }
     if !req.labels.is_empty() {
         // Comma-joined, which is lossless here: GitLab forbids commas in label
         // titles, so no name can be split by this.
@@ -1675,6 +1685,7 @@ mod tests {
             tab,
             state: state.into(),
             assigned_me: false,
+            review_requested_me: false,
             labels: vec![],
             search: None,
             sort: ForgeSort::default(),
@@ -2016,6 +2027,35 @@ mod tests {
         );
         assert_eq!(list_issues(&auth, &request).await.unwrap().rows.len(), 1);
         assert_eq!(user_hits.load(Ordering::SeqCst), 1, "login cached");
+    }
+
+    /// Codeg's own "changes waiting on my review": GitLab filters merge
+    /// requests by reviewer login; an issue has no reviewers to ask about.
+    #[tokio::test]
+    async fn review_requested_filters_merge_requests_by_the_reviewer() {
+        let (api_base, _, _, _, last_query) = mock_api().await;
+        let auth = auth_for(api_base);
+        let request = ListIssuesRequest {
+            review_requested_me: true,
+            ..req(super::super::ForgeTab::Prs, "open")
+        };
+        list_issues(&auth, &request).await.expect("merge requests");
+        assert_eq!(
+            last_query
+                .read()
+                .unwrap()
+                .get("reviewer_username")
+                .map(String::as_str),
+            Some("alice")
+        );
+        let issues = ListIssuesRequest {
+            review_requested_me: true,
+            ..req(super::super::ForgeTab::Issues, "open")
+        };
+        assert!(matches!(
+            list_issues(&auth, &issues).await,
+            Err(ForgeError::Invalid(_))
+        ));
     }
 
     /// The single-merge-request payload is what a task is checked out from:

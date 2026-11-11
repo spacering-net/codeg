@@ -586,6 +586,7 @@ impl PersonalAgentEngine {
         key: Option<&str>,
         text: Option<&str>,
         project: Option<i32>,
+        answers: Option<&[super::meet::ChoicePick]>,
     ) -> Result<TimelineRow, String> {
         let notice = svc::get_notice_of(&self.db.conn, self.bot().await, notice_id)
             .await
@@ -604,6 +605,13 @@ impl PersonalAgentEngine {
             .as_deref()
             .and_then(|d| serde_json::from_str(d).ok())
             .unwrap_or_else(|| json!({}));
+        // Getting to know the owner: what to call each other, answered whole
+        // (5.4) — nothing goes to the brain.
+        if data["purpose"] == "meet" {
+            return self
+                .answer_meet_name(&notice, row_id, data, answers.unwrap_or_default())
+                .await;
+        }
         let options = data["options"].as_array().cloned().unwrap_or_default();
         let own = text.map(str::trim).filter(|t| !t.is_empty());
         let picked = key
@@ -1296,7 +1304,7 @@ impl PersonalAgentEngine {
 
     /// A "changed" card about work assistants: made (`asked`, `made`), or
     /// waiting to be made (`show`, `suggest`, with the call to make it).
-    async fn raise_bots_card(
+    pub(super) async fn raise_bots_card(
         &self,
         why: &str,
         made: &[Made],
@@ -1316,6 +1324,14 @@ impl PersonalAgentEngine {
                 "Made {}",
                 made.iter()
                     .map(|m| display_name(&m.bot))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else if let Some(team) = pending.as_ref().and_then(|p| p["team"].as_array()) {
+            format!(
+                "Make work assistants: {}",
+                team.iter()
+                    .filter_map(|m| m["name"].as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -1482,6 +1498,17 @@ impl PersonalAgentEngine {
             }
             return Ok(card);
         }
+        // A team suggested (5.4): the ones ticked, made together — and let
+        // be only while none is being made.
+        let team = data["pending"]["team"].is_array();
+        if team && (action == "accept" || action.starts_with("accept:")) {
+            return self.accept_team(notice.id, row_id, action).await;
+        }
+        let _team = if team && action == "dismiss" {
+            Some(super::meet::team_guard().await)
+        } else {
+            None
+        };
         match action {
             "accept" => {
                 let pending = data["pending"].clone();
@@ -1562,6 +1589,19 @@ impl PersonalAgentEngine {
                 }
                 data["state"] = "dismissed".into();
                 let card = self.write_card(row_id, data.clone()).await?;
+                if let Some(team) = data["pending"]["team"].as_array() {
+                    let names: Vec<&str> = team.iter().filter_map(|m| m["name"].as_str()).collect();
+                    self.tell_bots(
+                        notice,
+                        &format!(
+                            "The owner let the suggested team ({}) be (card #{}).",
+                            names.join(", "),
+                            notice.id
+                        ),
+                    )
+                    .await;
+                    return Ok(card);
+                }
                 let name = data["pending"]["name"].as_str().unwrap_or_default();
                 self.tell_bots(
                     notice,
@@ -1582,14 +1622,14 @@ impl PersonalAgentEngine {
         }
     }
 
-    async fn locale_now(&self) -> AppLocale {
+    pub(super) async fn locale_now(&self) -> AppLocale {
         match svc::primary_bot(&self.db.conn).await.ok().flatten() {
             Some(p) => self.owner_locale(&p, None).await,
             None => AppLocale::En,
         }
     }
 
-    async fn write_card(&self, row_id: i32, data: Value) -> Result<TimelineRow, String> {
+    pub(super) async fn write_card(&self, row_id: i32, data: Value) -> Result<TimelineRow, String> {
         svc::update_row_data(&self.db.conn, row_id, None, Some(data))
             .await
             .map_err(|e| e.to_string())?;
@@ -1603,7 +1643,7 @@ impl PersonalAgentEngine {
         Ok(row)
     }
 
-    async fn tell_bots(&self, notice: &notice_entity::Model, summary: &str) {
+    pub(super) async fn tell_bots(&self, notice: &notice_entity::Model, summary: &str) {
         let _ = svc::insert_event(
             &self.db.conn,
             self.bot().await,
@@ -1844,10 +1884,21 @@ impl PersonalAgentEngine {
     }
 
     /// Make a work assistant from a `bot_create` call as made.
-    async fn create_from_call(&self, call: &Value) -> Result<Made, CreateError> {
+    pub(super) async fn create_from_call(&self, call: &Value) -> Result<Made, CreateError> {
+        self.create_from_call_as(call, None).await
+    }
+
+    /// [`Self::create_from_call`], under a uid chosen beforehand (a team's
+    /// member, found by it if a run is cut off).
+    pub(super) async fn create_from_call_as(
+        &self,
+        call: &Value,
+        uid: Option<String>,
+    ) -> Result<Made, CreateError> {
         let refused = CreateError::Refused;
         let s = |k: &str| call.get(k).and_then(|v| v.as_str()).map(str::to_string);
         let mut spec = BotSpec::named(s("name").unwrap_or_default());
+        spec.uid = uid;
         spec.template = s("template");
         if let (Some(shape), Some(color)) = (s("shape"), s("color")) {
             spec.avatar = Some(BotAvatar::Face { shape, color });
@@ -2024,7 +2075,7 @@ fn choice_options(options: &[String], project: Option<usize>) -> Value {
 }
 
 /// A made assistant as a card lists it.
-fn made_json(m: &Made, locale: AppLocale) -> Value {
+pub(super) fn made_json(m: &Made, locale: AppLocale) -> Value {
     json!({
         "bot_id": m.bot.id,
         "uid": m.bot.uid,

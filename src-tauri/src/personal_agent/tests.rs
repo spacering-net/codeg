@@ -5306,8 +5306,8 @@ async fn the_brain_first_wakes_when_the_owner_answers_the_opening_card() {
     let made = engine.create_bot(BotSpec::named("Reviewer")).await.unwrap();
     let worker = engine_of(&engine, &tmp, made.bot.id);
     let card = last_card(&worker, "choice").await;
-    assert!(worker.answer_choice(card_id(&card), Some("Z"), None, None).await.is_err());
-    let row = worker.answer_choice(card_id(&card), Some("b"), None, None).await.unwrap();
+    assert!(worker.answer_choice(card_id(&card), Some("Z"), None, None, None).await.is_err());
+    let row = worker.answer_choice(card_id(&card), Some("b"), None, None, None).await.unwrap();
     let answered = row.data.clone().unwrap();
     assert_eq!(answered["state"], "answered");
     assert_eq!(answered["answer"]["key"], "B");
@@ -5316,7 +5316,7 @@ async fn the_brain_first_wakes_when_the_owner_answers_the_opening_card() {
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].body, "B. Look at local changes");
     assert_eq!(queued[0].status, Some(OwnerStatus::Queued));
-    assert!(worker.answer_choice(card_id(&card), Some("A"), None, None).await.unwrap_err().contains("answered already"));
+    assert!(worker.answer_choice(card_id(&card), Some("A"), None, None, None).await.unwrap_err().contains("answered already"));
     // Its first session is told it was just made, and what was picked.
     let row = svc::get_bot(&engine.db.conn, made.bot.id).await.unwrap().unwrap();
     let note = worker.new_bot_note(&row).await.unwrap();
@@ -5327,15 +5327,15 @@ async fn the_brain_first_wakes_when_the_owner_answers_the_opening_card() {
     let dev = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
     let dw = engine_of(&engine, &tmp, dev.bot.id);
     let card = last_card(&dw, "choice").await;
-    assert!(dw.answer_choice(card_id(&card), Some("C"), None, None).await.unwrap_err().contains("needs a project"));
+    assert!(dw.answer_choice(card_id(&card), Some("C"), None, None, None).await.unwrap_err().contains("needs a project"));
     let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
-    dw.answer_choice(card_id(&card), Some("C"), None, Some(project)).await.unwrap();
+    dw.answer_choice(card_id(&card), Some("C"), None, Some(project), None).await.unwrap();
     let sent = rows_of(&dw, dev.bot.id, TimelineKind::Owner).await;
     assert!(sent[0].body.starts_with("C. Look at a project's to-dos first — app"), "{}", sent[0].body);
     let other = engine.create_bot(BotSpec::named("Blank")).await.unwrap();
     let ow = engine_of(&engine, &tmp, other.bot.id);
     let card = last_card(&ow, "choice").await;
-    ow.answer_choice(card_id(&card), Some("D"), Some("watch my CI"), None).await.unwrap();
+    ow.answer_choice(card_id(&card), Some("D"), Some("watch my CI"), None, None).await.unwrap();
     assert_eq!(rows_of(&ow, other.bot.id, TimelineKind::Owner).await[0].body, "watch my CI");
 }
 
@@ -5362,7 +5362,7 @@ async fn changing_the_role_before_it_ran_rewrites_only_what_codeg_wrote() {
     assert_eq!(svc::get_bot(&engine.db.conn, made.bot.id).await.unwrap().unwrap().template.as_deref(), Some("review"));
     // Once it has started, its role is its files' to change.
     let card = last_card(&worker, "choice").await;
-    worker.answer_choice(card_id(&card), Some("A"), None, None).await.unwrap();
+    worker.answer_choice(card_id(&card), Some("A"), None, None, None).await.unwrap();
     assert!(worker.set_bot_template("dev").await.is_err());
 }
 
@@ -9338,4 +9338,387 @@ async fn reminders_due_today_wait_on_the_owner_and_the_rest_of_the_day_is_its_sc
 
     engine.item_op(came.id, super::reminders::ItemOp::Done).await.unwrap();
     assert!(today_now(&engine).await.needs.is_empty());
+}
+
+// ── 1.15: getting to know the owner ─────────────────────────────────────────
+
+use super::meet::{ChoicePick, MEET_KEY};
+
+fn pick_text(t: &str) -> ChoicePick {
+    ChoicePick { key: None, text: Some(t.into()) }
+}
+
+fn pick_key(k: &str) -> ChoicePick {
+    ChoicePick { key: Some(k.into()), text: None }
+}
+
+async fn meet_record(engine: &PersonalAgentEngine) -> serde_json::Value {
+    let p = svc::primary_bot(&engine.db.conn).await.unwrap().unwrap();
+    serde_json::from_str::<serde_json::Value>(&p.settings).unwrap()[MEET_KEY].clone()
+}
+
+/// The newest card of `notice` with this `purpose`.
+async fn meet_card(engine: &PersonalAgentEngine, notice: &str, purpose: &str) -> Option<crate::db::entities::personal_agent_timeline::Model> {
+    notice_rows(engine)
+        .await
+        .into_iter()
+        .rfind(|r| data_of(r)["notice"] == notice && data_of(r)["purpose"] == purpose)
+}
+
+/// The first-thing card once it stopped looking.
+async fn starter_settled(engine: &PersonalAgentEngine) -> crate::db::entities::personal_agent_timeline::Model {
+    for _ in 0..200 {
+        if let Some(card) = notice_rows(engine).await.into_iter().rfind(|r| data_of(r)["notice"] == "starter") {
+            if data_of(&card)["state"] != "looking" {
+                return card;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("the first-thing card kept looking");
+}
+
+/// 1.15 ①: a primary set up now asks what to call each other first; the
+/// answers go into `USER.md` and its name, nothing wakes the brain, and the
+/// projects card comes next.
+#[tokio::test]
+async fn a_primary_set_up_now_asks_what_to_call_each_other_first() {
+    let (engine, tmp) = configured().await;
+    assert_eq!(meet_record(&engine).await["from"], "new");
+    engine.meet_after_save().await;
+    engine.meet_after_save().await;
+    let cards: Vec<_> = notice_rows(&engine).await.into_iter().filter(|r| data_of(r)["purpose"] == "meet").collect();
+    assert_eq!(cards.len(), 1, "asked once");
+    let card = &cards[0];
+    assert_eq!(data_of(card)["notice"], "choice");
+    assert_eq!(card.body, "What should I call you? Want to give me a name?");
+    // It waits on the owner, as a question.
+    let row = svc::primary_bot(&engine.db.conn).await.unwrap().unwrap();
+    let needs = super::live::live_from_db_with_needs(&engine.db, &row).await;
+    assert!(needs.1.iter().any(|n| n.kind == "choice"), "{:?}", needs.1);
+
+    let id = card_id(card);
+    assert!(engine.answer_choice(id, None, None, None, Some(&[pick_text("Sam")])).await.is_err(), "two questions");
+    assert!(engine.answer_choice(id, None, None, None, Some(&[pick_key("B"), pick_key("A")])).await.is_err(), "B is the owner's words");
+    assert!(meet_card(&engine, "onboarding", "connect").await.is_none(), "nothing next before it is answered");
+    let row = engine
+        .answer_choice(id, None, None, None, Some(&[pick_text("Sam"), pick_text("Gigi")]))
+        .await
+        .unwrap();
+    let data = row.data.clone().unwrap();
+    assert_eq!(data["state"], "answered");
+    assert_eq!((data["answer"]["call"].as_str(), data["answer"]["name"].as_str()), (Some("Sam"), Some("Gigi")));
+    let user = std::fs::read_to_string(tmp.path().join("personal-agent").join(workdir::USER_FILE)).unwrap();
+    assert!(user.ends_with("- Call them: Sam\n"), "{user}");
+    assert_eq!(svc::primary_bot(&engine.db.conn).await.unwrap().unwrap().name, "Gigi");
+    // It learns it with its next delivery; no message of the owner's.
+    assert!(rows_of(&engine, engine.bot().await, TimelineKind::Owner).await.is_empty());
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert!(events.iter().any(|e| e.summary.contains("called \"Sam\"") && e.summary.contains("named you \"Gigi\"")), "{events:?}");
+    assert!(engine.answer_choice(id, None, None, None, Some(&[pick_key("A"), pick_key("A")])).await.unwrap_err().contains("answered already"));
+    let connect = meet_card(&engine, "onboarding", "connect").await.expect("the projects card");
+    assert_eq!(data_of(&connect)["state"], "open");
+}
+
+/// 1.15 ③ ④: skipped, it all still works — the projects card skipped,
+/// what the assistants do on their own comes, and [Build a team] suggests
+/// development, review and fixing CI, made as ticked.
+#[tokio::test]
+async fn skipping_the_projects_still_shows_what_the_assistants_do_and_a_team_is_made_as_ticked() {
+    let (engine, _tmp) = ready().await;
+    engine.meet_after_save().await;
+    let name = meet_card(&engine, "choice", "meet").await.unwrap();
+    let row = engine.answer_choice(card_id(&name), None, None, None, Some(&[])).await.unwrap();
+    assert_eq!(row.data.unwrap()["state"], "skipped");
+    let connect = meet_card(&engine, "onboarding", "connect").await.unwrap();
+    assert!(engine.act_on_notice(card_id(&connect), "done").await.is_err());
+    let row = engine.act_on_notice(card_id(&connect), "skip").await.unwrap();
+    assert_eq!(row.data.unwrap()["state"], "skipped");
+    assert!(notice_rows(&engine).await.iter().all(|r| data_of(r)["notice"] != "starter"), "nothing to look in");
+    let promises = meet_card(&engine, "onboarding", "promises").await.expect("what the assistants do");
+
+    engine.act_on_notice(card_id(&promises), "team").await.unwrap();
+    assert!(engine.act_on_notice(card_id(&promises), "team").await.unwrap_err().contains("already"));
+    let team = last_card(&engine, "changed").await;
+    let data = data_of(&team);
+    assert_eq!((data["what"].as_str(), data["why"].as_str()), (Some("bots"), Some("suggest")));
+    let templates: Vec<&str> = data["pending"]["team"].as_array().unwrap().iter().map(|m| m["template"].as_str().unwrap()).collect();
+    assert_eq!(templates, vec!["dev", "review", "ci"]);
+    assert_eq!(data_of(&meet_card(&engine, "onboarding", "promises").await.unwrap())["team"], card_id(&team));
+    assert!(engine.act_on_notice(card_id(&team), "accept:docs").await.is_err());
+    let row = engine.act_on_notice(card_id(&team), "accept:dev,ci").await.unwrap();
+    let data = row.data.unwrap();
+    assert_eq!(data["state"], "applied");
+    let made: Vec<&str> = data["bots"].as_array().unwrap().iter().map(|b| b["template"].as_str().unwrap()).collect();
+    assert_eq!(made, vec!["dev", "ci"]);
+    assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 3);
+
+    let row = engine.act_on_notice(card_id(&promises), "done").await.unwrap();
+    assert_eq!(row.data.unwrap()["state"], "done");
+}
+
+/// 1.15 ②: the projects connected are looked in for one thing at once —
+/// [Another one] moves on, [Hand it to me] is the owner's message quoting
+/// the card; with nothing to offer it says it keeps an eye on them.
+#[tokio::test]
+async fn a_connected_project_gets_one_thing_at_once_and_it_is_handed_over() {
+    let (engine, tmp) = configured().await;
+    engine.meet_after_save().await;
+    let name = meet_card(&engine, "choice", "meet").await.unwrap();
+    engine.answer_choice(card_id(&name), None, None, None, Some(&[])).await.unwrap();
+    let app = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let quiet = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("quiet").to_string_lossy()).await;
+    let listed = super::meet::meet_projects(&engine.db).await;
+    assert!(listed.iter().any(|p| p.id == app && p.provider.is_none() && !p.account), "{listed:?}");
+    use sea_orm::Set;
+    let older = board_task(&engine, app, "Fix login", WorkTaskStatus::Failed, |t| {
+        t.updated_at = Set(chrono::Utc::now() - chrono::Duration::hours(2));
+    })
+    .await;
+    let newer = board_task(&engine, app, "Bump deps", WorkTaskStatus::Failed, |_| {}).await;
+    board_task(&engine, app, "Later", WorkTaskStatus::Failed, |t| t.deferred_at = Set(Some(chrono::Utc::now()))).await;
+
+    let connect = meet_card(&engine, "onboarding", "connect").await.unwrap();
+    assert!(engine.meet_connect(card_id(&connect), &[]).await.is_err(), "a project, or skip");
+    let row = engine.meet_connect(card_id(&connect), &[app]).await.unwrap();
+    let data = row.data.unwrap();
+    assert_eq!(data["state"], "connected");
+    assert_eq!(data["projects"][0]["id"], app);
+    assert_eq!(meet_record(&engine).await["projects"], json!([app]));
+    assert!(meet_card(&engine, "onboarding", "promises").await.is_some(), "what the assistants do comes too");
+
+    let card = starter_settled(&engine).await;
+    let d = data_of(&card);
+    assert_eq!(d["state"], "found");
+    assert_eq!((d["lead"]["kind"].as_str(), d["lead"]["task_id"].as_i64()), (Some("task"), Some(newer.id as i64)));
+    assert!(card.body.starts_with("I can help with this first:"), "{}", card.body);
+    engine.act_on_notice(card_id(&card), "next").await.unwrap();
+    let card = starter_settled(&engine).await;
+    assert_eq!(data_of(&card)["lead"]["task_id"], older.id);
+    let handed = engine
+        .act_on_notice_with(card_id(&card), "hand", Some("Handle the failed task \"Fix login\"".into()))
+        .await
+        .unwrap();
+    assert_eq!(handed.data.unwrap()["state"], "handed");
+    let owner = rows_of(&engine, engine.bot().await, TimelineKind::Owner).await;
+    assert_eq!(owner.len(), 1);
+    assert_eq!(owner[0].body, "Handle the failed task \"Fix login\"");
+    assert_eq!(owner[0].reply_to, Some(card.id));
+    assert!(engine.act_on_notice(card_id(&card), "next").await.is_err());
+
+    // Nothing to offer: it says it keeps an eye on them.
+    let (fresh, ftmp) = configured().await;
+    fresh.meet_after_save().await;
+    let name = meet_card(&fresh, "choice", "meet").await.unwrap();
+    fresh.answer_choice(card_id(&name), None, None, None, Some(&[])).await.unwrap();
+    let q = crate::db::test_helpers::seed_folder(&fresh.db, &ftmp.path().join("quiet").to_string_lossy()).await;
+    let connect = meet_card(&fresh, "onboarding", "connect").await.unwrap();
+    fresh.meet_connect(card_id(&connect), &[q]).await.unwrap();
+    let card = starter_settled(&fresh).await;
+    assert_eq!(data_of(&card)["state"], "none");
+    assert!(fresh.act_on_notice(card_id(&card), "hand").await.is_err());
+    let _ = quiet;
+}
+
+/// 1.15 ⑤: an owner from before this version is not asked what to call
+/// anyone; what the assistants do on their own comes, once.
+#[tokio::test]
+async fn an_owner_from_before_is_told_what_the_assistants_do_and_not_asked_names() {
+    let (engine, _tmp) = configured().await;
+    let primary = engine.bot().await;
+    svc::patch_settings(&engine.db.conn, primary, &json!({ MEET_KEY: null })).await.unwrap();
+    engine.meet_on_start().await;
+    assert_eq!(meet_record(&engine).await["from"], "upgrade");
+    engine.meet_on_start().await;
+    engine.meet_after_save().await;
+    let rows = notice_rows(&engine).await;
+    assert_eq!(rows.iter().filter(|r| data_of(r)["purpose"] == "promises").count(), 1);
+    assert!(rows.iter().all(|r| data_of(r)["purpose"] != "meet" && data_of(r)["purpose"] != "connect"));
+    assert!(rows.iter().all(|r| data_of(r)["notice"] != "starter"), "no project with a forge account");
+}
+
+/// The order a first thing is found in, through a forge that answers: a
+/// failed check on the owner's own pull request first, then a review asked
+/// of them, then an issue assigned to them, then a worktree left for a day.
+#[tokio::test]
+async fn the_first_thing_is_a_red_pr_of_the_owners_then_a_review_then_an_issue_then_an_old_worktree() {
+    use crate::forge::{ForgeCheck, ForgeCheckList, ForgeCheckState, ForgeIssueRow};
+    use std::collections::HashSet;
+    struct Fake;
+    fn row(number: i64, author: &str, is_pr: bool) -> ForgeIssueRow {
+        ForgeIssueRow {
+            number,
+            title: format!("#{number}"),
+            body: None,
+            state: "open".into(),
+            draft: false,
+            labels: vec![],
+            author: Some(author.into()),
+            author_avatar: None,
+            updated_at: None,
+            html_url: format!("https://forge.test/a/app/{number}"),
+            is_pr,
+            comments: 0,
+        }
+    }
+    #[async_trait::async_trait]
+    impl super::starter::ForgeReads for Fake {
+        async fn open_prs(&self, _: i32) -> Result<Vec<ForgeIssueRow>, String> {
+            Ok(vec![row(5, "bob", true), row(7, "me", true)])
+        }
+        async fn checks(&self, _: i32, number: i64) -> Result<ForgeCheckList, String> {
+            let state = if number == 7 { ForgeCheckState::Failure } else { ForgeCheckState::Success };
+            Ok(ForgeCheckList::available(vec![ForgeCheck {
+                id: "1".into(),
+                name: "lint".into(),
+                state,
+                summary: None,
+                url: None,
+                allow_failure: false,
+            }]))
+        }
+        async fn review_requested(&self, _: i32) -> Result<Vec<ForgeIssueRow>, String> {
+            Ok(vec![row(7, "me", true), row(9, "bob", true)])
+        }
+        async fn assigned(&self, _: i32) -> Result<Vec<ForgeIssueRow>, String> {
+            Ok(vec![row(3, "bob", false)])
+        }
+        async fn login(&self, _: i32) -> Option<String> {
+            Some("me".into())
+        }
+    }
+    let (engine, tmp) = configured().await;
+    let repo = tmp.path().join("app");
+    let app = crate::db::test_helpers::seed_folder(&engine.db, &repo.to_string_lossy()).await;
+    // A worktree of it with a change no one touched for two days, and one
+    // with a fresh change.
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    let old = tmp.path().join("app-old");
+    let fresh = tmp.path().join("app-fresh");
+    for dir in [&old, &fresh] {
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-q"]);
+        std::fs::write(dir.join("notes.md"), "draft").unwrap();
+    }
+    let two_days = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86_400);
+    std::fs::File::options().write(true).open(old.join("notes.md")).unwrap().set_modified(two_days).unwrap();
+    crate::db::service::folder_service::add_folder_with_parent(&engine.db.conn, &fresh.to_string_lossy(), Some(app)).await.unwrap();
+    let old_id = crate::db::service::folder_service::add_folder_with_parent(&engine.db.conn, &old.to_string_lossy(), Some(app)).await.unwrap().id;
+
+    let projects = vec![super::starter::Project { id: app, name: "app".into() }];
+    let now = chrono::Utc::now();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut order = Vec::new();
+    while let Some(lead) = super::starter::find(&engine.db, &Fake, &projects, &seen, now).await {
+        order.push(format!("{}:{}", lead["kind"].as_str().unwrap(), lead["number"].as_i64().or(lead["folder_id"].as_i64()).unwrap()));
+        if lead["kind"] == "pr_ci" {
+            assert_eq!(lead["checks"], json!(["lint"]));
+        }
+        seen.insert(lead["key"].as_str().unwrap().to_string());
+        assert!(order.len() < 10);
+    }
+    assert_eq!(order, vec!["pr_ci:7".to_string(), "review:9".into(), "issue:3".into(), format!("worktree:{old_id}")]);
+}
+
+/// A start at the moment of the first save does not take the primary for
+/// one from before: the row is marked new as it is made.
+#[tokio::test]
+async fn a_start_racing_the_first_save_still_asks_names() {
+    let (engine, _tmp) = configured().await;
+    engine.meet_on_start().await;
+    assert_eq!(meet_record(&engine).await["from"], "new");
+    assert!(meet_card(&engine, "onboarding", "promises").await.is_none());
+    engine.meet_after_save().await;
+    assert!(meet_card(&engine, "choice", "meet").await.is_some());
+}
+
+/// A look that is not the card's latest, or comes after the card settled,
+/// changes nothing: the card keeps its lead and its buttons.
+#[tokio::test]
+async fn a_late_or_duplicate_look_never_overrides_the_cards_latest() {
+    let (engine, tmp) = configured().await;
+    engine.meet_after_save().await;
+    let name = meet_card(&engine, "choice", "meet").await.unwrap();
+    engine.answer_choice(card_id(&name), None, None, None, Some(&[])).await.unwrap();
+    let app = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    use sea_orm::Set;
+    let older = board_task(&engine, app, "Fix login", WorkTaskStatus::Failed, |t| {
+        t.updated_at = Set(chrono::Utc::now() - chrono::Duration::hours(2));
+    })
+    .await;
+    board_task(&engine, app, "Bump deps", WorkTaskStatus::Failed, |_| {}).await;
+    let connect = meet_card(&engine, "onboarding", "connect").await.unwrap();
+    engine.meet_connect(card_id(&connect), &[app]).await.unwrap();
+    let card = starter_settled(&engine).await;
+    let id = card_id(&card);
+    // The first look again, finding nothing: the card was settled already.
+    engine.settle_starter(id, 0, None).await;
+    let card = starter_settled(&engine).await;
+    assert_eq!(data_of(&card)["state"], "found");
+    engine.act_on_notice(id, "next").await.unwrap();
+    // The look before [Another one], late: not this look's.
+    engine.settle_starter(id, 0, None).await;
+    let looking = notice_rows(&engine).await.into_iter().rfind(|r| data_of(r)["notice"] == "starter").unwrap();
+    assert_eq!((data_of(&looking)["state"].as_str(), data_of(&looking)["gen"].as_i64()), (Some("looking"), Some(1)));
+    let card = starter_settled(&engine).await;
+    assert_eq!(data_of(&card)["lead"]["task_id"], older.id);
+    engine.settle_starter(id, 1, None).await;
+    assert_eq!(data_of(&starter_settled(&engine).await)["state"], "found");
+    assert_eq!(engine.act_on_notice_with(id, "hand", Some("Fix it".into())).await.unwrap().data.unwrap()["state"], "handed");
+}
+
+/// A team run cut off after making one member: answering again makes the
+/// rest, takes the one made as made — none twice — and [Undo] removes them.
+#[tokio::test]
+async fn a_team_cut_off_halfway_is_finished_by_answering_again_and_undone_whole() {
+    let (engine, _tmp) = ready().await;
+    engine.meet_after_save().await;
+    let name = meet_card(&engine, "choice", "meet").await.unwrap();
+    engine.answer_choice(card_id(&name), None, None, None, Some(&[])).await.unwrap();
+    let connect = meet_card(&engine, "onboarding", "connect").await.unwrap();
+    engine.act_on_notice(card_id(&connect), "skip").await.unwrap();
+    let promises = meet_card(&engine, "onboarding", "promises").await.unwrap();
+    engine.act_on_notice(card_id(&promises), "team").await.unwrap();
+    let team = last_card(&engine, "changed").await;
+    // Cut off: the developer was being made under the uid it was given,
+    // and was.
+    let uid = svc::new_bot_uid();
+    let mut data = data_of(&team);
+    data["making"] = json!({ "template": "dev", "uid": uid });
+    svc::update_row_data(&engine.db.conn, team.id, None, Some(data)).await.unwrap();
+    let mut spec = super::bots::BotSpec::named("Developer");
+    spec.template = Some("dev".into());
+    spec.uid = Some(uid.clone());
+    let half = engine.create_bot(spec).await.unwrap();
+    // Meanwhile the owner made a developer of their own, on an executor
+    // config that was there: not the team's.
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let mut own = super::bots::BotSpec::named("My dev");
+    own.template = Some("dev".into());
+    own.executor = super::bots::ExecutorSpec::Existing(coder);
+    let own = engine.create_bot(own).await.unwrap();
+
+    let row = engine.act_on_notice(card_id(&team), "accept:dev,ci").await.unwrap();
+    let data = row.data.unwrap();
+    assert_eq!(data["state"], "applied");
+    assert!(data["making"].is_null());
+    let ids: Vec<i64> = data["bots"].as_array().unwrap().iter().map(|b| b["bot_id"].as_i64().unwrap()).collect();
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids[0], half.bot.id as i64, "the one made before is taken, not made again");
+    assert!(!ids.contains(&(own.bot.id as i64)), "the owner's own is not the team's");
+    assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 4);
+    assert!(engine.act_on_notice(card_id(&team), "accept:dev,ci").await.unwrap_err().contains("answered already"));
+    // Answered and recorded together, or neither.
+    let before = data_of(&last_card(&engine, "changed").await);
+    assert!(!svc::move_notice_with_data(&engine.db.conn, card_id(&team), &[NoticeState::Open], NoticeState::Acted, team.id, &json!({ "x": 1 })).await.unwrap());
+    assert_eq!(data_of(&last_card(&engine, "changed").await), before);
+    let row = engine.act_on_notice(card_id(&team), "undo").await.unwrap();
+    assert_eq!(row.data.unwrap()["state"], "undone");
+    let left: Vec<i32> = svc::list_bots(&engine.db.conn).await.unwrap().iter().map(|b| b.id).collect();
+    assert_eq!(left.len(), 2);
+    assert!(left.contains(&own.bot.id), "the owner's own stays");
+    assert_eq!(executor(&engine, coder).await.id, coder, "with its executor config");
 }

@@ -58,7 +58,7 @@ const letter = (i: number) => String.fromCharCode(65 + i)
 
 /** What the owner picked for one question: the choices' letters and their
  *  own words. */
-interface Pick {
+export interface Pick {
   keys: string[]
   text: string
 }
@@ -287,7 +287,7 @@ function QuestionView({
 }
 
 /** The questions one at a time; the last answer sends them all. */
-function Stepper({
+export function Stepper({
   questions,
   disabled,
   onAnswer,

@@ -223,6 +223,9 @@ impl EngineHost {
             if n > 0 {
                 tracing::info!("[personal-agent] made {n} work assistants from the executor configs");
             }
+            // Getting to know the owner: one from before this version gets
+            // what the assistants do on their own (5.4).
+            primary.meet_on_start().await;
         });
     }
 

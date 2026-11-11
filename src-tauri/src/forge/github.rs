@@ -251,7 +251,7 @@ pub async fn list_issues(
     } else {
         None
     };
-    let q = search_query(
+    let mut q = search_query(
         &repo,
         req.tab,
         &req.state,
@@ -259,6 +259,15 @@ pub async fn list_issues(
         &req.labels,
         req.search.as_deref(),
     );
+    if req.review_requested_me {
+        // A qualifier, so anywhere in `q` will do; the login is the one the
+        // assignee filter uses (`@me` is not taken by every server version).
+        let login = match assignee.as_deref() {
+            Some(l) => l.to_string(),
+            None => current_login(conn_auth).await?,
+        };
+        q.push_str(&format!(" review-requested:{login}"));
+    }
     let url = format!(
         "{}/search/issues?q={}&advanced_search=true&sort={}&order={}&page={page}&per_page={per_page}",
         conn_auth.api_base,
@@ -1504,6 +1513,7 @@ mod tests {
             tab,
             state: "open".into(),
             assigned_me: false,
+            review_requested_me: false,
             labels: vec![],
             search: None,
             sort: super::super::ForgeSort::default(),
@@ -1754,6 +1764,22 @@ mod tests {
         let second = list_issues(&auth, &request).await.unwrap();
         assert_eq!(second.rows.len(), 1);
         assert_eq!(user_hits.load(Ordering::SeqCst), 1, "login cached after first use");
+    }
+
+    /// Codeg's own "changes waiting on my review": a `review-requested:`
+    /// qualifier with the signed-in login, beside the one `repo:`.
+    #[tokio::test]
+    async fn review_requested_asks_for_the_signed_in_login() {
+        let (api_base, _, seen) = mock_api().await;
+        let auth = auth_for(api_base);
+        let request = ListIssuesRequest {
+            review_requested_me: true,
+            ..req(ForgeTab::Prs)
+        };
+        list_issues(&auth, &request).await.unwrap();
+        let q = seen.read().unwrap().q.clone();
+        assert!(q.starts_with("repo:acme/app is:pr"), "{q}");
+        assert!(q.ends_with(" review-requested:alice"), "{q}");
     }
 
     /// 403 + exhausted quota is a rate limit (with its retry hint), NOT an

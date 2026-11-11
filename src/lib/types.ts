@@ -2624,6 +2624,24 @@ export interface PersonalAgentToday {
   dispatches: DispatchInfo[]
 }
 
+/** A project the projects card lists when getting to know the owner (5.4,
+ *  1.15): where its remote is, and whether an account serves that forge. */
+export interface PersonalAgentMeetProject {
+  id: number
+  name: string
+  path: string
+  provider: ForgeProviderId | null
+  host: string | null
+  account: boolean
+}
+
+/** One answer on a native card of several questions: a choice's letter, or
+ *  the owner's own words. */
+export interface PersonalAgentChoicePick {
+  key?: string
+  text?: string
+}
+
 /** Whether the owner is in codeg now, as one window's beat leaves it. */
 export interface PersonalAgentPresence {
   present: boolean

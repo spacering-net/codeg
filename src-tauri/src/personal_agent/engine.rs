@@ -4083,9 +4083,17 @@ impl PersonalAgentEngine {
                 serde_json::Value::Object(patch)
             });
         } else {
-            write.settings_json = Some(crate::models::personal_agent::merge_settings_json(
-                "{}", &settings, !worker,
-            ));
+            let mut json = crate::models::personal_agent::merge_settings_json("{}", &settings, !worker);
+            // A primary set up now meets the owner from the page that set it
+            // up (5.4) — marked with the row itself, so a start running at
+            // the same moment never takes it for one from before this version.
+            if self.fixed_bot.is_none() {
+                if let Ok(serde_json::Value::Object(mut map)) = serde_json::from_str::<serde_json::Value>(&json) {
+                    map.insert(super::meet::MEET_KEY.into(), serde_json::json!({ "from": "new" }));
+                    json = serde_json::Value::Object(map).to_string();
+                }
+            }
+            write.settings_json = Some(json);
         }
         let first_save = existing.is_none();
         let renamed = existing

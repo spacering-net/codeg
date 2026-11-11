@@ -512,7 +512,7 @@ export function CommunicationPage({ account, disabled }: PageProps) {
  * — after a warning when that overwrites items the owner set their own way
  * (the level reads "custom" then).
  */
-function PresetPicker<L extends string>({
+export function PresetPicker<L extends string>({
   item,
   levels,
   level,
@@ -674,7 +674,7 @@ export function AutomationPage({ account, disabled }: PageProps) {
 
 /** The disturbance level the items add up to, when the backend did not
  *  say (an older one): read off them as it would. */
-function disturbOf(
+export function disturbOf(
   account: PersonalAgentAccount
 ): "quiet" | "standard" | "more" | "custom" {
   if (account.disturb_level) return account.disturb_level

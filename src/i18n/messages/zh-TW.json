@@ -8757,7 +8757,10 @@
         "accept": "建立",
         "dismiss": "不用",
         "undo": "復原",
-        "undoAll": "全部復原"
+        "undoAll": "全部復原",
+        "teamSuggested": "建議：組一個工作助手團隊",
+        "teamFor": "依你選的專案：{projects}",
+        "teamMake": "建好{count, plural, =0 {} other { # 個}}"
       },
       "delete": {
         "title": "刪除 {name}？",
@@ -9114,6 +9117,104 @@
       "item": {
         "notify": "{time} 提醒",
         "act": "{time} 去做"
+      }
+    },
+    "meet": {
+      "name": {
+        "heading": "認識一下",
+        "call": "我該怎麼稱呼你？",
+        "name": "給我取個名字？",
+        "systemUser": "你在這台電腦上的使用者名稱",
+        "currentName": "我現在的名字",
+        "answered": "稱呼你「{call}」，我叫「{name}」",
+        "answeredName": "我叫「{name}」",
+        "skipped": "先跳過了稱呼"
+      },
+      "connect": {
+        "heading": "你的專案",
+        "about1": "你不在的時候，我也替你盯著派出去的工作和 PR。",
+        "about2": "連上你的儲存庫，我能看 PR、CI 和議題。",
+        "prompt": "連上你的專案，我馬上找一件能幫你做的事。",
+        "loading": "正在讀取你的專案…",
+        "none": "codeg 裡還沒有開啟的專案。",
+        "onForge": "在 {forge} 上",
+        "noAccount": "在 {forge} 上，還沒連帳號",
+        "noForge": "沒有連著程式碼託管",
+        "connectAccount": "連接帳號",
+        "skipHint": "可以跳過，跳過了照樣能用。",
+        "connect": "連上{count, plural, =0 {} other { # 個專案}}",
+        "openFolder": "開啟一個專案資料夾",
+        "skip": "跳過",
+        "connected": "連上了：{projects}",
+        "joiner": "、",
+        "skipped": "先跳過了。之後隨時跟我說說你的專案。"
+      },
+      "starter": {
+        "heading": "我能先幫你做這件",
+        "lookingHeading": "馬上找一件事",
+        "noneHeading": "現在沒有要你處理的",
+        "looking": "正在找一件能馬上幫你做的事…",
+        "none": "現在沒有紅的，我會替你盯著。",
+        "noMore": "現在沒有別的了，我會替你盯著。",
+        "handed": "交給我了：{what}",
+        "dismissed": "先不用：{what}",
+        "handIt": "交給我",
+        "next": "換一件",
+        "notNow": "先不用",
+        "lead": {
+          "pr_ci": "PR #{number} 的 CI 紅了（{checks}）— {project}：{title}",
+          "review": "PR #{number} 在等你審查 — {project}：{title}",
+          "issue": "議題 #{number} 指派給了你 — {project}：{title}",
+          "task": "看板任務「{title}」失敗了，還沒人處理",
+          "worktree": "工作樹 {title} 有變更一天多沒提交"
+        },
+        "hand": {
+          "pr_ci": "處理 {project} 的 PR #{number} 的 CI：{url}",
+          "review": "審查 {project} 的 PR #{number}：{url}",
+          "issue": "處理 {project} 的議題 #{number}：{url}",
+          "task": "處理失敗的看板任務「{title}」（#{task}）",
+          "worktree": "看看工作樹 {path} 裡沒提交的變更"
+        }
+      },
+      "promises": {
+        "heading": "我會主動做這些",
+        "intro": "你希望我多主動？下面這些預設都開著，想自己來的就關掉。",
+        "items": {
+          "proactive": {
+            "title": "有事需要你時告訴你",
+            "hint": "提問、審批、做完的工作和你設的提醒，一到就說。"
+          },
+          "exec_questions": {
+            "title": "替你回答派出去的工作階段的提問",
+            "hint": "能答的我先答，拿不準的轉給你。"
+          },
+          "exec_plans": {
+            "title": "替你審批派出去的工作階段的計畫",
+            "hint": "我對照你的要求看計畫，說不清的轉給你。"
+          },
+          "followups": {
+            "title": "自己跟進和重試派出去的工作",
+            "hint": "派出去的工作需要再來一輪時，我直接接著做。"
+          },
+          "interrupt_retry": {
+            "title": "重新啟動打斷的工作自動重試",
+            "hint": "codeg 停下時正在跑的工作，回來後重新開始。"
+          },
+          "presence": {
+            "title": "學你的作息",
+            "hint": "按你在 codeg 裡的時間，在合適的時候找你。"
+          }
+        },
+        "later": "晨報、收尾、PR 看護和自動驗收，做好後也會出現在這裡。",
+        "team": "組個團隊",
+        "teamSuggested": "已建議團隊",
+        "prefs": "調整偏好",
+        "pet": "把我放到桌面上",
+        "petFailed": "打不開桌面夥伴",
+        "done": "完成",
+        "folded": "我會主動做這些 · 打擾程度：{level}",
+        "collapse": "收起",
+        "unavailable": "要在助手執行的那一端修改。"
       }
     }
   }

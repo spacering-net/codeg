@@ -42,6 +42,14 @@ pub enum NoticeKind {
     /// that it was woken to.
     #[sea_orm(string_value = "reminder")]
     Reminder,
+    /// Getting to know the owner (5.4): the projects to connect, and what
+    /// the assistants do on their own.
+    #[sea_orm(string_value = "onboarding")]
+    Onboarding,
+    /// The first thing an assistant can take off the owner's hands in the
+    /// projects they connected (5.4).
+    #[sea_orm(string_value = "starter")]
+    Starter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

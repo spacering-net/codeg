@@ -75,6 +75,13 @@ pub async fn list_issues(
         "{}/repos/{repo}/issues?state={}&type={kind}&page={page}&limit={per_page}",
         auth.api_base, req.state
     );
+    if req.review_requested_me {
+        // Only the cross-repository search filters by requested reviewer,
+        // and it cannot be narrowed to one repository.
+        return Err(ForgeError::Invalid(
+            "Gitea cannot list one repository's pull requests by requested reviewer".into(),
+        ));
+    }
     if req.assigned_me {
         // A literal login; Gitea has no `@me` shorthand on this endpoint. (The
         // cross-repository `/repos/issues/search` does take an `assigned`
@@ -1881,6 +1888,7 @@ mod tests {
             tab,
             state: state.into(),
             assigned_me: false,
+            review_requested_me: false,
             labels: vec![],
             search: None,
             sort: super::super::ForgeSort::default(),

@@ -911,6 +911,8 @@ pub async fn personal_agent_save_core(
     // assistants, if they have not yet (4.15) — before the save answers, so
     // the page that set it up finds them.
     if saved.kind == crate::db::entities::personal_agent::BotKind::Primary {
+        // Set up just now: what to call each other comes first (5.4).
+        engine.meet_after_save().await;
         let n = engine.make_workers_from_executors().await;
         if n > 0 {
             tracing::info!("[personal-agent] made {n} work assistants from the executor configs");
@@ -1296,10 +1298,39 @@ pub async fn personal_agent_choice_answer_core(
     key: Option<String>,
     text: Option<String>,
     project_id: Option<i32>,
+    answers: Option<Vec<crate::personal_agent::meet::ChoicePick>>,
 ) -> Result<TimelineRow, AppCommandError> {
     engine(bot_id)
         .await?
-        .answer_choice(notice_id, key.as_deref(), text.as_deref(), project_id)
+        .answer_choice(
+            notice_id,
+            key.as_deref(),
+            text.as_deref(),
+            project_id,
+            answers.as_deref(),
+        )
+        .await
+        .map_err(refused)
+}
+
+/// The projects the projects card lists when getting to know the owner
+/// (5.4): each open project, its forge and whether an account serves it.
+pub async fn personal_agent_meet_projects_core(
+    db: &AppDatabase,
+) -> Result<Vec<crate::personal_agent::meet::MeetProject>, AppCommandError> {
+    Ok(crate::personal_agent::meet::meet_projects(db).await)
+}
+
+/// "One thing at once" (5.4): the owner connected these projects on the
+/// projects card — codeg looks in them for a first thing to help with.
+pub async fn personal_agent_starter_core(
+    bot_id: Option<i32>,
+    notice_id: i32,
+    folder_ids: Vec<i32>,
+) -> Result<TimelineRow, AppCommandError> {
+    engine(bot_id)
+        .await?
+        .meet_connect(notice_id, &folder_ids)
         .await
         .map_err(refused)
 }
@@ -1808,6 +1839,25 @@ pub async fn personal_agent_choice_answer(
     key: Option<String>,
     text: Option<String>,
     project_id: Option<i32>,
+    answers: Option<Vec<crate::personal_agent::meet::ChoicePick>>,
 ) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_choice_answer_core(bot_id, notice_id, key, text, project_id).await
+    personal_agent_choice_answer_core(bot_id, notice_id, key, text, project_id, answers).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_meet_projects(
+    db: State<'_, AppDatabase>,
+) -> Result<Vec<crate::personal_agent::meet::MeetProject>, AppCommandError> {
+    personal_agent_meet_projects_core(&db).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_starter(
+    bot_id: Option<i32>,
+    notice_id: i32,
+    folder_ids: Vec<i32>,
+) -> Result<TimelineRow, AppCommandError> {
+    personal_agent_starter_core(bot_id, notice_id, folder_ids).await
 }

@@ -3056,6 +3056,42 @@ pub async fn move_notice(
     Ok(res.rows_affected == 1)
 }
 
+/// [`move_notice`] and the card row's data written with it, in one
+/// transaction: both or neither.
+pub async fn move_notice_with_data(
+    conn: &DatabaseConnection,
+    id: i32,
+    from: &[NoticeState],
+    to: NoticeState,
+    row_id: i32,
+    data: &serde_json::Value,
+) -> Result<bool, DbError> {
+    use sea_orm::TransactionTrait;
+    let txn = conn.begin().await?;
+    let now = Utc::now();
+    let acted_at: Option<DateTime<Utc>> = (to != NoticeState::Open).then_some(now);
+    let res = notice::Entity::update_many()
+        .col_expr(notice::Column::State, Expr::value(to))
+        .col_expr(notice::Column::ActedAt, Expr::value(acted_at))
+        .col_expr(notice::Column::UpdatedAt, Expr::value(now))
+        .filter(notice::Column::Id.eq(id))
+        .filter(notice::Column::State.is_in(from.to_vec()))
+        .exec(&txn)
+        .await?;
+    if res.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    timeline::Entity::update_many()
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
+        .col_expr(timeline::Column::Data, Expr::value(Some(data.to_string())))
+        .filter(timeline::Column::Id.eq(row_id))
+        .exec(&txn)
+        .await?;
+    txn.commit().await?;
+    Ok(true)
+}
+
 /// The card of `kind` raised under `subject` by one of the batches in
 /// `scope`: what a re-delivered turn raised already.
 pub async fn notice_by_subject(

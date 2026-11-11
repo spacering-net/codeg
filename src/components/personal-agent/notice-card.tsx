@@ -39,6 +39,7 @@ import {
 
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentNoticeAct } from "@/lib/api"
 import type {
@@ -63,6 +64,12 @@ import { ExchangeSheet } from "./exchange-sheet"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
+import {
+  ConnectCard,
+  MeetNameCard,
+  PromisesCard,
+  StarterCard,
+} from "./meet-cards"
 import { ReminderCard } from "./reminder-card"
 import {
   ABOUT_ITEMS,
@@ -109,7 +116,21 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
       <ChangedCard item={item} />
     )
   }
-  if (kind === "choice") return <ChoiceCard item={item} />
+  if (kind === "choice") {
+    return str(item.row.data, "purpose") === "meet" ? (
+      <MeetNameCard item={item} />
+    ) : (
+      <ChoiceCard item={item} />
+    )
+  }
+  if (kind === "onboarding") {
+    return str(item.row.data, "purpose") === "promises" ? (
+      <PromisesCard item={item} />
+    ) : (
+      <ConnectCard item={item} />
+    )
+  }
+  if (kind === "starter") return <StarterCard item={item} />
   if (kind === "ask") return <AskCard item={item} />
   if (kind === "reminder") return <ReminderCard item={item} />
   return null
@@ -117,6 +138,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
 
 type Choice =
   | "accept"
+  | `accept:${string}`
   | "dismiss"
   | "undo"
   | `undo:${number}`
@@ -881,10 +903,27 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
   const error = str(data, "error")
   const { busy, failed, answer } = useAnswer(Number(row.ref_id))
   const live = bots.filter((b) => b.state !== "undone")
+  // A team suggested when getting to know the owner (5.4): ticked to make.
+  const team = Array.isArray(pending?.team)
+    ? (pending.team as Array<Record<string, unknown>>).filter(
+        (m) => typeof m.template === "string"
+      )
+    : null
+  const teamProjects = Array.isArray(pending?.projects)
+    ? (pending.projects as unknown[]).filter(
+        (p): p is string => typeof p === "string"
+      )
+    : []
+  const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set())
+  const ticked = (team ?? [])
+    .map((m) => m.template as string)
+    .filter((k) => !unticked.has(k))
   const heading =
     state === "open"
       ? why === "suggest"
-        ? t("suggested")
+        ? team
+          ? t("teamSuggested")
+          : t("suggested")
         : t("show")
       : state === "dismissed"
         ? t("dismissed")
@@ -893,7 +932,10 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
           : why === "made"
             ? t("made", { count: bots.length })
             : t("applied")
-  const text = bots.map((b) => b.name).join(", ") || str(pending, "name") || ""
+  const text =
+    bots.map((b) => b.name).join(", ") ||
+    str(pending, "name") ||
+    (team ?? []).map((m) => String(m.name ?? "")).join(", ")
   return (
     <CardFrame
       item={item}
@@ -907,7 +949,49 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
       {why === "made" ? (
         <p className="mb-2 text-xs text-muted-foreground">{t("madeHint")}</p>
       ) : null}
-      {state === "open" || (state === "dismissed" && bots.length === 0) ? (
+      {team &&
+      (state === "open" || (state === "dismissed" && bots.length === 0)) ? (
+        <>
+          {teamProjects.length > 0 ? (
+            <p className="mb-2 text-xs text-muted-foreground">
+              {t("teamFor", { projects: teamProjects.join(", ") })}
+            </p>
+          ) : null}
+          <ul className="space-y-1.5" data-pa-team>
+            {team.map((m) => {
+              const key = m.template as string
+              const id = `pa-team-${row.id}-${key}`
+              return (
+                <li
+                  key={key}
+                  className="flex items-center gap-2"
+                  data-pa-team-member={key}
+                >
+                  <Checkbox
+                    id={id}
+                    checked={!unticked.has(key)}
+                    disabled={state !== "open" || readOnly || busy != null}
+                    onCheckedChange={(on) =>
+                      setUnticked((u) => {
+                        const next = new Set(u)
+                        if (on === true) next.delete(key)
+                        else next.add(key)
+                        return next
+                      })
+                    }
+                  />
+                  <label
+                    htmlFor={id}
+                    className="min-w-0 flex-1 cursor-pointer text-sm font-medium"
+                  >
+                    {String(m.name ?? key)}
+                  </label>
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      ) : state === "open" || (state === "dismissed" && bots.length === 0) ? (
         <p className="text-sm font-medium break-words" data-pa-bot-pending>
           {str(pending, "name")}
         </p>
@@ -1006,13 +1090,20 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
           <>
             <Button
               size="sm"
-              disabled={readOnly || busy != null}
-              onClick={() => void answer("accept")}
+              disabled={
+                readOnly ||
+                busy != null ||
+                (team != null && ticked.length === 0)
+              }
+              onClick={() =>
+                void answer(team ? `accept:${ticked.join(",")}` : "accept")
+              }
+              data-pa-bots-accept
             >
-              {busy === "accept" ? (
+              {busy === "accept" || busy?.startsWith("accept:") ? (
                 <SyncedSpinner small className="size-3.5" />
               ) : null}
-              {t("accept")}
+              {team ? t("teamMake", { count: ticked.length }) : t("accept")}
             </Button>
             <Button
               size="sm"

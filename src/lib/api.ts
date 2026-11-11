@@ -57,6 +57,8 @@ import type {
   PersonalAgentPresence,
   PersonalAgentProfile,
   PersonalAgentToday,
+  PersonalAgentMeetProject,
+  PersonalAgentChoicePick,
   ExecutorView,
   PersonalAgentStats,
   TimelineChanges,
@@ -2836,7 +2838,13 @@ export async function personalAgentBotSetTemplate(
  *  for one), or the owner's own words. */
 export async function personalAgentChoiceAnswer(
   noticeId: number,
-  answer: { key?: string; text?: string; projectId?: number | null },
+  answer: {
+    key?: string
+    text?: string
+    projectId?: number | null
+    /** A card of several questions, answered whole (none: skipped). */
+    answers?: PersonalAgentChoicePick[]
+  },
   bot?: number | null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_choice_answer", {
@@ -2844,6 +2852,29 @@ export async function personalAgentChoiceAnswer(
     key: answer.key ?? null,
     text: answer.text ?? null,
     projectId: answer.projectId ?? null,
+    answers: answer.answers ?? null,
+    botId: bot ?? null,
+  })
+}
+
+/** The projects the projects card lists when getting to know the owner
+ *  (5.4): each open project, its forge and whether an account serves it. */
+export async function personalAgentMeetProjects(): Promise<
+  PersonalAgentMeetProject[]
+> {
+  return getTransport().call("personal_agent_meet_projects", {})
+}
+
+/** Connect these projects on the projects card: codeg looks in them for one
+ *  thing to help with at once (5.4). */
+export async function personalAgentStarter(
+  noticeId: number,
+  folderIds: number[],
+  bot?: number | null
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_starter", {
+    noticeId,
+    folderIds,
     botId: bot ?? null,
   })
 }
@@ -2918,12 +2949,16 @@ export async function personalAgentMarkSeen(
 export async function personalAgentNoticeAct(
   noticeId: number,
   /** `accept` / `dismiss`; a stop card's `stop:<message id>`; a changed
-   *  card's `undo`, or `undo:<assistant id>` for one assistant it made; a
-   *  reminder card's `done`, `snooze:<15m|1h|tomorrow>` or `hand_over`. */
+   *  card's `undo`, or `undo:<assistant id>` for one assistant it made, and
+   *  a suggested team's `accept:<templates>`; a reminder card's `done`,
+   *  `snooze:<15m|1h|tomorrow>` or `hand_over`; getting to know the owner:
+   *  the projects card's `skip`, the first-thing card's `hand` (with its
+   *  words), `next` and `dismiss`, and `done` or `team` on what the
+   *  assistants do on their own. */
   action: NoticeAction,
   bot?: number | null,
-  /** `hand_over`: the owner's words, posted as their message quoting the
-   *  card. */
+  /** `hand_over` and `hand`: the owner's words, posted as their message
+   *  quoting the card. */
   text?: string
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_notice_act", {
@@ -2946,6 +2981,11 @@ export type NoticeAction =
   | "snooze:1h"
   | "snooze:tomorrow"
   | "hand_over"
+  | `accept:${string}`
+  | "skip"
+  | "hand"
+  | "next"
+  | "team"
 
 export async function personalAgentAnswerQuestion(
   questionId: string,

@@ -469,6 +469,9 @@ impl PersonalAgentEngine {
                 return Err("a question card is answered with its answer".into());
             }
             NoticeKind::Reminder => return self.act_on_reminder(&notice, action, text).await,
+            // Getting to know the owner (5.4).
+            NoticeKind::Onboarding => return self.act_on_onboarding(&notice, action).await,
+            NoticeKind::Starter => return self.act_on_starter(&notice, action, text).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.
