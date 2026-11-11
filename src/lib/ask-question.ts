@@ -148,7 +148,11 @@ export function parseAskQuestionInput(
       isSecret: obj.isSecret === true || obj.is_secret === true,
       id: typeof obj.id === "string" && obj.id ? obj.id : undefined,
       allowOther:
-        obj.allowOther === false || obj.allow_other === false ? false : true,
+        obj.allowOther === false || obj.allow_other === false
+          ? false
+          : obj.allowOther === true || obj.allow_other === true
+            ? true
+            : undefined,
     })
   }
   return out
