@@ -4926,6 +4926,23 @@ impl CodexParser {
                                             output_value,
                                             output.as_deref(),
                                         );
+                                    // The item_completed preview can truncate an
+                                    // MCP image. The response item has the original.
+                                    let images = output_value
+                                        .and_then(serde_json::Value::as_array)
+                                        .into_iter()
+                                        .flatten()
+                                        .filter(|item| {
+                                            item.get("type").and_then(|v| v.as_str())
+                                                == Some("input_image")
+                                        })
+                                        .filter_map(parse_input_image_data_uri)
+                                        .map(|(mime_type, data)| ImageData {
+                                            data,
+                                            mime_type,
+                                            uri: None,
+                                        })
+                                        .collect();
                                     messages.push(UnifiedMessage {
                                         id: format!("tool-result-{}", messages.len()),
                                         role: MessageRole::Tool,
@@ -4934,7 +4951,7 @@ impl CodexParser {
                                             output_preview: output,
                                             is_error,
                                             agent_stats: None,
-                                            images: Vec::new(),
+                                            images,
                                             exit_code: None,
                                         }],
                                         timestamp,
@@ -11200,6 +11217,73 @@ mod tests {
 
     fn rollout_line(ts: &str, msg_type: &str, payload: serde_json::Value) -> String {
         serde_json::json!({ "timestamp": ts, "type": msg_type, "payload": payload }).to_string()
+    }
+
+    #[test]
+    fn codex_mcp_screenshot_history_uses_the_full_function_output() {
+        let ts = "2026-11-11T09:20:00Z";
+        let image_data = "AQID".repeat(20_000);
+        let lines = [
+            rollout_line(
+                ts,
+                "response_item",
+                serde_json::json!({
+                    "type": "function_call",
+                    "namespace": "mcp__cua_repl",
+                    "name": "js",
+                    "arguments": "{}",
+                    "call_id": "screenshot"
+                }),
+            ),
+            rollout_line(
+                ts,
+                "event_msg",
+                serde_json::json!({
+                    "type": "item_completed",
+                    "item": {
+                        "type": "McpToolCall",
+                        "id": "screenshot",
+                        "server": "cua_repl",
+                        "tool": "js",
+                        "status": "completed",
+                        "result": {"content": [{"type": "text", "text": "… truncated …"}]}
+                    }
+                }),
+            ),
+            rollout_line(
+                ts,
+                "response_item",
+                serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": "screenshot",
+                    "output": [
+                        {"type": "input_text", "text": "Page loaded"},
+                        {"type": "input_image", "image_url": format!("data:image/jpeg;base64,{image_data}")}
+                    ]
+                }),
+            ),
+        ];
+        let detail = parse_rollout("mcp-screenshot", &lines.join("\n"), "session-1");
+        let results: Vec<_> = detail
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.blocks)
+            .filter_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview,
+                    images,
+                    ..
+                } if id == "screenshot" => Some((output_preview, images)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 1);
+        let (output, images) = results[0];
+        assert_eq!(output.as_deref(), Some("Page loaded\n"));
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].mime_type, "image/jpeg");
+        assert_eq!(images[0].data, image_data);
     }
 
     /// A directory of its own, for the tests that exercise the sibling-file

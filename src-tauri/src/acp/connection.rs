@@ -16934,6 +16934,43 @@ pub(crate) fn extract_tool_call_images(content: &[ToolCallContent]) -> Option<Ve
     }
 }
 
+fn extract_live_tool_call_images(
+    agent_type: AgentType,
+    content: Option<&[ToolCallContent]>,
+    raw_output: Option<&serde_json::Value>,
+) -> Option<Vec<ToolCallImageInfo>> {
+    if let Some(images) = content.and_then(extract_tool_call_images) {
+        return Some(images);
+    }
+    if agent_type != AgentType::Codex {
+        return None;
+    }
+
+    // codex-acp reports MCP content in rawOutput.result. A large result
+    // can be replaced by a text preview; those images come from history.
+    let images: Vec<_> = raw_output?
+        .pointer("/result/content")?
+        .as_array()?
+        .iter()
+        .filter_map(|block| {
+            if block.get("type")?.as_str()? != "image" {
+                return None;
+            }
+            let data = block.get("data")?.as_str()?;
+            let mime_type = block.get("mimeType")?.as_str()?;
+            if data.is_empty() || !mime_type.starts_with("image/") {
+                return None;
+            }
+            Some(ToolCallImageInfo {
+                data: data.to_string(),
+                mime_type: mime_type.to_string(),
+                uri: None,
+            })
+        })
+        .collect();
+    (!images.is_empty()).then_some(images)
+}
+
 /// If the output looks like numbered lines (`   115→content`), strip them
 /// and return `{"start_line":N,"content":"..."}` — same as the historical path.
 fn structurize_live_output(text: &str) -> String {
@@ -25587,7 +25624,11 @@ async fn emit_conversation_update(
                     // pi announces a command with an empty result, which pi-acp
                     // renders as JSON source (see fn doc).
                     .filter(|_| !pi_result_content_is_stringify_noise(agent_type, &tc.raw_output));
-            let images = extract_tool_call_images(content_blocks);
+            let images = extract_live_tool_call_images(
+                agent_type,
+                Some(content_blocks),
+                tc.raw_output.as_ref(),
+            );
             let codex_subagent_launch = codex_subagent.is_some();
             let raw_input = codex_subagent
                 .or(synthesized_edit)
@@ -26102,7 +26143,11 @@ async fn emit_conversation_update(
                 .filter(|_| {
                     !pi_result_content_is_stringify_noise(agent_type, &tcu.fields.raw_output)
                 });
-            let images = content_blocks.and_then(extract_tool_call_images);
+            let images = extract_live_tool_call_images(
+                agent_type,
+                content_blocks,
+                tcu.fields.raw_output.as_ref(),
+            );
             let codex_subagent_launch = codex_subagent.is_some();
             let raw_input = codex_subagent
                 .or(synthesized_edit)
@@ -42675,6 +42720,42 @@ mod tests {
             .recent_events_after(0)
             .map(|events| events.iter().map(|e| e.payload.clone()).collect())
             .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn codex_mcp_screenshot_is_forwarded_in_the_tool_update() {
+        let events = pi_emit_chunk(
+            AgentType::Codex,
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "screenshot",
+                "status": "completed",
+                "rawOutput": {
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": "Page loaded"},
+                            {"type": "image", "data": "AQID", "mimeType": "image/jpeg"}
+                        ]
+                    },
+                    "error": null
+                }
+            }),
+        )
+        .await;
+        let images = events
+            .iter()
+            .find_map(|event| match event {
+                AcpEvent::ToolCallUpdate {
+                    tool_call_id,
+                    images: Some(images),
+                    ..
+                } if tool_call_id == "screenshot" => Some(images),
+                _ => None,
+            })
+            .expect("completed screenshot update has images");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].mime_type, "image/jpeg");
+        assert_eq!(images[0].data, "AQID");
     }
 
     fn pi_chunk(text: &str) -> serde_json::Value {
