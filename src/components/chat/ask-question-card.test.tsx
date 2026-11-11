@@ -211,8 +211,9 @@ describe("AskQuestionCard", () => {
     expect(
       screen.queryByRole("radio", { name: "Other" })
     ).not.toBeInTheDocument()
+    expect(screen.queryByText("Other")).not.toBeInTheDocument()
     expect(
-      screen.queryByPlaceholderText("Type your answer?")
+      screen.queryByPlaceholderText("Type your answer…")
     ).not.toBeInTheDocument()
   })
 
@@ -239,8 +240,9 @@ describe("AskQuestionCard", () => {
     expect(
       screen.queryByRole("checkbox", { name: "Other" })
     ).not.toBeInTheDocument()
+    expect(screen.queryByText("Other")).not.toBeInTheDocument()
     expect(
-      screen.queryByPlaceholderText("Type your answer?")
+      screen.queryByPlaceholderText("Type your answer…")
     ).not.toBeInTheDocument()
   })
 
