@@ -4990,19 +4990,20 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             description: "The open source coding agent",
             // OpenCode 2. 2.2.0 (2026-10-27) is the first 2.x release on
             // GitHub, and the ACP registry's `opencode` entry moved to it the
-            // same day. This pin is 2.2.6 (2026-11-06), which the registry
+            // same day. This pin is 2.2.7 (2026-11-10), which the registry
             // entry names too, with the same sha256; GitHub's "latest" still
             // marks 1.19.5 (2026-10-28). The archives keep the 1.x names and
             // layout, a single `opencode` / `opencode.exe` at the root, and the
             // darwin binaries carry the Developer ID signature 1.18.34
-            // introduced: 2.2.6's darwin-arm64 and darwin-x64 pass `codesign
+            // introduced: 2.2.7's darwin-arm64 and darwin-x64 pass `codesign
             // --verify --strict`.
             //
             // codeg no longer runs 1.x (`opencode_launch` refuses it). 2.x
             // reads only `opencode.json` / `opencode.jsonc` and normalizes the
             // 1.x keys it still accepts in memory, keeps credentials in the
-            // `credential` table of `opencode.db` (it imports `auth.json` once,
-            // when it first upgrades a 1.x database), and stores sessions in
+            // `credential` table of `opencode.db` (it imports `auth.json` when
+            // it first upgrades a 1.x database and, since 2.2.7, when it creates
+            // a fresh one), and stores sessions in
             // `session_v2` / `session_message`, into which it migrates 1.x
             // sessions once. codeg's settings write the 2.x shapes. Since 2.2.5
             // it also reads an assistant message's content from a
@@ -5024,7 +5025,15 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // server through `client.experimental.mcp.add`, the same
             // `PUT /api/experimental/mcp/:server`. 2.2.6 changes only
             // `service.ts`, so that `session/close` deletes a session that
-            // `session/new` created and nothing ever prompted.
+            // `session/new` created and nothing ever prompted. 2.2.7 adds the
+            // `_session/steering` extension, advertised as
+            // `_meta.steering.supported` in `initialize`: it answers
+            // `promptRequired` (`noRunningTurn`) when no turn runs and
+            // otherwise feeds the text to the running turn, whose
+            // `session/prompt` stays open. codeg does not steer OpenCode
+            // natively (`steering_prompt_required_min_version`): by the source
+            // a session kept busy without a prompt, as `/goal` keeps it, would
+            // answer `injected` too.
             //
             // Two launch details moved in 2.2.4. The CLI now puts
             // `127.0.0.1,localhost,::1` into both `NO_PROXY` spellings of its
@@ -5088,6 +5097,32 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // whose provider host cannot be resolved now retries for up to an
             // hour (read in the source, not run).
             //
+            // A live A/B of 2.2.7 against 2.2.6, set up the same way, matched on
+            // `initialize` (`protocolVersion: 1`, plus the steering `_meta`),
+            // the model, effort and mode values, the slash commands, the tool,
+            // permission and question frames, Stop, `/compact`, `/goal` (it
+            // still answers `end_turn` at once, sends no `session/update` and
+            // keeps running after `session/cancel`), the
+            // credential API calls, the error texts codeg classifies, the
+            // background shell and image job rows, and `session/load` of a
+            // database the other version wrote, in both directions (no new
+            // migrations). What differs: a command's closing notice reads `Exit
+            // code: 3` where 2.2.6 said `Exited with code 3`, and a command a
+            // signal ended or a timeout stopped reads `Exit code: 143
+            // (SIGTERM)`. A numeric exit still rides `metadata.exit`; a signal
+            // rides `metadata.signal` (now also on a timeout) with no `exit`,
+            // and codeg, which lifts only `exit` into the card's `_meta`,
+            // reads the signal from that closing line
+            // (`extractAgentReportedExit`). `read` takes a negative offset
+            // (lines counted from the end), answers an offset past the end with
+            // the file's last lines and a header saying so, where 2.2.6 failed
+            // both, and suggests close names for a missing file. An MCP result
+            // that does not match its tool's output schema no longer fails the
+            // call. And the integration list no longer waits for the plugins,
+            // so asked first thing it answers an empty list (22 entries on
+            // 2.2.6); codeg's helper asks for the default model first, which
+            // still waits, and then gets the same 22.
+            //
             // codeg lists `/goal` like any other command and leaves it to
             // OpenCode to make it work over ACP. It keeps the session working
             // on an objective, up to 50 rounds with a reviewer call after
@@ -5107,39 +5142,39 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `/review` go the same way (2.2.0 and 2.2.5 alike), though each
             // is one prompt.
             distribution: AgentDistribution::Binary {
-                version: "2.2.6",
+                version: "2.2.7",
                 cmd: "opencode",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-darwin-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-darwin-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-darwin-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-darwin-x64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-linux-arm64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-linux-arm64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-linux-x64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-linux-x64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-windows-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-windows-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.6/opencode-windows-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-windows-x64.zip",
                         sha256: None,
                     },
                 ],
@@ -5158,8 +5193,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // Docker / Nix are the supported channels. The npm `hermes-agent`
             // package is a COMMUNITY bridge (wyrtensi/hermes-agent-npm, not
             // Nous Research), pinned here at an exact, audited version: its
-            // postinstall clones the OFFICIAL repo at tag v0.23.0 verifying the
-            // full commit SHA (2bd378ed…), bootstraps an isolated, uv-managed
+            // postinstall clones the OFFICIAL repo at tag v0.23.1 verifying the
+            // full commit SHA (3b421578…), bootstraps an isolated, uv-managed
             // Python 3.14 venv with a checksum-pinned uv, and runs `uv sync
             // --frozen --extra all --no-dev` (⊇ the acp+mcp extras) from
             // upstream's lockfile — all inside the npm package directory;
@@ -5181,35 +5216,36 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // hard-compares `rev-parse <tag>^{commit}` against the 40-hex pin
             // before the `checkout --detach`.
             //
-            // 0.23.0 audited: next to 0.22.7 only `package.json` moves (version,
+            // 0.23.1 audited: next to 0.23.0 only `package.json` moves (version,
             // description, upstream tag and commit), so `bin/`,
             // `scripts/postinstall.js` and `lib/` (uv 0.12.13 and its digest
             // table, the first-launch provisioning in `lib/provision.js`) are
-            // 0.22.7's; `pythonVersion` stays 3.14, and the install marker still
+            // 0.23.0's; `pythonVersion` stays 3.14, and the install marker still
             // keys on the npm version, tag, commit, Python and uv versions, so
             // upgrading rebuilds the checkout and its venv. The annotated tag
-            // v0.23.0 dereferences to exactly 2bd378ed…, tagged by "Hermes
-            // Release Automation" on 2026-11-05 (unsigned), 808 commits after
-            // v0.22.7. Its `uv.lock` keeps 355 packages and moves five (filelock,
-            // pyasn1, pypdf, setuptools and tornado), of which only `pyasn1`
-            // (0.6.4 to 0.6.5) is among the 104 packages `--extra all` installs
-            // on macOS arm64. npm 12.2.2 runs the postinstall under codeg's
-            // `--allow-scripts`. After an install that skipped it, the first
-            // `hermes acp` provisions the runtime itself (about 70 s on 0.22.7;
-            // not re-measured on 0.23.0).
+            // v0.23.1 dereferences to exactly 3b421578…, tagged by "Hermes
+            // Release Automation" on 2026-11-10 (unsigned), 2,578 non-merge
+            // commits after v0.23.0, though upstream calls it a patch release.
+            // Its `uv.lock` only drops `tenacity` (354 packages), so `--extra
+            // all` installs 103 packages on macOS arm64. npm 12.2.2 runs the
+            // postinstall under codeg's `--allow-scripts`. After an install that
+            // skipped it, the first `hermes acp` provisions the runtime itself
+            // and answers `initialize` after about 50 s with uv's caches warm
+            // (about 70 s on 0.22.7).
             //
-            // Known regressions on 0.23.0, both measured and both as on 0.22.7.
+            // Known regressions on 0.23.1, both measured and both as on 0.23.0.
             // From 0.22.3 `hermes acp` is a viewer: sessions, turns and MCP
             // servers run in a shared `gateway run --idle-exit` daemon, which
             // the first viewer for a `HERMES_HOME` starts with its own
             // environment and later viewers share; with no viewer left it exits
             // after `gateway.unmanaged_idle_exit_seconds` (600 by default; about
-            // 650 s as measured on 0.22.7, whose idle-exit code 0.23.0 keeps).
+            // 650 s as measured on 0.22.7, whose idle-exit code 0.23.1 still
+            // keeps).
             // (1) In a session that also got MCP servers over the wire, as every
             // session with codeg-mcp injected does, each call to a config.yaml
             // `mcp_servers` entry fails with "MCP server '<name>' is not
             // connected", while the same server answers in a session with none
-            // (upstream issue #143502, still open; the lookup code is 0.22.7's
+            // (upstream issue #143502, still open; the lookup code is 0.23.0's
             // byte for byte). codeg hands Hermes the user's own servers only
             // through config.yaml, so on every OS they are cut off whenever
             // codeg-mcp rides along. (2) Where the daemon is a child of the
@@ -5223,10 +5259,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // timing), while one sent seconds later works. When launchd takes
             // the job, the daemon runs outside the viewer's tree and the stop
             // reaches only that viewer (both setups measured on macOS; the code
-            // that starts the daemon is 0.22.7's). Re-check both on the next
+            // that starts the daemon is 0.23.0's). Re-check both on the next
             // bump.
             //
-            // Otherwise 0.23.0 answers as 0.22.7 did, as far as checked:
+            // Otherwise 0.23.1 answers as 0.23.0 did, as far as checked:
             // `initialize` is the same byte for byte (`protocolVersion: 1`,
             // `agentInfo.version` "0.0.0"); the session reply (legacy `models`
             // and `modes`, and Hermes' own `edit_approval_policy` / `model` /
@@ -5237,12 +5273,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // terminal command (the same five options) match 0.22.7's, so they
             // fold into codeg's selectors (`acp::connection`) as before. Hermes
             // now also resends its whole option list, unchanged, in a
-            // `config_option_update` at the end of every turn and twice after
-            // each model switch. A model picked during a turn is answered `{}`,
+            // `config_option_update` at the end of every turn and once or twice
+            // (by timing, on 0.23.0 too) after each model switch. A model picked during a turn is answered `{}`,
             // Hermes says "<model> applies from your next message." and runs the
             // next turn on it, but until that turn its pushes still name the
             // running model, so codeg's selector shows that one until the turn
-            // ends; the saved pick is untouched. By its source 0.23.0 also
+            // ends; the saved pick is untouched. By its source 0.23.1 also
             // offers a `service_tier` option, only on first-party fast-mode
             // routes (Anthropic, xAI, OpenAI) and never on `custom:codeg` (not
             // measured); codeg passes it through like any other option. With
@@ -5253,19 +5289,25 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // configured model. codeg-mcp's tools are
             // `mcp__editor_codeg_mcp_<8 hex>__<tool>`, which codeg still
             // recognises, reached through `tool_search` / `tool_call`, and every
-            // stdio MCP server gets `HERMES_HOME` in its environment. `state.db`
-            // keeps 0.22.7's schema (version 32, the same tables, columns and
-            // indexes), with every column `parsers::hermes` reads; sessions are
+            // stdio MCP server gets `HERMES_HOME` in its environment, no plugin
+            // session values. `state.db` is at schema version 33 (0.23.0: 32; a
+            // data-only migration plus one table and one trigger, no column
+            // changes), with every column `parsers::hermes` reads; sessions are
             // `local-<64 hex>` with `source = 'local'`. Load and resume neither
             // rewrite message rows nor clear `ended_at` (the next prompt does),
             // and a literal `\x00json:` message stays escaped; through 0.22.2
             // load and resume did both and stored such a message decoded, and
             // `parsers::hermes` reads either shape, taking a session's last
-            // activity from its newest message rather than `ended_at`. `hermes
-            // --version` prints `Hermes Agent v0.23.0 (2026.9.24) · stable ·
-            // local 2bd378ed1b8d` first, which is the line codeg parses; the
-            // update check it runs next takes over a minute without a route to
-            // GitHub, as on 0.22.7.
+            // activity from its newest message rather than `ended_at`. By its
+            // source 0.23.1 also takes a turn the provider refused for safety
+            // out of the model context (`active = 0`, which `parsers::hermes`
+            // skips like a rewound turn), and repairs older chats that end in
+            // such refusals the same way, while its own load replay still shows
+            // the refused ask with a notice (not measured). `hermes --version`
+            // prints `Hermes Agent v0.23.1 (2026.9.24) · stable · local
+            // 3b4215785882` first, which is the line codeg parses; the update
+            // check it runs next took 5 to 7 s with a route to GitHub, and 11 to
+            // 13 s on 0.23.0 and 0.23.1 alike with the proxy black-holed.
             //
             // Launch preference: `resolve_npx_command("hermes")` checks PATH,
             // then `~/.local/bin` (the official installer's target), then the
@@ -5275,8 +5317,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `~/.local/bin`. The npm global install is the managed/one-click
             // channel codeg's Install button drives.
             distribution: AgentDistribution::Npx {
-                version: "0.23.0",
-                package: "hermes-agent@0.23.0",
+                version: "0.23.1",
+                package: "hermes-agent@0.23.1",
                 cmd: "hermes",
                 args: &["acp"],
                 env: &[],
@@ -6283,9 +6325,36 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // found" (measured with probe servers). By the same rule a codeg tool
             // group turned on after a Kimi session's first request would not
             // reach the model in that session, even after a reopen.
+            //
+            // 2.5.3 is a patch release, and the mandated check passes verbatim.
+            // `package.json` changes only its version and the order of two
+            // devDependencies. 15 of the bundle's 3662 modules changed and
+            // cross-spawn joined it, for steering (#4762), the Windows MCP
+            // spawn fix (#4804) and a models.dev refresh that leaves the
+            // `moonshotai` rows alone; no `packages/acp-server` module changed,
+            // and neither did the sources of the rest of what codeg mirrors.
+            // Steering now cuts a streaming model request short and carries on
+            // in the same turn, but only steers from Kimi's own TUI, web UI and
+            // HTTP API take that path. Over ACP a second `session/prompt` during
+            // a turn is still refused at once with -32600 `turn.agent_busy` and
+            // never reaches the model (measured on 2.5.2 and 2.5.3 alike), and
+            // codeg queues such a prompt itself; `initialize` advertises no
+            // steering. On Windows a stdio MCP command now starts through
+            // cross-spawn: by its source an absolute `.exe` path, like
+            // codeg-mcp's, is spawned as before, while a script command such as
+            // `npx` from a user's `mcp.json` now runs through `cmd.exe` (not
+            // run). A live A/B against a fresh 2.5.2 matched on `initialize`
+            // (`protocolVersion: 1`), `session/new` (the model, thinking and
+            // mode values for all four block shapes, the 14 slash commands),
+            // text, Bash, MCP and question turns, a turn cancelled mid-tool, the
+            // plan round trip, the model requests, the wire record and
+            // loop-event types, and the session lock texts. Neither version
+            // sends `max_tokens`, and 2.5.3 resumes and loads a session 2.5.2
+            // wrote. The MCP tool-update and respawn behaviour above was not
+            // re-run; the modules behind it are unchanged.
             distribution: AgentDistribution::Npx {
-                version: "2.5.2",
-                package: "@moonshot-ai/kimi-code@2.5.2",
+                version: "2.5.3",
+                package: "@moonshot-ai/kimi-code@2.5.3",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -6961,9 +7030,32 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // OAuth sign-in a leftover static key is skipped in favour of the
             // exchanged project token. A home without desktop credentials, as in
             // the stand-in runs, gets the same list as before.
+            //
+            // Bridge 0.83.3, after 0.83.0 to 0.83.2 (all 2026-11-10), changes
+            // `package.json` only in its version. Installed fresh on
+            // 2026-11-11, 0.82.3 and 0.83.3 resolve the same dependencies (ACP
+            // SDK 1.9.0), and against the stand-in backend `initialize`
+            // (`protocolVersion: 1`), `session/new`, the mode gate, stdio MCP
+            // forwarding, `session/fork`, `session/load`, `/rename`,
+            // `authenticate` and completed, retried and failed prompts give the
+            // client the same frames as 0.82.3, apart from each turn's `turnMs`
+            // and random ids. The one backend frame that moved: looking up a
+            // loaded session's stored title, the bridge now asks
+            // `session/list` for that session id, and repeats the bare listing
+            // (the 50 newest sessions) only if the backend refuses the filter,
+            // so an older conversation now gets its title. The rest, read in
+            // the source: Start Plan models are offered and answered with the
+            // ZCode desktop app's stored sign-in token when its connection is
+            // Start Plan, where 0.82.3 always declined them; `ZCODE_APP_VERSION`
+            // is read from a desktop app bundled next to the CLI, which a
+            // home without the desktop app, as in the stand-in runs, does not
+            // have; `/resume` now pushes the adopted conversation's title as a
+            // `session_info_update`, which codeg applies like `/rename`'s; and
+            // the hub's stale-code check and the CLIProxyAPI quota cache run
+            // only in the hub and the CLI.
             distribution: AgentDistribution::Npx {
-                version: "0.82.3",
-                package: "zcode-acp-server@0.82.3",
+                version: "0.83.3",
+                package: "zcode-acp-server@0.83.3",
                 cmd: "zcode-acp-server",
                 args: &["server"],
                 env: &[],
@@ -8565,8 +8657,8 @@ mod tests {
         // range dies on the codeg-mcp stdio entry (see the registry entry).
         assert_npx_version(
             AgentType::KimiCode,
-            "2.5.2",
-            "@moonshot-ai/kimi-code@2.5.2",
+            "2.5.3",
+            "@moonshot-ai/kimi-code@2.5.3",
             Some("22.19.0"),
         );
         assert_npx_version(
@@ -8600,15 +8692,15 @@ mod tests {
             "command-code@1.88.5",
             Some("22.0.0"),
         );
-        assert_binary_version(AgentType::OpenCode, "2.2.6", "/releases/download/v2.2.6/");
+        assert_binary_version(AgentType::OpenCode, "2.2.7", "/releases/download/v2.2.7/");
         // Hermes rides the community npm bridge (upstream retired its PyPI
         // channel at 0.19.0; see the registry entry). The npm package version
         // tracks the upstream version 1:1, and the pin must stay EXACT — the
         // audited wrapper code is only what the pinned version ships.
         assert_npx_version(
             AgentType::Hermes,
-            "0.23.0",
-            "hermes-agent@0.23.0",
+            "0.23.1",
+            "hermes-agent@0.23.1",
             Some("20.0.0"),
         );
     }

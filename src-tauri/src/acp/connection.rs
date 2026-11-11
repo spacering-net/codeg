@@ -5907,13 +5907,13 @@ const HERMES_MODE_OPTION_ID: &str = "mode";
 const HERMES_SYNTHESIZED_OPTION_IDS: &[&str] = &[HERMES_MODEL_OPTION_ID, HERMES_MODE_OPTION_ID];
 
 /// Hermes lists its models in the session reply's legacy `models` (verified
-/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7 and 0.23.0): every signed-in provider's
+/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7, 0.23.0 and 0.23.1): every signed-in provider's
 /// models and every named endpoint's (`providers:` in config.yaml, codeg's own
 /// `custom:codeg` among them), with `provider:model` ids —
 /// `openrouter:anthropic/claude-opus-5.5`, `custom:codeg:glm-5.2`. Through
 /// 0.22.2 that is the only place: it sends no `configOptions`, and takes a
 /// switch only as `session/set_model`, its `session/set_config_option` storing
-/// whatever it is sent and answering an empty list. From 0.22.6 (0.23.0 is the
+/// whatever it is sent and answering an empty list. From 0.22.6 (0.23.1 is the
 /// pin) Hermes also sends the same rows, without the provider notes, as a
 /// `model` config option and takes a switch either way; codeg keeps building
 /// its selector from the legacy list and folds Hermes' own option into it
@@ -17551,9 +17551,11 @@ fn opencode_completion_meta(
 /// - `execute`: the calls the script made ([`CODE_MODE_CALLS_META_KEY`]).
 /// - `shell` (1.x's `bash`): a non-zero exit code ([`EXIT_CODE_META_KEY`]).
 ///   OpenCode completes a command that exited non-zero successfully, with
-///   `Exited with code N` as a second result block
-///   (`core/src/tool/shell/result.ts`), and 1.x never printed it, so this is
-///   the one structured statement of it.
+///   `Exited with code N` (2.2.7: `Exit code: N`) as a second result block
+///   (`core/src/shell/result.ts`), and 1.x never printed it, so this is the
+///   one structured statement of it. A signal (`metadata.signal`, no `exit`)
+///   is not lifted; the frontend reads it from the notice (`Killed by
+///   SIGTERM`, 2.2.7: `Exit code: 143 (SIGTERM)`).
 pub(crate) fn opencode_metadata_meta(
     name: &str,
     metadata: &serde_json::Value,

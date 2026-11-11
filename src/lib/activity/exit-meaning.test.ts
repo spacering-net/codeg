@@ -46,6 +46,16 @@ describe("readCommandExit: exits that answer the command", () => {
     expect(read("diff a.txt b.txt", 1, "1c1\n< a\n---\n> b")).toBe("differs")
   })
 
+  it("leaves OpenCode 2.2.7's closing notice out of what was printed", () => {
+    expect(read("rg -n 'nothing-here' src", 1, "Exit code: 1")).toBe("noMatch")
+    expect(read("grep -c foo a.ts", 1, "a.ts:0\n\nExit code: unknown")).toBe(
+      "noMatch"
+    )
+    expect(
+      read("grep -c foo a.ts", 1, "a.ts:0\n\nExit code: 143 (SIGTERM)")
+    ).toBe("noMatch")
+  })
+
   it("reads grep -c's zero counts as no match", () => {
     expect(read("grep -c foo a.ts b.ts", 1, "a.ts:0\nb.ts:0")).toBe("noMatch")
   })

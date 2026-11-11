@@ -305,6 +305,9 @@ function readRange(parsed: Record<string, unknown> | null): string | null {
   const offset = num(parsed, "offset")
   const limit = num(parsed, "limit")
   if (offset === undefined && limit === undefined) return null
+  // OpenCode 2.2.7 reads a negative offset back from the end of the file
+  // (`-50`: the last 50 lines), whose line numbers the call does not name.
+  if (offset !== undefined && offset < 0) return null
   const start = offset !== undefined && offset > 0 ? offset : 1
   if (limit === undefined) return `L${start}–`
   return `L${start}–${start + Math.max(limit, 1) - 1}`

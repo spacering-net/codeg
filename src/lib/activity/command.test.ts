@@ -154,6 +154,27 @@ describe("extractCommandExit", () => {
     ).toBeNull()
     expect(extractAgentReportedExit("Timed out before completion")).toBeNull()
   })
+
+  // 2.2.7 rewords the notice (#62141): `Exit code: N`, a signal as `Exit
+  // code: 143 (SIGTERM)`. The numeric code rides the call's `_meta`; only the
+  // signal has to come from the text.
+  it("reads OpenCode 2.2.7's signal notice", () => {
+    expect(extractAgentReportedExit("out\n\nExit code: 143 (SIGTERM)")).toEqual(
+      { code: null, signal: "SIGTERM" }
+    )
+    expect(
+      extractAgentReportedExit(
+        "Command timed out after 1 seconds. If it needs longer and isn't waiting for input, rerun with a larger timeout.\nExit code: 137 (SIGKILL)"
+      )
+    ).toEqual({ code: null, signal: "SIGKILL" })
+    // Plain codes look like Claude Code's framing: a succeeded call's own
+    // text, never read as the agent's status.
+    expect(extractAgentReportedExit("out\n\nExit code: 3")).toBeNull()
+    expect(extractAgentReportedExit("Exit code: unknown")).toBeNull()
+    expect(
+      extractAgentReportedExit("Exit code: 143 (SIGTERM)\nstill printing")
+    ).toBeNull()
+  })
 })
 
 describe("exitFromMeta", () => {

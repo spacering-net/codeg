@@ -387,13 +387,21 @@ const EXIT_CODE_LINE_RE = /^exit code[:\s]\s*(-?\d+)\s*$/i
 /** Codex CLI framing: `Process exited with code 1` among the metadata lines. */
 const PROCESS_EXITED_RE = /^process exited with code\s+(-?\d+)\s*$/i
 /**
- * OpenCode 2's shell notice, a result block of its own after the output:
- * `Exited with code 1`, or `Killed by SIGTERM` (packages/core/src/shell/
- * result.ts `notice`, unchanged since 2.0.28). OpenCode completes such a
- * command successfully, so the notice is the result's only word on it.
+ * OpenCode 2's shell notice, a result block of its own after the output
+ * (packages/core/src/shell/result.ts `notice`). Through 2.2.6 it read
+ * `Exited with code 1`, or `Killed by SIGTERM`; from 2.2.7 it reads
+ * `Exit code: 1`, or `Exit code: 143 (SIGTERM)` (128 plus the signal's
+ * number), a timeout's explanation standing on the line before it. OpenCode
+ * completes such a command successfully. A numeric code also reaches the
+ * card as a field (see {@link EXIT_CODE_META_KEY}); a signal, which OpenCode
+ * keeps in `metadata.signal`, is not lifted, so for a killed command the
+ * notice is what the card reads. 2.2.7's plain `Exit code: 1` is not read
+ * here: Claude Code's framing looks the same, and on a call that succeeded
+ * those words are the program's own.
  */
 const OPENCODE_EXITED_RE = /^exited with code\s+(-?\d+)\s*$/i
 const OPENCODE_KILLED_RE = /^killed by\s+(SIG[A-Z0-9]+)\s*$/i
+const OPENCODE_SIGNAL_EXIT_RE = /^exit code:\s*-?\d+\s+\((SIG[A-Z0-9]+)\)\s*$/i
 
 /**
  * `_meta` key carrying a command's exit code where the agent reports it as a
@@ -426,7 +434,8 @@ export function extractAgentReportedExit(
   if (!last) return null
   const exited = last.match(OPENCODE_EXITED_RE)
   if (exited) return { code: Number(exited[1]), signal: null }
-  const killed = last.match(OPENCODE_KILLED_RE)
+  const killed =
+    last.match(OPENCODE_KILLED_RE) ?? last.match(OPENCODE_SIGNAL_EXIT_RE)
   if (killed) return { code: null, signal: killed[1]! }
   return null
 }

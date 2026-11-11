@@ -8740,7 +8740,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
         // Unreachable: Hermes is always an Npx distribution. Fall through to
         // the npx guidance with the same pinned spec so a future match-arm
         // change can't resurrect a stale recipe.
-        _ => "hermes-agent@0.23.0",
+        _ => "hermes-agent@0.23.1",
     };
     (
         hermes_npx_argv(package, &["acp", "--setup"]),
@@ -20599,7 +20599,7 @@ wire_api = "chat"
     // version is also the recorded fallback when detection comes up empty.
     #[test]
     fn hermes_custom_version_spec_keeps_lifecycle_scripts_and_records_its_version() {
-        let spec = build_npm_install_spec("hermes-agent@0.23.0", Some("0.24.0")).unwrap();
+        let spec = build_npm_install_spec("hermes-agent@0.23.1", Some("0.24.0")).unwrap();
         assert_eq!(spec, "hermes-agent@0.24.0");
         assert!(npm_package_requires_scripts(&spec));
         assert!(npm_package_bootstraps_runtime(&spec));
@@ -22430,7 +22430,7 @@ wire_api = "chat"
     fn installs_name_the_packages_whose_scripts_npm_must_run() {
         for (specs, name) in [
             (
-                &["hermes-agent@0.23.0", "hermes-agent@0.24.0", "hermes-agent"][..],
+                &["hermes-agent@0.23.1", "hermes-agent@0.24.0", "hermes-agent"][..],
                 "hermes-agent",
             ),
             (
@@ -22461,14 +22461,14 @@ wire_api = "chat"
         // Grok's postinstall downloads nothing and leaves no runtime to check.
         assert!(!npm_package_bootstraps_runtime("@xai-official/grok@1.0.77"));
         assert_eq!(
-            hermes_npx_argv("hermes-agent@0.23.0", &["acp", "--setup"]),
+            hermes_npx_argv("hermes-agent@0.23.1", &["acp", "--setup"]),
             [
                 "npx",
                 "-y",
                 "--ignore-scripts=false",
                 "--allow-scripts=hermes-agent",
                 "--package",
-                "hermes-agent@0.23.0",
+                "hermes-agent@0.23.1",
                 "hermes",
                 "acp",
                 "--setup",
@@ -22495,7 +22495,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(pkg_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.23.0")
+                    Some("hermes-agent@0.23.1")
                 );
                 assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -23107,7 +23107,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.23.0", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.23.1", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -23125,7 +23125,7 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.23.0",
+            "hermes-agent@0.23.1",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));

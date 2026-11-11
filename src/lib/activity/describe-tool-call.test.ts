@@ -163,6 +163,18 @@ describe("describeToolCall: exploration", () => {
     expect(tool.metric).toEqual({ kind: "lines", count: 3 })
   })
 
+  it("names no range for a read counted back from the end", () => {
+    // OpenCode 2.2.7: `offset: -50` is the file's last 50 lines.
+    const tool = describeToolCall(
+      call(
+        "read",
+        { filePath: "/repo/agent/src/q.py", offset: -50 },
+        { output: JSON.stringify({ start_line: 151, content: "a\nb" }) }
+      )
+    )
+    expect(tool.detail).toBeNull()
+  })
+
   it("does not count lines of a read still in flight", () => {
     const tool = describeToolCall(
       call("Read", { file_path: "/r/a.ts" }, { state: "input-available" })
@@ -299,6 +311,20 @@ describe("describeToolCall: commands", () => {
     )
     expect(tool.status).toBe("succeeded")
     expect(tool.exit).toEqual({ code: 1, signal: null })
+  })
+
+  // 2.2.7 ends a command a signal killed with `Exit code: 143 (SIGTERM)` and
+  // records no `exit` field for it (packages/core/src/shell/result.ts).
+  it("reads OpenCode 2.2.7's signal notice as the command's failure", () => {
+    const tool = describeToolCall(
+      call(
+        "shell",
+        { command: "./serve.sh" },
+        { output: "listening on :3000\n\nExit code: 143 (SIGTERM)" }
+      )
+    )
+    expect(tool.status).toBe("failed")
+    expect(tool.exit).toEqual({ code: null, signal: "SIGTERM" })
   })
 
   it("leaves a succeeded command's own text alone", () => {

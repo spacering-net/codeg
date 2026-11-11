@@ -1737,9 +1737,11 @@ fn normalize_tool_call(raw_tool: &str, state: Option<&serde_json::Value>) -> Nor
         // as written — `command`, plus `workdir` / `timeout` / `background`
         // when the model set them; the frontend reads `shell` as `bash` — but
         // its exit status is taken from the field: the text only says
-        // "Exited with code N" after the output, and only for a non-zero
-        // status (`core/src/shell/result.ts`, `notice`), while a 1.x `bash`
-        // result never printed it at all.
+        // "Exited with code N" (2.2.7: "Exit code: N") after the output, and
+        // only for a non-zero status (`core/src/shell/result.ts`, `notice`),
+        // while a 1.x `bash` result never printed it at all. A command a
+        // signal ended has `metadata.signal` and no `exit`; the frontend reads
+        // its signal from that closing line (`extractAgentReportedExit`).
         "shell" => {
             exit_code = command_exit_code(metadata);
         }
@@ -1937,8 +1939,10 @@ pub(crate) fn structure_read_output(metadata: Option<&serde_json::Value>) -> Opt
 /// `core/src/tool/plugin/read.ts` (`toModelContent`) renders it for the model —
 /// a `Read file <path>, lines <a>-<b>` header, then each line prefixed with its
 /// number and `": "`, then possibly `[Output truncated. Continue reading with
-/// offset: <n>]`. A directory reads as `Read directory <path>, entries <a>-<b>`
-/// followed by one entry per line.
+/// offset: <n>]`. Since 2.2.7 an offset past the end returns the file's last
+/// lines instead of failing, the header then ending in `(offset <o> is past
+/// the end; the file has <n> lines)`. A directory reads as `Read directory
+/// <path>, entries <a>-<b>` followed by one entry per line.
 ///
 /// Returns the same payload as the 1.x path (`{"start_line", "content"}` JSON
 /// for a file, the entries one per line for a directory), or `None` when the
@@ -1959,6 +1963,10 @@ pub(crate) fn structure_read_output_text(text: &str) -> Option<String> {
         return Some(entries.join("\n"));
     }
     let rest = header.strip_prefix("Read file ")?;
+    let rest = match rest.rsplit_once(" (offset ") {
+        Some((head, note)) if note.ends_with(" line)") || note.ends_with(" lines)") => head,
+        _ => rest,
+    };
     if rest.ends_with(", 0 lines") {
         return Some(serde_json::json!({ "start_line": 1, "content": "" }).to_string());
     }
@@ -3750,6 +3758,14 @@ mod tests {
 
         // Anything else keeps its text: an image read, an error, a numbering
         // that does not match the header.
+        // 2.2.7 answers an offset past the end with the file's tail and says so
+        // in the header (`core/src/tool/plugin/read.ts`, `toModelContent`).
+        let past_end = "Read file /p/a.txt, lines 2-3 (offset 50 is past the end; the file has 3 lines)\n2: b\n3: c";
+        let structured: serde_json::Value =
+            serde_json::from_str(&super::structure_read_output_text(past_end).expect("past end"))
+                .unwrap();
+        assert_eq!(structured["start_line"], 2);
+        assert_eq!(structured["content"], "b\nc");
         assert!(super::structure_read_output_text("Image read successfully").is_none());
         assert!(super::structure_read_output_text("File not found: /p/x").is_none());
         assert!(super::structure_read_output_text("Read file /p/a, lines 1-2\n1: a\n3: b").is_none());
