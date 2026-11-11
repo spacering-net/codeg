@@ -113,11 +113,49 @@ describe("bounded workspace file search", () => {
     expect(api.search).toHaveBeenLastCalledWith(
       "/repo",
       "ts",
-      expect.objectContaining({ refresh: true })
+      expect.objectContaining({ maxAgeMs: 150 })
     )
     expect(result.current.allFiles.map((f) => f.relativePath)).toEqual([
       "fresh.ts",
     ])
+  })
+
+  it("keeps one freshness window per refresh so later keystrokes reuse the snapshot it built", async () => {
+    api.search.mockReturnValue(new Promise(() => {}))
+    const { result, rerender } = renderHook(
+      ({ enabled, query }: { enabled: boolean; query: string }) =>
+        useFileTree({ folderPath: "/repo", enabled, query }),
+      { initialProps: { enabled: false, query: "" } }
+    )
+    act(() => result.current.reset(true))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    // Disabled: the window starts when the picker is next used, not at reset.
+    expect(api.search).not.toHaveBeenCalled()
+    rerender({ enabled: true, query: "a" })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150)
+    })
+    expect(api.search.mock.lastCall?.[2]).toMatchObject({ maxAgeMs: 150 })
+    // The first query is aborted before answering; the window still grows
+    // from the same start instead of demanding a newer snapshot again.
+    rerender({ enabled: true, query: "ab" })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150)
+    })
+    expect(api.search.mock.lastCall?.[2]).toMatchObject({ maxAgeMs: 300 })
+    act(() => result.current.reset())
+    rerender({ enabled: true, query: "abc" })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150)
+    })
+    expect(api.search.mock.lastCall?.[2]).toMatchObject({ maxAgeMs: 450 })
+    act(() => result.current.reset(true))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150)
+    })
+    expect(api.search.mock.lastCall?.[2]).toMatchObject({ maxAgeMs: 150 })
   })
 
   it("closing and reopening clears local results without invalidating a warm index", async () => {
@@ -136,6 +174,41 @@ describe("bounded workspace file search", () => {
       "ts",
       expect.objectContaining({ refresh: false })
     )
+  })
+
+  it("keeps the previous results while the next keystroke loads and clears them on a folder switch", async () => {
+    const next = deferred()
+    api.search
+      .mockResolvedValueOnce([file("src/auth.ts")])
+      .mockReturnValueOnce(next.promise)
+      .mockReturnValue(new Promise(() => {}))
+    const { result, rerender } = renderHook(
+      ({ folderPath, query }: { folderPath: string; query: string }) =>
+        useFileTree({ folderPath, enabled: true, query }),
+      { initialProps: { folderPath: "/repo", query: "au" } }
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150)
+    })
+    expect(result.current.allFiles.map((f) => f.relativePath)).toEqual([
+      "src/auth.ts",
+    ])
+    rerender({ folderPath: "/repo", query: "aut" })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150)
+    })
+    expect(result.current.loading).toBe(true)
+    expect(result.current.allFiles.map((f) => f.relativePath)).toEqual([
+      "src/auth.ts",
+    ])
+    await act(async () => {
+      next.resolve([file("lib/author.ts")])
+    })
+    expect(result.current.allFiles.map((f) => f.relativePath)).toEqual([
+      "lib/author.ts",
+    ])
+    rerender({ folderPath: "/other", query: "aut" })
+    expect(result.current.allFiles).toEqual([])
   })
 
   it("cancels backend work for the old query and keeps a per-picker consumer", async () => {

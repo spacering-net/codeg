@@ -526,8 +526,18 @@ pub async fn search_workspace_files(
     files_only: Option<bool>,
     refresh: Option<bool>,
     request: Option<SearchRequest>,
+    max_age_ms: Option<u64>,
 ) -> Result<Vec<WorkspaceFileEntry>, AppCommandError> {
     let requested_at = Instant::now();
+    // `refresh` wants a snapshot built after this request; `max_age_ms` one
+    // built within that window (e.g. since a picker opened), so a later
+    // keystroke reuses the snapshot its first query built instead of asking
+    // for yet another walk. Both reuse a discovery already in flight.
+    let fresh_since = if refresh.unwrap_or(false) {
+        Some(requested_at)
+    } else {
+        max_age_ms.and_then(|age| requested_at.checked_sub(Duration::from_millis(age)))
+    };
     if path.trim().is_empty() || query.len() > 2048 {
         return Err(AppCommandError::invalid_input(
             "Invalid workspace file search",
@@ -561,9 +571,9 @@ pub async fn search_workspace_files(
                 query: &query,
                 limit: limit.unwrap_or(100).clamp(1, MAX_RESULTS),
                 files_only: files_only.unwrap_or(false),
-                refresh: refresh.unwrap_or(false),
+                refresh: fresh_since.is_some(),
             },
-            requested_at,
+            fresh_since.unwrap_or(requested_at),
             Arc::clone(&search.control),
         )
         .await
@@ -783,10 +793,39 @@ mod tests {
             Some(true),
             None,
             None,
+            None,
         )
         .await
         .unwrap();
         assert_eq!(results.len(), MAX_RESULTS);
         assert!(results.iter().all(|e| e.kind == WorkspaceEntryKind::File));
+    }
+
+    #[tokio::test]
+    async fn max_age_rebuilds_a_snapshot_older_than_the_window_and_reuses_a_newer_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        let find = |max_age_ms: Option<u64>| {
+            let path = path.clone();
+            async move {
+                search_workspace_files(path, "needle".into(), None, None, None, None, max_age_ms)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|e| e.path)
+                    .collect::<Vec<_>>()
+            }
+        };
+        std::fs::write(dir.path().join("a.txt"), "x").unwrap();
+        assert!(find(None).await.is_empty());
+        std::fs::write(dir.path().join("needle.txt"), "x").unwrap();
+        // The warm snapshot predates the new file: plain queries reuse it.
+        assert!(find(None).await.is_empty());
+        std::thread::sleep(Duration::from_millis(20));
+        // A picker that opened after that snapshot asks for a newer one.
+        assert_eq!(find(Some(5)).await, ["needle.txt"]);
+        std::fs::write(dir.path().join("needle-2.txt"), "x").unwrap();
+        // Its later keystrokes accept the snapshot built since it opened.
+        assert_eq!(find(Some(60_000)).await, ["needle.txt"]);
     }
 }

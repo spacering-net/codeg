@@ -258,14 +258,61 @@ async fn same_root_discovery_coalesces_and_one_closed_consumer_does_not_cancel_t
     assert_eq!(visits.load(Ordering::SeqCst), 1);
 }
 
+/// Long enough for a test to observe, short enough to stay inside the
+/// one-second waits the cancellation tests use.
+const SHORT_LINGER: Duration = Duration::from_millis(50);
+
 #[tokio::test]
-async fn closing_the_last_consumer_cancels_discovery_and_never_publishes_partial_data() {
+async fn a_superseding_keystroke_reattaches_to_the_running_discovery() {
     let root = tempfile::tempdir().unwrap();
     let key = RootKey::resolve(root.path().to_str().unwrap()).unwrap();
     let gate = Gate::new();
     let worker_gate = Arc::clone(&gate);
+    let visits = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&visits);
     let service = IndexService::new(
         Limits::default(),
+        Arc::new(move |_, visit| {
+            count.fetch_add(1, Ordering::SeqCst);
+            worker_gate.wait();
+            visit(entry("needle.ts", false));
+        }),
+    );
+    let worker = Arc::clone(&service);
+    let first_key = key.clone();
+    let first = tokio::spawn(async move { search(&worker, first_key, "ne").await });
+    tokio::time::timeout(Duration::from_secs(2), gate.started.notified())
+        .await
+        .unwrap();
+    // The picker aborts the old query before its debounced successor arrives:
+    // for a moment the cold discovery has no consumer at all.
+    first.abort();
+    let _ = first.await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!service.registry.lock().unwrap().jobs[&key]
+        .control
+        .stopped());
+    let worker = Arc::clone(&service);
+    let second_key = key.clone();
+    let second = tokio::spawn(async move { search(&worker, second_key, "needle").await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    gate.release();
+    assert_eq!(second.await.unwrap()[0].path, "needle.ts");
+    assert_eq!(visits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn closing_the_last_consumer_cancels_discovery_and_never_publishes_partial_data() {
+    let root = tempfile::tempdir().unwrap();
+    let key = RootKey::resolve(root.path().to_str().unwrap()).unwrap();
+    let key_for_wait = key.clone();
+    let gate = Gate::new();
+    let worker_gate = Arc::clone(&gate);
+    let service = IndexService::new(
+        Limits {
+            linger: SHORT_LINGER,
+            ..Limits::default()
+        },
         Arc::new(move |_, visit| {
             visit(entry("prefix.ts", false));
             worker_gate.wait();
@@ -300,6 +347,18 @@ async fn closing_the_last_consumer_cancels_discovery_and_never_publishes_partial
         .unwrap()
         .unwrap()
         .is_empty());
+    // A job that completes inside the linger may still publish a complete
+    // snapshot; this test is about one abandoned for longer than that.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !service.registry.lock().unwrap().jobs[&key_for_wait]
+            .control
+            .stopped()
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
     gate.release();
     tokio::time::timeout(Duration::from_secs(1), async {
         while service.discovery.available_permits() < WORKERS
@@ -317,7 +376,10 @@ async fn closing_the_last_consumer_cancels_discovery_and_never_publishes_partial
 
 #[tokio::test]
 async fn cancelled_queued_discovery_and_dropped_query_release_admission() {
-    let (service, visits) = counted(Limits::default());
+    let (service, visits) = counted(Limits {
+        linger: SHORT_LINGER,
+        ..Limits::default()
+    });
     let permits = service
         .discovery
         .clone()
@@ -359,7 +421,10 @@ async fn a_cancelled_old_build_cannot_replace_the_new_same_root_generation() {
     let visits = Arc::new(AtomicUsize::new(0));
     let count = Arc::clone(&visits);
     let service = IndexService::new(
-        Limits::default(),
+        Limits {
+            linger: Duration::ZERO,
+            ..Limits::default()
+        },
         Arc::new(move |_, visit| {
             if count.fetch_add(1, Ordering::SeqCst) == 0 {
                 worker_gate.wait();
@@ -469,6 +534,45 @@ async fn total_disk_budget_includes_active_leases_and_failures_back_off() {
     assert!(service.disk.used.load(Ordering::Acquire) <= limits.disk);
     drop(held);
     assert_eq!(service.disk.used.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn reserving_one_quota_never_evicts_snapshots_charged_to_the_other() {
+    let (service, visits) = counted(Limits {
+        disk: 64,
+        disk_per_root: 64,
+        ..Limits::default()
+    });
+    let warm = tempfile::tempdir().unwrap();
+    let cold = tempfile::tempdir().unwrap();
+    for root in [&warm, &cold] {
+        std::fs::write(root.path().join("needle"), "x").unwrap();
+    }
+    let warm_key = RootKey::resolve(warm.path().to_str().unwrap()).unwrap();
+    assert_eq!(search(&service, warm_key.clone(), "needle").await.len(), 1);
+    assert!(matches!(
+        service.registry.lock().unwrap().snapshots[0].1.storage,
+        Storage::Memory { .. }
+    ));
+    // Disk is exhausted by something no snapshot owns: evicting the memory
+    // index cannot free it, so the warm root must survive the failed build.
+    let held = service.disk.reserve(64).unwrap();
+    let error = service
+        .snapshot(
+            RootKey::resolve(cold.path().to_str().unwrap()).unwrap(),
+            false,
+            Instant::now(),
+            &SearchControl::default(),
+        )
+        .await
+        .err()
+        .unwrap();
+    assert!(error.contains("budget is in use"));
+    assert_eq!(service.registry.lock().unwrap().snapshots.len(), 1);
+    assert_eq!(search(&service, warm_key, "needle").await.len(), 1);
+    // The failed build is refused before walking; the warm root is reused.
+    assert_eq!(visits.load(Ordering::SeqCst), 1);
+    drop(held);
 }
 
 #[tokio::test]
@@ -646,7 +750,10 @@ async fn disk_scoring_matches_memory_unicode_path_and_stable_tie_ranking() {
 async fn expired_waiter_cancels_a_queued_job_and_leaves_no_worker_or_snapshot() {
     let root = tempfile::tempdir().unwrap();
     let key = RootKey::resolve(root.path().to_str().unwrap()).unwrap();
-    let (service, visits) = counted(Limits::default());
+    let (service, visits) = counted(Limits {
+        linger: SHORT_LINGER,
+        ..Limits::default()
+    });
     let held = service
         .discovery
         .clone()

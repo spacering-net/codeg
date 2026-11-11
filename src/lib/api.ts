@@ -5052,6 +5052,8 @@ export async function searchWorkspaceFiles(
     limit?: number
     filesOnly?: boolean
     refresh?: boolean
+    /** Reject a cached snapshot built more than this many ms ago. */
+    maxAgeMs?: number
     request?: { consumerId: string; generation: number }
     signal?: AbortSignal
   } = {}

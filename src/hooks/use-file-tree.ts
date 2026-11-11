@@ -49,12 +49,26 @@ export function useFileTree({
   const [revision, setRevision] = useState(0)
   const generation = useRef(0)
   const refresh = useRef(false)
+  // Set when a refresh was requested and the picker is next enabled: every
+  // query until the next reset then needs a native snapshot built since that
+  // moment. A window (not a per-request flag) lets later keystrokes reuse the
+  // snapshot the first one built, even if that first response was aborted.
+  const freshSince = useRef<number | null>(null)
   const consumer = useRef<string | undefined>(undefined)
+
+  // Results for the previous keystroke stay visible (callers re-rank them
+  // against the new query) until the new response lands, so typing does not
+  // blank the list. Only a different workspace or result shape clears them.
+  const scopeRef = useRef<string | null>(null)
 
   useEffect(() => {
     const current = ++generation.current
-    loadedForPathRef.current = null
-    setAllFiles([])
+    const scope = `${enabled}\0${folderPath ?? ""}\0${filesOnly}`
+    if (scopeRef.current !== scope) {
+      scopeRef.current = scope
+      loadedForPathRef.current = null
+      setAllFiles([])
+    }
     if (!enabled || !folderPath) {
       setLoading(false)
       return
@@ -62,6 +76,11 @@ export function useFileTree({
     let canceled = false
     const abort = new AbortController()
     setLoading(true)
+    if (refresh.current) {
+      refresh.current = false
+      freshSince.current = performance.now()
+    }
+    const since = freshSince.current
 
     async function load() {
       try {
@@ -71,7 +90,12 @@ export function useFileTree({
           {
             limit,
             filesOnly,
-            refresh: refresh.current,
+            refresh: false,
+            ...(since === null
+              ? {}
+              : {
+                  maxAgeMs: Math.max(0, Math.floor(performance.now() - since)),
+                }),
             request: {
               consumerId: (consumer.current ??= randomUUID()),
               generation: current,
@@ -80,7 +104,6 @@ export function useFileTree({
           }
         )
         if (canceled || generation.current !== current) return
-        if (query.trim()) refresh.current = false
         const flat: FlatFileEntry[] = files.map((f) => ({
           name: f.name,
           relativePath: f.path,
@@ -110,8 +133,12 @@ export function useFileTree({
 
   const reset = useCallback((refreshIndex = false) => {
     loadedForPathRef.current = null
+    scopeRef.current = null
     generation.current += 1
-    refresh.current ||= refreshIndex
+    if (refreshIndex) {
+      refresh.current = true
+      freshSince.current = null
+    }
     setAllFiles([])
     setRevision((value) => value + 1)
   }, [])

@@ -419,6 +419,7 @@ pub struct SearchWorkspaceFilesParams {
     pub files_only: Option<bool>,
     pub refresh: Option<bool>,
     pub request: Option<crate::commands::workspace_file_search::SearchRequest>,
+    pub max_age_ms: Option<u64>,
 }
 
 pub async fn search_workspace_files(
@@ -432,6 +433,7 @@ pub async fn search_workspace_files(
             params.files_only,
             params.refresh,
             params.request,
+            params.max_age_ms,
         )
         .await?,
     ))

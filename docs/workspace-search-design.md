@@ -21,7 +21,10 @@ There are no background jobs competing with foreground requests.
 
 Queries for the same root attach to one discovery job. Each waiting query owns
 a lease. Closing one consumer removes that lease without interrupting another
-consumer; when the last leaves, the discovery cancellation token is signalled.
+consumer. When the last leaves, the job lingers for three seconds: a picker
+aborts its previous query on every keystroke before the debounced next one
+arrives, and that query re-attaches instead of restarting the walk. If nobody
+attaches within the linger, the discovery cancellation token is signalled.
 Queued work exits without acquiring a permit. Running work checks cancellation
 between entries and never publishes a partial snapshot. A cancelled worker
 cannot publish over a newer job for the same root: publication checks the job
@@ -40,14 +43,19 @@ metadata. Aliases share a snapshot. Authorization and root-ignore changes select
 a different snapshot immediately; a configuration change during discovery
 invalidates that build. Other filesystem changes become visible after a
 five-minute TTL or explicit refresh. Refresh publishes only after a complete
-successful discovery and does not move the timestamp on each query.
+successful discovery and does not move the timestamp on each query. A query
+may instead pass `maxAgeMs`: the search dialog sends the time since it opened,
+so each opening sees files as they are then (as the full re-list it replaced
+did), while its later keystrokes reuse the snapshot the first one built.
 
 Compact in-memory snapshots deduplicate basenames and store integer parent
 references. All roots share a 128 MiB retained-index budget. Each of the two
 discovery workers can use at most half the 192 MiB compact-builder budget,
 including its interning table. The cache reserves space before publication.
 Evicted snapshots still held by active queries remain charged until their final
-lease drops, so eviction cannot admit more than the total budget. When memory
+lease drops, so eviction cannot admit more than the total budget. Admission
+evicts only snapshots charged to the quota it needs: a disk reservation never
+discards a warm memory index, nor a memory reservation a disk snapshot. When memory
 admission is unavailable, the complete disk snapshot remains usable instead.
 
 Scoring retains only top-k candidates. The compact scorer's basename memoization
@@ -98,7 +106,9 @@ invalidate Enter. Focus clears lazy session/commit caches for the next query
 while keeping the current in-flight search valid.
 
 Picker closure, root changes, newer typing and hook unmount abort queries.
-Frontend state retains only the current bounded results. There is no
+Frontend state retains only the current bounded results; the previous
+keystroke's results stay visible, re-ranked locally, until the next response
+lands, and only a workspace switch clears them. There is no
 Array.at dependency beyond the project's ES2020 target.
 
 ## Regression coverage

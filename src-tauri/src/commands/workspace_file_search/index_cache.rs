@@ -25,6 +25,10 @@ const DISK_BYTES: usize = 2 * 1024 * 1024 * 1024;
 const SNAPSHOT_DISK_BYTES: usize = 1024 * 1024 * 1024;
 const RECORD_BYTES: usize = 1024 * 1024;
 const ERROR_BACKOFF: Duration = Duration::from_secs(5);
+// A picker aborts its previous query on each keystroke before sending the next
+// one (after a short debounce). Without a grace period the last lease would
+// drop in between and every keystroke would restart a cold discovery from zero.
+const DISCOVERY_LINGER: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct RootKey {
@@ -74,6 +78,7 @@ struct Limits {
     disk: usize,
     disk_per_root: usize,
     roots: usize,
+    linger: Duration,
 }
 
 impl Default for Limits {
@@ -84,6 +89,7 @@ impl Default for Limits {
             disk: DISK_BYTES,
             disk_per_root: SNAPSHOT_DISK_BYTES,
             roots: ROOT_LIMIT,
+            linger: DISCOVERY_LINGER,
         }
     }
 }
@@ -159,6 +165,12 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
+    fn charge(&self) -> &Arc<Quota> {
+        match &self.storage {
+            Storage::Memory { _charge, .. } | Storage::Disk { _charge, .. } => &_charge.quota,
+        }
+    }
+
     fn search(
         &self,
         query: &str,
@@ -244,6 +256,10 @@ type Walker = dyn Fn(&str, &mut dyn FnMut(WorkspaceFileEntry) -> bool) + Send + 
 struct BuildJob {
     control: SearchControl,
     users: AtomicUsize,
+    // Bumped each time the last lease drops, so a lingering cancellation can
+    // tell whether a consumer re-attached (and maybe left again) meanwhile.
+    released: AtomicUsize,
+    linger: Duration,
     result: watch::Sender<Option<BuildResult>>,
 }
 
@@ -251,9 +267,32 @@ struct BuildLease(Arc<BuildJob>);
 
 impl Drop for BuildLease {
     fn drop(&mut self) {
-        if self.0.users.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.0.control.cancel.cancel();
+        if self.0.users.fetch_sub(1, Ordering::AcqRel) != 1 {
+            return;
         }
+        let epoch = self.0.released.fetch_add(1, Ordering::AcqRel) + 1;
+        let runtime = tokio::runtime::Handle::try_current();
+        let (false, Ok(runtime)) = (self.0.linger.is_zero(), runtime) else {
+            self.0.control.cancel.cancel();
+            return;
+        };
+        // Keep the walk alive briefly for a superseding query from the same
+        // picker. A consumer that attaches in this window keeps the job; if
+        // nobody does, cancellation proceeds as before. Completion ends the
+        // wait early so a finished job is not retained for the full linger.
+        let job = Arc::clone(&self.0);
+        runtime.spawn(async move {
+            let mut done = job.result.subscribe();
+            tokio::select! {
+                _ = tokio::time::sleep(job.linger) => {}
+                _ = done.wait_for(Option::is_some) => return,
+            }
+            if job.users.load(Ordering::Acquire) == 0
+                && job.released.load(Ordering::Acquire) == epoch
+            {
+                job.control.cancel.cancel();
+            }
+        });
     }
 }
 
@@ -308,8 +347,15 @@ impl IndexService {
             }
             // An in-flight query can still own an evicted snapshot. Its lease
             // keeps counting until it actually drops; eviction never lies
-            // about the process-wide total to admit a new allocation.
-            registry.snapshots.pop_front()?;
+            // about the process-wide total to admit a new allocation. Only
+            // snapshots charged to this quota can free it: evicting a memory
+            // index for disk space (or vice versa) would discard a warm root
+            // without making room.
+            let victim = registry
+                .snapshots
+                .iter()
+                .position(|(_, snapshot)| Arc::ptr_eq(snapshot.charge(), quota))?;
+            registry.snapshots.remove(victim);
         }
     }
 
@@ -354,6 +400,8 @@ impl IndexService {
                         let job = Arc::new(BuildJob {
                             control: SearchControl::default(),
                             users: AtomicUsize::new(0),
+                            released: AtomicUsize::new(0),
+                            linger: self.limits.linger,
                             result,
                         });
                         registry.jobs.insert(key.clone(), Arc::clone(&job));

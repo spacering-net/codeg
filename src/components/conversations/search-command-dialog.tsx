@@ -147,7 +147,9 @@ export function SearchCommandDialog({
       setAgentFilter(null)
       setResults([])
       setActiveTab("conversations")
-      resetFileTree()
+      // Like the full re-list this replaced, each opening searches files as
+      // they are now, not a native snapshot left over from before it opened.
+      resetFileTree(true)
     }
   }, [open, resetFileTree])
 
