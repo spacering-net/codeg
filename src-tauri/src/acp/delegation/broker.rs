@@ -34,11 +34,13 @@
 //!         [`DelegationBroker::cancel_by_parent_turn`]), or the LLM's own
 //!         [`DelegationBroker::cancel_task_by_id`].
 //!
-//! v1 is explicitly one-shot — no session reuse. The one exception is
-//! [`DelegationBroker::resume_delegation`]: an INTERRUPTED task (canceled, or
-//! stranded `in_progress` by a crash) can be brought back under its original
-//! `task_id` by reloading the child's recorded agent session — a continuation
-//! of the original task, never a new iteration on it.
+//! The broker tracks the original delegation task. Subsequent prompts in the
+//! same child session are managed by `SubsessionMessages`, which retains a
+//! live child connection when it takes ownership. Separately,
+//! [`DelegationBroker::resume_delegation`] restores an INTERRUPTED task
+//! (canceled, or stranded `in_progress` by a crash) under its original `task_id`
+//! by reloading the child's recorded agent session — a continuation of the
+//! original task, never a new iteration on it.
 //!
 //! Result durability: child output is NOT stored in codeg's DB, so the broker
 //! caches the completed text in `completed` (parent-scoped, FIFO-capped). Once
@@ -4184,8 +4186,8 @@ impl DelegationBroker {
                             Some(child_conversation_id),
                             Some(agent_type),
                             "the task already completed — resume only applies to a \
-                             canceled or interrupted task. Start a new \
-                             delegate_to_agent call for follow-up work.",
+                             canceled or interrupted task. Use send_to_subsession \
+                             with child_conversation_id for follow-up work in the same session.",
                             )
                             .with_assistant(assistant.as_ref()),
                         )),
@@ -4197,8 +4199,8 @@ impl DelegationBroker {
                                 Some(agent_type),
                                 "the task ended in failure rather than being \
                              interrupted — resume only applies to a canceled or \
-                             interrupted task. Start a new delegate_to_agent call \
-                             to retry it.",
+                             interrupted task. Use send_to_subsession with \
+                             child_conversation_id to retry in the same session.",
                             )
                             .with_assistant(assistant.as_ref()),
                         )),
@@ -4373,8 +4375,8 @@ impl DelegationBroker {
                     Some(ctx.child_conversation_id),
                     Some(ctx.agent_type),
                     "the task already completed — resume only applies to a \
-                     canceled or interrupted task. Start a new delegate_to_agent \
-                     call for follow-up work.",
+                     canceled or interrupted task. Use send_to_subsession with \
+                     child_conversation_id for follow-up work in the same session.",
                 );
             }
             TaskStatus::Failed | TaskStatus::Unknown => {
