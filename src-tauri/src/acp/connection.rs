@@ -13540,7 +13540,11 @@ async fn handle_fork_or_exit(
     //     below is redundant there, but not harmful: measured live, fork →
     //     resume → close the parent → prompt the fork works on 2.1.1 and 2.2.1
     //     alike. It stays for the older adapters a PATH or a custom version
-    //     can still resolve.
+    //     can still resolve. On 2.2.0+ the resume also cannot change the
+    //     thread's config: the app-server ignores resume overrides on a loaded
+    //     thread that has a subscriber. So Codex's MCP servers, codeg-mcp
+    //     included, have to ride on the fork itself (#1105, see
+    //     `crate::acp::fork::build_fork_request`).
     //
     // `session/resume` repairs both: claude's `getOrCreateSession` creates the
     // session under the SAME id (`createSession` uses `resume` as the id), and
@@ -14801,7 +14805,8 @@ async fn run_conversation_loop(
     // The connection's MCP servers, the list `session/new` / `load` / `resume`
     // name. Read only by a fork: claude-agent-acp 0.90.0 starts the forked
     // session itself, so the fork has to name the settings the resume that
-    // follows it sends (see `crate::acp::fork::build_fork_request`).
+    // follows it sends, and codex-acp mounts the forked thread's servers from
+    // the fork alone (see `crate::acp::fork::build_fork_request`).
     mcp_servers: &[McpServer],
     // Connection-scoped (created once in `run_connection`, shared across fork
     // restarts of this loop): outgoing prompts are fingerprinted here so the
@@ -48558,12 +48563,41 @@ mod tests {
         );
     }
 
-    /// Every other agent's fork stays bare: the resume that follows mounts the
-    /// servers, and naming them on the fork too would start them twice.
+    /// Codex's fork names the servers its resume names (#1105): codex-acp
+    /// mounts the forked thread's MCP servers from the fork request alone, and
+    /// the resume of that still-subscribed thread cannot add any, so a bare
+    /// fork lost codeg-mcp for the rest of the session.
     #[tokio::test]
-    async fn a_codex_fork_leaves_the_servers_to_its_resume() {
+    async fn a_codex_fork_names_the_servers_its_resume_names() {
         let mut fork = ForkTransition::start_with(
             AgentType::Codex,
+            fork_test_servers(),
+            "child",
+            true,
+            CloseAnswer::Closed,
+        )
+        .await;
+        fork.fork().await;
+        fork.until(
+            "the child's start",
+            |e| matches!(e, AcpEvent::SessionStarted { session_id } if session_id == "child"),
+        )
+        .await;
+        let forks = fork.forks.lock().unwrap().clone();
+        let resumes = fork.resumes.lock().unwrap().clone();
+        assert_eq!((forks.len(), resumes.len()), (1, 1));
+        assert_eq!(forks[0]["mcpServers"][0]["name"], "codeg-mcp");
+        assert_eq!(forks[0]["mcpServers"], resumes[0]["mcpServers"]);
+        assert!(forks[0].get("_meta").is_none());
+        fork.shutdown().await;
+    }
+
+    /// An agent whose resume mounts the servers keeps a bare fork: naming them
+    /// on the fork too would start them twice.
+    #[tokio::test]
+    async fn a_deepseek_fork_leaves_the_servers_to_its_resume() {
+        let mut fork = ForkTransition::start_with(
+            AgentType::DeepSeek,
             fork_test_servers(),
             "child",
             true,
