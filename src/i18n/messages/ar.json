@@ -5119,7 +5119,9 @@
       "statusRunning": "قيد التشغيل",
       "statusWaiting": "في الانتظار",
       "statusError": "خطأ",
-      "subAgentOf": "وكيل فرعي لـ"
+      "subAgentOf": "وكيل فرعي لـ",
+      "askQuestion": "يسألك",
+      "askPlan": "خطة بانتظار موافقتك"
     },
     "menu": {
       "scale": "الحجم",

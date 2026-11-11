@@ -133,6 +133,9 @@ async fn switching_the_brain_marks_the_open_segment_for_replacement() {
     let seg = svc::create_segment(&engine.db.conn, engine.bot().await, "claude_code", config, SegmentReason::First)
         .await
         .unwrap();
+    let workdir = engine.workdir_of(&engine.agent_row().await.unwrap());
+    let claude = workdir::skill_dir(&workdir, AgentType::ClaudeCode).unwrap();
+    assert!(claude.join("SKILL.md").is_file());
     engine
         .save(PersonalAgentDraft {
             agent_config: Some(brain(AgentType::Codex)),
@@ -143,6 +146,9 @@ async fn switching_the_brain_marks_the_open_segment_for_replacement() {
     let seg = svc::get_segment(&engine.db.conn, seg.id).await.unwrap().unwrap();
     assert_eq!(seg.pending_reason, Some(SegmentReason::Switch));
     assert!(seg.ended_at.is_none(), "only at the next delivery");
+    // The skill moves with the brain: no copy is left for the old one (18 #6).
+    assert!(workdir::skill_dir(&workdir, AgentType::Codex).unwrap().join("SKILL.md").is_file());
+    assert!(!claude.exists());
 }
 
 #[tokio::test]

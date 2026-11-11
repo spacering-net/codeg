@@ -5139,7 +5139,9 @@
       "statusRunning": "Running",
       "statusWaiting": "Waiting",
       "statusError": "Error",
-      "subAgentOf": "Sub-agent of"
+      "subAgentOf": "Sub-agent of",
+      "askQuestion": "Asks you",
+      "askPlan": "Plan to approve"
     },
     "menu": {
       "scale": "Scale",

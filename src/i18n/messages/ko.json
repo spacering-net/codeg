@@ -5119,7 +5119,9 @@
       "statusRunning": "실행 중",
       "statusWaiting": "대기 중",
       "statusError": "오류",
-      "subAgentOf": "하위 에이전트"
+      "subAgentOf": "하위 에이전트",
+      "askQuestion": "질문이 있어요",
+      "askPlan": "승인할 계획"
     },
     "menu": {
       "scale": "크기",

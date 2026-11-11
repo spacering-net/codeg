@@ -5119,7 +5119,9 @@
       "statusRunning": "実行中",
       "statusWaiting": "待機中",
       "statusError": "エラー",
-      "subAgentOf": "サブエージェント"
+      "subAgentOf": "サブエージェント",
+      "askQuestion": "あなたへの質問",
+      "askPlan": "承認待ちのプラン"
     },
     "menu": {
       "scale": "拡大率",

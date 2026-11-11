@@ -373,10 +373,7 @@ async fn init_workdir(path: &Path, files: &[(&str, String)]) -> Result<bool, Wor
     std::fs::write(path.join(MEMORY_DIR).join(".gitkeep"), "")?;
     // Agent CLIs keep their own per-project state beside the files (settings,
     // the skill codeg installs); none of it is the owner's content.
-    std::fs::write(
-        path.join(".gitignore"),
-        ".claude/\n.codex/\n.agents/\n.gemini/\n.cursor/\n.opencode/\n",
-    )?;
+    std::fs::write(path.join(".gitignore"), ignore_lines())?;
     std::fs::write(
         path.join(MARKER_FILE),
         serde_json::json!({ "version": 1, "created_at": chrono::Utc::now() }).to_string(),
@@ -385,6 +382,24 @@ async fn init_workdir(path: &Path, files: &[(&str, String)]) -> Result<bool, Wor
         commit_all(path, "init: personal agent working directory").await;
     }
     Ok(true)
+}
+
+/// The working directory's `.gitignore`: every folder an agent CLI keeps its
+/// own per-project state in here — the top of each project skill directory
+/// of every agent codeg knows, and the skill store agents share (18 #5).
+fn ignore_lines() -> String {
+    let mut tops = std::collections::BTreeSet::from([".agents"]);
+    for agent in crate::models::agent::BUILTIN_AGENT_TYPES {
+        let Some(spec) = crate::commands::acp::skill_storage_spec(*agent) else {
+            continue;
+        };
+        for rel in spec.project_rel_dirs {
+            if let Some(top) = rel.split('/').next().filter(|t| !t.is_empty()) {
+                tops.insert(top);
+            }
+        }
+    }
+    tops.into_iter().map(|top| format!("/{top}/\n")).collect()
 }
 
 /// Run git in the working directory with codeg's own identity and nothing of
@@ -678,6 +693,21 @@ pub fn skill_dir(path: &Path, agent_type: crate::models::AgentType) -> Option<Pa
     .map(|dir| dir.join(SKILL_NAME))
 }
 
+/// The copies of the skill codeg installed in the working directory for
+/// other brains than the one now using `keep`: wherever an agent it knows
+/// loads it from, one holding codeg's `SKILL.md`. `keep` itself stays, even
+/// when other agents read that folder as well.
+fn other_skill_copies(path: &Path, keep: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = crate::models::agent::BUILTIN_AGENT_TYPES
+        .iter()
+        .filter_map(|agent| skill_dir(path, *agent))
+        .filter(|dir| Some(dir.as_path()) != keep && dir.join("SKILL.md").is_file())
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
 /// [`sync_skill`] for an assistant: a worker's tells it that the facts about
 /// the owner are the primary's.
 pub fn sync_bot_skill(
@@ -687,9 +717,17 @@ pub fn sync_bot_skill(
     worker: bool,
     cards: CardUse,
 ) {
+    let dir = skill_dir(path, agent_type);
+    // A brain before this one left its copy in its own agent's folder; a new
+    // brain that reads that folder too would load the skill twice (18 #6).
+    for old in other_skill_copies(path, dir.as_deref()) {
+        if let Err(e) = std::fs::remove_dir_all(&old) {
+            tracing::warn!("[personal_agent] old skill copy not removed: {e}");
+        }
+    }
     // An agent codeg manages no skills for: the conventions still reach it
     // through the handoff card's tool notes.
-    let Some(dir) = skill_dir(path, agent_type) else {
+    let Some(dir) = dir else {
         return;
     };
     if enabled {
@@ -1106,6 +1144,75 @@ mod tests {
             assert!(soul.starts_with(soul_heading), "{locale:?}");
             assert!(user.starts_with(user_heading), "{locale:?}");
         }
+    }
+
+    /// Whatever brain an assistant has, the folders its agent keeps beside
+    /// the files stay out of the working directory's git (18 #5).
+    #[tokio::test]
+    async fn every_agents_folders_stay_out_of_the_working_directorys_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("pa");
+        ensure_initialized(&dir, AppLocale::En).await.unwrap();
+        let ignore = read_text(&dir, ".gitignore");
+        for top in [
+            "/.claude/",
+            "/.agents/",
+            "/.kimi-code/",
+            "/.qoder/",
+            "/.zcode/",
+            "/skills/",
+        ] {
+            assert!(ignore.lines().any(|l| l == top), "{top}: {ignore}");
+        }
+        assert!(dir.join(".git").exists(), "the directory is a repository");
+        for agent in crate::models::agent::BUILTIN_AGENT_TYPES {
+            let Some(skill) = skill_dir(&dir, *agent) else {
+                continue;
+            };
+            std::fs::create_dir_all(&skill).unwrap();
+            std::fs::write(skill.join("SKILL.md"), "skill").unwrap();
+        }
+        let out = git(&dir, &["status", "--porcelain", "--untracked-files=all"])
+            .await
+            .unwrap();
+        let status = String::from_utf8_lossy(&out.stdout);
+        assert!(status.trim().is_empty(), "nothing for git: {status}");
+    }
+
+    /// A new brain leaves one copy of the skill: the old brain's goes from
+    /// its agent's folder — the shared `.agents/skills` too, which the new
+    /// brain would read besides its own — while the owner's own skills stay
+    /// (18 #6).
+    #[test]
+    fn a_new_brain_leaves_one_copy_of_the_skill() {
+        use crate::models::AgentType;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let cards = CardUse::default();
+        sync_bot_skill(dir, AgentType::Cline, true, false, cards);
+        let cline = skill_dir(dir, AgentType::Cline).unwrap();
+        assert!(
+            cline.ends_with(".agents/skills/codeg-personal-agent"),
+            "{cline:?}"
+        );
+        assert!(cline.join("SKILL.md").is_file());
+        let owners = dir.join(".agents/skills/owners-own");
+        std::fs::create_dir_all(&owners).unwrap();
+        std::fs::write(owners.join("SKILL.md"), "mine").unwrap();
+
+        sync_bot_skill(dir, AgentType::Codex, true, false, cards);
+        let codex = skill_dir(dir, AgentType::Codex).unwrap();
+        assert!(codex.join("SKILL.md").is_file());
+        assert!(!cline.exists(), "Codex reads .agents/skills too");
+        assert!(owners.join("SKILL.md").is_file(), "the owner's skill stays");
+
+        sync_bot_skill(dir, AgentType::ClaudeCode, true, false, cards);
+        assert!(!codex.exists());
+        assert_eq!(other_skill_copies(dir, None).len(), 1);
+        // A brain codeg keeps no skill for: none is left behind either.
+        sync_bot_skill(dir, AgentType::Hermes, true, false, cards);
+        assert!(other_skill_copies(dir, None).is_empty());
+        assert!(owners.join("SKILL.md").is_file());
     }
 
     #[tokio::test]

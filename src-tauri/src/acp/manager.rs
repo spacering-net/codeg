@@ -3421,7 +3421,9 @@ impl ConnectionManager {
                 .pending_permission
                 .as_ref()
                 .map(crate::models::pet::PetPermissionSummary::from);
+            let ask = pet_ask(&state);
             let is_active = pending.is_some()
+                || ask.is_some()
                 || matches!(
                     state.status,
                     ConnectionStatus::Prompting | ConnectionStatus::Error
@@ -3437,6 +3439,7 @@ impl ConnectionManager {
                 title: String::new(),
                 status: state.status.clone(),
                 pending,
+                ask,
                 // Same reason as `title`: resolving a delegation child's parent
                 // needs the DB. Filled by `pet_list_active_sessions_core`.
                 parent: None,
@@ -3475,30 +3478,8 @@ impl ConnectionManager {
                     text: title.chars().take(200).collect(),
                     since: p.created_at,
                 })
-            } else if let Some(q) = &s.pending_question {
-                Some(SessionWait {
-                    kind: "question",
-                    text: q
-                        .questions
-                        .first()
-                        .map(|x| x.question.chars().take(200).collect())
-                        .unwrap_or_default(),
-                    since: q.created_at,
-                })
             } else {
-                s.pending_plan_approval.as_ref().map(|p| SessionWait {
-                    kind: "plan",
-                    text: p
-                        .plan_markdown
-                        .lines()
-                        .map(|l| l.trim().trim_start_matches('#').trim())
-                        .find(|l| !l.is_empty())
-                        .unwrap_or("")
-                        .chars()
-                        .take(200)
-                        .collect(),
-                    since: p.created_at,
-                })
+                ask_wait(&s).map(|(kind, text, since)| SessionWait { kind, text, since })
             };
             let running = s.turn_in_flight || matches!(s.status, ConnectionStatus::Prompting);
             out.push(SessionGlance {
@@ -4609,6 +4590,38 @@ impl ConnectionManager {
 /// includes the git credential helper — without it, delegated subagents
 /// fail any git command that depends on the codeg-injected helper.
 /// The internal suffix carrying an assistant brief, if there is one.
+/// The question or plan approval a session waits on: its kind (`question`
+/// or `plan`), the first question or the plan's first line, and since when.
+fn ask_wait(
+    s: &crate::acp::SessionState,
+) -> Option<(&'static str, String, chrono::DateTime<chrono::Utc>)> {
+    if let Some(q) = &s.pending_question {
+        let text = q
+            .questions
+            .first()
+            .map(|x| x.question.chars().take(200).collect())
+            .unwrap_or_default();
+        return Some(("question", text, q.created_at));
+    }
+    s.pending_plan_approval.as_ref().map(|p| {
+        let text = p
+            .plan_markdown
+            .lines()
+            .map(|l| l.trim().trim_start_matches('#').trim())
+            .find(|l| !l.is_empty())
+            .unwrap_or("")
+            .chars()
+            .take(200)
+            .collect();
+        ("plan", text, p.created_at)
+    })
+}
+
+/// [`ask_wait`] as the pet panel shows it (18 #2).
+fn pet_ask(s: &crate::acp::SessionState) -> Option<crate::models::pet::PetAsk> {
+    ask_wait(s).map(|(kind, text, _)| crate::models::pet::PetAsk { kind, text })
+}
+
 fn brief_suffix(brief: Option<String>) -> Vec<PromptInputBlock> {
     brief
         .map(|text| vec![PromptInputBlock::Text { text }])

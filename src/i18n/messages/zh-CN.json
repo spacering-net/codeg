@@ -5139,7 +5139,9 @@
       "statusRunning": "运行中",
       "statusWaiting": "等待中",
       "statusError": "出错",
-      "subAgentOf": "子智能体"
+      "subAgentOf": "子智能体",
+      "askQuestion": "在问你",
+      "askPlan": "计划等你审批"
     },
     "menu": {
       "scale": "缩放",

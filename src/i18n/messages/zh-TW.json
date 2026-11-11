@@ -5119,7 +5119,9 @@
       "statusRunning": "執行中",
       "statusWaiting": "等待中",
       "statusError": "發生錯誤",
-      "subAgentOf": "子智慧代理"
+      "subAgentOf": "子智慧代理",
+      "askQuestion": "在問你",
+      "askPlan": "計畫等你審批"
     },
     "menu": {
       "scale": "縮放",

@@ -5119,7 +5119,9 @@
       "statusRunning": "Läuft",
       "statusWaiting": "Wartet",
       "statusError": "Fehler",
-      "subAgentOf": "Sub-Agent von"
+      "subAgentOf": "Sub-Agent von",
+      "askQuestion": "Fragt dich",
+      "askPlan": "Plan zur Freigabe"
     },
     "menu": {
       "scale": "Skalierung",

@@ -57,22 +57,9 @@ pub fn spawn_daily_report_scheduler(
                 }
             };
 
-            for ch in &channels {
-                if !ch.daily_report_enabled {
-                    continue;
-                }
-
-                let report_time = ch.daily_report_time.as_deref().unwrap_or("18:00");
-
-                if current_time != report_time {
-                    continue;
-                }
-
+            let owns_board = crate::work_task::engine().is_some();
+            for ch in reports_due(&channels, &current_time, today, &sent_today, owns_board) {
                 let key = (ch.id, today);
-                if sent_today.contains(&key) {
-                    continue;
-                }
-
                 let lang = load_lang(&db_conn).await;
 
                 // Generate and send report
@@ -100,6 +87,28 @@ pub fn spawn_daily_report_scheduler(
             }
         }
     })
+}
+
+/// The channels whose daily report is due at `now` (`HH:MM`): reports on,
+/// at their time, not yet sent `today`. Only the process holding this data
+/// directory's board lock sends them, so two processes sharing it send each
+/// report once (18 #7).
+fn reports_due<'a>(
+    channels: &'a [crate::db::entities::chat_channel::Model],
+    now: &str,
+    today: NaiveDate,
+    sent_today: &HashSet<(i32, NaiveDate)>,
+    owns_board: bool,
+) -> Vec<&'a crate::db::entities::chat_channel::Model> {
+    if !owns_board {
+        return Vec::new();
+    }
+    channels
+        .iter()
+        .filter(|ch| ch.daily_report_enabled)
+        .filter(|ch| ch.daily_report_time.as_deref().unwrap_or("18:00") == now)
+        .filter(|ch| !sent_today.contains(&(ch.id, today)))
+        .collect()
 }
 
 async fn load_lang(db: &DatabaseConnection) -> Lang {
@@ -132,5 +141,56 @@ async fn generate_daily_report(db: &DatabaseConnection) -> DailyReportData {
         conversations_by_agent: activity.by_agent,
         projects_involved: activity.by_project.into_iter().map(|(name, _)| name).collect(),
         key_activities: activity.titles,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn channel(id: i32, on: bool, time: Option<&str>) -> crate::db::entities::chat_channel::Model {
+        crate::db::entities::chat_channel::Model {
+            id,
+            name: format!("ch{id}"),
+            channel_type: "telegram".into(),
+            enabled: true,
+            config_json: "{}".into(),
+            event_filter_json: None,
+            daily_report_enabled: on,
+            daily_report_time: time.map(str::to_string),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// Two processes on one data directory: only the one holding the board
+    /// lock sends the daily report (18 #7); it sends each channel's once, at
+    /// its time.
+    #[test]
+    fn only_the_board_lock_holder_sends_the_daily_report_once() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();
+        let channels = [
+            channel(1, true, Some("09:30")),
+            channel(2, true, None),
+            channel(3, false, Some("09:30")),
+        ];
+        let none = HashSet::new();
+        let ids = |due: Vec<&crate::db::entities::chat_channel::Model>| {
+            due.into_iter().map(|c| c.id).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(reports_due(&channels, "09:30", today, &none, true)),
+            vec![1]
+        );
+        assert_eq!(
+            ids(reports_due(&channels, "18:00", today, &none, true)),
+            vec![2]
+        );
+        assert!(
+            reports_due(&channels, "09:30", today, &none, false).is_empty(),
+            "the other process sends nothing"
+        );
+        let sent = HashSet::from([(1, today)]);
+        assert!(reports_due(&channels, "09:30", today, &sent, true).is_empty());
     }
 }
