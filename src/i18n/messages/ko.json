@@ -3946,6 +3946,13 @@
         "htmlPreviewHide": "미리보기 닫기"
       },
       "activity": {
+        "oauth": {
+          "waiting": "{server} 승인 대기 중",
+          "reconnecting": "{server}에 다시 연결 중…",
+          "open": "시스템 브라우저에서 승인 열기",
+          "verify": "다시 연결한 후 실제 MCP 도구 호출로 접근을 확인하세요. 브라우저를 여는 것만으로 승인이 확인되지는 않습니다.",
+          "openFailed": "브라우저를 열지 못했습니다. 승인 링크로 다시 시도하세요."
+        },
         "header": {
           "label": "실행 과정",
           "working": "진행 중",

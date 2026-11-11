@@ -3946,6 +3946,13 @@
         "htmlPreviewHide": "收起預覽"
       },
       "activity": {
+        "oauth": {
+          "waiting": "等待 {server} 授權",
+          "reconnecting": "正在重新連線 {server}…",
+          "open": "在系統瀏覽器中開啟授權",
+          "verify": "重新連線後，請用實際 MCP 工具呼叫驗證存取。開啟瀏覽器不代表授權成功。",
+          "openFailed": "無法開啟瀏覽器，請透過授權連結重試。"
+        },
         "header": {
           "label": "執行過程",
           "working": "進行中",

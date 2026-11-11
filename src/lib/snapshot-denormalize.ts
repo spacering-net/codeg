@@ -1,3 +1,4 @@
+import { stripKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import type {
   ActiveDelegationState,
   AsyncTaskRecord,
@@ -323,7 +324,7 @@ function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
     raw_output_chunks: outputChunks,
     raw_output_total_bytes: outputBytes,
     locations: tc.locations ?? null,
-    meta: tc.meta ?? null,
+    meta: stripKimiMcpOAuth(tc.meta ?? null),
     images: tc.images ?? [],
   }
 }

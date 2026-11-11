@@ -2520,6 +2520,141 @@ describe("AcpConnectionsProvider permission request details", () => {
     }
   })
 
+  it("exposes Kimi OAuth status before the tool settles and retires its link", async () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb)
+      return frames.length
+    })
+    vi.stubGlobal("cancelAnimationFrame", () => {})
+    try {
+      await mountProvider()
+      await act(async () => {
+        await h.actions!.connect(TAB, "kimi_code", "/tmp/x", "sess-1")
+      })
+      const handlers = latestAttachHandlers()
+      let seq = 0
+      const emit = (event: Omit<EventEnvelope, "seq" | "connection_id">) => {
+        emitAcpEvent(handlers, {
+          ...event,
+          seq: ++seq,
+          connection_id: "spawned-conn",
+        } as EventEnvelope)
+        act(() => {
+          while (frames.length) frames.shift()!(0)
+        })
+      }
+      const call = () => {
+        const block = h
+          .store!.getConnection(TAB)!
+          .liveMessage?.content.find(
+            (b) => b.type === "tool_call" && b.info.tool_call_id === "auth-1"
+          )
+        return block?.type === "tool_call" ? block.info : null
+      }
+      emit({ type: "status_changed", status: "prompting" } as EventEnvelope)
+      emit({
+        type: "tool_call",
+        tool_call_id: "auth-1",
+        title: "mcp__notion__authenticate",
+        kind: "other",
+        status: "pending",
+        content: null,
+        raw_input: null,
+        raw_output: null,
+      } as EventEnvelope)
+      emit({
+        type: "tool_call_update",
+        tool_call_id: "auth-1",
+        title: "Authenticating notion",
+        status: "inprogress",
+        content: null,
+        raw_input: "{}",
+        raw_output: null,
+      } as EventEnvelope)
+      const url =
+        "https://auth.example.test/authorize?state=a%2Bb&code_challenge=x_y&redirect_uri=http%3A%2F%2F127.0.0.1%3A43127%2Fcallback"
+      const progress = `Open this URL in your browser to authorize "notion":\n\n${url}\n\nWaiting for the OAuth callback (timeout 15 min). If you cancel, call this tool again to restart the flow.`
+      const update = (title: string | null, status: string | null = null) =>
+        emit({
+          type: "tool_call_update",
+          tool_call_id: "auth-1",
+          title,
+          status,
+          content: null,
+          raw_input: null,
+          raw_output: null,
+        } as EventEnvelope)
+      update(progress)
+      expect(call()?.status).toBe("inprogress")
+      expect(call()?.title).toBe("mcp__notion__authenticate")
+      expect(call()?.meta?.["codeg.kimiMcpOAuth"]).toMatchObject({
+        phase: "waiting",
+        url,
+      })
+      const { buildStreamingTurnsFromLiveMessage } =
+        await import("@/stores/conversation-runtime-store")
+      const { adaptMessageTurn } =
+        await import("@/lib/adapters/ai-elements-adapter")
+      const { MOCKUP_ADAPTER_TEXT } =
+        await import("@/lib/activity/__fixtures__/mockup-turn")
+      const built = buildStreamingTurnsFromLiveMessage(
+        42,
+        h.store!.getConnection(TAB)!.liveMessage!
+      )
+      const adapted = adaptMessageTurn(
+        built.turns[0]!,
+        MOCKUP_ADAPTER_TEXT,
+        true,
+        new Set(["auth-1"])
+      )
+      expect(adapted.content.find((p) => p.type === "tool-call")).toMatchObject(
+        {
+          toolName: "mcp__notion__authenticate",
+          meta: { "codeg.kimiMcpOAuth": { phase: "waiting", url } },
+        }
+      )
+      update("Authorized — reconnecting notion…")
+      expect(call()?.meta?.["codeg.kimiMcpOAuth"]).toMatchObject({
+        phase: "reconnecting",
+        url: null,
+      })
+      update(null, "failed")
+      expect(call()?.meta?.["codeg.kimiMcpOAuth"]).toBeNull()
+      update(progress)
+      expect(call()?.meta?.["codeg.kimiMcpOAuth"]).toBeNull()
+      emit({
+        type: "tool_call_update",
+        tool_call_id: "late-auth",
+        title: "mcp__notion__authenticate",
+        status: "inprogress",
+        content: null,
+        raw_input: "{}",
+        raw_output: null,
+        meta: {
+          "codeg.kimiMcpOAuth": {
+            toolName: "mcp__notion__authenticate",
+            server: "notion",
+            phase: "waiting",
+            url,
+          },
+        },
+      } as EventEnvelope)
+      const late = h
+        .store!.getConnection(TAB)!
+        .liveMessage?.content.find(
+          (b) => b.type === "tool_call" && b.info.tool_call_id === "late-auth"
+        )
+      expect(
+        late?.type === "tool_call"
+          ? late.info.meta?.["codeg.kimiMcpOAuth"]
+          : undefined
+      ).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it("keeps a Monitor a monitor through the frames that announce it", async () => {
     // claude-agent-acp 0.98.0, recorded: the call is announced by its tool
     // name with no input, and the input follows in an update that names no

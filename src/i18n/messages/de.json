@@ -3946,6 +3946,13 @@
         "htmlPreviewHide": "Vorschau ausblenden"
       },
       "activity": {
+        "oauth": {
+          "waiting": "Warten auf Autorisierung für {server}",
+          "reconnecting": "Verbindung zu {server} wird wiederhergestellt…",
+          "open": "Autorisierung im Systembrowser öffnen",
+          "verify": "Prüfe den Zugriff nach dem Neuverbinden mit einem echten MCP-Werkzeugaufruf. Das Öffnen des Browsers bestätigt keine Autorisierung.",
+          "openFailed": "Der Browser konnte nicht geöffnet werden. Versuche es über den Autorisierungslink erneut."
+        },
         "header": {
           "label": "Ablauf",
           "working": "Läuft",

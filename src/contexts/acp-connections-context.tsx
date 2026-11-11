@@ -1,6 +1,13 @@
 "use client"
 
 import {
+  readKimiMcpOAuth,
+  startKimiMcpOAuth,
+  stripKimiMcpOAuth,
+  updateKimiMcpOAuth,
+} from "@/lib/kimi-mcp-oauth"
+
+import {
   createContext,
   useCallback,
   useContext,
@@ -1881,15 +1888,16 @@ function mergeToolCallUpdate(
     newTotalBytes = update.raw_output.length
   }
 
+  const oauth = readKimiMcpOAuth(info.meta)
   return {
     ...info,
-    title: update.title ?? info.title,
+    title: oauth?.toolName ?? update.title ?? info.title,
     status: update.status ?? info.status,
     content: update.content ?? info.content,
     raw_input: update.raw_input ?? info.raw_input,
     raw_output_chunks: newChunks,
     locations: update.locations ?? info.locations,
-    meta: update.meta ?? info.meta,
+    meta: updateKimiMcpOAuth(info.meta, update, info.status),
     raw_output_total_bytes: newTotalBytes,
     images: update.images !== null ? update.images : info.images,
   }
@@ -2441,6 +2449,7 @@ function connectionsReducer(
     case "TOOL_CALL": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
+      const meta = startKimiMcpOAuth(conn.agentType, action.title, action.meta)
       // Out-of-turn wire tool activity stays OUT of `liveMessage` (the
       // transcript overlay renders that content — grafting it here recreated
       // the garbled-timeline bug), but its context is still recorded so a
@@ -2457,7 +2466,7 @@ function connectionsReducer(
             action.raw_output !== null ? [action.raw_output] : [],
           raw_output_total_bytes: action.raw_output?.length ?? 0,
           locations: action.locations,
-          meta: action.meta,
+          meta,
           images: action.images ?? [],
         }
         const next = new Map(state)
@@ -2510,7 +2519,7 @@ function connectionsReducer(
                 // The announcement is what names the tool
                 // (`_meta.claudeCode.toolName`), so its `_meta` must land.
                 locations: action.locations ?? block.info.locations,
-                meta: action.meta ?? block.info.meta,
+                meta: meta ?? block.info.meta,
                 images:
                   action.images !== null ? action.images : block.info.images,
               },
@@ -2536,7 +2545,7 @@ function connectionsReducer(
                 action.raw_output !== null ? [action.raw_output] : [],
               raw_output_total_bytes: action.raw_output?.length ?? 0,
               locations: action.locations ?? null,
-              meta: action.meta ?? null,
+              meta,
               images: action.images ?? [],
             },
           },
@@ -5256,7 +5265,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             raw_input: e.raw_input,
             raw_output: e.raw_output,
             locations: e.locations ?? null,
-            meta: (e.meta as ToolCallMeta) ?? null,
+            meta: stripKimiMcpOAuth((e.meta as ToolCallMeta) ?? null),
             images: e.images ?? null,
           })
           break
@@ -5274,7 +5283,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             raw_output: e.raw_output,
             raw_output_append: e.raw_output_append,
             locations: e.locations ?? null,
-            meta: (e.meta as ToolCallMeta) ?? null,
+            meta: stripKimiMcpOAuth((e.meta as ToolCallMeta) ?? null),
             images: e.images ?? null,
           })
           scheduleToolCallUpdateFlush()

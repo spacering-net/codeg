@@ -3946,6 +3946,13 @@
         "htmlPreviewHide": "プレビューを閉じる"
       },
       "activity": {
+        "oauth": {
+          "waiting": "{server} の認可を待機中",
+          "reconnecting": "{server} に再接続中…",
+          "open": "システムブラウザーで認可を開く",
+          "verify": "再接続後、実際の MCP ツール呼び出しでアクセスを確認してください。ブラウザーを開くだけでは認可は確認されません。",
+          "openFailed": "ブラウザーを開けませんでした。認可リンクから再試行してください。"
+        },
         "header": {
           "label": "実行過程",
           "working": "実行中",
