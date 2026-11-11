@@ -56,6 +56,7 @@ import type {
   PersonalAgentSettingChange,
   PersonalAgentPresence,
   PersonalAgentProfile,
+  PersonalAgentToday,
   ExecutorView,
   PersonalAgentStats,
   TimelineChanges,
@@ -2730,6 +2731,12 @@ export async function personalAgentAvatarPng(
 
 /** The "about you" page (1.12): the owner's time zone, the record's switch,
  *  whether they are in codeg, and the hours codeg sees. */
+/** "Today" (6.3): what waits on the owner anywhere in codeg, what the
+ *  assistants keep an eye on, the rest of the day, what was done today. */
+export async function personalAgentToday(): Promise<PersonalAgentToday> {
+  return getTransport().call("personal_agent_today", {})
+}
+
 export async function personalAgentProfile(): Promise<PersonalAgentProfile> {
   return getTransport().call("personal_agent_profile", {})
 }

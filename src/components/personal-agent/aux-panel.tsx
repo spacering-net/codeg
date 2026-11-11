@@ -11,6 +11,8 @@
  *     as a card — who it is, what it runs on, its session, its working
  *     directory — then folding sections: its context, the run log, the
  *     details;
+ *   - on the primary, "Today": every assistant's day in four groups (6.3,
+ *     `today-section.tsx`);
  *   - its open matters, as the workspace's task tab shows a board: sections
  *     by whom each piece waits on — the owner first, then the work still
  *     moving, what the agent has to pick up, what comes later — each piece
@@ -131,6 +133,7 @@ import {
   usePersonalAgentRoster,
   useRoster,
 } from "@/stores/personal-agent-roster-store"
+import { useToday } from "@/stores/personal-agent-today-store"
 import {
   PERSONAL_AGENT_EVENTS,
   usePersonalAgentUi,
@@ -154,6 +157,7 @@ import { BotAvatar } from "./bot-avatar"
 import { dueWhen, repeatText } from "./due-text"
 import { AnsweredForYou } from "./event-card"
 import { LadderChip, TaskStrip } from "./task-strip"
+import { TodaySection } from "./today-section"
 
 /** Run-log lines the status tab lists. */
 const RUN_LOG_LINES = 50
@@ -1971,6 +1975,8 @@ function DetailsTab({
   )
   useRoster()
   const notify = entry?.roster.notify ?? true
+  // "Today" is the primary's: every assistant's, held while it shows.
+  const today = useToday(botId == null)
   return (
     <ScrollArea className="h-full">
       <div className="flex min-w-0 flex-col gap-5 p-3">
@@ -1978,6 +1984,14 @@ function DetailsTab({
           <SectionHead>{t("sections.status")}</SectionHead>
           <StatusBody snapshot={snapshot} />
         </section>
+        {botId == null ? (
+          <TodaySection
+            head={<SectionHead>{t("sections.today")}</SectionHead>}
+            today={today}
+            inDrawer={inDrawer}
+            readOnly={readOnly}
+          />
+        ) : null}
         <section className="flex flex-col gap-2" data-pa-detail="matters">
           <SectionHead>{t("sections.matters")}</SectionHead>
           <WorkBody work={work} inDrawer={inDrawer} />

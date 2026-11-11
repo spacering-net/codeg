@@ -8898,6 +8898,7 @@
       },
       "sections": {
         "status": "État",
+        "today": "Aujourd’hui",
         "matters": "Sujets en cours",
         "data": "Données"
       },
@@ -9062,6 +9063,58 @@
     },
     "notify": {
       "open": "Ouvrir"
+    },
+    "today": {
+      "title": "Aujourd’hui",
+      "empty": "Rien ne vous attend aujourd’hui",
+      "yours": "À vous",
+      "open": "Ouvrir",
+      "undo": "Annuler",
+      "more": "Afficher {count} de plus",
+      "groups": {
+        "needs": "Vous attend",
+        "watching": "Sous surveillance",
+        "schedule": "Plus tard aujourd’hui",
+        "done": "Fait aujourd’hui"
+      },
+      "kind": {
+        "approval": "Attend votre approbation",
+        "forwarded": "Vous pose une question",
+        "question": "Vous pose une question",
+        "confirm": "Attend votre confirmation",
+        "stuck": "Ne sait pas si c’est fait",
+        "waiting": "Un travail vous attend",
+        "proposal": "Suggère",
+        "failed": "Échec",
+        "reminder": "Rappel",
+        "finished": "Terminé",
+        "canceled": "Arrêté",
+        "answered": "Répondu pour vous",
+        "changed": "Modifié pour vous",
+        "undone": "Modifié puis annulé"
+      },
+      "session": {
+        "permission": "Attend votre approbation",
+        "question": "Vous pose une question",
+        "plan": "Attend que vous approuviez un plan"
+      },
+      "task": {
+        "awaiting_input": "Attend votre réponse",
+        "review": "Prêt à vérifier",
+        "failed": "Échec",
+        "preparing": "En préparation",
+        "running": "En cours",
+        "merging": "Fusion en cours"
+      },
+      "dispatch": {
+        "queued": "En file",
+        "running": "En cours",
+        "waiting_input": "Son assistant répond"
+      },
+      "item": {
+        "notify": "Rappel à {time}",
+        "act": "Le fait à {time}"
+      }
     }
   }
 }

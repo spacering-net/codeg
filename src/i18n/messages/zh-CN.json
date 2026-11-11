@@ -8898,6 +8898,7 @@
       },
       "sections": {
         "status": "状态",
+        "today": "今日",
         "matters": "事项",
         "data": "数据"
       },
@@ -9062,6 +9063,58 @@
     },
     "notify": {
       "open": "打开"
+    },
+    "today": {
+      "title": "今日",
+      "empty": "今天没有需要你的事",
+      "yours": "你自己的",
+      "open": "打开",
+      "undo": "撤销",
+      "more": "再显示 {count} 项",
+      "groups": {
+        "needs": "需要你",
+        "watching": "在盯",
+        "schedule": "今天的安排",
+        "done": "今天完成"
+      },
+      "kind": {
+        "approval": "等你批准",
+        "forwarded": "在问你",
+        "question": "在问你",
+        "confirm": "等你确认",
+        "stuck": "不知道做成没有",
+        "waiting": "派出的活在等你",
+        "proposal": "提议",
+        "failed": "失败",
+        "reminder": "提醒",
+        "finished": "已完成",
+        "canceled": "已停止",
+        "answered": "替你答了",
+        "changed": "替你改了",
+        "undone": "改过，已撤销"
+      },
+      "session": {
+        "permission": "等你批准",
+        "question": "在问你",
+        "plan": "等你批准计划"
+      },
+      "task": {
+        "awaiting_input": "等你输入",
+        "review": "待验收",
+        "failed": "失败",
+        "preparing": "准备中",
+        "running": "进行中",
+        "merging": "合并中"
+      },
+      "dispatch": {
+        "queued": "排队中",
+        "running": "进行中",
+        "waiting_input": "助手正在替你答"
+      },
+      "item": {
+        "notify": "{time} 提醒",
+        "act": "{time} 去做"
+      }
     }
   }
 }

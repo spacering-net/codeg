@@ -8898,6 +8898,7 @@
       },
       "sections": {
         "status": "Status",
+        "today": "Hoje",
         "matters": "Assuntos",
         "data": "Dados"
       },
@@ -9062,6 +9063,58 @@
     },
     "notify": {
       "open": "Abrir"
+    },
+    "today": {
+      "title": "Hoje",
+      "empty": "Nada precisa de você hoje",
+      "yours": "Seu",
+      "open": "Abrir",
+      "undo": "Desfazer",
+      "more": "Mostrar mais {count}",
+      "groups": {
+        "needs": "Precisa de você",
+        "watching": "Acompanhando",
+        "schedule": "Mais tarde hoje",
+        "done": "Feito hoje"
+      },
+      "kind": {
+        "approval": "Precisa da sua aprovação",
+        "forwarded": "Pergunta a você",
+        "question": "Pergunta a você",
+        "confirm": "Aguarda sua confirmação",
+        "stuck": "Não sabe se deu certo",
+        "waiting": "Um trabalho espera por você",
+        "proposal": "Sugere",
+        "failed": "Falhou",
+        "reminder": "Lembrete",
+        "finished": "Concluído",
+        "canceled": "Parado",
+        "answered": "Respondido em seu nome",
+        "changed": "Alterado em seu nome",
+        "undone": "Alterado e desfeito"
+      },
+      "session": {
+        "permission": "Aguarda sua aprovação",
+        "question": "Pergunta a você",
+        "plan": "Aguarda você aprovar um plano"
+      },
+      "task": {
+        "awaiting_input": "Aguarda sua resposta",
+        "review": "Pronto para revisão",
+        "failed": "Falhou",
+        "preparing": "Preparando",
+        "running": "Em andamento",
+        "merging": "Mesclando"
+      },
+      "dispatch": {
+        "queued": "Na fila",
+        "running": "Em andamento",
+        "waiting_input": "O assistente está respondendo"
+      },
+      "item": {
+        "notify": "Lembrete às {time}",
+        "act": "Faz às {time}"
+      }
     }
   }
 }

@@ -109,6 +109,10 @@ interface PersonalAgentUiState {
    *  followed (1.13). */
   pendingJump: { bot: number; row: number } | null
   setPendingJump: (jump: { bot: number; row: number } | null) => void
+  /** Bumped to bring "Today" into view (the primary's pill, 1.14): the
+   *  panel opens on its details, scrolled to it. */
+  todayAsked: number
+  showToday: () => void
 }
 
 export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
@@ -143,4 +147,11 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
     set((s) => (s.viewing === viewing ? s : { viewing })),
   pendingJump: null,
   setPendingJump: (pendingJump) => set({ pendingJump }),
+  todayAsked: 0,
+  showToday: () =>
+    set((s) => ({
+      auxOpen: true,
+      auxTab: "details",
+      todayAsked: s.todayAsked + 1,
+    })),
 }))

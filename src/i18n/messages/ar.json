@@ -8898,6 +8898,7 @@
       },
       "sections": {
         "status": "الحالة",
+        "today": "اليوم",
         "matters": "الأمور المفتوحة",
         "data": "البيانات"
       },
@@ -9062,6 +9063,58 @@
     },
     "notify": {
       "open": "فتح"
+    },
+    "today": {
+      "title": "اليوم",
+      "empty": "لا شيء يحتاجك اليوم",
+      "yours": "خاصتك",
+      "open": "فتح",
+      "undo": "تراجع",
+      "more": "عرض {count} أخرى",
+      "groups": {
+        "needs": "يحتاجك",
+        "watching": "قيد المتابعة",
+        "schedule": "لاحقًا اليوم",
+        "done": "أُنجز اليوم"
+      },
+      "kind": {
+        "approval": "يحتاج موافقتك",
+        "forwarded": "يسألك",
+        "question": "يسألك",
+        "confirm": "ينتظر تأكيدك",
+        "stuck": "لا يعرف إن نجح",
+        "waiting": "عمل ينتظرك",
+        "proposal": "يقترح",
+        "failed": "فشل",
+        "reminder": "تذكير",
+        "finished": "اكتمل",
+        "canceled": "أُوقف",
+        "answered": "أُجيب نيابةً عنك",
+        "changed": "غُيّر نيابةً عنك",
+        "undone": "غُيّر ثم تُراجع عنه"
+      },
+      "session": {
+        "permission": "ينتظر موافقتك",
+        "question": "يسألك",
+        "plan": "ينتظر موافقتك على خطة"
+      },
+      "task": {
+        "awaiting_input": "ينتظر إدخالك",
+        "review": "جاهز للمراجعة",
+        "failed": "فشل",
+        "preparing": "قيد التحضير",
+        "running": "قيد التنفيذ",
+        "merging": "قيد الدمج"
+      },
+      "dispatch": {
+        "queued": "في الطابور",
+        "running": "قيد التنفيذ",
+        "waiting_input": "مساعده يجيب"
+      },
+      "item": {
+        "notify": "تذكير عند {time}",
+        "act": "يفعله عند {time}"
+      }
     }
   }
 }

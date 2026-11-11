@@ -8898,6 +8898,7 @@
       },
       "sections": {
         "status": "Status",
+        "today": "Today",
         "matters": "Matters",
         "data": "Data"
       },
@@ -9062,6 +9063,58 @@
     },
     "notify": {
       "open": "Open"
+    },
+    "today": {
+      "title": "Today",
+      "empty": "Nothing needs you today",
+      "yours": "Yours",
+      "open": "Open",
+      "undo": "Undo",
+      "more": "Show {count} more",
+      "groups": {
+        "needs": "Needs you",
+        "watching": "Watching",
+        "schedule": "Later today",
+        "done": "Done today"
+      },
+      "kind": {
+        "approval": "Needs your approval",
+        "forwarded": "Asks you",
+        "question": "Asks you",
+        "confirm": "Waits for you to confirm",
+        "stuck": "Not sure it worked",
+        "waiting": "Work waits for you",
+        "proposal": "Suggests",
+        "failed": "Failed",
+        "reminder": "Reminder",
+        "finished": "Finished",
+        "canceled": "Stopped",
+        "answered": "Answered for you",
+        "changed": "Changed for you",
+        "undone": "Changed, then taken back"
+      },
+      "session": {
+        "permission": "Waits for your approval",
+        "question": "Asks you",
+        "plan": "Waits for you to approve a plan"
+      },
+      "task": {
+        "awaiting_input": "Waits for your input",
+        "review": "Ready for review",
+        "failed": "Failed",
+        "preparing": "Preparing",
+        "running": "Running",
+        "merging": "Merging"
+      },
+      "dispatch": {
+        "queued": "Queued",
+        "running": "Running",
+        "waiting_input": "Its assistant is answering"
+      },
+      "item": {
+        "notify": "Reminder at {time}",
+        "act": "Does it at {time}"
+      }
     }
   }
 }

@@ -2558,6 +2558,72 @@ export type PersonalAgentNotifyLink =
 
 export const PERSONAL_AGENT_NOTIFY_EVENT = "personal-agent://notify"
 
+/** What a row of "Today" is (6.3, 1.14). */
+export type TodayRowKind =
+  // Waits on the owner: an assistant's card or ask, as its news is named …
+  | "approval"
+  | "forwarded"
+  | "question"
+  | "confirm"
+  | "stuck"
+  | "waiting"
+  // … an assistant's suggestion, handed-out work that failed, a board task,
+  // a session, a reminder that came due.
+  | "proposal"
+  | "failed"
+  | "task"
+  | "session"
+  | "reminder"
+  // Watching: handed-out work (and board tasks, above).
+  | "dispatch"
+  // The rest of the day: a matter with a time.
+  | "item"
+  // Done today.
+  | "finished"
+  | "answered"
+  | "changed"
+
+export interface TodayRow {
+  /** The same thing keeps the same key across reads. */
+  key: string
+  kind: TodayRowKind
+  /** How urgent a wait is, by the owner's levels. */
+  level?: PersonalAgentNewsLevel
+  /** The assistant it is about; `null`: the owner's own session or task. */
+  bot_id: number | null
+  project: { id: number; name: string } | null
+  title: string
+  text: string | null
+  /** ISO 8601: when it began waiting, is due, ended. */
+  at: string
+  /** A task's status, a dispatch's state, what a session waits for
+   *  (`permission` / `question` / `plan`), a matter's `<kind>:<notify|act>`,
+   *  a change's `acted` / `undone`, an answer's request. */
+  state: string | null
+  row_id: number | null
+  dispatch_id: number | null
+  task_id: number | null
+  conversation_id: number | null
+  item_id: number | null
+  notice_id: number | null
+  agent_type: string | null
+  /** The owner can take it back here. */
+  undo: boolean
+}
+
+/** "Today": every assistant's, in four groups. */
+export interface PersonalAgentToday {
+  needs: TodayRow[]
+  watching: TodayRow[]
+  schedule: TodayRow[]
+  done: TodayRow[]
+  day_start: string
+  day_end: string
+  at: string
+  /** The handed-out work rows point at. */
+  dispatches: DispatchInfo[]
+}
+
 /** Whether the owner is in codeg now, as one window's beat leaves it. */
 export interface PersonalAgentPresence {
   present: boolean

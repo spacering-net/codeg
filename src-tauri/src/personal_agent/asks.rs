@@ -1989,6 +1989,62 @@ pub async fn answered_for_owner(
     out
 }
 
+/// A question or plan approval an assistant answered for the owner.
+pub struct AnsweredAsk {
+    pub bot_id: i32,
+    pub ask_id: i32,
+    pub row_id: Option<i32>,
+    pub dispatch_id: i32,
+    /// `question`, `plan` or `plan_permission`.
+    pub request: String,
+    /// What was asked: the questions, or the plan.
+    pub asked: String,
+    /// The answer in a line.
+    pub answer: Option<String>,
+    pub answered_at: DateTime<Utc>,
+}
+
+/// The questions and plan approvals assistants answered for the owner since
+/// `since` (the cards themselves, not their mirrors), oldest first.
+pub async fn answered_for_owner_since(
+    db: &crate::db::AppDatabase,
+    since: DateTime<Utc>,
+) -> Vec<AnsweredAsk> {
+    let mut out = Vec::new();
+    for n in svc::notices_since(&db.conn, NoticeKind::Ask, &[NoticeState::Acted], since)
+        .await
+        .unwrap_or_default()
+    {
+        let Some(card) = AskCard::read(&n.payload) else {
+            continue;
+        };
+        let by_assistant = card
+            .answered_by
+            .as_ref()
+            .and_then(|b| b.get("kind"))
+            .and_then(|k| k.as_str())
+            == Some("assistant");
+        let Some(at) = card.answered_at.filter(|at| *at >= since) else {
+            continue;
+        };
+        if card.mirror_of.is_some() || card.state != "answered" || !by_assistant {
+            continue;
+        }
+        out.push(AnsweredAsk {
+            bot_id: n.bot_id.unwrap_or(card.bot_id),
+            ask_id: n.id,
+            row_id: n.timeline_id,
+            dispatch_id: card.dispatch_id,
+            request: card.request.clone(),
+            asked: card_body(&card),
+            answer: card.answer_text.clone(),
+            answered_at: at,
+        });
+    }
+    out.sort_by_key(|a| a.answered_at);
+    out
+}
+
 /// Why an ask is the owner's, in words for the brain.
 fn forward_words(why: &str) -> &'static str {
     match why {

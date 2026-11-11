@@ -38,7 +38,7 @@ const SHOWN: usize = 12;
 /// The longest a step's object is named in a line.
 const STEP_TARGET_MAX: usize = 80;
 /// A failed dispatch older than this no longer waits on anyone.
-const FAILED_FRESH_DAYS: i64 = 3;
+pub(super) const FAILED_FRESH_DAYS: i64 = 3;
 /// The longest a forge read for `pr_status` may take.
 const PR_READ_SECS: u64 = 25;
 /// How often the usage figures are caught up while nothing runs, and the
@@ -198,12 +198,12 @@ fn wait_phrase(kind: &str, text: &str) -> String {
 // ── what codeg has ──────────────────────────────────────────────────────────
 
 /// Projects by folder id: a worktree is named for its project.
-struct Folders {
+pub(super) struct Folders {
     rows: HashMap<i32, folder::Model>,
 }
 
 impl Folders {
-    async fn load(db: &AppDatabase) -> Self {
+    pub(super) async fn load(db: &AppDatabase) -> Self {
         let rows = folder::Entity::find()
             .all(&db.conn)
             .await
@@ -215,7 +215,7 @@ impl Folders {
     }
 
     /// The project a folder is (or is a worktree of); `None` outside any.
-    fn project(&self, id: i32) -> Option<(i32, String)> {
+    pub(super) fn project(&self, id: i32) -> Option<(i32, String)> {
         let f = self.rows.get(&id)?;
         let f = match f.parent_id {
             Some(p) => self.rows.get(&p).unwrap_or(f),
@@ -249,7 +249,7 @@ async fn assistants(
 }
 
 /// Tasks of the board, live folders only, archived ones left out.
-async fn board(db: &AppDatabase, project: Option<i32>) -> Vec<work_task::Model> {
+pub(super) async fn board(db: &AppDatabase, project: Option<i32>) -> Vec<work_task::Model> {
     let mut q = work_task::Entity::find()
         .filter(work_task::Column::DeletedAt.is_null())
         .filter(work_task::Column::ArchivedAt.is_null())
@@ -267,7 +267,7 @@ async fn board(db: &AppDatabase, project: Option<i32>) -> Vec<work_task::Model> 
 
 /// A task waits on the owner as the sidebar badge counts it: awaiting
 /// input, in review or failed, and not set aside for later.
-fn task_needs_owner(t: &work_task::Model) -> bool {
+pub(super) fn task_needs_owner(t: &work_task::Model) -> bool {
     t.deferred_at.is_none()
         && matches!(
             t.status,
@@ -275,7 +275,7 @@ fn task_needs_owner(t: &work_task::Model) -> bool {
         )
 }
 
-fn task_running(t: &work_task::Model) -> bool {
+pub(super) fn task_running(t: &work_task::Model) -> bool {
     matches!(
         t.status,
         WorkTaskStatus::Preparing | WorkTaskStatus::Running | WorkTaskStatus::Merging
@@ -283,14 +283,18 @@ fn task_running(t: &work_task::Model) -> bool {
 }
 
 /// The dispatches behind tasks and conversations, and whose they are.
-struct Provenance {
+pub(super) struct Provenance {
     by_id: HashMap<i32, dispatch_entity::Model>,
-    by_conversation: HashMap<i32, i32>,
+    pub(super) by_conversation: HashMap<i32, i32>,
     names: HashMap<i32, String>,
 }
 
 impl Provenance {
-    async fn load(db: &AppDatabase, dispatch_ids: &[i32], conversation_ids: &[i32]) -> Self {
+    pub(super) async fn load(
+        db: &AppDatabase,
+        dispatch_ids: &[i32],
+        conversation_ids: &[i32],
+    ) -> Self {
         let mut by_id: HashMap<i32, dispatch_entity::Model> = HashMap::new();
         if !dispatch_ids.is_empty() {
             for d in dispatch_entity::Entity::find()
@@ -343,13 +347,16 @@ impl Provenance {
         self.by(conversation_id.and_then(|c| self.by_conversation.get(&c).copied()))
     }
 
-    fn bot_of(&self, dispatch_id: Option<i32>) -> Option<i32> {
+    pub(super) fn bot_of(&self, dispatch_id: Option<i32>) -> Option<i32> {
         self.by_id.get(&dispatch_id?)?.bot_id
     }
 }
 
 /// The conversations behind sessions, by id.
-async fn conversations(db: &AppDatabase, ids: &[i32]) -> HashMap<i32, conversation::Model> {
+pub(super) async fn conversations(
+    db: &AppDatabase,
+    ids: &[i32],
+) -> HashMap<i32, conversation::Model> {
     if ids.is_empty() {
         return HashMap::new();
     }
@@ -365,7 +372,7 @@ async fn conversations(db: &AppDatabase, ids: &[i32]) -> HashMap<i32, conversati
 
 /// A live session the owner might care about: not an assistant's own
 /// brain, bound to a conversation that still exists.
-fn owners_session(g: &SessionGlance, convs: &HashMap<i32, conversation::Model>) -> bool {
+pub(super) fn owners_session(g: &SessionGlance, convs: &HashMap<i32, conversation::Model>) -> bool {
     !g.personal_agent
         && g.conversation_id
             .and_then(|c| convs.get(&c))

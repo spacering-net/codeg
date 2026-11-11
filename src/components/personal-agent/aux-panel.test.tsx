@@ -92,6 +92,19 @@ vi.mock("@/contexts/workbench-route-context", () => ({
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({ openTab: vi.fn() }),
 }))
+// "Today" has its own tests: here, only where it stands.
+const todayFeed = vi.hoisted(() => ({ active: [] as boolean[] }))
+vi.mock("@/stores/personal-agent-today-store", () => ({
+  useToday: (active = true) => {
+    todayFeed.active.push(active)
+    return null
+  },
+}))
+vi.mock("./today-section", () => ({
+  TodaySection: ({ head }: { head: React.ReactNode }) => (
+    <section data-pa-detail="today">{head}</section>
+  ),
+}))
 // The charts measure their box, which jsdom has none of: their own tests
 // cover them.
 vi.mock("@/components/token-usage/charts", () => ({
@@ -788,6 +801,23 @@ describe("the details' matters", () => {
     fireEvent.click(within(pr).getByRole("button", { name: "Done" }))
     expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 12, "done")
     expect(container.querySelector("[data-pa-group='external']")).toBeTruthy()
+  })
+
+  it("shows Today on the primary, after its status and before its matters", async () => {
+    todayFeed.active = []
+    const { container } = draw()
+    await screen.findByRole("switch")
+    const order = [...container.querySelectorAll("[data-pa-detail]")].map(
+      (el) => el.getAttribute("data-pa-detail")
+    )
+    expect(order.slice(0, 3)).toEqual(["status", "today", "matters"])
+    expect(
+      within(
+        container.querySelector('[data-pa-detail="today"]') as HTMLElement
+      ).getByText("Today")
+    ).toBeTruthy()
+    // Held while the primary's details show.
+    expect(todayFeed.active).toContain(true)
   })
 
   it("ends with the switch to be told and the way to its settings", async () => {

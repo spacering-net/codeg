@@ -342,6 +342,14 @@ pub async fn personal_agent_profile(
     Ok(Json(pa::personal_agent_profile_core(&state.db).await))
 }
 
+pub async fn personal_agent_today(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<crate::personal_agent::today::TodayView>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_today_core(&state.db, &state.connection_manager).await?,
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationPrefsSyncParams {

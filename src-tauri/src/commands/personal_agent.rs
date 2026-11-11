@@ -215,6 +215,15 @@ pub async fn personal_agent_dispatches_core(
                 .await?
         }
     };
+    dispatch_infos(db, rows).await
+}
+
+/// Dispatches as the page shows them: where each stands on the PR ladder,
+/// its task, its folder, how often its assistant answered for the owner.
+async fn dispatch_infos(
+    db: &AppDatabase,
+    rows: Vec<crate::db::entities::personal_agent_dispatch::Model>,
+) -> Result<Vec<DispatchInfo>, AppCommandError> {
     let mut folder_names: HashMap<i32, Option<String>> = HashMap::new();
     let tasks = crate::personal_agent::ladder::tasks_of(db, &rows).await;
     let ids: Vec<i32> = rows.iter().map(|d| d.id).collect();
@@ -604,6 +613,19 @@ pub async fn personal_agent_presence_core(
     beat: crate::personal_agent::presence::Beat,
 ) -> crate::personal_agent::presence::Presence {
     crate::personal_agent::presence::beat(&db.conn, beat).await
+}
+
+/// "Today" (6.3, 1.14): what waits on the owner anywhere in codeg, what the
+/// assistants keep an eye on, the rest of the day, and what was done today —
+/// every assistant's, with the handed-out work the rows point at.
+pub async fn personal_agent_today_core(
+    db: &AppDatabase,
+    manager: &crate::acp::manager::ConnectionManager,
+) -> Result<crate::personal_agent::today::TodayView, AppCommandError> {
+    let (mut view, rows) =
+        crate::personal_agent::today::today(db, manager, crate::personal_agent::clock::now()).await;
+    view.dispatches = dispatch_infos(db, rows).await?;
+    Ok(view)
 }
 
 /// codeg's general notification switch and "hide contents", from the page
@@ -1372,6 +1394,15 @@ pub async fn personal_agent_profile(
     db: State<'_, AppDatabase>,
 ) -> Result<crate::personal_agent::presence::ProfileView, AppCommandError> {
     Ok(personal_agent_profile_core(&db).await)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_today(
+    db: State<'_, AppDatabase>,
+    manager: State<'_, crate::acp::manager::ConnectionManager>,
+) -> Result<crate::personal_agent::today::TodayView, AppCommandError> {
+    personal_agent_today_core(&db, &manager).await
 }
 
 #[cfg(feature = "tauri-runtime")]

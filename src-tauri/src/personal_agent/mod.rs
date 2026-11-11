@@ -48,6 +48,7 @@ pub mod presence;
 pub mod reach;
 pub mod reminders;
 pub mod templates;
+pub mod today;
 pub mod tools;
 pub mod workdir;
 

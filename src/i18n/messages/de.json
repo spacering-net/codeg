@@ -8898,6 +8898,7 @@
       },
       "sections": {
         "status": "Status",
+        "today": "Heute",
         "matters": "Offene Punkte",
         "data": "Daten"
       },
@@ -9062,6 +9063,58 @@
     },
     "notify": {
       "open": "Öffnen"
+    },
+    "today": {
+      "title": "Heute",
+      "empty": "Heute braucht dich nichts",
+      "yours": "Deins",
+      "open": "Öffnen",
+      "undo": "Rückgängig",
+      "more": "{count} weitere anzeigen",
+      "groups": {
+        "needs": "Braucht dich",
+        "watching": "Im Blick",
+        "schedule": "Später heute",
+        "done": "Heute erledigt"
+      },
+      "kind": {
+        "approval": "Braucht deine Freigabe",
+        "forwarded": "Fragt dich",
+        "question": "Fragt dich",
+        "confirm": "Wartet auf deine Bestätigung",
+        "stuck": "Unklar, ob es geklappt hat",
+        "waiting": "Eine Arbeit wartet auf dich",
+        "proposal": "Schlägt vor",
+        "failed": "Fehlgeschlagen",
+        "reminder": "Erinnerung",
+        "finished": "Fertig",
+        "canceled": "Gestoppt",
+        "answered": "Für dich beantwortet",
+        "changed": "Für dich geändert",
+        "undone": "Geändert, dann zurückgenommen"
+      },
+      "session": {
+        "permission": "Wartet auf deine Freigabe",
+        "question": "Fragt dich",
+        "plan": "Wartet auf die Freigabe eines Plans"
+      },
+      "task": {
+        "awaiting_input": "Wartet auf deine Eingabe",
+        "review": "Bereit zur Prüfung",
+        "failed": "Fehlgeschlagen",
+        "preparing": "Wird vorbereitet",
+        "running": "Läuft",
+        "merging": "Wird zusammengeführt"
+      },
+      "dispatch": {
+        "queued": "In der Warteschlange",
+        "running": "Läuft",
+        "waiting_input": "Sein Assistent antwortet"
+      },
+      "item": {
+        "notify": "Erinnerung um {time}",
+        "act": "Erledigt es um {time}"
+      }
     }
   }
 }

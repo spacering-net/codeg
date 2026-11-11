@@ -1026,19 +1026,30 @@ fn need_key(bot: i32, n: &NeedsYou) -> String {
     }
 }
 
+/// The kind of news a need is (its level is the owner's for that kind):
+/// dispatched work waiting in its own session is `waiting`.
+pub fn need_kind(n: &NeedsYou) -> Option<&'static str> {
+    Some(match n.kind.as_str() {
+        "permission" => "approval",
+        "plan" | "question" if n.forwarded => "forwarded",
+        "plan" => "approval",
+        "question" | "choice" => "question",
+        "confirm" | "changed" => "confirm",
+        "uncertain" | "loop" => "stuck",
+        "input" => "waiting",
+        _ => return None,
+    })
+}
+
 /// The news a new need is told as at once; `None`: it is told only once it
 /// has waited (dispatched work's own session said so already).
 fn news_of_need(bot: i32, n: &NeedsYou, key: &str) -> Option<News> {
     let text = n.text.clone();
-    let (kind, what): (&'static str, What) = match n.kind.as_str() {
-        "permission" => ("approval", What::Approval { text }),
-        "plan" if n.forwarded => ("forwarded", What::Waiting { text }),
-        "plan" => ("approval", What::Approval { text }),
-        "question" if n.forwarded => ("forwarded", What::Waiting { text }),
-        "question" | "choice" => ("question", What::Waiting { text }),
-        "confirm" | "changed" => ("confirm", What::Waiting { text }),
-        "uncertain" | "loop" => ("stuck", What::Waiting { text }),
-        _ => return None,
+    let kind = need_kind(n).filter(|k| *k != "waiting")?;
+    let what = if kind == "approval" {
+        What::Approval { text }
+    } else {
+        What::Waiting { text }
     };
     Some(News {
         key: key.to_string(),

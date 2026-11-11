@@ -8898,6 +8898,7 @@
       },
       "sections": {
         "status": "Estado",
+        "today": "Hoy",
         "matters": "Asuntos",
         "data": "Datos"
       },
@@ -9062,6 +9063,58 @@
     },
     "notify": {
       "open": "Abrir"
+    },
+    "today": {
+      "title": "Hoy",
+      "empty": "Hoy no hay nada que te necesite",
+      "yours": "Tuyo",
+      "open": "Abrir",
+      "undo": "Deshacer",
+      "more": "Mostrar {count} más",
+      "groups": {
+        "needs": "Te necesita",
+        "watching": "En seguimiento",
+        "schedule": "Más tarde hoy",
+        "done": "Hecho hoy"
+      },
+      "kind": {
+        "approval": "Necesita tu aprobación",
+        "forwarded": "Te pregunta",
+        "question": "Te pregunta",
+        "confirm": "Espera tu confirmación",
+        "stuck": "No sabe si funcionó",
+        "waiting": "Un trabajo te espera",
+        "proposal": "Sugiere",
+        "failed": "Falló",
+        "reminder": "Recordatorio",
+        "finished": "Terminado",
+        "canceled": "Detenido",
+        "answered": "Respondido en tu nombre",
+        "changed": "Cambiado en tu nombre",
+        "undone": "Cambiado y deshecho"
+      },
+      "session": {
+        "permission": "Espera tu aprobación",
+        "question": "Te pregunta",
+        "plan": "Espera que apruebes un plan"
+      },
+      "task": {
+        "awaiting_input": "Espera tu respuesta",
+        "review": "Listo para revisar",
+        "failed": "Falló",
+        "preparing": "Preparando",
+        "running": "En curso",
+        "merging": "Fusionando"
+      },
+      "dispatch": {
+        "queued": "En cola",
+        "running": "En curso",
+        "waiting_input": "Su asistente está respondiendo"
+      },
+      "item": {
+        "notify": "Recordatorio a las {time}",
+        "act": "Lo hace a las {time}"
+      }
     }
   }
 }

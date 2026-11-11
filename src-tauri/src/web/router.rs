@@ -458,6 +458,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_profile),
         )
         .route(
+            "/personal_agent_today",
+            post(handlers::personal_agent::personal_agent_today),
+        )
+        .route(
             "/notification_prefs_sync",
             post(handlers::personal_agent::notification_prefs_sync),
         )

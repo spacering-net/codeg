@@ -58,6 +58,7 @@ import { useReducedMotion } from "@/hooks/use-chat-motion"
 import { toErrorMessage } from "@/lib/app-error"
 import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { useToday } from "@/stores/personal-agent-today-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { EventCard } from "./event-card"
 import { ExchangeRow } from "./exchange-row"
@@ -176,6 +177,19 @@ function rowIdOf(item: MessageItem): number | null {
  *  not known to have happened, a loop stopped, the opening choice, a change
  *  shown first, a reminder that came due — not a suggestion), an
  *  executor's question forwarded to them. */
+/** The "N items need you" pill: on the primary, what waits on the owner
+ *  anywhere ("Today"'s first group, `todayNeeds`), opening "Today";
+ *  otherwise — or with nothing there — the cards waiting in this
+ *  conversation, scrolled to. `null`: no pill. */
+export function attentionPill(
+  todayNeeds: number,
+  waits: number
+): { count: number; today: boolean } | null {
+  if (todayNeeds > 0) return { count: todayNeeds, today: true }
+  if (waits > 0) return { count: waits, today: false }
+  return null
+}
+
 export function waitsForOwner(row: TimelineRow): boolean {
   const data = row.data
   if (row.kind === "question" || row.kind === "permission") {
@@ -524,6 +538,12 @@ export function MessageList({
   else if (!bottomed && leftAt == null) setLeftAt(lastId)
   const newBelow = leftAt != null && lastId > leftAt
   const waits = useMemo(() => ownerWaitTargets(items), [items])
+  // On the primary the pill counts what waits on the owner anywhere —
+  // "Today"'s first group — and opens "Today" (10.7, 1.14); elsewhere, or
+  // before it is read, the cards here, scrolled to.
+  const today = useToday(botId == null)
+  const pill = attentionPill(today?.needs.length ?? 0, waits.length)
+  const showToday = usePersonalAgentUi((s) => s.showToday)
   // The message right above the "new messages" line is the last before a
   // line, as one above a time line is: it closes its run with a round
   // corner, and shows its actions on hover.
@@ -552,16 +572,20 @@ export function MessageList({
     <>
       <div className="relative flex min-h-0 flex-1 flex-col">
         <Pill
-          shown={waits.length > 0 && scrollReady}
+          shown={pill != null && scrollReady}
           className="top-2"
           onClick={() => {
+            if (pill?.today) {
+              showToday()
+              return
+            }
             const first = waits[0]
             if (first != null) jumpTo(first)
           }}
           data-pa-pill="attention"
         >
           <BellRing className="size-3.5 text-orange-500" aria-hidden />
-          {tp("attention", { count: waits.length })}
+          {tp("attention", { count: pill?.count ?? 0 })}
         </Pill>
         <Pill
           shown={newBelow && scrollReady}

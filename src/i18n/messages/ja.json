@@ -8898,6 +8898,7 @@
       },
       "sections": {
         "status": "状態",
+        "today": "今日",
         "matters": "事項",
         "data": "データ"
       },
@@ -9062,6 +9063,58 @@
     },
     "notify": {
       "open": "開く"
+    },
+    "today": {
+      "title": "今日",
+      "empty": "今日あなたが対応することはありません",
+      "yours": "あなたの",
+      "open": "開く",
+      "undo": "元に戻す",
+      "more": "あと {count} 件を表示",
+      "groups": {
+        "needs": "あなたの対応待ち",
+        "watching": "見守り中",
+        "schedule": "今日の予定",
+        "done": "今日完了"
+      },
+      "kind": {
+        "approval": "承認待ち",
+        "forwarded": "あなたに質問",
+        "question": "あなたに質問",
+        "confirm": "確認待ち",
+        "stuck": "できたか不明",
+        "waiting": "依頼した作業が待っています",
+        "proposal": "提案",
+        "failed": "失敗",
+        "reminder": "リマインダー",
+        "finished": "完了",
+        "canceled": "停止",
+        "answered": "代わりに回答",
+        "changed": "代わりに変更",
+        "undone": "変更後、元に戻した"
+      },
+      "session": {
+        "permission": "承認待ち",
+        "question": "あなたに質問",
+        "plan": "プランの承認待ち"
+      },
+      "task": {
+        "awaiting_input": "入力待ち",
+        "review": "レビュー待ち",
+        "failed": "失敗",
+        "preparing": "準備中",
+        "running": "実行中",
+        "merging": "マージ中"
+      },
+      "dispatch": {
+        "queued": "待機中",
+        "running": "実行中",
+        "waiting_input": "アシスタントが回答中"
+      },
+      "item": {
+        "notify": "{time} にリマインド",
+        "act": "{time} に実行"
+      }
     }
   }
 }

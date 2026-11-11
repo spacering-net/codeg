@@ -9118,3 +9118,224 @@ async fn what_was_held_is_decided_anew_when_its_time_comes() {
     assert_eq!(sent.len(), 1);
     assert!(sent[0].in_page && sent[0].mode == super::reach::Mode::Toast, "{:?}", sent[0]);
 }
+
+// ── 1.14: today ─────────────────────────────────────────────────────────────
+
+use super::today::{TodayRow, TodayView};
+
+async fn today_now(engine: &PersonalAgentEngine) -> TodayView {
+    super::today::today(&engine.db, &engine.manager, super::clock::now()).await.0
+}
+
+fn keys(rows: &[TodayRow]) -> Vec<String> {
+    rows.iter().map(|r| r.key.clone()).collect()
+}
+
+/// 1.14 ① ④: every session in codeg waiting on the owner and every board
+/// task that does, each once, under the assistant it is about — the
+/// owner's own under its project. An assistant's own session is not the
+/// owner's.
+#[tokio::test]
+async fn today_lists_every_session_and_board_task_waiting_on_the_owner_once() {
+    use sea_orm::Set;
+    let (host, w, tmp) = hosted().await;
+    let engine = host.primary();
+    let me = engine.bot().await;
+    let conn = &engine.db.conn;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("my-app").to_string_lossy()).await;
+    let review = board_task(&engine, project, "Fix cold start", WorkTaskStatus::Review, |_| {}).await;
+    task_dispatch(&engine, coder, project, review.id, "Fix cold start", DispatchState::Review).await;
+    let failed = board_task(&engine, project, "Bump deps", WorkTaskStatus::Failed, |t| {
+        t.last_error = Set(Some("tests failed".into()));
+    })
+    .await;
+    let aside = board_task(&engine, project, "Later thing", WorkTaskStatus::Review, |t| {
+        t.deferred_at = Set(Some(chrono::Utc::now()));
+    })
+    .await;
+    let running = board_task(&engine, project, "Refactor parser", WorkTaskStatus::Running, |t| {
+        t.started_at = Set(Some(chrono::Utc::now() - chrono::Duration::minutes(14)));
+    })
+    .await;
+    // The owner's session asks; an assistant's own brain asks too.
+    let owned = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    crate::db::service::conversation_service::update_title(conn, owned, "Explore auth".into()).await.unwrap();
+    waiting_session(&engine, "c-owner", owned, project, "rm -rf build").await;
+    let brain_conv = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::ClaudeCode).await;
+    waiting_session(&engine, "c-brain", brain_conv, project, "cargo test").await;
+    engine.manager.get_state("c-brain").await.unwrap().write().await.personal_agent = true;
+    // The worker asks the owner for an approval.
+    let mut ask = NewRow::new(TimelineKind::Permission, "git push --force");
+    ask.ref_id = Some("p9".into());
+    ask.data = Some(json!({ "state": "pending" }));
+    let ask = svc::insert_row(conn, w, ask).await.unwrap();
+
+    let view = today_now(&engine).await;
+    let needs = &view.needs;
+    assert_eq!(needs.len(), 4, "{needs:#?}");
+    let approval = needs.iter().find(|r| r.kind == "approval").expect("the worker's approval");
+    assert_eq!(
+        (approval.bot_id, approval.level, approval.title.as_str(), approval.row_id),
+        (Some(w), Some(Level::Urgent), "git push --force", Some(ask.id))
+    );
+    let session = needs.iter().find(|r| r.kind == "session").expect("the owner's session");
+    assert_eq!(
+        (session.conversation_id, session.title.as_str(), session.text.as_deref(), session.state.as_deref()),
+        (Some(owned), "Explore auth", Some("rm -rf build"), Some("permission"))
+    );
+    assert_eq!((session.bot_id, session.project.as_ref().map(|p| p.id)), (None, Some(project)));
+    assert_eq!(session.agent_type.as_deref(), Some("codex"));
+    assert!(!needs.iter().any(|r| r.conversation_id == Some(brain_conv)), "an assistant's own session: {needs:#?}");
+    // Urgent first.
+    assert!(needs[..2].iter().all(|r| r.level == Some(Level::Urgent)), "{needs:#?}");
+    let handed = needs.iter().find(|r| r.task_id == Some(review.id)).expect("the handed-out task");
+    assert_eq!((handed.kind, handed.bot_id, handed.state.as_deref()), ("task", Some(me), Some("review")));
+    let own = needs.iter().find(|r| r.task_id == Some(failed.id)).expect("the owner's failed task");
+    assert_eq!((own.bot_id, own.text.as_deref()), (None, Some("tests failed")));
+    assert_eq!(own.project.as_ref().map(|p| p.name.as_str()), Some("my-app"));
+    assert!(!needs.iter().any(|r| r.task_id == Some(aside.id)), "set aside for later");
+    // What runs is watched.
+    assert_eq!(keys(&view.watching), vec![format!("task:{}", running.id)]);
+    assert!(view.schedule.is_empty() && view.done.is_empty());
+    assert!(view.day_start <= view.at && view.at < view.day_end);
+}
+
+/// 1.14 ②: a question the assistant is answering is not in "needs you" —
+/// its work is watched; forwarded to the owner, it is theirs, at its card.
+#[tokio::test]
+async fn a_question_the_assistant_answers_is_not_the_owners_until_it_is_forwarded() {
+    let (engine, _tmp) = configured().await;
+    let me = engine.bot().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-q").await;
+    exec_conn(&engine, "c-q").await;
+    engine.open_round("c-q", id).await;
+    exec_asks(&engine, "c-q", vec![ask_spec("q1", "Approach", &["A", "B"])]).await;
+    let ask_id = ask_cards(&engine).await[0].ask_id;
+    let view = today_now(&engine).await;
+    assert!(view.needs.is_empty(), "{:#?}", view.needs);
+    assert_eq!(keys(&view.watching), vec![format!("dispatch:{id}")]);
+    assert_eq!(view.watching[0].state.as_deref(), Some("waiting_input"));
+
+    let (_seg, _batch) = event_turn(&engine, "pa-q").await;
+    let out = call(&engine, "dispatch_answer", json!({ "ask_id": ask_id, "forward": true, "reason": "Only the owner knows." })).await;
+    assert!(out.ok, "{}", out.text);
+    let view = today_now(&engine).await;
+    assert_eq!(view.needs.len(), 1, "{:#?}", view.needs);
+    let n = &view.needs[0];
+    assert_eq!((n.kind, n.bot_id, n.level, n.dispatch_id), ("forwarded", Some(me), Some(Level::Urgent), Some(id)));
+    assert_eq!((n.title.as_str(), n.text.as_deref()), ("Approach: which one?", Some("Investigate")));
+    let card = svc::ask_rows(&engine.db.conn, me, &["forwarded"]).await.unwrap();
+    assert_eq!(n.row_id, Some(card[0].id));
+    assert!(view.watching.is_empty(), "its card stands for the work: {:#?}", view.watching);
+}
+
+/// 1.14 ③: what was done today — work that finished, a question answered
+/// for the owner, a setting changed for them — and the change taken back
+/// from there.
+#[tokio::test]
+async fn what_was_done_today_is_listed_and_a_change_made_for_the_owner_can_be_taken_back() {
+    let (engine, _tmp) = configured().await;
+    let me = engine.bot().await;
+    let conn = &engine.db.conn;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-a").await;
+    exec_conn(&engine, "c-a").await;
+    engine.open_round("c-a", id).await;
+    exec_asks(&engine, "c-a", vec![ask_spec("q1", "Approach", &["A", "B"])]).await;
+    let ask_id = ask_cards(&engine).await[0].ask_id;
+    let (_seg, _batch) = event_turn(&engine, "pa-a").await;
+    let args = json!({ "ask_id": ask_id, "answers": [{ "question": 1, "choose": ["a"] }], "reason": "The owner said A." });
+    assert!(call(&engine, "dispatch_answer", args).await.ok);
+    let finished = session_dispatch(&engine, DispatchState::Running, "c-f").await;
+    svc::update_dispatch(conn, finished, None, DispatchWrite { state: Some(DispatchState::Completed), ..Default::default() })
+        .await
+        .unwrap();
+    let out = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "reply_length", "value": "short" }],
+        "quote": "keep it short",
+    }))
+    .await;
+    assert!(out.ok, "{}", out.text);
+
+    let view = crate::commands::personal_agent::personal_agent_today_core(&engine.db, &engine.manager)
+        .await
+        .unwrap();
+    let answered = view.done.iter().find(|r| r.kind == "answered").expect("the answer it gave");
+    assert_eq!((answered.bot_id, answered.title.as_str()), (Some(me), "Approach: which one?"));
+    assert!(answered.text.as_deref().is_some_and(|t| t.contains('A')), "{answered:?}");
+    assert!(answered.row_id.is_some() && !answered.undo);
+    let done = view.done.iter().find(|r| r.kind == "finished").expect("the work that finished");
+    assert_eq!(done.dispatch_id, Some(finished));
+    assert!(view.dispatches.iter().any(|d| d.id == finished), "the work comes with its row");
+    let changed = view.done.iter().find(|r| r.kind == "changed").expect("the change");
+    assert_eq!((changed.undo, changed.state.as_deref()), (true, Some("acted")));
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Short);
+
+    engine.act_on_notice(changed.notice_id.unwrap(), "undo").await.unwrap();
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Medium);
+    let view = today_now(&engine).await;
+    let changed = view.done.iter().find(|r| r.kind == "changed").expect("still listed, taken back");
+    assert_eq!((changed.undo, changed.state.as_deref()), (false, Some("undone")));
+
+    // A suggestion waits on the owner; taken, it is a change made for them,
+    // taken back from Today like any.
+    let out = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "reply_length", "value": "long" }], "suggest": true, "reason": "you ask for more",
+    }))
+    .await;
+    assert_eq!(out.data["state"], "open", "{}", out.text);
+    let card = out.data["notice_id"].as_i64().unwrap() as i32;
+    let view = today_now(&engine).await;
+    let suggested = view.needs.iter().find(|r| r.notice_id == Some(card)).expect("the suggestion waits");
+    assert_eq!((suggested.kind, suggested.level), ("proposal", Some(Level::Low)));
+    assert!(!view.done.iter().any(|r| r.notice_id == Some(card)));
+    engine.act_on_notice(card, "accept").await.unwrap();
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Long);
+    let view = today_now(&engine).await;
+    assert!(!view.needs.iter().any(|r| r.notice_id == Some(card)));
+    let taken = view.done.iter().find(|r| r.notice_id == Some(card)).expect("taken: done today");
+    assert_eq!((taken.kind, taken.undo), ("changed", true));
+    engine.act_on_notice(card, "undo").await.unwrap();
+    assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Medium);
+    assert!(!today_now(&engine).await.done.iter().any(|r| r.notice_id == Some(card) && r.undo));
+}
+
+/// 6.3: a reminder that came due today waits on the owner, with its card;
+/// the rest of the day's matters are its schedule; tomorrow's is not today.
+#[tokio::test]
+async fn reminders_due_today_wait_on_the_owner_and_the_rest_of_the_day_is_its_schedule() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let conn = &engine.db.conn;
+    let now = super::clock::now();
+    let (start, end) = super::today::day_of(now, engine.owner_tz().await);
+    let timed = |summary: &'static str, due: chrono::DateTime<chrono::Utc>| {
+        svc::create_item_timed(
+            conn,
+            bot,
+            ItemKind::Reminder,
+            None,
+            ItemStatus::Open,
+            Some(WaitsFor::Time),
+            summary.into(),
+            None,
+            None,
+            svc::ItemTime { due_at: Some(due), at_due: Some("notify".into()), ..Default::default() },
+        )
+    };
+    let came = timed("Stretch", start + (now - start) / 2).await.unwrap();
+    let later = timed("Call the bank", now + (end - now) / 2).await.unwrap();
+    timed("Dentist", end + chrono::Duration::hours(2)).await.unwrap();
+    engine.fire_due_at(now).await;
+
+    let view = today_now(&engine).await;
+    assert_eq!(keys(&view.needs), vec![format!("reminder:{}", came.id)]);
+    let r = &view.needs[0];
+    assert_eq!((r.title.as_str(), r.level, r.item_id), ("Stretch", Some(Level::Urgent), Some(came.id)));
+    assert_eq!(r.row_id, Some(reminder_rows(&engine, came.id).await[0].id));
+    assert_eq!(keys(&view.schedule), vec![format!("item:{}", later.id)]);
+    assert_eq!(view.schedule[0].state.as_deref(), Some("reminder:notify"));
+
+    engine.item_op(came.id, super::reminders::ItemOp::Done).await.unwrap();
+    assert!(today_now(&engine).await.needs.is_empty());
+}
