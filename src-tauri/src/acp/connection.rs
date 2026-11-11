@@ -5921,13 +5921,13 @@ const HERMES_MODE_OPTION_ID: &str = "mode";
 const HERMES_SYNTHESIZED_OPTION_IDS: &[&str] = &[HERMES_MODEL_OPTION_ID, HERMES_MODE_OPTION_ID];
 
 /// Hermes lists its models in the session reply's legacy `models` (verified
-/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7 and 0.23.0): every signed-in provider's
+/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7, 0.23.0 and 0.23.1): every signed-in provider's
 /// models and every named endpoint's (`providers:` in config.yaml, codeg's own
 /// `custom:codeg` among them), with `provider:model` ids —
 /// `openrouter:anthropic/claude-opus-5.5`, `custom:codeg:glm-5.2`. Through
 /// 0.22.2 that is the only place: it sends no `configOptions`, and takes a
 /// switch only as `session/set_model`, its `session/set_config_option` storing
-/// whatever it is sent and answering an empty list. From 0.22.6 (0.23.0 is the
+/// whatever it is sent and answering an empty list. From 0.22.6 (0.23.1 is the
 /// pin) Hermes also sends the same rows, without the provider notes, as a
 /// `model` config option and takes a switch either way; codeg keeps building
 /// its selector from the legacy list and folds Hermes' own option into it
@@ -9724,13 +9724,15 @@ async fn run_connection(
                             if session_notice(&dispatch).is_some() {
                                 continue;
                             }
-                            // Compaction, by contrast, IS history: codex
-                            // 1.13.0 replays each persisted compaction as
-                            // one completed update in its history position,
-                            // which is exactly where the divider belongs.
-                            if let Some(event) = session_compaction_event(&dispatch) {
-                                emit_with_state(&st, &h, event).await;
-                                continue;
+                            // Compaction IS history, which is why it is
+                            // claimed here: see `replayed_compaction`.
+                            match replayed_compaction(&dispatch, hydrate_from_replay) {
+                                ReplayedCompaction::NotCompaction => {}
+                                ReplayedCompaction::Drop => continue,
+                                ReplayedCompaction::Forward(event) => {
+                                    emit_with_state(&st, &h, *event).await;
+                                    continue;
+                                }
                             }
                             let _ = MatchDispatch::new(dispatch)
                                 .if_notification(async |notif: SessionNotification| {
@@ -13560,7 +13562,11 @@ async fn handle_fork_or_exit(
     //     below is redundant there, but not harmful: measured live, fork →
     //     resume → close the parent → prompt the fork works on 2.1.1 and 2.2.1
     //     alike. It stays for the older adapters a PATH or a custom version
-    //     can still resolve.
+    //     can still resolve. On 2.2.0+ the resume also cannot change the
+    //     thread's config: the app-server ignores resume overrides on a loaded
+    //     thread that has a subscriber. So Codex's MCP servers, codeg-mcp
+    //     included, have to ride on the fork itself (#1105, see
+    //     `crate::acp::fork::build_fork_request`).
     //
     // `session/resume` repairs both: claude's `getOrCreateSession` creates the
     // session under the SAME id (`createSession` uses `resume` as the id), and
@@ -14861,7 +14867,8 @@ async fn run_conversation_loop(
     // The connection's MCP servers, the list `session/new` / `load` / `resume`
     // name. Read only by a fork: claude-agent-acp 0.90.0 starts the forked
     // session itself, so the fork has to name the settings the resume that
-    // follows it sends (see `crate::acp::fork::build_fork_request`).
+    // follows it sends, and codex-acp mounts the forked thread's servers from
+    // the fork alone (see `crate::acp::fork::build_fork_request`).
     mcp_servers: &[McpServer],
     // Connection-scoped (created once in `run_connection`, shared across fork
     // restarts of this loop): outgoing prompts are fingerprinted here so the
@@ -17614,9 +17621,11 @@ fn opencode_completion_meta(
 /// - `execute`: the calls the script made ([`CODE_MODE_CALLS_META_KEY`]).
 /// - `shell` (1.x's `bash`): a non-zero exit code ([`EXIT_CODE_META_KEY`]).
 ///   OpenCode completes a command that exited non-zero successfully, with
-///   `Exited with code N` as a second result block
-///   (`core/src/tool/shell/result.ts`), and 1.x never printed it, so this is
-///   the one structured statement of it.
+///   `Exited with code N` (2.2.7: `Exit code: N`) as a second result block
+///   (`core/src/shell/result.ts`), and 1.x never printed it, so this is the
+///   one structured statement of it. A signal (`metadata.signal`, no `exit`)
+///   is not lifted; the frontend reads it from the notice (`Killed by
+///   SIGTERM`, 2.2.7: `Exit code: 143 (SIGTERM)`).
 pub(crate) fn opencode_metadata_meta(
     name: &str,
     metadata: &serde_json::Value,
@@ -25069,6 +25078,39 @@ fn session_notice(dispatch: &Dispatch) -> Option<SessionNotice> {
         title,
         description: air_task_str(update.get("description")),
     })
+}
+
+/// What the `session/load` drain does with one replayed frame, as far as
+/// compaction goes.
+#[derive(Debug)]
+enum ReplayedCompaction {
+    /// Not a `compaction_update`: the drain handles it as before.
+    NotCompaction,
+    /// A compaction the history codeg shows already holds, so it is dropped.
+    Drop,
+    /// A compaction to forward, as the card [`session_compaction_event`] makes.
+    Forward(Box<AcpEvent>),
+}
+
+/// Sorts a replayed frame for the `session/load` drain.
+///
+/// A load replays each persisted compaction as one completed update (codex
+/// 1.13.0, and claude-agent-acp, which from 0.106.0 (#1430) replays every
+/// compaction of the session, not only the last). That is history, and the
+/// history codeg shows comes from elsewhere: the agent's own store, which
+/// every native parser reads compactions from, or codeg's recorded transcript.
+/// Forwarded, each replayed compaction would land in the live message between
+/// turns, where a snapshot taken before the next prompt hands it to a client
+/// as a stray card after the history that already holds it.
+///
+/// Only `hydrating` forwards it: a custom agent whose transcript is being
+/// rebuilt from this replay has no other copy of it.
+fn replayed_compaction(dispatch: &Dispatch, hydrating: bool) -> ReplayedCompaction {
+    match session_compaction_event(dispatch) {
+        None => ReplayedCompaction::NotCompaction,
+        Some(event) if hydrating => ReplayedCompaction::Forward(Box::new(event)),
+        Some(_) => ReplayedCompaction::Drop,
+    }
 }
 
 /// Translate an ACP compaction frame into the `_meta.contextCompaction`
@@ -34725,6 +34767,41 @@ mod tests {
         );
         assert!(session_notice(&other_method).is_none());
         assert!(session_compaction_event(&other_method).is_none());
+    }
+
+    /// A load's replayed compaction is history the shown transcript already
+    /// holds; only a custom agent's hydration, which has no other copy, keeps
+    /// it. Everything else in the replay is left to the drain as before.
+    #[test]
+    fn a_replayed_compaction_is_forwarded_only_while_hydrating() {
+        let compaction = || {
+            async_task_notif(serde_json::json!({
+                "sessionUpdate": "compaction_update",
+                "compactionId": "cmp_1",
+                "status": "completed",
+                "summary": [{"type": "text", "text": "PROBE SUMMARY"}],
+                "_meta": {"jetbrains": {"air": {"version": 1, "contextCompaction": {"version": 1}}}},
+            }))
+        };
+        assert!(matches!(
+            replayed_compaction(&compaction(), false),
+            ReplayedCompaction::Drop
+        ));
+        assert!(matches!(
+            replayed_compaction(&compaction(), true),
+            ReplayedCompaction::Forward(ref event)
+                if matches!(**event, AcpEvent::ToolCallUpdate { ref tool_call_id, .. } if tool_call_id == "cmp_1")
+        ));
+        let chunk = async_task_notif(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "hi"},
+        }));
+        for hydrating in [false, true] {
+            assert!(matches!(
+                replayed_compaction(&chunk, hydrating),
+                ReplayedCompaction::NotCompaction
+            ));
+        }
     }
 
     /// The whole point of the translation: claude's reserved `_meta` block is
@@ -48905,12 +48982,41 @@ mod tests {
         );
     }
 
-    /// Every other agent's fork stays bare: the resume that follows mounts the
-    /// servers, and naming them on the fork too would start them twice.
+    /// Codex's fork names the servers its resume names (#1105): codex-acp
+    /// mounts the forked thread's MCP servers from the fork request alone, and
+    /// the resume of that still-subscribed thread cannot add any, so a bare
+    /// fork lost codeg-mcp for the rest of the session.
     #[tokio::test]
-    async fn a_codex_fork_leaves_the_servers_to_its_resume() {
+    async fn a_codex_fork_names_the_servers_its_resume_names() {
         let mut fork = ForkTransition::start_with(
             AgentType::Codex,
+            fork_test_servers(),
+            "child",
+            true,
+            CloseAnswer::Closed,
+        )
+        .await;
+        fork.fork().await;
+        fork.until(
+            "the child's start",
+            |e| matches!(e, AcpEvent::SessionStarted { session_id } if session_id == "child"),
+        )
+        .await;
+        let forks = fork.forks.lock().unwrap().clone();
+        let resumes = fork.resumes.lock().unwrap().clone();
+        assert_eq!((forks.len(), resumes.len()), (1, 1));
+        assert_eq!(forks[0]["mcpServers"][0]["name"], "codeg-mcp");
+        assert_eq!(forks[0]["mcpServers"], resumes[0]["mcpServers"]);
+        assert!(forks[0].get("_meta").is_none());
+        fork.shutdown().await;
+    }
+
+    /// An agent whose resume mounts the servers keeps a bare fork: naming them
+    /// on the fork too would start them twice.
+    #[tokio::test]
+    async fn a_deepseek_fork_leaves_the_servers_to_its_resume() {
+        let mut fork = ForkTransition::start_with(
+            AgentType::DeepSeek,
             fork_test_servers(),
             "child",
             true,

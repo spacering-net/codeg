@@ -6,7 +6,8 @@
  *    `opencode.db`), which codeg reads and writes only through OpenCode
  *    (`opencodeListIntegrations` / `opencodeConnectKey` /
  *    `opencodeDisconnectProvider`); no secret ever reaches the frontend.
- *    `auth.json` is read once, when OpenCode 2 first upgrades a 1.x database.
+ *    `auth.json` is read only when OpenCode 2 creates its database: when it
+ *    upgrades a 1.x one, and since 2.2.7 when it starts a fresh one.
  *  - its **definition** lives in the config file under `providers.<id>`:
  *    `name`, `package` (an AI SDK package as `aisdk:<npm>`, or a native
  *    `@opencode/ai/…` entry point), `settings` (`baseURL`, …), `models`.
