@@ -93,6 +93,14 @@ impl SubsessionMessageOutcome {
 
 #[async_trait]
 pub trait SubsessionMessageAccess: Send + Sync {
+    async fn send_to_parent(
+        &self,
+        _child: i32,
+        _message: String,
+    ) -> super::parent_replies::ParentReplyOutcome {
+        super::parent_replies::ParentReplyOutcome::refused("Parent messaging is unavailable")
+    }
+
     async fn request(
         &self,
         parent_connection_id: &str,
@@ -120,6 +128,25 @@ pub struct SubsessionTurn {
     pub id: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SubsessionStartError {
+    #[error("turn already in progress")]
+    Busy,
+    #[error("{0}")]
+    Failed(String),
+}
+
+impl From<String> for SubsessionStartError {
+    fn from(error: String) -> Self {
+        Self::Failed(error)
+    }
+}
+impl From<&str> for SubsessionStartError {
+    fn from(error: &str) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SubsessionTurnResult {
     pub status: String,
@@ -143,7 +170,7 @@ pub trait SubsessionRuntime: Send + Sync {
         parent: i32,
         child: i32,
         message: String,
-    ) -> Result<SubsessionTurn, String>;
+    ) -> Result<SubsessionTurn, SubsessionStartError>;
     async fn steer(&self, child: i32, message: String) -> Result<bool, String>;
     async fn interrupt(&self, child: i32) -> Result<(), String>;
     async fn wait(&self, turn: SubsessionTurn) -> Result<SubsessionTurnResult, String>;
@@ -157,6 +184,7 @@ struct Worker {
 
 #[derive(Clone)]
 pub struct SubsessionMessages {
+    parent_replies: Option<Arc<super::parent_replies::ParentReplies>>,
     db: Arc<AppDatabase>,
     runtime: Arc<dyn SubsessionRuntime>,
     workers: Arc<Mutex<HashMap<i32, Worker>>>,
@@ -166,11 +194,20 @@ pub struct SubsessionMessages {
 impl SubsessionMessages {
     pub fn with_runtime(db: Arc<AppDatabase>, runtime: Arc<dyn SubsessionRuntime>) -> Self {
         Self {
+            parent_replies: None,
             db,
             runtime,
             workers: Arc::new(Mutex::new(HashMap::new())),
             pending_results: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn with_parent_replies(
+        mut self,
+        replies: Arc<super::parent_replies::ParentReplies>,
+    ) -> Self {
+        self.parent_replies = Some(replies);
+        self
     }
 
     async fn wake_worker(&self, owner: &str, parent: i32, child: i32) {
@@ -303,7 +340,13 @@ impl SubsessionMessages {
                     Box::pin(async move { runtime.wait(turn).await }),
                 )))
             }
-            Err(error) => {
+            Err(SubsessionStartError::Busy) => {
+                messages::release_claim(&self.db.conn, id)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(None)
+            }
+            Err(SubsessionStartError::Failed(error)) => {
                 self.finish(id, Err(error)).await?;
                 Ok(None)
             }
@@ -496,6 +539,19 @@ impl SubsessionMessages {
 
 #[async_trait]
 impl SubsessionMessageAccess for SubsessionMessages {
+    async fn send_to_parent(
+        &self,
+        child: i32,
+        message: String,
+    ) -> super::parent_replies::ParentReplyOutcome {
+        match &self.parent_replies {
+            Some(replies) => replies.send(child, message).await,
+            None => super::parent_replies::ParentReplyOutcome::refused(
+                "Parent messaging is unavailable",
+            ),
+        }
+    }
+
     async fn request(
         &self,
         owner: &str,
@@ -616,6 +672,7 @@ mod tests {
         prepare_gate: Mutex<Option<oneshot::Receiver<Result<(), String>>>>,
         prepare_block_at: AtomicU64,
         prepare_entered: Notify,
+        start_busy_once: std::sync::atomic::AtomicBool,
     }
 
     impl FakeRuntime {
@@ -667,10 +724,13 @@ mod tests {
             _: i32,
             _: i32,
             message: String,
-        ) -> Result<SubsessionTurn, String> {
+        ) -> Result<SubsessionTurn, SubsessionStartError> {
+            if self.start_busy_once.swap(false, Ordering::AcqRel) {
+                return Err(SubsessionStartError::Busy);
+            }
             let mut busy = self.busy.lock().await;
             if *busy {
-                return Err("already running".into());
+                return Err(SubsessionStartError::Busy);
             }
             *busy = true;
             let (tx, rx) = oneshot::channel();
@@ -758,6 +818,37 @@ mod tests {
         })
         .await
         .expect("message reached expected status");
+    }
+
+    #[tokio::test]
+    async fn a_competing_parent_report_does_not_fail_an_unsent_child_prompt() {
+        let (service, runtime, parent, child) = setup(false, false).await;
+        runtime.start_busy_once.store(true, Ordering::Release);
+        let outcome = service
+            .request(
+                "parent",
+                parent,
+                request(
+                    child,
+                    SubsessionMessageAction::Send,
+                    Some("keep this prompt"),
+                    None,
+                    SubsessionDelivery::Queue,
+                ),
+            )
+            .await;
+        assert!(outcome.accepted);
+        let id = &outcome.messages[0].message_id;
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while runtime.sent.lock().await.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*runtime.sent.lock().await, ["keep this prompt"]);
+        runtime.complete("completed").await;
+        wait_for_status(&service, parent, child, id, "completed").await;
     }
 
     #[tokio::test]

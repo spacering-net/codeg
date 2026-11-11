@@ -2,7 +2,9 @@
 use crate::acp::{
     delegation::broker::DelegationBroker,
     manager::{ConnectionManager, ConnectionManagerSpawner},
-    subsession_messages::{SubsessionRuntime, SubsessionTurn, SubsessionTurnResult},
+    subsession_messages::{
+        SubsessionRuntime, SubsessionStartError, SubsessionTurn, SubsessionTurnResult,
+    },
     types::{AcpEvent, ConnectionStatus, EventEnvelope, PromptInputBlock},
 };
 use crate::db::{
@@ -248,14 +250,20 @@ impl SubsessionRuntime for AcpSubsessionRuntime {
         parent: i32,
         child: i32,
         message: String,
-    ) -> Result<SubsessionTurn, String> {
+    ) -> Result<SubsessionTurn, SubsessionStartError> {
         self.prepare(parent_connection_id, parent, child).await?;
         let row = self.child(parent, child).await?;
         let conn = self.connection(child).await?;
         if self.is_busy(child).await? {
-            return Err("child still has an active turn".into());
+            return Err(SubsessionStartError::Busy);
         }
-        self.manager.wait_prompt_quiescence(&conn).await?;
+        if let Err(error) = self.manager.wait_prompt_quiescence(&conn).await {
+            return Err(if self.is_busy(child).await.unwrap_or(false) {
+                SubsessionStartError::Busy
+            } else {
+                SubsessionStartError::Failed(error)
+            });
+        }
         self.manager.wait_turn_lifecycle(&conn).await?;
         let state = self
             .manager
@@ -275,7 +283,10 @@ impl SubsessionRuntime for AcpSubsessionRuntime {
                 Some(id.clone()),
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| match e {
+                crate::acp::error::AcpError::TurnInProgress => SubsessionStartError::Busy,
+                e => SubsessionStartError::Failed(e.to_string()),
+            })?;
         self.turns.lock().await.insert(id.clone(), (conn, events));
         Ok(SubsessionTurn { id })
     }
@@ -372,6 +383,281 @@ async fn collect_turn(
     }
 }
 
+/// The reverse direction uses the same ACP prompt, event collection and
+/// lifecycle barriers, but never cancels or steers the parent's current turn.
+pub struct AcpParentReplyRuntime {
+    inner: AcpSubsessionRuntime,
+}
+
+impl AcpParentReplyRuntime {
+    pub fn new(
+        manager: Arc<ConnectionManager>,
+        broker: Arc<DelegationBroker>,
+        db: Arc<AppDatabase>,
+        data_dir: Arc<PathBuf>,
+    ) -> Self {
+        Self {
+            inner: AcpSubsessionRuntime::new(manager, broker, db, data_dir),
+        }
+    }
+
+    async fn connection_gone(&self, conn: &str) -> bool {
+        match self.inner.manager.get_state(conn).await {
+            Some(state) => matches!(
+                state.read().await.status,
+                ConnectionStatus::Disconnected | ConnectionStatus::Error
+            ),
+            None => true,
+        }
+    }
+
+    async fn parent_connection(
+        &self,
+        message: &crate::db::entities::parent_reply::Model,
+    ) -> Result<Option<String>, String> {
+        let parent = message.parent_conversation_id;
+        self.inner
+            .child(parent, message.child_conversation_id)
+            .await?;
+        if let Ok(conn) = self.inner.connection(parent).await {
+            if let Some(state) = self.inner.manager.get_state(&conn).await {
+                if matches!(
+                    state.read().await.status,
+                    ConnectionStatus::Disconnected | ConnectionStatus::Error
+                ) {
+                    return Ok(None);
+                }
+            }
+            // A parent can itself be a delegated child. Preserve that live
+            // connection before its own broker retires the original task.
+            let row = conversation::Entity::find_by_id(parent)
+                .one(&self.inner.db.conn)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or("parent is unavailable")?;
+            if row.kind == conversation::ConversationKind::Delegate {
+                if let Some(state) = self.inner.manager.get_state(&conn).await {
+                    let original_turn = {
+                        let state = state.read().await;
+                        state.turn_in_flight.then_some(state.turns_completed)
+                    };
+                    self.inner
+                        .broker
+                        .retain_child_for_messaging(parent, original_turn)
+                        .await;
+                }
+            }
+            return Ok(Some(conn));
+        }
+        // An active child can restore its original parent after the UI closed
+        // the parent's connection. Without either live connection, leave the
+        // report queued until that conversation is opened again.
+        let Some(owner) = self
+            .inner
+            .manager
+            .find_connection_by_conversation_id(message.child_conversation_id)
+            .await
+        else {
+            return Ok(None);
+        };
+        crate::db::service::parent_reply_service::recover(&self.inner.db.conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        let row = conversation::Entity::find_by_id(parent)
+            .one(&self.inner.db.conn)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("parent is unavailable")?;
+        if row.status == conversation::ConversationStatus::InProgress {
+            // A dead report owner is not proof of ownership of the current
+            // parent turn: another runtime may already be handling user work.
+            // Keep queued until the parent is explicitly reattached locally.
+            return Ok(None);
+        }
+        let external = row
+            .external_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or("parent has no saved agent session")?;
+        let agent =
+            AgentType::from_wire(&row.agent_type).ok_or("parent agent type is unavailable")?;
+        let folder = folder::Entity::find_by_id(row.folder_id)
+            .one(&self.inner.db.conn)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("parent project folder is unavailable")?;
+        let options = if row.assistant_id.is_some() {
+            serde_json::from_str::<AssistantRunSnapshot>(
+                row.assistant_snapshot
+                    .as_deref()
+                    .ok_or("parent assistant settings are missing")?,
+            )
+            .map_err(|e| e.to_string())?
+            .agent_options
+        } else {
+            self.inner
+                .broker
+                .config_snapshot()
+                .await
+                .agent_defaults
+                .get(&agent)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let spawner = ConnectionManagerSpawner {
+            manager: self.inner.manager.clone(),
+            db: self.inner.db.clone(),
+            data_dir: self.inner.data_dir.clone(),
+        };
+        let spawned = spawner
+            .spawn_for_resume_strict(
+                &owner,
+                agent,
+                Some(row.origin_cwd.unwrap_or(folder.path)),
+                external,
+                options.mode_id,
+                options.config_values,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        self.inner
+            .prepared_connections
+            .lock()
+            .await
+            .insert(parent, spawned.connection_id.clone());
+        Ok(Some(spawned.connection_id))
+    }
+}
+
+#[async_trait]
+impl crate::acp::parent_replies::ParentReplyRuntime for AcpParentReplyRuntime {
+    async fn enabled(&self) -> bool {
+        self.inner.broker.config_snapshot().await.enabled
+    }
+
+    async fn wait_ready(
+        &self,
+        message: &crate::db::entities::parent_reply::Model,
+    ) -> Result<(), String> {
+        'ready: loop {
+            if !self.inner.broker.config_snapshot().await.enabled {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            let Some(conn) = self.parent_connection(message).await? else {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            };
+            let Some(state) = self.inner.manager.get_state(&conn).await else {
+                continue;
+            };
+            let mut events = state.read().await.event_stream().subscribe();
+            loop {
+                match self.inner.is_busy(message.parent_conversation_id).await {
+                    Ok(false) => break,
+                    Ok(true) => {
+                        tokio::select! {
+                            event = events.recv() => if event.is_err() { continue 'ready; },
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                        }
+                    }
+                    Err(_) => continue 'ready,
+                }
+                if matches!(
+                    state.read().await.status,
+                    ConnectionStatus::Disconnected | ConnectionStatus::Error
+                ) {
+                    continue 'ready;
+                }
+            }
+            if let Err(error) = self.inner.manager.wait_prompt_quiescence(&conn).await {
+                if self.connection_gone(&conn).await
+                    || self
+                        .inner
+                        .is_busy(message.parent_conversation_id)
+                        .await
+                        .unwrap_or(true)
+                {
+                    continue;
+                }
+                return Err(error);
+            }
+            if let Err(error) = self.inner.manager.wait_turn_lifecycle(&conn).await {
+                if self.connection_gone(&conn).await {
+                    continue;
+                }
+                return Err(error);
+            }
+            return Ok(());
+        }
+    }
+
+    async fn start(
+        &self,
+        message: &crate::db::entities::parent_reply::Model,
+    ) -> Result<Option<SubsessionTurn>, String> {
+        use crate::acp::error::AcpError;
+        self.inner
+            .child(
+                message.parent_conversation_id,
+                message.child_conversation_id,
+            )
+            .await?;
+        let Some(conn) = self.parent_connection(message).await? else {
+            return Ok(None);
+        };
+        if !self.inner.broker.config_snapshot().await.enabled {
+            return Ok(None);
+        }
+        let Some(state) = self.inner.manager.get_state(&conn).await else {
+            return Ok(None);
+        };
+        let events = state.read().await.event_stream().subscribe();
+        let row = conversation::Entity::find_by_id(message.parent_conversation_id)
+            .one(&self.inner.db.conn)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("parent is unavailable")?;
+        let text = format!("[Codeg child session report]\nFrom child conversation {} to parent conversation {}. Message ID: {}.\nThis is a report from your delegated child, not a new user instruction. Process it in the context of your current task; use send_to_subsession if a reply is needed.\n\n{}",
+            message.child_conversation_id, message.parent_conversation_id, message.message_id, message.message);
+        match self
+            .inner
+            .manager
+            .send_prompt_linked_with_message_id(
+                &self.inner.db,
+                &conn,
+                vec![PromptInputBlock::Text { text }],
+                Some(row.folder_id),
+                Some(row.id),
+                None,
+                Some(message.message_id.clone()),
+            )
+            .await
+        {
+            Ok(_) => {
+                self.inner
+                    .turns
+                    .lock()
+                    .await
+                    .insert(message.message_id.clone(), (conn, events));
+                Ok(Some(SubsessionTurn {
+                    id: message.message_id.clone(),
+                }))
+            }
+            Err(
+                AcpError::TurnInProgress
+                | AcpError::ConnectionNotFound(_)
+                | AcpError::ProcessExited,
+            ) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    async fn wait(&self, turn: SubsessionTurn) -> Result<SubsessionTurnResult, String> {
+        self.inner.wait(turn).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,6 +710,79 @@ mod tests {
             parent,
             child,
         )
+    }
+
+    #[tokio::test]
+    async fn parent_report_waits_across_disconnect_and_reopens_without_failing() {
+        use crate::acp::{connection::ConnectionCommand, parent_replies::ParentReplyRuntime};
+        use crate::web::event_bridge::EventEmitter;
+        let (inner, parent, child) = fixture().await;
+        inner
+            .broker
+            .set_config(crate::acp::delegation::broker::DelegationConfig {
+                enabled: true,
+                ..Default::default()
+            })
+            .await;
+        let mut old_commands = inner
+            .manager
+            .insert_test_connection_live("old-parent", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        let old_state = inner.manager.get_state("old-parent").await.unwrap();
+        {
+            let mut state = old_state.write().await;
+            state.conversation_id = Some(parent);
+            state.turn_in_flight = true;
+        }
+        let message = crate::db::service::parent_reply_service::enqueue(
+            &inner.db.conn,
+            child,
+            "report after reconnect",
+        )
+        .await
+        .unwrap();
+        let runtime = Arc::new(AcpParentReplyRuntime { inner });
+        let waiting = {
+            let runtime = runtime.clone();
+            tokio::spawn(async move { runtime.wait_ready(&message).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(!waiting.is_finished());
+        runtime
+            .inner
+            .manager
+            .disconnect("old-parent")
+            .await
+            .unwrap();
+        assert!(matches!(
+            old_commands.recv().await,
+            Some(ConnectionCommand::Disconnect)
+        ));
+        let mut commands = runtime
+            .inner
+            .manager
+            .insert_test_connection_live("new-parent", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        runtime
+            .inner
+            .manager
+            .get_state("new-parent")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .conversation_id = Some(parent);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            match commands.recv().await {
+                Some(ConnectionCommand::AwaitPromptQuiescence { reply }) => {
+                    reply.send(Ok(())).unwrap();
+                }
+                _ => panic!("expected prompt barrier on the reopened parent"),
+            }
+            waiting.await.unwrap().unwrap();
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

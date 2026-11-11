@@ -162,6 +162,12 @@ pub struct BrokerSubsessionMessageRequest {
     pub input: SubsessionMessageRequest,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerParentReplyRequest {
+    pub token: String,
+    pub message: String,
+}
+
 /// Pull the pending live-feedback notes for the parent session. Backs the
 /// `check_user_feedback` MCP tool. Authenticated by the same per-launch
 /// `token`; the listener resolves the parent connection from it and scopes the
@@ -451,6 +457,7 @@ pub enum BrokerMessage {
     CancelTask(BrokerCancelTaskRequest),
     ResumeTask(BrokerResumeTaskRequest),
     SubsessionMessage(BrokerSubsessionMessageRequest),
+    ParentReply(BrokerParentReplyRequest),
     Feedback(BrokerFeedbackRequest),
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
@@ -953,6 +960,13 @@ pub async fn client_subsession_message_round_trip(
     req: &BrokerSubsessionMessageRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::SubsessionMessage(req.clone())).await
+}
+
+pub async fn client_parent_reply_round_trip(
+    socket_path: &str,
+    req: &BrokerParentReplyRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ParentReply(req.clone())).await
 }
 
 /// Total budget for `open()` retries on Windows named pipes. Has to be

@@ -52,6 +52,7 @@ export const CODEG_MCP_WORKBENCH_TOOLS = [
 
 /** Child-message tools keep the generic tool renderer and their full JSON result. */
 export const CODEG_MCP_SUBSESSION_TOOLS = [
+  "send_to_parent",
   "send_to_subsession",
   "manage_subsession_messages",
 ] as const

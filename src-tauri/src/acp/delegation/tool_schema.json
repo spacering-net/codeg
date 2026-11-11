@@ -1394,12 +1394,34 @@
     }
   },
   {
+    "name": "send_to_parent",
+    "description": "Proactively report progress, a question, or a result to the parent that delegated this session. Only delegated child sessions can use this tool. The parent is inferred from your authenticated session; do not supply any conversation ID. Returns immediately with a durable queued message, so neither side waits for the other. If the parent is busy, the report waits until its current turn finishes; if idle, it automatically starts a new turn in the SAME parent session. The parent's reply is not returned by this tool: the parent can answer with send_to_subsession. This is an explicit report, not automatic forwarding of every child response. Avoid acknowledgment loops: report when there is useful information or a request for input.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32000,
+          "description": "Report content. Codeg labels it with your child conversation ID."
+        }
+      }
+    }
+  },
+  {
     "name": "send_to_subsession",
     "description": "Send a new message to an existing child conversation in the same child context, agent, and working directory. Returns message_id and per-message state/result. delivery defaults to queue: wait until the current round completes. Explicit immediate uses native steering when available; otherwise cancel the current round, wait for it to finish, then send in the same context. Read subsequent state/results with manage_subsession_messages.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["child_conversation_id", "message"],
+      "required": [
+        "child_conversation_id",
+        "message"
+      ],
       "properties": {
         "child_conversation_id": {
           "type": "integer",
@@ -1413,7 +1435,10 @@
         },
         "delivery": {
           "type": "string",
-          "enum": ["queue", "immediate"],
+          "enum": [
+            "queue",
+            "immediate"
+          ],
           "default": "queue"
         }
       }
@@ -1425,7 +1450,10 @@
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["child_conversation_id", "action"],
+      "required": [
+        "child_conversation_id",
+        "action"
+      ],
       "properties": {
         "child_conversation_id": {
           "type": "integer",
@@ -1434,7 +1462,11 @@
         },
         "action": {
           "type": "string",
-          "enum": ["list", "update", "cancel"]
+          "enum": [
+            "list",
+            "update",
+            "cancel"
+          ]
         },
         "message_id": {
           "type": "string",
@@ -1452,12 +1484,17 @@
           "if": {
             "properties": {
               "action": {
-                "enum": ["update", "cancel"]
+                "enum": [
+                  "update",
+                  "cancel"
+                ]
               }
             }
           },
           "then": {
-            "required": ["message_id"]
+            "required": [
+              "message_id"
+            ]
           }
         },
         {
@@ -1469,7 +1506,9 @@
             }
           },
           "then": {
-            "required": ["message"]
+            "required": [
+              "message"
+            ]
           }
         }
       ]

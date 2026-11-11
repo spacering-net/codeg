@@ -147,7 +147,8 @@ describe("parseCodegMcpToolCall: work-task report acks", () => {
 })
 
 describe("child message tool names", () => {
-  it("recognizes both tools without treating delegation tools as message tools", () => {
+  it("recognizes both directions without treating delegation tools as message tools", () => {
+    expect(isCodegMcpSubsessionTool("send_to_parent")).toBe(true)
     expect(isCodegMcpSubsessionTool("send_to_subsession")).toBe(true)
     expect(isCodegMcpSubsessionTool(" MANAGE_SUBSESSION_MESSAGES ")).toBe(true)
     expect(isCodegMcpSubsessionTool("delegate_to_agent")).toBe(false)

@@ -60,6 +60,7 @@ pub mod session_title;
 pub mod session_state;
 pub mod subsession_messages;
 pub mod subsession_runtime;
+pub mod parent_replies;
 pub mod stderr_tail;
 pub mod temp_reclaim;
 pub mod terminal_runtime;

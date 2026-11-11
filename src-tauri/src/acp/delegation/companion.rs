@@ -323,7 +323,8 @@ impl CompanionFeatures {
             | "cancel_delegation"
             | "resume_delegation"
             | "send_to_subsession"
-            | "manage_subsession_messages" => self.delegation,
+            | "manage_subsession_messages"
+            | "send_to_parent" => self.delegation,
             _ => false,
         }
     }
@@ -1078,6 +1079,46 @@ async fn build_tools_call_spawn(
             )
             .await
         }
+        "send_to_parent" => {
+            let args = match arguments.as_object() {
+                Some(args) => args,
+                None => return LineAction::Respond(err(id, -32602, "arguments must be an object")),
+            };
+            if args.keys().any(|key| key != "message") {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "send_to_parent accepts only message; the parent is resolved from your session",
+                ));
+            }
+            let message = match args.get("message").and_then(Value::as_str) {
+                Some(text) if !text.trim().is_empty() && text.chars().count() <= 32_000 => {
+                    text.to_string()
+                }
+                _ => {
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        "message must contain 1 to 32000 characters",
+                    ))
+                }
+            };
+            let req = super::transport::BrokerParentReplyRequest {
+                token: ctx.token.clone(),
+                message,
+            };
+            let round_trip = Box::pin(async move {
+                super::transport::client_parent_reply_round_trip(&socket, &req).await
+            });
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_subsession_message_result,
+            )
+            .await
+        }
         "check_user_feedback" => {
             let req = BrokerFeedbackRequest {
                 token: ctx.token.clone(),
@@ -1173,7 +1214,14 @@ async fn build_tools_call_spawn(
             // activity strip, so a canceled call cannot read a page invisibly.
             let round_trip =
                 Box::pin(async move { client_browser_snapshot_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_browser_snapshot_result).await
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_browser_snapshot_result,
+            )
+            .await
         }
         "browser_click" | "browser_hover" | "browser_type" | "browser_press_key"
         | "browser_select_option" => {
@@ -1210,7 +1258,14 @@ async fn build_tools_call_spawn(
             // strip line are in there, as for the snapshot.
             let round_trip =
                 Box::pin(async move { client_browser_console_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_browser_console_result).await
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_browser_console_result,
+            )
+            .await
         }
         "browser_screenshot" => {
             let (tab_id, request) = match browser_capture_request(&arguments) {
@@ -1226,7 +1281,14 @@ async fn build_tools_call_spawn(
             // the codeg side, which is what leaves the line on the strip.
             let round_trip =
                 Box::pin(async move { client_browser_capture_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_browser_capture_result).await
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_browser_capture_result,
+            )
+            .await
         }
         "browser_eval" => {
             let (tab_id, request) = match browser_eval_request(&arguments) {
@@ -1325,8 +1387,14 @@ async fn build_tools_call_spawn(
             };
             let round_trip =
                 Box::pin(async move { client_computer_windows_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_computer_windows_result)
-                .await
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_computer_windows_result,
+            )
+            .await
         }
         "computer_screenshot" => {
             let (target_id, max_dimension) = match computer_capture_request(&arguments) {
@@ -1342,8 +1410,14 @@ async fn build_tools_call_spawn(
             // on the codeg side, which is what writes the activity line.
             let round_trip =
                 Box::pin(async move { client_computer_capture_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_computer_capture_result)
-                .await
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_computer_capture_result,
+            )
+            .await
         }
         "computer_snapshot" => {
             let (target_id, request) = match computer_snapshot_request(&arguments) {
@@ -1357,8 +1431,14 @@ async fn build_tools_call_spawn(
             };
             let round_trip =
                 Box::pin(async move { client_computer_snapshot_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_computer_snapshot_result)
-                .await
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_computer_snapshot_result,
+            )
+            .await
         }
         "computer_verify" => {
             let (target_id, request) = match computer_verify_request(&arguments) {
@@ -2502,12 +2582,10 @@ pub fn browser_console_query(
         // The schema says at least one; "zero lines" is not a number of lines
         // to ask for, and quietly reading it as the default would be doing
         // something other than what was asked.
-        Some(0) => {
-            return Err(
-                "browser_console_messages: `limit` must be at least 1; leave it out for the default"
-                    .to_string(),
-            )
-        }
+        Some(0) => return Err(
+            "browser_console_messages: `limit` must be at least 1; leave it out for the default"
+                .to_string(),
+        ),
         Some(n) => Some(usize::try_from(n).unwrap_or(usize::MAX)),
     };
     let min_level = match arguments.get("minLevel").or_else(|| arguments.get("min_level")) {
@@ -2566,19 +2644,18 @@ pub fn browser_capture_request(
             )),
         }
     };
-    let (generation, target) = match (text("generation")?, text("ref")?) {
-        (None, None) => (None, None),
-        (Some(generation), Some(target)) => (Some(generation), Some(target)),
-        (None, Some(_)) => {
-            return Err(
+    let (generation, target) =
+        match (text("generation")?, text("ref")?) {
+            (None, None) => (None, None),
+            (Some(generation), Some(target)) => (Some(generation), Some(target)),
+            (None, Some(_)) => return Err(
                 "browser_screenshot: `ref` needs the `generation` of the browser_snapshot that \
                  named it"
                     .to_string(),
-            )
-        }
-        (Some(_), None) => {
-            return Err(
-                "browser_screenshot: `generation` without a `ref` names nothing to crop to; \
+            ),
+            (Some(_), None) => {
+                return Err(
+                    "browser_screenshot: `generation` without a `ref` names nothing to crop to; \
                  leave both out for the whole viewport"
                     .to_string(),
             )
@@ -2588,7 +2665,11 @@ pub fn browser_capture_request(
         None | Some(Value::Null) => None,
         Some(v) => Some(
             v.as_u64()
-                .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0 && *f > 0.0).map(|f| f as u64))
+                .or_else(|| {
+                    v.as_f64()
+                        .filter(|f| f.fract() == 0.0 && *f > 0.0)
+                        .map(|f| f as u64)
+                })
                 .filter(|n| *n > 0)
                 .and_then(|n| u32::try_from(n).ok())
                 .ok_or_else(|| {
@@ -2672,7 +2753,9 @@ pub fn browser_tab_op(
         match arguments.get(key) {
             Some(Value::String(s)) if !s.trim().is_empty() => Ok(s.trim().to_string()),
             _ => Err(match key {
-                "tabId" => format!("{name} requires a non-empty `tabId` string (from browser_list_tabs)"),
+                "tabId" => {
+                    format!("{name} requires a non-empty `tabId` string (from browser_list_tabs)")
+                }
                 _ => format!("{name} requires a non-empty `{key}` string"),
             }),
         }
@@ -3160,7 +3243,11 @@ fn computer_optional_u32(arguments: &Value, tool: &str, key: &str) -> Result<Opt
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
             .as_u64()
-            .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0 && *f >= 0.0).map(|f| f as u64))
+            .or_else(|| {
+                v.as_f64()
+                    .filter(|f| f.fract() == 0.0 && *f >= 0.0)
+                    .map(|f| f as u64)
+            })
             .and_then(|n| u32::try_from(n).ok())
             .map(Some)
             .ok_or_else(|| format!("{tool}: `{key}` must be a whole non-negative number, not {v}")),
@@ -3218,8 +3305,9 @@ pub fn computer_verify_request(
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                serde_json::from_value::<VerifyPredicate>(item.clone())
-                    .map_err(|e| format!("{tool}: `expect[{i}]` is not a predicate this tool knows: {e}"))
+                serde_json::from_value::<VerifyPredicate>(item.clone()).map_err(|e| {
+                    format!("{tool}: `expect[{i}]` is not a predicate this tool knows: {e}")
+                })
             })
             .collect::<Result<_, _>>()?,
         _ => {
@@ -3356,7 +3444,11 @@ pub fn render_computer_windows_result(outcome: &Value) -> Value {
             for w in windows {
                 let s = |k: &str| w.get(k).and_then(Value::as_str).unwrap_or("");
                 let app = w.get("app");
-                let app_s = |k: &str| app.and_then(|a| a.get(k)).and_then(Value::as_str).unwrap_or("");
+                let app_s = |k: &str| {
+                    app.and_then(|a| a.get(k))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                };
                 let b = |k: &str| {
                     w.get("bounds")
                         .and_then(|b| b.get(k))
@@ -4596,12 +4688,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_six_delegation_tools() {
+    async fn tools_list_returns_seven_delegation_tools() {
         let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let resp = unwrap_respond(dispatch_for_test(line).await);
         let result = resp.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"delegate_to_agent"));
         assert!(names.contains(&"get_delegation_status"));
@@ -5280,7 +5372,7 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 6);
+        assert_eq!(names.len(), 7);
     }
 
     #[tokio::test]
@@ -5289,7 +5381,7 @@ mod tests {
             dispatch_with_features(BOTH, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 8);
     }
 
     #[tokio::test]
@@ -5465,6 +5557,17 @@ mod tests {
                 LineAction::Spawn(_)
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn parent_reports_cannot_select_a_recipient_and_require_delegation() {
+        for arguments in [json!({}), json!({"message":" "}), json!({"message":42}), json!({"message":"report", "parent_conversation_id":99})] {
+            let line = json!({"jsonrpc":"2.0","id":81,"method":"tools/call","params":{"name":"send_to_parent","arguments":arguments}}).to_string();
+            assert_eq!(unwrap_respond(dispatch_for_test(&line).await).error.unwrap().code, -32602);
+        }
+        let line = json!({"jsonrpc":"2.0","id":82,"method":"tools/call","params":{"name":"send_to_parent","arguments":{"message":"report"}}}).to_string();
+        assert!(matches!(dispatch_for_test(&line).await, LineAction::Spawn(_)));
+        assert!(unwrap_respond(dispatch_with_features(FEEDBACK_ONLY, &line).await).error.unwrap().message.contains("unknown tool"));
     }
 
     // -- resume_delegation validation + feature gating -----------------------
@@ -6757,14 +6860,14 @@ mod tests {
         assert!(browser_eval_request(&json!({ "tabId": "t1" }))
             .unwrap_err()
             .contains("`code`"));
-        assert!(browser_eval_request(&json!({ "tabId": "t1", "code": "   " }))
-            .unwrap_err()
-            .contains("`code`"));
         assert!(
-            browser_eval_request(&json!({ "tabId": "t1", "code": 42 }))
+            browser_eval_request(&json!({ "tabId": "t1", "code": "   " }))
                 .unwrap_err()
-                .contains("must be a string")
+                .contains("`code`")
         );
+        assert!(browser_eval_request(&json!({ "tabId": "t1", "code": 42 }))
+            .unwrap_err()
+            .contains("must be a string"));
         let long = "a".repeat(MAX_EVAL_CODE_CHARS + 1);
         assert!(
             browser_eval_request(&json!({ "tabId": "t1", "code": long }))
@@ -7071,11 +7174,9 @@ mod tests {
         );
         // A single string is taken as a list of one, since that is how a model
         // that forgot the brackets meant it.
-        let (_, req) = browser_action_request(
-            "browser_select_option",
-            &with(json!({ "values": "l" })),
-        )
-        .unwrap();
+        let (_, req) =
+            browser_action_request("browser_select_option", &with(json!({ "values": "l" })))
+                .unwrap();
         assert_eq!(
             req.action,
             ActionKind::Select {
@@ -7112,7 +7213,12 @@ mod tests {
         .contains("`values`"));
 
         // Every tool but press needs a ref; every tool needs the generation.
-        for name in ["browser_click", "browser_hover", "browser_type", "browser_select_option"] {
+        for name in [
+            "browser_click",
+            "browser_hover",
+            "browser_type",
+            "browser_select_option",
+        ] {
             let err = browser_action_request(
                 name,
                 &json!({ "tabId": "t1", "generation": "g", "text": "x", "values": ["v"] }),
@@ -7164,7 +7270,11 @@ mod tests {
             ("browser_open_tab", json!({}), "`url`"),
             ("browser_open_tab", json!({ "url": "  " }), "`url`"),
             ("browser_open_tab", json!({ "url": 7 }), "`url`"),
-            ("browser_navigate", json!({ "url": "https://x.test/" }), "`tabId`"),
+            (
+                "browser_navigate",
+                json!({ "url": "https://x.test/" }),
+                "`tabId`",
+            ),
             ("browser_navigate", json!({ "tabId": "t1" }), "`url`"),
             ("browser_close_tab", json!({}), "`tabId`"),
         ] {
@@ -7660,10 +7770,9 @@ mod tests {
         );
         assert!(computer_capture_request(&json!({ "targetId": "w3", "maxDimension": 0 })).is_err());
 
-        let (id, req) = computer_snapshot_request(
-            &json!({ "targetId": "w1", "maxChars": 0, "query": "Save" }),
-        )
-        .unwrap();
+        let (id, req) =
+            computer_snapshot_request(&json!({ "targetId": "w1", "maxChars": 0, "query": "Save" }))
+                .unwrap();
         assert_eq!(id, "w1");
         // 0 is "no cap", and passes through as such.
         assert_eq!(req.max_chars, Some(0));
@@ -7904,8 +8013,16 @@ mod tests {
             }
         );
         for (tool, bad, says) in [
-            ("computer_click", json!({ "targetId": "w1", "ref": 3 }), "generation"),
-            ("computer_click", json!({ "targetId": "w1" }), "requires `ref`"),
+            (
+                "computer_click",
+                json!({ "targetId": "w1", "ref": 3 }),
+                "generation",
+            ),
+            (
+                "computer_click",
+                json!({ "targetId": "w1" }),
+                "requires `ref`",
+            ),
             (
                 "computer_click",
                 json!({ "targetId": "w1", "ref": 3, "coordinate": [1, 2], "generation": "1.1" }),
@@ -8435,7 +8552,11 @@ mod tests {
         assert_eq!(*seen.lock().await, vec!["ping"], "never forwarded");
 
         // A plain agent call is forwarded as always, without another probe.
-        let result = drive_call(&ctx, &assistant_call(json!({"agent_type": "codex", "task": "x"}))).await;
+        let result = drive_call(
+            &ctx,
+            &assistant_call(json!({"agent_type": "codex", "task": "x"})),
+        )
+        .await;
         assert_eq!(result["structuredContent"]["status"], "running");
         assert_eq!(*seen.lock().await, vec!["ping", "call"]);
     }
@@ -8466,7 +8587,11 @@ mod tests {
     #[tokio::test]
     async fn an_assistant_call_with_no_answer_from_the_parent_is_retryable() {
         // The default test socket does not exist: no answer at all.
-        let result = drive_call(&ctx(), &assistant_call(json!({"assistant_id": 3, "task": "x"}))).await;
+        let result = drive_call(
+            &ctx(),
+            &assistant_call(json!({"assistant_id": 3, "task": "x"})),
+        )
+        .await;
         assert_eq!(result["isError"], true);
         assert_eq!(
             result["structuredContent"]["error_code"],

@@ -226,6 +226,20 @@ async fn claim_as(
 pub async fn claim(conn: &DatabaseConnection, message_id: &str) -> Result<bool, DbError> {
     claim_as(conn, message_id, "running").await
 }
+
+/// The ACP send gate rejected the prompt before dispatch; let the next idle
+/// turn claim it again instead of treating a competing prompt as a failure.
+pub async fn release_claim(conn: &DatabaseConnection, message_id: &str) -> Result<(), DbError> {
+    Entity::update_many()
+        .col_expr(Column::Status, Expr::value("queued"))
+        .col_expr(Column::OwnerPid, Expr::value(Option::<i64>::None))
+        .col_expr(Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(Column::MessageId.eq(message_id))
+        .filter(Column::Status.eq("running"))
+        .filter(Column::OwnerPid.eq(i64::from(std::process::id())))
+        .exec(conn).await?;
+    Ok(())
+}
 /// Reserve an immediate steering note while the child's existing turn keeps running.
 pub async fn claim_delivery(conn: &DatabaseConnection, message_id: &str) -> Result<bool, DbError> {
     claim_as(conn, message_id, "dispatching").await
