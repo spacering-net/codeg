@@ -85,7 +85,7 @@ pub struct QuestionSpec {
     /// When true the user may select multiple options.
     pub multi_select: bool,
     /// The choices (0..=[`MAX_OPTIONS`]). Empty means free-text: the card
-    /// renders only its always-present "Other" input (codex `request_user_input`
+    /// renders only its free-text "Other" input (codex `request_user_input`
     /// and MCP-server elicitations both ask open questions this way; the
     /// codeg-mcp ask tool still requires [`MIN_OPTIONS`] at its own parse
     /// layer).
@@ -97,7 +97,9 @@ pub struct QuestionSpec {
     pub is_secret: bool,
     /// When false, the question card hides the "Other" option and free-text input.
     /// Defaults to true; false for native permission bridges (Antigravity, Pi select)
-    /// where only predetermined option IDs can be submitted.
+    /// where only predetermined option IDs can be submitted. Only meaningful with
+    /// options: those bridges always carry at least [`MIN_OPTIONS`], and an
+    /// option-less question still renders its free-text input regardless.
     #[serde(default = "default_true")]
     pub allow_other: bool,
 }
@@ -694,8 +696,9 @@ pub fn parse_pi_select_ask(tool_call: &Value, options: &[(String, String)]) -> O
 
 /// The permission `optionId` that answers pi with what the user picked, or
 /// `None` when the card produced nothing pi can accept: a declined card, or a
-/// free-text "Other" answer (the card always offers one, but pi's select can
-/// only be answered with one of ITS options). `None` means reply `Cancelled`,
+/// free-text "Other" answer (the card hides "Other" for this ask —
+/// `allow_other: false` — since pi's select can only be answered with one of ITS
+/// options; the check stays as the backstop). `None` means reply `Cancelled`,
 /// which pi-acp forwards to the extension as `{cancelled: true}` — the same
 /// thing `ctx.ui.select` returns when a TUI user presses Escape.
 pub fn pi_select_option_id(outcome: &QuestionOutcome, ask: &PiSelectAsk) -> Option<String> {
@@ -2144,6 +2147,30 @@ mod tests {
         assert_eq!(qs[0].options.len(), 2);
         assert!(!qs[0].id.is_empty());
         assert!(qs[0].allow_other);
+    }
+
+    #[test]
+    fn question_spec_allow_other_defaults_true_and_round_trips() {
+        // A spec stored or sent before the field existed (pending-question
+        // snapshots, an older codeg-mcp) must keep offering "Other".
+        let legacy: QuestionSpec = serde_json::from_value(json!({
+            "id": "q1",
+            "question": "Which approach?",
+            "header": "Approach",
+            "multi_select": false,
+            "options": [{ "label": "A", "description": "" }]
+        }))
+        .unwrap();
+        assert!(legacy.allow_other);
+
+        let closed = QuestionSpec {
+            allow_other: false,
+            ..legacy
+        };
+        let wire = serde_json::to_value(&closed).unwrap();
+        assert_eq!(wire["allow_other"], false);
+        let back: QuestionSpec = serde_json::from_value(wire).unwrap();
+        assert!(!back.allow_other);
     }
 
     fn elicitation_raw(props: Value, required: Value) -> Value {
@@ -4176,6 +4203,16 @@ mod tests {
         assert_eq!(q["options"][0]["label"], "Red");
         // No header field is serialized (the frontend reads it as "").
         assert!(q.get("header").is_none(), "input must not carry a header");
+        assert_eq!(q["allowOther"], true);
+    }
+
+    #[test]
+    fn grok_result_card_input_carries_allow_other_false_for_native_bridges() {
+        // pi and Antigravity reuse this card input for their answered capsule;
+        // the history card must hide "Other" just like the live one did.
+        let ask = parse_pi_select_ask(&pi_select_tool_call(), &pi_select_options()).unwrap();
+        let input = grok_result_card_input(std::slice::from_ref(&ask.spec));
+        assert_eq!(input["questions"][0]["allowOther"], false);
     }
 
     #[test]

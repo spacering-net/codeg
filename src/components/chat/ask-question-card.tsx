@@ -124,7 +124,8 @@ export function AskQuestionCard({
 
   // Reserve one stable content height for the whole set so switching between a
   // few-option tab and a many-option tab never resizes the card. Sized to the
-  // tallest question (its option count plus the always-present "Other" row),
+  // tallest question (its option count plus the "Other" row, unless that
+  // question disallows free text),
   // capped to the viewport; a taller-than-estimated tab scrolls internally.
   const maxRows = useMemo(
     () =>

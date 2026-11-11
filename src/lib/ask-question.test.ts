@@ -254,6 +254,27 @@ describe("parseAskQuestionInput", () => {
     expect(result.map((q) => q.isSecret)).toEqual([true, true, false])
   })
 
+  it("reads allowOther (and the snake_case variant), undefined when absent", () => {
+    const opts = [{ label: "A", description: "" }]
+    const input = JSON.stringify({
+      questions: [
+        { question: "Q1?", header: "", options: opts, allowOther: false },
+        { question: "Q2?", header: "", options: opts, allow_other: false },
+        { question: "Q3?", header: "", options: opts, allowOther: true },
+        { question: "Q4?", header: "", options: opts, allowOther: "no" },
+        { question: "Q5?", header: "", options: opts },
+      ],
+    })
+    const result = parseAskQuestionInput(input)
+    expect(result.map((q) => q.allowOther)).toEqual([
+      false,
+      false,
+      true,
+      undefined,
+      undefined,
+    ])
+  })
+
   it("captures codex's per-question id (and leaves it undefined otherwise)", () => {
     // codex `request_user_input` keys each question with a stable id; its answer
     // envelope is keyed by that id (see parseAskQuestionOutcome below).
