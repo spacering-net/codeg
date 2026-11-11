@@ -9706,13 +9706,15 @@ async fn run_connection(
                             if session_notice(&dispatch).is_some() {
                                 continue;
                             }
-                            // Compaction, by contrast, IS history: codex
-                            // 1.13.0 replays each persisted compaction as
-                            // one completed update in its history position,
-                            // which is exactly where the divider belongs.
-                            if let Some(event) = session_compaction_event(&dispatch) {
-                                emit_with_state(&st, &h, event).await;
-                                continue;
+                            // Compaction IS history, which is why it is
+                            // claimed here: see `replayed_compaction`.
+                            match replayed_compaction(&dispatch, hydrate_from_replay) {
+                                ReplayedCompaction::NotCompaction => {}
+                                ReplayedCompaction::Drop => continue,
+                                ReplayedCompaction::Forward(event) => {
+                                    emit_with_state(&st, &h, *event).await;
+                                    continue;
+                                }
                             }
                             let _ = MatchDispatch::new(dispatch)
                                 .if_notification(async |notif: SessionNotification| {
@@ -24987,6 +24989,39 @@ fn session_notice(dispatch: &Dispatch) -> Option<SessionNotice> {
     })
 }
 
+/// What the `session/load` drain does with one replayed frame, as far as
+/// compaction goes.
+#[derive(Debug)]
+enum ReplayedCompaction {
+    /// Not a `compaction_update`: the drain handles it as before.
+    NotCompaction,
+    /// A compaction the history codeg shows already holds, so it is dropped.
+    Drop,
+    /// A compaction to forward, as the card [`session_compaction_event`] makes.
+    Forward(Box<AcpEvent>),
+}
+
+/// Sorts a replayed frame for the `session/load` drain.
+///
+/// A load replays each persisted compaction as one completed update (codex
+/// 1.13.0, and claude-agent-acp, which from 0.106.0 (#1430) replays every
+/// compaction of the session, not only the last). That is history, and the
+/// history codeg shows comes from elsewhere: the agent's own store, which
+/// every native parser reads compactions from, or codeg's recorded transcript.
+/// Forwarded, each replayed compaction would land in the live message between
+/// turns, where a snapshot taken before the next prompt hands it to a client
+/// as a stray card after the history that already holds it.
+///
+/// Only `hydrating` forwards it: a custom agent whose transcript is being
+/// rebuilt from this replay has no other copy of it.
+fn replayed_compaction(dispatch: &Dispatch, hydrating: bool) -> ReplayedCompaction {
+    match session_compaction_event(dispatch) {
+        None => ReplayedCompaction::NotCompaction,
+        Some(event) if hydrating => ReplayedCompaction::Forward(Box::new(event)),
+        Some(_) => ReplayedCompaction::Drop,
+    }
+}
+
 /// Translate an ACP compaction frame into the `_meta.contextCompaction`
 /// synthetic tool call codeg already renders compaction from.
 ///
@@ -34526,6 +34561,41 @@ mod tests {
         );
         assert!(session_notice(&other_method).is_none());
         assert!(session_compaction_event(&other_method).is_none());
+    }
+
+    /// A load's replayed compaction is history the shown transcript already
+    /// holds; only a custom agent's hydration, which has no other copy, keeps
+    /// it. Everything else in the replay is left to the drain as before.
+    #[test]
+    fn a_replayed_compaction_is_forwarded_only_while_hydrating() {
+        let compaction = || {
+            async_task_notif(serde_json::json!({
+                "sessionUpdate": "compaction_update",
+                "compactionId": "cmp_1",
+                "status": "completed",
+                "summary": [{"type": "text", "text": "PROBE SUMMARY"}],
+                "_meta": {"jetbrains": {"air": {"version": 1, "contextCompaction": {"version": 1}}}},
+            }))
+        };
+        assert!(matches!(
+            replayed_compaction(&compaction(), false),
+            ReplayedCompaction::Drop
+        ));
+        assert!(matches!(
+            replayed_compaction(&compaction(), true),
+            ReplayedCompaction::Forward(ref event)
+                if matches!(**event, AcpEvent::ToolCallUpdate { ref tool_call_id, .. } if tool_call_id == "cmp_1")
+        ));
+        let chunk = async_task_notif(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "hi"},
+        }));
+        for hydrating in [false, true] {
+            assert!(matches!(
+                replayed_compaction(&chunk, hydrating),
+                ReplayedCompaction::NotCompaction
+            ));
+        }
     }
 
     /// The whole point of the translation: claude's reserved `_meta` block is

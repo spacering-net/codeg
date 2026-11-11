@@ -3273,9 +3273,74 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     checklist still replaces it, as before.
             //   * Per its changelog, CLI 2.1.322 only adds fast mode on Vertex;
             //     codeg shows the adapter's `fast` option as the adapter offers it.
+            //
+            // 0.105.0 and 0.106.0 (after 0.104.1, both on 2026-11-10) keep the
+            // Claude Agent SDK at 0.3.322 (Claude Code 2.1.322) and move the ACP
+            // SDK to 2.6.0 (schema 1.31.0); `engines.node` stays ">=22". Measured
+            // live as for 0.104.1, 0.104.1 and 0.106.0 side by side, plus
+            // codeg's `modelPicker` rows in `--settings` (alone, with an
+            // `availableModels` list in the user's settings, and with
+            // `availableModels` and `modelOverrides` inline) and a session
+            // compacted twice, then loaded and resumed in a new process. Every
+            // frame and transcript record codeg reads is the same apart from ids,
+            // paths and timing, except as (lllll), (mmmmm) and (nnnnn) say.
+            //
+            // (lllll) **Three new session methods, none of them used.** The
+            // `initialize` answer adds `sessionCapabilities.title`, `status` and
+            // `options`, which the schema crate's `SessionCapabilities` ignores:
+            //   * #1585 serves `session/set_title`. It renames any stored
+            //     session, loaded or not, by writing the `custom-title` and
+            //     `agent-name` records the CLI's `/rename` writes, which
+            //     `parsers::claude` and the background watch already read as the
+            //     user's name. A rename in codeg stays in codeg's database
+            //     (`title_locked`); sending it to Claude Code would be a new
+            //     write into the user's Claude transcripts, a product call that
+            //     this bump does not make.
+            //   * #1584 serves `session/status` (`open`, `saved` or `-32002`).
+            //     codeg's resume → load → new chain already tells the cases
+            //     apart by trying them.
+            //   * #1592 serves `session/options`, and takes `configOptions` on
+            //     `session/new`, `session/load` and `session/resume`, set in list
+            //     order as `session/set_config_option` sets them. The schema crate
+            //     at this pin has no field for either. codeg keeps applying its
+            //     saved picks after the session starts, and keeps probing options
+            //     with a throwaway `session/new` (`probe_agent_options`), which
+            //     costs the same CLI start a `session/options` call would.
+            //
+            // (mmmmm) **A load's replayed compactions stay in the drain.** #1430
+            // makes `session/load` replay the messages before every compaction,
+            // where it began at the last summary. Measured: a session compacted
+            // twice loads with all three prompts and both `compaction_update`s,
+            // where 0.104.1 sent the last prompt and one. codeg resumes Claude
+            // sessions (no replay, the same on both pins) and loads only when a
+            // resume fails. That load drains the replay but used to forward its
+            // compactions, into the live message between turns, where a snapshot
+            // taken before the next prompt hands them to a client as stray cards
+            // after the history that already holds them: one on 0.104.1, one per
+            // compaction now. The drain now drops them unless it is hydrating a
+            // custom agent's transcript (`replayed_compaction` in
+            // `connection.rs`).
+            //
+            // (nnnnn) Nothing to change in codeg, each checked:
+            //   * #1591 moves the account detail from the label of the RFD
+            //     `auth/status_update` to a new `description` (`label: "Claude
+            //     subscription"`, `description: "OAuth token"`). The legacy
+            //     `_auth/status_update` that codeg logs is unchanged.
+            //   * #1488 adds the `availableModels` and `modelOverrides` of the
+            //     `--settings` tier to the model picker. codeg sends only
+            //     `modelPicker` there, and the model rows are the same on both
+            //     pins in the three settings cases above.
+            //   * #1555 has idle compaction read `idleCompaction`,
+            //     `autoCompactEnabled` and `env` from the `--settings` tier too.
+            //     codeg sets none of them there.
+            //   * #1586 and #1582 change only the v2 agent; codeg speaks v1.
+            //     #1576 moves code and changes nothing.
+            //   * #1589 stops the Bun release executable from loading the
+            //     project's `.env` and `bunfig.toml`. codeg runs the npm package
+            //     under Node, which never loaded them.
             distribution: AgentDistribution::Npx {
-                version: "0.104.1",
-                package: "@agentclientprotocol/claude-agent-acp@0.104.1",
+                version: "0.106.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.106.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -8464,8 +8529,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.104.1",
-            "@agentclientprotocol/claude-agent-acp@0.104.1",
+            "0.106.0",
+            "@agentclientprotocol/claude-agent-acp@0.106.0",
             Some("22.0.0"),
         );
         assert_npx_version(
