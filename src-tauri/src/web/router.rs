@@ -77,6 +77,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::conversations::list_child_conversations),
         )
         .route(
+            "/list_pending_session_messages",
+            post(handlers::delegation::list_pending_session_messages),
+        )
+        .route(
             "/get_delegation_settings",
             post(handlers::delegation::get_delegation_settings),
         )

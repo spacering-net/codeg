@@ -23,6 +23,25 @@ pub async fn get_delegation_settings(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingSessionMessagesParams {
+    pub conversation_id: i32,
+}
+
+pub async fn list_pending_session_messages(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<PendingSessionMessagesParams>,
+) -> Result<Json<Vec<crate::commands::delegation::PendingSessionMessage>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::delegation::list_pending_session_messages_core(
+            &state.db.conn,
+            params.conversation_id,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
 pub struct SetDelegationSettingsParams {
     pub settings: DelegationSettings,
 }
@@ -31,13 +50,12 @@ pub async fn set_delegation_settings(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<SetDelegationSettingsParams>,
 ) -> Result<Json<DelegationSettings>, AppCommandError> {
-    let saved =
-        set_delegation_settings_core(
+    let saved = set_delegation_settings_core(
         &state.db.conn,
         &state.delegation_broker,
         &state.emitter,
         params.settings,
     )
-            .await?;
+    .await?;
     Ok(Json(saved))
 }

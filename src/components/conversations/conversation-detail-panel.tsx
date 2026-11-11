@@ -55,6 +55,7 @@ import {
 } from "@/lib/ask-selection-handoff"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useMessageQueue, type QueuedMessage } from "@/hooks/use-message-queue"
+import { usePendingSessionMessages } from "@/hooks/use-pending-session-messages"
 import { MessageListView } from "@/components/message/message-list-view"
 import {
   GoalControlProvider,
@@ -699,6 +700,10 @@ const ConversationTabView = memo(function ConversationTabView({
   })
   const { status: connStatus, sessionId: connSessionId } = conn
   const messageQueue = useMessageQueue()
+  const pendingSessionMessages = usePendingSessionMessages(
+    dbConversationId ?? null,
+    isActive
+  )
   const {
     queue: msgQueue,
     enqueue: mqEnqueue,
@@ -2360,6 +2365,7 @@ const ConversationTabView = memo(function ConversationTabView({
       isActive={isActive}
       showActiveFlow={showActiveFlow}
       queue={msgQueue}
+      backendQueue={pendingSessionMessages}
       onEnqueue={mqEnqueue}
       onQueueReorder={mqReorder}
       onQueueEdit={handleQueueEdit}

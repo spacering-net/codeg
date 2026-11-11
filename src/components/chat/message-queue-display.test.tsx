@@ -66,6 +66,30 @@ function renderDisplay(
 afterEach(cleanup)
 
 describe("MessageQueueDisplay click-to-insert", () => {
+  it("shows server-owned reports even without local drafts and removes dispatched reports", () => {
+    const props = {
+      queue: [],
+      backendQueue: [
+        {
+          message_id: "report-1",
+          message: "Please review the interface",
+          source_conversation_id: 6,
+          source_title: "API review",
+          source_kind: "child" as const,
+          created_at: "2026-11-11T05:43:41Z",
+        },
+      ],
+    }
+    const view = renderDisplay(props)
+    expect(screen.getByText("Please review the interface")).toBeInTheDocument()
+    expect(screen.getByText(/API review/)).toBeInTheDocument()
+    expect(screen.queryByTitle(TQ.editItem)).toBeNull()
+    expect(screen.queryByTitle(TQ.deleteItem)).toBeNull()
+    view.unmount()
+    renderDisplay({ queue: [], backendQueue: [] })
+    expect(screen.queryByText("Please review the interface")).toBeNull()
+  })
+
   it("offers no insert button without a steering handler", () => {
     renderDisplay()
     expect(screen.queryByTitle(TQ.steerItemNow)).toBeNull()

@@ -3518,6 +3518,9 @@
         "mentionGroupAssistant": "Assistants"
       },
       "messageQueue": {
+        "fromChild": "From child: {name}",
+        "fromParent": "From parent: {name}",
+        "waiting": "Queued",
         "addToQueue": "Queue message",
         "saveEdit": "Save",
         "cancelEdit": "Cancel edit",

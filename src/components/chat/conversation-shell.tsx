@@ -26,6 +26,7 @@ import type {
   ClaudeApiRetryState,
 } from "@/contexts/acp-connections-context"
 import type { QueuedMessage } from "@/hooks/use-message-queue"
+import type { PendingSessionMessage } from "@/lib/api"
 import { ChatInput } from "@/components/chat/chat-input"
 import { ChatWidthHandles } from "@/components/chat/chat-width-handles"
 import { chatGutterStyle } from "@/lib/chat-content-width"
@@ -125,6 +126,7 @@ interface ConversationShellProps {
    *  active tab only). Threaded straight through to the composer. */
   showActiveFlow?: boolean
   queue?: QueuedMessage[]
+  backendQueue?: PendingSessionMessage[]
   onEnqueue?: (draft: PromptDraft, modeId: string | null) => void
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
@@ -215,6 +217,7 @@ export function ConversationShell({
   isActive,
   showActiveFlow,
   queue,
+  backendQueue,
   onEnqueue,
   onQueueReorder,
   onQueueEdit,
@@ -347,6 +350,7 @@ export function ConversationShell({
               isActive={isActive}
               showActiveFlow={showActiveFlow}
               queue={queue}
+              backendQueue={backendQueue}
               onEnqueue={onEnqueue}
               onQueueReorder={onQueueReorder}
               onQueueEdit={onQueueEdit}

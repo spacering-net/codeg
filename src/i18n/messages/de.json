@@ -3518,6 +3518,9 @@
         "mentionGroupAssistant": "Assistenten"
       },
       "messageQueue": {
+        "fromChild": "Von Untersitzung: {name}",
+        "fromParent": "Von übergeordneter Sitzung: {name}",
+        "waiting": "In Warteschlange",
         "addToQueue": "Zur Warteschlange",
         "saveEdit": "Speichern",
         "cancelEdit": "Bearbeitung abbrechen",
