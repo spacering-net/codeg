@@ -20,6 +20,7 @@ use crate::acp::feedback::{
     bounded_feedback_batch, FeedbackItem, FeedbackStatus, PendingFeedback,
     SessionFeedbackAccess, MAX_FEEDBACK_CHARS, MAX_FEEDBACK_RESPONSE_BYTES,
 };
+use crate::acp::idle_sweep::IdleSweepPolicy;
 use crate::acp::plan_approval::{
     PlanApprovalAnswer, RegisteredPlanApproval, SessionPlanApprovalAccess,
 };
@@ -37,6 +38,16 @@ use crate::db::service::conversation_service;
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::web::event_bridge::{emit_with_state, emit_with_state_gated, EventEmitter};
+
+/// Owners no person composes prompts for: an automation run, a `codeg-cli`
+/// run, a one-shot generation. No tab comes back to their connections, so
+/// the idle sweep reclaims them on the short timeout and keeps them out of
+/// the idle-agent cap (see `acp::idle_sweep`).
+fn owner_is_headless(owner_window_label: &str) -> bool {
+    owner_window_label == "automation"
+        || owner_window_label == crate::cli_run::service::CLI_OWNER_LABEL
+        || crate::acp::one_shot::is_one_shot_owner(owner_window_label)
+}
 
 /// Cap on the number of prompt-text chars kept in the `user_prompt_sent`
 /// preview. Past this, `truncate_str` keeps this many chars and appends a short
@@ -1042,24 +1053,47 @@ impl ConnectionManager {
         true
     }
 
-    /// Disconnect connections that have been idle longer than `idle_timeout`.
-    /// "Idle" means: status is `Connected`, no `pending_permission`, no
-    /// launched-but-unresolved background work (async sub-agent / background
-    /// shell — disconnecting kills the agent CLI and the background work with
-    /// it), no Claude Remote Control (it runs in the same CLI), no codeg
-    /// delegation whose child is still running (ending the parent cancels it),
-    /// and no activity (no events, no commands) for at least
-    /// `idle_timeout`. `Prompting` connections are always preserved (a turn is
-    /// in flight). Returns the number of connections that were disconnected.
+    /// [`Self::sweep_idle_with`] with one timeout for every connection and no
+    /// cap ([`IdleSweepPolicy::uniform`]).
     pub async fn sweep_idle(&self, idle_timeout: Duration) -> usize {
+        self.sweep_idle_with(&IdleSweepPolicy::uniform(idle_timeout))
+            .await
+    }
+
+    /// Put idle connections to sleep (end the agent CLI; the session stays
+    /// resumable) according to `policy`. Returns how many were put to sleep.
+    ///
+    /// A connection is only ever a candidate while it is idle: status
+    /// `Connected`, no `pending_permission`, no launched-but-unresolved
+    /// background work or scheduled work held by the CLI (disconnecting kills
+    /// the agent CLI and that work with it), no Claude Remote Control (it runs
+    /// in the same CLI), and no codeg delegation whose child is still running
+    /// (ending the parent cancels it). `Prompting` connections are always
+    /// preserved (a turn is in flight).
+    ///
+    /// Among candidates, one is put to sleep when:
+    /// - it has been idle (no events, no commands, no keepalive touch) for
+    ///   the policy's timeout — the short `headless_idle_timeout` when no
+    ///   person composes prompts for it (automation, `codeg-cli`, one-shot);
+    /// - or, with a cap, there are more idle interactive connections than
+    ///   `max_idle`: the ones idle the longest go first, but only those no
+    ///   open tab is watching (untouched for `watched_window`). A watched
+    ///   connection is never put to sleep by the cap.
+    pub async fn sweep_idle_with(&self, policy: &IdleSweepPolicy) -> usize {
         let now = chrono::Utc::now();
-        let timeout = match chrono::Duration::from_std(idle_timeout) {
-            Ok(d) => d,
-            Err(_) => return 0,
+        let (Ok(timeout), Ok(headless_timeout), Ok(watched_window)) = (
+            chrono::Duration::from_std(policy.idle_timeout),
+            chrono::Duration::from_std(policy.headless_idle_timeout),
+            chrono::Duration::from_std(policy.watched_window),
+        ) else {
+            return 0;
         };
-        let to_disconnect: Vec<String> = {
+        let to_disconnect: Vec<(String, &'static str)> = {
             let connections = self.connections.lock().await;
             let mut victims = Vec::new();
+            // Idle interactive connections still under the timeout, with how
+            // long each has been idle — the pool the cap trims.
+            let mut warm: Vec<(String, chrono::Duration)> = Vec::new();
             for (id, conn) in connections.iter() {
                 let Ok(state) = conn.state.try_read() else {
                     // Per-state writer holds the lock; a future tick will
@@ -1098,15 +1132,37 @@ impl ConnectionManager {
                     continue;
                 }
                 let elapsed = now.signed_duration_since(state.last_activity_at);
-                if elapsed >= timeout {
-                    victims.push(id.clone());
+                let headless = owner_is_headless(&conn.owner_window_label);
+                let limit = if headless { headless_timeout } else { timeout };
+                if elapsed >= limit {
+                    victims.push((id.clone(), "idle timeout"));
+                } else if !headless {
+                    warm.push((id.clone(), elapsed));
+                }
+            }
+            if let Some(max_idle) = policy.max_idle {
+                if warm.len() > max_idle {
+                    let excess = warm.len() - max_idle;
+                    // Longest idle first; ties broken by id so a tick is
+                    // deterministic.
+                    warm.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                    victims.extend(
+                        warm.into_iter()
+                            .filter(|(_, elapsed)| *elapsed >= watched_window)
+                            .take(excess)
+                            .map(|(id, _)| (id, "idle agent cap")),
+                    );
                 }
             }
             victims
         };
         let mut disconnected = 0;
-        for id in to_disconnect {
-            tracing::info!("[ACP] idle sweep disconnecting connection={}", id);
+        for (id, reason) in to_disconnect {
+            tracing::info!(
+                "[ACP] idle sweep disconnecting connection={} reason={}",
+                id,
+                reason
+            );
             if self.disconnect(&id).await.is_ok() {
                 disconnected += 1;
             }
@@ -8577,6 +8633,112 @@ mod tests {
         assert!(!map.contains_key("a"));
         assert!(map.contains_key("b"));
         assert!(map.contains_key("c"));
+    }
+
+    fn server_policy(idle_secs: u64, max_idle: Option<usize>) -> IdleSweepPolicy {
+        IdleSweepPolicy {
+            idle_timeout: Duration::from_secs(idle_secs),
+            headless_idle_timeout: Duration::from_secs(180),
+            max_idle,
+            watched_window: Duration::from_secs(180),
+        }
+    }
+
+    async fn set_owner(mgr: &ConnectionManager, conn_id: &str, owner: &str) {
+        mgr.connections
+            .lock()
+            .await
+            .get_mut(conn_id)
+            .expect("connection exists")
+            .owner_window_label = owner.to_string();
+    }
+
+    /// The server keeps an interactive agent whose tab went quiet — a phone
+    /// that locked its screen stops touching, it is not done with the agent.
+    #[tokio::test]
+    async fn sweep_with_server_policy_keeps_an_unwatched_agent_until_its_long_timeout() {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(
+            &mgr,
+            "phone",
+            AgentType::ClaudeCode,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        // Twenty minutes without a touch: long past the desktop timeout.
+        backdate_last_activity(&mgr, "phone", 20 * 60).await;
+        assert_eq!(mgr.sweep_idle_with(&server_policy(7200, Some(8))).await, 0);
+        assert!(mgr.connections.lock().await.contains_key("phone"));
+
+        backdate_last_activity(&mgr, "phone", 7200).await;
+        assert_eq!(mgr.sweep_idle_with(&server_policy(7200, Some(8))).await, 1);
+        assert!(!mgr.connections.lock().await.contains_key("phone"));
+    }
+
+    /// Nobody comes back to an automation run's connection, so it keeps the
+    /// short timeout even under the server's long one.
+    #[tokio::test]
+    async fn sweep_with_server_policy_reclaims_headless_owners_on_the_short_timeout() {
+        let mgr = ConnectionManager::new();
+        for (id, owner) in [
+            ("automation", "automation"),
+            ("cli", crate::cli_run::service::CLI_OWNER_LABEL),
+            ("one-shot", crate::acp::one_shot::OWNER_LABEL),
+            ("person", "web"),
+        ] {
+            insert_fake_connection(&mgr, id, AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+            set_owner(&mgr, id, owner).await;
+            backdate_last_activity(&mgr, id, 600).await;
+        }
+        assert_eq!(mgr.sweep_idle_with(&server_policy(7200, None)).await, 3);
+        let map = mgr.connections.lock().await;
+        assert!(map.contains_key("person"), "a person's agent stays");
+        assert_eq!(map.len(), 1);
+    }
+
+    /// Past the cap, the agents idle the longest go to sleep first — and only
+    /// as many as it takes to get back under the cap.
+    #[tokio::test]
+    async fn sweep_cap_puts_the_longest_idle_unwatched_agents_to_sleep() {
+        let mgr = ConnectionManager::new();
+        for (id, idle_mins) in [("a", 10), ("b", 40), ("c", 20), ("d", 30)] {
+            insert_fake_connection(&mgr, id, AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+            backdate_last_activity(&mgr, id, idle_mins * 60).await;
+        }
+        assert_eq!(mgr.sweep_idle_with(&server_policy(7200, Some(2))).await, 2);
+        let map = mgr.connections.lock().await;
+        assert!(map.contains_key("a") && map.contains_key("c"));
+        assert!(!map.contains_key("b") && !map.contains_key("d"));
+    }
+
+    /// An agent an open tab is touching is never put to sleep by the cap, even
+    /// when that leaves the pool over it.
+    #[tokio::test]
+    async fn sweep_cap_never_touches_a_watched_agent() {
+        let mgr = ConnectionManager::new();
+        for (id, idle_secs) in [("watched-1", 20), ("watched-2", 50), ("unwatched", 3600)] {
+            insert_fake_connection(&mgr, id, AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+            backdate_last_activity(&mgr, id, idle_secs).await;
+        }
+        assert_eq!(mgr.sweep_idle_with(&server_policy(7200, Some(1))).await, 1);
+        let map = mgr.connections.lock().await;
+        assert!(map.contains_key("watched-1") && map.contains_key("watched-2"));
+        assert!(!map.contains_key("unwatched"));
+    }
+
+    /// The cap counts only idle agents: one mid-turn neither counts toward it
+    /// nor is ever chosen.
+    #[tokio::test]
+    async fn sweep_cap_ignores_busy_agents() {
+        let mgr = ConnectionManager::new();
+        for id in ["busy", "idle"] {
+            insert_fake_connection(&mgr, id, AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+            backdate_last_activity(&mgr, id, 3600).await;
+        }
+        mgr.get_state("busy").await.unwrap().write().await.status = ConnectionStatus::Prompting;
+        assert_eq!(mgr.sweep_idle_with(&server_policy(7200, Some(1))).await, 0);
+        assert_eq!(mgr.connections.lock().await.len(), 2);
     }
 
     /// When two `spawn_agent` calls race for the same logical session id,

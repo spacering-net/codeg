@@ -17,7 +17,7 @@ pub mod acp;
 pub mod acp_transcript;
 pub mod agent_turn_files;
 pub use acp::{
-    idle_sweep_task, idle_timeout_from_env, lifecycle_subscriber_task, SWEEP_INTERVAL_SECS,
+    idle_sweep_task, lifecycle_subscriber_task, IdleSweepPolicy, SweepRuntime, SWEEP_INTERVAL_SECS,
 };
 pub use acp::scratch_dir::scratch_sweep_task;
 pub use network::proxy::init_proxy_from_db;
@@ -1431,14 +1431,16 @@ mod tauri_app {
 
                 // Spawn the idle sweep so connections abandoned without an
                 // explicit disconnect (e.g. window/tab closed without
-                // teardown, panic survivors) are reaped. Override the
-                // 60-second default via `CODEG_ACP_IDLE_TIMEOUT_SECS`
-                // (set to `0` to disable).
-                if let Some(idle_timeout) = crate::acp::idle_timeout_from_env() {
+                // teardown, panic survivors) are reaped. Desktop policy: the
+                // 3-minute default, overridable via
+                // `CODEG_ACP_IDLE_TIMEOUT_SECS` (set to `0` to disable).
+                if let Some(policy) =
+                    crate::acp::IdleSweepPolicy::from_env(crate::acp::SweepRuntime::Desktop)
+                {
                     let cm = app.state::<ConnectionManager>().clone_ref();
                     tauri::async_runtime::spawn(crate::acp::idle_sweep_task(
                         cm,
-                        idle_timeout,
+                        policy,
                         std::time::Duration::from_secs(crate::acp::SWEEP_INTERVAL_SECS),
                     ));
                 }

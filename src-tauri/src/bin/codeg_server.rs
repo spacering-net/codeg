@@ -650,20 +650,22 @@ async fn async_main(
         pet_state_handle,
     ));
 
-    // Spawn the idle sweep so connections abandoned without an explicit
-    // disconnect (e.g. browser tab closed, panic survivors) are reaped.
-    // Override the 60-second default via `CODEG_ACP_IDLE_TIMEOUT_SECS`
-    // (set to `0` to disable).
-    if let Some(idle_timeout) = codeg_lib::idle_timeout_from_env() {
+    // Spawn the idle sweep. Server policy: the agent belongs to the server,
+    // not to a browser tab — a phone that locks its screen stops touching its
+    // connections without being done with them. Idle agents are kept for
+    // hours (`CODEG_ACP_IDLE_TIMEOUT_SECS`, `0` disables the sweep) and the
+    // cost is bounded by a cap on idle agents nobody is watching
+    // (`CODEG_ACP_MAX_IDLE_AGENTS`, `0` = no cap). See `acp::idle_sweep`.
+    if let Some(policy) = codeg_lib::IdleSweepPolicy::from_env(codeg_lib::SweepRuntime::Server) {
         tokio::spawn(codeg_lib::idle_sweep_task(
             state.connection_manager.clone_ref(),
-            idle_timeout,
+            policy,
             std::time::Duration::from_secs(codeg_lib::SWEEP_INTERVAL_SECS),
         ));
     }
 
     // Reclaim scratch directories lost track of mid-session. Deliberately NOT
-    // gated on `idle_timeout_from_env` like the sweep above: setting
+    // gated on the idle sweep policy above: setting
     // `CODEG_ACP_IDLE_TIMEOUT_SECS=0` disables idle disconnects, not disk
     // reclamation.
     tokio::spawn(codeg_lib::scratch_sweep_task());
