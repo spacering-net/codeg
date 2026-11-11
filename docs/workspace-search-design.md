@@ -91,13 +91,21 @@ watcher overflowed or failed to deliver, a change log past 4,096 paths, or an
 overlay past 20,000 entries drops the root's snapshot. The next query then
 rebuilds it. Root ignore files are also part of the cache key.
 
-A covered snapshot never expires by age and satisfies `refresh`/`maxAgeMs`
-without a rebuild. When the workspace closes, its watch ends. The snapshot is
-then treated as current up to that moment, minus the stream's unflushed
-batch window, and the five-minute TTL starts from there. Snapshots built
-without a live watch keep the plain TTL. Roots with authorized linked
-directories are never covered, because link targets lie outside the watched
-tree. The LRU and the memory and disk budgets still bound every root, watched
+A covered snapshot satisfies `refresh`/`maxAgeMs` without a rebuild and is
+exempt from the five-minute TTL. It is still rebuilt 30 minutes after its walk
+began. That longer TTL is a backstop for events a watcher loses without
+reporting it: notify's Windows backend drops an overflowed change buffer
+silently, inotify skips a new directory once the watch limit is reached, and
+network filesystems report only local changes. When the workspace closes, its
+watch ends. The snapshot is then treated as current up to that moment, minus
+the stream's unflushed batch window, and the five-minute TTL starts from there.
+Snapshots built without a live watch keep the plain TTL. Some dependencies are
+outside what the watch can follow, so these roots are never covered:
+- Roots with authorized linked directories, because link targets lie outside
+  the watched tree.
+- Roots whose walk applied a nested `.gitignore` or `.ignore` that is a
+  symlink, because edits to the target raise no event for the link. A change
+  that brings such a file in drops the snapshot instead. The LRU and the memory and disk budgets still bound every root, watched
 or not. Overlays are bounded by their entry limit rather than charged to the
 memory budget.
 

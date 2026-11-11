@@ -1225,3 +1225,122 @@ async fn roots_with_linked_directories_are_not_maintained_by_events() {
         .push(("api".into(), PathBuf::from("/elsewhere")));
     assert_eq!(registry.maintained(&root).count(), 0);
 }
+
+#[tokio::test]
+async fn a_covered_snapshot_is_still_rebuilt_after_the_long_backstop_ttl() {
+    let (_dir, root) = watched_root();
+    std::fs::write(root.join("needle.ts"), "x").unwrap();
+    let (service, visits) = counted(Limits::default());
+    service.watch_started(&root);
+    find(&service, &root, "needle").await;
+    // Past the plain TTL: a covered snapshot is kept.
+    service.registry.lock().unwrap().snapshots[0].fresh_base = Instant::now() - CACHE_TTL * 2;
+    find(&service, &root, "needle").await;
+    assert_eq!(visits.load(Ordering::SeqCst), 1);
+    // A file created without an event (a backend lost it silently) shows up
+    // once the backstop expires.
+    std::fs::write(root.join("unseen-needle.ts"), "x").unwrap();
+    service.registry.lock().unwrap().snapshots[0].fresh_base = Instant::now() - COVERED_TTL;
+    assert_eq!(
+        find(&service, &root, "needle").await,
+        ["needle.ts", "unseen-needle.ts"]
+    );
+    assert_eq!(visits.load(Ordering::SeqCst), 2);
+    assert!(service.registry.lock().unwrap().snapshots[0].covered);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn nested_symlinked_ignore_rules_keep_a_snapshot_on_the_plain_ttl() {
+    let (_dir, root) = watched_root();
+    let outside = tempfile::tempdir().unwrap();
+    let rules = outside.path().join("rules");
+    std::fs::write(&rules, "").unwrap();
+    std::fs::create_dir(root.join("pkg")).unwrap();
+    std::fs::write(root.join("pkg/needle.ts"), "x").unwrap();
+    std::os::unix::fs::symlink(&rules, root.join("pkg/.ignore")).unwrap();
+    let (service, visits) = counted(Limits::default());
+    service.watch_started(&root);
+    assert_eq!(find(&service, &root, "needle").await, ["pkg/needle.ts"]);
+    assert!(!service.registry.lock().unwrap().snapshots[0].covered);
+    // The rule target changes outside the watched tree: no event arrives, but
+    // a fresh query (Cmd+K opening) rebuilds rather than trusting coverage.
+    std::fs::write(&rules, "needle.ts\n").unwrap();
+    let key = RootKey::resolve(root.to_str().unwrap()).unwrap();
+    let fresh = service
+        .search(
+            key,
+            SearchOptions {
+                query: "needle",
+                limit: 10,
+                files_only: true,
+                refresh: true,
+            },
+            Instant::now(),
+            Arc::new(SearchControl::default()),
+        )
+        .await
+        .unwrap();
+    assert!(fresh.is_empty());
+    assert_eq!(visits.load(Ordering::SeqCst), 2);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlinked_rule_file_that_is_itself_ignored_still_counts() {
+    let (_dir, root) = watched_root();
+    let outside = tempfile::tempdir().unwrap();
+    let rules = outside.path().join("rules");
+    std::fs::write(&rules, "").unwrap();
+    // Hidden from results by the root rules, yet still applied by the walk.
+    std::fs::write(root.join(".gitignore"), ".ignore\n").unwrap();
+    std::fs::create_dir(root.join("pkg")).unwrap();
+    std::fs::write(root.join("pkg/needle.ts"), "x").unwrap();
+    std::os::unix::fs::symlink(&rules, root.join("pkg/.ignore")).unwrap();
+    let (service, _) = counted(Limits::default());
+    service.watch_started(&root);
+    assert_eq!(find(&service, &root, "needle").await, ["pkg/needle.ts"]);
+    assert!(!service.registry.lock().unwrap().snapshots[0].covered);
+    // Moved in the same way, it drops a covered snapshot.
+    std::fs::remove_file(root.join("pkg/.ignore")).unwrap();
+    service.watch_changed(
+        &root,
+        ["pkg/.ignore"].into_iter(),
+        ["pkg/.ignore"].into_iter(),
+        false,
+    );
+    find(&service, &root, "needle").await;
+    assert!(service.registry.lock().unwrap().snapshots[0].covered);
+    let moved = outside.path().join("lib");
+    std::fs::create_dir(&moved).unwrap();
+    std::os::unix::fs::symlink(&rules, moved.join(".ignore")).unwrap();
+    std::fs::rename(&moved, root.join("lib")).unwrap();
+    changed(&service, &root, &["lib"]);
+    assert!(service.registry.lock().unwrap().snapshots.is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_directory_moved_in_with_symlinked_rules_drops_the_snapshot() {
+    let (_dir, root) = watched_root();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(root.join("needle.ts"), "x").unwrap();
+    let (service, visits) = counted(Limits::default());
+    service.watch_started(&root);
+    find(&service, &root, "needle").await;
+    assert!(service.registry.lock().unwrap().snapshots[0].covered);
+    let moved = outside.path().join("pkg");
+    std::fs::create_dir(&moved).unwrap();
+    std::fs::write(moved.join("other-needle.ts"), "x").unwrap();
+    std::os::unix::fs::symlink(outside.path().join("rules"), moved.join(".gitignore")).unwrap();
+    std::fs::rename(&moved, root.join("pkg")).unwrap();
+    // Only the directory itself is reported.
+    changed(&service, &root, &["pkg"]);
+    assert!(service.registry.lock().unwrap().snapshots.is_empty());
+    assert_eq!(
+        find(&service, &root, "needle").await,
+        ["needle.ts", "pkg/other-needle.ts"]
+    );
+    assert_eq!(visits.load(Ordering::SeqCst), 2);
+    assert!(!service.registry.lock().unwrap().snapshots[0].covered);
+}

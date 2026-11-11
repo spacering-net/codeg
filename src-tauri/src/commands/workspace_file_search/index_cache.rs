@@ -4,8 +4,9 @@
 //!
 //! While the workspace's file watcher runs, file-change events keep each
 //! snapshot current through an overlay of added and removed entries, so a
-//! watched snapshot never expires by age. Once the watch ends (the workspace
-//! is no longer open), the usual TTL starts from that moment.
+//! watched snapshot is not rebuilt on the usual TTL (only, as a backstop for
+//! events a backend lost silently, after a much longer one). Once the watch
+//! ends (the workspace is no longer open), the usual TTL starts from then.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs::File;
@@ -45,6 +46,12 @@ const ADDED_ORDER: usize = usize::MAX / 2;
 // Upper bound on events a stopping workspace watch had not yet flushed
 // (its debounce batch window is 1.5 s).
 const UNFLUSHED_EVENTS: Duration = Duration::from_secs(2);
+// Even a watched snapshot is rebuilt this long after its walk began. Watch
+// backends can lose events without saying so (a Windows change buffer that
+// overflows reports nothing; inotify silently skips a new directory past the
+// watch limit; network filesystems report only local changes), so event
+// maintenance bounds staleness rather than ruling it out.
+const COVERED_TTL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct RootKey {
@@ -178,6 +185,8 @@ enum Storage {
 pub(super) struct Snapshot {
     built_at: Instant,
     storage: Storage,
+    // No ignore rule it applied lives outside what the workspace watch sees.
+    watchable: bool,
 }
 
 impl Snapshot {
@@ -324,8 +333,9 @@ enum Change {
 /// Re-read `paths` under `root` with full-walk ignore semantics. Paths below
 /// a directory the walk does not enter (ignored, or hard-skipped like `.git`)
 /// produce no change: they were never in the snapshot either. That keeps build
-/// output churn inside ignored trees from growing the overlay. None when the
-/// changed subtrees hold more entries than an overlay may (a rebuild is due).
+/// output churn inside ignored trees from growing the overlay. None when a
+/// rebuild is due instead: the changed subtrees hold more entries than an
+/// overlay may, or bring in ignore rules the watch cannot follow.
 fn read_changes(root: &Path, paths: Vec<String>, limit: usize) -> Option<Vec<Change>> {
     let Some(root_str) = root.to_str() else {
         return Some(Vec::new());
@@ -388,6 +398,20 @@ fn read_changes(root: &Path, paths: Vec<String>, limit: usize) -> Option<Vec<Cha
     if oversized {
         return None;
     }
+    // A directory moved in reports only itself, not the rule files inside.
+    let read_dirs = targets.iter().flat_map(|target| {
+        let prefix = format!("{target}/");
+        std::iter::once(seen.get_key_value(target)).flatten().chain(
+            seen.range(prefix.clone()..)
+                .take_while(move |(path, _)| path.starts_with(&prefix)),
+        )
+    });
+    if read_dirs
+        .filter(|(_, entry)| entry.kind == WorkspaceEntryKind::Dir)
+        .any(|(path, _)| unwatchable_rules(&root.join(path)))
+    {
+        return None;
+    }
     let mut changes = Vec::new();
     for target in targets {
         let parent = target.rsplit_once('/').map(|(parent, _)| parent);
@@ -413,6 +437,18 @@ fn read_changes(root: &Path, paths: Vec<String>, limit: usize) -> Option<Vec<Cha
 /// Proper ancestors of a relative path, nearest last: "a/b/c" -> "a", "a/b".
 fn ancestors(path: &str) -> impl Iterator<Item = &str> {
     path.match_indices('/').map(move |(i, _)| &path[..i])
+}
+
+/// Whether the walk into `dir` applies an ignore file that is a symlink: its
+/// target's rules count, but edits to the target produce no event for this
+/// path (the target may not even be in the watched tree). Checked per entered
+/// directory, since a rule file the walk applies may itself be ignored and so
+/// never yielded. The root's own ignore files are fingerprinted through their
+/// targets in [`RootKey`] instead.
+fn unwatchable_rules(dir: &Path) -> bool {
+    [".gitignore", ".ignore"].iter().any(|name| {
+        std::fs::symlink_metadata(dir.join(name)).is_ok_and(|meta| meta.file_type().is_symlink())
+    })
 }
 
 /// A file whose edit changes what a walk ignores. The workspace root's own
@@ -525,15 +561,19 @@ struct Cached {
     key: RootKey,
     snapshot: Arc<Snapshot>,
     overlay: Arc<Overlay>,
-    // Kept current by the workspace watch; never expires by age while it is.
+    // Kept current by the workspace watch: as fresh as any query asks for,
+    // until COVERED_TTL after its walk began.
     covered: bool,
-    // Otherwise: when the content was last known to be current.
+    // When the content was last known to be current; for a covered snapshot,
+    // when its walk began.
     fresh_base: Instant,
 }
 
 impl Cached {
     fn expired(&self) -> bool {
-        !self.covered && self.fresh_base.elapsed() >= CACHE_TTL
+        // A covered snapshot's base is when its walk began.
+        let ttl = if self.covered { COVERED_TTL } else { CACHE_TTL };
+        self.fresh_base.elapsed() >= ttl
     }
 
     fn fresh_as_of(&self, now: Instant) -> Instant {
@@ -902,7 +942,8 @@ impl IndexService {
                                 // like a watched snapshot in that state, the result is not
                                 // cached. Its waiters still receive it below.
                                 if !pending.dirty {
-                                    let covered = job.watch.is_some()
+                                    let covered = snapshot.watchable
+                                        && job.watch.is_some()
                                         && registry.watches.get(&key.path) == job.watch.as_ref();
                                     // Never watched: the TTL counts from completion as before.
                                     // Watched, but the watch ended or was replaced: the walk
@@ -983,6 +1024,8 @@ impl IndexService {
         let mut bytes = 0usize;
         let mut builder = Some(Builder::default());
         let mut error = None;
+        let mut watchable = true;
+        let root = Path::new(key.path());
         // Two discovery permits, each at most half the global build budget.
         let build_budget = self.limits.build / WORKERS;
         (self.walk)(key.path(), &mut |entry| {
@@ -1008,6 +1051,12 @@ impl IndexService {
                 return false;
             }
             bytes += len + 9;
+            if watchable
+                && entry.kind == WorkspaceEntryKind::Dir
+                && unwatchable_rules(&root.join(&entry.path))
+            {
+                watchable = false;
+            }
             if builder
                 .as_mut()
                 .is_some_and(|b| !b.push(&entry, build_budget))
@@ -1056,6 +1105,7 @@ impl IndexService {
         Ok(Arc::new(Snapshot {
             built_at: Instant::now(),
             storage,
+            watchable,
         }))
     }
 
