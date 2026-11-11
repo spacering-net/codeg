@@ -1893,6 +1893,11 @@
     "zcode": {
       "adapterInfo": "Codeg は {adapterPackage} を ACP ブリッジとして起動します。先に公式 ZCode をインストールしてログインしてください。既存の実行環境と設定を使用します。",
       "runtimeHint": "先に公式 ZCode をインストールしてログインしてください。Codeg は ACP ブリッジのみをインストールします。自動検出に失敗した場合は ZCODE_BIN で CLI、ZCODE_NODE で Node.js を指定できます。モデルと認証情報は ZCode で管理します。"
+    },
+    "quotaProbe": {
+      "label": "Official account quota monitoring",
+      "description": "Display subscription quota in the composer bar via 100% zero-network local session logs and native ACP events (no spoofed HTTP requests, zero risk of account restriction). Automatically enabled for official account login.",
+      "autoDisabledHint": "Automatically disabled because this agent is currently configured with a 3rd-party API key, custom endpoint, or Model Provider."
     }
   },
   "AgentVocabulary": {
@@ -2526,6 +2531,24 @@
         "loadFailed": "状態を取得できませんでした: {message}",
         "openSettings": "詳細設定を開く",
         "refresh": "更新"
+      },
+      "quota": {
+        "title": "Quota",
+        "triggerAria": "View agent quota",
+        "refresh": "Refresh quota",
+        "refreshing": "Refreshing…",
+        "shortWindow": "5-Hour Window",
+        "weeklyWindow": "Weekly Window",
+        "remaining": "Remaining",
+        "resetsSoon": "Resets soon",
+        "resetsIn": "Resets in {time}",
+        "days": "d",
+        "hours": "h",
+        "minutes": "m",
+        "seconds": "s",
+        "spendLimit": "Spend Limit",
+        "noQuota": "Quota unavailable",
+        "lastUpdated": "Updated {time}"
       }
     },
     "auxPanel": {

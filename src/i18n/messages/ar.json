@@ -1893,6 +1893,11 @@
     "zcode": {
       "adapterInfo": "يشغّل Codeg الحزمة {adapterPackage} كجسر ACP. ثبّت ZCode الرسمي وسجّل الدخول أولاً؛ يستخدم بيئته وإعداداته الحالية.",
       "runtimeHint": "ثبّت ZCode الرسمي وسجّل الدخول أولاً. يثبّت Codeg جسر ACP فقط. إذا فشل الاكتشاف، حدّد مسار CLI عبر ZCODE_BIN ومسار Node.js عبر ZCODE_NODE. تُدار النماذج وبيانات الاعتماد في ZCode."
+    },
+    "quotaProbe": {
+      "label": "Official account quota monitoring",
+      "description": "Display subscription quota in the composer bar via 100% zero-network local session logs and native ACP events (no spoofed HTTP requests, zero risk of account restriction). Automatically enabled for official account login.",
+      "autoDisabledHint": "Automatically disabled because this agent is currently configured with a 3rd-party API key, custom endpoint, or Model Provider."
     }
   },
   "AgentVocabulary": {
@@ -2526,6 +2531,24 @@
         "loadFailed": "تعذّرت قراءة الحالة: {message}",
         "openSettings": "فتح الإعدادات الكاملة",
         "refresh": "تحديث"
+      },
+      "quota": {
+        "title": "Quota",
+        "triggerAria": "View agent quota",
+        "refresh": "Refresh quota",
+        "refreshing": "Refreshing…",
+        "shortWindow": "5-Hour Window",
+        "weeklyWindow": "Weekly Window",
+        "remaining": "Remaining",
+        "resetsSoon": "Resets soon",
+        "resetsIn": "Resets in {time}",
+        "days": "d",
+        "hours": "h",
+        "minutes": "m",
+        "seconds": "s",
+        "spendLimit": "Spend Limit",
+        "noQuota": "Quota unavailable",
+        "lastUpdated": "Updated {time}"
       }
     },
     "auxPanel": {
@@ -3825,9 +3848,9 @@
         "resumeReasonLabel": "سبب الاستئناف",
         "detailTitle": "محادثة الوكيل الفرعي",
         "detailDescription": "عرض للقراءة فقط لمحادثة الوكيل الفرعي المُفوَّض.",
-        "waitForResult": "في انتظار نتيجة المهمة \u2066{task}\u2069",
+        "waitForResult": "في انتظار نتيجة المهمة ⁦{task}⁩",
         "waitForResultNoTask": "في انتظار نتيجة المهمة",
-        "cancelTask": "جارٍ إلغاء المهمة \u2066{task}\u2069",
+        "cancelTask": "جارٍ إلغاء المهمة ⁦{task}⁩",
         "cancelTaskNoTask": "جارٍ إلغاء المهمة",
         "resultPageOf": "{current} / {total}",
         "prevResult": "النتيجة السابقة",
@@ -3986,7 +4009,7 @@
           "monitor": "مراقبة",
           "networkAccess": "الوصول إلى الشبكة",
           "codexScript": "نص برمجي",
-          "background": "في الخلفية · \u2066#{id}\u2069",
+          "background": "في الخلفية · ⁦#{id}⁩",
           "backgroundShort": "في الخلفية",
           "sessionWait": "انتظار",
           "sessionTerminate": "إيقاف",
@@ -4281,9 +4304,9 @@
         "tokens": "{count} رمز",
         "stopDeclined": "تعذّر إيقاف هذه المهمة، ربما تكون قد انتهت بالفعل.",
         "stopFailed": "فشل إيقاف المهمة: {error}",
-        "agentWorking": "\u2066{agent}\u2069 يعمل",
+        "agentWorking": "⁦{agent}⁩ يعمل",
         "scheduledWakeup": "تنبيه مجدول",
-        "scheduledWakeupAt": "تنبيه مجدول في \u2066{time}\u2069",
+        "scheduledWakeupAt": "تنبيه مجدول في ⁦{time}⁩",
         "scheduledTask": "مهمة مجدولة"
       },
       "remoteControl": {
@@ -6625,8 +6648,8 @@
       "fetch": "جلب النماذج",
       "needKey": "أدخل مفتاح API أولًا.",
       "needBaseUrl": "أدخل عنوان API بصيغة http(s) أولًا.",
-      "summaryModels": "{count, plural, zero {لا نماذج} one {نموذج واحد} two {نموذجان} few {# نماذج} many {# نموذجًا} other {# نموذج}} · \u2066{host}\u2069",
-      "summaryPicked": "تم اختيار {picked} من {total} · \u2066{host}\u2069",
+      "summaryModels": "{count, plural, zero {لا نماذج} one {نموذج واحد} two {نموذجان} few {# نماذج} many {# نموذجًا} other {# نموذج}} · ⁦{host}⁩",
+      "summaryPicked": "تم اختيار {picked} من {total} · ⁦{host}⁩",
       "summaryRemoved": "أُزيل {count}",
       "fromPublished": "القائمة المطبّقة",
       "fromCache": "قائمة جُلبت سابقًا",
@@ -6707,7 +6730,7 @@
   "ProviderModels": {
     "fetch": "جلب النماذج",
     "fetching": "جارٍ جلب النماذج…",
-    "fromHost": "{count, plural, zero {لا نماذج} one {نموذج واحد} two {نموذجان} few {# نماذج} many {# نموذجًا} other {# نموذج}} · \u2066{host}\u2069",
+    "fromHost": "{count, plural, zero {لا نماذج} one {نموذج واحد} two {نموذجان} few {# نماذج} many {# نموذجًا} other {# نموذج}} · ⁦{host}⁩",
     "retry": "إعادة المحاولة",
     "needKey": "أدخل مفتاح API أولًا: تُجلب النماذج به.",
     "needBaseUrl": "أدخل عنوان API أولًا.",

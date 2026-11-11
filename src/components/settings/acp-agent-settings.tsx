@@ -692,6 +692,168 @@ export function setHostToolsAgentMode(
   })
 }
 
+const QUOTA_PROBE_MODE_ENV = "CODEG_QUOTA_PROBE_MODE"
+const QUOTA_PROBE_MODE_AUTO = "auto"
+const QUOTA_PROBE_MODE_OFF = "off"
+
+const QUOTA_PROBE_CAPABLE_AGENT_TYPES = new Set<string>([
+  "codex",
+  "antigravity",
+  "claude_code",
+  "gemini",
+  "cursor",
+  "kimi_code",
+  "minimax_code",
+  "grok",
+  "cline",
+  "kiro",
+  "qoder",
+  "trae",
+  "command_code",
+  "zcode",
+])
+
+/**
+ * Whether this agent supports official account / subscription login and can
+ * therefore display the smart quota monitoring switch. Pure BYO API key or
+ * multi-provider router agents (`open_code`, `open_claw`, `hermes`,
+ * `code_buddy`, `pi`, `deepseek`) do not show the switch.
+ */
+export function isQuotaProbeCapableAgent(
+  agent: Pick<AcpAgentInfo, "agent_type">,
+  envText = ""
+): boolean {
+  const agentType = agent.agent_type
+  if (QUOTA_PROBE_CAPABLE_AGENT_TYPES.has(agentType)) return true
+  if (
+    agentType.startsWith("custom:antigravity") ||
+    agentType.startsWith("custom:agy")
+  ) {
+    return true
+  }
+  if (agentType.startsWith("custom:")) {
+    const env = parseEnvText(envText)
+    return Boolean(
+      env.GEMINI_HOME?.trim() ||
+      env.AGY_AUTH_METHOD?.trim() ||
+      env.AGY_GEMINI_API_KEY?.trim()
+    )
+  }
+  return false
+}
+
+export type QuotaDraftSlice = Pick<
+  AgentDraft,
+  | "envText"
+  | "modelProviderId"
+  | "apiKey"
+  | "apiBaseUrl"
+  | "claudeAuthMode"
+  | "codexAuthMode"
+  | "geminiAuthMode"
+  | "grokAuthMode"
+  | "clineProvider"
+>
+
+/**
+ * Whether the current settings draft is configured for official account /
+ * subscription login (as opposed to a 3rd-party API key, custom base URL, or
+ * bound Model Provider).
+ */
+export function isDraftOfficialSubscriptionMode(
+  agentType: AgentType,
+  draft: QuotaDraftSlice
+): boolean {
+  if (draft.modelProviderId !== null) return false
+  const env = parseEnvText(draft.envText)
+
+  if (agentType === "codex") {
+    return draft.codexAuthMode === "chatgpt_subscription"
+  }
+  if (
+    agentType === "antigravity" ||
+    agentType.startsWith("custom:antigravity") ||
+    agentType.startsWith("custom:agy")
+  ) {
+    const method = (env.AGY_AUTH_METHOD ?? "").trim()
+    const apiKey = (env.AGY_GEMINI_API_KEY ?? "").trim()
+    if (method === "gemini-api-key" || method === "agent-platform") {
+      return false
+    }
+    if (!method && apiKey) return false
+    return true
+  }
+  if (agentType === "claude_code") {
+    return draft.claudeAuthMode === "official_subscription"
+  }
+  if (agentType === "gemini") {
+    return draft.geminiAuthMode === "login_google"
+  }
+  if (agentType === "grok") {
+    return draft.grokAuthMode === "subscription"
+  }
+  if (agentType === "cline") {
+    return isClineSignInProvider(draft.clineProvider)
+  }
+  if (agentType === "cursor") {
+    const cursorMode = (env.CURSOR_AUTH_MODE ?? "").trim()
+    if (cursorMode === "api_key") return false
+    if (!cursorMode && (env.CURSOR_API_KEY ?? "").trim()) return false
+    return true
+  }
+  if (
+    agentType === "kimi_code" ||
+    agentType === "minimax_code" ||
+    agentType === "kiro" ||
+    agentType === "qoder" ||
+    agentType === "trae" ||
+    agentType === "command_code" ||
+    agentType === "zcode"
+  ) {
+    return !draft.apiKey.trim() && !draft.apiBaseUrl.trim()
+  }
+  if (agentType.startsWith("custom:")) {
+    const method = (env.AGY_AUTH_METHOD ?? "").trim()
+    if (method === "gemini-api-key" || method === "agent-platform") {
+      return false
+    }
+    if ((env.AGY_GEMINI_API_KEY ?? "").trim()) return false
+    return Boolean(env.GEMINI_HOME?.trim() || method)
+  }
+  return false
+}
+
+/**
+ * Resolve whether quota monitoring is enabled for the current draft:
+ * - In 3rd-party API Key / Custom Base URL / Model Provider mode, returns false
+ *   automatically unless explicitly forced to `on` in `CODEG_QUOTA_PROBE_MODE`.
+ * - In Official Account Subscription mode, defaults to true unless explicitly
+ *   switched `off` by the user.
+ */
+export function quotaProbeEnabledForDraft(
+  agentType: AgentType,
+  draft: QuotaDraftSlice
+): boolean {
+  const mode = (parseEnvText(draft.envText)[QUOTA_PROBE_MODE_ENV] ?? "")
+    .trim()
+    .toLowerCase()
+  if (mode === QUOTA_PROBE_MODE_OFF || mode === "false" || mode === "0") {
+    return false
+  }
+  if (mode === "on" || mode === "true" || mode === "1") {
+    return true
+  }
+  return isDraftOfficialSubscriptionMode(agentType, draft)
+}
+
+export function setQuotaProbeMode(envText: string, enabled: boolean): string {
+  return patchEnvText(envText, {
+    [QUOTA_PROBE_MODE_ENV]: enabled
+      ? QUOTA_PROBE_MODE_AUTO
+      : QUOTA_PROBE_MODE_OFF,
+  })
+}
+
 /**
  * How Claude Code shows its thinking. Claude Code asks the API for
  * `display: "updates"` by default, so a thinking block carries only the notes
@@ -8925,6 +9087,47 @@ export function AcpAgentSettings() {
                       aria-label={t("hostTools.label")}
                     />
                   </div>
+                  {isQuotaProbeCapableAgent(
+                    selectedAgent,
+                    selectedDraft.envText
+                  ) &&
+                    (() => {
+                      const officialSub = isDraftOfficialSubscriptionMode(
+                        selectedAgent.agent_type,
+                        selectedDraft
+                      )
+                      return (
+                        <div className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3">
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium">
+                              {t("quotaProbe.label")}
+                            </label>
+                            <p className="text-2xs text-muted-foreground">
+                              {officialSub
+                                ? t("quotaProbe.description")
+                                : t("quotaProbe.autoDisabledHint")}
+                            </p>
+                          </div>
+                          <Switch
+                            checked={quotaProbeEnabledForDraft(
+                              selectedAgent.agent_type,
+                              selectedDraft
+                            )}
+                            onCheckedChange={(checked) => {
+                              updateSelectedDraft((current) => ({
+                                ...current,
+                                envText: setQuotaProbeMode(
+                                  current.envText,
+                                  checked
+                                ),
+                              }))
+                            }}
+                            disabled={!officialSub || selectedGrokSaving}
+                            aria-label={t("quotaProbe.label")}
+                          />
+                        </div>
+                      )
+                    })()}
                   {selectedAgent.agent_type === "claude_code" && (
                     <div className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3">
                       <div className="space-y-1">

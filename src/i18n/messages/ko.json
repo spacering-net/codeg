@@ -1893,6 +1893,11 @@
     "zcode": {
       "adapterInfo": "Codeg는 {adapterPackage}를 ACP 브리지로 실행합니다. 먼저 공식 ZCode를 설치하고 로그인하세요. 기존 런타임과 설정을 사용합니다.",
       "runtimeHint": "먼저 공식 ZCode를 설치하고 로그인하세요. Codeg는 ACP 브리지만 설치합니다. 자동 감지가 실패하면 ZCODE_BIN으로 CLI 경로를, ZCODE_NODE로 Node.js를 지정하세요. 모델과 인증 정보는 ZCode에서 관리합니다."
+    },
+    "quotaProbe": {
+      "label": "Official account quota monitoring",
+      "description": "Display subscription quota in the composer bar via 100% zero-network local session logs and native ACP events (no spoofed HTTP requests, zero risk of account restriction). Automatically enabled for official account login.",
+      "autoDisabledHint": "Automatically disabled because this agent is currently configured with a 3rd-party API key, custom endpoint, or Model Provider."
     }
   },
   "AgentVocabulary": {
@@ -2526,6 +2531,24 @@
         "loadFailed": "상태를 읽을 수 없습니다: {message}",
         "openSettings": "전체 설정 열기",
         "refresh": "새로 고침"
+      },
+      "quota": {
+        "title": "Quota",
+        "triggerAria": "View agent quota",
+        "refresh": "Refresh quota",
+        "refreshing": "Refreshing…",
+        "shortWindow": "5-Hour Window",
+        "weeklyWindow": "Weekly Window",
+        "remaining": "Remaining",
+        "resetsSoon": "Resets soon",
+        "resetsIn": "Resets in {time}",
+        "days": "d",
+        "hours": "h",
+        "minutes": "m",
+        "seconds": "s",
+        "spendLimit": "Spend Limit",
+        "noQuota": "Quota unavailable",
+        "lastUpdated": "Updated {time}"
       }
     },
     "auxPanel": {
