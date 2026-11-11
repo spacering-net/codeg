@@ -103,6 +103,9 @@ interface ComposerProps {
   status: PersonalAgentStatus
   /** The row the next message quotes. */
   quoting: number | null
+  /** Text to put in the box (a card's message the owner edits first); a
+   *  new `n` puts it in again. */
+  draft?: { text: string; n: number } | null
   onClearQuote: () => void
   /** A message went out. */
   onSent?: () => void
@@ -113,6 +116,7 @@ export function PersonalAgentComposer({
   agentName,
   status,
   quoting,
+  draft,
   onClearQuote,
   onSent,
 }: ComposerProps) {
@@ -202,6 +206,25 @@ export function PersonalAgentComposer({
   useEffect(() => {
     if (quoting != null) editorRef.current?.focus()
   }, [quoting])
+
+  // A card's message to edit first: after what is already typed, never in
+  // place of it.
+  const draftN = draft?.n
+  // One the box was opened with is not new: a draft goes in once.
+  const draftApplied = useRef(draftN ?? null)
+  useEffect(() => {
+    const editor = editorRef.current
+    if (draftN == null || !draft || !editor) return
+    if (draftApplied.current === draftN) return
+    draftApplied.current = draftN
+    const before = editor.isEmpty() ? "" : editor.getText().trimEnd()
+    const next = before ? `${before}\n\n${draft.text}` : draft.text
+    editor.setText(next)
+    setText(next)
+    editor.focus()
+    // Only a new draft puts it in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftN, editorReady])
 
   // Open the box once the text wraps (the editor's own size changes with
   // every wrap, and with the box's width); `onChange` closes it once the

@@ -2042,6 +2042,25 @@ export interface TimelineRow {
   updated_at: string
 }
 
+/** What the owner did with one button of a card in an assistant's reply
+ *  (`data.card_acts` on the reply row, by element id — 9.2): it survives a
+ *  reload and shows in every window. */
+export interface CardAct {
+  /** `pa.reply` or `pa.item`. */
+  action: string
+  label?: string
+  /** For `pa.item`: `done`, `drop` or `snooze`. */
+  op?: string
+  at: string
+}
+
+/** The button of a card a message of the owner's came from (`card` on
+ *  `personal_agent_send`). */
+export interface CardClick {
+  element: string
+  label: string
+}
+
 export interface TimelinePage {
   rows: TimelineRow[]
   has_older: boolean

@@ -21,6 +21,7 @@
 //! model; the persona tells it which language to answer in.
 
 use crate::db::entities::personal_agent_segment::SegmentReason;
+use crate::models::personal_agent_prefs::CardUse;
 
 /// One open matter, as a card lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +53,8 @@ pub struct OwnerLine {
     /// The row the owner replied to, with what it says: the agent may no
     /// longer have it in its context.
     pub quote: Option<(i32, String)>,
+    /// The button on the quoted row's card the message came from (9.2).
+    pub clicked: Option<String>,
     pub text: String,
 }
 
@@ -133,6 +136,11 @@ pub struct HandoffInput<'a> {
     /// what the owner picked on its opening card (4.12).
     pub new_bot: Option<&'a str>,
     pub budget_chars: usize,
+    /// How the owner wants cards (9.3).
+    pub cards: CardUse,
+    /// Whether the agent has the skill, and with it `ui-render.md`: one
+    /// without gets the short format here (9.1).
+    pub skill: bool,
 }
 
 /// A rendered card, and whether anything was cut to fit its budget.
@@ -254,6 +262,50 @@ answer (it is shown as a quote, not as text). When the owner tells you to change
 codeg work (shorter replies, ask before dispatching code changes, …), `prefs_update` changes it \
 — there is no setting they cannot change that way; the preferences you follow are in \
 <codeg-prefs>. When they ask for a new work assistant, `bot_create` makes it.";
+
+/// When and how the agent writes cards, in every handoff card (9.3): the
+/// skill says it at length, and its `ui-render.md` is the format; an agent
+/// without the skill gets the short format here (9.1).
+pub fn card_notes(cards: CardUse, skill: bool) -> String {
+    let when = match cards {
+        CardUse::Never => {
+            return "The owner wants no cards: answer in plain text, never a ```spec block."
+                .to_string()
+        }
+        CardUse::Prefer => "Use a card whenever your answer has a shape the owner scans or \
+decides on (several things summed up, how work stands, a comparison, a plan, a choice between \
+options, numbers over time); text for short answers, questions and chat, in short paragraphs.",
+        CardUse::Decisions => "The owner wants a card only when they have to decide something \
+(a choice between options, a plan to approve); everything else is text, in short paragraphs.",
+    };
+    let format = if skill {
+        "Your skill's `ui-render.md` is the format: read it before your first card."
+    } else {
+        CARD_FORMAT
+    };
+    format!(
+        "Your reply is drawn as UI: a ```spec block in it renders as a card. {when} Write a \
+sentence or two, then the block, and nothing after it; numbers and ids only from codeg's materials \
+and your tools. For a choice, Buttons with `pa.reply` labelled as the owner would say it; \
+`pa.item` closes or snoozes one of your matters, `pa.open` opens a place in codeg; what a tool of \
+yours does, do with the tool. {format}"
+    )
+}
+
+/// The card format in short, for an agent without the skill (9.1).
+const CARD_FORMAT: &str = "Card format: a ```spec fence of JSONL patch lines — \
+{\"op\":\"add\",\"path\":\"/root\",\"value\":\"main\"}, then one \
+{\"op\":\"add\",\"path\":\"/elements/<key>\",\"value\":{\"type\":…,\"props\":{…},\"children\":[<keys>]}} \
+per element (\"children\": [] for a leaf). Types: Card {title, description}, Stack {direction: \
+vertical|horizontal, gap}, Heading {text}, Text {text}, Badge {text}, Alert {title, message, type: \
+info|success|warning|error}, Table {columns: [..], rows: [[..]]}, Progress {value, label}, \
+Separator {}, Button {label, variant: primary|secondary|danger}, Link {label, href}. A Button acts \
+through its \"on\" field (beside \"props\"): {\"press\":{\"action\":\"pa.reply\"}} says its label \
+to you as the owner, quoting the card (params {\"text\": …} sends that instead, after the owner \
+confirms); {\"press\":{\"action\":\"pa.item\",\"params\":{\"id\":7,\"op\":\"done\"}}} \
+(op done|drop|snooze); {\"press\":{\"action\":\"pa.open\",\"params\":{\"target\":\"dispatch\",\"id\":12}}} \
+(target dispatch|task|session|item|bot|exchange|url, with id or url). These run only on the \
+owner's click, as the only action of a Button's or Link's press.";
 
 /// How the agent's memory works, in every handoff card — the skill says it
 /// at length, but not every agent loads skills, nor reads one before it
@@ -430,7 +482,8 @@ from the owner.\n\n\
         tools = section(
             "Tools",
             &format!(
-                "{TOOL_NOTES}\nExecutor configs you may dispatch to:\n{}{}",
+                "{TOOL_NOTES}\n{}\nExecutor configs you may dispatch to:\n{}{}",
+                card_notes(input.cards, input.skill),
                 render_assistants(input.assistants),
                 input
                     .division
@@ -626,9 +679,18 @@ write to another assistant or ask the owner something, say which input it is for
 /// One owner message as a delivery carries it: numbered, and naming what it
 /// replies to.
 pub fn owner_message(m: &OwnerLine) -> String {
-    let head = match &m.quote {
-        Some((id, excerpt)) => format!("[#{}, replying to #{} — \"{}\"]", m.id, id, excerpt),
-        None => format!("[#{}]", m.id),
+    let head = match (&m.quote, &m.clicked) {
+        (Some((id, excerpt)), Some(label)) => format!(
+            "[#{}, the owner clicked the button \"{}\" on the card in #{} — \"{}\"]",
+            m.id,
+            label.replace('"', "'"),
+            id,
+            excerpt
+        ),
+        (Some((id, excerpt)), None) => {
+            format!("[#{}, replying to #{} — \"{}\"]", m.id, id, excerpt)
+        }
+        (None, _) => format!("[#{}]", m.id),
     };
     let text = m.text.trim();
     if text.is_empty() {
@@ -707,6 +769,8 @@ mod tests {
             division: None,
             new_bot: None,
             budget_chars: budget,
+            cards: CardUse::Prefer,
+            skill: true,
         }
     }
 
@@ -920,6 +984,7 @@ mod tests {
         OwnerLine {
             id,
             quote: None,
+            clicked: None,
             text: text.into(),
         }
     }
@@ -968,6 +1033,7 @@ mod tests {
         let line = OwnerLine {
             id: 58,
             quote: Some((55, "the build is red".into())),
+            clicked: None,
             text: "why?".into(),
         };
         assert_eq!(

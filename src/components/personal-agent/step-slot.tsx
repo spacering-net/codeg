@@ -22,13 +22,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 
-import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { useReducedMotion } from "@/hooks/use-chat-motion"
 import { useElapsedLabel } from "@/hooks/use-elapsed-label"
 import { cleanTitle } from "@/lib/activity/progress"
+import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { PaReplyScope } from "./pa-card-scope"
 import type { SlotView, StepInfo } from "./reply-view"
 import { BUBBLE_MARKDOWN, MARKDOWN_LIST_ROOM } from "./shared"
 
@@ -142,12 +143,21 @@ function StepLine({ step, live }: { step: StepInfo; live: boolean }) {
   )
 }
 
-function SlotContent({ view, live }: { view: SlotView; live: boolean }) {
+function SlotContent({
+  view,
+  live,
+  row,
+}: {
+  view: SlotView
+  live: boolean
+  row: TimelineRow | null
+}) {
   const t = useTranslations("PersonalAgent.reply")
   switch (view.kind) {
     case "text":
       return (
-        <JsonRenderScope>
+        // The reply's own cards: their buttons can act for the owner.
+        <PaReplyScope row={row} running={live}>
           <MessageResponse
             className={cn("text-sm", MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
             mode={view.streaming ? "streaming" : undefined}
@@ -155,7 +165,7 @@ function SlotContent({ view, live }: { view: SlotView; live: boolean }) {
           >
             {view.text}
           </MessageResponse>
-        </JsonRenderScope>
+        </PaReplyScope>
       )
     case "step":
       return <StepLine step={view.step} live={live} />
@@ -191,9 +201,12 @@ function SlotContent({ view, live }: { view: SlotView; live: boolean }) {
 export function StepSlot({
   view,
   running,
+  row = null,
 }: {
   view: SlotView | null
   running: boolean
+  /** The reply row the text is of, for its cards. */
+  row?: TimelineRow | null
 }) {
   const reduced = useReducedMotion()
   const [shown, setShown] = useState<SlotView | null>(view)
@@ -331,7 +344,7 @@ export function StepSlot({
                 "animate-in fade-in-0 slide-in-from-bottom-2 duration-200 motion-reduce:animate-none"
             )}
           >
-            <SlotContent view={shown} live={running} />
+            <SlotContent view={shown} live={running} row={row} />
           </div>
         ) : null}
       </div>

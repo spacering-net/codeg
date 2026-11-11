@@ -17,6 +17,7 @@ import { useTranslations } from "next-intl"
 import { CircleAlert, CornerDownRight, RotateCcw, Square } from "lucide-react"
 import { toast } from "sonner"
 
+import { MessageResponse } from "@/components/ai-elements/message"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentResend } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -34,7 +35,15 @@ import {
   type ReplyEnding,
   type SlotView,
 } from "./reply-view"
-import { AGENT_SURFACE, INSET_HOVER, usePageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  BUBBLE_MARKDOWN,
+  INSET_HOVER,
+  MARKDOWN_LIST_ROOM,
+  usePageScope,
+} from "./shared"
+import { isChoiceQuestionRow, QuestionChoiceCard } from "./question-choice-card"
+import { splitReply } from "./reply-split"
 import { StepSlot } from "./step-slot"
 
 type ReplyItem = Extract<MessageItem, { kind: "reply" }>
@@ -212,6 +221,75 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
   }
   const copyText =
     !view.running && view.slot?.kind === "text" ? view.slot.text : null
+  // The brain's own questions, as choice cards in the bubble (10.7).
+  const questionRows = item.attached.filter(isChoiceQuestionRow)
+  const questionsShown = new Set(
+    questionRows.map((r) => r.ref_id).filter((id): id is string => !!id)
+  )
+  // Short paragraphs, no code and no card: a bubble each (10.7). While it
+  // streams too, so the bubbles it ends with are the ones it grew.
+  const parts = slot?.kind === "text" ? splitReply(slot.text) : null
+  const split = parts != null && parts.length > 1 ? parts : null
+  const lastSlot: SlotView | null =
+    split && slot?.kind === "text"
+      ? { ...slot, text: split[split.length - 1] }
+      : slot
+
+  const quote =
+    row?.reply_to != null && !item.quotesPrevious ? (
+      <QuoteBar targetId={row.reply_to} tone="light" className="mb-2" />
+    ) : null
+  const rest = (
+    <>
+      {lastSlot ? (
+        <StepSlot view={lastSlot} running={view.running} row={row} />
+      ) : null}
+      {liveTurn && !scope.readOnly && scope.connectionId && scope.agentType ? (
+        <div className="mt-2 flex flex-col gap-2 empty:hidden">
+          <BlockingPrompts
+            connectionId={scope.connectionId}
+            agentType={scope.agentType}
+            questionsShown={questionsShown}
+          />
+        </div>
+      ) : null}
+      {questionRows.map((r) => (
+        <QuestionChoiceCard key={r.id} row={r} live={liveTurn} />
+      ))}
+      {liveTurn ? <RequestInputs rows={item.attached} /> : null}
+      {view.answered.map((line) => (
+        <Answered key={line.rowId} line={line} />
+      ))}
+      {view.dispatches.length > 0 ? (
+        <DispatchAttachments rows={view.dispatches} />
+      ) : null}
+      {view.ending ? <Ending ending={view.ending} /> : null}
+      {view.resend.length > 0 && !scope.readOnly ? (
+        <Resend ids={view.resend} />
+      ) : null}
+    </>
+  )
+  const bubble = (
+    part: number,
+    tail: boolean,
+    children: React.ReactNode,
+    live = false
+  ) => (
+    <div
+      key={part}
+      data-bubble
+      data-pa-bubble-part={split ? part : undefined}
+      className={cn(
+        AGENT_SURFACE,
+        bubbleCorners("start", tail),
+        "min-w-0 p-3 text-sm break-words text-foreground [&>:first-child]:mt-0"
+      )}
+      aria-live={live ? "polite" : undefined}
+      aria-busy={live || undefined}
+    >
+      {children}
+    </div>
+  )
   return (
     <MessageRow
       rowId={item.anchor.id}
@@ -226,43 +304,35 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
         live: liveTurn,
       }}
     >
-      <div
-        data-bubble
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm break-words text-foreground [&>:first-child]:mt-0"
-        )}
-        aria-live={liveTurn ? "polite" : undefined}
-        aria-busy={liveTurn || undefined}
-      >
-        {row?.reply_to != null && !item.quotesPrevious ? (
-          <QuoteBar targetId={row.reply_to} tone="light" className="mb-2" />
-        ) : null}
-        {slot ? <StepSlot view={slot} running={view.running} /> : null}
-        {liveTurn &&
-        !scope.readOnly &&
-        scope.connectionId &&
-        scope.agentType ? (
-          <div className="mt-2 flex flex-col gap-2 empty:hidden">
-            <BlockingPrompts
-              connectionId={scope.connectionId}
-              agentType={scope.agentType}
-            />
-          </div>
-        ) : null}
-        {liveTurn ? <RequestInputs rows={item.attached} /> : null}
-        {view.answered.map((line) => (
-          <Answered key={line.rowId} line={line} />
-        ))}
-        {view.dispatches.length > 0 ? (
-          <DispatchAttachments rows={view.dispatches} />
-        ) : null}
-        {view.ending ? <Ending ending={view.ending} /> : null}
-        {view.resend.length > 0 && !scope.readOnly ? (
-          <Resend ids={view.resend} />
-        ) : null}
-      </div>
+      {split ? (
+        <div className="flex min-w-0 flex-col items-start gap-1">
+          {split.slice(0, -1).map((text, i) =>
+            bubble(
+              i,
+              false,
+              <>
+                {i === 0 ? quote : null}
+                <MessageResponse
+                  className={cn("text-sm", MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
+                >
+                  {text}
+                </MessageResponse>
+              </>
+            )
+          )}
+          {bubble(split.length - 1, item.tail, rest, liveTurn)}
+        </div>
+      ) : (
+        bubble(
+          0,
+          item.tail,
+          <>
+            {quote}
+            {rest}
+          </>,
+          liveTurn
+        )
+      )}
     </MessageRow>
   )
 }

@@ -8552,7 +8552,15 @@
           "other_config": "別の実行設定から",
           "agent": "エージェントの既定値"
         },
-        "nothingPicked": "このエージェントには選ぶ項目がありません。"
+        "nothingPicked": "このエージェントには選ぶ項目がありません。",
+        "progress": "{at} / {total}",
+        "several": "複数選択可",
+        "back": "前へ",
+        "next": "次へ",
+        "submit": "送信",
+        "skip": "スキップ",
+        "noLongerAsked": "この質問はもう回答を待っていません",
+        "otherWrote": "その他：{text}"
       },
       "changed": {
         "applied": "作業アシスタントを作成しました",
@@ -8811,6 +8819,23 @@
         "withdrawn": "もう回答を待っていません"
       },
       "answeredForYou": "代わりに {count} 回回答"
+    },
+    "card": {
+      "stripped": "クリックなしで動くアクションを取り除きました",
+      "cancel": "キャンセル",
+      "confirm": "確認",
+      "notFound": "見つかりません",
+      "reply": {
+        "title": "このメッセージを送信しますか？",
+        "description": "カードの「{label}」は次の内容をあなたのメッセージとして送ります：",
+        "send": "送信",
+        "toComposer": "入力欄に入れる"
+      },
+      "drop": {
+        "title": "この件を取りやめますか？",
+        "description": "「{summary}」は案件から外れます。",
+        "confirm": "取りやめる"
+      }
     }
   }
 }

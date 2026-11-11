@@ -8552,7 +8552,15 @@
           "other_config": "d'une autre configuration",
           "agent": "valeur par défaut de l'agent"
         },
-        "nothingPicked": "Rien à choisir pour cet agent."
+        "nothingPicked": "Rien à choisir pour cet agent.",
+        "progress": "{at} / {total}",
+        "several": "Plusieurs choix possibles",
+        "back": "Précédent",
+        "next": "Suivant",
+        "submit": "Envoyer",
+        "skip": "Passer",
+        "noLongerAsked": "N’attend plus de réponse",
+        "otherWrote": "Autre : {text}"
       },
       "changed": {
         "applied": "Assistant de travail créé",
@@ -8811,6 +8819,23 @@
         "withdrawn": "Elle n'attend plus de réponse"
       },
       "answeredForYou": "{count, plural, one {Répondue pour toi # fois} other {Répondue pour toi # fois}}"
+    },
+    "card": {
+      "stripped": "Actions qui s’exécuteraient sans votre clic retirées",
+      "cancel": "Annuler",
+      "confirm": "Confirmer",
+      "notFound": "Ce n’est plus disponible",
+      "reply": {
+        "title": "Envoyer ce message ?",
+        "description": "« {label} » de la carte envoie ceci comme votre message :",
+        "send": "Envoyer",
+        "toComposer": "Mettre dans la zone de saisie"
+      },
+      "drop": {
+        "title": "Abandonner ce sujet ?",
+        "description": "« {summary} » quitte vos sujets en cours.",
+        "confirm": "Abandonner"
+      }
     }
   }
 }

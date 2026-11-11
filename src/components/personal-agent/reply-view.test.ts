@@ -248,6 +248,24 @@ describe("replyView once the turn ended", () => {
           },
         }),
         row("question", { data: { kind: "ask", state: "resolved" } }),
+        // One with its questions on the row is a choice card in the
+        // bubble instead (10.7).
+        row("question", {
+          data: {
+            kind: "ask",
+            state: "answered",
+            questions: [
+              {
+                id: "q1",
+                question: "When?",
+                header: "",
+                multi_select: false,
+                options: [],
+              },
+            ],
+            answer: { answers: [{ selected: ["Monday"] }] },
+          },
+        }),
       ],
     })
     expect(v.answered.map((a) => [a.kind, a.text])).toEqual([

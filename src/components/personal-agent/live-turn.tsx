@@ -54,9 +54,13 @@ export function usePersonalAgentAttachment(
 export function BlockingPrompts({
   connectionId,
   agentType,
+  questionsShown,
 }: {
   connectionId: string
   agentType: AgentType
+  /** Questions the reply already shows as choice cards (by question id):
+   *  only one the timeline has not recorded is drawn here. */
+  questionsShown?: ReadonlySet<string>
 }) {
   const conn = useConnectionStateById(connectionId)
   const botId = useBotId()
@@ -75,7 +79,8 @@ export function BlockingPrompts({
           }}
         />
       ) : null}
-      {conn.pendingAskQuestion ? (
+      {conn.pendingAskQuestion &&
+      !questionsShown?.has(conn.pendingAskQuestion.question_id) ? (
         <AskQuestionCard
           question={conn.pendingAskQuestion}
           onAnswer={(questionId, answer) =>

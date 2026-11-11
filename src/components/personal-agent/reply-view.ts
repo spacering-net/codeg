@@ -115,6 +115,15 @@ export function slotOfStep(step: ReplyStep | null): SlotView {
   return { kind: "step", key: `s${step.n}`, step }
 }
 
+/** The brain's question that carries its questions (not a plan approval). */
+function hasQuestions(r: TimelineRow): boolean {
+  return (
+    r.data?.kind !== "plan_approval" &&
+    Array.isArray(r.data?.questions) &&
+    (r.data.questions as unknown[]).length > 0
+  )
+}
+
 function answeredLines(attached: readonly TimelineRow[]): AnsweredLine[] {
   const lines: AnsweredLine[] = []
   for (const r of attached) {
@@ -128,7 +137,9 @@ function answeredLines(attached: readonly TimelineRow[]): AnsweredLine[] {
       const name =
         options.find((o) => o.option_id === chosen)?.name ?? chosen ?? ""
       lines.push({ rowId: r.id, kind: "permission", text: name })
-    } else if (r.kind === "question") {
+    } else if (r.kind === "question" && !hasQuestions(r)) {
+      // A question with its questions on the row is a choice card in the
+      // bubble, answered or not: only an older row is a quiet line.
       const answer =
         data?.answer && typeof data.answer === "object"
           ? (data.answer as {

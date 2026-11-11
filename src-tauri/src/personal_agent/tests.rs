@@ -3368,8 +3368,8 @@ async fn workers_have_their_own_git_repositories_and_no_owner_file() {
     assert!(!dir.starts_with(&primary_dir), "not inside the primary's history");
     assert_eq!(workdir::editable_files(true).len(), 3);
     assert!(!workdir::editable_files(true).contains(&workdir::USER_FILE));
-    assert!(workdir::skill_md(true).contains("primary assistant"));
-    assert!(!workdir::skill_md(false).contains("You have no `USER.md`"));
+    assert!(workdir::skill_md(true, Default::default()).contains("primary assistant"));
+    assert!(!workdir::skill_md(false, Default::default()).contains("You have no `USER.md`"));
 }
 
 #[tokio::test]
@@ -7624,4 +7624,300 @@ async fn a_card_raised_between_the_setting_and_the_hand_off_tells_the_owner_once
         }
     }
     assert_eq!(told, 1, "told once");
+}
+
+// ── 1.10: cards in the assistant's replies ─────────────────────────────────
+
+/// A finished reply of the assistant's with a card on it: two options, one
+/// button each.
+fn card_reply(state: &str) -> NewRow {
+    let spec = [
+        r#"{"op":"add","path":"/root","value":"main"}"#,
+        r#"{"op":"add","path":"/elements/main","value":{"type":"Card","props":{"title":"Two ways"},"children":["a","b"]}}"#,
+        r#"{"op":"add","path":"/elements/a","value":{"type":"Button","props":{"label":"Go with plan A"},"on":{"press":{"action":"pa.reply"}},"children":[]}}"#,
+        r#"{"op":"add","path":"/elements/b","value":{"type":"Button","props":{"label":"Go with plan B"},"on":{"press":{"action":"pa.reply"}},"children":[]}}"#,
+    ]
+    .join("\n");
+    let mut r = NewRow::new(TimelineKind::Reply, format!("Pick one.\n\n```spec\n{spec}\n```"));
+    r.data = Some(serde_json::json!({ "state": state }));
+    r
+}
+
+fn click(element: &str, label: &str) -> super::card_acts::CardClick {
+    super::card_acts::CardClick {
+        element: element.into(),
+        label: label.into(),
+    }
+}
+
+/// [Go with plan A] on the assistant's card says it for the owner, quoting
+/// the card, and tells the assistant which button it was; the card keeps
+/// the press, and the same button sends nothing a second time. A reply
+/// still being written, or another assistant's, has no buttons to press.
+#[tokio::test]
+async fn a_card_button_speaks_for_the_owner_once_and_the_card_keeps_it() {
+    let (engine, tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, _state) = live_connection(&engine, seg, "pa-card").await;
+    let card = svc::insert_row(&engine.db.conn, engine.bot().await, card_reply("done"))
+        .await
+        .unwrap();
+
+    let sent = engine
+        .send_card_reply("Go with plan A".into(), card.id, click("c1/a", "Go with plan A"))
+        .await
+        .unwrap();
+    assert_eq!(sent.reply_to, Some(card.id), "it quotes the card");
+    assert_eq!(sent.body, "Go with plan A");
+    let kept = svc::get_row(&engine.db.conn, card.id).await.unwrap().unwrap();
+    let acts = &data_of(&kept)["card_acts"];
+    assert_eq!(acts["c1/a"]["action"], "pa.reply");
+    assert_eq!(acts["c1/a"]["label"], "Go with plan A");
+    assert!(acts["c1/b"].is_null());
+
+    let again = engine
+        .send_card_reply("Go with plan A".into(), card.id, click("c1/a", "Go with plan A"))
+        .await;
+    assert!(again.is_err(), "the same button sends once");
+    let owners = svc::page(&engine.db.conn, engine.bot().await, None, 50)
+        .await
+        .unwrap()
+        .0
+        .into_iter()
+        .filter(|r| r.kind == TimelineKind::Owner)
+        .count();
+    assert_eq!(owners, 1, "nothing more was sent");
+
+    engine.pump().await;
+    let (prompt, _) = take_prompt(&mut rx);
+    assert!(
+        prompt.contains(&format!(
+            "[#{}, the owner clicked the button \"Go with plan A\" on the card in #{}",
+            sent.id, card.id
+        )),
+        "{prompt}"
+    );
+    // The quoted card reaches the brain as words, not JSON lines.
+    assert!(prompt.contains("[button] Go with plan A"), "{prompt}");
+    assert!(!prompt.contains("\"op\":\"add\""), "{prompt}");
+
+    // A matter closed from the card: kept as such; a reply button cannot
+    // be kept without its message.
+    let kept = engine
+        .card_act(
+            card.id,
+            super::card_acts::CardAct {
+                element: "c1/done-7".into(),
+                action: "pa.item".into(),
+                label: Some("Done".into()),
+                op: Some("done".into()),
+            },
+        )
+        .await
+        .unwrap();
+    let acts = &kept.data.as_ref().unwrap()["card_acts"];
+    assert_eq!(acts["c1/done-7"]["op"], "done");
+    assert_eq!(acts["c1/a"]["action"], "pa.reply", "earlier presses stay");
+    assert!(engine
+        .card_act(
+            card.id,
+            super::card_acts::CardAct {
+                element: "c1/b".into(),
+                action: "pa.reply".into(),
+                label: None,
+                op: None,
+            },
+        )
+        .await
+        .is_err());
+
+    // A card that keeps no more presses sends nothing.
+    let full = svc::insert_row(&engine.db.conn, engine.bot().await, card_reply("done"))
+        .await
+        .unwrap();
+    let acts: serde_json::Map<String, serde_json::Value> = (0..100)
+        .map(|i| (format!("c9/x{i}"), serde_json::json!({ "action": "pa.item", "at": "now" })))
+        .collect();
+    svc::update_row_data(
+        &engine.db.conn,
+        full.id,
+        None,
+        Some(serde_json::json!({ "state": "done", "card_acts": acts })),
+    )
+    .await
+    .unwrap();
+    assert!(engine
+        .send_card_reply("Go with plan B".into(), full.id, click("c9/b", "Go with plan B"))
+        .await
+        .is_err());
+    let owners = svc::page(&engine.db.conn, engine.bot().await, None, 50)
+        .await
+        .unwrap()
+        .0
+        .into_iter()
+        .filter(|r| r.kind == TimelineKind::Owner)
+        .count();
+    assert_eq!(owners, 1, "a press the card cannot keep sends nothing");
+
+    // A message that cannot go leaves the button as it was: the press and
+    // the message are written together or not at all.
+    assert!(engine
+        .send_card_reply("   ".into(), card.id, click("c1/b", "   "))
+        .await
+        .is_err());
+    let kept = svc::get_row(&engine.db.conn, card.id).await.unwrap().unwrap();
+    assert!(data_of(&kept)["card_acts"]["c1/b"].is_null(), "not pressed");
+
+    // Still being written: no buttons yet.
+    let running = svc::insert_row(&engine.db.conn, engine.bot().await, card_reply("running"))
+        .await
+        .unwrap();
+    assert!(engine
+        .send_card_reply("Go with plan B".into(), running.id, click("c2/b", "Go with plan B"))
+        .await
+        .is_err());
+    // The owner's own message has no buttons; another assistant's card is
+    // not this one's to press.
+    assert!(engine
+        .send_card_reply("x".into(), sent.id, click("c3/x", "x"))
+        .await
+        .is_err());
+    let w = worker(&engine, &tmp, "Dev").await;
+    assert!(w
+        .send_card_reply("Go with plan B".into(), card.id, click("c1/b", "Go with plan B"))
+        .await
+        .is_err());
+}
+
+/// What the brain reads back of a reply with a card — `timeline_read`, the
+/// recent conversation on a new session's card — is the card's words.
+#[tokio::test]
+async fn a_card_is_read_back_as_its_words() {
+    let (engine, _tmp) = configured().await;
+    open_segment(&engine).await;
+    svc::insert_row(&engine.db.conn, engine.bot().await, card_reply("done"))
+        .await
+        .unwrap();
+    let out = super::tools::timeline_read_for_test(&engine).await;
+    assert!(out.contains("[card]\nTwo ways\n[button] Go with plan A\n[button] Go with plan B\n[/card]"), "{out}");
+    assert!(!out.contains("/elements/"), "{out}");
+    let handoff = engine.handoff_for_test().await;
+    assert!(handoff.contains("[button] Go with plan B"), "{handoff}");
+    assert!(!handoff.contains("/elements/"), "{handoff}");
+    // And how to write one: the skill's guide is there for Claude Code.
+    assert!(handoff.contains("`ui-render.md` is the format"), "{handoff}");
+}
+
+/// The owner's preference on cards decides the skill's section and whether
+/// its guide is installed (9.1); changing it reinstalls both, and the
+/// handoff card follows.
+#[tokio::test]
+async fn the_owners_card_preference_decides_the_skill_and_its_guide() {
+    let (host, w, _tmp) = hosted().await;
+    let engine = host.primary();
+    open_segment(&engine).await;
+    let row = engine.agent_row().await.unwrap();
+    let skill = workdir::skill_dir(&engine.workdir_of(&row), AgentType::ClaudeCode).unwrap();
+    let w = host.engine_for(Some(w)).await.unwrap();
+    let wrow = w.agent_row().await.unwrap();
+    std::fs::create_dir_all(w.workdir_of(&wrow)).unwrap();
+    w.resync_skill().await;
+    let wskill = workdir::skill_dir(&w.workdir_of(&wrow), AgentType::ClaudeCode).unwrap();
+    for dir in [&skill, &wskill] {
+        assert_eq!(
+            std::fs::read_to_string(dir.join(workdir::UI_RENDER_FILE)).unwrap(),
+            workdir::UI_RENDER_MD,
+            "every assistant's brain has the guide"
+        );
+        let md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        assert!(md.contains("Read `ui-render.md`, next to this file"), "{md}");
+        assert!(!md.contains("<!-- cards -->"));
+    }
+
+    engine.apply_settings(&[change("prefs.cards", serde_json::json!("never"))]).await.unwrap();
+    for dir in [&skill, &wskill] {
+        assert!(!dir.join(workdir::UI_RENDER_FILE).exists(), "no cards, no guide");
+        let md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        assert!(md.contains("The owner wants no cards"), "{md}");
+    }
+    let handoff = engine.handoff_for_test().await;
+    assert!(handoff.contains("The owner wants no cards"), "{handoff}");
+    assert!(!handoff.contains("pa.reply"), "{handoff}");
+
+    engine.apply_settings(&[change("prefs.cards", serde_json::json!("decisions"))]).await.unwrap();
+    assert!(skill.join(workdir::UI_RENDER_FILE).is_file());
+    let md = std::fs::read_to_string(skill.join("SKILL.md")).unwrap();
+    assert!(md.contains("only when they have to\ndecide something"), "{md}");
+
+    // Its own skill switched off and on: gone and back at once.
+    engine.apply_settings(&[change("own.skill_enabled", serde_json::json!(false))]).await.unwrap();
+    assert!(!skill.join("SKILL.md").exists());
+    let handoff = engine.handoff_for_test().await;
+    assert!(handoff.contains("Card format: a ```spec fence"), "no skill, the short format: {handoff}");
+    engine.apply_settings(&[change("own.skill_enabled", serde_json::json!(true))]).await.unwrap();
+    assert!(skill.join(workdir::UI_RENDER_FILE).is_file());
+}
+
+/// An executor's long result is cut after its cards became words: no card
+/// is cut in half (9.5).
+#[test]
+fn a_long_excerpt_is_cut_after_its_cards_become_words() {
+    let rows: Vec<String> = (0..80).map(|i| format!("[\"row {i}\",\"{}\"]", "x".repeat(20))).collect();
+    let table = format!(
+        r#"{{"op":"add","path":"/elements/t","value":{{"type":"Table","props":{{"columns":["Name","Note"],"rows":[{}]}},"children":[]}}}}"#,
+        rows.join(",")
+    );
+    let spec = format!("{}\n{table}", r#"{"op":"add","path":"/root","value":"t"}"#);
+    let text = format!("Done.\n\n```spec\n{spec}\n```");
+    assert!(text.chars().count() > 2_000);
+    let excerpt = super::dispatch::excerpt_of(&text);
+    assert!(excerpt.starts_with("Done.\n\n[card]\n| Name | Note |\n| row 0 |"), "{excerpt}");
+    assert!(!excerpt.contains("\"op\""), "{excerpt}");
+    // Short enough: kept as written, so the page still draws the card.
+    let short = "Done.\n\n```spec\n{\"op\":\"add\",\"path\":\"/root\",\"value\":\"t\"}\n```";
+    assert_eq!(super::dispatch::excerpt_of(short), short);
+}
+
+/// A secret the owner gives the brain's own question goes to the brain, and
+/// the timeline keeps "•••" (found in 1.10: the choice card shows the
+/// answer from the row).
+#[tokio::test]
+async fn a_secret_answer_to_the_brains_question_is_not_kept() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (_rx, state) = live_connection(&engine, seg, "pa-secret").await;
+    let spec = crate::acp::question::QuestionSpec {
+        id: "k".into(),
+        question: "Your API key?".into(),
+        header: "Key".into(),
+        multi_select: false,
+        options: vec![],
+        is_secret: true,
+    };
+    state.write().await.pending_question = Some(crate::acp::question::PendingQuestionState {
+        question_id: "qs".into(),
+        questions: vec![spec.clone()],
+        created_at: chrono::Utc::now(),
+    });
+    let mut row = NewRow::new(TimelineKind::Question, "Your API key?");
+    row.ref_id = Some("qs".into());
+    row.data = Some(serde_json::json!({ "kind": "ask", "state": "pending", "questions": [spec] }));
+    let row = svc::insert_row(&engine.db.conn, engine.bot().await, row).await.unwrap();
+    let _ = engine
+        .answer_question(
+            "qs",
+            crate::acp::question::QuestionAnswer {
+                answers: vec![crate::acp::question::QuestionAnswerItem {
+                    question_id: "k".into(),
+                    labels: vec!["sk-live-123".into()],
+                }],
+                declined: false,
+            },
+        )
+        .await;
+    let kept = svc::get_row(&engine.db.conn, row.id).await.unwrap().unwrap();
+    let data = data_of(&kept);
+    assert_eq!(data["state"], "answered");
+    assert!(!kept.data.unwrap().contains("sk-live-123"), "{data}");
+    assert!(data.to_string().contains("•••"), "{data}");
 }

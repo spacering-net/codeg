@@ -387,7 +387,8 @@ impl PersonalAgentEngine {
                 "its working directory could not be made: {e}"
             )));
         }
-        workdir::sync_bot_skill(&dir, brain.agent_type, settings.skill_enabled, true);
+        let cards = self.prefs().await.cards;
+        workdir::sync_bot_skill(&dir, brain.agent_type, settings.skill_enabled, true, cards);
 
         // How its executor config is used, and the kind of work it is first
         // for — when no one is yet.

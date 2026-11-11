@@ -601,7 +601,11 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     crate::db::entities::personal_agent_timeline::TimelineKind::Reply => "you",
                     _ => "codeg",
                 };
-                let body: String = row.body.chars().take(2_000).collect();
+                // A card as its words, not its JSON lines (9.5).
+                let body: String = super::spec_text::cards_as_text(&row.body)
+                    .chars()
+                    .take(2_000)
+                    .collect();
                 lines.push(format!(
                     "#{} {} [{}] {}: {}",
                     row.id,

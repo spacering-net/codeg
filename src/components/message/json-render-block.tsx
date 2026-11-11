@@ -32,6 +32,7 @@ import {
   type BaseComponentProps,
 } from "@json-render/react"
 import { shadcnComponents, type ShadcnProps } from "@json-render/shadcn"
+import type { Spec } from "@json-render/core"
 import { StreamdownContext } from "streamdown"
 
 import { MarkdownLink } from "@/components/ai-elements/markdown-link"
@@ -117,20 +118,38 @@ function chart(type: ChartType) {
   }
 }
 
+/** Every component a card can hold, as a session's card draws it; an
+ *  assistant's card (`personal-agent/pa-json-render-block.tsx`) swaps its
+ *  Button and Link. */
+export const jsonRenderComponents = {
+  ...shadcnComponents,
+  Card,
+  Link,
+  AreaChart: chart("AreaChart"),
+  BarChart: chart("BarChart"),
+  LineChart: chart("LineChart"),
+  PieChart: chart("PieChart"),
+  RadarChart: chart("RadarChart"),
+  RadialChart: chart("RadialChart"),
+  ScatterChart: chart("ScatterChart"),
+}
+
 const { registry } = defineRegistry(jsonRenderCatalog, {
-  components: {
-    ...shadcnComponents,
-    Card,
-    Link,
-    AreaChart: chart("AreaChart"),
-    BarChart: chart("BarChart"),
-    LineChart: chart("LineChart"),
-    PieChart: chart("PieChart"),
-    RadarChart: chart("RadarChart"),
-    RadialChart: chart("RadialChart"),
-    ScatterChart: chart("ScatterChart"),
-  },
+  components: jsonRenderComponents,
 })
+
+/** The fence's spec, or `null` when it is not one json-render can render
+ *  (then it stays code). */
+export function renderableSpec(source: string): Spec | null {
+  if (!isSpecStream(source)) return null
+  try {
+    const compiled = compileSpec(source)
+    return hasChildCycle(compiled) ? null : compiled
+  } catch {
+    // A `test` patch that fails throws; the fence stays code.
+    return null
+  }
+}
 
 export default function JsonRenderBlock({
   source,
@@ -145,16 +164,7 @@ export default function JsonRenderBlock({
   // still arriving, json-render keeps quiet about children that have not
   // arrived yet.
   const { mode } = useContext(StreamdownContext)
-  const spec = useMemo(() => {
-    if (!isSpecStream(source)) return null
-    try {
-      const compiled = compileSpec(source)
-      return hasChildCycle(compiled) ? null : compiled
-    } catch {
-      // A `test` patch that fails throws; the fence stays code.
-      return null
-    }
-  }, [source])
+  const spec = useMemo(() => renderableSpec(source), [source])
 
   if (!spec) return <>{fallback}</>
   return (

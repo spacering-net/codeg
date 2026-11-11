@@ -8552,7 +8552,15 @@
           "other_config": "沿用別的執行配置",
           "agent": "agent 自己的預設值"
         },
-        "nothingPicked": "這個 agent 沒有要選的項目。"
+        "nothingPicked": "這個 agent 沒有要選的項目。",
+        "progress": "{at} / {total}",
+        "several": "可複選",
+        "back": "上一題",
+        "next": "下一題",
+        "submit": "提交",
+        "skip": "略過",
+        "noLongerAsked": "這個問題已不再等你回答",
+        "otherWrote": "其他：{text}"
       },
       "changed": {
         "applied": "建好了一個工作助手",
@@ -8811,6 +8819,23 @@
         "withdrawn": "它已經不再等回答了"
       },
       "answeredForYou": "助理代答 {count} 次"
+    },
+    "card": {
+      "stripped": "已移除自動觸發的動作",
+      "cancel": "取消",
+      "confirm": "確定",
+      "notFound": "找不到了",
+      "reply": {
+        "title": "傳送這則訊息？",
+        "description": "卡片上的「{label}」會以你的名義送出這段話：",
+        "send": "傳送",
+        "toComposer": "放進輸入框"
+      },
+      "drop": {
+        "title": "放棄這件事？",
+        "description": "「{summary}」會從事項中移除。",
+        "confirm": "放棄"
+      }
     }
   }
 }

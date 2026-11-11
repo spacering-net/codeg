@@ -348,6 +348,8 @@ pub struct PersonalAgentEngine {
     pub(super) dispatch_lock: Mutex<()>,
     /// Serializes writing the ask cards (7.3.1): raised once, settled once.
     pub(super) asks_lock: Mutex<()>,
+    /// Serializes keeping what the owner pressed on the cards (9.2).
+    pub(super) card_lock: Mutex<()>,
     /// A delivery was asked for while one ran: run again after it.
     pump_again: AtomicBool,
     wake: Notify,
@@ -381,6 +383,7 @@ impl PersonalAgentEngine {
             pump_lock: Mutex::new(()),
             dispatch_lock: Mutex::new(()),
             asks_lock: Mutex::new(()),
+            card_lock: Mutex::new(()),
             pump_again: AtomicBool::new(false),
             wake: Notify::new(),
             booted: AtomicBool::new(false),
@@ -413,6 +416,21 @@ impl PersonalAgentEngine {
         );
         engine.booted.store(true, Ordering::SeqCst);
         engine
+    }
+
+    /// The handoff card the open segment would start with.
+    #[cfg(test)]
+    pub(crate) async fn handoff_for_test(&self) -> String {
+        let row = self.agent_row().await.expect("configured");
+        let config = brain_of(&row).expect("a brain");
+        let seg = svc::open_segment(&self.db.conn, self.bot().await)
+            .await
+            .unwrap()
+            .expect("an open segment");
+        let workdir = self.workdir_of(&row);
+        self.handoff_card(&row, &config, &seg, &workdir, &[], 32_000)
+            .await
+            .text
     }
 
     /// Run boot recovery, as `run` does first.
@@ -1392,7 +1410,8 @@ impl PersonalAgentEngine {
             None => None,
         };
         if let Some(questions) = questions {
-            let outcome = crate::acp::question::build_outcome(&questions, &answer);
+            // A secret goes to the agent, not into the timeline.
+            let outcome = crate::acp::question::redacted_outcome(&questions, &answer);
             let value = serde_json::to_value(&outcome).unwrap_or_default();
             self.settle_question_row(question_id, Some(value)).await;
         }
@@ -2059,6 +2078,7 @@ impl PersonalAgentEngine {
             agent_type,
             settings.skill_enabled,
             row.kind == BotKind::Worker,
+            self.prefs().await.cards,
         );
         let env = crate::commands::acp::build_session_runtime_env(
             &self.db,
@@ -2636,6 +2656,7 @@ impl PersonalAgentEngine {
                     Some(id) => self.quote_excerpt(id).await.map(|text| (id, text)),
                     None => None,
                 },
+                clicked: super::card_acts::clicked_of(o),
                 text: o.body.clone(),
             });
         }
@@ -2904,6 +2925,7 @@ impl PersonalAgentEngine {
                 .unwrap_or(row.body),
             _ => row.body,
         };
+        let text = super::spec_text::cards_as_text(&text);
         let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let mut excerpt: String = line.chars().take(QUOTE_EXCERPT_CHARS).collect();
         if line.chars().count() > QUOTE_EXCERPT_CHARS {
@@ -2999,7 +3021,9 @@ impl PersonalAgentEngine {
                             None => format!("You asked: {}", r.body),
                         }
                     }
-                    _ => r.body,
+                    // A card as its words: the JSON lines would fill the
+                    // card's budget (9.5).
+                    _ => super::spec_text::cards_as_text(&r.body).into_owned(),
                 },
             })
             .collect();
@@ -3067,6 +3091,9 @@ impl PersonalAgentEngine {
             division: division.as_deref(),
             new_bot: new_bot.as_deref(),
             budget_chars: budget as usize,
+            cards: self.prefs().await.cards,
+            skill: settings_of(row).skill_enabled
+                && workdir::skill_dir(workdir, config.agent_type).is_some(),
         })
     }
 
@@ -3489,17 +3516,44 @@ impl PersonalAgentEngine {
         blocks: Vec<PromptInputBlock>,
         reply_to: Option<i32>,
     ) -> Result<TimelineRow, String> {
-        self.queue_owner_message(text, blocks, reply_to, None).await
+        self.queue_owner_message(text, blocks, reply_to, None, None, None).await
+    }
+
+    /// An owner message from a button on the card in `reply_to` (9.2);
+    /// `card_click` names the button, and `reply_data` — the card's row
+    /// with the press kept — is written in the same transaction as the
+    /// message: both, or neither.
+    pub(super) async fn queue_card_message(
+        &self,
+        text: String,
+        reply_to: i32,
+        card_click: serde_json::Value,
+        reply_data: serde_json::Value,
+    ) -> Result<TimelineRow, String> {
+        self.queue_owner_message(
+            text,
+            Vec::new(),
+            Some(reply_to),
+            None,
+            Some(card_click),
+            Some(reply_data),
+        )
+        .await
     }
 
     /// Queue an owner message; `resent_from` is the interrupted message it
-    /// sends again, whose turn's ledger the delivery inherits.
+    /// sends again, whose turn's ledger the delivery inherits. From a
+    /// card's button, `card_click` names the button and `reply_data` is the
+    /// quoted card's row with the press kept, written with the message in
+    /// one transaction.
     async fn queue_owner_message(
         &self,
         text: String,
         blocks: Vec<PromptInputBlock>,
         reply_to: Option<i32>,
         resent_from: Option<i32>,
+        card_click: Option<serde_json::Value>,
+        reply_data: Option<serde_json::Value>,
     ) -> Result<TimelineRow, String> {
         if self.agent_row().await.is_none() {
             return Err("configure the personal agent first".into());
@@ -3527,10 +3581,27 @@ impl PersonalAgentEngine {
         if let Some(from) = resent_from {
             data.insert("resent_from".into(), from.into());
         }
+        if let Some(click) = card_click {
+            data.insert("card_click".into(), click);
+        }
         if !data.is_empty() {
             row.data = Some(serde_json::Value::Object(data));
         }
-        let row = self.push_row(row).await.ok_or("could not record the message")?;
+        let row = match (reply_to, reply_data) {
+            // From a card's button: the press is kept with the message.
+            (Some(card), Some(reply_data)) => {
+                let (inserted, card) =
+                    svc::insert_row_writing(&self.db.conn, self.bot().await, row, card, reply_data)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                let inserted = svc::to_row(inserted);
+                let mut rows = vec![inserted.clone()];
+                rows.extend(card.map(svc::to_row));
+                self.emit_rows(rows);
+                inserted
+            }
+            _ => self.push_row(row).await.ok_or("could not record the message")?,
+        };
         self.emit(PersonalAgentChange::Status);
         let row = self.give_way_to(row, &blocks).await;
         self.nudge();
@@ -3681,6 +3752,7 @@ impl PersonalAgentEngine {
         let line = OwnerLine {
             id: row.id,
             quote,
+            clicked: row.data.as_ref().and_then(super::card_acts::clicked_in),
             text: row.body.clone(),
         };
         let text = cards::owner_message(&line);
@@ -3808,8 +3880,15 @@ impl PersonalAgentEngine {
             },
             None => None,
         };
+        // Sent from a card's button, it still says which.
+        let card_click = reply_to.and(
+            row.data
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                .and_then(|d| d.get("card_click").cloned()),
+        );
         let new = self
-            .queue_owner_message(row.body.clone(), blocks, reply_to, Some(row.id))
+            .queue_owner_message(row.body.clone(), blocks, reply_to, Some(row.id), card_click, None)
             .await?;
         let mut data = row
             .data
@@ -3975,11 +4054,31 @@ impl PersonalAgentEngine {
                 agent_type,
                 settings.skill_enabled,
                 saved.kind == BotKind::Worker,
+                self.prefs().await.cards,
             );
         }
         self.emit(PersonalAgentChange::Agent);
         self.emit(PersonalAgentChange::Status);
         self.info_of(&saved).ok_or_else(|| "the saved configuration is unreadable".into())
+    }
+
+    /// Install this assistant's skill anew: the owner's preference on cards
+    /// or its own skill switch changed (9.1). Sessions already running read
+    /// the change from `<codeg-prefs>`; the next one loads the new files.
+    pub(super) async fn resync_skill(&self) {
+        let Some(row) = self.agent_row().await else {
+            return;
+        };
+        let Some(brain) = brain_of(&row) else {
+            return;
+        };
+        workdir::sync_bot_skill(
+            &self.workdir_of(&row),
+            brain.agent_type,
+            settings_of(&row).skill_enabled,
+            row.kind == BotKind::Worker,
+            self.prefs().await.cards,
+        );
     }
 
     async fn apply_brain_change(&self, old: &AssistantAgentConfig, new: &AssistantAgentConfig) {

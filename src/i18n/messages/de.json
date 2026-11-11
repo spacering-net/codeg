@@ -8552,7 +8552,15 @@
           "other_config": "aus einer anderen Konfiguration",
           "agent": "Standard des Agenten"
         },
-        "nothingPicked": "Für diesen Agenten gibt es nichts auszuwählen."
+        "nothingPicked": "Für diesen Agenten gibt es nichts auszuwählen.",
+        "progress": "{at} / {total}",
+        "several": "Mehrere möglich",
+        "back": "Zurück",
+        "next": "Weiter",
+        "submit": "Absenden",
+        "skip": "Überspringen",
+        "noLongerAsked": "Wartet nicht mehr auf eine Antwort",
+        "otherWrote": "Anderes: {text}"
       },
       "changed": {
         "applied": "Arbeitsassistent erstellt",
@@ -8811,6 +8819,23 @@
         "withdrawn": "Es wartet nicht mehr auf eine Antwort"
       },
       "answeredForYou": "{count, plural, one {# Mal für dich beantwortet} other {# Mal für dich beantwortet}}"
+    },
+    "card": {
+      "stripped": "Aktionen entfernt, die ohne deinen Klick laufen würden",
+      "cancel": "Abbrechen",
+      "confirm": "Bestätigen",
+      "notFound": "Nicht mehr vorhanden",
+      "reply": {
+        "title": "Diese Nachricht senden?",
+        "description": "„{label}“ auf der Karte sendet dies als deine Nachricht:",
+        "send": "Senden",
+        "toComposer": "Ins Eingabefeld übernehmen"
+      },
+      "drop": {
+        "title": "Diese Sache verwerfen?",
+        "description": "„{summary}“ verschwindet aus deinen offenen Sachen.",
+        "confirm": "Verwerfen"
+      }
     }
   }
 }

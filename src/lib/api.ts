@@ -22,6 +22,7 @@ import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
+  CardClick,
   LeakedTempReclaim,
   LeakedTempScan,
   AgentType,
@@ -2575,13 +2576,34 @@ export async function personalAgentSend(
   text: string,
   blocks?: unknown[] | null,
   replyTo?: number | null,
-  bot?: number | null
+  bot?: number | null,
+  /** The button of the quoted reply's card it came from (9.2). */
+  card?: CardClick | null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_send", {
     text,
     blocks: blocks && blocks.length > 0 ? blocks : null,
     replyTo: replyTo ?? null,
     botId: bot ?? null,
+    card: card ?? null,
+  })
+}
+
+/** Record what a button of a card in an assistant's reply did (9.2): the
+ *  reply row, as it now is. */
+export async function personalAgentCardAct(
+  bot: number | null | undefined,
+  rowId: number,
+  element: string,
+  act: { action: "pa.item"; label?: string | null; op?: string | null }
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_card_act", {
+    botId: bot ?? null,
+    rowId,
+    element,
+    action: act.action,
+    label: act.label ?? null,
+    op: act.op ?? null,
   })
 }
 

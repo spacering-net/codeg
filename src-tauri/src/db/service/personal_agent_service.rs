@@ -922,6 +922,36 @@ pub async fn insert_row(
     Ok(row.into_active(bot, Utc::now()).insert(conn).await?)
 }
 
+/// Insert `row` and, in the same transaction, set row `other`'s data to
+/// `data` (the assistant's own rows only): both are written, or neither.
+/// Returns the new row and `other` as written.
+pub async fn insert_row_writing(
+    conn: &DatabaseConnection,
+    bot: i32,
+    row: NewRow,
+    other: i32,
+    data: serde_json::Value,
+) -> Result<(timeline::Model, Option<timeline::Model>), DbError> {
+    use sea_orm::TransactionTrait;
+    require_bot(bot)?;
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let inserted = row.into_active(bot, now).insert(&txn).await?;
+    let written = timeline::Entity::update_many()
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
+        .col_expr(timeline::Column::Data, Expr::value(Some(data.to_string())))
+        .filter(timeline::Column::Id.eq(other))
+        .filter(timeline::Column::BotId.eq(bot))
+        .exec(&txn)
+        .await?;
+    if written.rows_affected != 1 {
+        return Err(DbError::Validation(format!("no row #{other} of this assistant")));
+    }
+    txn.commit().await?;
+    let other = get_row(conn, other).await?;
+    Ok((inserted, other))
+}
+
 pub async fn get_row(conn: &DatabaseConnection, id: i32) -> Result<Option<timeline::Model>, DbError> {
     Ok(timeline::Entity::find_by_id(id).one(conn).await?)
 }

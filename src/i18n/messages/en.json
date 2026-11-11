@@ -8552,7 +8552,15 @@
           "other_config": "from another config",
           "agent": "agent's default"
         },
-        "nothingPicked": "Nothing to pick for this agent."
+        "nothingPicked": "Nothing to pick for this agent.",
+        "progress": "{at} / {total}",
+        "several": "Pick any",
+        "back": "Back",
+        "next": "Next",
+        "submit": "Submit",
+        "skip": "Skip",
+        "noLongerAsked": "No longer waiting for an answer",
+        "otherWrote": "Other: {text}"
       },
       "changed": {
         "applied": "Made a work assistant",
@@ -8811,6 +8819,23 @@
         "withdrawn": "It no longer waits for an answer"
       },
       "answeredForYou": "{count, plural, one {Answered for you # time} other {Answered for you # times}}"
+    },
+    "card": {
+      "stripped": "Removed actions that would run without your click",
+      "cancel": "Cancel",
+      "confirm": "Confirm",
+      "notFound": "That is no longer there",
+      "reply": {
+        "title": "Send this message?",
+        "description": "The card's \"{label}\" sends this as your message:",
+        "send": "Send",
+        "toComposer": "Put in the input box"
+      },
+      "drop": {
+        "title": "Drop this matter?",
+        "description": "\"{summary}\" leaves your open matters.",
+        "confirm": "Drop"
+      }
     }
   }
 }

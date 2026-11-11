@@ -526,6 +526,93 @@ describe("MessageActions", () => {
 })
 
 describe("the bubbles", () => {
+  it("splits a reply of short paragraphs into bubbles that act as one", async () => {
+    const item = itemOf(
+      [
+        row(8, "reply", {
+          batch_id: 7,
+          body: "Done.\n\nThe build is green.\n\nNext: the PR.",
+          data: { state: "done" },
+        }),
+      ],
+      "reply"
+    ) as Extract<MessageItem, { kind: "reply" }>
+    const { container } = draw(<ReplyBubble item={item} />)
+    const bubbles = [...container.querySelectorAll("[data-bubble]")]
+    expect(bubbles.map((b) => b.textContent)).toEqual([
+      "Done.",
+      "The build is green.",
+      "Next: the PR.",
+    ])
+    expect(bubbles.map((b) => b.getAttribute("data-pa-bubble-part"))).toEqual([
+      "0",
+      "1",
+      "2",
+    ])
+    // One message: one frame, its menu from any of them.
+    expect(container.querySelectorAll("[data-row-id='8']")).toHaveLength(1)
+    fireEvent.contextMenu(bubbles[0])
+    const items = await screen.findAllByRole("menuitem")
+    expect(items.map((i) => i.textContent)).toContain("Quote")
+  })
+
+  it("keeps a reply with code in one bubble", () => {
+    const item = itemOf(
+      [
+        row(9, "reply", {
+          batch_id: 7,
+          body: "Run this:\n\n```sh\npnpm test\n```\n\nThat is all.",
+          data: { state: "done" },
+        }),
+      ],
+      "reply"
+    ) as Extract<MessageItem, { kind: "reply" }>
+    const { container } = draw(<ReplyBubble item={item} />)
+    expect(container.querySelectorAll("[data-bubble]")).toHaveLength(1)
+    expect(container.querySelector("[data-pa-bubble-part]")).toBeNull()
+  })
+
+  it("shows the brain's answered question as its folded choice card", () => {
+    const item = itemOf(
+      [
+        row(10, "reply", {
+          batch_id: 7,
+          body: "Looking at local changes.",
+          data: { state: "done" },
+        }),
+        row(11, "question", {
+          batch_id: 7,
+          ref_id: "q-1",
+          data: {
+            kind: "ask",
+            state: "answered",
+            questions: [
+              {
+                id: "a",
+                question: "Where first?",
+                header: "",
+                multi_select: false,
+                options: [
+                  { label: "The PR", description: "" },
+                  { label: "Local changes", description: "" },
+                ],
+              },
+            ],
+            answer: {
+              answers: [
+                { question: "Where first?", selected: ["Local changes"] },
+              ],
+            },
+          },
+        }),
+      ],
+      "reply"
+    ) as Extract<MessageItem, { kind: "reply" }>
+    draw(<ReplyBubble item={item} />)
+    expect(screen.getByText("You picked: B. Local changes")).toBeInTheDocument()
+    expect(screen.queryByText(/Your answer:/)).toBeNull()
+  })
+
   it("starts a reply that ended with no text on its ending, with nothing above it", () => {
     const item = itemOf(
       [

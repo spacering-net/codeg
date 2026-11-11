@@ -947,7 +947,7 @@ impl PersonalAgentEngine {
         let state = self.manager.get_state(conn).await?;
         let text = state.read().await.last_assistant_text.clone()?;
         let text = text.trim();
-        (!text.is_empty()).then(|| cut(text, PLAN_CHARS))
+        (!text.is_empty()).then(|| cut(&super::spec_text::cards_as_text(text), PLAN_CHARS))
     }
 
     /// Write card `ask_id` as `card` — its notice, its row, its mirrors —

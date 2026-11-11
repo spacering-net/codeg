@@ -817,10 +817,50 @@ pub async fn personal_agent_send_core(
     text: String,
     blocks: Option<Vec<PromptInputBlock>>,
     reply_to: Option<i32>,
+    card: Option<crate::personal_agent::card_acts::CardClick>,
+) -> Result<TimelineRow, AppCommandError> {
+    let engine = engine(bot_id).await?;
+    // From a button on one of the assistant's cards (9.2): it quotes that
+    // card, and the card keeps the press.
+    if let Some(card) = card {
+        let Some(row_id) = reply_to else {
+            return Err(refused("a button's message quotes its card".to_string()));
+        };
+        if blocks.is_some_and(|b| !b.is_empty()) {
+            return Err(refused("a button's message carries no attachments".to_string()));
+        }
+        return engine
+            .send_card_reply(text, row_id, card)
+            .await
+            .map_err(refused);
+    }
+    engine
+        .send_owner_message(text, blocks.unwrap_or_default(), reply_to)
+        .await
+        .map_err(refused)
+}
+
+/// The owner pressed a button on one of the assistant's cards that acts
+/// without a message (9.2): the card keeps it.
+pub async fn personal_agent_card_act_core(
+    bot_id: Option<i32>,
+    row_id: i32,
+    element: String,
+    action: String,
+    label: Option<String>,
+    op: Option<String>,
 ) -> Result<TimelineRow, AppCommandError> {
     engine(bot_id)
         .await?
-        .send_owner_message(text, blocks.unwrap_or_default(), reply_to)
+        .card_act(
+            row_id,
+            crate::personal_agent::card_acts::CardAct {
+                element,
+                action,
+                label,
+                op,
+            },
+        )
         .await
         .map_err(refused)
 }
@@ -1374,8 +1414,22 @@ pub async fn personal_agent_send(
     text: String,
     blocks: Option<Vec<PromptInputBlock>>,
     reply_to: Option<i32>,
+    card: Option<crate::personal_agent::card_acts::CardClick>,
 ) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_send_core(bot_id, text, blocks, reply_to).await
+    personal_agent_send_core(bot_id, text, blocks, reply_to, card).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_card_act(
+    bot_id: Option<i32>,
+    row_id: i32,
+    element: String,
+    action: String,
+    label: Option<String>,
+    op: Option<String>,
+) -> Result<TimelineRow, AppCommandError> {
+    personal_agent_card_act_core(bot_id, row_id, element, action, label, op).await
 }
 
 #[cfg(feature = "tauri-runtime")]

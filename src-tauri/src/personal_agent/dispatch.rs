@@ -224,6 +224,16 @@ fn moved_meanwhile(task_id: i32, e: String) -> String {
     }
 }
 
+/// A result excerpt as a dispatch keeps it: whole when it fits, cut
+/// otherwise — its cards turned into words first, so none is cut in half
+/// (9.5).
+pub(super) fn excerpt_of(text: &str) -> String {
+    if text.trim().chars().count() <= EXCERPT_CHARS {
+        return text.trim().to_string();
+    }
+    cut(&super::spec_text::cards_as_text(text), EXCERPT_CHARS)
+}
+
 pub(super) fn cut(text: &str, max: usize) -> String {
     let t = text.trim();
     if t.chars().count() <= max {
@@ -1109,7 +1119,7 @@ impl PersonalAgentEngine {
             Some(state) => state.read().await.last_assistant_text.clone(),
             None => None,
         }
-        .map(|t| cut(&t, EXCERPT_CHARS));
+        .map(|t| excerpt_of(&t));
         let (state, error) = end.outcome();
         if let Ok(Some(updated)) = svc::update_dispatch(
             &self.db.conn,
@@ -1217,7 +1227,10 @@ impl PersonalAgentEngine {
             state_sentence(d.state)
         );
         if let Some(e) = excerpt.as_deref().filter(|e| !e.trim().is_empty()) {
-            summary.push_str(&format!(" Result excerpt: {}", cut(e, 600)));
+            summary.push_str(&format!(
+                " Result excerpt: {}",
+                cut(&super::spec_text::cards_as_text(e), 600)
+            ));
         }
         if let Some(n) = note.as_deref() {
             summary.push_str(&format!(" ({n})"));
@@ -1464,7 +1477,7 @@ impl PersonalAgentEngine {
         if state == d.state {
             return;
         }
-        let excerpt = task.result_summary.as_deref().map(|t| cut(t, EXCERPT_CHARS));
+        let excerpt = task.result_summary.as_deref().map(excerpt_of);
         let note = match state {
             DispatchState::Failed | DispatchState::Interrupted => task.last_error.clone(),
             _ => None,

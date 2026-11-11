@@ -368,6 +368,9 @@ export interface PageScope {
   agentType: AgentType | null
   /** Start a message quoting this row. */
   onQuote: (rowId: number) => void
+  /** Put `text` in the composer, quoting this row (a card's message the
+   *  owner wants to edit first). */
+  onDraft?: (rowId: number, text: string) => void
   /** Scroll to a row (loading it first when it is older than what is held). */
   jumpTo: (rowId: number) => void
   /** The rows the page holds, by id. */

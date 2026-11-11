@@ -230,6 +230,13 @@ export function PersonalAgentPage() {
   const [sessionOpen, setSessionOpen] = useState(false)
   const [confirmNew, setConfirmNew] = useState(false)
   const [quoting, setQuoting] = useState<number | null>(null)
+  // A card's message the owner wants to edit first (9.2): into the
+  // composer, quoting the card.
+  const [draft, setDraft] = useState<{ text: string; n: number } | null>(null)
+  const onDraft = useCallback((rowId: number, text: string) => {
+    setQuoting(rowId)
+    setDraft((d) => ({ text, n: (d?.n ?? 0) + 1 }))
+  }, [])
   const jumpRef = useRef<((rowId: number) => void) | null>(null)
   const sentRef = useRef<(() => void) | null>(null)
 
@@ -292,10 +299,20 @@ export function PersonalAgentPage() {
       connectionId,
       agentType,
       onQuote: setQuoting,
+      onDraft,
       jumpTo,
       rowsById,
     }),
-    [readOnly, agentName, liveRowId, connectionId, agentType, jumpTo, rowsById]
+    [
+      readOnly,
+      agentName,
+      liveRowId,
+      connectionId,
+      agentType,
+      onDraft,
+      jumpTo,
+      rowsById,
+    ]
   )
 
   if (!snapshot || loading) {
@@ -404,6 +421,7 @@ export function PersonalAgentPage() {
             agentName={agentName}
             status={snapshot.status}
             quoting={quoting}
+            draft={draft}
             onClearQuote={() => setQuoting(null)}
             onSent={() => sentRef.current?.()}
           />

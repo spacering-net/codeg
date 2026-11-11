@@ -405,7 +405,22 @@ impl PersonalAgentEngine {
         let answers_changed = applied
             .iter()
             .any(|a| a.key == "prefs.exec_questions" || a.key == "prefs.exec_plans");
+        let skill_changed = applied
+            .iter()
+            .any(|a| a.key == "prefs.cards" || a.key == "own.skill_enabled");
         self.write_settings_now(applied).await?;
+        // How the owner wants cards (or whether this assistant has its
+        // skill) changed: the skill and its guide are installed anew (9.1).
+        if skill_changed {
+            match self.host_ref() {
+                Some(host) => {
+                    for engine in host.engines().await {
+                        engine.resync_skill().await;
+                    }
+                }
+                None => self.resync_skill().await,
+            }
+        }
         // Who answers the executors' questions changed: every running
         // session's windows are told anew (7.3.1).
         if answers_changed {

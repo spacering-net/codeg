@@ -215,13 +215,53 @@ pub struct SendParams {
     pub blocks: Option<Vec<PromptInputBlock>>,
     #[serde(default)]
     pub reply_to: Option<i32>,
+    /// The button on the quoted card the message comes from.
+    #[serde(default)]
+    pub card: Option<crate::personal_agent::card_acts::CardClick>,
 }
 
 pub async fn personal_agent_send(
     Json(params): Json<SendParams>,
 ) -> Result<Json<TimelineRow>, AppCommandError> {
     Ok(Json(
-        pa::personal_agent_send_core(params.bot_id, params.text, params.blocks, params.reply_to).await?,
+        pa::personal_agent_send_core(
+            params.bot_id,
+            params.text,
+            params.blocks,
+            params.reply_to,
+            params.card,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardActParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub row_id: i32,
+    pub element: String,
+    pub action: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub op: Option<String>,
+}
+
+pub async fn personal_agent_card_act(
+    Json(params): Json<CardActParams>,
+) -> Result<Json<TimelineRow>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_card_act_core(
+            params.bot_id,
+            params.row_id,
+            params.element,
+            params.action,
+            params.label,
+            params.op,
+        )
+        .await?,
     ))
 }
 

@@ -8552,7 +8552,15 @@
           "other_config": "다른 실행 구성에서",
           "agent": "에이전트 기본값"
         },
-        "nothingPicked": "이 에이전트에는 고를 항목이 없습니다."
+        "nothingPicked": "이 에이전트에는 고를 항목이 없습니다.",
+        "progress": "{at} / {total}",
+        "several": "여러 개 선택 가능",
+        "back": "이전",
+        "next": "다음",
+        "submit": "제출",
+        "skip": "건너뛰기",
+        "noLongerAsked": "이 질문은 더 이상 답을 기다리지 않습니다",
+        "otherWrote": "기타: {text}"
       },
       "changed": {
         "applied": "작업 어시스턴트를 만듦",
@@ -8811,6 +8819,23 @@
         "withdrawn": "더 이상 답을 기다리지 않습니다"
       },
       "answeredForYou": "대신 {count}번 답함"
+    },
+    "card": {
+      "stripped": "클릭 없이 실행되는 동작을 제거했습니다",
+      "cancel": "취소",
+      "confirm": "확인",
+      "notFound": "더 이상 없습니다",
+      "reply": {
+        "title": "이 메시지를 보낼까요?",
+        "description": "카드의 \"{label}\"은(는) 다음 내용을 내 메시지로 보냅니다:",
+        "send": "보내기",
+        "toComposer": "입력창에 넣기"
+      },
+      "drop": {
+        "title": "이 일을 그만둘까요?",
+        "description": "\"{summary}\"이(가) 진행 중인 일에서 빠집니다.",
+        "confirm": "그만두기"
+      }
     }
   }
 }

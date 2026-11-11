@@ -1,8 +1,10 @@
 "use client"
 
 /**
- * A choice card (10.7; the basic one, which 1.10 takes further): a
- * question, its lettered choices and "Other" for the owner's own words.
+ * A choice card (10.7): a question, its lettered choices and "Other" for
+ * the owner's own words. This is the native one (a new assistant's
+ * opening card); the assistant brain's own questions draw the same way,
+ * one question at a time (`question-choice-card.tsx`).
  * A letter key picks while the card has focus. Answered, it folds to one
  * line — "You picked: B. Look at local changes" — that opens to show the
  * card as it was. A choice that is about a project opens the project list
@@ -50,6 +52,34 @@ import { AGENT_SURFACE, str, usePageScope } from "./shared"
 import { useBotTemplates } from "./use-templates"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
+
+/** A choice's letter, in its little box. */
+export function ChoiceKey({
+  letter,
+  className,
+}: {
+  letter: string
+  className?: string
+}) {
+  return (
+    <span
+      className={cn(
+        "flex size-5 shrink-0 items-center justify-center rounded border border-border/80 text-xs font-medium text-muted-foreground",
+        className
+      )}
+    >
+      {letter}
+    </span>
+  )
+}
+
+/** A choice's row; `chosen` marks the one picked. */
+export function choiceRowClass(chosen: boolean): string {
+  return cn(
+    "flex w-full items-center gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-start text-sm transition-colors enabled:hover:bg-muted disabled:cursor-default",
+    chosen && "border-primary bg-primary/5"
+  )
+}
 
 interface ChoiceOption {
   key: string
@@ -158,14 +188,9 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
                 disabled={answered || readOnly || busy != null}
                 data-pa-choice={o.key}
                 onClick={() => pick(o)}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-start text-sm transition-colors enabled:hover:bg-muted disabled:cursor-default",
-                  chosen && "border-primary bg-primary/5"
-                )}
+                className={choiceRowClass(chosen)}
               >
-                <span className="flex size-5 shrink-0 items-center justify-center rounded border border-border/80 text-xs font-medium text-muted-foreground">
-                  {o.key}
-                </span>
+                <ChoiceKey letter={o.key} />
                 <span className="min-w-0 flex-1 break-words">{o.label}</span>
                 {busy === o.key ? (
                   <SyncedSpinner small className="size-3.5" />
@@ -209,9 +234,7 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
               if (v) void send({ key: otherKey, text: v })
             }}
           >
-            <span className="flex size-5 shrink-0 items-center justify-center rounded border border-border/80 text-xs font-medium text-muted-foreground">
-              {otherKey}
-            </span>
+            <ChoiceKey letter={otherKey} />
             <Input
               autoFocus
               value={text}
@@ -237,9 +260,7 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
             onClick={() => setWriting(true)}
             className="flex w-full items-center gap-2 rounded-lg border border-dashed border-border/70 px-3 py-2 text-start text-sm text-muted-foreground transition-colors enabled:hover:bg-muted"
           >
-            <span className="flex size-5 shrink-0 items-center justify-center rounded border border-border/80 text-xs font-medium">
-              {otherKey}
-            </span>
+            <ChoiceKey letter={otherKey} />
             {other}
           </button>
         )}

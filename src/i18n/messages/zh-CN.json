@@ -8552,7 +8552,15 @@
           "other_config": "沿用别的执行配置",
           "agent": "agent 自己的默认值"
         },
-        "nothingPicked": "这个 agent 没有要选的项。"
+        "nothingPicked": "这个 agent 没有要选的项。",
+        "progress": "{at} / {total}",
+        "several": "可多选",
+        "back": "上一题",
+        "next": "下一题",
+        "submit": "提交",
+        "skip": "跳过",
+        "noLongerAsked": "这个问题已不再等你回答",
+        "otherWrote": "其他：{text}"
       },
       "changed": {
         "applied": "建好了一个工作助手",
@@ -8811,6 +8819,23 @@
         "withdrawn": "它已经不再等回答了"
       },
       "answeredForYou": "助手代答 {count} 次"
+    },
+    "card": {
+      "stripped": "已移除自动触发的动作",
+      "cancel": "取消",
+      "confirm": "确定",
+      "notFound": "找不到了",
+      "reply": {
+        "title": "发送这条消息？",
+        "description": "卡片上的「{label}」会以你的名义发出这段话：",
+        "send": "发送",
+        "toComposer": "放进输入框"
+      },
+      "drop": {
+        "title": "放弃这件事？",
+        "description": "「{summary}」会从事项里移除。",
+        "confirm": "放弃"
+      }
     }
   }
 }
