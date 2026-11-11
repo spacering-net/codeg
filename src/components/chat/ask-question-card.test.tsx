@@ -208,8 +208,12 @@ describe("AskQuestionCard", () => {
       ],
     })
     expect(screen.getAllByRole("radio")).toHaveLength(2)
-    expect(screen.queryByRole("radio", { name: "Other" })).not.toBeInTheDocument()
-    expect(screen.queryByPlaceholderText("Type your answer?")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("radio", { name: "Other" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByPlaceholderText("Type your answer?")
+    ).not.toBeInTheDocument()
   })
 
   it("hides the Other option when allow_other is false in multi-select", () => {
@@ -232,8 +236,12 @@ describe("AskQuestionCard", () => {
       ],
     })
     expect(screen.getAllByRole("checkbox")).toHaveLength(3)
-    expect(screen.queryByRole("checkbox", { name: "Other" })).not.toBeInTheDocument()
-    expect(screen.queryByPlaceholderText("Type your answer?")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("checkbox", { name: "Other" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByPlaceholderText("Type your answer?")
+    ).not.toBeInTheDocument()
   })
 
   it("submits the typed Other text as the answer label", () => {

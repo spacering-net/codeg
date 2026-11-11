@@ -127,7 +127,12 @@ export function AskQuestionCard({
   // tallest question (its option count plus the always-present "Other" row),
   // capped to the viewport; a taller-than-estimated tab scrolls internally.
   const maxRows = useMemo(
-    () => questions.reduce((m, q) => Math.max(m, q.options.length + (q.allow_other === false ? 0 : 1)), 1),
+    () =>
+      questions.reduce(
+        (m, q) =>
+          Math.max(m, q.options.length + (q.allow_other === false ? 0 : 1)),
+        1
+      ),
     [questions]
   )
   const bodyHeight = `min(${maxRows * 4 + 1}rem, 50svh)`
