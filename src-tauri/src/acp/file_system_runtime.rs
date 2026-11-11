@@ -9,12 +9,13 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::v1::{
     ReadTextFileRequest, ReadTextFileResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::models::agent::AgentType;
 use crate::parsers::expand_home_prefix;
 
 const FS_MAX_CONCURRENT_OPS: usize = 8;
+const FS_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(15);
 const FS_IO_TIMEOUT: Duration = Duration::from_secs(30);
 const FS_MAX_FILE_SIZE_BYTES: u64 = 16 * 1024 * 1024;
 const FS_MAX_READ_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -978,6 +979,23 @@ impl FileSystemRuntime {
         }
     }
 
+    async fn acquire_io_permit(
+        &self,
+        operation: &'static str,
+    ) -> Result<OwnedSemaphorePermit, FileSystemRuntimeError> {
+        tokio::time::timeout(FS_ACQUIRE_TIMEOUT, self.io_semaphore.clone().acquire_owned())
+            .await
+            .map_err(|_| {
+                FileSystemRuntimeError::Internal(format!(
+                    "{operation} timed out waiting for filesystem permit after {}s",
+                    FS_ACQUIRE_TIMEOUT.as_secs()
+                ))
+            })?
+            .map_err(|_| {
+                FileSystemRuntimeError::Internal("filesystem runtime closed".to_string())
+            })
+    }
+
     pub async fn read_text_file(
         &self,
         request: ReadTextFileRequest,
@@ -993,14 +1011,7 @@ impl FileSystemRuntime {
             ));
         }
 
-        let _permit = self
-            .io_semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| {
-                FileSystemRuntimeError::Internal("filesystem runtime closed".to_string())
-            })?;
+        let _permit = self.acquire_io_permit("fs/read_text_file").await?;
 
         let policy = self.policy.clone();
         let path = request.path;
@@ -1035,14 +1046,7 @@ impl FileSystemRuntime {
             )));
         }
 
-        let _permit = self
-            .io_semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| {
-                FileSystemRuntimeError::Internal("filesystem runtime closed".to_string())
-            })?;
+        let _permit = self.acquire_io_permit("fs/write_text_file").await?;
 
         let policy = self.policy.clone();
         let path = request.path;
@@ -3171,6 +3175,102 @@ mod tests {
                     .starts_with(".codeg-fs-")
             });
         assert!(!leaked_tmp, "temporary file should be cleaned up");
+
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn read_times_out_when_permits_exhausted() {
+        let workspace = temp_workspace();
+        let file = workspace.join("sample.txt");
+        fs::write(&file, "hello").expect("write file");
+
+        let runtime = FileSystemRuntime::new(workspace.clone());
+        let _permits: Vec<_> = (0..FS_MAX_CONCURRENT_OPS)
+            .map(|_| {
+                runtime
+                    .io_semaphore
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("acquire permit")
+            })
+            .collect();
+
+        let err = runtime
+            .read_text_file(ReadTextFileRequest::new("sid", &file))
+            .await
+            .expect_err("read should time out when permits are exhausted");
+
+        match &err {
+            FileSystemRuntimeError::Internal(msg) => {
+                assert!(
+                    msg.contains("fs/read_text_file timed out waiting for filesystem permit after 15s"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected Internal timeout error, got: {other:?}"),
+        }
+
+        let rpc_err = err.into_rpc_error();
+        assert_eq!(
+            rpc_err.code,
+            agent_client_protocol::schema::v1::ErrorCode::InternalError
+        );
+
+        drop(_permits);
+        let ok = runtime
+            .read_text_file(ReadTextFileRequest::new("sid", &file))
+            .await
+            .expect("read should succeed after permits released");
+        assert_eq!(ok.content, "hello");
+
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn write_times_out_when_permits_exhausted() {
+        let workspace = temp_workspace();
+        let file = workspace.join("sample.txt");
+
+        let runtime = FileSystemRuntime::new(workspace.clone());
+        let _permits: Vec<_> = (0..FS_MAX_CONCURRENT_OPS)
+            .map(|_| {
+                runtime
+                    .io_semaphore
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("acquire permit")
+            })
+            .collect();
+
+        let err = runtime
+            .write_text_file(WriteTextFileRequest::new("sid", &file, "world"))
+            .await
+            .expect_err("write should time out when permits are exhausted");
+
+        match &err {
+            FileSystemRuntimeError::Internal(msg) => {
+                assert!(
+                    msg.contains("fs/write_text_file timed out waiting for filesystem permit after 15s"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected Internal timeout error, got: {other:?}"),
+        }
+
+        let rpc_err = err.into_rpc_error();
+        assert_eq!(
+            rpc_err.code,
+            agent_client_protocol::schema::v1::ErrorCode::InternalError
+        );
+
+        drop(_permits);
+        runtime
+            .write_text_file(WriteTextFileRequest::new("sid", &file, "world"))
+            .await
+            .expect("write should succeed after permits released");
+        let content = fs::read_to_string(&file).expect("read written file");
+        assert_eq!(content, "world");
 
         let _ = fs::remove_dir_all(workspace);
     }
