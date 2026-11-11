@@ -40,59 +40,6 @@
   </tr>
 </table>
 
-## 💖 Patrocinadores
-
-<table>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg" target="_blank"><img src="../images/compshare.png" alt="Compshare" width="160" /></a><br/>
-      <strong><a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg">Compshare (UCloud)</a></strong>
-    </td>
-    <td>Agradecemos à Compshare por patrocinar este projeto! A Compshare é a plataforma de nuvem de IA da UCloud, oferecendo planos Plan de agentes com modelos nacionais em assinatura mensal ou pagamento por uso, a partir de ¥49/mês. Também oferece acesso estável a modelos estrangeiros via proxy oficial. Compatível com Claude Code, Codex e chamadas de API. Pronto para empresas: alta concorrência, suporte técnico 24/7 e emissão de notas fiscais em autoatendimento. Quem se cadastrar através <a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg">deste link</a> ganha ¥5 de crédito de avaliação grátis na plataforma!</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://hezu.ink/sign-up?aff=0wVz" target="_blank"><img src="../images/hezu-ink.jpg" alt="合租巴士" width="200" /></a><br/>
-      <strong><a href="https://hezu.ink/sign-up?aff=0wVz">合租巴士</a></strong>
-    </td>
-    <td>Agradecemos ao 合租巴士 por patrocinar este projeto! O 合租巴士 é uma plataforma de retransmissão de IA confiável e eficiente, oferecendo retransmissão de alta estabilidade para modelos populares como Codex e Claude Code. A proporção de recarga é transparente (1:1), com subsídios de taxa do Codex a partir de apenas 0,08. <a href="https://hezu.ink/sign-up?aff=0wVz">Entre no grupo pelo site oficial para ganhar US$ 5 de crédito de teste</a>.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://go.apimart.ai/gh-codeg" target="_blank"><img src="../images/apimart-ai.png" alt="APIMart" width="200" /></a><br/>
-      <strong><a href="https://go.apimart.ai/gh-codeg">APIMart</a></strong>
-    </td>
-    <td>Agradecemos à APIMart por patrocinar este projeto! A APIMart é uma plataforma de API de baixo custo para geração de imagens e vídeos com IA: o GPT-Image-2 custa a partir de US$ 0,006 por imagem, mais de 160 imagens por dólar. Uma única API assíncrona cobre imagem e vídeo: envie uma tarefa, receba um ID e busque os resultados por polling ou callback. Processe dezenas de milhares de imagens em lote sem timeouts e troque de modelo sem alterar o código. Pagamento conforme o uso, sem mensalidade — <a href="https://go.apimart.ai/gh-codeg">cadastre-se aqui</a> para começar.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg" target="_blank"><img src="../images/astraflow.png" alt="UCloud ·星图AstraFlow" width="120" /></a><br/>
-      <strong><a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a></strong>
-    </td>
-    <td>
-      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a><br/>
-      O AstraFlow, plataforma de grandes modelos da UCloud, oferece acesso a mais de 200 modelos com um clique: modelos de código aberto líderes como Kimi K3, DeepSeek V4/V3, Qwen 3, GLM5.2 e happyhorse já vêm integrados — sem precisar treinar nada, prontos para usar.<br/>
-      Cadastre-se com seu <strong>e-mail</strong> pelo link acima, conclua a verificação de identidade e <a href="https://f.howxm.com/xs/u/HVFW5X8EIYV1">receba ¥50 em créditos de computação</a>.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG" target="_blank"><img src="../images/sidrune-ai.png" alt="Sidrune AI" width="200" /></a><br/>
-      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">Sidrune AI</a></strong>
-    </td>
-    <td>Agradecemos à Sidrune AI por patrocinar este projeto! A Sidrune AI oferece acesso a GPT, Claude e outros modelos de IA populares por meio de uma única API. Novos usuários que se cadastrarem pelo <a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">nosso link exclusivo</a> com o código promocional <code>SDRCODEG</code> recebem US$ 3 em créditos de API.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA" target="_blank"><img src="../images/beeapi.jpg" alt="BeeAPI" width="200" /></a><br/>
-      <strong><a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a></strong>
-    </td>
-    <td>Agradecemos à <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a> por patrocinar este projeto! A BeeAPI é uma plataforma profissional de retransmissão e agregação de APIs de IA multimodelo, que reúne vários provedores e diversos modelos de IA populares. Ela oferece comparação de preços entre fornecedores, roteamento inteligente por grupos e acesso e cobrança unificados via API, ajudando você a usar serviços de IA de forma mais flexível, estável e econômica.</td>
-  </tr>
-</table>
-
-> Quer se tornar patrocinador do Codeg? [Entre em contato por e-mail.](mailto:itpkcn@gmail.com)
-
 ## ✨ Recursos
 
 <table>

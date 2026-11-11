@@ -40,59 +40,6 @@
   </tr>
 </table>
 
-## 💖 Sponsors
-
-<table>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg" target="_blank"><img src="./docs/images/compshare.png" alt="Compshare" width="160" /></a><br/>
-      <strong><a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg">Compshare (UCloud)</a></strong>
-    </td>
-    <td>Thanks to Compshare for sponsoring this project! Compshare is UCloud's AI cloud platform, offering cost-effective monthly and pay-as-you-go agent Plan subscriptions for Chinese models, starting at just ¥49/month. It also provides stable officially-proxied access to overseas models. Supports Claude Code, Codex, and API integrations. Enterprise-ready with high concurrency, 24/7 technical support, and self-service invoicing. Users who sign up via <a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg">this link</a> receive ¥5 in free platform credits!</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://hezu.ink/sign-up?aff=0wVz" target="_blank"><img src="./docs/images/hezu-ink.jpg" alt="合租巴士" width="200" /></a><br/>
-      <strong><a href="https://hezu.ink/sign-up?aff=0wVz">合租巴士</a></strong>
-    </td>
-    <td>Thanks to 合租巴士 for sponsoring this project! 合租巴士 is a reliable and efficient AI relay platform, offering highly stable relay for mainstream models such as Codex and Claude Code. Top-ups are credited at a transparent 1:1 ratio, with Codex rate subsidies as low as 0.08. <a href="https://hezu.ink/sign-up?aff=0wVz">Join the group via the official website to get $5 in trial credit</a>.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://go.apimart.ai/gh-codeg" target="_blank"><img src="./docs/images/apimart-ai.png" alt="APIMart" width="200" /></a><br/>
-      <strong><a href="https://go.apimart.ai/gh-codeg">APIMart</a></strong>
-    </td>
-    <td>Thanks to APIMart for sponsoring this project! APIMart is a low-cost API platform for AI image & video generation — GPT-Image-2 from $0.006/image, 160+ images per dollar. One async API covers both image and video: submit a task, get an ID, fetch results via polling or callback. Batch tens of thousands of images without timeouts, switch models without changing code. Pay-as-you-go with no monthly fee — <a href="https://go.apimart.ai/gh-codeg">sign up here</a> to get started.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg" target="_blank"><img src="./docs/images/astraflow.png" alt="UCloud ·星图AstraFlow" width="120" /></a><br/>
-      <strong><a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a></strong>
-    </td>
-    <td>
-      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a><br/>
-      UCloud's AstraFlow large-model platform gives you one-click access to 200+ models: leading open-source models such as Kimi K3, DeepSeek V4/V3, Qwen 3, GLM5.2, and happyhorse are built in — no training of your own required, ready to use out of the box.<br/>
-      Sign up with your <strong>email</strong> through the link above, complete real-name verification, and <a href="https://f.howxm.com/xs/u/HVFW5X8EIYV1">claim ¥50 in compute credits</a>.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG" target="_blank"><img src="./docs/images/sidrune-ai.png" alt="Sidrune AI" width="200" /></a><br/>
-      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">Sidrune AI</a></strong>
-    </td>
-    <td>Thanks to Sidrune AI for sponsoring this project! Sidrune AI gives you access to GPT, Claude, and other major AI models through a single API. New users who sign up through <a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">our dedicated link</a> with promo code <code>SDRCODEG</code> get $3 in API credits.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA" target="_blank"><img src="./docs/images/beeapi.jpg" alt="BeeAPI" width="200" /></a><br/>
-      <strong><a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a></strong>
-    </td>
-    <td>Thanks to <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a> for sponsoring this project! BeeAPI is a professional multi-model AI API relay and aggregation platform that brings together many providers and a wide range of mainstream AI models. It supports cross-vendor price comparison, smart routing across groups, and unified API access and billing, helping you call AI services more flexibly, reliably, and at a lower cost.</td>
-  </tr>
-</table>
-
-> Want to become a Codeg sponsor? [Reach out to us by email.](mailto:itpkcn@gmail.com)
-
 ## ✨ Features
 
 <table>
