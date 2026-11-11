@@ -230,6 +230,7 @@ async fn end_to_end_uds_happy_path() {
         Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop)
             as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
         Arc::new(codeg_lib::acp::result_tool::NoResultTool),
+        Arc::new(codeg_lib::acp::subsession_messages::NoSubsessionMessages),
     );
 
     // Freshly-named directory per test — no clashes across test bins.
@@ -352,6 +353,7 @@ async fn end_to_end_uds_batch_status() {
         Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop)
             as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
         Arc::new(codeg_lib::acp::result_tool::NoResultTool),
+        Arc::new(codeg_lib::acp::subsession_messages::NoSubsessionMessages),
     );
 
     let dir = socket_dir();
@@ -445,6 +447,7 @@ async fn end_to_end_uds_invalid_token_rejected() {
         Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop)
             as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
         Arc::new(codeg_lib::acp::result_tool::NoResultTool),
+        Arc::new(codeg_lib::acp::subsession_messages::NoSubsessionMessages),
     );
 
     let dir = socket_dir();
@@ -517,6 +520,7 @@ async fn end_to_end_uds_ask_question_round_trip() {
         Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop)
             as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
         Arc::new(codeg_lib::acp::result_tool::NoResultTool),
+        Arc::new(codeg_lib::acp::subsession_messages::NoSubsessionMessages),
     );
 
     let dir = socket_dir();
@@ -663,6 +667,7 @@ async fn end_to_end_uds_ask_revoked_after_register_declines() {
         Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop)
             as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
         Arc::new(codeg_lib::acp::result_tool::NoResultTool),
+        Arc::new(codeg_lib::acp::subsession_messages::NoSubsessionMessages),
     );
 
     let dir = socket_dir();
@@ -814,6 +819,7 @@ async fn end_to_end_uds_assistant_delegation() {
         Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop)
             as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
         Arc::new(codeg_lib::acp::result_tool::NoResultTool),
+        Arc::new(codeg_lib::acp::subsession_messages::NoSubsessionMessages),
     );
     let dir = socket_dir();
     let socket = dir.path().join("codeg-e2e-assistant.sock");
