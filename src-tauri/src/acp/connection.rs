@@ -2676,12 +2676,12 @@ async fn build_agent(
             let binary_path = crate::commands::acp::resolve_system_agent_binary_for(
                 agent_type, cmd,
             )
-            .ok_or_else(|| {
-                AcpError::SdkNotInstalled(format!(
-                    "{} is not installed. Please install it in Agent Settings.",
-                    meta.name
-                ))
-            })?;
+                    .ok_or_else(|| {
+                        AcpError::SdkNotInstalled(format!(
+                            "{} is not installed. Please install it in Agent Settings.",
+                            meta.name
+                        ))
+                    })?;
             let binary_str = binary_path.to_string_lossy().to_string();
             let mut cmd_args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
             // Kiro's permission mode: `acp --trust-all-tools` auto-approves
@@ -3053,71 +3053,71 @@ pub async fn spawn_agent_connection(
         )
         .await;
 
-                // Revoke the per-launch token + cascade cancel any still-pending
-                // delegations AND questions owned by this parent connection. All are
-                // best-effort: a missing token entry is a no-op, and both
-                // `cancel_by_parent` calls are safe on an empty pending map.
-                if let Some(inj) = delegation_for_cleanup {
-                    let token = {
-                        let snap = state_clone.read().await;
-                        snap.delegation_token.clone()
-                    };
-                    if let Some(tok) = token {
-                        inj.tokens.revoke(&tok).await;
-                    }
-                    inj.broker.cancel_by_parent(&conn_id).await;
-                    // Reclaim a parked `ask_user_question` instead of waiting for the
-                    // companion's ask socket to close (which a reparented/hard-killed
-                    // agent may never do); the dropped sender declines the tool cleanly.
-                    inj.questions.cancel_questions_by_parent(&conn_id).await;
-                    // Likewise reclaim a parked Grok `exit_plan_mode` approval; the
-                    // dropped sender replies disconnect so grok keeps plan mode active.
-                    inj.plan_approvals
-                        .cancel_plan_approvals_by_parent(&conn_id)
-                        .await;
-                }
-
-                if let Err(e) = result {
-                    let code = e.code().map(String::from);
-                    emit_with_state(
-                        &state_clone,
-                        &emitter_clone,
-                        AcpEvent::Error {
-                            message: e.to_string(),
-                            agent_type: agent_type.to_string(),
-                            code,
-                            details: None,
-                            // The only genuinely terminal emit site: `run_connection`
-                            // is unwinding and the next event is `Disconnected`.
-                            // The lifecycle worker uses this flag to decide whether
-                            // to flip the conversation row to Cancelled and to
-                            // buffer the detail for the broker's cancel reason.
-                            terminal: true,
-                        },
-                    )
-                    .await;
-                    // Drive the state machine through `Error` before `Disconnected`
-                    // so the frontend's error-handling effect (cancelled-on-error)
-                    // engages — without this hop the connection would jump straight
-                    // to Disconnected and look like a clean shutdown.
-                    emit_with_state(
-                        &state_clone,
-                        &emitter_clone,
-                        AcpEvent::StatusChanged {
-                            status: ConnectionStatus::Error,
-                        },
-                    )
-                    .await;
-                }
-
-                emit_with_state(
-                    &state_clone,
-                    &emitter_clone,
-                    AcpEvent::StatusChanged {
-                        status: ConnectionStatus::Disconnected,
-                    },
-                )
+        // Revoke the per-launch token + cascade cancel any still-pending
+        // delegations AND questions owned by this parent connection. All are
+        // best-effort: a missing token entry is a no-op, and both
+        // `cancel_by_parent` calls are safe on an empty pending map.
+        if let Some(inj) = delegation_for_cleanup {
+            let token = {
+                let snap = state_clone.read().await;
+                snap.delegation_token.clone()
+            };
+            if let Some(tok) = token {
+                inj.tokens.revoke(&tok).await;
+            }
+            inj.broker.cancel_by_parent(&conn_id).await;
+            // Reclaim a parked `ask_user_question` instead of waiting for the
+            // companion's ask socket to close (which a reparented/hard-killed
+            // agent may never do); the dropped sender declines the tool cleanly.
+            inj.questions.cancel_questions_by_parent(&conn_id).await;
+            // Likewise reclaim a parked Grok `exit_plan_mode` approval; the
+            // dropped sender replies disconnect so grok keeps plan mode active.
+            inj.plan_approvals
+                .cancel_plan_approvals_by_parent(&conn_id)
                 .await;
+        }
+
+        if let Err(e) = result {
+            let code = e.code().map(String::from);
+            emit_with_state(
+                &state_clone,
+                &emitter_clone,
+                AcpEvent::Error {
+                    message: e.to_string(),
+                    agent_type: agent_type.to_string(),
+                    code,
+                    details: None,
+                    // The only genuinely terminal emit site: `run_connection`
+                    // is unwinding and the next event is `Disconnected`.
+                    // The lifecycle worker uses this flag to decide whether
+                    // to flip the conversation row to Cancelled and to
+                    // buffer the detail for the broker's cancel reason.
+                    terminal: true,
+                },
+            )
+            .await;
+            // Drive the state machine through `Error` before `Disconnected`
+            // so the frontend's error-handling effect (cancelled-on-error)
+            // engages — without this hop the connection would jump straight
+            // to Disconnected and look like a clean shutdown.
+            emit_with_state(
+                &state_clone,
+                &emitter_clone,
+                AcpEvent::StatusChanged {
+                    status: ConnectionStatus::Error,
+                },
+            )
+            .await;
+        }
+
+        emit_with_state(
+            &state_clone,
+            &emitter_clone,
+            AcpEvent::StatusChanged {
+                status: ConnectionStatus::Disconnected,
+            },
+        )
+        .await;
                 // Connection loop ended; `block_on` returns and `_cleanup`
                 // (bound at the top of the thread body) drops next, removing
                 // the manager map entry — same as on a panic unwind.
@@ -5811,8 +5811,8 @@ fn place_kiro_reasoning_selectors(
             kiro_thinking_option(reasoning),
             kiro_effort_option(reasoning),
         ]
-        .into_iter()
-        .flatten(),
+            .into_iter()
+            .flatten(),
     );
 }
 
@@ -10848,7 +10848,7 @@ async fn try_bridge_antigravity_ask(
                     &ask.spec,
                     &recorded,
                 )
-                .await;
+                    .await;
 
                 let response_outcome = match option_id {
                     Some(id) => {
@@ -10998,7 +10998,7 @@ async fn handle_cursor_ask_question(
     let Some((questions, ask_cfg)) = access else {
         let _ = responder.respond(
             crate::acp::cursor_ext::cursor_ask_skip_response_with_reason(
-                "the host's question bridge is unavailable; the user was not asked",
+            "the host's question bridge is unavailable; the user was not asked",
             ),
         );
         return;
@@ -11006,7 +11006,7 @@ async fn handle_cursor_ask_question(
     if !ask_cfg.is_enabled().await {
         let _ = responder.respond(
             crate::acp::cursor_ext::cursor_ask_skip_response_with_reason(
-                "the host's interactive question card is disabled; the user was not asked",
+            "the host's interactive question card is disabled; the user was not asked",
             ),
         );
         return;
@@ -14960,78 +14960,78 @@ async fn run_conversation_loop(
         ($update:expr) => {{
             let update = $update;
 
-            // An `Err` is the session's router going away, not one bad
-            // message (see `AgentSession::read_update`): the connection
-            // is gone, so the loop goes with it.
-            let dispatch = match update {
-                Ok(dispatch) => fix_usage_update_nulls(dispatch),
-                Err(e) => return Err(defer_to_connection_report(e).await),
-            };
-            let h = emitter.clone();
-            let st = Arc::clone(state);
-            let cwd_opt = Some(cwd);
-            // Background work outlives the turn that started it, so
-            // these frames arrive on the IDLE loop as often as inside
-            // one.
-            if let Some(delta) = air_async_task_delta(&dispatch)
-                .or_else(|| grok_workflow_task_delta(&dispatch, agent_type))
-            {
-                emit_with_state(&st, &h, AcpEvent::AsyncTask { delta }).await;
-            } else if let Some(notice) = session_notice(&dispatch) {
-                // Advisories land outside a turn as readily as inside
-                // one (a config warning at startup, a model reroute
-                // between prompts).
-                emit_with_state(&st, &h, AcpEvent::SessionNotice { notice }).await;
-            } else if let Some(event) = session_compaction_event(&dispatch) {
-                emit_with_state(&st, &h, event).await;
-            } else if let Some(completed) = grok_turn_completed(&dispatch, agent_type) {
-                // Grok's own end of a turn. Only the turn opened below
-                // ends here; one codeg started ended on its response.
-                if grok_turn_completed_ends(cb_state.grok_agent_turn.as_deref(), &completed) {
-                    close_grok_agent_turn(
-                        &st,
-                        &h,
-                        perms,
-                        agent_type,
-                        &agent_turn_session_id,
-                        completed.stop_reason,
-                        &mut cb_state,
-                    )
-                    .await;
-                }
-            } else {
-                // A turn Grok runs on its own (a background workflow's
-                // follow-up) gets a turn here, opened before its first
-                // chunk is emitted.
-                if let Some(prompt_id) = grok_agent_turn_opener(&dispatch, agent_type, &cb_state) {
-                    open_grok_agent_turn(&st, &h, prompt_id, &mut cb_state).await;
-                }
-                let drift = &mut config_drift_to_reassert;
-                if let Err(e) = MatchDispatch::new(dispatch)
-                    .if_notification(async |notif: SessionNotification| {
-                        // BEFORE the emit: it overwrites the very
-                        // state the comparison reads.
-                        if let SessionUpdate::ConfigOptionUpdate(update) = &notif.update {
-                            drift.extend(
-                                take_asserted_config_drift(&st, &update.config_options).await,
-                            );
+                    // An `Err` is the session's router going away, not one bad
+                    // message (see `AgentSession::read_update`): the connection
+                    // is gone, so the loop goes with it.
+                    let dispatch = match update {
+                        Ok(dispatch) => fix_usage_update_nulls(dispatch),
+                        Err(e) => return Err(defer_to_connection_report(e).await),
+                    };
+                    let h = emitter.clone();
+                    let st = Arc::clone(state);
+                    let cwd_opt = Some(cwd);
+                    // Background work outlives the turn that started it, so
+                    // these frames arrive on the IDLE loop as often as inside
+                    // one.
+                    if let Some(delta) = air_async_task_delta(&dispatch)
+                        .or_else(|| grok_workflow_task_delta(&dispatch, agent_type))
+                    {
+                        emit_with_state(&st, &h, AcpEvent::AsyncTask { delta }).await;
+                    } else if let Some(notice) = session_notice(&dispatch) {
+                        // Advisories land outside a turn as readily as inside
+                        // one (a config warning at startup, a model reroute
+                        // between prompts).
+                        emit_with_state(&st, &h, AcpEvent::SessionNotice { notice }).await;
+                    } else if let Some(event) = session_compaction_event(&dispatch) {
+                        emit_with_state(&st, &h, event).await;
+                    } else if let Some(completed) = grok_turn_completed(&dispatch, agent_type) {
+                        // Grok's own end of a turn. Only the turn opened below
+                        // ends here; one codeg started ended on its response.
+                        if grok_turn_completed_ends(cb_state.grok_agent_turn.as_deref(), &completed) {
+                            close_grok_agent_turn(
+                                &st,
+                                &h,
+                                perms,
+                                agent_type,
+                                &agent_turn_session_id,
+                                completed.stop_reason,
+                                &mut cb_state,
+                            )
+                            .await;
                         }
-                        // A custom agent's history is this
-                        // transcript and nothing else, and what
-                        // arrives here is part of it: a turn the
-                        // agent runs on its own (a background job's
-                        // follow-up, with no `session/prompt` around
-                        // it), the late completion of a call an
-                        // earlier turn started, or the last frames
-                        // of a turn whose response won the turn
-                        // loop's select. No-op for every other agent.
-                        if prompted {
+                    } else {
+                        // A turn Grok runs on its own (a background workflow's
+                        // follow-up) gets a turn here, opened before its first
+                        // chunk is emitted.
+                        if let Some(prompt_id) = grok_agent_turn_opener(&dispatch, agent_type, &cb_state) {
+                            open_grok_agent_turn(&st, &h, prompt_id, &mut cb_state).await;
+                        }
+                        let drift = &mut config_drift_to_reassert;
+                        if let Err(e) = MatchDispatch::new(dispatch)
+                    .if_notification(async |notif: SessionNotification| {
+                                    // BEFORE the emit: it overwrites the very
+                                    // state the comparison reads.
+                                    if let SessionUpdate::ConfigOptionUpdate(update) = &notif.update {
+                                        drift.extend(
+                                            take_asserted_config_drift(&st, &update.config_options).await,
+                                        );
+                                    }
+                                    // A custom agent's history is this
+                                    // transcript and nothing else, and what
+                                    // arrives here is part of it: a turn the
+                                    // agent runs on its own (a background job's
+                                    // follow-up, with no `session/prompt` around
+                                    // it), the late completion of a call an
+                                    // earlier turn started, or the last frames
+                                    // of a turn whose response won the turn
+                                    // loop's select. No-op for every other agent.
+                                    if prompted {
                             record_transcript_update(
                                 agent_type,
                                 &notif.session_id.0,
                                 &notif.update,
                             );
-                        }
+                                    }
                         emit_conversation_update(
                             &st,
                             &h,
@@ -15042,22 +15042,22 @@ async fn run_conversation_loop(
                             &mut cb_state,
                         )
                         .await;
-                        Ok(())
+                                    Ok(())
                     })
-                    .await
-                    .otherwise(async |dispatch| {
+                            .await
+                            .otherwise(async |dispatch| {
                         maybe_emit_ext_notification(&st, &h, agent_type, dispatch, &mut cb_state)
                             .await;
-                        Ok(())
-                    })
-                    .await
-                {
-                    // Both closures are infallible, so this is an update
-                    // whose params did not deserialize — the same drop the
-                    // in-turn loop counts, logged under the same throttle.
-                    log_dropped_update(&mut drop_log_throttle, "idle", &e);
-                }
-            }
+                                Ok(())
+                            })
+                            .await
+                        {
+                            // Both closures are infallible, so this is an update
+                            // whose params did not deserialize — the same drop the
+                            // in-turn loop counts, logged under the same throttle.
+                            log_dropped_update(&mut drop_log_throttle, "idle", &e);
+                        }
+                    }
         }};
     }
     loop {
@@ -15101,7 +15101,7 @@ async fn run_conversation_loop(
                     config_id.clone(),
                     value_id,
                 )
-                .await
+                        .await
                 {
                     // Advisory: the agent is running what it pushed and has already
                     // told the frontend so. Failing the connection over a selector
@@ -16548,7 +16548,7 @@ pub(crate) fn serialize_tool_call_content(
                         diff.meta.as_ref(),
                         "diffPatch",
                     )
-                    .is_none() =>
+                        .is_none() =>
             {
                 let path = diff.path.display();
                 let mut diff_text = format!("--- {path}\n+++ {path}\n");
@@ -25346,15 +25346,15 @@ async fn emit_conversation_update(
                 state,
                 &mut cb_state.opencode,
             )
-            .await
-            {
-                OpenCodeFrameRoute::Main => None,
-                OpenCodeFrameRoute::Subagent {
-                    parent_tool_call_id,
-                    ..
-                } => Some(parent_tool_call_id),
-                OpenCodeFrameRoute::Drop => return,
-            };
+                    .await
+                {
+                    OpenCodeFrameRoute::Main => None,
+                    OpenCodeFrameRoute::Subagent {
+                        parent_tool_call_id,
+                        ..
+                    } => Some(parent_tool_call_id),
+                    OpenCodeFrameRoute::Drop => return,
+                };
             // Gemini reports an approval-mode switch as a prose chunk reading
             // `[MODE_UPDATE] <mode>`. Turn it back into the mode event it should
             // have been — see `gemini_mode_update_chunk` for the two guards that
@@ -25459,15 +25459,15 @@ async fn emit_conversation_update(
                 state,
                 &mut cb_state.opencode,
             )
-            .await
-            {
-                OpenCodeFrameRoute::Main => None,
-                OpenCodeFrameRoute::Subagent {
-                    parent_tool_call_id,
-                    ..
-                } => Some(parent_tool_call_id),
-                OpenCodeFrameRoute::Drop => return,
-            };
+                    .await
+                {
+                    OpenCodeFrameRoute::Main => None,
+                    OpenCodeFrameRoute::Subagent {
+                        parent_tool_call_id,
+                        ..
+                    } => Some(parent_tool_call_id),
+                    OpenCodeFrameRoute::Drop => return,
+                };
             // Same suppression for a sub-agent's interleaved reasoning.
             if !should_suppress_subagent_chunk(
                 agent_type,
@@ -26066,9 +26066,9 @@ async fn emit_conversation_update(
             ) {
                 CodexSubagentActivity::None => {
                     match cb_state.codex_activity_calls.get(&tool_call_id) {
-                        Some(Some(launch_input)) => Some(launch_input.clone()),
-                        Some(None) => return,
-                        None => None,
+                    Some(Some(launch_input)) => Some(launch_input.clone()),
+                    Some(None) => return,
+                    None => None,
                     }
                 }
                 CodexSubagentActivity::Started { thread_id, input } => {
@@ -31614,7 +31614,7 @@ mod tests {
             &path,
             "{\n  // mine\n  \"auth\": {\"type\": \"oauth-personal\"},\n}\n",
         )
-        .unwrap();
+            .unwrap();
         assert_eq!(
             antigravity_effective_auth_type(&home()),
             AntigravityAuthType::Unreadable
@@ -31759,8 +31759,8 @@ mod tests {
             GcpField::Set("p"),
             GcpField::Set("global"),
         )
-        .expect("editable")
-        .expect("created");
+            .expect("editable")
+            .expect("created");
         assert_eq!(created["auth"]["type"], "oauth-personal");
         assert_eq!(created["gcp"]["project"], "p");
         assert_eq!(created["gcp"]["location"], "global");
@@ -31779,11 +31779,11 @@ mod tests {
         // none of codeg's business and must not block the `auth.type` update.
         let odd_gcp = serde_json::json!({ "gcp": ["not", "an", "object"] });
         assert!(merge_antigravity_settings(
-            Some(odd_gcp.clone()),
-            "oauth-personal",
-            GcpField::Set("p"),
-            GcpField::Keep,
-        )
+                Some(odd_gcp.clone()),
+                "oauth-personal",
+                GcpField::Set("p"),
+                GcpField::Keep,
+            )
         .is_err());
         let untouched = merge_antigravity_settings(
             Some(odd_gcp),
@@ -31791,8 +31791,8 @@ mod tests {
             GcpField::Keep,
             GcpField::Keep,
         )
-        .expect("editable")
-        .expect("auth.type still written");
+            .expect("editable")
+            .expect("auth.type still written");
         assert_eq!(untouched["auth"]["type"], "oauth-personal");
         assert_eq!(untouched["gcp"], serde_json::json!(["not", "an", "object"]));
 
@@ -31835,8 +31835,8 @@ mod tests {
             GcpField::Clear,
             GcpField::Clear,
         )
-        .expect("editable")
-        .expect("the gcp block changed, so this is a real write");
+                .expect("editable")
+                .expect("the gcp block changed, so this is a real write");
         assert!(
             cleared.get("gcp").is_none(),
             "an emptied block should go rather than linger as {{}}: {cleared}"
@@ -31851,8 +31851,8 @@ mod tests {
             GcpField::Set("new"),
             GcpField::Clear,
         )
-        .expect("editable")
-        .expect("changed");
+                .expect("editable")
+                .expect("changed");
         assert_eq!(partial["gcp"]["project"], "new");
         assert!(partial["gcp"].get("location").is_none());
 
@@ -31879,8 +31879,8 @@ mod tests {
             GcpField::Clear,
             GcpField::Clear,
         )
-        .expect("a clear must not refuse a block it cannot edit")
-        .expect("auth.type still written");
+                .expect("a clear must not refuse a block it cannot edit")
+                .expect("auth.type still written");
         assert_eq!(still_written["auth"]["type"], "oauth-business");
         assert_eq!(
             still_written["gcp"],
@@ -37548,11 +37548,11 @@ mod tests {
         // `session/set_model` probe against grok 0.2.94).
         let err = agent_client_protocol::Error::new(-32600, "Cannot switch to model ...").data(
             serde_json::json!({
-                "code": "MODEL_SWITCH_INCOMPATIBLE_AGENT",
-                "activeAgentType": "grok-build-plan",
-                "requiredAgentType": "cursor",
-                "modelId": "grok-composer-2.5-fast",
-                "suggestion": "start_new_session"
+            "code": "MODEL_SWITCH_INCOMPATIBLE_AGENT",
+            "activeAgentType": "grok-build-plan",
+            "requiredAgentType": "cursor",
+            "modelId": "grok-composer-2.5-fast",
+            "suggestion": "start_new_session"
             }),
         );
         assert!(is_grok_incompatible_agent_switch(&err));
@@ -39703,7 +39703,7 @@ mod tests {
             &mut cb,
             &oc_child_frames(OC_CHILD, "Background child"),
         )
-        .await;
+                .await;
         assert!(late.is_empty(), "{late:#?}");
     }
 

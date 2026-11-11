@@ -50,12 +50,13 @@ pub async fn set_delegation_settings(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<SetDelegationSettingsParams>,
 ) -> Result<Json<DelegationSettings>, AppCommandError> {
-    let saved = set_delegation_settings_core(
+    let saved =
+        set_delegation_settings_core(
         &state.db.conn,
         &state.delegation_broker,
         &state.emitter,
         params.settings,
     )
-    .await?;
+            .await?;
     Ok(Json(saved))
 }

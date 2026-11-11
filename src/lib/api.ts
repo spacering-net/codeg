@@ -5636,7 +5636,6 @@ export interface PendingSessionMessage {
   message: string
   source_conversation_id: number
   source_title: string | null
-  source_kind: "parent" | "child"
   created_at: string
 }
 

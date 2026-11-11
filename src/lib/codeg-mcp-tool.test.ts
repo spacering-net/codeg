@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import {
-  isCodegMcpSubsessionTool,
-  parseCodegMcpToolCall,
-} from "./codeg-mcp-tool"
+import { parseCodegMcpToolCall } from "./codeg-mcp-tool"
 
 const progress = (output: string | null, extra = {}) =>
   parseCodegMcpToolCall({
@@ -143,14 +140,5 @@ describe("parseCodegMcpToolCall: work-task report acks", () => {
     })
     expect(model.ack).toBeNull()
     expect(model.resultText).toBe('{"recorded":true}')
-  })
-})
-
-describe("child message tool names", () => {
-  it("recognizes both directions without treating delegation tools as message tools", () => {
-    expect(isCodegMcpSubsessionTool("send_to_parent")).toBe(true)
-    expect(isCodegMcpSubsessionTool("send_to_subsession")).toBe(true)
-    expect(isCodegMcpSubsessionTool(" MANAGE_SUBSESSION_MESSAGES ")).toBe(true)
-    expect(isCodegMcpSubsessionTool("delegate_to_agent")).toBe(false)
   })
 })

@@ -75,7 +75,6 @@ describe("MessageQueueDisplay click-to-insert", () => {
           message: "Please review the interface",
           source_conversation_id: 6,
           source_title: "API review",
-          source_kind: "child" as const,
           created_at: "2026-11-11T05:43:41Z",
         },
       ],

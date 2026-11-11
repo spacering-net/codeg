@@ -1340,7 +1340,7 @@ mod tauri_app {
                                 manager: std::sync::Arc::new(cm_state.clone_ref()),
                             },
                         ),
-                        crate::app_state::build_subsession_messages(
+                        crate::app_state::build_session_messages(
                             &cm_state,
                             broker.clone(),
                             db_conn.clone(),

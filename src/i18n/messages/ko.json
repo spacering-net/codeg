@@ -3518,8 +3518,7 @@
         "mentionGroupAssistant": "어시스턴트"
       },
       "messageQueue": {
-        "fromChild": "하위 세션: {name}",
-        "fromParent": "상위 세션: {name}",
+        "fromSession": "세션: {name}",
         "waiting": "대기 중",
         "addToQueue": "대기열에 추가",
         "saveEdit": "저장",

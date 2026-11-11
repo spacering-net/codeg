@@ -35,7 +35,7 @@
 //!         [`DelegationBroker::cancel_task_by_id`].
 //!
 //! The broker tracks the original delegation task. Subsequent prompts in the
-//! same child session are managed by `SubsessionMessages`, which retains a
+//! same child session are managed by `SessionMessages`, which retains a
 //! live child connection when it takes ownership. Separately,
 //! [`DelegationBroker::resume_delegation`] restores an INTERRUPTED task
 //! (canceled, or stranded `in_progress` by a crash) under its original `task_id`
@@ -2768,7 +2768,7 @@ impl DelegationBroker {
                     id: a.id,
                     snapshot: a.run_snapshot(),
                 }
-            }),
+                }),
         };
         // The assistant's standing instructions ride the child's first prompt
         // as a trailing internal frame (see `render_assistant_brief`).
@@ -3293,7 +3293,7 @@ impl DelegationBroker {
         .await;
         let retained = self.retained_children.lock().await;
         if !retained.contains_key(&child_conversation_id) {
-            let _ = self.spawner.disconnect(child_connection_id).await;
+        let _ = self.spawner.disconnect(child_connection_id).await;
         }
     }
 
@@ -3650,10 +3650,10 @@ impl DelegationBroker {
                     .await;
             }
         } else {
-            if cancel_turn {
-                let _ = self.spawner.cancel(&task.child_connection_id).await;
-            }
-            let _ = self.spawner.disconnect(&task.child_connection_id).await;
+        if cancel_turn {
+            let _ = self.spawner.cancel(&task.child_connection_id).await;
+        }
+        let _ = self.spawner.disconnect(&task.child_connection_id).await;
         }
     }
 
@@ -4170,11 +4170,11 @@ impl DelegationBroker {
                             } else {
                                 MemGate::Refuse(Box::new(
                                     not_resumable_report(
-                                        &req.task_id,
-                                        status,
-                                        Some(child_conversation_id),
-                                        Some(agent_type),
-                                        "a resume of this task is already in progress.",
+                                    &req.task_id,
+                                    status,
+                                    Some(child_conversation_id),
+                                    Some(agent_type),
+                                    "a resume of this task is already in progress.",
                                     )
                                     .with_assistant(assistant.as_ref()),
                                 ))
@@ -4186,21 +4186,21 @@ impl DelegationBroker {
                             Some(child_conversation_id),
                             Some(agent_type),
                             "the task already completed — resume only applies to a \
-                             canceled or interrupted task. Use send_to_subsession \
-                             with child_conversation_id for follow-up work in the same session.",
+                             canceled or interrupted task. Use send_to_session \
+                             with conversation_id for follow-up work in the same session.",
                             )
                             .with_assistant(assistant.as_ref()),
                         )),
                         _ => MemGate::Refuse(Box::new(
                             not_resumable_report(
-                                &req.task_id,
-                                status,
-                                Some(child_conversation_id),
-                                Some(agent_type),
-                                "the task ended in failure rather than being \
+                            &req.task_id,
+                            status,
+                            Some(child_conversation_id),
+                            Some(agent_type),
+                            "the task ended in failure rather than being \
                              interrupted — resume only applies to a canceled or \
-                             interrupted task. Use send_to_subsession with \
-                             child_conversation_id to retry in the same session.",
+                             interrupted task. Use send_to_session with \
+                             conversation_id to retry in the same session.",
                             )
                             .with_assistant(assistant.as_ref()),
                         )),
@@ -4375,7 +4375,7 @@ impl DelegationBroker {
                     Some(ctx.child_conversation_id),
                     Some(ctx.agent_type),
                     "the task already completed — resume only applies to a \
-                     canceled or interrupted task. Use send_to_subsession with \
+                     canceled or interrupted task. Use send_to_session with \
                      child_conversation_id for follow-up work in the same session.",
                 );
             }
@@ -10109,7 +10109,7 @@ mod tests {
         *lookup.ctx.lock().await = ctx;
         let broker =
             DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup())
-                .with_status_lookup(lookup.clone() as Arc<dyn ChildStatusLookup>);
+        .with_status_lookup(lookup.clone() as Arc<dyn ChildStatusLookup>);
         enable_delegation(&broker).await;
         (mock, lookup, broker)
     }

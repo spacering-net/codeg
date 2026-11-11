@@ -62,7 +62,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::acp::chat_authoring::{NewAutomationSpec, NewWorkTaskSpec};
 use crate::acp::question::QuestionSpec;
-use crate::acp::subsession_messages::SubsessionMessageRequest;
+use crate::acp::session_messages::SessionMessageRequest;
 
 /// One delegation call's worth of input forwarded from the companion to the
 /// main process. The main process re-validates `token` and maps
@@ -157,15 +157,9 @@ pub struct BrokerResumeTaskRequest {
 
 /// Explicit persistent child-message operation; cancellation only suppresses its reply.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrokerSubsessionMessageRequest {
+pub struct BrokerSessionMessageRequest {
     pub token: String,
-    pub input: SubsessionMessageRequest,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrokerParentReplyRequest {
-    pub token: String,
-    pub message: String,
+    pub input: SessionMessageRequest,
 }
 
 /// Pull the pending live-feedback notes for the parent session. Backs the
@@ -456,8 +450,7 @@ pub enum BrokerMessage {
     Status(BrokerStatusRequest),
     CancelTask(BrokerCancelTaskRequest),
     ResumeTask(BrokerResumeTaskRequest),
-    SubsessionMessage(BrokerSubsessionMessageRequest),
-    ParentReply(BrokerParentReplyRequest),
+    SessionMessage(BrokerSessionMessageRequest),
     Feedback(BrokerFeedbackRequest),
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
@@ -955,18 +948,11 @@ pub async fn client_list_assistants_round_trip(
     message_round_trip(socket_path, &BrokerMessage::ListAssistants(req.clone())).await
 }
 
-pub async fn client_subsession_message_round_trip(
+pub async fn client_session_message_round_trip(
     socket_path: &str,
-    req: &BrokerSubsessionMessageRequest,
+    req: &BrokerSessionMessageRequest,
 ) -> io::Result<BrokerResponse> {
-    message_round_trip(socket_path, &BrokerMessage::SubsessionMessage(req.clone())).await
-}
-
-pub async fn client_parent_reply_round_trip(
-    socket_path: &str,
-    req: &BrokerParentReplyRequest,
-) -> io::Result<BrokerResponse> {
-    message_round_trip(socket_path, &BrokerMessage::ParentReply(req.clone())).await
+    message_round_trip(socket_path, &BrokerMessage::SessionMessage(req.clone())).await
 }
 
 /// Total budget for `open()` retries on Windows named pipes. Has to be
@@ -1052,27 +1038,27 @@ mod tests {
     use tokio::io::duplex;
 
     #[tokio::test]
-    async fn subsession_message_round_trip_in_memory() {
+    async fn queued_session_message_round_trip_in_memory() {
         let (mut a, mut b) = duplex(8 * 1024);
         let input = serde_json::from_value(json!({
-            "child_conversation_id": 42, "action": "send", "message": "continue"
+            "conversation_id": 42, "action": "send", "message": "continue"
         }))
         .unwrap();
-        let message = BrokerMessage::SubsessionMessage(BrokerSubsessionMessageRequest {
+        let message = BrokerMessage::SessionMessage(BrokerSessionMessageRequest {
             token: "tok".into(),
             input,
         });
         assert_eq!(
             serde_json::to_value(&message).unwrap()["kind"],
-            "subsession_message"
+            "session_message"
         );
         write_frame(&mut a, &message).await.unwrap();
         let received: BrokerMessage = read_frame(&mut b).await.unwrap();
-        let BrokerMessage::SubsessionMessage(request) = received else {
+        let BrokerMessage::SessionMessage(request) = received else {
             panic!("wrong message")
         };
         assert_eq!(request.token, "tok");
-        assert_eq!(request.input.child_conversation_id, 42);
+        assert_eq!(request.input.conversation_id, 42);
         assert_eq!(
             serde_json::to_value(request.input).unwrap()["delivery"],
             "queue"

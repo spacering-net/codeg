@@ -61,7 +61,7 @@ use crate::acp::delegation::transport::{
     client_feedback_round_trip, client_list_assistants_round_trip, client_ping,
     client_result_schema_round_trip, client_resume_task_round_trip, client_round_trip,
     client_session_round_trip, client_status_round_trip, client_submit_result_round_trip,
-    client_subsession_message_round_trip, client_task_complete_round_trip,
+    client_session_message_round_trip, client_task_complete_round_trip,
     client_task_progress_round_trip, BrokerAskRequest, BrokerBrowserActRequest,
     BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
     BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
@@ -71,13 +71,13 @@ use crate::acp::delegation::transport::{
     BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCreateAutomationRequest,
     BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerRequest,
     BrokerResponse, BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
-    BrokerStatusRequest, BrokerSubmitResultRequest, BrokerSubsessionMessageRequest,
+    BrokerStatusRequest, BrokerSubmitResultRequest, BrokerSessionMessageRequest,
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::question::parse_questions;
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
-use crate::acp::subsession_messages::{
-    SubsessionDelivery, SubsessionMessageAction, SubsessionMessageRequest,
+use crate::acp::session_messages::{
+    SessionDelivery, SessionMessageAction, SessionMessageRequest,
 };
 use crate::models::AutomationAction;
 
@@ -322,9 +322,9 @@ impl CompanionFeatures {
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation"
-            | "send_to_subsession"
-            | "manage_subsession_messages"
-            | "send_to_parent" => self.delegation,
+            | "send_to_session"
+            | "manage_session_messages"
+            => self.delegation,
             _ => false,
         }
     }
@@ -1058,67 +1058,28 @@ async fn build_tools_call_spawn(
             )
             .await
         }
-        "send_to_subsession" | "manage_subsession_messages" => {
-            let input = match parse_subsession_message_request(&name, &arguments) {
+        "send_to_session" | "manage_session_messages" => {
+            let input = match parse_session_message_request(&name, &arguments) {
                 Ok(input) => input,
                 Err(message) => return LineAction::Respond(err(id, -32602, message)),
             };
-            let req = BrokerSubsessionMessageRequest {
+            let req = BrokerSessionMessageRequest {
                 token: ctx.token.clone(),
                 input,
             };
             let round_trip =
-                Box::pin(async move { client_subsession_message_round_trip(&socket, &req).await });
+                Box::pin(async move { client_session_message_round_trip(&socket, &req).await });
             // Persisted messages change only through explicit message management.
             register_and_spawn(
                 inflight,
                 id,
                 None,
                 round_trip,
-                render_subsession_message_result,
+                render_session_message_result,
             )
             .await
         }
-        "send_to_parent" => {
-            let args = match arguments.as_object() {
-                Some(args) => args,
-                None => return LineAction::Respond(err(id, -32602, "arguments must be an object")),
-            };
-            if args.keys().any(|key| key != "message") {
-                return LineAction::Respond(err(
-                    id,
-                    -32602,
-                    "send_to_parent accepts only message; the parent is resolved from your session",
-                ));
-            }
-            let message = match args.get("message").and_then(Value::as_str) {
-                Some(text) if !text.trim().is_empty() && text.chars().count() <= 32_000 => {
-                    text.to_string()
-                }
-                _ => {
-                    return LineAction::Respond(err(
-                        id,
-                        -32602,
-                        "message must contain 1 to 32000 characters",
-                    ))
-                }
-            };
-            let req = super::transport::BrokerParentReplyRequest {
-                token: ctx.token.clone(),
-                message,
-            };
-            let round_trip = Box::pin(async move {
-                super::transport::client_parent_reply_round_trip(&socket, &req).await
-            });
-            register_and_spawn(
-                inflight,
-                id,
-                None,
-                round_trip,
-                render_subsession_message_result,
-            )
-            .await
-        }
+
         "check_user_feedback" => {
             let req = BrokerFeedbackRequest {
                 token: ctx.token.clone(),
@@ -1394,7 +1355,7 @@ async fn build_tools_call_spawn(
                 round_trip,
                 render_computer_windows_result,
             )
-            .await
+                .await
         }
         "computer_screenshot" => {
             let (target_id, max_dimension) = match computer_capture_request(&arguments) {
@@ -1417,7 +1378,7 @@ async fn build_tools_call_spawn(
                 round_trip,
                 render_computer_capture_result,
             )
-            .await
+                .await
         }
         "computer_snapshot" => {
             let (target_id, request) = match computer_snapshot_request(&arguments) {
@@ -1438,7 +1399,7 @@ async fn build_tools_call_spawn(
                 round_trip,
                 render_computer_snapshot_result,
             )
-            .await
+                .await
         }
         "computer_verify" => {
             let (target_id, request) = match computer_verify_request(&arguments) {
@@ -1587,25 +1548,25 @@ async fn build_tools_call_spawn(
     }
 }
 
-fn parse_subsession_message_request(
+fn parse_session_message_request(
     name: &str,
     arguments: &Value,
-) -> Result<SubsessionMessageRequest, String> {
+) -> Result<SessionMessageRequest, String> {
     let args = arguments.as_object().ok_or("arguments must be an object")?;
-    let allowed: &[&str] = if name == "send_to_subsession" {
-        &["child_conversation_id", "message", "delivery"]
+    let allowed: &[&str] = if name == "send_to_session" {
+        &["conversation_id", "message", "delivery"]
     } else {
-        &["child_conversation_id", "action", "message_id", "message"]
+        &["conversation_id", "action", "message_id", "message"]
     };
     if let Some(key) = args.keys().find(|key| !allowed.contains(&key.as_str())) {
         return Err(format!("unknown argument: {key}"));
     }
-    let child_conversation_id = args
-        .get("child_conversation_id")
+    let conversation_id = args
+        .get("conversation_id")
         .and_then(Value::as_i64)
         .and_then(|id| i32::try_from(id).ok())
         .filter(|id| *id > 0)
-        .ok_or("child_conversation_id must be a positive integer")?;
+        .ok_or("conversation_id must be a positive integer")?;
     let text = |key: &str| -> Result<Option<String>, String> {
         match args.get(key) {
             None => Ok(None),
@@ -1613,13 +1574,13 @@ fn parse_subsession_message_request(
             _ => Err(format!("{key} must be a non-empty string")),
         }
     };
-    let action = if name == "send_to_subsession" {
-        SubsessionMessageAction::Send
+    let action = if name == "send_to_session" {
+        SessionMessageAction::Send
     } else {
         match args.get("action").and_then(Value::as_str) {
-            Some("list") => SubsessionMessageAction::List,
-            Some("update") => SubsessionMessageAction::Update,
-            Some("cancel") => SubsessionMessageAction::Cancel,
+            Some("list") => SessionMessageAction::List,
+            Some("update") => SessionMessageAction::Update,
+            Some("cancel") => SessionMessageAction::Cancel,
             _ => return Err("action must be list, update, or cancel".into()),
         }
     };
@@ -1627,26 +1588,26 @@ fn parse_subsession_message_request(
     let message_id = text("message_id")?;
     if matches!(
         action,
-        SubsessionMessageAction::Send | SubsessionMessageAction::Update
+        SessionMessageAction::Send | SessionMessageAction::Update
     ) && message.is_none()
     {
         return Err("message is required".into());
     }
     if matches!(
         action,
-        SubsessionMessageAction::Update | SubsessionMessageAction::Cancel
+        SessionMessageAction::Update | SessionMessageAction::Cancel
     ) && message_id.is_none()
     {
         return Err("message_id is required".into());
     }
     let delivery = match args.get("delivery") {
-        None => SubsessionDelivery::Queue,
-        Some(Value::String(value)) if value == "queue" => SubsessionDelivery::Queue,
-        Some(Value::String(value)) if value == "immediate" => SubsessionDelivery::Immediate,
+        None => SessionDelivery::Queue,
+        Some(Value::String(value)) if value == "queue" => SessionDelivery::Queue,
+        Some(Value::String(value)) if value == "immediate" => SessionDelivery::Immediate,
         _ => return Err("delivery must be queue or immediate".into()),
     };
-    Ok(SubsessionMessageRequest {
-        child_conversation_id,
+    Ok(SessionMessageRequest {
+        conversation_id,
         action,
         message,
         message_id,
@@ -1654,7 +1615,7 @@ fn parse_subsession_message_request(
     })
 }
 
-fn render_subsession_message_result(outcome: &Value) -> Value {
+fn render_session_message_result(outcome: &Value) -> Value {
     json!({"content": [{"type": "text", "text": outcome.to_string()}], "structuredContent": outcome, "isError": false})
 }
 
@@ -2583,8 +2544,8 @@ pub fn browser_console_query(
         // to ask for, and quietly reading it as the default would be doing
         // something other than what was asked.
         Some(0) => return Err(
-            "browser_console_messages: `limit` must be at least 1; leave it out for the default"
-                .to_string(),
+                "browser_console_messages: `limit` must be at least 1; leave it out for the default"
+                    .to_string(),
         ),
         Some(n) => Some(usize::try_from(n).unwrap_or(usize::MAX)),
     };
@@ -2646,16 +2607,16 @@ pub fn browser_capture_request(
     };
     let (generation, target) =
         match (text("generation")?, text("ref")?) {
-            (None, None) => (None, None),
-            (Some(generation), Some(target)) => (Some(generation), Some(target)),
+        (None, None) => (None, None),
+        (Some(generation), Some(target)) => (Some(generation), Some(target)),
             (None, Some(_)) => return Err(
                 "browser_screenshot: `ref` needs the `generation` of the browser_snapshot that \
                  named it"
                     .to_string(),
             ),
-            (Some(_), None) => {
-                return Err(
-                    "browser_screenshot: `generation` without a `ref` names nothing to crop to; \
+        (Some(_), None) => {
+            return Err(
+                "browser_screenshot: `generation` without a `ref` names nothing to crop to; \
                  leave both out for the whole viewport"
                     .to_string(),
             )
@@ -4693,17 +4654,17 @@ mod tests {
         let resp = unwrap_respond(dispatch_for_test(line).await);
         let result = resp.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 6);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"delegate_to_agent"));
         assert!(names.contains(&"get_delegation_status"));
         assert!(names.contains(&"cancel_delegation"));
         assert!(names.contains(&"resume_delegation"));
-        assert!(names.contains(&"send_to_subsession"));
-        assert!(names.contains(&"manage_subsession_messages"));
+        assert!(names.contains(&"send_to_session"));
+        assert!(names.contains(&"manage_session_messages"));
         let send = tools
             .iter()
-            .find(|tool| tool["name"] == "send_to_subsession")
+            .find(|tool| tool["name"] == "send_to_session")
             .unwrap();
         assert_eq!(
             send["inputSchema"]["properties"]["delivery"]["default"],
@@ -5372,7 +5333,7 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 6);
     }
 
     #[tokio::test]
@@ -5381,7 +5342,7 @@ mod tests {
             dispatch_with_features(BOTH, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 7);
     }
 
     #[tokio::test]
@@ -5463,18 +5424,18 @@ mod tests {
 
     #[test]
     fn subsession_parsing_defaults_to_queue_and_accepts_immediate() {
-        let args = json!({"child_conversation_id": 42, "message": "continue"});
-        let request = parse_subsession_message_request("send_to_subsession", &args).unwrap();
+        let args = json!({"conversation_id": 42, "message": "continue"});
+        let request = parse_session_message_request("send_to_session", &args).unwrap();
         assert_eq!(serde_json::to_value(request).unwrap()["delivery"], "queue");
         let args =
-            json!({"child_conversation_id": 42, "message": "change", "delivery": "immediate"});
-        let request = parse_subsession_message_request("send_to_subsession", &args).unwrap();
+            json!({"conversation_id": 42, "message": "change", "delivery": "immediate"});
+        let request = parse_session_message_request("send_to_session", &args).unwrap();
         assert_eq!(
             serde_json::to_value(request).unwrap()["delivery"],
             "immediate"
         );
         let outcome = json!({"accepted": true, "messages": [{"id": "m1", "state": "queued", "result": null}]});
-        let rendered = render_subsession_message_result(&outcome);
+        let rendered = render_session_message_result(&outcome);
         assert_eq!(rendered["structuredContent"], outcome);
         assert_eq!(
             serde_json::from_str::<Value>(rendered["content"][0]["text"].as_str().unwrap())
@@ -5487,36 +5448,36 @@ mod tests {
     async fn subsession_validation_and_delegation_gating() {
         for (name, arguments) in [
             (
-                "send_to_subsession",
-                json!({"child_conversation_id": 0, "message": "hi"}),
+                "send_to_session",
+                json!({"conversation_id": 0, "message": "hi"}),
             ),
             (
-                "send_to_subsession",
-                json!({"child_conversation_id": "1", "message": "hi"}),
+                "send_to_session",
+                json!({"conversation_id": "1", "message": "hi"}),
             ),
             (
-                "send_to_subsession",
-                json!({"child_conversation_id": 1, "message": " "}),
+                "send_to_session",
+                json!({"conversation_id": 1, "message": " "}),
             ),
             (
-                "send_to_subsession",
-                json!({"child_conversation_id": 1, "message": "hi", "delivery": "now"}),
+                "send_to_session",
+                json!({"conversation_id": 1, "message": "hi", "delivery": "now"}),
             ),
             (
-                "send_to_subsession",
-                json!({"child_conversation_id": 1, "message": "hi", "extra": true}),
+                "send_to_session",
+                json!({"conversation_id": 1, "message": "hi", "extra": true}),
             ),
             (
-                "manage_subsession_messages",
-                json!({"child_conversation_id": 1, "action": "send"}),
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "send"}),
             ),
             (
-                "manage_subsession_messages",
-                json!({"child_conversation_id": 1, "action": "cancel"}),
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "cancel"}),
             ),
             (
-                "manage_subsession_messages",
-                json!({"child_conversation_id": 1, "action": "update", "message_id": "m1"}),
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "update", "message_id": "m1"}),
             ),
         ] {
             let line = json!({"jsonrpc":"2.0", "id":88, "method":"tools/call", "params":{"name":name,"arguments":arguments}}).to_string();
@@ -5528,27 +5489,27 @@ mod tests {
                 -32602
             );
         }
-        for name in ["send_to_subsession", "manage_subsession_messages"] {
-            let line = json!({"jsonrpc":"2.0", "id":89, "method":"tools/call", "params":{"name":name,"arguments":{"child_conversation_id":1,"message":"hi","action":"list"}}}).to_string();
+        for name in ["send_to_session", "manage_session_messages"] {
+            let line = json!({"jsonrpc":"2.0", "id":89, "method":"tools/call", "params":{"name":name,"arguments":{"conversation_id":1,"message":"hi","action":"list"}}}).to_string();
             let response = unwrap_respond(dispatch_with_features(FEEDBACK_ONLY, &line).await);
             assert!(response.error.unwrap().message.contains("unknown tool"));
         }
         for (name, args) in [
             (
-                "send_to_subsession",
-                json!({"child_conversation_id": 1, "message": "hi"}),
+                "send_to_session",
+                json!({"conversation_id": 1, "message": "hi"}),
             ),
             (
-                "manage_subsession_messages",
-                json!({"child_conversation_id": 1, "action": "list"}),
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "list"}),
             ),
             (
-                "manage_subsession_messages",
-                json!({"child_conversation_id": 1, "action": "cancel", "message_id":"m1"}),
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "cancel", "message_id":"m1"}),
             ),
             (
-                "manage_subsession_messages",
-                json!({"child_conversation_id": 1, "action": "update", "message_id":"m1", "message":"new"}),
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "update", "message_id":"m1", "message":"new"}),
             ),
         ] {
             let line = json!({"jsonrpc":"2.0", "id":90, "method":"tools/call", "params":{"name":name,"arguments":args}}).to_string();
@@ -5557,17 +5518,6 @@ mod tests {
                 LineAction::Spawn(_)
             ));
         }
-    }
-
-    #[tokio::test]
-    async fn parent_reports_cannot_select_a_recipient_and_require_delegation() {
-        for arguments in [json!({}), json!({"message":" "}), json!({"message":42}), json!({"message":"report", "parent_conversation_id":99})] {
-            let line = json!({"jsonrpc":"2.0","id":81,"method":"tools/call","params":{"name":"send_to_parent","arguments":arguments}}).to_string();
-            assert_eq!(unwrap_respond(dispatch_for_test(&line).await).error.unwrap().code, -32602);
-        }
-        let line = json!({"jsonrpc":"2.0","id":82,"method":"tools/call","params":{"name":"send_to_parent","arguments":{"message":"report"}}}).to_string();
-        assert!(matches!(dispatch_for_test(&line).await, LineAction::Spawn(_)));
-        assert!(unwrap_respond(dispatch_with_features(FEEDBACK_ONLY, &line).await).error.unwrap().message.contains("unknown tool"));
     }
 
     // -- resume_delegation validation + feature gating -----------------------
@@ -6862,11 +6812,11 @@ mod tests {
             .contains("`code`"));
         assert!(
             browser_eval_request(&json!({ "tabId": "t1", "code": "   " }))
-                .unwrap_err()
+            .unwrap_err()
                 .contains("`code`")
         );
         assert!(browser_eval_request(&json!({ "tabId": "t1", "code": 42 }))
-            .unwrap_err()
+                .unwrap_err()
             .contains("must be a string"));
         let long = "a".repeat(MAX_EVAL_CODE_CHARS + 1);
         assert!(
@@ -7176,7 +7126,7 @@ mod tests {
         // that forgot the brackets meant it.
         let (_, req) =
             browser_action_request("browser_select_option", &with(json!({ "values": "l" })))
-                .unwrap();
+        .unwrap();
         assert_eq!(
             req.action,
             ActionKind::Select {
@@ -7772,7 +7722,7 @@ mod tests {
 
         let (id, req) =
             computer_snapshot_request(&json!({ "targetId": "w1", "maxChars": 0, "query": "Save" }))
-                .unwrap();
+        .unwrap();
         assert_eq!(id, "w1");
         // 0 is "no cap", and passes through as such.
         assert_eq!(req.max_chars, Some(0));

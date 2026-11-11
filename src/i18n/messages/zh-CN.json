@@ -3518,8 +3518,7 @@
         "mentionGroupAssistant": "助手"
       },
       "messageQueue": {
-        "fromChild": "来自子会话：{name}",
-        "fromParent": "来自父会话：{name}",
+        "fromSession": "来自会话：{name}",
         "waiting": "排队中",
         "addToQueue": "加入队列",
         "saveEdit": "保存",

@@ -1,4 +1,4 @@
-//! Persistent messages addressed to an existing direct child conversation.
+//! Persistent messages addressed to an existing conversation.
 
 use std::{
     collections::HashMap,
@@ -15,24 +15,23 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::db::{
-    entities::subsession_message::Model, service::subsession_message_service as messages,
-    AppDatabase,
+    entities::session_message::Model, service::session_message_service as messages, AppDatabase,
 };
 
 type ActiveTurn = (
     String,
-    Pin<Box<dyn Future<Output = Result<SubsessionTurnResult, String>> + Send>>,
+    Pin<Box<dyn Future<Output = Result<SessionTurnResult, String>> + Send>>,
 );
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SubsessionDelivery {
+pub enum SessionDelivery {
     Immediate,
     #[default]
     Queue,
 }
 
-impl SubsessionDelivery {
+impl SessionDelivery {
     fn as_str(self) -> &'static str {
         match self {
             Self::Immediate => "immediate",
@@ -43,7 +42,7 @@ impl SubsessionDelivery {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SubsessionMessageAction {
+pub enum SessionMessageAction {
     Send,
     List,
     Update,
@@ -52,17 +51,17 @@ pub enum SubsessionMessageAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SubsessionMessageRequest {
-    pub child_conversation_id: i32,
-    pub action: SubsessionMessageAction,
+pub struct SessionMessageRequest {
+    pub conversation_id: i32,
+    pub action: SessionMessageAction,
     pub message: Option<String>,
     pub message_id: Option<String>,
     #[serde(default)]
-    pub delivery: SubsessionDelivery,
+    pub delivery: SessionDelivery,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubsessionMessageOutcome {
+pub struct SessionMessageOutcome {
     pub accepted: bool,
     pub messages: Vec<Model>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,7 +70,7 @@ pub struct SubsessionMessageOutcome {
     pub message: Option<String>,
 }
 
-impl SubsessionMessageOutcome {
+impl SessionMessageOutcome {
     pub fn refused(code: &str, message: &str) -> Self {
         Self {
             accepted: false,
@@ -92,109 +91,100 @@ impl SubsessionMessageOutcome {
 }
 
 #[async_trait]
-pub trait SubsessionMessageAccess: Send + Sync {
-    async fn send_to_parent(
-        &self,
-        _child: i32,
-        _message: String,
-    ) -> super::parent_replies::ParentReplyOutcome {
-        super::parent_replies::ParentReplyOutcome::refused("Parent messaging is unavailable")
-    }
+pub trait SessionMessageAccess: Send + Sync {
+    async fn wake_pending(&self, _recipient: i32) {}
 
     async fn request(
         &self,
-        parent_connection_id: &str,
-        parent_conversation_id: i32,
-        request: SubsessionMessageRequest,
-    ) -> SubsessionMessageOutcome;
+        sender_connection_id: &str,
+        sender_conversation_id: i32,
+        request: SessionMessageRequest,
+    ) -> SessionMessageOutcome;
 }
 
-pub struct NoSubsessionMessages;
+pub struct NoSessionMessages;
 
 #[async_trait]
-impl SubsessionMessageAccess for NoSubsessionMessages {
-    async fn request(
-        &self,
-        _: &str,
-        _: i32,
-        _: SubsessionMessageRequest,
-    ) -> SubsessionMessageOutcome {
-        SubsessionMessageOutcome::refused("unavailable", "Subsession messages are unavailable")
+impl SessionMessageAccess for NoSessionMessages {
+    async fn request(&self, _: &str, _: i32, _: SessionMessageRequest) -> SessionMessageOutcome {
+        SessionMessageOutcome::refused("unavailable", "Session messages are unavailable")
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct SubsessionTurn {
+pub struct SessionTurn {
     pub id: String,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum SubsessionStartError {
+pub enum SessionStartError {
     #[error("turn already in progress")]
     Busy,
     #[error("{0}")]
     Failed(String),
 }
 
-impl From<String> for SubsessionStartError {
+impl From<String> for SessionStartError {
     fn from(error: String) -> Self {
         Self::Failed(error)
     }
 }
-impl From<&str> for SubsessionStartError {
+impl From<&str> for SessionStartError {
     fn from(error: &str) -> Self {
         Self::Failed(error.into())
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct SubsessionTurnResult {
+pub struct SessionTurnResult {
     pub status: String,
     pub text: Option<String>,
     pub error: Option<String>,
 }
 
 #[async_trait]
-pub trait SubsessionRuntime: Send + Sync {
+pub trait SessionRuntime: Send + Sync {
+    fn message_from(&self, _sender: i32, _recipient: i32, message: String) -> String {
+        message
+    }
+
     async fn prepare(
         &self,
-        parent_connection_id: &str,
-        parent: i32,
-        child: i32,
+        sender_connection_id: &str,
+        sender: i32,
+        recipient: i32,
     ) -> Result<(), String>;
-    async fn is_busy(&self, child: i32) -> Result<bool, String>;
-    async fn wait_idle(&self, child: i32) -> Result<(), String>;
+    async fn is_busy(&self, recipient: i32) -> Result<bool, String>;
+    async fn wait_idle(&self, recipient: i32) -> Result<(), String>;
     async fn start(
         &self,
-        parent_connection_id: &str,
-        parent: i32,
-        child: i32,
+        sender_connection_id: &str,
+        sender: i32,
+        recipient: i32,
         message: String,
-    ) -> Result<SubsessionTurn, SubsessionStartError>;
-    async fn steer(&self, child: i32, message: String) -> Result<bool, String>;
-    async fn interrupt(&self, child: i32) -> Result<(), String>;
-    async fn wait(&self, turn: SubsessionTurn) -> Result<SubsessionTurnResult, String>;
+    ) -> Result<SessionTurn, SessionStartError>;
+    async fn steer(&self, recipient: i32, message: String) -> Result<bool, String>;
+    async fn interrupt(&self, recipient: i32) -> Result<(), String>;
+    async fn wait(&self, turn: SessionTurn) -> Result<SessionTurnResult, String>;
 }
 
 struct Worker {
     wake: Arc<Notify>,
-    parent_connection_id: Arc<RwLock<String>>,
+    sender_connection_id: Arc<RwLock<String>>,
     revision: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
-pub struct SubsessionMessages {
-    parent_replies: Option<Arc<super::parent_replies::ParentReplies>>,
+pub struct SessionMessages {
     db: Arc<AppDatabase>,
-    runtime: Arc<dyn SubsessionRuntime>,
+    runtime: Arc<dyn SessionRuntime>,
     workers: Arc<Mutex<HashMap<i32, Worker>>>,
-    pending_results: Arc<Mutex<HashMap<String, SubsessionTurnResult>>>,
+    pending_results: Arc<Mutex<HashMap<String, SessionTurnResult>>>,
 }
 
-impl SubsessionMessages {
-    pub fn with_runtime(db: Arc<AppDatabase>, runtime: Arc<dyn SubsessionRuntime>) -> Self {
+impl SessionMessages {
+    pub fn with_runtime(db: Arc<AppDatabase>, runtime: Arc<dyn SessionRuntime>) -> Self {
         Self {
-            parent_replies: None,
             db,
             runtime,
             workers: Arc::new(Mutex::new(HashMap::new())),
@@ -202,18 +192,10 @@ impl SubsessionMessages {
         }
     }
 
-    pub fn with_parent_replies(
-        mut self,
-        replies: Arc<super::parent_replies::ParentReplies>,
-    ) -> Self {
-        self.parent_replies = Some(replies);
-        self
-    }
-
-    async fn wake_worker(&self, owner: &str, parent: i32, child: i32) {
+    async fn wake_worker(&self, owner: &str, sender: i32, recipient: i32) {
         let mut workers = self.workers.lock().await;
-        if let Some(worker) = workers.get(&child) {
-            *worker.parent_connection_id.write().await = owner.into();
+        if let Some(worker) = workers.get(&recipient) {
+            *worker.sender_connection_id.write().await = owner.into();
             worker.revision.fetch_add(1, Ordering::AcqRel);
             worker.wake.notify_one();
             return;
@@ -222,10 +204,10 @@ impl SubsessionMessages {
         let owner = Arc::new(RwLock::new(owner.to_string()));
         let revision = Arc::new(AtomicU64::new(0));
         workers.insert(
-            child,
+            recipient,
             Worker {
                 wake: wake.clone(),
-                parent_connection_id: owner.clone(),
+                sender_connection_id: owner.clone(),
                 revision: revision.clone(),
             },
         );
@@ -233,17 +215,17 @@ impl SubsessionMessages {
         tokio::spawn(async move {
             loop {
                 let observed = revision.load(Ordering::Acquire);
-                match service.run(parent, child, &wake, &owner).await {
+                match service.run(sender, recipient, &wake, &owner).await {
                     Ok(()) => return,
                     Err(error) => {
-                        tracing::warn!(child, parent, %error, "subsession message dispatcher paused");
+                        tracing::warn!(recipient, sender, %error, "session message dispatcher paused");
                         let mut workers = service.workers.lock().await;
                         // A sender that found this worker during error cleanup
                         // must get a fresh attempt, rather than a lost wakeup.
                         if revision.load(Ordering::Acquire) != observed {
                             continue;
                         }
-                        workers.remove(&child);
+                        workers.remove(&recipient);
                         return;
                     }
                 }
@@ -254,9 +236,9 @@ impl SubsessionMessages {
     async fn finish(
         &self,
         id: &str,
-        result: Result<SubsessionTurnResult, String>,
+        result: Result<SessionTurnResult, String>,
     ) -> Result<(), String> {
-        let result = result.unwrap_or_else(|error| SubsessionTurnResult {
+        let result = result.unwrap_or_else(|error| SessionTurnResult {
             status: "failed".into(),
             text: None,
             error: Some(error),
@@ -270,7 +252,7 @@ impl SubsessionMessages {
         self.persist_result(id, &result).await
     }
 
-    async fn persist_result(&self, id: &str, result: &SubsessionTurnResult) -> Result<(), String> {
+    async fn persist_result(&self, id: &str, result: &SessionTurnResult) -> Result<(), String> {
         let written = messages::finish(
             &self.db.conn,
             id,
@@ -305,8 +287,8 @@ impl SubsessionMessages {
     async fn start(
         &self,
         owner: &str,
-        parent: i32,
-        child: i32,
+        sender: i32,
+        recipient: i32,
         id: &str,
     ) -> Result<Option<ActiveTurn>, String> {
         if !messages::claim(&self.db.conn, id)
@@ -317,7 +299,7 @@ impl SubsessionMessages {
         }
         // Read AFTER claiming: an edit that won the race before the claim must
         // be the text sent to ACP, rather than our earlier queue snapshot.
-        let message = messages::get(&self.db.conn, parent, child, id)
+        let message = messages::get(&self.db.conn, sender, recipient, id)
             .await
             .map_err(|e| e.to_string())
             .and_then(|row| row.ok_or_else(|| "claimed message disappeared".to_string()));
@@ -330,7 +312,13 @@ impl SubsessionMessages {
         };
         match self
             .runtime
-            .start(owner, parent, child, message.message)
+            .start(
+                owner,
+                sender,
+                recipient,
+                self.runtime
+                    .message_from(sender, recipient, message.message),
+            )
             .await
         {
             Ok(turn) => {
@@ -340,13 +328,13 @@ impl SubsessionMessages {
                     Box::pin(async move { runtime.wait(turn).await }),
                 )))
             }
-            Err(SubsessionStartError::Busy) => {
+            Err(SessionStartError::Busy) => {
                 messages::release_claim(&self.db.conn, id)
                     .await
                     .map_err(|e| e.to_string())?;
                 Ok(None)
             }
-            Err(SubsessionStartError::Failed(error)) => {
+            Err(SessionStartError::Failed(error)) => {
                 self.finish(id, Err(error)).await?;
                 Ok(None)
             }
@@ -355,8 +343,8 @@ impl SubsessionMessages {
 
     async fn run(
         &self,
-        parent: i32,
-        child: i32,
+        sender: i32,
+        recipient: i32,
         wake: &Notify,
         owner: &RwLock<String>,
     ) -> Result<(), String> {
@@ -364,7 +352,7 @@ impl SubsessionMessages {
         let mut active: Option<ActiveTurn> = None;
         let mut reserved: Option<String> = None;
         let mut failure = self
-            .run_loop(parent, child, wake, owner, &mut active, &mut reserved)
+            .run_loop(sender, recipient, wake, owner, &mut active, &mut reserved)
             .await
             .err();
         if failure.is_some() {
@@ -392,8 +380,8 @@ impl SubsessionMessages {
 
     async fn run_loop(
         &self,
-        parent: i32,
-        child: i32,
+        sender: i32,
+        recipient: i32,
         wake: &Notify,
         owner: &RwLock<String>,
         active: &mut Option<ActiveTurn>,
@@ -401,7 +389,7 @@ impl SubsessionMessages {
     ) -> Result<(), String> {
         loop {
             let notified = wake.notified();
-            let next = messages::next_queued(&self.db.conn, parent, child)
+            let next = messages::next_queued(&self.db.conn, recipient)
                 .await
                 .map_err(|e| e.to_string())?;
             if next.as_ref().is_none_or(|m| m.delivery != "immediate") {
@@ -421,43 +409,49 @@ impl SubsessionMessages {
                 // Serialize exit with registration. An enqueue before this
                 // recheck is observed here; one after it starts a new worker.
                 let mut workers = self.workers.lock().await;
-                if messages::next_queued(&self.db.conn, parent, child)
+                if messages::next_queued(&self.db.conn, recipient)
                     .await
                     .map_err(|e| e.to_string())?
                     .is_none()
                 {
-                    workers.remove(&child);
+                    workers.remove(&recipient);
                     return Ok(());
                 }
                 continue;
             }
+            let sender = next
+                .as_ref()
+                .map(|m| m.sender_conversation_id)
+                .unwrap_or(sender);
             let owner = owner.read().await.clone();
-            if let Err(error) = self.runtime.prepare(&owner, parent, child).await {
-                // Disabling new work or losing the parent must not abandon the
+            if let Err(error) = self.runtime.prepare(&owner, sender, recipient).await {
+                // Disabling new work or losing the sender must not abandon the
                 // result of a turn we already started.
                 if let Some((id, result)) = active.take() {
                     self.finish(&id, result.await).await?;
                 }
                 return Err(error);
             }
-            let busy = self.runtime.is_busy(child).await?;
+            let busy = self.runtime.is_busy(recipient).await?;
             if let Some(message) = next.as_ref().filter(|m| m.delivery == "immediate" && busy) {
                 if !messages::claim_delivery(&self.db.conn, &message.message_id)
                     .await
                     .map_err(|e| e.to_string())?
                 {
-                    if messages::get(&self.db.conn, parent, child, &message.message_id)
+                    if messages::get(&self.db.conn, sender, recipient, &message.message_id)
                         .await
                         .map_err(|e| e.to_string())?
                         .is_some_and(|m| m.status == "queued")
                     {
-                        return Err("child is already being dispatched by another runtime".into());
+                        return Err(
+                            "recipient is already being dispatched by another runtime".into()
+                        );
                     }
                     continue;
                 }
                 *reserved = Some(message.message_id.clone());
                 let id = message.message_id.clone();
-                let message = messages::get(&self.db.conn, parent, child, &id)
+                let message = messages::get(&self.db.conn, sender, recipient, &id)
                     .await
                     .map_err(|e| e.to_string())
                     .and_then(|row| row.ok_or_else(|| "reserved message disappeared".to_string()));
@@ -468,13 +462,21 @@ impl SubsessionMessages {
                         return Err(error);
                     }
                 };
-                match self.runtime.steer(child, message.message.clone()).await {
+                match self
+                    .runtime
+                    .steer(
+                        recipient,
+                        self.runtime
+                            .message_from(sender, recipient, message.message.clone()),
+                    )
+                    .await
+                {
                     Ok(true) => {
                         // Delivered means injected into the current turn, not
                         // that the agent has finished following the instruction.
                         self.finish(
                             &message.message_id,
-                            Ok(SubsessionTurnResult {
+                            Ok(SessionTurnResult {
                                 status: "delivered".into(),
                                 text: None,
                                 error: None,
@@ -483,7 +485,7 @@ impl SubsessionMessages {
                         .await?;
                     }
                     Ok(false) => {
-                        if let Err(error) = self.runtime.interrupt(child).await {
+                        if let Err(error) = self.runtime.interrupt(recipient).await {
                             self.finish(&message.message_id, Err(error)).await?;
                             *reserved = None;
                             continue;
@@ -492,7 +494,7 @@ impl SubsessionMessages {
                             self.finish(&id, result.await).await?;
                         }
                         *active = self
-                            .start(&owner, parent, child, &message.message_id)
+                            .start(&owner, sender, recipient, &message.message_id)
                             .await?;
                     }
                     Err(error) => self.finish(&message.message_id, Err(error)).await?,
@@ -513,24 +515,27 @@ impl SubsessionMessages {
             }
             if busy {
                 tokio::select! {
-                    result = self.runtime.wait_idle(child) => result?,
+                    result = self.runtime.wait_idle(recipient) => result?,
                     _ = notified => {}
                 }
                 continue;
             }
             if let Some(message) = next {
                 *active = self
-                    .start(&owner, parent, child, &message.message_id)
+                    .start(&owner, sender, recipient, &message.message_id)
                     .await?;
                 if active.is_none() {
-                    // A different runtime may already own this child's running
+                    // A different runtime may already own this recipient's running
                     // message. Leave queued work intact for that owner.
-                    let rows = messages::list(&self.db.conn, parent, child)
+                    if messages::has_active(&self.db.conn, recipient)
                         .await
-                        .map_err(|e| e.to_string())?;
-                    if rows.iter().any(|r| r.status == "running") {
-                        return Err("child is already being dispatched by another runtime".into());
+                        .map_err(|e| e.to_string())?
+                    {
+                        return Err(
+                            "recipient is already being dispatched by another runtime".into()
+                        );
                     }
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                 }
             }
         }
@@ -538,33 +543,35 @@ impl SubsessionMessages {
 }
 
 #[async_trait]
-impl SubsessionMessageAccess for SubsessionMessages {
-    async fn send_to_parent(
-        &self,
-        child: i32,
-        message: String,
-    ) -> super::parent_replies::ParentReplyOutcome {
-        match &self.parent_replies {
-            Some(replies) => replies.send(child, message).await,
-            None => super::parent_replies::ParentReplyOutcome::refused(
-                "Parent messaging is unavailable",
-            ),
+impl SessionMessageAccess for SessionMessages {
+    async fn wake_pending(&self, recipient: i32) {
+        if let Err(error) = messages::recover_interrupted(&self.db.conn, recipient).await {
+            tracing::warn!(%error, recipient, "session queue recovery paused");
+            return;
+        }
+        if let Ok(Some(row)) = messages::next_queued(&self.db.conn, recipient).await {
+            self.wake_worker("", row.sender_conversation_id, recipient)
+                .await;
         }
     }
 
     async fn request(
         &self,
         owner: &str,
-        parent: i32,
-        request: SubsessionMessageRequest,
-    ) -> SubsessionMessageOutcome {
-        let child = request.child_conversation_id;
-        // Validate ownership before runtime access or revealing queue contents.
-        if child <= 0 || messages::list(&self.db.conn, parent, child).await.is_err() {
-            return SubsessionMessageOutcome::refused("unavailable", "Subsession is unavailable");
+        sender: i32,
+        request: SessionMessageRequest,
+    ) -> SessionMessageOutcome {
+        let recipient = request.conversation_id;
+        // The broker derives the sender from its authenticated connection.
+        if recipient <= 0
+            || messages::list(&self.db.conn, sender, recipient)
+                .await
+                .is_err()
+        {
+            return SessionMessageOutcome::refused("unavailable", "Session is unavailable");
         }
         if let Err(error) = self.flush_results().await {
-            return SubsessionMessageOutcome::refused("storage_error", &error);
+            return SessionMessageOutcome::refused("storage_error", &error);
         }
         let operation = async {
             let message = request
@@ -574,52 +581,52 @@ impl SubsessionMessageAccess for SubsessionMessages {
                 .filter(|s| !s.is_empty());
             let id = request.message_id.as_deref().filter(|s| !s.is_empty());
             match request.action {
-                SubsessionMessageAction::Send => {
+                SessionMessageAction::Send => {
                     let text = message
                         .ok_or_else(|| ("invalid_message", "Message is empty".to_string()))?;
                     // prepare also checks the live delegation gate and establishes
                     // ownership before the original one-shot broker can retire it.
                     self.runtime
-                        .prepare(owner, parent, child)
+                        .prepare(owner, sender, recipient)
                         .await
                         .map_err(|e| ("unavailable", e))?;
-                    messages::recover_interrupted(&self.db.conn, parent, child)
+                    messages::recover_interrupted(&self.db.conn, recipient)
                         .await
                         .map_err(|e| ("storage_error", e.to_string()))?;
                     let row = messages::enqueue(
                         &self.db.conn,
-                        parent,
-                        child,
+                        sender,
+                        recipient,
                         text,
                         request.delivery.as_str(),
                     )
                     .await
                     .map_err(|e| ("storage_error", e.to_string()))?;
-                    self.wake_worker(owner, parent, child).await;
+                    self.wake_worker(owner, sender, recipient).await;
                     Ok(vec![row])
                 }
-                SubsessionMessageAction::List => {
-                    messages::recover_interrupted(&self.db.conn, parent, child)
+                SessionMessageAction::List => {
+                    messages::recover_interrupted(&self.db.conn, recipient)
                         .await
                         .map_err(|e| ("storage_error", e.to_string()))?;
-                    let rows = messages::list(&self.db.conn, parent, child)
+                    let rows = messages::list(&self.db.conn, sender, recipient)
                         .await
                         .map_err(|e| ("storage_error", e.to_string()))?;
                     if rows.iter().any(|r| r.status == "queued") {
-                        self.wake_worker(owner, parent, child).await;
+                        self.wake_worker(owner, sender, recipient).await;
                     }
                     Ok(rows)
                 }
-                SubsessionMessageAction::Update | SubsessionMessageAction::Cancel => {
+                SessionMessageAction::Update | SessionMessageAction::Cancel => {
                     let id = id.ok_or_else(|| {
                         ("invalid_message_id", "Message id is required".to_string())
                     })?;
-                    let row = if request.action == SubsessionMessageAction::Update {
+                    let row = if request.action == SessionMessageAction::Update {
                         let text = message
                             .ok_or_else(|| ("invalid_message", "Message is empty".to_string()))?;
-                        messages::update_queued(&self.db.conn, parent, child, id, text).await
+                        messages::update_queued(&self.db.conn, sender, recipient, id, text).await
                     } else {
-                        messages::cancel_queued(&self.db.conn, parent, child, id).await
+                        messages::cancel_queued(&self.db.conn, sender, recipient, id).await
                     }
                     .map_err(|e| ("storage_error", e.to_string()))?;
                     let Some(row) = row else {
@@ -629,15 +636,15 @@ impl SubsessionMessageAccess for SubsessionMessages {
                                 .to_string(),
                         ));
                     };
-                    self.wake_worker(owner, parent, child).await;
+                    self.wake_worker(owner, sender, recipient).await;
                     Ok(vec![row])
                 }
             }
         }
         .await;
         match operation {
-            Ok(rows) => SubsessionMessageOutcome::accepted(rows),
-            Err((code, message)) => SubsessionMessageOutcome::refused(code, &message),
+            Ok(rows) => SessionMessageOutcome::accepted(rows),
+            Err((code, message)) => SessionMessageOutcome::refused(code, &message),
         }
     }
 }
@@ -648,7 +655,7 @@ mod tests {
     use crate::{
         db::{
             entities::conversation,
-            service::subsession_message_service as messages,
+            service::session_message_service as messages,
             test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder},
         },
         models::AgentType,
@@ -657,14 +664,100 @@ mod tests {
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     use tokio::sync::oneshot;
 
+    #[tokio::test]
+    async fn opening_a_recipient_reawakens_persisted_messages_without_sender_polling() {
+        let (service, runtime, sender, recipient) = setup(false, false).await;
+        let row = messages::enqueue(&service.db.conn, sender, recipient, "persisted", "queue")
+            .await
+            .unwrap();
+        assert!(runtime.sent.lock().await.is_empty());
+        service.wake_pending(recipient).await;
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while runtime.sent.lock().await.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("persisted prompt was dispatched");
+        runtime.complete("completed").await;
+        wait_for_status(&service, sender, recipient, &row.message_id, "completed").await;
+        assert_eq!(*runtime.sent.lock().await, ["persisted"]);
+    }
+
+    #[tokio::test]
+    async fn ordinary_session_messages_share_target_queue_and_keep_sender_ownership() {
+        let (service, runtime, sender, target) = setup(true, false).await;
+        conversation::Entity::update_many()
+            .col_expr(
+                conversation::Column::ParentId,
+                Expr::value(Option::<i32>::None),
+            )
+            .col_expr(conversation::Column::Kind, Expr::value("regular"))
+            .filter(conversation::Column::Id.eq(target))
+            .exec(&service.db.conn)
+            .await
+            .unwrap();
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&service.db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let other = seed_conversation(&service.db, target_row.folder_id, AgentType::Codex).await;
+        let make = |text: &str| {
+            request(
+                target,
+                SessionMessageAction::Send,
+                Some(text),
+                None,
+                SessionDelivery::Queue,
+            )
+        };
+        let first = service.request("sender", sender, make("first")).await;
+        let second = service.request("other", other, make("second")).await;
+        assert!(first.accepted && second.accepted);
+        let cancel = request(
+            target,
+            SessionMessageAction::Cancel,
+            None,
+            Some(&first.messages[0].message_id),
+            SessionDelivery::Queue,
+        );
+        assert!(!service.request("other", other, cancel).await.accepted);
+        runtime.complete("completed").await;
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if runtime.sent.lock().await.len() == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*runtime.sent.lock().await, ["first"]);
+        runtime.complete("completed").await;
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if runtime.sent.lock().await.len() == 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*runtime.sent.lock().await, ["first", "second"]);
+        runtime.complete("completed").await;
+    }
+
     #[derive(Default)]
     struct FakeRuntime {
         busy: Mutex<bool>,
         native: bool,
         sent: Mutex<Vec<String>>,
         steered: Mutex<Vec<String>>,
-        turns: Mutex<HashMap<String, oneshot::Receiver<SubsessionTurnResult>>>,
-        active: Mutex<Option<oneshot::Sender<SubsessionTurnResult>>>,
+        turns: Mutex<HashMap<String, oneshot::Receiver<SessionTurnResult>>>,
+        active: Mutex<Option<oneshot::Sender<SessionTurnResult>>>,
         changed: Notify,
         busy_error_once: std::sync::atomic::AtomicBool,
         busy_error_seen: Notify,
@@ -679,7 +772,7 @@ mod tests {
         async fn complete(&self, status: &str) {
             *self.busy.lock().await = false;
             if let Some(tx) = self.active.lock().await.take() {
-                let _ = tx.send(SubsessionTurnResult {
+                let _ = tx.send(SessionTurnResult {
                     status: status.into(),
                     text: Some("reply".into()),
                     error: None,
@@ -690,7 +783,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl SubsessionRuntime for FakeRuntime {
+    impl SessionRuntime for FakeRuntime {
         async fn prepare(&self, _: &str, _: i32, _: i32) -> Result<(), String> {
             let call = self.prepare_calls.fetch_add(1, Ordering::AcqRel) + 1;
             if call == self.prepare_block_at.load(Ordering::Acquire) {
@@ -705,7 +798,7 @@ mod tests {
         async fn is_busy(&self, _: i32) -> Result<bool, String> {
             if self.busy_error_once.swap(false, Ordering::AcqRel) {
                 self.busy_error_seen.notify_one();
-                return Err("temporary child lookup failure".into());
+                return Err("temporary recipient lookup failure".into());
             }
             Ok(*self.busy.lock().await)
         }
@@ -724,13 +817,13 @@ mod tests {
             _: i32,
             _: i32,
             message: String,
-        ) -> Result<SubsessionTurn, SubsessionStartError> {
+        ) -> Result<SessionTurn, SessionStartError> {
             if self.start_busy_once.swap(false, Ordering::AcqRel) {
-                return Err(SubsessionStartError::Busy);
+                return Err(SessionStartError::Busy);
             }
             let mut busy = self.busy.lock().await;
             if *busy {
-                return Err(SubsessionStartError::Busy);
+                return Err(SessionStartError::Busy);
             }
             *busy = true;
             let (tx, rx) = oneshot::channel();
@@ -738,7 +831,7 @@ mod tests {
             self.turns.lock().await.insert(id.clone(), rx);
             *self.active.lock().await = Some(tx);
             self.sent.lock().await.push(message);
-            Ok(SubsessionTurn { id })
+            Ok(SessionTurn { id })
         }
         async fn steer(&self, _: i32, message: String) -> Result<bool, String> {
             if self.native {
@@ -750,21 +843,21 @@ mod tests {
             self.complete("canceled").await;
             Ok(())
         }
-        async fn wait(&self, turn: SubsessionTurn) -> Result<SubsessionTurnResult, String> {
+        async fn wait(&self, turn: SessionTurn) -> Result<SessionTurnResult, String> {
             let rx = self.turns.lock().await.remove(&turn.id).unwrap();
             rx.await.map_err(|_| "closed".into())
         }
     }
 
-    async fn setup(busy: bool, native: bool) -> (SubsessionMessages, Arc<FakeRuntime>, i32, i32) {
+    async fn setup(busy: bool, native: bool) -> (SessionMessages, Arc<FakeRuntime>, i32, i32) {
         let db = Arc::new(fresh_in_memory_db().await);
         let folder = seed_folder(&db, "D:/message-tests").await;
-        let parent = seed_conversation(&db, folder, AgentType::Codex).await;
-        let child = seed_conversation(&db, folder, AgentType::Codex).await;
+        let sender = seed_conversation(&db, folder, AgentType::Codex).await;
+        let recipient = seed_conversation(&db, folder, AgentType::Codex).await;
         conversation::Entity::update_many()
-            .col_expr(conversation::Column::ParentId, Expr::value(parent))
+            .col_expr(conversation::Column::ParentId, Expr::value(sender))
             .col_expr(conversation::Column::Kind, Expr::value("delegate"))
-            .filter(conversation::Column::Id.eq(child))
+            .filter(conversation::Column::Id.eq(recipient))
             .exec(&db.conn)
             .await
             .unwrap();
@@ -774,22 +867,22 @@ mod tests {
             ..Default::default()
         });
         (
-            SubsessionMessages::with_runtime(db, runtime.clone()),
+            SessionMessages::with_runtime(db, runtime.clone()),
             runtime,
-            parent,
-            child,
+            sender,
+            recipient,
         )
     }
 
     fn request(
-        child: i32,
-        action: SubsessionMessageAction,
+        recipient: i32,
+        action: SessionMessageAction,
         text: Option<&str>,
         id: Option<&str>,
-        delivery: SubsessionDelivery,
-    ) -> SubsessionMessageRequest {
-        SubsessionMessageRequest {
-            child_conversation_id: child,
+        delivery: SessionDelivery,
+    ) -> SessionMessageRequest {
+        SessionMessageRequest {
+            conversation_id: recipient,
             action,
             message: text.map(str::to_owned),
             message_id: id.map(str::to_owned),
@@ -798,15 +891,15 @@ mod tests {
     }
 
     async fn wait_for_status(
-        service: &SubsessionMessages,
-        parent: i32,
-        child: i32,
+        service: &SessionMessages,
+        sender: i32,
+        recipient: i32,
         id: &str,
         status: &str,
     ) {
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
-                if messages::get(&service.db.conn, parent, child, id)
+                if messages::get(&service.db.conn, sender, recipient, id)
                     .await
                     .unwrap()
                     .is_some_and(|r| r.status == status)
@@ -821,19 +914,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_competing_parent_report_does_not_fail_an_unsent_child_prompt() {
-        let (service, runtime, parent, child) = setup(false, false).await;
+    async fn a_competing_prompt_does_not_fail_an_unsent_message() {
+        let (service, runtime, sender, recipient) = setup(false, false).await;
         runtime.start_busy_once.store(true, Ordering::Release);
         let outcome = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::Send,
+                    recipient,
+                    SessionMessageAction::Send,
                     Some("keep this prompt"),
                     None,
-                    SubsessionDelivery::Queue,
+                    SessionDelivery::Queue,
                 ),
             )
             .await;
@@ -848,22 +941,22 @@ mod tests {
         .unwrap();
         assert_eq!(*runtime.sent.lock().await, ["keep this prompt"]);
         runtime.complete("completed").await;
-        wait_for_status(&service, parent, child, id, "completed").await;
+        wait_for_status(&service, sender, recipient, id, "completed").await;
     }
 
     #[tokio::test]
     async fn queued_messages_can_be_edited_or_canceled_until_the_child_is_idle() {
-        let (service, runtime, parent, child) = setup(true, false).await;
+        let (service, runtime, sender, recipient) = setup(true, false).await;
         let first = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::Send,
+                    recipient,
+                    SessionMessageAction::Send,
                     Some("old"),
                     None,
-                    SubsessionDelivery::Queue,
+                    SessionDelivery::Queue,
                 ),
             )
             .await;
@@ -871,14 +964,14 @@ mod tests {
         let first_id = first.messages[0].message_id.clone();
         let second = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::Send,
+                    recipient,
+                    SessionMessageAction::Send,
                     Some("remove"),
                     None,
-                    SubsessionDelivery::Queue,
+                    SessionDelivery::Queue,
                 ),
             )
             .await;
@@ -887,14 +980,14 @@ mod tests {
         assert!(
             service
                 .request(
-                    "parent",
-                    parent,
+                    "sender",
+                    sender,
                     request(
-                        child,
-                        SubsessionMessageAction::Update,
+                        recipient,
+                        SessionMessageAction::Update,
                         Some("revised"),
                         Some(&first_id),
-                        SubsessionDelivery::Queue
+                        SessionDelivery::Queue
                     )
                 )
                 .await
@@ -903,14 +996,14 @@ mod tests {
         assert!(
             service
                 .request(
-                    "parent",
-                    parent,
+                    "sender",
+                    sender,
                     request(
-                        child,
-                        SubsessionMessageAction::Cancel,
+                        recipient,
+                        SessionMessageAction::Cancel,
                         None,
                         Some(&second_id),
-                        SubsessionDelivery::Queue
+                        SessionDelivery::Queue
                     )
                 )
                 .await
@@ -918,7 +1011,7 @@ mod tests {
         );
         assert!(runtime.sent.lock().await.is_empty());
         runtime.complete("completed").await;
-        wait_for_status(&service, parent, child, &first_id, "running").await;
+        wait_for_status(&service, sender, recipient, &first_id, "running").await;
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             while runtime.sent.lock().await.len() != 1 {
                 tokio::task::yield_now().await;
@@ -928,9 +1021,9 @@ mod tests {
         .unwrap();
         assert_eq!(*runtime.sent.lock().await, vec!["revised"]);
         runtime.complete("completed").await;
-        wait_for_status(&service, parent, child, &first_id, "completed").await;
+        wait_for_status(&service, sender, recipient, &first_id, "completed").await;
         assert_eq!(
-            messages::get(&service.db.conn, parent, child, &first_id)
+            messages::get(&service.db.conn, sender, recipient, &first_id)
                 .await
                 .unwrap()
                 .unwrap()
@@ -939,7 +1032,7 @@ mod tests {
             Some("reply")
         );
         assert_eq!(
-            messages::get(&service.db.conn, parent, child, &second_id)
+            messages::get(&service.db.conn, sender, recipient, &second_id)
                 .await
                 .unwrap()
                 .unwrap()
@@ -950,25 +1043,25 @@ mod tests {
 
     #[tokio::test]
     async fn immediate_messages_steer_without_canceling_the_current_turn() {
-        let (service, runtime, parent, child) = setup(true, true).await;
+        let (service, runtime, sender, recipient) = setup(true, true).await;
         let outcome = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::Send,
+                    recipient,
+                    SessionMessageAction::Send,
                     Some("redirect"),
                     None,
-                    SubsessionDelivery::Immediate,
+                    SessionDelivery::Immediate,
                 ),
             )
             .await;
         assert!(outcome.accepted);
         wait_for_status(
             &service,
-            parent,
-            child,
+            sender,
+            recipient,
             &outcome.messages[0].message_id,
             "delivered",
         )
@@ -981,25 +1074,25 @@ mod tests {
 
     #[tokio::test]
     async fn immediate_without_steering_interrupts_then_reuses_the_same_child() {
-        let (service, runtime, parent, child) = setup(false, false).await;
+        let (service, runtime, sender, recipient) = setup(false, false).await;
         let first = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::Send,
+                    recipient,
+                    SessionMessageAction::Send,
                     Some("first"),
                     None,
-                    SubsessionDelivery::Queue,
+                    SessionDelivery::Queue,
                 ),
             )
             .await;
         assert!(first.accepted);
         wait_for_status(
             &service,
-            parent,
-            child,
+            sender,
+            recipient,
             &first.messages[0].message_id,
             "running",
         )
@@ -1013,22 +1106,22 @@ mod tests {
         .unwrap();
         let next = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::Send,
+                    recipient,
+                    SessionMessageAction::Send,
                     Some("change now"),
                     None,
-                    SubsessionDelivery::Immediate,
+                    SessionDelivery::Immediate,
                 ),
             )
             .await;
         assert!(next.accepted);
         wait_for_status(
             &service,
-            parent,
-            child,
+            sender,
+            recipient,
             &next.messages[0].message_id,
             "running",
         )
@@ -1036,8 +1129,8 @@ mod tests {
         assert_eq!(
             messages::get(
                 &service.db.conn,
-                parent,
-                child,
+                sender,
+                recipient,
                 &first.messages[0].message_id
             )
             .await
@@ -1057,8 +1150,8 @@ mod tests {
         runtime.complete("completed").await;
         wait_for_status(
             &service,
-            parent,
-            child,
+            sender,
+            recipient,
             &next.messages[0].message_id,
             "completed",
         )
@@ -1067,17 +1160,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_dispatch_error_still_records_the_active_turn_result() {
-        let (service, runtime, parent, child) = setup(false, false).await;
+        let (service, runtime, sender, recipient) = setup(false, false).await;
         let first = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::Send,
+                    recipient,
+                    SessionMessageAction::Send,
                     Some("first"),
                     None,
-                    SubsessionDelivery::Queue,
+                    SessionDelivery::Queue,
                 ),
             )
             .await;
@@ -1092,14 +1185,14 @@ mod tests {
         runtime.busy_error_once.store(true, Ordering::Release);
         let next = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::Send,
+                    recipient,
+                    SessionMessageAction::Send,
                     Some("redirect"),
                     None,
-                    SubsessionDelivery::Immediate,
+                    SessionDelivery::Immediate,
                 ),
             )
             .await;
@@ -1113,16 +1206,16 @@ mod tests {
         runtime.complete("completed").await;
         wait_for_status(
             &service,
-            parent,
-            child,
+            sender,
+            recipient,
             &first.messages[0].message_id,
             "completed",
         )
         .await;
         wait_for_status(
             &service,
-            parent,
-            child,
+            sender,
+            recipient,
             &next.messages[0].message_id,
             "running",
         )
@@ -1137,8 +1230,8 @@ mod tests {
         runtime.complete("completed").await;
         wait_for_status(
             &service,
-            parent,
-            child,
+            sender,
+            recipient,
             &next.messages[0].message_id,
             "completed",
         )
@@ -1147,20 +1240,20 @@ mod tests {
 
     #[tokio::test]
     async fn a_new_message_waking_a_failing_worker_gets_a_fresh_attempt() {
-        let (service, runtime, parent, child) = setup(false, false).await;
+        let (service, runtime, sender, recipient) = setup(false, false).await;
         let (release, gate) = oneshot::channel();
         *runtime.prepare_gate.lock().await = Some(gate);
         runtime.prepare_block_at.store(2, Ordering::Release);
         let first = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::Send,
+                    recipient,
+                    SessionMessageAction::Send,
                     Some("first"),
                     None,
-                    SubsessionDelivery::Queue,
+                    SessionDelivery::Queue,
                 ),
             )
             .await;
@@ -1173,14 +1266,14 @@ mod tests {
         .unwrap();
         let second = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::Send,
+                    recipient,
+                    SessionMessageAction::Send,
                     Some("second"),
                     None,
-                    SubsessionDelivery::Queue,
+                    SessionDelivery::Queue,
                 ),
             )
             .await;
@@ -1190,8 +1283,8 @@ mod tests {
             .unwrap();
         wait_for_status(
             &service,
-            parent,
-            child,
+            sender,
+            recipient,
             &first.messages[0].message_id,
             "running",
         )
@@ -1206,8 +1299,8 @@ mod tests {
         runtime.complete("completed").await;
         wait_for_status(
             &service,
-            parent,
-            child,
+            sender,
+            recipient,
             &second.messages[0].message_id,
             "running",
         )
@@ -1223,8 +1316,8 @@ mod tests {
         runtime.complete("completed").await;
         wait_for_status(
             &service,
-            parent,
-            child,
+            sender,
+            recipient,
             &second.messages[0].message_id,
             "completed",
         )
@@ -1234,8 +1327,8 @@ mod tests {
     #[tokio::test]
     async fn a_completed_result_survives_a_failed_database_write_without_reexecuting() {
         use sea_orm::ConnectionTrait;
-        let (service, runtime, parent, child) = setup(false, false).await;
-        let row = messages::enqueue(&service.db.conn, parent, child, "task", "queue")
+        let (service, runtime, sender, recipient) = setup(false, false).await;
+        let row = messages::enqueue(&service.db.conn, sender, recipient, "task", "queue")
             .await
             .unwrap();
         assert!(messages::claim(&service.db.conn, &row.message_id)
@@ -1244,15 +1337,13 @@ mod tests {
         service
             .db
             .conn
-            .execute_unprepared(
-                "ALTER TABLE subsession_message RENAME TO unavailable_subsession_message",
-            )
+            .execute_unprepared("ALTER TABLE session_message RENAME TO unavailable_session_message")
             .await
             .unwrap();
         assert!(service
             .finish(
                 &row.message_id,
-                Ok(SubsessionTurnResult {
+                Ok(SessionTurnResult {
                     status: "completed".into(),
                     text: Some("completed before the outage".into()),
                     error: None,
@@ -1263,21 +1354,19 @@ mod tests {
         service
             .db
             .conn
-            .execute_unprepared(
-                "ALTER TABLE unavailable_subsession_message RENAME TO subsession_message",
-            )
+            .execute_unprepared("ALTER TABLE unavailable_session_message RENAME TO session_message")
             .await
             .unwrap();
         let outcome = service
             .request(
-                "parent",
-                parent,
+                "sender",
+                sender,
                 request(
-                    child,
-                    SubsessionMessageAction::List,
+                    recipient,
+                    SessionMessageAction::List,
                     None,
                     None,
-                    SubsessionDelivery::Queue,
+                    SessionDelivery::Queue,
                 ),
             )
             .await;

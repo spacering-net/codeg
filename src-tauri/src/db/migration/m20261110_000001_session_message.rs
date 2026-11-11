@@ -10,69 +10,55 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table(SubsessionMessage::Table)
+                    .table(SessionMessage::Table)
                     .col(
-                        ColumnDef::new(SubsessionMessage::Id)
+                        ColumnDef::new(SessionMessage::Id)
                             .integer()
                             .not_null()
                             .auto_increment()
                             .primary_key(),
                     )
                     .col(
-                        ColumnDef::new(SubsessionMessage::MessageId)
+                        ColumnDef::new(SessionMessage::MessageId)
                             .string()
                             .not_null()
                             .unique_key(),
                     )
                     .col(
-                        ColumnDef::new(SubsessionMessage::ParentConversationId)
+                        ColumnDef::new(SessionMessage::SenderConversationId)
                             .integer()
                             .not_null(),
                     )
                     .col(
-                        ColumnDef::new(SubsessionMessage::ChildConversationId)
+                        ColumnDef::new(SessionMessage::ConversationId)
                             .integer()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(SubsessionMessage::Message).text().not_null())
+                    .col(ColumnDef::new(SessionMessage::Message).text().not_null())
+                    .col(ColumnDef::new(SessionMessage::Delivery).string().not_null())
+                    .col(ColumnDef::new(SessionMessage::Status).string().not_null())
+                    .col(ColumnDef::new(SessionMessage::OwnerPid).big_integer())
+                    .col(ColumnDef::new(SessionMessage::Result).text())
+                    .col(ColumnDef::new(SessionMessage::Error).text())
                     .col(
-                        ColumnDef::new(SubsessionMessage::Delivery)
-                            .string()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(SubsessionMessage::Status)
-                            .string()
-                            .not_null(),
-                    )
-                    .col(ColumnDef::new(SubsessionMessage::OwnerPid).big_integer())
-                    .col(ColumnDef::new(SubsessionMessage::Result).text())
-                    .col(ColumnDef::new(SubsessionMessage::Error).text())
-                    .col(
-                        ColumnDef::new(SubsessionMessage::CreatedAt)
+                        ColumnDef::new(SessionMessage::CreatedAt)
                             .timestamp_with_time_zone()
                             .not_null(),
                     )
                     .col(
-                        ColumnDef::new(SubsessionMessage::UpdatedAt)
+                        ColumnDef::new(SessionMessage::UpdatedAt)
                             .timestamp_with_time_zone()
                             .not_null(),
                     )
                     .foreign_key(
                         ForeignKey::create()
-                            .from(
-                                SubsessionMessage::Table,
-                                SubsessionMessage::ParentConversationId,
-                            )
+                            .from(SessionMessage::Table, SessionMessage::SenderConversationId)
                             .to(Conversation::Table, Conversation::Id)
                             .on_delete(ForeignKeyAction::Cascade),
                     )
                     .foreign_key(
                         ForeignKey::create()
-                            .from(
-                                SubsessionMessage::Table,
-                                SubsessionMessage::ChildConversationId,
-                            )
+                            .from(SessionMessage::Table, SessionMessage::ConversationId)
                             .to(Conversation::Table, Conversation::Id)
                             .on_delete(ForeignKeyAction::Cascade),
                     )
@@ -82,34 +68,34 @@ impl MigrationTrait for Migration {
         manager
             .create_index(
                 Index::create()
-                    .name("idx_subsession_message_queue")
-                    .table(SubsessionMessage::Table)
-                    .col(SubsessionMessage::ChildConversationId)
-                    .col(SubsessionMessage::Status)
-                    .col(SubsessionMessage::Delivery)
-                    .col(SubsessionMessage::Id)
+                    .name("idx_session_message_queue")
+                    .table(SessionMessage::Table)
+                    .col(SessionMessage::ConversationId)
+                    .col(SessionMessage::Status)
+                    .col(SessionMessage::Delivery)
+                    .col(SessionMessage::Id)
                     .to_owned(),
             )
             .await?;
         manager.get_connection().execute(Statement::from_string(DbBackend::Sqlite,
-            "CREATE UNIQUE INDEX idx_subsession_message_running ON subsession_message(child_conversation_id) WHERE status = 'running'".to_owned())).await?;
+            "CREATE UNIQUE INDEX idx_session_message_running ON session_message(conversation_id) WHERE status = 'running'".to_owned())).await?;
         manager.get_connection().execute(Statement::from_string(DbBackend::Sqlite,
-            "CREATE UNIQUE INDEX idx_subsession_message_dispatching ON subsession_message(child_conversation_id) WHERE status = 'dispatching'".to_owned())).await?;
+            "CREATE UNIQUE INDEX idx_session_message_dispatching ON session_message(conversation_id) WHERE status = 'dispatching'".to_owned())).await?;
         Ok(())
     }
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(Table::drop().table(SubsessionMessage::Table).to_owned())
+            .drop_table(Table::drop().table(SessionMessage::Table).to_owned())
             .await
     }
 }
 #[derive(DeriveIden)]
-enum SubsessionMessage {
+enum SessionMessage {
     Table,
     Id,
     MessageId,
-    ParentConversationId,
-    ChildConversationId,
+    SenderConversationId,
+    ConversationId,
     Message,
     Delivery,
     Status,

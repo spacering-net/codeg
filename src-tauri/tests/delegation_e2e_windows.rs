@@ -220,7 +220,7 @@ async fn end_to_end_named_pipe_happy_path() {
         Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop)
             as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
         Arc::new(codeg_lib::acp::result_tool::NoResultTool),
-        Arc::new(codeg_lib::acp::subsession_messages::NoSubsessionMessages),
+        Arc::new(codeg_lib::acp::session_messages::NoSessionMessages),
     );
 
     let pipe = unique_pipe("happy");
@@ -329,7 +329,7 @@ async fn end_to_end_named_pipe_back_to_back_requests() {
         Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop)
             as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
         Arc::new(codeg_lib::acp::result_tool::NoResultTool),
-        Arc::new(codeg_lib::acp::subsession_messages::NoSubsessionMessages),
+        Arc::new(codeg_lib::acp::session_messages::NoSessionMessages),
     );
 
     let pipe = unique_pipe("repeat");

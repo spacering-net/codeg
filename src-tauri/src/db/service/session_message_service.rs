@@ -1,8 +1,8 @@
-//! Durable per-child messages. User operations always verify the live direct parent.
+//! Durable messages between existing conversations. Management is scoped to the authenticated sender.
 use crate::db::{
     entities::{
         conversation,
-        subsession_message::{self, Column, Entity, Model},
+        session_message::{self, Column, Entity, Model},
     },
     error::DbError,
 };
@@ -12,37 +12,35 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
 };
 
-async fn validate(conn: &DatabaseConnection, parent: i32, child: i32) -> Result<(), DbError> {
-    let parent_exists = conversation::Entity::find_by_id(parent)
+async fn validate(conn: &DatabaseConnection, sender: i32, recipient: i32) -> Result<(), DbError> {
+    if sender <= 0 || recipient <= 0 || sender == recipient {
+        return Err(DbError::Validation(
+            "distinct positive conversation IDs are required".into(),
+        ));
+    }
+    let live = conversation::Entity::find()
+        .filter(conversation::Column::Id.is_in([sender, recipient]))
         .filter(conversation::Column::DeletedAt.is_null())
-        .one(conn)
-        .await?
-        .is_some();
-    let child_exists = conversation::Entity::find_by_id(child)
-        .filter(conversation::Column::DeletedAt.is_null())
-        .filter(conversation::Column::ParentId.eq(parent))
-        .filter(conversation::Column::Kind.eq(conversation::ConversationKind::Delegate))
-        .one(conn)
-        .await?
-        .is_some();
-    if !parent_exists || !child_exists {
-        return Err(DbError::NotFound("subsession".into()));
+        .all(conn)
+        .await?;
+    if live.len() != 2 {
+        return Err(DbError::NotFound("session".into()));
     }
     Ok(())
 }
-fn scoped(parent: i32, child: i32) -> sea_orm::Select<Entity> {
+fn scoped(sender: i32, recipient: i32) -> sea_orm::Select<Entity> {
     Entity::find()
-        .filter(Column::ParentConversationId.eq(parent))
-        .filter(Column::ChildConversationId.eq(child))
+        .filter(Column::SenderConversationId.eq(sender))
+        .filter(Column::ConversationId.eq(recipient))
 }
 pub async fn enqueue(
     conn: &DatabaseConnection,
-    parent: i32,
-    child: i32,
+    sender: i32,
+    recipient: i32,
     message: &str,
     delivery: &str,
 ) -> Result<Model, DbError> {
-    validate(conn, parent, child).await?;
+    validate(conn, sender, recipient).await?;
     if !matches!(delivery, "queue" | "immediate") {
         return Err(DbError::Validation("invalid delivery".into()));
     }
@@ -50,10 +48,10 @@ pub async fn enqueue(
         return Err(DbError::Validation("message is empty".into()));
     }
     let now = Utc::now();
-    Ok(subsession_message::ActiveModel {
+    Ok(session_message::ActiveModel {
         message_id: Set(uuid::Uuid::new_v4().to_string()),
-        parent_conversation_id: Set(parent),
-        child_conversation_id: Set(child),
+        sender_conversation_id: Set(sender),
+        conversation_id: Set(recipient),
         message: Set(message.into()),
         delivery: Set(delivery.into()),
         status: Set("queued".into()),
@@ -69,36 +67,43 @@ pub async fn enqueue(
 }
 pub async fn list(
     conn: &DatabaseConnection,
-    parent: i32,
-    child: i32,
+    sender: i32,
+    recipient: i32,
 ) -> Result<Vec<Model>, DbError> {
-    validate(conn, parent, child).await?;
-    Ok(scoped(parent, child)
+    validate(conn, sender, recipient).await?;
+    Ok(scoped(sender, recipient)
         .order_by_asc(Column::Id)
         .all(conn)
         .await?)
 }
 pub async fn get(
     conn: &DatabaseConnection,
-    parent: i32,
-    child: i32,
+    sender: i32,
+    recipient: i32,
     message_id: &str,
 ) -> Result<Option<Model>, DbError> {
-    validate(conn, parent, child).await?;
-    Ok(scoped(parent, child)
+    validate(conn, sender, recipient).await?;
+    Ok(scoped(sender, recipient)
         .filter(Column::MessageId.eq(message_id))
         .one(conn)
         .await?)
 }
 pub async fn next_queued(
     conn: &DatabaseConnection,
-    parent: i32,
-    child: i32,
+    recipient: i32,
 ) -> Result<Option<Model>, DbError> {
-    validate(conn, parent, child).await?;
-    // Alphabetical delivery order puts immediate before queue; id is the durable FIFO.
-    Ok(scoped(parent, child)
+    Ok(Entity::find()
+        .filter(Column::ConversationId.eq(recipient))
         .filter(Column::Status.eq("queued"))
+        .filter(
+            Column::SenderConversationId.in_subquery(
+                Query::select()
+                    .column(conversation::Column::Id)
+                    .from(conversation::Entity)
+                    .and_where(Expr::col(conversation::Column::DeletedAt).is_null())
+                    .to_owned(),
+            ),
+        )
         .order_by_asc(Column::Delivery)
         .order_by_asc(Column::Id)
         .one(conn)
@@ -106,20 +111,20 @@ pub async fn next_queued(
 }
 pub async fn update_queued(
     conn: &DatabaseConnection,
-    parent: i32,
-    child: i32,
+    sender: i32,
+    recipient: i32,
     message_id: &str,
     message: &str,
 ) -> Result<Option<Model>, DbError> {
-    validate(conn, parent, child).await?;
+    validate(conn, sender, recipient).await?;
     if message.trim().is_empty() {
         return Err(DbError::Validation("message is empty".into()));
     }
     let changed = Entity::update_many()
         .col_expr(Column::Message, Expr::value(message))
         .col_expr(Column::UpdatedAt, Expr::value(Utc::now()))
-        .filter(Column::ParentConversationId.eq(parent))
-        .filter(Column::ChildConversationId.eq(child))
+        .filter(Column::SenderConversationId.eq(sender))
+        .filter(Column::ConversationId.eq(recipient))
         .filter(Column::MessageId.eq(message_id))
         .filter(Column::Status.eq("queued"))
         .exec(conn)
@@ -128,20 +133,20 @@ pub async fn update_queued(
     if changed == 0 {
         return Ok(None);
     }
-    get(conn, parent, child, message_id).await
+    get(conn, sender, recipient, message_id).await
 }
 pub async fn cancel_queued(
     conn: &DatabaseConnection,
-    parent: i32,
-    child: i32,
+    sender: i32,
+    recipient: i32,
     message_id: &str,
 ) -> Result<Option<Model>, DbError> {
-    validate(conn, parent, child).await?;
+    validate(conn, sender, recipient).await?;
     let changed = Entity::update_many()
         .col_expr(Column::Status, Expr::value("canceled"))
         .col_expr(Column::UpdatedAt, Expr::value(Utc::now()))
-        .filter(Column::ParentConversationId.eq(parent))
-        .filter(Column::ChildConversationId.eq(child))
+        .filter(Column::SenderConversationId.eq(sender))
+        .filter(Column::ConversationId.eq(recipient))
         .filter(Column::MessageId.eq(message_id))
         .filter(Column::Status.eq("queued"))
         .exec(conn)
@@ -150,7 +155,7 @@ pub async fn cancel_queued(
     if changed == 0 {
         return Ok(None);
     }
-    get(conn, parent, child, message_id).await
+    get(conn, sender, recipient, message_id).await
 }
 async fn validate_message(conn: &DatabaseConnection, message_id: &str) -> Result<bool, DbError> {
     let Some(row) = Entity::find()
@@ -160,7 +165,7 @@ async fn validate_message(conn: &DatabaseConnection, message_id: &str) -> Result
     else {
         return Ok(false);
     };
-    validate(conn, row.parent_conversation_id, row.child_conversation_id).await?;
+    validate(conn, row.sender_conversation_id, row.conversation_id).await?;
     Ok(true)
 }
 async fn claim_as(
@@ -186,8 +191,8 @@ async fn claim_as(
         .expr(Expr::value(1))
         .from_as(Entity, other.clone())
         .and_where(
-            Expr::col((other.clone(), Column::ChildConversationId))
-                .equals((Entity, Column::ChildConversationId)),
+            Expr::col((other.clone(), Column::ConversationId))
+                .equals((Entity, Column::ConversationId)),
         )
         .and_where(Expr::col((other.clone(), Column::Status)).is_in(["running", "dispatching"]))
         .cond_where(
@@ -222,7 +227,7 @@ async fn claim_as(
         Err(e) => Err(e.into()),
     }
 }
-/// Internal runtime claim; the unique index prevents two runtimes executing one child.
+/// Internal runtime claim; the unique index prevents two runtimes executing one recipient.
 pub async fn claim(conn: &DatabaseConnection, message_id: &str) -> Result<bool, DbError> {
     claim_as(conn, message_id, "running").await
 }
@@ -237,10 +242,11 @@ pub async fn release_claim(conn: &DatabaseConnection, message_id: &str) -> Resul
         .filter(Column::MessageId.eq(message_id))
         .filter(Column::Status.eq("running"))
         .filter(Column::OwnerPid.eq(i64::from(std::process::id())))
-        .exec(conn).await?;
+        .exec(conn)
+        .await?;
     Ok(())
 }
-/// Reserve an immediate steering note while the child's existing turn keeps running.
+/// Reserve an immediate steering note while the recipient's existing turn keeps running.
 pub async fn claim_delivery(conn: &DatabaseConnection, message_id: &str) -> Result<bool, DbError> {
     claim_as(conn, message_id, "dispatching").await
 }
@@ -251,7 +257,12 @@ pub async fn finish(
     result: Option<&str>,
     error: Option<&str>,
 ) -> Result<bool, DbError> {
-    if !validate_message(conn, message_id).await? {
+    if Entity::find()
+        .filter(Column::MessageId.eq(message_id))
+        .one(conn)
+        .await?
+        .is_none()
+    {
         return Ok(false);
     }
     if !matches!(
@@ -276,11 +287,10 @@ pub async fn finish(
 /// Recover only rows whose claiming process is demonstrably dead.
 pub async fn recover_interrupted(
     conn: &DatabaseConnection,
-    parent: i32,
-    child: i32,
+    recipient: i32,
 ) -> Result<u64, DbError> {
-    validate(conn, parent, child).await?;
-    let rows = scoped(parent, child)
+    let rows = Entity::find()
+        .filter(Column::ConversationId.eq(recipient))
         .filter(Column::Status.is_in(["running", "dispatching"]))
         .all(conn)
         .await?;
@@ -305,6 +315,15 @@ pub async fn recover_interrupted(
     Ok(count)
 }
 
+pub async fn has_active(conn: &DatabaseConnection, recipient: i32) -> Result<bool, DbError> {
+    Ok(Entity::find()
+        .filter(Column::ConversationId.eq(recipient))
+        .filter(Column::Status.is_in(["running", "dispatching"]))
+        .one(conn)
+        .await?
+        .is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,51 +332,132 @@ mod tests {
         AppDatabase,
     };
     use crate::models::agent::AgentType;
+
+    #[tokio::test]
+    async fn recovery_and_deleted_senders_do_not_block_other_senders() {
+        let (db, sender, recipient, other) = setup().await;
+        let first = enqueue(&db.conn, sender, recipient, "old owner", "queue")
+            .await
+            .unwrap();
+        assert!(claim(&db.conn, &first.message_id).await.unwrap());
+        Entity::update_many()
+            .col_expr(Column::OwnerPid, Expr::value(i64::from(u32::MAX)))
+            .filter(Column::Id.eq(first.id))
+            .exec(&db.conn)
+            .await
+            .unwrap();
+        let second = enqueue(&db.conn, other, recipient, "next sender", "queue")
+            .await
+            .unwrap();
+        assert_eq!(recover_interrupted(&db.conn, recipient).await.unwrap(), 1);
+        assert!(claim(&db.conn, &second.message_id).await.unwrap());
+        conversation::Entity::update_many()
+            .col_expr(conversation::Column::DeletedAt, Expr::value(Utc::now()))
+            .filter(conversation::Column::Id.eq(other))
+            .exec(&db.conn)
+            .await
+            .unwrap();
+        assert!(finish(
+            &db.conn,
+            &second.message_id,
+            "completed",
+            Some("done"),
+            None
+        )
+        .await
+        .unwrap());
+        let invalid = enqueue(
+            &db.conn,
+            sender,
+            recipient,
+            "deleted queued sender",
+            "queue",
+        )
+        .await
+        .unwrap();
+        conversation::Entity::update_many()
+            .col_expr(conversation::Column::DeletedAt, Expr::value(Utc::now()))
+            .filter(conversation::Column::Id.eq(sender))
+            .exec(&db.conn)
+            .await
+            .unwrap();
+        assert!(next_queued(&db.conn, recipient).await.unwrap().is_none());
+        let folder_id = conversation::Entity::find_by_id(recipient)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap()
+            .folder_id;
+        let fresh = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let valid = enqueue(&db.conn, fresh, recipient, "valid next sender", "queue")
+            .await
+            .unwrap();
+        assert_eq!(
+            next_queued(&db.conn, recipient)
+                .await
+                .unwrap()
+                .unwrap()
+                .message_id,
+            valid.message_id
+        );
+        assert_eq!(
+            Entity::find_by_id(invalid.id)
+                .one(&db.conn)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "queued"
+        );
+    }
     async fn setup() -> (AppDatabase, i32, i32, i32) {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "D:/subsession-test").await;
-        let parent = seed_conversation(&db, folder, AgentType::Codex).await;
-        let child = seed_conversation(&db, folder, AgentType::Codex).await;
+        let sender = seed_conversation(&db, folder, AgentType::Codex).await;
+        let recipient = seed_conversation(&db, folder, AgentType::Codex).await;
         let foreign = seed_conversation(&db, folder, AgentType::Codex).await;
         conversation::Entity::update_many()
-            .col_expr(conversation::Column::ParentId, Expr::value(parent))
+            .col_expr(conversation::Column::ParentId, Expr::value(sender))
             .col_expr(conversation::Column::Kind, Expr::value("delegate"))
-            .filter(conversation::Column::Id.eq(child))
+            .filter(conversation::Column::Id.eq(recipient))
             .exec(&db.conn)
             .await
             .unwrap();
-        (db, parent, child, foreign)
+        (db, sender, recipient, foreign)
     }
     #[tokio::test]
     async fn ownership_and_deleted_parents_are_rejected() {
-        let (db, parent, child, foreign) = setup().await;
-        let row = enqueue(&db.conn, parent, child, "hello", "queue")
+        let (db, sender, recipient, foreign) = setup().await;
+        let row = enqueue(&db.conn, sender, recipient, "hello", "queue")
             .await
             .unwrap();
-        assert!(list(&db.conn, foreign, child).await.is_err());
-        assert!(enqueue(&db.conn, parent, foreign, "hello", "queue")
+        assert!(list(&db.conn, foreign, recipient).await.unwrap().is_empty());
+        assert!(enqueue(&db.conn, sender, foreign, "hello", "queue")
             .await
-            .is_err());
-        assert!(get(&db.conn, foreign, child, &row.message_id)
+            .is_ok());
+        assert!(get(&db.conn, foreign, recipient, &row.message_id)
             .await
-            .is_err());
+            .unwrap()
+            .is_none());
         assert!(
-            update_queued(&db.conn, foreign, child, &row.message_id, "bad")
+            update_queued(&db.conn, foreign, recipient, &row.message_id, "bad")
                 .await
-                .is_err()
+                .unwrap()
+                .is_none()
         );
-        assert!(cancel_queued(&db.conn, foreign, child, &row.message_id)
+        assert!(cancel_queued(&db.conn, foreign, recipient, &row.message_id)
             .await
-            .is_err());
-        assert!(next_queued(&db.conn, foreign, child).await.is_err());
-        assert!(recover_interrupted(&db.conn, foreign, child).await.is_err());
+            .unwrap()
+            .is_none());
+
+        assert_eq!(recover_interrupted(&db.conn, recipient).await.unwrap(), 0);
         conversation::Entity::update_many()
             .col_expr(conversation::Column::DeletedAt, Expr::value(Utc::now()))
-            .filter(conversation::Column::Id.eq(parent))
+            .filter(conversation::Column::Id.eq(sender))
             .exec(&db.conn)
             .await
             .unwrap();
-        assert!(list(&db.conn, parent, child).await.is_err());
+        assert!(list(&db.conn, sender, recipient).await.is_err());
         assert!(claim(&db.conn, &row.message_id).await.is_err());
     }
     #[tokio::test]
@@ -367,11 +467,7 @@ mod tests {
         let second = enqueue(&db.conn, p, c, "second", "queue").await.unwrap();
         let immediate = enqueue(&db.conn, p, c, "now", "immediate").await.unwrap();
         assert_eq!(
-            next_queued(&db.conn, p, c)
-                .await
-                .unwrap()
-                .unwrap()
-                .message_id,
+            next_queued(&db.conn, c).await.unwrap().unwrap().message_id,
             immediate.message_id
         );
         assert!(claim_delivery(&db.conn, &immediate.message_id)
@@ -387,11 +483,7 @@ mod tests {
         .await
         .unwrap());
         assert_eq!(
-            next_queued(&db.conn, p, c)
-                .await
-                .unwrap()
-                .unwrap()
-                .message_id,
+            next_queued(&db.conn, c).await.unwrap().unwrap().message_id,
             first.message_id
         );
         assert!(claim(&db.conn, &first.message_id).await.unwrap());
@@ -419,11 +511,7 @@ mod tests {
             Some("answer")
         );
         assert_eq!(
-            next_queued(&db.conn, p, c)
-                .await
-                .unwrap()
-                .unwrap()
-                .message_id,
+            next_queued(&db.conn, c).await.unwrap().unwrap().message_id,
             second.message_id
         );
     }
@@ -438,7 +526,7 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        assert_eq!(recover_interrupted(&db.conn, p, c).await.unwrap(), 0);
+        assert_eq!(recover_interrupted(&db.conn, c).await.unwrap(), 0);
         Entity::update_many()
             .col_expr(Column::OwnerPid, Expr::value(1i64))
             .filter(Column::MessageId.eq(&row.message_id))
@@ -453,7 +541,7 @@ mod tests {
             .await
             .unwrap();
         assert!(claim(&db.conn, &row.message_id).await.unwrap());
-        assert_eq!(recover_interrupted(&db.conn, p, c).await.unwrap(), 0);
+        assert_eq!(recover_interrupted(&db.conn, c).await.unwrap(), 0);
     }
 
     #[tokio::test]

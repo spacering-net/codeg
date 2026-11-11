@@ -3518,8 +3518,7 @@
         "mentionGroupAssistant": "المساعدون"
       },
       "messageQueue": {
-        "fromChild": "من الجلسة الفرعية: {name}",
-        "fromParent": "من الجلسة الرئيسية: {name}",
+        "fromSession": "من الجلسة: {name}",
         "waiting": "في الانتظار",
         "addToQueue": "إضافة للقائمة",
         "saveEdit": "حفظ",

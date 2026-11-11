@@ -22,6 +22,4 @@ pub mod thread_binding_service;
 pub mod token_usage_service;
 pub mod tool_approval_service;
 pub mod work_task_service;
-pub mod subsession_message_service;
-
-pub mod parent_reply_service;
+pub mod session_message_service;

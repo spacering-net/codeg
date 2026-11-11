@@ -460,7 +460,7 @@ pub(crate) async fn handle_event(
                 let continues: Vec<String> = current.external_id.into_iter().collect();
                 let preserved =
                     conversation_service::bind_external_id(db_conn, cid, transcript_id, &continues)
-                        .await?;
+                .await?;
                 crate::commands::conversations::emit_conversation_upsert(&emitter, db_conn, cid)
                     .await;
                 crate::commands::conversations::emit_preserved_conversation(

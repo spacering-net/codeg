@@ -3518,8 +3518,7 @@
         "mentionGroupAssistant": "Asistentes"
       },
       "messageQueue": {
-        "fromChild": "De sesión hija: {name}",
-        "fromParent": "De sesión padre: {name}",
+        "fromSession": "De sesión: {name}",
         "waiting": "En cola",
         "addToQueue": "Agregar a la cola",
         "saveEdit": "Guardar",

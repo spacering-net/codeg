@@ -13,7 +13,6 @@ const report: PendingSessionMessage = {
   message: "Review needed",
   source_conversation_id: 6,
   source_title: "API review",
-  source_kind: "child",
   created_at: "2026-11-11T05:43:41Z",
 }
 

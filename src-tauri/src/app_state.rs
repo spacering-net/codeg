@@ -125,34 +125,20 @@ pub fn default_chat_channel_manager() -> ChatChannelManager {
 }
 
 /// Shared child-message service for desktop and server listeners.
-pub fn build_subsession_messages(
+pub fn build_session_messages(
     manager: &ConnectionManager,
     broker: Arc<DelegationBroker>,
     conn: sea_orm::DatabaseConnection,
     data_dir: PathBuf,
-) -> Arc<dyn crate::acp::subsession_messages::SubsessionMessageAccess> {
+) -> Arc<dyn crate::acp::session_messages::SessionMessageAccess> {
     let db = Arc::new(AppDatabase { conn });
-    let runtime = Arc::new(crate::acp::subsession_runtime::AcpSubsessionRuntime::new(
-        Arc::new(manager.clone_ref()),
-        broker.clone(),
-        db.clone(),
-        Arc::new(data_dir.clone()),
-    ));
-    let parent_runtime = Arc::new(crate::acp::subsession_runtime::AcpParentReplyRuntime::new(
+    let runtime = Arc::new(crate::acp::session_runtime::AcpSessionRuntime::new(
         Arc::new(manager.clone_ref()),
         broker,
         db.clone(),
         Arc::new(data_dir),
     ));
-    let replies = Arc::new(crate::acp::parent_replies::ParentReplies::new(
-        db.clone(),
-        parent_runtime,
-    ));
-    replies.recover_pending();
-    Arc::new(
-        crate::acp::subsession_messages::SubsessionMessages::with_runtime(db, runtime)
-            .with_parent_replies(replies),
-    )
+    Arc::new(crate::acp::session_messages::SessionMessages::with_runtime(db, runtime))
 }
 
 /// Build the delegation broker + token registry + per-process UDS socket

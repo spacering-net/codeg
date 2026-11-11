@@ -3518,8 +3518,7 @@
         "mentionGroupAssistant": "アシスタント"
       },
       "messageQueue": {
-        "fromChild": "子セッション：{name}",
-        "fromParent": "親セッション：{name}",
+        "fromSession": "セッション：{name}",
         "waiting": "待機中",
         "addToQueue": "キューに追加",
         "saveEdit": "保存",

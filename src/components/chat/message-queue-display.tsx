@@ -193,7 +193,7 @@ export function MessageQueueDisplay({
         >
           <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span className="max-w-40 shrink-0 truncate rounded-sm bg-muted px-1 py-0.5 text-muted-foreground">
-            {t(item.source_kind === "child" ? "fromChild" : "fromParent", {
+            {t("fromSession", {
               name: item.source_title || `#${item.source_conversation_id}`,
             })}
           </span>

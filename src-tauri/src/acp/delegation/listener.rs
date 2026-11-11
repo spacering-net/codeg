@@ -59,6 +59,7 @@ use serde_json::Value;
 /// `wait_ms = 0` opts out of the ceiling and blocks until the task is terminal.
 const STATUS_WAIT_MAX_MS: u64 = 60_000;
 
+
 /// The bound-but-not-yet-served socket handed from [`DelegationListener::bind`]
 /// to [`DelegationListener::accept_loop`]. A UDS listener on unix; on Windows,
 /// the first named-pipe server instance (the loop creates each subsequent one
@@ -139,7 +140,7 @@ pub struct TokenStats {
 }
 
 pub struct DelegationListener {
-    pub subsession_messages: Arc<dyn crate::acp::subsession_messages::SubsessionMessageAccess>,
+    pub session_messages: Arc<dyn crate::acp::session_messages::SessionMessageAccess>,
     pub broker: Arc<DelegationBroker>,
     pub tokens: Arc<TokenRegistry>,
     pub parent_lookup: Arc<dyn ParentSessionLookup>,
@@ -194,10 +195,10 @@ impl DelegationListener {
         browser: Arc<dyn BrowserToolAccess>,
         computer: Arc<dyn ComputerToolAccess>,
         results: Arc<dyn ResultToolAccess>,
-        subsession_messages: Arc<dyn crate::acp::subsession_messages::SubsessionMessageAccess>,
+        session_messages: Arc<dyn crate::acp::session_messages::SessionMessageAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            subsession_messages,
+            session_messages,
             broker,
             tokens,
             parent_lookup,
@@ -478,14 +479,8 @@ impl DelegationListener {
             }
             BrokerMessage::CancelTask(req) => report_response(self.process_cancel_task(req).await)?,
             BrokerMessage::ResumeTask(req) => report_response(self.process_resume_task(req).await)?,
-            BrokerMessage::SubsessionMessage(req) => {
-                let outcome = self.process_subsession_message(req).await;
-                BrokerResponse {
-                    outcome: serde_json::to_value(outcome).map_err(std::io::Error::other)?,
-                }
-            }
-            BrokerMessage::ParentReply(req) => {
-                let outcome = self.process_parent_reply(req).await;
+            BrokerMessage::SessionMessage(req) => {
+                let outcome = self.process_session_message(req).await;
                 BrokerResponse {
                     outcome: serde_json::to_value(outcome).map_err(std::io::Error::other)?,
                 }
@@ -860,54 +855,31 @@ impl DelegationListener {
             .await
     }
 
-    async fn process_subsession_message(
+    async fn process_session_message(
         &self,
-        req: super::transport::BrokerSubsessionMessageRequest,
-    ) -> crate::acp::subsession_messages::SubsessionMessageOutcome {
-        use crate::acp::subsession_messages::SubsessionMessageOutcome;
+        req: super::transport::BrokerSessionMessageRequest,
+    ) -> crate::acp::session_messages::SessionMessageOutcome {
+        use crate::acp::session_messages::SessionMessageOutcome;
         let Some(entry) = self.tokens.lookup(&req.token).await else {
-            return SubsessionMessageOutcome::refused("unavailable", "Subsession is unavailable");
+            return SessionMessageOutcome::refused("unavailable", "Subsession is unavailable");
         };
         if !self.broker.config_snapshot().await.enabled
-            && req.input.action == crate::acp::subsession_messages::SubsessionMessageAction::Send
+            && req.input.action == crate::acp::session_messages::SessionMessageAction::Send
         {
-            return SubsessionMessageOutcome::refused("disabled", "Delegation is disabled");
+            return SessionMessageOutcome::refused("disabled", "Delegation is disabled");
         }
         let Some(parent) = self
             .parent_lookup
             .current_conversation_id(&entry.parent_connection_id)
             .await
         else {
-            return SubsessionMessageOutcome::refused(
+            return SessionMessageOutcome::refused(
                 "unavailable",
                 "Parent session is unavailable",
             );
         };
-        self.subsession_messages
+        self.session_messages
             .request(&entry.parent_connection_id, parent, req.input)
-            .await
-    }
-
-    async fn process_parent_reply(
-        &self,
-        req: super::transport::BrokerParentReplyRequest,
-    ) -> crate::acp::parent_replies::ParentReplyOutcome {
-        use crate::acp::parent_replies::ParentReplyOutcome;
-        let Some(entry) = self.tokens.lookup(&req.token).await else {
-            return ParentReplyOutcome::refused("Parent messaging is unavailable");
-        };
-        if !self.broker.config_snapshot().await.enabled {
-            return ParentReplyOutcome::refused("Delegation is disabled");
-        }
-        let Some(child) = self
-            .parent_lookup
-            .current_conversation_id(&entry.parent_connection_id)
-            .await
-        else {
-            return ParentReplyOutcome::refused("Child session is unavailable");
-        };
-        self.subsession_messages
-            .send_to_parent(child, req.message)
             .await
     }
 
@@ -2132,7 +2104,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
-            Arc::new(crate::acp::subsession_messages::NoSubsessionMessages),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2158,7 +2130,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
-            Arc::new(crate::acp::subsession_messages::NoSubsessionMessages),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2185,7 +2157,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
-            Arc::new(crate::acp::subsession_messages::NoSubsessionMessages),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2211,7 +2183,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
-            Arc::new(crate::acp::subsession_messages::NoSubsessionMessages),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2239,7 +2211,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
-            Arc::new(crate::acp::subsession_messages::NoSubsessionMessages),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2266,7 +2238,7 @@ mod tests {
             browser,
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
-            Arc::new(crate::acp::subsession_messages::NoSubsessionMessages),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2320,26 +2292,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subsession_messages_resolve_the_authenticated_parent_and_allow_queue_cancel_when_disabled(
+    async fn session_messages_resolve_the_authenticated_parent_and_allow_queue_cancel_when_disabled(
     ) {
-        use crate::acp::subsession_messages::{
-            SubsessionDelivery, SubsessionMessageAccess, SubsessionMessageAction,
-            SubsessionMessageOutcome, SubsessionMessageRequest,
+        use crate::acp::session_messages::{
+            SessionDelivery, SessionMessageAccess, SessionMessageAction,
+            SessionMessageOutcome, SessionMessageRequest,
         };
         #[derive(Default)]
         struct Access(std::sync::atomic::AtomicUsize);
         #[async_trait]
-        impl SubsessionMessageAccess for Access {
+        impl SessionMessageAccess for Access {
             async fn request(
                 &self,
                 owner: &str,
                 parent: i32,
-                _: SubsessionMessageRequest,
-            ) -> SubsessionMessageOutcome {
+                _: SessionMessageRequest,
+            ) -> SessionMessageOutcome {
                 assert_eq!(owner, "parent-conn");
                 assert_eq!(parent, 42);
                 self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                SubsessionMessageOutcome {
+                SessionMessageOutcome {
                     accepted: true,
                     messages: vec![],
                     error_code: None,
@@ -2360,28 +2332,28 @@ mod tests {
         let broker = make_broker(Arc::new(MockSpawner::new())).await;
         let access = Arc::new(Access::default());
         let mut listener = make_listener(broker.clone(), tokens, Some(42));
-        Arc::get_mut(&mut listener).unwrap().subsession_messages = access.clone();
+        Arc::get_mut(&mut listener).unwrap().session_messages = access.clone();
         let make_request =
-            |token: &str, action| super::super::transport::BrokerSubsessionMessageRequest {
+            |token: &str, action| super::super::transport::BrokerSessionMessageRequest {
                 token: token.into(),
-                input: SubsessionMessageRequest {
-                    child_conversation_id: 77,
+                input: SessionMessageRequest {
+                    conversation_id: 77,
                     action,
                     message: Some("next".into()),
                     message_id: Some("queued-id".into()),
-                    delivery: SubsessionDelivery::Queue,
+                    delivery: SessionDelivery::Queue,
                 },
             };
         assert!(
             !listener
-                .process_subsession_message(make_request("bad", SubsessionMessageAction::Send))
+                .process_session_message(make_request("bad", SessionMessageAction::Send))
                 .await
                 .accepted
         );
         assert_eq!(access.0.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(
             listener
-                .process_subsession_message(make_request("tok", SubsessionMessageAction::Send))
+                .process_session_message(make_request("tok", SessionMessageAction::Send))
                 .await
                 .accepted
         );
@@ -2393,48 +2365,17 @@ mod tests {
             .await;
         assert!(
             !listener
-                .process_subsession_message(make_request("tok", SubsessionMessageAction::Send))
+                .process_session_message(make_request("tok", SessionMessageAction::Send))
                 .await
                 .accepted
         );
         assert!(
             listener
-                .process_subsession_message(make_request("tok", SubsessionMessageAction::Cancel))
+                .process_session_message(make_request("tok", SessionMessageAction::Cancel))
                 .await
                 .accepted
         );
         assert_eq!(access.0.load(std::sync::atomic::Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn parent_reports_use_authenticated_child_and_reject_invalid_tokens() {
-        use crate::acp::{parent_replies::ParentReplyOutcome, subsession_messages::{SubsessionMessageAccess, SubsessionMessageOutcome, SubsessionMessageRequest}};
-        #[derive(Default)]
-        struct Access(std::sync::atomic::AtomicUsize);
-        #[async_trait]
-        impl SubsessionMessageAccess for Access {
-            async fn request(&self, _: &str, _: i32, _: SubsessionMessageRequest) -> SubsessionMessageOutcome {
-                unreachable!()
-            }
-            async fn send_to_parent(&self, child: i32, message: String) -> ParentReplyOutcome {
-                assert_eq!(child, 42);
-                assert_eq!(message, "report");
-                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                ParentReplyOutcome { accepted: true, message: None, error: None }
-            }
-        }
-        let tokens = Arc::new(TokenRegistry::default());
-        tokens.register("tok".into(), TokenEntry { parent_connection_id: "child-conn".into(), working_dir: PathBuf::from("/tmp") }).await;
-        let broker = make_broker(Arc::new(MockSpawner::new())).await;
-        let access = Arc::new(Access::default());
-        let mut listener = make_listener(broker.clone(), tokens, Some(42));
-        Arc::get_mut(&mut listener).unwrap().subsession_messages = access.clone();
-        let request = |token: &str| super::super::transport::BrokerParentReplyRequest { token: token.into(), message: "report".into() };
-        assert!(!listener.process_parent_reply(request("invalid")).await.accepted);
-        assert!(listener.process_parent_reply(request("tok")).await.accepted);
-        broker.set_config(DelegationConfig { enabled: false, ..Default::default() }).await;
-        assert!(!listener.process_parent_reply(request("tok")).await.accepted);
-        assert_eq!(access.0.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -4302,7 +4243,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             computer,
             Arc::new(crate::acp::result_tool::NoResultTool),
-            Arc::new(crate::acp::subsession_messages::NoSubsessionMessages),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -4694,7 +4635,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             results.clone(),
-            Arc::new(crate::acp::subsession_messages::NoSubsessionMessages),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         );
         let ask = |token: &str| {
             BrokerMessage::ResultSchema(BrokerResultSchemaRequest {

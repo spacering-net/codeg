@@ -73,6 +73,10 @@ impl DelegationService {
         })
     }
 
+    pub fn session_messages(&self) -> &Arc<dyn crate::acp::session_messages::SessionMessageAccess> {
+        &self.listener.session_messages
+    }
+
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
     }
@@ -500,7 +504,7 @@ mod tests {
             Arc::new(Stub),
             Arc::new(crate::acp::computer_tools::NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
-            Arc::new(crate::acp::subsession_messages::NoSubsessionMessages),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         );
         DelegationService::new(listener, socket_path)
     }

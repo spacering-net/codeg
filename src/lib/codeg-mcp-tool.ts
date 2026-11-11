@@ -50,23 +50,6 @@ export const CODEG_MCP_WORKBENCH_TOOLS = [
   "resume_delegation",
 ] as const
 
-/** Child-message tools keep the generic tool renderer and their full JSON result. */
-export const CODEG_MCP_SUBSESSION_TOOLS = [
-  "send_to_parent",
-  "send_to_subsession",
-  "manage_subsession_messages",
-] as const
-
-export type CodegMcpSubsessionTool = (typeof CODEG_MCP_SUBSESSION_TOOLS)[number]
-
-export function isCodegMcpSubsessionTool(
-  name: string
-): name is CodegMcpSubsessionTool {
-  return CODEG_MCP_SUBSESSION_TOOLS.some(
-    (tool) => tool === name.toLowerCase().trim()
-  )
-}
-
 export type CodegMcpWorkbenchTool = (typeof CODEG_MCP_WORKBENCH_TOOLS)[number]
 
 const TOOL_SET: ReadonlySet<string> = new Set(CODEG_MCP_WORKBENCH_TOOLS)

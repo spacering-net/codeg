@@ -4356,7 +4356,7 @@ impl ConnectionManager {
                     &emitter,
                     AcpEvent::PlanApprovalResolved { approval_id },
                 )
-                .await;
+                    .await;
             }
         }
     }
@@ -4569,7 +4569,9 @@ impl ConnectionManagerSpawner {
             )
             .await
             .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
-        if !outcome.reused {
+        // Strict continuation addresses an existing independent conversation:
+        // it must not adopt the sender's CLI run policy.
+        if !outcome.reused && !strict {
             self.manager
                 .inherit_cli_run_tag(parent_connection_id, &outcome.connection_id)
                 .await;
@@ -11300,7 +11302,7 @@ mod tests {
         mgr.commit_feedback_delivered("nope", vec!["x".into()])
             .await;
     }
-}
+    }
 
 #[cfg(test)]
 mod subsession_ordering_tests {
@@ -11318,7 +11320,7 @@ mod subsession_ordering_tests {
             let mut state = state.write().await;
             state.turn_in_flight = true;
             state.turns_completed = 1;
-        }
+}
         manager.cancel_if_turn(&db.conn, "child", 0).await.unwrap();
         assert!(matches!(
             commands.try_recv(),
