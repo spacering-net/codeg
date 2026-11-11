@@ -50668,6 +50668,7 @@ mod tests {
                 })
                 .collect(),
             is_secret: false,
+            allow_other: false,
         };
         let answered = crate::acp::question::QuestionOutcome {
             answers: vec![crate::acp::question::QuestionAnsweredItem {

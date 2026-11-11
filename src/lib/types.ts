@@ -1631,6 +1631,7 @@ export interface QuestionSpec {
   multi_select: boolean
   options: QuestionOption[]
   is_secret?: boolean
+  allow_other?: boolean
 }
 
 /** Awaiting-answer question set on the session (mirror of `PendingQuestionState`). */

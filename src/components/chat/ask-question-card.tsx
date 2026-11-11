@@ -127,7 +127,7 @@ export function AskQuestionCard({
   // tallest question (its option count plus the always-present "Other" row),
   // capped to the viewport; a taller-than-estimated tab scrolls internally.
   const maxRows = useMemo(
-    () => questions.reduce((m, q) => Math.max(m, q.options.length + 1), 1),
+    () => questions.reduce((m, q) => Math.max(m, q.options.length + (q.allow_other === false ? 0 : 1)), 1),
     [questions]
   )
   const bodyHeight = `min(${maxRows * 4 + 1}rem, 50svh)`
@@ -377,16 +377,18 @@ export function AskQuestionCard({
               </Label>
             )
           })}
-          <Label className={cardClass(s?.otherActive ?? false)}>
-            <Checkbox
-              checked={s?.otherActive ?? false}
-              disabled={locked}
-              onCheckedChange={() => toggleOther(q)}
-              className="mt-0.5"
-            />
-            <span className="text-sm font-medium">{t("other")}</span>
-          </Label>
-          {otherInput}
+          {q.allow_other !== false && (
+            <Label className={cardClass(s?.otherActive ?? false)}>
+              <Checkbox
+                checked={s?.otherActive ?? false}
+                disabled={locked}
+                onCheckedChange={() => toggleOther(q)}
+                className="mt-0.5"
+              />
+              <span className="text-sm font-medium">{t("other")}</span>
+            </Label>
+          )}
+          {q.allow_other !== false && otherInput}
         </div>
       )
     }
@@ -423,18 +425,20 @@ export function AskQuestionCard({
               </Label>
             )
           })}
-          <Label className={cardClass(s?.otherActive ?? false)}>
-            <RadioGroupItem
-              value={OTHER_VALUE}
-              onClick={() => {
-                if (s?.otherActive) toggleOther(q)
-              }}
-              className="mt-0.5 data-[state=checked]:border-primary data-[state=checked]:bg-primary"
-            />
-            <span className="text-sm font-medium">{t("other")}</span>
-          </Label>
+          {q.allow_other !== false && (
+            <Label className={cardClass(s?.otherActive ?? false)}>
+              <RadioGroupItem
+                value={OTHER_VALUE}
+                onClick={() => {
+                  if (s?.otherActive) toggleOther(q)
+                }}
+                className="mt-0.5 data-[state=checked]:border-primary data-[state=checked]:bg-primary"
+              />
+              <span className="text-sm font-medium">{t("other")}</span>
+            </Label>
+          )}
         </RadioGroup>
-        {otherInput}
+        {q.allow_other !== false && otherInput}
       </div>
     )
   }

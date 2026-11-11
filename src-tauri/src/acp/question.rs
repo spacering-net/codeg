@@ -67,6 +67,10 @@ pub struct QuestionOption {
     pub description: String,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// A single multiple-choice question.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuestionSpec {
@@ -91,6 +95,11 @@ pub struct QuestionSpec {
     /// input. Default false — absent on the wire for every non-secret source.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_secret: bool,
+    /// When false, the question card hides the "Other" option and free-text input.
+    /// Defaults to true; false for native permission bridges (Antigravity, Pi select)
+    /// where only predetermined option IDs can be submitted.
+    #[serde(default = "default_true")]
+    pub allow_other: bool,
 }
 
 /// The pending (awaiting-answer) question set stored on
@@ -310,6 +319,7 @@ pub fn parse_questions(arguments: &Value) -> Result<Vec<QuestionSpec>, String> {
             multi_select,
             options,
             is_secret: false,
+            allow_other: true,
         });
     }
     Ok(out)
@@ -567,6 +577,7 @@ pub fn parse_grok_ext_questions(params: &Value) -> Result<Vec<QuestionSpec>, Str
             multi_select,
             options,
             is_secret: false,
+            allow_other: true,
         });
     }
     Ok(out)
@@ -675,6 +686,7 @@ pub fn parse_pi_select_ask(tool_call: &Value, options: &[(String, String)]) -> O
             multi_select: false,
             options: choices,
             is_secret: false,
+            allow_other: false,
         },
         option_ids,
     })
@@ -803,6 +815,7 @@ pub fn parse_antigravity_ask(
             multi_select: false,
             options: choices,
             is_secret: false,
+            allow_other: false,
         },
         option_ids,
     })
@@ -1827,6 +1840,7 @@ fn parse_form_questions(
             multi_select,
             options,
             is_secret: is_secret_property(raw, id),
+            allow_other: true,
         });
         fields.push(ElicitationField {
             other_field_id: minimax_companions.get(id).cloned(),
@@ -2038,6 +2052,7 @@ pub fn grok_result_card_input(specs: &[QuestionSpec]) -> Value {
                 "question": s.question,
                 "multiSelect": s.multi_select,
                 "options": s.options,
+                "allowOther": s.allow_other,
             })
         })
         .collect();
@@ -2128,6 +2143,7 @@ mod tests {
         assert!(!qs[0].multi_select);
         assert_eq!(qs[0].options.len(), 2);
         assert!(!qs[0].id.is_empty());
+        assert!(qs[0].allow_other);
     }
 
     fn elicitation_raw(props: Value, required: Value) -> Value {
@@ -3554,6 +3570,7 @@ mod tests {
                 })
                 .collect(),
             is_secret: false,
+            allow_other: true,
         };
 
         assert!(validate_specs(&[]).is_err(), "empty set");
@@ -3597,6 +3614,7 @@ mod tests {
                 },
             ],
             is_secret: false,
+            allow_other: true,
         };
         assert!(validate_specs(&[blank_id]).is_err(), "blank id");
         // Duplicate option label within one question (parse_questions rejects it).
@@ -3616,6 +3634,7 @@ mod tests {
                 },
             ],
             is_secret: false,
+            allow_other: true,
         };
         assert!(
             validate_specs(&[dup_label]).is_err(),
@@ -3935,6 +3954,7 @@ mod tests {
         );
         // `ctx.ui.select` yields one value.
         assert!(!ask.spec.multi_select);
+        assert!(!ask.spec.allow_other);
         assert_eq!(ask.spec.options.len(), 4);
         assert_eq!(
             ask.spec.options[0].label,
@@ -4254,6 +4274,7 @@ mod tests {
             .expect("实测交互格式应转换为问题卡片");
         assert_eq!(ask.spec.options[1].label, "前端开发");
         assert!(!ask.spec.multi_select);
+        assert!(!ask.spec.allow_other);
         assert_eq!(ask.option_ids[1].1, "opaque-second");
 
         let mut no_kind = antigravity_interaction();
@@ -4261,6 +4282,7 @@ mod tests {
         let ask_no_kind = parse_antigravity_ask(&no_kind, &antigravity_choices())
             .expect("实测 antigravity-acp 1.4.1 省略 kind 字段亦应正确识别为问题卡片");
         assert_eq!(ask_no_kind.spec.options[1].label, "前端开发");
+        assert!(!ask_no_kind.spec.allow_other);
     }
 
     #[test]
