@@ -4872,7 +4872,7 @@ pub async fn list_directory_with_files(
 /// Only *authorized* links are returned (see [`crate::folder_links`]): a
 /// symlink that merely happens to sit in the tree — the `secrets -> ~/.ssh` a
 /// cloned repo might ship — is not one of them and stays unfollowed.
-fn authorized_links_in(root: &Path) -> Vec<(String, PathBuf)> {
+pub(super) fn authorized_links_in(root: &Path) -> Vec<(String, PathBuf)> {
     let Ok(canonical_root) = std::fs::canonicalize(root) else {
         return Vec::new();
     };

@@ -9,7 +9,6 @@ use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use super::folders::{visit_workspace_files, WorkspaceEntryKind, WorkspaceFileEntry};
@@ -23,21 +22,10 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_CONSUMERS: usize = 128;
 const NO_PARENT: u32 = u32::MAX;
 
-#[derive(Clone, Copy)]
-struct IndexBudget {
-    build: usize,
-    retained: usize,
-}
+mod index_cache;
+use index_cache::{IndexService, RootKey};
 
-const INDEX_BUDGET: IndexBudget = IndexBudget {
-    build: BUILD_BYTES,
-    retained: INDEX_BYTES,
-};
-
-// One workspace cache and one builder/search worker for the whole process,
-// shared by every composer, dialog, desktop window and web client. Switching
-// roots drops the previous index before building the next one.
-static CACHE: LazyLock<Mutex<Option<CachedIndex>>> = LazyLock::new(|| Mutex::new(None));
+static INDEXES: LazyLock<Arc<IndexService>> = LazyLock::new(IndexService::production);
 static SEARCHES: LazyLock<StdMutex<Searches>> =
     LazyLock::new(|| StdMutex::new(Searches::default()));
 
@@ -133,7 +121,7 @@ impl SearchControl {
 
 struct ActiveSearch {
     request: SearchRequest,
-    control: SearchControl,
+    control: Arc<SearchControl>,
 }
 
 impl Drop for ActiveSearch {
@@ -151,12 +139,6 @@ impl Drop for ActiveSearch {
             }
         }
     }
-}
-
-struct CachedIndex {
-    root: String,
-    built_at: Instant,
-    index: Option<CompactIndex>,
 }
 
 // Store each basename once and each parent as a small integer. In a workspace
@@ -204,11 +186,9 @@ impl CompactIndex {
         let mut matches = Matches::new(query, limit, files_only);
         // Repeated basenames share normalization and name-tier scoring too.
         // A full set of name matches outranks every path/subsequence match.
-        let name_scores: Vec<_> = self
-            .names
-            .iter()
-            .map(|name| score_name(&matches.query, &name.lower, name.utf16_len))
-            .collect();
+        // A cache sized by all unique names would multiply scratch memory by
+        // each concurrent query. Cache only a fixed number of basename scores.
+        let mut name_scores = HashMap::new();
         let query_mask = matches.query.is_ascii().then(|| byte_mask(&matches.query));
         let mut ancestors: Vec<(u32, usize, usize, u64)> = Vec::new();
         let mut path = String::new();
@@ -228,7 +208,12 @@ impl CompactIndex {
             let mask = ancestors.last().map(|(_, _, _, mask)| *mask).unwrap_or(0)
                 | name.byte_mask
                 | if parent_len > 0 { byte_mask("/") } else { 0 };
-            let name_score = name_scores[node.name as usize];
+            let name_score = *name_scores
+                .entry(node.name)
+                .or_insert_with(|| score_name(&matches.query, &name.lower, name.utf16_len));
+            if name_scores.len() >= 4096 {
+                name_scores.clear();
+            }
             let may_match = (!files_only || !node.is_dir)
                 && match name_score {
                     Some(score) => matches.accepts(score, id),
@@ -302,7 +287,15 @@ impl Builder {
             .as_ref()
             .map(|lower| entry.name.len() + 32 + lower.capacity() + 16)
             .unwrap_or(0);
-        if self.index.bytes() + extra_nodes + extra_names + table_bytes + string_bytes > budget
+        let depth = entry.path.bytes().filter(|c| *c == b'/').count();
+        let parents_capacity = self.parents.capacity().max(depth + 1);
+        if self.index.bytes()
+            + extra_nodes
+            + extra_names
+            + table_bytes
+            + string_bytes
+            + parents_capacity * size_of::<u32>()
+            > budget
             || self.index.nodes.len() >= u32::MAX as usize
         {
             return false;
@@ -330,7 +323,6 @@ impl Builder {
                 id
             }
         };
-        let depth = entry.path.bytes().filter(|c| *c == b'/').count();
         self.parents.truncate(depth);
         if self.parents.len() != depth {
             return false;
@@ -342,6 +334,9 @@ impl Builder {
             is_dir: entry.kind == WorkspaceEntryKind::Dir,
         });
         if entry.kind == WorkspaceEntryKind::Dir {
+            if self.parents.len() == self.parents.capacity() {
+                self.parents.reserve_exact(1);
+            }
             self.parents.push(id);
         }
         true
@@ -394,8 +389,22 @@ impl Matches {
         if self.limit == 0 || (self.files_only && is_dir) {
             return;
         }
-        let Some(score) = score_file(&self.query, name, path) else {
-            return;
+        let lower_name = name.to_lowercase();
+        let name_len = lower_name.encode_utf16().count();
+        let score = if let Some(score) = score_name(&self.query, &lower_name, name_len) {
+            score
+        } else {
+            // Once top-k contains only basename hits, path and subsequence
+            // tiers cannot enter it. In disk snapshots this avoids allocating
+            // and lowercasing millions of irrelevant long ancestor paths.
+            if !self.needs_path_matches() {
+                return;
+            }
+            let Some(score) = score_path(&self.query, &lower_name, name_len, &path.to_lowercase())
+            else {
+                return;
+            };
+            score
         };
         self.offer_ranked(name, path, is_dir, order, score);
     }
@@ -466,6 +475,7 @@ fn subsequence(query: &str, text: &str) -> Option<usize> {
 }
 
 // Same tiers and UTF-16 positions/lengths as lib/file-search-match.ts.
+#[cfg(test)]
 fn score_file(query: &str, name: &str, path: &str) -> Option<i64> {
     let name = name.to_lowercase();
     let name_len = name.encode_utf16().count();
@@ -508,78 +518,6 @@ struct SearchOptions<'a> {
     refresh: bool,
 }
 
-fn search_or_build(
-    cache: &mut Option<CachedIndex>,
-    root: String,
-    options: SearchOptions<'_>,
-    budget: IndexBudget,
-    control: &SearchControl,
-) -> Vec<WorkspaceFileEntry> {
-    let SearchOptions {
-        query,
-        limit,
-        files_only,
-        refresh,
-    } = options;
-    if control.stopped() {
-        return Vec::new();
-    }
-    let fresh = cache
-        .as_ref()
-        .is_some_and(|c| c.root == root && c.built_at.elapsed() < CACHE_TTL);
-    if fresh && !refresh {
-        if limit == 0 {
-            return Vec::new();
-        }
-        if let Some(index) = cache.as_ref().and_then(|c| c.index.as_ref()) {
-            return index.search(query, limit, files_only, control);
-        }
-    }
-    let should_build = !fresh || refresh;
-    if should_build {
-        *cache = None;
-    }
-    let mut builder = should_build.then(Builder::default);
-    let mut matches = Matches::new(query, limit, files_only);
-    let mut order = 0;
-    visit_workspace_files(&root, |entry| {
-        if control.stopped() {
-            return false;
-        }
-        matches.offer(
-            &entry.name,
-            &entry.path,
-            entry.kind == WorkspaceEntryKind::Dir,
-            order,
-        );
-        order += 1;
-        if builder
-            .as_mut()
-            .is_some_and(|b| !b.push(&entry, budget.build))
-        {
-            builder = None;
-        }
-        // A warmup can stop once the budget is exhausted. A real search keeps
-        // walking and ranking so a late/deep exact match is never omitted.
-        builder.is_some() || limit != 0
-    });
-    if control.stopped() {
-        // A partial traversal must never become a fresh, incomplete index.
-        return Vec::new();
-    }
-    if should_build {
-        let index = builder
-            .map(|b| b.index)
-            .filter(|i| i.bytes() <= budget.retained);
-        *cache = Some(CachedIndex {
-            root,
-            built_at: Instant::now(),
-            index,
-        });
-    }
-    matches.finish()
-}
-
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn search_workspace_files(
     path: String,
@@ -595,10 +533,6 @@ pub async fn search_workspace_files(
             "Invalid workspace file search",
         ));
     }
-    let limit = limit.unwrap_or(100).clamp(1, MAX_RESULTS);
-    let files_only = files_only.unwrap_or(false);
-    // Register before admission: a newer generation cancels both queued and
-    // running work for this consumer, without affecting another picker/client.
     let request = request.unwrap_or_else(|| SearchRequest {
         consumer_id: uuid::Uuid::new_v4().to_string(),
         generation: 0,
@@ -609,65 +543,40 @@ pub async fn search_workspace_files(
     };
     let search = ActiveSearch {
         request,
-        control: SearchControl {
+        control: Arc::new(SearchControl {
             cancel,
             deadline: requested_at + SEARCH_TIMEOUT,
-        },
+        }),
     };
-    let mut cache = tokio::select! {
-        biased;
-        _ = search.control.cancel.cancelled() => return Ok(Vec::new()),
-        _ = tokio::time::sleep_until(search.control.deadline.into()) => {
-            return Err(AppCommandError::task_execution_failed("Workspace file search timed out"));
-        }
-        cache = CACHE.lock() => cache,
-    };
-    // A warmup or another refresh may have rebuilt the index while this
-    // request waited. Reuse that newer snapshot instead of scanning twice.
-    let refresh =
-        refresh.unwrap_or(false) && cache.as_ref().is_none_or(|c| c.built_at < requested_at);
-    tokio::task::spawn_blocking(move || {
-        let control = &search.control;
-        let results = if query.trim().is_empty() {
-            // Even files-only listings can walk an entire tree of directories.
-            // They share the worker, cancellation and deadline with searches.
-            let mut entries = Vec::new();
-            visit_workspace_files(&path, |entry| {
-                if control.stopped() {
-                    return false;
-                }
-                if !files_only || entry.kind == WorkspaceEntryKind::File {
-                    entries.push(entry);
-                }
-                entries.len() < limit
-            });
-            entries
-        } else {
-            search_or_build(
-                &mut cache,
-                path,
-                SearchOptions {
-                    query: &query,
-                    limit,
-                    files_only,
-                    refresh,
-                },
-                INDEX_BUDGET,
-                control,
-            )
-        };
-        if Instant::now() >= control.deadline {
-            Err(AppCommandError::task_execution_failed(
-                "Workspace file search timed out",
-            ))
-        } else if control.cancel.is_cancelled() {
-            Ok(Vec::new())
-        } else {
-            Ok(results)
-        }
-    })
-    .await
-    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?
+    // Canonicalization and linked-root authorization can touch the filesystem.
+    // They run off the async executor, before looking up the short-held registry.
+    let key = tokio::task::spawn_blocking(move || RootKey::resolve(&path))
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?
+        .map_err(AppCommandError::task_execution_failed)?;
+    let results = INDEXES
+        .search(
+            key,
+            SearchOptions {
+                query: &query,
+                limit: limit.unwrap_or(100).clamp(1, MAX_RESULTS),
+                files_only: files_only.unwrap_or(false),
+                refresh: refresh.unwrap_or(false),
+            },
+            requested_at,
+            Arc::clone(&search.control),
+        )
+        .await
+        .map_err(AppCommandError::task_execution_failed)?;
+    if Instant::now() >= search.control.deadline {
+        Err(AppCommandError::task_execution_failed(
+            "Workspace file search timed out",
+        ))
+    } else if search.control.cancel.is_cancelled() {
+        Ok(Vec::new())
+    } else {
+        Ok(results)
+    }
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -687,29 +596,6 @@ pub async fn prepare_workspace_file_search(path: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn run_search(
-        cache: &mut Option<CachedIndex>,
-        root: String,
-        query: &str,
-        limit: usize,
-        files_only: bool,
-        refresh: bool,
-        budget: IndexBudget,
-    ) -> Vec<WorkspaceFileEntry> {
-        search_or_build(
-            cache,
-            root,
-            SearchOptions {
-                query,
-                limit,
-                files_only,
-                refresh,
-            },
-            budget,
-            &SearchControl::default(),
-        )
-    }
 
     fn file(path: &str, is_dir: bool) -> WorkspaceFileEntry {
         WorkspaceFileEntry {
@@ -818,68 +704,6 @@ mod tests {
         assert_eq!(best[1].path, "0/needle-extra");
     }
 
-    #[test]
-    fn budget_fallback_still_searches_the_entire_workspace() {
-        let dir = tempfile::tempdir().unwrap();
-        for i in 0..100 {
-            std::fs::write(dir.path().join(format!("a{i:03}.txt")), "x").unwrap();
-        }
-        std::fs::create_dir_all(dir.path().join("z/deep")).unwrap();
-        std::fs::write(dir.path().join("z/deep/needle.txt"), "x").unwrap();
-        let mut cache = None;
-        let root = dir.path().to_string_lossy().into_owned();
-        let budget = IndexBudget {
-            build: 1024,
-            retained: 1024,
-        };
-        let best = run_search(&mut cache, root.clone(), "needle", 1, true, false, budget);
-        assert_eq!(best[0].path, "z/deep/needle.txt");
-        assert!(cache.as_ref().unwrap().index.is_none());
-        assert_eq!(
-            run_search(&mut cache, root, "needle", 1, true, false, budget),
-            best
-        );
-    }
-
-    #[test]
-    fn budget_fallback_preserves_failed_build_ttl_and_eventually_retries() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("needle.txt"), "x").unwrap();
-        let root = dir.path().to_string_lossy().into_owned();
-        let mut cache = None;
-        run_search(
-            &mut cache,
-            root.clone(),
-            "needle",
-            1,
-            true,
-            false,
-            IndexBudget {
-                build: 1024,
-                retained: 1024,
-            },
-        );
-        let marker = Instant::now() - Duration::from_secs(290);
-        cache.as_mut().unwrap().built_at = marker;
-        for _ in 0..3 {
-            let result = run_search(
-                &mut cache,
-                root.clone(),
-                "needle",
-                1,
-                true,
-                false,
-                INDEX_BUDGET,
-            );
-            assert_eq!(result[0].path, "needle.txt");
-            assert_eq!(cache.as_ref().unwrap().built_at, marker);
-            assert!(cache.as_ref().unwrap().index.is_none());
-        }
-        cache.as_mut().unwrap().built_at = Instant::now() - CACHE_TTL;
-        run_search(&mut cache, root, "needle", 1, true, false, INDEX_BUDGET);
-        assert!(cache.as_ref().unwrap().index.is_some());
-    }
-
     fn request(consumer: &str, generation: u64) -> SearchRequest {
         SearchRequest {
             consumer_id: consumer.into(),
@@ -935,160 +759,14 @@ mod tests {
         assert_eq!(searches.0.len(), MAX_CONSUMERS);
     }
 
-    #[test]
-    fn canceled_or_expired_searches_do_not_replace_a_cached_index() {
-        let mut cache = Some(CachedIndex {
-            root: "existing".into(),
-            built_at: Instant::now(),
-            index: None,
-        });
-        let canceled = SearchControl::default();
-        canceled.cancel.cancel();
-        let expired = SearchControl {
-            deadline: Instant::now() - Duration::from_secs(1),
-            ..SearchControl::default()
-        };
-        for control in [canceled, expired] {
-            assert!(search_or_build(
-                &mut cache,
-                "replacement".into(),
-                SearchOptions {
-                    query: "needle",
-                    limit: 1,
-                    files_only: true,
-                    refresh: true
-                },
-                INDEX_BUDGET,
-                &control,
-            )
-            .is_empty());
-            assert_eq!(cache.as_ref().unwrap().root, "existing");
-        }
-    }
-
     #[tokio::test]
-    async fn empty_query_shares_admission_and_can_cancel_while_waiting() {
-        let cache = CACHE.lock().await;
-        let request = request(&uuid::Uuid::new_v4().to_string(), 1);
-        let search_request = request.clone();
-        let task = tokio::spawn(search_workspace_files(
-            "/unused-because-canceled".into(),
-            "".into(),
-            Some(200),
-            Some(true),
-            None,
-            Some(search_request),
-        ));
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if SEARCHES
-                    .lock()
-                    .unwrap()
-                    .0
-                    .contains_key(&request.consumer_id)
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert!(
-            !task.is_finished(),
-            "empty queries must wait for the shared worker"
-        );
-        cancel_workspace_file_search(request).await.unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(1), task)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert!(result.is_empty());
-        drop(cache);
-    }
-
-    #[tokio::test]
-    async fn newer_generation_coalesces_a_queued_search_before_it_can_traverse() {
-        let cache = CACHE.lock().await;
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("latest.txt"), "x").unwrap();
-        let root = dir.path().to_string_lossy().into_owned();
-        let first = request(&uuid::Uuid::new_v4().to_string(), 1);
-        let latest = request(&first.consumer_id, 2);
-        let old_task = tokio::spawn(search_workspace_files(
-            root.clone(),
-            "obsolete".into(),
-            None,
-            None,
-            None,
-            Some(first.clone()),
-        ));
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while !SEARCHES.lock().unwrap().0.contains_key(&first.consumer_id) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        let latest_task = tokio::spawn(search_workspace_files(
-            root,
-            "latest".into(),
-            None,
-            None,
-            None,
-            Some(latest),
-        ));
-        // The old request completes while the worker is still held: it never
-        // starts a superseded traversal or waits for the newer one's scan.
-        assert!(tokio::time::timeout(Duration::from_secs(1), old_task)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap()
-            .is_empty());
-        assert!(!latest_task.is_finished());
-        drop(cache);
-        let results = latest_task.await.unwrap().unwrap();
-        assert_eq!(results[0].path, "latest.txt");
-    }
-
-    #[test]
-    fn refresh_and_root_changes_replace_cached_entries() {
-        let first = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
-        std::fs::write(first.path().join("old.ts"), "x").unwrap();
-        std::fs::write(second.path().join("other.ts"), "x").unwrap();
-        let mut cache = None;
-        let root = first.path().to_string_lossy().into_owned();
-        run_search(&mut cache, root.clone(), "", 0, false, false, INDEX_BUDGET);
-        std::fs::write(first.path().join("new.ts"), "x").unwrap();
-        assert!(run_search(
-            &mut cache,
-            root.clone(),
-            "new",
-            10,
-            true,
-            false,
-            INDEX_BUDGET
+    async fn legacy_prepare_does_no_background_work() {
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            prepare_workspace_file_search("/not-a-workspace-and-must-not-be-touched".into()),
         )
-        .is_empty());
-        assert_eq!(
-            run_search(&mut cache, root, "new", 10, true, true, INDEX_BUDGET)[0].path,
-            "new.ts"
-        );
-        let result = run_search(
-            &mut cache,
-            second.path().to_string_lossy().into_owned(),
-            "ts",
-            10,
-            true,
-            false,
-            INDEX_BUDGET,
-        );
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].path, "other.ts");
-        assert!(cache.as_ref().unwrap().index.as_ref().unwrap().bytes() <= INDEX_BYTES);
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -1110,42 +788,5 @@ mod tests {
         .unwrap();
         assert_eq!(results.len(), MAX_RESULTS);
         assert!(results.iter().all(|e| e.kind == WorkspaceEntryKind::File));
-    }
-
-    /// Manual end-to-end probe for unusually large workspaces. The path stays
-    /// local; output contains counts/budgets/timings rather than filenames.
-    #[test]
-    #[ignore = "set CODEG_MEMORY_WORKSPACE to profile a real workspace"]
-    fn large_workspace_memory_probe() {
-        let root = std::env::var("CODEG_MEMORY_WORKSPACE").expect("CODEG_MEMORY_WORKSPACE");
-        let started = Instant::now();
-        let mut cache = None;
-        println!("probe_pid={}", std::process::id());
-        run_search(&mut cache, root.clone(), "", 0, false, false, INDEX_BUDGET);
-        let warm_seconds = started.elapsed().as_secs_f64();
-        let stats = cache.as_ref().and_then(|c| c.index.as_ref()).map(|i| {
-            serde_json::json!({"entries":i.nodes.len(),"uniqueNames":i.names.len(),"retainedBytes":i.bytes()})
-        });
-        println!(
-            "{}",
-            serde_json::json!({"warmSeconds":warm_seconds,"index":stats})
-        );
-        for query in ["README.md", "index.ts", "workspace_file_search"] {
-            let started = Instant::now();
-            let results = run_search(
-                &mut cache,
-                root.clone(),
-                query,
-                100,
-                true,
-                false,
-                INDEX_BUDGET,
-            );
-            assert!(results.len() <= 100);
-            println!(
-                "{}",
-                serde_json::json!({"query":query,"results":results.len(),"responseBytes":serde_json::to_vec(&results).unwrap().len(),"seconds":started.elapsed().as_secs_f64()})
-            );
-        }
     }
 }

@@ -5039,7 +5039,7 @@ export async function listWorkspaceFiles(
   return getTransport().call("list_workspace_files", { path })
 }
 
-/** Warm a shared, budgeted native index without sending its entries to JS. */
+/** Compatibility no-op. Discovery starts only with a cancellable query. */
 export async function prepareWorkspaceFileSearch(path: string): Promise<void> {
   return getTransport().call("prepare_workspace_file_search", { path })
 }

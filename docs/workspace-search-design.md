@@ -1,129 +1,125 @@
-# Workspace search: scheduling and cache revision (proposal)
+# Native workspace search
 
-This is the fourth, **draft** split of #1097. The current compact native index,
-query cancellation, server/desktop APIs, and bounded result transfer remain here
-for review. This branch is not ready to merge or install. The single-root cache
-and traversal under a global mutex are still present; the proposed replacement
-below must land and pass the acceptance tests before this PR becomes ready.
-The WebKit, Tauri callback, and highlighting splits are independent of this work.
+Search surfaces never enumerate an entire workspace in the renderer. The
+desktop and HTTP commands rank natively and return at most 200 entries. The
+ranking tiers, UTF-16 offsets, deterministic tie order, ignore rules and
+authorized linked-directory behavior match the previous file search.
 
-## Current experiment: no eager discovery
+## Discovery belongs to a query
 
-The 0.42.2 experiment initially included only the other three splits. It still
-issued full `list_workspace_files` requests when composers mounted. An isolated
-read-only client issued eight of those requests during startup; a previous
-measurement of the user's workspace counted 5,308,089 entries and a 970,417,831
-byte response. That path is sufficient to multiply gigabytes of path strings
-and objects across composers.
+Mounting a composer or picker starts no discovery. The legacy prepare command
+is a compatibility no-op. Empty queries return a bounded traversal prefix using
+two listing permits, independently of index discovery and nonempty scoring.
 
-The experimental integration now uses this draft's bounded native queries.
-Mounting a composer or picker never schedules a prewarm. The legacy prepare
-endpoint is a no-op for compatibility; only an actual query owns a discovery
-and cancellation token. Closed search dialogs do not request results.
+Nonempty queries share a process-wide `IndexService`. A short-held registry
+mutex protects an LRU of complete snapshots, in-progress discovery jobs, and
+temporary failures. Traversal, file I/O and scoring run on blocking workers
+outside this lock. Discovery has two permits, scoring four, and empty listings
+two: one large discovery cannot block a small-root discovery or an empty
+listing. Permit acquisition is cancellable and bounded by the query deadline.
+There are no background jobs competing with foreground requests.
 
-This removes eager full-workspace payloads from the renderer. It does not
-resolve this draft's remaining single-root cache, global query admission, or
-repeated over-budget traversal issues. Those remain merge blockers. Reintroduce
-background prewarming only after the lifecycle/scheduling design below is
-implemented and validated.
+Queries for the same root attach to one discovery job. Each waiting query owns
+a lease. Closing one consumer removes that lease without interrupting another
+consumer; when the last leaves, the discovery cancellation token is signalled.
+Queued work exits without acquiring a permit. Running work checks cancellation
+between entries and never publishes a partial snapshot. A cancelled worker
+cannot publish over a newer job for the same root: publication checks the job
+identity under the registry lock. Dropping an async search also drops its lease.
 
-## Foreground work must not wait for background traversal
+Consumer IDs and generations reject stale requests and handle cancellation that
+arrives before its query. The consumer registry and failure backoff map are
+bounded to 128 entries. A five-minute cooperative deadline covers admission,
+discovery and scoring; the transport allows 330 seconds for the response.
 
-Separate the short-held cache/registry mutex from traversal and scoring. The
-registry holds per-canonical-root state and shared immutable snapshots; a worker
-never retains its mutex while touching the filesystem. Canonical roots include
-the authorized linked-root/ignore configuration in their cache identity.
+## Multiple roots share total budgets
 
-Use a dispatcher with at most two discovery workers: one foreground-reserved
-slot and one shared slot. Admit at most one background prewarm, and preempt its
-cancellation token when foreground discovery needs capacity. Empty queries only
-read and return a bounded top-level listing; they do not wait for a full index.
-Scoring an already built snapshot does not wait for discovery admission.
-Coalesce discovery for the same root. Queries attach to that root's discovery,
-while cancellation removes only that consumer; it cancels the traversal when
-no consumer or explicit retained refresh remains. A small-root foreground query
-can proceed even while a large root is being prepared.
+The LRU holds at most eight complete roots. Keys use the canonical workspace
+path, current authorized link names/targets, and root/linked-root ignore-file
+metadata. Aliases share a snapshot. Authorization and root-ignore changes select
+a different snapshot immediately; a configuration change during discovery
+invalidates that build. Other filesystem changes become visible after a
+five-minute TTL or explicit refresh. Refresh publishes only after a complete
+successful discovery and does not move the timestamp on each query.
 
-Preemption can discard an incomplete snapshot. Only successful, complete walks
-are published. Worker completion must verify the root generation before updating
-the registry, so a late cancelled build cannot replace a newer snapshot. Keep
-cancellation/deadline checks in discovery and scoring, and cancel queued jobs
-before acquiring a worker permit.
+Compact in-memory snapshots deduplicate basenames and store integer parent
+references. All roots share a 128 MiB retained-index budget. Each of the two
+discovery workers can use at most half the 192 MiB compact-builder budget,
+including its interning table. The cache reserves space before publication.
+Evicted snapshots still held by active queries remain charged until their final
+lease drops, so eviction cannot admit more than the total budget. When memory
+admission is unavailable, the complete disk snapshot remains usable instead.
 
-## Prewarm belongs to a visible consumer
+Scoring retains only top-k candidates. The compact scorer's basename memoization
+is limited to 4,096 entries per worker, rather than allocating one score for
+every unique name in every concurrent query. The limits describe index-owned
+allocations; filesystem walkers, OS page cache, thread stacks and the app's other
+subsystems have separate overhead and are not represented as a total RSS limit.
 
-Give prepare requests the same consumer ID/generation contract as queries, plus
-a dedicated prepare cancellation endpoint for desktop and server modes. The
-file picker and mention panel own an AbortController for their prepare lifecycle;
-close, disable, unmount, root change, or a new generation detaches it. A consumer
-query can promote an existing prewarm to foreground rather than repeat its walk.
-Use bounded registry tombstones to reject a cancelled request that arrives late.
-Prewarm is an optimization and must never outlive all of its consumers.
+## Oversized roots reuse a complete disk snapshot
 
-## Reuse roots within one global budget
+Discovery writes a length-prefixed binary snapshot in traversal order while
+optionally building the compact memory index. Once the compact budget is
+exhausted, it drops that builder and continues the same walk to disk. Every
+entry remains searchable, including late/deep exact matches. There is no
+full-workspace payload or fallback list allocated in the renderer.
 
-Replace the single cache slot with an LRU of snapshots keyed by canonical root.
-Retain at most 128 MiB across **all** root snapshots and at most eight roots; do
-not assign 128 MiB to each root. Include deduplicated strings, node arrays, and
-metadata in accounting. Queries hold an Arc lease; eviction removes its cache
-ownership, while active leases continue counting against the process-wide
-budget until released. Budget reservations therefore precede construction, not
-only publication. Cap simultaneous discovery allocations globally at 192 MiB
-and bound foreground scoring scratch space by result limit.
+The disk format contains UTF-8 basename/path lengths, directory kind and their
+bytes. A query reads records in 64 KiB buffered pages and keeps only the best
+matches. Independent positional-read cursors allow concurrent queries on one
+snapshot without shared-seek races. No database dependency, migration, persistent
+index directory or full-path array is needed.
 
-A -> B -> A within the TTL should reuse both complete snapshots if they fit the
-total budget. Refresh timestamps change only after a real successful discovery,
-not after fallback queries. Root/config invalidation creates a new generation;
-stale refresh results cannot overwrite it. Disk and memory expiry are explicit.
+All roots and active disk builds share a 2 GiB disk quota, with up to 1 GiB
+reserved for each discovery. Successful snapshots shrink their reservation to
+their actual bytes. LRU eviction releases ownership; active leases continue to
+count until close. A record is capped at 1 MiB. Quota or I/O failure yields an
+error and a five-second retry backoff. It never publishes an incomplete index or
+silently rescans the filesystem for each keystroke after a failed build.
 
-## Oversized roots reuse a disk snapshot
+Snapshots use `tempfile::tempfile`: unlinked at creation on Unix and
+delete-on-close on Windows. Cancellation, construction errors, eviction and
+process exit close them automatically, including abrupt termination without an
+application-managed stale-file sweep. Successful compact-index publication
+closes the temporary disk copy as well.
 
-While walking, incrementally write a temporary SQLite snapshot (rusqlite is
-already a dependency). Keep a compact memory index only while its reservation
-permits. When the memory builder reaches its share of the global build budget,
-drop that builder and continue the same discovery into the disk snapshot. This
-produces complete results without rescanning the filesystem on each keystroke.
-Publish the disk snapshot atomically only on successful completion. Bind its
-temporary-file lifetime to the snapshot lease and remove abandoned files on
-startup. Use a bounded global SQLite page cache and a disk quota/LRU as well;
-never convert a disk result into a full renderer-side file list.
+Disk scoring remains O(N) in snapshot records; initial discovery still walks
+the filesystem. This change removes repeated filesystem discovery within the
+TTL and bounds retained data, rather than claiming constant-time search in
+multi-million-entry workspaces. Incremental updates and a secondary text index
+can be evaluated separately using measured latency.
 
-Repeated oversized-root queries scan the cached rows in bounded pages and keep
-only top-k scores. They remain cancellable between pages. This still has O(N)
-scoring cost, which should be measured; it removes repeated filesystem discovery
-and bounds retained RAM. If disk quota/storage prevents a complete snapshot,
-return a retriable index-unavailable error with backoff, rather than marking a
-partial tree complete or silently restarting a full walk for every keypress.
-Incremental updates and a trigram index can be evaluated later if measurements
-justify them.
+## UI lifecycle
 
-## UI regressions fixed in this draft
+Keyboard and pointer navigation pin the suggestion group. Selection follows
+reference identity across progressive updates, with a valid fallback after
+deletion. Delayed file results cannot turn a selected session into a file or
+invalidate Enter. Focus clears lazy session/commit caches for the next query
+while keeping the current in-flight search valid.
 
-Keyboard and pointer navigation pin the active suggestion group. Selection
-tracks reference identity within that group across progressive updates, with a
-valid fallback when an item is removed. Delayed file arrival cannot reinterpret
-a selected session as a file or invalidate Enter. Window focus invalidates the
-lazy session/commit caches for the next query while keeping the valid current
-request alive. The ES2020 test helper no longer uses Array.at.
+Picker closure, root changes, newer typing and hook unmount abort queries.
+Frontend state retains only the current bounded results. There is no
+Array.at dependency beyond the project's ES2020 target.
 
-## Required acceptance before marking ready
+## Regression coverage
 
-- Block a large root's prewarm inside discovery; a small-root foreground and an
-  empty listing must complete before that block is released.
-- Close the only consumer during queued and active prewarm. Assert cancellation,
-  no partial snapshot publication, no stale event delivery, and released permits.
-  With two consumers, closing one must preserve the other's work.
-- Query A, B, A; count one discovery per root, including root aliases/config
-  changes and LRU eviction. Assert the *total* retained and active-lease budgets.
-- Force the memory budget small; issue several oversized-root queries and assert
-  one filesystem walk, complete late-file matches, bounded SQLite/cache memory,
-  cancellation during scoring, and temporary-file cleanup on failure/eviction.
-- Race cancellation, root change, foreground promotion, and TTL refresh; verify
-  registry generations and no starvation. Instrument queue time separately from
-  discovery/scoring time for a realistic large workspace.
-- Keep the keyboard progressive-result and window-focus regressions green.
-  Run full TypeScript including tests, ESLint, Vitest, production build, and
-  desktop/server Rust checks/tests/clippy against the final implementation.
+`workspace_file_search/index_cache/tests.rs` uses independent services and
+controlled workers, including:
 
-The remaining backend design/implementation is a merge blocker **only for this
-draft**. The other three split PRs can be reviewed and released independently.
+- A blocked large-root discovery while a small-root query and empty listing
+  complete, plus empty listing with both discovery permits held.
+- Same-root coalescing, one of two consumers closing, last-consumer and queued
+  cancellation, dropped queries, deadlines, and cancelled old-generation
+  completion racing its successor.
+- A -> B -> A reuse, canonical aliases, authorization changes, ignore metadata,
+  TTL, refresh and LRU eviction.
+- Tiny forced memory budgets with complete late matches from disk, one walk
+  across repeated queries, and concurrent positional reads.
+- Memory and disk quotas with active evicted leases, disk overflow cleanup,
+  retry backoff, cancelled disk scoring, Unicode/path ranking and stable ties.
+
+The frontend tests cover bounded/cancelled transport requests, no eager
+prewarm, picker closure, delayed groups, selection reorder/deletion and focus.
+An ignored `large_workspace_memory_probe` can be run with
+`CODEG_MEMORY_WORKSPACE` to report counts, response bytes, memory/disk accounting,
+walk counts and query timings without printing workspace filenames.
