@@ -4169,6 +4169,7 @@
         "resumeDelegation": "Reprise de la tâche {task}",
         "resumeDelegationNoId": "Reprise d'une tâche déléguée",
         "promptLabel": "Instruction",
+        "attachmentsLabel": "Pièces jointes",
         "ackRecorded": "Enregistré dans la tâche",
         "ackNotRecorded": "Non enregistré dans la tâche",
         "ackNotRecordedWithReason": "Non enregistré dans la tâche : {reason}",

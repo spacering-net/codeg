@@ -8379,6 +8379,7 @@ where
             crate::acp::delegation::listener::TokenEntry {
                 parent_connection_id: parent_connection_id.to_string(),
                 working_dir: working_dir.to_path_buf(),
+                agent_hosts_tools: !host_tools.hosts_channels(),
             },
         )
         .await;

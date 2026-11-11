@@ -4169,6 +4169,7 @@
         "resumeDelegation": "Retomando a tarefa {task}",
         "resumeDelegationNoId": "Retomando uma tarefa delegada",
         "promptLabel": "Instrução",
+        "attachmentsLabel": "Anexos",
         "ackRecorded": "Registrado na tarefa de trabalho",
         "ackNotRecorded": "Não registrado na tarefa de trabalho",
         "ackNotRecordedWithReason": "Não registrado na tarefa de trabalho: {reason}",

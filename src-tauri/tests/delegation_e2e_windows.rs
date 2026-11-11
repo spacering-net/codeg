@@ -200,6 +200,7 @@ async fn end_to_end_named_pipe_happy_path() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from(r"C:\Windows\Temp"),
             },
@@ -309,6 +310,7 @@ async fn end_to_end_named_pipe_back_to_back_requests() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from(r"C:\Windows\Temp"),
             },

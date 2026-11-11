@@ -810,6 +810,7 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                 .register(
                     token.clone(),
                     crate::acp::delegation::listener::TokenEntry {
+                        agent_hosts_tools: false,
                         parent_connection_id: cmd
                             .get("parent")
                             .and_then(Value::as_str)

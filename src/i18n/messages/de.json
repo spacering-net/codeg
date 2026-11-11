@@ -4169,6 +4169,7 @@
         "resumeDelegation": "Aufgabe {task} wird fortgesetzt",
         "resumeDelegationNoId": "Delegierte Aufgabe wird fortgesetzt",
         "promptLabel": "Anweisung",
+        "attachmentsLabel": "Anhänge",
         "ackRecorded": "In der Arbeitsaufgabe erfasst",
         "ackNotRecorded": "Nicht in der Arbeitsaufgabe erfasst",
         "ackNotRecordedWithReason": "Nicht in der Arbeitsaufgabe erfasst: {reason}",

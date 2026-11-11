@@ -4169,6 +4169,7 @@
         "resumeDelegation": "استئناف المهمة {task}",
         "resumeDelegationNoId": "استئناف مهمة مفوضة",
         "promptLabel": "التعليمات",
+        "attachmentsLabel": "المرفقات",
         "ackRecorded": "سُجِّل في مهمة العمل",
         "ackNotRecorded": "لم يُسجَّل في مهمة العمل",
         "ackNotRecordedWithReason": "لم يُسجَّل في مهمة العمل: {reason}",

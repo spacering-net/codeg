@@ -4169,6 +4169,7 @@
         "resumeDelegation": "작업 {task} 재개 중",
         "resumeDelegationNoId": "위임 작업 재개 중",
         "promptLabel": "프롬프트",
+        "attachmentsLabel": "첨부 파일",
         "ackRecorded": "작업 항목에 기록됨",
         "ackNotRecorded": "작업 항목에 기록되지 않음",
         "ackNotRecordedWithReason": "작업 항목에 기록되지 않음: {reason}",

@@ -4169,6 +4169,7 @@
         "resumeDelegation": "タスク {task} を再開中",
         "resumeDelegationNoId": "委任タスクを再開中",
         "promptLabel": "プロンプト",
+        "attachmentsLabel": "添付ファイル",
         "ackRecorded": "作業タスクに記録しました",
         "ackNotRecorded": "作業タスクに記録されていません",
         "ackNotRecordedWithReason": "作業タスクに記録されていません: {reason}",

@@ -1176,7 +1176,7 @@ pub fn attachment_names_from_prompt(blocks: &[PromptInputBlock]) -> Option<Strin
 /// or backslashes is wrapped in `<…>`. Without that a perfectly ordinary
 /// attachment — `file:///a/b (1).ts`, or a Windows `file:///C:\dir\x` — closed
 /// the link early and rendered as raw `[…](…)` source text.
-fn attachment_marker(label: &str, uri: &str) -> String {
+pub(crate) fn attachment_marker(label: &str, uri: &str) -> String {
     format!(
         "[{}]({})",
         escape_markdown_text(label),

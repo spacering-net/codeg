@@ -4169,6 +4169,7 @@
         "resumeDelegation": "Reanudando la tarea {task}",
         "resumeDelegationNoId": "Reanudando una tarea delegada",
         "promptLabel": "Instrucción",
+        "attachmentsLabel": "Adjuntos",
         "ackRecorded": "Registrado en la tarea de trabajo",
         "ackNotRecorded": "No registrado en la tarea de trabajo",
         "ackNotRecordedWithReason": "No registrado en la tarea de trabajo: {reason}",

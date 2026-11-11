@@ -4169,6 +4169,7 @@
         "resumeDelegation": "Resuming task {task}",
         "resumeDelegationNoId": "Resuming a delegated task",
         "promptLabel": "Prompt",
+        "attachmentsLabel": "Attachments",
         "ackRecorded": "Recorded on the work task",
         "ackNotRecorded": "Not recorded on the work task",
         "ackNotRecordedWithReason": "Not recorded on the work task: {reason}",

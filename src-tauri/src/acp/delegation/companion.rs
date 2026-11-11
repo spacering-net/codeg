@@ -46,6 +46,7 @@ use tokio::sync::{oneshot, Mutex};
 
 use crate::acp::chat_authoring::{
     NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
+    MAX_WORK_TASK_ATTACHMENTS,
 };
 use crate::acp::delegation::transport::{
     client_ask_round_trip, client_browser_act_round_trip, client_browser_capture_round_trip,
@@ -2122,7 +2123,38 @@ fn parse_work_task_spec(arguments: &Value) -> Result<NewWorkTaskSpec, String> {
         prompt: truncate_chars(&prompt, MAX_PROMPT_CHARS),
         agent_type: optional_string(arguments, "agent_type"),
         folder_path: optional_string(arguments, "folder_path"),
+        attachments: parse_attachment_paths(arguments)?,
     })
+}
+
+/// Read `create_work_task`'s optional `attachments`: an array of file paths.
+/// A lone string is taken as a one-item list (a common LLM slip), blanks are
+/// dropped and repeats collapse. Only the SHAPE is checked here — whether each
+/// path exists, and what it is, is decided by the main process when it reads
+/// the files, and comes back as a soft note the LLM can correct.
+fn parse_attachment_paths(arguments: &Value) -> Result<Vec<String>, String> {
+    const SHAPE: &str = "create_work_task `attachments` must be an array of file paths (strings)";
+    let raw: Vec<&Value> = match arguments.get("attachments") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items.iter().collect(),
+        Some(v @ Value::String(_)) => vec![v],
+        Some(_) => return Err(SHAPE.to_string()),
+    };
+    let mut paths: Vec<String> = Vec::new();
+    for item in raw {
+        let path = item.as_str().ok_or_else(|| SHAPE.to_string())?.trim();
+        if !path.is_empty() && !paths.iter().any(|p| p == path) {
+            paths.push(path.to_string());
+        }
+    }
+    if paths.len() > MAX_WORK_TASK_ATTACHMENTS {
+        return Err(format!(
+            "create_work_task takes at most {MAX_WORK_TASK_ATTACHMENTS} attachments (got {}); \
+             attach the ones that matter and reference the rest by path in `prompt`",
+            paths.len()
+        ));
+    }
+    Ok(paths)
 }
 
 /// Character-safe truncation shared by both spec parsers.
@@ -5728,6 +5760,14 @@ mod tests {
         for (args, expect) in [
             (json!({ "prompt": "p" }), "title"),
             (json!({ "title": "t" }), "prompt"),
+            (
+                json!({ "title": "t", "prompt": "p", "attachments": { "a": "b" } }),
+                "attachments",
+            ),
+            (
+                json!({ "title": "t", "prompt": "p", "attachments": ["/a.png", 3] }),
+                "attachments",
+            ),
         ] {
             let line = json!({
                 "jsonrpc": "2.0", "id": 44, "method": "tools/call",
@@ -5739,6 +5779,54 @@ mod tests {
             assert_eq!(e.code, -32602);
             assert!(e.message.contains(expect), "got: {}", e.message);
         }
+    }
+
+    #[test]
+    fn parse_work_task_spec_reads_attachments() {
+        // Absent / null → none.
+        let spec = parse_work_task_spec(&json!({ "title": "t", "prompt": "p" })).unwrap();
+        assert!(spec.attachments.is_empty());
+        let spec = parse_work_task_spec(&json!({
+            "title": "t", "prompt": "p", "attachments": null
+        }))
+        .unwrap();
+        assert!(spec.attachments.is_empty());
+
+        // Trimmed, blanks dropped, repeats collapsed, order kept.
+        let spec = parse_work_task_spec(&json!({
+            "title": "t", "prompt": "p",
+            "attachments": [" /tmp/shot.png ", "", "logs/run.log", "/tmp/shot.png"]
+        }))
+        .unwrap();
+        assert_eq!(spec.attachments, vec!["/tmp/shot.png", "logs/run.log"]);
+
+        // A lone string is a one-item list.
+        let spec = parse_work_task_spec(&json!({
+            "title": "t", "prompt": "p", "attachments": "/tmp/shot.png"
+        }))
+        .unwrap();
+        assert_eq!(spec.attachments, vec!["/tmp/shot.png"]);
+    }
+
+    #[test]
+    fn parse_work_task_spec_caps_the_attachment_count() {
+        let at_cap: Vec<String> = (0..MAX_WORK_TASK_ATTACHMENTS)
+            .map(|i| format!("/tmp/{i}.png"))
+            .collect();
+        let spec = parse_work_task_spec(&json!({
+            "title": "t", "prompt": "p", "attachments": at_cap
+        }))
+        .unwrap();
+        assert_eq!(spec.attachments.len(), MAX_WORK_TASK_ATTACHMENTS);
+
+        let over: Vec<String> = (0..=MAX_WORK_TASK_ATTACHMENTS)
+            .map(|i| format!("/tmp/{i}.png"))
+            .collect();
+        let err = parse_work_task_spec(&json!({
+            "title": "t", "prompt": "p", "attachments": over
+        }))
+        .expect_err("over the cap must be rejected, not truncated");
+        assert!(err.contains("at most"), "got: {err}");
     }
 
     #[test]

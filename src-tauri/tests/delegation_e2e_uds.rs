@@ -210,6 +210,7 @@ async fn end_to_end_uds_happy_path() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from("/tmp"),
             },
@@ -332,6 +333,7 @@ async fn end_to_end_uds_batch_status() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from("/tmp"),
             },
@@ -496,6 +498,7 @@ async fn end_to_end_uds_ask_question_round_trip() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from("/tmp"),
             },
@@ -638,6 +641,7 @@ async fn end_to_end_uds_ask_revoked_after_register_declines() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from("/tmp"),
             },
@@ -795,6 +799,7 @@ async fn end_to_end_uds_assistant_delegation() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from("/tmp"),
             },

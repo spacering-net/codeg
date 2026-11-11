@@ -4169,6 +4169,7 @@
         "resumeDelegation": "恢复任务 {task}",
         "resumeDelegationNoId": "恢复委派任务",
         "promptLabel": "指令",
+        "attachmentsLabel": "附件",
         "ackRecorded": "已记录到待办任务",
         "ackNotRecorded": "未记录到待办任务",
         "ackNotRecordedWithReason": "未记录到待办任务：{reason}",
