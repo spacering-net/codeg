@@ -11,12 +11,126 @@ export interface LiveToolRawOutput {
   raw_output_total_bytes: number
 }
 
-function mayBeStructuredOutput(chunks: readonly string[]): boolean {
-  for (const chunk of chunks) {
-    const first = chunk.trimStart()[0]
-    if (first) return first === "{" || first === "["
+/** How much of the head is checked before an output counts as structured. */
+const STRUCTURED_PROBE_CHARS = 1024
+
+function isJsonWhitespace(c: string): boolean {
+  return c === " " || c === "\n" || c === "\r" || c === "\t"
+}
+
+/**
+ * Whether `head` (starting at its first non-whitespace character) is a valid
+ * prefix of a JSON object or array. A bracket alone is not enough: plain
+ * terminal streams routinely open with one (`[+] Building`, `[1/200]`,
+ * `[INFO]`, `{{ … }}`), and exempting those would leave them unbounded. A
+ * probe that runs out mid-token counts as a prefix, so a structured result
+ * still arriving across append frames stays a candidate.
+ */
+function isJsonContainerPrefix(head: string): boolean {
+  if (head[0] !== "{" && head[0] !== "[") return false
+  const stack: string[] = []
+  type Expect =
+    | "value"
+    | "valueOrClose"
+    | "key"
+    | "keyOrClose"
+    | "colon"
+    | "commaOrClose"
+    | "end"
+  let expect = "value" as Expect
+  const afterValue = (): Expect => (stack.length === 0 ? "end" : "commaOrClose")
+  let i = 0
+  while (i < head.length) {
+    const c = head[i]
+    if (isJsonWhitespace(c)) {
+      i += 1
+      continue
+    }
+    if (expect === "end") return false
+    if (expect === "colon") {
+      if (c !== ":") return false
+      expect = "value"
+      i += 1
+      continue
+    }
+    if (expect === "commaOrClose") {
+      const top = stack[stack.length - 1]
+      if (c === ",") expect = top === "{" ? "key" : "value"
+      else if ((c === "}" && top === "{") || (c === "]" && top === "[")) {
+        stack.pop()
+        expect = afterValue()
+      } else return false
+      i += 1
+      continue
+    }
+    if (c === '"') {
+      let j = i + 1
+      while (j < head.length && head[j] !== '"') {
+        if (head.charCodeAt(j) < 0x20) return false
+        j += head[j] === "\\" ? 2 : 1
+      }
+      if (j >= head.length) return true
+      i = j + 1
+      expect =
+        expect === "key" || expect === "keyOrClose" ? "colon" : afterValue()
+      continue
+    }
+    if (expect === "keyOrClose" && c === "}") {
+      stack.pop()
+      expect = afterValue()
+      i += 1
+      continue
+    }
+    if (expect === "key" || expect === "keyOrClose") return false
+    if (expect === "valueOrClose" && c === "]") {
+      stack.pop()
+      expect = afterValue()
+      i += 1
+      continue
+    }
+    if (c === "{" || c === "[") {
+      stack.push(c)
+      expect = c === "{" ? "keyOrClose" : "valueOrClose"
+      i += 1
+      continue
+    }
+    if (c === "-" || (c >= "0" && c <= "9")) {
+      const number = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y
+      number.lastIndex = i
+      const match = number.exec(head)
+      // A number cut off by the probe window (`-`, `1.`, `1e`) is a prefix.
+      if (!match || match[0].length === 0) return /^-?$/.test(head.slice(i))
+      i += match[0].length
+      if (i >= head.length) return true
+      if (/[.eE+\-\d]/.test(head[i])) {
+        return /^[.eE+\-\d]+$/.test(head.slice(i))
+      }
+      expect = afterValue()
+      continue
+    }
+    const literal = ["true", "false", "null"].find((word) => word[0] === c)
+    if (!literal) return false
+    const rest = head.slice(i, i + literal.length)
+    if (!literal.startsWith(rest)) return false
+    if (rest.length < literal.length) return true
+    i += literal.length
+    expect = afterValue()
   }
-  return false
+  return true
+}
+
+function mayBeStructuredOutput(chunks: readonly string[]): boolean {
+  let head = ""
+  for (const chunk of chunks) {
+    let from = 0
+    if (!head) {
+      from = chunk.search(/\S/)
+      if (from === -1) continue
+    }
+    head += chunk.slice(from, from + STRUCTURED_PROBE_CHARS - head.length)
+    if (head.length >= STRUCTURED_PROBE_CHARS) break
+  }
+  return head.length > 0 && isJsonContainerPrefix(head)
 }
 
 function copyTail(value: string, budget: number): string {
@@ -33,9 +147,12 @@ function copyTail(value: string, budget: number): string {
     start += 1
   }
   const tail = value.slice(start)
-  // Copy only the bounded tail: substring implementations can share the
-  // backing storage of a much larger input. The temporary array is bounded
-  // by the preview budget as well.
+  // Substring implementations can share the backing storage of the input, so
+  // a tail cut from a much larger frame is copied. Shaving the oldest chunk
+  // of a stream that sits at the budget discards little, and copying ~budget
+  // characters on every such frame would cost milliseconds per append; the
+  // shared storage there stays within twice the budget.
+  if (start <= budget) return tail
   return tail.length === 1
     ? String.fromCharCode(tail.charCodeAt(0))
     : tail.split("").join("")

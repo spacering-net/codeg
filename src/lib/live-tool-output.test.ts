@@ -92,6 +92,52 @@ describe("live tool raw output retention", () => {
     }
   )
 
+  it.each([
+    "[+] Building 12.3s (4/9)\n",
+    "[1/200] Compiling foo.o\n",
+    "[INFO] starting server\n",
+    "[2026-11-12 10:00:00] request\n",
+    "{{ template }} rendered\n",
+    '["a"] then text\n',
+  ])("bounds a plain-text stream that opens with a bracket: %j", (head) => {
+    let output = replaceLiveToolRawOutput(head)
+    for (let i = 0; i < 150; i += 1) {
+      output = appendLiveToolRawOutput(output, "log line\n".repeat(200))
+    }
+    expect(output.raw_output_total_bytes).toBe(LIMIT)
+    expect(output.raw_output_chunks.join("")).toHaveLength(LIMIT)
+    expect(
+      replaceLiveToolRawOutput(head + "x".repeat(LIMIT)).raw_output_total_bytes
+    ).toBe(LIMIT)
+  })
+
+  it("judges the head across chunk boundaries", () => {
+    let plain = replaceLiveToolRawOutput("  [")
+    plain = appendLiveToolRawOutput(plain, "+] Building\n")
+    plain = appendLiveToolRawOutput(plain, "x".repeat(LIMIT))
+    expect(plain.raw_output_total_bytes).toBe(LIMIT)
+
+    let json = replaceLiveToolRawOutput("[\n  {")
+    json = appendLiveToolRawOutput(json, '\n    "text": -1.5e3, "ok": tr')
+    json = appendLiveToolRawOutput(json, 'ue, "body": "' + "x".repeat(LIMIT))
+    json = appendLiveToolRawOutput(json, '" }\n]')
+    expect(JSON.parse(json.raw_output_chunks.join(""))[0].body).toHaveLength(
+      LIMIT
+    )
+  })
+
+  it("keeps the newest text while a stream stays at the budget", () => {
+    let output = replaceLiveToolRawOutput(null)
+    let expected = ""
+    for (let i = 0; i < 400; i += 1) {
+      const line = `line ${i}\n`.repeat(100)
+      output = appendLiveToolRawOutput(output, line)
+      expected = (expected + line).slice(-LIMIT)
+    }
+    expect(output.raw_output_chunks.join("")).toBe(expected)
+    expect(output.raw_output_total_bytes).toBe(expected.length)
+  })
+
   it("preserves a structured result arriving across partial append frames", () => {
     let output = replaceLiveToolRawOutput(' \n{"tasks":[{"message":"')
     for (let i = 0; i < 150; i += 1) {
