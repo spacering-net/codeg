@@ -54,6 +54,8 @@ import type {
   BotMade,
   BotTemplate,
   PersonalAgentSettingChange,
+  PersonalAgentPresence,
+  PersonalAgentProfile,
   ExecutorView,
   PersonalAgentStats,
   TimelineChanges,
@@ -2683,6 +2685,27 @@ export async function personalAgentItemAct(
     act,
     until: until ?? null,
   })
+}
+
+/** One codeg window's beat (6.2, 1.12): whether it has the focus, and how
+ *  long since the last key or pointer input in it (`null`: none yet).
+ *  Whether the owner is in codeg after it. */
+export async function personalAgentPresence(
+  window: string,
+  focused: boolean,
+  idleMs: number | null
+): Promise<PersonalAgentPresence> {
+  return getTransport().call("personal_agent_presence", {
+    window,
+    focused,
+    idleMs,
+  })
+}
+
+/** The "about you" page (1.12): the owner's time zone, the record's switch,
+ *  whether they are in codeg, and the hours codeg sees. */
+export async function personalAgentProfile(): Promise<PersonalAgentProfile> {
+  return getTransport().call("personal_agent_profile", {})
 }
 
 /** Stop one piece of handed-out work from its card (8.5). False when it

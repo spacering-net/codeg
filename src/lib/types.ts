@@ -2478,9 +2478,53 @@ export interface PersonalAgentPrefs {
   exec_questions: "assistant" | "owner"
   /** An executor's plan approvals. */
   exec_plans: "assistant" | "owner"
+  /** The owner's time zone: `system` (follow the system's) or an IANA
+   *  name (1.12). */
+  time_zone: string
+  /** Whether codeg records when the owner is in codeg, to learn their usual
+   *  hours (1.12). */
+  presence: "on" | "off"
 }
 
 export type PersonalAgentPrefKey = keyof PersonalAgentPrefs
+
+/** Whether the owner is in codeg now, as one window's beat leaves it. */
+export interface PersonalAgentPresence {
+  present: boolean
+  /** Their last input in any window, ISO 8601. */
+  last_active: string | null
+}
+
+/** One kind of day's usual hours: minutes after its midnight; `end` may
+ *  pass 1440 (a late night belongs to its evening). */
+export interface PersonalAgentDayHours {
+  start: number
+  end: number
+  /** Learned from the record; else the defaults (09:00–18:00). */
+  learned: boolean
+  /** The days it was learned from. */
+  days: number
+}
+
+/** The "about you" page (13.5, 1.12). */
+export interface PersonalAgentProfile {
+  /** As set: `system` or a zone's name. */
+  time_zone: string
+  /** The zone in effect. */
+  zone: string
+  system_zone: string
+  zones: string[]
+  /** The record is kept. */
+  presence: boolean
+  present: boolean
+  last_active: string | null
+  hours: {
+    workday: PersonalAgentDayHours
+    restday: PersonalAgentDayHours
+  }
+  /** The days the hours are learned from. */
+  learn_days: number
+}
 
 /** How the assistants may use an executor config (10.5). */
 export interface ExecutorUsage {

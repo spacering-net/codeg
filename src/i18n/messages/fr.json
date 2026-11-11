@@ -7967,7 +7967,8 @@
         "executors": "Configurations d'exécution",
         "division": "Répartition du travail",
         "communication": "Communication",
-        "automation": "Missions et automatisation"
+        "automation": "Missions et automatisation",
+        "about": "À propos de vous"
       },
       "pages": {
         "identity": "Le nom et l'image sous lesquels il se présente, et l'agent sur lequel il s'exécute, mode et permissions compris : codeg l'exécute comme vous l'avez choisi.",
@@ -7980,7 +7981,8 @@
         "communication": "Comment les assistants vous parlent. Tous suivent les mêmes réglages.",
         "communicationNote": "Le ton et la façon de s'adresser à vous ne sont pas ici : écrivez-les dans le SOUL.md de chaque assistant et dans le USER.md du principal.",
         "automation": "Ce que les assistants font d'eux-mêmes, et ce qu'ils vous demandent d'abord. Par défaut, tout s'exécute seul et vous est signalé sur une carte ; chaque « me demander d'abord » est à activer par vous.",
-        "automationNote": "Ce qui vous attend figure sur une carte indiquant exactement ce qui sera exécuté, et s'exécute quand vous cliquez."
+        "automationNote": "Ce qui vous attend figure sur une carte indiquant exactement ce qui sera exécuté, et s'exécute quand vous cliquez.",
+        "about": "Ce sur quoi codeg s’appuie pour caler l’heure sur vous : votre fuseau horaire, et les horaires qu’il apprend de vos moments dans codeg. Le même pour tous les assistants."
       },
       "prefs": {
         "default": "(par défaut)",
@@ -8072,6 +8074,17 @@
           "hint": "Quand une session confiée par un assistant veut faire valider son plan avant de continuer.",
           "assistant": "L'assistant répond, et me demande en cas de doute",
           "owner": "Toujours me demander"
+        },
+        "time_zone": {
+          "title": "Fuseau horaire",
+          "hint": "Chaque heure que les assistants lisent ou écrivent — rappels, « demain matin », l’heure qu’on leur donne — est dans ce fuseau.",
+          "system": "Suivre le système"
+        },
+        "presence": {
+          "title": "Enregistrer présence et horaires",
+          "hint": "Note les minutes où vous êtes actif dans codeg (gardées 60 jours) pour apprendre quand votre journée commence et finit d’habitude. Désactivé : plus rien n’est noté et vos horaires sont ceux par défaut.",
+          "on": "Activé",
+          "off": "Désactivé"
         }
       },
       "workdir": {
@@ -8156,7 +8169,26 @@
       },
       "targetLoading": "Chargement des réglages de cet assistant…",
       "targetFailed": "Impossible de lire les réglages de cet assistant.",
-      "brain": "Cerveau"
+      "brain": "Cerveau",
+      "about": {
+        "followSystem": "Suivre le système",
+        "followSystemZone": "Suivre le système ({zone})",
+        "zoneSearch": "Rechercher un fuseau",
+        "zoneNoMatch": "Aucun fuseau ne correspond.",
+        "zoneNow": "Il y est {time}.",
+        "hoursTitle": "Vos horaires habituels selon codeg ({days} derniers jours)",
+        "workday": "Jours ouvrés",
+        "restday": "Week-ends",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–{end} le lendemain",
+        "learnedFrom": "{count, plural, one {sur # jour} other {sur # jours}}",
+        "stillLearning": "en cours d’apprentissage — par défaut pour l’instant",
+        "recordOff": "L’enregistrement est désactivé : vos horaires sont ceux par défaut.",
+        "presentNow": "Vous êtes dans codeg en ce moment.",
+        "lastActive": "Dernière activité à {time}.",
+        "notSeen": "Aucune activité dans codeg depuis son démarrage.",
+        "note": "Votre présence en ce moment reste jugée sur le vif — une fenêtre au premier plan et une saisie dans les deux dernières minutes — pour décider quand vous notifier ; elle n’est jamais conservée. « Demain matin » sur un rappel, c’est l’heure où votre journée commence d’habitude."
+      }
     },
     "statusWord": {
       "idle": "Inactif",

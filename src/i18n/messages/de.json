@@ -7967,7 +7967,8 @@
         "executors": "Ausführungskonfigurationen",
         "division": "Arbeitsteilung",
         "communication": "Kommunikation",
-        "automation": "Zuweisung & Automatisierung"
+        "automation": "Zuweisung & Automatisierung",
+        "about": "Über dich"
       },
       "pages": {
         "identity": "Der Name und das Bild, unter denen er auftritt, und der Agent, auf dem er läuft – samt Modus und Berechtigungen: codeg führt ihn so aus, wie du wählst.",
@@ -7980,7 +7981,8 @@
         "communication": "Wie die Assistenten mit dir sprechen. Alle Assistenten folgen derselben Vorgabe.",
         "communicationNote": "Tonfall und Anrede stehen nicht hier: Schreib sie in die SOUL.md jedes Assistenten und in die USER.md des Hauptassistenten.",
         "automation": "Was die Assistenten selbst erledigen und was sie dich vorher fragen. Standardmäßig läuft alles von selbst und wird dir auf einer Karte gemeldet; jedes „Frag mich vorher“ schaltest du selbst ein.",
-        "automationNote": "Was auf dich wartet, landet auf einer Karte mit genau dem, was ausgeführt wird, und läuft, wenn du klickst."
+        "automationNote": "Was auf dich wartet, landet auf einer Karte mit genau dem, was ausgeführt wird, und läuft, wenn du klickst.",
+        "about": "Woran sich codeg hält, um die Zeit für dich richtig zu treffen: deine Zeitzone und die Zeiten, die es daraus lernt, wann du in codeg bist. Für alle Assistenten gleich."
       },
       "prefs": {
         "default": "(Standard)",
@@ -8072,6 +8074,17 @@
           "hint": "Wenn eine Sitzung, die ein Assistent abgegeben hat, ihren Plan freigeben lassen will, bevor sie weitermacht.",
           "assistant": "Der Assistent antwortet und fragt mich, wenn er unsicher ist",
           "owner": "Immer mich fragen"
+        },
+        "time_zone": {
+          "title": "Zeitzone",
+          "hint": "Jede Zeit, die die Assistenten lesen oder schreiben – Erinnerungen, „morgen früh“, die Zeit, die ihnen gesagt wird –, gilt in dieser Zone.",
+          "system": "Wie das System"
+        },
+        "presence": {
+          "title": "Anwesenheit und Zeiten aufzeichnen",
+          "hint": "Notiert die Minuten, in denen du in codeg aktiv bist (60 Tage aufbewahrt), um zu lernen, wann dein Tag meist beginnt und endet. Aus: Es wird nichts mehr notiert, und deine Zeiten sind die Standardwerte.",
+          "on": "An",
+          "off": "Aus"
         }
       },
       "workdir": {
@@ -8156,7 +8169,26 @@
       },
       "targetLoading": "Einstellungen dieses Assistenten werden geladen …",
       "targetFailed": "Die Einstellungen dieses Assistenten konnten nicht gelesen werden.",
-      "brain": "Gehirn"
+      "brain": "Gehirn",
+      "about": {
+        "followSystem": "Wie das System",
+        "followSystemZone": "Wie das System ({zone})",
+        "zoneSearch": "Zeitzonen suchen",
+        "zoneNoMatch": "Keine Zeitzone passt.",
+        "zoneNow": "Dort ist es jetzt {time}.",
+        "hoursTitle": "Deine üblichen Zeiten laut codeg (letzte {days} Tage)",
+        "workday": "Werktage",
+        "restday": "Wochenenden",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–{end} am nächsten Tag",
+        "learnedFrom": "{count, plural, one {aus # Tag} other {aus # Tagen}}",
+        "stillLearning": "lernt noch – vorerst die Standardwerte",
+        "recordOff": "Die Aufzeichnung ist aus: Deine Zeiten sind die Standardwerte.",
+        "presentNow": "Du bist gerade in codeg.",
+        "lastActive": "Zuletzt aktiv um {time}.",
+        "notSeen": "Seit dem Start von codeg nicht aktiv gewesen.",
+        "note": "Ob du gerade da bist, wird weiterhin im Moment beurteilt – ein Fenster mit Fokus und Eingaben in den letzten zwei Minuten –, um zu entscheiden, wann du benachrichtigt wirst; es wird nie gespeichert. „Morgen früh“ bei einer Erinnerung ist, wann dein Tag meist beginnt."
+      }
     },
     "statusWord": {
       "idle": "Bereit",

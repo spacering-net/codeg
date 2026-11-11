@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -16,6 +17,21 @@ import type {
   PersonalAgentSnapshot,
 } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+
+const PROFILE = vi.hoisted(() => ({
+  time_zone: "system",
+  zone: "Asia/Shanghai",
+  system_zone: "Asia/Shanghai",
+  zones: ["Asia/Shanghai", "Asia/Tokyo", "Europe/Berlin"],
+  presence: true,
+  present: true,
+  last_active: "2026-11-11T02:00:00Z",
+  hours: {
+    workday: { start: 570, end: 1110, learned: true, days: 12 },
+    restday: { start: 540, end: 1080, learned: false, days: 0 },
+  },
+  learn_days: 28,
+}))
 
 const api = vi.hoisted(() => ({
   personalAgentSettingsPatch: vi.fn(async () => []),
@@ -29,6 +45,7 @@ const api = vi.hoisted(() => ({
   personalAgentBotCreate: vi.fn(),
   personalAgentBotImpact: vi.fn(),
   personalAgentBotDelete: vi.fn(),
+  personalAgentProfile: vi.fn(async () => PROFILE),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
@@ -75,6 +92,8 @@ const PREFS: PersonalAgentPrefs = {
   retry_rounds: 2,
   exec_questions: "assistant",
   exec_plans: "assistant",
+  time_zone: "system",
+  presence: "on",
 }
 
 function snapshot(
@@ -152,6 +171,7 @@ describe("the settings view", () => {
       "division",
       "communication",
       "automation",
+      "about",
     ]) {
       expect(document.querySelector(`[data-pa-nav="${page}"]`)).not.toBeNull()
     }
@@ -269,6 +289,86 @@ describe("the settings view", () => {
     ).toBeInTheDocument()
     expect(screen.queryByTestId("identity-page")).toBeNull()
     expect(screen.queryByText("This assistant · Worker 2")).toBeNull()
+  })
+
+  it("has the owner's zone and their record of hours on “About you”", async () => {
+    usePersonalAgentUi.getState().openSettings("about")
+    draw()
+    expect(
+      document.querySelector('[data-pa-settings-page="about"]')
+    ).not.toBeNull()
+    const zone = screen.getByLabelText("Time zone") as HTMLInputElement
+    await waitFor(() =>
+      expect(zone.value).toBe("Follow the system (Asia/Shanghai)")
+    )
+    // The hours codeg sees: learned on workdays, the defaults on weekends.
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-pa-hours="workday"]')?.textContent
+      ).toContain("09:30–18:30")
+    )
+    const workday = document.querySelector('[data-pa-hours="workday"]')!
+    expect(workday.textContent).toContain("from 12 days")
+    const restday = document.querySelector('[data-pa-hours="restday"]')!
+    expect(restday.getAttribute("data-learned")).toBe("false")
+    expect(restday.textContent).toContain("still learning")
+    expect(screen.getByText("You are in codeg now.")).toBeInTheDocument()
+    // Nothing to restore at the defaults.
+    expect(
+      screen.getByRole("button", { name: "Restore defaults" })
+    ).toBeDisabled()
+    // Turning the record off saves at once.
+    fireEvent.click(document.querySelector('[data-pa-pref="presence"]')!)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.presence", value: "off" }],
+        null
+      )
+    )
+  })
+
+  it("shows a zone the owner set, and restores the system's", async () => {
+    ctx.snapshot = snapshot({
+      prefs: { ...PREFS, time_zone: "Europe/Berlin", presence: "off" },
+    })
+    usePersonalAgentUi.getState().openSettings("about")
+    draw()
+    const zone = screen.getByLabelText("Time zone") as HTMLInputElement
+    expect(zone.value).toBe("Europe/Berlin")
+    expect(
+      screen.getByText("The record is off: your hours are the defaults.")
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Restore defaults" }))
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [
+          { key: "prefs.time_zone", value: "system" },
+          { key: "prefs.presence", value: "on" },
+        ],
+        null
+      )
+    )
+  })
+
+  it("picks a zone from the list", async () => {
+    usePersonalAgentUi.getState().openSettings("about")
+    draw()
+    const zone = screen.getByLabelText("Time zone") as HTMLInputElement
+    await waitFor(() =>
+      expect(zone.value).toBe("Follow the system (Asia/Shanghai)")
+    )
+    const user = userEvent.setup()
+    await user.clear(zone)
+    await user.type(zone, "Tok")
+    const tokyo = await screen.findByRole("option", { name: "Asia/Tokyo" })
+    expect(screen.queryByRole("option", { name: "Europe/Berlin" })).toBeNull()
+    await user.click(tokyo)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.time_zone", value: "Asia/Tokyo" }],
+        null
+      )
+    )
   })
 
   it("goes back to the conversation", () => {

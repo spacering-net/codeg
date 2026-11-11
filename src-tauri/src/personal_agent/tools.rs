@@ -388,7 +388,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 }
             };
             let items = svc::list_items(&db.conn, bot, &statuses, 100).await.unwrap_or_default();
-            let tz = engine.owner_tz();
+            let tz = engine.owner_tz().await;
             let now = super::clock::now();
             let mut rows = Vec::new();
             let mut lines = Vec::new();
@@ -465,7 +465,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             if let Some(on_done) = &item.on_done {
                 text.push_str(&format!("\nwhen done: {on_done}"));
             }
-            let tz = engine.owner_tz();
+            let tz = engine.owner_tz().await;
             let now = super::clock::now();
             if let Some(t) = reminders::time_words(&item, tz, now) {
                 text.push_str(&format!(
@@ -546,14 +546,14 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             };
             let summary = string(&args, "summary").map(|s| s.chars().take(500).collect::<String>());
             let on_done = string(&args, "on_done").map(|s| s.chars().take(2_000).collect::<String>());
-            let tz = engine.owner_tz();
+            let (tz, mornings) = engine.owner_day().await;
             let now = super::clock::now();
             match int(&args, "item_id").and_then(as_i32) {
                 Some(id) => {
                     let Ok(Some(item)) = svc::get_item_of(&db.conn, bot, id).await else {
                         return ToolOutcome::refused(format!("item #{id} does not exist"));
                     };
-                    let mut time = match reminders::time_from_args(&args, Some(&item), tz, now) {
+                    let mut time = match reminders::time_from_args(&args, Some(&item), tz, now, mornings) {
                         Ok(t) => t,
                         Err(e) => return ToolOutcome::refused(e),
                     };
@@ -626,7 +626,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     let Some(summary) = summary else {
                         return ToolOutcome::refused("a new item needs `summary`");
                     };
-                    let time = match reminders::time_from_args(&args, None, tz, now) {
+                    let time = match reminders::time_from_args(&args, None, tz, now, mornings) {
                         Ok(t) => t.filter(|t| t.due_at.is_some()).unwrap_or_default(),
                         Err(e) => return ToolOutcome::refused(e),
                     };

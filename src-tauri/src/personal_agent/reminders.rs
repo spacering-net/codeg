@@ -21,6 +21,12 @@
 //! on a repeating matter is done for this time: the next is set. On the
 //! reminder card, [Hand to the assistant] is the owner's message quoting
 //! it.
+//!
+//! **The owner's zone** is their preference (`system` follows the
+//! system's). When it changes — they set another, or the laptop they
+//! follow travels — a repeating matter's next time moves to keep its
+//! wall-clock time in the new zone (1.12), unless it was put off to a
+//! moment of its own; a one-off is a moment and stays.
 
 use std::sync::Arc;
 
@@ -29,7 +35,7 @@ use chrono_tz::Tz;
 use serde_json::{json, Value};
 
 use super::clock;
-use super::due::{self, ActSpec, AtDue, Repeat};
+use super::due::{self, ActSpec, AtDue, Mornings, Repeat};
 use super::engine::PersonalAgentEngine;
 use crate::db::entities::personal_agent_item::{
     self as item_entity, ItemKind, ItemStatus, WaitsFor,
@@ -71,6 +77,7 @@ impl ItemOp {
         until: Option<&str>,
         tz: Tz,
         now: DateTime<Utc>,
+        mornings: Mornings,
     ) -> Result<Self, String> {
         match (act, until.map(str::trim).filter(|u| !u.is_empty())) {
             ("done", _) => Ok(ItemOp::Done),
@@ -80,7 +87,7 @@ impl ItemOp {
                 if u.chars().count() > 64 {
                     return Err("`until` is too long".into());
                 }
-                let t = due::parse_when(u, tz, now)?;
+                let t = due::parse_when(u, tz, now, mornings)?;
                 due::check_due(t, tz, now)?;
                 Ok(ItemOp::Snooze(t))
             }
@@ -132,12 +139,25 @@ pub fn next_times(time: &ItemTime, tz: Tz, now: DateTime<Utc>) -> Vec<String> {
     out
 }
 
+/// A repeat rule as stored, its next time now set in `tz` (1.12): the
+/// rule's own, or a `moment` of its own.
+fn placed(repeat: Option<&str>, tz: Tz, moment: bool) -> Option<String> {
+    let rule = Repeat::parse(repeat)?.placed(tz, moment);
+    serde_json::to_string(&rule).ok()
+}
+
 /// A repeating matter's time after it is done once: its next. `None` for
 /// one that does not repeat, or whose rule has ended — it is done.
 pub fn after_done(item: &item_entity::Model, tz: Tz, now: DateTime<Utc>) -> Option<ItemTime> {
     let rule = Repeat::parse(item.repeat.as_deref())?;
     let next = due::next_after(&rule, tz, item.due_at?.max(now))?;
-    Some(ItemTime::of(item).at(next))
+    Some(
+        ItemTime {
+            repeat: placed(item.repeat.as_deref(), tz, false),
+            ..ItemTime::of(item)
+        }
+        .at(next),
+    )
 }
 
 /// A matter's time as `item_update`'s arguments set it (`due`, `repeat`,
@@ -150,6 +170,7 @@ pub fn time_from_args(
     item: Option<&item_entity::Model>,
     tz: Tz,
     now: DateTime<Utc>,
+    mornings: Mornings,
 ) -> Result<Option<ItemTime>, String> {
     let given = |k: &str| args.get(k).filter(|v| !v.is_null());
     let clear = given("clear_due").and_then(Value::as_bool).unwrap_or(false);
@@ -194,7 +215,7 @@ pub fn time_from_args(
     };
     let new_due = match due_arg {
         Some(s) => {
-            let t = due::parse_when(s, tz, now)?;
+            let t = due::parse_when(s, tz, now, mornings)?;
             due::check_due(t, tz, now)?;
             Some(t)
         }
@@ -207,9 +228,13 @@ pub fn time_from_args(
     let repeat = match repeat_arg {
         Some(Value::String(s)) if s == "none" => None,
         Some(v) if v.get("every").and_then(Value::as_str) == Some("none") => None,
-        Some(v) => {
-            Some(serde_json::to_string(&due::parse_repeat(v, first)?).map_err(|e| e.to_string())?)
-        }
+        // A rule from its first time: that time is the rule's.
+        Some(v) => Some(
+            serde_json::to_string(&due::parse_repeat(v, first)?.placed(tz, false))
+                .map_err(|e| e.to_string())?,
+        ),
+        // The next time alone, moved: a moment of its own.
+        None if new_due.is_some() => item.and_then(|i| placed(i.repeat.as_deref(), tz, true)),
         None => item.and_then(|i| i.repeat.clone()),
     };
     let act_spec = match spec_arg {
@@ -235,8 +260,32 @@ fn quoted(summary: &str) -> String {
 
 impl PersonalAgentEngine {
     /// The owner's zone, for every time an assistant reads or writes.
-    pub(super) fn owner_tz(&self) -> Tz {
-        clock::owner_tz()
+    pub(super) async fn owner_tz(&self) -> Tz {
+        clock::zone_of(&self.prefs().await.time_zone)
+    }
+
+    /// The owner's zone, and when their day starts ("tomorrow morning").
+    pub(super) async fn owner_day(&self) -> (Tz, Mornings) {
+        let prefs = self.prefs().await;
+        let tz = clock::zone_of(&prefs.time_zone);
+        let hours = super::presence::hours(&self.db.conn, &prefs, clock::now()).await;
+        (tz, hours.mornings())
+    }
+
+    /// The `<codeg-now>` line of a turn: now, the owner (whether they are
+    /// in codeg, their usual hours), their last message before
+    /// `before_row` (all of them, `None`), and what started it.
+    pub(super) async fn now_line(&self, before_row: Option<i32>, started_by: &str) -> String {
+        let prefs = self.prefs().await;
+        let tz = clock::zone_of(&prefs.time_zone);
+        let now = clock::now();
+        let hours = super::presence::hours(&self.db.conn, &prefs, now).await;
+        let about = super::presence::about_owner(&super::presence::now_state(), &hours, tz, now);
+        let last = svc::last_owner_message_before(&self.db.conn, self.bot().await, before_row)
+            .await
+            .ok()
+            .flatten();
+        due::now_line(now, tz, &about, last, started_by)
     }
 
     /// The clock's look at this assistant's matters (`DUE_TICK`).
@@ -251,10 +300,15 @@ impl PersonalAgentEngine {
         if bot <= 0 {
             return;
         }
+        let tz = self.owner_tz().await;
+        let was = {
+            let mut zone = self.clock_zone.lock().unwrap_or_else(|e| e.into_inner());
+            zone.replace(tz)
+        };
+        self.follow_zone(bot, was, tz, now).await;
         let Ok(items) = svc::due_items(&self.db.conn, bot, now).await else {
             return;
         };
-        let tz = self.owner_tz();
         let mut woke = false;
         for item in items {
             match self.fire_one(&item, tz, now).await {
@@ -265,6 +319,70 @@ impl PersonalAgentEngine {
         }
         if woke {
             self.nudge();
+        }
+    }
+
+    /// Each repeating matter waiting for its next time in a zone that is no
+    /// longer the owner's (`tz`) keeps its wall-clock time in theirs: the
+    /// zone its time was set in is on its rule — or, for one set before
+    /// rules kept it, `was`, the zone this engine last saw. One whose next
+    /// time is a moment of its own (put off, moved) keeps it — so does one
+    /// set before rules kept that, whose time is not the rule's clock time;
+    /// one whose time in the new zone has gone by today takes its next.
+    /// Either way its rule then names the owner's zone.
+    async fn follow_zone(&self, bot: i32, was: Option<Tz>, tz: Tz, now: DateTime<Utc>) {
+        let Ok(items) = svc::repeating_items(&self.db.conn, bot, now).await else {
+            return;
+        };
+        for item in items {
+            let (Some(due_at), Some(rule)) = (item.due_at, Repeat::parse(item.repeat.as_deref()))
+            else {
+                continue;
+            };
+            let set_in = match rule.zone.as_deref() {
+                Some(z) if z == tz.name() => continue,
+                Some(z) => z.parse::<Tz>().ok(),
+                None => was,
+            };
+            let mut time = ItemTime {
+                repeat: placed(item.repeat.as_deref(), tz, rule.moment),
+                ..ItemTime::of(&item)
+            };
+            let local = set_in
+                .filter(|_| !rule.moment)
+                .map(|z| due_at.with_timezone(&z).naive_local());
+            if let Some(local) = local.filter(|l| l.time() == rule.time()) {
+                let mut to = due::local_at(tz, local.date().and_time(rule.time()));
+                if to <= now {
+                    to = due::next_after(&rule, tz, now).unwrap_or(due_at);
+                }
+                if to != due_at {
+                    time = time.at(to);
+                }
+            }
+            let moved = time.fresh;
+            let write = ItemWrite {
+                time: Some(time),
+                ..Default::default()
+            };
+            match svc::update_item_with(
+                &self.db.conn,
+                bot,
+                item.id,
+                write,
+                Some(Some(due_at)),
+                None,
+                None,
+            )
+            .await
+            {
+                Ok(Some((m, _))) if moved => self.emit_item(m.id),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    "[personal_agent] matter #{} kept its time in the old zone: {e}",
+                    item.id
+                ),
+            }
         }
     }
 
@@ -580,7 +698,7 @@ impl PersonalAgentEngine {
         if matches!(item.status, ItemStatus::Done | ItemStatus::Dropped) {
             return Err(format!("matter #{item_id} is already settled"));
         }
-        let tz = self.owner_tz();
+        let tz = self.owner_tz().await;
         let now = clock::now();
         let name = quoted(&item.summary);
         let (write, card, until, note) = match &op {
@@ -644,6 +762,9 @@ impl PersonalAgentEngine {
                     time: Some(
                         ItemTime {
                             at_due: Some(item.at_due.clone().unwrap_or_else(|| "notify".into())),
+                            // A moment of its own: a change of zone leaves it.
+                            repeat: placed(item.repeat.as_deref(), tz, true)
+                                .or_else(|| item.repeat.clone()),
                             ..ItemTime::of(&item)
                         }
                         .at(*t),
@@ -683,7 +804,7 @@ impl PersonalAgentEngine {
             .and_then(|p| p.get("item_id").and_then(Value::as_i64))
             .and_then(|id| i32::try_from(id).ok())
             .ok_or("the card names no matter")?;
-        let tz = self.owner_tz();
+        let (tz, mornings) = self.owner_day().await;
         let now = clock::now();
         let op =
             match action {
@@ -693,6 +814,7 @@ impl PersonalAgentEngine {
                     action.strip_prefix("snooze:"),
                     tz,
                     now,
+                    mornings,
                 )?),
                 "hand_over" => None,
                 _ => return Err(

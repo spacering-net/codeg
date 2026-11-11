@@ -7967,7 +7967,8 @@
         "executors": "Configurações de execução",
         "division": "Divisão do trabalho",
         "communication": "Comunicação",
-        "automation": "Atribuição e automação"
+        "automation": "Atribuição e automação",
+        "about": "Sobre você"
       },
       "pages": {
         "identity": "O nome e a imagem com que ele se apresenta, e o agente em que roda, incluindo modo e permissões: o codeg o executa como você escolher.",
@@ -7980,7 +7981,8 @@
         "communication": "Como os assistentes falam com você. Todos seguem o mesmo.",
         "communicationNote": "O tom e como chamam você não ficam aqui: escreva isso no SOUL.md de cada assistente e no USER.md do principal.",
         "automation": "O que os assistentes fazem sozinhos e o que perguntam a você antes. Por padrão, tudo roda sozinho e avisa você em um cartão; cada “perguntar antes” é você quem ativa.",
-        "automationNote": "O que espera por você vai para um cartão com exatamente o que será executado, e roda quando você clica."
+        "automationNote": "O que espera por você vai para um cartão com exatamente o que será executado, e roda quando você clica.",
+        "about": "O que o codeg usa para acertar o horário para você: seu fuso horário e os horários que ele aprende de quando você está no codeg. O mesmo para todos os assistentes."
       },
       "prefs": {
         "default": "(padrão)",
@@ -8072,6 +8074,17 @@
           "hint": "Quando uma sessão que um assistente delegou quer o plano aprovado antes de continuar.",
           "assistant": "O assistente responde e me pergunta quando estiver em dúvida",
           "owner": "Sempre me perguntar"
+        },
+        "time_zone": {
+          "title": "Fuso horário",
+          "hint": "Todo horário que os assistentes leem ou escrevem — lembretes, “amanhã de manhã”, a hora que lhes é dita — está neste fuso.",
+          "system": "Seguir o sistema"
+        },
+        "presence": {
+          "title": "Registrar presença e horários",
+          "hint": "Anota os minutos em que você está ativo no codeg (guardados por 60 dias) para aprender quando seu dia costuma começar e terminar. Desligado: nada mais é anotado e seus horários são os padrão.",
+          "on": "Ligado",
+          "off": "Desligado"
         }
       },
       "workdir": {
@@ -8156,7 +8169,26 @@
       },
       "targetLoading": "Carregando as configurações deste assistente…",
       "targetFailed": "Não foi possível ler as configurações deste assistente.",
-      "brain": "Cérebro"
+      "brain": "Cérebro",
+      "about": {
+        "followSystem": "Seguir o sistema",
+        "followSystemZone": "Seguir o sistema ({zone})",
+        "zoneSearch": "Buscar fusos horários",
+        "zoneNoMatch": "Nenhum fuso horário corresponde.",
+        "zoneNow": "Lá agora são {time}.",
+        "hoursTitle": "Seus horários habituais segundo o codeg (últimos {days} dias)",
+        "workday": "Dias úteis",
+        "restday": "Fins de semana",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–{end} do dia seguinte",
+        "learnedFrom": "{count, plural, one {de # dia} other {de # dias}}",
+        "stillLearning": "ainda aprendendo — por enquanto, os padrão",
+        "recordOff": "O registro está desligado: seus horários são os padrão.",
+        "presentNow": "Você está no codeg agora.",
+        "lastActive": "Última atividade às {time}.",
+        "notSeen": "Sem atividade no codeg desde que ele iniciou.",
+        "note": "Se você está aqui agora continua sendo avaliado na hora — uma janela em foco e atividade nos últimos dois minutos — para decidir quando notificar você; isso nunca é guardado. “Amanhã de manhã” num lembrete é quando seu dia costuma começar."
+      }
     },
     "statusWord": {
       "idle": "Ocioso",

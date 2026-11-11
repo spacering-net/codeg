@@ -329,6 +329,19 @@ pub async fn personal_agent_item_act(
     ))
 }
 
+pub async fn personal_agent_presence(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(beat): Json<crate::personal_agent::presence::Beat>,
+) -> Result<Json<crate::personal_agent::presence::Presence>, AppCommandError> {
+    Ok(Json(pa::personal_agent_presence_core(&state.db, beat).await))
+}
+
+pub async fn personal_agent_profile(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<crate::personal_agent::presence::ProfileView>, AppCommandError> {
+    Ok(Json(pa::personal_agent_profile_core(&state.db).await))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DispatchStopParams {

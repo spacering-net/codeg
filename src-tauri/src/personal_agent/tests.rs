@@ -3883,7 +3883,7 @@ async fn a_message_folds_into_a_turn_carrying_an_earlier_one_when_the_agent_take
     let (now_line, said) = text.split_once("\n\n").unwrap();
     assert!(now_line.starts_with("<codeg-now>") && now_line.ends_with("</codeg-now>"), "{text}");
     assert!(now_line.contains("this turn: the owner's message, sent while your turn ran"), "{text}");
-    let first_at = first.created_at.with_timezone(&engine.owner_tz()).format("%H:%M").to_string();
+    let first_at = first.created_at.with_timezone(&engine.owner_tz().await).format("%H:%M").to_string();
     assert!(
         now_line.contains("the owner's last message before this turn: ") && now_line.contains(&first_at),
         "{text}"
@@ -7939,8 +7939,8 @@ async fn a_secret_answer_to_the_brains_question_is_not_kept() {
 // ── 1.11: time ──────────────────────────────────────────────────────────────
 
 /// `YYYY-MM-DD HH:MM` in the owner's zone, `days` from today.
-fn local_day(engine: &PersonalAgentEngine, days: i64, hm: &str) -> (String, chrono::DateTime<chrono::Utc>) {
-    let tz = engine.owner_tz();
+async fn local_day(engine: &PersonalAgentEngine, days: i64, hm: &str) -> (String, chrono::DateTime<chrono::Utc>) {
+    let tz = engine.owner_tz().await;
     let date = super::clock::now().with_timezone(&tz).date_naive() + chrono::Duration::days(days);
     let text = format!("{date} {hm}");
     let at = super::due::local_at(tz, chrono::NaiveDateTime::parse_from_str(&text, "%Y-%m-%d %H:%M").unwrap());
@@ -7973,8 +7973,8 @@ fn notice_of_row(row: &crate::db::entities::personal_agent_timeline::Model) -> i
 #[tokio::test]
 async fn a_matter_with_a_time_answers_its_time_and_weekday_in_the_owners_zone() {
     let (engine, _tmp) = configured().await;
-    let tz = engine.owner_tz();
-    let (due, at) = local_day(&engine, 1, "15:00");
+    let tz = engine.owner_tz().await;
+    let (due, at) = local_day(&engine, 1, "15:00").await;
     let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Call the bank", "due": due })).await;
     assert!(out.ok, "{}", out.text);
     let now = super::clock::now();
@@ -7989,7 +7989,7 @@ async fn a_matter_with_a_time_answers_its_time_and_weekday_in_the_owners_zone() 
     assert_eq!(item.fired_at, None);
 
     // Not in the past, not past a year, and a rule needs a first time.
-    let (past, _) = local_day(&engine, -1, "09:00");
+    let (past, _) = local_day(&engine, -1, "09:00").await;
     let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "x", "due": past })).await;
     assert!(!out.ok && out.text.contains("in the past"), "{}", out.text);
     let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "x", "due": "400d" })).await;
@@ -7999,7 +7999,7 @@ async fn a_matter_with_a_time_answers_its_time_and_weekday_in_the_owners_zone() 
 
     // A repeating one lists its next times; an act_spec makes it the
     // assistant's to do.
-    let (due, _) = local_day(&engine, 1, "09:30");
+    let (due, _) = local_day(&engine, 1, "09:30").await;
     let out = call(
         &engine,
         "item_update",
@@ -8017,7 +8017,7 @@ async fn a_matter_with_a_time_answers_its_time_and_weekday_in_the_owners_zone() 
 
     // A new due alone moves the next time, the rule stays; clear_due takes
     // the time away.
-    let (due2, at2) = local_day(&engine, 2, "11:00");
+    let (due2, at2) = local_day(&engine, 2, "11:00").await;
     let out = call(&engine, "item_update", json!({ "item_id": rid, "due": due2 })).await;
     assert!(out.ok, "{}", out.text);
     let r = svc::get_item(&engine.db.conn, rid).await.unwrap().unwrap();
@@ -8108,9 +8108,9 @@ async fn a_due_reminder_shows_its_card_once_and_the_assistant_hears_of_it() {
 async fn a_missed_reminder_comes_once_late_and_a_repeating_one_goes_on_from_its_latest_time() {
     let (engine, _tmp) = configured().await;
     let bot = engine.bot().await;
-    let tz = engine.owner_tz();
+    let tz = engine.owner_tz().await;
     // Due at 09:00 three days ago, every day; codeg was not running since.
-    let (first_text, first) = local_day(&engine, -3, "09:00");
+    let (first_text, first) = local_day(&engine, -3, "09:00").await;
     let rule = super::due::parse_repeat(
         &json!({ "every": "daily" }),
         chrono::NaiveDateTime::parse_from_str(&first_text, "%Y-%m-%d %H:%M").unwrap(),
@@ -8135,7 +8135,7 @@ async fn a_missed_reminder_comes_once_late_and_a_repeating_one_goes_on_from_its_
     )
     .await
     .unwrap();
-    let (_, today_nine) = local_day(&engine, 0, "09:00");
+    let (_, today_nine) = local_day(&engine, 0, "09:00").await;
     let back = today_nine + chrono::Duration::hours(1);
     engine.fire_due_at(back).await;
     let rows = reminder_rows(&engine, item.id).await;
@@ -8151,7 +8151,7 @@ async fn a_missed_reminder_comes_once_late_and_a_repeating_one_goes_on_from_its_
 
     // Tomorrow's time comes with today's card still open: a new card, the
     // old one expired.
-    let (_, tomorrow_nine) = local_day(&engine, 1, "09:00");
+    let (_, tomorrow_nine) = local_day(&engine, 1, "09:00").await;
     engine.fire_due_at(tomorrow_nine + chrono::Duration::seconds(5)).await;
     let rows = reminder_rows(&engine, item.id).await;
     assert_eq!(rows.len(), 2);
@@ -8215,7 +8215,7 @@ async fn a_matter_the_assistant_is_to_do_wakes_it_with_what_to_do() {
 #[tokio::test]
 async fn every_delivery_starts_with_the_owners_time_now() {
     let (engine, _tmp) = configured().await;
-    let tz = engine.owner_tz();
+    let tz = engine.owner_tz().await;
     let seg = open_segment(&engine).await;
     let (mut rx, _state) = live_connection(&engine, seg, "pa-now").await;
     engine.send_owner_message("hi".into(), Vec::new(), None).await.unwrap();
@@ -8238,7 +8238,7 @@ async fn every_delivery_starts_with_the_owners_time_now() {
     engine.send_owner_message("again".into(), Vec::new(), None).await.unwrap();
     engine.pump().await;
     let (prompt, _) = take_prompt(&mut rx);
-    let at = earlier.created_at.with_timezone(&engine.owner_tz()).format("%H:%M").to_string();
+    let at = earlier.created_at.with_timezone(&engine.owner_tz().await).format("%H:%M").to_string();
     let line = prompt.lines().next().unwrap();
     assert!(!line.contains("none yet") && line.contains(&at), "{line}");
 }
@@ -8246,7 +8246,7 @@ async fn every_delivery_starts_with_the_owners_time_now() {
 #[tokio::test]
 async fn the_owner_puts_a_matter_off_or_aside_without_the_brain() {
     let (engine, _tmp) = configured().await;
-    let tz = engine.owner_tz();
+    let tz = engine.owner_tz().await;
     let bot = engine.bot().await;
     let f = svc::create_item(&engine.db.conn, bot, ItemKind::Followup, None, ItemStatus::Open, None, "Reply to Ana".into(), None, None)
         .await
@@ -8304,7 +8304,7 @@ async fn handing_a_reminder_to_the_assistant_is_the_owners_message_quoting_it() 
 #[tokio::test]
 async fn a_change_read_before_a_firing_does_not_undo_it() {
     let (engine, _tmp) = configured().await;
-    let tz = engine.owner_tz();
+    let tz = engine.owner_tz().await;
     let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Pay rent", "due": "1m" })).await;
     let id = out.data["item_id"].as_i64().unwrap() as i32;
     // The brain's update read the matter before the clock fired it ...
@@ -8318,6 +8318,7 @@ async fn a_change_read_before_a_firing_does_not_undo_it() {
         Some(&stale),
         tz,
         super::clock::now(),
+        super::due::Mornings::default(),
     )
     .unwrap();
     svc::update_item(&engine.db.conn, id, svc::ItemWrite { time, ..Default::default() }).await.unwrap();
@@ -8406,7 +8407,7 @@ async fn a_reminder_card_whose_matter_moved_on_closes_as_it_stands() {
 
 /// A daily matter due yesterday at 09:00, not fired yet.
 async fn daily_since_yesterday(engine: &PersonalAgentEngine, summary: &str) -> crate::db::entities::personal_agent_item::Model {
-    let (text, first) = local_day(engine, -1, "09:00");
+    let (text, first) = local_day(engine, -1, "09:00").await;
     let rule = super::due::parse_repeat(
         &json!({ "every": "daily" }),
         chrono::NaiveDateTime::parse_from_str(&text, "%Y-%m-%d %H:%M").unwrap(),
@@ -8437,12 +8438,12 @@ async fn daily_since_yesterday(engine: &PersonalAgentEngine, summary: &str) -> c
 #[tokio::test]
 async fn a_time_worked_out_before_the_clock_moved_it_does_not_land() {
     let (engine, _tmp) = configured().await;
-    let tz = engine.owner_tz();
+    let tz = engine.owner_tz().await;
     let item = daily_since_yesterday(&engine, "Log the weight").await;
     // Read by the brain's update and the owner's [Done] ...
     let stale = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
     // ... then the clock catches up to today's time.
-    let (_, today) = local_day(&engine, 0, "09:00");
+    let (_, today) = local_day(&engine, 0, "09:00").await;
     let at = today + chrono::Duration::hours(1);
     engine.fire_due_at(at).await;
     let fired = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
@@ -8453,6 +8454,7 @@ async fn a_time_worked_out_before_the_clock_moved_it_does_not_land() {
         Some(&stale),
         tz,
         super::clock::now(),
+        super::due::Mornings::default(),
     )
     .unwrap();
     let err = engine
@@ -8477,9 +8479,9 @@ async fn a_time_worked_out_before_the_clock_moved_it_does_not_land() {
 #[tokio::test]
 async fn done_on_a_repeating_reminder_moves_it_once_together_with_its_card() {
     let (engine, _tmp) = configured().await;
-    let tz = engine.owner_tz();
+    let tz = engine.owner_tz().await;
     let item = daily_since_yesterday(&engine, "Water the fern").await;
-    let (_, today) = local_day(&engine, 0, "09:00");
+    let (_, today) = local_day(&engine, 0, "09:00").await;
     engine.fire_due_at(today + chrono::Duration::minutes(1)).await;
     let card = reminder_rows(&engine, item.id).await.remove(0);
     let notice = notice_of_row(&card);
@@ -8489,7 +8491,7 @@ async fn done_on_a_repeating_reminder_moves_it_once_together_with_its_card() {
     let next = after.due_at.unwrap();
     assert_eq!(after.status, ItemStatus::Open);
     // Today's 09:00 was done: tomorrow's, whatever the time now.
-    assert_eq!(next, local_day(&engine, 1, "09:00").1);
+    assert_eq!(next, local_day(&engine, 1, "09:00").await.1);
     assert_eq!(next.with_timezone(&tz).format("%H:%M").to_string(), "09:00");
     // The card closed with the change: a second press moves nothing.
     assert!(engine.act_on_notice(notice, "done").await.is_err());
@@ -8500,4 +8502,273 @@ async fn done_on_a_repeating_reminder_moves_it_once_together_with_its_card() {
         item_notes(&engine).await.iter().filter(|n| n.summary.contains("done for this time")).count(),
         1
     );
+}
+
+// ── 1.12: presence and the owner's hours ───────────────────────────────────
+
+async fn set_pref(engine: &Arc<PersonalAgentEngine>, key: &str, value: serde_json::Value) {
+    engine.apply_settings(&[change(&format!("prefs.{key}"), value)]).await.unwrap();
+}
+
+/// A record of the owner active `from`–`to` (`HH:MM`) on every one of the
+/// `days` days before the hours' today: workdays at `work`, rest days at
+/// `rest`.
+async fn seed_hours(engine: &PersonalAgentEngine, days: i64, work: (u32, u32), rest: (u32, u32)) {
+    let tz = engine.owner_tz().await;
+    let today = super::presence::hours_day(super::clock::now(), tz);
+    for back in 1..=days {
+        let date = today - chrono::Duration::days(back);
+        let (from, to) = if super::due::is_rest_day(date) { rest } else { work };
+        for slot in from / 5..to / 5 {
+            for _ in 0..5 {
+                crate::db::service::personal_agent_activity_service::add_minute(
+                    &engine.db.conn,
+                    date,
+                    slot,
+                    super::clock::now(),
+                )
+                .await
+                .unwrap();
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_owners_zone_is_theirs_to_set_and_every_time_follows_it() {
+    let (engine, _tmp) = configured().await;
+    assert_eq!(engine.owner_tz().await, super::clock::system_tz(), "the system's to begin with");
+    set_pref(&engine, "time_zone", json!("Pacific/Auckland")).await;
+    let tz = engine.owner_tz().await;
+    assert_eq!(tz.name(), "Pacific/Auckland");
+    let line = engine.now_line(None, "the owner's message").await;
+    assert!(line.contains("(Pacific/Auckland, UTC+"), "{line}");
+    // A time written in the owner's hours is read in their zone.
+    let (due, at) = local_day(&engine, 1, "15:00").await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Call", "due": due })).await;
+    assert!(out.ok && out.text.contains("Pacific/Auckland"), "{}", out.text);
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    assert_eq!(svc::get_item(&engine.db.conn, id).await.unwrap().unwrap().due_at, Some(at));
+    // The brain is told, with the preferences.
+    let block = crate::models::personal_agent_prefs::prefs_block(&engine.prefs().await, false);
+    assert!(block.contains("the owner's time zone: Pacific/Auckland"), "{block}");
+    // A zone codeg does not know is refused; `system` goes back.
+    assert!(engine.apply_settings(&[change("prefs.time_zone", json!("Mars/Base"))]).await.is_err());
+    set_pref(&engine, "time_zone", json!("system")).await;
+    assert_eq!(engine.owner_tz().await, super::clock::system_tz());
+}
+
+#[tokio::test]
+async fn a_new_zone_moves_a_repeating_matter_to_its_clock_time_there() {
+    let (engine, _tmp) = configured().await;
+    set_pref(&engine, "time_zone", json!("Asia/Shanghai")).await;
+    // The clock's first look takes the zone as it is.
+    engine.fire_due_at(super::clock::now()).await;
+    let (first, _) = local_day(&engine, 2, "09:00").await;
+    let daily = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "reminder", "summary": "Stand-up", "due": first, "repeat": { "every": "daily" } }),
+    )
+    .await;
+    assert!(daily.ok, "{}", daily.text);
+    let daily = daily.data["item_id"].as_i64().unwrap() as i32;
+    let (put_off, _) = local_day(&engine, 2, "10:15").await;
+    let snoozed = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "reminder", "summary": "Water", "due": first, "repeat": { "every": "daily" } }),
+    )
+    .await;
+    let snoozed = snoozed.data["item_id"].as_i64().unwrap() as i32;
+    let out = call(&engine, "item_update", json!({ "item_id": snoozed, "due": put_off })).await;
+    assert!(out.ok, "{}", out.text);
+    let once = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Dentist", "due": first })).await;
+    let once = once.data["item_id"].as_i64().unwrap() as i32;
+    // The owner puts a daily 09:00 one off to tomorrow morning — 09:00
+    // too, by the clock: still a moment of their own.
+    let pills = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "reminder", "summary": "Pills", "due": first, "repeat": { "every": "daily" } }),
+    )
+    .await;
+    let pills = pills.data["item_id"].as_i64().unwrap() as i32;
+    engine.settle_item(pills, "snooze", Some("tomorrow")).await.unwrap();
+    let before = |id| {
+        let engine = engine.clone();
+        async move { svc::get_item(&engine.db.conn, id).await.unwrap().unwrap().due_at.unwrap() }
+    };
+    let sh: chrono_tz::Tz = "Asia/Shanghai".parse().unwrap();
+    assert_eq!(before(pills).await.with_timezone(&sh).format("%H:%M").to_string(), "09:00");
+    let (snoozed_at, once_at, pills_at) = (before(snoozed).await, before(once).await, before(pills).await);
+
+    let rule = super::due::Repeat::parse(
+        svc::get_item(&engine.db.conn, daily).await.unwrap().unwrap().repeat.as_deref(),
+    )
+    .unwrap();
+    assert_eq!(rule.zone.as_deref(), Some("Asia/Shanghai"), "the rule keeps the zone its time was set in");
+
+    // codeg restarts — the engine has not seen a zone — and the owner's is
+    // another: the rule's own zone tells.
+    *engine.clock_zone.lock().unwrap() = None;
+    set_pref(&engine, "time_zone", json!("Europe/Berlin")).await;
+    engine.fire_due_at(super::clock::now()).await;
+    let berlin: chrono_tz::Tz = "Europe/Berlin".parse().unwrap();
+    let moved = before(daily).await;
+    assert_eq!(moved.with_timezone(&berlin).format("%H:%M").to_string(), "09:00", "its clock time in the new zone");
+    assert!(moved > super::clock::now());
+    assert_eq!(before(snoozed).await, snoozed_at, "put off to a moment of its own: it keeps it");
+    assert_eq!(before(once).await, once_at, "a one-off is a moment");
+    assert_eq!(before(pills).await, pills_at, "put off by the owner, on the rule's clock time or not");
+    // Once only: the next look leaves it be.
+    engine.fire_due_at(super::clock::now()).await;
+    assert_eq!(before(daily).await, moved);
+    let rule = super::due::Repeat::parse(
+        svc::get_item(&engine.db.conn, daily).await.unwrap().unwrap().repeat.as_deref(),
+    )
+    .unwrap();
+    assert_eq!(rule.zone.as_deref(), Some("Europe/Berlin"));
+    let rule = super::due::Repeat::parse(
+        svc::get_item(&engine.db.conn, snoozed).await.unwrap().unwrap().repeat.as_deref(),
+    )
+    .unwrap();
+    assert_eq!(rule.zone.as_deref(), Some("Europe/Berlin"), "the one put off is in the new zone from now on");
+
+    // A rule from before rules kept their zone takes the zone the clock
+    // last saw.
+    let (first, _) = local_day(&engine, 3, "07:30").await;
+    let legacy = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "reminder", "summary": "Legacy", "due": first, "repeat": { "every": "daily" } }),
+    )
+    .await;
+    let legacy = legacy.data["item_id"].as_i64().unwrap() as i32;
+    let mut rule = super::due::Repeat::parse(
+        svc::get_item(&engine.db.conn, legacy).await.unwrap().unwrap().repeat.as_deref(),
+    )
+    .unwrap();
+    rule.zone = None;
+    let item = svc::get_item(&engine.db.conn, legacy).await.unwrap().unwrap();
+    svc::update_item(
+        &engine.db.conn,
+        legacy,
+        svc::ItemWrite {
+            time: Some(svc::ItemTime { repeat: Some(serde_json::to_string(&rule).unwrap()), ..svc::ItemTime::of(&item) }),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    set_pref(&engine, "time_zone", json!("Asia/Tokyo")).await;
+    engine.fire_due_at(super::clock::now()).await;
+    let tokyo: chrono_tz::Tz = "Asia/Tokyo".parse().unwrap();
+    assert_eq!(before(legacy).await.with_timezone(&tokyo).format("%H:%M").to_string(), "07:30");
+}
+
+#[tokio::test]
+async fn the_owner_present_and_their_hours_reach_the_brain() {
+    let (engine, _tmp) = configured().await;
+    let window = format!("test-{}", uuid::Uuid::new_v4());
+    let state = super::presence::beat(
+        &engine.db.conn,
+        super::presence::Beat { window: window.clone(), focused: true, idle_ms: Some(0) },
+    )
+    .await;
+    assert!(state.present);
+    let line = engine.now_line(None, "the owner's message").await;
+    assert!(line.contains(" · the owner is in codeg now · "), "{line}");
+    assert!(!line.contains("usual hours"), "not learned yet: {line}");
+
+    // Learned: the line has today's hours, and tomorrow morning is when
+    // the owner's day starts.
+    seed_hours(&engine, 14, (10 * 60 + 30, 19 * 60), (11 * 60, 17 * 60)).await;
+    let tz = engine.owner_tz().await;
+    let now = super::clock::now();
+    let today = super::presence::hours_day(now, tz);
+    let line = engine.now_line(None, "the owner's message").await;
+    let want = if super::due::is_rest_day(today) {
+        "their usual hours on a rest day: 11:00–17:00"
+    } else {
+        "their usual hours on a workday: 10:30–19:00"
+    };
+    assert!(line.contains(want), "{line}");
+    let mornings = super::due::Mornings {
+        workday: chrono::NaiveTime::from_hms_opt(10, 30, 0).unwrap(),
+        restday: chrono::NaiveTime::from_hms_opt(11, 0, 0).unwrap(),
+    };
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Read", "due": "tomorrow" })).await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    let due = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap().due_at.unwrap();
+    assert_eq!(due, super::due::morning(tz, super::clock::now(), mornings));
+
+    // With the record off, the hours are the defaults.
+    set_pref(&engine, "presence", json!("off")).await;
+    let line = engine.now_line(None, "the owner's message").await;
+    assert!(!line.contains("usual hours"), "{line}");
+    let profile = super::presence::profile(&engine.db.conn).await;
+    assert!(!profile.presence && !profile.hours.workday.learned);
+    set_pref(&engine, "presence", json!("on")).await;
+    let profile = super::presence::profile(&engine.db.conn).await;
+    assert!(profile.presence && profile.hours.workday.learned && profile.hours.workday.days >= 5);
+    assert_eq!((profile.hours.workday.start, profile.hours.workday.end), (10 * 60 + 30, 19 * 60));
+    assert_eq!(profile.time_zone, "system");
+    assert!(profile.zones.contains(&"Asia/Shanghai") && profile.zones.contains(&profile.zone.as_str()));
+    super::presence::beat(
+        &engine.db.conn,
+        super::presence::Beat { window, focused: false, idle_ms: Some(0) },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_present_minute_is_recorded_only_while_the_owner_keeps_a_record() {
+    let (engine, _tmp) = configured().await;
+    set_pref(&engine, "time_zone", json!("Asia/Shanghai")).await;
+    let sh: chrono_tz::Tz = "Asia/Shanghai".parse().unwrap();
+    let at = chrono::TimeZone::with_ymd_and_hms(&sh, 2026, 11, 11, 10, 7, 0).unwrap().with_timezone(&chrono::Utc);
+    super::presence::record_minute(&engine.db.conn, at).await;
+    super::presence::record_minute(&engine.db.conn, at + chrono::Duration::minutes(1)).await;
+    let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();
+    let rows = crate::db::service::personal_agent_activity_service::since(&engine.db.conn, day).await.unwrap();
+    assert_eq!(rows, vec![(day, (10 * 60 + 5) / 5, 2)], "two minutes in the 10:05 slot of the owner's day");
+
+    set_pref(&engine, "presence", json!("off")).await;
+    super::presence::record_minute(&engine.db.conn, at + chrono::Duration::minutes(2)).await;
+    let rows = crate::db::service::personal_agent_activity_service::since(&engine.db.conn, day).await.unwrap();
+    assert_eq!(rows, vec![(day, 121, 2)], "off: nothing more is written");
+
+    // Nothing is recorded before an assistant is set up.
+    let (bare, _tmp2) = self::engine().await;
+    super::presence::record_minute(&bare.db.conn, at).await;
+    assert!(crate::db::service::personal_agent_activity_service::since(&bare.db.conn, day).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_record_keeps_sixty_days() {
+    let (engine, _tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();
+    for back in [0, 59, 60, 61] {
+        crate::db::service::personal_agent_activity_service::add_minute(
+            conn,
+            today - chrono::Duration::days(back),
+            100,
+            super::clock::now(),
+        )
+        .await
+        .unwrap();
+    }
+    crate::db::service::personal_agent_activity_service::prune(conn, today - chrono::Duration::days(super::presence::KEEP_DAYS))
+        .await
+        .unwrap();
+    let days: Vec<_> = crate::db::service::personal_agent_activity_service::since(conn, today - chrono::Duration::days(100))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.0)
+        .collect();
+    assert_eq!(days, vec![today - chrono::Duration::days(60), today - chrono::Duration::days(59), today]);
 }

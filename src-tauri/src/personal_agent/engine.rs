@@ -352,6 +352,9 @@ pub struct PersonalAgentEngine {
     pub(super) card_lock: Mutex<()>,
     /// Serializes the owner's answers on reminder cards (6.1).
     pub(super) reminder_lock: Mutex<()>,
+    /// The owner's zone at the clock's last look: a change moves the
+    /// repeating matters with it (1.12).
+    pub(super) clock_zone: std::sync::Mutex<Option<chrono_tz::Tz>>,
     /// A delivery was asked for while one ran: run again after it.
     pump_again: AtomicBool,
     wake: Notify,
@@ -387,6 +390,7 @@ impl PersonalAgentEngine {
             asks_lock: Mutex::new(()),
             card_lock: Mutex::new(()),
             reminder_lock: Mutex::new(()),
+            clock_zone: std::sync::Mutex::new(None),
             pump_again: AtomicBool::new(false),
             wake: Notify::new(),
             booted: AtomicBool::new(false),
@@ -2668,22 +2672,14 @@ impl PersonalAgentEngine {
         };
         // Every delivery starts with the owner's time now (6.1).
         {
-            let now = super::clock::now();
             let before = owners.iter().map(|o| o.id).min();
-            let last = svc::last_owner_message_before(&self.db.conn, self.bot().await, before)
-                .await
-                .ok()
-                .flatten();
             let started_by = match trigger {
                 BatchTrigger::Owner => "the owner's message",
                 BatchTrigger::Message => "another assistant's message",
                 BatchTrigger::Reminder => "a matter came due that you are to do",
                 _ => "news of work you dispatched or of your matters",
             };
-            cards_text.insert(
-                0,
-                super::due::now_line(now, self.owner_tz(), last, started_by),
-            );
+            cards_text.insert(0, self.now_line(before, started_by).await);
         }
         let event_lines = self.event_lines(&news).await;
         let events_text = {
@@ -2991,7 +2987,7 @@ impl PersonalAgentEngine {
         .await
         .unwrap_or_default();
         let mut lines = Vec::with_capacity(items.len());
-        let tz = self.owner_tz();
+        let tz = self.owner_tz().await;
         let now = super::clock::now();
         for i in items.into_iter().rev() {
             let dispatch = match i.dispatch_id {
@@ -3806,19 +3802,10 @@ impl PersonalAgentEngine {
         };
         // Its own time, as a delivery's: the turn may have begun before
         // midnight (6.1).
-        let now = super::clock::now();
-        let last = svc::last_owner_message_before(&self.db.conn, self.bot().await, Some(row.id))
-            .await
-            .ok()
-            .flatten();
         let text = format!(
             "{}\n\n{}",
-            super::due::now_line(
-                now,
-                self.owner_tz(),
-                last,
-                "the owner's message, sent while your turn ran"
-            ),
+            self.now_line(Some(row.id), "the owner's message, sent while your turn ran")
+                .await,
             cards::owner_message(&line)
         );
         // With attachments, the blocks ARE the wire payload: the text leads

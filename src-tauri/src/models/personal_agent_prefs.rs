@@ -139,6 +139,52 @@ pub enum ExecAnswers {
     Owner,
 }
 
+/// Whether codeg records when the owner is in codeg, to learn their usual
+/// hours (1.12).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnOff {
+    #[default]
+    On,
+    Off,
+}
+
+/// The owner's time zone as set: the system's.
+pub const SYSTEM_ZONE: &str = "system";
+
+fn default_zone() -> String {
+    SYSTEM_ZONE.to_string()
+}
+
+/// A zone this build does not know is the system's.
+fn lenient_zone<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_str()
+        .and_then(|s| check_zone(s).ok())
+        .unwrap_or_else(default_zone))
+}
+
+/// A zone as the owner sets it: `system`, or an IANA name — kept as the
+/// time zone database spells it.
+pub fn check_zone(raw: &str) -> Result<String, String> {
+    let s = raw.trim();
+    if s.eq_ignore_ascii_case(SYSTEM_ZONE) {
+        return Ok(default_zone());
+    }
+    s.parse::<chrono_tz::Tz>()
+        .map(|tz| tz.name().to_string())
+        .or_else(|_| {
+            chrono_tz::TZ_VARIANTS
+                .iter()
+                .find(|tz| tz.name().eq_ignore_ascii_case(s))
+                .map(|tz| tz.name().to_string())
+                .ok_or(())
+        })
+        .map_err(|_| {
+            format!("`time_zone` takes system or a time zone name such as Europe/Berlin, not `{s}`")
+        })
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerHandoff {
@@ -187,6 +233,13 @@ pub struct Prefs {
     /// An executor's plan approvals (7.3.1).
     #[serde(default, deserialize_with = "lenient")]
     pub exec_plans: ExecAnswers,
+    /// The owner's time zone: `system`, or an IANA name (1.12).
+    #[serde(default = "default_zone", deserialize_with = "lenient_zone")]
+    pub time_zone: String,
+    /// Whether codeg records when the owner is in codeg and learns their
+    /// usual hours from it; off, the hours are the defaults (1.12).
+    #[serde(default, deserialize_with = "lenient")]
+    pub presence: OnOff,
 }
 
 impl Default for Prefs {
@@ -205,6 +258,8 @@ impl Default for Prefs {
             retry_rounds: DEFAULT_RETRY_ROUNDS,
             exec_questions: ExecAnswers::default(),
             exec_plans: ExecAnswers::default(),
+            time_zone: default_zone(),
+            presence: OnOff::default(),
         }
     }
 }
@@ -216,6 +271,8 @@ pub enum PrefKind {
     Choice(&'static [&'static str]),
     /// A whole number in range.
     Count { max: u32 },
+    /// `system`, or a time zone's IANA name.
+    Zone,
 }
 
 /// One item, as codeg checks and describes it.
@@ -298,6 +355,16 @@ pub const PREFS: &[PrefSpec] = &[
         kind: PrefKind::Choice(&["assistant", "owner"]),
         label: "plan approvals from the sessions you dispatched",
     },
+    PrefSpec {
+        key: "time_zone",
+        kind: PrefKind::Zone,
+        label: "the owner's time zone",
+    },
+    PrefSpec {
+        key: "presence",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "learning the owner's usual hours from when they are in codeg",
+    },
 ];
 
 /// The "automation level" (13.4): a preset over the items below — not
@@ -355,6 +422,12 @@ pub fn check_pref(key: &str, value: &Value) -> Result<Value, String> {
             }
             Ok(json!(n))
         }
+        PrefKind::Zone => {
+            let raw = value
+                .as_str()
+                .ok_or("`time_zone` takes system or a time zone name such as Europe/Berlin")?;
+            Ok(json!(check_zone(raw)?))
+        }
     }
 }
 
@@ -375,6 +448,11 @@ impl Prefs {
 
     pub fn get(&self, key: &str) -> Value {
         self.to_map().remove(key).unwrap_or(Value::Null)
+    }
+
+    /// Whether codeg records when the owner is in codeg (1.12).
+    pub fn records_presence(&self) -> bool {
+        self.presence == OnOff::On
     }
 
     /// Whether a dispatch in `mode` goes to the owner as a card first.
@@ -463,6 +541,13 @@ fn brain_value(key: &str, value: &Value) -> String {
         ("exec_questions" | "exec_plans", "owner") => {
             "they go to the owner; you are told, nothing to answer".into()
         }
+        ("time_zone", SYSTEM_ZONE) => "the system's — <codeg-now> gives it".into(),
+        ("time_zone", zone) => format!("{zone} — <codeg-now> gives the time in it"),
+        ("presence", "on") => {
+            "on: codeg notes the minutes the owner is active in codeg and learns their usual hours"
+                .into()
+        }
+        ("presence", "off") => "off: nothing is noted; their hours are the defaults".into(),
         _ => value.to_string(),
     }
 }
@@ -731,6 +816,43 @@ mod tests {
         assert!(check_pref("loop_rounds", &json!(1_001)).is_err());
         assert_eq!(check_pref("loop_rounds", &json!("5")).unwrap(), json!(5));
         assert!(check_pref("nope", &json!(1)).is_err());
+    }
+
+    #[test]
+    fn a_time_zone_is_system_or_a_known_name() {
+        assert_eq!(
+            check_pref("time_zone", &json!("system")).unwrap(),
+            json!("system")
+        );
+        assert_eq!(
+            check_pref("time_zone", &json!(" SYSTEM ")).unwrap(),
+            json!("system")
+        );
+        assert_eq!(
+            check_pref("time_zone", &json!("europe/berlin")).unwrap(),
+            json!("Europe/Berlin"),
+            "kept as the database spells it"
+        );
+        assert!(check_pref("time_zone", &json!("Mars/Olympus")).is_err());
+        assert!(check_pref("time_zone", &json!(8)).is_err());
+        let p = Prefs::parse(Some(
+            &json!({ "time_zone": "Atlantis/Lost", "presence": "maybe" }),
+        ));
+        assert_eq!(
+            p.time_zone, "system",
+            "an unknown zone reads as the system's"
+        );
+        assert!(p.records_presence(), "an unknown word is the default: on");
+        let p = Prefs::parse(Some(
+            &json!({ "time_zone": "Asia/Tokyo", "presence": "off" }),
+        ));
+        assert_eq!(p.time_zone, "Asia/Tokyo");
+        assert!(!p.records_presence());
+        assert_eq!(
+            p.automation_level(),
+            "standard",
+            "neither is part of a level"
+        );
     }
 
     #[test]

@@ -7967,7 +7967,8 @@
         "executors": "실행 구성",
         "division": "업무 분담",
         "communication": "소통",
-        "automation": "배정 및 자동화"
+        "automation": "배정 및 자동화",
+        "about": "나에 대해"
       },
       "pages": {
         "identity": "사용할 이름과 사진, 그리고 실행할 에이전트(모드와 권한 포함)입니다. codeg는 고른 그대로 실행합니다.",
@@ -7980,7 +7981,8 @@
         "communication": "어시스턴트가 사용자와 대화하는 방식입니다. 모든 어시스턴트가 같은 설정을 따릅니다.",
         "communicationNote": "말투와 호칭은 여기서 정하지 않습니다. 각 어시스턴트의 SOUL.md와 메인 어시스턴트의 USER.md에 적으세요.",
         "automation": "어시스턴트가 스스로 하는 일과 먼저 물어보는 일입니다. 기본적으로 모두 자동으로 실행하고 카드로 알려 줍니다. 각 “먼저 묻기”는 직접 켜면 됩니다.",
-        "automationNote": "확인을 기다리는 일은 실행할 내용이 그대로 담긴 카드로 표시되며, 클릭하면 실행됩니다."
+        "automationNote": "확인을 기다리는 일은 실행할 내용이 그대로 담긴 카드로 표시되며, 클릭하면 실행됩니다.",
+        "about": "codeg가 시간을 맞추는 데 쓰는 정보: 시간대와, codeg를 사용하는 시간에서 배우는 일과. 모든 어시스턴트가 함께 씁니다."
       },
       "prefs": {
         "default": "(기본값)",
@@ -8072,6 +8074,17 @@
           "hint": "어시스턴트가 맡긴 세션이 계속하기 전에 계획 승인을 요청할 때.",
           "assistant": "어시스턴트가 대신 답하고, 확실하지 않으면 나에게 넘김",
           "owner": "항상 나에게 넘김"
+        },
+        "time_zone": {
+          "title": "시간대",
+          "hint": "어시스턴트가 읽고 쓰는 모든 시간(리마인더, '내일 아침', 전달되는 현재 시각)은 이 시간대를 따릅니다.",
+          "system": "시스템 따르기"
+        },
+        "presence": {
+          "title": "접속과 일과 기록",
+          "hint": "codeg에서 활동한 분을 기록해(60일 보관) 하루가 보통 몇 시에 시작하고 끝나는지 배웁니다. 끄면 더 기록하지 않고 기본 일과를 씁니다.",
+          "on": "켬",
+          "off": "끔"
         }
       },
       "workdir": {
@@ -8156,7 +8169,26 @@
       },
       "targetLoading": "이 어시스턴트의 설정을 불러오는 중…",
       "targetFailed": "이 어시스턴트의 설정을 불러올 수 없습니다.",
-      "brain": "두뇌"
+      "brain": "두뇌",
+      "about": {
+        "followSystem": "시스템 따르기",
+        "followSystemZone": "시스템 따르기({zone})",
+        "zoneSearch": "시간대 검색",
+        "zoneNoMatch": "일치하는 시간대가 없습니다.",
+        "zoneNow": "그곳은 지금 {time}입니다.",
+        "hoursTitle": "codeg가 보는 일과(최근 {days}일)",
+        "workday": "평일",
+        "restday": "주말",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–다음 날 {end}",
+        "learnedFrom": "{count}일 기준",
+        "stillLearning": "학습 중 — 지금은 기본값",
+        "recordOff": "기록이 꺼져 있음: 기본 일과를 씁니다.",
+        "presentNow": "지금 codeg를 사용 중입니다.",
+        "lastActive": "마지막 활동: {time}.",
+        "notSeen": "codeg 시작 후 아직 활동이 없습니다.",
+        "note": "지금 자리에 있는지는 계속 실시간으로 판단합니다(포커스된 창에서 최근 2분 내 입력). 알림 시점을 정하는 데만 쓰이며 기록되지 않습니다. 리마인더의 '내일 아침'은 하루가 보통 시작하는 시간입니다."
+      }
     },
     "statusWord": {
       "idle": "대기 중",

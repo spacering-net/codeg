@@ -32,6 +32,7 @@ const PAGES: readonly SettingsPage[] = [
   "division",
   "communication",
   "automation",
+  "about",
 ]
 
 export function isSettingsPage(v: unknown): v is SettingsPage {

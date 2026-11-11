@@ -7967,7 +7967,8 @@
         "executors": "執行配置",
         "division": "分工",
         "communication": "溝通",
-        "automation": "派活與自動"
+        "automation": "派活與自動",
+        "about": "了解你"
       },
       "pages": {
         "identity": "它的名字和頭像，以及它跑在哪個 agent 上——模式和權限也在這裡選，codeg 照著用。",
@@ -7980,7 +7981,8 @@
         "communication": "助手怎麼和你說話。每個助手都照這一份。",
         "communicationNote": "語氣與稱呼不在這一頁：寫在各助手的 SOUL.md 和主助手的 USER.md 裡。",
         "automation": "助手自己做什麼、先問你什麼。預設一律自動，做了都出卡告訴你；每一項「先問我」都由你開啟。",
-        "automationNote": "要你確認的，會出一張卡，卡上就是要執行的完整內容，點了才執行。"
+        "automationNote": "要你確認的，會出一張卡，卡上就是要執行的完整內容，點了才執行。",
+        "about": "codeg 用來把時間對準你的資訊：你的時區，以及從你在 codeg 裡的時段學到的作息。所有助手共用。"
       },
       "prefs": {
         "default": "（預設）",
@@ -8072,6 +8074,17 @@
           "hint": "助理派出的工作階段要先批准計畫才往下做時。",
           "assistant": "助理代答，拿不準時轉給我",
           "owner": "一律轉給我"
+        },
+        "time_zone": {
+          "title": "時區",
+          "hint": "助手讀寫的每個時間——提醒、「明天上午」、告訴它的目前時間——都依這個時區。",
+          "system": "跟隨系統"
+        },
+        "presence": {
+          "title": "記錄在場與作息",
+          "hint": "記下你在 codeg 裡有操作的分鐘（保留 60 天），學你一天通常幾點開始、幾點結束。關掉後不再記錄，作息用預設值。",
+          "on": "開",
+          "off": "關"
         }
       },
       "workdir": {
@@ -8156,7 +8169,26 @@
       },
       "targetLoading": "正在讀取這個助手的設定…",
       "targetFailed": "讀不到這個助手的設定。",
-      "brain": "大腦"
+      "brain": "大腦",
+      "about": {
+        "followSystem": "跟隨系統",
+        "followSystemZone": "跟隨系統（{zone}）",
+        "zoneSearch": "搜尋時區",
+        "zoneNoMatch": "沒有符合的時區。",
+        "zoneNow": "那裡現在是 {time}。",
+        "hoursTitle": "codeg 看到的作息（最近 {days} 天）",
+        "workday": "工作日",
+        "restday": "週末",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–隔天 {end}",
+        "learnedFrom": "根據 {count} 天",
+        "stillLearning": "還在學，先用預設值",
+        "recordOff": "記錄已關：作息用預設值。",
+        "presentNow": "你現在在 codeg 裡。",
+        "lastActive": "最近一次操作：{time}。",
+        "notSeen": "codeg 啟動以來還沒看到你的操作。",
+        "note": "你此刻在不在仍會即時判斷（有焦點的視窗、最近兩分鐘有操作），用來決定什麼時候通知你；這個不會被記下。提醒上的「明天上午」依你一天通常開始的時間。"
+      }
     },
     "statusWord": {
       "idle": "閒置",

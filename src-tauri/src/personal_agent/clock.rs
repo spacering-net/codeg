@@ -27,11 +27,20 @@ fn offset() -> chrono::Duration {
     chrono::Duration::zero()
 }
 
-/// The owner's time zone: the system's, UTC when it cannot be told. (The
-/// owner's own choice comes with the "about you" page, 1.12.)
-pub fn owner_tz() -> Tz {
+/// The system's time zone; UTC when it cannot be told.
+pub fn system_tz() -> Tz {
     iana_time_zone::get_timezone()
         .ok()
         .and_then(|name| name.parse::<Tz>().ok())
         .unwrap_or(Tz::UTC)
+}
+
+/// The owner's time zone as their preference sets it (1.12): `system`
+/// follows the system's, read anew each time — a laptop that travels takes
+/// its zone along; a name is that zone.
+pub fn zone_of(pref: &str) -> Tz {
+    if pref == crate::models::personal_agent_prefs::SYSTEM_ZONE {
+        return system_tz();
+    }
+    pref.parse::<Tz>().unwrap_or_else(|_| system_tz())
 }

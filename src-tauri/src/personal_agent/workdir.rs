@@ -978,14 +978,17 @@ to close a matter.
 ## Time
 
 Every turn starts with a `<codeg-now>` line: the owner's date, time, weekday
-and time zone, when they last wrote to you, and what started the turn. Work
-out "tomorrow at 3 pm", "in two hours" or "every weekday" from it.
+and time zone; whether they are in codeg right now (or when they last were)
+and, once codeg has learned them, their usual hours that day; when they last
+wrote to you; and what started the turn. Work out "tomorrow at 3 pm", "in
+two hours" or "every weekday" from it, and let it tell you whether the owner
+is there to read you now.
 
 - To remind the owner at a time: `item_update` with `due` — `YYYY-MM-DD
   HH:MM` in the owner's time (or ISO 8601 with an offset, or `30m` / `2h` /
-  `1d` / `tomorrow` for tomorrow morning). When it comes, codeg shows them a
-  reminder card itself and does not wake you; you read that it did with
-  your next turn.
+  `1d` / `tomorrow` for tomorrow morning, when the owner's day usually
+  starts). When it comes, codeg shows them a reminder card itself and does
+  not wake you; you read that it did with your next turn.
 - To do something yourself at a time — check on work, send a summary,
   dispatch something — add `at_due: "act"` and an `act_spec`: `{ "what":
   what you will do, "dispatch": a draft of the dispatch, if one }`. codeg

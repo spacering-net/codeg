@@ -7967,7 +7967,8 @@
         "executors": "Configuraciones de ejecución",
         "division": "Reparto del trabajo",
         "communication": "Comunicación",
-        "automation": "Asignación y automatización"
+        "automation": "Asignación y automatización",
+        "about": "Sobre ti"
       },
       "pages": {
         "identity": "El nombre y la imagen con los que se presenta, y el agente sobre el que funciona, modo y permisos incluidos: codeg lo ejecuta tal como lo elijas.",
@@ -7980,7 +7981,8 @@
         "communication": "Cómo te hablan los asistentes. Todos siguen lo mismo.",
         "communicationNote": "El tono y cómo se dirigen a ti no están aquí: escríbelos en el SOUL.md de cada asistente y en el USER.md del principal.",
         "automation": "Lo que los asistentes hacen por su cuenta y lo que te preguntan antes. Por defecto todo se hace solo y te lo cuentan en una tarjeta; cada «pregúntame antes» lo activas tú.",
-        "automationNote": "Lo que espera por ti va en una tarjeta con exactamente lo que se ejecutará, y se ejecuta cuando haces clic."
+        "automationNote": "Lo que espera por ti va en una tarjeta con exactamente lo que se ejecutará, y se ejecuta cuando haces clic.",
+        "about": "Lo que codeg usa para acertar con la hora: tu zona horaria y el horario que aprende de cuándo estás en codeg. Igual para todos los asistentes."
       },
       "prefs": {
         "default": "(predeterminado)",
@@ -8072,6 +8074,17 @@
           "hint": "Cuando una sesión que encargó un asistente quiere que se apruebe su plan antes de seguir.",
           "assistant": "El asistente responde y me pregunta si duda",
           "owner": "Preguntarme siempre"
+        },
+        "time_zone": {
+          "title": "Zona horaria",
+          "hint": "Toda hora que los asistentes leen o escriben —recordatorios, «mañana por la mañana», la hora que se les dice— está en esta zona.",
+          "system": "Seguir al sistema"
+        },
+        "presence": {
+          "title": "Registrar presencia y horario",
+          "hint": "Anota los minutos que estás activo en codeg (se guardan 60 días) para aprender cuándo suele empezar y terminar tu día. Desactivado: no se anota nada más y tu horario es el predeterminado.",
+          "on": "Activado",
+          "off": "Desactivado"
         }
       },
       "workdir": {
@@ -8156,7 +8169,26 @@
       },
       "targetLoading": "Cargando los ajustes de este asistente…",
       "targetFailed": "No se pudieron leer los ajustes de este asistente.",
-      "brain": "Cerebro"
+      "brain": "Cerebro",
+      "about": {
+        "followSystem": "Seguir al sistema",
+        "followSystemZone": "Seguir al sistema ({zone})",
+        "zoneSearch": "Buscar zonas horarias",
+        "zoneNoMatch": "Ninguna zona horaria coincide.",
+        "zoneNow": "Allí son las {time}.",
+        "hoursTitle": "Tu horario habitual según codeg (últimos {days} días)",
+        "workday": "Laborables",
+        "restday": "Fines de semana",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–{end} del día siguiente",
+        "learnedFrom": "{count, plural, one {de # día} other {de # días}}",
+        "stillLearning": "aún aprendiendo: por ahora, el predeterminado",
+        "recordOff": "El registro está desactivado: tu horario es el predeterminado.",
+        "presentNow": "Estás en codeg ahora.",
+        "lastActive": "Última actividad: {time}.",
+        "notSeen": "Sin actividad en codeg desde que se inició.",
+        "note": "Si estás aquí ahora se sigue viendo en el momento —una ventana con el foco y actividad en los últimos dos minutos— para decidir cuándo avisarte; nunca se guarda. «Mañana por la mañana» en un recordatorio es cuando suele empezar tu día."
+      }
     },
     "statusWord": {
       "idle": "Inactivo",

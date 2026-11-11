@@ -595,6 +595,25 @@ pub async fn personal_agent_item_act_core(
     Ok(item_info(item, dispatch_state))
 }
 
+/// One codeg window's beat (6.2, 1.12): whether it has the focus, and how
+/// long since the last key or pointer input in it. Whether the owner is in
+/// codeg after it. Every process takes it: it keeps its own windows, and
+/// writes the minute to the record when the owner keeps one.
+pub async fn personal_agent_presence_core(
+    db: &AppDatabase,
+    beat: crate::personal_agent::presence::Beat,
+) -> crate::personal_agent::presence::Presence {
+    crate::personal_agent::presence::beat(&db.conn, beat).await
+}
+
+/// The "about you" page (13.5, 1.12): the owner's time zone, the record's
+/// switch, whether they are in codeg, and the hours codeg sees.
+pub async fn personal_agent_profile_core(
+    db: &AppDatabase,
+) -> crate::personal_agent::presence::ProfileView {
+    crate::personal_agent::presence::profile(&db.conn).await
+}
+
 /// The owner's [Stop] on a task card (8.5, 4.10): this one piece of work,
 /// where it runs. False when it is past stopping (done, merging).
 pub async fn personal_agent_dispatch_stop_core(
@@ -1266,6 +1285,33 @@ pub async fn personal_agent_item_act(
     until: Option<String>,
 ) -> Result<ItemInfo, AppCommandError> {
     personal_agent_item_act_core(&db, bot_id, item_id, act, until).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_presence(
+    db: State<'_, AppDatabase>,
+    window: String,
+    focused: bool,
+    idle_ms: Option<u64>,
+) -> Result<crate::personal_agent::presence::Presence, AppCommandError> {
+    Ok(personal_agent_presence_core(
+        &db,
+        crate::personal_agent::presence::Beat {
+            window,
+            focused,
+            idle_ms,
+        },
+    )
+    .await)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_profile(
+    db: State<'_, AppDatabase>,
+) -> Result<crate::personal_agent::presence::ProfileView, AppCommandError> {
+    Ok(personal_agent_profile_core(&db).await)
 }
 
 #[cfg(feature = "tauri-runtime")]

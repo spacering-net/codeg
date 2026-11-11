@@ -17,6 +17,7 @@ import {
 import { AppearanceProvider } from "@/components/appearance-provider"
 import { OverlayScrollbarsInit } from "@/components/overlay-scrollbars-init"
 import { ClipboardFallbackInit } from "@/components/clipboard-fallback-init"
+import { PresenceHeartbeat } from "@/components/presence-heartbeat"
 import { ServiceWorkerInit } from "@/components/service-worker-init"
 import { WebConnectionGuard } from "@/components/connection/web-connection-guard"
 import { WebVersionNotice } from "@/components/connection/web-version-notice"
@@ -105,6 +106,7 @@ export default async function RootLayout({
               <AppearanceProvider>
                 <OverlayScrollbarsInit />
                 <ClipboardFallbackInit />
+                <PresenceHeartbeat />
                 <ServiceWorkerInit />
                 <WebConnectionGuard />
                 <WebVersionNotice />

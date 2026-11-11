@@ -28,6 +28,43 @@ pub const PAST_GRACE_SECS: i64 = 60;
 pub const LATE_AFTER_SECS: i64 = 120;
 /// "Tomorrow morning", until the owner's day is learned (1.12).
 pub const MORNING: (u32, u32) = (9, 0);
+/// Before this hour, "tomorrow morning" is the morning about to come.
+pub const SMALL_HOURS_END: u32 = 5;
+
+/// When the owner's day usually starts, on a workday and on a rest day
+/// (Saturday, Sunday) — what "tomorrow morning" means (1.12). [`MORNING`]
+/// until codeg has learned it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mornings {
+    pub workday: NaiveTime,
+    pub restday: NaiveTime,
+}
+
+impl Default for Mornings {
+    fn default() -> Self {
+        let at = NaiveTime::from_hms_opt(MORNING.0, MORNING.1, 0).unwrap_or(NaiveTime::MIN);
+        Self {
+            workday: at,
+            restday: at,
+        }
+    }
+}
+
+impl Mornings {
+    /// The morning of `date`.
+    pub fn on(&self, date: NaiveDate) -> NaiveTime {
+        if is_rest_day(date) {
+            self.restday
+        } else {
+            self.workday
+        }
+    }
+}
+
+/// Saturday and Sunday.
+pub fn is_rest_day(date: NaiveDate) -> bool {
+    matches!(date.weekday(), Weekday::Sat | Weekday::Sun)
+}
 
 /// How a matter repeats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +133,14 @@ pub struct Repeat {
     /// The last day it may fall on, in the owner's zone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<NaiveDate>,
+    /// The zone its next time was set in (1.12): when the owner's zone is
+    /// another, the clock moves that time to `at` in theirs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+    /// Its next time is a moment of its own — the owner put it off, or the
+    /// assistant moved it — not the rule's: a change of zone leaves it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub moment: bool,
 }
 
 impl Repeat {
@@ -103,7 +148,18 @@ impl Repeat {
         serde_json::from_str(raw?).ok()
     }
 
-    fn time(&self) -> NaiveTime {
+    /// Its next time set in `tz`: the rule's own (`moment` false), or a
+    /// moment of its own.
+    pub fn placed(self, tz: Tz, moment: bool) -> Self {
+        Self {
+            zone: Some(tz.name().to_string()),
+            moment,
+            ..self
+        }
+    }
+
+    /// Its wall-clock time.
+    pub fn time(&self) -> NaiveTime {
         NaiveTime::parse_from_str(&self.at, "%H:%M").unwrap_or(NaiveTime::MIN)
     }
 
@@ -295,6 +351,8 @@ pub fn parse_repeat(v: &Value, first: NaiveDateTime) -> Result<Repeat, String> {
         day,
         at: first.time().format("%H:%M").to_string(),
         until,
+        zone: None,
+        moment: false,
     })
 }
 
@@ -358,26 +416,37 @@ pub fn catch_up(
     (occ, missed)
 }
 
-/// "Tomorrow morning": the next 09:00 the owner wakes to — today's, in the
-/// small hours.
-pub fn morning(tz: Tz, now: DateTime<Utc>) -> DateTime<Utc> {
+/// "Tomorrow morning": when the owner's next day starts (`mornings`) — the
+/// day about to come, in the small hours; never a time already gone.
+pub fn morning(tz: Tz, now: DateTime<Utc>, mornings: Mornings) -> DateTime<Utc> {
     let local = now.with_timezone(&tz);
-    let date = if local.time() < NaiveTime::from_hms_opt(5, 0, 0).unwrap_or(NaiveTime::MIN) {
+    let small_hours =
+        local.time() < NaiveTime::from_hms_opt(SMALL_HOURS_END, 0, 0).unwrap_or(NaiveTime::MIN);
+    let mut date = if small_hours {
         local.date_naive()
     } else {
         local.date_naive().succ_opt().unwrap_or(local.date_naive())
     };
-    let at = NaiveTime::from_hms_opt(MORNING.0, MORNING.1, 0).unwrap_or(NaiveTime::MIN);
-    local_at(tz, date.and_time(at))
+    let mut t = local_at(tz, date.and_time(mornings.on(date)));
+    if t <= now {
+        date = date.succ_opt().unwrap_or(date);
+        t = local_at(tz, date.and_time(mornings.on(date)));
+    }
+    t
 }
 
 /// A time as the assistant or the page wrote it: ISO 8601 with an offset;
 /// `YYYY-MM-DD HH:MM`, in the owner's zone; or from now — `15m`, `1h`,
-/// `2d`, `tomorrow` (morning).
-pub fn parse_when(text: &str, tz: Tz, now: DateTime<Utc>) -> Result<DateTime<Utc>, String> {
+/// `2d`, `tomorrow` (morning, as `mornings` has it).
+pub fn parse_when(
+    text: &str,
+    tz: Tz,
+    now: DateTime<Utc>,
+    mornings: Mornings,
+) -> Result<DateTime<Utc>, String> {
     let s = text.trim();
     if s.eq_ignore_ascii_case("tomorrow") {
-        return Ok(morning(tz, now));
+        return Ok(morning(tz, now, mornings));
     }
     if let Some(d) = relative(s) {
         return Ok(now + d);
@@ -525,11 +594,13 @@ pub fn when_past(t: DateTime<Utc>, tz: Tz, now: DateTime<Utc>) -> String {
     }
 }
 
-/// The line every delivery starts with (6.1): now in the owner's zone, the
-/// owner's last message before this turn, and what started it.
+/// The line every delivery starts with (6.1): now in the owner's zone,
+/// `about` the owner (whether they are in codeg, their usual hours — 1.12),
+/// their last message before this turn, and what started it.
 pub fn now_line(
     now: DateTime<Utc>,
     tz: Tz,
+    about: &str,
     last_owner: Option<DateTime<Utc>>,
     started_by: &str,
 ) -> String {
@@ -538,9 +609,14 @@ pub fn now_line(
         Some(t) => when_past(t, tz, now),
         None => "none yet".to_string(),
     };
+    let about = if about.is_empty() {
+        String::new()
+    } else {
+        format!(" · {about}")
+    };
     format!(
-        "<codeg-now>{} ({}) · the owner's last message before this turn: {last} · this turn: \
-         {started_by}</codeg-now>",
+        "<codeg-now>{} ({}){about} · the owner's last message before this turn: {last} · this \
+         turn: {started_by}</codeg-now>",
         local.format("%Y-%m-%d %a %H:%M"),
         zone_label(tz, now),
     )
@@ -579,7 +655,7 @@ mod tests {
         let sh = tz("Asia/Shanghai");
         let now = at(sh, "2026-11-11 09:12");
         assert_eq!(
-            parse_when("2026-11-12 15:00", sh, now).unwrap(),
+            parse_when("2026-11-12 15:00", sh, now, Mornings::default()).unwrap(),
             Utc.with_ymd_and_hms(2026, 11, 12, 7, 0, 0).unwrap()
         );
         for s in [
@@ -589,22 +665,31 @@ mod tests {
             "2026-11-12T07:00:00Z",
         ] {
             assert_eq!(
-                parse_when(s, sh, now).unwrap(),
+                parse_when(s, sh, now, Mornings::default()).unwrap(),
                 Utc.with_ymd_and_hms(2026, 11, 12, 7, 0, 0).unwrap(),
                 "{s}"
             );
         }
         assert_eq!(
-            parse_when("15m", sh, now).unwrap(),
+            parse_when("15m", sh, now, Mornings::default()).unwrap(),
             now + Duration::minutes(15)
         );
-        assert_eq!(parse_when("1h", sh, now).unwrap(), now + Duration::hours(1));
-        assert_eq!(parse_when("2d", sh, now).unwrap(), now + Duration::days(2));
-        assert!(parse_when("next friday", sh, now).is_err());
+        assert_eq!(
+            parse_when("1h", sh, now, Mornings::default()).unwrap(),
+            now + Duration::hours(1)
+        );
+        assert_eq!(
+            parse_when("2d", sh, now, Mornings::default()).unwrap(),
+            now + Duration::days(2)
+        );
+        assert!(parse_when("next friday", sh, now, Mornings::default()).is_err());
         for odd in ["明天", "3天", "", "m", "-5m", "99999999999999m"] {
-            assert!(parse_when(odd, sh, now).is_err(), "{odd}");
+            assert!(
+                parse_when(odd, sh, now, Mornings::default()).is_err(),
+                "{odd}"
+            );
         }
-        assert!(parse_when("0m", sh, now).is_err());
+        assert!(parse_when("0m", sh, now, Mornings::default()).is_err());
     }
 
     #[test]
@@ -735,22 +820,54 @@ mod tests {
     #[test]
     fn tomorrow_morning_is_this_morning_in_the_small_hours() {
         let sh = tz("Asia/Shanghai");
+        let m = Mornings::default();
         assert_eq!(
-            local(morning(sh, at(sh, "2026-11-11 15:00")), sh),
+            local(morning(sh, at(sh, "2026-11-11 15:00"), m), sh),
             "2026-11-12 09:00 Thu"
         );
         assert_eq!(
-            local(morning(sh, at(sh, "2026-11-11 23:59")), sh),
+            local(morning(sh, at(sh, "2026-11-11 23:59"), m), sh),
             "2026-11-12 09:00 Thu"
         );
         assert_eq!(
-            local(morning(sh, at(sh, "2026-11-12 01:30")), sh),
+            local(morning(sh, at(sh, "2026-11-12 01:30"), m), sh),
             "2026-11-12 09:00 Thu"
         );
         assert_eq!(
-            parse_when("tomorrow", sh, at(sh, "2026-11-11 15:00")).unwrap(),
+            parse_when("tomorrow", sh, at(sh, "2026-11-11 15:00"), m).unwrap(),
             at(sh, "2026-11-12 09:00")
         );
+    }
+
+    #[test]
+    fn tomorrow_morning_is_when_the_owners_day_starts() {
+        let sh = tz("Asia/Shanghai");
+        let hm = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let m = Mornings {
+            workday: hm(9, 40),
+            restday: hm(11, 0),
+        };
+        // Wed 15:00 → Thu, a workday.
+        assert_eq!(
+            local(morning(sh, at(sh, "2026-11-11 15:00"), m), sh),
+            "2026-11-12 09:40 Thu"
+        );
+        // Fri → Sat, a rest day.
+        assert_eq!(
+            local(morning(sh, at(sh, "2026-11-13 20:00"), m), sh),
+            "2026-11-14 11:00 Sat"
+        );
+        // An early riser's morning already gone in the small hours: the next.
+        let early = Mornings {
+            workday: hm(4, 30),
+            restday: hm(4, 30),
+        };
+        assert_eq!(
+            local(morning(sh, at(sh, "2026-11-12 04:40"), early), sh),
+            "2026-11-13 04:30 Fri"
+        );
+        assert!(is_rest_day(NaiveDate::from_ymd_opt(2026, 11, 15).unwrap()));
+        assert!(!is_rest_day(NaiveDate::from_ymd_opt(2026, 11, 16).unwrap()));
     }
 
     #[test]
@@ -792,6 +909,7 @@ mod tests {
         let line = now_line(
             now,
             sh,
+            "",
             Some(at(sh, "2026-11-10 18:41")),
             "the owner's message",
         );
@@ -799,6 +917,17 @@ mod tests {
             line,
             "<codeg-now>2026-11-11 Wed 09:12 (Asia/Shanghai, UTC+08:00) · the owner's last message \
              before this turn: yesterday 18:41 · this turn: the owner's message</codeg-now>"
+        );
+        let line = now_line(
+            now,
+            sh,
+            "the owner is in codeg now",
+            None,
+            "the owner's message",
+        );
+        assert!(
+            line.contains("UTC+08:00) · the owner is in codeg now · the owner's last message"),
+            "{line}"
         );
         assert_eq!(
             describe_repeat(&rule(

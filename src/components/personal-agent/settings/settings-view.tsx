@@ -40,6 +40,7 @@ import {
 
 import { BotAvatar } from "../bot-avatar"
 import { useBotName } from "../shared"
+import { AboutPage } from "./about-page"
 import { IdentityPage } from "./identity-page"
 import { AdvancedPage, ExecutionPage, PersonaPage } from "./own-pages"
 import { AutomationPage, CommunicationPage } from "./pref-pages"
@@ -115,6 +116,7 @@ export function SettingsView() {
       pages: [
         { page: "communication", disabled: false },
         { page: "automation", disabled: false },
+        { page: "about", disabled: false },
       ],
     },
   ]
@@ -179,6 +181,10 @@ export function SettingsView() {
       case "automation":
         return account ? (
           <AutomationPage account={account} disabled={accountLocked} />
+        ) : null
+      case "about":
+        return account ? (
+          <AboutPage account={account} disabled={accountLocked} />
         ) : null
     }
   })()

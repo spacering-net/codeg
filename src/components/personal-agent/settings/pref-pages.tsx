@@ -11,7 +11,9 @@
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import {
+  Activity,
   Gauge,
+  Globe,
   HandHelping,
   LayoutGrid,
   ListChecks,
@@ -78,6 +80,8 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   retry_rounds: 2,
   exec_questions: "assistant",
   exec_plans: "assistant",
+  time_zone: "system",
+  presence: "on",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -155,6 +159,8 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   retry_rounds: Timer,
   exec_questions: MessageSquareReply,
   exec_plans: ListChecks,
+  time_zone: Globe,
+  presence: Activity,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
@@ -175,6 +181,9 @@ export const AUTOMATION_ITEMS: PersonalAgentPrefKey[] = [
   "retry_rounds",
   "loop_rounds",
 ]
+
+/** The items of the "About you" page (`about-page.tsx`). */
+export const ABOUT_ITEMS: PersonalAgentPrefKey[] = ["time_zone", "presence"]
 
 interface PageProps {
   account: PersonalAgentAccount

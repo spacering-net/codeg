@@ -7966,7 +7966,8 @@
         "executors": "执行配置",
         "division": "分工",
         "communication": "沟通",
-        "automation": "派活与自动"
+        "automation": "派活与自动",
+        "about": "了解你"
       },
       "pages": {
         "identity": "它的名字和头像，以及它跑在哪个 agent 上——模式和权限也在这里选，codeg 照着用。",
@@ -7979,7 +7980,8 @@
         "communication": "助手怎么和你说话。每个助手都照这一份。",
         "communicationNote": "语气与称呼不在这一页：写在各助手的 SOUL.md 和主助手的 USER.md 里。",
         "automation": "助手自己做什么、先问你什么。默认一律自动，做了都出卡告诉你；每一项「先问我」都由你打开。",
-        "automationNote": "要你确认的，出一张卡，卡上就是要执行的完整内容，点了才执行。"
+        "automationNote": "要你确认的，出一张卡，卡上就是要执行的完整内容，点了才执行。",
+        "about": "codeg 用来把时间对准你的信息：你的时区，以及从你在 codeg 里的时段学到的作息。所有助手共用。"
       },
       "prefs": {
         "default": "（默认）",
@@ -8071,6 +8073,17 @@
           "hint": "助手派出的会话要先批准计划才往下做时。",
           "assistant": "助手代答，拿不准时转给我",
           "owner": "一律转给我"
+        },
+        "time_zone": {
+          "title": "时区",
+          "hint": "助手读写的每个时间——提醒、「明天上午」、告诉它的当前时间——都按这个时区。",
+          "system": "跟随系统"
+        },
+        "presence": {
+          "title": "记录在场与作息",
+          "hint": "记下你在 codeg 里有操作的分钟（保留 60 天），学你一天通常几点开始、几点结束。关掉后不再记录，作息用默认值。",
+          "on": "开",
+          "off": "关"
         }
       },
       "workdir": {
@@ -8156,7 +8169,26 @@
       "tabPersona": "人设与记忆",
       "targetLoading": "正在读取这个助手的设置…",
       "targetFailed": "读不到这个助手的设置。",
-      "brain": "大脑"
+      "brain": "大脑",
+      "about": {
+        "followSystem": "跟随系统",
+        "followSystemZone": "跟随系统（{zone}）",
+        "zoneSearch": "搜索时区",
+        "zoneNoMatch": "没有匹配的时区。",
+        "zoneNow": "那里现在是 {time}。",
+        "hoursTitle": "codeg 看到的作息（最近 {days} 天）",
+        "workday": "工作日",
+        "restday": "周末",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–次日 {end}",
+        "learnedFrom": "根据 {count} 天",
+        "stillLearning": "还在学，先用默认值",
+        "recordOff": "记录已关：作息用默认值。",
+        "presentNow": "你现在在 codeg 里。",
+        "lastActive": "最近一次操作：{time}。",
+        "notSeen": "codeg 启动以来还没看到你的操作。",
+        "note": "你此刻在不在仍会实时判断（有焦点的窗口、最近两分钟有操作），用来决定什么时候通知你；这个不会被记下。提醒上的「明天上午」按你一天通常开始的时间。"
+      }
     },
     "statusWord": {
       "idle": "空闲",

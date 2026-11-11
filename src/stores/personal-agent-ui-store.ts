@@ -36,6 +36,7 @@ export type SettingsPage =
   | "division"
   | "communication"
   | "automation"
+  | "about"
 
 /** The settings view, while it is open: on which page, and — for the
  *  assistant's own pages — whose (`null`: the page's own assistant). */

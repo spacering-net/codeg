@@ -64,7 +64,7 @@ import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
 import { ReminderCard } from "./reminder-card"
-import { COMMUNICATION_ITEMS } from "./settings/pref-pages"
+import { ABOUT_ITEMS, COMMUNICATION_ITEMS } from "./settings/pref-pages"
 import {
   AGENT_SURFACE,
   asMode,
@@ -608,10 +608,9 @@ function pageOf(key: string): SettingsPage {
   if (key.startsWith("own.")) return "advanced"
   if (key.startsWith("team.division.")) return "division"
   if (key.startsWith("team.usage.")) return "executors"
-  const item = key.replace(/^prefs\./, "")
-  return COMMUNICATION_ITEMS.includes(item as PersonalAgentPrefKey)
-    ? "communication"
-    : "automation"
+  const item = key.replace(/^prefs\./, "") as PersonalAgentPrefKey
+  if (ABOUT_ITEMS.includes(item)) return "about"
+  return COMMUNICATION_ITEMS.includes(item) ? "communication" : "automation"
 }
 
 interface Change {
@@ -674,6 +673,10 @@ function useChangeText() {
           .filter(Boolean)
           .join(" · ")
       }
+    }
+    // A zone is its own name; only `system` has words.
+    if (key === "prefs.time_zone" && typeof v === "string") {
+      return v === "system" ? tp("time_zone.system") : v
     }
     if (key.startsWith("prefs.") && typeof v === "string") {
       return tp(`${key.slice(6)}.${v}` as "reply_length.short")

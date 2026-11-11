@@ -7966,7 +7966,8 @@
         "executors": "Executor configs",
         "division": "Division of work",
         "communication": "Communication",
-        "automation": "Dispatch & automation"
+        "automation": "Dispatch & automation",
+        "about": "About you"
       },
       "pages": {
         "identity": "The name and picture it goes by, and the agent it runs on — its mode and permissions included: codeg runs it as you pick.",
@@ -7979,7 +7980,8 @@
         "communication": "How the assistants talk to you. Every assistant follows the same.",
         "communicationNote": "Tone and how they address you are not here: write them in each assistant's SOUL.md, and in the primary's USER.md.",
         "automation": "What the assistants do on their own, and what they ask you first. By default everything runs on its own and tells you on a card; each “ask me first” is yours to turn on.",
-        "automationNote": "What waits for you goes on a card holding exactly what will run, and runs when you click."
+        "automationNote": "What waits for you goes on a card holding exactly what will run, and runs when you click.",
+        "about": "What codeg goes by to get the time right for you: your time zone, and the hours it learns from when you are in codeg. The same for every assistant."
       },
       "prefs": {
         "default": "(default)",
@@ -8071,6 +8073,17 @@
           "hint": "When a session an assistant dispatched wants its plan approved before it goes on.",
           "assistant": "The assistant answers, and asks me when unsure",
           "owner": "Always ask me"
+        },
+        "time_zone": {
+          "title": "Time zone",
+          "hint": "Every time the assistants read or write — reminders, “tomorrow morning”, the time they are told — is in this zone.",
+          "system": "Follow the system"
+        },
+        "presence": {
+          "title": "Record presence and hours",
+          "hint": "Note the minutes you are active in codeg (kept 60 days) to learn when your day usually starts and ends. Off: nothing more is noted, and your hours are the defaults.",
+          "on": "On",
+          "off": "Off"
         }
       },
       "workdir": {
@@ -8156,7 +8169,26 @@
       "tabPersona": "Persona & memory",
       "targetLoading": "Loading this assistant's settings…",
       "targetFailed": "Could not read this assistant's settings.",
-      "brain": "Brain"
+      "brain": "Brain",
+      "about": {
+        "followSystem": "Follow the system",
+        "followSystemZone": "Follow the system ({zone})",
+        "zoneSearch": "Search time zones",
+        "zoneNoMatch": "No time zone matches.",
+        "zoneNow": "It is {time} there now.",
+        "hoursTitle": "Your usual hours, as codeg sees them (last {days} days)",
+        "workday": "Workdays",
+        "restday": "Weekends",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–{end} the next day",
+        "learnedFrom": "{count, plural, one {from # day} other {from # days}}",
+        "stillLearning": "still learning — the defaults for now",
+        "recordOff": "The record is off: your hours are the defaults.",
+        "presentNow": "You are in codeg now.",
+        "lastActive": "Last active at {time}.",
+        "notSeen": "Not active in codeg since it started.",
+        "note": "Whether you are here right now is still judged as it happens — a window with the focus and input in the last two minutes — to decide when to notify you; it is never kept. “Tomorrow morning” on a reminder is when your day usually starts."
+      }
     },
     "statusWord": {
       "idle": "Idle",

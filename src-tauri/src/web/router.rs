@@ -450,6 +450,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_item_act),
         )
         .route(
+            "/personal_agent_presence",
+            post(handlers::personal_agent::personal_agent_presence),
+        )
+        .route(
+            "/personal_agent_profile",
+            post(handlers::personal_agent::personal_agent_profile),
+        )
+        .route(
             "/personal_agent_card_act",
             post(handlers::personal_agent::personal_agent_card_act),
         )

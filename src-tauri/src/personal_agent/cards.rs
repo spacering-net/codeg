@@ -253,8 +253,8 @@ project's worktree, `chat` for work outside any project, `session` for investiga
 current checkout) and continue it with `dispatch_followup`. Both return at once; progress reaches \
 you later as a <codeg-events> block. `assistant_list` and `project_list` give the ids they take. \
 `item_list` / `item_read` / `item_update` keep your open matters; `timeline_read` pages back \
-through the timeline. Every turn starts with <codeg-now>: the owner's date, time, weekday and zone \
-— work out \"tomorrow at 3 pm\" from it. To remind the owner at a time, `item_update` with `due` \
+through the timeline. Every turn starts with <codeg-now>: the owner's date, time, weekday and zone, \
+whether they are in codeg now — work out \"tomorrow at 3 pm\" from it. To remind the owner at a time, `item_update` with `due` \
 (`YYYY-MM-DD HH:MM` in their time; `repeat` for a recurring one): codeg shows them a reminder card \
 then without waking you; with `at_due: \"act\"` and an `act_spec` it wakes you then to do it. Tell \
 the owner the time and weekday codeg's answer gives back. `bot_list` shows the owner's other assistants and `bot_message` writes to \

@@ -1014,7 +1014,8 @@ impl PersonalAgentEngine {
         act: &str,
         until: Option<&str>,
     ) -> Result<crate::db::entities::personal_agent_item::Model, String> {
-        let op = super::reminders::ItemOp::parse(act, until, self.owner_tz(), super::clock::now())?;
+        let (tz, mornings) = self.owner_day().await;
+        let op = super::reminders::ItemOp::parse(act, until, tz, super::clock::now(), mornings)?;
         self.item_op(item_id, op).await
     }
 }

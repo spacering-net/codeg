@@ -2265,6 +2265,30 @@ pub async fn due_items(
     Ok(out)
 }
 
+/// An assistant's repeating matters waiting for a time still ahead of
+/// `now`, not fired for it — the ones a change of the owner's zone moves
+/// (1.12).
+pub async fn repeating_items(
+    conn: &DatabaseConnection,
+    bot: i32,
+    now: DateTime<Utc>,
+) -> Result<Vec<item::Model>, DbError> {
+    use sea_orm::Condition;
+    Ok(item::Entity::find()
+        .filter(item::Column::BotId.eq(bot))
+        .filter(item::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting]))
+        .filter(item::Column::Repeat.is_not_null())
+        .filter(item::Column::DueAt.gt(now))
+        .filter(
+            Condition::any()
+                .add(item::Column::FiredAt.is_null())
+                .add(Expr::col(item::Column::FiredAt).lt(Expr::col(item::Column::DueAt))),
+        )
+        .order_by_asc(item::Column::Id)
+        .all(conn)
+        .await?)
+}
+
 /// How a matter fires (6.1): its occurrence and what it leaves behind.
 #[derive(Debug, Clone)]
 pub struct ItemFire {
