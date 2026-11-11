@@ -41,8 +41,9 @@ The LRU holds at most eight complete roots. Keys use the canonical workspace
 path, current authorized link names/targets, and root/linked-root ignore-file
 metadata. Aliases share a snapshot. Authorization and root-ignore changes select
 a different snapshot immediately; a configuration change during discovery
-invalidates that build. Other filesystem changes become visible after a
-five-minute TTL or explicit refresh. Refresh publishes only after a complete
+invalidates that build. In a workspace that is open, file changes reach the
+snapshot through its watcher (next section). Otherwise they become visible
+after a five-minute TTL or explicit refresh. Refresh publishes only after a complete
 successful discovery and does not move the timestamp on each query. A query
 may instead pass `maxAgeMs`: the search dialog sends the time since it opened,
 so each opening sees files as they are then (as the full re-list it replaced
@@ -63,6 +64,42 @@ is limited to 4,096 entries per worker, rather than allocating one score for
 every unique name in every concurrent query. The limits describe index-owned
 allocations; filesystem walkers, OS page cache, thread stacks and the app's other
 subsystems have separate overhead and are not represented as a total RSS limit.
+
+## Open workspaces stay current from file events
+
+The workspace state stream already keeps one recursive watcher per open
+workspace root. While it is live, it registers that root with search and
+passes each debounced batch along, marking which paths were created, removed
+or renamed. Content and metadata edits do not change the name list.
+
+A snapshot whose discovery began while the watch was live is *covered*. Its
+changed paths are re-read on a dedicated thread, in arrival order, with a walk
+restricted to those paths and their ancestors. Descending through each
+ancestor applies its ignore files exactly as a full walk would. A path below a
+directory the walk does not enter (ignored, or skipped like `.git`) produces
+no change, so build output and dependency installs in ignored trees cost
+nothing. Each change becomes an overlay entry: a removed path hides itself and
+its subtree in the snapshot, and an existing path is replaced by everything
+visible at and below it now. Queries hide removed entries before they can take
+a top-k slot and offer added entries after the snapshot. Re-reading is
+idempotent, so a change seen twice is harmless.
+
+Changes that arrive while a discovery walk runs are recorded on its job and
+re-read once it publishes. If the walk itself sees one of the events below,
+its waiters still get its result but it is not cached. A nested `.gitignore` or `.ignore` edit, a batch the
+watcher overflowed or failed to deliver, a change log past 4,096 paths, or an
+overlay past 20,000 entries drops the root's snapshot. The next query then
+rebuilds it. Root ignore files are also part of the cache key.
+
+A covered snapshot never expires by age and satisfies `refresh`/`maxAgeMs`
+without a rebuild. When the workspace closes, its watch ends. The snapshot is
+then treated as current up to that moment, minus the stream's unflushed
+batch window, and the five-minute TTL starts from there. Snapshots built
+without a live watch keep the plain TTL. Roots with authorized linked
+directories are never covered, because link targets lie outside the watched
+tree. The LRU and the memory and disk budgets still bound every root, watched
+or not. Overlays are bounded by their entry limit rather than charged to the
+memory budget.
 
 ## Oversized roots reuse a complete disk snapshot
 
@@ -127,6 +164,11 @@ controlled workers, including:
   across repeated queries, and concurrent positional reads.
 - Memory and disk quotas with active evicted leases, disk overflow cleanup,
   retry backoff, cancelled disk scoring, Unicode/path ranking and stable ties.
+- Watched snapshots following creates, deletes and directory renames without
+  a rewalk, in memory and on disk; churn under ignored trees; nested ignore
+  edits and lost events forcing a rebuild; changes during a walk replayed onto
+  its result; and coverage only for watches live for the whole walk, ending
+  when the watch stops.
 
 The frontend tests cover bounded/cancelled transport requests, no eager
 prewarm, picker closure, delayed groups, selection reorder/deletion and focus.

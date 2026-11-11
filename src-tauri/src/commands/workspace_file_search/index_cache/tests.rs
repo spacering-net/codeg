@@ -174,7 +174,9 @@ async fn oversized_roots_are_complete_and_reused_without_another_walk() {
     }
     assert_eq!(visits.load(Ordering::SeqCst), 1);
     assert!(matches!(
-        service.registry.lock().unwrap().snapshots[0].1.storage,
+        service.registry.lock().unwrap().snapshots[0]
+            .snapshot
+            .storage,
         Storage::Disk { .. }
     ));
     assert_eq!(service.memory.used.load(Ordering::Acquire), 0);
@@ -487,7 +489,9 @@ async fn active_snapshot_leases_remain_charged_after_lru_eviction() {
     .await;
     assert_eq!(service.memory.used.load(Ordering::Acquire), bytes);
     assert!(matches!(
-        service.registry.lock().unwrap().snapshots[0].1.storage,
+        service.registry.lock().unwrap().snapshots[0]
+            .snapshot
+            .storage,
         Storage::Disk { .. }
     ));
     drop(lease);
@@ -551,7 +555,9 @@ async fn reserving_one_quota_never_evicts_snapshots_charged_to_the_other() {
     let warm_key = RootKey::resolve(warm.path().to_str().unwrap()).unwrap();
     assert_eq!(search(&service, warm_key.clone(), "needle").await.len(), 1);
     assert!(matches!(
-        service.registry.lock().unwrap().snapshots[0].1.storage,
+        service.registry.lock().unwrap().snapshots[0]
+            .snapshot
+            .storage,
         Storage::Memory { .. }
     ));
     // Disk is exhausted by something no snapshot owns: evicting the memory
@@ -634,7 +640,7 @@ async fn refresh_expiry_root_configuration_and_lru_eviction_trigger_real_rebuild
     assert_eq!(visits.load(Ordering::SeqCst), 2);
     {
         let mut registry = service.registry.lock().unwrap();
-        Arc::get_mut(&mut registry.snapshots[0].1).unwrap().built_at = Instant::now() - CACHE_TTL;
+        registry.snapshots[0].fresh_base = Instant::now() - CACHE_TTL;
     }
     search(&service, key, "needle").await;
     assert_eq!(visits.load(Ordering::SeqCst), 3);
@@ -733,7 +739,7 @@ async fn disk_scoring_matches_memory_unicode_path_and_stable_tie_ranking() {
             "{query}"
         );
     }
-    let snapshot = service
+    let (snapshot, overlay) = service
         .snapshot(key, false, Instant::now(), &SearchControl::default())
         .await
         .unwrap()
@@ -741,7 +747,7 @@ async fn disk_scoring_matches_memory_unicode_path_and_stable_tie_ranking() {
     let cancelled = SearchControl::default();
     cancelled.cancel.cancel();
     assert!(snapshot
-        .search("README", 10, true, &cancelled)
+        .search("README", 10, true, &cancelled, &overlay)
         .unwrap()
         .is_empty());
 }
@@ -814,4 +820,408 @@ async fn large_workspace_memory_probe() {
         );
     }
     assert_eq!(visits.load(Ordering::Acquire), 1);
+}
+
+// ---- File-change events keep watched snapshots current ----
+
+fn watched_root() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    (dir, root)
+}
+
+fn changed(service: &Arc<IndexService>, root: &Path, paths: &[&str]) {
+    service.watch_changed(root, paths.iter().copied(), paths.iter().copied(), false);
+    service.settle();
+}
+
+fn paths(entries: Vec<WorkspaceFileEntry>) -> Vec<String> {
+    entries.into_iter().map(|entry| entry.path).collect()
+}
+
+async fn find(service: &Arc<IndexService>, root: &Path, query: &str) -> Vec<String> {
+    let key = RootKey::resolve(root.to_str().unwrap()).unwrap();
+    service.settle();
+    paths(search(service, key, query).await)
+}
+
+#[tokio::test]
+async fn watched_snapshot_follows_creates_deletes_and_renames_without_a_rewalk() {
+    let (_dir, root) = watched_root();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/old-needle.ts"), "x").unwrap();
+    let (service, visits) = counted(Limits::default());
+    service.watch_started(&root);
+    assert_eq!(find(&service, &root, "needle").await, ["src/old-needle.ts"]);
+
+    std::fs::write(root.join("src/new-needle.ts"), "x").unwrap();
+    changed(&service, &root, &["src/new-needle.ts"]);
+    // Equal scores: snapshot entries rank before ones added since.
+    assert_eq!(
+        find(&service, &root, "needle").await,
+        ["src/old-needle.ts", "src/new-needle.ts"]
+    );
+
+    std::fs::remove_file(root.join("src/old-needle.ts")).unwrap();
+    changed(&service, &root, &["src/old-needle.ts"]);
+    assert_eq!(find(&service, &root, "needle").await, ["src/new-needle.ts"]);
+
+    // A renamed directory: the old path disappears with its subtree, the new
+    // one is read in full even though only the directory was reported.
+    std::fs::rename(root.join("src"), root.join("lib")).unwrap();
+    changed(&service, &root, &["src", "lib"]);
+    assert_eq!(find(&service, &root, "needle").await, ["lib/new-needle.ts"]);
+    assert_eq!(visits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn changes_in_ignored_trees_leave_the_overlay_untouched() {
+    let (_dir, root) = watched_root();
+    std::fs::write(root.join(".gitignore"), "target/\n*.log\n").unwrap();
+    std::fs::create_dir_all(root.join("target/debug")).unwrap();
+    std::fs::write(root.join("main.rs"), "x").unwrap();
+    let (service, _) = counted(Limits::default());
+    service.watch_started(&root);
+    assert_eq!(find(&service, &root, "main").await, ["main.rs"]);
+    std::fs::write(root.join("target/debug/main.o"), "x").unwrap();
+    std::fs::remove_dir_all(root.join("target/debug")).unwrap();
+    std::fs::write(root.join("main.log"), "x").unwrap();
+    changed(
+        &service,
+        &root,
+        &["target/debug/main.o", "target/debug", ".git/index"],
+    );
+    {
+        let registry = service.registry.lock().unwrap();
+        assert_eq!(registry.snapshots[0].overlay.len(), 0);
+    }
+    // A newly ignored-by-name file in a visible directory never shows up.
+    changed(&service, &root, &["main.log"]);
+    assert_eq!(find(&service, &root, "main").await, ["main.rs"]);
+}
+
+#[tokio::test]
+async fn nested_ignore_changes_and_lost_events_force_a_rebuild() {
+    let (_dir, root) = watched_root();
+    std::fs::create_dir(root.join("pkg")).unwrap();
+    std::fs::write(root.join("pkg/needle.ts"), "x").unwrap();
+    let (service, visits) = counted(Limits::default());
+    service.watch_started(&root);
+    assert_eq!(find(&service, &root, "needle").await, ["pkg/needle.ts"]);
+    std::fs::write(root.join("pkg/.gitignore"), "needle.ts\n").unwrap();
+    // A content edit of an ignore file is not structural, still decisive.
+    service.watch_changed(
+        &root,
+        ["pkg/.gitignore"].into_iter(),
+        std::iter::empty(),
+        false,
+    );
+    assert!(find(&service, &root, "needle").await.is_empty());
+    assert_eq!(visits.load(Ordering::SeqCst), 2);
+    std::fs::remove_file(root.join("pkg/.gitignore")).unwrap();
+    service.watch_changed(&root, std::iter::empty(), std::iter::empty(), true);
+    assert_eq!(find(&service, &root, "needle").await, ["pkg/needle.ts"]);
+    assert_eq!(visits.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn changes_during_the_walk_are_replayed_onto_the_published_snapshot() {
+    let (_dir, root) = watched_root();
+    std::fs::write(root.join("first-needle.ts"), "x").unwrap();
+    let gate = Gate::new();
+    let worker_gate = Arc::clone(&gate);
+    let service = IndexService::new(
+        Limits::default(),
+        Arc::new(move |path, visit| {
+            visit_workspace_files(path, visit);
+            worker_gate.wait();
+        }),
+    );
+    service.watch_started(&root);
+    let worker = Arc::clone(&service);
+    let key = RootKey::resolve(root.to_str().unwrap()).unwrap();
+    let first = tokio::spawn(async move { paths(search(&worker, key, "needle").await) });
+    tokio::time::timeout(Duration::from_secs(2), gate.started.notified())
+        .await
+        .unwrap();
+    // The walk has already passed this point: only the event can add it.
+    std::fs::write(root.join("late-needle.ts"), "x").unwrap();
+    changed(&service, &root, &["late-needle.ts"]);
+    gate.release();
+    assert_eq!(first.await.unwrap(), ["first-needle.ts"]);
+    // "needle" starts earlier in the late name, so it ranks first.
+    assert_eq!(
+        find(&service, &root, "needle").await,
+        ["late-needle.ts", "first-needle.ts"]
+    );
+}
+
+#[tokio::test]
+async fn only_a_watch_live_for_the_whole_walk_covers_a_snapshot_until_it_stops() {
+    let (_dir, root) = watched_root();
+    std::fs::write(root.join("needle.ts"), "x").unwrap();
+    let (service, visits) = counted(Limits::default());
+    let key = RootKey::resolve(root.to_str().unwrap()).unwrap();
+    let covered =
+        |service: &Arc<IndexService>| service.registry.lock().unwrap().snapshots[0].covered;
+    // Built before the watch: it may have missed earlier changes.
+    search(&service, key.clone(), "needle").await;
+    let token = service.watch_started(&root);
+    assert!(!covered(&service));
+    let refresh = |service: Arc<IndexService>, key: RootKey| async move {
+        service
+            .search(
+                key,
+                SearchOptions {
+                    query: "needle",
+                    limit: 10,
+                    files_only: true,
+                    refresh: true,
+                },
+                Instant::now(),
+                Arc::new(SearchControl::default()),
+            )
+            .await
+            .unwrap()
+    };
+    refresh(Arc::clone(&service), key.clone()).await;
+    assert_eq!(visits.load(Ordering::SeqCst), 2);
+    assert!(covered(&service));
+    // Covered: as fresh as any request asks for, and it never ages out.
+    service.registry.lock().unwrap().snapshots[0].fresh_base = Instant::now() - CACHE_TTL * 2;
+    refresh(Arc::clone(&service), key.clone()).await;
+    search(&service, key.clone(), "needle").await;
+    assert_eq!(visits.load(Ordering::SeqCst), 2);
+    // A stale token (a replaced watch) changes nothing.
+    service.watch_stopped(&root, token + 1);
+    assert!(covered(&service));
+    service.watch_stopped(&root, token);
+    assert!(!covered(&service));
+    // From here the TTL applies as for any unwatched snapshot.
+    search(&service, key.clone(), "needle").await;
+    assert_eq!(visits.load(Ordering::SeqCst), 2);
+    refresh(Arc::clone(&service), key).await;
+    assert_eq!(visits.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn disk_snapshots_apply_the_same_overlay() {
+    let (_dir, root) = watched_root();
+    std::fs::write(root.join("a-needle.ts"), "x").unwrap();
+    std::fs::write(root.join("b-needle.ts"), "x").unwrap();
+    let (service, visits) = counted(Limits {
+        memory: 0,
+        ..Limits::default()
+    });
+    service.watch_started(&root);
+    assert_eq!(
+        find(&service, &root, "needle").await,
+        ["a-needle.ts", "b-needle.ts"]
+    );
+    assert!(matches!(
+        service.registry.lock().unwrap().snapshots[0]
+            .snapshot
+            .storage,
+        Storage::Disk { .. }
+    ));
+    std::fs::remove_file(root.join("a-needle.ts")).unwrap();
+    std::fs::write(root.join("c-needle.ts"), "x").unwrap();
+    changed(&service, &root, &["a-needle.ts", "c-needle.ts"]);
+    assert_eq!(
+        find(&service, &root, "needle").await,
+        ["b-needle.ts", "c-needle.ts"]
+    );
+    assert_eq!(visits.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn reading_changes_uses_full_walk_semantics() {
+    let (_dir, root) = watched_root();
+    std::fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    std::fs::create_dir_all(root.join("build/out")).unwrap();
+    std::fs::create_dir_all(root.join("src/new/deep")).unwrap();
+    std::fs::write(root.join("src/new/deep/a.ts"), "x").unwrap();
+    std::fs::write(root.join("src/new/deep/.DS_Store"), "x").unwrap();
+    let changes = read_changes(
+        &root,
+        vec![
+            "src/new/deep/a.ts".into(),
+            "src/new".into(),
+            "build/out/x.o".into(),
+            "src/gone.ts".into(),
+            "missing-parent/x.ts".into(),
+        ],
+        OVERLAY_LIMIT,
+    )
+    .unwrap();
+    assert_eq!(
+        changes,
+        [
+            Change::Removed("src/gone.ts".into()),
+            Change::Replaced(
+                "src/new".into(),
+                vec![
+                    entry("src/new", true),
+                    entry("src/new/deep", true),
+                    entry("src/new/deep/a.ts", false),
+                ]
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_walk_that_lost_events_answers_its_waiters_but_is_not_cached() {
+    let (_dir, root) = watched_root();
+    std::fs::write(root.join("needle.ts"), "x").unwrap();
+    let gate = Gate::new();
+    let worker_gate = Arc::clone(&gate);
+    let visits = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&visits);
+    let service = IndexService::new(
+        Limits::default(),
+        Arc::new(move |path, visit| {
+            if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                worker_gate.wait();
+            }
+            visit_workspace_files(path, visit);
+        }),
+    );
+    service.watch_started(&root);
+    let worker = Arc::clone(&service);
+    let key = RootKey::resolve(root.to_str().unwrap()).unwrap();
+    let first_key = key.clone();
+    let first = tokio::spawn(async move { paths(search(&worker, first_key, "needle").await) });
+    tokio::time::timeout(Duration::from_secs(2), gate.started.notified())
+        .await
+        .unwrap();
+    service.watch_changed(&root, std::iter::empty(), std::iter::empty(), true);
+    gate.release();
+    assert_eq!(first.await.unwrap(), ["needle.ts"]);
+    assert!(service.registry.lock().unwrap().snapshots.is_empty());
+    search(&service, key, "needle").await;
+    assert_eq!(visits.load(Ordering::SeqCst), 2);
+    assert!(service.registry.lock().unwrap().snapshots[0].covered);
+}
+
+#[test]
+fn a_changed_subtree_past_the_overlay_limit_is_not_collected() {
+    let (_dir, root) = watched_root();
+    std::fs::create_dir(root.join("moved")).unwrap();
+    for i in 0..4 {
+        std::fs::write(root.join(format!("moved/{i}.ts")), "x").unwrap();
+    }
+    assert_eq!(read_changes(&root, vec!["moved".into()], 3), None);
+    assert_eq!(
+        read_changes(&root, vec!["moved".into()], 5).unwrap().len(),
+        1
+    );
+}
+
+#[test]
+fn ignore_rule_files_include_nested_git_excludes() {
+    for path in [
+        ".gitignore",
+        "a/.ignore",
+        "pkg/.git/info/exclude",
+        ".git/info/exclude",
+    ] {
+        assert!(is_ignore_file(path), "{path}");
+    }
+    for path in [
+        ".git/.gitignore",
+        "pkg/.git/hooks/.ignore",
+        "a/gitignore",
+        "a/b.ts",
+    ] {
+        assert!(!is_ignore_file(path), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn an_oversized_change_drops_the_snapshot_for_a_rebuild() {
+    let (_dir, root) = watched_root();
+    std::fs::write(root.join("needle.ts"), "x").unwrap();
+    let (service, visits) = counted(Limits::default());
+    service.watch_started(&root);
+    assert_eq!(find(&service, &root, "needle").await, ["needle.ts"]);
+    std::fs::create_dir(root.join("vendor")).unwrap();
+    for i in 0..=OVERLAY_LIMIT {
+        std::fs::write(root.join(format!("vendor/{i}")), "").unwrap();
+    }
+    changed(&service, &root, &["vendor"]);
+    assert!(service.registry.lock().unwrap().snapshots.is_empty());
+    assert_eq!(find(&service, &root, "needle").await, ["needle.ts"]);
+    assert_eq!(visits.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_change_read_before_a_rebuild_never_lands_on_the_new_snapshot() {
+    let (_dir, root) = watched_root();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/needle.ts"), "x").unwrap();
+    let (service, visits) = counted(Limits::default());
+    service.watch_started(&root);
+    assert_eq!(find(&service, &root, "needle").await, ["src/needle.ts"]);
+    // Hold the change thread after it has read `src/needle.ts` as present.
+    let (reached, wait_reached) = mpsc::channel();
+    let (release, wait_release) = mpsc::channel::<()>();
+    let wait_release = Mutex::new(wait_release);
+    *service.after_read.lock().unwrap() = Some(Box::new(move || {
+        let _ = reached.send(());
+        let _ = wait_release.lock().unwrap().recv();
+    }));
+    service.watch_changed(
+        &root,
+        ["src/needle.ts"].into_iter(),
+        ["src/needle.ts"].into_iter(),
+        false,
+    );
+    wait_reached.recv().unwrap();
+    // Meanwhile the rules change and a rebuild no longer lists the file.
+    std::fs::write(root.join("src/.gitignore"), "needle.ts\n").unwrap();
+    service.watch_changed(
+        &root,
+        ["src/.gitignore"].into_iter(),
+        std::iter::empty(),
+        false,
+    );
+    let key = RootKey::resolve(root.to_str().unwrap()).unwrap();
+    assert!(search(&service, key, "needle").await.is_empty());
+    assert_eq!(visits.load(Ordering::SeqCst), 2);
+    release.send(()).unwrap();
+    assert!(find(&service, &root, "needle").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_replaced_watch_uncovers_snapshots_like_a_stop() {
+    let (_dir, root) = watched_root();
+    std::fs::write(root.join("needle.ts"), "x").unwrap();
+    let (service, _) = counted(Limits::default());
+    let first = service.watch_started(&root);
+    find(&service, &root, "needle").await;
+    assert!(service.registry.lock().unwrap().snapshots[0].covered);
+    // A new stream registered before the old one's stop arrived.
+    let second = service.watch_started(&root);
+    assert!(!service.registry.lock().unwrap().snapshots[0].covered);
+    service.watch_stopped(&root, first);
+    assert_eq!(service.registry.lock().unwrap().watches[&root], second);
+}
+
+#[tokio::test]
+async fn roots_with_linked_directories_are_not_maintained_by_events() {
+    let (_dir, root) = watched_root();
+    std::fs::write(root.join("needle.ts"), "x").unwrap();
+    let (service, _) = counted(Limits::default());
+    service.watch_started(&root);
+    find(&service, &root, "needle").await;
+    let mut registry = service.registry.lock().unwrap();
+    assert_eq!(registry.maintained(&root).count(), 1);
+    // The same root keyed with an authorized link (its target is outside the
+    // watched tree, and the focused walk does not follow links).
+    registry.snapshots[0]
+        .key
+        .links
+        .push(("api".into(), PathBuf::from("/elsewhere")));
+    assert_eq!(registry.maintained(&root).count(), 0);
 }

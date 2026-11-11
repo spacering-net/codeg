@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::UNIX_EPOCH;
 
 use base64::Engine as _;
@@ -5197,14 +5197,63 @@ pub(super) fn visit_workspace_files(path: &str, mut visit: impl FnMut(WorkspaceF
     // walker reports a symlink as a leaf file.
     let linked = authorized_links_in(&root);
     let linked_names: HashSet<String> = linked.iter().map(|(name, _)| name.clone()).collect();
+    if !visit_workspace_main_pass(&root, linked_names, None, &mut visit) {
+        return;
+    }
 
+    for (link_name, target) in linked {
+        if !visit(WorkspaceFileEntry {
+            name: link_name.clone(),
+            path: link_name.clone(),
+            kind: WorkspaceEntryKind::Dir,
+        }) {
+            return;
+        }
+        // Rooted at the resolved target so the linked project's own ignore
+        // files apply, then re-prefixed with the link name so every path stays
+        // relative to the workspace root and resolves back through the link.
+        if !visit_files_under(&target, &link_name, &mut visit) {
+            return;
+        }
+    }
+}
+
+/// Relative-path predicate for [`visit_workspace_focused`]: entries it rejects
+/// are neither yielded nor descended.
+pub(super) type WalkFocus = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// The main pass of [`visit_workspace_files`] restricted to the entries
+/// `focus` keeps. Descending through each kept ancestor reads that directory's
+/// ignore files exactly as a full walk would, so a handful of changed paths
+/// can be re-evaluated with full-walk semantics without walking everything.
+/// Authorized linked roots are not visited.
+pub(super) fn visit_workspace_focused(
+    path: &str,
+    focus: WalkFocus,
+    mut visit: impl FnMut(WorkspaceFileEntry) -> bool,
+) {
+    let root = PathBuf::from(path);
+    let linked_names = authorized_links_in(&root)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    visit_workspace_main_pass(&root, linked_names, Some(focus), &mut visit);
+}
+
+fn visit_workspace_main_pass(
+    root: &Path,
+    linked_names: HashSet<String>,
+    focus: Option<WalkFocus>,
+    visit: &mut impl FnMut(WorkspaceFileEntry) -> bool,
+) -> bool {
     // Conservative gitignore parity with the previous client-side pass: respect
     // in-tree `.gitignore`/`.ignore`/`.git/info/exclude`, but not the global
     // gitignore or parent-directory ignores (the workspace root is the
     // boundary). `require_git(false)` keeps `.gitignore` effective even outside
     // a git repo. `hidden(false)` keeps dotfiles visible. The `filter_entry`
     // mirrors `get_file_tree`'s hardcoded ignores exactly.
-    let walker = WalkBuilder::new(&root)
+    let filter_root = root.to_path_buf();
+    let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(false)
         .ignore(true)
@@ -5214,17 +5263,25 @@ pub(super) fn visit_workspace_files(path: &str, mut visit: impl FnMut(WorkspaceF
         .require_git(false)
         .sort_by_file_name(|a, b| a.cmp(b))
         .filter_entry(move |e| {
+            if e.depth() == 0 {
+                return true;
+            }
             let name = e.file_name().to_string_lossy();
             if e.depth() == 1 && linked_names.contains(name.as_ref()) {
                 return false;
             }
-            if e.file_type()
+            let kept = if e
+                .file_type()
                 .is_some_and(|t| entry_presents_as_dir(&t, e.path()))
             {
                 !FILE_TREE_IGNORED_DIRS.contains(&name.as_ref())
             } else {
                 name != ".DS_Store"
-            }
+            };
+            kept && focus.as_ref().is_none_or(|focus| {
+                let rel = e.path().strip_prefix(&filter_root).unwrap_or(e.path());
+                focus(&rel.to_string_lossy().replace('\\', "/"))
+            })
         })
         .build();
 
@@ -5246,7 +5303,7 @@ pub(super) fn visit_workspace_files(path: &str, mut visit: impl FnMut(WorkspaceF
             .is_some_and(|t| entry_presents_as_dir(&t, entry_path));
         let name = entry.file_name().to_string_lossy().to_string();
         let rel_path = entry_path
-            .strip_prefix(&root)
+            .strip_prefix(root)
             .unwrap_or(entry_path)
             .to_string_lossy()
             .replace('\\', "/");
@@ -5260,25 +5317,10 @@ pub(super) fn visit_workspace_files(path: &str, mut visit: impl FnMut(WorkspaceF
                 WorkspaceEntryKind::File
             },
         }) {
-            return;
+            return false;
         }
     }
-
-    for (link_name, target) in linked {
-        if !visit(WorkspaceFileEntry {
-            name: link_name.clone(),
-            path: link_name.clone(),
-            kind: WorkspaceEntryKind::Dir,
-        }) {
-            return;
-        }
-        // Rooted at the resolved target so the linked project's own ignore
-        // files apply, then re-prefixed with the link name so every path stays
-        // relative to the workspace root and resolves back through the link.
-        if !visit_files_under(&target, &link_name, &mut visit) {
-            return;
-        }
-    }
+    true
 }
 
 /// Flat listing of `root`, with every path prefixed by `prefix/`. Shares the

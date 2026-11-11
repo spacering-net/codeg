@@ -23,7 +23,7 @@ const MAX_CONSUMERS: usize = 128;
 const NO_PARENT: u32 = u32::MAX;
 
 mod index_cache;
-use index_cache::{IndexService, RootKey};
+use index_cache::{IndexService, Overlay, RootKey};
 
 static INDEXES: LazyLock<Arc<IndexService>> = LazyLock::new(IndexService::production);
 static SEARCHES: LazyLock<StdMutex<Searches>> =
@@ -176,6 +176,7 @@ impl CompactIndex {
             + self.string_bytes
     }
 
+    #[cfg(test)]
     fn search(
         &self,
         query: &str,
@@ -184,6 +185,15 @@ impl CompactIndex {
         control: &SearchControl,
     ) -> Vec<WorkspaceFileEntry> {
         let mut matches = Matches::new(query, limit, files_only);
+        if self.scan(&mut matches, control) {
+            matches.finish()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Offer every indexed entry to `matches`; false when stopped early.
+    fn scan(&self, matches: &mut Matches, control: &SearchControl) -> bool {
         // Repeated basenames share normalization and name-tier scoring too.
         // A full set of name matches outranks every path/subsequence match.
         // A cache sized by all unique names would multiply scratch memory by
@@ -195,7 +205,7 @@ impl CompactIndex {
         let mut lower_path = String::new();
         for (id, node) in self.nodes.iter().enumerate() {
             if control.stopped() {
-                return Vec::new();
+                return false;
             }
             while ancestors.last().map(|(id, ..)| *id).unwrap_or(NO_PARENT) != node.parent {
                 ancestors.pop();
@@ -214,7 +224,7 @@ impl CompactIndex {
             if name_scores.len() >= 4096 {
                 name_scores.clear();
             }
-            let may_match = (!files_only || !node.is_dir)
+            let may_match = (!matches.files_only || !node.is_dir)
                 && match name_score {
                     Some(score) => matches.accepts(score, id),
                     None => {
@@ -248,7 +258,7 @@ impl CompactIndex {
                 lower_path.truncate(lower_parent_len);
             }
         }
-        matches.finish()
+        true
     }
 }
 
@@ -373,6 +383,8 @@ struct Matches {
     limit: usize,
     files_only: bool,
     best: BinaryHeap<Reverse<Ranked>>,
+    // Snapshot entries removed since it was built (by file-change events).
+    hidden: Option<Arc<Overlay>>,
 }
 
 impl Matches {
@@ -382,10 +394,28 @@ impl Matches {
             limit,
             files_only,
             best: BinaryHeap::new(),
+            hidden: None,
         }
     }
 
+    /// Hide snapshot entries the overlay removed. Entries it added are offered
+    /// separately through [`Matches::offer_added`] and are never hidden.
+    fn hiding(mut self, overlay: &Arc<Overlay>) -> Self {
+        if overlay.removes_any() {
+            self.hidden = Some(Arc::clone(overlay));
+        }
+        self
+    }
+
     fn offer(&mut self, name: &str, path: &str, is_dir: bool, order: usize) {
+        self.offer_from(name, path, is_dir, order, true);
+    }
+
+    fn offer_added(&mut self, name: &str, path: &str, is_dir: bool, order: usize) {
+        self.offer_from(name, path, is_dir, order, false);
+    }
+
+    fn offer_from(&mut self, name: &str, path: &str, is_dir: bool, order: usize, base: bool) {
         if self.limit == 0 || (self.files_only && is_dir) {
             return;
         }
@@ -406,7 +436,7 @@ impl Matches {
             };
             score
         };
-        self.offer_ranked(name, path, is_dir, order, score);
+        self.insert(name, path, is_dir, order, score, base);
     }
 
     fn accepts(&self, score: i64, order: usize) -> bool {
@@ -427,7 +457,23 @@ impl Matches {
     }
 
     fn offer_ranked(&mut self, name: &str, path: &str, is_dir: bool, order: usize, score: i64) {
-        if !self.accepts(score, order) {
+        self.insert(name, path, is_dir, order, score, true);
+    }
+
+    fn insert(
+        &mut self,
+        name: &str,
+        path: &str,
+        is_dir: bool,
+        order: usize,
+        score: i64,
+        base: bool,
+    ) {
+        // Checked only for entries that would enter top-k, so removals cost
+        // nothing for the millions of entries a query rejects anyway.
+        if !self.accepts(score, order)
+            || (base && self.hidden.as_ref().is_some_and(|o| o.hides(path)))
+        {
             return;
         }
         self.best.push(Reverse(Ranked {
@@ -593,6 +639,31 @@ pub async fn search_workspace_files(
 pub async fn cancel_workspace_file_search(request: SearchRequest) -> Result<(), AppCommandError> {
     SEARCHES.lock().unwrap().register(&request, true)?;
     Ok(())
+}
+
+/// A workspace watch on `root` (canonical) became live; see
+/// [`IndexService::watch_started`]. Returns the token for [`watch_stopped`].
+pub(crate) fn watch_started(root: &std::path::Path) -> u64 {
+    INDEXES.watch_started(root)
+}
+
+pub(crate) fn watch_stopped(root: &std::path::Path, token: u64) {
+    INDEXES.watch_stopped(root, token);
+}
+
+/// One debounced batch of root-relative paths from the watch on `root`.
+pub(crate) fn watch_changed<'a>(
+    root: &std::path::Path,
+    changed: impl IntoIterator<Item = &'a String>,
+    structural: impl IntoIterator<Item = &'a String>,
+    overflowed: bool,
+) {
+    INDEXES.watch_changed(
+        root,
+        changed.into_iter().map(String::as_str),
+        structural.into_iter().map(String::as_str),
+        overflowed,
+    );
 }
 
 /// Compatibility endpoint for older clients. Discovery is now owned by an
