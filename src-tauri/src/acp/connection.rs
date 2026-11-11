@@ -10718,9 +10718,16 @@ async fn try_bridge_antigravity_ask(
     req: &RequestPermissionRequest,
     responder: Responder<RequestPermissionResponse>,
 ) -> Result<(), Responder<RequestPermissionResponse>> {
+    // Gated on Antigravity's own interaction id fingerprint rather than
+    // AgentType::Antigravity: interaction_<hex> is minted uniquely by
+    // antigravity-acp, and this ensures custom agents running Antigravity (e.g.
+    // custom:antigravity-b) also bridge into interactive question cards (#1024).
     let tool_call_id = req.tool_call.tool_call_id.to_string();
     if !crate::acp::question::is_antigravity_interaction_id(&tool_call_id)
-        || state.read().await.agent_type != AgentType::Antigravity
+        || !matches!(
+            state.read().await.agent_type,
+            AgentType::Antigravity | AgentType::Custom(_)
+        )
     {
         return Err(responder);
     }
@@ -20872,7 +20879,7 @@ async fn take_antigravity_answered_close(
     state: &Arc<RwLock<SessionState>>,
     tool_call_id: &str,
 ) -> bool {
-    agent_type == AgentType::Antigravity
+    matches!(agent_type, AgentType::Antigravity | AgentType::Custom(_))
         && crate::acp::question::is_antigravity_interaction_id(tool_call_id)
         && state
             .write()
@@ -50510,6 +50517,8 @@ mod tests {
         for (agent_type, enabled, decline, bridged) in [
             (AgentType::Antigravity, true, false, true),
             (AgentType::Antigravity, true, true, true),
+            // Custom agents running Antigravity (e.g. custom:antigravity-b) are bridged too.
+            (AgentType::Custom("antigravity-b"), true, false, true),
             // The ask feature's kill switch keeps the approval card, as it does
             // for every other native ask bridge.
             (AgentType::Antigravity, false, false, false),
@@ -50704,6 +50713,12 @@ mod tests {
                 2,
             ),
             (
+                AgentType::Custom("antigravity-b"),
+                Some(&answered),
+                ("completed", "Response received"),
+                2,
+            ),
+            (
                 AgentType::Codex,
                 Some(&answered),
                 ("completed", "Response received"),
@@ -50776,7 +50791,7 @@ mod tests {
                 other => panic!("unexpected output {other:?} ({case})"),
             };
             match (agent_type, card) {
-                (AgentType::Antigravity, Some(outcome)) => {
+                (AgentType::Antigravity | AgentType::Custom(_), Some(outcome)) => {
                     let expected = crate::acp::question::grok_result_card_output(outcome);
                     assert_eq!(output, expected.to_string(), "{case}");
                     assert_eq!(call.label, "ask_user_question", "{case}");
@@ -50790,7 +50805,7 @@ mod tests {
                 _ => assert!(output.contains("Response received"), "{output}"),
             }
             // Each record is consumed by the frame it was waiting for.
-            if agent_type == AgentType::Antigravity {
+            if matches!(agent_type, AgentType::Antigravity | AgentType::Custom(_)) {
                 assert!(guard.antigravity_answered_interactions.is_empty(), "{case}");
             }
         }
