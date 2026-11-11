@@ -2369,7 +2369,7 @@
       "fieldTitle": "Título",
       "untitled": "Conversación sin título",
       "sessionId": "ID de sesión",
-      "externalId": "ID de extensión",
+      "externalId": "Índice de sesión",
       "agent": "Agente",
       "model": "Modelo",
       "status": "Estado",
@@ -4111,7 +4111,9 @@
         "openFile": "Abrir {filePath}",
         "collapse": "Contraer",
         "currentMessage": "Mensaje actual",
-        "scrollToCurrent": "Desplazarse al mensaje actual (#{ordinal})"
+        "scrollToCurrent": "Desplazarse al mensaje actual (#{ordinal})",
+        "running": "En curso",
+        "total": "{count, plural, one {# mensaje} other {# mensajes}}"
       },
       "replyArtifacts": {
         "title": "Archivos modificados",

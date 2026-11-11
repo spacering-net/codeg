@@ -2369,7 +2369,7 @@
       "fieldTitle": "タイトル",
       "untitled": "無題の会話",
       "sessionId": "セッション ID",
-      "externalId": "拡張 ID",
+      "externalId": "セッションインデックス",
       "agent": "エージェント",
       "model": "モデル",
       "status": "ステータス",
@@ -4111,7 +4111,9 @@
         "openFile": "{filePath} を開く",
         "collapse": "折りたたむ",
         "currentMessage": "現在のメッセージ",
-        "scrollToCurrent": "現在のメッセージ（#{ordinal}）へスクロール"
+        "scrollToCurrent": "現在のメッセージ（#{ordinal}）へスクロール",
+        "running": "実行中",
+        "total": "全 {count} 件"
       },
       "replyArtifacts": {
         "title": "変更されたファイル",

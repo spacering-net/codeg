@@ -2369,7 +2369,7 @@
       "fieldTitle": "標題",
       "untitled": "未命名對話",
       "sessionId": "對話 ID",
-      "externalId": "擴充 ID",
+      "externalId": "對話索引",
       "agent": "智能體",
       "model": "模型",
       "status": "狀態",
@@ -4111,7 +4111,9 @@
         "openFile": "開啟 {filePath}",
         "collapse": "收合",
         "currentMessage": "目前訊息",
-        "scrollToCurrent": "捲動到目前訊息（#{ordinal}）"
+        "scrollToCurrent": "捲動到目前訊息（#{ordinal}）",
+        "running": "進行中",
+        "total": "共 {count} 則"
       },
       "replyArtifacts": {
         "title": "變更檔案",

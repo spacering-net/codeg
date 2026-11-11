@@ -219,8 +219,12 @@ function messageButton(label: string): HTMLElement {
 
 /** The file box of `name`. */
 function fileBox(name: string): HTMLElement {
-  return screen.getByText(name).closest("[data-testid=nav-file]")!
-    .parentElement as HTMLElement
+  // The file's line names it; an open diff's title bar does too.
+  const line = screen
+    .getAllByText(name)
+    .map((el) => el.closest("[data-testid=nav-file]"))
+    .find((el) => el != null)!
+  return line.parentElement as HTMLElement
 }
 
 beforeEach(() => {
@@ -231,6 +235,81 @@ beforeEach(() => {
 })
 
 describe("MessageNavList", () => {
+  describe("while the agent answers a message", () => {
+    const running = { turnId: "u3", startedAt: Date.now() - 65_000 }
+
+    it("lists that message first, its clock running", () => {
+      renderList({ running })
+      const pinned = screen.getByTestId("nav-running")
+      expect(pinned).toHaveTextContent("delete a file")
+      expect(within(pinned).getByTestId("nav-running-clock")).toHaveTextContent(
+        /1m [56]s/
+      )
+      // First in the list, and listed once.
+      const labels = screen
+        .getAllByTestId("nav-message")
+        .map((row) => row.textContent)
+      expect(labels[0]).toContain("delete a file")
+      expect(
+        labels.filter((label) => label?.includes("delete a file"))
+      ).toHaveLength(1)
+      expect(labels.slice(1).map((l) => l?.replace(/\d+$/, ""))).toEqual([
+        expect.stringContaining("first message"),
+        expect.stringContaining("edit something"),
+      ])
+    })
+
+    it("says it is running in words for a screen reader", () => {
+      renderList({ running })
+      expect(
+        within(screen.getByTestId("nav-running-clock")).getByText("Running")
+      ).toHaveClass("sr-only")
+    })
+
+    it("goes back to its place once it is done", () => {
+      const view = renderList({ running })
+      view.rerender(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <SessionViewerHostContext.Provider
+            value={{ open: (request) => opened.push(request) }}
+          >
+            <MessageNavScrollContext.Provider value={null}>
+              <MessageNavList entries={entries} onSelect={vi.fn()} />
+            </MessageNavScrollContext.Provider>
+          </SessionViewerHostContext.Provider>
+        </NextIntlClientProvider>
+      )
+      expect(screen.queryByTestId("nav-running")).not.toBeInTheDocument()
+      const labels = screen
+        .getAllByTestId("nav-message")
+        .map((row) => row.textContent)
+      expect(labels[2]).toContain("delete a file")
+    })
+
+    it("lists nothing first for a message it doesn't hold", () => {
+      renderList({ running: { turnId: "elsewhere", startedAt: null } })
+      expect(screen.queryByTestId("nav-running")).not.toBeInTheDocument()
+    })
+  })
+
+  it("says when the message the transcript shows was sent", () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-06-12T12:06:30.000Z"))
+    try {
+      renderList({
+        currentTurnId: "u1",
+        entries: [
+          { ...entries[0], sentAt: Date.parse("2026-06-12T12:00:00.000Z") },
+        ],
+      })
+      expect(screen.getByTestId("nav-row-time")).toHaveTextContent(
+        "6 minutes ago"
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("lists nothing without entries", () => {
     renderList({ entries: [] })
     expect(screen.queryAllByRole("listitem")).toHaveLength(0)
@@ -493,6 +572,46 @@ describe("MessageNavList", () => {
       })
     })
 
+    // As an edit's diff in the transcript: the switch and the open-in-tab
+    // button sit on the diff panel's title bar, not on the file's line.
+    it("puts a diff's controls on its panel's title bar", () => {
+      renderList()
+      fireEvent.click(messageButton("edit something"))
+      const box = fileBox("b.ts")
+      const line = box.querySelector("[data-testid=nav-file]") as HTMLElement
+      expect(
+        within(line).queryByRole("button", { name: "View Diff" })
+      ).toBeNull()
+      fireEvent.click(
+        within(line).getByRole("button", {
+          name: "Show the changes to src/b.ts",
+        })
+      )
+      expect(
+        within(line).queryByRole("button", { name: "View Diff" })
+      ).toBeNull()
+      expect(
+        within(line).queryByRole("button", {
+          name: "Switch to side-by-side view",
+        })
+      ).toBeNull()
+      const panel = within(box).getByTestId("nav-file-diff")
+      const bar = panel.firstElementChild as HTMLElement
+      // The bidi marks that keep the folder in order aside.
+      expect(bar.textContent?.replace(/\u200e/g, "")).toContain("src/b.ts")
+      expect(
+        within(bar).getByRole("button", { name: "View Diff" })
+      ).toBeInTheDocument()
+      expect(
+        within(bar).getByRole("button", {
+          name: "Switch to side-by-side view",
+        })
+      ).toBeInTheDocument()
+      // The code is under the bar.
+      expect(bar.querySelector("[data-diff-row]")).toBeNull()
+      expect(panel.querySelectorAll("[data-diff-row]")).toHaveLength(3)
+    })
+
     it("keeps a file's diff open while its message is closed and reopened", () => {
       renderList()
       fireEvent.click(messageButton("edit something"))
@@ -608,7 +727,7 @@ describe("MessageNavList", () => {
   describe("in a scroll area", () => {
     /** A scroll area `height` tall, at its top. Rows are 33px apart from its
      *  top (the virtualizer mock), and the section header covers its top
-     *  28px. */
+     *  36px. */
     function scrollArea(height: number): HTMLElement & { height: number } {
       const element = document.createElement("div") as HTMLDivElement & {
         height: number
@@ -657,6 +776,36 @@ describe("MessageNavList", () => {
           name: "Scroll to the current message (#3)",
         })
       ).toBeInTheDocument()
+    })
+
+    // The running message is listed apart, above the virtualized rows.
+    it("offers a way back to the current message when it is the running one", () => {
+      const area = scrollArea(60)
+      renderList(
+        {
+          currentTurnId: "u3",
+          running: { turnId: "u3", startedAt: null },
+        },
+        { scrollElement: area }
+      )
+      // It sits 30px into the scrolled content, 40px tall.
+      const pinned = screen.getByTestId("nav-running")
+      pinned.getBoundingClientRect = () =>
+        ({ top: 30 - area.scrollTop, height: 40 }) as DOMRect
+      scrollTo(area, 200)
+      const back = screen.getByRole("button", {
+        name: "Scroll to the current message (#3)",
+      })
+      fireEvent.click(back)
+      expect(area.scrollTo).toHaveBeenCalledWith({
+        top: 30 - (60 - 40) / 2,
+        behavior: "smooth",
+      })
+      // Back at the top it is in view again.
+      scrollTo(area, 0)
+      expect(
+        screen.queryByRole("button", { name: /Scroll to the current message/ })
+      ).not.toBeInTheDocument()
     })
 
     it("checks again when the scroll area resizes, without a scroll", async () => {
@@ -710,21 +859,16 @@ describe("MessageNavList", () => {
       )
       // Over a workspace background image `ws-msg-card` / `ws-msg-chip` turn
       // a fill translucent (globals.css): every page-coloured or muted fill
-      // here — the band, the number pills, the diff's panel, the button back
-      // to the current message — has one.
-      const OPAQUE = [
-        "bg-background",
-        "bg-card",
-        "bg-muted",
-        "bg-secondary",
-        "bg-popover",
-      ]
+      // here — the band, the diff's panel, the button back to the current
+      // message — has one.
+      // Their tints too (`bg-background/80`): page-coloured all the same.
+      const OPAQUE = /^bg-(background|card|muted|secondary|popover)(\/\d+)?$/
       const classes = (el: Element) =>
         (el.getAttribute("class") ?? "").split(/\s+/)
       const filled = [...document.body.querySelectorAll("*")].filter((el) =>
-        classes(el).some((c) => OPAQUE.includes(c))
+        classes(el).some((c) => OPAQUE.test(c))
       )
-      expect(filled.length).toBeGreaterThan(3)
+      expect(filled.length).toBeGreaterThanOrEqual(3)
       for (const el of filled) {
         expect(classes(el).join(" ")).toMatch(/\bws-msg-(card|chip)\b/)
       }

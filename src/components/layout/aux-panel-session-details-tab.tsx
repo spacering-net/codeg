@@ -99,7 +99,9 @@ export function SessionDetailsTab() {
           onViewportRef={handleViewportRef}
         >
           <MessageNavScrollContext.Provider value={viewport}>
-            <div className="min-w-0 space-y-4 p-3 text-sm">
+            {/* The cards are as far apart as they are from the panel's
+                sides. */}
+            <div className="min-w-0 space-y-3 p-3 text-sm">
               <SessionDetailsCard summary={summary} model={model} />
               <SessionDetailsInsights
                 conversationId={activeRuntimeId}

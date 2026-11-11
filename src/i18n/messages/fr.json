@@ -2369,7 +2369,7 @@
       "fieldTitle": "Titre",
       "untitled": "Conversation sans titre",
       "sessionId": "ID de session",
-      "externalId": "ID d'extension",
+      "externalId": "Index de session",
       "agent": "Agent",
       "model": "Modèle",
       "status": "Statut",
@@ -4111,7 +4111,9 @@
         "openFile": "Ouvrir {filePath}",
         "collapse": "Réduire",
         "currentMessage": "Message actuel",
-        "scrollToCurrent": "Faire défiler jusqu’au message actuel (#{ordinal})"
+        "scrollToCurrent": "Faire défiler jusqu’au message actuel (#{ordinal})",
+        "running": "En cours",
+        "total": "{count, plural, one {# message} other {# messages}}"
       },
       "replyArtifacts": {
         "title": "Fichiers modifiés",
