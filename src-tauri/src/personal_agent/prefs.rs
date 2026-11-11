@@ -112,7 +112,7 @@ fn check_own(item: &str, value: &Value) -> Result<Value, String> {
 fn tool_key(raw: &str) -> Option<String> {
     let k = raw.trim();
     let k = k.strip_prefix("prefs.").unwrap_or(k);
-    if prefs::spec(k).is_some() || k == prefs::AUTOMATION_KEY {
+    if prefs::spec(k).is_some() || prefs::PRESETS.iter().any(|(key, _)| *key == k) {
         return Some(format!("prefs.{k}"));
     }
     let k = k.strip_prefix("own.").unwrap_or(k);
@@ -125,7 +125,7 @@ const BRAIN_ITEM: &str = "brain";
 /// Every key the tool takes, for a refusal.
 fn tool_keys() -> String {
     let mut keys: Vec<&str> = prefs::PREFS.iter().map(|s| s.key).collect();
-    keys.push(prefs::AUTOMATION_KEY);
+    keys.extend(prefs::PRESETS.iter().map(|(k, _)| *k));
     keys.extend(OWN_ITEMS);
     keys.push(BRAIN_ITEM);
     keys.join(", ")
@@ -196,6 +196,7 @@ impl PersonalAgentEngine {
             Some(p) => AccountView::from_settings(&p.settings),
             None => AccountView {
                 automation_level: Prefs::default().automation_level().to_string(),
+                disturb_level: Prefs::default().disturb_level().to_string(),
                 ..AccountView::default()
             },
         }
@@ -219,13 +220,18 @@ impl PersonalAgentEngine {
             Ok(Value::Object(m)) => m,
             _ => Map::new(),
         };
-        // `automation_level` stands for the items it sets.
+        // A preset (`automation_level`, `disturb_level`) stands for the
+        // items it sets.
         let mut expanded: Vec<SettingChange> = Vec::new();
         for c in changes {
-            if c.key == format!("prefs.{}", prefs::AUTOMATION_KEY) {
+            let preset_key = c
+                .key
+                .strip_prefix("prefs.")
+                .and_then(|k| prefs::PRESETS.iter().find(|(key, _)| *key == k));
+            if let Some((key, levels)) = preset_key {
                 let level = c.value.as_str().unwrap_or_default();
-                let preset = prefs::automation_preset(level)
-                    .ok_or("`automation_level` takes standard or ask_more")?;
+                let preset = prefs::preset(key, level)
+                    .ok_or_else(|| format!("`{key}` takes {}", levels.join(" or ")))?;
                 for (k, v) in preset {
                     expanded.push(SettingChange {
                         key: format!("prefs.{k}"),
@@ -888,8 +894,28 @@ impl PersonalAgentEngine {
             )
             .await;
         }
+        let card_id = card.id;
         self.emit_rows(vec![svc::to_row(card)]);
         self.emit(PersonalAgentChange::Status);
+        // Changed as the owner asked: low news, for a digest (1.13). What
+        // waits for them first is told by the roster's live state.
+        if let (Why::Asked, Some(host)) = (why, self.host_ref()) {
+            let bot = self.bot().await;
+            host.tell(super::reach::News {
+                key: format!("changed:{}", notice.id),
+                bot_id: bot,
+                kind: "changed",
+                what: super::reach::What::Plain {
+                    text: super::reach::glimpse(&changes_text(plan)),
+                },
+                link: Some(super::reach::NotifyLink::Bot {
+                    bot_id: bot,
+                    row_id: Some(card_id),
+                }),
+                need: None,
+            })
+            .await;
+        }
         Ok(notice.id)
     }
 

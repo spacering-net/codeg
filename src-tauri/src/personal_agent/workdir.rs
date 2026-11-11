@@ -1006,6 +1006,12 @@ is there to read you now.
   saying how late; a repeating one comes once, not once per time it missed.
 - The owner can mark a matter done, drop it or put it off from the page
   without you; you read a line about it with your next turn.
+- codeg notifies the owner itself — their reminders, what waits on them
+  (your questions and permission requests, cards to confirm, questions you
+  forward), work you dispatched that is done, your reply to what they asked
+  — as their notification settings allow (quiet hours, whether they are
+  typing or away, which assistants they muted). Say what you have to say in
+  your reply; there is nothing to send to reach them.
 
 ## Events
 

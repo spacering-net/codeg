@@ -1,9 +1,10 @@
 /**
  * What the assistant that dispatched a session answers there for the owner
  * (personal agent 7.3.1): its questions — except those asking for a secret —
- * and its plan approvals. A window holds back its notification of those
- * until the backend forwards one to the owner (`ask_forwarded`); everything
- * else (the executor's other permission requests) notifies as always.
+ * and its plan approvals. A window does not notify those: one the
+ * assistant forwards to the owner (`ask_forwarded`) reaches them as the
+ * assistant's own notification (1.13). Everything else (the executor's
+ * other permission requests) notifies as always.
  *
  * Pure, so it can be tested alone.
  */

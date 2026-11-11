@@ -8673,7 +8673,7 @@ async fn the_owner_present_and_their_hours_reach_the_brain() {
     let window = format!("test-{}", uuid::Uuid::new_v4());
     let state = super::presence::beat(
         &engine.db.conn,
-        super::presence::Beat { window: window.clone(), focused: true, idle_ms: Some(0) },
+        super::presence::Beat { window: window.clone(), focused: true, idle_ms: Some(0), typed_ms: None, viewing: None },
     )
     .await;
     assert!(state.present);
@@ -8718,7 +8718,7 @@ async fn the_owner_present_and_their_hours_reach_the_brain() {
     assert!(profile.zones.contains(&"Asia/Shanghai") && profile.zones.contains(&profile.zone.as_str()));
     super::presence::beat(
         &engine.db.conn,
-        super::presence::Beat { window, focused: false, idle_ms: Some(0) },
+        super::presence::Beat { window, focused: false, idle_ms: Some(0), typed_ms: None, viewing: None },
     )
     .await;
 }
@@ -8771,4 +8771,350 @@ async fn the_record_keeps_sixty_days() {
         .map(|r| r.0)
         .collect();
     assert_eq!(days, vec![today - chrono::Duration::days(60), today - chrono::Duration::days(59), today]);
+}
+
+// ── 1.13 reaching the owner ────────────────────────────────────────────────
+
+use crate::db::service::personal_agent_service::NewNotice;
+use crate::models::personal_agent_prefs::Level;
+
+fn owner_away() -> super::presence::Attending {
+    super::presence::Attending::default()
+}
+
+/// The owner at codeg, typing last at `typed` (never: `None`), its window
+/// not in front.
+fn owner_here(typed: Option<chrono::DateTime<chrono::Utc>>) -> super::presence::Attending {
+    super::presence::Attending {
+        present: true,
+        last_typed: typed,
+        window_focused: false,
+        viewing: vec![],
+    }
+}
+
+/// A piece of news from assistant `bot`, as a hook tells it.
+fn news(bot: i32, key: &str, kind: &'static str, text: &str) -> super::reach::News {
+    super::reach::News {
+        key: key.into(),
+        bot_id: bot,
+        kind,
+        what: super::reach::What::Done { text: text.into() },
+        link: Some(super::reach::NotifyLink::Bot { bot_id: bot, row_id: None }),
+        need: None,
+    }
+}
+
+/// A host whose quiet hours never come, the owner at `att`.
+async fn reaching(att: super::presence::Attending) -> (Arc<EngineHost>, i32, tempfile::TempDir) {
+    let (host, w, tmp) = hosted().await;
+    set_pref(&host.primary(), "quiet_hours", json!("none")).await;
+    host.reach.set_attending(Some(att));
+    (host, w, tmp)
+}
+
+#[tokio::test]
+async fn a_reminder_reaches_the_owner_once_under_the_assistants_name_saying_why() {
+    let (host, _w, _tmp) = reaching(owner_away()).await;
+    let engine = host.primary();
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Stretch", "due": "2m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    let at = super::clock::now() + chrono::Duration::minutes(3);
+    engine.fire_due_at(at).await;
+    engine.fire_due_at(at + chrono::Duration::seconds(15)).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1, "once: {sent:?}");
+    let n = &sent[0];
+    let row = svc::get_bot(&host.db.conn, engine.bot().await).await.unwrap().unwrap();
+    let name = if row.name.trim().is_empty() { "Personal agent".to_string() } else { row.name.clone() };
+    assert_eq!(n.title, name);
+    assert_eq!((n.level, n.attention, n.mode), (Level::Urgent, true, super::reach::Mode::System));
+    assert!(
+        n.body.starts_with("Reminder: Stretch\nYou asked to be reminded at "),
+        "the last line says why: {}",
+        n.body
+    );
+    let card = reminder_rows(&engine, id).await[0].id;
+    assert_eq!(
+        n.link,
+        Some(super::reach::NotifyLink::Bot { bot_id: row.id, row_id: Some(card) })
+    );
+    assert_eq!(n.hidden_body, "Open codeg to see it");
+}
+
+#[tokio::test]
+async fn what_waits_on_the_owner_is_told_as_it_comes_and_only_once() {
+    let (host, w, _tmp) = reaching(owner_here(None)).await;
+    let worker = svc::get_bot(&host.db.conn, w).await.unwrap().unwrap();
+    let mut row = NewRow::new(TimelineKind::Notice, "Did the comment go out on PR #7?");
+    row.data = Some(json!({ "notice": "uncertain", "state": "open" }));
+    let (_, card) = svc::create_notice_with_row(
+        &host.db.conn,
+        w,
+        NewNotice {
+            kind: NoticeKind::Uncertain,
+            subject_key: None,
+            level: NoticeLevel::Normal,
+            batch_id: None,
+            payload: json!({}),
+        },
+        row,
+    )
+    .await
+    .unwrap();
+    let (_, needs) = host.live_with_needs(&worker).await;
+    host.reach_needs(&worker, &needs).await;
+    host.reach_needs(&worker, &needs).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].title, "Dev");
+    assert_eq!(sent[0].level, Level::Normal);
+    assert_eq!(
+        sent[0].body,
+        "Waiting for you: Did the comment go out on PR #7?\nIt needs you to decide what happens next."
+    );
+    assert_eq!(sent[0].link, Some(super::reach::NotifyLink::Bot { bot_id: w, row_id: Some(card.id) }));
+    // Gone and back is new.
+    host.reach_needs(&worker, &[]).await;
+    host.reach_needs(&worker, &needs).await;
+    assert!(host.reach.take_sent().is_empty(), "the same card is told once");
+}
+
+#[tokio::test]
+async fn normal_news_waits_while_the_owner_types_and_while_they_are_away() {
+    let now = super::clock::now();
+    let (host, w, _tmp) = reaching(owner_here(Some(now))).await;
+    host.tell_at(news(w, "done:1", "done", "Fix login"), now).await;
+    assert!(host.reach.take_sent().is_empty(), "they are typing");
+    assert_eq!(host.reach.held_counts(), (1, 0, 0));
+    // Still typing a minute on; three minutes after they stopped, it goes.
+    host.reach.set_attending(Some(owner_here(Some(now + chrono::Duration::minutes(1)))));
+    host.reach_tick_at(now + chrono::Duration::minutes(2)).await;
+    assert!(host.reach.take_sent().is_empty());
+    host.reach_tick_at(now + chrono::Duration::minutes(4)).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].body, "Done: Fix login\nIt dispatched this work for you.");
+
+    // Away: held until they are back, then merged.
+    host.reach.set_attending(Some(owner_away()));
+    host.tell_at(news(w, "done:2", "done", "Bump deps"), now).await;
+    host.tell_at(news(w, "done:3", "done", "Write docs"), now).await;
+    host.reach_tick_at(now + chrono::Duration::minutes(5)).await;
+    assert!(host.reach.take_sent().is_empty());
+    assert_eq!(host.reach.held_counts(), (0, 2, 0));
+    host.reach.set_attending(Some(owner_here(None)));
+    host.reach_tick_at(now + chrono::Duration::minutes(30)).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1, "merged");
+    assert_eq!(sent[0].title, "Dev");
+    assert_eq!(
+        sent[0].body,
+        "While you were away — 2 things\n· Done: Bump deps\n· Done: Write docs"
+    );
+    // Urgent does not wait for anyone.
+    host.reach.set_attending(Some(owner_here(Some(now))));
+    host.tell_at(news(w, "approval:1", "approval", "rm -rf build"), now).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].attention);
+}
+
+#[tokio::test]
+async fn quiet_hours_let_only_the_owners_reminders_through_until_they_end() {
+    let (host, w, _tmp) = reaching(owner_here(None)).await;
+    let engine = host.primary();
+    let tz = engine.owner_tz().await;
+    let now = super::clock::now();
+    let local = now.with_timezone(&tz);
+    let from = (local - chrono::Duration::hours(1)).format("%H:%M").to_string();
+    let to = (local + chrono::Duration::hours(1)).format("%H:%M").to_string();
+    set_pref(&engine, "quiet_hours", json!("fixed")).await;
+    set_pref(&engine, "quiet_from", json!(from)).await;
+    set_pref(&engine, "quiet_to", json!(to)).await;
+    host.tell_at(news(w, "approval:q", "approval", "push to main"), now).await;
+    host.tell_at(news(w, "done:q", "done", "Fix login"), now).await;
+    let mut reminder = news(w, "reminder:q", "reminder", "");
+    reminder.what = super::reach::What::Reminder { text: "Stand-up".into(), at: "09:00".into() };
+    host.tell_at(reminder, now).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1, "only the reminder: {sent:?}");
+    assert!(sent[0].body.starts_with("Reminder: Stand-up"));
+    host.reach_tick_at(now + chrono::Duration::minutes(10)).await;
+    assert!(host.reach.take_sent().is_empty(), "still quiet");
+    host.reach_tick_at(now + chrono::Duration::minutes(70)).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].body.contains("Waiting for your approval") || sent[0].body.contains("push to main"), "{}", sent[0].body);
+    assert!(sent[0].body.starts_with("While you were away — 2 things"), "{}", sent[0].body);
+}
+
+#[tokio::test]
+async fn muted_hidden_switched_off_and_looked_at_assistants_do_not_interrupt() {
+    let (host, w, _tmp) = reaching(owner_here(None)).await;
+    let now = super::clock::now();
+    host.roster_act(w, crate::models::personal_agent_roster::RosterAct::Mute).await.unwrap();
+    host.tell_at(news(w, "approval:m", "approval", "x"), now).await;
+    let mut reminder = news(w, "reminder:m", "reminder", "");
+    reminder.what = super::reach::What::Reminder { text: "Pills".into(), at: "21:00".into() };
+    host.tell_at(reminder, now).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1, "a muted assistant still brings the owner's reminder");
+    assert!(sent[0].body.starts_with("Reminder: Pills"));
+    host.roster_act(w, crate::models::personal_agent_roster::RosterAct::Unmute).await.unwrap();
+    host.roster_act(w, crate::models::personal_agent_roster::RosterAct::Notify { on: false }).await.unwrap();
+    host.tell_at(news(w, "approval:n", "approval", "x"), now).await;
+    host.roster_act(w, crate::models::personal_agent_roster::RosterAct::Notify { on: true }).await.unwrap();
+    host.roster_act(w, crate::models::personal_agent_roster::RosterAct::Hide).await.unwrap();
+    host.tell_at(news(w, "approval:h", "approval", "x"), now).await;
+    host.roster_act(w, crate::models::personal_agent_roster::RosterAct::Show).await.unwrap();
+    assert!(host.reach.take_sent().is_empty());
+    // In front of them: no notification.
+    host.reach.set_attending(Some(super::presence::Attending { viewing: vec![w], ..owner_here(None) }));
+    host.tell_at(news(w, "approval:v", "approval", "x"), now).await;
+    assert!(host.reach.take_sent().is_empty());
+    // A window with the focus shows it on the page.
+    host.reach.set_attending(Some(super::presence::Attending { window_focused: true, ..owner_here(None) }));
+    host.tell_at(news(w, "approval:t", "approval", "x"), now).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].mode, super::reach::Mode::Toast);
+    // Not proactive: only reminders.
+    set_pref(&host.primary(), "proactive", json!("off")).await;
+    host.reach.set_attending(Some(owner_here(None)));
+    host.tell_at(news(w, "approval:p", "approval", "x"), now).await;
+    assert!(host.reach.take_sent().is_empty());
+}
+
+#[tokio::test]
+async fn low_news_is_merged_at_most_every_two_hours_when_the_owner_asks_for_more() {
+    let (host, w, _tmp) = reaching(owner_here(None)).await;
+    let engine = host.primary();
+    engine.apply_settings(&[change("prefs.disturb_level", json!("more"))]).await.unwrap();
+    assert_eq!(engine.account().await.disturb_level, "more");
+    let now = super::clock::now();
+    let mut a = news(w, "exchange:1", "exchange", "");
+    a.what = super::reach::What::Plain { text: "→ Review: please look at #12".into() };
+    host.tell_at(a, now).await;
+    host.reach_tick_at(now + chrono::Duration::minutes(5)).await;
+    assert!(host.reach.take_sent().is_empty(), "not before two hours have gone");
+    host.reach_tick_at(now + chrono::Duration::hours(3)).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].level, Level::Low);
+    // "More" also sends while they type.
+    host.reach.set_attending(Some(owner_here(Some(now))));
+    host.tell_at(news(w, "done:more", "done", "Fix it"), now).await;
+    assert_eq!(host.reach.take_sent().len(), 1);
+}
+
+#[tokio::test]
+async fn the_disturbance_level_is_read_off_its_items_and_quiet_leaves_normal_news_in_today() {
+    let (host, w, _tmp) = reaching(owner_here(None)).await;
+    let engine = host.primary();
+    assert_eq!(engine.account().await.disturb_level, "standard");
+    engine.apply_settings(&[change("prefs.disturb_level", json!("quiet"))]).await.unwrap();
+    let account = engine.account().await;
+    assert_eq!(account.disturb_level, "quiet");
+    assert_eq!(account.prefs.normal_via, crate::models::personal_agent_prefs::NormalVia::Today);
+    let now = super::clock::now();
+    host.tell_at(news(w, "done:quiet", "done", "Fix it"), now).await;
+    assert!(host.reach.take_sent().is_empty(), "normal news waits in today");
+    host.tell_at(news(w, "approval:quiet", "approval", "x"), now).await;
+    assert_eq!(host.reach.take_sent().len(), 1, "urgent still reaches them");
+    engine.apply_settings(&[change("prefs.normal_via", json!("in_page"))]).await.unwrap();
+    assert_eq!(engine.account().await.disturb_level, "custom");
+    assert!(engine.apply_settings(&[change("prefs.disturb_level", json!("loud"))]).await.is_err());
+    // An item the owner sets by itself is checked like any other.
+    assert!(engine.apply_settings(&[change("prefs.quiet_from", json!("25:00"))]).await.is_err());
+    engine.apply_settings(&[change("prefs.quiet_from", json!("21:30"))]).await.unwrap();
+    assert_eq!(engine.prefs().await.quiet_from, "21:30");
+    let block = crate::models::personal_agent_prefs::prefs_block(&engine.prefs().await, false);
+    assert!(block.contains("how urgent each kind of news is") && block.contains("reminders urgent"), "{block}");
+    assert!(!block.contains("- how urgent reminders are"), "the levels are one line");
+}
+
+#[tokio::test]
+async fn finished_work_reaches_the_owner_once() {
+    let (host, _w, _tmp) = reaching(owner_here(None)).await;
+    let engine = host.primary();
+    let id = session_dispatch(&engine, DispatchState::Completed, "conn-r13").await;
+    let d = dispatch_state(&engine, id).await;
+    engine.record_progress(&d, Some("it works".into()), None, "turn").await;
+    engine.record_progress(&d, Some("it works".into()), None, "turn").await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].body, "Done: Investigate\nIt dispatched this work for you.");
+}
+
+#[tokio::test]
+async fn tomorrow_morning_is_the_fixed_time_when_the_owner_sets_one() {
+    let (engine, _tmp) = configured().await;
+    set_pref(&engine, "morning", json!("fixed")).await;
+    set_pref(&engine, "morning_at", json!("07:15")).await;
+    let (tz, mornings) = engine.owner_day().await;
+    assert_eq!(mornings.workday, chrono::NaiveTime::from_hms_opt(7, 15, 0).unwrap());
+    assert_eq!(mornings.restday, mornings.workday);
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Gym", "due": "tomorrow" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    let due = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap().due_at.unwrap();
+    assert_eq!(due.with_timezone(&tz).format("%H:%M").to_string(), "07:15");
+}
+
+#[tokio::test]
+async fn what_was_held_is_decided_anew_when_its_time_comes() {
+    let now = super::clock::now();
+    let (host, w, _tmp) = reaching(owner_here(Some(now))).await;
+    let engine = host.primary();
+    // Held while they type; their quiet hours begin before they stop.
+    host.tell_at(news(w, "done:a", "done", "Fix login"), now).await;
+    assert_eq!(host.reach.held_counts(), (1, 0, 0));
+    let tz = engine.owner_tz().await;
+    let local = |t: chrono::DateTime<chrono::Utc>| t.with_timezone(&tz).format("%H:%M").to_string();
+    set_pref(&engine, "quiet_hours", json!("fixed")).await;
+    set_pref(&engine, "quiet_from", json!(local(now + chrono::Duration::minutes(2)))).await;
+    set_pref(&engine, "quiet_to", json!(local(now + chrono::Duration::minutes(62)))).await;
+    host.reach_tick_at(now + chrono::Duration::minutes(5)).await;
+    assert!(host.reach.take_sent().is_empty(), "stopped typing, but it is their quiet time now");
+    assert_eq!(host.reach.held_counts(), (0, 1, 0), "it waits for the quiet hours to end");
+    host.reach_tick_at(now + chrono::Duration::minutes(63)).await;
+    assert_eq!(host.reach.take_sent().len(), 1, "and goes after them");
+    set_pref(&engine, "quiet_hours", json!("none")).await;
+
+    // Held, then the owner says normal news is to wait in today: it does.
+    host.reach.set_attending(Some(owner_here(Some(now))));
+    host.tell_at(news(w, "done:b", "done", "Bump deps"), now).await;
+    set_pref(&engine, "normal_via", json!("today")).await;
+    host.reach_tick_at(now + chrono::Duration::minutes(5)).await;
+    assert!(host.reach.take_sent().is_empty());
+    assert_eq!(host.reach.held_counts(), (0, 0, 0));
+    set_pref(&engine, "normal_via", json!("system")).await;
+
+    // Held, then not proactive any more: dropped.
+    host.tell_at(news(w, "done:c", "done", "Docs"), now).await;
+    set_pref(&engine, "proactive", json!("off")).await;
+    host.reach_tick_at(now + chrono::Duration::minutes(5)).await;
+    assert!(host.reach.take_sent().is_empty());
+    assert_eq!(host.reach.held_counts(), (0, 0, 0));
+    set_pref(&engine, "proactive", json!("on")).await;
+
+    // A longer wait after typing is the owner's: four minutes is not five.
+    set_pref(&engine, "focus_wait", json!(5)).await;
+    host.tell_at(news(w, "done:d", "done", "Release"), now + chrono::Duration::minutes(3)).await;
+    assert_eq!(host.reach.held_counts(), (1, 0, 0), "typed three minutes ago: within five");
+    host.reach_tick_at(now + chrono::Duration::minutes(4)).await;
+    assert!(host.reach.take_sent().is_empty());
+    host.reach_tick_at(now + chrono::Duration::minutes(5)).await;
+    assert_eq!(host.reach.take_sent().len(), 1);
+
+    // On the page only stays on the page, after waiting too.
+    set_pref(&engine, "focus_wait", json!(3)).await;
+    host.reach.set_attending(Some(owner_away()));
+    host.tell_at(news(w, "done:e", "done", "Ship"), now).await;
+    set_pref(&engine, "normal_via", json!("in_page")).await;
+    host.reach.set_attending(Some(owner_here(None)));
+    host.reach_tick_at(now + chrono::Duration::minutes(10)).await;
+    let sent = host.reach.take_sent();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].in_page && sent[0].mode == super::reach::Mode::Toast, "{:?}", sent[0]);
 }

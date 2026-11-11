@@ -51,11 +51,11 @@ struct Running {
 
 pub struct EngineHost {
     pub(super) db: AppDatabase,
-    manager: ConnectionManager,
+    pub(super) manager: ConnectionManager,
     pub(super) emitter: EventEmitter,
     bus: Arc<InternalEventBus>,
-    data_dir: PathBuf,
-    primary: Arc<PersonalAgentEngine>,
+    pub(super) data_dir: PathBuf,
+    pub(super) primary: Arc<PersonalAgentEngine>,
     /// Workers' engines by assistant id. Made under this lock, so two asks
     /// for the same assistant get one engine.
     workers: Mutex<HashMap<i32, Running>>,
@@ -65,6 +65,8 @@ pub struct EngineHost {
     me: std::sync::Weak<EngineHost>,
     /// The assistants' live states pushed to the pages (`live`).
     pub(super) live: super::live::LiveHub,
+    /// What reaches the owner, and when (`reach`, 1.13).
+    pub(super) reach: super::reach::Reach,
 }
 
 /// Build the host and publish it. Call ONLY where the work-task engine was
@@ -94,12 +96,15 @@ pub async fn run(host: Arc<EngineHost>) {
     host.start().await;
     // A busy assistant's state is pushed again now and then, changed or
     // not: a page that stops hearing it lets it go stale (8.3).
+    // What waits on the owner too long is told, and what was held for
+    // them goes once its time has come (1.13).
     let ticker = host.clone();
     tokio::spawn(async move {
         let mut every = tokio::time::interval(super::live::BUSY_REPUSH);
         loop {
             every.tick().await;
             ticker.repush_busy();
+            ticker.reach_tick().await;
         }
     });
     // The usage figures are caught up while nothing runs (8.1).
@@ -151,6 +156,7 @@ impl EngineHost {
                 running: AtomicBool::new(false),
                 me: me.clone(),
                 live: super::live::LiveHub::new(true),
+                reach: super::reach::Reach::default(),
             }
         })
     }
@@ -218,6 +224,23 @@ impl EngineHost {
                 tracing::info!("[personal-agent] made {n} work assistants from the executor configs");
             }
         });
+    }
+
+    /// Whether an assistant's engine owns connection `conn_id`: its own
+    /// session, or a conversation it dispatched.
+    pub(super) async fn connection_engine(&self, conn_id: &str) -> bool {
+        for engine in self.engines().await {
+            if engine.owns_connection(conn_id).await {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Where assistant `bot`'s face is drawn for the system notifications
+    /// the desktop posts.
+    pub fn avatar_png(&self, bot: i32) -> PathBuf {
+        super::reach::avatar_png(&self.data_dir, bot)
     }
 
     /// Hand one bus event to the engine whose connection it is about: an

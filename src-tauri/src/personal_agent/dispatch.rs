@@ -1382,7 +1382,43 @@ impl PersonalAgentEngine {
                 return;
             }
         };
+        let card_id = card.id;
         self.emit_rows(vec![svc::to_row(card)]);
+        // Done, failed or ready for review: the owner hears of it (1.13).
+        let what = match d.state {
+            DispatchState::Completed
+                if ladder == crate::models::personal_agent_overview::Ladder::PrOpen =>
+            {
+                Some(super::reach::What::Review {
+                    text: super::reach::glimpse(&d.title),
+                })
+            }
+            DispatchState::Completed => Some(super::reach::What::Done {
+                text: super::reach::glimpse(&d.title),
+            }),
+            DispatchState::Review => Some(super::reach::What::Review {
+                text: super::reach::glimpse(&d.title),
+            }),
+            DispatchState::Failed => Some(super::reach::What::Failed {
+                text: super::reach::glimpse(&d.title),
+            }),
+            _ => None,
+        };
+        if let (Some(what), Some(host)) = (what, self.host_ref()) {
+            let bot = self.bot().await;
+            host.tell(super::reach::News {
+                key: format!("done:{bot}:{card_id}"),
+                bot_id: bot,
+                kind: "done",
+                what,
+                link: Some(super::reach::NotifyLink::Bot {
+                    bot_id: bot,
+                    row_id: Some(card_id),
+                }),
+                need: None,
+            })
+            .await;
+        }
         // Work done is progress on the thread it was for (4.9).
         if let (DispatchState::Completed, Some(t)) = (d.state, d.thread_id) {
             self.thread_progress(t).await;

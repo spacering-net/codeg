@@ -46,6 +46,7 @@ const api = vi.hoisted(() => ({
   personalAgentBotImpact: vi.fn(),
   personalAgentBotDelete: vi.fn(),
   personalAgentProfile: vi.fn(async () => PROFILE),
+  personalAgentRosterAct: vi.fn(async () => {}),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
@@ -76,25 +77,10 @@ vi.mock("@/contexts/personal-agent-context", () => ({
   }),
 }))
 
+import { DEFAULT_PREFS } from "./pref-pages"
 import { SettingsView } from "./settings-view"
 
-const PREFS: PersonalAgentPrefs = {
-  reply_length: "medium",
-  cards: "prefer",
-  when_unsure: "assume",
-  chat_changes: "apply",
-  confirm_dispatch: "never",
-  followups: "auto",
-  messages: "auto",
-  worker_handoff: "message",
-  loop_rounds: 3,
-  interrupt_retry: "auto",
-  retry_rounds: 2,
-  exec_questions: "assistant",
-  exec_plans: "assistant",
-  time_zone: "system",
-  presence: "on",
-}
+const PREFS: PersonalAgentPrefs = { ...DEFAULT_PREFS }
 
 function snapshot(
   account: Partial<PersonalAgentAccount> = {},
@@ -132,6 +118,7 @@ function snapshot(
       prefs: PREFS,
       team: { division: {}, usage: {} },
       automation_level: "standard",
+      disturb_level: "standard",
       ...account,
     },
   } as unknown as PersonalAgentSnapshot
@@ -169,7 +156,9 @@ describe("the settings view", () => {
       "workers",
       "executors",
       "division",
+      "notify",
       "communication",
+      "proactive",
       "automation",
       "about",
     ]) {
@@ -397,5 +386,181 @@ describe("the settings view", () => {
         7
       )
     )
+  })
+
+  it("sets how the assistants reach the owner on “Proactive & notifications”", async () => {
+    usePersonalAgentUi.getState().openSettings("proactive")
+    const { unmount } = draw()
+    expect(
+      document.querySelector('[data-pa-settings-page="proactive"]')
+    ).not.toBeNull()
+    for (const item of [
+      "proactive",
+      "urgent_via",
+      "normal_via",
+      "low_via",
+      "focus_wait",
+      "quiet_hours",
+      "quiet_lets",
+      "morning",
+      "level_reminder",
+      "level_answered",
+    ]) {
+      expect(document.querySelector(`[data-pa-pref="${item}"]`)).not.toBeNull()
+    }
+    // The fixed times only show when they are fixed.
+    expect(document.querySelector('[data-pa-pref="quiet_from"]')).toBeNull()
+    expect(document.querySelector('[data-pa-pref="morning_at"]')).toBeNull()
+    // A count saves when it is left.
+    const wait = document.querySelector(
+      '[data-pa-pref="focus_wait"]'
+    ) as HTMLInputElement
+    fireEvent.change(wait, { target: { value: "5" } })
+    fireEvent.blur(wait)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.focus_wait", value: 5 }],
+        null
+      )
+    )
+    // A preset is a patch of its own.
+    fireEvent.click(document.querySelector('[data-pa-level="quiet"]')!)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.disturb_level", value: "quiet" }],
+        null
+      )
+    )
+    unmount()
+    api.personalAgentSettingsPatch.mockClear()
+    // Fixed quiet hours and morning: their times show and save as HH:MM.
+    ctx.snapshot = snapshot({
+      prefs: {
+        ...PREFS,
+        quiet_hours: "fixed",
+        morning: "fixed",
+        normal_via: "in_page",
+      },
+      disturb_level: "custom",
+    })
+    draw()
+    const from = document.querySelector(
+      '[data-pa-pref="quiet_from"]'
+    ) as HTMLInputElement
+    expect(from.value).toBe("22:00")
+    expect(document.querySelector('[data-pa-pref="quiet_to"]')).not.toBeNull()
+    expect(document.querySelector('[data-pa-pref="morning_at"]')).not.toBeNull()
+    fireEvent.change(from, { target: { value: "21:30" } })
+    fireEvent.blur(from)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.quiet_from", value: "21:30" }],
+        null
+      )
+    )
+    // A level of the owner's own making is not overwritten unasked.
+    api.personalAgentSettingsPatch.mockClear()
+    fireEvent.click(document.querySelector('[data-pa-level="more"]')!)
+    expect(api.personalAgentSettingsPatch).not.toHaveBeenCalled()
+    expect(
+      await screen.findByText("This overwrites 3 items you changed.")
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }))
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.disturb_level", value: "more" }],
+        null
+      )
+    )
+    // Restore defaults puts the page's items back.
+    api.personalAgentSettingsPatch.mockClear()
+    fireEvent.click(screen.getByRole("button", { name: "Restore defaults" }))
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [
+          { key: "prefs.normal_via", value: "system" },
+          { key: "prefs.quiet_hours", value: "auto" },
+          { key: "prefs.morning", value: "hours" },
+        ],
+        null
+      )
+    )
+  })
+
+  it("turns an assistant's own notifications on and off on its “Notifications” page", async () => {
+    const flags = {
+      sort_order: 0,
+      pinned_at: null,
+      section: null,
+      hidden: false,
+      muted: false,
+      unread_mark: false,
+      notify: true,
+    }
+    const entry = (id: number, kind: "primary" | "worker") => ({
+      id,
+      kind,
+      uid: `u${id}`,
+      name: kind === "primary" ? "Nova" : "Reviewer",
+      avatar: { kind: "face", shape: "blob", color: "blue" },
+      template: null,
+      executor_assistant_id: null,
+      created_at: "2026-11-10T00:00:00Z",
+      roster: { ...flags, muted: id === 7 },
+      live: { bot_id: id, updated_at: "2026-11-10T00:00:00Z" },
+    })
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "primary"),
+      entry(7, "worker"),
+    ] as never)
+    usePersonalAgentUi.getState().openSettings("notify")
+    const { unmount } = draw()
+    const notify = await waitFor(() => {
+      const el = document.querySelector('[data-pa-notify="notify"]')
+      expect(el).not.toBeDisabled()
+      return el!
+    })
+    // The primary cannot be hidden.
+    expect(document.querySelector('[data-pa-notify="hidden"]')).toBeNull()
+    fireEvent.click(notify)
+    await waitFor(() =>
+      expect(api.personalAgentRosterAct).toHaveBeenCalledWith(1, {
+        act: "notify",
+        on: false,
+      })
+    )
+    fireEvent.click(document.querySelector('[data-pa-notify="muted"]')!)
+    await waitFor(() =>
+      expect(api.personalAgentRosterAct).toHaveBeenCalledWith(1, {
+        act: "mute",
+      })
+    )
+    unmount()
+    // A work assistant: muted already, and it can be hidden.
+    ctx.botId = 7
+    const worker = snapshot() as unknown as {
+      agent: Record<string, unknown>
+    }
+    worker.agent = { ...worker.agent, id: 7, kind: "worker", name: "Reviewer" }
+    ctx.snapshot = worker
+    draw()
+    const muted = await waitFor(() => {
+      const el = document.querySelector('[data-pa-notify="muted"]')
+      expect(el).toHaveAttribute("data-state", "checked")
+      return el!
+    })
+    fireEvent.click(muted)
+    await waitFor(() =>
+      expect(api.personalAgentRosterAct).toHaveBeenCalledWith(7, {
+        act: "unmute",
+      })
+    )
+    fireEvent.click(document.querySelector('[data-pa-notify="hidden"]')!)
+    await waitFor(() =>
+      expect(api.personalAgentRosterAct).toHaveBeenCalledWith(7, {
+        act: "hide",
+      })
+    )
+    api.personalAgentBots.mockResolvedValue([])
   })
 })

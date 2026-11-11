@@ -12,6 +12,12 @@
  * decides from that whether the owner is present, and (with their record
  * on) learns their usual hours.
  *
+ * Two more things ride along (1.13): how long since the owner last typed
+ * into something editable here (a composer, an editor, a terminal) — typing
+ * is focus, and normal news waits for them to stop — and the assistant
+ * whose conversation this window is showing them, which is not notified.
+ * A change of either goes out at once (typing: the first after a while).
+ *
  * Some windows are not the owner at work — the login page, the desktop pet,
  * the computer-use overlays — and never beat. A failed beat is dropped
  * silently: the next one says the same.
@@ -20,6 +26,7 @@
 import { useEffect } from "react"
 
 import { personalAgentPresence } from "@/lib/api"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 /** How often a window with the focus beats. */
 export const BEAT_EVERY_MS = 30_000
@@ -55,12 +62,41 @@ const INPUTS = [
   "touchstart",
 ] as const
 
+/** The `<input>` types that take text. */
+const TEXT_INPUTS = new Set([
+  "",
+  "text",
+  "search",
+  "email",
+  "url",
+  "tel",
+  "password",
+  "number",
+])
+
+/** Whether a key pressed on `target` is typing: into a text field, a text
+ *  area (the composers, Monaco, xterm's hidden one) or editable content. */
+export function isTyping(target: EventTarget | null): boolean {
+  if (typeof HTMLElement === "undefined" || !(target instanceof HTMLElement)) {
+    return false
+  }
+  if (target.isContentEditable) return true
+  if (target instanceof HTMLTextAreaElement) return !target.readOnly
+  if (target instanceof HTMLInputElement) {
+    return !target.readOnly && TEXT_INPUTS.has(target.type.toLowerCase())
+  }
+  return false
+}
+
 /** Start beating for this window; returns the stop. */
 export function startPresenceHeartbeat(): () => void {
   const id = newWindowId()
   let lastInput: number | null = null
   /** The input the last beat carried. */
   let sentInput: number | null = null
+  let lastTyped: number | null = null
+  /** The typing the last beat carried. */
+  let sentTyped: number | null = null
   let lastMove = 0
   let stopped = false
 
@@ -71,9 +107,12 @@ export function startPresenceHeartbeat(): () => void {
     if (stopped || skipsPresence(window.location.pathname)) return
     const now = Date.now()
     const idleMs = lastInput == null ? null : Math.max(0, now - lastInput)
+    const typedMs = lastTyped == null ? null : Math.max(0, now - lastTyped)
+    const viewing = usePersonalAgentUi.getState().viewing
     sentInput = lastInput
+    sentTyped = lastTyped
     Promise.resolve()
-      .then(() => personalAgentPresence(id, hasFocus, idleMs))
+      .then(() => personalAgentPresence(id, hasFocus, idleMs, typedMs, viewing))
       .catch(() => {})
   }
 
@@ -85,7 +124,12 @@ export function startPresenceHeartbeat(): () => void {
       lastMove = now
     }
     lastInput = now
-    if (sentInput == null || now - sentInput > FRESH_AFTER_MS) beat(true)
+    let fresh = sentInput == null || now - sentInput > FRESH_AFTER_MS
+    if (e.type === "keydown" && isTyping(e.target)) {
+      lastTyped = now
+      if (sentTyped == null || now - sentTyped > FRESH_AFTER_MS) fresh = true
+    }
+    if (fresh) beat(true)
   }
   /** The owner came to this window: that is input too. */
   const arrived = () => {
@@ -111,11 +155,16 @@ export function startPresenceHeartbeat(): () => void {
   const timer = window.setInterval(() => {
     if (focused()) beat(true)
   }, BEAT_EVERY_MS)
+  // The assistant shown here changed: say so at once.
+  const offViewing = usePersonalAgentUi.subscribe((s, prev) => {
+    if (s.viewing !== prev.viewing) beat()
+  })
   if (focused()) arrived()
   beat()
 
   return () => {
     stopped = true
+    offViewing()
     window.clearInterval(timer)
     for (const type of INPUTS) window.removeEventListener(type, onInput, opts)
     window.removeEventListener("focus", onFocus)

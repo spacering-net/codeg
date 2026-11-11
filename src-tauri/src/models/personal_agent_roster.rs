@@ -113,6 +113,10 @@ pub struct NeedsYou {
     /// The handed-out work that asks (`input`).
     #[serde(skip)]
     pub dispatch_id: Option<i32>,
+    /// A dispatched session's question or plan, forwarded to the owner by
+    /// the assistant answering for them (7.3.1).
+    #[serde(skip)]
+    pub forwarded: bool,
 }
 
 /// One step, as the page says it in a short line (8.4). The same shape says

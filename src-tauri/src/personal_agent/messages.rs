@@ -766,6 +766,23 @@ impl PersonalAgentEngine {
         }
         self.emit(PersonalAgentChange::Status);
         self.emit_for(to.id, PersonalAgentChange::Status);
+        // Low news: the owner may take it in a digest (1.13).
+        if let Some(host) = self.host_ref() {
+            host.tell(super::reach::News {
+                key: format!("exchange:{}", sent.sender_row.id),
+                bot_id: me.id,
+                kind: "exchange",
+                what: super::reach::What::Plain {
+                    text: format!("→ {}: {excerpt}", display_name(&to)),
+                },
+                link: Some(super::reach::NotifyLink::Bot {
+                    bot_id: me.id,
+                    row_id: Some(sent.sender_row.id),
+                }),
+                need: None,
+            })
+            .await;
+        }
         // The receiver takes it from here.
         if let Some(peer) = self.peer(to.id).await {
             peer.nudge();

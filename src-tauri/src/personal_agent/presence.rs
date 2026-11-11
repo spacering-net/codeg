@@ -78,6 +78,13 @@ pub struct Beat {
     /// focus; none yet, `None`.
     #[serde(default)]
     pub idle_ms: Option<u64>,
+    /// Milliseconds since the last keystroke into a text field while it
+    /// had the focus (1.13): the owner at work on something.
+    #[serde(default)]
+    pub typed_ms: Option<u64>,
+    /// The assistant whose conversation it shows (1.13).
+    #[serde(default)]
+    pub viewing: Option<i32>,
 }
 
 /// Whether the owner is in codeg now.
@@ -91,7 +98,24 @@ pub struct Presence {
 struct Window {
     focused: bool,
     last_input: Option<DateTime<Utc>>,
+    last_typed: Option<DateTime<Utc>>,
+    viewing: Option<i32>,
     heard: DateTime<Utc>,
+}
+
+/// What reaching the owner goes by (1.13): whether they are here, whether
+/// they are typing, whether a codeg window has the focus, and the
+/// assistants they are looking at.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Attending {
+    pub present: bool,
+    /// Their last keystroke into a text field in a window with the focus.
+    pub last_typed: Option<DateTime<Utc>>,
+    /// Some codeg window has the focus.
+    pub window_focused: bool,
+    /// The assistants a window with the focus shows, while the owner is
+    /// present.
+    pub viewing: Vec<i32>,
 }
 
 /// The windows heard from, and the record's bookkeeping.
@@ -121,19 +145,53 @@ impl Tracker {
                 self.windows.remove(&oldest);
             }
         }
-        let input = b
-            .idle_ms
-            .map(|ms| now - Duration::milliseconds(ms.min(MAX_IDLE_MS) as i64));
+        let ago = |ms: u64| now - Duration::milliseconds(ms.min(MAX_IDLE_MS) as i64);
+        let input = b.idle_ms.map(ago);
+        let typed = b.typed_ms.map(ago);
         let w = self.windows.entry(id).or_insert(Window {
             focused: false,
             last_input: None,
+            last_typed: None,
+            viewing: None,
             heard: now,
         });
         w.focused = b.focused;
         w.heard = now;
+        w.viewing = b.viewing.filter(|id| *id > 0);
+        if let Some(t) = typed {
+            w.last_typed = Some(w.last_typed.map_or(t, |had| had.max(t)));
+        }
         if let Some(t) = input {
             w.last_input = Some(w.last_input.map_or(t, |had| had.max(t)));
             self.last_active = Some(self.last_active.map_or(t, |had| had.max(t)));
+        }
+    }
+
+    /// What reaching the owner goes by at `now`.
+    pub fn attending(&self, now: DateTime<Utc>) -> Attending {
+        let live = |w: &&Window| w.focused && (now - w.heard).num_seconds() < WINDOW_GONE_SECS;
+        let present = self.state(now).present;
+        let mut viewing: Vec<i32> = if present {
+            self.windows
+                .values()
+                .filter(live)
+                .filter_map(|w| w.viewing)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        viewing.sort_unstable();
+        viewing.dedup();
+        Attending {
+            present,
+            last_typed: self
+                .windows
+                .values()
+                .filter(live)
+                .filter_map(|w| w.last_typed)
+                .max(),
+            window_focused: self.windows.values().any(|w| live(&w)),
+            viewing,
         }
     }
 
@@ -184,6 +242,11 @@ fn tracker() -> std::sync::MutexGuard<'static, Tracker> {
 /// Whether the owner is in codeg now, as this process's windows say.
 pub fn now_state() -> Presence {
     tracker().state(clock::now())
+}
+
+/// What reaching the owner goes by now, as this process's windows say.
+pub fn now_attending() -> Attending {
+    tracker().attending(clock::now())
 }
 
 /// The account's preferences, from the primary's row; `None` before an
@@ -488,6 +551,8 @@ mod tests {
                 window: window.into(),
                 focused,
                 idle_ms,
+                typed_ms: None,
+                viewing: None,
             },
             at,
         );

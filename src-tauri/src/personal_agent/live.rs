@@ -259,6 +259,7 @@ async fn needs_of(
             count: 1,
             mirror: data.get("mirror_of").is_some_and(|m| !m.is_null()),
             dispatch_id: None,
+            forwarded: false,
         });
     }
     let open = svc::notices_in_state(&db.conn, bot, NoticeState::Open)
@@ -301,6 +302,7 @@ async fn needs_of(
             count: 1,
             mirror: false,
             dispatch_id: None,
+            forwarded: false,
         });
     }
     // An executor's question or plan approval is the owner's once it is
@@ -333,6 +335,7 @@ async fn needs_of(
             count: 1,
             mirror,
             dispatch_id: if mirror { None } else { dispatch_id },
+            forwarded: true,
         });
     }
     for w in hand
@@ -350,6 +353,7 @@ async fn needs_of(
             count: 1,
             mirror: false,
             dispatch_id: Some(w.dispatch_id),
+            forwarded: false,
         });
     }
     needs.sort_by_key(|n| n.since);
@@ -884,7 +888,9 @@ impl EngineHost {
         let Ok(Some(row)) = svc::get_bot(&self.db.conn, bot).await else {
             return;
         };
-        let live = self.live_of(&row).await;
+        let (live, needs) = self.live_with_needs(&row).await;
+        // What waits on the owner now: what is new reaches them (1.13).
+        self.reach_needs(&row, &needs).await;
         let busy = live.work == WorkState::Busy;
         emit_event(
             &self.emitter,

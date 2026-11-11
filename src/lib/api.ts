@@ -2693,13 +2693,39 @@ export async function personalAgentItemAct(
 export async function personalAgentPresence(
   window: string,
   focused: boolean,
-  idleMs: number | null
+  idleMs: number | null,
+  typedMs: number | null = null,
+  viewing: number | null = null
 ): Promise<PersonalAgentPresence> {
   return getTransport().call("personal_agent_presence", {
     window,
     focused,
     idleMs,
+    typedMs,
+    viewing,
   })
+}
+
+/** Hand this device's notification switch and "hide contents" to the
+ *  desktop backend, which posts the assistants' notifications itself
+ *  (1.13). The local shell's: they are this screen's settings. */
+export async function notificationPrefsSync(
+  enabled: boolean,
+  hideBody: boolean
+): Promise<void> {
+  return getShellTransport().call("notification_prefs_sync", {
+    enabled,
+    hideBody,
+  })
+}
+
+/** An assistant's avatar as a PNG (base64, no `data:` prefix), for the
+ *  icon of the notifications the desktop backend posts (1.13). */
+export async function personalAgentAvatarPng(
+  botId: number,
+  png: string
+): Promise<void> {
+  return getTransport().call("personal_agent_avatar_png", { botId, png })
 }
 
 /** The "about you" page (1.12): the owner's time zone, the record's switch,

@@ -384,8 +384,9 @@ export interface ConnectionState {
   pendingPlanApproval: PendingPlanApprovalState | null
   /** What the assistant that dispatched this session answers here for the
    *  owner (personal agent 7.3.1): its questions and plan approvals are not
-   *  notified until one is forwarded to the owner (`ask_forwarded`). Set
-   *  from an `ask_delegate` event or a snapshot's `ask_delegate`. */
+   *  notified here — one forwarded to the owner (`ask_forwarded`) is the
+   *  assistant's own notification (1.13). Set from an `ask_delegate` event
+   *  or a snapshot's `ask_delegate`. */
   askDelegate?: AskDelegate | null
   claudeApiRetry: ClaudeApiRetryState | null
   /** AIR typed session failure table (see `lib/session-failures.ts` for the
@@ -5401,26 +5402,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           break
         case "ask_forwarded":
           // A question or plan approval the dispatching assistant was
-          // answering is the owner's now: the notification it held back.
-          {
-            const nc = quiet
-              ? null
-              : storeRef.current.connections.get(contextKey)
-            if (nc) {
-              const agent = getAgentLabel(nc.agentType)
-              const question = e.kind === "question"
-              const kind = question ? "question_request" : "permission_request"
-              void notifyDesktop(
-                kind,
-                sessionNotification(contextKey, {
-                  body: question
-                    ? t("notificationQuestion", { agent })
-                    : t("notificationPlanApproval", { agent }),
-                })
-              )
-              void requestWindowAttention(kind)
-            }
-          }
+          // answering is the owner's now. The assistant tells them itself
+          // (1.13): an urgent notification under its own name, routed by
+          // the backend (`personal-agent://notify`) — one here as well
+          // would be the same news twice. The card is already up.
           break
         case "plan_approval_resolved":
           // The approval was answered (this or another window) or canceled.

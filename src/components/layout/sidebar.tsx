@@ -86,6 +86,7 @@ import {
   type SidebarSectionOrder,
 } from "@/lib/sidebar-view-mode-storage"
 import { useCanvasBoardsStore } from "@/stores/canvas-boards-store"
+import { useRoster } from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { useConversationTagsStore } from "@/stores/conversation-tags-store"
 import {
@@ -189,6 +190,45 @@ function SidebarNavButton({
   )
 }
 
+/**
+ * The assistants' badge on the sidebar (1.13): how many assistants have
+ * something the owner has not seen — not the hidden or muted ones, nor the
+ * one the page is showing them right now — and whether any (not hidden)
+ * waits on them. Until the roster is read, the primary's own.
+ */
+function useAssistantsBadge(
+  primaryId: number | null,
+  primaryUnseen: number,
+  primaryNeeds: boolean
+): { unreadBots: number; needsOwner: boolean } {
+  const roster = useRoster()
+  const watching = usePersonalAgentUi((s) => s.watching)
+  const viewBot = usePersonalAgentUi((s) => s.viewBot)
+  const watched = watching ? (viewBot ?? primaryId) : null
+  if (!roster) {
+    const seen = watching && viewBot == null
+    return {
+      unreadBots: primaryUnseen > 0 && !seen ? 1 : 0,
+      needsOwner: primaryNeeds,
+    }
+  }
+  let unreadBots = 0
+  let needsOwner = false
+  for (const e of roster) {
+    if (e.roster.hidden) continue
+    if (e.live.attention === "needs_you") needsOwner = true
+    if (e.roster.muted || e.id === watched) continue
+    if (
+      e.live.unread > 0 ||
+      e.roster.unread_mark ||
+      e.live.attention === "unread"
+    ) {
+      unreadBots += 1
+    }
+  }
+  return { unreadBots, needsOwner }
+}
+
 export function Sidebar() {
   const t = useTranslations("Folder.sidebar")
   const { isOpen, toggle } = useSidebarContext()
@@ -201,16 +241,12 @@ export function Sidebar() {
   // Once set up, the agent's row is the agent: its avatar and name.
   const personalAgent = personalAgentState?.agent ?? null
   const personalAgentLabel = personalAgent?.name.trim() || t("personalAgent")
-  // What the assistants said that the owner has not seen — none while the
-  // page shows the newest to them (it is marked seen as it lands).
-  // Only while the page shows the primary: another assistant's newest
-  // being seen is not the primary's.
-  const personalAgentWatching = usePersonalAgentUi(
-    (s) => s.watching && s.viewBot == null
-  )
-  const personalAgentUnseen = personalAgentWatching
-    ? 0
-    : (personalAgentState?.status.unseen ?? 0)
+  const { unreadBots: personalAgentUnseen, needsOwner: anyNeedsOwner } =
+    useAssistantsBadge(
+      personalAgent?.id ?? null,
+      personalAgentState?.status.unseen ?? 0,
+      personalAgentNeedsOwner
+    )
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
@@ -650,20 +686,22 @@ export function Sidebar() {
             }}
             trailing={
               personalAgentUnseen > 0 ? (
-                // Unseen messages: a count on the theme colour, as a
-                // messenger shows one (the tasks count's geometry). It
-                // stands for the waiting dot too: the page says the rest.
+                // The assistants with something unread: a count on the
+                // theme colour, as a messenger shows one (the tasks count's
+                // geometry). It stands for the waiting dot too: the page
+                // says the rest.
                 <span
                   className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-primary px-1 font-mono text-[0.625rem] font-medium leading-none text-primary-foreground"
-                  aria-label={t("personalAgentUnseen", {
+                  aria-label={t("personalAgentUnreadBots", {
                     count: personalAgentUnseen,
                   })}
                 >
                   {personalAgentUnseen > 99 ? "99+" : personalAgentUnseen}
                 </span>
-              ) : personalAgentNeedsOwner ? (
-                // The agent waits on the owner (a question or a permission
-                // request): the same quiet dot-badge as the tasks count.
+              ) : anyNeedsOwner ? (
+                // An assistant waits on the owner (a question, a permission
+                // request, a card): the same quiet dot-badge as the tasks
+                // count.
                 <span className="ml-auto inline-flex size-2 shrink-0 rounded-full bg-primary" />
               ) : null
             }

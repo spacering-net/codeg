@@ -1237,6 +1237,30 @@ impl PersonalAgentEngine {
         }
         self.settle_ask(&card.conn, &card.request_id, resolution).await;
         let now = self.ask_card(ask_id).await.unwrap_or(card);
+        // Answered for the owner: low news, for a digest (1.13).
+        if by == Answerer::Assistant && matches!(outcome, AnswerOutcome::Answered(_)) {
+            if let Some(host) = self.host_ref() {
+                host.tell(super::reach::News {
+                    key: format!("answered:{ask_id}"),
+                    bot_id: bot,
+                    kind: "answered",
+                    what: super::reach::What::Plain {
+                        text: super::reach::glimpse(&format!(
+                            "#{} {}: {}",
+                            now.dispatch_id,
+                            now.title,
+                            now.answer_text.clone().unwrap_or_default()
+                        )),
+                    },
+                    link: Some(super::reach::NotifyLink::Bot {
+                        bot_id: bot,
+                        row_id: None,
+                    }),
+                    need: None,
+                })
+                .await;
+            }
+        }
         Ok(match outcome {
             AnswerOutcome::Answered(_) => AskReply {
                 state: "answered",

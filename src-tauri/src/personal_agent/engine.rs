@@ -3208,6 +3208,7 @@ impl PersonalAgentEngine {
             }
         };
         let has_text = !content.text.trim().is_empty();
+        let reply_words = super::reach::reply_glimpse(&content.text);
         let canceled = matches!(stop.as_deref(), Some("cancelled" | "canceled"));
         // It was told to stop for the owner's message and did: not a
         // failure, and not the owner's own stop either — its events ride
@@ -3322,6 +3323,26 @@ impl PersonalAgentEngine {
             self.emit_rows(moved.into_iter().map(svc::to_row).collect());
             let _ = svc::finish_batch_events(&self.db.conn, turn.batch_id).await;
             self.messages_handled(turn.batch_id).await;
+            // It answered what the owner asked: they hear of it (1.13).
+            if !canceled && !turn.owner_row_ids.is_empty() {
+                if let Some(host) = self.host_ref() {
+                    let bot = self.bot().await;
+                    host.tell(super::reach::News {
+                        key: format!("reply:{bot}:{}", turn.batch_id),
+                        bot_id: bot,
+                        kind: "reply",
+                        what: super::reach::What::Reply {
+                            text: reply_words.clone(),
+                        },
+                        link: Some(super::reach::NotifyLink::Bot {
+                            bot_id: bot,
+                            row_id: turn.reply_row_id,
+                        }),
+                        need: None,
+                    })
+                    .await;
+                }
+            }
             if canceled {
                 self.marker(
                     Some(turn.segment_id),

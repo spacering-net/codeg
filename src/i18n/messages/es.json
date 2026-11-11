@@ -2378,7 +2378,7 @@
       "noRecentCli": "No hay conversaciones recientes desde la línea de comandos",
       "recentFilterMenuLabel": "Mostrar en Recientes",
       "personalAgent": "Agente personal",
-      "personalAgentUnseen": "{count, plural, one {# mensaje sin leer} other {# mensajes sin leer}}",
+      "personalAgentUnreadBots": "{count, plural, one {# asistente tiene mensajes sin leer} other {# asistentes tienen mensajes sin leer}}",
       "personalAgentBadge": "Asignada por el agente personal"
     },
     "conversation": {
@@ -7962,11 +7962,13 @@
         "identity": "Identidad y cerebro",
         "persona": "Personalidad y memoria",
         "execution": "Ejecución",
+        "notify": "Avisos",
         "advanced": "Avanzado",
         "workers": "Asistentes de trabajo",
         "executors": "Configuraciones de ejecución",
         "division": "Reparto del trabajo",
         "communication": "Comunicación",
+        "proactive": "Proactividad y avisos",
         "automation": "Asignación y automatización",
         "about": "Sobre ti"
       },
@@ -7974,12 +7976,17 @@
         "identity": "El nombre y la imagen con los que se presenta, y el agente sobre el que funciona, modo y permisos incluidos: codeg lo ejecuta tal como lo elijas.",
         "persona": "Quién es, las reglas que sigue y lo que recuerda: archivos en su directorio de trabajo.",
         "execution": "La configuración de ejecución a la que asigna trabajo por defecto y la plantilla a partir de la que se creó.",
+        "notify": "Si este asistente te avisa, y si aparece en la lista.",
         "advanced": "Compactación, tarjeta de traspaso, cuánto ejecuta a la vez, su habilidad integrada y su directorio de trabajo.",
         "workers": "Tus asistentes de trabajo, cada uno con su propia función, memoria y conversación. Haz clic en uno para abrir sus ajustes.",
         "executors": "A quién asignan trabajo los asistentes: un agente, con sus opciones e instrucciones permanentes.",
         "division": "Quién se encarga primero de cada tipo de trabajo. Los asistentes lo siguen salvo que nombres a otro o que la primera opción no pueda asumirlo en ese momento.",
         "communication": "Cómo te hablan los asistentes. Todos siguen lo mismo.",
         "communicationNote": "El tono y cómo se dirigen a ti no están aquí: escríbelos en el SOUL.md de cada asistente y en el USER.md del principal.",
+        "proactive": "Cuándo y cómo te avisan los asistentes. Lo urgente —tus recordatorios, lo que espera tu respuesta o tu aprobación— llega al momento; lo demás espera mientras escribes, mientras no estás y en tus horas de silencio. Igual para todos los asistentes.",
+        "proactiveNote": "Los interruptores de cada asistente —avisarme, silenciar, ocultar— están en su página Avisos. El interruptor general de notificaciones de codeg y «ocultar el contenido» (Ajustes → Notificaciones) también se aplican a los asistentes.",
+        "byKind": "Ajustar por tipo",
+        "byKindHint": "Cuánto puede interrumpirte cada tipo de noticia. Lo urgente llega al momento; lo normal espera un buen momento; lo bajo solo va a Hoy.",
         "automation": "Lo que los asistentes hacen por su cuenta y lo que te preguntan antes. Por defecto todo se hace solo y te lo cuentan en una tarjeta; cada «pregúntame antes» lo activas tú.",
         "automationNote": "Lo que espera por ti va en una tarjeta con exactamente lo que se ejecutará, y se ejecuta cuando haces clic.",
         "about": "Lo que codeg usa para acertar con la hora: tu zona horaria y el horario que aprende de cuándo estás en codeg. Igual para todos los asistentes."
@@ -8085,6 +8092,134 @@
           "hint": "Anota los minutos que estás activo en codeg (se guardan 60 días) para aprender cuándo suele empezar y terminar tu día. Desactivado: no se anota nada más y tu horario es el predeterminado.",
           "on": "Activado",
           "off": "Desactivado"
+        },
+        "disturb_level": {
+          "title": "Interrupciones",
+          "quiet": "Menos",
+          "standard": "Estándar",
+          "more": "Más",
+          "custom": "Personalizado",
+          "quietHint": "Solo te avisan lo urgente y tus recordatorios; lo demás espera en Hoy.",
+          "standardHint": "Lo normal te avisa cuando estás y no escribes; mientras escribes espera a que pares, y mientras no estás se junta para cuando vuelvas.",
+          "moreHint": "Lo normal te avisa incluso mientras escribes, y lo bajo llega en un solo aviso como mucho cada dos horas.",
+          "customHint": "Algunos de los elementos de abajo están a tu manera.",
+          "confirmTitle": "¿Cambiar a «{level}»?",
+          "confirmBody": "{count, plural, one {Esto sobrescribe # elemento que cambiaste.} other {Esto sobrescribe # elementos que cambiaste.}}",
+          "confirm": "Cambiar"
+        },
+        "level": {
+          "urgent": "Urgente",
+          "normal": "Normal",
+          "low": "Bajo"
+        },
+        "proactive": {
+          "title": "Proactividad",
+          "hint": "Desactivada: los asistentes solo responden cuando les hablas; tus recordatorios siguen llegando.",
+          "on": "Activada",
+          "off": "Desactivada"
+        },
+        "urgent_via": {
+          "title": "Noticias urgentes",
+          "hint": "Tus recordatorios, una pregunta que un asistente te pasó, un asistente que espera tu aprobación, una sesión que te espera 10 minutos.",
+          "system_attention": "Notificación del sistema, y rebote del Dock o parpadeo en la barra de tareas",
+          "system": "Solo notificación del sistema",
+          "in_page": "Solo dentro de codeg"
+        },
+        "normal_via": {
+          "title": "Noticias normales",
+          "hint": "Trabajo terminado, una respuesta a lo que pediste, una tarjeta que te espera.",
+          "system": "Notificación del sistema",
+          "in_page": "Solo dentro de codeg",
+          "today": "Solo en Hoy"
+        },
+        "low_via": {
+          "title": "Noticias de prioridad baja",
+          "hint": "Avances, los mensajes entre asistentes, ajustes cambiados como pediste.",
+          "today": "Solo en Hoy",
+          "digest": "Un aviso combinado, como mucho cada 2 horas"
+        },
+        "focus_wait": {
+          "title": "Mientras escribes",
+          "hint": "Minutos tras dejar de escribir antes de enviar lo normal, juntado en un solo aviso. 0 lo envía como siempre."
+        },
+        "quiet_hours": {
+          "title": "Horas de silencio",
+          "hint": "En las horas de silencio solo llegan tus recordatorios; lo demás espera a que vuelvas.",
+          "auto": "Fuera de tu horario habitual (22:00–08:00 hasta aprenderlo)",
+          "fixed": "Un tramo fijo",
+          "none": "Ninguna"
+        },
+        "quiet_from": {
+          "title": "Silencio desde",
+          "hint": "Cuándo empiezan las horas de silencio."
+        },
+        "quiet_to": {
+          "title": "Silencio hasta",
+          "hint": "Cuándo terminan las horas de silencio."
+        },
+        "quiet_lets": {
+          "title": "En horas de silencio",
+          "hint": "Lo que te sigue avisando entonces.",
+          "reminders": "Solo los recordatorios que vencen",
+          "urgent": "Recordatorios y noticias urgentes"
+        },
+        "morning": {
+          "title": "«Mañana por la mañana» en los recordatorios",
+          "hint": "A qué hora vuelve un recordatorio pospuesto a mañana por la mañana.",
+          "hours": "Cuando suele empezar tu día",
+          "fixed": "Una hora fija"
+        },
+        "morning_at": {
+          "title": "Mañana por la mañana a las",
+          "hint": "La hora que significa «mañana por la mañana»."
+        },
+        "level_reminder": {
+          "title": "Recordatorios",
+          "hint": "Vence un recordatorio que pusiste."
+        },
+        "level_forwarded": {
+          "title": "Te lo pasaron",
+          "hint": "Una pregunta o un plan de una sesión que lanzó un asistente, y que te pasó a ti."
+        },
+        "level_approval": {
+          "title": "Un asistente espera aprobación",
+          "hint": "Un asistente no puede seguir hasta que apruebes un paso."
+        },
+        "level_waiting": {
+          "title": "Esperando 10 minutos",
+          "hint": "Una sesión o un trabajo asignado lleva 10 minutos esperando tu respuesta."
+        },
+        "level_question": {
+          "title": "Un asistente pregunta",
+          "hint": "La pregunta de un asistente, o su tarjeta de opciones."
+        },
+        "level_confirm": {
+          "title": "Tarjetas por confirmar",
+          "hint": "Algo que pediste confirmar antes, o un cambio que se te muestra primero."
+        },
+        "level_stuck": {
+          "title": "Atascado",
+          "hint": "Un paso que no se sabe si ocurrió, o un intercambio entre asistentes que se detuvo sin avanzar."
+        },
+        "level_done": {
+          "title": "Trabajo hecho",
+          "hint": "Un trabajo que asignó un asistente terminó, falló o espera tu revisión."
+        },
+        "level_reply": {
+          "title": "Respuestas",
+          "hint": "Un asistente respondió a lo que le pediste."
+        },
+        "level_exchange": {
+          "title": "Entre asistentes",
+          "hint": "Los mensajes de los asistentes entre sí."
+        },
+        "level_changed": {
+          "title": "Ajustes cambiados",
+          "hint": "Un ajuste que un asistente cambió como pediste."
+        },
+        "level_answered": {
+          "title": "Respondido en tu lugar",
+          "hint": "Una pregunta de una sesión asignada que un asistente respondió por ti."
         }
       },
       "workdir": {
@@ -8188,6 +8323,15 @@
         "lastActive": "Última actividad: {time}.",
         "notSeen": "Sin actividad en codeg desde que se inició.",
         "note": "Si estás aquí ahora se sigue viendo en el momento —una ventana con el foco y actividad en los últimos dos minutos— para decidir cuándo avisarte; nunca se guarda. «Mañana por la mañana» en un recordatorio es cuando suele empezar tu día."
+      },
+      "notifyPage": {
+        "notify": "Avisarme",
+        "notifyHint": "Cuando termine algo o te esté esperando",
+        "muted": "Silenciar",
+        "mutedHint": "Sin notificaciones del sistema; lo que dice sigue contando como no leído.",
+        "hidden": "Ocultar",
+        "hiddenHint": "Sigue funcionando, pero nunca te avisa, no aparece en la lista ni cuenta en la insignia; «N ocultos» al pie de la lista lo muestra.",
+        "note": "Tus recordatorios llegan sea lo que sea que pongas aquí. Los niveles y las horas de silencio están en Preferencias → Proactividad y avisos."
       }
     },
     "statusWord": {
@@ -8915,6 +9059,9 @@
         "closed": "Atendido",
         "woke": "Llegó la hora: se despertó al asistente para hacerlo"
       }
+    },
+    "notify": {
+      "open": "Abrir"
     }
   }
 }

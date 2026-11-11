@@ -2378,7 +2378,7 @@
       "noRecentCli": "没有最近从命令行启动的会话",
       "recentFilterMenuLabel": "最近显示",
       "personalAgent": "个人助手",
-      "personalAgentUnseen": "{count} 条未读消息",
+      "personalAgentUnreadBots": "{count} 个助手有未读消息",
       "personalAgentBadge": "由个人助手派出"
     },
     "conversation": {
@@ -7961,11 +7961,13 @@
         "identity": "身份与大脑",
         "persona": "人设与记忆",
         "execution": "执行方式",
+        "notify": "通知",
         "advanced": "高级",
         "workers": "工作助手",
         "executors": "执行配置",
         "division": "分工",
         "communication": "沟通",
+        "proactive": "主动与通知",
         "automation": "派活与自动",
         "about": "了解你"
       },
@@ -7973,12 +7975,17 @@
         "identity": "它的名字和头像，以及它跑在哪个 agent 上——模式和权限也在这里选，codeg 照着用。",
         "persona": "它是谁、守什么规矩、记得什么：都是它工作目录里的文件。",
         "execution": "它默认派给哪个执行配置，以及它是按哪个模板建的。",
+        "notify": "这个助手要不要通知你，以及要不要在名册上显示。",
         "advanced": "压缩、交接卡、同时派几件、内置技能和工作目录。",
         "workers": "你的工作助手，各有各的岗位、记忆和对话。点一个打开它自己的设置。",
         "executors": "助手派活交给的对象：一个 agent，加上它的选项和常驻指令。",
         "division": "每类活先交给谁。除非你点名要谁，或者首选当时接不了，助手都照这里分。",
         "communication": "助手怎么和你说话。每个助手都照这一份。",
         "communicationNote": "语气与称呼不在这一页：写在各助手的 SOUL.md 和主助手的 USER.md 里。",
+        "proactive": "助手什么时候、怎么找你。紧急的（你设的提醒、等你回答或批准的）立刻送到；其余的在你打字时、离开时和安静时段里先等一等。所有助手共用。",
+        "proactiveNote": "每个助手自己的开关（通知我、静音、隐藏）在它的「通知」页。codeg 常规设置里的通知总开关和「隐藏通知内容」（设置 → 通知）对助手同样有效。",
+        "byKind": "按类别调整",
+        "byKindHint": "每类消息能打扰你到什么程度。紧急：立刻送到；一般：挑合适的时候送；低：只进「今日」。",
         "automation": "助手自己做什么、先问你什么。默认一律自动，做了都出卡告诉你；每一项「先问我」都由你打开。",
         "automationNote": "要你确认的，出一张卡，卡上就是要执行的完整内容，点了才执行。",
         "about": "codeg 用来把时间对准你的信息：你的时区，以及从你在 codeg 里的时段学到的作息。所有助手共用。"
@@ -8084,6 +8091,134 @@
           "hint": "记下你在 codeg 里有操作的分钟（保留 60 天），学你一天通常几点开始、几点结束。关掉后不再记录，作息用默认值。",
           "on": "开",
           "off": "关"
+        },
+        "disturb_level": {
+          "title": "打扰程度",
+          "quiet": "少打扰",
+          "standard": "标准",
+          "more": "多提醒",
+          "custom": "自定义",
+          "quietHint": "只有紧急的消息和你设的提醒会通知你，其余进「今日」。",
+          "standardHint": "一般的消息在你在场、没在打字时通知你；打字时等你停手再说，离开时攒到你回来。",
+          "moreHint": "一般的消息打字时也照常通知；低级的消息合并成一条，最多每 2 小时一次。",
+          "customHint": "下面有几项是你自己调过的。",
+          "confirmTitle": "切到「{level}」？",
+          "confirmBody": "会覆盖你改过的 {count} 项。",
+          "confirm": "切换"
+        },
+        "level": {
+          "urgent": "紧急",
+          "normal": "一般",
+          "low": "低"
+        },
+        "proactive": {
+          "title": "主动功能",
+          "hint": "关掉后，助手只在你说话时回应；你设的提醒照常到点。",
+          "on": "开",
+          "off": "关"
+        },
+        "urgent_via": {
+          "title": "紧急消息",
+          "hint": "你设的提醒、助手转给你的提问、助手在等你批准、会话等你超过 10 分钟。",
+          "system_attention": "系统通知，加程序坞 / 任务栏提醒",
+          "system": "只发系统通知",
+          "in_page": "只在 codeg 里"
+        },
+        "normal_via": {
+          "title": "一般消息",
+          "hint": "派出的活做完了、它回你结论了、有卡片等你处理。",
+          "system": "系统通知",
+          "in_page": "只在 codeg 里",
+          "today": "只进「今日」"
+        },
+        "low_via": {
+          "title": "低级消息",
+          "hint": "进展、助手之间的往来、按你说的改了设置。",
+          "today": "只进「今日」",
+          "digest": "合并成一条通知，最多每 2 小时一次"
+        },
+        "focus_wait": {
+          "title": "打字时",
+          "hint": "你停手几分钟后，再把一般的消息合并成一条发出。0 表示照常发。"
+        },
+        "quiet_hours": {
+          "title": "安静时段",
+          "hint": "安静时段里只送你设的提醒，其余等你回来。",
+          "auto": "作息之外（学到作息之前是 22:00～08:00）",
+          "fixed": "固定时段",
+          "none": "不设"
+        },
+        "quiet_from": {
+          "title": "安静开始",
+          "hint": "安静时段从几点开始。"
+        },
+        "quiet_to": {
+          "title": "安静结束",
+          "hint": "安静时段到几点结束。"
+        },
+        "quiet_lets": {
+          "title": "安静时段里",
+          "hint": "这段时间仍会通知你的。",
+          "reminders": "只送到期提醒",
+          "urgent": "到期提醒和紧急消息"
+        },
+        "morning": {
+          "title": "提醒里的「明天上午」",
+          "hint": "把提醒推到「明天上午」时，它几点再来。",
+          "hours": "按作息的开始时间",
+          "fixed": "固定时刻"
+        },
+        "morning_at": {
+          "title": "「明天上午」是",
+          "hint": "「明天上午」指的时刻。"
+        },
+        "level_reminder": {
+          "title": "提醒",
+          "hint": "你设的提醒到点了。"
+        },
+        "level_forwarded": {
+          "title": "转给你的",
+          "hint": "助手派出的会话里的提问或计划，它转给了你。"
+        },
+        "level_approval": {
+          "title": "助手等你批准",
+          "hint": "助手要你批准一步才能继续。"
+        },
+        "level_waiting": {
+          "title": "等你 10 分钟",
+          "hint": "会话或派出的活等你回答已经 10 分钟。"
+        },
+        "level_question": {
+          "title": "助手在问你",
+          "hint": "助手自己的提问，或它的选择卡。"
+        },
+        "level_confirm": {
+          "title": "等你确认的卡",
+          "hint": "你要求先确认的事，或先给你看的改动。"
+        },
+        "level_stuck": {
+          "title": "卡住了",
+          "hint": "不知道做成没有的一步，或助手之间来回没进展停下了。"
+        },
+        "level_done": {
+          "title": "活做完了",
+          "hint": "助手派出的活做完了、失败了，或等你验收。"
+        },
+        "level_reply": {
+          "title": "回复",
+          "hint": "助手回答了你让它办的事。"
+        },
+        "level_exchange": {
+          "title": "助手之间",
+          "hint": "助手之间的往来消息。"
+        },
+        "level_changed": {
+          "title": "改了设置",
+          "hint": "助手按你说的改了一项设置。"
+        },
+        "level_answered": {
+          "title": "替你回答了",
+          "hint": "派出的会话里的提问，助手替你回答了。"
         }
       },
       "workdir": {
@@ -8188,6 +8323,15 @@
         "lastActive": "最近一次操作：{time}。",
         "notSeen": "codeg 启动以来还没看到你的操作。",
         "note": "你此刻在不在仍会实时判断（有焦点的窗口、最近两分钟有操作），用来决定什么时候通知你；这个不会被记下。提醒上的「明天上午」按你一天通常开始的时间。"
+      },
+      "notifyPage": {
+        "notify": "通知我",
+        "notifyHint": "做完或等你时通知你",
+        "muted": "静音",
+        "mutedHint": "不弹它的系统通知；它说的照样算未读。",
+        "hidden": "隐藏",
+        "hiddenHint": "照常运行，但不通知你、不在名册里显示、不计入角标；名册底部「已隐藏 N 个」点开能看。",
+        "note": "无论这里怎么设，你设的提醒照常送到。级别和安静时段在「偏好 → 主动与通知」。"
       }
     },
     "statusWord": {
@@ -8915,6 +9059,9 @@
         "closed": "已处理",
         "woke": "到点了，已叫醒助手去做"
       }
+    },
+    "notify": {
+      "open": "打开"
     }
   }
 }

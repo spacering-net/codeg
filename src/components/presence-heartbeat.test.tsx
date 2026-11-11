@@ -5,15 +5,20 @@ const api = vi.hoisted(() => ({
     (
       window: string,
       focused: boolean,
-      idleMs: number | null
+      idleMs: number | null,
+      typedMs?: number | null,
+      viewing?: number | null
     ) => Promise<{ present: boolean; last_active: string | null }>
   >(async () => ({ present: true, last_active: null })),
 }))
 vi.mock("@/lib/api", () => api)
 
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+
 import {
   BEAT_EVERY_MS,
   FRESH_AFTER_MS,
+  isTyping,
   skipsPresence,
   startPresenceHeartbeat,
 } from "./presence-heartbeat"
@@ -45,6 +50,8 @@ beforeEach(() => {
 afterEach(() => {
   stop?.()
   stop = null
+  usePersonalAgentUi.setState({ viewing: null })
+  document.body.innerHTML = ""
   vi.useRealTimers()
   vi.restoreAllMocks()
   api.personalAgentPresence.mockClear()
@@ -184,5 +191,63 @@ describe("the presence heartbeat", () => {
     await flush()
     await flush()
     expect(errors).not.toHaveBeenCalled()
+  })
+
+  it("tells how long since the owner typed into something editable", async () => {
+    stop = startPresenceHeartbeat()
+    await flush()
+    // A key on the page itself is input, not typing.
+    expect(api.personalAgentPresence.mock.calls[0][3]).toBeNull()
+    const box = document.createElement("textarea")
+    document.body.appendChild(box)
+    vi.advanceTimersByTime(2_000)
+    api.personalAgentPresence.mockClear()
+    // The first typing goes out at once, though input went out just now.
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }))
+    await flush()
+    expect(api.personalAgentPresence.mock.calls).toHaveLength(1)
+    expect(api.personalAgentPresence.mock.calls[0][3]).toBe(0)
+    // More typing waits for the regular beat, which carries its age.
+    vi.advanceTimersByTime(4_000)
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }))
+    await flush()
+    expect(api.personalAgentPresence.mock.calls).toHaveLength(1)
+    vi.advanceTimersByTime(BEAT_EVERY_MS - 6_000)
+    await flush()
+    expect(api.personalAgentPresence.mock.calls[1][3]).toBe(
+      BEAT_EVERY_MS - 6_000
+    )
+    // Not typing: a checkbox, a read-only field, a plain element.
+    const check = document.createElement("input")
+    check.type = "checkbox"
+    const ro = document.createElement("input")
+    ro.readOnly = true
+    expect(isTyping(check)).toBe(false)
+    expect(isTyping(ro)).toBe(false)
+    expect(isTyping(document.createElement("div"))).toBe(false)
+    expect(isTyping(document.createElement("input"))).toBe(true)
+    const editable = document.createElement("div")
+    editable.contentEditable = "true"
+    // jsdom does not compute isContentEditable.
+    Object.defineProperty(editable, "isContentEditable", { value: true })
+    expect(isTyping(editable)).toBe(true)
+  })
+
+  it("says which assistant it shows, at once when that changes", async () => {
+    stop = startPresenceHeartbeat()
+    await flush()
+    expect(api.personalAgentPresence.mock.calls[0][4]).toBeNull()
+    api.personalAgentPresence.mockClear()
+    usePersonalAgentUi.getState().setViewing(7)
+    await flush()
+    expect(api.personalAgentPresence.mock.calls).toHaveLength(1)
+    expect(api.personalAgentPresence.mock.calls[0][4]).toBe(7)
+    // The same again is no change.
+    usePersonalAgentUi.getState().setViewing(7)
+    await flush()
+    expect(api.personalAgentPresence.mock.calls).toHaveLength(1)
+    usePersonalAgentUi.getState().setViewing(null)
+    await flush()
+    expect(api.personalAgentPresence.mock.calls[1][4]).toBeNull()
   })
 })

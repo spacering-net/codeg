@@ -2378,7 +2378,7 @@
       "noRecentCli": "No recent conversations from the command line",
       "recentFilterMenuLabel": "Show in Recent",
       "personalAgent": "Personal agent",
-      "personalAgentUnseen": "{count, plural, one {# unread message} other {# unread messages}}",
+      "personalAgentUnreadBots": "{count, plural, one {# assistant has unread messages} other {# assistants have unread messages}}",
       "personalAgentBadge": "Dispatched by the personal agent"
     },
     "conversation": {
@@ -7961,11 +7961,13 @@
         "identity": "Identity & brain",
         "persona": "Persona & memory",
         "execution": "Execution",
+        "notify": "Notifications",
         "advanced": "Advanced",
         "workers": "Work assistants",
         "executors": "Executor configs",
         "division": "Division of work",
         "communication": "Communication",
+        "proactive": "Proactive & notifications",
         "automation": "Dispatch & automation",
         "about": "About you"
       },
@@ -7973,12 +7975,17 @@
         "identity": "The name and picture it goes by, and the agent it runs on — its mode and permissions included: codeg runs it as you pick.",
         "persona": "Who it is, the rules it keeps and what it remembers: files in its working directory.",
         "execution": "The executor config it dispatches to by default, and the template it was made from.",
+        "notify": "Whether this assistant notifies you, and whether it shows on the roster.",
         "advanced": "Compaction, the handoff card, how much it runs at once, its built-in skill and its working directory.",
         "workers": "Your work assistants, each with its own job, memory and conversation. Click one to open its own settings.",
         "executors": "What the assistants hand work to: an agent, with its options and standing instructions.",
         "division": "Who takes each kind of work first. The assistants go by it unless you name someone else, or the pick cannot take it right then.",
         "communication": "How the assistants talk to you. Every assistant follows the same.",
         "communicationNote": "Tone and how they address you are not here: write them in each assistant's SOUL.md, and in the primary's USER.md.",
+        "proactive": "When and how the assistants reach you. Urgent news — your reminders, what waits for your answer or approval — comes at once; the rest waits while you type, while you are away and in your quiet hours. The same for every assistant.",
+        "proactiveNote": "Each assistant's own switches — notify me, mute, hide — are on its Notifications page. codeg's notification switch and “hide contents” (Settings → Notifications) apply to the assistants too.",
+        "byKind": "Adjust by kind",
+        "byKindHint": "How much each kind of news may interrupt you. Urgent comes at once; normal waits for a good moment; low only goes to Today.",
         "automation": "What the assistants do on their own, and what they ask you first. By default everything runs on its own and tells you on a card; each “ask me first” is yours to turn on.",
         "automationNote": "What waits for you goes on a card holding exactly what will run, and runs when you click.",
         "about": "What codeg goes by to get the time right for you: your time zone, and the hours it learns from when you are in codeg. The same for every assistant."
@@ -8084,6 +8091,134 @@
           "hint": "Note the minutes you are active in codeg (kept 60 days) to learn when your day usually starts and ends. Off: nothing more is noted, and your hours are the defaults.",
           "on": "On",
           "off": "Off"
+        },
+        "disturb_level": {
+          "title": "Interruptions",
+          "quiet": "Fewer",
+          "standard": "Standard",
+          "more": "More",
+          "custom": "Custom",
+          "quietHint": "Only urgent news and your reminders notify you; the rest waits in Today.",
+          "standardHint": "Normal news notifies you while you are around and not typing; while you type it waits till you stop, and while you are away it is gathered for your return.",
+          "moreHint": "Normal news notifies you even while you type, and low news comes as one notification at most every two hours.",
+          "customHint": "Some of the items below are set your own way.",
+          "confirmTitle": "Switch to “{level}”?",
+          "confirmBody": "{count, plural, one {This overwrites # item you changed.} other {This overwrites # items you changed.}}",
+          "confirm": "Switch"
+        },
+        "level": {
+          "urgent": "Urgent",
+          "normal": "Normal",
+          "low": "Low"
+        },
+        "proactive": {
+          "title": "Proactive",
+          "hint": "Off: the assistants only answer when you talk to them; your reminders still come.",
+          "on": "On",
+          "off": "Off"
+        },
+        "urgent_via": {
+          "title": "Urgent news",
+          "hint": "Your reminders, a question an assistant forwarded to you, an assistant waiting for your approval, a session waiting for you 10 minutes.",
+          "system_attention": "System notification, and bounce the Dock or flash the taskbar",
+          "system": "System notification only",
+          "in_page": "Only in codeg"
+        },
+        "normal_via": {
+          "title": "Normal news",
+          "hint": "Work that finished, a reply to what you asked, a card waiting for you.",
+          "system": "System notification",
+          "in_page": "Only in codeg",
+          "today": "Only in Today"
+        },
+        "low_via": {
+          "title": "Low news",
+          "hint": "Progress, the assistants' messages to each other, settings changed as you asked.",
+          "today": "Only in Today",
+          "digest": "One merged notification, at most every 2 hours"
+        },
+        "focus_wait": {
+          "title": "While you type",
+          "hint": "Minutes after you stop typing before normal news is sent, merged into one notification. 0 sends it as usual."
+        },
+        "quiet_hours": {
+          "title": "Quiet hours",
+          "hint": "In quiet hours only your reminders come through; the rest waits for you to be back.",
+          "auto": "Outside your usual hours (22:00–08:00 until learned)",
+          "fixed": "A fixed span",
+          "none": "None"
+        },
+        "quiet_from": {
+          "title": "Quiet from",
+          "hint": "When quiet hours start."
+        },
+        "quiet_to": {
+          "title": "Quiet until",
+          "hint": "When quiet hours end."
+        },
+        "quiet_lets": {
+          "title": "In quiet hours",
+          "hint": "What still notifies you then.",
+          "reminders": "Only reminders that come due",
+          "urgent": "Reminders and urgent news"
+        },
+        "morning": {
+          "title": "“Tomorrow morning” in reminders",
+          "hint": "The time a reminder put off till tomorrow morning comes back.",
+          "hours": "When your day usually starts",
+          "fixed": "A fixed time"
+        },
+        "morning_at": {
+          "title": "Tomorrow morning at",
+          "hint": "The time “tomorrow morning” means."
+        },
+        "level_reminder": {
+          "title": "Reminders",
+          "hint": "A reminder you set comes due."
+        },
+        "level_forwarded": {
+          "title": "Forwarded to you",
+          "hint": "A question or plan from a session an assistant dispatched, which it forwarded to you."
+        },
+        "level_approval": {
+          "title": "An assistant waits for approval",
+          "hint": "An assistant cannot go on until you approve a step."
+        },
+        "level_waiting": {
+          "title": "Waiting 10 minutes",
+          "hint": "A session or a piece of dispatched work has waited 10 minutes for your answer."
+        },
+        "level_question": {
+          "title": "An assistant asks",
+          "hint": "An assistant's own question, or its choice card."
+        },
+        "level_confirm": {
+          "title": "Cards to confirm",
+          "hint": "Something you asked to confirm first, or a change shown to you first."
+        },
+        "level_stuck": {
+          "title": "Stuck",
+          "hint": "A step not known to have happened, or an exchange between assistants stopped going round."
+        },
+        "level_done": {
+          "title": "Work done",
+          "hint": "Work an assistant dispatched finished, failed, or waits for your review."
+        },
+        "level_reply": {
+          "title": "Replies",
+          "hint": "An assistant answered what you asked it."
+        },
+        "level_exchange": {
+          "title": "Between assistants",
+          "hint": "The assistants' messages to each other."
+        },
+        "level_changed": {
+          "title": "Settings changed",
+          "hint": "A setting an assistant changed as you asked."
+        },
+        "level_answered": {
+          "title": "Answered for you",
+          "hint": "A question from a dispatched session that an assistant answered for you."
         }
       },
       "workdir": {
@@ -8188,6 +8323,15 @@
         "lastActive": "Last active at {time}.",
         "notSeen": "Not active in codeg since it started.",
         "note": "Whether you are here right now is still judged as it happens — a window with the focus and input in the last two minutes — to decide when to notify you; it is never kept. “Tomorrow morning” on a reminder is when your day usually starts."
+      },
+      "notifyPage": {
+        "notify": "Notify me",
+        "notifyHint": "When it finishes something or waits for you",
+        "muted": "Mute",
+        "mutedHint": "No system notifications from it; what it says still counts as unread.",
+        "hidden": "Hide",
+        "hiddenHint": "It runs as ever, but never notifies you, stays off the roster and out of the badge; “N hidden” at the roster's foot shows it.",
+        "note": "Your reminders come whatever is set here. The levels and quiet hours are in Preferences → Proactive & notifications."
       }
     },
     "statusWord": {
@@ -8915,6 +9059,9 @@
         "closed": "Handled",
         "woke": "Time's up — the assistant was woken to do it"
       }
+    },
+    "notify": {
+      "open": "Open"
     }
   }
 }

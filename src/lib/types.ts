@@ -2484,9 +2484,79 @@ export interface PersonalAgentPrefs {
   /** Whether codeg records when the owner is in codeg, to learn their usual
    *  hours (1.12). */
   presence: "on" | "off"
+  /** Off: the assistants reach the owner only with their reminders (1.13). */
+  proactive: "on" | "off"
+  /** How urgent news reaches the owner. */
+  urgent_via: "system_attention" | "system" | "in_page"
+  /** How normal news reaches the owner. */
+  normal_via: "system" | "in_page" | "today"
+  /** How low news reaches the owner: only in "Today", or one merged
+   *  notification at most every two hours. */
+  low_via: "today" | "digest"
+  /** While the owner types: minutes after they stop before normal news is
+   *  sent, merged; 0 = sent as usual. */
+  focus_wait: number
+  /** Quiet hours: outside the usual hours (22:00–08:00 until learned), a
+   *  fixed span, or none. */
+  quiet_hours: "auto" | "fixed" | "none"
+  /** The fixed span, `HH:MM`. */
+  quiet_from: string
+  quiet_to: string
+  /** What still comes through in quiet hours. */
+  quiet_lets: "reminders" | "urgent"
+  /** "Tomorrow morning" in reminders: when the owner's day usually starts,
+   *  or a fixed time. */
+  morning: "hours" | "fixed"
+  /** The fixed morning, `HH:MM`. */
+  morning_at: string
+  level_reminder: PersonalAgentNewsLevel
+  level_forwarded: PersonalAgentNewsLevel
+  level_approval: PersonalAgentNewsLevel
+  level_waiting: PersonalAgentNewsLevel
+  level_question: PersonalAgentNewsLevel
+  level_confirm: PersonalAgentNewsLevel
+  level_stuck: PersonalAgentNewsLevel
+  level_done: PersonalAgentNewsLevel
+  level_reply: PersonalAgentNewsLevel
+  level_exchange: PersonalAgentNewsLevel
+  level_changed: PersonalAgentNewsLevel
+  level_answered: PersonalAgentNewsLevel
 }
 
+/** How much a kind of news may interrupt the owner (6.2). */
+export type PersonalAgentNewsLevel = "urgent" | "normal" | "low"
+
 export type PersonalAgentPrefKey = keyof PersonalAgentPrefs
+
+/** Payload of `personal-agent://notify` (1.13): something to tell the
+ *  owner, routed by the backend.
+ *  - `posted`: the desktop backend posted the OS notification itself;
+ *  - `toast`: a codeg window has the focus — that window shows it in page;
+ *  - `system`: none has — one window or tab posts the OS notification. */
+export interface PersonalAgentNotify {
+  id: string
+  mode: "toast" | "system" | "posted"
+  level: PersonalAgentNewsLevel
+  bot_id: number | null
+  /** The assistant's name, or a merged title. */
+  title: string
+  /** The news, then a line saying why it is told now. */
+  body: string
+  /** The body when notification contents are hidden. */
+  hidden_body: string
+  /** Urgent: draw the owner back (Dock bounce, taskbar flash). */
+  attention: boolean
+  /** The owner wants it on the page only: never a system notification. */
+  in_page: boolean
+  link: PersonalAgentNotifyLink | null
+  avatar: BotAvatar | null
+}
+
+export type PersonalAgentNotifyLink =
+  | { kind: "bot"; bot_id: number; row_id: number | null }
+  | { kind: "conversation"; conversation_id: number; folder_id: number | null }
+
+export const PERSONAL_AGENT_NOTIFY_EVENT = "personal-agent://notify"
 
 /** Whether the owner is in codeg now, as one window's beat leaves it. */
 export interface PersonalAgentPresence {
@@ -2557,10 +2627,12 @@ export interface PersonalAgentAccount {
   team: PersonalAgentTeam
   /** What the items add up to: a preset, or `custom`. */
   automation_level: "standard" | "ask_more" | "custom"
+  /** The disturbance level the notification items add up to (13.4). */
+  disturb_level: "quiet" | "standard" | "more" | "custom"
 }
 
 /** One item to change: `prefs.<item>`, `prefs.automation_level`,
- *  `own.<item>`, `team.division.<kind>`, `team.usage.<uid>`. */
+ *  `prefs.disturb_level`, `own.<item>`, `team.division.<kind>`, `team.usage.<uid>`. */
 export interface PersonalAgentSettingChange {
   key: string
   value: unknown
@@ -4438,8 +4510,7 @@ export type AcpEvent =
     }
   /**
    * The assistant that dispatched this session answers its questions and
-   * plan approvals for the owner: hold back their notifications until one is
-   * forwarded (`ask_forwarded`).
+   * plan approvals for the owner: a window does not notify them.
    */
   | {
       type: "ask_delegate"
@@ -4447,7 +4518,8 @@ export type AcpEvent =
     }
   /**
    * A question or plan approval the assistant was answering is now the
-   * owner's: notify them as its kind would have.
+   * owner's. The assistant notifies them itself (`personal-agent://notify`,
+   * 1.13); a window has nothing more to do.
    */
   | {
       type: "ask_forwarded"

@@ -2378,7 +2378,7 @@
       "noRecentCli": "Keine letzten Unterhaltungen von der Kommandozeile",
       "recentFilterMenuLabel": "In „Zuletzt“ anzeigen",
       "personalAgent": "Persönlicher Agent",
-      "personalAgentUnseen": "{count, plural, one {# ungelesene Nachricht} other {# ungelesene Nachrichten}}",
+      "personalAgentUnreadBots": "{count, plural, one {# Assistent hat ungelesene Nachrichten} other {# Assistenten haben ungelesene Nachrichten}}",
       "personalAgentBadge": "Vom persönlichen Agenten zugewiesen"
     },
     "conversation": {
@@ -7962,11 +7962,13 @@
         "identity": "Identität & Gehirn",
         "persona": "Persona & Gedächtnis",
         "execution": "Ausführung",
+        "notify": "Benachrichtigungen",
         "advanced": "Erweitert",
         "workers": "Arbeitsassistenten",
         "executors": "Ausführungskonfigurationen",
         "division": "Arbeitsteilung",
         "communication": "Kommunikation",
+        "proactive": "Proaktiv & Benachrichtigungen",
         "automation": "Zuweisung & Automatisierung",
         "about": "Über dich"
       },
@@ -7974,12 +7976,17 @@
         "identity": "Der Name und das Bild, unter denen er auftritt, und der Agent, auf dem er läuft – samt Modus und Berechtigungen: codeg führt ihn so aus, wie du wählst.",
         "persona": "Wer er ist, welche Regeln er befolgt und was er sich merkt: Dateien in seinem Arbeitsverzeichnis.",
         "execution": "Die Ausführungskonfiguration, der er standardmäßig zuweist, und die Vorlage, aus der er erstellt wurde.",
+        "notify": "Ob dieser Assistent dich benachrichtigt und ob er in der Liste erscheint.",
         "advanced": "Verdichtung, Übergabekarte, wie viel er gleichzeitig ausführt, sein integrierter Skill und sein Arbeitsverzeichnis.",
         "workers": "Deine Arbeitsassistenten, jeder mit eigener Aufgabe, eigenem Gedächtnis und eigener Unterhaltung. Klicke auf einen, um seine Einstellungen zu öffnen.",
         "executors": "Woran die Assistenten Arbeit abgeben: ein Agent mit seinen Optionen und dauerhaften Anweisungen.",
         "division": "Wer welche Art von Arbeit zuerst übernimmt. Die Assistenten halten sich daran, es sei denn, du nennst jemand anderen oder die erste Wahl kann gerade nicht übernehmen.",
         "communication": "Wie die Assistenten mit dir sprechen. Alle Assistenten folgen derselben Vorgabe.",
         "communicationNote": "Tonfall und Anrede stehen nicht hier: Schreib sie in die SOUL.md jedes Assistenten und in die USER.md des Hauptassistenten.",
+        "proactive": "Wann und wie die Assistenten dich erreichen. Dringendes – deine Erinnerungen, was auf deine Antwort oder Freigabe wartet – kommt sofort; der Rest wartet, während du tippst, während du weg bist und in deinen Ruhezeiten. Für alle Assistenten gleich.",
+        "proactiveNote": "Die eigenen Schalter jedes Assistenten – benachrichtigen, stummschalten, ausblenden – sind auf seiner Seite „Benachrichtigungen“. Der Benachrichtigungsschalter von codeg und „Inhalte ausblenden“ (Einstellungen → Benachrichtigungen) gelten auch für die Assistenten.",
+        "byKind": "Nach Art anpassen",
+        "byKindHint": "Wie sehr dich jede Art von Neuigkeit unterbrechen darf. Dringend kommt sofort; normal wartet auf einen guten Moment; niedrig landet nur in „Heute“.",
         "automation": "Was die Assistenten selbst erledigen und was sie dich vorher fragen. Standardmäßig läuft alles von selbst und wird dir auf einer Karte gemeldet; jedes „Frag mich vorher“ schaltest du selbst ein.",
         "automationNote": "Was auf dich wartet, landet auf einer Karte mit genau dem, was ausgeführt wird, und läuft, wenn du klickst.",
         "about": "Woran sich codeg hält, um die Zeit für dich richtig zu treffen: deine Zeitzone und die Zeiten, die es daraus lernt, wann du in codeg bist. Für alle Assistenten gleich."
@@ -8085,6 +8092,134 @@
           "hint": "Notiert die Minuten, in denen du in codeg aktiv bist (60 Tage aufbewahrt), um zu lernen, wann dein Tag meist beginnt und endet. Aus: Es wird nichts mehr notiert, und deine Zeiten sind die Standardwerte.",
           "on": "An",
           "off": "Aus"
+        },
+        "disturb_level": {
+          "title": "Unterbrechungen",
+          "quiet": "Weniger",
+          "standard": "Standard",
+          "more": "Mehr",
+          "custom": "Benutzerdefiniert",
+          "quietHint": "Nur Dringendes und deine Erinnerungen benachrichtigen dich; der Rest wartet in „Heute“.",
+          "standardHint": "Normales benachrichtigt dich, wenn du da bist und nicht tippst; während du tippst, wartet es, bis du aufhörst, und während du weg bist, wird es für deine Rückkehr gesammelt.",
+          "moreHint": "Normales benachrichtigt dich auch beim Tippen, und Niedriges kommt als eine Benachrichtigung, höchstens alle zwei Stunden.",
+          "customHint": "Einige der Punkte unten sind nach deinen Wünschen eingestellt.",
+          "confirmTitle": "Zu „{level}“ wechseln?",
+          "confirmBody": "{count, plural, one {Das überschreibt # Punkt, den du geändert hast.} other {Das überschreibt # Punkte, die du geändert hast.}}",
+          "confirm": "Wechseln"
+        },
+        "level": {
+          "urgent": "Dringend",
+          "normal": "Normal",
+          "low": "Niedrig"
+        },
+        "proactive": {
+          "title": "Proaktiv",
+          "hint": "Aus: Die Assistenten antworten nur, wenn du sie ansprichst; deine Erinnerungen kommen trotzdem.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "urgent_via": {
+          "title": "Dringende Neuigkeiten",
+          "hint": "Deine Erinnerungen, eine Frage, die ein Assistent an dich weitergegeben hat, ein Assistent, der auf deine Freigabe wartet, eine Sitzung, die 10 Minuten auf dich wartet.",
+          "system_attention": "Systembenachrichtigung, dazu Dock-Hüpfen oder Taskleisten-Blinken",
+          "system": "Nur Systembenachrichtigung",
+          "in_page": "Nur in codeg"
+        },
+        "normal_via": {
+          "title": "Normale Neuigkeiten",
+          "hint": "Fertige Arbeit, eine Antwort auf deine Bitte, eine Karte, die auf dich wartet.",
+          "system": "Systembenachrichtigung",
+          "in_page": "Nur in codeg",
+          "today": "Nur in „Heute“"
+        },
+        "low_via": {
+          "title": "Niedrige Neuigkeiten",
+          "hint": "Fortschritt, Nachrichten der Assistenten untereinander, auf deinen Wunsch geänderte Einstellungen.",
+          "today": "Nur in „Heute“",
+          "digest": "Eine zusammengefasste Benachrichtigung, höchstens alle 2 Stunden"
+        },
+        "focus_wait": {
+          "title": "Während du tippst",
+          "hint": "Minuten nach dem Tippen, bevor Normales gesendet wird, zusammengefasst in einer Benachrichtigung. 0 sendet es wie gewohnt."
+        },
+        "quiet_hours": {
+          "title": "Ruhezeiten",
+          "hint": "In den Ruhezeiten kommen nur deine Erinnerungen durch; der Rest wartet, bis du zurück bist.",
+          "auto": "Außerhalb deiner üblichen Zeiten (22:00–08:00, bis sie gelernt sind)",
+          "fixed": "Ein fester Zeitraum",
+          "none": "Keine"
+        },
+        "quiet_from": {
+          "title": "Ruhe ab",
+          "hint": "Wann die Ruhezeiten beginnen."
+        },
+        "quiet_to": {
+          "title": "Ruhe bis",
+          "hint": "Wann die Ruhezeiten enden."
+        },
+        "quiet_lets": {
+          "title": "In den Ruhezeiten",
+          "hint": "Was dich dann noch benachrichtigt.",
+          "reminders": "Nur fällige Erinnerungen",
+          "urgent": "Erinnerungen und Dringendes"
+        },
+        "morning": {
+          "title": "„Morgen früh“ in Erinnerungen",
+          "hint": "Wann eine auf morgen früh verschobene Erinnerung wiederkommt.",
+          "hours": "Wenn dein Tag meist beginnt",
+          "fixed": "Eine feste Uhrzeit"
+        },
+        "morning_at": {
+          "title": "Morgen früh um",
+          "hint": "Die Uhrzeit, die „morgen früh“ bedeutet."
+        },
+        "level_reminder": {
+          "title": "Erinnerungen",
+          "hint": "Eine Erinnerung, die du gesetzt hast, ist fällig."
+        },
+        "level_forwarded": {
+          "title": "An dich weitergegeben",
+          "hint": "Eine Frage oder ein Plan aus einer Sitzung, die ein Assistent vergeben hat, und die er an dich weitergegeben hat."
+        },
+        "level_approval": {
+          "title": "Assistent wartet auf Freigabe",
+          "hint": "Ein Assistent kommt erst weiter, wenn du einen Schritt freigibst."
+        },
+        "level_waiting": {
+          "title": "Wartet 10 Minuten",
+          "hint": "Eine Sitzung oder vergebene Arbeit wartet seit 10 Minuten auf deine Antwort."
+        },
+        "level_question": {
+          "title": "Ein Assistent fragt",
+          "hint": "Die eigene Frage eines Assistenten oder seine Auswahlkarte."
+        },
+        "level_confirm": {
+          "title": "Karten zum Bestätigen",
+          "hint": "Etwas, das du zuerst bestätigen wolltest, oder eine Änderung, die dir zuerst gezeigt wird."
+        },
+        "level_stuck": {
+          "title": "Festgefahren",
+          "hint": "Ein Schritt, von dem unklar ist, ob er geschah, oder ein Austausch zwischen Assistenten, der ohne Fortschritt gestoppt wurde."
+        },
+        "level_done": {
+          "title": "Arbeit erledigt",
+          "hint": "Von einem Assistenten vergebene Arbeit ist fertig, fehlgeschlagen oder wartet auf deine Prüfung."
+        },
+        "level_reply": {
+          "title": "Antworten",
+          "hint": "Ein Assistent hat auf deine Bitte geantwortet."
+        },
+        "level_exchange": {
+          "title": "Unter Assistenten",
+          "hint": "Die Nachrichten der Assistenten untereinander."
+        },
+        "level_changed": {
+          "title": "Einstellungen geändert",
+          "hint": "Eine Einstellung, die ein Assistent auf deinen Wunsch geändert hat."
+        },
+        "level_answered": {
+          "title": "Für dich beantwortet",
+          "hint": "Eine Frage aus einer vergebenen Sitzung, die ein Assistent für dich beantwortet hat."
         }
       },
       "workdir": {
@@ -8188,6 +8323,15 @@
         "lastActive": "Zuletzt aktiv um {time}.",
         "notSeen": "Seit dem Start von codeg nicht aktiv gewesen.",
         "note": "Ob du gerade da bist, wird weiterhin im Moment beurteilt – ein Fenster mit Fokus und Eingaben in den letzten zwei Minuten –, um zu entscheiden, wann du benachrichtigt wirst; es wird nie gespeichert. „Morgen früh“ bei einer Erinnerung ist, wann dein Tag meist beginnt."
+      },
+      "notifyPage": {
+        "notify": "Benachrichtigen",
+        "notifyHint": "Wenn er etwas abschließt oder auf dich wartet",
+        "muted": "Stummschalten",
+        "mutedHint": "Keine Systembenachrichtigungen von ihm; was er sagt, zählt trotzdem als ungelesen.",
+        "hidden": "Ausblenden",
+        "hiddenHint": "Er läuft weiter, benachrichtigt dich aber nie, steht nicht in der Liste und zählt nicht im Badge; „N ausgeblendet“ unten in der Liste zeigt ihn.",
+        "note": "Deine Erinnerungen kommen, egal was hier eingestellt ist. Stufen und Ruhezeiten findest du unter Präferenzen → Proaktiv & Benachrichtigungen."
       }
     },
     "statusWord": {
@@ -8915,6 +9059,9 @@
         "closed": "Erledigt",
         "woke": "Es ist so weit – der Assistent wurde geweckt, um es zu tun"
       }
+    },
+    "notify": {
+      "open": "Öffnen"
     }
   }
 }

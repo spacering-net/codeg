@@ -26,11 +26,13 @@ const PAGES: readonly SettingsPage[] = [
   "identity",
   "persona",
   "execution",
+  "notify",
   "advanced",
   "workers",
   "executors",
   "division",
   "communication",
+  "proactive",
   "automation",
   "about",
 ]

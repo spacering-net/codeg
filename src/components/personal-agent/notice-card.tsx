@@ -64,7 +64,13 @@ import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
 import { ReminderCard } from "./reminder-card"
-import { ABOUT_ITEMS, COMMUNICATION_ITEMS } from "./settings/pref-pages"
+import {
+  ABOUT_ITEMS,
+  choiceKey,
+  COMMUNICATION_ITEMS,
+  isClockItem,
+  PROACTIVE_ITEMS,
+} from "./settings/pref-pages"
 import {
   AGENT_SURFACE,
   asMode,
@@ -610,6 +616,7 @@ function pageOf(key: string): SettingsPage {
   if (key.startsWith("team.usage.")) return "executors"
   const item = key.replace(/^prefs\./, "") as PersonalAgentPrefKey
   if (ABOUT_ITEMS.includes(item)) return "about"
+  if (PROACTIVE_ITEMS.includes(item)) return "proactive"
   return COMMUNICATION_ITEMS.includes(item) ? "communication" : "automation"
 }
 
@@ -678,8 +685,12 @@ function useChangeText() {
     if (key === "prefs.time_zone" && typeof v === "string") {
       return v === "system" ? tp("time_zone.system") : v
     }
+    // A time of day is its own words.
+    if (key.startsWith("prefs.") && isClockItem(key.slice(6))) {
+      return typeof v === "string" ? v : String(v ?? "")
+    }
     if (key.startsWith("prefs.") && typeof v === "string") {
-      return tp(`${key.slice(6)}.${v}` as "reply_length.short")
+      return tp(choiceKey(key.slice(6), v) as "reply_length.short")
     }
     if (key.startsWith("team.division.")) {
       if (typeof v !== "string") return ts("team.auto")

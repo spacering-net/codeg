@@ -30,11 +30,13 @@ export type SettingsPage =
   | "identity"
   | "persona"
   | "execution"
+  | "notify"
   | "advanced"
   | "workers"
   | "executors"
   | "division"
   | "communication"
+  | "proactive"
   | "automation"
   | "about"
 
@@ -97,6 +99,16 @@ interface PersonalAgentUiState {
    *  roster. Switching closes what was open about the other one. */
   viewBot: number | null
   setViewBot: (bot: number | null) => void
+  /** The assistant whose conversation this window shows the owner right
+   *  now (its real id, the primary's too): the page is the active route
+   *  and the settings view is not over it. The presence beat carries it —
+   *  an assistant being looked at is not notified (1.13). */
+  viewing: number | null
+  setViewing: (bot: number | null) => void
+  /** A row to show once the page is on its assistant: a notification
+   *  followed (1.13). */
+  pendingJump: { bot: number; row: number } | null
+  setPendingJump: (jump: { bot: number; row: number } | null) => void
 }
 
 export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
@@ -126,4 +138,9 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
         ? s
         : { viewBot, settings: null, workOpen: false, watching: false }
     ),
+  viewing: null,
+  setViewing: (viewing) =>
+    set((s) => (s.viewing === viewing ? s : { viewing })),
+  pendingJump: null,
+  setPendingJump: (pendingJump) => set({ pendingJump }),
 }))

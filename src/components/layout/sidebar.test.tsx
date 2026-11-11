@@ -56,6 +56,8 @@ const mockState = vi.hoisted(() => ({
   personalAgentNeedsOwner: false,
   // Messages from the assistants the owner has not seen.
   personalAgentUnseen: 0,
+  // The roster as read (`null`: not yet).
+  roster: null as unknown[] | null,
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
@@ -126,6 +128,9 @@ vi.mock("@/contexts/personal-agent-context", () => ({
     },
   }),
 }))
+vi.mock("@/stores/personal-agent-roster-store", () => ({
+  useRoster: () => mockState.roster,
+}))
 vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({
     routeId: "conversations",
@@ -183,7 +188,8 @@ describe("Sidebar — fixed nav region", () => {
     mockState.activeFolder = { id: 7, path: "/x" }
     mockState.personalAgentNeedsOwner = false
     mockState.personalAgentUnseen = 0
-    usePersonalAgentUi.setState({ watching: false })
+    mockState.roster = null
+    usePersonalAgentUi.setState({ watching: false, viewBot: null })
   })
 
   it("Automations navigates to the automations route", () => {
@@ -208,29 +214,90 @@ describe("Sidebar — fixed nav region", () => {
     expect(row().querySelector("span.rounded-full")).not.toBeNull()
   })
 
-  it("counts the assistants' unseen messages on the Personal agent row", () => {
-    mockState.personalAgentUnseen = 3
-    mockState.personalAgentNeedsOwner = true
-    renderSidebar()
-    const badge = screen.getByLabelText("3 unread messages")
+  it("counts the assistants with unseen messages on the Personal agent row", () => {
+    const bot = (
+      id: number,
+      live: { attention?: string; unread?: number },
+      roster: { hidden?: boolean; muted?: boolean; unread_mark?: boolean } = {}
+    ) => ({
+      id,
+      kind: id === 1 ? "primary" : "worker",
+      roster: { hidden: false, muted: false, unread_mark: false, ...roster },
+      live: { attention: "none", unread: 0, ...live },
+    })
+    mockState.roster = [
+      bot(1, { attention: "unread", unread: 4 }),
+      bot(2, { attention: "needs_you", unread: 1 }),
+      bot(3, {}, { unread_mark: true }),
+      // Neither a muted nor a hidden one counts.
+      bot(4, { attention: "unread", unread: 2 }, { muted: true }),
+      bot(5, { attention: "unread", unread: 2 }, { hidden: true }),
+    ]
+    const first = renderSidebar()
+    const badge = screen.getByLabelText("3 assistants have unread messages")
     expect(badge.textContent).toBe("3")
     // The count stands for the waiting dot too.
     expect(
       badge.closest("button")?.querySelectorAll("span.rounded-full")
     ).toHaveLength(1)
-  })
-
-  it("caps the unseen count at 99+", () => {
-    mockState.personalAgentUnseen = 120
+    first.unmount()
+    // Not the one the page is showing the owner right now.
+    usePersonalAgentUi.setState({ watching: true, viewBot: 2 })
     renderSidebar()
-    expect(screen.getByLabelText("120 unread messages").textContent).toBe("99+")
+    expect(
+      screen.getByLabelText("2 assistants have unread messages")
+    ).toBeTruthy()
   })
 
-  it("shows no count while the page shows the owner the newest", () => {
+  it("marks the row when any assistant not hidden waits on the owner", () => {
+    mockState.roster = [
+      {
+        id: 9,
+        kind: "worker",
+        roster: { hidden: true, muted: false, unread_mark: false },
+        live: { attention: "needs_you", unread: 0 },
+      },
+    ]
+    const hidden = renderSidebar()
+    const row = () => screen.getByRole("button", { name: "Personal agent" })
+    expect(row().querySelector("span.rounded-full")).toBeNull()
+    hidden.unmount()
+    mockState.roster = [
+      {
+        id: 9,
+        kind: "worker",
+        roster: { hidden: false, muted: true, unread_mark: false },
+        live: { attention: "needs_you", unread: 0 },
+      },
+    ]
+    renderSidebar()
+    expect(row().querySelector("span.rounded-full")).not.toBeNull()
+  })
+
+  it("caps the count at 99+", () => {
+    mockState.roster = Array.from({ length: 120 }, (_, i) => ({
+      id: i + 1,
+      kind: i === 0 ? "primary" : "worker",
+      roster: { hidden: false, muted: false, unread_mark: true },
+      live: { attention: "none", unread: 0 },
+    }))
+    renderSidebar()
+    expect(
+      screen.getByLabelText("120 assistants have unread messages").textContent
+    ).toBe("99+")
+  })
+
+  it("goes by the primary until the roster is read", () => {
     mockState.personalAgentUnseen = 2
+    const first = renderSidebar()
+    expect(
+      screen.getByLabelText("1 assistant has unread messages")
+    ).toBeTruthy()
+    first.unmount()
+    // Not while the page shows the owner the newest.
     usePersonalAgentUi.setState({ watching: true })
     renderSidebar()
-    expect(screen.queryByLabelText("2 unread messages")).toBeNull()
+    expect(screen.queryByLabelText(/unread messages/)).toBeNull()
   })
 
   it("New chat returns to the conversation workspace", () => {

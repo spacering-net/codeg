@@ -150,7 +150,7 @@ const EYES: Record<BotColor, string> = {
 }
 
 /** The shapes, in a 100 × 100 box. */
-const PATHS: Record<BotShape, string> = {
+export const FACE_PATHS: Record<BotShape, string> = {
   blob: "M50 6C74 6 94 22 94 48C94 76 76 94 50 94C22 94 6 78 6 50C6 24 26 6 50 6Z",
   pebble:
     "M52 10C78 10 96 28 92 54C88 80 68 92 46 90C22 88 6 72 8 48C10 24 28 10 52 10Z",
@@ -503,7 +503,10 @@ function FaceAvatar({
         aria-hidden
       >
         <g className="pa-face-body">
-          <path d={PATHS[shape] ?? PATHS.blob} className={BODY[color]} />
+          <path
+            d={FACE_PATHS[shape] ?? FACE_PATHS.blob}
+            className={BODY[color]}
+          />
           <g transform={`translate(0 ${EYES_AT[displayed]})`}>
             <g
               className="pa-face-gaze"

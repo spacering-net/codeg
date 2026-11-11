@@ -344,6 +344,36 @@ pub async fn personal_agent_profile(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NotificationPrefsSyncParams {
+    pub enabled: bool,
+    pub hide_body: bool,
+}
+
+pub async fn notification_prefs_sync(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<NotificationPrefsSyncParams>,
+) -> Result<Json<()>, AppCommandError> {
+    pa::notification_prefs_sync_core(&state.db, params.enabled, params.hide_body).await?;
+    Ok(Json(()))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvatarPngParams {
+    pub bot_id: i32,
+    pub png: String,
+}
+
+pub async fn personal_agent_avatar_png(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AvatarPngParams>,
+) -> Result<Json<()>, AppCommandError> {
+    pa::personal_agent_avatar_png_core(&state.db, params.bot_id, params.png).await?;
+    Ok(Json(()))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DispatchStopParams {
     #[serde(default)]
     pub bot_id: Option<i32>,

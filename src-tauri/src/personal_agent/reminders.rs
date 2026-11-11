@@ -258,6 +258,27 @@ fn quoted(summary: &str) -> String {
     format!("\"{s}\"")
 }
 
+/// What "tomorrow morning" is for the owner: when their day usually starts
+/// (1.12), or the fixed time they set (1.13).
+pub(super) async fn mornings_of(
+    db: &sea_orm::DatabaseConnection,
+    prefs: &crate::models::personal_agent_prefs::Prefs,
+) -> Mornings {
+    use crate::models::personal_agent_prefs::{clock_of, MorningMode};
+    match prefs.morning {
+        MorningMode::Fixed => {
+            let at = clock_of(&prefs.morning_at).unwrap_or_else(|| Mornings::default().workday);
+            Mornings {
+                workday: at,
+                restday: at,
+            }
+        }
+        MorningMode::Hours => super::presence::hours(db, prefs, clock::now())
+            .await
+            .mornings(),
+    }
+}
+
 impl PersonalAgentEngine {
     /// The owner's zone, for every time an assistant reads or writes.
     pub(super) async fn owner_tz(&self) -> Tz {
@@ -268,8 +289,7 @@ impl PersonalAgentEngine {
     pub(super) async fn owner_day(&self) -> (Tz, Mornings) {
         let prefs = self.prefs().await;
         let tz = clock::zone_of(&prefs.time_zone);
-        let hours = super::presence::hours(&self.db.conn, &prefs, clock::now()).await;
-        (tz, hours.mornings())
+        (tz, mornings_of(&self.db.conn, &prefs).await)
     }
 
     /// The `<codeg-now>` line of a turn: now, the owner (whether they are
@@ -549,6 +569,7 @@ impl PersonalAgentEngine {
             // Changed meanwhile: the next look reads it as it is now.
             return Ok(None);
         };
+        let card_id = fired.row.id;
         let mut rows = vec![svc::to_row(fired.row)];
         for old in &fired.expired {
             if let Ok(r) = self.set_reminder_row(old, "expired", None, None).await {
@@ -558,6 +579,26 @@ impl PersonalAgentEngine {
         self.emit_rows(rows);
         self.emit(PersonalAgentChange::Item { id: item.id });
         self.emit(PersonalAgentChange::Status);
+        // The owner's reminder reaches them (1.13); one the assistant is to
+        // do wakes it instead.
+        if let (AtDue::Notify, Some(host)) = (at_due, self.host_ref()) {
+            let bot = self.bot().await;
+            host.tell(super::reach::News {
+                key: format!("reminder:{}:{}", item.id, occ.timestamp()),
+                bot_id: bot,
+                kind: "reminder",
+                what: super::reach::What::Reminder {
+                    text: super::reach::glimpse(&item.summary),
+                    at: occ.with_timezone(&tz).format("%H:%M").to_string(),
+                },
+                link: Some(super::reach::NotifyLink::Bot {
+                    bot_id: bot,
+                    row_id: Some(card_id),
+                }),
+                need: None,
+            })
+            .await;
+        }
         Ok(Some(at_due))
     }
 

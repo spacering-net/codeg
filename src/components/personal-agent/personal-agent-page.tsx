@@ -315,6 +315,26 @@ export function PersonalAgentPage() {
     ]
   )
 
+  // Whose conversation this window shows the owner: the presence beat
+  // says so, and that assistant is not notified (1.13).
+  const setViewing = usePersonalAgentUi((s) => s.setViewing)
+  const viewingId = !settingsOpen && !loading ? (agent?.id ?? null) : null
+  useEffect(() => {
+    setViewing(viewingId)
+  }, [viewingId, setViewing])
+  useEffect(() => () => setViewing(null), [setViewing])
+
+  // A notification followed here: its row, once the page is on its
+  // assistant and its conversation is drawn.
+  const pendingJump = usePersonalAgentUi((s) => s.pendingJump)
+  const agentId = agent?.id ?? null
+  useEffect(() => {
+    if (!pendingJump || loading || settingsOpen) return
+    if (agentId == null || pendingJump.bot !== agentId) return
+    usePersonalAgentUi.getState().setPendingJump(null)
+    jumpTo(pendingJump.row)
+  }, [pendingJump, agentId, loading, settingsOpen, jumpTo])
+
   if (!snapshot || loading) {
     return (
       <UnderBand band={band}>

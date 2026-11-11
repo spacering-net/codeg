@@ -606,6 +606,62 @@ pub async fn personal_agent_presence_core(
     crate::personal_agent::presence::beat(&db.conn, beat).await
 }
 
+/// codeg's general notification switch and "hide contents", from the page
+/// (1.13): the desktop posts the assistants' notifications under them.
+pub async fn notification_prefs_sync_core(
+    db: &AppDatabase,
+    enabled: bool,
+    hide_body: bool,
+) -> Result<(), AppCommandError> {
+    crate::personal_agent::reach::set_gate(
+        &db.conn,
+        crate::personal_agent::reach::Gate { enabled, hide_body },
+    )
+    .await
+    .map_err(AppCommandError::task_execution_failed)
+}
+
+/// An assistant's face, drawn by the page, for the system notifications the
+/// desktop posts under its name (1.13). Only where the assistants run.
+pub async fn personal_agent_avatar_png_core(
+    db: &AppDatabase,
+    bot_id: i32,
+    png: String,
+) -> Result<(), AppCommandError> {
+    use base64::Engine as _;
+    let Some(host) = crate::personal_agent::host::host() else {
+        return Ok(());
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(png.trim().as_bytes())
+        .map_err(|e| AppCommandError::invalid_input(format!("not base64: {e}")))?;
+    if bytes.len() > crate::personal_agent::reach::AVATAR_MAX_BYTES
+        || !bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+    {
+        return Err(AppCommandError::invalid_input(
+            "not a PNG of at most 256 KB",
+        ));
+    }
+    if svc::get_bot(&db.conn, bot_id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return Err(AppCommandError::not_found("no such assistant"));
+    }
+    let path = host.avatar_png(bot_id);
+    let write = || -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("png.tmp");
+        std::fs::write(&tmp, &bytes)?;
+        std::fs::rename(&tmp, &path)
+    };
+    write().map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
 /// The "about you" page (13.5, 1.12): the owner's time zone, the record's
 /// switch, whether they are in codeg, and the hours codeg sees.
 pub async fn personal_agent_profile_core(
@@ -1294,6 +1350,8 @@ pub async fn personal_agent_presence(
     window: String,
     focused: bool,
     idle_ms: Option<u64>,
+    typed_ms: Option<u64>,
+    viewing: Option<i32>,
 ) -> Result<crate::personal_agent::presence::Presence, AppCommandError> {
     Ok(personal_agent_presence_core(
         &db,
@@ -1301,6 +1359,8 @@ pub async fn personal_agent_presence(
             window,
             focused,
             idle_ms,
+            typed_ms,
+            viewing,
         },
     )
     .await)
@@ -1312,6 +1372,26 @@ pub async fn personal_agent_profile(
     db: State<'_, AppDatabase>,
 ) -> Result<crate::personal_agent::presence::ProfileView, AppCommandError> {
     Ok(personal_agent_profile_core(&db).await)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn notification_prefs_sync(
+    db: State<'_, AppDatabase>,
+    enabled: bool,
+    hide_body: bool,
+) -> Result<(), AppCommandError> {
+    notification_prefs_sync_core(&db, enabled, hide_body).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_avatar_png(
+    db: State<'_, AppDatabase>,
+    bot_id: i32,
+    png: String,
+) -> Result<(), AppCommandError> {
+    personal_agent_avatar_png_core(&db, bot_id, png).await
 }
 
 #[cfg(feature = "tauri-runtime")]

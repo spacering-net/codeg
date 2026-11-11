@@ -185,6 +185,220 @@ pub fn check_zone(raw: &str) -> Result<String, String> {
         })
 }
 
+/// How urgent something is for the owner, and so how it reaches them (6.2).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Level {
+    Urgent,
+    #[default]
+    Normal,
+    Low,
+}
+
+impl Level {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Level::Urgent => "urgent",
+            Level::Normal => "normal",
+            Level::Low => "low",
+        }
+    }
+}
+
+fn urgent() -> Level {
+    Level::Urgent
+}
+
+fn low() -> Level {
+    Level::Low
+}
+
+fn lenient_urgent<'de, D: Deserializer<'de>>(d: D) -> Result<Level, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or(Level::Urgent))
+}
+
+fn lenient_low<'de, D: Deserializer<'de>>(d: D) -> Result<Level, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or(Level::Low))
+}
+
+/// How an urgent matter reaches the owner.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UrgentVia {
+    /// A system notification, and the Dock / taskbar asks for them.
+    #[default]
+    SystemAttention,
+    System,
+    /// Only on the page, while they are in codeg.
+    InPage,
+}
+
+/// How a matter of normal urgency reaches the owner.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NormalVia {
+    /// A system notification, as their presence allows: at once while they
+    /// are here and not typing; after they stop typing; or, gone, merged
+    /// for when they are back.
+    #[default]
+    System,
+    InPage,
+    /// No notification: it waits in "today".
+    Today,
+}
+
+/// How a matter of low urgency reaches the owner.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LowVia {
+    #[default]
+    Today,
+    /// Merged into one notification, at most every two hours.
+    Digest,
+}
+
+/// When the owner is not to be disturbed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuietHours {
+    /// Outside their usual hours; [`DEFAULT_QUIET_FROM`]–[`DEFAULT_QUIET_TO`]
+    /// until codeg has learned them (or with the record off).
+    #[default]
+    Auto,
+    /// `quiet_from`–`quiet_to`.
+    Fixed,
+    None,
+}
+
+/// What still reaches the owner in their quiet hours.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuietLets {
+    /// Their reminders only.
+    #[default]
+    Reminders,
+    /// Their reminders and what is urgent.
+    Urgent,
+}
+
+/// What "tomorrow morning" is in a reminder.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MorningMode {
+    /// When the owner's day usually starts (1.12).
+    #[default]
+    Hours,
+    /// `morning_at`, every day.
+    Fixed,
+}
+
+/// The default quiet hours, until the usual hours are learned.
+pub const DEFAULT_QUIET_FROM: &str = "22:00";
+pub const DEFAULT_QUIET_TO: &str = "08:00";
+/// The fixed "tomorrow morning", until the owner sets another.
+pub const DEFAULT_MORNING_AT: &str = "09:00";
+/// Minutes after the owner stops typing that what waited for it goes out.
+pub const DEFAULT_FOCUS_WAIT: u32 = 3;
+/// The longest that can be set.
+pub const MAX_FOCUS_WAIT: u32 = 60;
+
+fn default_quiet_from() -> String {
+    DEFAULT_QUIET_FROM.into()
+}
+
+fn default_quiet_to() -> String {
+    DEFAULT_QUIET_TO.into()
+}
+
+fn default_morning_at() -> String {
+    DEFAULT_MORNING_AT.into()
+}
+
+fn default_focus_wait() -> u32 {
+    DEFAULT_FOCUS_WAIT
+}
+
+fn lenient_focus_wait<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_u64()
+        .map(|n| n.min(MAX_FOCUS_WAIT as u64) as u32)
+        .unwrap_or(DEFAULT_FOCUS_WAIT))
+}
+
+/// A time of day as the owner sets it: `HH:MM`, 00:00 to 23:59.
+pub fn check_clock(raw: &str) -> Result<String, String> {
+    let s = raw.trim();
+    chrono::NaiveTime::parse_from_str(s, "%H:%M")
+        .map(|t| t.format("%H:%M").to_string())
+        .map_err(|_| format!("a time of day is HH:MM, such as 21:30, not `{s}`"))
+}
+
+/// A clock time as stored, `None` if it is not one.
+pub fn clock_of(s: &str) -> Option<chrono::NaiveTime> {
+    chrono::NaiveTime::parse_from_str(s.trim(), "%H:%M").ok()
+}
+
+fn lenient_clock<'de, D: Deserializer<'de>>(
+    d: D,
+    fallback: fn() -> String,
+) -> Result<String, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_str()
+        .and_then(|s| check_clock(s).ok())
+        .unwrap_or_else(fallback))
+}
+
+fn lenient_quiet_from<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    lenient_clock(d, default_quiet_from)
+}
+
+fn lenient_quiet_to<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    lenient_clock(d, default_quiet_to)
+}
+
+fn lenient_morning_at<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    lenient_clock(d, default_morning_at)
+}
+
+/// The kinds of news codeg routes to the owner (6.2, 8.6), each with the
+/// level it starts at: `level_<kind>` is the owner's setting for it.
+pub const NEWS: &[(&str, Level, &str)] = &[
+    ("reminder", Level::Urgent, "reminders"),
+    (
+        "forwarded",
+        Level::Urgent,
+        "questions forwarded from dispatched work",
+    ),
+    (
+        "approval",
+        Level::Urgent,
+        "an assistant waiting for approval",
+    ),
+    (
+        "waiting",
+        Level::Urgent,
+        "anything waiting on them 10 minutes",
+    ),
+    ("question", Level::Normal, "an assistant's own questions"),
+    ("confirm", Level::Normal, "cards to confirm"),
+    (
+        "stuck",
+        Level::Normal,
+        "steps that may not have happened, stopped exchanges",
+    ),
+    (
+        "done",
+        Level::Normal,
+        "dispatched work finished or ready for review",
+    ),
+    ("reply", Level::Normal, "replies to what they asked"),
+    ("exchange", Level::Low, "assistants' messages to each other"),
+    ("changed", Level::Low, "settings changed as they asked"),
+    ("answered", Level::Low, "questions answered for them"),
+];
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerHandoff {
@@ -240,6 +454,64 @@ pub struct Prefs {
     /// usual hours from it; off, the hours are the defaults (1.12).
     #[serde(default, deserialize_with = "lenient")]
     pub presence: OnOff,
+    /// Off, codeg reaches out to the owner only with their reminders (1.13).
+    #[serde(default, deserialize_with = "lenient")]
+    pub proactive: OnOff,
+    #[serde(default, deserialize_with = "lenient")]
+    pub urgent_via: UrgentVia,
+    #[serde(default, deserialize_with = "lenient")]
+    pub normal_via: NormalVia,
+    #[serde(default, deserialize_with = "lenient")]
+    pub low_via: LowVia,
+    /// While the owner types, what is of normal urgency waits until they
+    /// have stopped this many minutes; 0 sends it as usual.
+    #[serde(
+        default = "default_focus_wait",
+        deserialize_with = "lenient_focus_wait"
+    )]
+    pub focus_wait: u32,
+    #[serde(default, deserialize_with = "lenient")]
+    pub quiet_hours: QuietHours,
+    #[serde(
+        default = "default_quiet_from",
+        deserialize_with = "lenient_quiet_from"
+    )]
+    pub quiet_from: String,
+    #[serde(default = "default_quiet_to", deserialize_with = "lenient_quiet_to")]
+    pub quiet_to: String,
+    #[serde(default, deserialize_with = "lenient")]
+    pub quiet_lets: QuietLets,
+    #[serde(default, deserialize_with = "lenient")]
+    pub morning: MorningMode,
+    #[serde(
+        default = "default_morning_at",
+        deserialize_with = "lenient_morning_at"
+    )]
+    pub morning_at: String,
+    #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
+    pub level_reminder: Level,
+    #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
+    pub level_forwarded: Level,
+    #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
+    pub level_approval: Level,
+    #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
+    pub level_waiting: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_question: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_confirm: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_stuck: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_done: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_reply: Level,
+    #[serde(default = "low", deserialize_with = "lenient_low")]
+    pub level_exchange: Level,
+    #[serde(default = "low", deserialize_with = "lenient_low")]
+    pub level_changed: Level,
+    #[serde(default = "low", deserialize_with = "lenient_low")]
+    pub level_answered: Level,
 }
 
 impl Default for Prefs {
@@ -260,6 +532,29 @@ impl Default for Prefs {
             exec_plans: ExecAnswers::default(),
             time_zone: default_zone(),
             presence: OnOff::default(),
+            proactive: OnOff::default(),
+            urgent_via: UrgentVia::default(),
+            normal_via: NormalVia::default(),
+            low_via: LowVia::default(),
+            focus_wait: DEFAULT_FOCUS_WAIT,
+            quiet_hours: QuietHours::default(),
+            quiet_from: default_quiet_from(),
+            quiet_to: default_quiet_to(),
+            quiet_lets: QuietLets::default(),
+            morning: MorningMode::default(),
+            morning_at: default_morning_at(),
+            level_reminder: Level::Urgent,
+            level_forwarded: Level::Urgent,
+            level_approval: Level::Urgent,
+            level_waiting: Level::Urgent,
+            level_question: Level::Normal,
+            level_confirm: Level::Normal,
+            level_stuck: Level::Normal,
+            level_done: Level::Normal,
+            level_reply: Level::Normal,
+            level_exchange: Level::Low,
+            level_changed: Level::Low,
+            level_answered: Level::Low,
         }
     }
 }
@@ -273,7 +568,12 @@ pub enum PrefKind {
     Count { max: u32 },
     /// `system`, or a time zone's IANA name.
     Zone,
+    /// A time of day, `HH:MM`.
+    Clock,
 }
+
+/// The words a `level_<kind>` item takes.
+const LEVELS: &[&str] = &["urgent", "normal", "low"];
 
 /// One item, as codeg checks and describes it.
 #[derive(Debug, Clone, Copy)]
@@ -365,11 +665,168 @@ pub const PREFS: &[PrefSpec] = &[
         kind: PrefKind::Choice(&["on", "off"]),
         label: "learning the owner's usual hours from when they are in codeg",
     },
+    PrefSpec {
+        key: "proactive",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg reaching out to the owner",
+    },
+    PrefSpec {
+        key: "urgent_via",
+        kind: PrefKind::Choice(&["system_attention", "system", "in_page"]),
+        label: "how urgent news reaches the owner",
+    },
+    PrefSpec {
+        key: "normal_via",
+        kind: PrefKind::Choice(&["system", "in_page", "today"]),
+        label: "how news of normal urgency reaches the owner",
+    },
+    PrefSpec {
+        key: "low_via",
+        kind: PrefKind::Choice(&["today", "digest"]),
+        label: "how minor news reaches the owner",
+    },
+    PrefSpec {
+        key: "focus_wait",
+        kind: PrefKind::Count {
+            max: MAX_FOCUS_WAIT,
+        },
+        label:
+            "while the owner types, news of normal urgency waits until they have stopped (minutes)",
+    },
+    PrefSpec {
+        key: "quiet_hours",
+        kind: PrefKind::Choice(&["auto", "fixed", "none"]),
+        label: "the owner's quiet hours",
+    },
+    PrefSpec {
+        key: "quiet_from",
+        kind: PrefKind::Clock,
+        label: "fixed quiet hours from",
+    },
+    PrefSpec {
+        key: "quiet_to",
+        kind: PrefKind::Clock,
+        label: "fixed quiet hours until",
+    },
+    PrefSpec {
+        key: "quiet_lets",
+        kind: PrefKind::Choice(&["reminders", "urgent"]),
+        label: "what still reaches the owner in their quiet hours",
+    },
+    PrefSpec {
+        key: "morning",
+        kind: PrefKind::Choice(&["hours", "fixed"]),
+        label: "\"tomorrow morning\" in a reminder",
+    },
+    PrefSpec {
+        key: "morning_at",
+        kind: PrefKind::Clock,
+        label: "the fixed \"tomorrow morning\"",
+    },
+    PrefSpec {
+        key: "level_reminder",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent reminders are",
+    },
+    PrefSpec {
+        key: "level_forwarded",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent questions forwarded from dispatched work are",
+    },
+    PrefSpec {
+        key: "level_approval",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent an assistant waiting for approval is",
+    },
+    PrefSpec {
+        key: "level_waiting",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent anything waiting on the owner 10 minutes is",
+    },
+    PrefSpec {
+        key: "level_question",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent an assistant's own questions are",
+    },
+    PrefSpec {
+        key: "level_confirm",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent cards to confirm are",
+    },
+    PrefSpec {
+        key: "level_stuck",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent steps that may not have happened and stopped exchanges are",
+    },
+    PrefSpec {
+        key: "level_done",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent dispatched work finished or ready for review is",
+    },
+    PrefSpec {
+        key: "level_reply",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent replies to what the owner asked are",
+    },
+    PrefSpec {
+        key: "level_exchange",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent assistants' messages to each other are",
+    },
+    PrefSpec {
+        key: "level_changed",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent settings changed as the owner asked are",
+    },
+    PrefSpec {
+        key: "level_answered",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent questions answered for the owner are",
+    },
 ];
 
 /// The "automation level" (13.4): a preset over the items below — not
 /// stored, read off them. Changing one of them makes it "custom".
 pub const AUTOMATION_KEY: &str = "automation_level";
+/// The "disturbance level" (13.4): a preset over how news reaches the owner.
+pub const DISTURB_KEY: &str = "disturb_level";
+
+/// The presets, and the levels each has, in the order they are read off.
+pub const PRESETS: &[(&str, &[&str])] = &[
+    (AUTOMATION_KEY, &["standard", "ask_more"]),
+    (DISTURB_KEY, &["quiet", "standard", "more"]),
+];
+
+/// The items preset `key`'s `level` sets, and to what.
+pub fn preset(key: &str, level: &str) -> Option<Vec<(&'static str, Value)>> {
+    match key {
+        AUTOMATION_KEY => automation_preset(level),
+        DISTURB_KEY => disturb_preset(level),
+        _ => None,
+    }
+}
+
+/// The items each disturbance level sets. Urgent news and reminders reach
+/// the owner at every level.
+pub fn disturb_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
+    match level {
+        "quiet" => Some(vec![
+            ("normal_via", json!("today")),
+            ("low_via", json!("today")),
+        ]),
+        "standard" => Some(vec![
+            ("normal_via", json!("system")),
+            ("low_via", json!("today")),
+            ("focus_wait", json!(DEFAULT_FOCUS_WAIT)),
+        ]),
+        "more" => Some(vec![
+            ("normal_via", json!("system")),
+            ("low_via", json!("digest")),
+            ("focus_wait", json!(0)),
+        ]),
+        _ => None,
+    }
+}
 
 /// The items each automation level sets, and to what.
 pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
@@ -428,6 +885,14 @@ pub fn check_pref(key: &str, value: &Value) -> Result<Value, String> {
                 .ok_or("`time_zone` takes system or a time zone name such as Europe/Berlin")?;
             Ok(json!(check_zone(raw)?))
         }
+        PrefKind::Clock => {
+            let raw = value
+                .as_str()
+                .ok_or_else(|| format!("`{key}` takes a time of day, HH:MM"))?;
+            check_clock(raw)
+                .map(|s| json!(s))
+                .map_err(|e| format!("`{key}`: {e}"))
+        }
     }
 }
 
@@ -467,10 +932,26 @@ impl Prefs {
     /// The automation level the items add up to: `standard`, `ask_more`, or
     /// `custom` when they match neither.
     pub fn automation_level(&self) -> &'static str {
+        self.preset_level(AUTOMATION_KEY)
+    }
+
+    /// The disturbance level the items add up to: `quiet`, `standard`,
+    /// `more`, or `custom`.
+    pub fn disturb_level(&self) -> &'static str {
+        self.preset_level(DISTURB_KEY)
+    }
+
+    /// The level of preset `key` the items add up to, or `custom`.
+    pub fn preset_level(&self, key: &str) -> &'static str {
         let map = self.to_map();
-        for level in ["standard", "ask_more"] {
-            let preset = automation_preset(level).unwrap_or_default();
-            if preset
+        let levels = PRESETS
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, l)| *l)
+            .unwrap_or_default();
+        for level in levels {
+            let items = preset(key, level).unwrap_or_default();
+            if items
                 .iter()
                 .all(|(k, v)| map.get(*k).is_some_and(|have| have == v))
             {
@@ -478,6 +959,30 @@ impl Prefs {
             }
         }
         "custom"
+    }
+
+    /// The level news of kind `kind` (one of [`NEWS`]) reaches the owner at.
+    pub fn level_of(&self, kind: &str) -> Level {
+        match kind {
+            "reminder" => self.level_reminder,
+            "forwarded" => self.level_forwarded,
+            "approval" => self.level_approval,
+            "waiting" => self.level_waiting,
+            "question" => self.level_question,
+            "confirm" => self.level_confirm,
+            "stuck" => self.level_stuck,
+            "done" => self.level_done,
+            "reply" => self.level_reply,
+            "exchange" => self.level_exchange,
+            "changed" => self.level_changed,
+            "answered" => self.level_answered,
+            _ => Level::Normal,
+        }
+    }
+
+    /// Whether codeg reaches out to the owner with more than reminders.
+    pub fn proactive(&self) -> bool {
+        self.proactive == OnOff::On
     }
 }
 
@@ -548,22 +1053,75 @@ fn brain_value(key: &str, value: &Value) -> String {
                 .into()
         }
         ("presence", "off") => "off: nothing is noted; their hours are the defaults".into(),
+        ("proactive", "on") => {
+            "on: codeg tells the owner when something is stuck on them, ready or done".into()
+        }
+        ("proactive", "off") => {
+            "off: codeg reaches out to the owner only with their reminders; speak when spoken to"
+                .into()
+        }
+        ("urgent_via", "system_attention") => {
+            "a system notification, and the Dock / taskbar asks for them".into()
+        }
+        ("urgent_via" | "normal_via", "system") => "a system notification".into(),
+        ("urgent_via" | "normal_via", "in_page") => {
+            "only on the page, while they are in codeg".into()
+        }
+        ("normal_via", "today") => "no notification: it waits in their day's list".into(),
+        ("low_via", "today") => "no notification".into(),
+        ("low_via", "digest") => "merged into one notification, at most every two hours".into(),
+        ("focus_wait", _) => match value.as_u64() {
+            Some(0) => "not held: it goes out as usual".into(),
+            Some(n) => format!("{n}"),
+            None => value.to_string(),
+        },
+        ("quiet_hours", "auto") => {
+            "outside their usual hours (22:00–08:00 until codeg has learned them)".into()
+        }
+        ("quiet_hours", "fixed") => "the fixed times below".into(),
+        ("quiet_hours", "none") => "none".into(),
+        ("quiet_lets", "reminders") => "their reminders only".into(),
+        ("quiet_lets", "urgent") => "their reminders and what is urgent".into(),
+        ("morning", "hours") => "when their day usually starts".into(),
+        ("morning", "fixed") => "the fixed time below".into(),
+        (_, w) if !w.is_empty() => w.to_string(),
         _ => value.to_string(),
     }
+}
+
+/// The `level_<kind>` items, as one line.
+fn levels_line(map: &Map<String, Value>) -> String {
+    let parts: Vec<String> = NEWS
+        .iter()
+        .map(|(kind, _, label)| {
+            let v = map
+                .get(&format!("level_{kind}"))
+                .and_then(Value::as_str)
+                .unwrap_or("normal");
+            format!("{label} {v}")
+        })
+        .collect();
+    format!(
+        "- how urgent each kind of news is (codeg routes it; urgent goes out at once, normal \
+         as their presence allows, low waits for them): {}",
+        parts.join(" · ")
+    )
 }
 
 /// The preferences as the brain reads them: `<codeg-prefs>`. A worker is
 /// not told how the primary hands work to workers.
 pub fn prefs_block(prefs: &Prefs, worker: bool) -> String {
     let map = prefs.to_map();
-    let lines: Vec<String> = PREFS
+    let mut lines: Vec<String> = PREFS
         .iter()
         .filter(|s| !(worker && s.key == "worker_handoff"))
+        .filter(|s| !s.key.starts_with("level_"))
         .map(|s| {
             let v = map.get(s.key).cloned().unwrap_or(Value::Null);
             format!("- {}: {}", s.label, brain_value(s.key, &v))
         })
         .collect();
+    lines.push(levels_line(&map));
     format!(
         "<codeg-prefs>\n\
 The owner's preferences, as they set them in codeg — every assistant follows the same ones. The \
@@ -769,6 +1327,9 @@ pub struct AccountView {
     /// The automation level the preferences add up to.
     #[serde(default)]
     pub automation_level: String,
+    /// The disturbance level they add up to (1.13).
+    #[serde(default)]
+    pub disturb_level: String,
 }
 
 impl AccountView {
@@ -777,10 +1338,12 @@ impl AccountView {
         let v: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
         let prefs = Prefs::parse(v.get("prefs"));
         let automation_level = prefs.automation_level().to_string();
+        let disturb_level = prefs.disturb_level().to_string();
         Self {
             prefs,
             team: TeamSettings::parse(v.get("team")),
             automation_level,
+            disturb_level,
         }
     }
 }
@@ -853,6 +1416,46 @@ mod tests {
             "standard",
             "neither is part of a level"
         );
+    }
+
+    #[test]
+    fn notification_items_read_leniently_and_presets_read_off() {
+        let p = Prefs::parse(Some(&json!({
+            "quiet_from": "25:99",
+            "quiet_to": "06:30",
+            "focus_wait": 600,
+            "level_reminder": "loud",
+            "level_exchange": "normal",
+            "normal_via": "pigeon",
+        })));
+        assert_eq!(p.quiet_from, DEFAULT_QUIET_FROM);
+        assert_eq!(p.quiet_to, "06:30");
+        assert_eq!(p.focus_wait, MAX_FOCUS_WAIT);
+        assert_eq!(
+            p.level_reminder,
+            Level::Urgent,
+            "an unknown level is the kind's own"
+        );
+        assert_eq!(p.level_exchange, Level::Normal);
+        assert_eq!(p.normal_via, NormalVia::System);
+        assert_eq!(
+            check_pref("morning_at", &json!(" 7:05 ")).unwrap(),
+            json!("07:05")
+        );
+        assert!(check_pref("morning_at", &json!("7pm")).is_err());
+        let d = Prefs::default();
+        assert_eq!(d.disturb_level(), "standard");
+        for (kind, level, _) in NEWS {
+            assert_eq!(d.level_of(kind), *level, "{kind}");
+            assert!(spec(&format!("level_{kind}")).is_some(), "{kind}");
+        }
+        let mut map = d.to_map();
+        for (k, v) in disturb_preset("more").unwrap() {
+            map.insert(k.into(), v);
+        }
+        let more: Prefs = serde_json::from_value(Value::Object(map)).unwrap();
+        assert_eq!(more.disturb_level(), "more");
+        assert_eq!(more.automation_level(), "standard", "the presets are apart");
     }
 
     #[test]

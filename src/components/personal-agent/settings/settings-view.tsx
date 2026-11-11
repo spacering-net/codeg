@@ -42,8 +42,9 @@ import { BotAvatar } from "../bot-avatar"
 import { useBotName } from "../shared"
 import { AboutPage } from "./about-page"
 import { IdentityPage } from "./identity-page"
+import { NotifyPage } from "./notify-page"
 import { AdvancedPage, ExecutionPage, PersonaPage } from "./own-pages"
-import { AutomationPage, CommunicationPage } from "./pref-pages"
+import { AutomationPage, CommunicationPage, ProactivePage } from "./pref-pages"
 import { DivisionPage, ExecutorsPage, WorkersPage } from "./team-pages"
 import { useTargetSnapshot } from "./use-settings"
 
@@ -100,6 +101,7 @@ export function SettingsView() {
         { page: "identity", disabled: false },
         { page: "persona", disabled: !agent },
         ...(worker ? [{ page: "execution" as const, disabled: false }] : []),
+        { page: "notify", disabled: !agent },
         { page: "advanced", disabled: !agent },
       ],
     },
@@ -115,6 +117,7 @@ export function SettingsView() {
       label: t("nav.prefs"),
       pages: [
         { page: "communication", disabled: false },
+        { page: "proactive", disabled: false },
         { page: "automation", disabled: false },
         { page: "about", disabled: false },
       ],
@@ -128,6 +131,7 @@ export function SettingsView() {
       (page === "identity" ||
         page === "persona" ||
         page === "execution" ||
+        page === "notify" ||
         page === "advanced")
     ) {
       return (
@@ -155,6 +159,8 @@ export function SettingsView() {
         return agent && worker ? (
           <ExecutionPage agent={agent} bot={target} disabled={readOnly} />
         ) : null
+      case "notify":
+        return agent ? <NotifyPage agent={agent} disabled={readOnly} /> : null
       case "advanced":
         return agent ? (
           <AdvancedPage agent={agent} bot={target} disabled={readOnly} />
@@ -177,6 +183,10 @@ export function SettingsView() {
       case "communication":
         return account ? (
           <CommunicationPage account={account} disabled={accountLocked} />
+        ) : null
+      case "proactive":
+        return account ? (
+          <ProactivePage account={account} disabled={accountLocked} />
         ) : null
       case "automation":
         return account ? (

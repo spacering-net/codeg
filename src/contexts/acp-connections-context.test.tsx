@@ -9070,7 +9070,7 @@ describe("a dispatching assistant answers for the owner (personal agent 7.3.1)",
     expect(h.requestWindowAttention).toHaveBeenCalledWith("question_request")
   })
 
-  it("notifies once the assistant forwards it to the owner", async () => {
+  it("leaves a forwarded one to the assistant's own notification", async () => {
     const handlers = await delegated()
     emitAcpEvent(handlers, {
       seq: 2,
@@ -9079,11 +9079,6 @@ describe("a dispatching assistant answers for the owner (personal agent 7.3.1)",
       request_id: "q-1",
       kind: "question",
     })
-    expect(h.requestWindowAttention).toHaveBeenCalledWith("question_request")
-    expect(h.notifyDesktop).toHaveBeenCalledWith(
-      "question_request",
-      expect.anything()
-    )
     emitAcpEvent(handlers, {
       seq: 3,
       connection_id: "spawned-conn",
@@ -9091,12 +9086,9 @@ describe("a dispatching assistant answers for the owner (personal agent 7.3.1)",
       request_id: "ap-1",
       kind: "plan",
     })
-    expect(h.notifyDesktop).toHaveBeenLastCalledWith(
-      "permission_request",
-      expect.objectContaining({
-        body: expect.stringContaining("notificationPlanApproval"),
-      })
-    )
+    // The backend tells the owner under the assistant's name (1.13).
+    expect(h.notifyDesktop).not.toHaveBeenCalled()
+    expect(h.requestWindowAttention).not.toHaveBeenCalled()
   })
 
   it("notifies as always once nobody answers for the owner", async () => {

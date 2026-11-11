@@ -45,6 +45,7 @@ pub mod notices;
 pub mod options;
 pub mod prefs;
 pub mod presence;
+pub mod reach;
 pub mod reminders;
 pub mod templates;
 pub mod tools;
