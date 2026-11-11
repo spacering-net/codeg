@@ -8731,7 +8731,12 @@
       "item": {
         "done": "Hecho",
         "later": "Más tarde",
-        "drop": "Descartar"
+        "drop": "Descartar",
+        "in15m": "En 15 min",
+        "in1h": "En 1 hora",
+        "tomorrow": "Mañana por la mañana",
+        "untimed": "Sin hora fija",
+        "act": "Lo hace a su hora"
       },
       "output": {
         "all": "Todo",
@@ -8835,6 +8840,48 @@
         "title": "¿Descartar este asunto?",
         "description": "«{summary}» saldrá de tus asuntos abiertos.",
         "confirm": "Descartar"
+      }
+    },
+    "due": {
+      "tomorrow": "Mañana {time}",
+      "yesterday": "Ayer {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} min",
+        "hours": "{n} h",
+        "hoursMinutes": "{h} h {m} min",
+        "days": "{n, plural, one {# día} other {# días}}"
+      },
+      "repeat": {
+        "daily": "Todos los días {time}",
+        "weekdays": "Cada día laborable {time}",
+        "weekly": "Cada {days} {time}",
+        "monthly": "El día {day} de cada mes, {time}",
+        "until": "{rule}, hasta el {date}",
+        "sep": ", "
+      },
+      "dueAt": "Vence {when}",
+      "overdue": "Vencido · vencía {when}",
+      "reminded": "Recordado · vence {when}",
+      "late": "{duration} tarde",
+      "missed": "{count, plural, one {Se perdió # vez} other {Se perdió # veces}}"
+    },
+    "reminder": {
+      "title": "Recordatorio",
+      "done": "Hecho",
+      "snooze15m": "En 15 min",
+      "snooze1h": "En 1 hora",
+      "snoozeTomorrow": "Mañana por la mañana",
+      "handOver": "Pasárselo al asistente",
+      "handOverText": "Ocúpate del recordatorio #{id}: {summary}",
+      "state": {
+        "done": "Hecho",
+        "snoozed": "Pospuesto hasta {when}",
+        "handed": "Pasado al asistente",
+        "dropped": "Descartado",
+        "expired": "Caducado: llegó otra vez",
+        "closed": "Atendido",
+        "woke": "Llegó la hora: se despertó al asistente para hacerlo"
       }
     }
   }

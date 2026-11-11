@@ -1220,7 +1220,8 @@ pub async fn set_result_rows_read(
         .await?)
 }
 
-/// The result cards of these events, by event id.
+/// The result cards of these events, by event id — a matter that came due
+/// for the assistant to do is numbered by its reminder card (6.1).
 pub async fn result_rows_of_events(
     conn: &DatabaseConnection,
     event_ids: &[i32],
@@ -1229,7 +1230,7 @@ pub async fn result_rows_of_events(
         return Ok(Vec::new());
     }
     Ok(timeline::Entity::find()
-        .filter(timeline::Column::Kind.eq(TimelineKind::Result))
+        .filter(timeline::Column::Kind.is_in([TimelineKind::Result, TimelineKind::Notice]))
         .filter(timeline::Column::EventId.is_in(event_ids.to_vec()))
         .order_by_asc(timeline::Column::Id)
         .all(conn)
@@ -1269,6 +1270,26 @@ pub async fn queued_owner_rows(
         .order_by_asc(timeline::Column::Id)
         .all(conn)
         .await?)
+}
+
+/// When the owner last wrote to `bot` before row `before` (before now,
+/// without it): the `<codeg-now>` line's "last message" (6.1).
+pub async fn last_owner_message_before(
+    conn: &DatabaseConnection,
+    bot: i32,
+    before: Option<i32>,
+) -> Result<Option<DateTime<Utc>>, DbError> {
+    let mut query = timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
+        .filter(timeline::Column::Kind.eq(TimelineKind::Owner));
+    if let Some(id) = before {
+        query = query.filter(timeline::Column::Id.lt(id));
+    }
+    Ok(query
+        .order_by_desc(timeline::Column::Id)
+        .one(conn)
+        .await?
+        .map(|r| r.created_at))
 }
 
 pub async fn count_queued_owner_rows(conn: &DatabaseConnection, bot: i32) -> Result<u64, DbError> {
@@ -1904,6 +1925,35 @@ pub async fn create_item(
     on_done: Option<String>,
     origin_timeline_id: Option<i32>,
 ) -> Result<item::Model, DbError> {
+    create_item_timed(
+        conn,
+        bot,
+        kind,
+        dispatch_id,
+        status,
+        waits_for,
+        summary,
+        on_done,
+        origin_timeline_id,
+        ItemTime::default(),
+    )
+    .await
+}
+
+/// [`create_item`], due at a time (6.1).
+#[allow(clippy::too_many_arguments)]
+pub async fn create_item_timed(
+    conn: &DatabaseConnection,
+    bot: i32,
+    kind: ItemKind,
+    dispatch_id: Option<i32>,
+    status: ItemStatus,
+    waits_for: Option<WaitsFor>,
+    summary: String,
+    on_done: Option<String>,
+    origin_timeline_id: Option<i32>,
+    time: ItemTime,
+) -> Result<item::Model, DbError> {
     require_bot(bot)?;
     let now = Utc::now();
     let row = item::ActiveModel {
@@ -1918,6 +1968,11 @@ pub async fn create_item(
         created_at: Set(now),
         updated_at: Set(now),
         bot_id: Set(Some(bot)),
+        due_at: Set(time.due_at),
+        repeat: Set(time.repeat),
+        at_due: Set(time.at_due),
+        act_spec: Set(time.act_spec),
+        fired_at: Set(None),
     };
     Ok(row.insert(conn).await?)
 }
@@ -1956,6 +2011,53 @@ pub struct ItemWrite {
     pub waits_for: Option<Option<WaitsFor>>,
     pub summary: Option<String>,
     pub on_done: Option<Option<String>>,
+    /// A matter's time, whole: its due time, repeat, what happens then,
+    /// what to do, and when its current time fired.
+    pub time: Option<ItemTime>,
+}
+
+/// When a matter is due and what happens then (6.1); all `None`, it has no
+/// time. `repeat` and `act_spec` are JSON.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ItemTime {
+    pub due_at: Option<DateTime<Utc>>,
+    pub repeat: Option<String>,
+    pub at_due: Option<String>,
+    pub act_spec: Option<String>,
+    /// A new time: written, the matter has not fired for it. Otherwise
+    /// whether it fired is left as the clock has it — never written back
+    /// from an earlier read, which could undo a firing in between.
+    pub fresh: bool,
+}
+
+impl ItemTime {
+    /// A matter's time as it stands.
+    pub fn of(item: &item::Model) -> Self {
+        Self {
+            due_at: item.due_at,
+            repeat: item.repeat.clone(),
+            at_due: item.at_due.clone(),
+            act_spec: item.act_spec.clone(),
+            fresh: false,
+        }
+    }
+
+    /// This time moved to `due_at`, not fired yet.
+    pub fn at(self, due_at: DateTime<Utc>) -> Self {
+        Self {
+            due_at: Some(due_at),
+            fresh: true,
+            ..self
+        }
+    }
+
+    /// No time.
+    pub fn none() -> Self {
+        Self {
+            fresh: true,
+            ..Self::default()
+        }
+    }
 }
 
 pub async fn update_item(
@@ -1963,6 +2065,14 @@ pub async fn update_item(
     id: i32,
     write: ItemWrite,
 ) -> Result<Option<item::Model>, DbError> {
+    item_update_stmt(id, write).exec(conn).await?;
+    get_item(conn, id).await
+}
+
+/// The update `write` makes to matter `id`. A time that is not new
+/// (`fresh` false) changes its rule, what happens and what to do, never
+/// its due time or whether it fired — those are the clock's.
+fn item_update_stmt(id: i32, write: ItemWrite) -> sea_orm::UpdateMany<item::Entity> {
     let mut update = item::Entity::update_many()
         .col_expr(item::Column::UpdatedAt, Expr::value(Utc::now()))
         .filter(item::Column::Id.eq(id));
@@ -1978,8 +2088,334 @@ pub async fn update_item(
     if let Some(v) = write.on_done {
         update = update.col_expr(item::Column::OnDone, Expr::value(v));
     }
-    update.exec(conn).await?;
-    get_item(conn, id).await
+    if let Some(t) = write.time {
+        update = update
+            .col_expr(item::Column::Repeat, Expr::value(t.repeat))
+            .col_expr(item::Column::AtDue, Expr::value(t.at_due))
+            .col_expr(item::Column::ActSpec, Expr::value(t.act_spec));
+        if t.fresh {
+            update = update
+                .col_expr(item::Column::DueAt, Expr::value(t.due_at))
+                .col_expr(item::Column::FiredAt, Expr::value(None::<DateTime<Utc>>));
+        }
+    }
+    update
+}
+
+/// What becomes of a matter's open reminder cards when it changes.
+#[derive(Debug, Clone)]
+pub struct CardClose {
+    pub to: NoticeState,
+    /// The card's `data.state`.
+    pub state: String,
+    /// When it was put off to.
+    pub until: Option<DateTime<Utc>>,
+}
+
+/// Change `bot`'s matter `id` as `write` says, in one transaction with
+/// what goes with it: its open reminder cards closed (`close`), the line
+/// the assistant reads about it queued (`note`). Only if its due time is
+/// still `expect_due` when that is given — a time worked out from an
+/// earlier read never lands after the clock moved it. `None` when it was
+/// not (the matter changed meanwhile). The matter and the card rows that
+/// changed.
+pub async fn update_item_with(
+    conn: &DatabaseConnection,
+    bot: i32,
+    id: i32,
+    write: ItemWrite,
+    expect_due: Option<Option<DateTime<Utc>>>,
+    close: Option<CardClose>,
+    note: Option<NewEvent>,
+) -> Result<Option<(item::Model, Vec<timeline::Model>)>, DbError> {
+    use sea_orm::TransactionTrait;
+    require_bot(bot)?;
+    let note_key = match &note {
+        Some(n) => Some(scoped_source_key(conn, bot, &n.source_key).await?),
+        None => None,
+    };
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let mut update = item_update_stmt(id, write).filter(item::Column::BotId.eq(bot));
+    update = match expect_due {
+        Some(Some(d)) => update.filter(item::Column::DueAt.eq(d)),
+        Some(None) => update.filter(item::Column::DueAt.is_null()),
+        None => update,
+    };
+    if update.exec(&txn).await?.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(None);
+    }
+    let mut rows = Vec::new();
+    if let Some(close) = close {
+        let open = notice::Entity::find()
+            .filter(notice::Column::BotId.eq(bot))
+            .filter(notice::Column::Kind.eq(NoticeKind::Reminder))
+            .filter(notice::Column::SubjectKey.eq(reminder_subject(id)))
+            .filter(notice::Column::State.eq(NoticeState::Open))
+            .all(&txn)
+            .await?;
+        for n in open {
+            notice::Entity::update_many()
+                .col_expr(notice::Column::State, Expr::value(close.to))
+                .col_expr(notice::Column::ActedAt, Expr::value(Some(now)))
+                .col_expr(notice::Column::UpdatedAt, Expr::value(now))
+                .filter(notice::Column::Id.eq(n.id))
+                .exec(&txn)
+                .await?;
+            let Some(row_id) = n.timeline_id else {
+                continue;
+            };
+            let Some(row) = timeline::Entity::find_by_id(row_id).one(&txn).await? else {
+                continue;
+            };
+            let mut data = row
+                .data
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                .filter(serde_json::Value::is_object)
+                .unwrap_or_else(|| serde_json::json!({}));
+            data["state"] = close.state.clone().into();
+            data["until"] = close
+                .until
+                .map(|u| serde_json::json!(u))
+                .unwrap_or(serde_json::Value::Null);
+            data["error"] = serde_json::Value::Null;
+            timeline::Entity::update_many()
+                .col_expr(timeline::Column::Data, Expr::value(Some(data.to_string())))
+                .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
+                .filter(timeline::Column::Id.eq(row_id))
+                .exec(&txn)
+                .await?;
+            if let Some(r) = timeline::Entity::find_by_id(row_id).one(&txn).await? {
+                rows.push(r);
+            }
+        }
+    }
+    if let (Some(n), Some(key)) = (note, note_key) {
+        event::ActiveModel {
+            id: NotSet,
+            kind: Set(n.kind),
+            source_key: Set(key),
+            coalesce_key: Set(n.coalesce_key),
+            summary: Set(n.summary),
+            payload: Set(n.payload.map(|p| p.to_string())),
+            wake: Set(n.wake),
+            state: Set(EventState::Pending),
+            batch_id: Set(None),
+            requeues: Set(0),
+            requeued_from: Set(None),
+            created_at: Set(now),
+            updated_at: Set(now),
+            bot_id: Set(Some(bot)),
+            origin_bot_id: Set(n.lineage.origin_bot_id),
+            origin_row_id: Set(n.lineage.origin_row_id),
+            thread_id: Set(n.lineage.thread_id),
+        }
+        .insert(&txn)
+        .await?;
+    }
+    let Some(item) = item::Entity::find_by_id(id).one(&txn).await? else {
+        txn.rollback().await?;
+        return Ok(None);
+    };
+    txn.commit().await?;
+    Ok(Some((item, rows)))
+}
+
+/// `bot`'s matters due by `now` with something to happen then: open or
+/// waiting, a due time at or before `now`, and either not fired for it yet
+/// (earliest first, a batch at a time — each fires and leaves the set) or
+/// repeating, so its next time may have come. A one-off that fired waits
+/// for the owner and is not read again.
+pub async fn due_items(
+    conn: &DatabaseConnection,
+    bot: i32,
+    now: DateTime<Utc>,
+) -> Result<Vec<item::Model>, DbError> {
+    use sea_orm::Condition;
+    let due = || {
+        item::Entity::find()
+            .filter(item::Column::BotId.eq(bot))
+            .filter(item::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting]))
+            .filter(item::Column::DueAt.is_not_null())
+            .filter(item::Column::DueAt.lte(now))
+            .filter(item::Column::AtDue.is_not_null())
+    };
+    let mut out = due()
+        .filter(
+            Condition::any()
+                .add(item::Column::FiredAt.is_null())
+                .add(Expr::col(item::Column::FiredAt).lt(Expr::col(item::Column::DueAt))),
+        )
+        .order_by_asc(item::Column::DueAt)
+        .order_by_asc(item::Column::Id)
+        .limit(200)
+        .all(conn)
+        .await?;
+    out.extend(
+        due()
+            .filter(item::Column::Repeat.is_not_null())
+            .filter(item::Column::FiredAt.is_not_null())
+            .filter(Expr::col(item::Column::FiredAt).gte(Expr::col(item::Column::DueAt)))
+            .order_by_asc(item::Column::Id)
+            .all(conn)
+            .await?,
+    );
+    Ok(out)
+}
+
+/// How a matter fires (6.1): its occurrence and what it leaves behind.
+#[derive(Debug, Clone)]
+pub struct ItemFire {
+    /// The matter, as the clock read it: it fires only if it still is so.
+    pub item_id: i32,
+    pub seen_due: DateTime<Utc>,
+    pub seen_fired: Option<DateTime<Utc>>,
+    /// The occurrence that fires (a repeating matter that missed several
+    /// fires the latest of them).
+    pub due_at: DateTime<Utc>,
+    pub fired_at: DateTime<Utc>,
+    pub waits_for: Option<WaitsFor>,
+    /// The card it raises.
+    pub notice: NewNotice,
+    pub notice_state: NoticeState,
+    pub row: NewRow,
+    /// The event for the assistant: a wake-up for one it is to do (its card
+    /// numbered by the row), a note that the owner was reminded.
+    pub event: NewEvent,
+    pub event_numbers_row: bool,
+}
+
+/// What firing a matter wrote.
+#[derive(Debug, Clone)]
+pub struct Fired {
+    pub notice: notice::Model,
+    pub row: timeline::Model,
+    /// Reminder cards of the same matter still open from an earlier
+    /// occurrence, now expired.
+    pub expired: Vec<notice::Model>,
+}
+
+/// Fire a matter, in one transaction: the matter takes the occurrence and
+/// is marked fired — only if it is still as the clock read it, so a matter
+/// the owner or the assistant changed meanwhile, or another tick fired, is
+/// left alone (`None`) — its card and its event are written, and its
+/// cards still open from an earlier occurrence expire.
+pub async fn fire_item(
+    conn: &DatabaseConnection,
+    bot: i32,
+    fire: ItemFire,
+) -> Result<Option<Fired>, DbError> {
+    use sea_orm::TransactionTrait;
+    require_bot(bot)?;
+    let source_key = scoped_source_key(conn, bot, &fire.event.source_key).await?;
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let mut claim = item::Entity::update_many()
+        .col_expr(item::Column::DueAt, Expr::value(fire.due_at))
+        .col_expr(item::Column::FiredAt, Expr::value(fire.fired_at))
+        .col_expr(item::Column::WaitsFor, Expr::value(fire.waits_for))
+        .col_expr(item::Column::UpdatedAt, Expr::value(now))
+        .filter(item::Column::Id.eq(fire.item_id))
+        .filter(item::Column::BotId.eq(bot))
+        .filter(item::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting]))
+        .filter(item::Column::DueAt.eq(fire.seen_due));
+    claim = match fire.seen_fired {
+        Some(f) => claim.filter(item::Column::FiredAt.eq(f)),
+        None => claim.filter(item::Column::FiredAt.is_null()),
+    };
+    if claim.exec(&txn).await?.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(None);
+    }
+    let subject = fire.notice.subject_key.clone();
+    let stale = match subject.as_deref() {
+        Some(subject) => {
+            notice::Entity::find()
+                .filter(notice::Column::BotId.eq(bot))
+                .filter(notice::Column::Kind.eq(NoticeKind::Reminder))
+                .filter(notice::Column::SubjectKey.eq(subject))
+                .filter(notice::Column::State.eq(NoticeState::Open))
+                .all(&txn)
+                .await?
+        }
+        None => Vec::new(),
+    };
+    if !stale.is_empty() {
+        notice::Entity::update_many()
+            .col_expr(notice::Column::State, Expr::value(NoticeState::Expired))
+            .col_expr(notice::Column::ActedAt, Expr::value(Some(now)))
+            .col_expr(notice::Column::UpdatedAt, Expr::value(now))
+            .filter(notice::Column::Id.is_in(stale.iter().map(|n| n.id).collect::<Vec<_>>()))
+            .filter(notice::Column::State.eq(NoticeState::Open))
+            .exec(&txn)
+            .await?;
+    }
+    let ev = event::ActiveModel {
+        id: NotSet,
+        kind: Set(fire.event.kind),
+        source_key: Set(source_key),
+        coalesce_key: Set(fire.event.coalesce_key),
+        summary: Set(fire.event.summary),
+        payload: Set(fire.event.payload.map(|p| p.to_string())),
+        wake: Set(fire.event.wake),
+        state: Set(EventState::Pending),
+        batch_id: Set(None),
+        requeues: Set(0),
+        requeued_from: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        bot_id: Set(Some(bot)),
+        origin_bot_id: Set(fire.event.lineage.origin_bot_id),
+        origin_row_id: Set(fire.event.lineage.origin_row_id),
+        thread_id: Set(fire.event.lineage.thread_id),
+    }
+    .insert(&txn)
+    .await?;
+    let made = notice::ActiveModel {
+        id: NotSet,
+        bot_id: Set(Some(bot)),
+        kind: Set(fire.notice.kind),
+        subject_key: Set(fire.notice.subject_key),
+        level: Set(fire.notice.level),
+        state: Set(fire.notice_state),
+        timeline_id: Set(None),
+        batch_id: Set(fire.notice.batch_id),
+        payload: Set(fire.notice.payload.to_string()),
+        notified_at: Set(None),
+        acted_at: Set((fire.notice_state != NoticeState::Open).then_some(now)),
+        expires_at: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(&txn)
+    .await?;
+    let mut row = fire.row;
+    row.ref_id = Some(made.id.to_string());
+    if fire.event_numbers_row {
+        row.event_id = Some(ev.id);
+    }
+    let card = row.into_active(bot, now).insert(&txn).await?;
+    notice::Entity::update_many()
+        .col_expr(notice::Column::TimelineId, Expr::value(card.id))
+        .filter(notice::Column::Id.eq(made.id))
+        .exec(&txn)
+        .await?;
+    txn.commit().await?;
+    Ok(Some(Fired {
+        notice: notice::Model {
+            timeline_id: Some(card.id),
+            ..made
+        },
+        row: card,
+        expired: stale,
+    }))
+}
+
+/// The subject a matter's reminder cards are filed under.
+pub fn reminder_subject(item_id: i32) -> String {
+    format!("item:{item_id}")
 }
 
 /// Items in the given statuses (all of them when empty), newest first.

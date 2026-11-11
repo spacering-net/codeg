@@ -2667,13 +2667,22 @@ export async function personalAgentTurnSteps(
   return getTransport().call("personal_agent_turn_steps", { botId })
 }
 
-/** Settle one of an assistant's open matters: done, dropped, or later. */
+/** Settle one of an assistant's open matters: done, dropped, later (it
+ *  waits on time, no due), or snoozed until `until` — `15m`, `1h`,
+ *  `tomorrow` (tomorrow morning) or an ISO 8601 time with its offset. A
+ *  snooze without `until` is `later`. */
 export async function personalAgentItemAct(
   botId: number | null | undefined,
   itemId: number,
-  act: "done" | "drop" | "later"
+  act: "done" | "drop" | "later" | "snooze",
+  until?: "15m" | "1h" | "tomorrow" | (string & {})
 ): Promise<ItemInfo> {
-  return getTransport().call("personal_agent_item_act", { botId, itemId, act })
+  return getTransport().call("personal_agent_item_act", {
+    botId,
+    itemId,
+    act,
+    until: until ?? null,
+  })
 }
 
 /** Stop one piece of handed-out work from its card (8.5). False when it
@@ -2853,16 +2862,34 @@ export async function personalAgentMarkSeen(
 export async function personalAgentNoticeAct(
   noticeId: number,
   /** `accept` / `dismiss`; a stop card's `stop:<message id>`; a changed
-   *  card's `undo`, or `undo:<assistant id>` for one assistant it made. */
-  action: "accept" | "dismiss" | "undo" | `undo:${number}` | `stop:${number}`,
-  bot?: number | null
+   *  card's `undo`, or `undo:<assistant id>` for one assistant it made; a
+   *  reminder card's `done`, `snooze:<15m|1h|tomorrow>` or `hand_over`. */
+  action: NoticeAction,
+  bot?: number | null,
+  /** `hand_over`: the owner's words, posted as their message quoting the
+   *  card. */
+  text?: string
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_notice_act", {
     noticeId,
     action,
     botId: bot ?? null,
+    text: text ?? null,
   })
 }
+
+/** What the owner can answer on a native card. */
+export type NoticeAction =
+  | "accept"
+  | "dismiss"
+  | "undo"
+  | `undo:${number}`
+  | `stop:${number}`
+  | "done"
+  | "snooze:15m"
+  | "snooze:1h"
+  | "snooze:tomorrow"
+  | "hand_over"
 
 export async function personalAgentAnswerQuestion(
   questionId: string,

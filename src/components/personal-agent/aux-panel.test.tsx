@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -152,6 +153,11 @@ function item(patch: Partial<ItemInfo>): ItemInfo {
     created_at: "2026-11-04T09:00:00Z",
     updated_at: "2026-11-04T10:00:00Z",
     dispatch_state: null,
+    due_at: null,
+    repeat: null,
+    at_due: null,
+    act_spec: null,
+    fired_at: null,
     ...patch,
   }
 }
@@ -579,7 +585,7 @@ describe("the details' matters", () => {
     ).toBe("Details")
   })
 
-  it("settles a matter from its card: done, later, dropped", async () => {
+  it("settles a matter from its card: done, put off, later, dropped", async () => {
     api.personalAgentItems.mockResolvedValue([
       item({
         id: 11,
@@ -599,8 +605,33 @@ describe("the details' matters", () => {
     const question = container.querySelector<HTMLElement>(
       "[data-pa-group='owner']"
     )!
-    fireEvent.click(within(question).getByRole("button", { name: "Later" }))
-    expect(api.personalAgentItemAct).toHaveBeenCalledWith(null, 11, "later")
+    // [Later] is a menu: a set time, or none.
+    await userEvent.click(
+      within(question).getByRole("button", { name: "Later" })
+    )
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "In 1 hour" })
+    )
+    expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+      null,
+      11,
+      "snooze",
+      "1h"
+    )
+    await waitFor(() =>
+      expect(
+        within(question)
+          .getByRole("button", { name: "Later" })
+          .hasAttribute("disabled")
+      ).toBe(false)
+    )
+    await userEvent.click(
+      within(question).getByRole("button", { name: "Later" })
+    )
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "No set time" })
+    )
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 11, "later")
     const done = within(question).getByRole("button", { name: "Done" })
     await waitFor(() => expect(done.hasAttribute("disabled")).toBe(false))
     fireEvent.click(done)
@@ -612,6 +643,61 @@ describe("the details' matters", () => {
     expect(within(reminder).queryByRole("button", { name: "Later" })).toBeNull()
     fireEvent.click(within(reminder).getByRole("button", { name: "Drop" }))
     expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 15, "drop")
+  })
+
+  it("says when a matter is due, how it comes back, and puts off one waiting on time", async () => {
+    const hour = 3_600_000
+    api.personalAgentItems.mockResolvedValue([
+      item({
+        id: 21,
+        kind: "reminder",
+        waits_for: "time",
+        summary: "Stand-up notes",
+        due_at: new Date(Date.now() + hour).toISOString(),
+        repeat: { every: "weekdays", at: "09:00" },
+        at_due: "notify",
+      }),
+      item({
+        id: 22,
+        kind: "followup",
+        waits_for: "time",
+        summary: "Check the release",
+        due_at: new Date(Date.now() - hour).toISOString(),
+        at_due: "act",
+      }),
+      item({
+        id: 23,
+        kind: "reminder",
+        waits_for: "owner",
+        summary: "Call the bank",
+        due_at: new Date(Date.now() - hour).toISOString(),
+        fired_at: new Date(Date.now() - hour + 5_000).toISOString(),
+        at_due: "notify",
+      }),
+    ])
+    const { container } = draw()
+    await screen.findByText("Stand-up notes")
+    expect(screen.getByText(/^Due .+ · Every weekday 09:00$/)).toBeTruthy()
+    expect(screen.getByText(/^Overdue · due /)).toBeTruthy()
+    expect(screen.getByText(/^Reminded · due /)).toBeTruthy()
+    // The one the assistant does itself says so.
+    expect(
+      container.querySelectorAll("[data-pa-item-at-due='act']")
+    ).toHaveLength(1)
+    // Waiting on time with a due time, it can still be put off.
+    const card = screen
+      .getByText("Stand-up notes")
+      .closest<HTMLElement>(".ws-msg-card")!
+    await userEvent.click(within(card).getByRole("button", { name: "Later" }))
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Tomorrow morning" })
+    )
+    expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+      null,
+      21,
+      "snooze",
+      "tomorrow"
+    )
   })
 
   it("carries a task's card, and lets the owner close a pull request codeg does not follow", async () => {

@@ -52,9 +52,10 @@ export const assistantActionDefinitions = {
     params: z.object({
       id: z.number(),
       op: z.enum(PA_ITEM_OPS),
+      until: z.string().nullable(),
     }),
     description:
-      'Close or set aside one of your open matters, without a turn of yours. Params: { id: number — the matter\'s id from item_list, op: "done" | "drop" | "snooze" } — snooze sets it aside to wait for later; drop asks the owner first.',
+      'Close or put off one of your open matters, without a turn of yours. Params: { id: number — the matter\'s id from item_list, op: "done" | "drop" | "snooze", until?: "15m" | "1h" | "tomorrow" | an ISO 8601 time with its offset — snooze only: when it comes due again ("tomorrow" is tomorrow morning); without it the matter waits on time with no due } — done on a repeating matter finishes this time and schedules the next; drop asks the owner first.',
   },
   [PA_OPEN]: {
     params: z.object({

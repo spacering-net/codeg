@@ -66,6 +66,20 @@ pub struct Model {
     pub updated_at: DateTimeUtc,
     /// The assistant it belongs to (`personal_agent.id`).
     pub bot_id: Option<i32>,
+    /// When the current occurrence is due.
+    pub due_at: Option<DateTimeUtc>,
+    /// How it repeats (JSON, `personal_agent::due::Repeat`).
+    #[sea_orm(column_type = "Text", nullable)]
+    pub repeat: Option<String>,
+    /// What happens when it is due: `notify` or `act`.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub at_due: Option<String>,
+    /// What the assistant is to do when an `act` matter comes due (JSON,
+    /// `personal_agent::due::ActSpec`).
+    #[sea_orm(column_type = "Text", nullable)]
+    pub act_spec: Option<String>,
+    /// When the current occurrence fired; on or after `due_at`, it has.
+    pub fired_at: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

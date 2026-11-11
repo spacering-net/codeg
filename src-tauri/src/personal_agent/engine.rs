@@ -350,6 +350,8 @@ pub struct PersonalAgentEngine {
     pub(super) asks_lock: Mutex<()>,
     /// Serializes keeping what the owner pressed on the cards (9.2).
     pub(super) card_lock: Mutex<()>,
+    /// Serializes the owner's answers on reminder cards (6.1).
+    pub(super) reminder_lock: Mutex<()>,
     /// A delivery was asked for while one ran: run again after it.
     pump_again: AtomicBool,
     wake: Notify,
@@ -384,6 +386,7 @@ impl PersonalAgentEngine {
             dispatch_lock: Mutex::new(()),
             asks_lock: Mutex::new(()),
             card_lock: Mutex::new(()),
+            reminder_lock: Mutex::new(()),
             pump_again: AtomicBool::new(false),
             wake: Notify::new(),
             booted: AtomicBool::new(false),
@@ -654,6 +657,10 @@ impl PersonalAgentEngine {
         liveness.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut reconcile = tokio::time::interval(RECONCILE_TICK);
         reconcile.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        // The clock (6.1): what is due fires, what was missed while codeg
+        // was not running or the computer slept fires once, late.
+        let mut due = tokio::time::interval(super::reminders::DUE_TICK);
+        due.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 _ = self.wake.notified() => {
@@ -667,6 +674,9 @@ impl PersonalAgentEngine {
                 _ = reconcile.tick() => {
                     self.reconcile_dispatches().await;
                     self.ask_tick().await;
+                }
+                _ = due.tick() => {
+                    self.due_tick().await;
                 }
             }
         }
@@ -743,6 +753,17 @@ impl PersonalAgentEngine {
             .await
             .ask_for
             .insert(conn_id.to_string(), for_input);
+    }
+
+    /// The owner's latest message the turn in flight carries: where a
+    /// matter it records came from.
+    pub(super) async fn turn_owner_row(&self) -> Option<i32> {
+        self.state
+            .lock()
+            .await
+            .turn
+            .as_ref()
+            .and_then(|t| t.owner_row_ids.last().copied())
     }
 
     /// Whether a turn is running.
@@ -2631,14 +2652,39 @@ impl PersonalAgentEngine {
         for e in events.iter().filter(|e| e.kind == svc::ASK_EVENT) {
             asks.push(self.ask_block(e).await);
         }
-        // What started it — recorded only, for the status and statistics.
+        // What started it — recorded only, for the status, the statistics
+        // and the `<codeg-now>` line.
         let trigger = if !owners.is_empty() {
             BatchTrigger::Owner
         } else if !messages.is_empty() {
             BatchTrigger::Message
+        } else if events
+            .iter()
+            .any(|e| e.kind == super::reminders::REMINDER_EVENT)
+        {
+            BatchTrigger::Reminder
         } else {
             BatchTrigger::Event
         };
+        // Every delivery starts with the owner's time now (6.1).
+        {
+            let now = super::clock::now();
+            let before = owners.iter().map(|o| o.id).min();
+            let last = svc::last_owner_message_before(&self.db.conn, self.bot().await, before)
+                .await
+                .ok()
+                .flatten();
+            let started_by = match trigger {
+                BatchTrigger::Owner => "the owner's message",
+                BatchTrigger::Message => "another assistant's message",
+                BatchTrigger::Reminder => "a matter came due that you are to do",
+                _ => "news of work you dispatched or of your matters",
+            };
+            cards_text.insert(
+                0,
+                super::due::now_line(now, self.owner_tz(), last, started_by),
+            );
+        }
         let event_lines = self.event_lines(&news).await;
         let events_text = {
             let parts: Vec<String> = cards::events_block(&event_lines)
@@ -2945,6 +2991,8 @@ impl PersonalAgentEngine {
         .await
         .unwrap_or_default();
         let mut lines = Vec::with_capacity(items.len());
+        let tz = self.owner_tz();
+        let now = super::clock::now();
         for i in items.into_iter().rev() {
             let dispatch = match i.dispatch_id {
                 Some(id) => svc::get_dispatch(&self.db.conn, id).await.ok().flatten().map(|d| {
@@ -2966,6 +3014,7 @@ impl PersonalAgentEngine {
                 kind: enum_str(&i.kind),
                 status: enum_str(&i.status),
                 waits_for: i.waits_for.as_ref().map(enum_str),
+                time: super::reminders::time_words(&i, tz, now),
                 summary: i.summary,
                 dispatch,
             });
@@ -3546,7 +3595,7 @@ impl PersonalAgentEngine {
     /// card's button, `card_click` names the button and `reply_data` is the
     /// quoted card's row with the press kept, written with the message in
     /// one transaction.
-    async fn queue_owner_message(
+    pub(super) async fn queue_owner_message(
         &self,
         text: String,
         blocks: Vec<PromptInputBlock>,
@@ -3755,7 +3804,23 @@ impl PersonalAgentEngine {
             clicked: row.data.as_ref().and_then(super::card_acts::clicked_in),
             text: row.body.clone(),
         };
-        let text = cards::owner_message(&line);
+        // Its own time, as a delivery's: the turn may have begun before
+        // midnight (6.1).
+        let now = super::clock::now();
+        let last = svc::last_owner_message_before(&self.db.conn, self.bot().await, Some(row.id))
+            .await
+            .ok()
+            .flatten();
+        let text = format!(
+            "{}\n\n{}",
+            super::due::now_line(
+                now,
+                self.owner_tz(),
+                last,
+                "the owner's message, sent while your turn ran"
+            ),
+            cards::owner_message(&line)
+        );
         // With attachments, the blocks ARE the wire payload: the text leads
         // them, as it does in a delivery.
         let more = (!blocks.is_empty()).then(|| {

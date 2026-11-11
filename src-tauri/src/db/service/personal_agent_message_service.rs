@@ -333,6 +333,11 @@ pub async fn send_message(
                 created_at: Set(now),
                 updated_at: Set(now),
                 bot_id: Set(Some(new.from)),
+                due_at: Set(None),
+                repeat: Set(None),
+                at_due: Set(None),
+                act_spec: Set(None),
+                fired_at: Set(None),
             }
             .insert(&txn)
             .await?,

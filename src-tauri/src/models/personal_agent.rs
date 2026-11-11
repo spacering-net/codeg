@@ -472,6 +472,14 @@ pub struct ItemInfo {
     pub updated_at: DateTime<Utc>,
     /// The dispatch's state, for a dispatch item.
     pub dispatch_state: Option<DispatchState>,
+    /// When it is due (its current occurrence), how it repeats, what
+    /// happens then (`notify` / `act`), what it is to do, and when the
+    /// current occurrence fired (6.1).
+    pub due_at: Option<DateTime<Utc>>,
+    pub repeat: Option<serde_json::Value>,
+    pub at_due: Option<String>,
+    pub act_spec: Option<serde_json::Value>,
+    pub fired_at: Option<DateTime<Utc>>,
 }
 
 /// A context-occupancy reading.

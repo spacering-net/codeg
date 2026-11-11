@@ -8731,7 +8731,12 @@
       "item": {
         "done": "완료",
         "later": "나중에",
-        "drop": "그만두기"
+        "drop": "그만두기",
+        "in15m": "15분 후",
+        "in1h": "1시간 후",
+        "tomorrow": "내일 오전",
+        "untimed": "시간 정하지 않음",
+        "act": "때가 되면 처리"
       },
       "output": {
         "all": "전체",
@@ -8835,6 +8840,48 @@
         "title": "이 일을 그만둘까요?",
         "description": "\"{summary}\"이(가) 진행 중인 일에서 빠집니다.",
         "confirm": "그만두기"
+      }
+    },
+    "due": {
+      "tomorrow": "내일 {time}",
+      "yesterday": "어제 {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n}분",
+        "hours": "{n}시간",
+        "hoursMinutes": "{h}시간 {m}분",
+        "days": "{n}일"
+      },
+      "repeat": {
+        "daily": "매일 {time}",
+        "weekdays": "평일마다 {time}",
+        "weekly": "매주 {days} {time}",
+        "monthly": "매월 {day}일 {time}",
+        "until": "{rule}, {date}까지",
+        "sep": ", "
+      },
+      "dueAt": "{when} 마감",
+      "overdue": "기한 지남 · {when} 마감",
+      "reminded": "알림 보냄 · {when} 마감",
+      "late": "{duration} 늦음",
+      "missed": "{count}번 놓침"
+    },
+    "reminder": {
+      "title": "리마인더",
+      "done": "완료",
+      "snooze15m": "15분 후",
+      "snooze1h": "1시간 후",
+      "snoozeTomorrow": "내일 오전",
+      "handOver": "어시스턴트에게 맡기기",
+      "handOverText": "리마인더 #{id} 처리해 줘: {summary}",
+      "state": {
+        "done": "완료함",
+        "snoozed": "{when}(으)로 미룸",
+        "handed": "어시스턴트에게 맡김",
+        "dropped": "그만둠",
+        "expired": "만료됨(새 회차가 왔습니다)",
+        "closed": "처리함",
+        "woke": "시간이 되어 어시스턴트를 깨워 처리하게 했습니다"
       }
     }
   }

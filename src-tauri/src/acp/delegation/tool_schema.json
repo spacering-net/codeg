@@ -1575,7 +1575,7 @@
   },
   {
     "name": "item_list",
-    "description": "List your open matters (the ledger codeg keeps for you, including one per dispatch): id, kind, status, who it waits for, a summary, and the dispatch's current state. Defaults to the active ones (open and waiting).",
+    "description": "List your open matters (the ledger codeg keeps for you, including one per dispatch): id, kind, status, who it waits for, a summary, the dispatch's current state, and when it is due. Defaults to the active ones (open and waiting).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1612,7 +1612,7 @@
   },
   {
     "name": "item_update",
-    "description": "Update an open matter — its status, who it waits for, its summary, what to do when it is done — or, without `item_id`, add one (a reminder, a follow-up, a question for the owner). Dispatches get their item automatically; do not add one for them.",
+    "description": "Update an open matter — its status, who it waits for, its summary, what to do when it is done, its time — or, without `item_id`, add one (a reminder, a follow-up, a question for the owner). Dispatches get their item automatically; do not add one for them. With `due` the matter has a time: then codeg shows the owner a reminder card (`at_due` notify, the default — you are not woken) or wakes you to do it (`at_due` act, with `act_spec`). The answer gives the time in the owner's zone with its weekday, and a repeating one's next times: tell the owner those. Done on a repeating matter is done for this time; codeg sets the next.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1655,6 +1655,81 @@
         "on_done": {
           "type": "string",
           "maxLength": 2000
+        },
+        "due": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "When it is due: `YYYY-MM-DD HH:MM` in the owner's time (see <codeg-now>), ISO 8601 with an offset, or from now — `30m`, `2h`, `1d`, `tomorrow` (tomorrow morning). Not in the past, at most a year ahead. A new due alone moves the next time only; a repeating matter keeps its rule."
+        },
+        "repeat": {
+          "type": "object",
+          "description": "For a recurring matter, from its first time (`due`): every — daily, weekdays, weekly or monthly; days (weekly; default the first time's day); day 1–31 (monthly; default the first time's; past a short month's end, its last day); until — the last date, YYYY-MM-DD. The wall-clock time is the first time's. { \"every\": \"none\" } stops it repeating.",
+          "properties": {
+            "every": {
+              "type": "string",
+              "enum": [
+                "daily",
+                "weekdays",
+                "weekly",
+                "monthly",
+                "none"
+              ]
+            },
+            "days": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat",
+                  "sun"
+                ]
+              }
+            },
+            "day": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 31
+            },
+            "until": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "every"
+          ]
+        },
+        "at_due": {
+          "type": "string",
+          "enum": [
+            "notify",
+            "act"
+          ],
+          "description": "What happens at the time: `notify` (default) — codeg shows the owner a reminder card and does not wake you; `act` — codeg wakes you to do what `act_spec` says."
+        },
+        "act_spec": {
+          "type": "object",
+          "description": "For `act`: what you will do then, and a draft of the dispatch to make if there is one (the dispatch tool's fields: mode, assistant_id, title, prompt, project_id, deliverable, on_done). Handed back to you when it comes due. Implies `at_due: act`.",
+          "properties": {
+            "what": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "dispatch": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "what"
+          ]
+        },
+        "clear_due": {
+          "type": "boolean",
+          "description": "Take the matter's time away (no due, no repeat)."
         }
       }
     }

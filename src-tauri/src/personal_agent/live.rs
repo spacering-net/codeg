@@ -1006,61 +1006,16 @@ impl EngineHost {
 
 impl PersonalAgentEngine {
     /// The owner settles one of its open matters from the panel: `done`,
-    /// `drop`, or `later` (it waits on time). Handed-out work is settled when
-    /// the work ends.
+    /// `drop`, `later` (it waits with no time) or `snooze` until `until`
+    /// (6.1). Handed-out work is settled when the work ends.
     pub async fn settle_item(
         &self,
         item_id: i32,
         act: &str,
+        until: Option<&str>,
     ) -> Result<crate::db::entities::personal_agent_item::Model, String> {
-        use crate::db::entities::personal_agent_item::{ItemKind, WaitsFor};
-        let bot = self.bot().await;
-        let item = svc::get_item_of(&self.db.conn, bot, item_id)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("no matter #{item_id}"))?;
-        // Handed-out work settles itself as the work ends — except a pull
-        // request codeg does not follow yet (8.5): the owner closes that one
-        // once it is merged, or drops it.
-        if item.kind == ItemKind::Dispatch {
-            let live = match item.dispatch_id {
-                Some(id) => svc::get_dispatch(&self.db.conn, id)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .is_some_and(|d| super::dispatch::LIVE_STATES.contains(&d.state)),
-                None => false,
-            };
-            if live || act == "later" {
-                return Err(
-                    "a piece of handed-out work is settled when the work ends; stop it on its card"
-                        .into(),
-                );
-            }
-        }
-        if matches!(item.status, ItemStatus::Done | ItemStatus::Dropped) {
-            return Err(format!("matter #{item_id} is already settled"));
-        }
-        let write = match act {
-            "done" => svc::ItemWrite {
-                status: Some(ItemStatus::Done),
-                ..Default::default()
-            },
-            "drop" => svc::ItemWrite {
-                status: Some(ItemStatus::Dropped),
-                ..Default::default()
-            },
-            "later" => svc::ItemWrite {
-                waits_for: Some(Some(WaitsFor::Time)),
-                ..Default::default()
-            },
-            other => return Err(format!("unknown act `{other}`")),
-        };
-        let updated = svc::update_item(&self.db.conn, item_id, write)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("no matter #{item_id}"))?;
-        self.emit_item(item_id);
-        Ok(updated)
+        let op = super::reminders::ItemOp::parse(act, until, self.owner_tz(), super::clock::now())?;
+        self.item_op(item_id, op).await
     }
 }
 

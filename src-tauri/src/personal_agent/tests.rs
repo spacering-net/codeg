@@ -3476,8 +3476,12 @@ async fn upgrading_files_the_existing_records_under_the_primary() {
     use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
     use sea_orm_migration::MigratorTrait;
     let conn = Database::connect("sqlite::memory:").await.unwrap();
-    let all = crate::db::migration::Migrator::migrations().len();
-    crate::db::migration::Migrator::up(&conn, Some((all - 1) as u32)).await.unwrap();
+    // Up to the bots migration, as the ledger build left it.
+    let before_bots = crate::db::migration::Migrator::migrations()
+        .iter()
+        .position(|m| m.name() == "m20261108_000001_personal_agent_bots")
+        .expect("the bots migration");
+    crate::db::migration::Migrator::up(&conn, Some(before_bots as u32)).await.unwrap();
     for sql in [
         "INSERT INTO personal_agent (name, avatar, agent_type, agent_options, label_snapshot, settings, revision, created_at, updated_at) \
          VALUES ('Nova', '{}', 'claude_code', '{}', '{}', '{}', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
@@ -3875,7 +3879,16 @@ async fn a_message_folds_into_a_turn_carrying_an_earlier_one_when_the_agent_take
             _ => None,
         })
         .unwrap();
-    assert!(text.starts_with(&format!("[#{}, replying to #{}", second.id, first.id)), "{text}");
+    // It carries its own time, as a delivery does (6.1).
+    let (now_line, said) = text.split_once("\n\n").unwrap();
+    assert!(now_line.starts_with("<codeg-now>") && now_line.ends_with("</codeg-now>"), "{text}");
+    assert!(now_line.contains("this turn: the owner's message, sent while your turn ran"), "{text}");
+    let first_at = first.created_at.with_timezone(&engine.owner_tz()).format("%H:%M").to_string();
+    assert!(
+        now_line.contains("the owner's last message before this turn: ") && now_line.contains(&first_at),
+        "{text}"
+    );
+    assert!(said.starts_with(&format!("[#{}, replying to #{}", second.id, first.id)), "{text}");
     assert!(text.ends_with("second"), "{text}");
     assert_eq!(second.status, Some(OwnerStatus::Delivered), "the turn's now");
     assert_eq!(second.batch_id, Some(batch));
@@ -3967,7 +3980,8 @@ async fn a_folded_message_with_attachments_leads_with_its_text() {
     assert_eq!(blocks.len(), 2, "{blocks:?}");
     match &blocks[0] {
         crate::acp::types::PromptInputBlock::Text { text } => {
-            assert_eq!(text, &format!("[#{}] use this screenshot", second.id));
+            assert!(text.starts_with("<codeg-now>"), "{text}");
+            assert!(text.ends_with(&format!("</codeg-now>\n\n[#{}] use this screenshot", second.id)), "{text}");
         }
         other => panic!("the text leads: {other:?}"),
     }
@@ -6000,12 +6014,12 @@ async fn the_owner_settles_a_matter_from_the_panel() {
     )
     .await
     .unwrap();
-    let later = engine.settle_item(item.id, "later").await.unwrap();
+    let later = engine.settle_item(item.id, "later", None).await.unwrap();
     assert_eq!((later.status, later.waits_for), (ItemStatus::Open, Some(WaitsFor::Time)));
-    let done = engine.settle_item(item.id, "done").await.unwrap();
+    let done = engine.settle_item(item.id, "done", None).await.unwrap();
     assert_eq!(done.status, ItemStatus::Done);
-    assert!(engine.settle_item(item.id, "drop").await.unwrap_err().contains("already settled"));
-    assert!(engine.settle_item(999, "done").await.is_err());
+    assert!(engine.settle_item(item.id, "drop", None).await.unwrap_err().contains("already settled"));
+    assert!(engine.settle_item(999, "done", None).await.is_err());
     // Handed-out work ends with the work.
     let d = session_dispatch(&engine, DispatchState::Running, "c-item").await;
     let i = svc::create_item(
@@ -6021,7 +6035,7 @@ async fn the_owner_settles_a_matter_from_the_panel() {
     )
     .await
     .unwrap();
-    assert!(engine.settle_item(i.id, "done").await.unwrap_err().contains("handed-out work"));
+    assert!(engine.settle_item(i.id, "done", None).await.unwrap_err().contains("handed-out work"));
 }
 
 #[test]
@@ -6325,7 +6339,7 @@ async fn code_work_is_done_when_merged_and_a_pull_request_waits_for_its_merge() 
     let m = matter(d.id).await;
     assert_eq!((m.status, m.waits_for), (ItemStatus::Waiting, Some(WaitsFor::Owner)));
     // A live piece of work is not settled from the panel.
-    assert!(engine.settle_item(m.id, "done").await.is_err());
+    assert!(engine.settle_item(m.id, "done", None).await.is_err());
 
     // Delivered as a pull request: not done — it waits for the merge, the
     // event says so, and the card has the PR.
@@ -6351,8 +6365,8 @@ async fn code_work_is_done_when_merged_and_a_pull_request_waits_for_its_merge() 
     assert_eq!((facts.pr_url.as_deref(), facts.pr_number), (Some("https://github.com/o/r/pull/9"), Some(9)));
     // The owner closes it once merged (codeg does not follow PRs yet), but
     // not "later".
-    assert!(engine.settle_item(m2.id, "later").await.is_err());
-    assert_eq!(engine.settle_item(m2.id, "done").await.unwrap().status, ItemStatus::Done);
+    assert!(engine.settle_item(m2.id, "later", None).await.is_err());
+    assert_eq!(engine.settle_item(m2.id, "done", None).await.unwrap().status, ItemStatus::Done);
 
     // Merged: done.
     let merged = board_task(&engine, project, "Land", WorkTaskStatus::Done, |t| {
@@ -7920,4 +7934,570 @@ async fn a_secret_answer_to_the_brains_question_is_not_kept() {
     assert_eq!(data["state"], "answered");
     assert!(!kept.data.unwrap().contains("sk-live-123"), "{data}");
     assert!(data.to_string().contains("•••"), "{data}");
+}
+
+// ── 1.11: time ──────────────────────────────────────────────────────────────
+
+/// `YYYY-MM-DD HH:MM` in the owner's zone, `days` from today.
+fn local_day(engine: &PersonalAgentEngine, days: i64, hm: &str) -> (String, chrono::DateTime<chrono::Utc>) {
+    let tz = engine.owner_tz();
+    let date = super::clock::now().with_timezone(&tz).date_naive() + chrono::Duration::days(days);
+    let text = format!("{date} {hm}");
+    let at = super::due::local_at(tz, chrono::NaiveDateTime::parse_from_str(&text, "%Y-%m-%d %H:%M").unwrap());
+    (text, at)
+}
+
+async fn reminder_rows(engine: &PersonalAgentEngine, item: i32) -> Vec<crate::db::entities::personal_agent_timeline::Model> {
+    let mut rows: Vec<_> = notice_rows(engine)
+        .await
+        .into_iter()
+        .filter(|r| data_of(r)["notice"] == "reminder" && data_of(r)["item_id"] == item)
+        .collect();
+    rows.sort_by_key(|r| r.id);
+    rows
+}
+
+async fn item_notes(engine: &PersonalAgentEngine) -> Vec<crate::db::entities::personal_agent_event::Model> {
+    svc::pending_events(&engine.db.conn, engine.bot().await)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == super::reminders::ITEM_NOTE_EVENT)
+        .collect()
+}
+
+fn notice_of_row(row: &crate::db::entities::personal_agent_timeline::Model) -> i32 {
+    row.ref_id.as_deref().unwrap().parse().unwrap()
+}
+
+#[tokio::test]
+async fn a_matter_with_a_time_answers_its_time_and_weekday_in_the_owners_zone() {
+    let (engine, _tmp) = configured().await;
+    let tz = engine.owner_tz();
+    let (due, at) = local_day(&engine, 1, "15:00");
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Call the bank", "due": due })).await;
+    assert!(out.ok, "{}", out.text);
+    let now = super::clock::now();
+    assert!(out.text.contains(&super::due::describe(at, tz, now)), "{}", out.text);
+    assert!(out.text.contains("(tomorrow)") && out.text.contains(&super::due::zone_label(tz, at)), "{}", out.text);
+    assert!(out.text.contains("reminds the owner"), "{}", out.text);
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(item.due_at, Some(at));
+    assert_eq!(item.at_due.as_deref(), Some("notify"));
+    assert_eq!(item.waits_for, Some(WaitsFor::Time), "a matter with a time waits on it");
+    assert_eq!(item.fired_at, None);
+
+    // Not in the past, not past a year, and a rule needs a first time.
+    let (past, _) = local_day(&engine, -1, "09:00");
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "x", "due": past })).await;
+    assert!(!out.ok && out.text.contains("in the past"), "{}", out.text);
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "x", "due": "400d" })).await;
+    assert!(!out.ok && out.text.contains("a year"), "{}", out.text);
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "x", "repeat": { "every": "daily" } })).await;
+    assert!(!out.ok && out.text.contains("`due`"), "{}", out.text);
+
+    // A repeating one lists its next times; an act_spec makes it the
+    // assistant's to do.
+    let (due, _) = local_day(&engine, 1, "09:30");
+    let out = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "followup", "summary": "Stand-up notes", "due": due, "repeat": { "every": "weekdays" },
+                "act_spec": { "what": "Summarize yesterday's merged PRs" } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert!(out.text.contains("every weekday (Mon–Fri) at 09:30") && out.text.contains("next times:"), "{}", out.text);
+    assert!(out.text.contains("wakes you to do it"), "{}", out.text);
+    let rid = out.data["item_id"].as_i64().unwrap() as i32;
+    let r = svc::get_item(&engine.db.conn, rid).await.unwrap().unwrap();
+    assert_eq!(r.at_due.as_deref(), Some("act"));
+    assert_eq!(super::due::ActSpec::parse(r.act_spec.as_deref()).unwrap().what, "Summarize yesterday's merged PRs");
+
+    // A new due alone moves the next time, the rule stays; clear_due takes
+    // the time away.
+    let (due2, at2) = local_day(&engine, 2, "11:00");
+    let out = call(&engine, "item_update", json!({ "item_id": rid, "due": due2 })).await;
+    assert!(out.ok, "{}", out.text);
+    let r = svc::get_item(&engine.db.conn, rid).await.unwrap().unwrap();
+    assert_eq!(r.due_at, Some(at2));
+    assert!(r.repeat.as_deref().unwrap().contains("09:30"), "the rule keeps its time");
+    let out = call(&engine, "item_update", json!({ "item_id": rid, "clear_due": true, "due": due2 })).await;
+    assert!(!out.ok, "clear_due alone");
+    let out = call(&engine, "item_update", json!({ "item_id": rid, "clear_due": true })).await;
+    assert!(out.ok, "{}", out.text);
+    let r = svc::get_item(&engine.db.conn, rid).await.unwrap().unwrap();
+    assert_eq!((r.due_at, r.repeat, r.at_due), (None, None, None));
+
+    // The lists say it.
+    let list = call(&engine, "item_list", json!({})).await;
+    assert!(list.text.contains("Call the bank") && list.text.contains("due "), "{}", list.text);
+    let read = call(&engine, "item_read", json!({ "item_id": id })).await;
+    assert!(read.text.contains(&super::due::zone_label(tz, at)), "{}", read.text);
+}
+
+#[tokio::test]
+async fn a_dispatch_or_a_message_matter_takes_no_time() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let d = svc::create_item(&engine.db.conn, bot, ItemKind::Dispatch, None, ItemStatus::Open, None, "Fix it".into(), None, None)
+        .await
+        .unwrap();
+    let out = call(&engine, "item_update", json!({ "item_id": d.id, "due": "1h" })).await;
+    assert!(!out.ok && out.text.contains("neither takes a time"), "{}", out.text);
+    assert!(engine.settle_item(d.id, "snooze", Some("1h")).await.is_err());
+}
+
+#[tokio::test]
+async fn a_due_reminder_shows_its_card_once_and_the_assistant_hears_of_it() {
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Stretch", "due": "2m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    let now = super::clock::now();
+    // Not yet.
+    engine.fire_due_at(now).await;
+    assert!(reminder_rows(&engine, id).await.is_empty());
+    let at = now + chrono::Duration::minutes(3);
+    engine.fire_due_at(at).await;
+    engine.fire_due_at(at + chrono::Duration::seconds(15)).await;
+    let rows = reminder_rows(&engine, id).await;
+    assert_eq!(rows.len(), 1, "once");
+    let card = data_of(&rows[0]);
+    assert_eq!(card["state"], "open");
+    assert_eq!(card["at_due"], "notify");
+    assert_eq!(card["late_secs"], 0, "on time");
+    assert_eq!(card["summary"], "Stretch");
+    assert!(rows[0].body.starts_with(&format!("Reminder #{id}: Stretch")), "{}", rows[0].body);
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(item.fired_at, Some(at));
+    assert_eq!(item.waits_for, Some(WaitsFor::Owner));
+    // The assistant is not woken; it reads that the owner was reminded.
+    let notes = item_notes(&engine).await;
+    assert_eq!(notes.len(), 1);
+    assert!(!notes[0].wake);
+    assert!(notes[0].summary.contains(&format!("Reminder #{id} \"Stretch\" was shown to the owner")), "{}", notes[0].summary);
+
+    // [15 minutes later]: the card says until when, the matter moves, and
+    // it comes again then.
+    let notice = notice_of_row(&rows[0]);
+    let row = engine.act_on_notice(notice, "snooze:15m").await.unwrap();
+    let data = row.data.clone().unwrap();
+    assert_eq!(data["state"], "snoozed");
+    assert!(data["until"].is_string());
+    assert!(engine.act_on_notice(notice, "done").await.is_err(), "answered once");
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    let until = item.due_at.unwrap();
+    assert!(until > super::clock::now() + chrono::Duration::minutes(14));
+    assert_eq!(item.fired_at, None);
+    assert_eq!(item.status, ItemStatus::Open);
+    assert!(item_notes(&engine).await.iter().any(|n| n.summary.contains(&format!("The owner put #{id} \"Stretch\" off until"))));
+    engine.fire_due_at(until + chrono::Duration::seconds(1)).await;
+    let rows = reminder_rows(&engine, id).await;
+    assert_eq!(rows.len(), 2, "it comes again");
+    // [Done]: the matter is done, the card says so.
+    let row = engine.act_on_notice(notice_of_row(&rows[1]), "done").await.unwrap();
+    assert_eq!(row.data.unwrap()["state"], "done");
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(item.status, ItemStatus::Done);
+    engine.fire_due_at(until + chrono::Duration::hours(1)).await;
+    assert_eq!(reminder_rows(&engine, id).await.len(), 2, "a done matter fires no more");
+}
+
+#[tokio::test]
+async fn a_missed_reminder_comes_once_late_and_a_repeating_one_goes_on_from_its_latest_time() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let tz = engine.owner_tz();
+    // Due at 09:00 three days ago, every day; codeg was not running since.
+    let (first_text, first) = local_day(&engine, -3, "09:00");
+    let rule = super::due::parse_repeat(
+        &json!({ "every": "daily" }),
+        chrono::NaiveDateTime::parse_from_str(&first_text, "%Y-%m-%d %H:%M").unwrap(),
+    )
+    .unwrap();
+    let item = svc::create_item_timed(
+        &engine.db.conn,
+        bot,
+        ItemKind::Reminder,
+        None,
+        ItemStatus::Open,
+        Some(WaitsFor::Time),
+        "Take the pills".into(),
+        None,
+        None,
+        svc::ItemTime {
+            due_at: Some(first),
+            repeat: Some(serde_json::to_string(&rule).unwrap()),
+            at_due: Some("notify".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (_, today_nine) = local_day(&engine, 0, "09:00");
+    let back = today_nine + chrono::Duration::hours(1);
+    engine.fire_due_at(back).await;
+    let rows = reminder_rows(&engine, item.id).await;
+    assert_eq!(rows.len(), 1, "once, not once per day missed");
+    let card = data_of(&rows[0]);
+    assert_eq!(card["missed"], 3);
+    assert_eq!(card["late_secs"], 3600, "late from today's time");
+    assert!(rows[0].body.contains("1 h late"), "{}", rows[0].body);
+    let item = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
+    assert_eq!(item.due_at, Some(today_nine));
+    engine.fire_due_at(back + chrono::Duration::minutes(30)).await;
+    assert_eq!(reminder_rows(&engine, item.id).await.len(), 1);
+
+    // Tomorrow's time comes with today's card still open: a new card, the
+    // old one expired.
+    let (_, tomorrow_nine) = local_day(&engine, 1, "09:00");
+    engine.fire_due_at(tomorrow_nine + chrono::Duration::seconds(5)).await;
+    let rows = reminder_rows(&engine, item.id).await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(data_of(&rows[0])["state"], "expired");
+    assert_eq!(data_of(&rows[1])["state"], "open");
+    assert_eq!(data_of(&rows[1])["late_secs"], 0);
+
+    // Done on a repeating matter: done for this time, the next is set.
+    let done = engine.settle_item(item.id, "done", None).await.unwrap();
+    assert_eq!(done.status, ItemStatus::Open);
+    let next = done.due_at.unwrap();
+    assert!(next > super::clock::now(), "the next time is ahead");
+    assert_eq!(next.with_timezone(&tz).format("%H:%M").to_string(), "09:00");
+    assert_eq!(done.fired_at, None);
+    assert_eq!(data_of(&reminder_rows(&engine, item.id).await[1])["state"], "done");
+    assert!(item_notes(&engine).await.iter().any(|n| n.summary.contains("done for this time")));
+}
+
+#[tokio::test]
+async fn a_matter_the_assistant_is_to_do_wakes_it_with_what_to_do() {
+    let (engine, _tmp) = configured().await;
+    let out = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "followup", "summary": "Check the release CI", "due": "5m", "at_due": "act",
+                "act_spec": { "what": "Look at the release pipeline and tell the owner",
+                              "dispatch": { "mode": "chat", "title": "CI check", "prompt": "Read the CI" } } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    let at = super::clock::now() + chrono::Duration::minutes(6);
+    engine.fire_due_at(at).await;
+    let rows = reminder_rows(&engine, id).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(data_of(&rows[0])["state"], "woke");
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    let ev = events.iter().find(|e| e.kind == super::reminders::REMINDER_EVENT).expect("a wake-up");
+    assert!(ev.wake);
+    assert_eq!(rows[0].event_id, Some(ev.id), "the card numbers it");
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(item.waits_for, Some(WaitsFor::Agent));
+
+    let seg = open_segment(&engine).await;
+    let (mut rx, _state) = live_connection(&engine, seg, "pa-111").await;
+    engine.pump().await;
+    let (prompt, _) = take_prompt(&mut rx);
+    assert!(prompt.starts_with("<codeg-now>"), "{prompt}");
+    assert!(prompt.contains("this turn: a matter came due that you are to do"), "{prompt}");
+    for part in [
+        format!("[#{}] It is time for #{id} \"Check the release CI\"", rows[0].id),
+        "What you are to do: Look at the release pipeline and tell the owner.".to_string(),
+        "\"title\":\"CI check\"".to_string(),
+    ] {
+        assert!(prompt.contains(&part), "{part} in {prompt}");
+    }
+    let batch = svc::running_batches(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert_eq!(batch[0].trigger, Some(crate::db::entities::personal_agent_batch::BatchTrigger::Reminder));
+}
+
+#[tokio::test]
+async fn every_delivery_starts_with_the_owners_time_now() {
+    let (engine, _tmp) = configured().await;
+    let tz = engine.owner_tz();
+    let seg = open_segment(&engine).await;
+    let (mut rx, _state) = live_connection(&engine, seg, "pa-now").await;
+    engine.send_owner_message("hi".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (prompt, _) = take_prompt(&mut rx);
+    let first = prompt.lines().next().unwrap();
+    assert!(first.starts_with("<codeg-now>") && first.ends_with("</codeg-now>"), "{first}");
+    assert!(first.contains(&super::due::zone_label(tz, super::clock::now())), "{first}");
+    assert!(first.contains("the owner's last message before this turn: none yet"), "{first}");
+    assert!(first.contains("this turn: the owner's message"), "{first}");
+    let local = super::clock::now().with_timezone(&tz);
+    assert!(first.contains(&local.format("%Y-%m-%d %a").to_string()), "{first}");
+    // With an earlier message, it says when the owner last wrote.
+    let (engine, _tmp2) = configured().await;
+    let mut earlier = NewRow::new(TimelineKind::Owner, "earlier");
+    earlier.status = Some(OwnerStatus::Answered);
+    let earlier = svc::insert_row(&engine.db.conn, engine.bot().await, earlier).await.unwrap();
+    let seg = open_segment(&engine).await;
+    let (mut rx, _state) = live_connection(&engine, seg, "pa-now-2").await;
+    engine.send_owner_message("again".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (prompt, _) = take_prompt(&mut rx);
+    let at = earlier.created_at.with_timezone(&engine.owner_tz()).format("%H:%M").to_string();
+    let line = prompt.lines().next().unwrap();
+    assert!(!line.contains("none yet") && line.contains(&at), "{line}");
+}
+
+#[tokio::test]
+async fn the_owner_puts_a_matter_off_or_aside_without_the_brain() {
+    let (engine, _tmp) = configured().await;
+    let tz = engine.owner_tz();
+    let bot = engine.bot().await;
+    let f = svc::create_item(&engine.db.conn, bot, ItemKind::Followup, None, ItemStatus::Open, None, "Reply to Ana".into(), None, None)
+        .await
+        .unwrap();
+    // A matter with no time put off an hour becomes a reminder then.
+    let before = super::clock::now();
+    let i = engine.settle_item(f.id, "snooze", Some("1h")).await.unwrap();
+    let due = i.due_at.unwrap();
+    assert!(due >= before + chrono::Duration::minutes(59) && due <= super::clock::now() + chrono::Duration::hours(1));
+    assert_eq!(i.at_due.as_deref(), Some("notify"));
+    assert_eq!(i.waits_for, Some(WaitsFor::Time));
+    // Tomorrow morning: 09:00, in the owner's zone.
+    let i = engine.settle_item(f.id, "snooze", Some("tomorrow")).await.unwrap();
+    assert_eq!(i.due_at.unwrap().with_timezone(&tz).format("%H:%M").to_string(), "09:00");
+    // Garbage and the past are refused.
+    assert!(engine.settle_item(f.id, "snooze", Some("whenever")).await.is_err());
+    assert!(engine.settle_item(f.id, "snooze", Some("2020-01-01 09:00")).await.is_err());
+    // Snooze without a time is "later": no new time.
+    let i = engine.settle_item(f.id, "snooze", None).await.unwrap();
+    assert_eq!(i.waits_for, Some(WaitsFor::Time));
+    let notes = item_notes(&engine).await;
+    assert!(notes.iter().all(|n| !n.wake), "the brain is not woken for them");
+    assert!(notes.iter().any(|n| n.summary.contains(&format!("The owner put #{} \"Reply to Ana\" off until", f.id))));
+    assert!(notes.iter().any(|n| n.summary.contains("set #") && n.summary.contains("aside")));
+    // Fired and set aside: no longer due.
+    engine.fire_due_at(i.due_at.unwrap() + chrono::Duration::minutes(1)).await;
+    let i = engine.settle_item(f.id, "later", None).await.unwrap();
+    assert_eq!(i.due_at, None, "a one-off that came due waits with no time");
+    assert!(reminder_rows(&engine, f.id).await.iter().all(|r| data_of(r)["state"] != "open"));
+}
+
+#[tokio::test]
+async fn handing_a_reminder_to_the_assistant_is_the_owners_message_quoting_it() {
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Renew the domain", "due": "1m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    engine.fire_due_at(super::clock::now() + chrono::Duration::minutes(2)).await;
+    let card = reminder_rows(&engine, id).await.remove(0);
+    let notice = notice_of_row(&card);
+    let row = engine
+        .act_on_notice_with(notice, "hand_over", Some(format!("处理提醒 #{id}：Renew the domain")))
+        .await
+        .unwrap();
+    assert_eq!(row.data.unwrap()["state"], "handed");
+    let owner = svc::queued_owner_rows(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert_eq!(owner.len(), 1);
+    assert_eq!(owner[0].body, format!("处理提醒 #{id}：Renew the domain"));
+    assert_eq!(owner[0].reply_to, Some(card.id), "it quotes the card");
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(item.waits_for, Some(WaitsFor::Agent));
+    assert!(engine.act_on_notice_with(notice, "hand_over", None).await.is_err(), "once");
+    assert!(engine.act_on_notice(notice, "accept").await.is_err());
+}
+
+#[tokio::test]
+async fn a_change_read_before_a_firing_does_not_undo_it() {
+    let (engine, _tmp) = configured().await;
+    let tz = engine.owner_tz();
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Pay rent", "due": "1m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    // The brain's update read the matter before the clock fired it ...
+    let stale = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    let at = super::clock::now() + chrono::Duration::minutes(2);
+    engine.fire_due_at(at).await;
+    assert_eq!(reminder_rows(&engine, id).await.len(), 1);
+    // ... and writes its change after: the firing stands.
+    let time = super::reminders::time_from_args(
+        &json!({ "act_spec": { "what": "Pay it from the joint account" } }),
+        Some(&stale),
+        tz,
+        super::clock::now(),
+    )
+    .unwrap();
+    svc::update_item(&engine.db.conn, id, svc::ItemWrite { time, ..Default::default() }).await.unwrap();
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(item.fired_at, Some(at), "not written back from the earlier read");
+    engine.fire_due_at(at + chrono::Duration::seconds(15)).await;
+    assert_eq!(reminder_rows(&engine, id).await.len(), 1, "it does not fire again");
+    assert!(
+        !svc::pending_events(&engine.db.conn, engine.bot().await)
+            .await
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == super::reminders::REMINDER_EVENT),
+        "nor wake the assistant for the same time"
+    );
+}
+
+#[tokio::test]
+async fn matters_that_fired_and_wait_for_the_owner_do_not_hold_up_the_rest() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let due = super::clock::now() + chrono::Duration::minutes(1);
+    let make = |n: usize| {
+        let db = engine.db.conn.clone();
+        async move {
+            svc::create_item_timed(
+                &db,
+                bot,
+                ItemKind::Reminder,
+                None,
+                ItemStatus::Open,
+                Some(WaitsFor::Time),
+                format!("Reminder {n}"),
+                None,
+                None,
+                svc::ItemTime {
+                    due_at: Some(due),
+                    at_due: Some("notify".into()),
+                    fresh: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+        }
+    };
+    for n in 0..205 {
+        make(n).await;
+    }
+    let at = due + chrono::Duration::minutes(1);
+    engine.fire_due_at(at).await;
+    engine.fire_due_at(at + chrono::Duration::seconds(15)).await;
+    // 205 fired, none waiting on the owner's answer blocks the others.
+    let fired = svc::list_items(&engine.db.conn, bot, &[], 500)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.fired_at.is_some())
+        .count();
+    assert_eq!(fired, 205);
+    let late = make(999).await;
+    engine.fire_due_at(at + chrono::Duration::seconds(30)).await;
+    assert_eq!(reminder_rows(&engine, late.id).await.len(), 1, "a newer one still fires");
+}
+
+#[tokio::test]
+async fn a_reminder_card_whose_matter_moved_on_closes_as_it_stands() {
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Book the hall", "due": "1m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    engine.fire_due_at(super::clock::now() + chrono::Duration::minutes(2)).await;
+    let card = reminder_rows(&engine, id).await.remove(0);
+    let notice = notice_of_row(&card);
+    // The matter was settled, the card not (an answer cut off before it
+    // marked the card, say).
+    svc::update_item(&engine.db.conn, id, svc::ItemWrite { status: Some(ItemStatus::Done), ..Default::default() })
+        .await
+        .unwrap();
+    let row = engine.act_on_notice(notice, "snooze:1h").await.unwrap();
+    assert_eq!(row.data.unwrap()["state"], "done", "it closes as the matter stands");
+    assert!(engine.act_on_notice(notice, "done").await.is_err(), "and is answered");
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(item.status, ItemStatus::Done, "nothing ran again");
+    assert_eq!(item.due_at, out.data["due_at"].as_str().map(|s| s.parse().unwrap()));
+}
+
+/// A daily matter due yesterday at 09:00, not fired yet.
+async fn daily_since_yesterday(engine: &PersonalAgentEngine, summary: &str) -> crate::db::entities::personal_agent_item::Model {
+    let (text, first) = local_day(engine, -1, "09:00");
+    let rule = super::due::parse_repeat(
+        &json!({ "every": "daily" }),
+        chrono::NaiveDateTime::parse_from_str(&text, "%Y-%m-%d %H:%M").unwrap(),
+    )
+    .unwrap();
+    svc::create_item_timed(
+        &engine.db.conn,
+        engine.bot().await,
+        ItemKind::Reminder,
+        None,
+        ItemStatus::Open,
+        Some(WaitsFor::Time),
+        summary.into(),
+        None,
+        None,
+        svc::ItemTime {
+            due_at: Some(first),
+            repeat: Some(serde_json::to_string(&rule).unwrap()),
+            at_due: Some("notify".into()),
+            act_spec: None,
+            fresh: true,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_time_worked_out_before_the_clock_moved_it_does_not_land() {
+    let (engine, _tmp) = configured().await;
+    let tz = engine.owner_tz();
+    let item = daily_since_yesterday(&engine, "Log the weight").await;
+    // Read by the brain's update and the owner's [Done] ...
+    let stale = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
+    // ... then the clock catches up to today's time.
+    let (_, today) = local_day(&engine, 0, "09:00");
+    let at = today + chrono::Duration::hours(1);
+    engine.fire_due_at(at).await;
+    let fired = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
+    assert_eq!((fired.due_at, fired.fired_at), (Some(today), Some(at)));
+    // An act_spec change worked out from the earlier read is refused ...
+    let time = super::reminders::time_from_args(
+        &json!({ "act_spec": { "what": "Ask how it went" } }),
+        Some(&stale),
+        tz,
+        super::clock::now(),
+    )
+    .unwrap();
+    let err = engine
+        .write_item(&stale, svc::ItemWrite { time: time.clone(), ..Default::default() }, None, None)
+        .await
+        .unwrap_err();
+    assert!(err.contains("changed meanwhile"), "{err}");
+    // ... and even written unguarded, it leaves the clock's due time alone.
+    svc::update_item(&engine.db.conn, item.id, svc::ItemWrite { time, ..Default::default() }).await.unwrap();
+    let now = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
+    assert_eq!((now.due_at, now.fired_at), (Some(today), Some(at)), "today's time stays fired");
+    // So is a [Done] worked out from it: it would make today's time again.
+    let next = super::reminders::after_done(&stale, tz, super::clock::now()).unwrap();
+    assert!(engine
+        .write_item(&stale, svc::ItemWrite { time: Some(next), ..Default::default() }, Some(("done", None)), None)
+        .await
+        .is_err());
+    engine.fire_due_at(at + chrono::Duration::seconds(15)).await;
+    assert_eq!(reminder_rows(&engine, item.id).await.len(), 1, "today's time fired once");
+}
+
+#[tokio::test]
+async fn done_on_a_repeating_reminder_moves_it_once_together_with_its_card() {
+    let (engine, _tmp) = configured().await;
+    let tz = engine.owner_tz();
+    let item = daily_since_yesterday(&engine, "Water the fern").await;
+    let (_, today) = local_day(&engine, 0, "09:00");
+    engine.fire_due_at(today + chrono::Duration::minutes(1)).await;
+    let card = reminder_rows(&engine, item.id).await.remove(0);
+    let notice = notice_of_row(&card);
+    let row = engine.act_on_notice(notice, "done").await.unwrap();
+    assert_eq!(row.data.unwrap()["state"], "done");
+    let after = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
+    let next = after.due_at.unwrap();
+    assert_eq!(after.status, ItemStatus::Open);
+    // Today's 09:00 was done: tomorrow's, whatever the time now.
+    assert_eq!(next, local_day(&engine, 1, "09:00").1);
+    assert_eq!(next.with_timezone(&tz).format("%H:%M").to_string(), "09:00");
+    // The card closed with the change: a second press moves nothing.
+    assert!(engine.act_on_notice(notice, "done").await.is_err());
+    assert_eq!(svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap().due_at, Some(next));
+    let notice_row = svc::get_notice(&engine.db.conn, notice).await.unwrap().unwrap();
+    assert_eq!(notice_row.state, crate::db::entities::personal_agent_notice::NoticeState::Acted);
+    assert_eq!(
+        item_notes(&engine).await.iter().filter(|n| n.summary.contains("done for this time")).count(),
+        1
+    );
 }

@@ -108,7 +108,7 @@ AVAILABLE ACTIONS:
 - removeState: Remove an item from an array in state by index. Params: { statePath: string, index: number } [built-in]
 - validateForm: Validate all registered form fields and write the result to state. Params: { statePath?: string }. Defaults to /formValidation. Result: { valid: boolean, errors: Record<string, string[]> }. [built-in]
 - pa.reply: The owner says the button's label to you, as their message quoting this card — write the label as they would say it ("Go with plan A"). Params: { text?: string } — a message to send instead of the label, built from the card's state with {"$template": …} or {"$state": …} (a form's fields); the owner sees it in full and confirms before it is sent.
-- pa.item: Close or set aside one of your open matters, without a turn of yours. Params: { id: number — the matter's id from item_list, op: "done" | "drop" | "snooze" } — snooze sets it aside to wait for later; drop asks the owner first.
+- pa.item: Close or put off one of your open matters, without a turn of yours. Params: { id: number — the matter's id from item_list, op: "done" | "drop" | "snooze", until?: "15m" | "1h" | "tomorrow" | an ISO 8601 time with its offset — snooze only: when it comes due again ("tomorrow" is tomorrow morning); without it the matter waits on time with no due } — done on a repeating matter finishes this time and schedules the next; drop asks the owner first.
 - pa.open: Open a place in codeg. Params: { target: "dispatch" | "task" | "session" | "item" | "bot" | "exchange" | "url", id?: number, url?: string } — id is the dispatch, board task, session (conversation), open matter, assistant or message thread number; url is a web address, for target "url".
 
 EVENTS (the `on` field):

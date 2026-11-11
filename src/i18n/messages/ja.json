@@ -8731,7 +8731,12 @@
       "item": {
         "done": "完了",
         "later": "後で",
-        "drop": "やめる"
+        "drop": "やめる",
+        "in15m": "15 分後",
+        "in1h": "1 時間後",
+        "tomorrow": "明日の午前",
+        "untimed": "時間を決めない",
+        "act": "時間になったら実行"
       },
       "output": {
         "all": "すべて",
@@ -8835,6 +8840,48 @@
         "title": "この件を取りやめますか？",
         "description": "「{summary}」は案件から外れます。",
         "confirm": "取りやめる"
+      }
+    },
+    "due": {
+      "tomorrow": "明日 {time}",
+      "yesterday": "昨日 {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} 分",
+        "hours": "{n} 時間",
+        "hoursMinutes": "{h} 時間 {m} 分",
+        "days": "{n} 日"
+      },
+      "repeat": {
+        "daily": "毎日 {time}",
+        "weekdays": "平日毎日 {time}",
+        "weekly": "毎週{days} {time}",
+        "monthly": "毎月 {day} 日 {time}",
+        "until": "{rule}、{date} まで",
+        "sep": "・"
+      },
+      "dueAt": "{when} 期限",
+      "overdue": "期限切れ · {when} 期限",
+      "reminded": "通知済み · {when} 期限",
+      "late": "{duration} 遅れ",
+      "missed": "{count} 回逃しました"
+    },
+    "reminder": {
+      "title": "リマインダー",
+      "done": "完了",
+      "snooze15m": "15 分後",
+      "snooze1h": "1 時間後",
+      "snoozeTomorrow": "明日の午前",
+      "handOver": "アシスタントに任せる",
+      "handOverText": "リマインダー #{id} を処理して：{summary}",
+      "state": {
+        "done": "完了しました",
+        "snoozed": "{when} に延期",
+        "handed": "アシスタントに任せました",
+        "dropped": "やめました",
+        "expired": "期限切れ（次の回が来ました）",
+        "closed": "対応済み",
+        "woke": "時間になり、アシスタントを起こして対応させました"
       }
     }
   }

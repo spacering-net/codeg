@@ -8,8 +8,9 @@
  * - `pa.reply` says the button's label to the assistant as the owner's
  *   message, quoting this reply; a different `text` (a form's fields) is
  *   shown in full first, to send, put in the composer or drop;
- * - `pa.item` closes or snoozes one of its open matters (`drop` asks
- *   first) without a turn of its own;
+ * - `pa.item` closes or snoozes one of its open matters — until a time
+ *   when it carries one (`until`) — without a turn of its own (`drop` asks
+ *   first);
  * - `pa.open` opens a place in codeg.
  *
  * What makes a click count: the spec is sanitized on every compile
@@ -309,6 +310,22 @@ function LibraryConfirmation() {
   )
 }
 
+/** The longest `until` a snooze button may carry. */
+const MAX_UNTIL_CHARS = 64
+
+/** A `pa.item` button's `until`: undefined when it has none (or for an op
+ *  other than snooze, which ignores it), false when it is not a short
+ *  string — such a button is not offered. The backend reads what it says
+ *  (`15m`, `1h`, `tomorrow`, an ISO 8601 time) and refuses what it cannot. */
+function untilOf(params: Record<string, unknown>): string | undefined | false {
+  if (params.op !== "snooze" || params.until == null) return undefined
+  const until = params.until
+  if (typeof until !== "string") return false
+  const trimmed = until.trim()
+  if (!trimmed || trimmed.length > MAX_UNTIL_CHARS) return false
+  return trimmed
+}
+
 type Pending =
   | { kind: "reply"; text: string; label: string; elementId: string }
   | {
@@ -428,9 +445,7 @@ function PaCard({
         return (
           isId(params.id) &&
           PA_ITEM_OPS.includes(params.op as PaItemOp) &&
-          // A snooze until a set time needs due times (1.11): until then
-          // such a button is not offered rather than snoozing without one.
-          !(params.op === "snooze" && params.until != null) &&
+          untilOf(params) !== false &&
           items != null &&
           items.has(params.id)
         )
@@ -534,11 +549,16 @@ function PaCard({
     item: ItemInfo,
     op: PaItemOp,
     label: string,
-    elementId: string
+    elementId: string,
+    until?: string
   ) => {
     const { scope: s, botId: bot } = latest.current
     track(elementId, async () => {
-      await personalAgentItemAct(bot, item.id, op === "snooze" ? "later" : op)
+      if (op === "snooze" && until) {
+        await personalAgentItemAct(bot, item.id, "snooze", until)
+      } else {
+        await personalAgentItemAct(bot, item.id, op)
+      }
       await personalAgentCardAct(bot, s.rowId, elementId, {
         action: PA_ITEM,
         label,
@@ -699,7 +719,9 @@ function PaCard({
             })
             return
           }
-          actOnItem(item, op, c.label, c.elementId)
+          const until = untilOf(p)
+          if (until === false) return
+          actOnItem(item, op, c.label, c.elementId, until)
           return
         }
         case PA_OPEN:

@@ -174,8 +174,8 @@ function rowIdOf(item: MessageItem): number | null {
 /** A card waiting for the owner: a question or permission request still
  *  pending, a native card still open that asks them (a confirmation, a step
  *  not known to have happened, a loop stopped, the opening choice, a change
- *  shown first — not a suggestion), an executor's question forwarded to
- *  them. */
+ *  shown first, a reminder that came due — not a suggestion), an
+ *  executor's question forwarded to them. */
 export function waitsForOwner(row: TimelineRow): boolean {
   const data = row.data
   if (row.kind === "question" || row.kind === "permission") {
@@ -193,7 +193,8 @@ export function waitsForOwner(row: TimelineRow): boolean {
     kind === "uncertain" ||
     kind === "loop" ||
     kind === "choice" ||
-    kind === "changed"
+    kind === "changed" ||
+    (kind === "reminder" && data?.at_due !== "act")
   )
 }
 

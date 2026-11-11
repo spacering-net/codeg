@@ -8731,7 +8731,12 @@
       "item": {
         "done": "完成",
         "later": "稍後",
-        "drop": "放棄"
+        "drop": "放棄",
+        "in15m": "15 分鐘後",
+        "in1h": "1 小時後",
+        "tomorrow": "明天上午",
+        "untimed": "不定時（等時間）",
+        "act": "到點去做"
       },
       "output": {
         "all": "全部",
@@ -8835,6 +8840,48 @@
         "title": "放棄這件事？",
         "description": "「{summary}」會從事項中移除。",
         "confirm": "放棄"
+      }
+    },
+    "due": {
+      "tomorrow": "明天 {time}",
+      "yesterday": "昨天 {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} 分鐘",
+        "hours": "{n} 小時",
+        "hoursMinutes": "{h} 小時 {m} 分鐘",
+        "days": "{n} 天"
+      },
+      "repeat": {
+        "daily": "每天 {time}",
+        "weekdays": "每個工作日 {time}",
+        "weekly": "每{days} {time}",
+        "monthly": "每月 {day} 日 {time}",
+        "until": "{rule}，截至 {date}",
+        "sep": "、"
+      },
+      "dueAt": "{when} 到期",
+      "overdue": "已逾期 · {when} 到期",
+      "reminded": "已提醒 · {when} 到期",
+      "late": "晚了 {duration}",
+      "missed": "錯過了 {count} 次"
+    },
+    "reminder": {
+      "title": "提醒",
+      "done": "完成",
+      "snooze15m": "15 分鐘後",
+      "snooze1h": "1 小時後",
+      "snoozeTomorrow": "明天上午",
+      "handOver": "交給助手",
+      "handOverText": "處理提醒 #{id}：{summary}",
+      "state": {
+        "done": "已完成",
+        "snoozed": "延到 {when}",
+        "handed": "已交給助手",
+        "dropped": "已放棄",
+        "expired": "已過期（有了新的一次）",
+        "closed": "已處理",
+        "woke": "時間到了，已叫醒助手去做"
       }
     }
   }

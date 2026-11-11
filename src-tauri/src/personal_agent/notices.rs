@@ -439,6 +439,17 @@ impl PersonalAgentEngine {
         notice_id: i32,
         action: &str,
     ) -> Result<TimelineRow, String> {
+        self.act_on_notice_with(notice_id, action, None).await
+    }
+
+    /// [`Self::act_on_notice`], with the owner's words some answers carry:
+    /// a reminder handed to the assistant (6.1).
+    pub async fn act_on_notice_with(
+        self: &Arc<Self>,
+        notice_id: i32,
+        action: &str,
+        text: Option<String>,
+    ) -> Result<TimelineRow, String> {
         // Only its own cards: one of another assistant's is not here.
         let notice = svc::get_notice_of(&self.db.conn, self.bot().await, notice_id)
             .await
@@ -457,6 +468,7 @@ impl PersonalAgentEngine {
             NoticeKind::Ask => {
                 return Err("a question card is answered with its answer".into());
             }
+            NoticeKind::Reminder => return self.act_on_reminder(&notice, action, text).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.

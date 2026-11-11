@@ -15,6 +15,7 @@
  * - **loop**: two assistants went back and forth with no progress, or in a
  *   circle, and codeg stopped their exchange: [See the exchange], [Let them
  *   go on] (three rounds more), [I'll handle it].
+ * - **reminder**: a matter that came due (`./reminder-card.tsx`).
  * - **stopped**: what the owner's stop took with it — the work the turn
  *   handed out, the messages nobody had started on — and what it could not:
  *   messages another assistant is already working on, each with [Stop this
@@ -62,6 +63,7 @@ import { ExchangeSheet } from "./exchange-sheet"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
+import { ReminderCard } from "./reminder-card"
 import { COMMUNICATION_ITEMS } from "./settings/pref-pages"
 import {
   AGENT_SURFACE,
@@ -103,6 +105,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   }
   if (kind === "choice") return <ChoiceCard item={item} />
   if (kind === "ask") return <AskCard item={item} />
+  if (kind === "reminder") return <ReminderCard item={item} />
   return null
 }
 

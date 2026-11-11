@@ -19,7 +19,9 @@
  *     task card (8.5), and an entry whose work has ended (a pull request
  *     codeg does not follow yet) the owner closes there: done or dropped. A
  *     reminder, a follow-up or a question jumps to the message it came
- *     from, and the owner can settle it there: done, later, dropped;
+ *     from, says when it is due and how it comes back, and the owner can
+ *     settle it there: done, put off (15 minutes, an hour, tomorrow
+ *     morning, or with no set time), dropped;
  *   - its numbers: the last two weeks in four figures, then the charts;
  *   - "Notify me", and the way to its settings.
  *   The rail counts what waits on the owner.
@@ -87,6 +89,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -141,7 +149,9 @@ import {
   workTargetOf,
 } from "./shared"
 
+import { useActivityTranslate } from "./activity-text"
 import { BotAvatar } from "./bot-avatar"
+import { dueWhen, repeatText } from "./due-text"
 import { AnsweredForYou } from "./event-card"
 import { LadderChip, TaskStrip } from "./task-strip"
 
@@ -763,18 +773,95 @@ function DispatchCard({
 }
 
 /** The way to settle a matter on the panel: done, dropped, or — for one
- *  that is not handed-out work — later. */
+ *  that is not handed-out work — later, or put off until `until`. */
 function useSettle(item: ItemInfo | null) {
   const { botId } = usePersonalAgent()
   const [acting, setActing] = useState(false)
-  const settle = (act: "done" | "drop" | "later") => {
+  const settle = (
+    act: "done" | "drop" | "later" | "snooze",
+    until?: "15m" | "1h" | "tomorrow"
+  ) => {
     if (!item) return
     setActing(true)
-    personalAgentItemAct(botId, item.id, act)
+    const call =
+      act === "snooze"
+        ? personalAgentItemAct(botId, item.id, act, until)
+        : personalAgentItemAct(botId, item.id, act)
+    call
       .catch((e) => toast.error(toErrorMessage(e)))
       .finally(() => setActing(false))
   }
   return { acting, settle }
+}
+
+/** When a matter is due, in a few words: due, overdue, reminded — and how
+ *  it comes back when it repeats. Nothing for one with no due time. */
+function useDueNotes(): (item: ItemInfo, now: number) => string[] {
+  const tw = useActivityTranslate()
+  const locale = useLocale()
+  return (item, now) => {
+    if (!item.due_at) return []
+    const due = Date.parse(item.due_at)
+    const when = dueWhen(tw, item.due_at, now, locale)
+    const fired =
+      item.fired_at != null && Date.parse(item.fired_at) >= due - 1000
+    const line = fired
+      ? tw("due.reminded", { when })
+      : due < now
+        ? tw("due.overdue", { when })
+        : tw("due.dueAt", { when })
+    const rule = item.repeat ? repeatText(tw, item.repeat, now, locale) : ""
+    return [rule ? `${line} · ${rule}` : line]
+  }
+}
+
+const SNOOZE_CHOICES = [
+  { until: "15m", label: "in15m" },
+  { until: "1h", label: "in1h" },
+  { until: "tomorrow", label: "tomorrow" },
+] as const
+
+/** [Later], as a menu: in 15 minutes, in an hour, tomorrow morning, or
+ *  with no set time (it waits on time). */
+function LaterMenu({
+  disabled,
+  onSnooze,
+  onLater,
+}: {
+  disabled: boolean
+  onSnooze: (until: "15m" | "1h" | "tomorrow") => void
+  onLater: () => void
+}) {
+  const td = useTranslations("PersonalAgent.detail.item")
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={disabled}
+          data-pa-item-act="later-menu"
+        >
+          {td("later")}
+          <ChevronDown className="size-3" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {SNOOZE_CHOICES.map((c) => (
+          <DropdownMenuItem
+            key={c.until}
+            onSelect={() => onSnooze(c.until)}
+            data-pa-item-act={`snooze-${c.until}`}
+          >
+            {td(c.label)}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuItem onSelect={onLater} data-pa-item-act="later">
+          {td("untimed")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
 }
 
 /** A reminder, a follow-up or a question: its kind's icon, and the way to
@@ -793,6 +880,7 @@ function ItemCard({
   const { jumpTo, readOnly } = usePageScope()
   const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
   const { acting, settle } = useSettle(item)
+  const dueNotes = useDueNotes()
   const Icon =
     item.kind === "dispatch" ? ListTodo : (KIND_ICON[item.kind] ?? ListTodo)
   const origin = item.origin_timeline_id
@@ -808,16 +896,12 @@ function ItemCard({
         >
           {td("done")}
         </Button>
-        {item.waits_for !== "time" ? (
-          <Button
-            size="xs"
-            variant="ghost"
+        {item.waits_for !== "time" || item.due_at != null ? (
+          <LaterMenu
             disabled={acting}
-            onClick={() => settle("later")}
-            data-pa-item-act="later"
-          >
-            {td("later")}
-          </Button>
+            onSnooze={(until) => settle("snooze", until)}
+            onLater={() => settle("later")}
+          />
         ) : null}
         <Button
           size="xs"
@@ -839,10 +923,23 @@ function ItemCard({
         </span>
       }
       title={item.summary}
+      chip={
+        item.at_due === "act" && item.due_at ? (
+          <span
+            className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[0.625rem] leading-4 text-muted-foreground"
+            data-pa-item-at-due="act"
+          >
+            {td("act")}
+          </span>
+        ) : undefined
+      }
       meta={[t(`items.kind.${item.kind}`), formatRelative(item.updated_at, now)]
         .filter(Boolean)
         .join(" · ")}
-      notes={item.on_done ? [t("items.onDone", { text: item.on_done })] : []}
+      notes={[
+        ...dueNotes(item, now),
+        ...(item.on_done ? [t("items.onDone", { text: item.on_done })] : []),
+      ]}
       onOpen={
         origin != null
           ? () => {

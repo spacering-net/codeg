@@ -8731,7 +8731,12 @@
       "item": {
         "done": "Erledigt",
         "later": "Später",
-        "drop": "Verwerfen"
+        "drop": "Verwerfen",
+        "in15m": "In 15 Min.",
+        "in1h": "In 1 Stunde",
+        "tomorrow": "Morgen früh",
+        "untimed": "Ohne feste Zeit",
+        "act": "Erledigt es zur Zeit"
       },
       "output": {
         "all": "Alle",
@@ -8835,6 +8840,48 @@
         "title": "Diese Sache verwerfen?",
         "description": "„{summary}“ verschwindet aus deinen offenen Sachen.",
         "confirm": "Verwerfen"
+      }
+    },
+    "due": {
+      "tomorrow": "Morgen {time}",
+      "yesterday": "Gestern {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} Min.",
+        "hours": "{n} Std.",
+        "hoursMinutes": "{h} Std. {m} Min.",
+        "days": "{n, plural, one {# Tag} other {# Tage}}"
+      },
+      "repeat": {
+        "daily": "Jeden Tag {time}",
+        "weekdays": "Jeden Werktag {time}",
+        "weekly": "Jeden {days} {time}",
+        "monthly": "Am {day}. jedes Monats, {time}",
+        "until": "{rule}, bis {date}",
+        "sep": ", "
+      },
+      "dueAt": "Fällig {when}",
+      "overdue": "Überfällig · fällig {when}",
+      "reminded": "Erinnert · fällig {when}",
+      "late": "{duration} zu spät",
+      "missed": "{count, plural, one {# Mal verpasst} other {# Mal verpasst}}"
+    },
+    "reminder": {
+      "title": "Erinnerung",
+      "done": "Erledigt",
+      "snooze15m": "In 15 Min.",
+      "snooze1h": "In 1 Stunde",
+      "snoozeTomorrow": "Morgen früh",
+      "handOver": "An den Assistenten geben",
+      "handOverText": "Kümmere dich um Erinnerung #{id}: {summary}",
+      "state": {
+        "done": "Erledigt",
+        "snoozed": "Verschoben auf {when}",
+        "handed": "An den Assistenten gegeben",
+        "dropped": "Verworfen",
+        "expired": "Abgelaufen – sie kam erneut",
+        "closed": "Erledigt",
+        "woke": "Es ist so weit – der Assistent wurde geweckt, um es zu tun"
       }
     }
   }

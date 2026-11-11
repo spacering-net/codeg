@@ -37,6 +37,11 @@ pub enum NoticeKind {
     /// answers for the owner, or forwards to them (7.3.1).
     #[sea_orm(string_value = "ask")]
     Ask,
+    /// A matter came due (6.1): the owner's reminder, with what they can
+    /// do about it — or, for one the assistant was to do then, the note
+    /// that it was woken to.
+    #[sea_orm(string_value = "reminder")]
+    Reminder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

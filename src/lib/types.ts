@@ -2337,6 +2337,33 @@ export type ItemKind = "dispatch" | "reminder" | "followup" | "question"
 export type ItemStatus = "open" | "waiting" | "done" | "dropped"
 export type WaitsFor = "owner" | "agent" | "time" | "external"
 
+/** A day of the week, as a repeat rule names it. */
+export type ItemWeekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
+
+/** How a matter with a due time comes back (6.1). */
+export interface ItemRepeat {
+  every: "daily" | "weekdays" | "weekly" | "monthly"
+  /** `weekly`: the days it comes on. */
+  days?: ItemWeekday[]
+  /** `monthly`: the day of the month, 1–31 (past a month's end, its last
+   *  day). */
+  day?: number
+  /** `HH:MM`, the owner's local time. */
+  at: string
+  /** `YYYY-MM-DD`, the last day it comes on (inclusive). */
+  until?: string | null
+}
+
+/** What happens when a matter comes due: a reminder card for the owner, or
+ *  the assistant woken to do it. */
+export type ItemAtDue = "notify" | "act"
+
+/** What the assistant said it would do when the matter comes due. */
+export interface ItemActSpec {
+  what: string
+  dispatch?: Record<string, unknown> | null
+}
+
 export interface ItemInfo {
   id: number
   kind: ItemKind
@@ -2349,6 +2376,13 @@ export interface ItemInfo {
   created_at: string
   updated_at: string
   dispatch_state: DispatchState | null
+  /** UTC; the current occurrence's due time. */
+  due_at: string | null
+  repeat: ItemRepeat | null
+  at_due: ItemAtDue | null
+  act_spec: ItemActSpec | null
+  /** When the current occurrence fired: at or after `due_at`, it did. */
+  fired_at: string | null
 }
 
 export interface UsageReading {

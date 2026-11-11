@@ -308,6 +308,9 @@ pub struct ItemActParams {
     pub bot_id: Option<i32>,
     pub item_id: i32,
     pub act: String,
+    /// `snooze`: until when.
+    #[serde(default)]
+    pub until: Option<String>,
 }
 
 pub async fn personal_agent_item_act(
@@ -315,8 +318,14 @@ pub async fn personal_agent_item_act(
     Json(params): Json<ItemActParams>,
 ) -> Result<Json<crate::models::personal_agent::ItemInfo>, AppCommandError> {
     Ok(Json(
-        pa::personal_agent_item_act_core(&state.db, params.bot_id, params.item_id, params.act)
-            .await?,
+        pa::personal_agent_item_act_core(
+            &state.db,
+            params.bot_id,
+            params.item_id,
+            params.act,
+            params.until,
+        )
+        .await?,
     ))
 }
 
@@ -606,13 +615,23 @@ pub struct NoticeActParams {
     pub bot_id: Option<i32>,
     pub notice_id: i32,
     pub action: String,
+    /// The owner's words, for an answer that carries them (a reminder
+    /// handed to the assistant).
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 pub async fn personal_agent_notice_act(
     Json(params): Json<NoticeActParams>,
 ) -> Result<Json<TimelineRow>, AppCommandError> {
     Ok(Json(
-        pa::personal_agent_notice_act_core(params.bot_id, params.notice_id, params.action).await?,
+        pa::personal_agent_notice_act_core(
+            params.bot_id,
+            params.notice_id,
+            params.action,
+            params.text,
+        )
+        .await?,
     ))
 }
 

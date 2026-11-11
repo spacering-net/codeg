@@ -8731,7 +8731,12 @@
       "item": {
         "done": "Fait",
         "later": "Plus tard",
-        "drop": "Abandonner"
+        "drop": "Abandonner",
+        "in15m": "Dans 15 min",
+        "in1h": "Dans 1 heure",
+        "tomorrow": "Demain matin",
+        "untimed": "Sans heure fixe",
+        "act": "S’en charge à l’heure"
       },
       "output": {
         "all": "Tout",
@@ -8835,6 +8840,48 @@
         "title": "Abandonner ce sujet ?",
         "description": "« {summary} » quitte vos sujets en cours.",
         "confirm": "Abandonner"
+      }
+    },
+    "due": {
+      "tomorrow": "Demain {time}",
+      "yesterday": "Hier {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} min",
+        "hours": "{n} h",
+        "hoursMinutes": "{h} h {m} min",
+        "days": "{n, plural, one {# jour} other {# jours}}"
+      },
+      "repeat": {
+        "daily": "Chaque jour {time}",
+        "weekdays": "Chaque jour ouvré {time}",
+        "weekly": "Chaque {days} {time}",
+        "monthly": "Le {day} de chaque mois, {time}",
+        "until": "{rule}, jusqu’au {date}",
+        "sep": ", "
+      },
+      "dueAt": "Échéance {when}",
+      "overdue": "En retard · échéance {when}",
+      "reminded": "Rappelé · échéance {when}",
+      "late": "{duration} de retard",
+      "missed": "{count, plural, one {Manqué # fois} other {Manqué # fois}}"
+    },
+    "reminder": {
+      "title": "Rappel",
+      "done": "Fait",
+      "snooze15m": "Dans 15 min",
+      "snooze1h": "Dans 1 heure",
+      "snoozeTomorrow": "Demain matin",
+      "handOver": "Confier à l’assistant",
+      "handOverText": "Occupe-toi du rappel #{id} : {summary}",
+      "state": {
+        "done": "Fait",
+        "snoozed": "Reporté à {when}",
+        "handed": "Confié à l’assistant",
+        "dropped": "Abandonné",
+        "expired": "Expiré — il est revenu",
+        "closed": "Traité",
+        "woke": "C’est l’heure — l’assistant a été réveillé pour s’en charger"
       }
     }
   }

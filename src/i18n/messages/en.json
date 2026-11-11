@@ -8731,7 +8731,12 @@
       "item": {
         "done": "Done",
         "later": "Later",
-        "drop": "Drop"
+        "drop": "Drop",
+        "in15m": "In 15 min",
+        "in1h": "In 1 hour",
+        "tomorrow": "Tomorrow morning",
+        "untimed": "No set time",
+        "act": "Does it when due"
       },
       "output": {
         "all": "All",
@@ -8835,6 +8840,48 @@
         "title": "Drop this matter?",
         "description": "\"{summary}\" leaves your open matters.",
         "confirm": "Drop"
+      }
+    },
+    "due": {
+      "tomorrow": "Tomorrow {time}",
+      "yesterday": "Yesterday {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} min",
+        "hours": "{n} h",
+        "hoursMinutes": "{h} h {m} min",
+        "days": "{n, plural, one {# day} other {# days}}"
+      },
+      "repeat": {
+        "daily": "Every day {time}",
+        "weekdays": "Every weekday {time}",
+        "weekly": "Every {days} {time}",
+        "monthly": "Day {day} of every month, {time}",
+        "until": "{rule}, until {date}",
+        "sep": ", "
+      },
+      "dueAt": "Due {when}",
+      "overdue": "Overdue · due {when}",
+      "reminded": "Reminded · due {when}",
+      "late": "{duration} late",
+      "missed": "{count, plural, one {Missed # time} other {Missed # times}}"
+    },
+    "reminder": {
+      "title": "Reminder",
+      "done": "Done",
+      "snooze15m": "In 15 min",
+      "snooze1h": "In 1 hour",
+      "snoozeTomorrow": "Tomorrow morning",
+      "handOver": "Hand to the assistant",
+      "handOverText": "Handle reminder #{id}: {summary}",
+      "state": {
+        "done": "Done",
+        "snoozed": "Put off until {when}",
+        "handed": "Handed to the assistant",
+        "dropped": "Dropped",
+        "expired": "Expired — it came round again",
+        "closed": "Handled",
+        "woke": "Time's up — the assistant was woken to do it"
       }
     }
   }

@@ -190,6 +190,11 @@ fn item_info(
         created_at: i.created_at,
         updated_at: i.updated_at,
         dispatch_state,
+        due_at: i.due_at,
+        repeat: i.repeat.as_deref().and_then(|r| serde_json::from_str(r).ok()),
+        at_due: i.at_due,
+        act_spec: i.act_spec.as_deref().and_then(|a| serde_json::from_str(a).ok()),
+        fired_at: i.fired_at,
     }
 }
 
@@ -567,17 +572,22 @@ pub async fn personal_agent_turn_steps_core(
     Ok(crate::personal_agent::live::turn_steps(db, bot_id).await)
 }
 
-/// The owner settles one of an assistant's open matters on the panel:
-/// done, dropped, or later (it waits on time). Handed-out work ends with the
-/// work itself.
+/// The owner settles one of an assistant's open matters on the panel or a
+/// card: done, dropped, later (it waits with no time), or snoozed `until`
+/// — `15m`, `1h`, `tomorrow` (morning) or a time (6.1). Handed-out work
+/// ends with the work itself.
 pub async fn personal_agent_item_act_core(
     db: &AppDatabase,
     bot_id: Option<i32>,
     item_id: i32,
     act: String,
+    until: Option<String>,
 ) -> Result<ItemInfo, AppCommandError> {
     let engine = engine(bot_id).await?;
-    let item = engine.settle_item(item_id, &act).await.map_err(refused)?;
+    let item = engine
+        .settle_item(item_id, &act, until.as_deref())
+        .await
+        .map_err(refused)?;
     let dispatch_state = match item.dispatch_id {
         Some(id) => svc::get_dispatch(&db.conn, id).await?.map(|d| d.state),
         None => None,
@@ -988,10 +998,11 @@ pub async fn personal_agent_notice_act_core(
     bot_id: Option<i32>,
     notice_id: i32,
     action: String,
+    text: Option<String>,
 ) -> Result<TimelineRow, AppCommandError> {
     engine(bot_id)
         .await?
-        .act_on_notice(notice_id, &action)
+        .act_on_notice_with(notice_id, &action, text)
         .await
         .map_err(refused)
 }
@@ -1252,8 +1263,9 @@ pub async fn personal_agent_item_act(
     bot_id: Option<i32>,
     item_id: i32,
     act: String,
+    until: Option<String>,
 ) -> Result<ItemInfo, AppCommandError> {
-    personal_agent_item_act_core(&db, bot_id, item_id, act).await
+    personal_agent_item_act_core(&db, bot_id, item_id, act, until).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1515,8 +1527,9 @@ pub async fn personal_agent_notice_act(
     bot_id: Option<i32>,
     notice_id: i32,
     action: String,
+    text: Option<String>,
 ) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_notice_act_core(bot_id, notice_id, action).await
+    personal_agent_notice_act_core(bot_id, notice_id, action, text).await
 }
 
 #[cfg(feature = "tauri-runtime")]

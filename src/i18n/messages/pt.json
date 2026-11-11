@@ -8731,7 +8731,12 @@
       "item": {
         "done": "Concluído",
         "later": "Mais tarde",
-        "drop": "Descartar"
+        "drop": "Descartar",
+        "in15m": "Em 15 min",
+        "in1h": "Em 1 hora",
+        "tomorrow": "Amanhã de manhã",
+        "untimed": "Sem hora definida",
+        "act": "Faz na hora"
       },
       "output": {
         "all": "Tudo",
@@ -8835,6 +8840,48 @@
         "title": "Descartar este assunto?",
         "description": "“{summary}” sai dos seus assuntos em aberto.",
         "confirm": "Descartar"
+      }
+    },
+    "due": {
+      "tomorrow": "Amanhã {time}",
+      "yesterday": "Ontem {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} min",
+        "hours": "{n} h",
+        "hoursMinutes": "{h} h {m} min",
+        "days": "{n, plural, one {# dia} other {# dias}}"
+      },
+      "repeat": {
+        "daily": "Todos os dias {time}",
+        "weekdays": "Todo dia útil {time}",
+        "weekly": "Toda {days} {time}",
+        "monthly": "Dia {day} de cada mês, {time}",
+        "until": "{rule}, até {date}",
+        "sep": ", "
+      },
+      "dueAt": "Vence {when}",
+      "overdue": "Atrasado · vencia {when}",
+      "reminded": "Lembrado · vence {when}",
+      "late": "{duration} de atraso",
+      "missed": "{count, plural, one {Perdido # vez} other {Perdido # vezes}}"
+    },
+    "reminder": {
+      "title": "Lembrete",
+      "done": "Concluído",
+      "snooze15m": "Em 15 min",
+      "snooze1h": "Em 1 hora",
+      "snoozeTomorrow": "Amanhã de manhã",
+      "handOver": "Passar ao assistente",
+      "handOverText": "Cuide do lembrete #{id}: {summary}",
+      "state": {
+        "done": "Concluído",
+        "snoozed": "Adiado para {when}",
+        "handed": "Passado ao assistente",
+        "dropped": "Descartado",
+        "expired": "Expirado — chegou de novo",
+        "closed": "Tratado",
+        "woke": "Chegou a hora — o assistente foi acordado para fazer isso"
       }
     }
   }

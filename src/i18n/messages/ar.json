@@ -8731,7 +8731,12 @@
       "item": {
         "done": "تم",
         "later": "لاحقًا",
-        "drop": "إسقاط"
+        "drop": "إسقاط",
+        "in15m": "بعد 15 دقيقة",
+        "in1h": "بعد ساعة",
+        "tomorrow": "صباح الغد",
+        "untimed": "دون وقت محدد",
+        "act": "ينفّذه في موعده"
       },
       "output": {
         "all": "الكل",
@@ -8835,6 +8840,48 @@
         "title": "هل تريد ترك هذا الأمر؟",
         "description": "سيخرج «{summary}» من أمورك المفتوحة.",
         "confirm": "ترك"
+      }
+    },
+    "due": {
+      "tomorrow": "غدًا {time}",
+      "yesterday": "أمس {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} د",
+        "hours": "{n} س",
+        "hoursMinutes": "{h} س {m} د",
+        "days": "{n, plural, one {يوم واحد} two {يومان} few {# أيام} many {# يومًا} other {# يوم}}"
+      },
+      "repeat": {
+        "daily": "كل يوم {time}",
+        "weekdays": "كل يوم عمل {time}",
+        "weekly": "كل {days} {time}",
+        "monthly": "اليوم {day} من كل شهر، {time}",
+        "until": "{rule}، حتى {date}",
+        "sep": "، "
+      },
+      "dueAt": "يستحق {when}",
+      "overdue": "متأخر · كان يستحق {when}",
+      "reminded": "تم التذكير · يستحق {when}",
+      "late": "متأخر {duration}",
+      "missed": "{count, plural, one {فات مرة واحدة} two {فات مرتين} few {فات # مرات} many {فات # مرة} other {فات # مرة}}"
+    },
+    "reminder": {
+      "title": "تذكير",
+      "done": "تم",
+      "snooze15m": "بعد 15 دقيقة",
+      "snooze1h": "بعد ساعة",
+      "snoozeTomorrow": "صباح الغد",
+      "handOver": "سلّمه للمساعد",
+      "handOverText": "تولَّ التذكير #{id}: {summary}",
+      "state": {
+        "done": "تم",
+        "snoozed": "مؤجل حتى {when}",
+        "handed": "سُلّم للمساعد",
+        "dropped": "أُسقط",
+        "expired": "انتهت صلاحيته — حلّ موعده مجددًا",
+        "closed": "عولج",
+        "woke": "حان الوقت — أُوقظ المساعد لينفّذه"
       }
     }
   }

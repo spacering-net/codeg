@@ -305,24 +305,51 @@ describe("an assistant's card: pa.item", () => {
     expect(screen.getByRole("button", { name: "Done" })).toBeDisabled()
   })
 
-  it("offers no snooze until a set time before matters have due times", async () => {
-    draw(
-      card({
-        a: button("Later", {
-          press: { action: "pa.item", params: { id: 5, op: "snooze" } },
-        }),
-        b: button("In an hour", {
-          press: {
-            action: "pa.item",
-            params: { id: 5, op: "snooze", until: "1h" },
-          },
-        }),
-      })
+  it("snoozes one until the time the button names", async () => {
+    const src = card({
+      a: button("In an hour", {
+        press: {
+          action: "pa.item",
+          params: { id: 5, op: "snooze", until: "1h" },
+        },
+      }),
+      b: button("Later", {
+        press: { action: "pa.item", params: { id: 5, op: "snooze" } },
+      }),
+      c: button("Odd", {
+        press: {
+          action: "pa.item",
+          params: { id: 5, op: "snooze", until: "x".repeat(65) },
+        },
+      }),
+    })
+    draw(src)
+    const hour = screen.getByRole("button", { name: "In an hour" })
+    await waitFor(() => expect(hour).toBeEnabled())
+    // An `until` that is not a short string is not offered.
+    expect(screen.getByRole("button", { name: "Odd" })).toBeDisabled()
+    fireEvent.click(hour)
+    await waitFor(() =>
+      expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+        7,
+        5,
+        "snooze",
+        "1h"
+      )
     )
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Later" })).toBeEnabled()
+      expect(api.personalAgentCardAct).toHaveBeenCalledWith(
+        7,
+        120,
+        `${cardIdOf(src)}/a`,
+        { action: "pa.item", label: "In an hour", op: "snooze" }
+      )
     )
-    expect(screen.getByRole("button", { name: "In an hour" })).toBeDisabled()
+    // Without one, it waits on time with no due.
+    fireEvent.click(screen.getByRole("button", { name: "Later" }))
+    await waitFor(() =>
+      expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(7, 5, "snooze")
+    )
   })
 
   it("closes one without a turn, and the card keeps it", async () => {

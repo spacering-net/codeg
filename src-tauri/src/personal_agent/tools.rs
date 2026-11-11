@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use super::dispatch::{executor_of, DispatchAuth, DispatchRequest, FollowupAuth};
 use super::engine::{enum_str, PersonalAgentEngine};
 use super::messages::{MessageCall, Unnamed};
+use super::reminders;
 use crate::db::entities::folder::FolderKind;
 use crate::db::entities::personal_agent_dispatch::DispatchMode;
 use crate::db::entities::personal_agent_item::{ItemKind, ItemStatus, WaitsFor};
@@ -387,6 +388,8 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 }
             };
             let items = svc::list_items(&db.conn, bot, &statuses, 100).await.unwrap_or_default();
+            let tz = engine.owner_tz();
+            let now = super::clock::now();
             let mut rows = Vec::new();
             let mut lines = Vec::new();
             for i in items {
@@ -403,6 +406,9 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 );
                 if let Some(w) = &i.waits_for {
                     line.push_str(&format!(" · waits for {}", enum_str(w)));
+                }
+                if let Some(t) = reminders::time_words(&i, tz, now) {
+                    line.push_str(&format!(" · {t}"));
                 }
                 if let Some(d) = &dispatch {
                     line.push_str(&format!(
@@ -422,6 +428,10 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "on_done": i.on_done,
                     "dispatch_id": i.dispatch_id,
                     "dispatch_state": dispatch.as_ref().map(|d| d.state),
+                    "due_at": i.due_at,
+                    "due_local": i.due_at.map(|t| super::due::describe(t, tz, now)),
+                    "at_due": i.at_due,
+                    "repeat": i.repeat.as_deref().and_then(|r| serde_json::from_str::<Value>(r).ok()),
                 }));
             }
             let text = if lines.is_empty() {
@@ -454,6 +464,20 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             }
             if let Some(on_done) = &item.on_done {
                 text.push_str(&format!("\nwhen done: {on_done}"));
+            }
+            let tz = engine.owner_tz();
+            let now = super::clock::now();
+            if let Some(t) = reminders::time_words(&item, tz, now) {
+                text.push_str(&format!(
+                    "\n{t} ({})",
+                    super::due::zone_label(tz, item.due_at.unwrap_or(now))
+                ));
+            }
+            if let Some(spec) = super::due::ActSpec::parse(item.act_spec.as_deref()) {
+                text.push_str(&format!("\nto do then: {}", spec.what));
+                if let Some(d) = &spec.dispatch {
+                    text.push_str(&format!("\ndispatch draft: {}", Value::Object(d.clone())));
+                }
             }
             let dispatch_json = dispatch.as_ref().map(|d| {
                 let executor = executor_of(d);
@@ -492,6 +516,10 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                         "waits_for": item.waits_for,
                         "summary": item.summary,
                         "on_done": item.on_done,
+                        "due_at": item.due_at,
+                        "at_due": item.at_due,
+                        "repeat": item.repeat.as_deref().and_then(|r| serde_json::from_str::<Value>(r).ok()),
+                        "act_spec": item.act_spec.as_deref().and_then(|a| serde_json::from_str::<Value>(a).ok()),
                     },
                     "dispatch": dispatch_json,
                 }),
@@ -518,29 +546,69 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             };
             let summary = string(&args, "summary").map(|s| s.chars().take(500).collect::<String>());
             let on_done = string(&args, "on_done").map(|s| s.chars().take(2_000).collect::<String>());
+            let tz = engine.owner_tz();
+            let now = super::clock::now();
             match int(&args, "item_id").and_then(as_i32) {
                 Some(id) => {
-                    let Ok(Some(_)) = svc::get_item_of(&db.conn, bot, id).await else {
+                    let Ok(Some(item)) = svc::get_item_of(&db.conn, bot, id).await else {
                         return ToolOutcome::refused(format!("item #{id} does not exist"));
                     };
-                    let updated = svc::update_item(
-                        &db.conn,
-                        id,
-                        ItemWrite {
-                            status,
-                            waits_for: waits_for.map(Some),
-                            summary,
-                            on_done: on_done.map(Some),
-                        },
-                    )
-                    .await;
-                    engine.emit(PersonalAgentChange::Item { id });
+                    let mut time = match reminders::time_from_args(&args, Some(&item), tz, now) {
+                        Ok(t) => t,
+                        Err(e) => return ToolOutcome::refused(e),
+                    };
+                    let mut status = status;
+                    let mut waits_for = waits_for;
+                    let mut again = None;
+                    // Done on a repeating matter: done for this time.
+                    if status == Some(ItemStatus::Done) && time.is_none() {
+                        if let Some(next) = reminders::after_done(&item, tz, now) {
+                            again = next.due_at;
+                            status = None;
+                            time = Some(next);
+                            waits_for.get_or_insert(WaitsFor::Time);
+                        }
+                    }
+                    let new_due = time.as_ref().and_then(|t| t.due_at).filter(|d| Some(*d) != item.due_at);
+                    if new_due.is_some() && waits_for.is_none() {
+                        waits_for = Some(WaitsFor::Time);
+                    }
+                    // A reminder still open for a time gone by goes with it.
+                    let card = match (status, &time) {
+                        (Some(ItemStatus::Done), _) => Some(("done", None)),
+                        (Some(ItemStatus::Dropped), _) => Some(("dropped", None)),
+                        (_, Some(_)) if again.is_some() => Some(("done", None)),
+                        (_, Some(t)) if t.due_at.is_none() => Some(("closed", None)),
+                        (_, Some(t)) if new_due.is_some() => Some(("snoozed", t.due_at)),
+                        _ => None,
+                    };
+                    let updated = engine
+                        .write_item(
+                            &item,
+                            ItemWrite {
+                                status,
+                                waits_for: waits_for.map(Some),
+                                summary,
+                                on_done: on_done.map(Some),
+                                time: time.clone(),
+                            },
+                            card,
+                            None,
+                        )
+                        .await;
                     match updated {
-                        Ok(Some(i)) => ToolOutcome::ok(
-                            format!("Updated #{}: {} · {}", i.id, i.summary, enum_str(&i.status)),
-                            json!({ "item_id": i.id, "status": i.status }),
-                        ),
-                        _ => ToolOutcome::refused("the update did not apply"),
+                        Ok(i) => {
+                            let mut text = format!("Updated #{}: {} · {}", i.id, i.summary, enum_str(&i.status));
+                            if let Some(t) = again {
+                                text.push_str(&format!(
+                                    " — done for this time; it comes up again {}",
+                                    super::due::describe(t, tz, now)
+                                ));
+                            }
+                            text.push_str(&time_answer(&i, tz, now));
+                            ToolOutcome::ok(text, item_answer(&i, tz, now))
+                        }
+                        Err(e) => ToolOutcome::refused(e),
                     }
                 }
                 None => {
@@ -558,7 +626,15 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     let Some(summary) = summary else {
                         return ToolOutcome::refused("a new item needs `summary`");
                     };
-                    match svc::create_item(
+                    let time = match reminders::time_from_args(&args, None, tz, now) {
+                        Ok(t) => t.filter(|t| t.due_at.is_some()).unwrap_or_default(),
+                        Err(e) => return ToolOutcome::refused(e),
+                    };
+                    let waits_for = match (waits_for, time.due_at) {
+                        (None, Some(_)) => Some(WaitsFor::Time),
+                        (w, _) => w,
+                    };
+                    match svc::create_item_timed(
                         &db.conn,
                         bot,
                         kind,
@@ -567,15 +643,16 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                         waits_for,
                         summary,
                         on_done,
-                        None,
+                        engine.turn_owner_row().await,
+                        time,
                     )
                     .await
                     {
                         Ok(i) => {
                             engine.emit(PersonalAgentChange::Item { id: i.id });
                             ToolOutcome::ok(
-                                format!("Added #{}: {}", i.id, i.summary),
-                                json!({ "item_id": i.id }),
+                                format!("Added #{}: {}{}", i.id, i.summary, time_answer(&i, tz, now)),
+                                item_answer(&i, tz, now),
                             )
                         }
                         Err(e) => ToolOutcome::refused(e.to_string()),
@@ -634,6 +711,42 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
         }
         other => ToolOutcome::refused(format!("unknown personal-agent tool: {other}")),
     }
+}
+
+/// A matter's time, as `item_update` answers it: the time in the owner's
+/// zone with its weekday — to tell the owner as it is — what happens then,
+/// and its next times.
+fn time_answer(
+    item: &crate::db::entities::personal_agent_item::Model,
+    tz: chrono_tz::Tz,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let Some(words) = reminders::time_words(item, tz, now) else {
+        return String::new();
+    };
+    let due_at = item.due_at.unwrap_or(now);
+    let mut out = format!("\n{words} ({})", super::due::zone_label(tz, due_at));
+    let times = reminders::next_times(&svc::ItemTime::of(item), tz, now);
+    if times.len() > 1 {
+        out.push_str(&format!("\nnext times: {}", times.join("; ")));
+    }
+    out.push_str("\nTell the owner this time and weekday as codeg gives them.");
+    out
+}
+
+fn item_answer(
+    item: &crate::db::entities::personal_agent_item::Model,
+    tz: chrono_tz::Tz,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Value {
+    json!({
+        "item_id": item.id,
+        "status": item.status,
+        "due_at": item.due_at,
+        "due_local": item.due_at.map(|t| super::due::describe(t, tz, now)),
+        "at_due": item.at_due,
+        "repeat": item.repeat.as_deref().and_then(|r| serde_json::from_str::<Value>(r).ok()),
+    })
 }
 
 /// What a dispatch call answers: the new dispatch, or — the call repeating
