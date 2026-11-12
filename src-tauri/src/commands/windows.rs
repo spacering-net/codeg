@@ -385,6 +385,9 @@ fn resolve_settings_route(section: Option<&str>) -> &'static str {
         Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
         Some("system") => "settings/system",
+        // Desktop only, like the page itself: the web nav hides it, so the web
+        // `open_settings_window` deliberately has no arm for it.
+        Some("web-service") => "settings/web-service",
         _ => "settings/appearance",
     }
 }
@@ -2714,7 +2717,8 @@ mod settings_route_tests {
     /// page must be able to name it and land there. `collaboration` is where
     /// the codeg-mcp tool switches live in full, and it is what the status-bar
     /// codeg-mcp popover links to; `computer-use` is what the Computer use
-    /// popover links to.
+    /// popover links to; `web-service` is what the Web service popover links
+    /// to.
     #[test]
     fn every_named_settings_section_resolves_to_its_own_route() {
         for section in [
@@ -2732,6 +2736,7 @@ mod settings_route_tests {
             "version-control",
             "shortcuts",
             "system",
+            "web-service",
         ] {
             assert_eq!(
                 resolve_settings_route(Some(section)),

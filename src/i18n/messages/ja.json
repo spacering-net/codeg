@@ -2526,6 +2526,24 @@
         "loadFailed": "状態を取得できませんでした: {message}",
         "openSettings": "詳細設定を開く",
         "refresh": "更新"
+      },
+      "webService": {
+        "title": "Web サービス",
+        "start": "Web サービスを開始",
+        "stop": "Web サービスを停止",
+        "cancel": "キャンセル",
+        "confirmStart": "開始",
+        "confirmTitle": "Codeg をネットワークに公開しますか？",
+        "confirmDescription": "Web サービスは {address} で待ち受けます。同じネットワーク上のどのデバイスからも、アクセストークンがあればターミナルやエージェントを含む Codeg にアクセスできます。",
+        "tooltipNetwork": "Web サービス · {address} で待ち受け中（ネットワークからアクセス可能）",
+        "tooltipLocal": "Web サービス · {address} で待ち受け中（このコンピューターのみ）",
+        "tooltipStopped": "Web サービス · 停止中",
+        "hintNetwork": "{address} で待ち受け中。ネットワーク上のデバイスがアクセストークンで Codeg を開けます。",
+        "hintLocal": "{address} で待ち受け中。このコンピューターからのみアクセスできます。",
+        "hintStoppedNetwork": "停止中。開始すると {address} で待ち受け、ネットワークからアクセスできます。",
+        "hintStoppedLocal": "停止中。開始すると {address} で待ち受け、このコンピューターからのみアクセスできます。",
+        "copyAddress": "アドレスをコピー",
+        "openSettings": "Web サービス設定を開く"
       }
     },
     "auxPanel": {
@@ -4474,7 +4492,12 @@
       "permissionDenied": "権限が不足しています。1024 以上のポートを使用するか、より高い権限で実行してください",
       "addressUnavailable": "このアドレスはこの端末では利用できません",
       "bindFailed": "アドレスのバインドに失敗しました"
-    }
+    },
+    "bindHost": "待ち受け",
+    "bindHostAll": "すべてのインターフェース（0.0.0.0）",
+    "bindHostLocal": "このコンピューターのみ（127.0.0.1）",
+    "bindHostAllHint": "ローカルネットワーク上のデバイスがアクセストークンでサービスに接続できます。",
+    "bindHostLocalHint": "このコンピューターからのみ接続できます。リバースプロキシや Tailscale Serve の背後で使う場合などに。"
   },
   "DirectoryBrowser": {
     "title": "ディレクトリを参照",

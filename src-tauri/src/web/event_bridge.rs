@@ -189,6 +189,22 @@ pub const COMPUTER_TOOLS_SETTINGS_CHANGED_EVENT: &str = "computer-tools-settings
 /// (`{ "automations_enabled": bool, "work_tasks_enabled": bool }`).
 pub const CHAT_AUTHORING_SETTINGS_CHANGED_EVENT: &str = "chat-authoring-settings://changed";
 
+/// Announces that the desktop web service started or stopped, from whichever
+/// surface did it — the Settings window, the status-bar toggle, or auto-start
+/// at launch. Every window (each workspace's status bar, an open Settings
+/// page) follows it by re-reading `get_web_server_status`. Payload is
+/// [`WebServiceStatusChanged`] and deliberately nothing more: like every side
+/// channel it also reaches the web broadcaster, and the status itself carries
+/// the access token.
+pub const WEB_SERVICE_STATUS_CHANGED_EVENT: &str = "web-service://status-changed";
+
+/// Payload for [`WEB_SERVICE_STATUS_CHANGED_EVENT`].
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebServiceStatusChanged {
+    pub running: bool,
+}
+
 /// Announces a delegation-settings write. Same cross-window rationale as
 /// [`CHAT_AUTHORING_SETTINGS_CHANGED_EVENT`], and load-bearing for the same
 /// reason: the record has two editors — the settings form, which writes all
@@ -730,6 +746,12 @@ mod tests {
             rx.try_recv().is_err(),
             "non-status ACP events must not emit on conversation://changed"
         );
+    }
+
+    #[test]
+    fn web_service_status_changed_carries_only_the_running_flag() {
+        let wire = serde_json::to_value(WebServiceStatusChanged { running: true }).unwrap();
+        assert_eq!(wire, serde_json::json!({ "running": true }));
     }
 
     #[test]

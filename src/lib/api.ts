@@ -3647,6 +3647,8 @@ export type SettingsSection =
   | "version-control"
   | "shortcuts"
   | "system"
+  // Desktop only: the web nav has no Web service page.
+  | "web-service"
 
 interface OpenSettingsWindowOptions {
   agentType?: AgentType | null
@@ -5318,7 +5320,20 @@ export interface WebServerInfo {
   port: number
   token: string
   addresses: string[]
+  /** Address the listener is bound to: `0.0.0.0` (every interface, so the
+   *  local network can reach it) or `127.0.0.1` (this machine only). */
+  bindHost: string
 }
+
+/** Bind hosts the desktop web service can be configured with (Rust
+ *  `WEB_SERVICE_HOST_CANDIDATES`); the first is the default. */
+export const WEB_SERVICE_HOSTS = ["0.0.0.0", "127.0.0.1"] as const
+export type WebServiceHost = (typeof WEB_SERVICE_HOSTS)[number]
+export const DEFAULT_WEB_SERVICE_HOST: WebServiceHost = "0.0.0.0"
+
+/** Broadcast whenever the desktop web service starts or stops, from any
+ *  window or from auto-start. Carries only `running`; re-read the status. */
+export const WEB_SERVICE_STATUS_CHANGED_EVENT = "web-service://status-changed"
 
 export async function startWebServer(params?: {
   port?: number
@@ -5344,6 +5359,8 @@ export interface WebServiceConfig {
   token: string | null
   port: number | null
   autoStart: boolean
+  /** Saved bind host; `null`/absent means never chosen (the default). */
+  host?: WebServiceHost | null
 }
 
 export async function getWebServiceConfig(): Promise<WebServiceConfig> {

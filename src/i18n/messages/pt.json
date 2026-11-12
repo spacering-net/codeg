@@ -2526,6 +2526,24 @@
         "loadFailed": "Não foi possível ler o estado: {message}",
         "openSettings": "Abrir configurações",
         "refresh": "Atualizar"
+      },
+      "webService": {
+        "title": "Serviço web",
+        "start": "Iniciar serviço web",
+        "stop": "Parar serviço web",
+        "cancel": "Cancelar",
+        "confirmStart": "Iniciar",
+        "confirmTitle": "Abrir o Codeg para a sua rede?",
+        "confirmDescription": "O serviço web vai escutar em {address}. Qualquer dispositivo da sua rede poderá acessar o Codeg — incluindo terminais e agentes — com o token de acesso.",
+        "tooltipNetwork": "Serviço web · escutando em {address} (acessível pela sua rede)",
+        "tooltipLocal": "Serviço web · escutando em {address} (apenas este computador)",
+        "tooltipStopped": "Serviço web · parado",
+        "hintNetwork": "Escutando em {address}. Dispositivos da sua rede podem abrir o Codeg com o token de acesso.",
+        "hintLocal": "Escutando em {address}. Apenas este computador pode acessar.",
+        "hintStoppedNetwork": "Parado. Ao iniciar, vai escutar em {address}, acessível pela sua rede.",
+        "hintStoppedLocal": "Parado. Ao iniciar, vai escutar em {address}, apenas este computador.",
+        "copyAddress": "Copiar endereço",
+        "openSettings": "Abrir configurações do serviço web"
       }
     },
     "auxPanel": {
@@ -4474,7 +4492,12 @@
       "permissionDenied": "Permissão negada. Use uma porta acima de 1024 ou execute com privilégios mais altos.",
       "addressUnavailable": "O endereço não está disponível nesta máquina",
       "bindFailed": "Falha ao vincular o endereço"
-    }
+    },
+    "bindHost": "Escutar em",
+    "bindHostAll": "Todas as interfaces (0.0.0.0)",
+    "bindHostLocal": "Apenas este computador (127.0.0.1)",
+    "bindHostAllHint": "Dispositivos da sua rede local podem acessar o serviço com o token de acesso.",
+    "bindHostLocalHint": "Apenas este computador pode acessar o serviço — por exemplo, atrás de um proxy reverso ou do Tailscale Serve."
   },
   "DirectoryBrowser": {
     "title": "Explorar diretório",

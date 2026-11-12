@@ -58,6 +58,7 @@ pub const FORBIDDEN_PREFERENCE_KEYS: &[&str] = &[
     "web_service_port",
     "web_service_token",
     "web_service_auto_start",
+    "web_service_host",
     "github_accounts",
     "chat_event_webhooks",
     "git_settings",

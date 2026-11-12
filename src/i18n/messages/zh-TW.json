@@ -2526,6 +2526,24 @@
         "loadFailed": "無法讀取狀態：{message}",
         "openSettings": "開啟詳細設定",
         "refresh": "重新整理"
+      },
+      "webService": {
+        "title": "Web 服務",
+        "start": "啟動 Web 服務",
+        "stop": "停止 Web 服務",
+        "cancel": "取消",
+        "confirmStart": "啟動",
+        "confirmTitle": "向區域網路開放 Codeg？",
+        "confirmDescription": "Web 服務將監聽 {address}。同一網路中的任何裝置都能憑存取權杖連上 Codeg，包括其中的終端機和智慧體。",
+        "tooltipNetwork": "Web 服務 · 正在監聽 {address}（區域網路可存取）",
+        "tooltipLocal": "Web 服務 · 正在監聽 {address}（僅本機）",
+        "tooltipStopped": "Web 服務 · 已停止",
+        "hintNetwork": "正在監聽 {address}。同一網路中的裝置可憑存取權杖開啟 Codeg。",
+        "hintLocal": "正在監聽 {address}。只有本機能存取。",
+        "hintStoppedNetwork": "已停止。啟動後將監聽 {address}，區域網路可存取。",
+        "hintStoppedLocal": "已停止。啟動後將監聽 {address}，僅本機可存取。",
+        "copyAddress": "複製位址",
+        "openSettings": "開啟 Web 服務設定"
       }
     },
     "auxPanel": {
@@ -4474,7 +4492,12 @@
       "permissionDenied": "權限不足，請使用 1024 以上的連接埠，或以更高權限執行",
       "addressUnavailable": "該位址在本機不可用",
       "bindFailed": "綁定位址失敗"
-    }
+    },
+    "bindHost": "監聽位址",
+    "bindHostAll": "所有網路介面（0.0.0.0）",
+    "bindHostLocal": "僅本機（127.0.0.1）",
+    "bindHostAllHint": "區域網路中的裝置可憑存取權杖連線此服務。",
+    "bindHostLocalHint": "只有本機能連線此服務，例如放在反向代理或 Tailscale Serve 之後使用。"
   },
   "DirectoryBrowser": {
     "title": "瀏覽目錄",

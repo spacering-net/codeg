@@ -2526,6 +2526,24 @@
         "loadFailed": "Impossible de lire l'état : {message}",
         "openSettings": "Ouvrir les paramètres",
         "refresh": "Actualiser"
+      },
+      "webService": {
+        "title": "Service web",
+        "start": "Démarrer le service web",
+        "stop": "Arrêter le service web",
+        "cancel": "Annuler",
+        "confirmStart": "Démarrer",
+        "confirmTitle": "Ouvrir Codeg à votre réseau ?",
+        "confirmDescription": "Le service web écoutera sur {address}. Tout appareil de votre réseau pourra alors accéder à Codeg — y compris ses terminaux et ses agents — avec le jeton d’accès.",
+        "tooltipNetwork": "Service web · écoute sur {address} (accessible depuis votre réseau)",
+        "tooltipLocal": "Service web · écoute sur {address} (cet ordinateur uniquement)",
+        "tooltipStopped": "Service web · arrêté",
+        "hintNetwork": "Écoute sur {address}. Les appareils de votre réseau peuvent ouvrir Codeg avec le jeton d’accès.",
+        "hintLocal": "Écoute sur {address}. Seul cet ordinateur peut y accéder.",
+        "hintStoppedNetwork": "Arrêté. Au démarrage, il écoutera sur {address}, accessible depuis votre réseau.",
+        "hintStoppedLocal": "Arrêté. Au démarrage, il écoutera sur {address}, cet ordinateur uniquement.",
+        "copyAddress": "Copier l’adresse",
+        "openSettings": "Ouvrir les réglages du service web"
       }
     },
     "auxPanel": {
@@ -4474,7 +4492,12 @@
       "permissionDenied": "Permission refusée. Utilisez un port supérieur à 1024 ou exécutez avec des privilèges plus élevés.",
       "addressUnavailable": "Cette adresse n'est pas disponible sur cette machine",
       "bindFailed": "Échec de la liaison à l'adresse"
-    }
+    },
+    "bindHost": "Écouter sur",
+    "bindHostAll": "Toutes les interfaces (0.0.0.0)",
+    "bindHostLocal": "Cet ordinateur uniquement (127.0.0.1)",
+    "bindHostAllHint": "Les appareils de votre réseau local peuvent accéder au service avec le jeton d’accès.",
+    "bindHostLocalHint": "Seul cet ordinateur peut accéder au service — par exemple derrière un proxy inverse ou Tailscale Serve."
   },
   "DirectoryBrowser": {
     "title": "Parcourir le répertoire",

@@ -2526,6 +2526,24 @@
         "loadFailed": "Status konnte nicht gelesen werden: {message}",
         "openSettings": "Alle Einstellungen öffnen",
         "refresh": "Aktualisieren"
+      },
+      "webService": {
+        "title": "Webdienst",
+        "start": "Webdienst starten",
+        "stop": "Webdienst beenden",
+        "cancel": "Abbrechen",
+        "confirmStart": "Starten",
+        "confirmTitle": "Codeg für dein Netzwerk öffnen?",
+        "confirmDescription": "Der Webdienst lauscht auf {address}. Jedes Gerät in deinem Netzwerk kann dann mit dem Zugriffstoken auf Codeg zugreifen – einschließlich Terminals und Agenten.",
+        "tooltipNetwork": "Webdienst · lauscht auf {address} (aus deinem Netzwerk erreichbar)",
+        "tooltipLocal": "Webdienst · lauscht auf {address} (nur dieser Computer)",
+        "tooltipStopped": "Webdienst · beendet",
+        "hintNetwork": "Lauscht auf {address}. Geräte in deinem Netzwerk können Codeg mit dem Zugriffstoken öffnen.",
+        "hintLocal": "Lauscht auf {address}. Nur dieser Computer kann darauf zugreifen.",
+        "hintStoppedNetwork": "Beendet. Nach dem Start lauscht er auf {address}, aus deinem Netzwerk erreichbar.",
+        "hintStoppedLocal": "Beendet. Nach dem Start lauscht er auf {address}, nur dieser Computer.",
+        "copyAddress": "Adresse kopieren",
+        "openSettings": "Webdienst-Einstellungen öffnen"
       }
     },
     "auxPanel": {
@@ -4474,7 +4492,12 @@
       "permissionDenied": "Zugriff verweigert. Verwenden Sie einen Port über 1024 oder starten Sie mit höheren Rechten.",
       "addressUnavailable": "Die Adresse ist auf diesem Computer nicht verfügbar",
       "bindFailed": "Adresse konnte nicht gebunden werden"
-    }
+    },
+    "bindHost": "Lauschen auf",
+    "bindHostAll": "Alle Schnittstellen (0.0.0.0)",
+    "bindHostLocal": "Nur dieser Computer (127.0.0.1)",
+    "bindHostAllHint": "Geräte in deinem lokalen Netzwerk erreichen den Dienst mit dem Zugriffstoken.",
+    "bindHostLocalHint": "Nur dieser Computer erreicht den Dienst – etwa hinter einem Reverse-Proxy oder Tailscale Serve."
   },
   "DirectoryBrowser": {
     "title": "Verzeichnis durchsuchen",

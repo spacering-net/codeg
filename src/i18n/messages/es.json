@@ -2526,6 +2526,24 @@
         "loadFailed": "No se pudo leer el estado: {message}",
         "openSettings": "Abrir ajustes completos",
         "refresh": "Actualizar"
+      },
+      "webService": {
+        "title": "Servicio web",
+        "start": "Iniciar servicio web",
+        "stop": "Detener servicio web",
+        "cancel": "Cancelar",
+        "confirmStart": "Iniciar",
+        "confirmTitle": "¿Abrir Codeg a tu red?",
+        "confirmDescription": "El servicio web escuchará en {address}. Cualquier dispositivo de tu red podrá acceder a Codeg —incluidos sus terminales y agentes— con el token de acceso.",
+        "tooltipNetwork": "Servicio web · escuchando en {address} (accesible desde tu red)",
+        "tooltipLocal": "Servicio web · escuchando en {address} (solo este equipo)",
+        "tooltipStopped": "Servicio web · detenido",
+        "hintNetwork": "Escuchando en {address}. Los dispositivos de tu red pueden abrir Codeg con el token de acceso.",
+        "hintLocal": "Escuchando en {address}. Solo este equipo puede acceder.",
+        "hintStoppedNetwork": "Detenido. Al iniciarse escuchará en {address}, accesible desde tu red.",
+        "hintStoppedLocal": "Detenido. Al iniciarse escuchará en {address}, solo este equipo.",
+        "copyAddress": "Copiar dirección",
+        "openSettings": "Abrir ajustes del servicio web"
       }
     },
     "auxPanel": {
@@ -4474,7 +4492,12 @@
       "permissionDenied": "Permiso denegado. Utilice un puerto superior a 1024 o ejecute con mayores privilegios.",
       "addressUnavailable": "La dirección no está disponible en este equipo",
       "bindFailed": "No se pudo enlazar la dirección"
-    }
+    },
+    "bindHost": "Escuchar en",
+    "bindHostAll": "Todas las interfaces (0.0.0.0)",
+    "bindHostLocal": "Solo este equipo (127.0.0.1)",
+    "bindHostAllHint": "Los dispositivos de tu red local pueden acceder al servicio con el token de acceso.",
+    "bindHostLocalHint": "Solo este equipo puede acceder al servicio; por ejemplo, detrás de un proxy inverso o Tailscale Serve."
   },
   "DirectoryBrowser": {
     "title": "Explorar directorio",

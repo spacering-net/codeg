@@ -2526,6 +2526,24 @@
         "loadFailed": "无法读取状态：{message}",
         "openSettings": "打开详细设置",
         "refresh": "刷新"
+      },
+      "webService": {
+        "title": "Web 服务",
+        "start": "启动 Web 服务",
+        "stop": "停止 Web 服务",
+        "cancel": "取消",
+        "confirmStart": "启动",
+        "confirmTitle": "向局域网开放 Codeg？",
+        "confirmDescription": "Web 服务将监听 {address}。同一网络中的任何设备都能凭访问令牌连上 Codeg，包括其中的终端和智能体。",
+        "tooltipNetwork": "Web 服务 · 正在监听 {address}（局域网可访问）",
+        "tooltipLocal": "Web 服务 · 正在监听 {address}（仅本机）",
+        "tooltipStopped": "Web 服务 · 已停止",
+        "hintNetwork": "正在监听 {address}。同一网络中的设备可凭访问令牌打开 Codeg。",
+        "hintLocal": "正在监听 {address}。只有本机能访问。",
+        "hintStoppedNetwork": "已停止。启动后将监听 {address}，局域网可访问。",
+        "hintStoppedLocal": "已停止。启动后将监听 {address}，仅本机可访问。",
+        "copyAddress": "复制地址",
+        "openSettings": "打开 Web 服务设置"
       }
     },
     "auxPanel": {
@@ -4474,7 +4492,12 @@
       "permissionDenied": "权限不足，请使用 1024 以上的端口，或以更高权限运行",
       "addressUnavailable": "该地址在本机不可用",
       "bindFailed": "绑定地址失败"
-    }
+    },
+    "bindHost": "监听地址",
+    "bindHostAll": "所有网络接口（0.0.0.0）",
+    "bindHostLocal": "仅本机（127.0.0.1）",
+    "bindHostAllHint": "局域网中的设备可凭访问令牌连接此服务。",
+    "bindHostLocalHint": "只有本机能连接此服务，例如放在反向代理或 Tailscale Serve 之后使用。"
   },
   "DirectoryBrowser": {
     "title": "浏览目录",

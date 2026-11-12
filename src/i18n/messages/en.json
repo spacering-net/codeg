@@ -2526,6 +2526,24 @@
         "loadFailed": "Could not read the status: {message}",
         "openSettings": "Open full settings",
         "refresh": "Refresh"
+      },
+      "webService": {
+        "title": "Web service",
+        "start": "Start web service",
+        "stop": "Stop web service",
+        "cancel": "Cancel",
+        "confirmStart": "Start",
+        "confirmTitle": "Open Codeg to your network?",
+        "confirmDescription": "The web service will listen on {address}. Any device on your network can then reach Codeg — including its terminals and agents — with the access token.",
+        "tooltipNetwork": "Web service · listening on {address} (reachable from your network)",
+        "tooltipLocal": "Web service · listening on {address} (this computer only)",
+        "tooltipStopped": "Web service · stopped",
+        "hintNetwork": "Listening on {address}. Devices on your network can open Codeg with the access token.",
+        "hintLocal": "Listening on {address}. Only this computer can reach it.",
+        "hintStoppedNetwork": "Stopped. Starting will listen on {address}, reachable from your network.",
+        "hintStoppedLocal": "Stopped. Starting will listen on {address}, this computer only.",
+        "copyAddress": "Copy address",
+        "openSettings": "Open Web service settings"
       }
     },
     "auxPanel": {
@@ -4474,7 +4492,12 @@
       "permissionDenied": "Permission denied. Try a port above 1024 or run with higher privileges.",
       "addressUnavailable": "The address is not available on this machine",
       "bindFailed": "Failed to bind address"
-    }
+    },
+    "bindHost": "Listen on",
+    "bindHostAll": "All interfaces (0.0.0.0)",
+    "bindHostLocal": "This computer only (127.0.0.1)",
+    "bindHostAllHint": "Devices on your local network can reach the service with the access token.",
+    "bindHostLocalHint": "Only this computer can reach the service — for example behind a reverse proxy or Tailscale Serve."
   },
   "DirectoryBrowser": {
     "title": "Browse Directory",

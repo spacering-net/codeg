@@ -2526,6 +2526,24 @@
         "loadFailed": "상태를 읽을 수 없습니다: {message}",
         "openSettings": "전체 설정 열기",
         "refresh": "새로 고침"
+      },
+      "webService": {
+        "title": "웹 서비스",
+        "start": "웹 서비스 시작",
+        "stop": "웹 서비스 중지",
+        "cancel": "취소",
+        "confirmStart": "시작",
+        "confirmTitle": "Codeg를 네트워크에 공개할까요?",
+        "confirmDescription": "웹 서비스가 {address}에서 수신 대기합니다. 같은 네트워크의 모든 기기가 액세스 토큰으로 터미널과 에이전트를 포함한 Codeg에 접근할 수 있습니다.",
+        "tooltipNetwork": "웹 서비스 · {address}에서 수신 대기 중 (네트워크에서 접근 가능)",
+        "tooltipLocal": "웹 서비스 · {address}에서 수신 대기 중 (이 컴퓨터만)",
+        "tooltipStopped": "웹 서비스 · 중지됨",
+        "hintNetwork": "{address}에서 수신 대기 중. 네트워크의 기기가 액세스 토큰으로 Codeg를 열 수 있습니다.",
+        "hintLocal": "{address}에서 수신 대기 중. 이 컴퓨터에서만 접근할 수 있습니다.",
+        "hintStoppedNetwork": "중지됨. 시작하면 {address}에서 수신 대기하며 네트워크에서 접근할 수 있습니다.",
+        "hintStoppedLocal": "중지됨. 시작하면 {address}에서 수신 대기하며 이 컴퓨터에서만 접근할 수 있습니다.",
+        "copyAddress": "주소 복사",
+        "openSettings": "웹 서비스 설정 열기"
       }
     },
     "auxPanel": {
@@ -4474,7 +4492,12 @@
       "permissionDenied": "권한이 부족합니다. 1024 이상의 포트를 사용하거나 더 높은 권한으로 실행하세요",
       "addressUnavailable": "이 주소는 현재 시스템에서 사용할 수 없습니다",
       "bindFailed": "주소 바인딩에 실패했습니다"
-    }
+    },
+    "bindHost": "수신 주소",
+    "bindHostAll": "모든 인터페이스 (0.0.0.0)",
+    "bindHostLocal": "이 컴퓨터만 (127.0.0.1)",
+    "bindHostAllHint": "로컬 네트워크의 기기가 액세스 토큰으로 서비스에 접근할 수 있습니다.",
+    "bindHostLocalHint": "이 컴퓨터에서만 서비스에 접근할 수 있습니다. 예: 리버스 프록시나 Tailscale Serve 뒤에서 사용할 때."
   },
   "DirectoryBrowser": {
     "title": "디렉토리 찾아보기",
