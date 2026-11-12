@@ -28,7 +28,7 @@ import {
   PlugIcon,
   SearchIcon,
   SparklesIcon,
-  SquareTerminalIcon,
+  TerminalIcon,
   TargetIcon,
   TimerIcon,
   UsersIcon,
@@ -67,7 +67,7 @@ export function toolIcon(tool: ToolDescriptor): ActivityIcon {
     case "memory":
       return BrainIcon
     case "command":
-      return SquareTerminalIcon
+      return TerminalIcon
     // The same glyph as the monitor's row in the async-task strip.
     case "monitor":
       return MonitorIcon
