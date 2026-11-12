@@ -31,6 +31,7 @@ pub mod personal_agent_notice;
 pub mod personal_agent_segment;
 pub mod personal_agent_thread;
 pub mod personal_agent_timeline;
+pub mod personal_agent_verification;
 pub mod prelude;
 pub mod quick_message;
 pub mod remote_workspace_connection;

@@ -196,6 +196,22 @@ pub async fn move_dispatches_to(
         .filter(item::Column::DispatchId.is_in(ids.to_vec()))
         .exec(&txn)
         .await?;
+    // Their rounds of acceptance go with them (7.5).
+    crate::db::entities::personal_agent_verification::Entity::update_many()
+        .col_expr(
+            crate::db::entities::personal_agent_verification::Column::BotId,
+            Expr::value(bot),
+        )
+        .col_expr(
+            crate::db::entities::personal_agent_verification::Column::UpdatedAt,
+            Expr::value(now),
+        )
+        .filter(
+            crate::db::entities::personal_agent_verification::Column::DispatchId
+                .is_in(ids.to_vec()),
+        )
+        .exec(&txn)
+        .await?;
     txn.commit().await?;
     Ok(())
 }
@@ -1890,6 +1906,51 @@ pub async fn insert_event_with_row(
     Ok(Some((ev, card)))
 }
 
+/// Queue `event` (its chain and all) without a card. `false` when its
+/// `source_key` was already recorded.
+pub async fn insert_new_event(
+    conn: &DatabaseConnection,
+    bot: i32,
+    event: NewEvent,
+) -> Result<bool, DbError> {
+    require_bot(bot)?;
+    let source_key = scoped_source_key(conn, bot, &event.source_key).await?;
+    let now = Utc::now();
+    let inserted = event::ActiveModel {
+        id: NotSet,
+        kind: Set(event.kind),
+        source_key: Set(source_key),
+        coalesce_key: Set(event.coalesce_key),
+        summary: Set(event.summary),
+        payload: Set(event.payload.map(|p| p.to_string())),
+        wake: Set(event.wake),
+        state: Set(EventState::Pending),
+        batch_id: Set(None),
+        requeues: Set(0),
+        requeued_from: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        bot_id: Set(Some(bot)),
+        origin_bot_id: Set(event.lineage.origin_bot_id),
+        origin_row_id: Set(event.lineage.origin_row_id),
+        thread_id: Set(event.lineage.thread_id),
+    }
+    .insert(conn)
+    .await;
+    match inserted {
+        Ok(_) => Ok(true),
+        Err(e)
+            if matches!(
+                e.sql_err(),
+                Some(sea_orm::SqlErr::UniqueConstraintViolation(_))
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// An event to queue.
 #[derive(Debug, Clone)]
 pub struct NewEvent {
@@ -2476,6 +2537,8 @@ pub struct NewDispatch {
     /// Where the chain it belongs to started, the thread it is on, and the
     /// input it was dispatched for.
     pub lineage: Lineage,
+    /// What done looks like (7.5).
+    pub done_when: Option<String>,
 }
 
 /// Where an input's chain started — an assistant and its timeline row (an
@@ -2529,6 +2592,7 @@ fn dispatch_active(new: NewDispatch) -> dispatch::ActiveModel {
         updated_at: Set(now),
         finished_at: Set(None),
         round_op_id: Set(None),
+        done_when: Set(new.done_when),
     }
 }
 

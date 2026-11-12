@@ -350,7 +350,13 @@ pub async fn today(
     // card above; one asking for input asks through its session: its row
     // stands for both.
     let mut listed_conversations: HashSet<i32> = HashSet::new();
+    // A task its assistant is accepting is its assistant's — or the owner's
+    // through its acceptance card (7.5): not the board's review row.
+    let accepting = super::acceptance::being_accepted(db, &tasks).await;
     for t in tasks.iter().filter(|t| task_needs_owner(t)) {
+        if accepting.contains_key(&t.id) {
+            continue;
+        }
         if t.status == WorkTaskStatus::AwaitingInput {
             listed_conversations.extend(t.conversation_id);
             if t.personal_agent_dispatch_id
@@ -517,7 +523,12 @@ pub async fn today(
         dispatch_ids.push(d.id);
         view.watching.push(row);
     }
-    for t in tasks.iter().filter(|t| task_running(t)) {
+    for t in tasks.iter().filter(|t| {
+        task_running(t)
+            || accepting
+                .get(&t.id)
+                .is_some_and(|v| *v == super::acceptance::AcceptView::Checking)
+    }) {
         let mut row = TodayRow::new(
             format!("task:{}", t.id),
             "task",
@@ -526,7 +537,11 @@ pub async fn today(
         );
         row.bot_id = prov.bot_of(t.personal_agent_dispatch_id);
         row.project = project_of(t.folder_id);
-        row.state = Some(super::engine::enum_str(&t.status));
+        row.state = Some(if accepting.contains_key(&t.id) {
+            "checking".to_string()
+        } else {
+            super::engine::enum_str(&t.status)
+        });
         row.task_id = Some(t.id);
         row.conversation_id = t.conversation_id;
         view.watching.push(row);

@@ -229,13 +229,40 @@ async fn dispatch_infos(
     let ids: Vec<i32> = rows.iter().map(|d| d.id).collect();
     let answering = crate::personal_agent::asks::answering_dispatches(db, &ids).await;
     let answered = crate::personal_agent::asks::answered_for_owner(db, &ids).await;
+    // Acceptance (7.5): where each stands, its latest round, and the checks.
+    let views = {
+        let refs: Vec<&crate::db::entities::personal_agent_dispatch::Model> = rows.iter().collect();
+        crate::personal_agent::acceptance::views_of(db, &refs, &tasks).await
+    };
+    let latest = crate::db::service::personal_agent_verification_service::latest_of(&db.conn, &ids)
+        .await
+        .unwrap_or_default();
+    let checks = crate::db::service::personal_agent_verification_service::of_checks(&db.conn, &ids)
+        .await
+        .unwrap_or_default();
     let mut out = Vec::with_capacity(rows.len());
     for d in rows {
         let task = d.work_task_id.and_then(|id| tasks.get(&id));
-        let ladder = crate::personal_agent::ladder::for_owner(
-            crate::personal_agent::ladder::ladder_of(&d, task),
-            answering.contains(&d.id),
+        let ladder = crate::personal_agent::acceptance::ladder_with(
+            crate::personal_agent::ladder::for_owner(
+                crate::personal_agent::ladder::ladder_of(&d, task),
+                answering.contains(&d.id),
+            ),
+            views.get(&d.id).copied(),
         );
+        let acceptance = latest
+            .get(&d.id)
+            .map(|r| crate::models::personal_agent::AcceptanceInfo {
+                round_id: r.id,
+                round: r.round,
+                state: r.state,
+                verdict: r.check_verdict,
+                unchecked: r.unchecked,
+                decided_by: r.decided_by,
+                check_dispatch_id: r.check_dispatch_id,
+                current: task.is_some_and(|t| t.run_seq == r.run_seq),
+            });
+        let check = checks.get(&d.id);
         let answered_for_you = answered.get(&d.id).copied().unwrap_or(0);
         let task = task.map(crate::personal_agent::ladder::task_facts);
         let folder_name = match d.folder_id {
@@ -281,6 +308,10 @@ async fn dispatch_infos(
             ladder,
             answered_for_you,
             task,
+            done_when: d.done_when,
+            acceptance,
+            check_for: check.map(|r| r.dispatch_id),
+            check_round: check.map(|r| r.round),
         });
     }
     Ok(out)

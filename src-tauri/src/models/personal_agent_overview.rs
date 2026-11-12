@@ -17,8 +17,11 @@ pub enum Ladder {
     Working,
     /// Waiting on the owner: an answer, an approval.
     WaitingYou,
-    /// Waiting for the owner's review and merge (no automatic acceptance in
-    /// phase 1: a task in review can be merged).
+    /// Ready for review and being accepted: checked by another executor,
+    /// or waiting on its assistant's conclusion (7.5).
+    Checking,
+    /// Waiting for the owner's review and merge — or, when its assistant
+    /// accepts it, accepted.
     Mergeable,
     /// The board is landing it.
     Merging,
@@ -41,7 +44,11 @@ impl Ladder {
     pub fn is_live(self) -> bool {
         matches!(
             self,
-            Ladder::Working | Ladder::WaitingYou | Ladder::Mergeable | Ladder::Merging
+            Ladder::Working
+                | Ladder::WaitingYou
+                | Ladder::Checking
+                | Ladder::Mergeable
+                | Ladder::Merging
         )
     }
 
@@ -50,6 +57,7 @@ impl Ladder {
         match self {
             Ladder::Working => "working",
             Ladder::WaitingYou => "waiting for the owner",
+            Ladder::Checking => "in review, being checked and accepted",
             Ladder::Mergeable => "ready to merge (in review)",
             Ladder::Merging => "merging",
             Ladder::PrOpen => "PR opened, not merged yet (codeg does not follow PR status yet)",

@@ -349,3 +349,61 @@ describe("the task card on the news", () => {
     )
   })
 })
+
+describe("acceptance on the news (7.5)", () => {
+  function events(rows: TimelineRow[]) {
+    return buildMessageItems(rows).filter(
+      (i): i is Extract<MessageItem, { kind: "event" }> => i.kind === "event"
+    )
+  }
+
+  it("says code work in review is being checked, not ready to merge", () => {
+    const [news] = events([result(1, { state: "review", ladder: "checking" })])
+    const { container } = draw(<EventCard item={news} />, { zh: true })
+    const chip = container.querySelector("[data-pa-work] [data-pa-ladder]")!
+    expect(chip.textContent).toBe("检查中")
+    expect(chip.className).toContain("text-sky-700")
+  })
+
+  it("shows a check's round, its verdict and its evidence rather than its whole text", () => {
+    const [news] = events([
+      result(1, {
+        state: "completed",
+        ladder: "done",
+        mode: "session",
+        check_for: 233,
+        check_round: 2,
+        verdict: "fail",
+        evidence: "- evidence: a.txt:1 still says two",
+        excerpt: "I read everything first. VERDICT: FAIL",
+      }),
+    ])
+    const { container } = draw(<EventCard item={news} />, { zh: true })
+    expect(container.querySelector("[data-pa-check-label]")?.textContent).toBe(
+      "验收检查 · 第 2 轮"
+    )
+    expect(container.querySelector("[data-pa-verdict]")?.textContent).toBe(
+      "不通过"
+    )
+    expect(container.textContent).toContain("a.txt:1 still says two")
+    expect(container.textContent).not.toContain("I read everything first")
+  })
+
+  it("an interrupted check says its round and no verdict", () => {
+    const [news] = events([
+      result(1, {
+        state: "interrupted",
+        mode: "session",
+        check_for: 233,
+        check_round: 1,
+        verdict: null,
+        evidence: null,
+      }),
+    ])
+    const { container } = draw(<EventCard item={news} />)
+    expect(container.querySelector("[data-pa-check-label]")?.textContent).toBe(
+      "Acceptance check · round 1"
+    )
+    expect(container.querySelector("[data-pa-verdict]")).toBeNull()
+  })
+})

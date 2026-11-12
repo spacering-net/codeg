@@ -1795,7 +1795,7 @@ them with `forward: true` (say what you lean to in `suggestion`).\n{}\n</codeg-a
 
     /// The owner's words that began the work: the message the dispatch
     /// was made for.
-    async fn owner_words(&self, d: &dispatch_entity::Model) -> Option<String> {
+    pub(super) async fn owner_words(&self, d: &dispatch_entity::Model) -> Option<String> {
         let row = svc::get_row(&self.db.conn, d.origin_row_id?).await.ok().flatten()?;
         (row.kind == TimelineKind::Owner).then(|| row.body.trim().to_string()).filter(|b| !b.is_empty())
     }

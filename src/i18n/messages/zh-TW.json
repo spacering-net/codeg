@@ -8222,6 +8222,30 @@
         "level_answered": {
           "title": "替你回答了",
           "hint": "派出的會話裡的提問，助手替你回答了。"
+        },
+        "auto_accept": {
+          "title": "自動驗收",
+          "hint": "助理派出的改程式碼的工作進入待驗收時，派另一個執行配置唯讀檢查，助理對照驗收標準下結論。關掉就回到你自己驗收。",
+          "on": "開",
+          "off": "關"
+        },
+        "accept_revise": {
+          "title": "驗收後退回",
+          "hint": "檢查之後助理要退回修改時。",
+          "auto": "自動退回",
+          "ask": "先問我（出驗收卡）"
+        },
+        "accept_rounds": {
+          "title": "驗收檢查最多幾輪",
+          "hint": "檢查到這麼多輪還要退回，就交給你決定。0 是不自動退回。"
+        },
+        "level_acceptance": {
+          "title": "驗收",
+          "hint": "派出的工作驗收通過可以合併、已合併，或要你決定。"
+        },
+        "level_used_up": {
+          "title": "用完輪次仍沒過",
+          "hint": "退回到你允許的輪數還沒通過。"
         }
       },
       "workdir": {
@@ -8459,7 +8483,11 @@
     "dispatchCard": {
       "continue": "繼續：{title}",
       "notSent": "沒送出",
-      "more": "還有 {count} 項"
+      "more": "還有 {count} 項",
+      "doneWhen": "驗收標準",
+      "check": "驗收檢查",
+      "checkRound": "驗收檢查 · 第 {round} 輪",
+      "checkVia": "用 {name} 的執行配置檢查"
     },
     "event": {
       "someone": "職務助理",
@@ -8874,7 +8902,9 @@
       "you": "需要你處理：{text}",
       "answerPlain": "需要你回答",
       "approvalPlain": "需要你核准",
-      "youPlain": "需要你處理"
+      "youPlain": "需要你處理",
+      "acceptance": "驗收要你決定：{text}",
+      "acceptancePlain": "驗收要你決定"
     },
     "statusLine": {
       "steps": "這一回合的步驟",
@@ -8944,7 +8974,8 @@
       "failed": "失敗",
       "paused": "暫停",
       "canceled": "已取消",
-      "handed_over": "已接手"
+      "handed_over": "已接手",
+      "checking": "檢查中"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>，{files} 個檔案",
@@ -9096,7 +9127,8 @@
         "canceled": "已停止",
         "answered": "替你答了",
         "changed": "替你改了",
-        "undone": "改過，已復原"
+        "undone": "改過，已復原",
+        "acceptance": "驗收要你決定"
       },
       "session": {
         "permission": "等你核准",
@@ -9109,7 +9141,8 @@
         "failed": "失敗",
         "preparing": "準備中",
         "running": "進行中",
-        "merging": "合併中"
+        "merging": "合併中",
+        "checking": "檢查中"
       },
       "dispatch": {
         "queued": "排隊中",
@@ -9205,9 +9238,13 @@
           "presence": {
             "title": "學你的作息",
             "hint": "按你在 codeg 裡的時間，在合適的時候找你。"
+          },
+          "auto_accept": {
+            "title": "檢查並驗收派出去的改程式碼的工作",
+            "hint": "派另一個執行配置唯讀檢查，我對照你的要求下結論。"
           }
         },
-        "later": "晨報、收尾、PR 看護和自動驗收，做好後也會出現在這裡。",
+        "later": "晨報、收尾和 PR 看護，做好後也會出現在這裡。",
         "team": "組個團隊",
         "teamSuggested": "已建議團隊",
         "prefs": "調整偏好",
@@ -9218,6 +9255,52 @@
         "collapse": "收起",
         "unavailable": "要在助手執行的那一端修改。"
       }
+    },
+    "acceptance": {
+      "title": "驗收 · 第 {round} 輪",
+      "titleMax": "驗收 · 第 {round} 輪（最多 {max} 輪）",
+      "people": "{executor} 執行 · {checker} 檢查",
+      "peopleUnchecked": "{executor} 執行",
+      "check": "檢查：",
+      "verdict": {
+        "pass": "通過",
+        "fail": "未通過",
+        "unverified": "無法驗證"
+      },
+      "unchecked": "未經獨立檢查",
+      "notVerified": "未經驗證",
+      "decision": {
+        "accept": "通過",
+        "revise": "退回修改",
+        "ask_owner": "問你"
+      },
+      "assistant": "助理：{decision}",
+      "assistantWhy": "助理：{decision}，理由：{reason}",
+      "against": "檢查：{verdict} · 助理：{decision}，理由：{reason}",
+      "fallback": "助理沒給結論，依檢查結論處理",
+      "owner": "你的決定：{decision}",
+      "question": "問你：{question}",
+      "usedUp": "已經檢查了 {count} 輪，到了你允許的輪數",
+      "wouldSend": "退回時會送出的修改意見",
+      "revise": "依卡上的意見退回",
+      "accept": "算通過",
+      "recheck": "重新檢查",
+      "openTask": "打開任務",
+      "accepted": "已通過",
+      "revised": "已退回修改",
+      "void": "檢查期間工作樹被改動，這一輪作廢",
+      "changed": "工作樹在檢查後被改動，驗收已失效",
+      "changedAfterAccept": "驗收之後工作樹變了",
+      "superseded": "已重新檢查",
+      "stale": "已失效，沒有執行",
+      "merged": "已合併 {commit}",
+      "delivered": "已交付，頭提交 {head}",
+      "history": "之前幾輪",
+      "historyRevised": "第 {round} 輪：退回「{message}」",
+      "historyAccepted": "第 {round} 輪：通過",
+      "historyAsked": "第 {round} 輪：問你",
+      "historyChanged": "第 {round} 輪：通過後工作樹變了",
+      "historyOpen": "第 {round} 輪：進行中"
     }
   }
 }

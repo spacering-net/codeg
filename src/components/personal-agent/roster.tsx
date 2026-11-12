@@ -148,9 +148,11 @@ export function rowLine(
       needs.kind === "choice" ||
       needs.kind === "input"
         ? "answer"
-        : needs.kind === "uncertain" || needs.kind === "loop"
-          ? "you"
-          : "approval"
+        : needs.kind === "acceptance"
+          ? "acceptance"
+          : needs.kind === "uncertain" || needs.kind === "loop"
+            ? "you"
+            : "approval"
     return {
       text: needs.text
         ? t(`needs.${ask}`, { text: needs.text })

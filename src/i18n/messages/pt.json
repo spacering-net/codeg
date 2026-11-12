@@ -8222,6 +8222,30 @@
         "level_answered": {
           "title": "Respondido em seu lugar",
           "hint": "Uma pergunta de uma sessão atribuída que um assistente respondeu em seu lugar."
+        },
+        "auto_accept": {
+          "title": "Aceitação automática",
+          "hint": "Quando um trabalho de código delegado por um assistente fica pronto para revisão, outra configuração de execução o verifica (somente leitura) e o assistente o aceita conforme os critérios. Desligada: você mesmo revisa.",
+          "on": "Ligada",
+          "off": "Desligada"
+        },
+        "accept_revise": {
+          "title": "Devolver o trabalho após a verificação",
+          "hint": "Quando o assistente quer mudanças após a verificação.",
+          "auto": "Devolver automaticamente",
+          "ask": "Perguntar antes (no cartão de aceitação)"
+        },
+        "accept_rounds": {
+          "title": "Rodadas de verificação de aceitação",
+          "hint": "Depois de tantas verificações, devolver de novo é decisão sua. 0 não devolve nada sozinho."
+        },
+        "level_acceptance": {
+          "title": "Aceitação",
+          "hint": "Trabalho aceito pelo assistente que você pode mesclar, já mesclado, ou cuja aceitação depende de você."
+        },
+        "level_used_up": {
+          "title": "Rodadas esgotadas, ainda não está certo",
+          "hint": "Trabalho devolvido tantas vezes quanto você permite e ainda não está certo."
         }
       },
       "workdir": {
@@ -8459,7 +8483,11 @@
     "dispatchCard": {
       "continue": "Continuar: {title}",
       "notSent": "Não enviado",
-      "more": "Mais {count}"
+      "more": "Mais {count}",
+      "doneWhen": "Pronto quando",
+      "check": "Verificação de aceitação",
+      "checkRound": "Verificação de aceitação · rodada {round}",
+      "checkVia": "verificado com a configuração de execução de {name}"
     },
     "event": {
       "someone": "Um assistente",
@@ -8874,7 +8902,9 @@
       "you": "Precisa de você: {text}",
       "answerPlain": "Precisa da sua resposta",
       "approvalPlain": "Precisa da sua aprovação",
-      "youPlain": "Precisa de você"
+      "youPlain": "Precisa de você",
+      "acceptance": "A aceitação depende de você: {text}",
+      "acceptancePlain": "A aceitação depende de você"
     },
     "statusLine": {
       "steps": "Passos deste turno",
@@ -8944,7 +8974,8 @@
       "failed": "Falhou",
       "paused": "Adiada",
       "canceled": "Cancelada",
-      "handed_over": "Assumida por você"
+      "handed_over": "Assumida por você",
+      "checking": "Em verificação"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# arquivo} other {# arquivos}}",
@@ -9096,7 +9127,8 @@
         "canceled": "Parado",
         "answered": "Respondido em seu nome",
         "changed": "Alterado em seu nome",
-        "undone": "Alterado e desfeito"
+        "undone": "Alterado e desfeito",
+        "acceptance": "A aceitação depende de você"
       },
       "session": {
         "permission": "Aguarda sua aprovação",
@@ -9109,7 +9141,8 @@
         "failed": "Falhou",
         "preparing": "Preparando",
         "running": "Em andamento",
-        "merging": "Mesclando"
+        "merging": "Mesclando",
+        "checking": "Em verificação"
       },
       "dispatch": {
         "queued": "Na fila",
@@ -9205,9 +9238,13 @@
           "presence": {
             "title": "Aprender seus horários",
             "hint": "Pelo seu tempo no codeg, para te procurar na hora certa."
+          },
+          "auto_accept": {
+            "title": "Verificar e aceitar o trabalho de código que delego",
+            "hint": "Outra configuração de execução verifica em modo somente leitura; eu avalio conforme o que você pediu."
           }
         },
-        "later": "Resumos da manhã, fechamentos, acompanhamento de PRs e verificações automáticas entram aqui quando ficarem prontos.",
+        "later": "Resumos da manhã, fechamentos e acompanhamento de PRs entram aqui quando ficarem prontos.",
         "team": "Montar uma equipe",
         "teamSuggested": "Equipe sugerida",
         "prefs": "Ajustar preferências",
@@ -9218,6 +9255,52 @@
         "collapse": "Recolher",
         "unavailable": "Isso se muda onde o assistente roda."
       }
+    },
+    "acceptance": {
+      "title": "Aceitação · rodada {round}",
+      "titleMax": "Aceitação · rodada {round} de no máximo {max}",
+      "people": "Feito por {executor} · verificado por {checker}",
+      "peopleUnchecked": "Feito por {executor}",
+      "check": "Verificação:",
+      "verdict": {
+        "pass": "Aprovada",
+        "fail": "Reprovada",
+        "unverified": "Não foi possível verificar"
+      },
+      "unchecked": "Sem verificação independente",
+      "notVerified": "Não verificado",
+      "decision": {
+        "accept": "aceitar",
+        "revise": "devolver",
+        "ask_owner": "perguntar a você"
+      },
+      "assistant": "Assistente: {decision}",
+      "assistantWhy": "Assistente: {decision}, porque: {reason}",
+      "against": "Verificação: {verdict} · Assistente: {decision}, porque: {reason}",
+      "fallback": "O assistente não concluiu: o codeg seguiu a verificação",
+      "owner": "Sua decisão: {decision}",
+      "question": "Pergunta a você: {question}",
+      "usedUp": "{count, plural, one {Verificado # vez} other {Verificado # vezes}} — tantas quanto você permite",
+      "wouldSend": "O que a devolução enviaria",
+      "revise": "Devolver como está",
+      "accept": "Aceitar",
+      "recheck": "Verificar de novo",
+      "openTask": "Abrir tarefa",
+      "accepted": "Aceito",
+      "revised": "Devolvido para alteração",
+      "void": "A árvore de trabalho mudou durante a verificação — esta rodada não vale",
+      "changed": "A árvore de trabalho mudou após a verificação — esta aceitação não vale mais",
+      "changedAfterAccept": "A árvore de trabalho mudou depois da aceitação",
+      "superseded": "Já foi verificado de novo",
+      "stale": "Não se aplica mais — nada foi feito",
+      "merged": "Mesclado {commit}",
+      "delivered": "Entregue, commit de cabeça {head}",
+      "history": "Rodadas anteriores",
+      "historyRevised": "Rodada {round}: devolvido — “{message}”",
+      "historyAccepted": "Rodada {round}: aceito",
+      "historyAsked": "Rodada {round}: perguntado a você",
+      "historyChanged": "Rodada {round}: aceito, depois a árvore de trabalho mudou",
+      "historyOpen": "Rodada {round}: em aberto"
     }
   }
 }

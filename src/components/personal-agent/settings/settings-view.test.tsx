@@ -203,6 +203,30 @@ describe("the settings view", () => {
     )
   })
 
+  it("has automatic acceptance, how work is sent back and its rounds on “Dispatch & automation” (7.5)", async () => {
+    usePersonalAgentUi.getState().openSettings("automation")
+    draw()
+    for (const item of ["auto_accept", "accept_revise", "accept_rounds"]) {
+      expect(document.querySelector(`[data-pa-pref="${item}"]`)).not.toBeNull()
+    }
+    expect(screen.getByText("Automatic acceptance")).toBeInTheDocument()
+    expect(
+      screen.getByText("Sending work back after its check")
+    ).toBeInTheDocument()
+    const rounds = document.querySelector(
+      '[data-pa-pref="accept_rounds"]'
+    ) as HTMLInputElement
+    expect(rounds.value).toBe("3")
+    fireEvent.change(rounds, { target: { value: "2" } })
+    fireEvent.blur(rounds)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.accept_rounds", value: 2 }],
+        null
+      )
+    )
+  })
+
   it("picks an automation level, and warns before overwriting the owner's own", async () => {
     usePersonalAgentUi.getState().openSettings("automation")
     const { unmount } = draw()
@@ -405,6 +429,8 @@ describe("the settings view", () => {
       "morning",
       "level_reminder",
       "level_answered",
+      "level_acceptance",
+      "level_used_up",
     ]) {
       expect(document.querySelector(`[data-pa-pref="${item}"]`)).not.toBeNull()
     }

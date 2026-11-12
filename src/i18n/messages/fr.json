@@ -8222,6 +8222,30 @@
         "level_answered": {
           "title": "Répondu à votre place",
           "hint": "Une question d'une session confiée à laquelle un assistant a répondu à votre place."
+        },
+        "auto_accept": {
+          "title": "Validation automatique",
+          "hint": "Quand un travail de code confié par un assistant est prêt à vérifier, une autre configuration d'exécution le vérifie (en lecture seule) et l'assistant le valide selon ses critères. Désactivée : vous le vérifiez vous-même.",
+          "on": "Activée",
+          "off": "Désactivée"
+        },
+        "accept_revise": {
+          "title": "Renvoi après la vérification",
+          "hint": "Quand l'assistant veut des modifications après la vérification.",
+          "auto": "Renvoyer automatiquement",
+          "ask": "Me demander d'abord (sur la carte de validation)"
+        },
+        "accept_rounds": {
+          "title": "Tours de vérification de validation",
+          "hint": "Après autant de vérifications, le renvoyer encore est votre décision. 0 ne renvoie rien de lui-même."
+        },
+        "level_acceptance": {
+          "title": "Validation",
+          "hint": "Un travail validé par son assistant que vous pouvez fusionner, fusionné, ou dont la validation vous revient."
+        },
+        "level_used_up": {
+          "title": "Tours épuisés, toujours pas bon",
+          "hint": "Un travail renvoyé autant de fois que vous le permettez et toujours pas bon."
         }
       },
       "workdir": {
@@ -8459,7 +8483,11 @@
     "dispatchCard": {
       "continue": "Suite : {title}",
       "notSent": "Non envoyé",
-      "more": "{count} de plus"
+      "more": "{count} de plus",
+      "doneWhen": "Terminé quand",
+      "check": "Vérification de validation",
+      "checkRound": "Vérification de validation · tour {round}",
+      "checkVia": "vérifié avec la configuration d'exécution de {name}"
     },
     "event": {
       "someone": "Un assistant",
@@ -8874,7 +8902,9 @@
       "you": "Besoin de vous : {text}",
       "answerPlain": "Besoin de votre réponse",
       "approvalPlain": "Besoin de votre approbation",
-      "youPlain": "Besoin de vous"
+      "youPlain": "Besoin de vous",
+      "acceptance": "À vous de décider de la validation : {text}",
+      "acceptancePlain": "À vous de décider de la validation"
     },
     "statusLine": {
       "steps": "Étapes de ce tour",
@@ -8944,7 +8974,8 @@
       "failed": "Échouée",
       "paused": "Mise de côté",
       "canceled": "Annulée",
-      "handed_over": "Reprise par vous"
+      "handed_over": "Reprise par vous",
+      "checking": "En vérification"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# fichier} other {# fichiers}}",
@@ -9096,7 +9127,8 @@
         "canceled": "Arrêté",
         "answered": "Répondu pour vous",
         "changed": "Modifié pour vous",
-        "undone": "Modifié puis annulé"
+        "undone": "Modifié puis annulé",
+        "acceptance": "À vous de décider de la validation"
       },
       "session": {
         "permission": "Attend votre approbation",
@@ -9109,7 +9141,8 @@
         "failed": "Échec",
         "preparing": "En préparation",
         "running": "En cours",
-        "merging": "Fusion en cours"
+        "merging": "Fusion en cours",
+        "checking": "En vérification"
       },
       "dispatch": {
         "queued": "En file",
@@ -9205,9 +9238,13 @@
           "presence": {
             "title": "Apprendre tes horaires",
             "hint": "D'après ta présence dans codeg, pour te joindre au bon moment."
+          },
+          "auto_accept": {
+            "title": "Vérifier et valider le travail de code que je confie",
+            "hint": "Une autre configuration d'exécution le vérifie en lecture seule ; je le juge d'après ce que vous avez demandé."
           }
         },
-        "later": "Briefings du matin, bilans, suivi des PR et validations automatiques s'ajouteront ici dès qu'ils seront prêts.",
+        "later": "Briefings du matin, bilans et suivi des PR s'ajouteront ici dès qu'ils seront prêts.",
         "team": "Former une équipe",
         "teamSuggested": "Équipe suggérée",
         "prefs": "Ajuster les préférences",
@@ -9218,6 +9255,52 @@
         "collapse": "Replier",
         "unavailable": "Cela se change là où tourne l'assistant."
       }
+    },
+    "acceptance": {
+      "title": "Validation · tour {round}",
+      "titleMax": "Validation · tour {round} sur {max} au plus",
+      "people": "Fait par {executor} · vérifié par {checker}",
+      "peopleUnchecked": "Fait par {executor}",
+      "check": "Vérification :",
+      "verdict": {
+        "pass": "Réussie",
+        "fail": "Échouée",
+        "unverified": "Impossible à vérifier"
+      },
+      "unchecked": "Non vérifié de façon indépendante",
+      "notVerified": "Non vérifié",
+      "decision": {
+        "accept": "valider",
+        "revise": "renvoyer",
+        "ask_owner": "vous demander"
+      },
+      "assistant": "Assistant : {decision}",
+      "assistantWhy": "Assistant : {decision}, car : {reason}",
+      "against": "Vérification : {verdict} · Assistant : {decision}, car : {reason}",
+      "fallback": "L'assistant n'a pas conclu : codeg a suivi la vérification",
+      "owner": "Votre décision : {decision}",
+      "question": "Il vous demande : {question}",
+      "usedUp": "Vérifié {count} fois — autant que vous le permettez",
+      "wouldSend": "Ce que le renvoi enverrait",
+      "revise": "Renvoyer tel quel",
+      "accept": "Valider",
+      "recheck": "Vérifier à nouveau",
+      "openTask": "Ouvrir la tâche",
+      "accepted": "Validé",
+      "revised": "Renvoyé pour modification",
+      "void": "L'arbre de travail a changé pendant la vérification — ce tour est annulé",
+      "changed": "L'arbre de travail a changé après la vérification — cette validation ne vaut plus",
+      "changedAfterAccept": "L'arbre de travail a changé après la validation",
+      "superseded": "Vérifié à nouveau depuis",
+      "stale": "Ne s'applique plus — rien n'a été fait",
+      "merged": "Fusionné {commit}",
+      "delivered": "Livré, commit de tête {head}",
+      "history": "Tours précédents",
+      "historyRevised": "Tour {round} : renvoyé — « {message} »",
+      "historyAccepted": "Tour {round} : validé",
+      "historyAsked": "Tour {round} : soumis à vous",
+      "historyChanged": "Tour {round} : validé, puis l'arbre de travail a changé",
+      "historyOpen": "Tour {round} : en cours"
     }
   }
 }

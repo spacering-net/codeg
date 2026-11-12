@@ -182,6 +182,7 @@ fn need_phrase(n: &NeedsYou) -> String {
         "loop" => format!("stopped a back-and-forth for the owner: {}", quoted(text)),
         "choice" => format!("asks the owner to choose: {}", quoted(text)),
         "changed" => format!("shows a change for the owner to confirm: {}", quoted(text)),
+        "acceptance" => format!("waits for the owner's call on accepting {}", quoted(text)),
         "input" => format!("handed-out work waits for the owner's input: {text}"),
         _ => format!("waits on the owner: {}", quoted(text)),
     }
@@ -711,7 +712,13 @@ impl PersonalAgentEngine {
         // A task asking for input asks through its session: its line stands
         // for both.
         let mut listed_conversations: HashSet<i32> = HashSet::new();
+        // A task its assistant is accepting is its assistant's, or the
+        // owner's through the acceptance card listed above (7.5).
+        let accepting = super::acceptance::being_accepted(db, &tasks).await;
         for t in tasks.iter().filter(|t| task_needs_owner(t)) {
+            if accepting.contains_key(&t.id) {
+                continue;
+            }
             // A dispatched task asking for input is its assistant's ask above.
             if t.status == WorkTaskStatus::AwaitingInput
                 && t.personal_agent_dispatch_id

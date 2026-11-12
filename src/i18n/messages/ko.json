@@ -8222,6 +8222,30 @@
         "level_answered": {
           "title": "대신 답함",
           "hint": "맡긴 세션의 질문에 어시스턴트가 대신 답했습니다."
+        },
+        "auto_accept": {
+          "title": "자동 검수",
+          "hint": "어시스턴트가 맡긴 코드 변경 작업이 검토 대기가 되면 다른 실행 구성이 읽기 전용으로 확인하고, 어시스턴트가 검수 기준에 따라 결론을 내려요. 끄면 직접 검수해요.",
+          "on": "켬",
+          "off": "끔"
+        },
+        "accept_revise": {
+          "title": "검수 후 되돌려 보내기",
+          "hint": "확인 후 어시스턴트가 수정을 원할 때.",
+          "auto": "자동으로 되돌려 보내기",
+          "ask": "먼저 물어보기 (검수 카드로)"
+        },
+        "accept_rounds": {
+          "title": "검수 확인 최대 차수",
+          "hint": "이만큼 확인한 뒤에도 되돌려 보내야 하면 직접 정해요. 0이면 자동으로 되돌려 보내지 않아요."
+        },
+        "level_acceptance": {
+          "title": "검수",
+          "hint": "맡긴 작업이 검수를 통과해 병합할 수 있거나, 병합됐거나, 결정이 필요할 때."
+        },
+        "level_used_up": {
+          "title": "차수를 다 써도 불통과",
+          "hint": "허용한 횟수만큼 되돌려 보냈는데도 통과하지 못했을 때."
         }
       },
       "workdir": {
@@ -8459,7 +8483,11 @@
     "dispatchCard": {
       "continue": "이어서: {title}",
       "notSent": "보내지 못함",
-      "more": "{count}건 더"
+      "more": "{count}건 더",
+      "doneWhen": "검수 기준",
+      "check": "검수 확인",
+      "checkRound": "검수 확인 · {round}차",
+      "checkVia": "{name}의 실행 구성으로 확인"
     },
     "event": {
       "someone": "어시스턴트",
@@ -8874,7 +8902,9 @@
       "you": "내 확인 필요: {text}",
       "answerPlain": "내 답변 필요",
       "approvalPlain": "내 승인 필요",
-      "youPlain": "내 확인 필요"
+      "youPlain": "내 확인 필요",
+      "acceptance": "검수 결정 필요: {text}",
+      "acceptancePlain": "검수 결정 필요"
     },
     "statusLine": {
       "steps": "이번 턴의 단계",
@@ -8944,7 +8974,8 @@
       "failed": "실패",
       "paused": "보류",
       "canceled": "취소됨",
-      "handed_over": "직접 맡음"
+      "handed_over": "직접 맡음",
+      "checking": "검수 중"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>, 파일 {files}개",
@@ -9096,7 +9127,8 @@
         "canceled": "중지됨",
         "answered": "대신 답함",
         "changed": "대신 변경함",
-        "undone": "변경 후 되돌림"
+        "undone": "변경 후 되돌림",
+        "acceptance": "검수 결정 필요"
       },
       "session": {
         "permission": "승인 대기",
@@ -9109,7 +9141,8 @@
         "failed": "실패",
         "preparing": "준비 중",
         "running": "진행 중",
-        "merging": "병합 중"
+        "merging": "병합 중",
+        "checking": "검수 중"
       },
       "dispatch": {
         "queued": "대기열",
@@ -9205,9 +9238,13 @@
           "presence": {
             "title": "생활 패턴 익히기",
             "hint": "codeg에 있는 시간을 보고 알맞은 때 연락해요."
+          },
+          "auto_accept": {
+            "title": "맡긴 코드 변경 작업을 확인하고 검수하기",
+            "hint": "다른 실행 구성이 읽기 전용으로 확인하고, 요청하신 대로인지 제가 판단해요."
           }
         },
-        "later": "아침 브리핑, 마무리, PR 지켜보기, 자동 검수도 준비되면 여기에 추가돼요.",
+        "later": "아침 브리핑, 마무리, PR 지켜보기도 준비되면 여기에 추가돼요.",
         "team": "팀 꾸리기",
         "teamSuggested": "팀을 제안함",
         "prefs": "환경설정 조정",
@@ -9218,6 +9255,52 @@
         "collapse": "접기",
         "unavailable": "어시스턴트가 실행되는 쪽에서 바꿀 수 있어요."
       }
+    },
+    "acceptance": {
+      "title": "검수 · {round}차",
+      "titleMax": "검수 · {round}차 (최대 {max}차)",
+      "people": "{executor} 작업 · {checker} 확인",
+      "peopleUnchecked": "{executor} 작업",
+      "check": "확인:",
+      "verdict": {
+        "pass": "통과",
+        "fail": "불통과",
+        "unverified": "확인 불가"
+      },
+      "unchecked": "독립 확인 없음",
+      "notVerified": "검증 안 됨",
+      "decision": {
+        "accept": "통과",
+        "revise": "되돌려 보내기",
+        "ask_owner": "물어보기"
+      },
+      "assistant": "어시스턴트: {decision}",
+      "assistantWhy": "어시스턴트: {decision}, 이유: {reason}",
+      "against": "확인: {verdict} · 어시스턴트: {decision}, 이유: {reason}",
+      "fallback": "어시스턴트가 결론을 내지 않아 확인 결과대로 처리했어요",
+      "owner": "내 결정: {decision}",
+      "question": "질문: {question}",
+      "usedUp": "{count}차까지 확인했어요. 허용한 횟수에 도달했어요",
+      "wouldSend": "되돌려 보낼 때 보낼 수정 의견",
+      "revise": "카드의 의견대로 되돌려 보내기",
+      "accept": "통과로 처리",
+      "recheck": "다시 확인",
+      "openTask": "작업 열기",
+      "accepted": "통과됨",
+      "revised": "되돌려 보냄",
+      "void": "확인하는 동안 워크트리가 바뀌어 이번 차수는 무효예요",
+      "changed": "확인 후 워크트리가 바뀌어 검수가 무효가 되었어요",
+      "changedAfterAccept": "검수 후 워크트리가 바뀌었어요",
+      "superseded": "다시 검수했어요",
+      "stale": "무효가 되어 실행하지 않았어요",
+      "merged": "병합됨 {commit}",
+      "delivered": "전달됨, 헤드 커밋 {head}",
+      "history": "이전 차수",
+      "historyRevised": "{round}차: 되돌려 보냄 “{message}”",
+      "historyAccepted": "{round}차: 통과",
+      "historyAsked": "{round}차: 물어봄",
+      "historyChanged": "{round}차: 통과 후 워크트리가 바뀜",
+      "historyOpen": "{round}차: 진행 중"
     }
   }
 }

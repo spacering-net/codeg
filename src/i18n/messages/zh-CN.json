@@ -8221,6 +8221,30 @@
         "level_answered": {
           "title": "替你回答了",
           "hint": "派出的会话里的提问，助手替你回答了。"
+        },
+        "auto_accept": {
+          "title": "自动验收",
+          "hint": "助手派出的改代码的活进入待验收时，派另一个执行配置只读检查，助手对照验收标准下结论。关掉就回到你自己验收。",
+          "on": "开",
+          "off": "关"
+        },
+        "accept_revise": {
+          "title": "验收后退回",
+          "hint": "检查之后助手要退回修改时。",
+          "auto": "自动退回",
+          "ask": "先问我（出验收卡）"
+        },
+        "accept_rounds": {
+          "title": "验收检查最多几轮",
+          "hint": "检查到这么多轮还要退回，就交给你决定。0 是不自动退回。"
+        },
+        "level_acceptance": {
+          "title": "验收",
+          "hint": "派出的活验收通过可以合并、已合并，或要你定。"
+        },
+        "level_used_up": {
+          "title": "用完轮次仍没过",
+          "hint": "退回到你允许的轮数还没过。"
         }
       },
       "workdir": {
@@ -8459,7 +8483,11 @@
     "dispatchCard": {
       "continue": "继续：{title}",
       "notSent": "没发出去",
-      "more": "还有 {count} 件"
+      "more": "还有 {count} 件",
+      "doneWhen": "验收标准",
+      "check": "验收检查",
+      "checkRound": "验收检查 · 第 {round} 轮",
+      "checkVia": "用 {name} 的执行配置检查"
     },
     "event": {
       "someone": "岗位助手",
@@ -8874,7 +8902,9 @@
       "you": "需要你处理：{text}",
       "answerPlain": "需要你回答",
       "approvalPlain": "需要你批准",
-      "youPlain": "需要你处理"
+      "youPlain": "需要你处理",
+      "acceptance": "验收要你定：{text}",
+      "acceptancePlain": "验收要你定"
     },
     "statusLine": {
       "steps": "这一回合的步骤",
@@ -8944,7 +8974,8 @@
       "failed": "失败",
       "paused": "暂停",
       "canceled": "已取消",
-      "handed_over": "已接手"
+      "handed_over": "已接手",
+      "checking": "检查中"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>，{files} 个文件",
@@ -9096,7 +9127,8 @@
         "canceled": "已停止",
         "answered": "替你答了",
         "changed": "替你改了",
-        "undone": "改过，已撤销"
+        "undone": "改过，已撤销",
+        "acceptance": "验收要你定"
       },
       "session": {
         "permission": "等你批准",
@@ -9109,7 +9141,8 @@
         "failed": "失败",
         "preparing": "准备中",
         "running": "进行中",
-        "merging": "合并中"
+        "merging": "合并中",
+        "checking": "检查中"
       },
       "dispatch": {
         "queued": "排队中",
@@ -9205,9 +9238,13 @@
           "presence": {
             "title": "学你的作息",
             "hint": "按你在 codeg 里的时间，在合适的时候找你。"
+          },
+          "auto_accept": {
+            "title": "检查并验收派出去的改代码的活",
+            "hint": "派另一个执行配置只读检查，我对照你的要求下结论。"
           }
         },
-        "later": "晨报、收尾、PR 看护和自动验收，做好后也会出现在这里。",
+        "later": "晨报、收尾和 PR 看护，做好后也会出现在这里。",
         "team": "组个团队",
         "teamSuggested": "已建议团队",
         "prefs": "调整偏好",
@@ -9218,6 +9255,52 @@
         "collapse": "收起",
         "unavailable": "要在助手运行的那一端改。"
       }
+    },
+    "acceptance": {
+      "title": "验收 · 第 {round} 轮",
+      "titleMax": "验收 · 第 {round} 轮（最多 {max} 轮）",
+      "people": "{executor} 执行 · {checker} 检查",
+      "peopleUnchecked": "{executor} 执行",
+      "check": "检查：",
+      "verdict": {
+        "pass": "通过",
+        "fail": "不通过",
+        "unverified": "未能验证"
+      },
+      "unchecked": "未经独立检查",
+      "notVerified": "未经验证",
+      "decision": {
+        "accept": "通过",
+        "revise": "退回修改",
+        "ask_owner": "问你"
+      },
+      "assistant": "助手：{decision}",
+      "assistantWhy": "助手：{decision}，理由：{reason}",
+      "against": "检查：{verdict} · 助手：{decision}，理由：{reason}",
+      "fallback": "助手没给结论，按检查结论处理",
+      "owner": "你的决定：{decision}",
+      "question": "问你：{question}",
+      "usedUp": "已经检查了 {count} 轮，到了你允许的轮数",
+      "wouldSend": "退回时会发出的修改意见",
+      "revise": "按卡上的意见退回",
+      "accept": "算通过",
+      "recheck": "重新检查",
+      "openTask": "打开任务",
+      "accepted": "已通过",
+      "revised": "已退回修改",
+      "void": "检查期间工作树被改动，这一轮作废",
+      "changed": "工作树在检查后被改动，验收已失效",
+      "changedAfterAccept": "验收之后工作树变了",
+      "superseded": "已重新检查",
+      "stale": "已失效，没有执行",
+      "merged": "已合并 {commit}",
+      "delivered": "已交付，头提交 {head}",
+      "history": "之前几轮",
+      "historyRevised": "第 {round} 轮：退回「{message}」",
+      "historyAccepted": "第 {round} 轮：通过",
+      "historyAsked": "第 {round} 轮：问你",
+      "historyChanged": "第 {round} 轮：通过后工作树变了",
+      "historyOpen": "第 {round} 轮：进行中"
     }
   }
 }

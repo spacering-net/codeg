@@ -282,6 +282,7 @@ fn request(mode: DispatchMode, assistant_id: i32, project_id: Option<i32>) -> Di
         project_id,
         report: false,
         on_done: Some("remind the owner".into()),
+        done_when: None,
     }
 }
 
@@ -368,6 +369,7 @@ async fn the_owner_writing_in_a_dispatched_conversation_takes_it_over() {
             origin_batch_id: None,
             on_done: None,
             lineage: Default::default(),
+            done_when: None,
         },
     )
     .await
@@ -512,6 +514,7 @@ async fn session_dispatch(engine: &PersonalAgentEngine, state: DispatchState, co
             origin_batch_id: None,
             on_done: None,
             lineage: Default::default(),
+            done_when: None,
         },
     )
     .await
@@ -589,6 +592,7 @@ async fn a_put_back_event_lists_what_the_interrupted_turn_dispatched() {
             origin_batch_id: Some(batch.id),
             on_done: None,
             lineage: Default::default(),
+            done_when: None,
         },
     )
     .await
@@ -2004,6 +2008,7 @@ async fn live_session_dispatch(
             origin_batch_id: None,
             on_done: None,
             lineage: Default::default(),
+            done_when: None,
         },
     )
     .await
@@ -2789,6 +2794,7 @@ async fn a_task_follow_up_is_settled_by_the_claim_record() {
             origin_batch_id: None,
             on_done: None,
             lineage: Default::default(),
+            done_when: None,
         },
     )
     .await
@@ -2891,6 +2897,7 @@ async fn a_proposal_card_runs_exactly_what_it_shows() {
             project_id: None,
             report: false,
             on_done: None,
+            done_when: None,
         })
         .await
         .unwrap();
@@ -2940,6 +2947,7 @@ async fn a_card_cut_off_mid_run_is_settled_by_its_entry_after_a_restart() {
             project_id: None,
             report: false,
             on_done: None,
+            done_when: None,
         })
         .await
         .unwrap();
@@ -3293,6 +3301,7 @@ async fn two_workers_keep_their_records_apart() {
             origin_batch_id: None,
             on_done: None,
             lineage: Default::default(),
+            done_when: None,
         },
     )
     .await
@@ -4893,6 +4902,7 @@ async fn follow_ups_and_messages_wait_for_the_owner_when_they_asked() {
             project_id: None,
             report: false,
             on_done: None,
+            done_when: None,
         })
         .await
         .unwrap();
@@ -5061,6 +5071,7 @@ async fn the_executor_view_shows_what_each_runs_and_what_keeps_failing() {
                 project_id: None,
                 report: false,
                 on_done: None,
+                done_when: None,
             })
             .await
             .unwrap();
@@ -5580,6 +5591,7 @@ async fn a_work_assistants_dispatch_runs_on_its_own_executor_and_says_who_sent_i
             origin_batch_id: None,
             on_done: None,
             lineage: Default::default(),
+            done_when: None,
         },
     )
     .await
@@ -6161,6 +6173,7 @@ async fn task_dispatch(
             origin_batch_id: None,
             on_done: None,
             lineage: Default::default(),
+            done_when: None,
         },
     )
     .await
@@ -6190,6 +6203,8 @@ async fn the_overview_says_how_every_assistant_is_and_what_waits_on_the_owner() 
     use sea_orm::Set;
     let (host, w, tmp) = hosted().await;
     let engine = host.primary();
+    // Acceptance off (7.5): a task in review waits for the owner, as in phase 1.
+    set_pref(&engine, "auto_accept", serde_json::json!("off")).await;
     let conn = &engine.db.conn;
     let coder = role_assistant(&engine, "Coder", true).await;
     let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("my-app").to_string_lossy()).await;
@@ -6324,6 +6339,8 @@ async fn the_overview_says_how_every_assistant_is_and_what_waits_on_the_owner() 
 async fn code_work_is_done_when_merged_and_a_pull_request_waits_for_its_merge() {
     use sea_orm::Set;
     let (engine, tmp) = configured().await;
+    // Acceptance off (7.5): a task in review waits for the owner, as in phase 1.
+    set_pref(&engine, "auto_accept", serde_json::json!("off")).await;
     let coder = role_assistant(&engine, "Coder", true).await;
     let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("repo").to_string_lossy()).await;
     let conn = &engine.db.conn;
@@ -9146,6 +9163,8 @@ async fn today_lists_every_session_and_board_task_waiting_on_the_owner_once() {
     use sea_orm::Set;
     let (host, w, tmp) = hosted().await;
     let engine = host.primary();
+    // Acceptance off (7.5): a task in review waits for the owner, as in phase 1.
+    set_pref(&engine, "auto_accept", serde_json::json!("off")).await;
     let me = engine.bot().await;
     let conn = &engine.db.conn;
     let coder = role_assistant(&engine, "Coder", true).await;
@@ -9727,4 +9746,518 @@ async fn a_team_cut_off_halfway_is_finished_by_answering_again_and_undone_whole(
     assert_eq!(left.len(), 2);
     assert!(left.contains(&own.bot.id), "the owner's own stays");
     assert_eq!(executor(&engine, coder).await.id, coder, "with its executor config");
+}
+
+// ── acceptance (7.5) ─────────────────────────────────────────────────────────
+
+/// A git checkout at `dir`: one commit, and `a.txt` changed since — the
+/// worktree of a task that changed code.
+fn git_checkout(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    git_in(dir, &["init", "-q"]);
+    git_in(dir, &["config", "core.autocrlf", "false"]);
+    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-q", "-m", "base"]);
+    std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+}
+
+fn git_in(dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// Code work of `engine`'s ready for review: a task whose worktree is a
+/// real checkout, its dispatch with acceptance criteria, an executor
+/// (`Coder`) and another executor config to check it (`Checker`). The
+/// conversation slots are taken, so the check codeg sends out stays queued
+/// and a test finishes it itself.
+struct Work {
+    d: crate::db::entities::personal_agent_dispatch::Model,
+    task: work_task_entity::Model,
+    wt: std::path::PathBuf,
+    checker: i32,
+}
+
+async fn work_in_review(engine: &Arc<PersonalAgentEngine>, tmp: &tempfile::TempDir) -> Work {
+    use sea_orm::{ActiveModelTrait, Set};
+    let coder = role_assistant(engine, "Coder", true).await;
+    let checker = role_assistant(engine, "Checker", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let wt = tmp.path().join("app-task");
+    git_checkout(&wt);
+    let wt_folder = crate::db::test_helpers::seed_folder(&engine.db, &wt.to_string_lossy()).await;
+    let task = board_task(engine, project, "Fix cold start", WorkTaskStatus::Review, |t| {
+        t.worktree_folder_id = Set(Some(wt_folder));
+        t.files_changed = Set(Some(1));
+        t.additions = Set(Some(1));
+        t.deletions = Set(Some(1));
+        t.settled_at = Set(Some(chrono::Utc::now()));
+        t.result_summary = Set(Some("Fixed the blank screen.".into()));
+    })
+    .await;
+    let d = task_dispatch(engine, coder, project, task.id, "Fix cold start", DispatchState::Review).await;
+    let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = d.into();
+    am.done_when = Set(Some("1. no blank screen on a cold start\n2. the tests pass".into()));
+    let d = am.update(&engine.db.conn).await.unwrap();
+    for i in 0..3 {
+        let busy = svc::create_dispatch(
+            &engine.db.conn,
+            NewDispatch {
+                bot_id: engine.bot().await,
+                mode: DispatchMode::Chat,
+                executor_assistant_id: coder,
+                executor_snapshot_json: "{}".into(),
+                folder_id: None,
+                deliverable: None,
+                title: format!("busy {i}"),
+                prompt: "busy".into(),
+                origin_batch_id: None,
+                on_done: None,
+                lineage: Default::default(),
+                done_when: None,
+            },
+        )
+        .await
+        .unwrap();
+        svc::update_dispatch(
+            &engine.db.conn,
+            busy.id,
+            None,
+            DispatchWrite {
+                state: Some(DispatchState::Running),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let task = crate::db::service::work_task_service::get_model(&engine.db.conn, task.id).await.unwrap();
+    Work { d, task, wt, checker }
+}
+
+async fn rounds_of(engine: &PersonalAgentEngine, d: i32) -> Vec<crate::db::entities::personal_agent_verification::Model> {
+    crate::db::service::personal_agent_verification_service::rounds_of(&engine.db.conn, d).await.unwrap()
+}
+
+/// The check codeg sent out ends with `text` as its last message.
+async fn finish_check(engine: &Arc<PersonalAgentEngine>, check: i32, text: &str) {
+    engine.state.lock().await.check_texts.insert(check, text.to_string());
+    let d = svc::update_dispatch(
+        &engine.db.conn,
+        check,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Completed),
+            result_excerpt: Some(Some(super::dispatch::excerpt_of(text))),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    engine.record_progress(&d, Some(text.to_string()), None, "turn").await;
+}
+
+/// Bump the task's run: it was sent back, retried or merged meanwhile.
+async fn bump_run(engine: &PersonalAgentEngine, task: i32) {
+    use sea_orm::{ActiveModelTrait, Set};
+    let t = crate::db::service::work_task_service::get_model(&engine.db.conn, task).await.unwrap();
+    let seq = t.run_seq;
+    let mut am: work_task_entity::ActiveModel = t.into();
+    am.run_seq = Set(seq + 1);
+    am.update(&engine.db.conn).await.unwrap();
+}
+
+#[tokio::test]
+async fn code_work_is_checked_by_another_executor_and_its_assistant_concludes() {
+    use crate::db::entities::personal_agent_verification::{CheckVerdict, VerificationState};
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let bot = engine.bot().await;
+    let conn = &engine.db.conn;
+    svc::create_item(conn, bot, ItemKind::Dispatch, Some(w.d.id), ItemStatus::Open, None, "work".into(), None, None)
+        .await
+        .unwrap();
+
+    // Ready for review: the card says it is being checked, the assistant is
+    // not woken for it, and nobody waits on the owner.
+    engine.record_progress(&w.d, None, None, "task").await;
+    let rows = svc::rows_since(conn, bot, chrono::Utc::now() - chrono::Duration::hours(1)).await.unwrap();
+    let card = rows.iter().rfind(|r| r.kind == TimelineKind::Result && r.dispatch_id == Some(w.d.id)).unwrap();
+    assert_eq!(data_of(card)["ladder"], "checking");
+    let ev = svc::pending_events(conn, bot).await.unwrap();
+    let review = ev.iter().find(|e| e.summary.contains("check it (read-only)")).unwrap();
+    assert!(!review.wake, "nothing to read until the check is back");
+    let item = svc::item_of_dispatch(conn, w.d.id).await.unwrap().unwrap();
+    assert_eq!((item.status, item.waits_for), (ItemStatus::Open, Some(WaitsFor::External)));
+
+    // codeg sends the check out: another executor config, in the task's
+    // worktree, read only, held to the criteria — bound to this version.
+    engine.acceptance_tick().await;
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!(r.len(), 1);
+    assert_eq!((r[0].round, r[0].state, r[0].run_seq), (1, VerificationState::Checking, w.task.run_seq));
+    let fp = crate::work_task::git::worktree_fingerprint(&w.wt.to_string_lossy()).await.unwrap();
+    assert_eq!(r[0].fingerprint, fp);
+    let check = svc::get_dispatch(conn, r[0].check_dispatch_id.unwrap()).await.unwrap().unwrap();
+    assert_eq!((check.mode, check.executor_assistant_id, check.bot_id), (DispatchMode::Session, w.checker, Some(bot)));
+    assert_eq!(check.folder_id, w.task.worktree_folder_id);
+    assert!(check.prompt.contains("READ-ONLY") && check.prompt.contains("no blank screen on a cold start"), "{}", check.prompt);
+    assert!(check.prompt.contains("a.txt"), "the changed files: {}", check.prompt);
+    assert!(svc::item_of_dispatch(conn, check.id).await.unwrap().is_none(), "no matter of its own");
+    // A second tick opens nothing more.
+    engine.acceptance_tick().await;
+    assert_eq!(rounds_of(&engine, w.d.id).await.len(), 1);
+    let info = crate::commands::personal_agent::personal_agent_dispatches_core(&engine.db, Some(bot), None, None, Some(vec![w.d.id, check.id]))
+        .await
+        .unwrap();
+    let mine = info.iter().find(|i| i.id == w.d.id).unwrap();
+    assert_eq!(mine.ladder, Ladder::Checking);
+    assert_eq!(mine.done_when.as_deref(), Some("1. no blank screen on a cold start\n2. the tests pass"));
+    assert_eq!(mine.acceptance.as_ref().map(|a| a.round), Some(1));
+    let theirs = info.iter().find(|i| i.id == check.id).unwrap();
+    assert_eq!((theirs.check_for, theirs.check_round), (Some(w.d.id), Some(1)));
+
+    // The check fails it: the assistant is woken with everything to decide on.
+    let long_preamble = "I read everything. ".repeat(200);
+    finish_check(&engine, check.id, &format!("{long_preamble}\nVERDICT: FAIL\n- evidence: a.txt:1 still says two")).await;
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!((r[0].state, r[0].check_verdict), (VerificationState::Deciding, Some(CheckVerdict::Fail)));
+    assert!(r[0].check_evidence.as_deref().unwrap().contains("a.txt:1"), "the verdict past the excerpt is read");
+    let ev = svc::pending_events(conn, bot).await.unwrap();
+    let accept = ev.iter().find(|e| e.kind == super::acceptance::ACCEPT_EVENT).unwrap();
+    assert!(accept.wake);
+    let block = engine.acceptance_block(accept).await;
+    assert!(block.starts_with("<codeg-acceptance"), "{block}");
+    for want in ["VERDICT FAIL", "a.txt:1", "no blank screen", "Fixed the blank screen.", "round 1 of 3", "acceptance_decide"] {
+        assert!(block.contains(want), "{want}: {block}");
+    }
+
+    // Only the assistant that dispatched it decides, with what it needs.
+    let out = call(&engine, "acceptance_decide", json!({ "dispatch_id": w.d.id, "decision": "revise" })).await;
+    assert!(!out.ok && out.text.contains("message"), "{}", out.text);
+    let out = call(&engine, "acceptance_decide", json!({ "dispatch_id": w.d.id, "decision": "accept" })).await;
+    assert!(!out.ok && out.text.contains("reason"), "against the check takes a reason: {}", out.text);
+    // It accepts, disagreeing with the check: the card shows both.
+    let out = call(
+        &engine,
+        "acceptance_decide",
+        json!({ "dispatch_id": w.d.id, "decision": "accept", "reason": "a.txt is meant to say two." }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!(r[0].state, VerificationState::Accepted);
+    let card = notice_rows(&engine).await.into_iter().rfind(|n| data_of(n)["notice"] == "acceptance").unwrap();
+    let data = data_of(&card);
+    assert_eq!((data["verdict"].as_str(), data["decision"].as_str()), (Some("fail"), Some("accept")));
+    assert_eq!(data["reason"], "a.txt is meant to say two.");
+    assert_eq!(data["checker"], "Checker");
+    // Concluded once: again is refused, and nothing changes.
+    let again = call(&engine, "acceptance_decide", json!({ "dispatch_id": w.d.id, "decision": "accept", "reason": "x" })).await;
+    assert!(!again.ok, "{}", again.text);
+    // Accepted: no longer held from the board's merge, and its version is
+    // the one the gate lets through.
+    let task = crate::db::service::work_task_service::get_model(conn, w.task.id).await.unwrap();
+    assert!(super::acceptance::merge_holds(&engine.db, std::slice::from_ref(&task)).await.is_empty());
+    super::acceptance::merge_gate(&engine.db, &task, &w.wt.to_string_lossy()).await.unwrap();
+    let info = crate::commands::personal_agent::personal_agent_dispatches_core(&engine.db, Some(bot), None, None, Some(vec![w.d.id]))
+        .await
+        .unwrap();
+    assert_eq!(info[0].ladder, Ladder::Mergeable);
+}
+
+#[tokio::test]
+async fn a_conclusion_lands_only_on_the_version_it_is_about() {
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let conn = &engine.db.conn;
+    engine.acceptance_tick().await;
+    let check = rounds_of(&engine, w.d.id).await[0].check_dispatch_id.unwrap();
+
+    // The worktree changes while it is checked — a file never added: void.
+    std::fs::write(w.wt.join("new.txt"), "x").unwrap();
+    finish_check(&engine, check, "VERDICT: PASS\n- evidence: all good").await;
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!(r[0].state, VerificationState::Void);
+    let card = notice_rows(&engine).await.into_iter().rfind(|n| data_of(n)["notice"] == "acceptance").unwrap();
+    assert_eq!(data_of(&card)["state"], "changed");
+    assert!(svc::pending_events(conn, engine.bot().await).await.unwrap().iter().all(|e| e.kind != super::acceptance::ACCEPT_EVENT));
+    // Not checked again on its own; the owner asks for it on the card.
+    engine.acceptance_tick().await;
+    assert_eq!(rounds_of(&engine, w.d.id).await.len(), 1);
+    let notice = svc::get_notice(conn, r[0].notice_id.unwrap()).await.unwrap().unwrap();
+    engine.act_on_notice(notice.id, "recheck").await.unwrap();
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!(r.len(), 2);
+    assert_eq!((r[1].round, r[1].state), (1, VerificationState::Checking), "a void round does not count");
+    // The void round's card asks nothing more: it was checked again.
+    let old = notice_rows(&engine).await.into_iter().find(|n| data_of(n)["round_id"] == r[0].id).unwrap();
+    assert_eq!((data_of(&old)["state"].as_str(), data_of(&old)["superseded"].as_bool()), (Some("acted"), Some(true)));
+    assert_eq!(r[1].fingerprint, crate::work_task::git::worktree_fingerprint(&w.wt.to_string_lossy()).await.unwrap());
+
+    // Checked; then the task moves on before the conclusion: refused.
+    finish_check(&engine, r[1].check_dispatch_id.unwrap(), "VERDICT: PASS").await;
+    assert_eq!(rounds_of(&engine, w.d.id).await[1].state, VerificationState::Deciding);
+    bump_run(&engine, w.task.id).await;
+    let out = call(&engine, "acceptance_decide", json!({ "dispatch_id": w.d.id, "decision": "accept" })).await;
+    assert!(!out.ok && out.text.contains("no longer applies"), "{}", out.text);
+    assert_eq!(rounds_of(&engine, w.d.id).await[1].state, VerificationState::Stale);
+}
+
+#[tokio::test]
+async fn work_changed_after_its_acceptance_is_not_merged_and_is_checked_again() {
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let conn = &engine.db.conn;
+    engine.acceptance_tick().await;
+    let task = crate::db::service::work_task_service::get_model(conn, w.task.id).await.unwrap();
+    // Not accepted yet: held, and the gate says it waits (no failure).
+    assert!(super::acceptance::merge_holds(&engine.db, std::slice::from_ref(&task)).await.contains(&task.id));
+    let held = super::acceptance::merge_gate(&engine.db, &task, &w.wt.to_string_lossy()).await.unwrap_err();
+    assert!(held.contains(super::acceptance::MERGE_HOLD), "{held}");
+    let check = rounds_of(&engine, w.d.id).await[0].check_dispatch_id.unwrap();
+    finish_check(&engine, check, "VERDICT: PASS").await;
+    let out = call(&engine, "acceptance_decide", json!({ "dispatch_id": w.d.id, "decision": "accept" })).await;
+    assert!(out.ok, "{}", out.text);
+
+    // Someone edits the worktree before the board merges: not merged, the
+    // card says the worktree changed and offers to check it again.
+    std::fs::write(w.wt.join("a.txt"), "three\n").unwrap();
+    let err = super::acceptance::merge_gate(&engine.db, &task, &w.wt.to_string_lossy()).await.unwrap_err();
+    assert!(err.contains("changed after it was accepted"), "{err}");
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!(r[0].state, VerificationState::Changed);
+    assert!(super::acceptance::merge_holds(&engine.db, std::slice::from_ref(&task)).await.contains(&task.id));
+    // The host hands the change to the round's engine (none runs here).
+    engine.round_changed(&r[0]).await;
+    let notice = svc::get_notice(conn, r[0].notice_id.unwrap()).await.unwrap().unwrap();
+    assert_eq!(notice.state, crate::db::entities::personal_agent_notice::NoticeState::Open);
+    // A delivery of the changed version is refused too.
+    assert!(super::acceptance::delivery_gate(&engine.db, &task, &w.wt.to_string_lossy()).await.unwrap().is_none(), "nothing accepted now");
+    engine.act_on_notice(notice.id, "recheck").await.unwrap();
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!((r.len(), r[1].round, r[1].state), (2, 2, VerificationState::Checking));
+}
+
+#[tokio::test]
+async fn the_version_accepted_is_the_one_delivered_and_merged() {
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let conn = &engine.db.conn;
+    engine.acceptance_tick().await;
+    let check = rounds_of(&engine, w.d.id).await[0].check_dispatch_id.unwrap();
+    finish_check(&engine, check, "VERDICT: PASS").await;
+    assert!(call(&engine, "acceptance_decide", json!({ "dispatch_id": w.d.id, "decision": "accept" })).await.ok);
+    let task = crate::db::service::work_task_service::get_model(conn, w.task.id).await.unwrap();
+    let round = super::acceptance::delivery_gate(&engine.db, &task, &w.wt.to_string_lossy()).await.unwrap().unwrap();
+    super::acceptance::delivered(&engine.db, round, "abc123").await;
+    // Delivered and kept in review: the same version keeps its acceptance —
+    // nothing is checked again.
+    bump_run(&engine, w.task.id).await;
+    engine.acceptance_tick().await;
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!(r.len(), 1);
+    assert_eq!((r[0].state, r[0].delivered_head.as_deref()), (VerificationState::Accepted, Some("abc123")));
+    assert_eq!(r[0].run_seq, w.task.run_seq + 1, "bound to the run it is now");
+    // Merged: the merge commit goes on the round.
+    let t = crate::db::service::work_task_service::get_model(conn, w.task.id).await.unwrap();
+    let mut am: work_task_entity::ActiveModel = t.into();
+    am.status = Set(WorkTaskStatus::Done);
+    am.merge_commit = Set(Some("def456".into()));
+    am.completion_kind = Set(Some("merged".into()));
+    am.update(conn).await.unwrap();
+    let d = svc::update_dispatch(conn, w.d.id, None, DispatchWrite { state: Some(DispatchState::Completed), ..Default::default() })
+        .await
+        .unwrap()
+        .unwrap();
+    engine.record_progress(&d, None, None, "task").await;
+    assert_eq!(rounds_of(&engine, w.d.id).await[0].merge_commit.as_deref(), Some("def456"));
+}
+
+#[tokio::test]
+async fn without_a_conclusion_codeg_goes_by_the_check_and_rounds_run_out_to_the_owner() {
+    use crate::db::entities::personal_agent_verification::{AcceptDecision, DecidedBy, VerificationState};
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    engine.acceptance_tick().await;
+    let check = rounds_of(&engine, w.d.id).await[0].check_dispatch_id.unwrap();
+    finish_check(&engine, check, "VERDICT: FAIL\n- evidence: the tests fail").await;
+    let id = rounds_of(&engine, w.d.id).await[0].id;
+    // The owner sees changes first: the check's words go on the card, not
+    // back to the executor.
+    set_pref(&engine, "accept_revise", json!("ask")).await;
+    // Its event still waits for a delivery: nothing yet.
+    engine.acceptance_tick().await;
+    assert_eq!(rounds_of(&engine, w.d.id).await[0].state, VerificationState::Deciding);
+    // A delivery carried it and its turn ended without a conclusion (or the
+    // process restarted after): the records alone say so.
+    let ev = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    let ev = ev.iter().find(|e| e.kind == super::acceptance::ACCEPT_EVENT).unwrap();
+    let seg = svc::open_segment(&engine.db.conn, engine.bot().await).await.unwrap();
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg.map(|s| s.id).unwrap_or(1), BatchKind::Delivery, None)
+        .await
+        .unwrap();
+    svc::mark_events_delivered(&engine.db.conn, &[ev.id], batch.id).await.unwrap();
+    engine.acceptance_tick().await;
+    assert_eq!(rounds_of(&engine, w.d.id).await[0].state, VerificationState::Deciding, "carried, not settled");
+    svc::finish_batch_events(&engine.db.conn, batch.id).await.unwrap();
+    assert_eq!(id, rounds_of(&engine, w.d.id).await[0].id);
+    engine.acceptance_tick().await;
+    let r = &rounds_of(&engine, w.d.id).await[0];
+    assert_eq!((r.state, r.decided_by), (VerificationState::Asked, Some(DecidedBy::Fallback)));
+    assert!(r.message.as_deref().unwrap().contains("the tests fail"));
+    let card = svc::get_notice(&engine.db.conn, r.notice_id.unwrap()).await.unwrap().unwrap();
+    assert_eq!(card.state, crate::db::entities::personal_agent_notice::NoticeState::Open);
+
+    // Out of rounds: one allowed, and the assistant would send it back again
+    // — the owner's call instead.
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    set_pref(&engine, "accept_rounds", json!(1)).await;
+    engine.acceptance_tick().await;
+    let check = rounds_of(&engine, w.d.id).await[0].check_dispatch_id.unwrap();
+    finish_check(&engine, check, "VERDICT: FAIL").await;
+    let out = call(&engine, "acceptance_decide", json!({ "dispatch_id": w.d.id, "decision": "revise", "message": "Fix the tests." })).await;
+    assert!(out.ok && out.text.contains("as many as"), "{}", out.text);
+    let r = &rounds_of(&engine, w.d.id).await[0];
+    assert_eq!((r.state, r.decision), (VerificationState::Asked, Some(AcceptDecision::AskOwner)));
+    assert_eq!(r.message.as_deref(), Some("Fix the tests."));
+
+    // A pass without a conclusion is accepted by codeg.
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    engine.acceptance_tick().await;
+    let check = rounds_of(&engine, w.d.id).await[0].check_dispatch_id.unwrap();
+    finish_check(&engine, check, "VERDICT: PASS").await;
+    engine.conclude_all_undecided().await;
+    let r = &rounds_of(&engine, w.d.id).await[0];
+    assert_eq!((r.state, r.decided_by), (VerificationState::Accepted, Some(DecidedBy::Fallback)));
+}
+
+#[tokio::test]
+async fn the_check_goes_to_the_divisions_pick_never_to_the_executor() {
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let coder = w.d.executor_assistant_id;
+    let all = crate::db::service::assistant_service::list_all(&engine.db.conn).await.unwrap();
+    let uid = |id: i32| all.iter().find(|a| a.id == id).unwrap().uid.clone();
+    // Auto: someone else.
+    assert_eq!(engine.pick_checker(&w.d, &w.task).await.unwrap().id, w.checker);
+    // The division names the executor itself: skipped, auto instead.
+    engine
+        .apply_settings(&[change("team.division.check", json!(format!("assistant:{}", uid(coder))))])
+        .await
+        .unwrap();
+    assert_eq!(engine.pick_checker(&w.d, &w.task).await.unwrap().id, w.checker);
+    // A third one named: it.
+    let third = role_assistant(&engine, "Reviewer", true).await;
+    engine
+        .apply_settings(&[change("team.division.check", json!(format!("assistant:{}", uid_of(&engine, third).await)))])
+        .await
+        .unwrap();
+    assert_eq!(engine.pick_checker(&w.d, &w.task).await.unwrap().id, third);
+    // One that takes no work session is not picked.
+    engine
+        .apply_settings(&[change(&format!("team.usage.{}", uid_of(&engine, third).await), json!({ "modes": ["task"] }))])
+        .await
+        .unwrap();
+    assert_eq!(engine.pick_checker(&w.d, &w.task).await.unwrap().id, w.checker);
+    // Nobody but the executor: no check; the assistant decides on what there is.
+    for id in [w.checker, third] {
+        crate::db::service::assistant_service::soft_delete(&engine.db.conn, id).await.unwrap();
+    }
+    assert!(engine.pick_checker(&w.d, &w.task).await.is_none());
+    engine.acceptance_tick().await;
+    let r = &rounds_of(&engine, w.d.id).await[0];
+    assert_eq!((r.state, r.unchecked, r.check_dispatch_id), (VerificationState::Deciding, true, None));
+    let ev = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    let e = ev.iter().find(|e| e.kind == super::acceptance::ACCEPT_EVENT).unwrap();
+    assert!(engine.acceptance_block(e).await.contains("Nobody else could check it"));
+}
+
+async fn uid_of(engine: &PersonalAgentEngine, id: i32) -> String {
+    crate::db::service::assistant_service::list_all(&engine.db.conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|a| a.id == id)
+        .unwrap()
+        .uid
+}
+
+#[tokio::test]
+async fn acceptance_off_leaves_review_to_the_owner_and_criteria_are_kept() {
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    set_pref(&engine, "auto_accept", json!("off")).await;
+    engine.acceptance_tick().await;
+    assert!(rounds_of(&engine, w.d.id).await.is_empty());
+    assert!(super::acceptance::merge_holds(&engine.db, std::slice::from_ref(&w.task)).await.is_empty());
+    // `done_when` is checked and kept, and the dispatch card shows it.
+    let coder = w.d.executor_assistant_id;
+    let mut req = request(DispatchMode::Chat, coder, None);
+    req.done_when = Some("x".repeat(super::dispatch::MAX_DONE_WHEN_CHARS + 1));
+    assert!(engine.validate_dispatch(&req).await.unwrap_err().contains("done_when"));
+    req.done_when = Some("  1. a summary of the options  ".into());
+    let d = engine.dispatch(req).await.unwrap();
+    assert_eq!(d.done_when.as_deref(), Some("1. a summary of the options"));
+    let rows = svc::rows_since(&engine.db.conn, engine.bot().await, chrono::Utc::now() - chrono::Duration::hours(1)).await.unwrap();
+    let card = rows.iter().rfind(|r| r.kind == TimelineKind::Dispatch && r.dispatch_id == Some(d.id)).unwrap();
+    assert_eq!(data_of(card)["done_when"], "1. a summary of the options");
+}
+
+#[tokio::test]
+async fn an_acceptance_card_is_the_owners_in_today_and_moves_with_handed_over_work() {
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    let (engine, tmp) = ready().await;
+    let made = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
+    let worker = engine_of(&engine, &tmp, made.bot.id);
+    let w = work_in_review(&worker, &tmp).await;
+    worker.acceptance_tick().await;
+    let check = rounds_of(&worker, w.d.id).await[0].check_dispatch_id.unwrap();
+    finish_check(&worker, check, "VERDICT: FAIL\n- evidence: it breaks the API").await;
+    let out = call(
+        &worker,
+        "acceptance_decide",
+        json!({ "dispatch_id": w.d.id, "decision": "ask_owner", "question": "Keep the old API?",
+                "message": "Keep the old API and add the new one beside it." }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    // In Today: the card is what needs the owner, not the task's review.
+    let view = super::today::today(&engine.db, &engine.manager, super::clock::now()).await.0;
+    let card = view.needs.iter().find(|r| r.kind == "acceptance").expect("the acceptance card needs the owner");
+    assert_eq!(card.bot_id, Some(made.bot.id));
+    assert!(!view.needs.iter().any(|r| r.task_id == Some(w.task.id)), "{:#?}", view.needs);
+
+    // The worker is deleted, its work handed over: the round and its card
+    // are the primary's, and the owner answers it there.
+    engine
+        .delete_bot(made.bot.id, &BotDeleteOptions { hand_over: true, ..Default::default() }, Some(worker.clone()))
+        .await
+        .unwrap();
+    let primary = engine.bot().await;
+    let r = &rounds_of(&engine, w.d.id).await[0];
+    assert_eq!((r.bot_id, r.state), (Some(primary), VerificationState::Asked));
+    let notice = svc::get_notice(&engine.db.conn, r.notice_id.unwrap()).await.unwrap().unwrap();
+    assert_eq!((notice.bot_id, notice.state), (Some(primary), crate::db::entities::personal_agent_notice::NoticeState::Open));
+    engine.act_on_notice(notice.id, "accept").await.unwrap();
+    assert_eq!(rounds_of(&engine, w.d.id).await[0].state, VerificationState::Accepted);
 }

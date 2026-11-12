@@ -1175,3 +1175,75 @@ describe("DispatchAttachments", () => {
     expect(container.querySelectorAll("[data-pa-work-pill]")).toHaveLength(5)
   })
 })
+
+describe("acceptance on the work handed out (7.5)", () => {
+  it("shows the assistant's acceptance criteria under its pill", () => {
+    pa.dispatchById = new Map([
+      [
+        5,
+        dispatchInfo({
+          state: "running",
+          done_when: "1. no blank screen\n2. the tests pass",
+        }),
+      ],
+    ])
+    const { container } = draw(
+      <DispatchAttachments
+        rows={[
+          row(20, "dispatch", { body: "Add a test page", dispatch_id: 5 }),
+        ]}
+      />
+    )
+    const criteria = container.querySelector("[data-pa-done-when]")!
+    expect(criteria.textContent).toContain("Done when")
+    expect(criteria.textContent).toContain("1. no blank screen")
+    expect(criteria.textContent).toContain("2. the tests pass")
+  })
+
+  it("reads the criteria off the card before the page has the dispatch, and not on a follow-up", () => {
+    pa.dispatchById = new Map()
+    const { container } = draw(
+      <DispatchAttachments
+        rows={[
+          row(20, "dispatch", {
+            body: "Add a test page",
+            data: {
+              executor: "Builder",
+              state: "queued",
+              done_when: "It builds",
+            },
+          }),
+          row(21, "dispatch", {
+            body: "Add a test page",
+            data: { followup: true, done_when: "It builds" },
+          }),
+        ]}
+      />
+    )
+    expect(container.querySelectorAll("[data-pa-done-when]")).toHaveLength(1)
+  })
+
+  it("says a check is the acceptance check of a round, and whose executor config checks it", () => {
+    pa.dispatchById = new Map()
+    const { container } = draw(
+      <DispatchAttachments
+        rows={[
+          row(20, "dispatch", {
+            body: "Add a test page",
+            data: {
+              executor: "Checker",
+              state: "running",
+              check_for: 4,
+              check_round: 2,
+              check_via: { bot_id: 9, name: "Ace" },
+            },
+          }),
+        ]}
+      />
+    )
+    const label = container.querySelector("[data-pa-check-label]")!
+    expect(label.textContent).toContain("Acceptance check · round 2")
+    expect(label.textContent).toContain("checked with Ace's executor config")
+    expect(container.querySelector("[data-pa-work-pill]")).toBeTruthy()
+  })
+})

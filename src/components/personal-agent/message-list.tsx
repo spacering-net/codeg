@@ -199,6 +199,11 @@ export function waitsForOwner(row: TimelineRow): boolean {
   if (row.kind === "notice" && data?.notice === "ask") {
     return data?.state === "forwarded"
   }
+  // A round of acceptance that is the owner's call, or theirs to check
+  // again (7.5).
+  if (row.kind === "notice" && data?.notice === "acceptance") {
+    return data?.state === "open" || data?.state === "changed"
+  }
   if (row.kind !== "notice" || data?.state !== "open") return false
   if (data?.why === "suggest") return false
   const kind = data?.notice

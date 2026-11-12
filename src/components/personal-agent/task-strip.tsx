@@ -32,6 +32,7 @@ import { canOpenWork, useOpenWork, usePageScope, workTargetOf } from "./shared"
 const LADDERS: readonly Ladder[] = [
   "working",
   "waiting_you",
+  "checking",
   "mergeable",
   "merging",
   "pr_open",
@@ -48,6 +49,7 @@ const LADDERS: readonly Ladder[] = [
 export const LIVE_LADDERS: ReadonlySet<Ladder> = new Set<Ladder>([
   "working",
   "waiting_you",
+  "checking",
   "mergeable",
 ])
 
@@ -63,6 +65,7 @@ export function asLadder(v: unknown): Ladder | null {
 export function ladderTone(ladder: Ladder): string {
   switch (ladder) {
     case "working":
+    case "checking":
     case "merging":
       return "bg-sky-500/15 text-sky-700 dark:text-sky-300"
     case "waiting_you":
@@ -84,7 +87,8 @@ export function ladderTone(ladder: Ladder): string {
 export function LadderChip({ ladder }: { ladder: Ladder | null }) {
   const t = useTranslations("PersonalAgent.ladder")
   if (!ladder) return null
-  const moving = ladder === "working" || ladder === "merging"
+  const moving =
+    ladder === "working" || ladder === "checking" || ladder === "merging"
   return (
     <span
       data-pa-ladder={ladder}

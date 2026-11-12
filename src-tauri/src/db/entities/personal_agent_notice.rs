@@ -50,6 +50,11 @@ pub enum NoticeKind {
     /// projects they connected (5.4).
     #[sea_orm(string_value = "starter")]
     Starter,
+    /// A round of acceptance (7.5): what the check found, what the
+    /// assistant concluded and why — and, when it is the owner's call, the
+    /// question and what sending it back would say.
+    #[sea_orm(string_value = "acceptance")]
+    Acceptance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

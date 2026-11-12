@@ -8221,6 +8221,30 @@
         "level_answered": {
           "title": "Answered for you",
           "hint": "A question from a dispatched session that an assistant answered for you."
+        },
+        "auto_accept": {
+          "title": "Automatic acceptance",
+          "hint": "When code work an assistant handed out is ready for review, another executor config checks it (read-only) and the assistant accepts it against its criteria. Off: you review it yourself.",
+          "on": "On",
+          "off": "Off"
+        },
+        "accept_revise": {
+          "title": "Sending work back after its check",
+          "hint": "When the assistant wants changes after the check.",
+          "auto": "Send it back automatically",
+          "ask": "Ask me first (on the acceptance card)"
+        },
+        "accept_rounds": {
+          "title": "Rounds of acceptance checks",
+          "hint": "After this many checks, sending it back again is your call. 0 sends nothing back on its own."
+        },
+        "level_acceptance": {
+          "title": "Acceptance",
+          "hint": "Work its assistant accepted and you can merge, work merged, or your call on accepting it."
+        },
+        "level_used_up": {
+          "title": "Out of rounds",
+          "hint": "Work sent back as many rounds as you allow and still not right."
         }
       },
       "workdir": {
@@ -8459,7 +8483,11 @@
     "dispatchCard": {
       "continue": "Continue: {title}",
       "notSent": "Not sent",
-      "more": "{count, plural, one {# more} other {# more}}"
+      "more": "{count, plural, one {# more} other {# more}}",
+      "doneWhen": "Done when",
+      "check": "Acceptance check",
+      "checkRound": "Acceptance check · round {round}",
+      "checkVia": "checked with {name}'s executor config"
     },
     "event": {
       "someone": "An assistant",
@@ -8874,7 +8902,9 @@
       "you": "Needs you: {text}",
       "answerPlain": "Needs your answer",
       "approvalPlain": "Needs your approval",
-      "youPlain": "Needs you"
+      "youPlain": "Needs you",
+      "acceptance": "Your call on accepting: {text}",
+      "acceptancePlain": "Your call on accepting"
     },
     "statusLine": {
       "steps": "This turn's steps",
@@ -8944,7 +8974,8 @@
       "failed": "Failed",
       "paused": "Set aside",
       "canceled": "Canceled",
-      "handed_over": "Taken over"
+      "handed_over": "Taken over",
+      "checking": "Being checked"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# file} other {# files}}",
@@ -9096,7 +9127,8 @@
         "canceled": "Stopped",
         "answered": "Answered for you",
         "changed": "Changed for you",
-        "undone": "Changed, then taken back"
+        "undone": "Changed, then taken back",
+        "acceptance": "Your call on accepting"
       },
       "session": {
         "permission": "Waits for your approval",
@@ -9109,7 +9141,8 @@
         "failed": "Failed",
         "preparing": "Preparing",
         "running": "Running",
-        "merging": "Merging"
+        "merging": "Merging",
+        "checking": "Being checked"
       },
       "dispatch": {
         "queued": "Queued",
@@ -9205,9 +9238,13 @@
           "presence": {
             "title": "Learn your hours",
             "hint": "From when you're in codeg, so I reach you at the right time."
+          },
+          "auto_accept": {
+            "title": "Check and accept the code work I hand out",
+            "hint": "Another executor config checks it read-only; I judge it against what you asked."
           }
         },
-        "later": "Morning briefs, wrap-ups, PR watching and automatic checks join here as they arrive.",
+        "later": "Morning briefs, wrap-ups and PR watching join here as they arrive.",
         "team": "Build a team",
         "teamSuggested": "Team suggested",
         "prefs": "Adjust preferences",
@@ -9218,6 +9255,52 @@
         "collapse": "Fold",
         "unavailable": "These can be changed where the assistant runs."
       }
+    },
+    "acceptance": {
+      "title": "Acceptance · round {round}",
+      "titleMax": "Acceptance · round {round} of at most {max}",
+      "people": "{executor} did it · {checker} checked it",
+      "peopleUnchecked": "{executor} did it",
+      "check": "Check:",
+      "verdict": {
+        "pass": "Passed",
+        "fail": "Not passed",
+        "unverified": "Couldn't verify"
+      },
+      "unchecked": "Not checked independently",
+      "notVerified": "Not verified",
+      "decision": {
+        "accept": "accept",
+        "revise": "send it back",
+        "ask_owner": "ask you"
+      },
+      "assistant": "Assistant: {decision}",
+      "assistantWhy": "Assistant: {decision}, because: {reason}",
+      "against": "Check: {verdict} · Assistant: {decision}, because: {reason}",
+      "fallback": "The assistant gave no conclusion: codeg went by the check",
+      "owner": "Your decision: {decision}",
+      "question": "It asks you: {question}",
+      "usedUp": "{count, plural, one {Checked # round} other {Checked # rounds}} — as many as you allow",
+      "wouldSend": "What sending it back would say",
+      "revise": "Send it back as written",
+      "accept": "Accept it",
+      "recheck": "Check again",
+      "openTask": "Open task",
+      "accepted": "Accepted",
+      "revised": "Sent back to be changed",
+      "void": "The worktree changed while it was checked — this round is void",
+      "changed": "The worktree changed after its check — this acceptance no longer holds",
+      "changedAfterAccept": "The worktree changed after it was accepted",
+      "superseded": "Checked again since",
+      "stale": "No longer applies — nothing was done",
+      "merged": "Merged {commit}",
+      "delivered": "Delivered, head {head}",
+      "history": "Earlier rounds",
+      "historyRevised": "Round {round}: sent back — “{message}”",
+      "historyAccepted": "Round {round}: accepted",
+      "historyAsked": "Round {round}: put to you",
+      "historyChanged": "Round {round}: accepted, then the worktree changed",
+      "historyOpen": "Round {round}: open"
     }
   }
 }

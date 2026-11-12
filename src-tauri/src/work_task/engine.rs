@@ -3987,6 +3987,13 @@ impl TaskEngine {
         let pre_merge_head = task_git::rev_parse(&root.path, "HEAD")
             .await
             .map_err(|e| e.to_string())?;
+        // An unattended landing of a task its personal assistant accepts
+        // lands the version accepted, read again here under the folder lock
+        // (personal agent 7.5): the generation is the one `begin_merge` binds
+        // to below, the worktree's fingerprint must still be the one checked.
+        if auto {
+            crate::personal_agent::acceptance::merge_gate(&self.db, &task, &_wt.path).await?;
+        }
 
         let state = WorkTaskMergeState {
             op: WorkTaskMergeOp::Land,
@@ -4499,6 +4506,11 @@ impl TaskEngine {
         let expected_head = task_git::rev_parse(&wt.path, &work_branch)
             .await
             .map_err(|e| format!("could not resolve the task branch: {e}"))?;
+        // A task its personal assistant accepted is delivered as the version
+        // accepted, and the head pushed is recorded on that round (personal
+        // agent 7.5).
+        let accepted_round =
+            crate::personal_agent::acceptance::delivery_gate(&self.db, &task, &wt.path).await?;
         let title = pr_title
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty())
@@ -4556,6 +4568,9 @@ impl TaskEngine {
         if outcome.is_ok() && state.delete_worktree {
             self.remove_delivered_worktree(task_id, task.folder_id, &expected_head)
                 .await;
+        }
+        if let (true, Some(round)) = (outcome.is_ok(), accepted_round) {
+            crate::personal_agent::acceptance::delivered(&self.db, round, &expected_head).await;
         }
         self.release_in_flight(task_id, token).await;
         self.emit_upsert(task_id);
@@ -5845,6 +5860,11 @@ impl TaskEngine {
                 .into_iter()
                 .filter(|t| t.folder_id == folder_id && auto_merge_candidate(t, &settings))
                 .collect();
+        // A task its personal assistant accepts lands once the version there
+        // passed (personal agent 7.5); the gate under the folder lock in
+        // `merge_task` holds it to that version.
+        let held = crate::personal_agent::acceptance::merge_holds(&self.db, &candidates).await;
+        candidates.retain(|t| !held.contains(&t.id));
         candidates.sort_by_key(|t| (t.settled_at, t.id));
         for task in candidates {
             // A gone worktree cannot serve a merge generation; that task's
@@ -6774,7 +6794,7 @@ fn auto_merge_candidate(
 /// Whether the folder's settings would make `run_preflight` attempt a command
 /// at all — the sweep's gate must not wait for a light that will never be
 /// written.
-fn preflight_configured(settings: &WorkTaskFolderSettings) -> bool {
+pub(crate) fn preflight_configured(settings: &WorkTaskFolderSettings) -> bool {
     settings
         .preflight_command
         .as_deref()
@@ -6814,6 +6834,9 @@ fn is_benign_merge_race(error: &str) -> bool {
         || error.contains("left review")
         || error.contains("already merging")
         || is_queued_merge_superseded(error)
+        // Waiting on its personal assistant's acceptance: not a failure, and
+        // its card (not the board's banner) says what changed.
+        || error.contains(crate::personal_agent::acceptance::MERGE_HOLD)
 }
 
 /// The one benign race the drain cannot simply step over: the user withdrew or

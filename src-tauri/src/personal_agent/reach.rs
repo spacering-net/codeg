@@ -153,6 +153,30 @@ pub enum What {
     Review {
         text: String,
     },
+    /// Accepted by its assistant: it can be merged (7.5).
+    Accepted {
+        text: String,
+    },
+    /// Accepted, delivered as a pull request.
+    AcceptedPr {
+        text: String,
+    },
+    /// Accepted and merged.
+    Merged {
+        text: String,
+    },
+    /// The acceptance is the owner's call.
+    AcceptAsk {
+        text: String,
+    },
+    /// Sent back as many rounds as allowed, still not accepted.
+    UsedUp {
+        text: String,
+    },
+    /// The worktree changed during or after its check.
+    AcceptVoid {
+        text: String,
+    },
     /// The reply's first words (none: it said nothing in words).
     Reply {
         text: Option<String>,
@@ -395,6 +419,14 @@ struct Words {
     why_waiting: &'static str,
     why_done: &'static str,
     why_reply: &'static str,
+    accepted: &'static str,
+    accepted_pr: &'static str,
+    merged: &'static str,
+    accept_ask: &'static str,
+    used_up: &'static str,
+    accept_void: &'static str,
+    why_acceptance: &'static str,
+    why_used_up: &'static str,
 }
 
 const EN: Words = Words {
@@ -423,6 +455,14 @@ const EN: Words = Words {
     why_waiting: "No one has answered it yet.",
     why_done: "It dispatched this work for you.",
     why_reply: "You asked it.",
+    accepted: "Ready to merge: {text}",
+    accepted_pr: "Accepted: {text}",
+    merged: "Merged: {text}",
+    accept_ask: "Your call on its acceptance: {text}",
+    used_up: "Still not right after the rounds allowed: {text}",
+    accept_void: "Its check no longer applies: {text}",
+    why_acceptance: "It checked the work it dispatched for you.",
+    why_used_up: "It sent the work back as many times as you allow.",
 };
 
 const ZH_CN: Words = Words {
@@ -451,6 +491,14 @@ const ZH_CN: Words = Words {
     why_waiting: "还没有人回应。",
     why_done: "这是它替你派出的活。",
     why_reply: "这是你让它办的事。",
+    accepted: "可以合并了：{text}",
+    accepted_pr: "验收通过：{text}",
+    merged: "已合并：{text}",
+    accept_ask: "验收要你定：{text}",
+    used_up: "退回几轮还没过：{text}",
+    accept_void: "验收已失效：{text}",
+    why_acceptance: "这是它替你派出、替你验收的活。",
+    why_used_up: "已经退回到你允许的轮数。",
 };
 
 const ZH_TW: Words = Words {
@@ -479,6 +527,14 @@ const ZH_TW: Words = Words {
     why_waiting: "還沒有人回應。",
     why_done: "這是它替你派出的工作。",
     why_reply: "這是你請它辦的事。",
+    accepted: "可以合併了：{text}",
+    accepted_pr: "驗收通過：{text}",
+    merged: "已合併：{text}",
+    accept_ask: "驗收要你決定：{text}",
+    used_up: "退回幾輪還沒通過：{text}",
+    accept_void: "驗收已失效：{text}",
+    why_acceptance: "這是它替你派出、替你驗收的工作。",
+    why_used_up: "已經退回到你允許的輪數。",
 };
 
 const JA: Words = Words {
@@ -507,6 +563,14 @@ const JA: Words = Words {
     why_waiting: "まだ誰も応答していません。",
     why_done: "あなたのために依頼した作業です。",
     why_reply: "あなたが頼んだことです。",
+    accepted: "マージできます：{text}",
+    accepted_pr: "受け入れ済み：{text}",
+    merged: "マージしました：{text}",
+    accept_ask: "受け入れの判断をお願いします：{text}",
+    used_up: "許可された回数を直しても通りません：{text}",
+    accept_void: "確認が無効になりました：{text}",
+    why_acceptance: "あなたの代わりに出した作業を受け入れ確認しました。",
+    why_used_up: "許可された回数まで差し戻しました。",
 };
 
 const KO: Words = Words {
@@ -535,6 +599,14 @@ const KO: Words = Words {
     why_waiting: "아직 아무도 응답하지 않았어요.",
     why_done: "대신 맡긴 작업이에요.",
     why_reply: "부탁하신 일이에요.",
+    accepted: "병합할 수 있어요: {text}",
+    accepted_pr: "검수 통과: {text}",
+    merged: "병합됨: {text}",
+    accept_ask: "검수 결정을 기다려요: {text}",
+    used_up: "허용된 횟수만큼 고쳐도 통과하지 못했어요: {text}",
+    accept_void: "검수가 무효가 되었어요: {text}",
+    why_acceptance: "대신 맡긴 작업을 대신 검수했어요.",
+    why_used_up: "허용하신 횟수만큼 되돌려 보냈어요.",
 };
 
 const ES: Words = Words {
@@ -563,6 +635,14 @@ const ES: Words = Words {
     why_waiting: "Nadie ha respondido todavía.",
     why_done: "Es trabajo que encargó por ti.",
     why_reply: "Se lo pediste tú.",
+    accepted: "Listo para fusionar: {text}",
+    accepted_pr: "Aceptado: {text}",
+    merged: "Fusionado: {text}",
+    accept_ask: "Te toca decidir si se acepta: {text}",
+    used_up: "Sigue sin estar bien tras las rondas permitidas: {text}",
+    accept_void: "Su revisión ya no vale: {text}",
+    why_acceptance: "Revisó el trabajo que encargó por ti.",
+    why_used_up: "Lo devolvió tantas veces como permites.",
 };
 
 const DE: Words = Words {
@@ -591,6 +671,14 @@ const DE: Words = Words {
     why_waiting: "Bisher hat niemand geantwortet.",
     why_done: "Diese Arbeit hat es für dich vergeben.",
     why_reply: "Du hast es darum gebeten.",
+    accepted: "Bereit zum Mergen: {text}",
+    accepted_pr: "Abgenommen: {text}",
+    merged: "Gemergt: {text}",
+    accept_ask: "Du entscheidest über die Abnahme: {text}",
+    used_up: "Nach den erlaubten Runden noch nicht richtig: {text}",
+    accept_void: "Die Prüfung gilt nicht mehr: {text}",
+    why_acceptance: "Es hat die Arbeit geprüft, die es für dich vergeben hat.",
+    why_used_up: "Es hat die Arbeit so oft zurückgeschickt, wie du erlaubst.",
 };
 
 const FR: Words = Words {
@@ -620,6 +708,14 @@ const FR: Words = Words {
     why_waiting: "Personne n'a encore répondu.",
     why_done: "Il a confié ce travail pour vous.",
     why_reply: "Vous le lui avez demandé.",
+    accepted: "Prêt à fusionner : {text}",
+    accepted_pr: "Accepté : {text}",
+    merged: "Fusionné : {text}",
+    accept_ask: "À vous de décider de l'acceptation : {text}",
+    used_up: "Toujours pas bon après les tours permis : {text}",
+    accept_void: "Sa vérification ne vaut plus : {text}",
+    why_acceptance: "Il a vérifié le travail qu'il a confié pour vous.",
+    why_used_up: "Il l'a renvoyé autant de fois que vous le permettez.",
 };
 
 const PT: Words = Words {
@@ -649,6 +745,14 @@ const PT: Words = Words {
     why_waiting: "Ninguém respondeu ainda.",
     why_done: "Ele delegou este trabalho para você.",
     why_reply: "Você pediu isso a ele.",
+    accepted: "Pronto para mesclar: {text}",
+    accepted_pr: "Aceito: {text}",
+    merged: "Mesclado: {text}",
+    accept_ask: "A decisão sobre a aceitação é sua: {text}",
+    used_up: "Ainda não está certo após as rodadas permitidas: {text}",
+    accept_void: "A verificação não vale mais: {text}",
+    why_acceptance: "Ele verificou o trabalho que delegou por você.",
+    why_used_up: "Ele devolveu o trabalho tantas vezes quanto você permite.",
 };
 
 const AR: Words = Words {
@@ -677,6 +781,14 @@ const AR: Words = Words {
     why_waiting: "لم يردّ أحد بعد.",
     why_done: "هذا عمل أسنده نيابةً عنك.",
     why_reply: "أنت من طلب ذلك.",
+    accepted: "جاهز للدمج: {text}",
+    accepted_pr: "تم القبول: {text}",
+    merged: "تم الدمج: {text}",
+    accept_ask: "القرار لك في القبول: {text}",
+    used_up: "لم يصبح صحيحًا بعد الجولات المسموح بها: {text}",
+    accept_void: "لم يعد فحصه ساريًا: {text}",
+    why_acceptance: "فحص العمل الذي أسنده نيابةً عنك.",
+    why_used_up: "أعاد العمل بعدد المرات التي تسمح بها.",
 };
 
 fn words(locale: AppLocale) -> &'static Words {
@@ -712,6 +824,12 @@ fn main_line(w: &Words, what: &What) -> String {
         What::Done { text } => fill(w.done, text, 0, ""),
         What::Failed { text } => fill(w.failed, text, 0, ""),
         What::Review { text } => fill(w.review, text, 0, ""),
+        What::Accepted { text } => fill(w.accepted, text, 0, ""),
+        What::AcceptedPr { text } => fill(w.accepted_pr, text, 0, ""),
+        What::Merged { text } => fill(w.merged, text, 0, ""),
+        What::AcceptAsk { text } => fill(w.accept_ask, text, 0, ""),
+        What::UsedUp { text } => fill(w.used_up, text, 0, ""),
+        What::AcceptVoid { text } => fill(w.accept_void, text, 0, ""),
         What::Reply { text } => text.clone().unwrap_or_else(|| w.reply_empty.to_string()),
         What::Plain { text } => text.clone(),
     }
@@ -732,6 +850,8 @@ fn reason(w: &Words, kind: &str, what: &What) -> Option<String> {
         "stuck" => w.why_stuck.into(),
         "done" => w.why_done.into(),
         "reply" => w.why_reply.into(),
+        "acceptance" => w.why_acceptance.into(),
+        "used_up" => w.why_used_up.into(),
         _ => return None,
     };
     Some(line)
@@ -913,6 +1033,8 @@ impl Reach {
             let key = need_key(bot, n);
             let told = match had.get(&key) {
                 Some(seen) => seen.told,
+                // Told as its own news when it was raised (7.5).
+                None if n.kind == "acceptance" => true,
                 None => {
                     let news = news_of_need(bot, n, &key);
                     let fresh = n.since >= started;
@@ -1037,6 +1159,8 @@ pub fn need_kind(n: &NeedsYou) -> Option<&'static str> {
         "confirm" | "changed" => "confirm",
         "uncertain" | "loop" => "stuck",
         "input" => "waiting",
+        // An acceptance card the owner is to answer (7.5).
+        "acceptance" => "acceptance",
         _ => return None,
     })
 }
@@ -1045,7 +1169,8 @@ pub fn need_kind(n: &NeedsYou) -> Option<&'static str> {
 /// has waited (dispatched work's own session said so already).
 fn news_of_need(bot: i32, n: &NeedsYou, key: &str) -> Option<News> {
     let text = n.text.clone();
-    let kind = need_kind(n).filter(|k| *k != "waiting")?;
+    // An acceptance card was told when it was raised (7.5).
+    let kind = need_kind(n).filter(|k| !matches!(*k, "waiting" | "acceptance"))?;
     let what = if kind == "approval" {
         What::Approval { text }
     } else {

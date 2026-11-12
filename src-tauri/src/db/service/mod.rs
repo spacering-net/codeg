@@ -18,6 +18,7 @@ pub mod model_provider_service;
 pub mod personal_agent_activity_service;
 pub mod personal_agent_message_service;
 pub mod personal_agent_service;
+pub mod personal_agent_verification_service;
 pub mod quick_message_service;
 pub mod remote_workspace_connection_service;
 pub mod sender_context_service;

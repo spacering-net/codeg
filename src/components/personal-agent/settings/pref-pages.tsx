@@ -15,10 +15,13 @@ import {
   Activity,
   AlarmClock,
   ArrowLeftRight,
+  BadgeCheck,
   Bell,
   BellDot,
   BellRing,
+  CircleAlert,
   CircleCheck,
+  ClipboardCheck,
   Gauge,
   Globe,
   Hand,
@@ -47,6 +50,7 @@ import {
   Text,
   Timer,
   TriangleAlert,
+  Undo2,
   Waypoints,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
@@ -99,6 +103,9 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   retry_rounds: 2,
   exec_questions: "assistant",
   exec_plans: "assistant",
+  auto_accept: "on",
+  accept_revise: "auto",
+  accept_rounds: 3,
   time_zone: "system",
   presence: "on",
   proactive: "on",
@@ -124,6 +131,8 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   level_exchange: "low",
   level_changed: "low",
   level_answered: "low",
+  level_acceptance: "normal",
+  level_used_up: "urgent",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -139,6 +148,7 @@ export const AUTOMATION_PRESETS: Record<
     interrupt_retry: "auto",
     exec_questions: "assistant",
     exec_plans: "assistant",
+    accept_revise: "auto",
   },
   ask_more: {
     confirm_dispatch: "code",
@@ -148,6 +158,7 @@ export const AUTOMATION_PRESETS: Record<
     interrupt_retry: "ask",
     exec_questions: "owner",
     exec_plans: "owner",
+    accept_revise: "ask",
   },
 }
 
@@ -188,6 +199,8 @@ export const LEVEL_ITEMS: PersonalAgentPrefKey[] = [
   "level_exchange",
   "level_changed",
   "level_answered",
+  "level_acceptance",
+  "level_used_up",
 ]
 
 /** The items that take a time of day, `HH:MM`. */
@@ -226,6 +239,8 @@ const CHOICES: Partial<Record<PersonalAgentPrefKey, readonly string[]>> = {
   interrupt_retry: ["auto", "ask"],
   exec_questions: ["assistant", "owner"],
   exec_plans: ["assistant", "owner"],
+  auto_accept: ["on", "off"],
+  accept_revise: ["auto", "ask"],
   proactive: ["on", "off"],
   urgent_via: ["system_attention", "system", "in_page"],
   normal_via: ["system", "in_page", "today"],
@@ -240,6 +255,7 @@ const CHOICES: Partial<Record<PersonalAgentPrefKey, readonly string[]>> = {
 const COUNT_MAX: Partial<Record<PersonalAgentPrefKey, number>> = {
   loop_rounds: 1000,
   retry_rounds: 10,
+  accept_rounds: 10,
   focus_wait: 60,
 }
 
@@ -257,6 +273,9 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   retry_rounds: Timer,
   exec_questions: MessageSquareReply,
   exec_plans: ListChecks,
+  auto_accept: ClipboardCheck,
+  accept_revise: Undo2,
+  accept_rounds: Timer,
   time_zone: Globe,
   presence: Activity,
   proactive: Sparkles,
@@ -282,6 +301,8 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   level_exchange: ArrowLeftRight,
   level_changed: SlidersHorizontal,
   level_answered: Inbox,
+  level_acceptance: BadgeCheck,
+  level_used_up: CircleAlert,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
@@ -297,9 +318,12 @@ export const AUTOMATION_ITEMS: PersonalAgentPrefKey[] = [
   "followups",
   "exec_questions",
   "exec_plans",
+  "auto_accept",
+  "accept_revise",
   "messages",
   "worker_handoff",
   "retry_rounds",
+  "accept_rounds",
   "loop_rounds",
 ]
 

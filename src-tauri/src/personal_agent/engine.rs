@@ -326,6 +326,10 @@ pub(super) struct EngineState {
     /// `ask_user_question`), by connection: one ask at a time per
     /// connection, so the next ask replaces it.
     pub(super) ask_for: HashMap<String, Option<String>>,
+    /// A check's whole last message, by its dispatch, from the end of its
+    /// turn until its verdict is read (7.5): the excerpt a dispatch keeps is
+    /// cut from the front, and the verdict comes last.
+    pub(super) check_texts: HashMap<i32, String>,
 }
 
 pub struct PersonalAgentEngine {
@@ -352,6 +356,8 @@ pub struct PersonalAgentEngine {
     pub(super) card_lock: Mutex<()>,
     /// Serializes the owner's answers on reminder cards (6.1).
     pub(super) reminder_lock: Mutex<()>,
+    /// Serializes opening, moving and concluding rounds of acceptance (7.5).
+    pub(super) accept_lock: Mutex<()>,
     /// The owner's zone at the clock's last look: a change moves the
     /// repeating matters with it (1.12).
     pub(super) clock_zone: std::sync::Mutex<Option<chrono_tz::Tz>>,
@@ -390,6 +396,7 @@ impl PersonalAgentEngine {
             asks_lock: Mutex::new(()),
             card_lock: Mutex::new(()),
             reminder_lock: Mutex::new(()),
+            accept_lock: Mutex::new(()),
             clock_zone: std::sync::Mutex::new(None),
             pump_again: AtomicBool::new(false),
             wake: Notify::new(),
@@ -674,6 +681,7 @@ impl PersonalAgentEngine {
                 _ = liveness.tick() => {
                     self.liveness_tick().await;
                     self.poll_task_dispatches().await;
+                    self.acceptance_tick().await;
                 }
                 _ = reconcile.tick() => {
                     self.reconcile_dispatches().await;
@@ -1837,6 +1845,9 @@ impl PersonalAgentEngine {
                 // No turn to answer them: the executors' questions waiting
                 // on this assistant are the owner's (7.3.1).
                 self.forward_all_asking("turn_failed").await;
+                // Nor to conclude its rounds of acceptance: their checks'
+                // verdicts do (7.5).
+                self.conclude_all_undecided().await;
                 self.emit(PersonalAgentChange::Status);
             }
             if !self.pump_again.load(Ordering::SeqCst) {
@@ -2648,13 +2659,24 @@ impl PersonalAgentEngine {
         let messages = self.messages_of(&events).await;
         let news: Vec<_> = events
             .iter()
-            .filter(|e| e.kind != msvc::MESSAGE_EVENT && e.kind != svc::ASK_EVENT)
+            .filter(|e| {
+                e.kind != msvc::MESSAGE_EVENT
+                    && e.kind != svc::ASK_EVENT
+                    && e.kind != super::acceptance::ACCEPT_EVENT
+            })
             .cloned()
             .collect();
         // The executors' questions and plan approvals, each in full (7.3.1).
         let mut asks = Vec::new();
         for e in events.iter().filter(|e| e.kind == svc::ASK_EVENT) {
             asks.push(self.ask_block(e).await);
+        }
+        // The rounds of acceptance to conclude, each with its materials (7.5).
+        for e in events
+            .iter()
+            .filter(|e| e.kind == super::acceptance::ACCEPT_EVENT)
+        {
+            asks.push(self.acceptance_block(e).await);
         }
         // What started it — recorded only, for the status, the statistics
         // and the `<codeg-now>` line.
@@ -4358,6 +4380,17 @@ impl PersonalAgentEngine {
     }
 
     /// The current delivery's batch, for dispatches made during it.
+    /// When the delivery running now began; `None` outside one.
+    pub(super) async fn turn_started_at(&self) -> Option<DateTime<Utc>> {
+        self.state
+            .lock()
+            .await
+            .turn
+            .as_ref()
+            .filter(|t| t.kind == BatchKind::Delivery)
+            .map(|t| t.started_at)
+    }
+
     pub(super) async fn current_batch(&self) -> Option<i32> {
         self.state
             .lock()

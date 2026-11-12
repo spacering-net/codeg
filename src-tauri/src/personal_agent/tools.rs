@@ -261,6 +261,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 project_id: int(&args, "project_id").and_then(as_i32),
                 report: report || (mode != DispatchMode::Task && args.get("deliverable").is_some()),
                 on_done: string(&args, "on_done"),
+                done_when: string(&args, "done_when"),
             };
             let mut valid = match engine.validate_dispatch(&req).await {
                 Ok(v) => v,
@@ -322,6 +323,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             }
         }
         "dispatch_answer" => engine.dispatch_answer_call(&args).await,
+        "acceptance_decide" => engine.acceptance_decide_call(&args).await,
         "prefs_update" => engine.prefs_update_call(&args).await,
         "bot_create" => engine.bot_create_call(&args).await,
         "bot_list" => engine.bot_list_call().await,

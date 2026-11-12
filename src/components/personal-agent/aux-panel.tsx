@@ -152,6 +152,7 @@ import {
   workTargetOf,
 } from "./shared"
 
+import { CheckLabel, DoneWhen } from "./acceptance-bits"
 import { useActivityTranslate } from "./activity-text"
 import { BotAvatar } from "./bot-avatar"
 import { dueWhen, repeatText } from "./due-text"
@@ -762,12 +763,19 @@ function DispatchCard({
       onOpen={canOpen ? () => openWork(target) : null}
       openLabel={canOpen ? t("timeline.viewSession") : undefined}
       extra={
-        d.task || d.answered_for_you > 0 ? (
+        d.task ||
+        d.answered_for_you > 0 ||
+        d.done_when ||
+        d.check_for != null ? (
           <>
+            {d.check_for != null ? (
+              <CheckLabel round={d.check_round ?? null} via={null} />
+            ) : null}
             {d.task ? <TaskStrip d={d} /> : null}
             {d.answered_for_you > 0 ? (
               <AnsweredForYou count={d.answered_for_you} className="mt-1.5" />
             ) : null}
+            <DoneWhen text={d.done_when} className="mt-1.5" />
           </>
         ) : undefined
       }

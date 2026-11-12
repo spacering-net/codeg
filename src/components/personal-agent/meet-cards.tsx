@@ -654,6 +654,7 @@ export const PROMISES: ReadonlyArray<{
   { key: "exec_questions", on: "assistant", off: "owner" },
   { key: "exec_plans", on: "assistant", off: "owner" },
   { key: "followups", on: "auto", off: "ask" },
+  { key: "auto_accept", on: "on", off: "off" },
   { key: "interrupt_retry", on: "auto", off: "ask" },
   { key: "presence", on: "on", off: "off" },
 ]

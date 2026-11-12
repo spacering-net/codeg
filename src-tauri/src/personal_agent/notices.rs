@@ -472,6 +472,8 @@ impl PersonalAgentEngine {
             // Getting to know the owner (5.4).
             NoticeKind::Onboarding => return self.act_on_onboarding(&notice, action).await,
             NoticeKind::Starter => return self.act_on_starter(&notice, action, text).await,
+            // A round of acceptance (7.5).
+            NoticeKind::Acceptance => return self.act_on_acceptance(&notice, action).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.

@@ -2222,6 +2222,85 @@ export interface DispatchInfo {
   /** How many of its executor's questions and plan approvals its assistant
    *  answered for the owner (7.3.1). */
   answered_for_you: number
+  /** What done looks like, as its assistant wrote it (7.5). */
+  done_when?: string | null
+  /** Its latest round of acceptance, when it has one (7.5). */
+  acceptance?: AcceptanceInfo | null
+  /** For a check codeg sent out: the dispatch it checks, and which round. */
+  check_for?: number | null
+  check_round?: number | null
+}
+
+/** Where a round of acceptance stands (7.5). */
+export type AcceptanceState =
+  | "checking"
+  | "deciding"
+  | "asked"
+  | "accepted"
+  | "revised"
+  | "stale"
+  | "void"
+  | "changed"
+
+/** What the acceptance check found. */
+export type CheckVerdict = "pass" | "fail" | "unverified"
+
+/** Who concluded a round. */
+export type AcceptanceDecidedBy = "assistant" | "fallback" | "owner"
+
+/** A round of acceptance, as a dispatch card shows it (7.5). */
+export interface AcceptanceInfo {
+  round_id: number
+  round: number
+  state: AcceptanceState
+  verdict: CheckVerdict | null
+  unchecked: boolean
+  decided_by: AcceptanceDecidedBy | null
+  check_dispatch_id: number | null
+  /** It is about the task's current run. */
+  current: boolean
+}
+
+/** An acceptance card's `data` (Rust `acceptance_payload`). */
+export interface AcceptanceCardData {
+  notice: "acceptance"
+  /** open = the owner's call; changed = checked again on a click; stale =
+   *  no longer applies; acted = concluded. */
+  state: "open" | "acted" | "changed" | "stale"
+  /** A later round replaced this one (the work was checked again). */
+  superseded?: boolean
+  round_id: number
+  round: number
+  max_rounds: number
+  /** The round's own state. */
+  phase: AcceptanceState
+  dispatch_id: number
+  title: string
+  work_task_id: number | null
+  folder_id: number | null
+  executor: string | null
+  executor_agent: AgentType | null
+  checker: string | null
+  checker_agent: AgentType | null
+  check_dispatch_id: number | null
+  verdict: CheckVerdict | null
+  evidence: string | null
+  unchecked: boolean
+  decision: "accept" | "revise" | "ask_owner" | null
+  decided_by: AcceptanceDecidedBy | null
+  reason: string | null
+  message: string | null
+  question: string | null
+  history: {
+    round: number
+    state: AcceptanceState
+    verdict: CheckVerdict | null
+    message: string | null
+  }[]
+  delivered_head: string | null
+  merge_commit: string | null
+  version_guaranteed: boolean | null
+  pr_url: string | null
 }
 
 /** A plan answer on an ask card: send it back (`revise`) with feedback. */
@@ -2301,6 +2380,7 @@ export interface ConversationTarget {
 export type Ladder =
   | "working"
   | "waiting_you"
+  | "checking"
   | "mergeable"
   | "merging"
   | "pr_open"
@@ -2478,6 +2558,14 @@ export interface PersonalAgentPrefs {
   exec_questions: "assistant" | "owner"
   /** An executor's plan approvals. */
   exec_plans: "assistant" | "owner"
+  /** Code work an assistant dispatched is checked and accepted on its own
+   *  (7.5). */
+  auto_accept: "on" | "off"
+  /** Work its assistant wants changed after the check: sent back at once, or
+   *  put to the owner first. */
+  accept_revise: "auto" | "ask"
+  /** Rounds of checks one piece of work gets; 0 sends nothing back. */
+  accept_rounds: number
   /** The owner's time zone: `system` (follow the system's) or an IANA
    *  name (1.12). */
   time_zone: string
@@ -2521,6 +2609,8 @@ export interface PersonalAgentPrefs {
   level_exchange: PersonalAgentNewsLevel
   level_changed: PersonalAgentNewsLevel
   level_answered: PersonalAgentNewsLevel
+  level_acceptance: PersonalAgentNewsLevel
+  level_used_up: PersonalAgentNewsLevel
 }
 
 /** How much a kind of news may interrupt the owner (6.2). */
@@ -2802,6 +2892,7 @@ export interface BotNeedsYou {
     | "choice"
     | "changed"
     | "input"
+    | "acceptance"
     | string
   text: string
   since: string

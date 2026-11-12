@@ -8222,6 +8222,30 @@
         "level_answered": {
           "title": "Respondido en tu lugar",
           "hint": "Una pregunta de una sesión asignada que un asistente respondió por ti."
+        },
+        "auto_accept": {
+          "title": "Aceptación automática",
+          "hint": "Cuando el trabajo de código que encargó un asistente queda listo para revisar, otra configuración de ejecución lo revisa (solo lectura) y el asistente lo acepta según sus criterios. Desactivada: lo revisas tú.",
+          "on": "Activada",
+          "off": "Desactivada"
+        },
+        "accept_revise": {
+          "title": "Devolver el trabajo tras la revisión",
+          "hint": "Cuando, tras la revisión, el asistente quiere cambios.",
+          "auto": "Devolverlo automáticamente",
+          "ask": "Pregúntame antes (en la tarjeta de aceptación)"
+        },
+        "accept_rounds": {
+          "title": "Rondas de revisión de aceptación",
+          "hint": "Tras tantas revisiones, devolverlo otra vez lo decides tú. 0 no devuelve nada por sí solo."
+        },
+        "level_acceptance": {
+          "title": "Aceptación",
+          "hint": "Trabajo aceptado por su asistente que puedes fusionar, ya fusionado, o cuya aceptación te toca decidir."
+        },
+        "level_used_up": {
+          "title": "Sin rondas y aún no está bien",
+          "hint": "Trabajo devuelto tantas veces como permites y que sigue sin estar bien."
         }
       },
       "workdir": {
@@ -8459,7 +8483,11 @@
     "dispatchCard": {
       "continue": "Continuar: {title}",
       "notSent": "No enviado",
-      "more": "{count} más"
+      "more": "{count} más",
+      "doneWhen": "Hecho cuando",
+      "check": "Revisión de aceptación",
+      "checkRound": "Revisión de aceptación · ronda {round}",
+      "checkVia": "revisado con la configuración de ejecución de {name}"
     },
     "event": {
       "someone": "Un asistente",
@@ -8874,7 +8902,9 @@
       "you": "Te necesita: {text}",
       "answerPlain": "Necesita tu respuesta",
       "approvalPlain": "Necesita tu aprobación",
-      "youPlain": "Te necesita"
+      "youPlain": "Te necesita",
+      "acceptance": "Te toca decidir la aceptación: {text}",
+      "acceptancePlain": "Te toca decidir la aceptación"
     },
     "statusLine": {
       "steps": "Pasos de este turno",
@@ -8944,7 +8974,8 @@
       "failed": "Fallida",
       "paused": "Aplazada",
       "canceled": "Cancelada",
-      "handed_over": "Asumida por ti"
+      "handed_over": "Asumida por ti",
+      "checking": "En revisión"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# archivo} other {# archivos}}",
@@ -9096,7 +9127,8 @@
         "canceled": "Detenido",
         "answered": "Respondido en tu nombre",
         "changed": "Cambiado en tu nombre",
-        "undone": "Cambiado y deshecho"
+        "undone": "Cambiado y deshecho",
+        "acceptance": "Te toca decidir la aceptación"
       },
       "session": {
         "permission": "Espera tu aprobación",
@@ -9109,7 +9141,8 @@
         "failed": "Falló",
         "preparing": "Preparando",
         "running": "En curso",
-        "merging": "Fusionando"
+        "merging": "Fusionando",
+        "checking": "En revisión"
       },
       "dispatch": {
         "queued": "En cola",
@@ -9205,9 +9238,13 @@
           "presence": {
             "title": "Aprender tu horario",
             "hint": "Por cuándo estás en codeg, para avisarte en buen momento."
+          },
+          "auto_accept": {
+            "title": "Revisar y aceptar el trabajo de código que encargo",
+            "hint": "Otra configuración de ejecución lo revisa en solo lectura; yo lo juzgo según lo que pediste."
           }
         },
-        "later": "Resúmenes matinales, cierres, vigilancia de PR y comprobaciones automáticas se sumarán aquí cuando lleguen.",
+        "later": "Resúmenes matinales, cierres y vigilancia de PR se sumarán aquí cuando lleguen.",
         "team": "Formar un equipo",
         "teamSuggested": "Equipo sugerido",
         "prefs": "Ajustar preferencias",
@@ -9218,6 +9255,52 @@
         "collapse": "Plegar",
         "unavailable": "Se cambia donde se ejecuta el asistente."
       }
+    },
+    "acceptance": {
+      "title": "Aceptación · ronda {round}",
+      "titleMax": "Aceptación · ronda {round} de {max} como máximo",
+      "people": "Lo hizo {executor} · lo revisó {checker}",
+      "peopleUnchecked": "Lo hizo {executor}",
+      "check": "Revisión:",
+      "verdict": {
+        "pass": "Superada",
+        "fail": "No superada",
+        "unverified": "No se pudo verificar"
+      },
+      "unchecked": "Sin revisión independiente",
+      "notVerified": "Sin verificar",
+      "decision": {
+        "accept": "aceptar",
+        "revise": "devolverlo",
+        "ask_owner": "preguntarte"
+      },
+      "assistant": "Asistente: {decision}",
+      "assistantWhy": "Asistente: {decision}, porque: {reason}",
+      "against": "Revisión: {verdict} · Asistente: {decision}, porque: {reason}",
+      "fallback": "El asistente no dio una conclusión: codeg siguió la revisión",
+      "owner": "Tu decisión: {decision}",
+      "question": "Te pregunta: {question}",
+      "usedUp": "{count, plural, one {Revisado # vez} other {Revisado # veces}}: todas las que permites",
+      "wouldSend": "Lo que diría al devolverlo",
+      "revise": "Devolverlo tal cual",
+      "accept": "Aceptarlo",
+      "recheck": "Revisar de nuevo",
+      "openTask": "Abrir tarea",
+      "accepted": "Aceptado",
+      "revised": "Devuelto para cambiarlo",
+      "void": "El árbol de trabajo cambió durante la revisión: esta ronda no vale",
+      "changed": "El árbol de trabajo cambió tras la revisión: esta aceptación ya no vale",
+      "changedAfterAccept": "El árbol de trabajo cambió después de aceptarlo",
+      "superseded": "Ya se volvió a revisar",
+      "stale": "Ya no aplica: no se hizo nada",
+      "merged": "Fusionado {commit}",
+      "delivered": "Entregado, commit de cabeza {head}",
+      "history": "Rondas anteriores",
+      "historyRevised": "Ronda {round}: devuelto — «{message}»",
+      "historyAccepted": "Ronda {round}: aceptado",
+      "historyAsked": "Ronda {round}: te lo preguntó",
+      "historyChanged": "Ronda {round}: aceptado, luego cambió el árbol de trabajo",
+      "historyOpen": "Ronda {round}: abierta"
     }
   }
 }

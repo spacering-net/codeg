@@ -101,6 +101,10 @@ pub struct Model {
     /// The input it was made for: `<kind>:<id>`.
     #[sea_orm(column_type = "Text", nullable)]
     pub for_input: Option<String>,
+    /// What done looks like, as the assistant wrote it when it dispatched
+    /// the work (7.5): its acceptance is judged against it.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub done_when: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

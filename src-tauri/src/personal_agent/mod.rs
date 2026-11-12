@@ -22,6 +22,7 @@
 //! The engine runs in the process that holds the work-task engine, next to
 //! it; any other process on the same data dir sees the page read-only.
 
+pub mod acceptance;
 pub mod activity;
 pub mod asks;
 pub mod ladder;

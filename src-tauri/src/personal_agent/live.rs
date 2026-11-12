@@ -276,6 +276,9 @@ async fn needs_of(
                 NoticeKind::Uncertain => "uncertain",
                 NoticeKind::Loop => "loop",
                 NoticeKind::Choice => "choice",
+                // The owner's call on an acceptance, or a check to run again
+                // (7.5).
+                NoticeKind::Acceptance => "acceptance",
                 _ => return None,
             };
             Some((n, kind))
@@ -371,12 +374,20 @@ pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbF
     let tasks = super::ladder::tasks_of(db, &dispatches).await;
     let ids: Vec<i32> = dispatches.iter().map(|d| d.id).collect();
     let answering = super::asks::answering_dispatches(db, &ids).await;
+    let views = {
+        let refs: Vec<&crate::db::entities::personal_agent_dispatch::Model> =
+            dispatches.iter().collect();
+        super::acceptance::views_of(db, &refs, &tasks).await
+    };
     let mut hand: Vec<HandWork> = dispatches
         .into_iter()
         .map(|d| {
-            let ladder = super::ladder::for_owner(
-                super::ladder::ladder_of(&d, d.work_task_id.and_then(|id| tasks.get(&id))),
-                answering.contains(&d.id),
+            let ladder = super::acceptance::ladder_with(
+                super::ladder::for_owner(
+                    super::ladder::ladder_of(&d, d.work_task_id.and_then(|id| tasks.get(&id))),
+                    answering.contains(&d.id),
+                ),
+                views.get(&d.id).copied(),
             );
             HandWork {
                 dispatch_id: d.id,

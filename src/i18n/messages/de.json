@@ -8222,6 +8222,30 @@
         "level_answered": {
           "title": "Für dich beantwortet",
           "hint": "Eine Frage aus einer vergebenen Sitzung, die ein Assistent für dich beantwortet hat."
+        },
+        "auto_accept": {
+          "title": "Automatische Abnahme",
+          "hint": "Wenn Code-Arbeit, die ein Assistent vergeben hat, zur Prüfung bereit ist, prüft eine andere Ausführungskonfiguration sie (nur lesend), und der Assistent nimmt sie anhand seiner Kriterien ab. Aus: Du prüfst selbst.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "accept_revise": {
+          "title": "Nach der Prüfung zurückschicken",
+          "hint": "Wenn der Assistent nach der Prüfung Änderungen will.",
+          "auto": "Automatisch zurückschicken",
+          "ask": "Frag mich vorher (auf der Abnahmekarte)"
+        },
+        "accept_rounds": {
+          "title": "Runden der Abnahmeprüfung",
+          "hint": "Nach so vielen Prüfungen entscheidest du, ob es noch einmal zurückgeht. 0 schickt nichts von selbst zurück."
+        },
+        "level_acceptance": {
+          "title": "Abnahme",
+          "hint": "Arbeit, die ihr Assistent abgenommen hat und du mergen kannst, gemergte Arbeit oder deine Abnahme-Entscheidung."
+        },
+        "level_used_up": {
+          "title": "Runden aufgebraucht, noch nicht richtig",
+          "hint": "Arbeit, die so oft zurückgeschickt wurde, wie du erlaubst, und noch nicht stimmt."
         }
       },
       "workdir": {
@@ -8459,7 +8483,11 @@
     "dispatchCard": {
       "continue": "Weiter: {title}",
       "notSent": "Nicht gesendet",
-      "more": "{count} weitere"
+      "more": "{count} weitere",
+      "doneWhen": "Fertig, wenn",
+      "check": "Abnahmeprüfung",
+      "checkRound": "Abnahmeprüfung · Runde {round}",
+      "checkVia": "mit der Ausführungskonfiguration von {name} geprüft"
     },
     "event": {
       "someone": "Ein Assistent",
@@ -8874,7 +8902,9 @@
       "you": "Braucht dich: {text}",
       "answerPlain": "Braucht deine Antwort",
       "approvalPlain": "Braucht deine Freigabe",
-      "youPlain": "Braucht dich"
+      "youPlain": "Braucht dich",
+      "acceptance": "Deine Abnahme-Entscheidung: {text}",
+      "acceptancePlain": "Deine Abnahme-Entscheidung"
     },
     "statusLine": {
       "steps": "Schritte dieser Runde",
@@ -8944,7 +8974,8 @@
       "failed": "Fehlgeschlagen",
       "paused": "Zurückgestellt",
       "canceled": "Abgebrochen",
-      "handed_over": "Übernommen"
+      "handed_over": "Übernommen",
+      "checking": "Wird geprüft"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# Datei} other {# Dateien}}",
@@ -9096,7 +9127,8 @@
         "canceled": "Gestoppt",
         "answered": "Für dich beantwortet",
         "changed": "Für dich geändert",
-        "undone": "Geändert, dann zurückgenommen"
+        "undone": "Geändert, dann zurückgenommen",
+        "acceptance": "Deine Abnahme-Entscheidung"
       },
       "session": {
         "permission": "Wartet auf deine Freigabe",
@@ -9109,7 +9141,8 @@
         "failed": "Fehlgeschlagen",
         "preparing": "Wird vorbereitet",
         "running": "Läuft",
-        "merging": "Wird zusammengeführt"
+        "merging": "Wird zusammengeführt",
+        "checking": "Wird geprüft"
       },
       "dispatch": {
         "queued": "In der Warteschlange",
@@ -9205,9 +9238,13 @@
           "presence": {
             "title": "Deine Zeiten lernen",
             "hint": "Aus deiner Zeit in codeg, damit ich dich passend erreiche."
+          },
+          "auto_accept": {
+            "title": "Code-Arbeit, die ich vergebe, prüfen und abnehmen",
+            "hint": "Eine andere Ausführungskonfiguration prüft sie nur lesend; ich beurteile sie nach dem, was du wolltest."
           }
         },
-        "later": "Morgenbriefing, Tagesabschluss, PR-Betreuung und automatische Abnahme kommen hier dazu, sobald sie fertig sind.",
+        "later": "Morgenbriefing, Tagesabschluss und PR-Betreuung kommen hier dazu, sobald sie fertig sind.",
         "team": "Ein Team bilden",
         "teamSuggested": "Team vorgeschlagen",
         "prefs": "Einstellungen anpassen",
@@ -9218,6 +9255,52 @@
         "collapse": "Einklappen",
         "unavailable": "Das lässt sich dort ändern, wo der Assistent läuft."
       }
+    },
+    "acceptance": {
+      "title": "Abnahme · Runde {round}",
+      "titleMax": "Abnahme · Runde {round} von höchstens {max}",
+      "people": "{executor} hat es gemacht · {checker} hat geprüft",
+      "peopleUnchecked": "{executor} hat es gemacht",
+      "check": "Prüfung:",
+      "verdict": {
+        "pass": "Bestanden",
+        "fail": "Nicht bestanden",
+        "unverified": "Nicht prüfbar"
+      },
+      "unchecked": "Nicht unabhängig geprüft",
+      "notVerified": "Nicht verifiziert",
+      "decision": {
+        "accept": "abnehmen",
+        "revise": "zurückschicken",
+        "ask_owner": "dich fragen"
+      },
+      "assistant": "Assistent: {decision}",
+      "assistantWhy": "Assistent: {decision}, weil: {reason}",
+      "against": "Prüfung: {verdict} · Assistent: {decision}, weil: {reason}",
+      "fallback": "Der Assistent hat nicht entschieden: codeg ist der Prüfung gefolgt",
+      "owner": "Deine Entscheidung: {decision}",
+      "question": "Fragt dich: {question}",
+      "usedUp": "{count, plural, one {# Runde geprüft} other {# Runden geprüft}} – so viele, wie du erlaubst",
+      "wouldSend": "Was beim Zurückschicken mitginge",
+      "revise": "So zurückschicken",
+      "accept": "Abnehmen",
+      "recheck": "Erneut prüfen",
+      "openTask": "Aufgabe öffnen",
+      "accepted": "Abgenommen",
+      "revised": "Zur Überarbeitung zurückgeschickt",
+      "void": "Der Arbeitsbaum hat sich während der Prüfung geändert – diese Runde ist ungültig",
+      "changed": "Der Arbeitsbaum hat sich nach der Prüfung geändert – diese Abnahme gilt nicht mehr",
+      "changedAfterAccept": "Der Arbeitsbaum hat sich nach der Abnahme geändert",
+      "superseded": "Inzwischen erneut geprüft",
+      "stale": "Gilt nicht mehr – nichts wurde ausgeführt",
+      "merged": "Gemergt {commit}",
+      "delivered": "Ausgeliefert, Head-Commit {head}",
+      "history": "Frühere Runden",
+      "historyRevised": "Runde {round}: zurückgeschickt – „{message}“",
+      "historyAccepted": "Runde {round}: abgenommen",
+      "historyAsked": "Runde {round}: dir vorgelegt",
+      "historyChanged": "Runde {round}: abgenommen, dann änderte sich der Arbeitsbaum",
+      "historyOpen": "Runde {round}: offen"
     }
   }
 }

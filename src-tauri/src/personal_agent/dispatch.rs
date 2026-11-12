@@ -46,6 +46,8 @@ pub const STOPPED_NOTE: &str = "stopped by the owner";
 pub const MAX_TITLE_CHARS: usize = 120;
 /// Longest prompt or follow-up message.
 pub const MAX_PROMPT_CHARS: usize = 20_000;
+/// Longest acceptance criteria (7.5).
+pub const MAX_DONE_WHEN_CHARS: usize = 4_000;
 
 /// A dispatch as the tool asked for it — and as a proposal card keeps it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -57,6 +59,9 @@ pub struct DispatchRequest {
     pub project_id: Option<i32>,
     pub report: bool,
     pub on_done: Option<String>,
+    /// What done looks like, criterion by criterion (7.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_when: Option<String>,
 }
 
 /// A dispatch checked against the roster and the projects, ready to record.
@@ -69,6 +74,7 @@ pub struct ValidDispatch {
     pub prompt: String,
     pub report: bool,
     pub on_done: Option<String>,
+    pub done_when: Option<String>,
     /// The input it is dispatched for, and the chain and thread it inherits
     /// from that input (`for`, 4.11); empty when nothing started it.
     pub lineage: svc::Lineage,
@@ -85,6 +91,7 @@ impl ValidDispatch {
             project_id: self.folder_id,
             report: self.report,
             on_done: self.on_done.clone(),
+            done_when: self.done_when.clone(),
         }
     }
 }
@@ -366,6 +373,19 @@ impl PersonalAgentEngine {
             .as_deref()
             .map(|s| cut(s, 2_000))
             .filter(|s| !s.is_empty());
+        let done_when = match req
+            .done_when
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(w) if w.chars().count() > MAX_DONE_WHEN_CHARS => {
+                return Err(format!(
+                    "`done_when` is longer than {MAX_DONE_WHEN_CHARS} characters"
+                ));
+            }
+            w => w.map(str::to_string),
+        };
         Ok(ValidDispatch {
             mode: req.mode,
             snapshot,
@@ -374,6 +394,7 @@ impl PersonalAgentEngine {
             prompt,
             report: req.report,
             on_done,
+            done_when,
             lineage: svc::Lineage::default(),
         })
     }
@@ -395,6 +416,7 @@ impl PersonalAgentEngine {
             prompt,
             report,
             on_done,
+            done_when,
             lineage,
         } = v;
         let thread = lineage.thread_id;
@@ -406,6 +428,7 @@ impl PersonalAgentEngine {
             project_id: folder_id,
             report,
             on_done: on_done.clone(),
+            done_when: done_when.clone(),
         };
         let key = ledger::dispatch_key(snapshot.assistant_id, mode, folder_id, &title);
         // A repeat costs nothing to find before anything is written.
@@ -438,6 +461,7 @@ impl PersonalAgentEngine {
             origin_batch_id,
             on_done: on_done.clone(),
             lineage,
+            done_when: done_when.clone(),
         };
         let payload = serde_json::to_value(&request).ok();
         let row = match &auth {
@@ -499,6 +523,8 @@ impl PersonalAgentEngine {
             "folder_id": folder_id,
             "deliverable": row.deliverable,
             "state": row.state,
+            // The assistant's acceptance criteria, for the owner to see (7.5).
+            "done_when": done_when,
         }));
         let card = self.push_row(card).await;
         let _ = svc::create_item(
@@ -746,7 +772,7 @@ impl PersonalAgentEngine {
 
     /// Start queued dispatches off the engine's loop: starting one spawns an
     /// agent, which must not hold up the events of everything else.
-    fn kick_queue(self: &std::sync::Arc<Self>) {
+    pub(super) fn kick_queue(self: &std::sync::Arc<Self>) {
         let engine = self.clone();
         tokio::spawn(async move {
             engine.start_queued().await;
@@ -1115,11 +1141,17 @@ impl PersonalAgentEngine {
             .ok()
             .flatten()
             .and_then(|d| d.round_op_id);
-        let excerpt = match self.manager.get_state(conn_id).await {
+        let full = match self.manager.get_state(conn_id).await {
             Some(state) => state.read().await.last_assistant_text.clone(),
             None => None,
+        };
+        // A check's verdict comes last, past what an excerpt keeps (7.5).
+        if let Some(text) = full.as_ref() {
+            if self.check_round_of(id).await.is_some() {
+                self.state.lock().await.check_texts.insert(id, text.clone());
+            }
         }
-        .map(|t| excerpt_of(&t));
+        let excerpt = full.map(|t| excerpt_of(&t));
         let (state, error) = end.outcome();
         if let Ok(Some(updated)) = svc::update_dispatch(
             &self.db.conn,
@@ -1196,6 +1228,15 @@ impl PersonalAgentEngine {
         cause: &str,
     ) {
         use crate::models::personal_agent_roster::FaceState;
+        // A check codeg sent out for an acceptance (7.5) is news of that
+        // acceptance, not work for the assistant to read — unless it waits
+        // on a permission, which is the owner's as any session's is.
+        if let Some(round) = self.check_round_of(d.id).await {
+            if d.state != DispatchState::WaitingInput {
+                self.check_progress(d, round, note, cause).await;
+                return;
+            }
+        }
         match d.state {
             DispatchState::Completed => self.flash_face(FaceState::Done).await,
             DispatchState::Failed | DispatchState::Interrupted => {
@@ -1216,7 +1257,24 @@ impl PersonalAgentEngine {
             DispatchMode::Task => task.as_ref().map(|t| t.run_seq).unwrap_or(0),
             _ => d.turns,
         };
-        let ladder = super::ladder::ladder_of(d, task.as_ref());
+        let mut ladder = super::ladder::ladder_of(d, task.as_ref());
+        // Code work its assistant accepts (7.5): in review, it is checked
+        // first — the assistant hears again once the check is back.
+        let accepting = match (d.state, task.as_ref()) {
+            (DispatchState::Review, Some(t)) => {
+                super::acceptance::wants_acceptance(d, t, &self.prefs().await)
+            }
+            _ => false,
+        };
+        if accepting {
+            ladder = crate::models::personal_agent_overview::Ladder::Checking;
+        }
+        // Accepted work that landed: the round records the merge commit and
+        // the owner hears it merged (instead of "done").
+        let landed = match (d.state, task.as_ref()) {
+            (DispatchState::Completed, Some(t)) => self.acceptance_landed(d, t).await,
+            _ => false,
+        };
         let source_key = format!("dispatch:{}:{}:{}:{}", d.id, round, enum_str(&d.state), cause);
         let mut summary = format!(
             "Dispatch #{} \"{}\" ({} · executor {}) {}.",
@@ -1235,6 +1293,12 @@ impl PersonalAgentEngine {
         if let Some(n) = note.as_deref() {
             summary.push_str(&format!(" ({n})"));
         }
+        if accepting {
+            summary.push_str(
+                " codeg has another executor check it (read-only) first; you get the check's \
+                 verdict to accept it — nothing to do until then.",
+            );
+        }
         // A pull request is not the end of code work: merged is (8.5).
         if ladder == crate::models::personal_agent_overview::Ladder::PrOpen {
             let pr = task.as_ref().map(super::ladder::pr_of).and_then(|(url, _)| url);
@@ -1249,7 +1313,7 @@ impl PersonalAgentEngine {
         let mut wake = !matches!(
             d.state,
             DispatchState::Queued | DispatchState::Running | DispatchState::HandedOver
-        );
+        ) && !accepting;
         // A question or a plan approval is told by its own card (7.3.1).
         let asking = d.state == DispatchState::WaitingInput && self.waits_on_ask(d).await;
         let quiet = matches!(d.state, DispatchState::Queued | DispatchState::Running) || asking;
@@ -1384,8 +1448,10 @@ impl PersonalAgentEngine {
         };
         let card_id = card.id;
         self.emit_rows(vec![svc::to_row(card)]);
-        // Done, failed or ready for review: the owner hears of it (1.13).
+        // Done, failed or ready for review: the owner hears of it (1.13) —
+        // of work being accepted, once it is (7.5).
         let what = match d.state {
+            _ if accepting || landed => None,
             DispatchState::Completed
                 if ladder == crate::models::personal_agent_overview::Ladder::PrOpen =>
             {
@@ -1425,6 +1491,8 @@ impl PersonalAgentEngine {
         }
         if let Ok(Some(item)) = svc::item_of_dispatch(&self.db.conn, d.id).await {
             let (status, waits_for) = match d.state {
+                // Being checked and accepted: nobody waits on the owner.
+                DispatchState::Review if accepting => (ItemStatus::Open, Some(WaitsFor::External)),
                 DispatchState::WaitingInput | DispatchState::Review => {
                     (ItemStatus::Waiting, Some(WaitsFor::Owner))
                 }

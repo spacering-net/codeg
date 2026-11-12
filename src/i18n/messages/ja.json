@@ -8222,6 +8222,30 @@
         "level_answered": {
           "title": "代わりに回答",
           "hint": "依頼したセッションからの質問に、アシスタントが代わりに答えた。"
+        },
+        "auto_accept": {
+          "title": "自動検収",
+          "hint": "アシスタントが出したコード変更の作業がレビュー待ちになると、別の実行設定が読み取り専用で確認し、アシスタントが完了条件に照らして判断します。オフにすると自分で確認します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "accept_revise": {
+          "title": "確認後の差し戻し",
+          "hint": "確認のあとアシスタントが修正を求めるとき。",
+          "auto": "自動で差し戻す",
+          "ask": "先に確認して（検収カードで）"
+        },
+        "accept_rounds": {
+          "title": "検収の確認の回数",
+          "hint": "この回数を確認してもまだ差し戻すなら、あなたが判断します。0 は自動で差し戻しません。"
+        },
+        "level_acceptance": {
+          "title": "検収",
+          "hint": "出した作業が検収を通ってマージできる、マージした、またはあなたの判断が必要なとき。"
+        },
+        "level_used_up": {
+          "title": "回数を使い切っても不合格",
+          "hint": "許可された回数まで差し戻してもまだ通らないとき。"
         }
       },
       "workdir": {
@@ -8459,7 +8483,11 @@
     "dispatchCard": {
       "continue": "続き：{title}",
       "notSent": "送信されませんでした",
-      "more": "ほか {count} 件"
+      "more": "ほか {count} 件",
+      "doneWhen": "完了条件",
+      "check": "検収の確認",
+      "checkRound": "検収の確認 · {round} 回目",
+      "checkVia": "{name} の実行設定で確認"
     },
     "event": {
       "someone": "アシスタント",
@@ -8874,7 +8902,9 @@
       "you": "あなたの対応が必要：{text}",
       "answerPlain": "あなたの回答が必要",
       "approvalPlain": "あなたの承認が必要",
-      "youPlain": "あなたの対応が必要"
+      "youPlain": "あなたの対応が必要",
+      "acceptance": "検収の判断が必要：{text}",
+      "acceptancePlain": "検収の判断が必要"
     },
     "statusLine": {
       "steps": "このターンのステップ",
@@ -8944,7 +8974,8 @@
       "failed": "失敗",
       "paused": "保留",
       "canceled": "キャンセル",
-      "handed_over": "引き継ぎ済み"
+      "handed_over": "引き継ぎ済み",
+      "checking": "検収中"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>、{files} ファイル",
@@ -9096,7 +9127,8 @@
         "canceled": "停止",
         "answered": "代わりに回答",
         "changed": "代わりに変更",
-        "undone": "変更後、元に戻した"
+        "undone": "変更後、元に戻した",
+        "acceptance": "検収の判断が必要"
       },
       "session": {
         "permission": "承認待ち",
@@ -9109,7 +9141,8 @@
         "failed": "失敗",
         "preparing": "準備中",
         "running": "実行中",
-        "merging": "マージ中"
+        "merging": "マージ中",
+        "checking": "検収中"
       },
       "dispatch": {
         "queued": "待機中",
@@ -9205,9 +9238,13 @@
           "presence": {
             "title": "あなたの生活リズムを学ぶ",
             "hint": "codeg にいる時間から、ちょうどよいときに連絡します。"
+          },
+          "auto_accept": {
+            "title": "出したコード変更の作業を確認して検収する",
+            "hint": "別の実行設定が読み取り専用で確認し、あなたの要望に照らして私が判断します。"
           }
         },
-        "later": "朝のまとめ・締めくくり・PR の見守り・自動検収も、できあがりしだいここに加わります。",
+        "later": "朝のまとめ・締めくくり・PR の見守りも、できあがりしだいここに加わります。",
         "team": "チームを作る",
         "teamSuggested": "チームを提案済み",
         "prefs": "設定を調整",
@@ -9218,6 +9255,52 @@
         "collapse": "たたむ",
         "unavailable": "アシスタントが動いている側で変更できます。"
       }
+    },
+    "acceptance": {
+      "title": "検収 · {round} 回目",
+      "titleMax": "検収 · {round} 回目（最大 {max} 回）",
+      "people": "{executor} が作業 · {checker} が確認",
+      "peopleUnchecked": "{executor} が作業",
+      "check": "確認：",
+      "verdict": {
+        "pass": "合格",
+        "fail": "不合格",
+        "unverified": "確認できず"
+      },
+      "unchecked": "独立した確認なし",
+      "notVerified": "未検証",
+      "decision": {
+        "accept": "合格",
+        "revise": "差し戻し",
+        "ask_owner": "あなたに確認"
+      },
+      "assistant": "アシスタント：{decision}",
+      "assistantWhy": "アシスタント：{decision}（理由：{reason}）",
+      "against": "確認：{verdict} · アシスタント：{decision}（理由：{reason}）",
+      "fallback": "アシスタントが結論を出さなかったため、確認結果に従いました",
+      "owner": "あなたの判断：{decision}",
+      "question": "質問：{question}",
+      "usedUp": "{count} 回確認しました。許可された回数に達しています",
+      "wouldSend": "差し戻すときに送る修正内容",
+      "revise": "この内容で差し戻す",
+      "accept": "合格にする",
+      "recheck": "もう一度確認",
+      "openTask": "タスクを開く",
+      "accepted": "合格",
+      "revised": "差し戻しました",
+      "void": "確認中にワークツリーが変更されたため、この回は無効です",
+      "changed": "確認後にワークツリーが変更されたため、検収は無効になりました",
+      "changedAfterAccept": "検収後にワークツリーが変わりました",
+      "superseded": "その後に再確認しました",
+      "stale": "無効になりました。実行していません",
+      "merged": "マージ済み {commit}",
+      "delivered": "納品済み、先頭コミット {head}",
+      "history": "これまでの回",
+      "historyRevised": "{round} 回目：差し戻し「{message}」",
+      "historyAccepted": "{round} 回目：合格",
+      "historyAsked": "{round} 回目：あなたに確認",
+      "historyChanged": "{round} 回目：合格後にワークツリーが変更",
+      "historyOpen": "{round} 回目：進行中"
     }
   }
 }

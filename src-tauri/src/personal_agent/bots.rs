@@ -1061,6 +1061,12 @@ impl PersonalAgentEngine {
                 }
             }
             drop(routes);
+            // Their acceptance cards are the primary's now (7.5).
+            match self.host_ref() {
+                Some(h) => h.primary().adopt_acceptances(&ids).await,
+                None if self.bot().await == primary.id => self.adopt_acceptances(&ids).await,
+                None => {}
+            }
             if !live.is_empty() {
                 let list = live
                     .iter()

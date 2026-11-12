@@ -11,7 +11,8 @@
  * read the rest under it. The latest news of a task carries its task card
  * (`TaskStrip`, 8.5) under the row. It quotes the reply that dispatched (or last
  * continued) the work, unless that is the message right above. Unread until
- * the assistant starts on it.
+ * the assistant starts on it. The news of an acceptance check (7.5) says
+ * which round it checked and what it found, with its evidence as the text.
  */
 
 import { useTranslations } from "next-intl"
@@ -24,6 +25,7 @@ import { useCollapsibleOverflow } from "@/hooks/use-collapsible-overflow"
 import type { AgentType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { asVerdict, CheckLabel, VerdictChip } from "./acceptance-bits"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
@@ -179,6 +181,13 @@ export function EventCard({ item }: { item: EventItem }) {
   const retry = useRetryLine()(data?.auto_retry)
   const target = workTargetOf(info, row)
   const unread = row.read_at == null
+  // The acceptance check of other work (7.5): its verdict, and its evidence
+  // as the text.
+  const checkFor = num(data, "check_for")
+  const checkRound = num(data, "check_round")
+  const verdict = asVerdict(data?.verdict)
+  const evidence = str(data, "evidence")
+  const shown = checkFor != null && evidence ? evidence : excerpt
   return (
     <MessageRow
       rowId={row.id}
@@ -250,7 +259,18 @@ export function EventCard({ item }: { item: EventItem }) {
             {retry}
           </p>
         ) : null}
-        {excerpt ? <CollapsedText text={excerpt} /> : null}
+        {checkFor != null ? (
+          <div
+            className="mt-2 flex flex-wrap items-center gap-1.5"
+            data-pa-check-result={verdict ?? ""}
+          >
+            <CheckLabel round={checkRound} via={null} />
+            {data?.verdict !== undefined && data?.verdict !== null ? (
+              <VerdictChip verdict={verdict} />
+            ) : null}
+          </div>
+        ) : null}
+        {shown ? <CollapsedText text={shown} /> : null}
       </div>
     </MessageRow>
   )

@@ -61,6 +61,24 @@ fn lenient_retry_rounds<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error
         .unwrap_or(DEFAULT_RETRY_ROUNDS))
 }
 
+/// How many rounds of checks one piece of work gets before its assistant's
+/// sending it back again goes to the owner instead (7.5); 0 sends nothing
+/// back on its own.
+pub const DEFAULT_ACCEPT_ROUNDS: u32 = 3;
+/// The most rounds that can be set.
+pub const MAX_ACCEPT_ROUNDS: u32 = 10;
+
+fn default_accept_rounds() -> u32 {
+    DEFAULT_ACCEPT_ROUNDS
+}
+
+fn lenient_accept_rounds<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_u64()
+        .map(|n| n.min(MAX_ACCEPT_ROUNDS as u64) as u32)
+        .unwrap_or(DEFAULT_ACCEPT_ROUNDS))
+}
+
 fn lenient_rounds<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let v = Value::deserialize(d)?;
     Ok(v.as_u64()
@@ -397,6 +415,16 @@ pub const NEWS: &[(&str, Level, &str)] = &[
     ("exchange", Level::Low, "assistants' messages to each other"),
     ("changed", Level::Low, "settings changed as they asked"),
     ("answered", Level::Low, "questions answered for them"),
+    (
+        "acceptance",
+        Level::Normal,
+        "acceptance of dispatched work: ready to merge, merged, a call to make",
+    ),
+    (
+        "used_up",
+        Level::Urgent,
+        "work sent back as many rounds as allowed, still not right",
+    ),
 ];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -447,6 +475,21 @@ pub struct Prefs {
     /// An executor's plan approvals (7.3.1).
     #[serde(default, deserialize_with = "lenient")]
     pub exec_plans: ExecAnswers,
+    /// Code work an assistant dispatched is checked and accepted on its own
+    /// (7.5); off, it waits for the owner's review as before.
+    #[serde(default, deserialize_with = "lenient")]
+    pub auto_accept: OnOff,
+    /// Work its assistant wants changed after the check: sent back at once,
+    /// or put to the owner on the acceptance card first.
+    #[serde(default, deserialize_with = "lenient")]
+    pub accept_revise: AskFirst,
+    /// Rounds of checks one piece of work gets; 0 sends nothing back on its
+    /// own.
+    #[serde(
+        default = "default_accept_rounds",
+        deserialize_with = "lenient_accept_rounds"
+    )]
+    pub accept_rounds: u32,
     /// The owner's time zone: `system`, or an IANA name (1.12).
     #[serde(default = "default_zone", deserialize_with = "lenient_zone")]
     pub time_zone: String,
@@ -512,6 +555,10 @@ pub struct Prefs {
     pub level_changed: Level,
     #[serde(default = "low", deserialize_with = "lenient_low")]
     pub level_answered: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_acceptance: Level,
+    #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
+    pub level_used_up: Level,
 }
 
 impl Default for Prefs {
@@ -530,6 +577,9 @@ impl Default for Prefs {
             retry_rounds: DEFAULT_RETRY_ROUNDS,
             exec_questions: ExecAnswers::default(),
             exec_plans: ExecAnswers::default(),
+            auto_accept: OnOff::default(),
+            accept_revise: AskFirst::default(),
+            accept_rounds: DEFAULT_ACCEPT_ROUNDS,
             time_zone: default_zone(),
             presence: OnOff::default(),
             proactive: OnOff::default(),
@@ -555,6 +605,8 @@ impl Default for Prefs {
             level_exchange: Level::Low,
             level_changed: Level::Low,
             level_answered: Level::Low,
+            level_acceptance: Level::Normal,
+            level_used_up: Level::Urgent,
         }
     }
 }
@@ -654,6 +706,23 @@ pub const PREFS: &[PrefSpec] = &[
         key: "exec_plans",
         kind: PrefKind::Choice(&["assistant", "owner"]),
         label: "plan approvals from the sessions you dispatched",
+    },
+    PrefSpec {
+        key: "auto_accept",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "checking and accepting the code work you dispatched",
+    },
+    PrefSpec {
+        key: "accept_revise",
+        kind: PrefKind::Choice(&["auto", "ask"]),
+        label: "sending work back after its check",
+    },
+    PrefSpec {
+        key: "accept_rounds",
+        kind: PrefKind::Count {
+            max: MAX_ACCEPT_ROUNDS,
+        },
+        label: "rounds of checks one piece of work gets",
     },
     PrefSpec {
         key: "time_zone",
@@ -783,6 +852,16 @@ pub const PREFS: &[PrefSpec] = &[
         kind: PrefKind::Choice(LEVELS),
         label: "how urgent questions answered for the owner are",
     },
+    PrefSpec {
+        key: "level_acceptance",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent acceptance news is (ready to merge, merged, a call to make)",
+    },
+    PrefSpec {
+        key: "level_used_up",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent work sent back as many rounds as allowed is",
+    },
 ];
 
 /// The "automation level" (13.4): a preset over the items below — not
@@ -839,6 +918,7 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("interrupt_retry", json!("auto")),
             ("exec_questions", json!("assistant")),
             ("exec_plans", json!("assistant")),
+            ("accept_revise", json!("auto")),
         ]),
         "ask_more" => Some(vec![
             ("confirm_dispatch", json!("code")),
@@ -848,6 +928,7 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("interrupt_retry", json!("ask")),
             ("exec_questions", json!("owner")),
             ("exec_plans", json!("owner")),
+            ("accept_revise", json!("ask")),
         ]),
         _ => None,
     }
@@ -976,8 +1057,16 @@ impl Prefs {
             "exchange" => self.level_exchange,
             "changed" => self.level_changed,
             "answered" => self.level_answered,
+            "acceptance" => self.level_acceptance,
+            "used_up" => self.level_used_up,
             _ => Level::Normal,
         }
+    }
+
+    /// Whether code work an assistant dispatched is checked and accepted
+    /// on its own (7.5).
+    pub fn accepts(&self) -> bool {
+        self.auto_accept == OnOff::On
     }
 
     /// Whether codeg reaches out to the owner with more than reminders.
@@ -1046,6 +1135,23 @@ fn brain_value(key: &str, value: &Value) -> String {
         ("exec_questions" | "exec_plans", "owner") => {
             "they go to the owner; you are told, nothing to answer".into()
         }
+        ("auto_accept", "on") => {
+            "on: when code work you dispatched is ready for review, codeg has another \
+             executor check it (read-only) and you accept it with acceptance_decide"
+                .into()
+        }
+        ("auto_accept", "off") => {
+            "off: code work ready for review waits for the owner's own review".into()
+        }
+        ("accept_revise", "auto") => "sent back to the executor at once".into(),
+        ("accept_revise", "ask") => {
+            "put to the owner on the acceptance card, with what you would send back".into()
+        }
+        ("accept_rounds", _) => match value.as_u64() {
+            Some(0) => "none: nothing is sent back on its own; the owner decides".into(),
+            Some(n) => format!("at most {n} checks, then it is the owner's call"),
+            None => value.to_string(),
+        },
         ("time_zone", SYSTEM_ZONE) => "the system's — <codeg-now> gives it".into(),
         ("time_zone", zone) => format!("{zone} — <codeg-now> gives the time in it"),
         ("presence", "on") => {

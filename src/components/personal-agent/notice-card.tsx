@@ -16,6 +16,8 @@
  *   circle, and codeg stopped their exchange: [See the exchange], [Let them
  *   go on] (three rounds more), [I'll handle it].
  * - **reminder**: a matter that came due (`./reminder-card.tsx`).
+ * - **acceptance**: a round of acceptance of code work an assistant handed
+ *   out (`./acceptance-card.tsx`, 7.5).
  * - **stopped**: what the owner's stop took with it — the work the turn
  *   handed out, the messages nobody had started on — and what it could not:
  *   messages another assistant is already working on, each with [Stop this
@@ -56,6 +58,7 @@ import {
   type SettingsPage,
 } from "@/stores/personal-agent-ui-store"
 
+import { AcceptanceCard } from "./acceptance-card"
 import { AskCard } from "./ask-card"
 import { BotAvatar } from "./bot-avatar"
 import { ChoiceCard } from "./choice-card"
@@ -133,6 +136,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "starter") return <StarterCard item={item} />
   if (kind === "ask") return <AskCard item={item} />
   if (kind === "reminder") return <ReminderCard item={item} />
+  if (kind === "acceptance") return <AcceptanceCard item={item} />
   return null
 }
 

@@ -1460,6 +1460,11 @@
           "maxLength": 2000,
           "description": "What you should do once it finishes, e.g. 'remind the owner to release after the review passes'. Handed back to you with the completion event."
         },
+        "done_when": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "What done looks like, criterion by criterion — e.g. '1. a cold start no longer shows a blank screen; 2. the existing tests pass; 3. the public API is unchanged'. The owner sees it on the dispatch card. For code work (task) codeg has another executor check the result against it, and you accept it with acceptance_decide; it also guides how you answer the executor's questions. Write it in the owner's language."
+        },
         "for": {
           "type": "string",
           "description": "The input of this turn the work is for — its id as the delivery shows it: an owner's message #58, another assistant's message m12, news #61. The dispatch is filed under where that input came from. Needed only when the turn carries inputs from more than one source; otherwise leave it out."
@@ -1569,6 +1574,47 @@
           "type": "string",
           "maxLength": 1000,
           "description": "One sentence: what the answer (or forwarding it) rests on."
+        }
+      }
+    }
+  },
+  {
+    "name": "acceptance_decide",
+    "description": "Conclude a round of acceptance of code work you dispatched — the <codeg-acceptance> block: the check another executor ran (read-only) against your acceptance criteria, and the facts of the work. `accept` when it does what the owner wanted: the owner is told it can be merged, and the board merges it when its settings say so. `revise` with `message` when something must change: write it from what the owner wanted — leave out points of the check that go against what they asked or do not matter, add what it missed that they care about; the task goes back to its executor and is checked again when ready. `ask_owner` with `question` when you cannot settle it (a trade-off nothing they said decides); put in `message` what you would send back, so they can do that with one click. You may disagree with the check's verdict — then say why in `reason`. The round is the one this delivery carried; a round whose task or worktree changed since its check is refused, and nothing is done.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "dispatch_id",
+        "decision"
+      ],
+      "properties": {
+        "dispatch_id": {
+          "type": "integer",
+          "description": "The dispatch on the <codeg-acceptance> block."
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "accept",
+            "revise",
+            "ask_owner"
+          ],
+          "description": "accept, revise or ask_owner."
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "One or two sentences on what the conclusion rests on; required when you go against the check's verdict."
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "revise: what the executor is to change (required). ask_owner: what sending it back would say."
+        },
+        "question": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "ask_owner: what the owner is to decide (required)."
         }
       }
     }

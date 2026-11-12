@@ -447,6 +447,27 @@ pub struct DispatchInfo {
     /// How many of its executor's questions and plan approvals its assistant
     /// answered for the owner (7.3.1).
     pub answered_for_you: u32,
+    /// What done looks like, as its assistant wrote it (7.5).
+    pub done_when: Option<String>,
+    /// Its latest round of acceptance, when it has one (7.5).
+    pub acceptance: Option<AcceptanceInfo>,
+    /// For a check codeg sent out: the dispatch it checks, and which round.
+    pub check_for: Option<i32>,
+    pub check_round: Option<i32>,
+}
+
+/// A round of acceptance, as a dispatch card shows it (7.5).
+#[derive(Debug, Clone, Serialize)]
+pub struct AcceptanceInfo {
+    pub round_id: i32,
+    pub round: i32,
+    pub state: crate::db::entities::personal_agent_verification::VerificationState,
+    pub verdict: Option<crate::db::entities::personal_agent_verification::CheckVerdict>,
+    pub unchecked: bool,
+    pub decided_by: Option<crate::db::entities::personal_agent_verification::DecidedBy>,
+    pub check_dispatch_id: Option<i32>,
+    /// It is about the task's current run (not an earlier version's).
+    pub current: bool,
 }
 
 /// Where a conversation opens: its project and the agent that reads it.

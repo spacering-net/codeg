@@ -2954,7 +2954,8 @@ export async function personalAgentNoticeAct(
    *  `snooze:<15m|1h|tomorrow>` or `hand_over`; getting to know the owner:
    *  the projects card's `skip`, the first-thing card's `hand` (with its
    *  words), `next` and `dismiss`, and `done` or `team` on what the
-   *  assistants do on their own. */
+   *  assistants do on their own; an acceptance card's `revise` (send it
+   *  back with the card's words), `accept` or `recheck` (7.5). */
   action: NoticeAction,
   bot?: number | null,
   /** `hand_over` and `hand`: the owner's words, posted as their message
@@ -2986,6 +2987,8 @@ export type NoticeAction =
   | "hand"
   | "next"
   | "team"
+  | "revise"
+  | "recheck"
 
 export async function personalAgentAnswerQuestion(
   questionId: string,

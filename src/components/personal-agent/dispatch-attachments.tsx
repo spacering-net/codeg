@@ -10,7 +10,9 @@
  * the drawer on the right (a task's own, or the conversation a chat or
  * session dispatch runs in); a chevron says it does. The rest — the agent's
  * mark, the kind of work and where — is the news card's, from the assistant
- * that ran it, which comes later in the list.
+ * that ran it, which comes later in the list. Under a pill, the
+ * assistant's acceptance criteria when it wrote them (7.5); over the pill of
+ * the check codeg sent out for an acceptance, which round it checks.
  */
 
 import { useEffect, useState } from "react"
@@ -30,6 +32,7 @@ import {
   useOpenWork,
   workTargetOf,
 } from "./shared"
+import { CheckLabel, DoneWhen } from "./acceptance-bits"
 import { WorkPill } from "./work-card"
 
 /** Pills shown before the rest fold into "N more". */
@@ -66,7 +69,17 @@ function DispatchPill({
     running && info ? elapsedLabel(now - Date.parse(info.updated_at)) : null
   const target = workTargetOf(info, row)
   const title = info?.title ?? row.body
-  return (
+  // The acceptance check of other work (7.5): which round, and whose
+  // executor config checks it.
+  const checkFor = info?.check_for ?? num(data, "check_for")
+  const checkRound = info?.check_round ?? num(data, "check_round")
+  const via = data?.check_via
+  const viaName =
+    via && typeof via === "object"
+      ? str(via as Record<string, unknown>, "name")
+      : null
+  const doneWhen = info?.done_when ?? str(data, "done_when")
+  const pill = (
     <WorkPill
       rowId={row.id}
       state={state}
@@ -77,6 +90,18 @@ function DispatchPill({
       elapsed={elapsed}
       onOpen={canOpenWork(target) ? () => openWork(target) : null}
     />
+  )
+  if (checkFor == null && !doneWhen) return pill
+  return (
+    <div className="flex max-w-full min-w-0 flex-col items-start gap-1">
+      {checkFor != null ? (
+        <CheckLabel round={checkRound} via={viaName} className="ps-1" />
+      ) : null}
+      {pill}
+      {doneWhen && data?.followup !== true ? (
+        <DoneWhen text={doneWhen} className="ps-1" />
+      ) : null}
+    </div>
   )
 }
 
