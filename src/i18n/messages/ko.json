@@ -2405,7 +2405,6 @@
       "restore": "복원",
       "attachToCurrentSession": "세션에 추가",
       "rename": "이름 변경",
-      "moveToProject": "프로젝트로 이동…",
       "status": "상태",
       "delete": "삭제",
       "importLocalSessions": "로컬 세션 가져오기",
@@ -2423,15 +2422,17 @@
       "collapseSubsessions": "하위 대화 접기"
     },
     "moveConversation": {
-      "title": "다른 프로젝트로 이동",
-      "titleMany": "대화 {count}개를 다른 프로젝트로 이동",
-      "targetLabel": "프로젝트",
-      "targetPlaceholder": "프로젝트 선택",
-      "explain": "다음 메시지부터 에이전트는 {path}에서 작업합니다. 기록은 그대로 유지됩니다. 에이전트가 새 디렉터리에서 세션을 재개하지 못하면 다시 불러오거나 새 세션을 시작하라는 안내가 표시됩니다.",
-      "explainNoTarget": "다음 메시지부터 에이전트는 선택한 프로젝트의 디렉터리에서 작업합니다. 기록은 그대로 유지됩니다.",
-      "chatFilesNote": "채팅 중에 만든 파일은 임시 디렉터리 {path}에 남으며 프로젝트로 옮겨지지 않습니다.",
-      "chatFilesNoteMany": "이 채팅들에서 만든 파일은 각자의 임시 디렉터리에 남으며 프로젝트로 옮겨지지 않습니다.",
-      "noTargets": "이동할 수 있는 다른 열린 프로젝트가 없습니다.",
+      "menuLabel": "이동",
+      "title": "대화 이동",
+      "titleMany": "대화 {count}개 이동",
+      "intro": "“{title}” 대화를 다음 폴더로 이동합니다:",
+      "introMany": "선택한 대화 {count}개를 다음 폴더로 이동합니다:",
+      "untitledConversation": "제목 없는 대화",
+      "explain": "다음 메시지부터 에이전트는 이 폴더에서 작업합니다. 기록은 그대로 유지됩니다. 에이전트가 새 디렉터리에서 세션을 재개하지 못하면 다시 불러오거나 새 세션을 시작하라는 안내가 표시됩니다.",
+      "chatFilesNote": "채팅 중에 만든 파일은 임시 디렉터리 {path}에 남으며 폴더로 옮겨지지 않습니다.",
+      "chatFilesNoteMany": "이 채팅들에서 만든 파일은 각자의 임시 디렉터리에 남으며 폴더로 옮겨지지 않습니다.",
+      "noTargets": "열려 있는 다른 폴더가 없습니다",
+      "targetUnavailable": "이 폴더는 닫혔거나 제거되었습니다. 다른 폴더를 선택하세요.",
       "cancel": "취소",
       "move": "이동",
       "toastMoved": "대화 {count}개를 {folder}(으)로 이동했습니다",
@@ -2440,11 +2441,11 @@
       "skipReason": {
         "not_found": "더 이상 존재하지 않습니다",
         "not_movable": "하위 대화는 상위 대화와 함께 이동합니다",
-        "already_there": "이미 이 프로젝트에 있습니다",
+        "already_there": "이미 이 폴더에 있습니다",
         "task_owned": "할 일 작업에 속해 있습니다",
         "busy": "에이전트가 작업 중입니다. 끝난 뒤 다시 시도하세요",
         "conflict": "이동하는 동안 변경되었습니다. 다시 시도하세요",
-        "target_unavailable": "대상 프로젝트가 닫혔거나 제거되었습니다"
+        "target_unavailable": "대상 폴더가 닫혔거나 제거되었습니다"
       }
     },
     "search": {

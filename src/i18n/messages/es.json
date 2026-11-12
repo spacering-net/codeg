@@ -2405,7 +2405,6 @@
       "restore": "Restaurar",
       "attachToCurrentSession": "Agregar a la sesión",
       "rename": "Renombrar",
-      "moveToProject": "Mover a un proyecto…",
       "status": "Estado",
       "delete": "Eliminar",
       "importLocalSessions": "Importar sesiones locales",
@@ -2423,15 +2422,17 @@
       "collapseSubsessions": "Contraer subconversaciones"
     },
     "moveConversation": {
-      "title": "Mover a otro proyecto",
-      "titleMany": "Mover {count, plural, one {# conversación} other {# conversaciones}} a otro proyecto",
-      "targetLabel": "Proyecto",
-      "targetPlaceholder": "Elige un proyecto",
-      "explain": "A partir del siguiente mensaje, el agente trabaja en {path}. El historial no cambia. Si el agente no puede reanudar la sesión en el nuevo directorio, se te ofrecerá recargarla o iniciar una sesión nueva.",
-      "explainNoTarget": "A partir del siguiente mensaje, el agente trabaja en el directorio del proyecto elegido. El historial no cambia.",
-      "chatFilesNote": "Los archivos creados durante el chat se quedan en su directorio temporal {path}; no se mueven al proyecto.",
-      "chatFilesNoteMany": "Los archivos creados durante estos chats se quedan en sus directorios temporales; no se mueven al proyecto.",
-      "noTargets": "No hay otro proyecto abierto al que moverla.",
+      "menuLabel": "Mover a",
+      "title": "Mover conversación",
+      "titleMany": "Mover {count, plural, one {# conversación} other {# conversaciones}}",
+      "intro": "«{title}» se moverá a esta carpeta:",
+      "introMany": "{count, plural, one {La conversación seleccionada se moverá} other {Las # conversaciones seleccionadas se moverán}} a esta carpeta:",
+      "untitledConversation": "Conversación sin título",
+      "explain": "A partir del siguiente mensaje, el agente trabaja en esta carpeta; el historial no cambia. Si el agente no puede reanudar la sesión aquí, se te ofrecerá recargarla o iniciar una sesión nueva.",
+      "chatFilesNote": "Los archivos creados durante el chat se quedan en su directorio temporal {path}; no se mueven a la carpeta.",
+      "chatFilesNoteMany": "Los archivos creados durante estos chats se quedan en sus directorios temporales; no se mueven a la carpeta.",
+      "noTargets": "No hay otra carpeta abierta",
+      "targetUnavailable": "Esta carpeta se cerró o se eliminó; elige otra.",
       "cancel": "Cancelar",
       "move": "Mover",
       "toastMoved": "{count, plural, one {Se movió # conversación} other {Se movieron # conversaciones}} a {folder}",
@@ -2440,11 +2441,11 @@
       "skipReason": {
         "not_found": "Ya no existe",
         "not_movable": "Las subconversaciones se mueven con su conversación principal",
-        "already_there": "Ya está en este proyecto",
+        "already_there": "Ya está en esta carpeta",
         "task_owned": "Pertenece a una tarea pendiente",
         "busy": "Un agente está trabajando en ella; inténtalo cuando termine",
         "conflict": "Cambió mientras se movía; inténtalo de nuevo",
-        "target_unavailable": "El proyecto se cerró o se eliminó"
+        "target_unavailable": "La carpeta se cerró o se eliminó"
       }
     },
     "search": {

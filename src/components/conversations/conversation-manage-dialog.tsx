@@ -16,7 +16,6 @@ import {
   CheckSquare,
   ChevronDown,
   ChevronRight,
-  FolderInput,
   GitBranch,
   ListChecks,
   Loader2,
@@ -108,7 +107,11 @@ import { cn } from "@/lib/utils"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { toErrorMessage } from "@/lib/app-error"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
-import { MoveConversationDialog } from "@/components/conversations/move-conversation-dialog"
+import {
+  MoveConversationDialog,
+  sharedFolderId,
+} from "@/components/conversations/move-conversation-dialog"
+import { MoveToFolderButton } from "@/components/conversations/move-to-folder-menu"
 
 interface ConversationManageDialogProps {
   open: boolean
@@ -547,7 +550,8 @@ export function ConversationManageDialog({
   const [pending, setPending] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [moveOpen, setMoveOpen] = useState(false)
+  // The folder picked from "Move to…", awaiting confirmation.
+  const [moveFolderId, setMoveFolderId] = useState<number | null>(null)
 
   // History remains filterable when an agent is disabled or removed. Prefer
   // the live registry's order, retain built-ins while it loads, and include
@@ -1134,16 +1138,12 @@ export function ConversationManageDialog({
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              {/* Move to another project */}
-              <Button
-                size="sm"
-                variant="outline"
+              {/* Move to another folder: pick it here, confirm in a dialog */}
+              <MoveToFolderButton
+                currentFolderId={sharedFolderId(selectedConversations)}
                 disabled={selectedCount === 0 || pending}
-                onClick={() => setMoveOpen(true)}
-              >
-                <FolderInput className="h-3.5 w-3.5 mr-1" />
-                {t("moveSelected")}
-              </Button>
+                onPick={setMoveFolderId}
+              />
 
               {/* Delete */}
               <Button
@@ -1196,9 +1196,10 @@ export function ConversationManageDialog({
       </AlertDialog>
 
       <MoveConversationDialog
-        open={moveOpen}
-        onOpenChange={setMoveOpen}
+        open={moveFolderId !== null}
+        onOpenChange={(o) => !o && setMoveFolderId(null)}
         conversations={selectedConversations}
+        targetFolderId={moveFolderId}
         onMoved={handleMoved}
       />
     </>

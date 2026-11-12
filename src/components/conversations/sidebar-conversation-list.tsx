@@ -2143,6 +2143,20 @@ export function SidebarConversationList({
     setManageFolderId(folderId)
   }, [])
 
+  // From a row: the folder whose header the row is listed under — its own
+  // folder, or the repo a worktree session is merged into while "Show
+  // worktrees" is off — so the dialog opens on the group the user is looking
+  // at, like that header's own menu entry would.
+  const handleManageConversationsFor = useCallback(
+    (conversation: DbConversationSummary) => {
+      setManageFolderId(
+        displayChildToParent.get(conversation.folder_id) ??
+          conversation.folder_id
+      )
+    },
+    [displayChildToParent]
+  )
+
   const handleManageFolderTags = useCallback((folderId: number) => {
     openConversationTagsManager({ folderId })
   }, [])
@@ -2237,18 +2251,21 @@ export function SidebarConversationList({
     [updateConversationLocal]
   )
 
-  // "Move to project…" — one dialog for the whole list, like the other
-  // per-row actions, so the card memo keeps bailing out on a stable callback.
-  const [moveTarget, setMoveTarget] = useState<DbConversationSummary | null>(
-    null
-  )
-  const handleMoveToProject = useCallback(
-    (conversation: DbConversationSummary) => setMoveTarget(conversation),
+  // "Move to folder" — the row's submenu picks the folder, this one dialog for
+  // the whole list confirms it, so the card memo keeps bailing out on a stable
+  // callback.
+  const [moveRequest, setMoveRequest] = useState<{
+    conversation: DbConversationSummary
+    folderId: number
+  } | null>(null)
+  const handleMoveToFolder = useCallback(
+    (conversation: DbConversationSummary, folderId: number) =>
+      setMoveRequest({ conversation, folderId }),
     []
   )
-  const moveTargets = useMemo(
-    () => (moveTarget ? [moveTarget] : []),
-    [moveTarget]
+  const moveConversationsList = useMemo(
+    () => (moveRequest ? [moveRequest.conversation] : []),
+    [moveRequest]
   )
 
   const handleNewConversation = useCallback(() => {
@@ -3291,7 +3308,8 @@ export function SidebarConversationList({
         onStatusChange={handleStatusChange}
         onNewConversation={handleNewConversationForFolder}
         onTogglePin={handleTogglePin}
-        onMoveToProject={handleMoveToProject}
+        onMoveToFolder={handleMoveToFolder}
+        onManageConversations={handleManageConversationsFor}
         depth={row.depth}
         hasChildren={conv.child_count > 0}
         expanded={conversationExpanded.has(conv.id)}
@@ -3630,9 +3648,10 @@ export function SidebarConversationList({
       )}
 
       <MoveConversationDialog
-        open={moveTarget !== null}
-        onOpenChange={(open) => !open && setMoveTarget(null)}
-        conversations={moveTargets}
+        open={moveRequest !== null}
+        onOpenChange={(open) => !open && setMoveRequest(null)}
+        conversations={moveConversationsList}
+        targetFolderId={moveRequest?.folderId ?? null}
       />
 
       <AlertDialog

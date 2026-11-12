@@ -54,6 +54,7 @@ const CHAT = folder(9, "Chat", "/data/chat-sessions/2026-11-12/abc", "chat")
 
 function renderDialog(
   conversations: MovableConversation[],
+  targetFolderId: number | null,
   onMoved = vi.fn(),
   onOpenChange = vi.fn()
 ): ReactElement {
@@ -63,6 +64,7 @@ function renderDialog(
         open
         onOpenChange={onOpenChange}
         conversations={conversations}
+        targetFolderId={targetFolderId}
         onMoved={onMoved}
       />
     </NextIntlClientProvider>
@@ -71,9 +73,13 @@ function renderDialog(
   return ui
 }
 
-function pickFolder(name: string) {
-  fireEvent.click(screen.getByRole("button", { name: /Choose a project/ }))
-  fireEvent.click(screen.getByText(name))
+function conv(
+  id: number,
+  folder_id: number,
+  kind: MovableConversation["kind"] = "regular",
+  title: string | null = `conv-${id}`
+): MovableConversation {
+  return { id, folder_id, kind, title }
 }
 
 describe("MoveConversationDialog", () => {
@@ -89,29 +95,18 @@ describe("MoveConversationDialog", () => {
     })
   })
 
-  it("offers only the other open projects and moves there", async () => {
+  it("confirms the picked folder and moves there", async () => {
     const result: MoveConversationsResult = { moved: [5], skipped: [] }
     moveConversationsMock.mockResolvedValue(result)
     const onMoved = vi.fn()
     const onOpenChange = vi.fn()
-    renderDialog(
-      [{ id: 5, folder_id: 1, kind: "regular" }],
-      onMoved,
-      onOpenChange
-    )
+    renderDialog([conv(5, 1)], OTHER.id, onMoved, onOpenChange)
 
-    fireEvent.click(screen.getByRole("button", { name: /Choose a project/ }))
-    // The conversation's own folder is no destination; hidden chat folders
-    // never are.
-    expect(screen.queryByText("/work/repo")).toBeNull()
-    expect(screen.queryByText("Chat")).toBeNull()
-    fireEvent.click(screen.getByText("other"))
-
+    expect(screen.getByText("Move conversation")).toBeDefined()
     expect(
-      screen.getByText(
-        /From the next message on, the agent works in \/work\/other/
-      )
+      screen.getByText("“conv-5” will be moved to this folder:")
     ).toBeDefined()
+    expect(screen.getByText("/work/other")).toBeDefined()
     fireEvent.click(screen.getByRole("button", { name: "Move" }))
 
     await waitFor(() => expect(onMoved).toHaveBeenCalledWith(result))
@@ -122,17 +117,20 @@ describe("MoveConversationDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
+  it("names an untitled conversation as such", () => {
+    renderDialog([conv(5, 1, "regular", null)], OTHER.id)
+    expect(
+      screen.getByText("“Untitled conversation” will be moved to this folder:")
+    ).toBeDefined()
+  })
+
   it("tells where a chat's files stay", () => {
-    renderDialog([{ id: 7, folder_id: CHAT.id, kind: "chat" }])
+    renderDialog([conv(7, CHAT.id, "chat")], REPO.id)
     expect(
       screen.getByText(
         /Files created during the chat stay in its scratch directory \/data\/chat-sessions\/2026-11-12\/abc/
       )
     ).toBeDefined()
-    // A chat lives in no open project, so every open project is a target.
-    fireEvent.click(screen.getByRole("button", { name: /Choose a project/ }))
-    expect(screen.getByText("repo")).toBeDefined()
-    expect(screen.getByText("other")).toBeDefined()
   })
 
   it("explains why some conversations stayed", async () => {
@@ -143,15 +141,13 @@ describe("MoveConversationDialog", () => {
         { conversationId: 3, reason: "busy" },
       ],
     } satisfies MoveConversationsResult)
-    renderDialog([
-      { id: 1, folder_id: 1, kind: "regular" },
-      { id: 2, folder_id: 1, kind: "regular" },
-      { id: 3, folder_id: 2, kind: "regular" },
-    ])
+    renderDialog([conv(1, 1), conv(2, 1), conv(3, 2)], OTHER.id)
+    expect(screen.getByText("Move 3 conversations")).toBeDefined()
     expect(
-      screen.getByText("Move 3 conversations to another project")
+      screen.getByText(
+        "The selected 3 conversations will be moved to this folder:"
+      )
     ).toBeDefined()
-    pickFolder("other")
     fireEvent.click(screen.getByRole("button", { name: "Move" }))
 
     await waitFor(() => expect(toastMock.warning).toHaveBeenCalled())
@@ -170,12 +166,7 @@ describe("MoveConversationDialog", () => {
       message: "folder 2 is not a project folder",
     })
     const onOpenChange = vi.fn()
-    renderDialog(
-      [{ id: 1, folder_id: 1, kind: "regular" }],
-      vi.fn(),
-      onOpenChange
-    )
-    pickFolder("other")
+    renderDialog([conv(1, 1)], OTHER.id, vi.fn(), onOpenChange)
     fireEvent.click(screen.getByRole("button", { name: "Move" }))
 
     await waitFor(() => expect(toastMock.error).toHaveBeenCalled())
@@ -185,11 +176,11 @@ describe("MoveConversationDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
   })
 
-  it("says so when there is nowhere to move to", () => {
+  it("won't move into a folder that closed while it was open", () => {
     useAppWorkspaceStore.setState({ folders: [REPO] })
-    renderDialog([{ id: 1, folder_id: 1, kind: "regular" }])
+    renderDialog([conv(1, 1)], OTHER.id)
     expect(
-      screen.getByText("There is no other open project to move to.")
+      screen.getByText("This folder was closed or removed — pick another one.")
     ).toBeDefined()
     expect(
       (screen.getByRole("button", { name: "Move" }) as HTMLButtonElement)

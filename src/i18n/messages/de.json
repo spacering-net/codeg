@@ -2405,7 +2405,6 @@
       "restore": "Wiederherstellen",
       "attachToCurrentSession": "Zur Sitzung hinzufügen",
       "rename": "Umbenennen",
-      "moveToProject": "In Projekt verschieben…",
       "status": "Zustand",
       "delete": "Löschen",
       "importLocalSessions": "Lokale Sitzungen importieren",
@@ -2423,15 +2422,17 @@
       "collapseSubsessions": "Unterkonversationen ausblenden"
     },
     "moveConversation": {
-      "title": "In ein anderes Projekt verschieben",
-      "titleMany": "{count, plural, one {# Unterhaltung} other {# Unterhaltungen}} in ein anderes Projekt verschieben",
-      "targetLabel": "Projekt",
-      "targetPlaceholder": "Projekt auswählen",
-      "explain": "Ab der nächsten Nachricht arbeitet der Agent in {path}. Der Verlauf bleibt unverändert. Kann der Agent die Sitzung im neuen Verzeichnis nicht fortsetzen, wird angeboten, sie neu zu laden oder eine neue Sitzung zu starten.",
-      "explainNoTarget": "Ab der nächsten Nachricht arbeitet der Agent im Verzeichnis des gewählten Projekts. Der Verlauf bleibt unverändert.",
-      "chatFilesNote": "Im Chat erstellte Dateien bleiben in seinem temporären Verzeichnis {path}; sie werden nicht ins Projekt verschoben.",
-      "chatFilesNoteMany": "In diesen Chats erstellte Dateien bleiben in ihren temporären Verzeichnissen; sie werden nicht ins Projekt verschoben.",
-      "noTargets": "Es gibt kein anderes geöffnetes Projekt, in das verschoben werden kann.",
+      "menuLabel": "Verschieben nach",
+      "title": "Unterhaltung verschieben",
+      "titleMany": "{count, plural, one {# Unterhaltung} other {# Unterhaltungen}} verschieben",
+      "intro": "„{title}“ wird in diesen Ordner verschoben:",
+      "introMany": "{count, plural, one {Die ausgewählte Unterhaltung wird} other {Die # ausgewählten Unterhaltungen werden}} in diesen Ordner verschoben:",
+      "untitledConversation": "Unbenannte Unterhaltung",
+      "explain": "Ab der nächsten Nachricht arbeitet der Agent in diesem Ordner; der Verlauf bleibt unverändert. Kann der Agent die Sitzung hier nicht fortsetzen, wird angeboten, sie neu zu laden oder eine neue Sitzung zu starten.",
+      "chatFilesNote": "Im Chat erstellte Dateien bleiben in seinem temporären Verzeichnis {path}; sie werden nicht in den Ordner verschoben.",
+      "chatFilesNoteMany": "In diesen Chats erstellte Dateien bleiben in ihren temporären Verzeichnissen; sie werden nicht in den Ordner verschoben.",
+      "noTargets": "Kein anderer Ordner geöffnet",
+      "targetUnavailable": "Dieser Ordner wurde geschlossen oder entfernt – wähle einen anderen.",
       "cancel": "Abbrechen",
       "move": "Verschieben",
       "toastMoved": "{count, plural, one {# Unterhaltung} other {# Unterhaltungen}} nach {folder} verschoben",
@@ -2440,11 +2441,11 @@
       "skipReason": {
         "not_found": "Sie existiert nicht mehr",
         "not_movable": "Unter-Unterhaltungen werden mit ihrer übergeordneten verschoben",
-        "already_there": "Sie ist bereits in diesem Projekt",
+        "already_there": "Sie ist bereits in diesem Ordner",
         "task_owned": "Sie gehört zu einer To-do-Aufgabe",
         "busy": "Ein Agent arbeitet gerade daran – versuche es, wenn er fertig ist",
         "conflict": "Sie hat sich beim Verschieben geändert – versuche es erneut",
-        "target_unavailable": "Das Projekt wurde geschlossen oder entfernt"
+        "target_unavailable": "Der Ordner wurde geschlossen oder entfernt"
       }
     },
     "search": {

@@ -493,7 +493,7 @@ describe("ConversationManageDialog", () => {
     expect(h.closeConversationTab).toHaveBeenCalledWith(1, 1, "claude_code")
   })
 
-  it("moves the selection to another project and drops what moved from it", async () => {
+  it("moves the selection to another folder and drops what moved from it", async () => {
     h.moveConvs.mockResolvedValue({
       moved: [1],
       skipped: [{ conversationId: 2, reason: "busy" }],
@@ -507,8 +507,10 @@ describe("ConversationManageDialog", () => {
     const listCalls = h.listAll.mock.calls.length
 
     await user.click(screen.getByRole("button", { name: "Move to…" }))
-    await user.click(screen.getByRole("button", { name: /Choose a project/ }))
     await user.click(paletteRow("beta"))
+    // The pick only asks; nothing moves before the confirmation.
+    expect(h.moveConvs).not.toHaveBeenCalled()
+    expect(screen.getByText("Move 2 conversations")).toBeTruthy()
     await user.click(screen.getByRole("button", { name: "Move" }))
 
     await waitFor(() => expect(h.moveConvs).toHaveBeenCalledWith([1, 2], 3))

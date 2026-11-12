@@ -2405,7 +2405,6 @@
       "restore": "还原",
       "attachToCurrentSession": "添加到会话",
       "rename": "重命名",
-      "moveToProject": "移动到项目…",
       "status": "状态",
       "delete": "删除",
       "importLocalSessions": "导入本地会话",
@@ -2423,15 +2422,17 @@
       "collapseSubsessions": "折叠子会话"
     },
     "moveConversation": {
-      "title": "移动到其他项目",
-      "titleMany": "将 {count} 个会话移动到其他项目",
-      "targetLabel": "项目",
-      "targetPlaceholder": "选择项目",
-      "explain": "从下一条消息起，智能体会在 {path} 中工作，历史记录保持不变。若该智能体无法在新目录中恢复会话，会提示你重新加载或新建会话。",
-      "explainNoTarget": "从下一条消息起，智能体会在所选项目的目录中工作，历史记录保持不变。",
-      "chatFilesNote": "聊天中生成的文件仍保留在原临时目录 {path}，不会搬进项目。",
-      "chatFilesNoteMany": "这些聊天中生成的文件仍保留在各自的临时目录，不会搬进项目。",
-      "noTargets": "没有其他已打开的项目可以移入。",
+      "menuLabel": "移动到",
+      "title": "移动会话",
+      "titleMany": "移动 {count} 个会话",
+      "intro": "「{title}」将移动到以下文件夹：",
+      "introMany": "选中的 {count} 个会话将移动到以下文件夹：",
+      "untitledConversation": "未命名会话",
+      "explain": "从下一条消息起，智能体会在该文件夹中工作，历史记录保持不变。若智能体无法在新目录中恢复会话，会提示你重新加载或新建会话。",
+      "chatFilesNote": "聊天中生成的文件仍保留在原临时目录 {path}，不会搬进该文件夹。",
+      "chatFilesNoteMany": "这些聊天中生成的文件仍保留在各自的临时目录，不会搬进该文件夹。",
+      "noTargets": "没有其他已打开的文件夹",
+      "targetUnavailable": "该文件夹已关闭或移除，请另选一个。",
       "cancel": "取消",
       "move": "移动",
       "toastMoved": "已将 {count} 个会话移动到 {folder}",
@@ -2440,11 +2441,11 @@
       "skipReason": {
         "not_found": "会话已不存在",
         "not_movable": "子会话会随父会话一起移动",
-        "already_there": "已在该项目中",
+        "already_there": "已在该文件夹中",
         "task_owned": "属于看板任务",
         "busy": "智能体正在处理它，请等它完成后再试",
         "conflict": "移动过程中会话发生了变化，请重试",
-        "target_unavailable": "目标项目已关闭或移除"
+        "target_unavailable": "目标文件夹已关闭或移除"
       }
     },
     "search": {

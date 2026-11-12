@@ -2405,7 +2405,6 @@
       "restore": "Restaurer",
       "attachToCurrentSession": "Ajouter à la session",
       "rename": "Renommer",
-      "moveToProject": "Déplacer vers un projet…",
       "status": "Statut",
       "delete": "Supprimer",
       "importLocalSessions": "Importer les sessions locales",
@@ -2423,15 +2422,17 @@
       "collapseSubsessions": "Réduire les sous-conversations"
     },
     "moveConversation": {
-      "title": "Déplacer vers un autre projet",
-      "titleMany": "Déplacer {count, plural, one {# conversation} other {# conversations}} vers un autre projet",
-      "targetLabel": "Projet",
-      "targetPlaceholder": "Choisir un projet",
-      "explain": "À partir du prochain message, l'agent travaille dans {path}. L'historique reste inchangé. Si l'agent ne peut pas reprendre la session dans le nouveau répertoire, il vous sera proposé de la recharger ou de démarrer une nouvelle session.",
-      "explainNoTarget": "À partir du prochain message, l'agent travaille dans le répertoire du projet choisi. L'historique reste inchangé.",
-      "chatFilesNote": "Les fichiers créés pendant le chat restent dans son répertoire temporaire {path} ; ils ne sont pas déplacés dans le projet.",
-      "chatFilesNoteMany": "Les fichiers créés pendant ces chats restent dans leurs répertoires temporaires ; ils ne sont pas déplacés dans le projet.",
-      "noTargets": "Aucun autre projet ouvert vers lequel déplacer.",
+      "menuLabel": "Déplacer vers",
+      "title": "Déplacer la conversation",
+      "titleMany": "Déplacer {count, plural, one {# conversation} other {# conversations}}",
+      "intro": "« {title} » sera déplacée vers ce dossier :",
+      "introMany": "{count, plural, one {La conversation sélectionnée sera déplacée} other {Les # conversations sélectionnées seront déplacées}} vers ce dossier :",
+      "untitledConversation": "Conversation sans titre",
+      "explain": "À partir du prochain message, l'agent travaille dans ce dossier ; l'historique reste inchangé. Si l'agent ne peut pas reprendre la session ici, il vous sera proposé de la recharger ou de démarrer une nouvelle session.",
+      "chatFilesNote": "Les fichiers créés pendant le chat restent dans son répertoire temporaire {path} ; ils ne sont pas déplacés dans le dossier.",
+      "chatFilesNoteMany": "Les fichiers créés pendant ces chats restent dans leurs répertoires temporaires ; ils ne sont pas déplacés dans le dossier.",
+      "noTargets": "Aucun autre dossier ouvert",
+      "targetUnavailable": "Ce dossier a été fermé ou retiré — choisissez-en un autre.",
       "cancel": "Annuler",
       "move": "Déplacer",
       "toastMoved": "{count, plural, one {# conversation déplacée} other {# conversations déplacées}} vers {folder}",
@@ -2440,11 +2441,11 @@
       "skipReason": {
         "not_found": "Elle n'existe plus",
         "not_movable": "Les sous-conversations suivent leur conversation parente",
-        "already_there": "Elle est déjà dans ce projet",
+        "already_there": "Elle est déjà dans ce dossier",
         "task_owned": "Elle appartient à une tâche",
         "busy": "Un agent travaille dessus — réessayez quand il aura terminé",
         "conflict": "Elle a changé pendant le déplacement — réessayez",
-        "target_unavailable": "Le projet a été fermé ou retiré"
+        "target_unavailable": "Le dossier a été fermé ou retiré"
       }
     },
     "search": {

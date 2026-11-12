@@ -2405,7 +2405,6 @@
       "restore": "Restore",
       "attachToCurrentSession": "Add to session",
       "rename": "Rename",
-      "moveToProject": "Move to project…",
       "status": "Status",
       "delete": "Delete",
       "importLocalSessions": "Import local sessions",
@@ -2423,15 +2422,17 @@
       "collapseSubsessions": "Collapse sub-conversations"
     },
     "moveConversation": {
-      "title": "Move to another project",
-      "titleMany": "Move {count, plural, one {# conversation} other {# conversations}} to another project",
-      "targetLabel": "Project",
-      "targetPlaceholder": "Choose a project",
-      "explain": "From the next message on, the agent works in {path}. The history stays as it is. If the agent can't resume the session in the new directory, you'll be offered to reload it or start a new session.",
-      "explainNoTarget": "From the next message on, the agent works in the chosen project's directory. The history stays as it is.",
-      "chatFilesNote": "Files created during the chat stay in its scratch directory {path}; they are not moved into the project.",
-      "chatFilesNoteMany": "Files created during these chats stay in their scratch directories; they are not moved into the project.",
-      "noTargets": "There is no other open project to move to.",
+      "menuLabel": "Move to",
+      "title": "Move conversation",
+      "titleMany": "Move {count, plural, one {# conversation} other {# conversations}}",
+      "intro": "“{title}” will be moved to this folder:",
+      "introMany": "The selected {count, plural, one {conversation} other {# conversations}} will be moved to this folder:",
+      "untitledConversation": "Untitled conversation",
+      "explain": "From the next message on, the agent works in this folder; the history stays as it is. If the agent can't resume the session here, you'll be offered to reload it or start a new session.",
+      "chatFilesNote": "Files created during the chat stay in its scratch directory {path}; they are not moved into the folder.",
+      "chatFilesNoteMany": "Files created during these chats stay in their scratch directories; they are not moved into the folder.",
+      "noTargets": "No other open folder",
+      "targetUnavailable": "This folder was closed or removed — pick another one.",
       "cancel": "Cancel",
       "move": "Move",
       "toastMoved": "{count, plural, one {Moved # conversation} other {Moved # conversations}} to {folder}",
@@ -2440,11 +2441,11 @@
       "skipReason": {
         "not_found": "It no longer exists",
         "not_movable": "Sub-conversations move with their parent",
-        "already_there": "It is already in this project",
+        "already_there": "It is already in this folder",
         "task_owned": "It belongs to a to-do task",
         "busy": "An agent is working on it — try again when it's done",
         "conflict": "It changed while being moved — try again",
-        "target_unavailable": "The project was closed or removed"
+        "target_unavailable": "The folder was closed or removed"
       }
     },
     "search": {
