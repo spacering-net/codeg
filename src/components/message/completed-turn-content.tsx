@@ -203,6 +203,15 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
       ? formatElapsedLabel(durationMs, tElapsed)
       : null
 
+  // Streamdown's incomplete-markdown repair (remend) may only run on text that
+  // is still being written. On settled text it appends a closer after spans
+  // that are ALREADY complete — a glob inside code, an identifier like `_meta`
+  // — leaving a stray `*` / `_`; landing after a final code fence, that closer
+  // reopens the block (#555). Every branch below renders some slice of this one
+  // turn, so they all get the same answer.
+  const isStreaming = !completed
+  const { awaitingUser } = useActivityLive()
+
   // Folding trades the process away to keep the answer. With no answer left
   // over there is nothing to keep, and the reply would fold to a lone header —
   // which is exactly the shape of the turns a reader most needs to see: one
@@ -216,6 +225,13 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   // reply is then an explicit choice; the round settling re-applies the rule.
   const canFold =
     split.progress.length > 0 && (!completed || hasVisibleAnswer(split.answer))
+  const failureKey = useMemo(
+    () => buildActivity(parts, { isStreaming }).summary.firstUnrecoveredKey,
+    [parts, isStreaming]
+  )
+  // 自动折叠不能遮住失败或等待用户处理的交互。
+  const foldable =
+    canFold && (collapseMode === "current" || (!failureKey && !awaitingUser))
   // What is drawn: a reply that cannot fold shows its steps whatever `open`
   // says.
   const bodyOpen = foldable ? open : true
@@ -240,14 +256,6 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   }
   const animateEnter = openMark.open === bodyOpen && openMark.animateEnter
 
-  // Streamdown's incomplete-markdown repair (remend) may only run on text that
-  // is still being written. On settled text it appends a closer after spans
-  // that are ALREADY complete — a glob inside code, an identifier like `_meta`
-  // — leaving a stray `*` / `_`; landing after a final code fence, that closer
-  // reopens the block (#555). Every branch below renders some slice of this one
-  // turn, so they all get the same answer.
-  const isStreaming = !completed
-
   // While the agent is still at it, the prose after its last step is one more
   // step, not yet the answer: on the rail, as prose between steps is, with the
   // turning ring under it. Until the reply ends there is no telling an aside
@@ -267,9 +275,6 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
     () => buildActivity(parts, { isStreaming, keepAnswer: proseOnRail }),
     [parts, isStreaming, proseOnRail]
   )
-  // The header's red "N failed": open the turn at the first failure nothing
-  // redid — the row, and the group it is folded into.
-  const failureKey = activity.summary.firstUnrecoveredKey
   const jumpToFailure = useCallback(() => {
     if (!failureKey) return
     openDisclosures(disclosureKeysFor(activity.items, failureKey))
@@ -296,10 +301,6 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   // above it. It has nothing to fold, so no row once the agent stops. A live
   // reply with its steps folded ends on the turning mark under whatever does
   // end it instead.
-  const { awaitingUser } = useActivityLive()
-  // 自动折叠不能遮住失败或等待用户处理的交互。
-  const foldable =
-    canFold && (collapseMode === "current" || (!failureKey && !awaitingUser))
   const working = isStreaming && !awaitingUser
   const footShown =
     bodyOpen && (working || (foldable && activity.items.length > 0))
