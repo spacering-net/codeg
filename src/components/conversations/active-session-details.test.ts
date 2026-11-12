@@ -119,15 +119,64 @@ describe("resolveActiveSessionDetails", () => {
   it("prefers the loaded detail summary over the workspace summary", () => {
     const getSession = vi.fn(() =>
       session({
-        detail: detail({ summary: summary({ id: 5, title: "from-detail" }) }),
+        detail: detail({
+          summary: summary({ id: 5, external_id: "from-detail" }),
+        }),
       })
     )
     const result = resolveActiveSessionDetails(
       { conversationId: 5 },
       getSession,
-      [summary({ id: 5, title: "from-workspace" })]
+      [summary({ id: 5, external_id: null })]
     )
-    expect(result.summary?.title).toBe("from-detail")
+    expect(result.summary?.external_id).toBe("from-detail")
+  })
+
+  // The loaded detail is a snapshot of when the transcript was fetched; the
+  // workspace list follows the backend's status/upsert events.
+  it("takes the status and title from the live workspace row", () => {
+    const loaded = summary({ id: 5, title: "old", status: "in_progress" })
+    const getSession = vi.fn(() =>
+      session({ detail: detail({ summary: loaded }) })
+    )
+    const result = resolveActiveSessionDetails(
+      { conversationId: 5 },
+      getSession,
+      [summary({ id: 5, title: "renamed", status: "pending_review" })]
+    )
+    expect(result.summary?.status).toBe("pending_review")
+    expect(result.summary?.title).toBe("renamed")
+    // The rest is still the loaded detail's.
+    expect(result.summary?.created_at).toBe(loaded.created_at)
+  })
+
+  // A sub-agent's conversation isn't in the workspace list; the tab's status
+  // comes from the child-summary cache, which follows the same events.
+  it("takes the status from the tab when the list doesn't hold the row", () => {
+    const getSession = vi.fn(() =>
+      session({
+        detail: detail({ summary: summary({ id: 5, status: "in_progress" }) }),
+      })
+    )
+    const result = resolveActiveSessionDetails(
+      { conversationId: 5, status: "completed" },
+      getSession,
+      []
+    )
+    expect(result.summary?.status).toBe("completed")
+  })
+
+  it("hands back the loaded summary itself while it is current", () => {
+    const loaded = summary({ id: 5 })
+    const getSession = vi.fn(() =>
+      session({ detail: detail({ summary: loaded }) })
+    )
+    const result = resolveActiveSessionDetails(
+      { conversationId: 5, status: loaded.status },
+      getSession,
+      [summary({ id: 5 })]
+    )
+    expect(result.summary).toBe(loaded)
   })
 
   it("falls back to detail.session_stats when sessionStats is absent", () => {

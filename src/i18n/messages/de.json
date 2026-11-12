@@ -2369,7 +2369,7 @@
       "fieldTitle": "Titel",
       "untitled": "Unbenannte Konversation",
       "sessionId": "Sitzungs-ID",
-      "externalId": "Erweiterungs-ID",
+      "externalId": "Sitzungsindex",
       "agent": "Agent",
       "model": "Modell",
       "status": "Status",
@@ -4118,7 +4118,9 @@
         "openFile": "{filePath} öffnen",
         "collapse": "Einklappen",
         "currentMessage": "Aktuelle Nachricht",
-        "scrollToCurrent": "Zur aktuellen Nachricht (#{ordinal}) scrollen"
+        "scrollToCurrent": "Zur aktuellen Nachricht (#{ordinal}) scrollen",
+        "running": "Läuft",
+        "total": "{count, plural, one {# Nachricht} other {# Nachrichten}}"
       },
       "replyArtifacts": {
         "title": "Geänderte Dateien",

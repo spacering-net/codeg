@@ -51,7 +51,7 @@ function LtrValue({
  * Deliberately request-free. The sidebar card holds only a
  * `DbConversationSummary`, and everything here comes from it or from the
  * workspace store, so the bubble paints the instant it opens. Token usage and
- * the session/extension ids are NOT shown: those need a
+ * the session id and session index are NOT shown: those need a
  * `getFolderConversation` round-trip per conversation, which is what the
  * right-click "Session Details" dialog (`SessionDetailsContent`) is for.
  *

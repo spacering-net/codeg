@@ -104,6 +104,8 @@ function setupScene(opts: {
   runtimeConversationId?: number
   activeTab?: string
   conversation?: Partial<DbConversationSummary>
+  /** The summary of the transcript the runtime session loaded. */
+  loadedSummary?: DbConversationSummary
 }) {
   mockAux.mockReturnValue({
     isOpen: true,
@@ -123,8 +125,16 @@ function setupScene(opts: {
     activeTabId: opts.hasActiveConversation ? 1 : null,
   }
   mockTabs.mockImplementation((sel: (s: TabSlice) => unknown) => sel(tabState))
+  const sessions = new Map<number, unknown>()
+  if (opts.loadedSummary) {
+    sessions.set(opts.runtimeConversationId ?? 7, {
+      detail: { summary: opts.loadedSummary, turns: [] },
+      sessionStats: null,
+      localTurns: [],
+    })
+  }
   mockRuntime.mockImplementation((sel: (s: RuntimeSlice) => unknown) =>
-    sel({ byConversationId: new Map() })
+    sel({ byConversationId: sessions })
   )
   mockWorkspace.mockImplementation((sel: (s: WorkspaceSlice) => unknown) =>
     sel({
@@ -165,19 +175,60 @@ describe("SessionDetailsTab", () => {
     expect(queryByTestId("command-dropdown")).toBeNull()
   })
 
-  it("opens its card with the title, the agent's icon by its name under it", () => {
+  it("leads its card with the agent's icon, its status a dot on it", () => {
+    setupScene({ hasActiveConversation: true })
+    const { getByTestId } = renderTab()
+    const avatar = getByTestId("session-agent-avatar")
+    // The icon stands on its own at the card's start; the name under the
+    // title already says which agent it is, so it's hidden from assistive
+    // tech.
+    expect(avatar.closest("section")?.firstElementChild).toContainElement(
+      avatar
+    )
+    expect(avatar).toContainElement(getByTestId("agent-icon"))
+    expect(avatar).toHaveAttribute("aria-hidden", "true")
+    // The status rides the icon's corner, as in the conversation list.
+    expect(avatar.querySelector(".bg-yellow-400")).not.toBeNull()
+    expect(avatar.parentElement).toHaveTextContent("My session")
+  })
+
+  it("puts the agent's name and the model under the title", () => {
     setupScene({ hasActiveConversation: true })
     const { getByText, getByTestId } = renderTab()
-    const title = getByText("My session")
-    // Nothing shares the title's row.
-    expect(title.closest("section")?.firstElementChild).toBe(title)
-    const agentLine = title.nextElementSibling as HTMLElement
-    expect(agentLine).toContainElement(getByText("Claude Code"))
-    // The icon leads the agent's name; the name already says it, so it's
-    // hidden from assistive tech.
-    const icon = getByTestId("agent-icon")
-    expect(agentLine.firstElementChild).toContainElement(icon)
-    expect(icon.closest('[aria-hidden="true"]')).not.toBeNull()
+    const line = getByTestId("session-agent-line")
+    expect(getByText("My session").nextElementSibling).toBe(line)
+    expect(line).toContainElement(getByText("Claude Code"))
+    expect(line).toContainElement(getByText("claude-opus-4-8"))
+    // The status is only a dot on the icon; a screen reader hears it here.
+    expect(within(line).getByText("Status: In Progress")).toHaveClass("sr-only")
+  })
+
+  it("says nothing of when the conversation last moved", () => {
+    setupScene({ hasActiveConversation: true })
+    const { queryByText } = renderTab()
+    expect(queryByText(/ago$/)).toBeNull()
+  })
+
+  // The loaded transcript's summary is a snapshot of when it was fetched;
+  // the status shown follows the workspace list's, which the backend's
+  // status events keep current.
+  it("follows the conversation's status past the loaded snapshot", () => {
+    const loaded = summary({ status: "in_progress" })
+    setupScene({ hasActiveConversation: true, loadedSummary: loaded })
+    const { getByTestId, rerender } = renderTab()
+    const line = () => getByTestId("session-agent-line")
+    expect(line()).toHaveTextContent("Status: In Progress")
+    setupScene({
+      hasActiveConversation: true,
+      loadedSummary: loaded,
+      conversation: { status: "pending_review" },
+    })
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SessionDetailsTab />
+      </NextIntlClientProvider>
+    )
+    expect(line()).toHaveTextContent("Status: Review")
   })
 
   it("lists the session's properties on its card", () => {
@@ -185,19 +236,20 @@ describe("SessionDetailsTab", () => {
       hasActiveConversation: true,
       conversation: { external_id: "5a1e3c9d-7b2f-4d8e-9a10-3c4b5d6e7f80" },
     })
-    const { getByText, getAllByRole } = renderTab()
+    const { getAllByRole, getByTitle } = renderTab()
     const properties = getAllByRole("term").map((term) => [
       term.textContent,
       term.nextElementSibling?.textContent,
     ])
+    // The agent's own id by its first segment; the whole one in its tooltip.
     expect(properties).toEqual([
-      ["Model", "claude-opus-4-8"],
       ["Git Branch", "main"],
       ["Session ID", "7"],
-      ["Extension ID", "5a1e3c9d-7b2f-4d8e-9a10-3c4b5d6e7f80"],
+      ["Session Index", "5a1e3c9d"],
     ])
-    // The status sits by the agent.
-    expect(getByText("In Progress")).toBeInTheDocument()
+    expect(
+      getByTitle("5a1e3c9d-7b2f-4d8e-9a10-3c4b5d6e7f80")
+    ).toHaveTextContent("5a1e3c9d")
   })
 
   it("copies an id from its row", async () => {
@@ -206,14 +258,18 @@ describe("SessionDetailsTab", () => {
       conversation: { external_id: "5a1e3c9d-7b2f-4d8e-9a10-3c4b5d6e7f80" },
     })
     const { getByRole } = renderTab()
-    fireEvent.click(getByRole("button", { name: "Copy Extension ID" }))
+    const copy = getByRole("button", { name: "Copy Session Index" })
+    // Shown only while its cell is pointed at or focused.
+    expect(copy).toHaveClass("opacity-0", "group-hover/prop:opacity-100")
+    fireEvent.click(copy)
     expect(copyTextToClipboard).toHaveBeenCalledWith(
       "5a1e3c9d-7b2f-4d8e-9a10-3c4b5d6e7f80"
     )
+    // It stays while it says the copy went through.
     await waitFor(() =>
-      expect(
-        getByRole("button", { name: "Copied Extension ID" })
-      ).toBeInTheDocument()
+      expect(getByRole("button", { name: "Copied Session Index" })).toHaveClass(
+        "opacity-100"
+      )
     )
   })
 
@@ -222,6 +278,14 @@ describe("SessionDetailsTab", () => {
     const { getByText } = renderTab()
     const parent = getByText("Parent Session")
     expect(within(parent.parentElement!).getByText("3")).toBeInTheDocument()
+  })
+
+  it("spaces its cards as far apart as they are from its sides", () => {
+    setupScene({ hasActiveConversation: true })
+    const { getByTestId } = renderTab()
+    const column = getByTestId("session-insights").parentElement
+    expect(column).toHaveClass("p-3", "space-y-3")
+    expect(column).toContainElement(getByTestId("session-agent-avatar"))
   })
 
   it("shows the empty state when there is no active session", () => {
@@ -234,7 +298,8 @@ describe("SessionDetailsTab", () => {
   })
 
   // The panel follows the conversation's plan, sub-agents and messages
-  // instead; the dialog still lists both.
+  // instead; the dialog still lists both. (The card says when the
+  // conversation last moved, as a time ago.)
   it("leaves out token usage and timestamps", () => {
     setupScene({ hasActiveConversation: true })
     const { queryByText } = renderTab()

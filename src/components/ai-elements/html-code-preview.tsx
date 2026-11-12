@@ -39,13 +39,63 @@ const views = new Map<string, View>()
 /** Previews on screen, by `frames` key: their entries are never evicted. */
 const pins = new Map<string, number>()
 const CACHE_LIMIT = 32
+const FRAME_CACHE_BYTES = 8 * 1024 * 1024
+const VIEW_CACHE_BYTES = 1024 * 1024
+let frameBytes = 0
+let viewBytes = 0
 
-function remember<T>(cache: Map<string, T>, key: string, value: T) {
-  cache.delete(key)
-  cache.set(key, value)
-  for (const oldest of cache.keys()) {
-    if (cache.size <= CACHE_LIMIT) break
-    if (cache !== frames || !pins.has(oldest)) cache.delete(oldest)
+// Count source keys as well as generated documents. A small number of large
+// replies can otherwise keep arbitrarily large strings alive after closing.
+function frameSize(key: string, entry: FrameEntry) {
+  return 128 + (key.length + entry.theme.length + (entry.doc?.length ?? 0)) * 2
+}
+
+function trimFrames() {
+  for (const [key, entry] of frames) {
+    if (frames.size <= CACHE_LIMIT && frameBytes <= FRAME_CACHE_BYTES) break
+    if (pins.has(key)) continue
+    frames.delete(key)
+    frameBytes -= frameSize(key, entry)
+  }
+}
+
+let trimQueued = false
+
+/**
+ * Trim once the commit that unpinned an entry is over. A preview drawn again
+ * as a new tree (as Streamdown does when a reply finishes) unmounts and
+ * mounts in one commit, its cleanup running before the new pin: trimming
+ * right away would evict the very entry it is about to mount from.
+ */
+function trimFramesAfterCommit() {
+  if (trimQueued) return
+  trimQueued = true
+  queueMicrotask(() => {
+    trimQueued = false
+    trimFrames()
+  })
+}
+
+function rememberFrame(key: string, entry: FrameEntry) {
+  const previous = frames.get(key)
+  if (previous) frameBytes -= frameSize(key, previous)
+  frames.delete(key)
+  frames.set(key, entry)
+  frameBytes += frameSize(key, entry)
+  trimFrames()
+}
+
+function rememberView(key: string, view: View) {
+  const bytes = 64 + key.length * 2
+  if (views.delete(key)) viewBytes -= bytes
+  // A view preference alone should never pin a multi-megabyte source.
+  if (bytes > VIEW_CACHE_BYTES) return
+  views.set(key, view)
+  viewBytes += bytes
+  for (const oldest of views.keys()) {
+    if (views.size <= CACHE_LIMIT && viewBytes <= VIEW_CACHE_BYTES) break
+    views.delete(oldest)
+    viewBytes -= 64 + oldest.length * 2
   }
 }
 
@@ -53,6 +103,8 @@ function remember<T>(cache: Map<string, T>, key: string, value: T) {
 export function resetHtmlPreviewCachesForTests(): void {
   frames.clear()
   views.clear()
+  frameBytes = 0
+  viewBytes = 0
 }
 
 export function HtmlCodePending() {
@@ -81,7 +133,7 @@ export function HtmlCodePreview({
   const { preview, expanded } = view
   const changeView = (change: Partial<View>) => {
     const next = { ...view, ...change }
-    remember(views, source, next)
+    rememberView(source, next)
     setView(next)
   }
   const frameRef = useRef<HTMLIFrameElement>(null)
@@ -102,6 +154,9 @@ export function HtmlCodePreview({
       const count = (pins.get(key) ?? 1) - 1
       if (count > 0) pins.set(key, count)
       else pins.delete(key)
+      // Pinned entries may exceed the cache budget while visible. Enforce it
+      // when they close, even if no new preview is ever built.
+      trimFramesAfterCommit()
     }
   }, [key])
 
@@ -111,7 +166,7 @@ export function HtmlCodePreview({
     let active = true
     buildChatHtmlDocument(source, { nonce: randomUUID(), dark, theme }).then(
       (doc) => {
-        remember(frames, key, {
+        rememberFrame(key, {
           doc,
           theme,
           height: frames.get(key)?.height,
@@ -119,7 +174,7 @@ export function HtmlCodePreview({
         if (active) setLoaded({ key, doc })
       },
       () => {
-        remember(frames, key, { doc: null, theme })
+        rememberFrame(key, { doc: null, theme })
         if (active) setLoaded({ key, doc: null })
       }
     )

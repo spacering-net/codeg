@@ -2369,7 +2369,7 @@
       "fieldTitle": "제목",
       "untitled": "제목 없는 대화",
       "sessionId": "세션 ID",
-      "externalId": "확장 ID",
+      "externalId": "세션 인덱스",
       "agent": "에이전트",
       "model": "모델",
       "status": "상태",
@@ -4118,7 +4118,9 @@
         "openFile": "{filePath} 열기",
         "collapse": "접기",
         "currentMessage": "현재 메시지",
-        "scrollToCurrent": "현재 메시지(#{ordinal})로 스크롤"
+        "scrollToCurrent": "현재 메시지(#{ordinal})로 스크롤",
+        "running": "진행 중",
+        "total": "총 {count}개"
       },
       "replyArtifacts": {
         "title": "변경된 파일",

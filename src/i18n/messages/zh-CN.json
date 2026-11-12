@@ -2369,7 +2369,7 @@
       "fieldTitle": "标题",
       "untitled": "未命名会话",
       "sessionId": "会话 ID",
-      "externalId": "扩展 ID",
+      "externalId": "会话索引",
       "agent": "智能体",
       "model": "模型",
       "status": "状态",
@@ -4118,7 +4118,9 @@
         "openFile": "打开 {filePath}",
         "collapse": "收起",
         "currentMessage": "当前消息",
-        "scrollToCurrent": "滚动到当前消息（#{ordinal}）"
+        "scrollToCurrent": "滚动到当前消息（#{ordinal}）",
+        "running": "进行中",
+        "total": "共 {count} 条"
       },
       "replyArtifacts": {
         "title": "改动文件",

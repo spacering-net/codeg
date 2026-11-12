@@ -2369,7 +2369,7 @@
       "fieldTitle": "Title",
       "untitled": "Untitled conversation",
       "sessionId": "Session ID",
-      "externalId": "Extension ID",
+      "externalId": "Session Index",
       "agent": "Agent",
       "model": "Model",
       "status": "Status",
@@ -4118,7 +4118,9 @@
         "openFile": "Open {filePath}",
         "collapse": "Collapse",
         "currentMessage": "Current message",
-        "scrollToCurrent": "Scroll to the current message (#{ordinal})"
+        "scrollToCurrent": "Scroll to the current message (#{ordinal})",
+        "running": "Running",
+        "total": "{count, plural, one {# message} other {# messages}}"
       },
       "replyArtifacts": {
         "title": "Files changed",

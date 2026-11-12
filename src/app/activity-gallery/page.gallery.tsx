@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react"
 
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import { AsyncTaskStrip } from "@/components/chat/async-task-strip"
+import { SessionDetailsCard } from "@/components/conversations/session-details-content"
 import { SessionDetailsInsights } from "@/components/layout/session-details-insights"
 import { CompletedTurnContent } from "@/components/message/completed-turn-content"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
@@ -52,7 +53,11 @@ import {
   toolResult,
   toolUse,
 } from "@/lib/activity/__fixtures__/mockup-turn"
-import type { AsyncTaskRecord, MessageTurn } from "@/lib/types"
+import type {
+  AsyncTaskRecord,
+  DbConversationSummary,
+  MessageTurn,
+} from "@/lib/types"
 import { publishTranscriptInsights } from "@/stores/transcript-insights-store"
 
 const params =
@@ -1212,27 +1217,54 @@ function AsyncTasksScenario() {
  */
 const NAV_CONVERSATION_ID = -1
 
-function navUserTurn(id: string, text: string): MessageTurn {
+/** The conversation the nav scenario's summary card describes;
+ *  `&status=` picks its status. */
+const NAV_SUMMARY: DbConversationSummary = {
+  id: 128,
+  folder_id: 1,
+  title: "Keep the CSV export working after the schema change",
+  title_locked: false,
+  agent_type: "codex",
+  status: params.get("status") ?? "in_progress",
+  kind: "regular",
+  model: null,
+  git_branch: "fix/csv-export",
+  external_id: "019a4c1e-7b2f-7d8e-9a10-3c4b5d6e7f80",
+  message_count: 9,
+  child_count: 1,
+  created_at: "2026-11-11T09:00:00.000Z",
+  updated_at: new Date(Date.now() - 6 * 60_000).toISOString(),
+  pinned_at: null,
+}
+
+/** A message sent `minutesAgo` before the page loaded. */
+function navUserTurn(
+  id: string,
+  text: string,
+  minutesAgo: number
+): MessageTurn {
   return {
     id,
     role: "user",
-    timestamp: "2026-10-22T08:00:00Z",
+    timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
     blocks: [{ type: "text", text }],
   }
 }
 
 const NAV_TURNS: MessageTurn[] = [
-  navUserTurn("nav-1", "Survey the project and list its components"),
+  navUserTurn("nav-1", "Survey the project and list its components", 52),
   FILES_TURN,
-  navUserTurn("nav-2", "/compact"),
+  navUserTurn("nav-2", "/compact", 40),
   navUserTurn(
     "nav-3",
-    "Page through the tasks instead of loading them all at once"
+    "Page through the tasks instead of loading them all at once",
+    31
   ),
   LONG_EDIT_TURN,
   navUserTurn(
     "nav-4",
-    "继续打磨优化会话详情tab内容：\n1、Git分支名的左边那个图标不要；\n2、检查消息导航是否有性能问题，有的话一并修掉，然后跑一遍测试"
+    "继续打磨优化会话详情tab内容：\n1、Git分支名的左边那个图标不要；\n2、检查消息导航是否有性能问题，有的话一并修掉，然后跑一遍测试",
+    3
   ),
   DELEGATION_TURN,
   { ...FILES_TURN, id: "nav-files" },
@@ -1264,6 +1296,7 @@ function navInsights() {
     },
   })
   const plan = DELEGATION_TURN.blocks.find((block) => block.type === "plan")
+  const lastEntry = entries[entries.length - 1]
   return {
     nav: {
       count: entries.length,
@@ -1271,6 +1304,11 @@ function navInsights() {
       earlier: null,
       revealingTurnId: null,
       currentTurnId: params.get("current") ?? "nav-4",
+      // `&turn=running`: the agent is still on the last message.
+      running:
+        params.get("turn") === "running" && lastEntry
+          ? { turnId: lastEntry.turnId, startedAt: Date.now() - 83_000 }
+          : null,
     },
     plan: {
       entries: plan?.type === "plan" ? plan.entries : [],
@@ -1300,7 +1338,8 @@ function NavScenario() {
     >
       <ScrollArea className="min-h-0 flex-1" onViewportRef={setViewport}>
         <MessageNavScrollContext.Provider value={viewport}>
-          <div className="min-w-0 space-y-4 p-3 text-sm">
+          <div className="min-w-0 space-y-3 p-3 text-sm">
+            <SessionDetailsCard summary={NAV_SUMMARY} model="gpt-5.5-codex" />
             <SessionDetailsInsights
               conversationId={NAV_CONVERSATION_ID}
               active

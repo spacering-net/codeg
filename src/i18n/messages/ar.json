@@ -2369,7 +2369,7 @@
       "fieldTitle": "العنوان",
       "untitled": "محادثة بدون عنوان",
       "sessionId": "معرّف الجلسة",
-      "externalId": "معرّف الامتداد",
+      "externalId": "فهرس الجلسة",
       "agent": "الوكيل",
       "model": "النموذج",
       "status": "الحالة",
@@ -4118,7 +4118,9 @@
         "openFile": "فتح {filePath}",
         "collapse": "طي",
         "currentMessage": "الرسالة الحالية",
-        "scrollToCurrent": "التمرير إلى الرسالة الحالية (#{ordinal})"
+        "scrollToCurrent": "التمرير إلى الرسالة الحالية (#{ordinal})",
+        "running": "قيد التشغيل",
+        "total": "{count, plural, zero {لا رسائل} one {رسالة واحدة} two {رسالتان} few {# رسائل} many {# رسالة} other {# رسالة}}"
       },
       "replyArtifacts": {
         "title": "الملفات المتغيرة",

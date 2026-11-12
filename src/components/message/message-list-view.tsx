@@ -121,6 +121,7 @@ import {
   useTranscriptNavDemanded,
   type TranscriptInsights,
   type TranscriptInsightsActions,
+  type TranscriptRunningRound,
 } from "@/stores/transcript-insights-store"
 import { useModelLabels } from "@/hooks/use-model-labels"
 import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
@@ -2031,6 +2032,31 @@ export function MessageListView({
       : null
   const navRevealingTurnId = navJump.revealingTurnId
   const replyStreaming = connStatus === "prompting"
+  // The round the agent is on, which the navigator lists first while it runs:
+  // from the send (the prompt is in, no word back yet) to the reply settling,
+  // for a passive viewer too. Its message is the last user turn — a walk back
+  // from the end, cheap enough for every batch; the store keeps the value
+  // while it is unchanged.
+  const roundRunning = replyStreaming || lastAssistantRunning
+  const liveStartedAt = liveMessage?.startedAt ?? null
+  const runningUserTurn = useMemo(() => {
+    if (!insightsInSidebar || !roundRunning) return null
+    for (let i = timelineTurns.length - 1; i >= 0; i--) {
+      const turn = timelineTurns[i].turn
+      if (turn.role === "user") return turn
+    }
+    return null
+  }, [insightsInSidebar, roundRunning, timelineTurns])
+  const runningRound = useMemo<TranscriptRunningRound | null>(() => {
+    if (!runningUserTurn) return null
+    const sentAt = Date.parse(runningUserTurn.timestamp)
+    return {
+      turnId: runningUserTurn.id,
+      // The composer's live timer counts from the live reply's start; agree
+      // with it while one is streaming.
+      startedAt: liveStartedAt ?? (Number.isNaN(sentAt) ? null : sentAt),
+    }
+  }, [runningUserTurn, liveStartedAt])
   const transcriptInsights = useMemo<TranscriptInsights | null>(
     () =>
       insightsInSidebar
@@ -2041,6 +2067,7 @@ export function MessageListView({
               earlier: navEarlier,
               revealingTurnId: navRevealingTurnId,
               currentTurnId: currentNavTurnId,
+              running: runningRound,
             },
             plan: { entries: sidebarPlanEntries, streaming: replyStreaming },
             actions: insightsActions,
@@ -2053,6 +2080,7 @@ export function MessageListView({
       navEarlier,
       navRevealingTurnId,
       currentNavTurnId,
+      runningRound,
       sidebarPlanEntries,
       replyStreaming,
       insightsActions,

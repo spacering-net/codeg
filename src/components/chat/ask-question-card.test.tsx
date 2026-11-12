@@ -189,6 +189,63 @@ describe("AskQuestionCard", () => {
     expect(screen.queryByRole("radio")).not.toBeInTheDocument()
   })
 
+  it("hides the Other option when allow_other is false in single-select", () => {
+    renderCard({
+      question_id: "q-no-other-single",
+      created_at: "2026-01-01T00:00:00Z",
+      questions: [
+        {
+          id: "qa",
+          question: "Which approach?",
+          header: "Approach",
+          multi_select: false,
+          allow_other: false,
+          options: [
+            { label: "Incremental", description: "smaller diffs" },
+            { label: "Rewrite", description: "clean slate" },
+          ],
+        },
+      ],
+    })
+    expect(screen.getAllByRole("radio")).toHaveLength(2)
+    expect(
+      screen.queryByRole("radio", { name: "Other" })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText("Other")).not.toBeInTheDocument()
+    expect(
+      screen.queryByPlaceholderText("Type your answer…")
+    ).not.toBeInTheDocument()
+  })
+
+  it("hides the Other option when allow_other is false in multi-select", () => {
+    renderCard({
+      question_id: "q-no-other-multi",
+      created_at: "2026-01-01T00:00:00Z",
+      questions: [
+        {
+          id: "qb",
+          question: "Which modules?",
+          header: "Scope",
+          multi_select: true,
+          allow_other: false,
+          options: [
+            { label: "auth", description: "" },
+            { label: "billing", description: "" },
+            { label: "ui", description: "" },
+          ],
+        },
+      ],
+    })
+    expect(screen.getAllByRole("checkbox")).toHaveLength(3)
+    expect(
+      screen.queryByRole("checkbox", { name: "Other" })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText("Other")).not.toBeInTheDocument()
+    expect(
+      screen.queryByPlaceholderText("Type your answer…")
+    ).not.toBeInTheDocument()
+  })
+
   it("submits the typed Other text as the answer label", () => {
     const onAnswer = renderCard(single)
     fireEvent.click(screen.getByRole("radio", { name: "Other" }))

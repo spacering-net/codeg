@@ -7,8 +7,8 @@ import type { PlanEntryInfo } from "@/lib/types"
 
 /**
  * What a conversation's transcript knows about itself that the Session Details
- * side panel shows: the agent's plan, and the message navigator — each message
- * with the files it changed and the sub-agents it delegated to.
+ * side panel shows: the agent's plan, and the message navigator — each
+ * message with the files it changed and the sub-agents it delegated to.
  *
  * Both are derived inside `MessageListView`, which owns the adapted thread
  * they come from and the virtual list a navigator jump has to scroll.
@@ -39,6 +39,15 @@ export interface TranscriptNavInsights {
    *  viewport, or the latest once it is scrolled to the end. Only tracked
    *  while the rows are wanted; null otherwise. */
   currentTurnId: string | null
+  /** The message the agent is answering right now, which the navigator lists
+   *  first while it runs; null while nothing runs. */
+  running: TranscriptRunningRound | null
+}
+
+/** The round under way: its message, and since when (ms since the epoch). */
+export interface TranscriptRunningRound {
+  turnId: string
+  startedAt: number | null
 }
 
 export interface TranscriptPlanInsights {
@@ -152,6 +161,7 @@ function sameNavEntry(a: MessageNavEntry, b: MessageNavEntry): boolean {
       a.threadIndex === b.threadIndex &&
       a.turnIndex === b.turnIndex &&
       a.ordinal === b.ordinal &&
+      (a.sentAt ?? null) === (b.sentAt ?? null) &&
       a.label === b.label &&
       a.additions === b.additions &&
       a.deletions === b.deletions &&
@@ -246,6 +256,19 @@ function updateNavEntry(
   return { ...entry, files, subAgents }
 }
 
+function sameRunning(
+  a: TranscriptRunningRound | null,
+  b: TranscriptRunningRound | null
+): boolean {
+  return (
+    a === b ||
+    (a != null &&
+      b != null &&
+      a.turnId === b.turnId &&
+      a.startedAt === b.startedAt)
+  )
+}
+
 function mergeNav(
   prev: TranscriptNavInsights,
   next: TranscriptNavInsights
@@ -262,11 +285,18 @@ function mergeNav(
     next.count === prev.count &&
     next.earlier === prev.earlier &&
     next.revealingTurnId === prev.revealingTurnId &&
-    next.currentTurnId === prev.currentTurnId
+    next.currentTurnId === prev.currentTurnId &&
+    sameRunning(next.running, prev.running)
   ) {
     return prev
   }
-  return { ...next, entries }
+  return {
+    ...next,
+    entries,
+    running: sameRunning(next.running, prev.running)
+      ? prev.running
+      : next.running,
+  }
 }
 
 function mergePlan(
