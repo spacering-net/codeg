@@ -2252,6 +2252,103 @@ describe("AcpConnectionsProvider abandoned connect tears down only what it creat
   })
 })
 
+describe("AcpConnectionsProvider retained tool output", () => {
+  it.each([
+    "opening",
+    "repeated opening",
+    "replacement",
+    "append",
+    "unannounced update",
+    "out-of-turn opening",
+  ])("bounds a large plain-text %s frame", async (route) => {
+    const originalRaf = globalThis.requestAnimationFrame
+    const originalCancelRaf = globalThis.cancelAnimationFrame
+    const frames = new Map<number, FrameRequestCallback>()
+    let nextFrame = 0
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.set(++nextFrame, callback)
+      return nextFrame
+    })
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id))
+    try {
+      await mountProvider()
+      await act(async () => {
+        await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+      })
+      const handlers = latestAttachHandlers()
+      let seq = 0
+      const large = "old output\n".repeat(30_000) + "LATEST"
+      const opening = (rawOutput: string | null) =>
+        emitAcpEvent(handlers, {
+          seq: ++seq,
+          connection_id: "spawned-conn",
+          type: "tool_call",
+          tool_call_id: "large-call",
+          title: "Bash",
+          kind: "execute",
+          status: "in_progress",
+          content: null,
+          raw_input: '{"command":"build"}',
+          raw_output: rawOutput,
+        })
+      if (route !== "out-of-turn opening") {
+        emitAcpEvent(handlers, {
+          seq: ++seq,
+          connection_id: "spawned-conn",
+          type: "status_changed",
+          status: "prompting",
+        })
+      }
+      if (
+        route === "opening" ||
+        route === "out-of-turn opening" ||
+        route === "repeated opening"
+      ) {
+        if (route === "repeated opening") opening("small")
+        opening(large)
+      } else {
+        if (route !== "unannounced update") opening("small")
+        emitAcpEvent(handlers, {
+          seq: ++seq,
+          connection_id: "spawned-conn",
+          type: "tool_call_update",
+          tool_call_id: "large-call",
+          title: "Bash",
+          status: "in_progress",
+          content: null,
+          raw_input: null,
+          raw_output: large,
+          raw_output_append: route === "append",
+        })
+        act(() => {
+          const pending = [...frames.values()]
+          frames.clear()
+          for (const frame of pending) frame(0)
+        })
+      }
+      const connection = h.store!.getConnection(TAB)!
+      const block = connection.liveMessage?.content.find(
+        (item) =>
+          item.type === "tool_call" && item.info.tool_call_id === "large-call"
+      )
+      const info =
+        route === "out-of-turn opening"
+          ? connection.outOfTurnToolCalls?.get("large-call")
+          : block?.type === "tool_call"
+            ? block.info
+            : null
+      expect(info).toBeTruthy()
+      expect(info?.raw_output_total_bytes).toBe(200_000)
+      expect(info?.raw_output_chunks.join("")).toBe(large.slice(-200_000))
+      expect(info?.title).toBe("Bash")
+      expect(info?.status).toBe("in_progress")
+    } finally {
+      vi.stubGlobal("requestAnimationFrame", originalRaf)
+      vi.stubGlobal("cancelAnimationFrame", originalCancelRaf)
+    }
+  })
+})
+
 describe("AcpConnectionsProvider permission request details", () => {
   it("hydrates a permission request from an existing live tool call input", async () => {
     await mountProvider()

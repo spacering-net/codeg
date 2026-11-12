@@ -214,6 +214,24 @@ describe("denormalizeSnapshot — tool call raw output", () => {
     expect(info.raw_output_total_bytes).toBe("file contents".length)
   })
 
+  it("bounds oversized plain text when a reconnect hydrates the call", () => {
+    const info = hydratedToolInfo({
+      kind: "text",
+      content: "x".repeat(300_000) + "\nlatest",
+    })
+    expect(info.raw_output_total_bytes).toBe(200_000)
+    expect(info.raw_output_chunks.join("")).toHaveLength(200_000)
+    expect(info.raw_output_chunks.join("")).toMatch(/\nlatest$/)
+  })
+
+  it("keeps oversized structured output parseable after hydration", () => {
+    const payload = {
+      tasks: [{ task_id: "task-1", message: "x".repeat(300_000) }],
+    }
+    const info = hydratedToolInfo({ kind: "json", value: payload })
+    expect(JSON.parse(info.raw_output_chunks.join(""))).toEqual(payload)
+  })
+
   // The backend promotes `{"error": "…"}` raw output to this variant, so the
   // inverse is that same object — readers find the error where they look.
   it("hydrates an error output as the {error} object it was promoted from", () => {

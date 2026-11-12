@@ -118,6 +118,10 @@ import {
 } from "@/lib/acp-error-presentation"
 import { dismissNotification, notify, type NotifyAction } from "@/lib/notify"
 import type { SnapshotPatch } from "@/lib/snapshot-denormalize"
+import {
+  appendLiveToolRawOutput,
+  replaceLiveToolRawOutput,
+} from "@/lib/live-tool-output"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
   localizeConfigOptionLabel,
@@ -1043,7 +1047,6 @@ export function streamFlushDelayMs(liveRunChars: number): number {
 }
 
 type ConnectionsMap = Map<string, ConnectionState>
-const MAX_LIVE_TOOL_RAW_OUTPUT_CHARS = 200_000
 const MAX_BUFFERED_UNMAPPED_EVENTS_PER_CONNECTION = 64
 const MAX_BUFFERED_UNMAPPED_CONNECTIONS = 128
 /**
@@ -1846,40 +1849,10 @@ function mergeToolCallUpdate(
   info: ToolCallInfo,
   update: ToolCallUpdateAction
 ): ToolCallInfo {
-  let newChunks: string[]
-  let newTotalBytes: number
-
-  if (update.raw_output === null) {
-    newChunks = info.raw_output_chunks
-    newTotalBytes = info.raw_output_total_bytes
-  } else if (update.raw_output_append) {
-    newChunks = [...info.raw_output_chunks, update.raw_output]
-    newTotalBytes = info.raw_output_total_bytes + update.raw_output.length
-
-    // 超限时从头部批量移除 chunks（单次 slice 替代循环 shift）
-    if (
-      newTotalBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS &&
-      newChunks.length > 1
-    ) {
-      let evictCount = 0
-      let evictedBytes = 0
-      while (
-        evictCount < newChunks.length - 1 &&
-        newTotalBytes - evictedBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS
-      ) {
-        evictedBytes += newChunks[evictCount].length
-        evictCount++
-      }
-      if (evictCount > 0) {
-        newChunks = newChunks.slice(evictCount)
-        newTotalBytes -= evictedBytes
-      }
-    }
-  } else {
-    // 非 append 模式（替换）
-    newChunks = [update.raw_output]
-    newTotalBytes = update.raw_output.length
-  }
+  const output =
+    update.raw_output === null || update.raw_output_append
+      ? appendLiveToolRawOutput(info, update.raw_output)
+      : replaceLiveToolRawOutput(update.raw_output)
 
   return {
     ...info,
@@ -1887,10 +1860,9 @@ function mergeToolCallUpdate(
     status: update.status ?? info.status,
     content: update.content ?? info.content,
     raw_input: update.raw_input ?? info.raw_input,
-    raw_output_chunks: newChunks,
+    ...output,
     locations: update.locations ?? info.locations,
     meta: update.meta ?? info.meta,
-    raw_output_total_bytes: newTotalBytes,
     images: update.images !== null ? update.images : info.images,
   }
 }
@@ -2453,9 +2425,7 @@ function connectionsReducer(
           status: action.status,
           content: action.content,
           raw_input: action.raw_input,
-          raw_output_chunks:
-            action.raw_output !== null ? [action.raw_output] : [],
-          raw_output_total_bytes: action.raw_output?.length ?? 0,
+          ...replaceLiveToolRawOutput(action.raw_output),
           locations: action.locations,
           meta: action.meta,
           images: action.images ?? [],
@@ -2496,14 +2466,9 @@ function connectionsReducer(
                 status: action.status ?? block.info.status,
                 content: action.content ?? block.info.content,
                 raw_input: action.raw_input ?? block.info.raw_input,
-                raw_output_chunks:
-                  action.raw_output !== null
-                    ? [action.raw_output]
-                    : block.info.raw_output_chunks,
-                raw_output_total_bytes:
-                  action.raw_output !== null
-                    ? action.raw_output.length
-                    : block.info.raw_output_total_bytes,
+                ...(action.raw_output !== null
+                  ? replaceLiveToolRawOutput(action.raw_output)
+                  : appendLiveToolRawOutput(block.info, null)),
                 // The block may be the placeholder a permission request drew
                 // before this frame was applied (the agent's announcement and
                 // its request reach codeg on separate paths, either first).
@@ -2532,9 +2497,7 @@ function connectionsReducer(
               status: action.status,
               content: action.content,
               raw_input: action.raw_input,
-              raw_output_chunks:
-                action.raw_output !== null ? [action.raw_output] : [],
-              raw_output_total_bytes: action.raw_output?.length ?? 0,
+              ...replaceLiveToolRawOutput(action.raw_output),
               locations: action.locations ?? null,
               meta: action.meta ?? null,
               images: action.images ?? [],
@@ -2616,9 +2579,7 @@ function connectionsReducer(
       let newContent: LiveContentBlock[]
 
       if (existingIndex === -1) {
-        const initialChunks =
-          action.raw_output !== null ? [action.raw_output] : []
-        const initialBytes = action.raw_output?.length ?? 0
+        const output = replaceLiveToolRawOutput(action.raw_output)
         newContent = [
           ...prev.content,
           {
@@ -2629,11 +2590,12 @@ function connectionsReducer(
               kind: action.fallback_kind,
               status:
                 action.status ??
-                (initialChunks.length > 0 ? "in_progress" : "pending"),
+                (output.raw_output_chunks.length > 0
+                  ? "in_progress"
+                  : "pending"),
               content: action.content,
               raw_input: action.raw_input,
-              raw_output_chunks: initialChunks,
-              raw_output_total_bytes: initialBytes,
+              ...output,
               locations: action.locations ?? null,
               meta: action.meta ?? null,
               images: action.images ?? [],
