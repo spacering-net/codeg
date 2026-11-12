@@ -9248,6 +9248,8 @@ async fn run_connection(
                 codex_user_input_shape(agent_type, init_resp.agent_info.as_ref());
             let steering_policy =
                 steering_policy_agent(agent_type, init_resp.agent_info.as_ref());
+            let antigravity_interactions =
+                speaks_antigravity_interactions(agent_type, init_resp.agent_info.as_ref());
             tracing::info!(
                 "[ACP][{}] steering: advertised={}, agent={:?}, agent_version={:?}, policy={}{}, native={}",
                 agent_type,
@@ -9383,6 +9385,7 @@ async fn run_connection(
                 // agents could ship it someday).
                 s.native_steering_available = native_steering_available;
                 s.codex_user_input_shape = codex_user_input_shape;
+                s.antigravity_interactions = antigravity_interactions;
                 s.neutral_goal_channel = neutral_goal_channel;
                 // The vocabulary is decided HERE for every adapter, advertising
                 // or not — this assignment is what flips it from "unknown" to
@@ -10719,9 +10722,12 @@ async fn try_bridge_antigravity_ask(
     req: &RequestPermissionRequest,
     responder: Responder<RequestPermissionResponse>,
 ) -> Result<(), Responder<RequestPermissionResponse>> {
+    // The id prefix is only antigravity-acp's convention, so the connection must
+    // be antigravity-acp too: the built-in agent, or a custom agent whose
+    // running adapter names itself so (see `speaks_antigravity_interactions`).
     let tool_call_id = req.tool_call.tool_call_id.to_string();
     if !crate::acp::question::is_antigravity_interaction_id(&tool_call_id)
-        || state.read().await.agent_type != AgentType::Antigravity
+        || !state.read().await.antigravity_interactions
     {
         return Err(responder);
     }
@@ -16935,6 +16941,43 @@ pub(crate) fn extract_tool_call_images(content: &[ToolCallContent]) -> Option<Ve
     }
 }
 
+fn extract_live_tool_call_images(
+    agent_type: AgentType,
+    content: Option<&[ToolCallContent]>,
+    raw_output: Option<&serde_json::Value>,
+) -> Option<Vec<ToolCallImageInfo>> {
+    if let Some(images) = content.and_then(extract_tool_call_images) {
+        return Some(images);
+    }
+    if agent_type != AgentType::Codex {
+        return None;
+    }
+
+    // codex-acp reports MCP content in rawOutput.result. A large result
+    // can be replaced by a text preview; those images come from history.
+    let images: Vec<_> = raw_output?
+        .pointer("/result/content")?
+        .as_array()?
+        .iter()
+        .filter_map(|block| {
+            if block.get("type")?.as_str()? != "image" {
+                return None;
+            }
+            let data = block.get("data")?.as_str()?;
+            let mime_type = block.get("mimeType")?.as_str()?;
+            if data.is_empty() || !mime_type.starts_with("image/") {
+                return None;
+            }
+            Some(ToolCallImageInfo {
+                data: data.to_string(),
+                mime_type: mime_type.to_string(),
+                uri: None,
+            })
+        })
+        .collect();
+    (!images.is_empty()).then_some(images)
+}
+
 /// If the output looks like numbered lines (`   115→content`), strip them
 /// and return `{"start_line":N,"content":"..."}` — same as the historical path.
 fn structurize_live_output(text: &str) -> String {
@@ -19994,6 +20037,36 @@ fn steering_policy_agent(
     }
 }
 
+/// The `agentInfo.name` antigravity-acp reports at `initialize` (verified
+/// against 1.4.1).
+const ANTIGRAVITY_ACP_AGENT_NAME: &str = "antigravity-acp";
+
+/// Whether this connection's `interaction_<hex>` questions are antigravity-acp's
+/// own, to be bridged into the question card (pinned into
+/// `SessionState::antigravity_interactions`). The built-in Antigravity always
+/// is. A custom agent is only when the running adapter names itself
+/// antigravity-acp (a second Antigravity account registered as a custom agent,
+/// say), by the same exact-name rule as [`steering_policy_agent`]: the id
+/// prefix is antigravity-acp's convention, not a reserved namespace, and the
+/// bridge answers the permission request itself and later drops a frame under
+/// that id. No other built-in type is ever let in.
+///
+/// Live only, like the custom-agent steering policy: a custom agent's history
+/// is still codeg's transcript, which records the raw frames and not the
+/// answered card.
+fn speaks_antigravity_interactions(
+    agent_type: AgentType,
+    agent_info: Option<&agent_client_protocol::schema::v1::Implementation>,
+) -> bool {
+    match agent_type {
+        AgentType::Antigravity => true,
+        AgentType::Custom(_) => {
+            agent_info.is_some_and(|info| info.name == ANTIGRAVITY_ACP_AGENT_NAME)
+        }
+        _ => false,
+    }
+}
+
 /// codex-acp 1.12.0 swapped the question and the short tab header between a
 /// `request_user_input` property's `title` and `description`. Both generations
 /// emit both strings, so the FORM cannot be dated — but the adapter that built
@@ -20869,17 +20942,14 @@ fn grok_meta_marks_ask_user(
 /// card (the bridge left the question on the approval card, or a drain
 /// abandoned it) the frame settles the placeholder as usual.
 async fn take_antigravity_answered_close(
-    agent_type: AgentType,
     state: &Arc<RwLock<SessionState>>,
     tool_call_id: &str,
 ) -> bool {
-    agent_type == AgentType::Antigravity
-        && crate::acp::question::is_antigravity_interaction_id(tool_call_id)
-        && state
-            .write()
-            .await
-            .antigravity_answered_interactions
-            .remove(tool_call_id)
+    if !crate::acp::question::is_antigravity_interaction_id(tool_call_id) {
+        return false;
+    }
+    let mut s = state.write().await;
+    s.antigravity_interactions && s.antigravity_answered_interactions.remove(tool_call_id)
 }
 
 /// Record the answered card for one Antigravity question under the
@@ -25588,7 +25658,11 @@ async fn emit_conversation_update(
                     // pi announces a command with an empty result, which pi-acp
                     // renders as JSON source (see fn doc).
                     .filter(|_| !pi_result_content_is_stringify_noise(agent_type, &tc.raw_output));
-            let images = extract_tool_call_images(content_blocks);
+            let images = extract_live_tool_call_images(
+                agent_type,
+                Some(content_blocks),
+                tc.raw_output.as_ref(),
+            );
             let codex_subagent_launch = codex_subagent.is_some();
             let raw_input = codex_subagent
                 .or(synthesized_edit)
@@ -25792,7 +25866,7 @@ async fn emit_conversation_update(
             // The closing "Response received" frame of an Antigravity question
             // would overwrite the answered card the bridge recorded (see
             // `take_antigravity_answered_close`).
-            if take_antigravity_answered_close(agent_type, state, &tool_call_id).await {
+            if take_antigravity_answered_close(state, &tool_call_id).await {
                 return;
             }
             // A fork's copy of its own launch result: dropped before the `_meta`
@@ -26103,7 +26177,11 @@ async fn emit_conversation_update(
                 .filter(|_| {
                     !pi_result_content_is_stringify_noise(agent_type, &tcu.fields.raw_output)
                 });
-            let images = content_blocks.and_then(extract_tool_call_images);
+            let images = extract_live_tool_call_images(
+                agent_type,
+                content_blocks,
+                tcu.fields.raw_output.as_ref(),
+            );
             let codex_subagent_launch = codex_subagent.is_some();
             let raw_input = codex_subagent
                 .or(synthesized_edit)
@@ -30243,6 +30321,44 @@ mod tests {
             steering_policy_agent(AgentType::Codex, Some(&claude)),
             AgentType::Codex
         );
+    }
+
+    #[test]
+    fn antigravity_interactions_follow_the_running_adapter_name() {
+        use agent_client_protocol::schema::v1::Implementation;
+        let agy = Implementation::new(ANTIGRAVITY_ACP_AGENT_NAME, "1.4.1");
+        let custom = AgentType::Custom("antigravity-b");
+        // The built-in agent needs no proof, as before.
+        assert!(speaks_antigravity_interactions(
+            AgentType::Antigravity,
+            None
+        ));
+        assert!(speaks_antigravity_interactions(
+            AgentType::Antigravity,
+            Some(&agy)
+        ));
+        // A custom registration of the same adapter.
+        assert!(speaks_antigravity_interactions(custom, Some(&agy)));
+        // Any other custom adapter, or one that reports nothing, is left alone:
+        // `interaction_` is not a reserved prefix.
+        assert!(!speaks_antigravity_interactions(custom, None));
+        for name in [
+            "acme-acp",
+            "antigravity",
+            "antigravity-acp-fork",
+            "agy_acp_server",
+        ] {
+            let other = Implementation::new(name, "1.4.1");
+            assert!(
+                !speaks_antigravity_interactions(custom, Some(&other)),
+                "{name}"
+            );
+        }
+        // A built-in type is never let in by what its adapter reports.
+        assert!(!speaks_antigravity_interactions(
+            AgentType::Codex,
+            Some(&agy)
+        ));
     }
 
     #[test]
@@ -42678,6 +42794,42 @@ mod tests {
             .unwrap_or_default()
     }
 
+    #[tokio::test]
+    async fn codex_mcp_screenshot_is_forwarded_in_the_tool_update() {
+        let events = pi_emit_chunk(
+            AgentType::Codex,
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "screenshot",
+                "status": "completed",
+                "rawOutput": {
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": "Page loaded"},
+                            {"type": "image", "data": "AQID", "mimeType": "image/jpeg"}
+                        ]
+                    },
+                    "error": null
+                }
+            }),
+        )
+        .await;
+        let images = events
+            .iter()
+            .find_map(|event| match event {
+                AcpEvent::ToolCallUpdate {
+                    tool_call_id,
+                    images: Some(images),
+                    ..
+                } if tool_call_id == "screenshot" => Some(images),
+                _ => None,
+            })
+            .expect("completed screenshot update has images");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].mime_type, "image/jpeg");
+        assert_eq!(images[0].data, "AQID");
+    }
+
     fn pi_chunk(text: &str) -> serde_json::Value {
         serde_json::json!({
             "sessionUpdate": "agent_message_chunk",
@@ -50508,22 +50660,45 @@ mod tests {
     #[tokio::test]
     async fn antigravity_interaction_round_trip_preserves_choice_and_gates() {
         use agent_client_protocol::Channel;
-        for (agent_type, enabled, decline, bridged) in [
-            (AgentType::Antigravity, true, false, true),
-            (AgentType::Antigravity, true, true, true),
+        // (agent, the `agentInfo.name` its adapter reported at initialize, ask
+        // feature on, user declines, bridged)
+        for (agent_type, adapter, enabled, decline, bridged) in [
+            (AgentType::Antigravity, None, true, false, true),
+            (AgentType::Antigravity, None, true, true, true),
+            // A custom agent running antigravity-acp (a second account, say).
+            (
+                AgentType::Custom("antigravity-b"),
+                Some(ANTIGRAVITY_ACP_AGENT_NAME),
+                true,
+                false,
+                true,
+            ),
+            // Any other custom adapter keeps its look-alike ids on the approval
+            // card, as does one that reported no `agentInfo`.
+            (AgentType::Custom("acme"), Some("acme-acp"), true, false, false),
+            (AgentType::Custom("antigravity-b"), None, true, false, false),
             // The ask feature's kill switch keeps the approval card, as it does
             // for every other native ask bridge.
-            (AgentType::Antigravity, false, false, false),
-            (AgentType::Codex, true, false, false),
+            (AgentType::Antigravity, None, false, false, false),
+            (AgentType::Codex, None, true, false, false),
         ] {
             let (client_end, agent_end) = Channel::duplex();
-            let state = Arc::new(RwLock::new(SessionState::new(
+            let mut session = SessionState::new(
                 "conn-test".into(),
                 agent_type,
                 None,
                 "win".into(),
                 None,
-            )));
+            );
+            // What initialize pins.
+            let adapter = adapter.map(|name| {
+                agent_client_protocol::schema::v1::Implementation::new(name, "1.4.1")
+            });
+            if session.agent_type != AgentType::Antigravity {
+                session.antigravity_interactions =
+                    speaks_antigravity_interactions(agent_type, adapter.as_ref());
+            }
+            let state = Arc::new(RwLock::new(session));
             let config = crate::acp::question::QuestionRuntimeConfig::new();
             config
                 .set(crate::acp::question::QuestionConfig { enabled })
@@ -50669,6 +50844,7 @@ mod tests {
                 })
                 .collect(),
             is_secret: false,
+            allow_other: false,
         };
         let answered = crate::acp::question::QuestionOutcome {
             answers: vec![crate::acp::question::QuestionAnsweredItem {
@@ -50684,7 +50860,8 @@ mod tests {
             declined: true,
         };
         // (agent, the card the bridge recorded, closing frame, frames for the id
-        // that reach the reducers)
+        // that reach the reducers). The custom agent is one whose adapter
+        // reported antigravity-acp at initialize.
         for (agent_type, card, (closing_status, closing_output), frames_expected) in [
             (
                 AgentType::Antigravity,
@@ -50705,19 +50882,29 @@ mod tests {
                 2,
             ),
             (
+                AgentType::Custom("antigravity-b"),
+                Some(&answered),
+                ("completed", "Response received"),
+                2,
+            ),
+            (
                 AgentType::Codex,
                 Some(&answered),
                 ("completed", "Response received"),
                 3,
             ),
         ] {
-            let state = Arc::new(RwLock::new(SessionState::new(
+            let mut session = SessionState::new(
                 "conn-agy-frames".into(),
                 agent_type,
                 None,
                 "win".into(),
                 None,
-            )));
+            );
+            if matches!(agent_type, AgentType::Custom(_)) {
+                session.antigravity_interactions = true;
+            }
+            let state = Arc::new(RwLock::new(session));
             let mut cache = ToolCallOutputCache::default();
             let mut cb = CodeBuddyLiveState::default();
             emit_conversation_update(
@@ -50777,7 +50964,7 @@ mod tests {
                 other => panic!("unexpected output {other:?} ({case})"),
             };
             match (agent_type, card) {
-                (AgentType::Antigravity, Some(outcome)) => {
+                (AgentType::Antigravity | AgentType::Custom(_), Some(outcome)) => {
                     let expected = crate::acp::question::grok_result_card_output(outcome);
                     assert_eq!(output, expected.to_string(), "{case}");
                     assert_eq!(call.label, "ask_user_question", "{case}");
@@ -50791,7 +50978,7 @@ mod tests {
                 _ => assert!(output.contains("Response received"), "{output}"),
             }
             // Each record is consumed by the frame it was waiting for.
-            if agent_type == AgentType::Antigravity {
+            if matches!(agent_type, AgentType::Antigravity | AgentType::Custom(_)) {
                 assert!(guard.antigravity_answered_interactions.is_empty(), "{case}");
             }
         }

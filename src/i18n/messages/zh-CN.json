@@ -3992,6 +3992,13 @@
         "htmlPreviewHide": "收起预览"
       },
       "activity": {
+        "oauth": {
+          "waiting": "等待 {server} 授权",
+          "reconnecting": "正在重新连接 {server}…",
+          "open": "在系统浏览器中打开授权",
+          "verify": "重新连接后，请用真实 MCP 工具调用验证访问。打开浏览器不代表授权成功。",
+          "openFailed": "无法打开浏览器，请通过授权链接重试。"
+        },
         "header": {
           "label": "执行过程",
           "working": "进行中",

@@ -1,3 +1,4 @@
+import { stripKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import type {
   ActiveDelegationState,
   AsyncTaskRecord,
@@ -20,6 +21,7 @@ import type {
 } from "@/lib/types"
 
 import { routeAcpError, type AcpErrorLevel } from "@/lib/acp-error-presentation"
+import { replaceLiveToolRawOutput } from "@/lib/live-tool-output"
 import type {
   LiveContentBlock as LocalLiveContentBlock,
   LiveMessage as LocalLiveMessage,
@@ -306,13 +308,8 @@ function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
   // Backend's structured output is collapsed into a single raw chunk for
   // hydration. Chunk history isn't recoverable from the snapshot — the
   // frontend's per-chunk delta tracking will resume from subsequent events.
-  const outputChunks: string[] = []
-  let outputBytes = 0
-  const rawOutput = toolOutputRawText(tc.output)
-  if (rawOutput !== null) {
-    outputChunks.push(rawOutput)
-    outputBytes = rawOutput.length
-  }
+  const output = replaceLiveToolRawOutput(toolOutputRawText(tc.output))
+
   return {
     tool_call_id: tc.id,
     title: tc.label,
@@ -320,10 +317,9 @@ function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
     status: tc.status,
     content: tc.content,
     raw_input: tc.input == null ? null : JSON.stringify(tc.input),
-    raw_output_chunks: outputChunks,
-    raw_output_total_bytes: outputBytes,
+    ...output,
     locations: tc.locations ?? null,
-    meta: tc.meta ?? null,
+    meta: stripKimiMcpOAuth(tc.meta ?? null),
     images: tc.images ?? [],
   }
 }

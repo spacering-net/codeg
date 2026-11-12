@@ -3992,6 +3992,13 @@
         "htmlPreviewHide": "Ocultar vista previa"
       },
       "activity": {
+        "oauth": {
+          "waiting": "Esperando autorización de {server}",
+          "reconnecting": "Reconectando con {server}…",
+          "open": "Abrir autorización en el navegador del sistema",
+          "verify": "Tras reconectar, verifica el acceso con una llamada real a una herramienta MCP. Abrir el navegador no confirma la autorización.",
+          "openFailed": "No se pudo abrir el navegador. Usa el enlace de autorización para reintentar."
+        },
         "header": {
           "label": "Actividad",
           "working": "En curso",

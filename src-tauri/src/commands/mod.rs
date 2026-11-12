@@ -83,6 +83,7 @@ pub mod version_control;
 #[cfg(feature = "tauri-runtime")]
 pub mod windows;
 pub mod work_task;
+pub mod workspace_file_search;
 pub mod workspace_state;
 #[cfg(feature = "tauri-runtime")]
 pub mod workspace_windows;

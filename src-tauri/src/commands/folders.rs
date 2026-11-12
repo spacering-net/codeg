@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::UNIX_EPOCH;
 
 use base64::Engine as _;
@@ -4825,7 +4825,7 @@ pub async fn list_directory_with_files(
 /// Only *authorized* links are returned (see [`crate::folder_links`]): a
 /// symlink that merely happens to sit in the tree — the `secrets -> ~/.ssh` a
 /// cloned repo might ship — is not one of them and stays unfollowed.
-fn authorized_links_in(root: &Path) -> Vec<(String, PathBuf)> {
+pub(super) fn authorized_links_in(root: &Path) -> Vec<(String, PathBuf)> {
     let Ok(canonical_root) = std::fs::canonicalize(root) else {
         return Vec::new();
     };
@@ -5127,29 +5127,86 @@ fn build_file_tree(
 }
 
 /// Flat, gitignore-aware listing of every file and directory under `path`, for
-/// fuzzy file search. Unlike [`get_file_tree`], ignored directories
-/// (`node_modules`, `target`, `dist`, …) are pruned *during* the walk, so no
-/// depth cap is needed: deep files stay reachable while the heavy trees are
-/// never descended and the payload stays small. Gitignore handling that used to
-/// run client-side now happens here at native speed in a single pass.
+/// compatibility with clients that need enumeration. Search surfaces use
+/// `workspace_file_search` so an unbounded listing never reaches the renderer.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn list_workspace_files(
     path: String,
 ) -> Result<Vec<WorkspaceFileEntry>, AppCommandError> {
-    let root = PathBuf::from(&path);
+    let mut entries = Vec::new();
+    visit_workspace_files(&path, |entry| {
+        entries.push(entry);
+        true
+    });
+    Ok(entries)
+}
+
+/// Visit the search-visible entries without collecting the whole workspace.
+/// Returning false stops both the main walk and any authorized linked roots.
+pub(super) fn visit_workspace_files(path: &str, mut visit: impl FnMut(WorkspaceFileEntry) -> bool) {
+    let root = PathBuf::from(path);
     // Linked directories are walked separately below, rooted at the link so
     // their own `.gitignore` applies. Excluded from the main pass because the
     // walker reports a symlink as a leaf file.
     let linked = authorized_links_in(&root);
     let linked_names: HashSet<String> = linked.iter().map(|(name, _)| name.clone()).collect();
+    if !visit_workspace_main_pass(&root, linked_names, None, &mut visit) {
+        return;
+    }
 
+    for (link_name, target) in linked {
+        if !visit(WorkspaceFileEntry {
+            name: link_name.clone(),
+            path: link_name.clone(),
+            kind: WorkspaceEntryKind::Dir,
+        }) {
+            return;
+        }
+        // Rooted at the resolved target so the linked project's own ignore
+        // files apply, then re-prefixed with the link name so every path stays
+        // relative to the workspace root and resolves back through the link.
+        if !visit_files_under(&target, &link_name, &mut visit) {
+            return;
+        }
+    }
+}
+
+/// Relative-path predicate for [`visit_workspace_focused`]: entries it rejects
+/// are neither yielded nor descended.
+pub(super) type WalkFocus = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// The main pass of [`visit_workspace_files`] restricted to the entries
+/// `focus` keeps. Descending through each kept ancestor reads that directory's
+/// ignore files exactly as a full walk would, so a handful of changed paths
+/// can be re-evaluated with full-walk semantics without walking everything.
+/// Authorized linked roots are not visited.
+pub(super) fn visit_workspace_focused(
+    path: &str,
+    focus: WalkFocus,
+    mut visit: impl FnMut(WorkspaceFileEntry) -> bool,
+) {
+    let root = PathBuf::from(path);
+    let linked_names = authorized_links_in(&root)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    visit_workspace_main_pass(&root, linked_names, Some(focus), &mut visit);
+}
+
+fn visit_workspace_main_pass(
+    root: &Path,
+    linked_names: HashSet<String>,
+    focus: Option<WalkFocus>,
+    visit: &mut impl FnMut(WorkspaceFileEntry) -> bool,
+) -> bool {
     // Conservative gitignore parity with the previous client-side pass: respect
     // in-tree `.gitignore`/`.ignore`/`.git/info/exclude`, but not the global
     // gitignore or parent-directory ignores (the workspace root is the
     // boundary). `require_git(false)` keeps `.gitignore` effective even outside
     // a git repo. `hidden(false)` keeps dotfiles visible. The `filter_entry`
     // mirrors `get_file_tree`'s hardcoded ignores exactly.
-    let walker = WalkBuilder::new(&root)
+    let filter_root = root.to_path_buf();
+    let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(false)
         .ignore(true)
@@ -5159,21 +5216,28 @@ pub async fn list_workspace_files(
         .require_git(false)
         .sort_by_file_name(|a, b| a.cmp(b))
         .filter_entry(move |e| {
+            if e.depth() == 0 {
+                return true;
+            }
             let name = e.file_name().to_string_lossy();
             if e.depth() == 1 && linked_names.contains(name.as_ref()) {
                 return false;
             }
-            if e.file_type()
+            let kept = if e
+                .file_type()
                 .is_some_and(|t| entry_presents_as_dir(&t, e.path()))
             {
                 !FILE_TREE_IGNORED_DIRS.contains(&name.as_ref())
             } else {
                 name != ".DS_Store"
-            }
+            };
+            kept && focus.as_ref().is_none_or(|focus| {
+                let rel = e.path().strip_prefix(&filter_root).unwrap_or(e.path());
+                focus(&rel.to_string_lossy().replace('\\', "/"))
+            })
         })
         .build();
 
-    let mut entries: Vec<WorkspaceFileEntry> = Vec::new();
     for result in walker {
         // Skip unreadable entries (permission errors, transient races) rather
         // than failing the whole search.
@@ -5192,12 +5256,12 @@ pub async fn list_workspace_files(
             .is_some_and(|t| entry_presents_as_dir(&t, entry_path));
         let name = entry.file_name().to_string_lossy().to_string();
         let rel_path = entry_path
-            .strip_prefix(&root)
+            .strip_prefix(root)
             .unwrap_or(entry_path)
             .to_string_lossy()
             .replace('\\', "/");
 
-        entries.push(WorkspaceFileEntry {
+        if !visit(WorkspaceFileEntry {
             name,
             path: rel_path,
             kind: if is_dir {
@@ -5205,28 +5269,21 @@ pub async fn list_workspace_files(
             } else {
                 WorkspaceEntryKind::File
             },
-        });
+        }) {
+            return false;
+        }
     }
-
-    for (link_name, target) in linked {
-        entries.push(WorkspaceFileEntry {
-            name: link_name.clone(),
-            path: link_name.clone(),
-            kind: WorkspaceEntryKind::Dir,
-        });
-        // Rooted at the resolved target so the linked project's own ignore
-        // files apply, then re-prefixed with the link name so every path stays
-        // relative to the workspace root and resolves back through the link.
-        entries.extend(list_files_under(&target, &link_name));
-    }
-
-    Ok(entries)
+    true
 }
 
 /// Flat listing of `root`, with every path prefixed by `prefix/`. Shares the
 /// ignore configuration of [`list_workspace_files`]; nested symlinks are not
 /// followed, so this cannot recurse.
-fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
+fn visit_files_under(
+    root: &Path,
+    prefix: &str,
+    visit: &mut impl FnMut(WorkspaceFileEntry) -> bool,
+) -> bool {
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(false)
@@ -5248,7 +5305,6 @@ fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
         })
         .build();
 
-    let mut entries = Vec::new();
     for result in walker {
         let Ok(entry) = result else { continue };
         let entry_path = entry.path();
@@ -5261,7 +5317,7 @@ fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
         let is_dir = entry
             .file_type()
             .is_some_and(|t| entry_presents_as_dir(&t, entry_path));
-        entries.push(WorkspaceFileEntry {
+        if !visit(WorkspaceFileEntry {
             name: entry.file_name().to_string_lossy().to_string(),
             path: format!("{prefix}/{}", rel.to_string_lossy().replace('\\', "/")),
             kind: if is_dir {
@@ -5269,9 +5325,11 @@ fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
             } else {
                 WorkspaceEntryKind::File
             },
-        });
+        }) {
+            return false;
+        }
     }
-    entries
+    true
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]

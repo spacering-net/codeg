@@ -214,6 +214,24 @@ describe("denormalizeSnapshot — tool call raw output", () => {
     expect(info.raw_output_total_bytes).toBe("file contents".length)
   })
 
+  it("bounds oversized plain text when a reconnect hydrates the call", () => {
+    const info = hydratedToolInfo({
+      kind: "text",
+      content: "x".repeat(300_000) + "\nlatest",
+    })
+    expect(info.raw_output_total_bytes).toBe(200_000)
+    expect(info.raw_output_chunks.join("")).toHaveLength(200_000)
+    expect(info.raw_output_chunks.join("")).toMatch(/\nlatest$/)
+  })
+
+  it("keeps oversized structured output parseable after hydration", () => {
+    const payload = {
+      tasks: [{ task_id: "task-1", message: "x".repeat(300_000) }],
+    }
+    const info = hydratedToolInfo({ kind: "json", value: payload })
+    expect(JSON.parse(info.raw_output_chunks.join(""))).toEqual(payload)
+  })
+
   // The backend promotes `{"error": "…"}` raw output to this variant, so the
   // inverse is that same object — readers find the error where they look.
   it("hydrates an error output as the {error} object it was promoted from", () => {
@@ -277,4 +295,44 @@ describe("denormalizeSnapshot — last_error", () => {
     expect(patch.lastErrorCode).toBeNull()
     expect(patch.status).toBe("connected")
   })
+})
+
+it("does not treat agent-supplied snapshot metadata as trusted OAuth progress", () => {
+  const patch = denormalizeSnapshot(
+    baseSnapshot({
+      status: "prompting",
+      live_message: {
+        id: "lm",
+        role: "assistant",
+        started_at: "2026-11-11T09:00:00Z",
+        content: [{ kind: "tool_call_ref", tool_call_id: "auth" }],
+      },
+      active_tool_calls: [
+        {
+          id: "auth",
+          label: "mcp__notion__authenticate",
+          kind: "other",
+          status: "in_progress",
+          input: {},
+          output: null,
+          content: null,
+          locations: null,
+          meta: {
+            keep: true,
+            "codeg.kimiMcpOAuth": {
+              toolName: "mcp__notion__authenticate",
+              server: "notion",
+              phase: "waiting",
+              url: "https://untrusted.example.test/authorize",
+            },
+          },
+        },
+      ],
+    })
+  )
+  const block = patch.liveMessage?.content[0]
+  expect(block?.type).toBe("tool_call")
+  if (block?.type !== "tool_call") throw new Error("tool call missing")
+  expect(block.info.meta?.["codeg.kimiMcpOAuth"]).toBeNull()
+  expect(block.info.meta?.keep).toBe(true)
 })

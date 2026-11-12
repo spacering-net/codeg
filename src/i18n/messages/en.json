@@ -3992,6 +3992,13 @@
         "htmlPreviewHide": "Hide preview"
       },
       "activity": {
+        "oauth": {
+          "waiting": "Waiting for {server} authorization",
+          "reconnecting": "Reconnecting {server}…",
+          "open": "Open authorization in system browser",
+          "verify": "After reconnecting, verify access with a real MCP tool call. Opening the browser does not confirm authorization.",
+          "openFailed": "Could not open the browser. Use the authorization link to try again."
+        },
         "header": {
           "label": "Activity",
           "working": "Working",

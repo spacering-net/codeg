@@ -597,6 +597,16 @@ pub struct SessionState {
     /// Backend-only.
     pub antigravity_answered_interactions: BTreeSet<String>,
 
+    /// Whether the adapter on this connection is antigravity-acp, so that its
+    /// `interaction_<hex>` questions are bridged into the question card
+    /// (`connection.rs::try_bridge_antigravity_ask`). Always true for the
+    /// built-in Antigravity. A custom agent gets it at initialize only when
+    /// the RUNNING adapter reports `agentInfo.name == "antigravity-acp"` (a
+    /// second Antigravity account registered as a custom agent, say), because
+    /// the id prefix alone says nothing about who minted it
+    /// (`connection.rs::speaks_antigravity_interactions`). Backend-only.
+    pub antigravity_interactions: bool,
+
     /// Whether live-feedback notes for THIS session go over the native ACP
     /// `_session/steering` push channel instead of the `check_user_feedback`
     /// pull tool. Synthesized ONCE at initialize from three gates (extension
@@ -946,6 +956,7 @@ impl SessionState {
             feedback_tool_available: false,
             result_tool_available: false,
             antigravity_answered_interactions: BTreeSet::new(),
+            antigravity_interactions: agent_type == AgentType::Antigravity,
             native_steering_available: false,
             codex_user_input_shape: None,
             neutral_goal_channel: false,

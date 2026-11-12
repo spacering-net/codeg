@@ -1,6 +1,14 @@
 "use client"
 
 import {
+  readKimiMcpOAuth,
+  rebindKimiMcpOAuth,
+  startKimiMcpOAuth,
+  stripKimiMcpOAuth,
+  updateKimiMcpOAuth,
+} from "@/lib/kimi-mcp-oauth"
+
+import {
   createContext,
   useCallback,
   useContext,
@@ -118,6 +126,10 @@ import {
 } from "@/lib/acp-error-presentation"
 import { dismissNotification, notify, type NotifyAction } from "@/lib/notify"
 import type { SnapshotPatch } from "@/lib/snapshot-denormalize"
+import {
+  appendLiveToolRawOutput,
+  replaceLiveToolRawOutput,
+} from "@/lib/live-tool-output"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
   localizeConfigOptionLabel,
@@ -1043,7 +1055,6 @@ export function streamFlushDelayMs(liveRunChars: number): number {
 }
 
 type ConnectionsMap = Map<string, ConnectionState>
-const MAX_LIVE_TOOL_RAW_OUTPUT_CHARS = 200_000
 const MAX_BUFFERED_UNMAPPED_EVENTS_PER_CONNECTION = 64
 const MAX_BUFFERED_UNMAPPED_CONNECTIONS = 128
 /**
@@ -1837,6 +1848,40 @@ function recordOutOfTurnToolCall(
   return next
 }
 
+/** Keep the Kimi OAuth bindings this client established when a newer snapshot
+ *  replaces the live message (see `rebindKimiMcpOAuth`). Matched by tool-call
+ *  id; a call the snapshot no longer has, or has settled, loses its binding. */
+function carryKimiMcpOAuth(
+  previous: LiveMessage | null,
+  hydrated: LiveMessage | null
+): LiveMessage | null {
+  if (!previous || !hydrated) return hydrated
+  const bound = new Map<string, ToolCallMeta>()
+  for (const block of previous.content) {
+    if (block.type === "tool_call" && readKimiMcpOAuth(block.info.meta)) {
+      bound.set(block.info.tool_call_id, block.info.meta)
+    }
+  }
+  if (bound.size === 0) return hydrated
+  let changed = false
+  const content = hydrated.content.map((block) => {
+    if (block.type !== "tool_call") return block
+    const previousMeta = bound.get(block.info.tool_call_id)
+    if (previousMeta === undefined) return block
+    changed = true
+    return {
+      ...block,
+      info: {
+        ...block.info,
+        // The bound name, as `mergeToolCallUpdate` keeps it while live.
+        title: readKimiMcpOAuth(previousMeta)?.toolName ?? block.info.title,
+        meta: rebindKimiMcpOAuth(previousMeta, block.info),
+      },
+    }
+  })
+  return changed ? { ...hydrated, content } : hydrated
+}
+
 type ToolCallUpdateAction = Extract<Action, { type: "TOOL_CALL_UPDATE" }>
 
 /** Fold one `tool_call_update` into the tool call it revises. Shared by the
@@ -1846,51 +1891,21 @@ function mergeToolCallUpdate(
   info: ToolCallInfo,
   update: ToolCallUpdateAction
 ): ToolCallInfo {
-  let newChunks: string[]
-  let newTotalBytes: number
+  const output =
+    update.raw_output === null || update.raw_output_append
+      ? appendLiveToolRawOutput(info, update.raw_output)
+      : replaceLiveToolRawOutput(update.raw_output)
 
-  if (update.raw_output === null) {
-    newChunks = info.raw_output_chunks
-    newTotalBytes = info.raw_output_total_bytes
-  } else if (update.raw_output_append) {
-    newChunks = [...info.raw_output_chunks, update.raw_output]
-    newTotalBytes = info.raw_output_total_bytes + update.raw_output.length
-
-    // 超限时从头部批量移除 chunks（单次 slice 替代循环 shift）
-    if (
-      newTotalBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS &&
-      newChunks.length > 1
-    ) {
-      let evictCount = 0
-      let evictedBytes = 0
-      while (
-        evictCount < newChunks.length - 1 &&
-        newTotalBytes - evictedBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS
-      ) {
-        evictedBytes += newChunks[evictCount].length
-        evictCount++
-      }
-      if (evictCount > 0) {
-        newChunks = newChunks.slice(evictCount)
-        newTotalBytes -= evictedBytes
-      }
-    }
-  } else {
-    // 非 append 模式（替换）
-    newChunks = [update.raw_output]
-    newTotalBytes = update.raw_output.length
-  }
-
+  const oauth = readKimiMcpOAuth(info.meta)
   return {
     ...info,
-    title: update.title ?? info.title,
+    title: oauth?.toolName ?? update.title ?? info.title,
     status: update.status ?? info.status,
     content: update.content ?? info.content,
     raw_input: update.raw_input ?? info.raw_input,
-    raw_output_chunks: newChunks,
+    ...output,
     locations: update.locations ?? info.locations,
-    meta: update.meta ?? info.meta,
-    raw_output_total_bytes: newTotalBytes,
+    meta: updateKimiMcpOAuth(info.meta, update, info.status),
     images: update.images !== null ? update.images : info.images,
   }
 }
@@ -2185,7 +2200,9 @@ function connectionsReducer(
         return next
       }
 
-      const hydratedLiveMessage = action.patch.liveMessage
+      const hydratedLiveMessage = sameSession
+        ? carryKimiMcpOAuth(current.liveMessage, action.patch.liveMessage)
+        : action.patch.liveMessage
       const hydratedPendingPermission = mergePendingPermissionWithLiveMessage(
         action.patch.pendingPermission,
         hydratedLiveMessage ?? current.liveMessage
@@ -2441,6 +2458,7 @@ function connectionsReducer(
     case "TOOL_CALL": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
+      const meta = startKimiMcpOAuth(conn.agentType, action.title, action.meta)
       // Out-of-turn wire tool activity stays OUT of `liveMessage` (the
       // transcript overlay renders that content — grafting it here recreated
       // the garbled-timeline bug), but its context is still recorded so a
@@ -2453,11 +2471,9 @@ function connectionsReducer(
           status: action.status,
           content: action.content,
           raw_input: action.raw_input,
-          raw_output_chunks:
-            action.raw_output !== null ? [action.raw_output] : [],
-          raw_output_total_bytes: action.raw_output?.length ?? 0,
+          ...replaceLiveToolRawOutput(action.raw_output),
           locations: action.locations,
-          meta: action.meta,
+          meta,
           images: action.images ?? [],
         }
         const next = new Map(state)
@@ -2496,21 +2512,16 @@ function connectionsReducer(
                 status: action.status ?? block.info.status,
                 content: action.content ?? block.info.content,
                 raw_input: action.raw_input ?? block.info.raw_input,
-                raw_output_chunks:
-                  action.raw_output !== null
-                    ? [action.raw_output]
-                    : block.info.raw_output_chunks,
-                raw_output_total_bytes:
-                  action.raw_output !== null
-                    ? action.raw_output.length
-                    : block.info.raw_output_total_bytes,
+                ...(action.raw_output !== null
+                  ? replaceLiveToolRawOutput(action.raw_output)
+                  : appendLiveToolRawOutput(block.info, null)),
                 // The block may be the placeholder a permission request drew
                 // before this frame was applied (the agent's announcement and
                 // its request reach codeg on separate paths, either first).
                 // The announcement is what names the tool
                 // (`_meta.claudeCode.toolName`), so its `_meta` must land.
                 locations: action.locations ?? block.info.locations,
-                meta: action.meta ?? block.info.meta,
+                meta: meta ?? block.info.meta,
                 images:
                   action.images !== null ? action.images : block.info.images,
               },
@@ -2532,11 +2543,9 @@ function connectionsReducer(
               status: action.status,
               content: action.content,
               raw_input: action.raw_input,
-              raw_output_chunks:
-                action.raw_output !== null ? [action.raw_output] : [],
-              raw_output_total_bytes: action.raw_output?.length ?? 0,
+              ...replaceLiveToolRawOutput(action.raw_output),
               locations: action.locations ?? null,
-              meta: action.meta ?? null,
+              meta,
               images: action.images ?? [],
             },
           },
@@ -2616,9 +2625,7 @@ function connectionsReducer(
       let newContent: LiveContentBlock[]
 
       if (existingIndex === -1) {
-        const initialChunks =
-          action.raw_output !== null ? [action.raw_output] : []
-        const initialBytes = action.raw_output?.length ?? 0
+        const output = replaceLiveToolRawOutput(action.raw_output)
         newContent = [
           ...prev.content,
           {
@@ -2629,11 +2636,12 @@ function connectionsReducer(
               kind: action.fallback_kind,
               status:
                 action.status ??
-                (initialChunks.length > 0 ? "in_progress" : "pending"),
+                (output.raw_output_chunks.length > 0
+                  ? "in_progress"
+                  : "pending"),
               content: action.content,
               raw_input: action.raw_input,
-              raw_output_chunks: initialChunks,
-              raw_output_total_bytes: initialBytes,
+              ...output,
               locations: action.locations ?? null,
               meta: action.meta ?? null,
               images: action.images ?? [],
@@ -5256,7 +5264,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             raw_input: e.raw_input,
             raw_output: e.raw_output,
             locations: e.locations ?? null,
-            meta: (e.meta as ToolCallMeta) ?? null,
+            meta: stripKimiMcpOAuth((e.meta as ToolCallMeta) ?? null),
             images: e.images ?? null,
           })
           break
@@ -5274,7 +5282,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             raw_output: e.raw_output,
             raw_output_append: e.raw_output_append,
             locations: e.locations ?? null,
-            meta: (e.meta as ToolCallMeta) ?? null,
+            meta: stripKimiMcpOAuth((e.meta as ToolCallMeta) ?? null),
             images: e.images ?? null,
           })
           scheduleToolCallUpdateFlush()

@@ -412,6 +412,54 @@ pub async fn list_workspace_files(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SearchWorkspaceFilesParams {
+    pub path: String,
+    pub query: String,
+    pub limit: Option<usize>,
+    pub files_only: Option<bool>,
+    pub refresh: Option<bool>,
+    pub request: Option<crate::commands::workspace_file_search::SearchRequest>,
+    pub max_age_ms: Option<u64>,
+}
+
+pub async fn search_workspace_files(
+    Json(params): Json<SearchWorkspaceFilesParams>,
+) -> Result<Json<Vec<folder_commands::WorkspaceFileEntry>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::workspace_file_search::search_workspace_files(
+            params.path,
+            params.query,
+            params.limit,
+            params.files_only,
+            params.refresh,
+            params.request,
+            params.max_age_ms,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct CancelWorkspaceFileSearchParams {
+    pub request: crate::commands::workspace_file_search::SearchRequest,
+}
+
+pub async fn cancel_workspace_file_search(
+    Json(params): Json<CancelWorkspaceFileSearchParams>,
+) -> Result<Json<()>, AppCommandError> {
+    crate::commands::workspace_file_search::cancel_workspace_file_search(params.request).await?;
+    Ok(Json(()))
+}
+
+pub async fn prepare_workspace_file_search(
+    Json(params): Json<ListWorkspaceFilesParams>,
+) -> Json<()> {
+    crate::commands::workspace_file_search::prepare_workspace_file_search(params.path).await;
+    Json(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OpenSettingsWindowParams {
     pub section: Option<String>,
     pub agent_type: Option<String>,
