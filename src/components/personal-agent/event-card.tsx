@@ -16,13 +16,15 @@
  */
 
 import { useTranslations } from "next-intl"
-import { ChevronDown, ChevronUp } from "lucide-react"
+import { ChevronDown, ChevronUp, Repeat } from "lucide-react"
 
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useCollapsibleOverflow } from "@/hooks/use-collapsible-overflow"
-import type { AgentType } from "@/lib/types"
+import { Button } from "@/components/ui/button"
+import type { AgentType, DispatchInfo, RoutineDraft } from "@/lib/types"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { cn } from "@/lib/utils"
 
 import { asVerdict, CheckLabel, VerdictChip } from "./acceptance-bits"
@@ -41,6 +43,7 @@ import {
   str,
   UnreadMark,
   useOpenWork,
+  usePageScope,
   useWorkMeta,
   workTargetOf,
 } from "./shared"
@@ -153,9 +156,34 @@ export function AnsweredForYou({
   )
 }
 
+/** "Every week, like this": a routine handing out the same work, at this
+ *  weekday and time (6.9). */
+function weeklyDraft(info: DispatchInfo): RoutineDraft {
+  const now = new Date()
+  return {
+    title: info.title,
+    what: info.prompt,
+    kind: "dispatch",
+    cron: `${now.getMinutes()} ${now.getHours()} * * ${now.getDay()}`,
+    dispatch: {
+      assistant_id: info.executor.assistant_id,
+      mode: info.mode,
+      project_id: info.mode === "chat" ? null : info.folder_id,
+      deliverable:
+        info.mode === "task"
+          ? info.deliverable === "report"
+            ? "report"
+            : "change"
+          : null,
+    },
+  }
+}
+
 export function EventCard({ item }: { item: EventItem }) {
   const t = useTranslations("PersonalAgent")
-  const { dispatchById } = usePersonalAgent()
+  const { dispatchById, botId } = usePersonalAgent()
+  const { readOnly } = usePageScope()
+  const openRoutineEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
   const openWork = useOpenWork()
   const meta = useWorkMeta()
   const row = item.row
@@ -271,6 +299,33 @@ export function EventCard({ item }: { item: EventItem }) {
           </div>
         ) : null}
         {shown ? <CollapsedText text={shown} /> : null}
+        {/* Done, and not a routine's already: make it one (6.9). */}
+        {item.latest &&
+        info &&
+        info.state === "completed" &&
+        checkFor == null &&
+        info.routine_id == null &&
+        !readOnly ? (
+          <div className="mt-2">
+            <Button
+              size="xs"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={() =>
+                openRoutineEditor({
+                  botId,
+                  routineId: null,
+                  draft: weeklyDraft(info),
+                  noticeId: null,
+                })
+              }
+              data-pa-weekly
+            >
+              <Repeat aria-hidden />
+              {t("routines.weekly")}
+            </Button>
+          </div>
+        ) : null}
       </div>
     </MessageRow>
   )

@@ -14,7 +14,13 @@
 
 import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
-import { CircleAlert, CornerDownRight, RotateCcw, Square } from "lucide-react"
+import {
+  CircleAlert,
+  CornerDownRight,
+  Repeat,
+  RotateCcw,
+  Square,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { MessageResponse } from "@/components/ai-elements/message"
@@ -177,7 +183,27 @@ function RequestInputs({ rows }: { rows: ReplyItem["attached"] }) {
   )
 }
 
+/** Text so far that may yet be a routine's `[[silent]]`. */
+function silentSoFar(text: string): boolean {
+  const t = text.trim()
+  return t.length > 0 && "[[silent]]".startsWith(t)
+}
+
+function routineOf(
+  v: unknown
+): { id: number | null; title: string; seq: number | null } | null {
+  if (!v || typeof v !== "object") return null
+  const r = v as { id?: unknown; title?: unknown; seq?: unknown }
+  if (typeof r.title !== "string" || !r.title) return null
+  return {
+    id: typeof r.id === "number" ? r.id : null,
+    title: r.title,
+    seq: typeof r.seq === "number" ? r.seq : null,
+  }
+}
+
 export function ReplyBubble({ item }: { item: ReplyItem }) {
+  const tr = useTranslations("PersonalAgent.routines")
   const scope = usePageScope()
   const { liveReplies, liveTexts } = usePersonalAgent()
   const row = item.row
@@ -199,12 +225,17 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
   // with them; with none yet, there is no bubble at all — unless the turn
   // asks the owner something here.
   const said = row ? liveTexts?.get(row.id) : undefined
-  const slot: SlotView | null =
+  const streamed: SlotView | null =
     view.running && view.slot?.kind !== "text"
       ? said
         ? { kind: "text", key: `t${said.n}`, text: said.text, streaming: true }
         : null
       : view.slot
+  // A routine's "nothing to say" as it streams in is not shown (6.9).
+  const slot: SlotView | null =
+    view.running && streamed?.kind === "text" && silentSoFar(streamed.text)
+      ? null
+      : streamed
   const asks = item.attached.some(
     (r) =>
       (r.kind === "question" || r.kind === "permission") &&
@@ -235,10 +266,26 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
       ? { ...slot, text: split[split.length - 1] }
       : slot
 
-  const quote =
-    row?.reply_to != null && !item.quotesPrevious ? (
-      <QuoteBar targetId={row.reply_to} tone="light" className="mb-2" />
-    ) : null
+  // The routine it reports for (6.9).
+  const routine = routineOf(row?.data?.routine)
+  const quote = (
+    <>
+      {routine ? (
+        <p
+          className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground"
+          data-pa-reply-routine={routine.id ?? ""}
+        >
+          <Repeat className="size-3 shrink-0" aria-hidden />
+          <span className="min-w-0 truncate">
+            {tr("reply", { title: routine.title, seq: routine.seq ?? 1 })}
+          </span>
+        </p>
+      ) : null}
+      {row?.reply_to != null && !item.quotesPrevious ? (
+        <QuoteBar targetId={row.reply_to} tone="light" className="mb-2" />
+      ) : null}
+    </>
+  )
   const rest = (
     <>
       {lastSlot ? (

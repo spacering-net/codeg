@@ -8276,6 +8276,20 @@
         "level_pr": {
           "title": "PR의 다른 소식",
           "hint": "지켜보는 PR: 검사 실패 또는 재통과, 충돌, 병합, 닫힘."
+        },
+        "routine_dispatch": {
+          "title": "루틴의 작업 맡기기",
+          "hint": "작업형 루틴이 실행될 때마다 맡기는 작업.",
+          "auto": "바로 맡기기",
+          "ask": "매번 먼저 묻기 (확인 카드)"
+        },
+        "level_routine": {
+          "title": "루틴 보고",
+          "hint": "설정한 루틴이 알릴 것을 찾았을 때."
+        },
+        "level_routine_paused": {
+          "title": "루틴 일시 중지",
+          "hint": "3번 연속 실패했거나 실행 구성을 쓸 수 없을 때."
         }
       },
       "workdir": {
@@ -9008,7 +9022,8 @@
         "status": "상태",
         "today": "오늘",
         "matters": "진행 중인 일",
-        "data": "데이터"
+        "data": "데이터",
+        "routines": "루틴"
       },
       "notify": "알림 받기",
       "notifyHint": "일을 끝냈거나 내 응답을 기다릴 때",
@@ -9254,6 +9269,13 @@
         "open": "PR 열림",
         "merged": "병합됨",
         "closed": "닫힘"
+      },
+      "routine": {
+        "at": "{time} 루틴",
+        "running": "루틴 실행 중",
+        "asked": "루틴이 확인을 기다림",
+        "reported": "루틴 보고",
+        "silent": "루틴: 변화 없음"
       }
     },
     "meet": {
@@ -9493,6 +9515,159 @@
       "view": "PR 보기",
       "gotIt": "확인",
       "unwatch": "그만 지켜보기"
+    },
+    "routines": {
+      "zone": "({zone})",
+      "onEvent": "트리거: {event}",
+      "withLabel": "라벨 {label}",
+      "mineOnly": "자기 작업만",
+      "event": {
+        "dispatch_ended": "맡긴 작업이 끝났을 때",
+        "task_status": "보드 작업 상태가 바뀔 때",
+        "session_waiting": "세션이 당신을 기다릴 때",
+        "pr_checks_failed": "지켜보는 PR의 검사 실패",
+        "pr_checks_passed": "지켜보는 PR의 검사가 다시 통과",
+        "pr_conflict": "지켜보는 PR에 충돌",
+        "pr_mergeable": "지켜보는 PR 병합 가능",
+        "pr_no_conflict": "지켜보는 PR 충돌 없음 (검사 알 수 없음)",
+        "pr_merged": "지켜보는 PR 병합됨",
+        "pr_closed": "지켜보는 PR 닫힘",
+        "forge_issue": "플랫폼에 새 이슈나 PR"
+      },
+      "precheck": {
+        "commits": "{branch}에 새 커밋이 있을 때만",
+        "forgeIssue": "새 이슈가 있을 때만",
+        "forgePr": "새 PR이 있을 때만",
+        "itemsWaiting": "{hours}시간 넘게 기다린 항목이 있을 때만",
+        "changes": "작업 트리가 바뀌었을 때만"
+      },
+      "outcome": {
+        "running": "실행 중",
+        "skipped": "건너뜀: 새 소식 없음",
+        "silent": "변화 없음",
+        "reported": "보고함",
+        "failed": "실패",
+        "missed": "놓침",
+        "asked": "확인 대기",
+        "declined": "확인 안 함",
+        "stopped": "중지됨"
+      },
+      "empty": "아직 루틴이 없어요. 대화에서 하나 설정해 달라고 해 보세요.",
+      "new": "새 루틴",
+      "kind": {
+        "brain": "어시스턴트가 확인",
+        "dispatch": "작업을 맡김"
+      },
+      "paused": {
+        "owner": "일시 중지됨",
+        "failures": "일시 중지: 3번 연속 실패",
+        "executor": "일시 중지: 실행 구성을 쓸 수 없음"
+      },
+      "next": "다음: {when}",
+      "last": "지난 실행 {when} · 총 {n}회",
+      "runNow": "지금 실행",
+      "pause": "일시 중지",
+      "resume": "재개",
+      "edit": "편집",
+      "delete": "삭제",
+      "deleteTitle": "이 루틴을 삭제할까요?",
+      "deleteDescription": "“{title}”은(는) 더 이상 실행되지 않아요. 이미 맡긴 작업에는 영향이 없어요.",
+      "cancel": "취소",
+      "weekly": "매주 이렇게 하기",
+      "reply": "루틴 “{title}” · {seq}번째",
+      "editor": {
+        "titleNew": "새 루틴",
+        "titleEdit": "루틴 편집",
+        "trialNote": "저장하면 바로 한 번 시험 실행하고, 이후에는 codeg가 일정대로 실행해요.",
+        "editNote": "변경 사항은 다음 실행부터 적용돼요.",
+        "name": "이름",
+        "what": "할 일",
+        "whatHint": "예: 밤사이 CI에 실패가 있는지 보고 있으면 알려줘",
+        "kind": "실행 방식",
+        "kindBrain": "어시스턴트 깨우기",
+        "kindDispatch": "작업을 바로 맡기기",
+        "kindBrainHint": "확인하고 알려줘요. 말할 게 없으면 조용히 있어요.",
+        "kindDispatchHint": "codeg가 어시스턴트를 깨우지 않고 아래 작업을 맡기며, 결과는 평소처럼 돌아와요.",
+        "executor": "실행 구성",
+        "ownExecutor": "자체 구성",
+        "mode": "방식",
+        "modeTask": "보드 작업",
+        "modeSession": "프로젝트 작업 세션",
+        "modeChat": "채팅",
+        "deliverable": "결과물",
+        "change": "코드 변경",
+        "report": "보고서",
+        "project": "프로젝트",
+        "pickProject": "프로젝트 선택",
+        "anyProject": "모든 프로젝트",
+        "when": "언제",
+        "schedule": "일정에 따라",
+        "event": "이벤트 발생 시",
+        "presetDaily": "매일 9:00",
+        "presetWeekdays": "평일 9:00",
+        "presetWeekly": "매주 월요일 9:00",
+        "custom": "직접 설정…",
+        "timezone": "시간대",
+        "ownerZone": "내 시간대 ({zone})",
+        "eventKind": "이벤트",
+        "issueOrPr": "이슈 또는 PR",
+        "issues": "이슈",
+        "prs": "PR",
+        "label": "라벨",
+        "states": "상태 (쉼표로 구분)",
+        "mine": "자기 작업만",
+        "precheck": "먼저 확인",
+        "check": {
+          "none": "항상 실행",
+          "commits": "새 커밋이 있을 때만",
+          "forge_new": "새 이슈나 PR이 있을 때만",
+          "items_waiting": "오래 기다린 항목이 있을 때만",
+          "changes": "작업 트리가 바뀌었을 때만"
+        },
+        "branch": "브랜치 (기본: HEAD)",
+        "hours": "시간",
+        "needTitle": "이름을 입력하세요.",
+        "needWhat": "할 일을 적어 주세요.",
+        "needCron": "일정을 설정하세요.",
+        "made": "루틴을 만들었고 시험 실행 중이에요",
+        "saved": "루틴을 저장했어요",
+        "cancel": "취소",
+        "save": "저장",
+        "saveRun": "저장하고 한 번 실행"
+      },
+      "card": {
+        "made": "루틴 만듦",
+        "changed": "루틴 변경됨",
+        "proposal": "제안된 루틴",
+        "proposalChange": "루틴 변경 제안",
+        "repeat": "루틴으로 만들까요?",
+        "paused": "루틴 일시 중지됨",
+        "undone": "취소함",
+        "dismissed": "다음에",
+        "resumed": "재개됨",
+        "madeNote": "만들었어요. 루틴 목록에 있어요.",
+        "action": {
+          "pause": "일시 중지",
+          "resume": "재개",
+          "delete": "삭제",
+          "run_now": "지금 실행",
+          "edit": "변경"
+        },
+        "repeatBody": "30일 동안 비슷한 요청을 {count}번 했어요.",
+        "pausedExecutor": "사용하는 실행 구성이 삭제·비활성화되었거나 어시스턴트가 더 이상 쓸 수 없어요.",
+        "pausedFailures": "3번 연속 실패했어요.",
+        "trial": "시험 실행을 시작했어요.",
+        "reason": "이유: {reason}",
+        "undo": "실행 취소",
+        "edit": "편집",
+        "accept": "만들기",
+        "acceptChange": "변경하기",
+        "dismiss": "괜찮아요",
+        "makeIt": "루틴으로 만들기",
+        "useAnother": "다른 것 사용",
+        "resume": "재개",
+        "open": "루틴 열기"
+      }
     }
   }
 }

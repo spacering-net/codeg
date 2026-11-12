@@ -67,6 +67,11 @@ pub enum NoticeKind {
     /// One per place it reached, on its head; a newer one supersedes it.
     #[sea_orm(string_value = "pr")]
     Pr,
+    /// A routine (6.9): one made or changed as the owner said (undo), one
+    /// the assistant suggests, an offer to make a request the owner keeps
+    /// making a routine, one codeg paused.
+    #[sea_orm(string_value = "routine")]
+    Routine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

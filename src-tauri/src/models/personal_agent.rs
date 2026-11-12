@@ -454,6 +454,8 @@ pub struct DispatchInfo {
     /// For a check codeg sent out: the dispatch it checks, and which round.
     pub check_for: Option<i32>,
     pub check_round: Option<i32>,
+    /// The routine whose run handed it out (6.9).
+    pub routine_id: Option<i32>,
 }
 
 /// A round of acceptance, as a dispatch card shows it (7.5).
@@ -732,4 +734,6 @@ pub enum PersonalAgentChange {
     Agent,
     Dispatch { id: i32 },
     Item { id: i32 },
+    /// A routine changed, or one of its runs (6.9).
+    Routine { id: i32 },
 }

@@ -368,6 +368,10 @@ pub struct PersonalAgentEngine {
     /// The owner's zone at the clock's last look: a change moves the
     /// repeating matters with it (1.12).
     pub(super) clock_zone: std::sync::Mutex<Option<chrono_tz::Tz>>,
+    /// When the routines' executor configs were last looked at (6.9).
+    pub(super) routine_check_at: std::sync::Mutex<Option<DateTime<Utc>>>,
+    /// The clock's look at the routines is running (`spawn_routine_tick`).
+    pub(super) routine_busy: AtomicBool,
     /// A delivery was asked for while one ran: run again after it.
     pump_again: AtomicBool,
     wake: Notify,
@@ -408,6 +412,8 @@ impl PersonalAgentEngine {
             watch_busy: AtomicBool::new(false),
             retired: AtomicBool::new(false),
             clock_zone: std::sync::Mutex::new(None),
+            routine_check_at: std::sync::Mutex::new(None),
+            routine_busy: AtomicBool::new(false),
             pump_again: AtomicBool::new(false),
             wake: Notify::new(),
             booted: AtomicBool::new(false),
@@ -1731,7 +1737,17 @@ impl PersonalAgentEngine {
             None => auto_quote,
         };
         let finished_at = Utc::now();
+        // What it reports for stays on it (6.9).
+        let routine = svc::get_row(&self.db.conn, row_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.data)
+            .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+            .map(|d| d["routine"].clone())
+            .unwrap_or(serde_json::Value::Null);
         let data = serde_json::json!({
+            "routine": routine,
             "state": outcome.state,
             "why": outcome.why,
             "stop_reason": outcome.stop_reason,
@@ -2704,6 +2720,11 @@ impl PersonalAgentEngine {
             .any(|e| e.kind == super::reminders::REMINDER_EVENT)
         {
             BatchTrigger::Reminder
+        } else if events
+            .iter()
+            .any(|e| e.kind == super::routines::ROUTINE_EVENT)
+        {
+            BatchTrigger::Routine
         } else {
             BatchTrigger::Event
         };
@@ -2714,6 +2735,7 @@ impl PersonalAgentEngine {
                 BatchTrigger::Owner => "the owner's message",
                 BatchTrigger::Message => "another assistant's message",
                 BatchTrigger::Reminder => "a matter came due that you are to do",
+                BatchTrigger::Routine => "a routine of yours came round",
                 _ => "news of work you dispatched or of your matters",
             };
             cards_text.insert(0, self.now_line(before, started_by).await);
@@ -2844,13 +2866,30 @@ impl PersonalAgentEngine {
         let read_cards = svc::set_result_rows_read(&self.db.conn, self.bot().await, &taken, Some(Utc::now()))
             .await
             .unwrap_or_default();
+        self.note_routine_batch(&events, batch.id).await;
         // The reply exists from the start: it streams in place and settles
         // in place.
         let started_at = Utc::now();
         let mut reply = NewRow::new(TimelineKind::Reply, "");
         reply.segment_id = Some(session.segment.id);
         reply.batch_id = Some(batch.id);
-        reply.data = Some(serde_json::json!({ "state": "running", "started_at": started_at }));
+        // A routine's run, with nothing of the owner's: its reply is the
+        // routine's report (6.9).
+        let routine = if owners.is_empty() && messages.is_empty() {
+            events
+                .iter()
+                .filter(|e| e.kind == super::routines::ROUTINE_EVENT)
+                .find_map(|e| e.payload.as_deref())
+                .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+                .map(|p| serde_json::json!({ "id": p["routine_id"], "title": p["title"], "seq": p["seq"] }))
+        } else {
+            None
+        };
+        reply.data = Some(serde_json::json!({
+            "state": "running",
+            "started_at": started_at,
+            "routine": routine,
+        }));
         let reply = svc::insert_row(&self.db.conn, self.bot().await, reply).await.ok();
         let token = format!("pa-{}-{}", batch.id, uuid::Uuid::new_v4().simple());
         let start_seq = self.current_seq(&session.conn_id).await;
@@ -3246,6 +3285,9 @@ impl PersonalAgentEngine {
         };
         let has_text = !content.text.trim().is_empty();
         let reply_words = super::reach::reply_glimpse(&content.text);
+        // Nothing worth saying, and nothing of the owner's to answer: the
+        // reply is not shown (6.9).
+        let silent = turn.owner_row_ids.is_empty() && super::routines::is_silent(&content.text);
         let canceled = matches!(stop.as_deref(), Some("cancelled" | "canceled"));
         // It was told to stop for the owner's message and did: not a
         // failure, and not the owner's own stop either — its events ride
@@ -3291,6 +3333,8 @@ impl PersonalAgentEngine {
                         "interrupted"
                     } else if canceled {
                         "canceled"
+                    } else if silent {
+                        "silent"
                     } else {
                         "done"
                     },
@@ -3413,6 +3457,16 @@ impl PersonalAgentEngine {
         if !preempted {
             self.forward_unanswered(&asks, interrupted).await;
         }
+        // The routine runs it carried come to what it came to (6.9).
+        self.settle_routine_batch(
+            turn.batch_id,
+            interrupted,
+            canceled,
+            silent && !interrupted && !canceled,
+            turn.reply_row_id,
+            reply_words.clone(),
+        )
+        .await;
         self.after_turn_bookkeeping(&turn).await;
     }
 
@@ -3674,6 +3728,8 @@ impl PersonalAgentEngine {
                 return Err("that message cannot be quoted".into());
             }
         }
+        // Typed, not a card's button nor a message sent again.
+        let typed = card_click.is_none() && resent_from.is_none();
         let mut row = NewRow::new(TimelineKind::Owner, text);
         row.status = Some(OwnerStatus::Queued);
         row.reply_to = reply_to;
@@ -3706,6 +3762,10 @@ impl PersonalAgentEngine {
             _ => self.push_row(row).await.ok_or("could not record the message")?,
         };
         self.emit(PersonalAgentChange::Status);
+        // The third request like it in a month: offered as a routine (6.7).
+        if typed {
+            self.offer_routine_for_message(row.id, &row.body).await;
+        }
         let row = self.give_way_to(row, &blocks).await;
         self.nudge();
         Ok(row)

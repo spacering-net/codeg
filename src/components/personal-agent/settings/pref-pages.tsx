@@ -23,6 +23,9 @@ import {
   GitPullRequest,
   GitPullRequestArrow,
   GitPullRequestDraft,
+  CalendarCheck,
+  CalendarClock,
+  CalendarX,
   BellRing,
   CircleAlert,
   CircleCheck,
@@ -115,6 +118,7 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   forge_comment: "auto",
   issue_close: "auto",
   pr_merge: "auto",
+  routine_dispatch: "auto",
   time_zone: "system",
   presence: "on",
   proactive: "on",
@@ -145,6 +149,8 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   level_forge: "low",
   level_pr_ready: "normal",
   level_pr: "low",
+  level_routine: "normal",
+  level_routine_paused: "urgent",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -164,6 +170,7 @@ export const AUTOMATION_PRESETS: Record<
     forge_comment: "auto",
     issue_close: "auto",
     pr_merge: "auto",
+    routine_dispatch: "auto",
   },
   ask_more: {
     confirm_dispatch: "code",
@@ -177,6 +184,7 @@ export const AUTOMATION_PRESETS: Record<
     forge_comment: "ask",
     issue_close: "ask",
     pr_merge: "ask",
+    routine_dispatch: "ask",
   },
 }
 
@@ -222,6 +230,8 @@ export const LEVEL_ITEMS: PersonalAgentPrefKey[] = [
   "level_forge",
   "level_pr_ready",
   "level_pr",
+  "level_routine",
+  "level_routine_paused",
 ]
 
 /** The items that take a time of day, `HH:MM`. */
@@ -265,6 +275,7 @@ const CHOICES: Partial<Record<PersonalAgentPrefKey, readonly string[]>> = {
   forge_comment: ["auto", "ask"],
   issue_close: ["auto", "ask"],
   pr_merge: ["auto", "ask"],
+  routine_dispatch: ["auto", "ask"],
   proactive: ["on", "off"],
   urgent_via: ["system_attention", "system", "in_page"],
   normal_via: ["system", "in_page", "today"],
@@ -303,6 +314,7 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   forge_comment: MessageSquareText,
   issue_close: CircleX,
   pr_merge: GitMerge,
+  routine_dispatch: CalendarClock,
   time_zone: Globe,
   presence: Activity,
   proactive: Sparkles,
@@ -333,6 +345,8 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   level_forge: GitPullRequest,
   level_pr_ready: GitPullRequestArrow,
   level_pr: GitPullRequestDraft,
+  level_routine: CalendarCheck,
+  level_routine_paused: CalendarX,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
@@ -353,6 +367,7 @@ export const AUTOMATION_ITEMS: PersonalAgentPrefKey[] = [
   "forge_comment",
   "issue_close",
   "pr_merge",
+  "routine_dispatch",
   "messages",
   "worker_handoff",
   "retry_rounds",

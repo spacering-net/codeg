@@ -78,6 +78,7 @@ import { CollapsedText } from "./event-card"
 import { ExchangeSheet } from "./exchange-sheet"
 import { ForgeCard } from "./forge-card"
 import { PrCard } from "./pr-card"
+import { RoutineCard } from "./routine-card"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
@@ -153,6 +154,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "acceptance") return <AcceptanceCard item={item} />
   if (kind === "forge") return <ForgeCard item={item} />
   if (kind === "pr") return <PrCard item={item} />
+  if (kind === "routine") return <RoutineCard item={item} />
   return null
 }
 

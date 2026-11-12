@@ -1,6 +1,11 @@
 import { create } from "zustand"
 
-import type { AgentType, DispatchMode, DispatchState } from "@/lib/types"
+import type {
+  AgentType,
+  DispatchMode,
+  DispatchState,
+  RoutineDraft,
+} from "@/lib/types"
 
 /**
  * The personal agent page's view state that other branches of the tree read:
@@ -86,6 +91,17 @@ export interface WorkTarget {
   state: DispatchState | null
 }
 
+/** The routine editor (6.9): on one routine, or a new one prefilled. */
+export interface RoutineEditorRequest {
+  key: number
+  /** The assistant whose; `null`: the primary. */
+  botId: number | null
+  routineId: number | null
+  draft: RoutineDraft | null
+  /** The card it was opened from: settled when it is saved. */
+  noticeId: number | null
+}
+
 interface PersonalAgentUiState {
   auxOpen: boolean
   auxTab: AuxTab
@@ -122,6 +138,13 @@ interface PersonalAgentUiState {
     prefill?: ExecutorEditorPrefill | null
   ) => void
   clearExecutorEditor: () => void
+  /** The routine editor, when open. */
+  routineEditor: RoutineEditorRequest | null
+  openRoutineEditor: (req: Omit<RoutineEditorRequest, "key">) => void
+  closeRoutineEditor: () => void
+  /** Bumped to bring the details' routines into view (`pa.open`). */
+  routinesAsked: number
+  showRoutines: () => void
   /** The assistant the page shows (`null`: the primary), picked in the
    *  roster. Switching closes what was open about the other one. */
   viewBot: number | null
@@ -173,6 +196,19 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
       },
     })),
   clearExecutorEditor: () => set({ executorEditor: null }),
+  routineEditor: null,
+  openRoutineEditor: (req) =>
+    set((s) => ({
+      routineEditor: { ...req, key: (s.routineEditor?.key ?? 0) + 1 },
+    })),
+  closeRoutineEditor: () => set({ routineEditor: null }),
+  routinesAsked: 0,
+  showRoutines: () =>
+    set((s) => ({
+      auxOpen: true,
+      auxTab: "details",
+      routinesAsked: s.routinesAsked + 1,
+    })),
   viewBot: null,
   setViewBot: (viewBot) =>
     set((s) =>

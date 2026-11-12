@@ -61,6 +61,8 @@ interface PersonalAgentContextValue {
   /** Bumped on every dispatch / item change, for the panels that list them. */
   dispatchVersion: number
   itemVersion: number
+  /** Bumped on every routine change (6.9). */
+  routineVersion: number
   /** The agent waits on the owner (a question or permission request). */
   needsOwner: boolean
   /** The step each reply in flight is on, as last pushed, by reply row id. */
@@ -228,6 +230,7 @@ function usePersonalAgentStore(
   const [loading, setLoading] = useState(true)
   const [dispatchVersion, setDispatchVersion] = useState(0)
   const [itemVersion, setItemVersion] = useState(0)
+  const [routineVersion, setRoutineVersion] = useState(0)
   const [liveReplies, setLiveReplies] = useState<
     ReadonlyMap<number, ReplyStep | null>
   >(() => new Map())
@@ -459,6 +462,9 @@ function usePersonalAgentStore(
           case "item":
             setItemVersion((v) => v + 1)
             break
+          case "routine":
+            setRoutineVersion((v) => v + 1)
+            break
         }
       }
     ).then((u: () => void) => {
@@ -469,6 +475,7 @@ function usePersonalAgentStore(
       void refresh()
       setDispatchVersion((v) => v + 1)
       setItemVersion((v) => v + 1)
+      setRoutineVersion((v) => v + 1)
       const ids = [...dispatchByIdRef.current.keys()]
       if (ids.length > 0) void fetchDispatches(ids)
     })
@@ -566,6 +573,7 @@ function usePersonalAgentStore(
       refresh,
       dispatchVersion,
       itemVersion,
+      routineVersion,
       needsOwner,
       liveReplies,
       liveTexts,
@@ -584,6 +592,7 @@ function usePersonalAgentStore(
       refresh,
       dispatchVersion,
       itemVersion,
+      routineVersion,
       needsOwner,
       liveReplies,
       liveTexts,
@@ -626,6 +635,7 @@ function pendingStore(botId: number): PersonalAgentContextValue {
     refresh: async () => {},
     dispatchVersion: 0,
     itemVersion: 0,
+    routineVersion: 0,
     needsOwner: false,
     liveReplies: new Map(),
     dispatchById: new Map(),

@@ -35,6 +35,7 @@ export const PA_OPEN_TARGETS = [
   "item",
   "bot",
   "exchange",
+  "routine",
   "url",
 ] as const
 export type PaOpenTarget = (typeof PA_OPEN_TARGETS)[number]
@@ -64,6 +65,6 @@ export const assistantActionDefinitions = {
       url: z.string().nullable(),
     }),
     description:
-      'Open a place in codeg. Params: { target: "dispatch" | "task" | "session" | "item" | "bot" | "exchange" | "url", id?: number, url?: string } — id is the dispatch, board task, session (conversation), open matter, assistant or message thread number; url is a web address, for target "url".',
+      'Open a place in codeg. Params: { target: "dispatch" | "task" | "session" | "item" | "bot" | "exchange" | "routine" | "url", id?: number, url?: string } — id is the dispatch, board task, session (conversation), open matter, assistant, message thread or routine number; url is a web address, for target "url".',
   },
 }

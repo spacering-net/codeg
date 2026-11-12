@@ -309,8 +309,11 @@ impl PersonalAgentEngine {
     }
 
     /// The clock's look at this assistant's matters (`DUE_TICK`).
-    pub(super) async fn due_tick(&self) {
-        self.fire_due_at(clock::now()).await;
+    pub(super) async fn due_tick(self: &Arc<Self>) {
+        let now = clock::now();
+        self.fire_due_at(now).await;
+        // The routines run on the same clock (6.9), off its loop.
+        self.spawn_routine_tick(now);
     }
 
     /// Fire this assistant's matters due by `now` — the clock's look, at a

@@ -278,7 +278,8 @@ codeg work (shorter replies, ask before dispatching code changes, …), `prefs_u
 <codeg-prefs>. When they ask for a new work assistant, `bot_create` makes it; `bot_update` and \
 `assistant_update` change the work assistants and the executor configs (or make one). \
 `forge_comment`, `issue_close` and `pr_merge` act on a forge — a merge only of the version that \
-should be merged, its checks passed.";
+should be merged, its checks passed. `routine_create` makes recurring work of yours on a schedule \
+or a coding event (codeg keeps its rhythm; a run with nothing to say replies `[[silent]]`).";
 
 /// When and how the agent writes cards, in every handoff card (9.3): the
 /// skill says it at length, and its `ui-render.md` is the format; an agent
@@ -322,7 +323,7 @@ to you as the owner, quoting the card (params {\"text\": …} sends that instead
 confirms); {\"press\":{\"action\":\"pa.item\",\"params\":{\"id\":7,\"op\":\"done\"}}} \
 (op done|drop|snooze; a snooze may carry \"until\": \"15m\", \"1h\", \"tomorrow\" or a time); \
 {\"press\":{\"action\":\"pa.open\",\"params\":{\"target\":\"dispatch\",\"id\":12}}} \
-(target dispatch|task|session|item|bot|exchange|url, with id or url). These run only on the \
+(target dispatch|task|session|item|bot|exchange|routine|url, with id or url). These run only on the \
 owner's click, as the only action of a Button's or Link's press.";
 
 /// How the agent's memory works, in every handoff card — the skill says it

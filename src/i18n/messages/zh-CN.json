@@ -8275,6 +8275,20 @@
         "level_pr": {
           "title": "PR 的其他动态",
           "hint": "看护的 PR：检查没过或又绿了、有冲突、已合并、已关闭。"
+        },
+        "routine_dispatch": {
+          "title": "例程派活",
+          "hint": "派活型例程每次运行时派出的活。",
+          "auto": "直接派",
+          "ask": "每次先问我（等你确认卡）"
+        },
+        "level_routine": {
+          "title": "例程报告",
+          "hint": "你设的例程跑完有话要说时。"
+        },
+        "level_routine_paused": {
+          "title": "例程被暂停",
+          "hint": "连续失败 3 次，或者它用的执行配置不能用了。"
         }
       },
       "workdir": {
@@ -9008,7 +9022,8 @@
         "status": "状态",
         "today": "今日",
         "matters": "事项",
-        "data": "数据"
+        "data": "数据",
+        "routines": "例程"
       },
       "notify": "通知我",
       "notifyHint": "做完或等你时通知你",
@@ -9254,6 +9269,13 @@
         "open": "PR 进行中",
         "merged": "已合并",
         "closed": "已关闭"
+      },
+      "routine": {
+        "at": "{time} 例程",
+        "running": "例程在跑",
+        "asked": "例程等你确认",
+        "reported": "例程报告",
+        "silent": "例程：没有变化"
       }
     },
     "meet": {
@@ -9493,6 +9515,159 @@
       "view": "查看 PR",
       "gotIt": "知道了",
       "unwatch": "不用再盯了"
+    },
+    "routines": {
+      "zone": "（{zone}）",
+      "onEvent": "触发：{event}",
+      "withLabel": "标签 {label}",
+      "mineOnly": "只看它自己的活",
+      "event": {
+        "dispatch_ended": "派出的活结束",
+        "task_status": "看板任务状态变化",
+        "session_waiting": "有会话在等你",
+        "pr_checks_failed": "看护的 PR 检查没过",
+        "pr_checks_passed": "看护的 PR 检查又绿了",
+        "pr_conflict": "看护的 PR 有冲突",
+        "pr_mergeable": "看护的 PR 可以合并",
+        "pr_no_conflict": "看护的 PR 没有冲突（检查未知）",
+        "pr_merged": "看护的 PR 已合并",
+        "pr_closed": "看护的 PR 被关闭",
+        "forge_issue": "平台上有新的 issue 或 PR"
+      },
+      "precheck": {
+        "commits": "{branch} 有新提交才跑",
+        "forgeIssue": "有新 issue 才跑",
+        "forgePr": "有新 PR 才跑",
+        "itemsWaiting": "有事项等了超过 {hours} 小时才跑",
+        "changes": "工作树有改动才跑"
+      },
+      "outcome": {
+        "running": "在跑",
+        "skipped": "跳过：没有新情况",
+        "silent": "没有变化",
+        "reported": "有报告",
+        "failed": "失败",
+        "missed": "错过",
+        "asked": "等你确认",
+        "declined": "没有确认",
+        "stopped": "已停止"
+      },
+      "empty": "还没有例程。可以在对话里让它帮你设一个。",
+      "new": "新建例程",
+      "kind": {
+        "brain": "叫醒助手看",
+        "dispatch": "直接派活"
+      },
+      "paused": {
+        "owner": "已暂停",
+        "failures": "已暂停：连续失败 3 次",
+        "executor": "已暂停：它用的执行配置不能用了"
+      },
+      "next": "下次：{when}",
+      "last": "上次 {when} · 共跑了 {n} 次",
+      "runNow": "立即跑",
+      "pause": "暂停",
+      "resume": "恢复",
+      "edit": "编辑",
+      "delete": "删除",
+      "deleteTitle": "删除这个例程？",
+      "deleteDescription": "「{title}」将不再运行。它已经派出的活不受影响。",
+      "cancel": "取消",
+      "weekly": "每周这样做",
+      "reply": "例程「{title}」· 第 {seq} 次",
+      "editor": {
+        "titleNew": "新建例程",
+        "titleEdit": "编辑例程",
+        "trialNote": "保存后会立刻试跑一次，之后由 codeg 按时运行。",
+        "editNote": "改动从下一次运行起生效。",
+        "name": "名称",
+        "what": "要做什么",
+        "whatHint": "比如：看一下夜里 CI 有没有红的，有就告诉我",
+        "kind": "怎么跑",
+        "kindBrain": "叫醒助手",
+        "kindDispatch": "直接派活",
+        "kindBrainHint": "它看完会告诉你；没有值得说的就不出声。",
+        "kindDispatchHint": "codeg 直接按下面的设置派活，不叫醒助手；结果照常回来。",
+        "executor": "执行配置",
+        "ownExecutor": "它自己的",
+        "mode": "方式",
+        "modeTask": "看板任务",
+        "modeSession": "项目里的工作会话",
+        "modeChat": "对话",
+        "deliverable": "交付",
+        "change": "改代码",
+        "report": "出报告",
+        "project": "项目",
+        "pickProject": "选一个项目",
+        "anyProject": "任意项目",
+        "when": "什么时候",
+        "schedule": "定时",
+        "event": "有事件时",
+        "presetDaily": "每天 9:00",
+        "presetWeekdays": "工作日 9:00",
+        "presetWeekly": "每周一 9:00",
+        "custom": "自定义…",
+        "timezone": "时区",
+        "ownerZone": "跟你一样（{zone}）",
+        "eventKind": "事件",
+        "issueOrPr": "issue 还是 PR",
+        "issues": "issue",
+        "prs": "PR",
+        "label": "标签",
+        "states": "状态（逗号分隔）",
+        "mine": "只看它自己的活",
+        "precheck": "先看一眼",
+        "check": {
+          "none": "每次都跑",
+          "commits": "有新提交才跑",
+          "forge_new": "有新 issue 或 PR 才跑",
+          "items_waiting": "有事项等太久才跑",
+          "changes": "工作树有改动才跑"
+        },
+        "branch": "分支（默认 HEAD）",
+        "hours": "小时",
+        "needTitle": "起个名字。",
+        "needWhat": "写一下要做什么。",
+        "needCron": "设一个时间。",
+        "made": "例程已建，正在试跑",
+        "saved": "例程已保存",
+        "cancel": "取消",
+        "save": "保存",
+        "saveRun": "保存并试跑一次"
+      },
+      "card": {
+        "made": "已建例程",
+        "changed": "已改例程",
+        "proposal": "建议的例程",
+        "proposalChange": "建议改一个例程",
+        "repeat": "做成例程？",
+        "paused": "例程已暂停",
+        "undone": "已撤销",
+        "dismissed": "先不了",
+        "resumed": "已恢复",
+        "madeNote": "已建好，在例程列表里。",
+        "action": {
+          "pause": "暂停",
+          "resume": "恢复",
+          "delete": "删除",
+          "run_now": "立即跑",
+          "edit": "修改"
+        },
+        "repeatBody": "30 天里你第 {count} 次让它做这类事。",
+        "pausedExecutor": "它用的执行配置被删除、停用，或者不再允许助手派活。",
+        "pausedFailures": "连续失败了 3 次。",
+        "trial": "已开始试跑。",
+        "reason": "依据：{reason}",
+        "undo": "撤销",
+        "edit": "编辑",
+        "accept": "建这个",
+        "acceptChange": "照这个改",
+        "dismiss": "不用",
+        "makeIt": "做成例程",
+        "useAnother": "换一个",
+        "resume": "恢复",
+        "open": "打开例程"
+      }
     }
   }
 }

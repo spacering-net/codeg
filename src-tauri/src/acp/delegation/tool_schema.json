@@ -2484,5 +2484,382 @@
         }
       }
     }
+  },
+  {
+    "name": "routine_list",
+    "description": "Your routines: what each does, when it runs (schedule or event), whether it is on or paused (and why), its next run and its latest runs (reported, silent = no change, skipped, missed, failed).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "routine_create",
+    "description": "Make a routine of yours: work that recurs on a schedule (`cron`) or on a coding event (`event`), with an optional look first (`precheck`). codeg keeps its rhythm — never schedule or wait yourself, and do not write the timing into `what`. Made and turned on at once, it runs once right away as a trial the owner can see, and a card tells them (they can undo it). Prefer a routine over a repeating matter for recurring work with its own report; a repeating matter is for reminding the owner. Use `suggest: true` for one you only think would help.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "A short name, as the owner reads it."
+        },
+        "what": {
+          "type": "string",
+          "description": "What to do each run, in full (for kind=brain it is what you are woken with)."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "brain",
+            "dispatch"
+          ],
+          "description": "brain (default): codeg wakes you with `what` each run — reply exactly [[silent]] when there is nothing worth saying. dispatch: codeg hands out `dispatch` itself each run without waking you; its result comes back as any dispatch's news."
+        },
+        "cron": {
+          "type": "string",
+          "description": "A 5-field cron (min hour dom mon dow) in `timezone`: e.g. `0 9 * * 1` is Mondays 09:00. Give `cron` or `event`."
+        },
+        "timezone": {
+          "type": "string",
+          "description": "An IANA zone; left out (or `owner`): the owner's zone, followed when it changes."
+        },
+        "event": {
+          "type": "object",
+          "description": "Run on a coding event instead of a schedule: its `kind` and a filter. Each event sets it off once; work this routine handed out does not set it off again.",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "dispatch_ended",
+                "task_status",
+                "session_waiting",
+                "pr_checks_failed",
+                "pr_checks_passed",
+                "pr_conflict",
+                "pr_mergeable",
+                "pr_no_conflict",
+                "pr_merged",
+                "pr_closed",
+                "forge_issue"
+              ],
+              "description": "dispatch_ended: handed-out work ended; task_status: any board task changed state; session_waiting: a session waits for the owner; pr_*: a pull request codeg watches; forge_issue: a new issue (or pull request) on a project's forge, read every five minutes."
+            },
+            "project_id": {
+              "type": "integer",
+              "description": "Only in this project (required for forge_issue)."
+            },
+            "states": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only these states: a dispatch's (completed, failed, interrupted, canceled, handed_over) or a board task's (done, failed, review, …)."
+            },
+            "mine": {
+              "type": "boolean",
+              "description": "Only your own work."
+            },
+            "label": {
+              "type": "string",
+              "description": "forge_issue: only with this label."
+            },
+            "what": {
+              "type": "string",
+              "enum": [
+                "issue",
+                "pr"
+              ],
+              "description": "forge_issue: issues (default) or pull requests."
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        "dispatch": {
+          "type": "object",
+          "description": "For kind=dispatch: the work it hands out each run, as `dispatch` takes it. `assistant_id` left out: your own executor config. `title`/`prompt` left out: the routine's title and `what`.",
+          "properties": {
+            "assistant_id": {
+              "type": "integer"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "task",
+                "chat",
+                "session"
+              ]
+            },
+            "project_id": {
+              "type": "integer"
+            },
+            "title": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "deliverable": {
+              "type": "string",
+              "enum": [
+                "change",
+                "report"
+              ]
+            },
+            "done_when": {
+              "type": "string"
+            },
+            "own_executor": {
+              "type": "boolean",
+              "description": "routine_update: true switches it back to your own executor config (leaving `assistant_id` out keeps the one it names)."
+            }
+          },
+          "required": [
+            "mode"
+          ]
+        },
+        "precheck": {
+          "type": "object",
+          "description": "A look first, with no model, before a scheduled or event run wakes anyone: nothing new → the run is skipped (\"no change\"). kind none | commits {project_id, branch?} | forge_new {project_id, what?: issue|pr, label?} | items_waiting {hours} | changes {project_id}.",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "none",
+                "commits",
+                "forge_new",
+                "items_waiting",
+                "changes"
+              ]
+            },
+            "project_id": {
+              "type": "integer"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "what": {
+              "type": "string",
+              "enum": [
+                "issue",
+                "pr"
+              ]
+            },
+            "label": {
+              "type": "string"
+            },
+            "hours": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why, as the card shows it (the owner's words when they asked for it)."
+        },
+        "suggest": {
+          "type": "boolean",
+          "description": "true when it is your own idea: a proposal card instead, made only if the owner says so."
+        }
+      },
+      "required": [
+        "title",
+        "what"
+      ]
+    }
+  },
+  {
+    "name": "routine_update",
+    "description": "Change one of your routines (any field of routine_create: what you give replaces it; `cron` and `event` replace each other), or `action`: pause, resume, delete, run_now. Done at once with a card that can undo it (run_now just runs it); `suggest: true` puts it to the owner first.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "routine_id": {
+          "type": "integer"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "pause",
+            "resume",
+            "delete",
+            "run_now"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "description": "A short name, as the owner reads it."
+        },
+        "what": {
+          "type": "string",
+          "description": "What to do each run, in full (for kind=brain it is what you are woken with)."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "brain",
+            "dispatch"
+          ],
+          "description": "brain (default): codeg wakes you with `what` each run — reply exactly [[silent]] when there is nothing worth saying. dispatch: codeg hands out `dispatch` itself each run without waking you; its result comes back as any dispatch's news."
+        },
+        "cron": {
+          "type": "string",
+          "description": "A 5-field cron (min hour dom mon dow) in `timezone`: e.g. `0 9 * * 1` is Mondays 09:00. Give `cron` or `event`."
+        },
+        "timezone": {
+          "type": "string",
+          "description": "An IANA zone; left out (or `owner`): the owner's zone, followed when it changes."
+        },
+        "event": {
+          "type": "object",
+          "description": "Run on a coding event instead of a schedule: its `kind` and a filter. Each event sets it off once; work this routine handed out does not set it off again.",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "dispatch_ended",
+                "task_status",
+                "session_waiting",
+                "pr_checks_failed",
+                "pr_checks_passed",
+                "pr_conflict",
+                "pr_mergeable",
+                "pr_no_conflict",
+                "pr_merged",
+                "pr_closed",
+                "forge_issue"
+              ],
+              "description": "dispatch_ended: handed-out work ended; task_status: any board task changed state; session_waiting: a session waits for the owner; pr_*: a pull request codeg watches; forge_issue: a new issue (or pull request) on a project's forge, read every five minutes."
+            },
+            "project_id": {
+              "type": "integer",
+              "description": "Only in this project (required for forge_issue)."
+            },
+            "states": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only these states: a dispatch's (completed, failed, interrupted, canceled, handed_over) or a board task's (done, failed, review, …)."
+            },
+            "mine": {
+              "type": "boolean",
+              "description": "Only your own work."
+            },
+            "label": {
+              "type": "string",
+              "description": "forge_issue: only with this label."
+            },
+            "what": {
+              "type": "string",
+              "enum": [
+                "issue",
+                "pr"
+              ],
+              "description": "forge_issue: issues (default) or pull requests."
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        "dispatch": {
+          "type": "object",
+          "description": "For kind=dispatch: the work it hands out each run, as `dispatch` takes it. `assistant_id` left out: your own executor config. `title`/`prompt` left out: the routine's title and `what`.",
+          "properties": {
+            "assistant_id": {
+              "type": "integer"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "task",
+                "chat",
+                "session"
+              ]
+            },
+            "project_id": {
+              "type": "integer"
+            },
+            "title": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "deliverable": {
+              "type": "string",
+              "enum": [
+                "change",
+                "report"
+              ]
+            },
+            "done_when": {
+              "type": "string"
+            },
+            "own_executor": {
+              "type": "boolean",
+              "description": "routine_update: true switches it back to your own executor config (leaving `assistant_id` out keeps the one it names)."
+            }
+          },
+          "required": [
+            "mode"
+          ]
+        },
+        "precheck": {
+          "type": "object",
+          "description": "A look first, with no model, before a scheduled or event run wakes anyone: nothing new → the run is skipped (\"no change\"). kind none | commits {project_id, branch?} | forge_new {project_id, what?: issue|pr, label?} | items_waiting {hours} | changes {project_id}.",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "none",
+                "commits",
+                "forge_new",
+                "items_waiting",
+                "changes"
+              ]
+            },
+            "project_id": {
+              "type": "integer"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "what": {
+              "type": "string",
+              "enum": [
+                "issue",
+                "pr"
+              ]
+            },
+            "label": {
+              "type": "string"
+            },
+            "hours": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why, as the card shows it (the owner's words when they asked for it)."
+        },
+        "suggest": {
+          "type": "boolean",
+          "description": "true when it is your own idea: a proposal card instead, made only if the owner says so."
+        }
+      },
+      "required": [
+        "routine_id"
+      ]
+    }
   }
 ]

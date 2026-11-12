@@ -1,0 +1,376 @@
+"use client"
+
+/**
+ * A routine's card (6.9), codeg's own:
+ * - made or changed as the owner said: what it is now, [Undo] [Edit];
+ * - suggested by the assistant: in full, [Make it] / [Do it] and [Not now];
+ * - an offer to make a request the owner keeps making a routine: [Make it a
+ *   routine] opens the editor prefilled, [Not now];
+ * - paused by codeg (three failed runs, an executor config it cannot use):
+ *   why, [Resume] or [Use another], and [Open routines].
+ */
+
+import { useState } from "react"
+import { useTranslations } from "next-intl"
+import {
+  CalendarCheck,
+  CalendarClock,
+  CalendarPlus,
+  CalendarX,
+  Repeat,
+  type LucideIcon,
+} from "lucide-react"
+
+import { Button } from "@/components/ui/button"
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
+import { useBotId } from "@/contexts/personal-agent-context"
+import { personalAgentNoticeAct, type NoticeAction } from "@/lib/api"
+import type { RoutineDraft, RoutineEventSpec, RoutineKind } from "@/lib/types"
+import { cn } from "@/lib/utils"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+
+import type { MessageItem } from "./message-items"
+import { bubbleCorners, MessageRow } from "./message-row"
+import { asDraft, precheckWords, RoutineWhen } from "./routine-bits"
+import { AGENT_SURFACE, num, str, usePageScope } from "./shared"
+
+type NoticeItem = Extract<MessageItem, { kind: "notice" }>
+
+type What = "made" | "changed" | "proposal" | "repeat" | "paused"
+const WHATS: readonly What[] = [
+  "made",
+  "changed",
+  "proposal",
+  "repeat",
+  "paused",
+]
+
+const ICONS: Record<What, LucideIcon> = {
+  made: CalendarCheck,
+  changed: CalendarClock,
+  proposal: CalendarPlus,
+  repeat: Repeat,
+  paused: CalendarX,
+}
+
+interface Shown {
+  id?: number | null
+  title?: string
+  what?: string
+  kind?: RoutineKind
+  cron?: string | null
+  timezone?: string | null
+  event?: RoutineEventSpec | null
+  precheck?: RoutineDraft["precheck"]
+}
+
+function shownOf(v: unknown): Shown | null {
+  if (!v || typeof v !== "object") return null
+  return v as Shown
+}
+
+export function RoutineCard({ item }: { item: NoticeItem }) {
+  const t = useTranslations("PersonalAgent.routines.card")
+  const tr = useTranslations("PersonalAgent.routines")
+  const botId = useBotId()
+  const { readOnly } = usePageScope()
+  const openEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
+  const showRoutines = usePersonalAgentUi((s) => s.showRoutines)
+  const row = item.row
+  const data = (row.data ?? {}) as Record<string, unknown>
+  const noticeId = Number(row.ref_id)
+  const [busy, setBusy] = useState<NoticeAction | null>(null)
+  const [failed, setFailed] = useState<string | null>(null)
+
+  const raw = str(data, "what")
+  const what: What = (WHATS as readonly string[]).includes(raw ?? "")
+    ? (raw as What)
+    : "made"
+  const state = str(data, "state") ?? "open"
+  const draft = asDraft(data.draft)
+  // What it is: the routine as it stands, or the draft it would be.
+  const r =
+    shownOf(data.routine) ??
+    (draft
+      ? {
+          title: draft.title ?? "",
+          what: draft.what ?? "",
+          kind: draft.kind ?? "brain",
+          cron: draft.cron,
+          timezone: draft.timezone,
+          event: draft.event,
+          precheck: draft.precheck,
+        }
+      : null)
+  const routineId = r?.id ?? num(data, "routine_id")
+  const reason = str(data, "reason")
+  const action = str(data, "action")
+  const error = str(data, "error")
+  const open = state === "open"
+  const Icon = ICONS[what]
+
+  const answer = async (a: NoticeAction) => {
+    if (!Number.isFinite(noticeId) || busy) return
+    setBusy(a)
+    setFailed(null)
+    try {
+      await personalAgentNoticeAct(noticeId, a, botId)
+    } catch (e) {
+      setFailed(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+  const spin = (a: NoticeAction) =>
+    busy === a ? <SyncedSpinner small className="size-3.5" /> : null
+
+  const heading =
+    what === "proposal"
+      ? routineId != null
+        ? t("proposalChange")
+        : t("proposal")
+      : t(what)
+  const stateNote = (() => {
+    if (state === "undone") return t("undone")
+    if (state === "dismissed") return t("dismissed")
+    if (state === "resumed") return t("resumed")
+    if (state === "made" && (what === "proposal" || what === "repeat"))
+      return t("madeNote")
+    return null
+  })()
+  const precheck = r ? precheckWords(tr, r.precheck) : null
+  const changeWord =
+    what === "changed" || (what === "proposal" && routineId != null)
+      ? action && action !== "edit"
+        ? t(`action.${action}` as "action.pause")
+        : t("action.edit")
+      : null
+  const tone =
+    what === "paused"
+      ? "text-amber-700 dark:text-amber-300"
+      : what === "made"
+        ? "text-emerald-700 dark:text-emerald-300"
+        : "text-muted-foreground"
+  const pausedWhy = str(data, "reason")
+
+  return (
+    <MessageRow
+      rowId={row.id}
+      side="start"
+      gap={item.gap}
+      tail={item.tail}
+      roomy
+      actions={{
+        rowId: row.id,
+        text: [heading, r?.title].filter(Boolean).join(" · "),
+        at: row.created_at,
+      }}
+    >
+      <div
+        data-bubble
+        data-pa-routine-card={what}
+        data-pa-routine-card-state={state}
+        className={cn(
+          AGENT_SURFACE,
+          bubbleCorners("start", item.tail),
+          "min-w-0 p-3 text-sm text-foreground",
+          !open && state !== "made" && "opacity-80"
+        )}
+      >
+        <p
+          className={cn(
+            "mb-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs",
+            tone
+          )}
+        >
+          <Icon className="size-3.5 shrink-0" aria-hidden />
+          <span className="font-medium">{heading}</span>
+          {changeWord ? (
+            <span className="text-muted-foreground">· {changeWord}</span>
+          ) : null}
+        </p>
+        {r ? (
+          <>
+            <p
+              className="text-sm font-medium break-words"
+              data-pa-routine-title
+            >
+              {r.title}
+            </p>
+            <p className="mt-1 text-xs break-words text-muted-foreground">
+              <RoutineWhen cron={r.cron} event={r.event} zone={r.timezone} />
+              {r.kind ? ` · ${tr(`kind.${r.kind}` as "kind.brain")}` : null}
+              {precheck ? ` · ${precheck}` : null}
+            </p>
+            {r.what && what !== "paused" ? (
+              <p className="mt-1.5 line-clamp-4 text-xs break-words whitespace-pre-wrap text-foreground/80">
+                {r.what}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+        {what === "repeat" ? (
+          <p
+            className="mt-1.5 text-xs text-muted-foreground"
+            data-pa-routine-repeat
+          >
+            {t("repeatBody", { count: num(data, "count") ?? 3 })}
+          </p>
+        ) : null}
+        {what === "paused" ? (
+          <p className="mt-1.5 text-xs break-words text-amber-700 dark:text-amber-300">
+            {pausedWhy === "executor"
+              ? t("pausedExecutor")
+              : t("pausedFailures")}
+            {str(data, "why") ? ` — ${str(data, "why")}` : null}
+          </p>
+        ) : null}
+        {what === "made" && num(data, "trial_run_id") != null ? (
+          <p className="mt-1.5 text-xs text-muted-foreground">{t("trial")}</p>
+        ) : null}
+        {reason && what !== "paused" ? (
+          <p className="mt-1.5 text-xs break-words text-muted-foreground">
+            {t("reason", { reason })}
+          </p>
+        ) : null}
+        {stateNote ? (
+          <p
+            className="mt-1.5 text-xs text-muted-foreground"
+            data-pa-routine-note
+          >
+            {stateNote}
+          </p>
+        ) : null}
+        {!readOnly ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {(what === "made" || what === "changed") && state === "made" ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy != null}
+                  onClick={() => void answer("undo")}
+                  data-pa-routine-card-act="undo"
+                >
+                  {spin("undo")}
+                  {t("undo")}
+                </Button>
+                {routineId != null ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      openEditor({
+                        botId,
+                        routineId,
+                        draft: null,
+                        noticeId: null,
+                      })
+                    }
+                    data-pa-routine-card-act="edit"
+                  >
+                    {t("edit")}
+                  </Button>
+                ) : null}
+              </>
+            ) : null}
+            {what === "proposal" && open ? (
+              <>
+                <Button
+                  size="sm"
+                  disabled={busy != null}
+                  onClick={() => void answer("accept")}
+                  data-pa-routine-card-act="accept"
+                >
+                  {spin("accept")}
+                  {routineId != null ? t("acceptChange") : t("accept")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy != null}
+                  onClick={() => void answer("dismiss")}
+                  data-pa-routine-card-act="dismiss"
+                >
+                  {spin("dismiss")}
+                  {t("dismiss")}
+                </Button>
+              </>
+            ) : null}
+            {what === "repeat" && open ? (
+              <>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    openEditor({
+                      botId,
+                      routineId: null,
+                      draft,
+                      noticeId: Number.isFinite(noticeId) ? noticeId : null,
+                    })
+                  }
+                  data-pa-routine-card-act="make"
+                >
+                  {t("makeIt")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy != null}
+                  onClick={() => void answer("dismiss")}
+                  data-pa-routine-card-act="dismiss"
+                >
+                  {spin("dismiss")}
+                  {t("dismiss")}
+                </Button>
+              </>
+            ) : null}
+            {what === "paused" && open ? (
+              <>
+                {pausedWhy === "executor" && routineId != null ? (
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      openEditor({
+                        botId,
+                        routineId,
+                        draft: null,
+                        noticeId: Number.isFinite(noticeId) ? noticeId : null,
+                      })
+                    }
+                    data-pa-routine-card-act="another"
+                  >
+                    {t("useAnother")}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    disabled={busy != null}
+                    onClick={() => void answer("resume")}
+                    data-pa-routine-card-act="resume"
+                  >
+                    {spin("resume")}
+                    {t("resume")}
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => showRoutines()}
+                  data-pa-routine-card-act="open"
+                >
+                  {t("open")}
+                </Button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        {failed || error ? (
+          <p className="mt-1.5 text-xs break-words text-destructive">
+            {failed ?? error}
+          </p>
+        ) : null}
+      </div>
+    </MessageRow>
+  )
+}

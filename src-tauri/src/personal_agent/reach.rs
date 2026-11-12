@@ -207,6 +207,15 @@ pub enum What {
     PrClosed {
         text: String,
     },
+    /// A routine's report: its title, and the reply's first words.
+    RoutineReport {
+        title: String,
+        text: Option<String>,
+    },
+    /// A routine codeg paused.
+    RoutinePaused {
+        text: String,
+    },
     /// The reply's first words (none: it said nothing in words).
     Reply {
         text: Option<String>,
@@ -468,6 +477,10 @@ struct Words {
     pr_closed: &'static str,
     why_pr: &'static str,
     why_pr_ready: &'static str,
+    routine: &'static str,
+    routine_paused: &'static str,
+    why_routine: &'static str,
+    why_routine_paused: &'static str,
 }
 
 const EN: Words = Words {
@@ -515,6 +528,10 @@ const EN: Words = Words {
     pr_closed: "Closed without merging: {text}",
     why_pr: "It watches this pull request for you.",
     why_pr_ready: "Its checks are green and the forge can merge it.",
+    routine: "Routine report: {text}",
+    routine_paused: "Routine paused: {text}",
+    why_routine: "It ran a routine you set up.",
+    why_routine_paused: "It failed three times in a row, or its executor config can't be used; it won't run until you look.",
 };
 
 const ZH_CN: Words = Words {
@@ -562,6 +579,10 @@ const ZH_CN: Words = Words {
     pr_closed: "没合并就关了：{text}",
     why_pr: "这是它替你看护的 PR。",
     why_pr_ready: "检查全绿，平台也显示能合。",
+    routine: "例程报告：{text}",
+    routine_paused: "例程已暂停：{text}",
+    why_routine: "你设的例程跑了一次。",
+    why_routine_paused: "连续失败了 3 次，或者它用的执行配置不能用了；你看过之前它不会再跑。",
 };
 
 const ZH_TW: Words = Words {
@@ -609,6 +630,10 @@ const ZH_TW: Words = Words {
     pr_closed: "沒合併就關了：{text}",
     why_pr: "這是它替你看護的 PR。",
     why_pr_ready: "檢查全綠，平台也顯示能合併。",
+    routine: "例程報告：{text}",
+    routine_paused: "例程已暫停：{text}",
+    why_routine: "你設的例程跑了一次。",
+    why_routine_paused: "連續失敗了 3 次，或者它用的執行設定不能用了；你看過之前它不會再跑。",
 };
 
 const JA: Words = Words {
@@ -656,6 +681,10 @@ const JA: Words = Words {
     pr_closed: "マージされずにクローズ：{text}",
     why_pr: "あなたの代わりに見守っている PR です。",
     why_pr_ready: "チェックがすべて成功し、プラットフォームでもマージできます。",
+    routine: "ルーティンの報告：{text}",
+    routine_paused: "ルーティンを一時停止しました：{text}",
+    why_routine: "設定したルーティンが実行されました。",
+    why_routine_paused: "3 回続けて失敗したか、使う実行設定が使えなくなりました。確認するまで実行されません。",
 };
 
 const KO: Words = Words {
@@ -703,6 +732,10 @@ const KO: Words = Words {
     pr_closed: "병합 없이 닫힘: {text}",
     why_pr: "대신 지켜보는 PR이에요.",
     why_pr_ready: "검사가 모두 통과했고 플랫폼에서도 병합할 수 있어요.",
+    routine: "루틴 보고: {text}",
+    routine_paused: "루틴 일시 중지됨: {text}",
+    why_routine: "설정한 루틴이 실행됐어요.",
+    why_routine_paused: "3번 연속 실패했거나 사용하는 실행 구성을 쓸 수 없어요. 확인하기 전까지 실행되지 않아요.",
 };
 
 const ES: Words = Words {
@@ -750,6 +783,10 @@ const ES: Words = Words {
     pr_closed: "Cerrada sin fusionar: {text}",
     why_pr: "Vigila esta pull request por ti.",
     why_pr_ready: "Sus comprobaciones están en verde y la forja puede fusionarla.",
+    routine: "Informe de la rutina: {text}",
+    routine_paused: "Rutina en pausa: {text}",
+    why_routine: "Se ejecutó una rutina que configuraste.",
+    why_routine_paused: "Falló tres veces seguidas o ya no se puede usar su configuración de ejecución; no volverá a ejecutarse hasta que la revises.",
 };
 
 const DE: Words = Words {
@@ -797,6 +834,10 @@ const DE: Words = Words {
     pr_closed: "Ohne Merge geschlossen: {text}",
     why_pr: "Es beobachtet diesen Pull Request für dich.",
     why_pr_ready: "Die Prüfungen sind grün und die Forge kann ihn mergen.",
+    routine: "Bericht der Routine: {text}",
+    routine_paused: "Routine pausiert: {text}",
+    why_routine: "Eine Routine, die du eingerichtet hast, ist gelaufen.",
+    why_routine_paused: "Sie ist dreimal hintereinander fehlgeschlagen oder ihre Ausführungskonfiguration ist nicht mehr nutzbar; sie läuft erst wieder, wenn du nachsiehst.",
 };
 
 const FR: Words = Words {
@@ -845,6 +886,10 @@ const FR: Words = Words {
     pr_closed: "Fermée sans fusion : {text}",
     why_pr: "Il surveille cette pull request pour vous.",
     why_pr_ready: "Ses vérifications sont au vert et la forge peut la fusionner.",
+    routine: "Rapport de la routine : {text}",
+    routine_paused: "Routine en pause : {text}",
+    why_routine: "Une routine que vous avez configurée s'est exécutée.",
+    why_routine_paused: "Elle a échoué trois fois de suite ou sa configuration d'exécution n'est plus utilisable ; elle ne s'exécutera plus tant que vous n'aurez pas regardé.",
 };
 
 const PT: Words = Words {
@@ -893,6 +938,10 @@ const PT: Words = Words {
     pr_closed: "Fechado sem mesclar: {text}",
     why_pr: "Ele acompanha este pull request para você.",
     why_pr_ready: "As verificações estão verdes e a forja pode mesclá-lo.",
+    routine: "Relatório da rotina: {text}",
+    routine_paused: "Rotina pausada: {text}",
+    why_routine: "Uma rotina que você configurou foi executada.",
+    why_routine_paused: "Falhou três vezes seguidas ou sua configuração de execução não pode mais ser usada; não roda de novo até você olhar.",
 };
 
 const AR: Words = Words {
@@ -940,6 +989,10 @@ const AR: Words = Words {
     pr_closed: "أُغلق دون دمج: {text}",
     why_pr: "هذا طلب سحب يراقبه نيابةً عنك.",
     why_pr_ready: "نجحت الفحوصات كلها والمنصة تستطيع دمجه.",
+    routine: "تقرير الروتين: {text}",
+    routine_paused: "تم إيقاف الروتين مؤقتًا: {text}",
+    why_routine: "تم تشغيل روتين قمت بإعداده.",
+    why_routine_paused: "فشل ثلاث مرات متتالية أو لم يعد من الممكن استخدام إعداد التنفيذ الخاص به؛ لن يعمل حتى تتحقق منه.",
 };
 
 fn words(locale: AppLocale) -> &'static Words {
@@ -989,6 +1042,14 @@ fn main_line(w: &Words, what: &What) -> String {
         What::PrReady { text } => fill(w.pr_ready, text, 0, ""),
         What::PrNoConflict { text } => fill(w.pr_no_conflict, text, 0, ""),
         What::PrClosed { text } => fill(w.pr_closed, text, 0, ""),
+        What::RoutineReport { title, text } => {
+            let main = fill(w.routine, title, 0, "");
+            match text {
+                Some(t) => format!("{main}\n{t}"),
+                None => main,
+            }
+        }
+        What::RoutinePaused { text } => fill(w.routine_paused, text, 0, ""),
         What::Reply { text } => text.clone().unwrap_or_else(|| w.reply_empty.to_string()),
         What::Plain { text } => text.clone(),
     }
@@ -1014,6 +1075,8 @@ fn reason(w: &Words, kind: &str, what: &What) -> Option<String> {
         "forge" => w.why_forge.into(),
         "pr" => w.why_pr.into(),
         "pr_ready" => w.why_pr_ready.into(),
+        "routine" => w.why_routine.into(),
+        "routine_paused" => w.why_routine_paused.into(),
         _ => return None,
     };
     Some(line)
@@ -1196,7 +1259,9 @@ impl Reach {
             let told = match had.get(&key) {
                 Some(seen) => seen.told,
                 // Told as its own news when it was raised (7.5, 7.4).
-                None if n.kind == "acceptance" || n.kind == "mergeable" => true,
+                None if matches!(n.kind.as_str(), "acceptance" | "mergeable" | "routine_paused") => {
+                    true
+                }
                 None => {
                     let news = news_of_need(bot, n, &key);
                     let fresh = n.since >= started;
@@ -1325,6 +1390,8 @@ pub fn need_kind(n: &NeedsYou) -> Option<&'static str> {
         "acceptance" => "acceptance",
         // A watched pull request they can merge (7.4).
         "mergeable" => "pr_ready",
+        // A routine codeg paused (6.9).
+        "routine_paused" => "routine_paused",
         _ => return None,
     })
 }
@@ -1334,7 +1401,8 @@ pub fn need_kind(n: &NeedsYou) -> Option<&'static str> {
 fn news_of_need(bot: i32, n: &NeedsYou, key: &str) -> Option<News> {
     let text = n.text.clone();
     // An acceptance card was told when it was raised (7.5).
-    let kind = need_kind(n).filter(|k| !matches!(*k, "waiting" | "acceptance" | "pr_ready"))?;
+    let kind = need_kind(n)
+        .filter(|k| !matches!(*k, "waiting" | "acceptance" | "pr_ready" | "routine_paused"))?;
     let what = if kind == "approval" {
         What::Approval { text }
     } else {

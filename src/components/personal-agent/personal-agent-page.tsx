@@ -86,6 +86,7 @@ import { SettingsView } from "./settings/settings-view"
 import { PageScopeContext, useStatusWord, type PageScope } from "./shared"
 import { useSessionLinkOpener } from "./session-link"
 import { PersonalAgentWorkDrawer } from "./work-drawer"
+import { RoutineEditor } from "./routine-editor"
 import { StatusLine } from "./status-line"
 import { useAssistantShortcuts } from "./use-assistant-shortcuts"
 import { viewOf } from "./roster-order"
@@ -511,6 +512,7 @@ export function PersonalAgentPage() {
           </Drawer>
         ) : null}
         <PersonalAgentWorkDrawer />
+        <RoutineEditor />
         <AlertDialog open={confirmNew} onOpenChange={setConfirmNew}>
           <AlertDialogContent>
             <AlertDialogHeader>

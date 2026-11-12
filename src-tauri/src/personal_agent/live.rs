@@ -233,6 +233,12 @@ fn payload_of(raw: &str) -> serde_json::Value {
     serde_json::from_str(raw).unwrap_or(serde_json::Value::Null)
 }
 
+/// [`needs_of`] for a test: what waits on the owner from the cards alone.
+#[cfg(test)]
+pub(crate) async fn needs_for_test(db: &AppDatabase, bot: i32) -> Vec<NeedsYou> {
+    needs_of(db, bot, &[], &HashMap::new()).await
+}
+
 /// The cards and the work waiting on the owner, oldest first.
 async fn needs_of(
     db: &AppDatabase,
@@ -289,6 +295,11 @@ async fn needs_of(
                 // A watched pull request the owner can merge now (7.4,
                 // 8.6): theirs until it moves on.
                 NoticeKind::Pr if payload["event"].as_str() == Some("mergeable") => "mergeable",
+                // A routine codeg paused: it runs no more until the owner
+                // looks (6.9).
+                NoticeKind::Routine if payload["what"].as_str() == Some("paused") => {
+                    "routine_paused"
+                }
                 _ => return None,
             };
             Some((n, kind))

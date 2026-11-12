@@ -8276,6 +8276,20 @@
         "level_pr": {
           "title": "PR のその他の動き",
           "hint": "見守り中の PR：チェック失敗・再成功、コンフリクト、マージ、クローズ。"
+        },
+        "routine_dispatch": {
+          "title": "ルーティンの作業依頼",
+          "hint": "依頼型ルーティンが実行のたびに依頼する作業。",
+          "auto": "そのまま依頼",
+          "ask": "毎回先に確認（確認カード）"
+        },
+        "level_routine": {
+          "title": "ルーティンの報告",
+          "hint": "設定したルーティンが伝えることを見つけたとき。"
+        },
+        "level_routine_paused": {
+          "title": "ルーティンの一時停止",
+          "hint": "3 回続けて失敗したか、実行設定が使えなくなったとき。"
         }
       },
       "workdir": {
@@ -9008,7 +9022,8 @@
         "status": "状態",
         "today": "今日",
         "matters": "事項",
-        "data": "データ"
+        "data": "データ",
+        "routines": "ルーティン"
       },
       "notify": "通知する",
       "notifyHint": "何かを終えたときや、あなたを待っているときに通知します",
@@ -9254,6 +9269,13 @@
         "open": "PR オープン",
         "merged": "マージ済み",
         "closed": "クローズ"
+      },
+      "routine": {
+        "at": "{time} にルーティン",
+        "running": "ルーティン実行中",
+        "asked": "ルーティンが確認待ち",
+        "reported": "ルーティンの報告",
+        "silent": "ルーティン：変化なし"
       }
     },
     "meet": {
@@ -9493,6 +9515,159 @@
       "view": "PR を見る",
       "gotIt": "了解",
       "unwatch": "見守りをやめる"
+    },
+    "routines": {
+      "zone": "（{zone}）",
+      "onEvent": "トリガー：{event}",
+      "withLabel": "ラベル {label}",
+      "mineOnly": "自分の作業のみ",
+      "event": {
+        "dispatch_ended": "依頼した作業が終わったとき",
+        "task_status": "ボードのタスクの状態が変わったとき",
+        "session_waiting": "セッションがあなたを待っているとき",
+        "pr_checks_failed": "見守り中の PR のチェックが失敗",
+        "pr_checks_passed": "見守り中の PR のチェックが再び成功",
+        "pr_conflict": "見守り中の PR にコンフリクト",
+        "pr_mergeable": "見守り中の PR がマージ可能",
+        "pr_no_conflict": "見守り中の PR にコンフリクトなし（チェック不明）",
+        "pr_merged": "見守り中の PR がマージされた",
+        "pr_closed": "見守り中の PR がクローズ",
+        "forge_issue": "プラットフォームに新しい issue や PR"
+      },
+      "precheck": {
+        "commits": "{branch} に新しいコミットがあるときだけ",
+        "forgeIssue": "新しい issue があるときだけ",
+        "forgePr": "新しい PR があるときだけ",
+        "itemsWaiting": "{hours} 時間以上待っている事項があるときだけ",
+        "changes": "作業ツリーが変わったときだけ"
+      },
+      "outcome": {
+        "running": "実行中",
+        "skipped": "スキップ：新しいことなし",
+        "silent": "変化なし",
+        "reported": "報告あり",
+        "failed": "失敗",
+        "missed": "見送り",
+        "asked": "確認待ち",
+        "declined": "未確認",
+        "stopped": "停止"
+      },
+      "empty": "まだルーティンはありません。会話で設定を頼んでください。",
+      "new": "新しいルーティン",
+      "kind": {
+        "brain": "アシスタントが確認",
+        "dispatch": "作業を依頼"
+      },
+      "paused": {
+        "owner": "一時停止中",
+        "failures": "一時停止：3 回連続で失敗",
+        "executor": "一時停止：実行設定が使えません"
+      },
+      "next": "次回：{when}",
+      "last": "前回 {when} · 計 {n} 回",
+      "runNow": "今すぐ実行",
+      "pause": "一時停止",
+      "resume": "再開",
+      "edit": "編集",
+      "delete": "削除",
+      "deleteTitle": "このルーティンを削除しますか？",
+      "deleteDescription": "「{title}」は実行されなくなります。すでに依頼した作業には影響しません。",
+      "cancel": "キャンセル",
+      "weekly": "毎週これをやる",
+      "reply": "ルーティン「{title}」· {seq} 回目",
+      "editor": {
+        "titleNew": "新しいルーティン",
+        "titleEdit": "ルーティンを編集",
+        "trialNote": "保存するとすぐに 1 回試しに実行し、その後は codeg が予定どおり実行します。",
+        "editNote": "変更は次回の実行から反映されます。",
+        "name": "名前",
+        "what": "やること",
+        "whatHint": "例：夜間の CI で失敗がないか見て、あれば教えて",
+        "kind": "実行のしかた",
+        "kindBrain": "アシスタントを起こす",
+        "kindDispatch": "作業を直接依頼",
+        "kindBrainHint": "確認して報告します。伝えることがなければ黙っています。",
+        "kindDispatchHint": "codeg がアシスタントを起こさずに下の作業を依頼し、結果はいつもどおり戻ります。",
+        "executor": "実行設定",
+        "ownExecutor": "自分のもの",
+        "mode": "方法",
+        "modeTask": "ボードのタスク",
+        "modeSession": "プロジェクトの作業セッション",
+        "modeChat": "チャット",
+        "deliverable": "成果",
+        "change": "コード変更",
+        "report": "レポート",
+        "project": "プロジェクト",
+        "pickProject": "プロジェクトを選択",
+        "anyProject": "すべてのプロジェクト",
+        "when": "いつ",
+        "schedule": "スケジュール",
+        "event": "イベント発生時",
+        "presetDaily": "毎日 9:00",
+        "presetWeekdays": "平日 9:00",
+        "presetWeekly": "毎週月曜 9:00",
+        "custom": "カスタム…",
+        "timezone": "タイムゾーン",
+        "ownerZone": "あなたと同じ（{zone}）",
+        "eventKind": "イベント",
+        "issueOrPr": "issue か PR か",
+        "issues": "issue",
+        "prs": "PR",
+        "label": "ラベル",
+        "states": "状態（カンマ区切り）",
+        "mine": "自分の作業のみ",
+        "precheck": "先に確認",
+        "check": {
+          "none": "毎回実行",
+          "commits": "新しいコミットがあるときだけ",
+          "forge_new": "新しい issue や PR があるときだけ",
+          "items_waiting": "長く待っている事項があるときだけ",
+          "changes": "作業ツリーが変わったときだけ"
+        },
+        "branch": "ブランチ（既定は HEAD）",
+        "hours": "時間",
+        "needTitle": "名前を付けてください。",
+        "needWhat": "やることを書いてください。",
+        "needCron": "スケジュールを設定してください。",
+        "made": "ルーティンを作成し、試しに実行しています",
+        "saved": "ルーティンを保存しました",
+        "cancel": "キャンセル",
+        "save": "保存",
+        "saveRun": "保存して 1 回実行"
+      },
+      "card": {
+        "made": "ルーティンを作成",
+        "changed": "ルーティンを変更",
+        "proposal": "提案されたルーティン",
+        "proposalChange": "ルーティン変更の提案",
+        "repeat": "ルーティンにしますか？",
+        "paused": "ルーティンを一時停止",
+        "undone": "取り消しました",
+        "dismissed": "見送りました",
+        "resumed": "再開しました",
+        "madeNote": "作成しました。ルーティン一覧にあります。",
+        "action": {
+          "pause": "一時停止",
+          "resume": "再開",
+          "delete": "削除",
+          "run_now": "今すぐ実行",
+          "edit": "変更"
+        },
+        "repeatBody": "30 日間で {count} 回、似たことを頼んでいます。",
+        "pausedExecutor": "使用する実行設定が削除・無効化されたか、アシスタントが使えなくなりました。",
+        "pausedFailures": "3 回続けて失敗しました。",
+        "trial": "試しの実行を始めました。",
+        "reason": "理由：{reason}",
+        "undo": "元に戻す",
+        "edit": "編集",
+        "accept": "作成する",
+        "acceptChange": "変更する",
+        "dismiss": "今はいい",
+        "makeIt": "ルーティンにする",
+        "useAnother": "別のものを使う",
+        "resume": "再開",
+        "open": "ルーティンを開く"
+      }
     }
   }
 }

@@ -83,6 +83,9 @@ pub struct TodayRow {
     /// - done — handed-out work `finished`, a question `answered` for the
     ///   owner, a setting `changed` for them, a pull request merged
     ///   (`pr_merged`).
+    /// - the schedule also has a `routine` that runs later today; watching,
+    ///   a `routine_run` under way; done, a routine's report
+    ///   (`routine_report`, its state `reported` or `silent`).
     pub kind: &'static str,
     /// How urgent a wait is, by the owner's levels (6.2).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,6 +112,8 @@ pub struct TodayRow {
     pub conversation_id: Option<i32>,
     pub item_id: Option<i32>,
     pub notice_id: Option<i32>,
+    /// The routine it is, or is a run of (6.9).
+    pub routine_id: Option<i32>,
     /// The agent a session runs.
     pub agent_type: Option<String>,
     /// The owner can take it back here ([Undo]).
@@ -139,6 +144,7 @@ impl TodayRow {
             conversation_id: None,
             item_id: None,
             notice_id: None,
+            routine_id: None,
             agent_type: None,
             undo: false,
         }
@@ -287,6 +293,7 @@ pub async fn today(
             NoticeKind::Proposal,
             NoticeKind::Changed,
             NoticeKind::Forge,
+            NoticeKind::Routine,
         ]))
         .order_by_asc(notice_entity::Column::Id)
         .all(&db.conn)
@@ -495,6 +502,34 @@ pub async fn today(
             view.schedule.push(row);
         }
     }
+    // The routines that run in the rest of the day (6.9).
+    let routines = crate::db::service::personal_agent_routine_service::list_all(&db.conn)
+        .await
+        .unwrap_or_default();
+    let routine_titles: HashMap<i32, String> =
+        routines.iter().map(|r| (r.id, r.title.clone())).collect();
+    for r in &routines {
+        if !r.enabled
+            || r.trigger != crate::db::entities::personal_agent_routine::RoutineTrigger::Schedule
+            || !bots.iter().any(|b| b.id == r.bot_id)
+        {
+            continue;
+        }
+        let Some(next) = r.next_run_at.filter(|t| *t >= now && *t < day_end) else {
+            continue;
+        };
+        let mut row = TodayRow::new(
+            format!("routine:{}:{}", r.id, next.timestamp()),
+            "routine",
+            one_line(&r.title),
+            next,
+        );
+        row.bot_id = Some(r.bot_id);
+        row.state = Some(super::engine::enum_str(&r.kind));
+        row.routine_id = Some(r.id);
+        view.schedule.push(row);
+    }
+    view.schedule.sort_by_key(|r| r.at);
     view.needs.sort_by_key(|r| (level_rank(r.level), r.at));
 
     // ── watching ────────────────────────────────────────────────────────
@@ -586,6 +621,33 @@ pub async fn today(
         row.state = Some(w.phase.clone().unwrap_or_else(|| "open".into()));
         row.task_id = w.work_task_id;
         if let Some(d) = w.dispatch_id {
+            row.dispatch_id = Some(d);
+            dispatch_ids.push(d);
+        }
+        view.watching.push(row);
+    }
+    // Routine runs under way: its assistant on it, the work it handed out,
+    // or the owner's confirmation it waits for (6.9).
+    for run in crate::db::service::personal_agent_routine_service::running_runs(&db.conn)
+        .await
+        .unwrap_or_default()
+    {
+        let Some(title) = routine_titles.get(&run.routine_id) else {
+            continue;
+        };
+        if !bot_ids.contains(&run.bot_id) {
+            continue;
+        }
+        let mut row = TodayRow::new(
+            format!("routine_run:{}", run.id),
+            "routine_run",
+            one_line(title),
+            run.started_at,
+        );
+        row.bot_id = Some(run.bot_id);
+        row.state = Some(super::engine::enum_str(&run.outcome));
+        row.routine_id = Some(run.routine_id);
+        if let Some(d) = run.dispatch_id {
             row.dispatch_id = Some(d);
             dispatch_ids.push(d);
         }
@@ -751,6 +813,47 @@ pub async fn today(
         row.state = Some("acted".into());
         row.row_id = n.timeline_id;
         row.notice_id = Some(n.id);
+        view.done.push(row);
+    }
+    // The routines' reports today, "no change" among them (6.2: low).
+    for run in crate::db::service::personal_agent_routine_service::runs_between(
+        &db.conn, day_start, day_end,
+    )
+    .await
+    .unwrap_or_default()
+    {
+        use crate::db::entities::personal_agent_routine_run::RunOutcome;
+        if !matches!(run.outcome, RunOutcome::Reported | RunOutcome::Silent) {
+            continue;
+        }
+        let Some(title) = routine_titles.get(&run.routine_id) else {
+            continue;
+        };
+        if !bot_ids.contains(&run.bot_id) {
+            continue;
+        }
+        let mut row = TodayRow::new(
+            format!("routine_report:{}", run.id),
+            "routine_report",
+            one_line(title),
+            run.ended_at.unwrap_or(run.started_at),
+        );
+        row.bot_id = Some(run.bot_id);
+        row.state = Some(super::engine::enum_str(&run.outcome));
+        row.routine_id = Some(run.routine_id);
+        row.text = run.note.as_deref().and_then(some_line);
+        if let Some(b) = run.batch_id {
+            row.row_id = svc::reply_row_of_batch(&db.conn, b)
+                .await
+                .ok()
+                .flatten()
+                .filter(|r| !svc::is_discarded(r))
+                .map(|r| r.id);
+        }
+        if let Some(d) = run.dispatch_id {
+            row.dispatch_id = Some(d);
+            dispatch_ids.push(d);
+        }
         view.done.push(row);
     }
     view.done.sort_by_key(|r| std::cmp::Reverse(r.at));

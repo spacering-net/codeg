@@ -117,6 +117,16 @@ function useOpener(
       case "pr":
       case "pr_merged":
         return work ?? task ?? bot
+      // A routine: its assistant's routines.
+      case "routine":
+        return bot
+          ? () => {
+              bot()
+              usePersonalAgentUi.getState().showRoutines()
+            }
+          : null
+      case "routine_run":
+        return work ?? bot
       default:
         return jump ?? work ?? bot
     }
@@ -152,6 +162,14 @@ function useRowWords() {
         const does = row.state?.endsWith(":act") ?? false
         return t(does ? "item.act" : "item.notify", { time: clock(row.at) })
       }
+      case "routine":
+        return t("routine.at", { time: clock(row.at) })
+      case "routine_run":
+        return row.state === "asked" ? t("routine.asked") : t("routine.running")
+      case "routine_report":
+        return row.state === "silent"
+          ? t("routine.silent")
+          : t("routine.reported")
       default:
         return t(`kind.${row.kind}` as "kind.approval")
     }

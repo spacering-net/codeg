@@ -90,9 +90,12 @@ export function replyState(row: TimelineRow): string | null {
   return typeof s === "string" ? s : null
 }
 
-/** A reply whose prompt never reached the agent: as if it never was. */
+/** A reply whose prompt never reached the agent — or a routine's that had
+ *  nothing to say (`[[silent]]`, 6.9): as if it never was. */
 export function isDiscarded(row: TimelineRow): boolean {
-  return row.kind === "reply" && replyState(row) === "discarded"
+  if (row.kind !== "reply") return false
+  const state = replyState(row)
+  return state === "discarded" || state === "silent"
 }
 
 /** New to the owner, as the server counts it: a result card, a native card,
@@ -102,7 +105,7 @@ export function isUnseen(row: TimelineRow): boolean {
   if (row.kind === "result" || row.kind === "notice") return true
   if (row.kind !== "reply") return false
   const state = replyState(row)
-  return state !== "running" && state !== "discarded"
+  return state !== "running" && state !== "discarded" && state !== "silent"
 }
 
 /** The owner's messages are on the end side, everyone else's on the start. */

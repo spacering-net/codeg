@@ -158,6 +158,7 @@ import { BotAvatar } from "./bot-avatar"
 import { dueWhen, repeatText } from "./due-text"
 import { AnsweredForYou } from "./event-card"
 import { LadderChip, TaskStrip } from "./task-strip"
+import { RoutinesSection } from "./routines-section"
 import { TodaySection } from "./today-section"
 
 /** Run-log lines the status tab lists. */
@@ -2004,6 +2005,10 @@ function DetailsTab({
           <SectionHead>{t("sections.matters")}</SectionHead>
           <WorkBody work={work} inDrawer={inDrawer} />
         </section>
+        <RoutinesSection
+          head={<SectionHead>{t("sections.routines")}</SectionHead>}
+          readOnly={readOnly}
+        />
         <section className="flex flex-col gap-2" data-pa-detail="data">
           <SectionHead>{t("sections.data")}</SectionHead>
           <StatsBody />

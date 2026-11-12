@@ -845,14 +845,16 @@ pub fn to_row(m: timeline::Model) -> TimelineRow {
     }
 }
 
-/// Whether a row is a reply whose prompt never reached the agent: every
-/// reader treats it as absent.
+/// Whether a row is a reply whose prompt never reached the agent — or one
+/// that said only that there was nothing to say (a routine's `[[silent]]`,
+/// 6.9): every reader treats it as absent.
 pub fn is_discarded(m: &timeline::Model) -> bool {
-    m.kind == TimelineKind::Reply && reply_state(m) == Some("discarded")
+    m.kind == TimelineKind::Reply && matches!(reply_state(m), Some("discarded" | "silent"))
 }
 
 /// A reply row's `data.state`: `running`, `done`, `canceled`,
-/// `interrupted`, `discarded` — `None` on a phase-one row, which has none.
+/// `interrupted`, `discarded`, `silent` — `None` on a phase-one row, which
+/// has none.
 pub fn reply_state(m: &timeline::Model) -> Option<&'static str> {
     let data = m.data.as_deref()?;
     let state = serde_json::from_str::<serde_json::Value>(data)
@@ -860,9 +862,16 @@ pub fn reply_state(m: &timeline::Model) -> Option<&'static str> {
         .get("state")?
         .as_str()?
         .to_string();
-    ["running", "done", "canceled", "interrupted", "discarded"]
-        .into_iter()
-        .find(|s| *s == state)
+    [
+        "running",
+        "done",
+        "canceled",
+        "interrupted",
+        "discarded",
+        "silent",
+    ]
+    .into_iter()
+    .find(|s| *s == state)
 }
 
 /// Whether a reply row holds nothing to read yet: running with no body, or
@@ -870,7 +879,7 @@ pub fn reply_state(m: &timeline::Model) -> Option<&'static str> {
 pub fn is_unwritten_reply(m: &timeline::Model) -> bool {
     m.kind == TimelineKind::Reply
         && match reply_state(m) {
-            Some("discarded") => true,
+            Some("discarded" | "silent") => true,
             Some("running") => m.body.trim().is_empty(),
             _ => false,
         }
@@ -1332,7 +1341,7 @@ fn unseen_by_owner() -> Condition {
                         .add(timeline::Column::Kind.eq(TimelineKind::Reply))
                         .add(Expr::cust(
                             "COALESCE(json_extract(data, '$.state'), '') \
-                             NOT IN ('running', 'discarded')",
+                             NOT IN ('running', 'discarded', 'silent')",
                         )),
                 ),
         )
@@ -1583,7 +1592,7 @@ pub async fn last_said(
         .filter(timeline::Column::Kind.eq(TimelineKind::Reply))
         .filter(Expr::cust("trim(body) <> ''"))
         .filter(Expr::cust(
-            "COALESCE(json_extract(data, '$.state'), '') NOT IN ('running', 'discarded')",
+            "COALESCE(json_extract(data, '$.state'), '') NOT IN ('running', 'discarded', 'silent')",
         ))
         .order_by_desc(timeline::Column::Id)
         .one(conn)
@@ -2652,7 +2661,7 @@ pub(crate) fn is_unique_violation(e: &sea_orm::DbErr) -> bool {
 }
 
 /// The entry an insert into `slot` collided with.
-async fn colliding_entry(
+pub(crate) async fn colliding_entry(
     conn: &DatabaseConnection,
     slot: &LedgerSlot,
 ) -> Result<action::Model, DbError> {

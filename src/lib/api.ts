@@ -57,6 +57,10 @@ import type {
   PersonalAgentPresence,
   PersonalAgentProfile,
   PersonalAgentToday,
+  Routine,
+  RoutineAction,
+  RoutineDraft,
+  RoutineRun,
   PersonalAgentMeetProject,
   PersonalAgentChoicePick,
   ExecutorView,
@@ -2739,6 +2743,53 @@ export async function personalAgentToday(): Promise<PersonalAgentToday> {
   return getTransport().call("personal_agent_today", {})
 }
 
+/** An assistant's routines, with their latest runs (6.9). */
+export async function personalAgentRoutines(
+  bot?: number | null
+): Promise<Routine[]> {
+  return getTransport().call("personal_agent_routines", { botId: bot ?? null })
+}
+
+/** A routine's runs, newest first. */
+export async function personalAgentRoutineRuns(
+  routineId: number,
+  limit?: number
+): Promise<RoutineRun[]> {
+  return getTransport().call("personal_agent_routine_runs", {
+    routineId,
+    limit: limit ?? null,
+  })
+}
+
+/** Save a routine from the editor: made (and run once as a trial) when
+ *  `routineId` is null, else changed. `noticeId`: the card it came from. */
+export async function personalAgentRoutineSave(
+  bot: number | null | undefined,
+  routineId: number | null,
+  draft: RoutineDraft,
+  noticeId?: number | null
+): Promise<Routine> {
+  return getTransport().call("personal_agent_routine_save", {
+    botId: bot ?? null,
+    routineId,
+    draft,
+    noticeId: noticeId ?? null,
+  })
+}
+
+/** Run a routine now, pause, resume or delete it. */
+export async function personalAgentRoutineAct(
+  bot: number | null | undefined,
+  routineId: number,
+  action: RoutineAction
+): Promise<Routine> {
+  return getTransport().call("personal_agent_routine_act", {
+    botId: bot ?? null,
+    routineId,
+    action,
+  })
+}
+
 export async function personalAgentProfile(): Promise<PersonalAgentProfile> {
   return getTransport().call("personal_agent_profile", {})
 }
@@ -2991,6 +3042,7 @@ export type NoticeAction =
   | "revise"
   | "recheck"
   | "retry"
+  | "resume"
 
 export async function personalAgentAnswerQuestion(
   questionId: string,

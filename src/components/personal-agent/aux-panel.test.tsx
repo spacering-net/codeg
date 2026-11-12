@@ -32,6 +32,8 @@ const api = vi.hoisted(() => ({
   personalAgentOutputRead: vi.fn(),
   personalAgentRosterAct: vi.fn(async () => {}),
   personalAgentBots: vi.fn(),
+  personalAgentRoutines: vi.fn(async () => []),
+  personalAgentRoutineAct: vi.fn(async () => ({})),
 }))
 const pa = vi.hoisted(() => ({
   snapshot: null as unknown,

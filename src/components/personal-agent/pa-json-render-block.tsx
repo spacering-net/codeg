@@ -591,6 +591,9 @@ function PaCard({
       case "item":
         nav.showAux("details")
         return
+      case "routine":
+        usePersonalAgentUi.getState().showRoutines()
+        return
       case "task":
         if (isId(id)) {
           nav.openWork({

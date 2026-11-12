@@ -411,6 +411,15 @@ impl PersonalAgentEngine {
             self.patch_account(json!({ "team": team })).await;
         }
 
+        // The night cleaner looks every night (4.13); its first run waits
+        // for the owner to tell it its scope.
+        if template == "cleanup" {
+            if let Some(w) = words {
+                if let Err(e) = super::routines::make_nightly(&self.db.conn, bot.id, w).await {
+                    tracing::warn!("[personal-agent] the nightly routine was not made: {e}");
+                }
+            }
+        }
         let made = Made {
             bot,
             executor,
@@ -1052,6 +1061,13 @@ impl PersonalAgentEngine {
             if let Err(e) = moved {
                 tracing::warn!("[personal_agent] watches of #{id} not handed on: {e}");
             }
+        }
+        // Its routines go with it (4.14); the work they handed out is like
+        // any other of its work.
+        if let Err(e) =
+            crate::db::service::personal_agent_routine_service::delete_of_bot(&self.db.conn, id).await
+        {
+            tracing::warn!("[personal_agent] routines of #{id} not deleted: {e}");
         }
         if opts.hand_over {
             let ids: Vec<i32> = live.iter().map(|d| d.id).collect();

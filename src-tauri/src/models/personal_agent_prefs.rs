@@ -435,6 +435,12 @@ pub const NEWS: &[(&str, Level, &str)] = &[
         Level::Low,
         "watched pull requests: checks failed or green again, a conflict, merged, closed",
     ),
+    ("routine", Level::Normal, "a routine's report"),
+    (
+        "routine_paused",
+        Level::Urgent,
+        "a routine paused: it failed three times in a row, or its executor config is gone",
+    ),
     (
         "used_up",
         Level::Urgent,
@@ -516,6 +522,10 @@ pub struct Prefs {
     /// merge and its checks are green; CNB always asks.
     #[serde(default, deserialize_with = "lenient")]
     pub pr_merge: AskFirst,
+    /// The work a dispatch routine hands out (6.9): handed out at once, or
+    /// put to the owner on a confirm card first.
+    #[serde(default, deserialize_with = "lenient")]
+    pub routine_dispatch: AskFirst,
     /// The owner's time zone: `system`, or an IANA name (1.12).
     #[serde(default = "default_zone", deserialize_with = "lenient_zone")]
     pub time_zone: String,
@@ -589,6 +599,10 @@ pub struct Prefs {
     pub level_pr_ready: Level,
     #[serde(default = "low", deserialize_with = "lenient_low")]
     pub level_pr: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_routine: Level,
+    #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
+    pub level_routine_paused: Level,
     #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
     pub level_used_up: Level,
 }
@@ -615,6 +629,7 @@ impl Default for Prefs {
             forge_comment: AskFirst::default(),
             issue_close: AskFirst::default(),
             pr_merge: AskFirst::default(),
+            routine_dispatch: AskFirst::default(),
             time_zone: default_zone(),
             presence: OnOff::default(),
             proactive: OnOff::default(),
@@ -644,6 +659,8 @@ impl Default for Prefs {
             level_forge: Level::Low,
             level_pr_ready: Level::Normal,
             level_pr: Level::Low,
+            level_routine: Level::Normal,
+            level_routine_paused: Level::Urgent,
             level_used_up: Level::Urgent,
         }
     }
@@ -776,6 +793,11 @@ pub const PREFS: &[PrefSpec] = &[
         key: "pr_merge",
         kind: PrefKind::Choice(&["auto", "ask"]),
         label: "pull requests you merge",
+    },
+    PrefSpec {
+        key: "routine_dispatch",
+        kind: PrefKind::Choice(&["auto", "ask"]),
+        label: "the work your dispatch routines hand out",
     },
     PrefSpec {
         key: "time_zone",
@@ -926,6 +948,16 @@ pub const PREFS: &[PrefSpec] = &[
         label: "how urgent the rest of a watched pull request's news is",
     },
     PrefSpec {
+        key: "level_routine",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent a routine's report is",
+    },
+    PrefSpec {
+        key: "level_routine_paused",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent a paused routine is",
+    },
+    PrefSpec {
         key: "level_used_up",
         kind: PrefKind::Choice(LEVELS),
         label: "how urgent work sent back as many rounds as allowed is",
@@ -990,6 +1022,7 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("forge_comment", json!("auto")),
             ("issue_close", json!("auto")),
             ("pr_merge", json!("auto")),
+            ("routine_dispatch", json!("auto")),
         ]),
         "ask_more" => Some(vec![
             ("confirm_dispatch", json!("code")),
@@ -1003,6 +1036,7 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("forge_comment", json!("ask")),
             ("issue_close", json!("ask")),
             ("pr_merge", json!("ask")),
+            ("routine_dispatch", json!("ask")),
         ]),
         _ => None,
     }
@@ -1135,6 +1169,8 @@ impl Prefs {
             "forge" => self.level_forge,
             "pr_ready" => self.level_pr_ready,
             "pr" => self.level_pr,
+            "routine" => self.level_routine,
+            "routine_paused" => self.level_routine_paused,
             "used_up" => self.level_used_up,
             _ => Level::Normal,
         }
@@ -1234,6 +1270,14 @@ fn brain_value(key: &str, value: &Value) -> String {
         }
         ("pr_merge", "ask") => {
             "put to the owner on an approval card; merged once they approve".into()
+        }
+        ("routine_dispatch", "auto") => {
+            "a dispatch routine hands out its work at once when it runs".into()
+        }
+        ("routine_dispatch", "ask") => {
+            "a dispatch routine's work is put to the owner on a confirm card first; it runs once \
+             they confirm"
+                .into()
         }
         ("accept_revise", "ask") => {
             "put to the owner on the acceptance card, with what you would send back".into()

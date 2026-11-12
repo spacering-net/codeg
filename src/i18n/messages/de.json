@@ -8276,6 +8276,20 @@
         "level_pr": {
           "title": "Weitere PR-Neuigkeiten",
           "hint": "Beobachtete PRs: Checks fehlgeschlagen oder wieder grün, ein Konflikt, gemergt, geschlossen."
+        },
+        "routine_dispatch": {
+          "title": "Arbeit von Routinen",
+          "hint": "Die Arbeit, die eine Vergabe-Routine bei jedem Lauf vergibt.",
+          "auto": "Direkt vergeben",
+          "ask": "Jedes Mal vorher fragen (Bestätigungskarte)"
+        },
+        "level_routine": {
+          "title": "Berichte von Routinen",
+          "hint": "Was eine eingerichtete Routine gefunden hat."
+        },
+        "level_routine_paused": {
+          "title": "Routine pausiert",
+          "hint": "Dreimal hintereinander fehlgeschlagen oder Ausführungskonfiguration nicht nutzbar."
         }
       },
       "workdir": {
@@ -9008,7 +9022,8 @@
         "status": "Status",
         "today": "Heute",
         "matters": "Offene Punkte",
-        "data": "Daten"
+        "data": "Daten",
+        "routines": "Routinen"
       },
       "notify": "Benachrichtigen",
       "notifyHint": "Wenn er etwas abschließt oder auf dich wartet",
@@ -9254,6 +9269,13 @@
         "open": "PR offen",
         "merged": "Gemergt",
         "closed": "Geschlossen"
+      },
+      "routine": {
+        "at": "Routine um {time}",
+        "running": "Routine läuft",
+        "asked": "Routine wartet auf dich",
+        "reported": "Routinebericht",
+        "silent": "Routine: keine Änderung"
       }
     },
     "meet": {
@@ -9493,6 +9515,159 @@
       "view": "PR ansehen",
       "gotIt": "Verstanden",
       "unwatch": "Nicht mehr beobachten"
+    },
+    "routines": {
+      "zone": "({zone})",
+      "onEvent": "Bei: {event}",
+      "withLabel": "Label {label}",
+      "mineOnly": "nur eigene Arbeit",
+      "event": {
+        "dispatch_ended": "Vergebene Arbeit endet",
+        "task_status": "Eine Board-Aufgabe ändert ihren Status",
+        "session_waiting": "Eine Sitzung wartet auf dich",
+        "pr_checks_failed": "Checks eines beobachteten PR schlagen fehl",
+        "pr_checks_passed": "Checks eines beobachteten PR wieder grün",
+        "pr_conflict": "Ein beobachteter PR hat einen Konflikt",
+        "pr_mergeable": "Ein beobachteter PR kann gemergt werden",
+        "pr_no_conflict": "Ein beobachteter PR ohne Konflikt (Checks unbekannt)",
+        "pr_merged": "Ein beobachteter PR wird gemergt",
+        "pr_closed": "Ein beobachteter PR wird geschlossen",
+        "forge_issue": "Ein neues Issue oder ein neuer PR auf der Forge"
+      },
+      "precheck": {
+        "commits": "nur bei neuen Commits auf {branch}",
+        "forgeIssue": "nur bei einem neuen Issue",
+        "forgePr": "nur bei einem neuen PR",
+        "itemsWaiting": "nur wenn Vorgänge über {hours} h warten",
+        "changes": "nur wenn sich der Arbeitsbaum geändert hat"
+      },
+      "outcome": {
+        "running": "Läuft",
+        "skipped": "Übersprungen: nichts Neues",
+        "silent": "Keine Änderung",
+        "reported": "Berichtet",
+        "failed": "Fehlgeschlagen",
+        "missed": "Verpasst",
+        "asked": "Wartet auf dich",
+        "declined": "Nicht bestätigt",
+        "stopped": "Gestoppt"
+      },
+      "empty": "Noch keine Routinen. Bitte es im Gespräch, eine einzurichten.",
+      "new": "Neue Routine",
+      "kind": {
+        "brain": "Der Assistent schaut nach",
+        "dispatch": "Vergibt Arbeit"
+      },
+      "paused": {
+        "owner": "Pausiert",
+        "failures": "Pausiert: dreimal hintereinander fehlgeschlagen",
+        "executor": "Pausiert: Ausführungskonfiguration nicht nutzbar"
+      },
+      "next": "Nächste: {when}",
+      "last": "Zuletzt {when} · insgesamt {n}",
+      "runNow": "Jetzt ausführen",
+      "pause": "Pausieren",
+      "resume": "Fortsetzen",
+      "edit": "Bearbeiten",
+      "delete": "Löschen",
+      "deleteTitle": "Diese Routine löschen?",
+      "deleteDescription": "„{title}“ läuft nicht mehr. Bereits vergebene Arbeit ist nicht betroffen.",
+      "cancel": "Abbrechen",
+      "weekly": "Jede Woche so machen",
+      "reply": "Routine „{title}“ · Lauf {seq}",
+      "editor": {
+        "titleNew": "Neue Routine",
+        "titleEdit": "Routine bearbeiten",
+        "trialNote": "Nach dem Speichern läuft sie einmal zur Probe; danach hält codeg den Takt.",
+        "editNote": "Änderungen gelten ab dem nächsten Lauf.",
+        "name": "Name",
+        "what": "Was zu tun ist",
+        "whatHint": "Z. B.: Schau dir die nächtliche CI an und sag mir, was rot ist",
+        "kind": "Wie sie läuft",
+        "kindBrain": "Assistent wecken",
+        "kindDispatch": "Arbeit direkt vergeben",
+        "kindBrainHint": "Er schaut nach und berichtet; gibt es nichts zu sagen, bleibt er still.",
+        "kindDispatchHint": "codeg vergibt die Arbeit unten, ohne den Assistenten zu wecken; das Ergebnis kommt wie gewohnt.",
+        "executor": "Ausführungskonfiguration",
+        "ownExecutor": "Die eigene",
+        "mode": "Art",
+        "modeTask": "Board-Aufgabe",
+        "modeSession": "Arbeitssitzung im Projekt",
+        "modeChat": "Chat",
+        "deliverable": "Ergebnis",
+        "change": "Codeänderung",
+        "report": "Bericht",
+        "project": "Projekt",
+        "pickProject": "Projekt wählen",
+        "anyProject": "Jedes Projekt",
+        "when": "Wann",
+        "schedule": "Nach Zeitplan",
+        "event": "Bei einem Ereignis",
+        "presetDaily": "Täglich 9:00",
+        "presetWeekdays": "Werktags 9:00",
+        "presetWeekly": "Montags 9:00",
+        "custom": "Eigene…",
+        "timezone": "Zeitzone",
+        "ownerZone": "Deine ({zone})",
+        "eventKind": "Ereignis",
+        "issueOrPr": "Issues oder PRs",
+        "issues": "Issues",
+        "prs": "Pull Requests",
+        "label": "Label",
+        "states": "Status (durch Kommas getrennt)",
+        "mine": "Nur eigene Arbeit",
+        "precheck": "Vorher prüfen",
+        "check": {
+          "none": "Immer ausführen",
+          "commits": "Nur bei neuen Commits",
+          "forge_new": "Nur bei neuem Issue oder PR",
+          "items_waiting": "Nur wenn Vorgänge lange warten",
+          "changes": "Nur bei geändertem Arbeitsbaum"
+        },
+        "branch": "Branch (Standard: HEAD)",
+        "hours": "Stunden",
+        "needTitle": "Gib ihr einen Namen.",
+        "needWhat": "Beschreibe, was zu tun ist.",
+        "needCron": "Lege einen Zeitplan fest.",
+        "made": "Routine erstellt; der Probelauf hat begonnen",
+        "saved": "Routine gespeichert",
+        "cancel": "Abbrechen",
+        "save": "Speichern",
+        "saveRun": "Speichern und einmal ausführen"
+      },
+      "card": {
+        "made": "Routine erstellt",
+        "changed": "Routine geändert",
+        "proposal": "Vorgeschlagene Routine",
+        "proposalChange": "Vorgeschlagene Änderung einer Routine",
+        "repeat": "Zur Routine machen?",
+        "paused": "Routine pausiert",
+        "undone": "Rückgängig gemacht",
+        "dismissed": "Nicht jetzt",
+        "resumed": "Fortgesetzt",
+        "madeNote": "Erledigt – sie steht jetzt bei den Routinen.",
+        "action": {
+          "pause": "pausieren",
+          "resume": "fortsetzen",
+          "delete": "löschen",
+          "run_now": "jetzt ausführen",
+          "edit": "ändern"
+        },
+        "repeatBody": "Du hast in 30 Tagen {count}-mal so etwas gebeten.",
+        "pausedExecutor": "Ihre Ausführungskonfiguration wurde gelöscht, deaktiviert oder darf von den Assistenten nicht mehr genutzt werden.",
+        "pausedFailures": "Sie ist dreimal hintereinander fehlgeschlagen.",
+        "trial": "Der Probelauf hat begonnen.",
+        "reason": "Warum: {reason}",
+        "undo": "Rückgängig",
+        "edit": "Bearbeiten",
+        "accept": "Erstellen",
+        "acceptChange": "Übernehmen",
+        "dismiss": "Nicht jetzt",
+        "makeIt": "Zur Routine machen",
+        "useAnother": "Eine andere nehmen",
+        "resume": "Fortsetzen",
+        "open": "Routinen öffnen"
+      }
     }
   }
 }

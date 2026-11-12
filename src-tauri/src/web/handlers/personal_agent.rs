@@ -688,6 +688,84 @@ pub async fn personal_agent_mark_seen(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RoutinesParams {
+    /// The assistant whose; left out, the primary.
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+}
+
+pub async fn personal_agent_routines(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<RoutinesParams>,
+) -> Result<Json<Vec<crate::personal_agent::routines::RoutineView>>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_routines_core(&state.db, params.bot_id).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineRunsParams {
+    pub routine_id: i32,
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
+pub async fn personal_agent_routine_runs(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<RoutineRunsParams>,
+) -> Result<Json<Vec<crate::personal_agent::routines::RunView>>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_routine_runs_core(&state.db, params.routine_id, params.limit).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineSaveParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    #[serde(default)]
+    pub routine_id: Option<i32>,
+    pub draft: crate::personal_agent::routines::Draft,
+    #[serde(default)]
+    pub notice_id: Option<i32>,
+}
+
+pub async fn personal_agent_routine_save(
+    Json(params): Json<RoutineSaveParams>,
+) -> Result<Json<crate::personal_agent::routines::RoutineView>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_routine_save_core(
+            params.bot_id,
+            params.routine_id,
+            params.draft,
+            params.notice_id,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineActParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub routine_id: i32,
+    pub action: String,
+}
+
+pub async fn personal_agent_routine_act(
+    Json(params): Json<RoutineActParams>,
+) -> Result<Json<crate::personal_agent::routines::RoutineView>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_routine_act_core(params.bot_id, params.routine_id, params.action)
+            .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NoticeActParams {
     /// The assistant it is about; left out, the primary.
     #[serde(default)]

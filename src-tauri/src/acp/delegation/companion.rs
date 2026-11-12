@@ -299,7 +299,8 @@ impl CompanionFeatures {
             | "bot_list" | "bot_message" | "prefs_update" | "bot_create" | "overview"
             | "board_status" | "session_list" | "automation_status" | "pr_status"
             | "usage_summary" | "activity_summary" | "acceptance_decide" | "forge_comment"
-            | "issue_close" | "pr_merge" | "bot_update" | "assistant_update" => self.personal_agent,
+            | "issue_close" | "pr_merge" | "bot_update" | "assistant_update" | "routine_list"
+            | "routine_create" | "routine_update" => self.personal_agent,
             "browser_list_tabs" | "browser_snapshot" | "browser_console_messages"
             | "browser_screenshot" | "browser_click" | "browser_hover" | "browser_type"
             | "browser_press_key" | "browser_select_option" | "browser_open_tab"
@@ -1508,7 +1509,8 @@ async fn build_tools_call_spawn(
         | "bot_list" | "bot_message" | "prefs_update" | "bot_create" | "overview"
         | "board_status" | "session_list" | "automation_status" | "pr_status" | "usage_summary"
         | "activity_summary" | "acceptance_decide" | "forge_comment" | "issue_close"
-        | "pr_merge" | "bot_update" | "assistant_update" => {
+        | "pr_merge" | "bot_update" | "assistant_update" | "routine_list" | "routine_create"
+        | "routine_update" => {
             // Shape only: the app owns every rule (which assistants exist,
             // which projects may be targeted, which states allow a
             // follow-up), so the companion forwards the arguments as given.
@@ -5790,7 +5792,7 @@ mod tests {
         computer_clipboard: false,
     };
 
-    const PERSONAL_AGENT_TOOLS: [&str; 26] = [
+    const PERSONAL_AGENT_TOOLS: [&str; 29] = [
         "assistant_list",
         "project_list",
         "dispatch",
@@ -5817,6 +5819,9 @@ mod tests {
         "pr_merge",
         "bot_update",
         "assistant_update",
+        "routine_list",
+        "routine_create",
+        "routine_update",
     ];
 
     #[tokio::test]

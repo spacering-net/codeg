@@ -291,6 +291,12 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     if let (false, Some(n)) = (made.earlier, note) {
                         out.text = format!("{}\n{n}", out.text);
                     }
+                    // The third request like it in a month (6.7).
+                    if !made.earlier {
+                        if let Some(n) = engine.offer_routine_for_dispatch(&made.dispatch).await {
+                            out.text = format!("{}\n{n}", out.text);
+                        }
+                    }
                     out
                 }
                 Ok(Err(card)) => card.outcome("dispatch"),
@@ -329,6 +335,9 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
         "bot_update" => engine.bot_update_call(&args).await,
         "assistant_update" => engine.assistant_update_call(&args).await,
         "bot_list" => engine.bot_list_call().await,
+        "routine_list" => engine.routine_list_call().await,
+        "routine_create" => engine.routine_create_call(&args).await,
+        "routine_update" => engine.routine_update_call(&args).await,
         "overview" => engine.overview_call().await,
         "board_status" => engine.board_status_call(&args).await,
         "session_list" => engine.session_list_call(&args).await,

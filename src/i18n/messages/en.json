@@ -8275,6 +8275,20 @@
         "level_pr": {
           "title": "Other PR news",
           "hint": "Watched pull requests: checks failed or green again, a conflict, merged, closed."
+        },
+        "routine_dispatch": {
+          "title": "Work routines hand out",
+          "hint": "A dispatch routine's work, each time it runs.",
+          "auto": "Hand it out directly",
+          "ask": "Ask me first each time (confirm card)"
+        },
+        "level_routine": {
+          "title": "Routine reports",
+          "hint": "What a routine you set up found."
+        },
+        "level_routine_paused": {
+          "title": "A routine paused",
+          "hint": "Failed three times in a row, or its executor config can't be used."
         }
       },
       "workdir": {
@@ -9008,7 +9022,8 @@
         "status": "Status",
         "today": "Today",
         "matters": "Matters",
-        "data": "Data"
+        "data": "Data",
+        "routines": "Routines"
       },
       "notify": "Notify me",
       "notifyHint": "When it finishes something or waits for you",
@@ -9254,6 +9269,13 @@
         "open": "PR open",
         "merged": "Merged",
         "closed": "Closed"
+      },
+      "routine": {
+        "at": "Routine at {time}",
+        "running": "Routine running",
+        "asked": "Routine waits for you",
+        "reported": "Routine report",
+        "silent": "Routine: no change"
       }
     },
     "meet": {
@@ -9493,6 +9515,159 @@
       "view": "View PR",
       "gotIt": "Got it",
       "unwatch": "Stop watching"
+    },
+    "routines": {
+      "zone": "({zone})",
+      "onEvent": "On: {event}",
+      "withLabel": "label {label}",
+      "mineOnly": "its own work only",
+      "event": {
+        "dispatch_ended": "Dispatched work ends",
+        "task_status": "A board task changes state",
+        "session_waiting": "A session waits for you",
+        "pr_checks_failed": "A watched PR's checks fail",
+        "pr_checks_passed": "A watched PR's checks are green again",
+        "pr_conflict": "A watched PR has a conflict",
+        "pr_mergeable": "A watched PR can be merged",
+        "pr_no_conflict": "A watched PR has no conflict (checks unknown)",
+        "pr_merged": "A watched PR is merged",
+        "pr_closed": "A watched PR is closed",
+        "forge_issue": "A new issue or PR on the forge"
+      },
+      "precheck": {
+        "commits": "only with new commits on {branch}",
+        "forgeIssue": "only with a new issue",
+        "forgePr": "only with a new pull request",
+        "itemsWaiting": "only with matters waiting over {hours} h",
+        "changes": "only when the working tree changed"
+      },
+      "outcome": {
+        "running": "Running",
+        "skipped": "Skipped: nothing new",
+        "silent": "No change",
+        "reported": "Reported",
+        "failed": "Failed",
+        "missed": "Missed",
+        "asked": "Waiting for you",
+        "declined": "Not confirmed",
+        "stopped": "Stopped"
+      },
+      "empty": "No routines yet. Ask it in the conversation to set one up.",
+      "new": "New routine",
+      "kind": {
+        "brain": "The assistant looks",
+        "dispatch": "Hands out work"
+      },
+      "paused": {
+        "owner": "Paused",
+        "failures": "Paused: failed three times in a row",
+        "executor": "Paused: its executor config can't be used"
+      },
+      "next": "Next: {when}",
+      "last": "Last run {when} · {n} runs in all",
+      "runNow": "Run now",
+      "pause": "Pause",
+      "resume": "Resume",
+      "edit": "Edit",
+      "delete": "Delete",
+      "deleteTitle": "Delete this routine?",
+      "deleteDescription": "“{title}” stops running. The work it already handed out is not affected.",
+      "cancel": "Cancel",
+      "weekly": "Do this every week",
+      "reply": "Routine “{title}” · run {seq}",
+      "editor": {
+        "titleNew": "New routine",
+        "titleEdit": "Edit routine",
+        "trialNote": "Once saved it runs once right away, as a trial; after that codeg keeps its rhythm.",
+        "editNote": "Changes apply from its next run.",
+        "name": "Name",
+        "what": "What to do",
+        "whatHint": "E.g. look at last night's CI and tell me what is red",
+        "kind": "How it runs",
+        "kindBrain": "Wake the assistant",
+        "kindDispatch": "Hand out work directly",
+        "kindBrainHint": "It looks and reports; with nothing worth saying it stays quiet.",
+        "kindDispatchHint": "codeg hands out the work below without waking the assistant; the result comes back as usual.",
+        "executor": "Executor config",
+        "ownExecutor": "Its own",
+        "mode": "Way",
+        "modeTask": "Board task",
+        "modeSession": "Work session in the project",
+        "modeChat": "Chat",
+        "deliverable": "Result",
+        "change": "Code change",
+        "report": "Report",
+        "project": "Project",
+        "pickProject": "Pick a project",
+        "anyProject": "Any project",
+        "when": "When",
+        "schedule": "On a schedule",
+        "event": "On an event",
+        "presetDaily": "Every day 9:00",
+        "presetWeekdays": "Weekdays 9:00",
+        "presetWeekly": "Mondays 9:00",
+        "custom": "Custom…",
+        "timezone": "Time zone",
+        "ownerZone": "Yours ({zone})",
+        "eventKind": "Event",
+        "issueOrPr": "Issues or PRs",
+        "issues": "Issues",
+        "prs": "Pull requests",
+        "label": "Label",
+        "states": "States (comma-separated)",
+        "mine": "Only its own work",
+        "precheck": "Look first",
+        "check": {
+          "none": "Always run",
+          "commits": "Only with new commits",
+          "forge_new": "Only with a new issue or PR",
+          "items_waiting": "Only with matters waiting long",
+          "changes": "Only when the working tree changed"
+        },
+        "branch": "Branch (default: HEAD)",
+        "hours": "Hours",
+        "needTitle": "Give it a name.",
+        "needWhat": "Say what it is to do.",
+        "needCron": "Give it a schedule.",
+        "made": "Routine made; its trial run has started",
+        "saved": "Routine saved",
+        "cancel": "Cancel",
+        "save": "Save",
+        "saveRun": "Save and run once"
+      },
+      "card": {
+        "made": "Routine made",
+        "changed": "Routine changed",
+        "proposal": "Suggested routine",
+        "proposalChange": "Suggested change to a routine",
+        "repeat": "Make it a routine?",
+        "paused": "Routine paused",
+        "undone": "Undone",
+        "dismissed": "Not now",
+        "resumed": "Resumed",
+        "madeNote": "Done — it is in the routines now.",
+        "action": {
+          "pause": "pause it",
+          "resume": "resume it",
+          "delete": "delete it",
+          "run_now": "run it now",
+          "edit": "change it"
+        },
+        "repeatBody": "You asked for something like this {count} times in 30 days.",
+        "pausedExecutor": "Its executor config was deleted, turned off, or may no longer be used by the assistants.",
+        "pausedFailures": "It failed three times in a row.",
+        "trial": "Its trial run has started.",
+        "reason": "Why: {reason}",
+        "undo": "Undo",
+        "edit": "Edit",
+        "accept": "Make it",
+        "acceptChange": "Do it",
+        "dismiss": "Not now",
+        "makeIt": "Make it a routine",
+        "useAnother": "Use another",
+        "resume": "Resume",
+        "open": "Open routines"
+      }
     }
   }
 }

@@ -8276,6 +8276,20 @@
         "level_pr": {
           "title": "Otras novedades de PR",
           "hint": "PR vigiladas: comprobaciones fallidas o en verde de nuevo, un conflicto, fusionada, cerrada."
+        },
+        "routine_dispatch": {
+          "title": "Trabajo que encargan las rutinas",
+          "hint": "El trabajo de una rutina de encargo, cada vez que se ejecuta.",
+          "auto": "Encargarlo directamente",
+          "ask": "Preguntarme antes cada vez (tarjeta de confirmación)"
+        },
+        "level_routine": {
+          "title": "Informes de rutinas",
+          "hint": "Lo que encontró una rutina que configuraste."
+        },
+        "level_routine_paused": {
+          "title": "Rutina en pausa",
+          "hint": "Falló tres veces seguidas o no se puede usar su configuración de ejecución."
         }
       },
       "workdir": {
@@ -9008,7 +9022,8 @@
         "status": "Estado",
         "today": "Hoy",
         "matters": "Asuntos",
-        "data": "Datos"
+        "data": "Datos",
+        "routines": "Rutinas"
       },
       "notify": "Avisarme",
       "notifyHint": "Cuando termine algo o te esté esperando",
@@ -9254,6 +9269,13 @@
         "open": "PR abierta",
         "merged": "Fusionada",
         "closed": "Cerrada"
+      },
+      "routine": {
+        "at": "Rutina a las {time}",
+        "running": "Rutina en curso",
+        "asked": "La rutina te espera",
+        "reported": "Informe de rutina",
+        "silent": "Rutina: sin cambios"
       }
     },
     "meet": {
@@ -9493,6 +9515,159 @@
       "view": "Ver PR",
       "gotIt": "Entendido",
       "unwatch": "Dejar de vigilar"
+    },
+    "routines": {
+      "zone": "({zone})",
+      "onEvent": "Al ocurrir: {event}",
+      "withLabel": "etiqueta {label}",
+      "mineOnly": "solo su propio trabajo",
+      "event": {
+        "dispatch_ended": "Termina un trabajo encargado",
+        "task_status": "Una tarea del tablero cambia de estado",
+        "session_waiting": "Una sesión te espera",
+        "pr_checks_failed": "Fallan las comprobaciones de una PR vigilada",
+        "pr_checks_passed": "Las comprobaciones de una PR vigilada vuelven a verde",
+        "pr_conflict": "Una PR vigilada tiene conflictos",
+        "pr_mergeable": "Una PR vigilada se puede fusionar",
+        "pr_no_conflict": "Una PR vigilada no tiene conflictos (comprobaciones desconocidas)",
+        "pr_merged": "Se fusiona una PR vigilada",
+        "pr_closed": "Se cierra una PR vigilada",
+        "forge_issue": "Un issue o PR nuevo en la forja"
+      },
+      "precheck": {
+        "commits": "solo si hay commits nuevos en {branch}",
+        "forgeIssue": "solo si hay un issue nuevo",
+        "forgePr": "solo si hay una PR nueva",
+        "itemsWaiting": "solo si hay asuntos esperando más de {hours} h",
+        "changes": "solo si cambió el árbol de trabajo"
+      },
+      "outcome": {
+        "running": "En curso",
+        "skipped": "Omitida: nada nuevo",
+        "silent": "Sin cambios",
+        "reported": "Informó",
+        "failed": "Falló",
+        "missed": "Perdida",
+        "asked": "Esperándote",
+        "declined": "No confirmada",
+        "stopped": "Detenida"
+      },
+      "empty": "Aún no hay rutinas. Pídele en la conversación que te configure una.",
+      "new": "Nueva rutina",
+      "kind": {
+        "brain": "Lo revisa el asistente",
+        "dispatch": "Encarga trabajo"
+      },
+      "paused": {
+        "owner": "En pausa",
+        "failures": "En pausa: falló tres veces seguidas",
+        "executor": "En pausa: no se puede usar su configuración de ejecución"
+      },
+      "next": "Próxima: {when}",
+      "last": "Última {when} · {n} en total",
+      "runNow": "Ejecutar ahora",
+      "pause": "Pausar",
+      "resume": "Reanudar",
+      "edit": "Editar",
+      "delete": "Eliminar",
+      "deleteTitle": "¿Eliminar esta rutina?",
+      "deleteDescription": "«{title}» deja de ejecutarse. El trabajo que ya encargó no se ve afectado.",
+      "cancel": "Cancelar",
+      "weekly": "Hacer esto cada semana",
+      "reply": "Rutina «{title}» · ejecución {seq}",
+      "editor": {
+        "titleNew": "Nueva rutina",
+        "titleEdit": "Editar rutina",
+        "trialNote": "Al guardarla se ejecuta una vez de prueba; después codeg lleva su ritmo.",
+        "editNote": "Los cambios se aplican desde la próxima ejecución.",
+        "name": "Nombre",
+        "what": "Qué hacer",
+        "whatHint": "P. ej.: revisa el CI de anoche y dime qué está en rojo",
+        "kind": "Cómo se ejecuta",
+        "kindBrain": "Despertar al asistente",
+        "kindDispatch": "Encargar trabajo directamente",
+        "kindBrainHint": "Revisa e informa; si no hay nada que contar, no dice nada.",
+        "kindDispatchHint": "codeg encarga el trabajo de abajo sin despertar al asistente; el resultado llega como siempre.",
+        "executor": "Configuración de ejecución",
+        "ownExecutor": "La suya",
+        "mode": "Modo",
+        "modeTask": "Tarea del tablero",
+        "modeSession": "Sesión de trabajo en el proyecto",
+        "modeChat": "Chat",
+        "deliverable": "Resultado",
+        "change": "Cambio de código",
+        "report": "Informe",
+        "project": "Proyecto",
+        "pickProject": "Elige un proyecto",
+        "anyProject": "Cualquier proyecto",
+        "when": "Cuándo",
+        "schedule": "Según un horario",
+        "event": "Al ocurrir un evento",
+        "presetDaily": "Cada día 9:00",
+        "presetWeekdays": "Laborables 9:00",
+        "presetWeekly": "Lunes 9:00",
+        "custom": "Personalizar…",
+        "timezone": "Zona horaria",
+        "ownerZone": "La tuya ({zone})",
+        "eventKind": "Evento",
+        "issueOrPr": "Issues o PR",
+        "issues": "Issues",
+        "prs": "Pull requests",
+        "label": "Etiqueta",
+        "states": "Estados (separados por comas)",
+        "mine": "Solo su propio trabajo",
+        "precheck": "Mirar antes",
+        "check": {
+          "none": "Ejecutar siempre",
+          "commits": "Solo con commits nuevos",
+          "forge_new": "Solo con un issue o PR nuevo",
+          "items_waiting": "Solo con asuntos esperando mucho",
+          "changes": "Solo si cambió el árbol de trabajo"
+        },
+        "branch": "Rama (por defecto: HEAD)",
+        "hours": "Horas",
+        "needTitle": "Ponle un nombre.",
+        "needWhat": "Indica qué debe hacer.",
+        "needCron": "Ponle un horario.",
+        "made": "Rutina creada; su ejecución de prueba empezó",
+        "saved": "Rutina guardada",
+        "cancel": "Cancelar",
+        "save": "Guardar",
+        "saveRun": "Guardar y ejecutar una vez"
+      },
+      "card": {
+        "made": "Rutina creada",
+        "changed": "Rutina cambiada",
+        "proposal": "Rutina sugerida",
+        "proposalChange": "Cambio sugerido a una rutina",
+        "repeat": "¿Convertirlo en rutina?",
+        "paused": "Rutina en pausa",
+        "undone": "Deshecho",
+        "dismissed": "Ahora no",
+        "resumed": "Reanudada",
+        "madeNote": "Hecho: ya está entre las rutinas.",
+        "action": {
+          "pause": "pausarla",
+          "resume": "reanudarla",
+          "delete": "eliminarla",
+          "run_now": "ejecutarla ahora",
+          "edit": "cambiarla"
+        },
+        "repeatBody": "Pediste algo así {count} veces en 30 días.",
+        "pausedExecutor": "Su configuración de ejecución se eliminó, se desactivó o los asistentes ya no pueden usarla.",
+        "pausedFailures": "Falló tres veces seguidas.",
+        "trial": "Su ejecución de prueba empezó.",
+        "reason": "Por qué: {reason}",
+        "undo": "Deshacer",
+        "edit": "Editar",
+        "accept": "Crearla",
+        "acceptChange": "Hacerlo",
+        "dismiss": "Ahora no",
+        "makeIt": "Convertir en rutina",
+        "useAnother": "Usar otra",
+        "resume": "Reanudar",
+        "open": "Abrir rutinas"
+      }
     }
   }
 }

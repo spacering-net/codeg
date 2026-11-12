@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
 import { cardIdOf } from "@/lib/json-render/pa-spec"
 import type { ItemInfo, TimelineRow } from "@/lib/types"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 const gesture = vi.hoisted(() => ({ trusted: true }))
 vi.mock("./pa-gesture", () => ({ isOwnerGesture: () => gesture.trusted }))
@@ -404,12 +405,26 @@ describe("an assistant's card: pa.open", () => {
           press: { action: "pa.open", params: { target: "session" } },
         }),
         b: button("Somewhere", {
-          press: { action: "pa.open", params: { target: "routine", id: 2 } },
+          press: { action: "pa.open", params: { target: "nowhere", id: 2 } },
         }),
       })
     )
     expect(screen.getByRole("button", { name: "Open" })).toBeDisabled()
     expect(screen.getByRole("button", { name: "Somewhere" })).toBeDisabled()
+  })
+
+  it("opens the details' routines (6.9)", () => {
+    const asked = usePersonalAgentUi.getState().routinesAsked
+    draw(
+      card({
+        a: button("See the routine", {
+          press: { action: "pa.open", params: { target: "routine", id: 2 } },
+        }),
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "See the routine" }))
+    expect(usePersonalAgentUi.getState().routinesAsked).toBe(asked + 1)
+    expect(usePersonalAgentUi.getState().auxTab).toBe("details")
   })
 
   it("opens a session", async () => {

@@ -246,6 +246,11 @@ async fn dispatch_infos(
     let checks = crate::db::service::personal_agent_verification_service::of_checks(&db.conn, &ids)
         .await
         .unwrap_or_default();
+    // The routines whose runs handed them out (6.9).
+    let routines =
+        crate::db::service::personal_agent_routine_service::routines_of_dispatches(&db.conn, &ids)
+            .await
+            .unwrap_or_default();
     let mut out = Vec::with_capacity(rows.len());
     for d in rows {
         let task = d.work_task_id.and_then(|id| tasks.get(&id));
@@ -322,6 +327,7 @@ async fn dispatch_infos(
             acceptance,
             check_for: check.map(|r| r.dispatch_id),
             check_round: check.map(|r| r.round),
+            routine_id: routines.get(&d.id).copied(),
         });
     }
     Ok(out)
@@ -1133,6 +1139,60 @@ pub async fn personal_agent_mark_seen_core(
     }
 }
 
+// ── routines (6.9) ──────────────────────────────────────────────────────────
+
+/// An assistant's routines (the primary's when `bot_id` is left out), with
+/// their latest runs — read from the record, wherever the assistants run.
+pub async fn personal_agent_routines_core(
+    db: &AppDatabase,
+    bot_id: Option<i32>,
+) -> Result<Vec<crate::personal_agent::routines::RoutineView>, AppCommandError> {
+    let bot = resolve_bot(db, bot_id).await?;
+    crate::personal_agent::routines::routines_of(db, Some(bot))
+        .await
+        .map_err(AppCommandError::task_execution_failed)
+}
+
+/// A routine's runs, newest first.
+pub async fn personal_agent_routine_runs_core(
+    db: &AppDatabase,
+    routine_id: i32,
+    limit: Option<u64>,
+) -> Result<Vec<crate::personal_agent::routines::RunView>, AppCommandError> {
+    crate::personal_agent::routines::runs_of(db, routine_id, limit.unwrap_or(30))
+        .await
+        .map_err(AppCommandError::task_execution_failed)
+}
+
+/// The owner saved a routine in the editor: made (and run once as a test)
+/// or changed. `notice_id`: the card it came from, settled with it.
+pub async fn personal_agent_routine_save_core(
+    bot_id: Option<i32>,
+    routine_id: Option<i32>,
+    draft: crate::personal_agent::routines::Draft,
+    notice_id: Option<i32>,
+) -> Result<crate::personal_agent::routines::RoutineView, AppCommandError> {
+    engine(bot_id)
+        .await?
+        .routine_save(routine_id, draft, notice_id)
+        .await
+        .map_err(refused)
+}
+
+/// The owner's buttons on a routine: `run_now`, `pause`, `resume`,
+/// `delete`.
+pub async fn personal_agent_routine_act_core(
+    bot_id: Option<i32>,
+    routine_id: i32,
+    action: String,
+) -> Result<crate::personal_agent::routines::RoutineView, AppCommandError> {
+    engine(bot_id)
+        .await?
+        .routine_act(routine_id, &action)
+        .await
+        .map_err(refused)
+}
+
 /// The owner's answer on a native card (`accept` / `dismiss`).
 pub async fn personal_agent_notice_act_core(
     bot_id: Option<i32>,
@@ -1748,6 +1808,46 @@ pub async fn personal_agent_mark_seen(
     up_to: i32,
 ) -> Result<(), AppCommandError> {
     personal_agent_mark_seen_core(&db, bot_id, up_to).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_routines(
+    db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
+) -> Result<Vec<crate::personal_agent::routines::RoutineView>, AppCommandError> {
+    personal_agent_routines_core(&db, bot_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_routine_runs(
+    db: State<'_, AppDatabase>,
+    routine_id: i32,
+    limit: Option<u64>,
+) -> Result<Vec<crate::personal_agent::routines::RunView>, AppCommandError> {
+    personal_agent_routine_runs_core(&db, routine_id, limit).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_routine_save(
+    bot_id: Option<i32>,
+    routine_id: Option<i32>,
+    draft: crate::personal_agent::routines::Draft,
+    notice_id: Option<i32>,
+) -> Result<crate::personal_agent::routines::RoutineView, AppCommandError> {
+    personal_agent_routine_save_core(bot_id, routine_id, draft, notice_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_routine_act(
+    bot_id: Option<i32>,
+    routine_id: i32,
+    action: String,
+) -> Result<crate::personal_agent::routines::RoutineView, AppCommandError> {
+    personal_agent_routine_act_core(bot_id, routine_id, action).await
 }
 
 #[cfg(feature = "tauri-runtime")]

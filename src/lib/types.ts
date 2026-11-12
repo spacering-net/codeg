@@ -2229,6 +2229,8 @@ export interface DispatchInfo {
   /** For a check codeg sent out: the dispatch it checks, and which round. */
   check_for?: number | null
   check_round?: number | null
+  /** The routine whose run handed it out (6.9). */
+  routine_id?: number | null
 }
 
 /** Where a round of acceptance stands (7.5). */
@@ -2788,6 +2790,8 @@ export interface PersonalAgentPrefs {
   /** A pull request an assistant merges: when its head is the version to
    *  merge and its checks passed; CNB always asks. */
   pr_merge: "auto" | "ask"
+  /** The work a dispatch routine hands out (6.9). */
+  routine_dispatch: "auto" | "ask"
   /** The owner's time zone: `system` (follow the system's) or an IANA
    *  name (1.12). */
   time_zone: string
@@ -2836,6 +2840,8 @@ export interface PersonalAgentPrefs {
   level_forge: PersonalAgentNewsLevel
   level_pr_ready: PersonalAgentNewsLevel
   level_pr: PersonalAgentNewsLevel
+  level_routine: PersonalAgentNewsLevel
+  level_routine_paused: PersonalAgentNewsLevel
 }
 
 /** How much a kind of news may interrupt the owner (6.2). */
@@ -2904,6 +2910,10 @@ export type TodayRowKind =
   | "pr_ready"
   | "pr"
   | "pr_merged"
+  // A routine (6.9): one that runs later today, a run under way, a report.
+  | "routine"
+  | "routine_run"
+  | "routine_report"
 
 export interface TodayRow {
   /** The same thing keeps the same key across reads. */
@@ -2928,6 +2938,8 @@ export interface TodayRow {
   conversation_id: number | null
   item_id: number | null
   notice_id: number | null
+  /** The routine it is, or is a run of (6.9). */
+  routine_id?: number | null
   agent_type: string | null
   /** The owner can take it back here. */
   undo: boolean
@@ -3127,6 +3139,8 @@ export interface BotNeedsYou {
     | "acceptance"
     /** A watched pull request ready to merge (7.4). */
     | "mergeable"
+    /** A routine codeg paused (6.9). */
+    | "routine_paused"
     | string
   text: string
   since: string
@@ -3369,6 +3383,8 @@ export type PersonalAgentChange = { bot_id?: number } & (
   | { kind: "agent" }
   | { kind: "dispatch"; id: number }
   | { kind: "item"; id: number }
+  /** A routine changed, or one of its runs (6.9). */
+  | { kind: "routine"; id: number }
 )
 
 export const PERSONAL_AGENT_CHANGED_EVENT = "personal-agent://changed"
@@ -7681,3 +7697,136 @@ export interface DeepSeekModelCatalog {
    *  fixed, sessions run on the agent's built-in catalog instead. */
   invalid: string | null
 }
+
+// ── routines (6.9) ──────────────────────────────────────────────────────────
+
+/** `brain` wakes its assistant; `dispatch` hands out its template's work. */
+export type RoutineKind = "brain" | "dispatch"
+export type RoutineTrigger = "schedule" | "event"
+
+/** The coding events a routine can run on. */
+export const ROUTINE_EVENT_KINDS = [
+  "dispatch_ended",
+  "task_status",
+  "session_waiting",
+  "pr_checks_failed",
+  "pr_checks_passed",
+  "pr_conflict",
+  "pr_mergeable",
+  "pr_no_conflict",
+  "pr_merged",
+  "pr_closed",
+  "forge_issue",
+] as const
+export type RoutineEventKind = (typeof ROUTINE_EVENT_KINDS)[number]
+
+/** An event trigger: its kind, and which of those events. */
+export interface RoutineEventSpec {
+  kind: RoutineEventKind | string
+  project_id?: number | null
+  /** A dispatch's or a board task's states. */
+  states?: string[]
+  /** Only the assistant's own work. */
+  mine?: boolean
+  /** `forge_issue`: a label, and issues or pull requests. */
+  label?: string | null
+  what?: "issue" | "pr" | null
+}
+
+/** The work a dispatch routine hands out. */
+export interface RoutineDispatchTemplate {
+  assistant_id?: number | null
+  mode?: DispatchMode | null
+  project_id?: number | null
+  title?: string | null
+  prompt?: string | null
+  deliverable?: "change" | "report" | null
+  done_when?: string | null
+  /** In a change: back to the assistant's own executor config. */
+  own_executor?: boolean
+}
+
+/** What a run looks at before it wakes anyone. */
+export type RoutinePrecheck =
+  | { kind: "none" }
+  | { kind: "commits"; project_id: number; branch?: string | null }
+  | {
+      kind: "forge_new"
+      project_id: number
+      what?: "issue" | "pr" | null
+      label?: string | null
+    }
+  | { kind: "items_waiting"; hours: number }
+  | { kind: "changes"; project_id: number }
+
+/** A routine as the editor writes it. */
+export interface RoutineDraft {
+  title?: string | null
+  what?: string | null
+  kind?: RoutineKind | null
+  cron?: string | null
+  /** An IANA zone; left out, the owner's. */
+  timezone?: string | null
+  event?: RoutineEventSpec | null
+  dispatch?: RoutineDispatchTemplate | null
+  precheck?: RoutinePrecheck | null
+}
+
+export type RoutineRunOutcome =
+  | "running"
+  | "skipped"
+  | "silent"
+  | "reported"
+  | "failed"
+  | "missed"
+  | "asked"
+  | "declined"
+  | "stopped"
+
+export interface RoutineRun {
+  id: number
+  routine_id: number
+  seq: number
+  /** `schedule` | `event` | `now` | `trial` */
+  trigger: string
+  due_at: string | null
+  started_at: string
+  ended_at: string | null
+  outcome: RoutineRunOutcome
+  note: string | null
+  dispatch_id: number | null
+  notice_id: number | null
+  /** Its assistant's reply, to scroll to. */
+  row_id: number | null
+}
+
+export interface Routine {
+  id: number
+  bot_id: number
+  title: string
+  what: string
+  kind: RoutineKind
+  trigger: RoutineTrigger
+  cron: string | null
+  /** As set; `null` follows the owner's zone. */
+  timezone: string | null
+  /** The zone it runs in now. */
+  zone: string
+  event: RoutineEventSpec | null
+  dispatch: RoutineDispatchTemplate | null
+  precheck: RoutinePrecheck | null
+  enabled: boolean
+  /** `failures` | `executor` | `owner` */
+  paused_reason: string | null
+  source: string
+  next_run_at: string | null
+  last_run_at: string | null
+  runs: number
+  failures: number
+  created_at: string
+  /** Its latest runs, newest first. */
+  last: RoutineRun[]
+}
+
+/** The owner's buttons on a routine. */
+export type RoutineAction = "run_now" | "pause" | "resume" | "delete"

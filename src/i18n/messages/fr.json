@@ -8276,6 +8276,20 @@
         "level_pr": {
           "title": "Autres nouvelles des PR",
           "hint": "PR surveillées : vérifications en échec ou de nouveau au vert, un conflit, fusionnée, fermée."
+        },
+        "routine_dispatch": {
+          "title": "Travail confié par les routines",
+          "hint": "Le travail qu'une routine de délégation confie à chaque exécution.",
+          "auto": "Le confier directement",
+          "ask": "Me demander à chaque fois (carte de confirmation)"
+        },
+        "level_routine": {
+          "title": "Rapports de routine",
+          "hint": "Ce qu'une routine que vous avez configurée a trouvé."
+        },
+        "level_routine_paused": {
+          "title": "Routine en pause",
+          "hint": "Trois échecs d'affilée, ou sa configuration d'exécution est inutilisable."
         }
       },
       "workdir": {
@@ -9008,7 +9022,8 @@
         "status": "État",
         "today": "Aujourd’hui",
         "matters": "Sujets en cours",
-        "data": "Données"
+        "data": "Données",
+        "routines": "Routines"
       },
       "notify": "Me prévenir",
       "notifyHint": "Quand il termine quelque chose ou vous attend",
@@ -9254,6 +9269,13 @@
         "open": "PR ouverte",
         "merged": "Fusionnée",
         "closed": "Fermée"
+      },
+      "routine": {
+        "at": "Routine à {time}",
+        "running": "Routine en cours",
+        "asked": "La routine vous attend",
+        "reported": "Rapport de routine",
+        "silent": "Routine : aucun changement"
       }
     },
     "meet": {
@@ -9493,6 +9515,159 @@
       "view": "Voir la PR",
       "gotIt": "Compris",
       "unwatch": "Ne plus surveiller"
+    },
+    "routines": {
+      "zone": "({zone})",
+      "onEvent": "Déclencheur : {event}",
+      "withLabel": "libellé {label}",
+      "mineOnly": "son travail uniquement",
+      "event": {
+        "dispatch_ended": "Un travail confié se termine",
+        "task_status": "Une tâche du tableau change d'état",
+        "session_waiting": "Une session vous attend",
+        "pr_checks_failed": "Les vérifications d'une PR surveillée échouent",
+        "pr_checks_passed": "Les vérifications d'une PR surveillée repassent au vert",
+        "pr_conflict": "Une PR surveillée est en conflit",
+        "pr_mergeable": "Une PR surveillée peut être fusionnée",
+        "pr_no_conflict": "Une PR surveillée sans conflit (vérifications inconnues)",
+        "pr_merged": "Une PR surveillée est fusionnée",
+        "pr_closed": "Une PR surveillée est fermée",
+        "forge_issue": "Un nouvel issue ou une nouvelle PR sur la forge"
+      },
+      "precheck": {
+        "commits": "seulement s'il y a de nouveaux commits sur {branch}",
+        "forgeIssue": "seulement s'il y a un nouvel issue",
+        "forgePr": "seulement s'il y a une nouvelle PR",
+        "itemsWaiting": "seulement si des sujets attendent depuis plus de {hours} h",
+        "changes": "seulement si l'arbre de travail a changé"
+      },
+      "outcome": {
+        "running": "En cours",
+        "skipped": "Ignorée : rien de nouveau",
+        "silent": "Aucun changement",
+        "reported": "Rapport fait",
+        "failed": "Échec",
+        "missed": "Manquée",
+        "asked": "Vous attend",
+        "declined": "Non confirmée",
+        "stopped": "Arrêtée"
+      },
+      "empty": "Pas encore de routine. Demandez-lui d'en configurer une dans la conversation.",
+      "new": "Nouvelle routine",
+      "kind": {
+        "brain": "L'assistant regarde",
+        "dispatch": "Confie du travail"
+      },
+      "paused": {
+        "owner": "En pause",
+        "failures": "En pause : trois échecs d'affilée",
+        "executor": "En pause : sa configuration d'exécution est inutilisable"
+      },
+      "next": "Prochaine : {when}",
+      "last": "Dernière {when} · {n} au total",
+      "runNow": "Exécuter maintenant",
+      "pause": "Mettre en pause",
+      "resume": "Reprendre",
+      "edit": "Modifier",
+      "delete": "Supprimer",
+      "deleteTitle": "Supprimer cette routine ?",
+      "deleteDescription": "« {title} » ne s'exécutera plus. Le travail déjà confié n'est pas affecté.",
+      "cancel": "Annuler",
+      "weekly": "Faire ça chaque semaine",
+      "reply": "Routine « {title} » · exécution {seq}",
+      "editor": {
+        "titleNew": "Nouvelle routine",
+        "titleEdit": "Modifier la routine",
+        "trialNote": "Une fois enregistrée, elle s'exécute une fois à l'essai ; ensuite codeg suit son rythme.",
+        "editNote": "Les modifications s'appliquent dès la prochaine exécution.",
+        "name": "Nom",
+        "what": "Quoi faire",
+        "whatHint": "Ex. : regarde la CI de la nuit et dis-moi ce qui est en rouge",
+        "kind": "Comment elle s'exécute",
+        "kindBrain": "Réveiller l'assistant",
+        "kindDispatch": "Confier du travail directement",
+        "kindBrainHint": "Il regarde et rend compte ; s'il n'y a rien à dire, il reste silencieux.",
+        "kindDispatchHint": "codeg confie le travail ci-dessous sans réveiller l'assistant ; le résultat revient comme d'habitude.",
+        "executor": "Configuration d'exécution",
+        "ownExecutor": "La sienne",
+        "mode": "Mode",
+        "modeTask": "Tâche du tableau",
+        "modeSession": "Session de travail dans le projet",
+        "modeChat": "Discussion",
+        "deliverable": "Résultat",
+        "change": "Modification du code",
+        "report": "Rapport",
+        "project": "Projet",
+        "pickProject": "Choisissez un projet",
+        "anyProject": "N'importe quel projet",
+        "when": "Quand",
+        "schedule": "Selon un horaire",
+        "event": "Sur un événement",
+        "presetDaily": "Chaque jour 9:00",
+        "presetWeekdays": "Jours ouvrés 9:00",
+        "presetWeekly": "Le lundi 9:00",
+        "custom": "Personnaliser…",
+        "timezone": "Fuseau horaire",
+        "ownerZone": "La vôtre ({zone})",
+        "eventKind": "Événement",
+        "issueOrPr": "Issues ou PR",
+        "issues": "Issues",
+        "prs": "Pull requests",
+        "label": "Libellé",
+        "states": "États (séparés par des virgules)",
+        "mine": "Uniquement son propre travail",
+        "precheck": "Vérifier d'abord",
+        "check": {
+          "none": "Toujours exécuter",
+          "commits": "Seulement avec de nouveaux commits",
+          "forge_new": "Seulement avec un nouvel issue ou PR",
+          "items_waiting": "Seulement si des sujets attendent longtemps",
+          "changes": "Seulement si l'arbre de travail a changé"
+        },
+        "branch": "Branche (par défaut : HEAD)",
+        "hours": "Heures",
+        "needTitle": "Donnez-lui un nom.",
+        "needWhat": "Indiquez ce qu'elle doit faire.",
+        "needCron": "Définissez un horaire.",
+        "made": "Routine créée ; son exécution d'essai a commencé",
+        "saved": "Routine enregistrée",
+        "cancel": "Annuler",
+        "save": "Enregistrer",
+        "saveRun": "Enregistrer et exécuter une fois"
+      },
+      "card": {
+        "made": "Routine créée",
+        "changed": "Routine modifiée",
+        "proposal": "Routine suggérée",
+        "proposalChange": "Modification suggérée d'une routine",
+        "repeat": "En faire une routine ?",
+        "paused": "Routine en pause",
+        "undone": "Annulé",
+        "dismissed": "Pas maintenant",
+        "resumed": "Reprise",
+        "madeNote": "C'est fait : elle figure dans les routines.",
+        "action": {
+          "pause": "la mettre en pause",
+          "resume": "la reprendre",
+          "delete": "la supprimer",
+          "run_now": "l'exécuter maintenant",
+          "edit": "la modifier"
+        },
+        "repeatBody": "Vous avez demandé quelque chose de semblable {count} fois en 30 jours.",
+        "pausedExecutor": "Sa configuration d'exécution a été supprimée, désactivée ou n'est plus utilisable par les assistants.",
+        "pausedFailures": "Elle a échoué trois fois d'affilée.",
+        "trial": "Son exécution d'essai a commencé.",
+        "reason": "Pourquoi : {reason}",
+        "undo": "Annuler",
+        "edit": "Modifier",
+        "accept": "La créer",
+        "acceptChange": "Appliquer",
+        "dismiss": "Pas maintenant",
+        "makeIt": "En faire une routine",
+        "useAnother": "En utiliser une autre",
+        "resume": "Reprendre",
+        "open": "Ouvrir les routines"
+      }
     }
   }
 }

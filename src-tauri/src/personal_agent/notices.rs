@@ -38,6 +38,14 @@ use crate::db::service::personal_agent_service as svc;
 use crate::db::service::personal_agent_service::{NewNotice, NewRow};
 use crate::models::personal_agent::{PersonalAgentChange, TimelineRow};
 
+/// A routine run's work, held for the owner's confirmation (6.9).
+fn routine_confirm(notice: &notice_entity::Model) -> bool {
+    notice
+        .subject_key
+        .as_deref()
+        .is_some_and(|k| k.starts_with("confirm:routine-run:"))
+}
+
 /// What a card runs when the owner says so.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -299,7 +307,7 @@ impl PersonalAgentEngine {
     }
 
     /// A card holding a checked dispatch.
-    async fn dispatch_card(
+    pub(super) async fn dispatch_card(
         &self,
         v: &ValidDispatch,
         batch_id: Option<i32>,
@@ -477,6 +485,8 @@ impl PersonalAgentEngine {
             // What an assistant does on a forge (7.4).
             NoticeKind::Forge => return self.act_on_forge(&notice, action).await,
             NoticeKind::Pr => return self.act_on_pr(&notice, action).await,
+            // A routine made, changed, suggested, offered or paused (6.9).
+            NoticeKind::Routine => return self.act_on_routine(&notice, action).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.
@@ -499,6 +509,9 @@ impl PersonalAgentEngine {
                 .write_card_row(&notice, "dismissed", Value::Null, None)
                 .await?;
             self.tell_brain(&notice, &proposal, "declined", None).await;
+            if routine_confirm(&notice) {
+                self.routine_card_answered(notice_id, None).await;
+            }
             return Ok(row);
         }
         // Phase one: the card is taken, before anything runs.
@@ -599,6 +612,16 @@ impl PersonalAgentEngine {
             Ok(result) => {
                 self.tell_brain(&notice, &proposal, "approved", result.as_ref())
                     .await;
+                // A routine's run, confirmed: it runs as that work (6.9).
+                if routine_confirm(&notice) {
+                    let made = result
+                        .as_ref()
+                        .and_then(|r| r["dispatch_id"].as_i64())
+                        .and_then(|i| i32::try_from(i).ok());
+                    if made.is_some() {
+                        self.routine_card_answered(notice_id, made).await;
+                    }
+                }
                 self.card_row(&notice).await
             }
             Err(e) => {

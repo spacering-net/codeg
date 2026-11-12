@@ -108,6 +108,9 @@ pub enum DispatchAuth {
     Card { notice_id: i32 },
     /// Outside any delivery and any card (a call that came late, tests).
     Direct,
+    /// A routine's run hands it out (6.9): once per run, whatever repeats
+    /// it. `label` names the routine on its card.
+    Routine { run_id: i32, label: serde_json::Value },
 }
 
 /// What recording a dispatch came to.
@@ -442,8 +445,12 @@ impl PersonalAgentEngine {
         }
         let origin_batch_id = match &auth {
             DispatchAuth::Ledgered { batch_id, .. } => Some(*batch_id),
-            DispatchAuth::Card { .. } => None,
+            DispatchAuth::Card { .. } | DispatchAuth::Routine { .. } => None,
             DispatchAuth::Direct => self.current_batch().await,
+        };
+        let routine_label = match &auth {
+            DispatchAuth::Routine { label, .. } => Some(label.clone()),
+            _ => None,
         };
         let new = NewDispatch {
             bot_id: self.bot().await,
@@ -509,6 +516,16 @@ impl PersonalAgentEngine {
             DispatchAuth::Direct => svc::create_dispatch(&self.db.conn, new)
                 .await
                 .map_err(|e| e.to_string())?,
+            DispatchAuth::Routine { run_id, .. } => {
+                let slot = LedgerSlot::outside(format!("routine-run:{run_id}"));
+                match svc::create_dispatch_ledgered(&self.db.conn, new, &slot, payload, None)
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    Ledgered::New(row) => row,
+                    Ledgered::Earlier(earlier) => return self.earlier_dispatch(&earlier).await,
+                }
+            }
         };
         // The card, then the ledger entry pointing back at it.
         let mut card = NewRow::new(TimelineKind::Dispatch, title.clone());
@@ -525,6 +542,8 @@ impl PersonalAgentEngine {
             "state": row.state,
             // The assistant's acceptance criteria, for the owner to see (7.5).
             "done_when": done_when,
+            // The routine whose run handed it out (6.9).
+            "routine": routine_label,
         }));
         let card = self.push_row(card).await;
         let _ = svc::create_item(
@@ -1304,6 +1323,8 @@ impl PersonalAgentEngine {
             )
             .await;
         }
+        // A routine's run comes to what its work came to (6.9).
+        self.routine_dispatch_ended(d).await;
         if let (DispatchState::Completed, Some(t), Some(host)) =
             (d.state, task.as_ref(), self.host_ref())
         {

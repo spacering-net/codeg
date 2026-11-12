@@ -11517,3 +11517,624 @@ mod against_a_forge {
         .await;
     }
 }
+
+// ── 2.4: routines ───────────────────────────────────────────────────────────
+
+use crate::db::entities::personal_agent_routine_run::RunOutcome;
+use crate::db::service::personal_agent_routine_service as rsvc;
+
+async fn routine_events(engine: &PersonalAgentEngine) -> Vec<crate::db::entities::personal_agent_event::Model> {
+    svc::pending_events(&engine.db.conn, engine.bot().await)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == super::routines::ROUTINE_EVENT)
+        .collect()
+}
+
+async fn routine_cards(engine: &PersonalAgentEngine, what: &str) -> Vec<crate::db::entities::personal_agent_timeline::Model> {
+    notice_rows(engine)
+        .await
+        .into_iter()
+        .filter(|r| data_of(r)["notice"] == "routine" && data_of(r)["what"] == what)
+        .collect()
+}
+
+/// A dispatch's state once codeg's own start of it is over (in a test it
+/// cannot start an agent, so it may fail on its own).
+async fn settled(engine: &PersonalAgentEngine, id: i32) -> crate::db::entities::personal_agent_dispatch::Model {
+    for _ in 0..100 {
+        let d = dispatch_state(engine, id).await;
+        if d.state != DispatchState::Queued {
+            return d;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    dispatch_state(engine, id).await
+}
+
+#[tokio::test]
+async fn a_routine_made_in_words_runs_at_once_then_on_its_schedule_and_says_nothing_when_there_is_nothing() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let out = call(
+        &engine,
+        "routine_create",
+        json!({ "title": "Night CI", "what": "Look at last night's CI; tell me what is red.",
+                "cron": "0 9 * * *", "reason": "the owner asked for it" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert!(out.text.contains("trial run"), "{}", out.text);
+    let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
+    // Made and on, with a card that can undo it, and its trial under way.
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    assert!(r.enabled && r.next_run_at.is_some());
+    assert_eq!(r.runs, 1);
+    let made = routine_cards(&engine, "made").await;
+    assert_eq!(made.len(), 1);
+    assert_eq!(data_of(&made[0])["routine"]["id"], id);
+    assert_eq!(data_of(&made[0])["reason"], "the owner asked for it");
+    let runs = rsvc::runs_of(&engine.db.conn, id, 10).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!((runs[0].trigger.as_str(), runs[0].outcome, runs[0].seq), ("trial", RunOutcome::Running, 1));
+    let events = routine_events(&engine).await;
+    assert_eq!(events.len(), 1);
+    assert!(events[0].wake);
+    assert_eq!(runs[0].event_id, Some(events[0].id));
+
+    // Its turn says which run it is and that codeg keeps the rhythm; with
+    // nothing to say, nothing is shown.
+    let (mut rx, state) = live_connection(&engine, seg, "pa-ro1").await;
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains(&format!("Routine #{id} \"Night CI\" — run 1")), "{prompt}");
+    assert!(prompt.contains("do not schedule it yourself"), "{prompt}");
+    assert!(prompt.contains("a routine of yours came round"), "{prompt}");
+    let batch = rsvc::get_run(&engine.db.conn, runs[0].id).await.unwrap().unwrap().batch_id.expect("on its way");
+    let b = svc::get_batch(&engine.db.conn, batch).await.unwrap().unwrap();
+    assert_eq!(b.trigger, Some(crate::db::entities::personal_agent_batch::BatchTrigger::Routine));
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-ro1", text("[[silent]]"), true).await;
+    emit(&engine, &state, "pa-ro1", turn_complete("end_turn"), true).await;
+    let reply = svc::reply_row_of_batch(&engine.db.conn, batch).await.unwrap().unwrap();
+    assert!(svc::is_discarded(&reply), "not shown: {:?}", reply.data);
+    assert_eq!(data_of(&reply)["routine"]["id"], id);
+    let run = rsvc::get_run(&engine.db.conn, runs[0].id).await.unwrap().unwrap();
+    assert_eq!(run.outcome, RunOutcome::Silent);
+    let unseen = svc::count_unseen(&engine.db.conn, engine.bot().await).await.unwrap();
+    // Only the made card is new to the owner.
+    assert_eq!(unseen, 1);
+
+    // Its time comes: once, run 2, which reports.
+    let due = r.next_run_at.unwrap();
+    engine.routine_tick(due - chrono::Duration::seconds(1)).await;
+    assert_eq!(rsvc::runs_of(&engine.db.conn, id, 10).await.unwrap().len(), 1, "not yet");
+    engine.routine_tick(due + chrono::Duration::seconds(5)).await;
+    engine.routine_tick(due + chrono::Duration::seconds(20)).await;
+    let runs = rsvc::runs_of(&engine.db.conn, id, 10).await.unwrap();
+    assert_eq!(runs.len(), 2, "once");
+    assert_eq!((runs[0].trigger.as_str(), runs[0].seq, runs[0].due_at), ("schedule", 2, Some(due)));
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(r.next_run_at, Some(due + chrono::Duration::days(1)));
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains("run 2"), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-ro1", text("Two jobs are red on main."), true).await;
+    emit(&engine, &state, "pa-ro1", turn_complete("end_turn"), true).await;
+    let run = rsvc::get_run(&engine.db.conn, runs[0].id).await.unwrap().unwrap();
+    assert_eq!(run.outcome, RunOutcome::Reported);
+    let reply = svc::reply_row_of_batch(&engine.db.conn, run.batch_id.unwrap()).await.unwrap().unwrap();
+    assert!(!svc::is_discarded(&reply));
+    assert_eq!(data_of(&reply)["routine"]["seq"], 2);
+    // The page reads it with its latest runs.
+    let views = super::routines::routines_of(&engine.db, Some(engine.bot().await)).await.unwrap();
+    assert_eq!(views[0].last[0].outcome, RunOutcome::Reported);
+    assert_eq!(views[0].last[0].row_id, Some(reply.id));
+}
+
+#[tokio::test]
+async fn a_look_first_that_finds_nothing_wakes_no_one_and_a_time_slept_through_is_missed() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let out = call(
+        &engine,
+        "routine_create",
+        json!({ "title": "Stale matters", "what": "Chase what waits.", "cron": "0 9 * * *",
+                "precheck": { "kind": "items_waiting", "hours": 4 } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
+    // The trial does not look first.
+    assert_eq!(rsvc::runs_of(&engine.db.conn, id, 10).await.unwrap()[0].outcome, RunOutcome::Running);
+    assert_eq!(routine_events(&engine).await.len(), 1);
+    // Its time: nothing waits that long — skipped, no one woken.
+    let due = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap().next_run_at.unwrap();
+    engine.routine_tick(due + chrono::Duration::seconds(10)).await;
+    let runs = rsvc::runs_of(&engine.db.conn, id, 10).await.unwrap();
+    assert_eq!((runs[0].trigger.as_str(), runs[0].outcome, runs[0].seq), ("schedule", RunOutcome::Skipped, 0));
+    assert!(runs[0].note.as_deref().unwrap().contains("No matter has waited"), "{:?}", runs[0].note);
+    assert_eq!(routine_events(&engine).await.len(), 1, "no one woken");
+    // A matter waiting five hours: the next time runs, as run 2.
+    let item = svc::create_item(&engine.db.conn, bot, ItemKind::Question, None, ItemStatus::Open, Some(WaitsFor::Owner), "Which DB?".into(), None, None)
+        .await
+        .unwrap();
+    let mut am: crate::db::entities::personal_agent_item::ActiveModel = item.into();
+    am.created_at = Set(chrono::Utc::now() - chrono::Duration::hours(5));
+    am.update(&engine.db.conn).await.unwrap();
+    let due = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap().next_run_at.unwrap();
+    engine.routine_tick(due + chrono::Duration::seconds(10)).await;
+    let runs = rsvc::runs_of(&engine.db.conn, id, 10).await.unwrap();
+    assert_eq!((runs[0].outcome, runs[0].seq), (RunOutcome::Running, 2));
+    assert_eq!(routine_events(&engine).await.len(), 2);
+    let ev = routine_events(&engine).await.into_iter().find(|e| e.id == runs[0].event_id.unwrap()).unwrap();
+    assert!(ev.summary.contains("1 matter(s) have waited over 4 h"), "{}", ev.summary);
+    // The machine slept three hours past the next: missed, not made up for.
+    let due = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap().next_run_at.unwrap();
+    engine.routine_tick(due + chrono::Duration::hours(3)).await;
+    let runs = rsvc::runs_of(&engine.db.conn, id, 10).await.unwrap();
+    assert_eq!(runs[0].outcome, RunOutcome::Missed);
+    assert!(runs[0].note.as_deref().unwrap().contains("1 time(s)"), "{:?}", runs[0].note);
+    assert_eq!(routine_events(&engine).await.len(), 2, "not run");
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(r.next_run_at, Some(due + chrono::Duration::days(1)), "goes on as usual");
+}
+
+#[tokio::test]
+async fn a_dispatch_routine_hands_out_its_work_itself_or_asks_first_when_the_owner_says_so() {
+    let (engine, _tmp) = configured().await;
+    let researcher = role_assistant(&engine, "Researcher", true).await;
+    let out = call(
+        &engine,
+        "routine_create",
+        json!({ "title": "Deps check", "what": "Check the dependencies for security updates.",
+                "kind": "dispatch", "cron": "0 9 * * 1",
+                "dispatch": { "assistant_id": researcher, "mode": "chat" } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
+    let run = rsvc::runs_of(&engine.db.conn, id, 1).await.unwrap().remove(0);
+    let d_id = run.dispatch_id.expect("handed out");
+    let d = dispatch_state(&engine, d_id).await;
+    assert_eq!(d.executor_assistant_id, researcher);
+    assert!(d.prompt.contains("This is run 1 of the routine \"Deps check\""), "{}", d.prompt);
+    assert!(routine_events(&engine).await.is_empty(), "no one woken");
+    let card = svc::page(&engine.db.conn, engine.bot().await, None, 100)
+        .await
+        .unwrap()
+        .0
+        .into_iter()
+        .find(|r| r.kind == TimelineKind::Dispatch && r.dispatch_id == Some(d_id))
+        .expect("its card");
+    assert_eq!(data_of(&card)["routine"]["id"], id);
+    // Not a "make it a routine" result: its routine is on it.
+    let infos = crate::commands::personal_agent::personal_agent_dispatches_core(&engine.db, Some(engine.bot().await), None, None, Some(vec![d_id]))
+        .await
+        .unwrap();
+    assert_eq!(infos[0].routine_id, Some(id));
+    // Its work done: reported.
+    let d = settled(&engine, d_id).await;
+    engine
+        .routine_dispatch_ended(&crate::db::entities::personal_agent_dispatch::Model { state: DispatchState::Completed, ..d })
+        .await;
+    assert_eq!(rsvc::get_run(&engine.db.conn, run.id).await.unwrap().unwrap().outcome, RunOutcome::Reported);
+
+    // "Routine dispatches: ask me first": a confirm card; confirmed, it runs.
+    engine
+        .apply_settings(&[change("prefs.routine_dispatch", json!("ask"))])
+        .await
+        .unwrap();
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    let asked = engine.run_now(r, "now").await.unwrap();
+    assert_eq!(asked.outcome, RunOutcome::Asked);
+    let notice = svc::get_notice(&engine.db.conn, asked.notice_id.unwrap()).await.unwrap().unwrap();
+    assert_eq!(notice.subject_key.as_deref(), Some(format!("confirm:routine-run:{}", asked.id).as_str()));
+    assert_eq!(all_dispatches(&engine).await.len(), 1, "nothing handed out yet");
+    engine.act_on_notice(notice.id, "accept").await.unwrap();
+    let after = rsvc::get_run(&engine.db.conn, asked.id).await.unwrap().unwrap();
+    assert_eq!(after.outcome, RunOutcome::Running);
+    assert!(after.dispatch_id.is_some());
+    // Declined: the run says so.
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    let asked = engine.run_now(r, "now").await.unwrap();
+    engine.act_on_notice(asked.notice_id.unwrap(), "dismiss").await.unwrap();
+    assert_eq!(rsvc::get_run(&engine.db.conn, asked.id).await.unwrap().unwrap().outcome, RunOutcome::Declined);
+}
+
+#[tokio::test]
+async fn three_failed_runs_in_a_row_or_an_executor_that_is_gone_pause_a_routine() {
+    let (engine, _tmp) = configured().await;
+    let researcher = role_assistant(&engine, "Researcher", true).await;
+    let out = call(
+        &engine,
+        "routine_create",
+        json!({ "title": "Deps check", "what": "Check the dependencies.", "kind": "dispatch",
+                "cron": "0 9 * * 1", "dispatch": { "assistant_id": researcher, "mode": "chat" } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
+    for i in 0..3 {
+        let run = rsvc::runs_of(&engine.db.conn, id, 1).await.unwrap().remove(0);
+        let d = settled(&engine, run.dispatch_id.unwrap()).await;
+        engine
+            .routine_dispatch_ended(&crate::db::entities::personal_agent_dispatch::Model {
+                state: DispatchState::Failed,
+                error: Some("boom".into()),
+                ..d
+            })
+            .await;
+        assert_eq!(rsvc::get_run(&engine.db.conn, run.id).await.unwrap().unwrap().outcome, RunOutcome::Failed);
+        if i < 2 {
+            let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+            assert!(r.enabled, "still on after {} failure(s)", i + 1);
+            engine.run_now(r, "now").await.unwrap();
+        }
+    }
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    assert!(!r.enabled);
+    assert_eq!(r.paused_reason.as_deref(), Some("failures"));
+    let paused = routine_cards(&engine, "paused").await;
+    assert_eq!(paused.len(), 1);
+    let notice = svc::get_notice(&engine.db.conn, notice_id_of(&paused[0])).await.unwrap().unwrap();
+    assert_eq!(notice.level, crate::db::entities::personal_agent_notice::NoticeLevel::Urgent);
+    assert!(data_of(&paused[0])["why"].as_str().unwrap().contains("boom"));
+    // It waits on the owner.
+    let live = super::live::needs_for_test(&engine.db, engine.bot().await).await;
+    assert!(live.iter().any(|n| n.kind == "routine_paused"), "{live:?}");
+    // Resumed from its card.
+    engine.act_on_notice(notice.id, "resume").await.unwrap();
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    assert!(r.enabled && r.failures == 0 && r.paused_reason.is_none());
+    // Its executor config deleted: paused at the clock's next look, and it
+    // cannot be resumed while that stands.
+    crate::db::service::assistant_service::soft_delete(&engine.db.conn, researcher).await.unwrap();
+    engine.routine_tick(super::clock::now()).await;
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!((r.enabled, r.paused_reason.as_deref()), (false, Some("executor")));
+    let paused = routine_cards(&engine, "paused").await;
+    let last = paused.last().unwrap();
+    assert_eq!(data_of(last)["reason"], "executor");
+    assert!(engine.act_on_notice(notice_id_of(last), "resume").await.is_err());
+}
+
+#[tokio::test]
+async fn an_event_routine_runs_once_for_each_event_it_fits_and_not_for_work_it_handed_out() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let out = call(
+        &engine,
+        "routine_create",
+        json!({ "title": "Failed work", "what": "Look at why it failed and tell me.",
+                "event": { "kind": "dispatch_ended", "states": ["failed"] } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
+    let failed = session_dispatch(&engine, DispatchState::Failed, "conn-ev1").await;
+    super::watch::signal(&engine.db, "dispatch_ended", format!("dispatch:{failed}:0:failed"), Some(bot), None,
+        json!({ "dispatch_id": failed, "title": "Investigate", "state": "failed" })).await;
+    super::watch::signal(&engine.db, "dispatch_ended", format!("dispatch:{failed}:1:completed"), Some(bot), None,
+        json!({ "dispatch_id": failed, "title": "Investigate", "state": "completed" })).await;
+    engine.routine_tick(super::clock::now()).await;
+    engine.routine_tick(super::clock::now()).await;
+    let runs: Vec<_> = rsvc::runs_of(&engine.db.conn, id, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.trigger == "event")
+        .collect();
+    assert_eq!(runs.len(), 1, "once, and only the one it fits");
+    assert!(runs[0].event_key.as_deref().unwrap().starts_with("signal:"));
+    assert!(runs[0].note.as_deref().unwrap().contains("ended: failed"));
+    let ev = routine_events(&engine).await.into_iter().find(|e| Some(e.id) == runs[0].event_id).unwrap();
+    assert!(ev.summary.contains("The event: dispatch #"), "{}", ev.summary);
+    // Work its own run handed out does not set it off again.
+    let seg = open_segment(&engine).await;
+    let b = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None).await.unwrap();
+    rsvc::update_run(&engine.db.conn, runs[0].id, None, rsvc::RunWrite { batch_id: Some(Some(b.id)), ..Default::default() })
+        .await
+        .unwrap();
+    let mine = session_dispatch(&engine, DispatchState::Failed, "conn-ev2").await;
+    svc::update_dispatch(&engine.db.conn, mine, None, DispatchWrite { ..Default::default() }).await.unwrap();
+    {
+        use sea_orm::{ActiveModelTrait, Set};
+        let d = dispatch_state(&engine, mine).await;
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = d.into();
+        am.origin_batch_id = Set(Some(b.id));
+        am.update(&engine.db.conn).await.unwrap();
+    }
+    super::watch::signal(&engine.db, "dispatch_ended", format!("dispatch:{mine}:0:failed"), Some(bot), None,
+        json!({ "dispatch_id": mine, "title": "Investigate", "state": "failed" })).await;
+    engine.routine_tick(super::clock::now()).await;
+    let events_runs = rsvc::runs_of(&engine.db.conn, id, 10).await.unwrap().into_iter().filter(|r| r.trigger == "event").count();
+    assert_eq!(events_runs, 1, "its own work is not an event for it");
+}
+
+#[tokio::test]
+async fn a_suggested_routine_is_made_when_the_owner_says_so_and_changes_are_undone_from_their_cards() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let out = call(
+        &engine,
+        "routine_create",
+        json!({ "title": "Weekly deps", "what": "Check the dependencies for updates.", "cron": "0 9 * * 1",
+                "suggest": true, "reason": "you check them every Monday" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert!(rsvc::list_of(&engine.db.conn, bot).await.unwrap().is_empty(), "nothing made yet");
+    let notice = out.data["notice_id"].as_i64().unwrap() as i32;
+    let row = engine.act_on_notice(notice, "accept").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "made");
+    let list = rsvc::list_of(&engine.db.conn, bot).await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].source, "suggest");
+    assert_eq!(rsvc::runs_of(&engine.db.conn, list[0].id, 5).await.unwrap()[0].trigger, "trial");
+    assert!(engine.act_on_notice(notice, "accept").await.is_err(), "answered already");
+    let id = list[0].id;
+    // Paused as the owner said, then undone from its card.
+    let out = call(&engine, "routine_update", json!({ "routine_id": id, "action": "pause" })).await;
+    assert!(out.ok, "{}", out.text);
+    assert!(!rsvc::get(&engine.db.conn, id).await.unwrap().unwrap().enabled);
+    engine.act_on_notice(out.data["notice_id"].as_i64().unwrap() as i32, "undo").await.unwrap();
+    assert!(rsvc::get(&engine.db.conn, id).await.unwrap().unwrap().enabled);
+    // A new time, undone.
+    let out = call(&engine, "routine_update", json!({ "routine_id": id, "cron": "30 10 * * 2" })).await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(rsvc::get(&engine.db.conn, id).await.unwrap().unwrap().cron.as_deref(), Some("30 10 * * 2"));
+    engine.act_on_notice(out.data["notice_id"].as_i64().unwrap() as i32, "undo").await.unwrap();
+    assert_eq!(rsvc::get(&engine.db.conn, id).await.unwrap().unwrap().cron.as_deref(), Some("0 9 * * 1"));
+    // Run now.
+    let out = call(&engine, "routine_update", json!({ "routine_id": id, "action": "run_now" })).await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(rsvc::runs_of(&engine.db.conn, id, 1).await.unwrap()[0].trigger, "now");
+    // A suggested change: made only once the owner says so.
+    let out = call(&engine, "routine_update", json!({ "routine_id": id, "action": "pause", "suggest": true })).await;
+    assert!(out.ok, "{}", out.text);
+    assert!(rsvc::get(&engine.db.conn, id).await.unwrap().unwrap().enabled);
+    engine.act_on_notice(out.data["notice_id"].as_i64().unwrap() as i32, "accept").await.unwrap();
+    assert!(!rsvc::get(&engine.db.conn, id).await.unwrap().unwrap().enabled);
+    // Made in words, undone: gone.
+    let out = call(&engine, "routine_create", json!({ "title": "Tmp", "what": "x", "cron": "0 8 * * *" })).await;
+    let tmp_id = out.data["routine"]["id"].as_i64().unwrap() as i32;
+    engine.act_on_notice(out.data["notice_id"].as_i64().unwrap() as i32, "undo").await.unwrap();
+    assert!(rsvc::get_of(&engine.db.conn, bot, tmp_id).await.unwrap().is_none());
+    // The list says what is left.
+    let list = call(&engine, "routine_list", json!({})).await;
+    assert!(list.text.contains("Weekly deps") && !list.text.contains("\"Tmp\""), "{}", list.text);
+    // Refusals say why.
+    let bad = call(&engine, "routine_create", json!({ "title": "x", "what": "y" })).await;
+    assert!(!bad.ok && bad.text.contains("`cron`"), "{}", bad.text);
+    let bad = call(&engine, "routine_create", json!({ "title": "x", "what": "y", "cron": "nope" })).await;
+    assert!(!bad.ok, "{}", bad.text);
+}
+
+#[tokio::test]
+async fn the_third_request_alike_in_a_month_is_offered_as_a_routine_once() {
+    let (engine, _tmp) = configured().await;
+    // The owner's own words, three times alike.
+    for _ in 0..3 {
+        engine
+            .send_owner_message("Summarize yesterday's merged pull requests".into(), Vec::new(), None)
+            .await
+            .unwrap();
+    }
+    let offers = routine_cards(&engine, "repeat").await;
+    assert_eq!(offers.len(), 1);
+    assert_eq!(data_of(&offers[0])["from"], "message");
+    assert_eq!(data_of(&offers[0])["draft"]["kind"], "brain");
+    // Work handed out three times alike.
+    let researcher = role_assistant(&engine, "Researcher", true).await;
+    let titles = [
+        "Check deps for security updates",
+        "Check the deps for security updates",
+        "Check deps for security updates again",
+        "Check deps for security updates now",
+    ];
+    for (i, title) in titles.iter().enumerate() {
+        owner_turn(&engine, "pa-rep").await;
+        let out = call(
+            &engine,
+            "dispatch",
+            json!({ "mode": "chat", "assistant_id": researcher, "title": title, "prompt": "Look at Cargo.lock." }),
+        )
+        .await;
+        assert!(out.ok, "{}", out.text);
+        assert_eq!(out.text.contains("offering to make it a routine"), i == 2, "{i}: {}", out.text);
+    }
+    let offers = routine_cards(&engine, "repeat").await;
+    assert_eq!(offers.len(), 2, "once each");
+    let d = data_of(&offers[1]);
+    assert_eq!(d["from"], "dispatch");
+    assert_eq!(d["draft"]["kind"], "dispatch");
+    assert_eq!(d["draft"]["dispatch"]["assistant_id"], researcher);
+    // [Make it a routine] saves from the editor, settling the card.
+    let draft: super::routines::Draft = serde_json::from_value(d["draft"].clone()).unwrap();
+    let saved = engine.routine_save(None, draft, Some(notice_id_of(&offers[1]))).await.unwrap();
+    assert_eq!(saved.source, "card");
+    let offers = routine_cards(&engine, "repeat").await;
+    assert_eq!(data_of(&offers[1])["state"], "made");
+}
+
+#[tokio::test]
+async fn the_night_cleaner_comes_with_a_nightly_routine_that_goes_with_it() {
+    let (engine, tmp) = ready().await;
+    let made = engine.create_bot(BotSpec::named("Night cleaner")).await.unwrap();
+    assert_eq!(made.template, "cleanup");
+    let w = made.bot.id;
+    let list = rsvc::list_of(&engine.db.conn, w).await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].cron.as_deref(), Some(super::routines::NIGHTLY_CRON));
+    assert!(list[0].trial_pending && list[0].enabled);
+    // Its trial waits while its opening card asks for its scope.
+    let worker = engine_of(&engine, &tmp, w);
+    let asking = svc::notices_in_state(&engine.db.conn, w, crate::db::entities::personal_agent_notice::NoticeState::Open)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|n| n.kind == crate::db::entities::personal_agent_notice::NoticeKind::Choice);
+    if let Some(n) = asking {
+        worker.routine_tick(super::clock::now()).await;
+        assert!(rsvc::runs_of(&engine.db.conn, list[0].id, 5).await.unwrap().is_empty(), "waits for its scope");
+        svc::move_notice(&engine.db.conn, n.id, &[crate::db::entities::personal_agent_notice::NoticeState::Open], crate::db::entities::personal_agent_notice::NoticeState::Acted)
+            .await
+            .unwrap();
+    }
+    worker.routine_tick(super::clock::now()).await;
+    let runs = rsvc::runs_of(&engine.db.conn, list[0].id, 5).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].trigger, "trial");
+    let r = rsvc::get(&engine.db.conn, list[0].id).await.unwrap().unwrap();
+    assert!(!r.trial_pending && r.next_run_at.is_some());
+    // Deleted with it.
+    engine.delete_bot(w, &BotDeleteOptions::default(), Some(worker.clone())).await.unwrap();
+    assert!(rsvc::list_of(&engine.db.conn, w).await.unwrap().is_empty());
+    assert!(rsvc::runs_of(&engine.db.conn, list[0].id, 5).await.unwrap().is_empty());
+}
+
+// ── 2.4, review round 1 regressions ─────────────────────────────────────────
+
+#[tokio::test]
+async fn undoing_a_change_puts_back_what_the_routine_did_not_have() {
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "routine_create", json!({ "title": "Night CI", "what": "Look at CI.", "cron": "0 9 * * *" })).await;
+    let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!((r.timezone.as_deref(), r.precheck.as_deref()), (None, None));
+    let out = call(
+        &engine,
+        "routine_update",
+        json!({ "routine_id": id, "timezone": "America/New_York", "precheck": { "kind": "items_waiting", "hours": 2 } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(r.timezone.as_deref(), Some("America/New_York"));
+    assert!(r.precheck.is_some());
+    engine.act_on_notice(out.data["notice_id"].as_i64().unwrap() as i32, "undo").await.unwrap();
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(r.timezone, None, "back in the owner's zone");
+    assert_eq!(r.precheck, None, "no look first, as before");
+}
+
+#[tokio::test]
+async fn changing_a_dispatch_routine_keeps_what_its_template_had() {
+    let (engine, _tmp) = configured().await;
+    let researcher = role_assistant(&engine, "Researcher", true).await;
+    let other = role_assistant(&engine, "Other", true).await;
+    let out = call(
+        &engine,
+        "routine_create",
+        json!({ "title": "Deps", "what": "Check deps.", "kind": "dispatch", "cron": "0 9 * * 1",
+                "dispatch": { "assistant_id": researcher, "mode": "chat", "prompt": "Run cargo audit and list advisories.",
+                              "done_when": "- every advisory listed" } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
+    // The editor's save: the executor and the time, as it shows them.
+    engine
+        .routine_save(
+            Some(id),
+            serde_json::from_value(json!({ "title": "Deps", "what": "Check deps.", "kind": "dispatch", "cron": "0 10 * * 1",
+                "timezone": "owner", "event": null, "precheck": { "kind": "none" },
+                "dispatch": { "assistant_id": other, "mode": "chat", "project_id": null, "deliverable": null } }))
+            .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    let t = super::routines::template_of(&r).unwrap();
+    assert_eq!(t.assistant_id, Some(other));
+    assert_eq!(t.prompt.as_deref(), Some("Run cargo audit and list advisories."));
+    assert_eq!(t.done_when.as_deref(), Some("- every advisory listed"));
+    assert_eq!(r.cron.as_deref(), Some("0 10 * * 1"));
+}
+
+#[tokio::test]
+async fn a_session_waiting_is_the_work_it_belongs_to() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let out = call(
+        &engine,
+        "routine_create",
+        json!({ "title": "Waits", "what": "See what waits.", "event": { "kind": "session_waiting", "mine": true } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
+    let event_runs = |engine: Arc<PersonalAgentEngine>| async move {
+        rsvc::runs_of(&engine.db.conn, id, 20).await.unwrap().into_iter().filter(|r| r.trigger == "event").count()
+    };
+    // Its own work's session waits: it is this assistant's — no dispatch
+    // named, found by the conversation.
+    let mine = session_dispatch(&engine, DispatchState::WaitingInput, "conn-sw1").await;
+    svc::update_dispatch(&engine.db.conn, mine, None, DispatchWrite { conversation_id: Some(901), ..Default::default() })
+        .await
+        .unwrap();
+    super::watch::signal(&engine.db, "session_waiting", "session:conn-sw1:1".into(), None, None,
+        json!({ "conversation_id": 901, "connection_id": "conn-sw1", "what": "permission" })).await;
+    // A session nobody of codeg's handed out: not its own.
+    super::watch::signal(&engine.db, "session_waiting", "session:conn-sw2:1".into(), None, None,
+        json!({ "conversation_id": 902, "connection_id": "conn-sw2", "what": "question" })).await;
+    engine.routine_tick(super::clock::now()).await;
+    assert_eq!(event_runs(engine.clone()).await, 1, "only its own work's session");
+    // A session of work this routine handed out does not set it off again.
+    let run = rsvc::runs_of(&engine.db.conn, id, 1).await.unwrap().remove(0);
+    let handed = session_dispatch(&engine, DispatchState::WaitingInput, "conn-sw3").await;
+    rsvc::update_run(&engine.db.conn, run.id, None, rsvc::RunWrite { dispatch_id: Some(Some(handed)), ..Default::default() })
+        .await
+        .unwrap();
+    svc::update_dispatch(&engine.db.conn, handed, None, DispatchWrite { conversation_id: Some(903), ..Default::default() })
+        .await
+        .unwrap();
+    super::watch::signal(&engine.db, "session_waiting", "session:conn-sw3:1".into(), Some(bot), None,
+        json!({ "conversation_id": 903, "connection_id": "conn-sw3", "what": "permission" })).await;
+    engine.routine_tick(super::clock::now()).await;
+    assert_eq!(event_runs(engine.clone()).await, 1, "its own work is not an event for it");
+}
+
+// ── 2.4, review round 2 regressions ─────────────────────────────────────────
+
+#[tokio::test]
+async fn a_work_assistants_routine_can_go_back_to_its_own_executor_config() {
+    let (engine, tmp) = ready().await;
+    let made = engine.create_bot(BotSpec::named("Researcher")).await.unwrap();
+    let worker = engine_of(&engine, &tmp, made.bot.id);
+    let other = role_assistant(&engine, "Other", true).await;
+    let out = call(
+        &worker,
+        "routine_create",
+        json!({ "title": "Deps", "what": "Check deps.", "kind": "dispatch", "cron": "0 9 * * 1",
+                "dispatch": { "assistant_id": other, "mode": "chat", "prompt": "Run cargo audit." } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
+    // The editor: "its own".
+    worker
+        .routine_save(
+            Some(id),
+            serde_json::from_value(json!({ "title": "Deps", "what": "Check deps.", "kind": "dispatch", "cron": "0 9 * * 1",
+                "timezone": "owner", "event": null, "precheck": { "kind": "none" },
+                "dispatch": { "assistant_id": null, "own_executor": true, "mode": "chat", "project_id": null, "deliverable": null } }))
+            .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
+    let t = super::routines::template_of(&r).unwrap();
+    assert_eq!(t.assistant_id, None, "its own, not the one it named");
+    assert_eq!(t.prompt.as_deref(), Some("Run cargo audit."), "the rest stays");
+    // Run: handed to the work assistant's own executor config.
+    let run = worker.run_now(r, "now").await.unwrap();
+    let d = dispatch_state(&engine, run.dispatch_id.expect("handed out")).await;
+    assert_eq!(d.executor_assistant_id, made.executor.id);
+}
