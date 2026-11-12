@@ -729,7 +729,7 @@ pub const ANTIGRAVITY_INTERACTION_ID_PREFIX: &str = "interaction_";
 /// True when `id` has the shape of an antigravity-acp question's tool call id
 /// (see [`ANTIGRAVITY_INTERACTION_ID_PREFIX`]). The prefix alone says nothing
 /// about the agent, so callers must also check that the connection is
-/// Antigravity's.
+/// antigravity-acp's (`SessionState::antigravity_interactions`).
 pub fn is_antigravity_interaction_id(id: &str) -> bool {
     id.strip_prefix(ANTIGRAVITY_INTERACTION_ID_PREFIX)
         .is_some_and(|rest| !rest.is_empty())
@@ -744,7 +744,7 @@ pub struct AntigravityAsk {
 
 /// 识别 antigravity-acp 1.4.1 的交互请求，而非模型调用 ask_question 的参数。
 /// 实测 title 是问题正文、rawInput 为空，选项位于请求外层。
-/// 调用方还必须校验 AgentType::Antigravity，避免接管其他代理的权限请求。
+/// 调用方还必须校验连接是 antigravity-acp（`SessionState::antigravity_interactions`），避免接管其他代理的权限请求。
 pub fn parse_antigravity_ask(
     tool_call: &Value,
     options: &[(String, String)],
