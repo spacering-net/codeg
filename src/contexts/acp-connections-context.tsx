@@ -1,6 +1,14 @@
 "use client"
 
 import {
+  readKimiMcpOAuth,
+  rebindKimiMcpOAuth,
+  startKimiMcpOAuth,
+  stripKimiMcpOAuth,
+  updateKimiMcpOAuth,
+} from "@/lib/kimi-mcp-oauth"
+
+import {
   createContext,
   useCallback,
   useContext,
@@ -1840,6 +1848,40 @@ function recordOutOfTurnToolCall(
   return next
 }
 
+/** Keep the Kimi OAuth bindings this client established when a newer snapshot
+ *  replaces the live message (see `rebindKimiMcpOAuth`). Matched by tool-call
+ *  id; a call the snapshot no longer has, or has settled, loses its binding. */
+function carryKimiMcpOAuth(
+  previous: LiveMessage | null,
+  hydrated: LiveMessage | null
+): LiveMessage | null {
+  if (!previous || !hydrated) return hydrated
+  const bound = new Map<string, ToolCallMeta>()
+  for (const block of previous.content) {
+    if (block.type === "tool_call" && readKimiMcpOAuth(block.info.meta)) {
+      bound.set(block.info.tool_call_id, block.info.meta)
+    }
+  }
+  if (bound.size === 0) return hydrated
+  let changed = false
+  const content = hydrated.content.map((block) => {
+    if (block.type !== "tool_call") return block
+    const previousMeta = bound.get(block.info.tool_call_id)
+    if (previousMeta === undefined) return block
+    changed = true
+    return {
+      ...block,
+      info: {
+        ...block.info,
+        // The bound name, as `mergeToolCallUpdate` keeps it while live.
+        title: readKimiMcpOAuth(previousMeta)?.toolName ?? block.info.title,
+        meta: rebindKimiMcpOAuth(previousMeta, block.info),
+      },
+    }
+  })
+  return changed ? { ...hydrated, content } : hydrated
+}
+
 type ToolCallUpdateAction = Extract<Action, { type: "TOOL_CALL_UPDATE" }>
 
 /** Fold one `tool_call_update` into the tool call it revises. Shared by the
@@ -1854,15 +1896,16 @@ function mergeToolCallUpdate(
       ? appendLiveToolRawOutput(info, update.raw_output)
       : replaceLiveToolRawOutput(update.raw_output)
 
+  const oauth = readKimiMcpOAuth(info.meta)
   return {
     ...info,
-    title: update.title ?? info.title,
+    title: oauth?.toolName ?? update.title ?? info.title,
     status: update.status ?? info.status,
     content: update.content ?? info.content,
     raw_input: update.raw_input ?? info.raw_input,
     ...output,
     locations: update.locations ?? info.locations,
-    meta: update.meta ?? info.meta,
+    meta: updateKimiMcpOAuth(info.meta, update, info.status),
     images: update.images !== null ? update.images : info.images,
   }
 }
@@ -2157,7 +2200,9 @@ function connectionsReducer(
         return next
       }
 
-      const hydratedLiveMessage = action.patch.liveMessage
+      const hydratedLiveMessage = sameSession
+        ? carryKimiMcpOAuth(current.liveMessage, action.patch.liveMessage)
+        : action.patch.liveMessage
       const hydratedPendingPermission = mergePendingPermissionWithLiveMessage(
         action.patch.pendingPermission,
         hydratedLiveMessage ?? current.liveMessage
@@ -2413,6 +2458,7 @@ function connectionsReducer(
     case "TOOL_CALL": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
+      const meta = startKimiMcpOAuth(conn.agentType, action.title, action.meta)
       // Out-of-turn wire tool activity stays OUT of `liveMessage` (the
       // transcript overlay renders that content — grafting it here recreated
       // the garbled-timeline bug), but its context is still recorded so a
@@ -2427,7 +2473,7 @@ function connectionsReducer(
           raw_input: action.raw_input,
           ...replaceLiveToolRawOutput(action.raw_output),
           locations: action.locations,
-          meta: action.meta,
+          meta,
           images: action.images ?? [],
         }
         const next = new Map(state)
@@ -2475,7 +2521,7 @@ function connectionsReducer(
                 // The announcement is what names the tool
                 // (`_meta.claudeCode.toolName`), so its `_meta` must land.
                 locations: action.locations ?? block.info.locations,
-                meta: action.meta ?? block.info.meta,
+                meta: meta ?? block.info.meta,
                 images:
                   action.images !== null ? action.images : block.info.images,
               },
@@ -2499,7 +2545,7 @@ function connectionsReducer(
               raw_input: action.raw_input,
               ...replaceLiveToolRawOutput(action.raw_output),
               locations: action.locations ?? null,
-              meta: action.meta ?? null,
+              meta,
               images: action.images ?? [],
             },
           },
@@ -5218,7 +5264,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             raw_input: e.raw_input,
             raw_output: e.raw_output,
             locations: e.locations ?? null,
-            meta: (e.meta as ToolCallMeta) ?? null,
+            meta: stripKimiMcpOAuth((e.meta as ToolCallMeta) ?? null),
             images: e.images ?? null,
           })
           break
@@ -5236,7 +5282,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             raw_output: e.raw_output,
             raw_output_append: e.raw_output_append,
             locations: e.locations ?? null,
-            meta: (e.meta as ToolCallMeta) ?? null,
+            meta: stripKimiMcpOAuth((e.meta as ToolCallMeta) ?? null),
             images: e.images ?? null,
           })
           scheduleToolCallUpdateFlush()

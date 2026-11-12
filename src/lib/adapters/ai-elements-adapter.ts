@@ -21,6 +21,7 @@ import {
 import { isGrepNoMatchCommandResult } from "@/lib/grep-no-match"
 import { isBackgroundTaskToolCall } from "@/lib/background-task"
 import { isContextCompactionMeta } from "@/lib/context-compaction"
+import { readKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
 import { feedbackCheckHasContent } from "@/lib/feedback-check"
 import {
@@ -1737,7 +1738,10 @@ export function dropEmptyInFlightToolCalls(
       isBackgroundTaskToolCall(part) ||
       // A compaction runs with no arguments until it completes; dropping it
       // would hide the "compacting" divider for as long as it works.
-      isContextCompactionMeta(part.meta)
+      isContextCompactionMeta(part.meta) ||
+      // Kimi's synthetic authenticate tool takes {} and has no result while
+      // awaiting OAuth. Its scoped progress is the content the user needs.
+      readKimiMcpOAuth(part.meta)?.toolName === part.toolName
     ) {
       return true
     }
