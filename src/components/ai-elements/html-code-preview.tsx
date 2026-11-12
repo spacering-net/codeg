@@ -59,6 +59,23 @@ function trimFrames() {
   }
 }
 
+let trimQueued = false
+
+/**
+ * Trim once the commit that unpinned an entry is over. A preview drawn again
+ * as a new tree (as Streamdown does when a reply finishes) unmounts and
+ * mounts in one commit, its cleanup running before the new pin: trimming
+ * right away would evict the very entry it is about to mount from.
+ */
+function trimFramesAfterCommit() {
+  if (trimQueued) return
+  trimQueued = true
+  queueMicrotask(() => {
+    trimQueued = false
+    trimFrames()
+  })
+}
+
 function rememberFrame(key: string, entry: FrameEntry) {
   const previous = frames.get(key)
   if (previous) frameBytes -= frameSize(key, previous)
@@ -138,8 +155,8 @@ export function HtmlCodePreview({
       if (count > 0) pins.set(key, count)
       else pins.delete(key)
       // Pinned entries may exceed the cache budget while visible. Enforce it
-      // immediately when they close, even if no new preview is ever built.
-      trimFrames()
+      // when they close, even if no new preview is ever built.
+      trimFramesAfterCommit()
     }
   }, [key])
 

@@ -21,6 +21,12 @@ const preview = (source: string, key?: string) => (
   </HtmlCodePreview>
 )
 
+// A closed preview trims the cache once its commit is over.
+async function close(view: { unmount: () => void }) {
+  view.unmount()
+  await act(async () => {})
+}
+
 beforeEach(() => {
   resetHtmlPreviewCachesForTests()
   build.mockClear()
@@ -33,7 +39,7 @@ describe("HTML preview cache retention", () => {
     await waitFor(() =>
       expect(mounted.container.querySelectorAll("iframe")).toHaveLength(40)
     )
-    mounted.unmount()
+    await close(mounted)
 
     const reopened = render(preview(sources[0]))
     await waitFor(() =>
@@ -48,7 +54,7 @@ describe("HTML preview cache retention", () => {
     await waitFor(() =>
       expect(mounted.container.querySelector("iframe")).not.toBeNull()
     )
-    mounted.unmount()
+    await close(mounted)
 
     const reopened = render(preview(source))
     await waitFor(() =>
@@ -66,7 +72,7 @@ describe("HTML preview cache retention", () => {
     await waitFor(() =>
       expect(mounted.container.querySelectorAll("iframe")).toHaveLength(8)
     )
-    mounted.unmount()
+    await close(mounted)
 
     const reopened = render(preview(sources[0]))
     await waitFor(() =>
@@ -82,7 +88,7 @@ describe("HTML preview cache retention", () => {
       expect(mounted.container.querySelector("iframe")).not.toBeNull()
     )
     fireEvent.click(mounted.getByRole("button", { name: "code" }))
-    mounted.unmount()
+    await close(mounted)
 
     const reopened = render(preview(source))
     await waitFor(() =>
@@ -98,12 +104,45 @@ describe("HTML preview cache retention", () => {
     )
     const second = render(preview(source))
     expect(second.container.querySelector("iframe")).not.toBeNull()
-    first.unmount()
+    await close(first)
     const third = render(preview(source))
     expect(third.container.querySelector("iframe")).not.toBeNull()
     expect(build).toHaveBeenCalledTimes(1)
     second.unmount()
     third.unmount()
+  })
+
+  it("keeps an over-budget document across a remount in the same commit", async () => {
+    // Streamdown draws a finished reply as a new tree: the old preview
+    // unmounts and the new one mounts in one commit, and must not rebuild.
+    const source = "remount" + "x".repeat(3 * 1024 * 1024)
+    const mounted = render(preview(source, "streaming"))
+    await waitFor(() =>
+      expect(mounted.container.querySelector("iframe")).not.toBeNull()
+    )
+    mounted.rerender(preview(source, "finished"))
+    await act(async () => {})
+    expect(mounted.container.querySelector("iframe")).not.toBeNull()
+    expect(build).toHaveBeenCalledTimes(1)
+    mounted.unmount()
+  })
+
+  it("keeps on-screen documents beyond the entry limit across a remount", async () => {
+    const sources = Array.from({ length: 40 }, (_, i) => `on screen ${i}`)
+    const tree = (last: string) => (
+      <>
+        {sources.map((s, i) => preview(s, i === sources.length - 1 ? last : s))}
+      </>
+    )
+    const mounted = render(tree("streaming"))
+    await waitFor(() =>
+      expect(mounted.container.querySelectorAll("iframe")).toHaveLength(40)
+    )
+    mounted.rerender(tree("finished"))
+    await act(async () => {})
+    expect(mounted.container.querySelectorAll("iframe")).toHaveLength(40)
+    expect(build).toHaveBeenCalledTimes(40)
+    mounted.unmount()
   })
 
   it("applies the byte budget to a build that finishes after unmount", async () => {
