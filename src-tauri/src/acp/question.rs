@@ -1666,6 +1666,7 @@ fn is_secret_property(raw: &Value, id: &str) -> bool {
 /// property with no usable choices renders as free text (the card's
 /// always-present "Other" input) — including plain strings, numbers, integers,
 /// and choice fields whose options were all empty/duplicate.
+///
 /// For a sole rendered generic question without property prose, the trimmed,
 /// bounded request `message` supplies the question before the title/id fallback.
 /// Codex user-input forms and MiniMax retain their own orientation rules.
@@ -2323,6 +2324,51 @@ mod tests {
             assert_eq!(q.specs[0].question, "Delivery");
             assert!(q.specs[1..].iter().all(|s| s.question == "Another question"));
         }
+    }
+
+    /// deepseek-acp 0.9.0's ask, verbatim off the wire (#1138): the full
+    /// question rides only in `message`, the property `title` is a short label,
+    /// and every choice carries its own explanation.
+    #[test]
+    fn classify_elicitation_reads_deepseek_single_question_form() {
+        let question = "客户端流水线从 11-11 23:29 被 Windows Update 关机切断，已停 9.5 小时（服务端 queued 0，看门狗报了 176 次不自动拉起）。现在要不要我把它拉起来？";
+        let raw = json!({
+            "mode": "form",
+            "sessionId": "sess-1",
+            "message": question,
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "restart": {
+                        "type": "string",
+                        "title": "流水线",
+                        "oneOf": [
+                            {
+                                "const": "现在拉起来（推荐）",
+                                "title": "现在拉起来（推荐）",
+                                "description": "跑计划任务 step11-upscale 起 launch_step11.py，不动任何代码/参数，从 batch_6 剩余 52,362 张继续。"
+                            },
+                            {
+                                "const": "先不拉，我自己来",
+                                "title": "先不拉，我自己来",
+                                "description": "保持停止状态，我不碰客户端。"
+                            }
+                        ]
+                    }
+                },
+                "required": ["restart"]
+            }
+        });
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+        assert_eq!(q.specs.len(), 1);
+        assert_eq!(q.specs[0].question, question);
+        assert_eq!(q.specs[0].header, "流水线");
+        assert_eq!(
+            q.specs[0].options[0].description,
+            "跑计划任务 step11-upscale 起 launch_step11.py，不动任何代码/参数，从 batch_6 剩余 52,362 张继续。"
+        );
+        assert_eq!(q.specs[0].options[1].description, "保持停止状态，我不碰客户端。");
+        assert!(validate_specs(&q.specs).is_ok());
     }
 
     /// codex-acp 2.6.0's form for `request_user_input_async`, as sent live to
