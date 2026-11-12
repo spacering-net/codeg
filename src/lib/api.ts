@@ -19,6 +19,7 @@ import {
   DEFAULT_FORGE_PAGE_SIZE,
 } from "./forge-list-prefs"
 import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
+import { asConversationMovedError } from "./conversation-moved"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
@@ -135,6 +136,7 @@ import type {
   WorktreeResolution,
   GitWorktreeRemoval,
   DbConversationSummary,
+  MoveConversationsResult,
   ImportResult,
   ImportSelectedResult,
   ScanResult,
@@ -341,7 +343,7 @@ export async function acpPrompt(
     })
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
-    throw e
+    throw asConversationMovedError(e) ?? e
   }
 }
 
@@ -3880,6 +3882,22 @@ export async function deleteConversation(
   conversationId: number
 ): Promise<void> {
   return getTransport().call("delete_conversation", { conversationId })
+}
+
+/**
+ * Move conversations to another open project folder. From the next message on
+ * the agent works in the target folder; the history is untouched. Each
+ * conversation is judged on its own — see {@link MoveConversationsResult} —
+ * and the call rejects only for an invalid target.
+ */
+export async function moveConversations(
+  conversationIds: number[],
+  targetFolderId: number
+): Promise<MoveConversationsResult> {
+  return getTransport().call("move_conversations", {
+    conversationIds,
+    targetFolderId,
+  })
 }
 
 // Folder command management

@@ -293,6 +293,10 @@ pub fn build_router_with_proxy_auth(
             "/delete_conversation",
             post(handlers::conversations::delete_conversation),
         )
+        .route(
+            "/move_conversations",
+            post(handlers::conversations::move_conversations),
+        )
         // ─── Folders ───
         .route(
             "/load_folder_history",

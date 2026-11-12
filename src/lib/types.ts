@@ -604,9 +604,11 @@ export interface DbConversationSummary {
   parent_id?: number | null
   parent_tool_use_id?: string | null
   delegation_call_id?: string | null
-  /** Set when the conversation was re-parented out of a removed worktree: the
-   *  worktree path it originally ran in. Drives the "source worktree removed"
-   *  badge. */
+  /** The directory this conversation's session was recorded in, when that
+   *  differs from its current folder's path: set when it was re-parented out of
+   *  a removed worktree, or moved to another project by the user (a moved chat
+   *  conversation remembers its scratch dir). Drives the "original working
+   *  directory" line of the hover details. */
   origin_cwd?: string | null
   /** The assistant a delegation child ran as, and its name when the
    *  delegation started (off the child row's snapshot). Absent on every other
@@ -636,6 +638,25 @@ export type ConversationChange =
   | { kind: "status"; id: number; status: string }
 
 export const CONVERSATION_CHANGED_EVENT = "conversation://changed"
+
+/** Why `moveConversations` left a conversation where it was. Mirrors the Rust
+ *  `MoveSkipReason`. */
+export type MoveSkipReason =
+  | "not_found"
+  | "not_movable"
+  | "already_there"
+  | "task_owned"
+  | "busy"
+  | "conflict"
+  | "target_unavailable"
+
+/** Result of `moveConversations`: the root conversations moved (their
+ *  delegation children moved with them) and, per conversation, why the rest
+ *  were left alone. */
+export interface MoveConversationsResult {
+  moved: number[]
+  skipped: { conversationId: number; reason: MoveSkipReason }[]
+}
 
 /** Payload for the global `folder://changed` side-channel. A folder created or
  *  updated headlessly — e.g. the automation engine minting a per-run worktree —

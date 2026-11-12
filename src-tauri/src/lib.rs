@@ -1877,6 +1877,7 @@ mod tauri_app {
                 conversation_tags::get_conversation_branch_tag,
                 conversation_tags::update_conversation_branch_tag,
                 conversations::delete_conversation,
+                conversations::move_conversations,
                 folders::load_folder_history,
                 folders::get_folder,
                 folders::list_open_folder_details,

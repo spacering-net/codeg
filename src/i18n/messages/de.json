@@ -2230,7 +2230,7 @@
       "statusRunningBadge": "Läuft",
       "runningCountBadge": "{count, plural, one {# laufende Sitzung} other {# laufende Sitzungen}}",
       "statusCancelledBadge": "Abgebrochen",
-      "worktreeRemovedBadge": "Quell-Worktree entfernt",
+      "originalWorkingDir": "Ursprüngliches Arbeitsverzeichnis",
       "cliBadge": "Über die Kommandozeile gestartet",
       "conversationCountUnit": "{count, plural, one {# Konversation} other {# Konversationen}}",
       "emptyFolderHint": "Keine Konversationen",
@@ -2271,6 +2271,7 @@
         "untitledConversation": "Unbenannte Konversation",
         "setStatus": "Status setzen…",
         "deleteSelected": "Löschen",
+        "moveSelected": "Verschieben nach…",
         "noConversations": "Keine Konversationen in diesem Ordner.",
         "noConversationsWorkspace": "Keine Konversationen im Arbeitsbereich.",
         "noMatchingConversations": "Keine Konversationen entsprechen den Filtern.",
@@ -2404,6 +2405,7 @@
       "restore": "Wiederherstellen",
       "attachToCurrentSession": "Zur Sitzung hinzufügen",
       "rename": "Umbenennen",
+      "moveToProject": "In Projekt verschieben…",
       "status": "Zustand",
       "delete": "Löschen",
       "importLocalSessions": "Lokale Sitzungen importieren",
@@ -2419,6 +2421,31 @@
       "reopen": "Erneut öffnen",
       "expandSubsessions": "Unterkonversationen einblenden",
       "collapseSubsessions": "Unterkonversationen ausblenden"
+    },
+    "moveConversation": {
+      "title": "In ein anderes Projekt verschieben",
+      "titleMany": "{count, plural, one {# Unterhaltung} other {# Unterhaltungen}} in ein anderes Projekt verschieben",
+      "targetLabel": "Projekt",
+      "targetPlaceholder": "Projekt auswählen",
+      "explain": "Ab der nächsten Nachricht arbeitet der Agent in {path}. Der Verlauf bleibt unverändert. Kann der Agent die Sitzung im neuen Verzeichnis nicht fortsetzen, wird angeboten, sie neu zu laden oder eine neue Sitzung zu starten.",
+      "explainNoTarget": "Ab der nächsten Nachricht arbeitet der Agent im Verzeichnis des gewählten Projekts. Der Verlauf bleibt unverändert.",
+      "chatFilesNote": "Im Chat erstellte Dateien bleiben in seinem temporären Verzeichnis {path}; sie werden nicht ins Projekt verschoben.",
+      "chatFilesNoteMany": "In diesen Chats erstellte Dateien bleiben in ihren temporären Verzeichnissen; sie werden nicht ins Projekt verschoben.",
+      "noTargets": "Es gibt kein anderes geöffnetes Projekt, in das verschoben werden kann.",
+      "cancel": "Abbrechen",
+      "move": "Verschieben",
+      "toastMoved": "{count, plural, one {# Unterhaltung} other {# Unterhaltungen}} nach {folder} verschoben",
+      "toastSkipped": "{count, plural, one {# Unterhaltung wurde nicht verschoben} other {# Unterhaltungen wurden nicht verschoben}}",
+      "toastFailed": "Verschieben fehlgeschlagen: {message}",
+      "skipReason": {
+        "not_found": "Sie existiert nicht mehr",
+        "not_movable": "Unter-Unterhaltungen werden mit ihrer übergeordneten verschoben",
+        "already_there": "Sie ist bereits in diesem Projekt",
+        "task_owned": "Sie gehört zu einer To-do-Aufgabe",
+        "busy": "Ein Agent arbeitet gerade daran – versuche es, wenn er fertig ist",
+        "conflict": "Sie hat sich beim Verschieben geändert – versuche es erneut",
+        "target_unavailable": "Das Projekt wurde geschlossen oder entfernt"
+      }
     },
     "search": {
       "dialogTitle": "Suchen",
@@ -3447,7 +3474,8 @@
         },
         "errors": {
           "connectionFailed": "Verbindung fehlgeschlagen",
-          "sendPromptFailed": "Nachricht konnte nicht gesendet werden: {error}"
+          "sendPromptFailed": "Nachricht konnte nicht gesendet werden: {error}",
+          "conversationMoved": "Diese Unterhaltung wurde nach {folder} verschoben. Sende die Nachricht erneut, um dort weiterzumachen."
         }
       },
       "shared": {

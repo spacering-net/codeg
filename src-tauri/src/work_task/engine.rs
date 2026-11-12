@@ -44,7 +44,7 @@ use crate::db::entities::conversation::{self, ConversationStatus};
 use crate::db::entities::work_task::WorkTaskStatus;
 use crate::db::entities::{folder, folder_command};
 use crate::db::service::work_task_service::DeliveryRecord;
-use crate::db::service::{conversation_service, tab_service, work_task_service};
+use crate::db::service::{conversation_service, work_task_service};
 use crate::db::AppDatabase;
 use crate::forge::deliver::{
     adopt_pull_request, issues_pull_request_body, local_pull_request_body, pull_request_body,
@@ -6381,14 +6381,12 @@ struct WorktreeRef {
     path: String,
 }
 
-/// Converge DB + clients once a task worktree is off disk. Split out of
-/// [`TaskEngine::remove_worktree_locked`] so the ordering contract below is
-/// unit-testable without a real git worktree.
-///
-/// Write order: conversations first (never orphaned under a vanishing folder),
-/// then its tabs, then the folder row. Each step ends in a broadcast, because a
-/// removal no client hears about is a removal no client shows: the sidebar keeps
-/// the dead worktree until the next full `fetchFolders` (i.e. a reload).
+/// Converge DB + clients once a task worktree is off disk: the shared sequence
+/// in [`crate::commands::worktree_convergence`] (the branch selector's
+/// worktree delete runs the same one), with this task's bookkeeping — detach
+/// the worktree, record the cleanup — between the writes and the announcement.
+/// Split out of [`TaskEngine::remove_worktree_locked`] so the ordering contract
+/// is unit-testable without a real git worktree.
 async fn converge_worktree_removal(
     db: &AppDatabase,
     emitter: &EventEmitter,
@@ -6397,56 +6395,10 @@ async fn converge_worktree_removal(
     project_folder_id: i32,
     wt_path: &str,
 ) {
-    let moved = conversation_service::reparent_folder_conversations(
-        &db.conn,
-        wt_id,
-        project_folder_id,
-        wt_path,
-    )
-    .await
-    .unwrap_or(0);
+    use crate::commands::worktree_convergence;
 
-    match tab_service::delete_folder_tabs_and_bump(&db.conn, wt_id).await {
-        Ok(inv) => {
-            if let Some(tabs) = inv.emit {
-                emit_event(
-                    emitter,
-                    crate::web::event_bridge::TABS_CHANGED_EVENT,
-                    crate::web::event_bridge::TabsChanged {
-                        version: inv.version,
-                        origin: "server".to_string(),
-                        tabs,
-                    },
-                );
-            }
-        }
-        Err(e) => tracing::warn!("[work_task] tab cleanup failed for folder {wt_id}: {e}"),
-    }
-
-    // Announce the folder drop only when the row really is gone, so a failed
-    // write can't leave clients disagreeing with what a refetch would return.
-    let folder_gone = match folder::Entity::find_by_id(wt_id).one(&db.conn).await {
-        Ok(Some(row)) => {
-            let now = chrono::Utc::now();
-            let mut active = row.into_active_model();
-            active.is_open = Set(false);
-            active.deleted_at = Set(Some(now));
-            active.updated_at = Set(now);
-            match active.update(&db.conn).await {
-                Ok(_) => true,
-                Err(e) => {
-                    tracing::warn!("[work_task] worktree folder {wt_id} soft-delete failed: {e}");
-                    false
-                }
-            }
-        }
-        // Already soft-deleted / never there: a client still holding it is stale.
-        Ok(None) => true,
-        Err(e) => {
-            tracing::warn!("[work_task] worktree folder {wt_id} lookup failed: {e}");
-            false
-        }
-    };
+    let outcome =
+        worktree_convergence::converge_db(db, emitter, wt_id, project_folder_id, wt_path).await;
 
     let _ = work_task_service::clear_worktree(&db.conn, task_id).await;
     let _ = work_task_service::record_event(
@@ -6454,24 +6406,11 @@ async fn converge_worktree_removal(
         task_id,
         "user_action",
         "engine",
-        Some(serde_json::json!({ "action": "cleanup", "reparented": moved })),
+        Some(serde_json::json!({ "action": "cleanup", "reparented": outcome.moved })),
     )
     .await;
 
-    // Conversations first: this starts every client's refetch, so the moved
-    // rows have the shortest possible window with no folder to render under.
-    emit_event(
-        emitter,
-        crate::web::event_bridge::CONVERSATIONS_BULK_CHANGED_EVENT,
-        crate::web::event_bridge::ConversationsBulkChanged {
-            imported: 0,
-            updated: moved as u32,
-            folder_ids: vec![project_folder_id],
-        },
-    );
-    if folder_gone {
-        emit_folder_deleted(emitter, wt_id);
-    }
+    worktree_convergence::announce(emitter, outcome, project_folder_id, wt_id);
 }
 
 /// The commit THIS TASK's own work sits on top of: the point its worktree was
@@ -10174,6 +10113,91 @@ mod tests {
         let dropped = rx.try_recv().expect("folder delete should broadcast");
         assert_eq!(dropped.payload["kind"], "deleted");
         assert_eq!(dropped.payload["id"], 9999);
+    }
+
+    /// The shared convergence keeps the order clients depend on: the closed
+    /// tabs, then the conversations' refetch, then the folder drop — and it
+    /// still closes the worktree's tabs rather than re-pointing them.
+    #[tokio::test]
+    async fn worktree_removal_closes_tabs_before_announcing_the_move() {
+        use crate::db::service::tab_service;
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+        use crate::web::event_bridge::{
+            WebEventBroadcaster, CONVERSATIONS_BULK_CHANGED_EVENT, FOLDER_CHANGED_EVENT,
+            TABS_CHANGED_EVENT,
+        };
+
+        let db = fresh_in_memory_db().await;
+        let root_id = seed_folder(&db, "/tmp/repo3").await;
+        let wt = open_worktree_folder_core(&db, "/tmp/repo3-task-1".to_string(), root_id)
+            .await
+            .expect("worktree folder");
+        let conv = conversation_service::create(&db.conn, wt.id, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("conversation");
+        let kept =
+            conversation_service::create(&db.conn, root_id, AgentType::ClaudeCode, None, None)
+                .await
+                .expect("conversation");
+        let tab = |folder_id: i32, conversation_id: i32, position: i32| crate::models::OpenedTab {
+            id: 0,
+            folder_id,
+            conversation_id: Some(conversation_id),
+            agent_type: AgentType::ClaudeCode,
+            position,
+            is_active: false,
+            is_pinned: false,
+        };
+        tab_service::save_all_tabs_cas(
+            &db.conn,
+            vec![tab(wt.id, conv.id, 0), tab(root_id, kept.id, 1)],
+            0,
+        )
+        .await
+        .expect("tabs");
+        let task = work_task_service::create(
+            &db.conn,
+            crate::models::WorkTaskDraft {
+                folder_id: root_id,
+                title: "fix login".to_string(),
+                config: serde_json::json!({
+                    "display_text": "fix login",
+                    "prompt_blocks": [{ "type": "text", "text": "fix login" }],
+                }),
+            },
+        )
+        .await
+        .expect("task");
+
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+        converge_worktree_removal(&db, &emitter, task.id, wt.id, root_id, &wt.path).await;
+
+        let channels: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|ev| ev.channel.to_string())
+            .collect();
+        assert_eq!(
+            channels,
+            vec![
+                TABS_CHANGED_EVENT.to_string(),
+                CONVERSATIONS_BULK_CHANGED_EVENT.to_string(),
+                FOLDER_CHANGED_EVENT.to_string(),
+            ]
+        );
+        let (tabs, _) = tab_service::snapshot_tabs(&db.conn).await.expect("tabs");
+        assert_eq!(
+            tabs.iter().map(|t| t.conversation_id).collect::<Vec<_>>(),
+            vec![Some(kept.id)],
+            "the worktree's tab is closed, not re-pointed"
+        );
+        let events = work_task_service::list_events(&db.conn, task.id, 10)
+            .await
+            .expect("events");
+        assert!(events
+            .iter()
+            .any(|e| e.kind == "user_action"
+                && e.payload.as_ref().is_some_and(|p| p["reparented"] == 1)));
     }
 
     #[test]

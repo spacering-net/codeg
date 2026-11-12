@@ -2230,7 +2230,7 @@
       "statusRunningBadge": "실행 중",
       "runningCountBadge": "{count}개 세션 실행 중",
       "statusCancelledBadge": "취소됨",
-      "worktreeRemovedBadge": "원본 worktree가 삭제됨",
+      "originalWorkingDir": "원래 작업 디렉터리",
       "cliBadge": "명령줄에서 시작됨",
       "conversationCountUnit": "{count}개",
       "emptyFolderHint": "대화 없음",
@@ -2271,6 +2271,7 @@
         "untitledConversation": "제목 없는 대화",
         "setStatus": "상태 변경…",
         "deleteSelected": "삭제",
+        "moveSelected": "이동…",
         "noConversations": "이 폴더에 대화가 없습니다.",
         "noConversationsWorkspace": "작업 공간에 대화가 없습니다.",
         "noMatchingConversations": "필터에 일치하는 대화가 없습니다.",
@@ -2404,6 +2405,7 @@
       "restore": "복원",
       "attachToCurrentSession": "세션에 추가",
       "rename": "이름 변경",
+      "moveToProject": "프로젝트로 이동…",
       "status": "상태",
       "delete": "삭제",
       "importLocalSessions": "로컬 세션 가져오기",
@@ -2419,6 +2421,31 @@
       "reopen": "다시 열기",
       "expandSubsessions": "하위 대화 펼치기",
       "collapseSubsessions": "하위 대화 접기"
+    },
+    "moveConversation": {
+      "title": "다른 프로젝트로 이동",
+      "titleMany": "대화 {count}개를 다른 프로젝트로 이동",
+      "targetLabel": "프로젝트",
+      "targetPlaceholder": "프로젝트 선택",
+      "explain": "다음 메시지부터 에이전트는 {path}에서 작업합니다. 기록은 그대로 유지됩니다. 에이전트가 새 디렉터리에서 세션을 재개하지 못하면 다시 불러오거나 새 세션을 시작하라는 안내가 표시됩니다.",
+      "explainNoTarget": "다음 메시지부터 에이전트는 선택한 프로젝트의 디렉터리에서 작업합니다. 기록은 그대로 유지됩니다.",
+      "chatFilesNote": "채팅 중에 만든 파일은 임시 디렉터리 {path}에 남으며 프로젝트로 옮겨지지 않습니다.",
+      "chatFilesNoteMany": "이 채팅들에서 만든 파일은 각자의 임시 디렉터리에 남으며 프로젝트로 옮겨지지 않습니다.",
+      "noTargets": "이동할 수 있는 다른 열린 프로젝트가 없습니다.",
+      "cancel": "취소",
+      "move": "이동",
+      "toastMoved": "대화 {count}개를 {folder}(으)로 이동했습니다",
+      "toastSkipped": "대화 {count}개를 이동하지 못했습니다",
+      "toastFailed": "이동하지 못했습니다: {message}",
+      "skipReason": {
+        "not_found": "더 이상 존재하지 않습니다",
+        "not_movable": "하위 대화는 상위 대화와 함께 이동합니다",
+        "already_there": "이미 이 프로젝트에 있습니다",
+        "task_owned": "할 일 작업에 속해 있습니다",
+        "busy": "에이전트가 작업 중입니다. 끝난 뒤 다시 시도하세요",
+        "conflict": "이동하는 동안 변경되었습니다. 다시 시도하세요",
+        "target_unavailable": "대상 프로젝트가 닫혔거나 제거되었습니다"
+      }
     },
     "search": {
       "dialogTitle": "검색",
@@ -3447,7 +3474,8 @@
         },
         "errors": {
           "connectionFailed": "연결 실패",
-          "sendPromptFailed": "메시지 전송에 실패했습니다: {error}"
+          "sendPromptFailed": "메시지 전송에 실패했습니다: {error}",
+          "conversationMoved": "이 대화는 {folder}(으)로 이동되었습니다. 그곳에서 계속하려면 메시지를 다시 보내세요."
         }
       },
       "shared": {

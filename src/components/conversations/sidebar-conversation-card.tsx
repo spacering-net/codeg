@@ -21,6 +21,7 @@ import {
   Info,
   ChevronRight,
   SquareTerminal,
+  FolderInput,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -195,6 +196,9 @@ interface SidebarConversationCardProps {
   onStatusChange: (id: number, status: ConversationStatus) => Promise<void>
   onNewConversation?: (folderId: number) => void
   onTogglePin?: (id: number, nextPinned: boolean) => void
+  /** Opens "Move to project…" for this conversation. Offered on root
+   *  regular and chat conversations only (a sub-session moves with its root). */
+  onMoveToProject?: (conversation: DbConversationSummary) => void
   /** Delegation-tree nesting depth (0 = root). Drives the per-level indent. */
   depth?: number
   /** True when `child_count > 0`: the conversation has delegation children, so
@@ -218,6 +222,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   onStatusChange,
   onNewConversation,
   onTogglePin,
+  onMoveToProject,
   depth = 0,
   hasChildren = false,
   expanded = false,
@@ -711,6 +716,15 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
               <Info className="h-4 w-4" />
               {tDetails("menuLabel")}
             </ContextMenuItem>
+            {onMoveToProject &&
+              !isSubsession &&
+              (conversation.kind === "regular" ||
+                conversation.kind === "chat") && (
+                <ContextMenuItem onSelect={() => onMoveToProject(conversation)}>
+                  <FolderInput className="h-4 w-4" />
+                  {t("moveToProject")}
+                </ContextMenuItem>
+              )}
             {/* Mirrors the file tree's "add to session": inserts an `@`-style
               mention of THIS conversation into the active session's composer.
               Disabled only when no conversation tab is open — there is no

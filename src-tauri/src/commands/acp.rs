@@ -12606,14 +12606,22 @@ pub async fn acp_get_session_snapshot_by_conversation(
 /// connection by `external_id` and the frontend would mis-tag it as a locally
 /// owned connection, tearing it down (killing the real owner's agent) on tab
 /// close. Discovering it here lets the second client attach as a viewer.
+///
+/// A conversation the user moved to another folder only discovers connections
+/// launched in the folder it is in NOW: one still running in the folder it left
+/// (a client that missed the move, or a turn that was in flight) is not
+/// something to attach to — the next prompt there is refused anyway.
 pub(crate) async fn acp_find_connection_for_conversation_core(
     manager: &ConnectionManager,
+    db: &sea_orm::DatabaseConnection,
     conversation_id: i32,
     session_id: Option<&str>,
     agent_type: AgentType,
 ) -> Result<Option<crate::acp::ConversationConnectionInfo>, AcpError> {
+    let fence = manager.relocation_fence(db, conversation_id).await;
+    let dir = fence.as_ref().map(|(_, path)| path.as_str());
     let connection_id = match manager
-        .find_connection_by_conversation_id(conversation_id)
+        .find_connection_by_conversation_id_in(conversation_id, dir)
         .await
     {
         Some(id) => id,
@@ -12623,7 +12631,7 @@ pub(crate) async fn acp_find_connection_for_conversation_core(
         None => match session_id {
             Some(sid) if !sid.is_empty() => {
                 match manager
-                    .find_connection_by_external_id(sid, agent_type)
+                    .find_connection_by_external_id_in(sid, agent_type, dir)
                     .await
                 {
                     Some(id) => id,
@@ -12666,9 +12674,11 @@ pub async fn acp_find_connection_for_conversation(
     session_id: Option<String>,
     agent_type: AgentType,
     manager: State<'_, ConnectionManager>,
+    db: State<'_, AppDatabase>,
 ) -> Result<Option<crate::acp::ConversationConnectionInfo>, AcpError> {
     acp_find_connection_for_conversation_core(
         &manager,
+        &db.conn,
         conversation_id,
         session_id.as_deref(),
         agent_type,
@@ -20385,6 +20395,7 @@ wire_api = "chat"
         use crate::web::event_bridge::EventEmitter;
 
         let mgr = ConnectionManager::new();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
         {
@@ -20394,10 +20405,16 @@ wire_api = "chat"
             s.event_seq = 7;
         }
 
-        let info = acp_find_connection_for_conversation_core(&mgr, 42, None, AgentType::ClaudeCode)
-            .await
-            .expect("ok")
-            .expect("a live connection is bound to conversation 42");
+        let info = acp_find_connection_for_conversation_core(
+            &mgr,
+            &db.conn,
+            42,
+            None,
+            AgentType::ClaudeCode,
+        )
+        .await
+        .expect("ok")
+        .expect("a live connection is bound to conversation 42");
         assert_eq!(info.connection_id, "c1");
         assert_eq!(info.event_seq, 7);
     }
@@ -20411,14 +20428,19 @@ wire_api = "chat"
         use crate::web::event_bridge::EventEmitter;
 
         let mgr = ConnectionManager::new();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
-        assert!(
-            acp_find_connection_for_conversation_core(&mgr, 999, None, AgentType::ClaudeCode)
-                .await
-                .expect("ok")
-                .is_none()
-        );
+        assert!(acp_find_connection_for_conversation_core(
+            &mgr,
+            &db.conn,
+            999,
+            None,
+            AgentType::ClaudeCode
+        )
+        .await
+        .expect("ok")
+        .is_none());
     }
 
     #[tokio::test]
@@ -20433,6 +20455,7 @@ wire_api = "chat"
         use crate::web::event_bridge::EventEmitter;
 
         let mgr = ConnectionManager::new();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
         {
@@ -20445,16 +20468,23 @@ wire_api = "chat"
 
         // by-conversation misses, no session fallback → None.
         assert!(
-            acp_find_connection_for_conversation_core(&mgr, 42, None, AgentType::ClaudeCode)
-                .await
-                .expect("ok")
-                .is_none(),
+            acp_find_connection_for_conversation_core(
+                &mgr,
+                &db.conn,
+                42,
+                None,
+                AgentType::ClaudeCode
+            )
+            .await
+            .expect("ok")
+            .is_none(),
             "without a session_id fallback an unbound connection is undiscoverable"
         );
 
         // session fallback finds the live owner (matching agent_type).
         let info = acp_find_connection_for_conversation_core(
             &mgr,
+            &db.conn,
             42,
             Some("sess-abc"),
             AgentType::ClaudeCode,
@@ -20468,6 +20498,7 @@ wire_api = "chat"
         // a non-matching session id still misses.
         assert!(acp_find_connection_for_conversation_core(
             &mgr,
+            &db.conn,
             42,
             Some("other"),
             AgentType::ClaudeCode
@@ -20480,10 +20511,16 @@ wire_api = "chat"
         // (external_id is unique only per agent) — otherwise a viewer could
         // attach to the wrong agent's connection.
         assert!(
-            acp_find_connection_for_conversation_core(&mgr, 42, Some("sess-abc"), AgentType::Codex)
-                .await
-                .expect("ok")
-                .is_none(),
+            acp_find_connection_for_conversation_core(
+                &mgr,
+                &db.conn,
+                42,
+                Some("sess-abc"),
+                AgentType::Codex
+            )
+            .await
+            .expect("ok")
+            .is_none(),
             "external_id fallback must be scoped by agent_type"
         );
     }
@@ -20498,6 +20535,7 @@ wire_api = "chat"
         use crate::models::AgentType;
         use crate::web::event_bridge::EventEmitter;
 
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         for terminal in [ConnectionStatus::Disconnected, ConnectionStatus::Error] {
             let mgr = ConnectionManager::new();
             mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
@@ -20509,10 +20547,16 @@ wire_api = "chat"
                 s.status = terminal.clone();
             }
             assert!(
-                acp_find_connection_for_conversation_core(&mgr, 42, None, AgentType::ClaudeCode)
-                    .await
-                    .expect("ok")
-                    .is_none(),
+                acp_find_connection_for_conversation_core(
+                    &mgr,
+                    &db.conn,
+                    42,
+                    None,
+                    AgentType::ClaudeCode
+                )
+                .await
+                .expect("ok")
+                .is_none(),
                 "terminal status {terminal:?} must not be returned as a live connection"
             );
         }

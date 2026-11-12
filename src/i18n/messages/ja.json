@@ -2230,7 +2230,7 @@
       "statusRunningBadge": "実行中",
       "runningCountBadge": "{count} 件の会話が実行中",
       "statusCancelledBadge": "キャンセル済み",
-      "worktreeRemovedBadge": "元の worktree は削除済み",
+      "originalWorkingDir": "元の作業ディレクトリ",
       "cliBadge": "コマンドラインから開始",
       "conversationCountUnit": "{count} 件",
       "emptyFolderHint": "会話がありません",
@@ -2271,6 +2271,7 @@
         "untitledConversation": "無題の会話",
         "setStatus": "ステータスを変更…",
         "deleteSelected": "削除",
+        "moveSelected": "移動先…",
         "noConversations": "このフォルダには会話がありません。",
         "noConversationsWorkspace": "ワークスペースに会話がありません。",
         "noMatchingConversations": "条件に一致する会話がありません。",
@@ -2404,6 +2405,7 @@
       "restore": "元に戻す",
       "attachToCurrentSession": "セッションに追加",
       "rename": "名前を変更",
+      "moveToProject": "プロジェクトへ移動…",
       "status": "ステータス",
       "delete": "削除",
       "importLocalSessions": "ローカルセッションをインポート",
@@ -2419,6 +2421,31 @@
       "reopen": "再開する",
       "expandSubsessions": "サブ会話を展開",
       "collapseSubsessions": "サブ会話を折りたたむ"
+    },
+    "moveConversation": {
+      "title": "別のプロジェクトへ移動",
+      "titleMany": "{count} 件の会話を別のプロジェクトへ移動",
+      "targetLabel": "プロジェクト",
+      "targetPlaceholder": "プロジェクトを選択",
+      "explain": "次のメッセージから、エージェントは {path} で作業します。履歴はそのまま残ります。エージェントが新しいディレクトリでセッションを再開できない場合は、再読み込みするか新しいセッションを開始するよう案内されます。",
+      "explainNoTarget": "次のメッセージから、エージェントは選択したプロジェクトのディレクトリで作業します。履歴はそのまま残ります。",
+      "chatFilesNote": "チャット中に作成されたファイルは一時ディレクトリ {path} に残り、プロジェクトには移動されません。",
+      "chatFilesNoteMany": "これらのチャット中に作成されたファイルはそれぞれの一時ディレクトリに残り、プロジェクトには移動されません。",
+      "noTargets": "移動先にできる、開いている他のプロジェクトがありません。",
+      "cancel": "キャンセル",
+      "move": "移動",
+      "toastMoved": "{count} 件の会話を {folder} に移動しました",
+      "toastSkipped": "{count} 件の会話は移動されませんでした",
+      "toastFailed": "移動できませんでした：{message}",
+      "skipReason": {
+        "not_found": "会話が存在しません",
+        "not_movable": "サブ会話は親と一緒に移動します",
+        "already_there": "すでにこのプロジェクトにあります",
+        "task_owned": "ToDo タスクに属しています",
+        "busy": "エージェントが作業中です。完了してから再試行してください",
+        "conflict": "移動中に変更されました。再試行してください",
+        "target_unavailable": "移動先のプロジェクトが閉じられたか削除されました"
+      }
     },
     "search": {
       "dialogTitle": "検索",
@@ -3447,7 +3474,8 @@
         },
         "errors": {
           "connectionFailed": "接続に失敗しました",
-          "sendPromptFailed": "メッセージの送信に失敗しました: {error}"
+          "sendPromptFailed": "メッセージの送信に失敗しました: {error}",
+          "conversationMoved": "この会話は {folder} に移動されました。そちらで続けるには、メッセージをもう一度送信してください。"
         }
       },
       "shared": {

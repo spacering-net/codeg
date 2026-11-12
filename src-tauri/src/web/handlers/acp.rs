@@ -185,6 +185,11 @@ pub async fn acp_prompt(
                 AcpError::TurnInProgress => {
                     AppCommandError::new(AppErrorCode::TurnInProgress, message)
                 }
+                // The conversation was moved to another folder: expected, and
+                // the client recovers by re-pointing its tab — not a fault.
+                AcpError::ConversationMoved { .. } => {
+                    AppCommandError::new(AppErrorCode::InvalidInput, message)
+                }
                 _ => AppCommandError::task_execution_failed(message),
             }
         })?;
@@ -644,6 +649,7 @@ pub async fn acp_find_connection_for_conversation(
 ) -> Result<Json<Option<crate::acp::ConversationConnectionInfo>>, AppCommandError> {
     let info = acp_commands::acp_find_connection_for_conversation_core(
         &state.connection_manager,
+        &state.db.conn,
         params.conversation_id,
         params.session_id.as_deref(),
         params.agent_type,

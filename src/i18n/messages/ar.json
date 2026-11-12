@@ -2230,7 +2230,7 @@
       "statusRunningBadge": "قيد التشغيل",
       "runningCountBadge": "{count} جلسة قيد التشغيل",
       "statusCancelledBadge": "ملغى",
-      "worktreeRemovedBadge": "تمت إزالة شجرة العمل الأصلية",
+      "originalWorkingDir": "دليل العمل الأصلي",
       "cliBadge": "بدأت من سطر الأوامر",
       "conversationCountUnit": "{count} محادثة",
       "emptyFolderHint": "لا توجد محادثات",
@@ -2271,6 +2271,7 @@
         "untitledConversation": "محادثة بدون عنوان",
         "setStatus": "تعيين الحالة…",
         "deleteSelected": "حذف",
+        "moveSelected": "نقل إلى…",
         "noConversations": "لا توجد محادثات في هذا المجلد.",
         "noConversationsWorkspace": "لا توجد محادثات في مساحة العمل.",
         "noMatchingConversations": "لا توجد محادثات مطابقة للفلاتر.",
@@ -2404,6 +2405,7 @@
       "restore": "استعادة",
       "attachToCurrentSession": "إضافة إلى الجلسة",
       "rename": "إعادة تسمية",
+      "moveToProject": "نقل إلى مشروع…",
       "status": "الحالة",
       "delete": "حذف",
       "importLocalSessions": "استيراد الجلسات المحلية",
@@ -2419,6 +2421,31 @@
       "reopen": "إعادة فتح",
       "expandSubsessions": "توسيع المحادثات الفرعية",
       "collapseSubsessions": "طي المحادثات الفرعية"
+    },
+    "moveConversation": {
+      "title": "نقل إلى مشروع آخر",
+      "titleMany": "نقل {count, plural, zero {# محادثة} one {محادثة واحدة} two {محادثتين} few {# محادثات} many {# محادثة} other {# محادثة}} إلى مشروع آخر",
+      "targetLabel": "المشروع",
+      "targetPlaceholder": "اختر مشروعًا",
+      "explain": "بدءًا من الرسالة التالية، يعمل الوكيل في \u2066{path}\u2069. يبقى السجل كما هو. إذا تعذّر على الوكيل استئناف الجلسة في الدليل الجديد، فسيُعرض عليك إعادة تحميلها أو بدء جلسة جديدة.",
+      "explainNoTarget": "بدءًا من الرسالة التالية، يعمل الوكيل في دليل المشروع المختار. يبقى السجل كما هو.",
+      "chatFilesNote": "تبقى الملفات التي أُنشئت أثناء الدردشة في دليلها المؤقت \u2066{path}\u2069، ولا تُنقل إلى المشروع.",
+      "chatFilesNoteMany": "تبقى الملفات التي أُنشئت أثناء هذه الدردشات في أدلتها المؤقتة، ولا تُنقل إلى المشروع.",
+      "noTargets": "لا يوجد مشروع مفتوح آخر يمكن النقل إليه.",
+      "cancel": "إلغاء",
+      "move": "نقل",
+      "toastMoved": "{count, plural, zero {لم تُنقل أي محادثة} one {نُقلت محادثة واحدة} two {نُقلت محادثتان} few {نُقلت # محادثات} many {نُقلت # محادثة} other {نُقلت # محادثة}} إلى \u2066{folder}\u2069",
+      "toastSkipped": "{count, plural, zero {لم تُنقل أي محادثة} one {لم تُنقل محادثة واحدة} two {لم تُنقل محادثتان} few {لم تُنقل # محادثات} many {لم تُنقل # محادثة} other {لم تُنقل # محادثة}}",
+      "toastFailed": "تعذّر النقل: {message}",
+      "skipReason": {
+        "not_found": "لم تعد موجودة",
+        "not_movable": "تنتقل المحادثات الفرعية مع محادثتها الأم",
+        "already_there": "موجودة بالفعل في هذا المشروع",
+        "task_owned": "تابعة لمهمة",
+        "busy": "يعمل وكيل عليها الآن — أعد المحاولة عند انتهائه",
+        "conflict": "تغيّرت أثناء النقل — أعد المحاولة",
+        "target_unavailable": "أُغلق المشروع أو أُزيل"
+      }
     },
     "search": {
       "dialogTitle": "بحث",
@@ -3447,7 +3474,8 @@
         },
         "errors": {
           "connectionFailed": "فشل الاتصال",
-          "sendPromptFailed": "فشل إرسال الرسالة: {error}"
+          "sendPromptFailed": "فشل إرسال الرسالة: {error}",
+          "conversationMoved": "نُقلت هذه المحادثة إلى \u2066{folder}\u2069. أعد إرسال رسالتك للمتابعة هناك."
         }
       },
       "shared": {

@@ -3584,19 +3584,13 @@ async fn reparent_target(
     target.filter(|id| *id != worktree_folder_id)
 }
 
-/// Converge DB + clients once a worktree directory is off disk: its
-/// conversations move to `project_folder_id` (stamped with `origin_cwd` so
-/// history still resolves), its tabs close, its folder row is soft-deleted, any
-/// to-do task pointing at it is detached, and every client is told. Returns the
-/// number of conversations moved.
+/// Converge DB + clients once a worktree directory is off disk — the shared
+/// sequence in [`crate::commands::worktree_convergence`] — plus what only this
+/// path does: detach any to-do task that pointed at the folder and stop its
+/// office watches. Returns the number of conversations moved.
 ///
-/// Write order matters — conversations first, so they are never left pointing at
-/// a folder that has already vanished — and each step ends in a broadcast,
-/// because a removal no client hears about is a removal no client shows: the
-/// sidebar keeps the dead worktree until the next full `fetchFolders`.
-///
-/// The work-task engine runs the same sequence for the worktree it minted
-/// (`converge_worktree_removal`), wrapped in its own task bookkeeping.
+/// The work-task engine runs the same shared sequence for the worktree it
+/// minted (`converge_worktree_removal`), wrapped in its own task bookkeeping.
 async fn converge_removed_worktree_folder(
     db: &AppDatabase,
     emitter: &EventEmitter,
@@ -3604,45 +3598,17 @@ async fn converge_removed_worktree_folder(
     project_folder_id: i32,
     worktree_path: &str,
 ) -> u32 {
-    use crate::db::service::{conversation_service, tab_service, work_task_service};
+    use crate::commands::worktree_convergence;
+    use crate::db::service::work_task_service;
 
-    let moved = conversation_service::reparent_folder_conversations(
-        &db.conn,
+    let outcome = worktree_convergence::converge_db(
+        db,
+        emitter,
         worktree_folder_id,
         project_folder_id,
         worktree_path,
     )
-    .await
-    .unwrap_or(0) as u32;
-
-    match tab_service::delete_folder_tabs_and_bump(&db.conn, worktree_folder_id).await {
-        Ok(inv) => {
-            if let Some(tabs) = inv.emit {
-                crate::web::event_bridge::emit_event(
-                    emitter,
-                    crate::web::event_bridge::TABS_CHANGED_EVENT,
-                    crate::web::event_bridge::TabsChanged {
-                        version: inv.version,
-                        origin: "server".to_string(),
-                        tabs,
-                    },
-                );
-            }
-        }
-        Err(e) => {
-            tracing::warn!("[folders] tab cleanup failed for folder {worktree_folder_id}: {e}")
-        }
-    }
-
-    // Announce the folder drop only when the row really is gone, so a failed
-    // write can't leave clients disagreeing with what a refetch would return.
-    let folder_gone = match folder_service::soft_delete_folder(&db.conn, worktree_folder_id).await {
-        Ok(()) => true,
-        Err(e) => {
-            tracing::warn!("[folders] worktree folder {worktree_folder_id} soft-delete failed: {e}");
-            false
-        }
-    };
+    .await;
 
     // A settled to-do task may own this worktree (its card offers a cleanup and
     // a diff that would now only fail). The engine detaches the ones it removes
@@ -3654,20 +3620,7 @@ async fn converge_removed_worktree_folder(
             Vec::new()
         });
 
-    // Conversations first: this starts every client's refetch, so the moved rows
-    // have the shortest possible window with no folder to render under.
-    crate::web::event_bridge::emit_event(
-        emitter,
-        crate::web::event_bridge::CONVERSATIONS_BULK_CHANGED_EVENT,
-        crate::web::event_bridge::ConversationsBulkChanged {
-            imported: 0,
-            updated: moved,
-            folder_ids: vec![project_folder_id],
-        },
-    );
-    if folder_gone {
-        emit_folder_deleted(emitter, worktree_folder_id);
-    }
+    worktree_convergence::announce(emitter, outcome, project_folder_id, worktree_folder_id);
     for task_id in detached {
         crate::web::event_bridge::emit_event(
             emitter,
@@ -3676,7 +3629,7 @@ async fn converge_removed_worktree_folder(
         );
     }
     crate::office_watch::stop_office_watches_under_root(worktree_path);
-    moved
+    outcome.moved as u32
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -8292,6 +8245,77 @@ mod tests {
             moved.origin_cwd.as_deref(),
             Some(wt_path.as_str()),
             "the session remembers where it actually ran"
+        );
+    }
+
+    /// The branch selector's removal runs the same shared convergence as the
+    /// task engine, with its own bookkeeping after the folder drop: closed tabs,
+    /// the conversations' refetch, the folder drop, then the detached task.
+    #[tokio::test]
+    async fn remove_worktree_announces_in_order_and_detaches_the_task_last() {
+        use crate::db::service::{conversation_service, tab_service};
+        use crate::models::agent::AgentType;
+        use crate::web::event_bridge::{
+            WebEventBroadcaster, CONVERSATIONS_BULK_CHANGED_EVENT, FOLDER_CHANGED_EVENT,
+            TABS_CHANGED_EVENT, WORK_TASK_CHANGED_EVENT,
+        };
+
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo.clone()).await.expect("root");
+        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
+            .await
+            .expect("worktree folder");
+        let conv =
+            conversation_service::create(&db.conn, wt_folder.id, AgentType::ClaudeCode, None, None)
+                .await
+                .expect("conversation");
+        tab_service::save_all_tabs_cas(
+            &db.conn,
+            vec![crate::models::OpenedTab {
+                id: 0,
+                folder_id: wt_folder.id,
+                conversation_id: Some(conv.id),
+                agent_type: AgentType::ClaudeCode,
+                position: 0,
+                is_active: true,
+                is_pinned: false,
+            }],
+            0,
+        )
+        .await
+        .expect("tabs");
+        seed_task_on_worktree(&db, root.id, wt_folder.id).await;
+
+        let broadcaster = std::sync::Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+        let removal =
+            git_remove_worktree_core(&emitter, &db, repo, "wt".into(), root.id, true, false)
+                .await
+                .expect("worktree + branch removal");
+        assert_eq!(removal.reparented, 1);
+
+        let channels: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|ev| ev.channel.to_string())
+            .filter(|c| {
+                [
+                    TABS_CHANGED_EVENT,
+                    CONVERSATIONS_BULK_CHANGED_EVENT,
+                    FOLDER_CHANGED_EVENT,
+                    WORK_TASK_CHANGED_EVENT,
+                ]
+                .contains(&c.as_str())
+            })
+            .collect();
+        assert_eq!(
+            channels,
+            vec![
+                TABS_CHANGED_EVENT.to_string(),
+                CONVERSATIONS_BULK_CHANGED_EVENT.to_string(),
+                FOLDER_CHANGED_EVENT.to_string(),
+                WORK_TASK_CHANGED_EVENT.to_string(),
+            ]
         );
     }
 

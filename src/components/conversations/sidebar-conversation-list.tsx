@@ -107,6 +107,7 @@ import {
   SubsessionAncestorRails,
   CONV_RAIL_DEPTH_STEP,
 } from "./sidebar-conversation-card"
+import { MoveConversationDialog } from "./move-conversation-dialog"
 import {
   applyLayoutMove,
   buildDragSlots,
@@ -2236,6 +2237,20 @@ export function SidebarConversationList({
     [updateConversationLocal]
   )
 
+  // "Move to project…" — one dialog for the whole list, like the other
+  // per-row actions, so the card memo keeps bailing out on a stable callback.
+  const [moveTarget, setMoveTarget] = useState<DbConversationSummary | null>(
+    null
+  )
+  const handleMoveToProject = useCallback(
+    (conversation: DbConversationSummary) => setMoveTarget(conversation),
+    []
+  )
+  const moveTargets = useMemo(
+    () => (moveTarget ? [moveTarget] : []),
+    [moveTarget]
+  )
+
   const handleNewConversation = useCallback(() => {
     // Starting a conversation returns to the conversation workspace if a
     // workbench route (e.g. Automations) was taking over the content region.
@@ -3276,6 +3291,7 @@ export function SidebarConversationList({
         onStatusChange={handleStatusChange}
         onNewConversation={handleNewConversationForFolder}
         onTogglePin={handleTogglePin}
+        onMoveToProject={handleMoveToProject}
         depth={row.depth}
         hasChildren={conv.child_count > 0}
         expanded={conversationExpanded.has(conv.id)}
@@ -3612,6 +3628,12 @@ export function SidebarConversationList({
           </ContextMenuContent>
         </ContextMenu>
       )}
+
+      <MoveConversationDialog
+        open={moveTarget !== null}
+        onOpenChange={(open) => !open && setMoveTarget(null)}
+        conversations={moveTargets}
+      />
 
       <AlertDialog
         open={removeConfirm !== null}

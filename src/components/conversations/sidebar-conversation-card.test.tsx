@@ -218,6 +218,52 @@ describe("SidebarConversationCard pin action", () => {
   })
 })
 
+describe("SidebarConversationCard move to project", () => {
+  const onMoveToProject = vi.fn()
+  beforeEach(() => onMoveToProject.mockClear())
+
+  function renderCard(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+        onMoveToProject={onMoveToProject}
+      />
+    )
+  }
+
+  it("offers the move on a regular conversation", () => {
+    const c = conv(1)
+    const { getByText } = renderCard(c)
+    fireEvent.contextMenu(getByText("conv-1"))
+    fireEvent.click(getByText("Move to project…"))
+    expect(onMoveToProject).toHaveBeenCalledWith(c)
+  })
+
+  it("offers the move on a chat conversation", () => {
+    const { getByText } = renderCard({ ...conv(2), kind: "chat" })
+    fireEvent.contextMenu(getByText("conv-2"))
+    expect(screen.getByText("Move to project…")).toBeDefined()
+  })
+
+  it("does not offer it on a sub-session — it moves with its root", () => {
+    const child: DbConversationSummary = {
+      ...conv(3),
+      kind: "delegate",
+      parent_id: 1,
+    }
+    const { getByText } = renderCard(child)
+    fireEvent.contextMenu(getByText("conv-3"))
+    expect(screen.queryByText("Move to project…")).toBeNull()
+  })
+})
+
 describe("SidebarConversationCard command-line badge", () => {
   function renderCard(c: DbConversationSummary) {
     return renderWithIntl(
@@ -704,14 +750,14 @@ describe("SidebarConversationCard hover details bubble", () => {
     const origin = "/Users/dev/projects/codeg-feature-x"
     const { container } = renderCard({ ...conv(1), origin_cwd: origin })
 
-    expect(screen.queryByText("Source worktree removed")).toBeNull()
-    expect(screen.queryByTitle("Source worktree removed")).toBeNull()
+    expect(screen.queryByText("Original working directory")).toBeNull()
+    expect(screen.queryByTitle("Original working directory")).toBeNull()
 
     fireEvent.pointerEnter(rowOf(container), { pointerType: "mouse" })
     act(() => {
       vi.advanceTimersByTime(600)
     })
-    expect(screen.getByText("Source worktree removed")).toBeDefined()
+    expect(screen.getByText("Original working directory")).toBeDefined()
     expect(screen.getByText(origin)).toBeDefined()
   })
 

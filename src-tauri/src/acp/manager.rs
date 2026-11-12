@@ -484,6 +484,19 @@ pub struct ConnectionManager {
     /// touch the same map. At most one per connection (the agent is blocked in
     /// its `exit_plan_mode` call) — no cap, no cumulative growth.
     pending_plan_approvals: Arc<Mutex<HashMap<String, PendingPlanApprovalEntry>>>,
+    /// Conversations a user moved to another folder during this process's
+    /// life (root and the delegation children that moved with it).
+    ///
+    /// Membership only. The fences that consult it — prompt admission in
+    /// `send_prompt_linked_full` and live-connection discovery — read the
+    /// row's CURRENT folder from the database and compare it with the
+    /// connection's launch directory, so a second move, or a move into a
+    /// worktree that is later removed and re-parented, is judged by where the
+    /// row is now, never by where some earlier move put it. Conversations that
+    /// were never moved are not in here, so nothing about them changes: a
+    /// to-do task's retry still resumes its session wherever the task put it.
+    /// Bounded by the number of conversations moved in one process lifetime.
+    relocated: Arc<std::sync::Mutex<std::collections::HashSet<i32>>>,
 }
 
 /// A parked `ask_user_question` awaiting its answer. The `sender` resolves the
@@ -549,6 +562,110 @@ struct PendingPlanApprovalEntry {
     sender: tokio::sync::oneshot::Sender<PlanApprovalAnswer>,
 }
 
+/// Why ending a connection right now would kill work the user started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionBusy {
+    /// A turn is in flight.
+    Turn,
+    /// The agent is waiting on a permission answer.
+    PendingPermission,
+    /// Launched-but-unresolved background work (async sub-agent, background
+    /// shell) — it runs inside the agent CLI and dies with it.
+    BackgroundWork,
+    /// Claude Code's Remote Control: the session was handed to claude.ai/code
+    /// or a phone.
+    RemoteControl,
+    /// A codeg delegation whose child is still running; ending the parent
+    /// cancels it.
+    DelegatedChild,
+    /// A goal loop is open and driving work the agent starts on its own.
+    Goal,
+}
+
+/// The work a connection is carrying that its teardown would kill — the
+/// conditions the idle sweep honours on a `Connected` connection, shared with
+/// "move conversation", which must not pull a working agent out of its folder
+/// either. `child_live` answers whether a delegated child connection is still
+/// in the connection map: an entry whose terminal frame never arrived must not
+/// pin the parent forever.
+fn teardown_blocker(
+    state: &crate::acp::session_state::SessionState,
+    now: chrono::DateTime<chrono::Utc>,
+    child_live: impl Fn(&str) -> bool,
+) -> Option<ConnectionBusy> {
+    if state.pending_permission.is_some() {
+        return Some(ConnectionBusy::PendingPermission);
+    }
+    if state.has_active_background_work(now) {
+        return Some(ConnectionBusy::BackgroundWork);
+    }
+    // Claude Code's Remote Control runs in the agent CLI: the user handed the
+    // session to claude.ai/code or a phone, and disconnecting would end it
+    // there. It stays until they turn it off or close the connection
+    // themselves.
+    if state.remote_control.is_some() {
+        return Some(ConnectionBusy::RemoteControl);
+    }
+    // A codeg delegation still running. It outlives the turn that started it,
+    // so its parent is idle by design while the child works, and ending the
+    // parent cancels every child it has in flight (`cancel_by_parent`). Every
+    // delegation is counted, not just the ones bound to a card
+    // (`active_delegations`).
+    if state
+        .delegated_children
+        .iter()
+        .any(|child| child_live(child))
+    {
+        return Some(ConnectionBusy::DelegatedChild);
+    }
+    None
+}
+
+/// Whether a connection launched in `launch` is running in `current` (a folder
+/// path from the database). Compared as the parsers compare paths first, then
+/// — only if that says no — with both sides canonicalized, so a symlinked or
+/// differently-spelled path to the same directory still matches. A connection
+/// with no launch directory never matches.
+pub(crate) fn launch_dir_matches(launch: Option<&std::path::Path>, current: &str) -> bool {
+    let Some(launch) = launch else {
+        return false;
+    };
+    if crate::parsers::path_eq_for_matching(&launch.to_string_lossy(), current) {
+        return true;
+    }
+    match (
+        std::fs::canonicalize(launch),
+        std::fs::canonicalize(current),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// A conversation "move to project" is about to relocate: what identifies the
+/// connections working on it.
+#[derive(Debug, Clone)]
+pub struct RelocatingConversation {
+    pub id: i32,
+    pub agent_type: AgentType,
+    pub external_id: Option<String>,
+}
+
+/// The prompt locks of every connection working on a set of conversations,
+/// held — in connection-id order — while they are checked for work in flight,
+/// the rows are moved, and the idle connections are ended. No prompt can be
+/// admitted on any of them meanwhile. Dropping it releases the locks.
+pub struct ConversationConnectionsLock {
+    connection_ids: Vec<String>,
+    _guards: Vec<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl ConversationConnectionsLock {
+    pub fn connection_ids(&self) -> &[String] {
+        &self.connection_ids
+    }
+}
+
 /// What [`ConnectionManager::spawn_agent_with_outcome`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnOutcome {
@@ -578,6 +695,7 @@ impl ConnectionManager {
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
             question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
+            relocated: Arc::new(std::sync::Mutex::new(Default::default())),
         }
     }
 
@@ -596,6 +714,7 @@ impl ConnectionManager {
             pending_questions: self.pending_questions.clone(),
             question_registration: self.question_registration.clone(),
             pending_plan_approvals: self.pending_plan_approvals.clone(),
+            relocated: self.relocated.clone(),
         }
     }
 
@@ -650,6 +769,7 @@ impl ConnectionManager {
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
             question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
+            relocated: Arc::new(std::sync::Mutex::new(Default::default())),
         }
     }
 
@@ -1070,30 +1190,7 @@ impl ConnectionManager {
                 if state.status != ConnectionStatus::Connected {
                     continue;
                 }
-                if state.pending_permission.is_some() {
-                    continue;
-                }
-                if state.has_active_background_work(now) {
-                    continue;
-                }
-                // Claude Code's Remote Control runs in the agent CLI: the user
-                // handed the session to claude.ai/code or a phone, and
-                // disconnecting would end it there. It stays until they turn it
-                // off or close the connection themselves.
-                if state.remote_control.is_some() {
-                    continue;
-                }
-                // A codeg delegation still running. It outlives the turn that
-                // started it, so its parent is idle by design while the child
-                // works, and ending the parent cancels every child it has in
-                // flight (`cancel_by_parent`). Every delegation is counted, not
-                // just the ones bound to a card (`active_delegations`). Only a
-                // child still in the map counts: an entry whose terminal frame
-                // never arrived must not pin the parent forever.
-                if state
-                    .delegated_children
-                    .iter()
-                    .any(|child| connections.contains_key(child))
+                if teardown_blocker(&state, now, |child| connections.contains_key(child)).is_some()
                 {
                     continue;
                 }
@@ -1473,21 +1570,31 @@ impl ConnectionManager {
         // Snapshot what we need from the connection map under one short lock.
         // The conversation-linked check happens INSIDE the prompt lock so
         // any racing send sees a consistent post-link state.
-        let (state_arc, emitter, agent_type, already_linked, turn_in_flight) = {
+        let (
+            state_arc,
+            emitter,
+            agent_type,
+            already_linked,
+            turn_in_flight,
+            bound_conversation_id,
+            launch_dir,
+        ) = {
             let connections = self.connections.lock().await;
             let conn = connections
                 .get(conn_id)
                 .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
-            let (already, in_flight) = {
+            let (bound, in_flight, launch_dir) = {
                 let s = conn.state.read().await;
-                (s.conversation_id.is_some(), s.turn_in_flight)
+                (s.conversation_id, s.turn_in_flight, s.working_dir.clone())
             };
             (
                 conn.state.clone(),
                 conn.emitter.clone(),
                 conn.agent_type,
-                already,
+                bound.is_some(),
                 in_flight,
+                bound,
+                launch_dir,
             )
         };
 
@@ -1507,6 +1614,18 @@ impl ConnectionManager {
                 "[ACP] prompt rejected before admission: a turn is already in flight"
             );
             return Err(AcpError::TurnInProgress);
+        }
+
+        // A conversation the user moved to another folder must not run a turn
+        // on a connection started in the folder it left — on the already-linked
+        // fast path, or when adopting the caller's row (Branch A). Checked under
+        // `prompt_lock`, which the move holds while it writes the row and marks
+        // it, so a prompt is judged either entirely before the move (and the
+        // move waits for it, then sees the turn and skips) or after it. Before
+        // any side effect: a refusal changes no row and broadcasts nothing.
+        if let Some(cid) = bound_conversation_id.or(conversation_id) {
+            self.admit_relocated(&db.conn, cid, launch_dir.as_deref())
+                .await?;
         }
 
         // Re-hydrate uploaded image attachments (web / remote-workspace mode
@@ -2639,6 +2758,15 @@ impl ConnectionManager {
                     };
                     // The pre-fork history was started where the original was.
                     let source = current.source.clone();
+                    // ...and was recorded in the directory the original
+                    // remembers as its origin (a worktree it was re-parented
+                    // out of, the scratch dir of a chat it was moved out of).
+                    // The stale-id history fallback matches on it, and the chat
+                    // scratch-dir GC keeps the directory alive while some row
+                    // remembers it — so the sibling must carry it too, or
+                    // deleting the original would leave the sibling's history
+                    // (and the files the agent wrote) to be reclaimed.
+                    let origin_cwd = current.origin_cwd.clone();
 
                     // UPDATE current row → S2. Writing external_id explicitly
                     // here closes the race against `refreshConversations()`
@@ -2714,7 +2842,7 @@ impl ConnectionManager {
                         updated_at: Set(now),
                         deleted_at: Set(None),
                         pinned_at: Set(None),
-                        origin_cwd: Set(None),
+                        origin_cwd: Set(origin_cwd),
                         assistant_id: Set(None),
                         assistant_snapshot: Set(None),
                         source: Set(source),
@@ -4255,20 +4383,236 @@ impl ConnectionManager {
         }
     }
 
+    /// Take the prompt locks of every connection working on `rows`: those bound
+    /// to one of the conversations, plus those not bound to any conversation
+    /// yet whose session is one of theirs (`agent_type` + `external_id`) — a
+    /// connection binds its conversation only on its first prompt, so a
+    /// conversation opened but not yet prompted is still worked on by it.
+    /// Locks are taken in connection-id order, so two moves can't deadlock.
+    ///
+    /// A connection that appears after this returns is not covered; the
+    /// relocation fence (see [`Self::mark_relocated`]) is what stops it from
+    /// running a turn in the old folder.
+    pub async fn lock_conversation_connections(
+        &self,
+        rows: &[RelocatingConversation],
+    ) -> ConversationConnectionsLock {
+        // Read each state after letting go of the map: never wait on a state
+        // lock while holding the map lock.
+        let all: Vec<_> = {
+            let conns = self.connections.lock().await;
+            conns
+                .iter()
+                .map(|(id, conn)| {
+                    (
+                        id.clone(),
+                        conn.agent_type,
+                        conn.state.clone(),
+                        conn.prompt_lock.clone(),
+                    )
+                })
+                .collect()
+        };
+        let mut matched = Vec::new();
+        for (id, agent_type, state, lock) in all {
+            let s = state.read().await;
+            let hit = match s.conversation_id {
+                Some(cid) => rows.iter().any(|r| r.id == cid),
+                None => s.external_id.as_deref().is_some_and(|eid| {
+                    rows.iter().any(|r| {
+                        r.agent_type == agent_type && r.external_id.as_deref() == Some(eid)
+                    })
+                }),
+            };
+            if hit {
+                matched.push((id, lock));
+            }
+        }
+        matched.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut guards = Vec::with_capacity(matched.len());
+        let mut connection_ids = Vec::with_capacity(matched.len());
+        for (id, lock) in matched {
+            guards.push(lock.lock_owned().await);
+            connection_ids.push(id);
+        }
+        ConversationConnectionsLock {
+            connection_ids,
+            _guards: guards,
+        }
+    }
+
+    /// The first reason any connection under `lock` must not be ended now:
+    /// everything the idle sweep honours, plus a turn in flight and an open
+    /// goal loop (its continuations are turns the agent starts itself, which
+    /// `Prompting` never shows). Read while the prompt locks are held, so no
+    /// prompt can be admitted between this and the move.
+    pub async fn busy_reason(&self, lock: &ConversationConnectionsLock) -> Option<ConnectionBusy> {
+        let now = chrono::Utc::now();
+        let (states, live): (Vec<_>, std::collections::HashSet<String>) = {
+            let conns = self.connections.lock().await;
+            (
+                lock.connection_ids
+                    .iter()
+                    .filter_map(|id| conns.get(id).map(|c| c.state.clone()))
+                    .collect(),
+                conns.keys().cloned().collect(),
+            )
+        };
+        for state in states {
+            let s = state.read().await;
+            if matches!(
+                s.status,
+                ConnectionStatus::Disconnected | ConnectionStatus::Error
+            ) {
+                continue;
+            }
+            if s.turn_in_flight || s.status == ConnectionStatus::Prompting {
+                return Some(ConnectionBusy::Turn);
+            }
+            if let Some(reason) = teardown_blocker(&s, now, |child| live.contains(child)) {
+                return Some(reason);
+            }
+            if s.goal_active {
+                return Some(ConnectionBusy::Goal);
+            }
+        }
+        None
+    }
+
+    /// End every connection under `lock` (all idle — the caller checked
+    /// [`Self::busy_reason`]) and then release the locks. `disconnect` does not
+    /// take the prompt lock, so ending them while it is held cannot deadlock.
+    pub async fn disconnect_locked(&self, lock: ConversationConnectionsLock) -> usize {
+        let mut ended = 0;
+        for id in &lock.connection_ids {
+            if self.disconnect(id).await.is_ok() {
+                ended += 1;
+            }
+        }
+        drop(lock);
+        ended
+    }
+
+    /// Record that the user moved `conversation_ids` to another folder. Call
+    /// after the rows are written and before the connection locks are
+    /// released, so no prompt is admitted on an old-folder connection in
+    /// between.
+    pub fn mark_relocated(&self, conversation_ids: &[i32]) {
+        let mut set = self.relocated.lock().unwrap_or_else(|e| e.into_inner());
+        set.extend(conversation_ids.iter().copied());
+    }
+
+    /// For a conversation moved during this process's life, the folder it is in
+    /// now (`(folder_id, path)`, read from the database); `None` when it was
+    /// never moved — or its row or folder is gone — and no fence applies.
+    pub(crate) async fn relocation_fence(
+        &self,
+        db: &DatabaseConnection,
+        conversation_id: i32,
+    ) -> Option<(i32, String)> {
+        let moved = {
+            let set = self.relocated.lock().unwrap_or_else(|e| e.into_inner());
+            set.contains(&conversation_id)
+        };
+        if !moved {
+            return None;
+        }
+        let row = conversation::Entity::find_by_id(conversation_id)
+            .one(db)
+            .await
+            .ok()
+            .flatten()?;
+        let folder = crate::db::entities::folder::Entity::find_by_id(row.folder_id)
+            .one(db)
+            .await
+            .ok()
+            .flatten()?;
+        Some((folder.id, folder.path))
+    }
+
+    /// Refuse a prompt for a moved conversation on a connection launched
+    /// anywhere but the folder the conversation is in now.
+    async fn admit_relocated(
+        &self,
+        db: &DatabaseConnection,
+        conversation_id: i32,
+        launch_dir: Option<&std::path::Path>,
+    ) -> Result<(), AcpError> {
+        match self.relocation_fence(db, conversation_id).await {
+            Some((folder_id, path)) if !launch_dir_matches(launch_dir, &path) => {
+                tracing::info!(
+                    conversation_id,
+                    folder_id,
+                    "[ACP] prompt refused: the conversation was moved out of this \
+                     connection's folder"
+                );
+                Err(AcpError::ConversationMoved {
+                    conversation_id,
+                    folder_id,
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// [`Self::find_connection_by_conversation_id`] restricted to connections
+    /// launched in `dir` (`None`: any).
+    pub(crate) async fn find_connection_by_conversation_id_in(
+        &self,
+        conversation_id: i32,
+        dir: Option<&str>,
+    ) -> Option<String> {
+        let connections = self.connections.lock().await;
+        for (id, conn) in connections.iter() {
+            let state = conn.state.read().await;
+            if state.conversation_id != Some(conversation_id) {
+                continue;
+            }
+            if let Some(dir) = dir {
+                if !launch_dir_matches(state.working_dir.as_deref(), dir) {
+                    continue;
+                }
+            }
+            return Some(id.clone());
+        }
+        None
+    }
+
+    /// [`Self::find_connection_by_external_id`] restricted to connections
+    /// launched in `dir` (`None`: any).
+    pub(crate) async fn find_connection_by_external_id_in(
+        &self,
+        external_id: &str,
+        agent_type: AgentType,
+        dir: Option<&str>,
+    ) -> Option<String> {
+        let connections = self.connections.lock().await;
+        for (id, conn) in connections.iter() {
+            if conn.agent_type != agent_type {
+                continue;
+            }
+            let state = conn.state.read().await;
+            if state.external_id.as_deref() != Some(external_id) {
+                continue;
+            }
+            if let Some(dir) = dir {
+                if !launch_dir_matches(state.working_dir.as_deref(), dir) {
+                    continue;
+                }
+            }
+            return Some(id.clone());
+        }
+        None
+    }
+
     /// Resolve a conversation_id to its currently-active connection id, if any.
     /// Used by the by-conversation snapshot endpoint and the LifecycleSubscriber.
     /// Per-session state is acquired via `read().await` to avoid the
     /// `try_read`-skip false negative that would intermittently return None
     /// while `emit_with_state` is mid-update — the wait is microseconds.
     pub async fn find_connection_by_conversation_id(&self, conversation_id: i32) -> Option<String> {
-        let connections = self.connections.lock().await;
-        for (id, conn) in connections.iter() {
-            let state = conn.state.read().await;
-            if state.conversation_id == Some(conversation_id) {
-                return Some(id.clone());
-            }
-        }
-        None
+        self.find_connection_by_conversation_id_in(conversation_id, None)
+            .await
     }
 
     /// The in-flight user prompt for `conversation_id` and the instant its turn
@@ -4324,17 +4668,8 @@ impl ConnectionManager {
         external_id: &str,
         agent_type: AgentType,
     ) -> Option<String> {
-        let connections = self.connections.lock().await;
-        for (id, conn) in connections.iter() {
-            if conn.agent_type != agent_type {
-                continue;
-            }
-            let state = conn.state.read().await;
-            if state.external_id.as_deref() == Some(external_id) {
-                return Some(id.clone());
-            }
-        }
-        None
+        self.find_connection_by_external_id_in(external_id, agent_type, None)
+            .await
     }
 }
 
@@ -9002,6 +9337,74 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(current.tag_ids, expected, "the forked row keeps them too");
+    }
+
+    /// The sibling holds the pre-fork history, which was recorded where the
+    /// original remembers: a chat moved into a project, forked, and then the
+    /// moved row deleted must still leave the sibling's history (and the chat's
+    /// scratch dir, which the GC keeps for any row remembering it) intact.
+    #[tokio::test]
+    async fn fork_session_sibling_remembers_where_the_history_was_recorded() {
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let project = test_helpers::seed_folder(&db, "/tmp/fork-origin-project").await;
+        let chat = crate::commands::conversations::create_chat_conversation_core(
+            &db.conn,
+            data_dir.path(),
+            AgentType::ClaudeCode,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, chat.conversation_id, "session-S1", &[])
+            .await
+            .unwrap();
+        crate::commands::conversations::move_conversations_core(
+            &EventEmitter::Noop,
+            &db.conn,
+            &ConnectionManager::new(),
+            vec![chat.conversation_id],
+            project,
+        )
+        .await
+        .unwrap();
+
+        let (mgr, join) = manager_with_fake_fork(
+            "c-fork-origin",
+            chat.conversation_id,
+            "session-S2",
+            "session-S1",
+        )
+        .await;
+        let result = mgr
+            .fork_session(&db, "c-fork-origin", None, None, None)
+            .await
+            .expect("fork_session should succeed");
+        let _ = join.await;
+
+        let sibling = conversation_service::get_by_id(&db.conn, result.sibling_conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            sibling.origin_cwd.as_deref(),
+            Some(chat.folder.path.as_str())
+        );
+        assert_eq!(sibling.folder_id, project);
+
+        conversation_service::soft_delete(&db.conn, chat.conversation_id)
+            .await
+            .unwrap();
+        let removed = crate::commands::conversations::gc_orphan_chat_dirs_core_with_threshold(
+            &db.conn,
+            data_dir.path(),
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+        assert_eq!(removed, 0);
+        assert!(std::path::Path::new(&chat.folder.path).is_dir());
     }
 
     #[tokio::test]

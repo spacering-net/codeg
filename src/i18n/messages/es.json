@@ -2230,7 +2230,7 @@
       "statusRunningBadge": "Ejecutando",
       "runningCountBadge": "{count, plural, one {# sesión en ejecución} other {# sesiones en ejecución}}",
       "statusCancelledBadge": "Cancelado",
-      "worktreeRemovedBadge": "Worktree de origen eliminado",
+      "originalWorkingDir": "Directorio de trabajo original",
       "cliBadge": "Iniciada desde la línea de comandos",
       "conversationCountUnit": "{count, plural, one {# conversación} other {# conversaciones}}",
       "emptyFolderHint": "Sin conversaciones",
@@ -2271,6 +2271,7 @@
         "untitledConversation": "Conversación sin título",
         "setStatus": "Cambiar estado…",
         "deleteSelected": "Eliminar",
+        "moveSelected": "Mover a…",
         "noConversations": "No hay conversaciones en esta carpeta.",
         "noConversationsWorkspace": "No hay conversaciones en el espacio de trabajo.",
         "noMatchingConversations": "Ninguna conversación coincide con los filtros.",
@@ -2404,6 +2405,7 @@
       "restore": "Restaurar",
       "attachToCurrentSession": "Agregar a la sesión",
       "rename": "Renombrar",
+      "moveToProject": "Mover a un proyecto…",
       "status": "Estado",
       "delete": "Eliminar",
       "importLocalSessions": "Importar sesiones locales",
@@ -2419,6 +2421,31 @@
       "reopen": "Reabrir",
       "expandSubsessions": "Expandir subconversaciones",
       "collapseSubsessions": "Contraer subconversaciones"
+    },
+    "moveConversation": {
+      "title": "Mover a otro proyecto",
+      "titleMany": "Mover {count, plural, one {# conversación} other {# conversaciones}} a otro proyecto",
+      "targetLabel": "Proyecto",
+      "targetPlaceholder": "Elige un proyecto",
+      "explain": "A partir del siguiente mensaje, el agente trabaja en {path}. El historial no cambia. Si el agente no puede reanudar la sesión en el nuevo directorio, se te ofrecerá recargarla o iniciar una sesión nueva.",
+      "explainNoTarget": "A partir del siguiente mensaje, el agente trabaja en el directorio del proyecto elegido. El historial no cambia.",
+      "chatFilesNote": "Los archivos creados durante el chat se quedan en su directorio temporal {path}; no se mueven al proyecto.",
+      "chatFilesNoteMany": "Los archivos creados durante estos chats se quedan en sus directorios temporales; no se mueven al proyecto.",
+      "noTargets": "No hay otro proyecto abierto al que moverla.",
+      "cancel": "Cancelar",
+      "move": "Mover",
+      "toastMoved": "{count, plural, one {Se movió # conversación} other {Se movieron # conversaciones}} a {folder}",
+      "toastSkipped": "{count, plural, one {# conversación no se movió} other {# conversaciones no se movieron}}",
+      "toastFailed": "No se pudo mover: {message}",
+      "skipReason": {
+        "not_found": "Ya no existe",
+        "not_movable": "Las subconversaciones se mueven con su conversación principal",
+        "already_there": "Ya está en este proyecto",
+        "task_owned": "Pertenece a una tarea pendiente",
+        "busy": "Un agente está trabajando en ella; inténtalo cuando termine",
+        "conflict": "Cambió mientras se movía; inténtalo de nuevo",
+        "target_unavailable": "El proyecto se cerró o se eliminó"
+      }
     },
     "search": {
       "dialogTitle": "Buscar",
@@ -3447,7 +3474,8 @@
         },
         "errors": {
           "connectionFailed": "Conexión fallida",
-          "sendPromptFailed": "No se pudo enviar el mensaje: {error}"
+          "sendPromptFailed": "No se pudo enviar el mensaje: {error}",
+          "conversationMoved": "Esta conversación se movió a {folder}. Vuelve a enviar el mensaje para continuar allí."
         }
       },
       "shared": {

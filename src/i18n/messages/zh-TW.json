@@ -2230,7 +2230,7 @@
       "statusRunningBadge": "運行中",
       "runningCountBadge": "{count} 個會話進行中",
       "statusCancelledBadge": "已取消",
-      "worktreeRemovedBadge": "來源 worktree 已刪除",
+      "originalWorkingDir": "最初執行目錄",
       "cliBadge": "從命令列啟動",
       "conversationCountUnit": "{count} 條",
       "emptyFolderHint": "暫無對話",
@@ -2271,6 +2271,7 @@
         "untitledConversation": "未命名會話",
         "setStatus": "設為狀態…",
         "deleteSelected": "刪除",
+        "moveSelected": "移動到…",
         "noConversations": "此資料夾暫無會話。",
         "noConversationsWorkspace": "工作區暫無會話。",
         "noMatchingConversations": "沒有符合過濾條件的會話。",
@@ -2404,6 +2405,7 @@
       "restore": "還原",
       "attachToCurrentSession": "添加到會話",
       "rename": "重新命名",
+      "moveToProject": "移動到專案…",
       "status": "狀態",
       "delete": "刪除",
       "importLocalSessions": "匯入本地會話",
@@ -2419,6 +2421,31 @@
       "reopen": "重新開啟",
       "expandSubsessions": "展開子會話",
       "collapseSubsessions": "摺疊子會話"
+    },
+    "moveConversation": {
+      "title": "移動到其他專案",
+      "titleMany": "將 {count} 個對話移動到其他專案",
+      "targetLabel": "專案",
+      "targetPlaceholder": "選擇專案",
+      "explain": "從下一則訊息起，代理會在 {path} 中工作，歷史記錄保持不變。若該代理無法在新目錄中恢復對話，會提示你重新載入或新建對話。",
+      "explainNoTarget": "從下一則訊息起，代理會在所選專案的目錄中工作，歷史記錄保持不變。",
+      "chatFilesNote": "聊天中產生的檔案仍保留在原暫存目錄 {path}，不會搬進專案。",
+      "chatFilesNoteMany": "這些聊天中產生的檔案仍保留在各自的暫存目錄，不會搬進專案。",
+      "noTargets": "沒有其他已開啟的專案可以移入。",
+      "cancel": "取消",
+      "move": "移動",
+      "toastMoved": "已將 {count} 個對話移動到 {folder}",
+      "toastSkipped": "{count} 個對話未移動",
+      "toastFailed": "移動失敗：{message}",
+      "skipReason": {
+        "not_found": "對話已不存在",
+        "not_movable": "子對話會隨父對話一起移動",
+        "already_there": "已在該專案中",
+        "task_owned": "屬於看板任務",
+        "busy": "代理正在處理它，請等它完成後再試",
+        "conflict": "移動過程中對話發生了變化，請重試",
+        "target_unavailable": "目標專案已關閉或移除"
+      }
     },
     "search": {
       "dialogTitle": "搜尋",
@@ -3447,7 +3474,8 @@
         },
         "errors": {
           "connectionFailed": "連線失敗",
-          "sendPromptFailed": "訊息傳送失敗：{error}"
+          "sendPromptFailed": "訊息傳送失敗：{error}",
+          "conversationMoved": "此對話已移到 {folder}，請重新傳送訊息，在那裡繼續。"
         }
       },
       "shared": {

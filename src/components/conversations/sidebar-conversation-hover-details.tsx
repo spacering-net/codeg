@@ -171,10 +171,11 @@ export function SidebarConversationHoverDetails({
         <InfoItem label={t("folderPath")}>
           <LtrValue>{folder?.path || none}</LtrValue>
         </InfoItem>
-        {/* Re-parented out of a removed worktree: the path above is where the
-            conversation lives NOW, so surface where it originally ran. */}
+        {/* Re-parented out of a removed worktree, or moved to another project
+            by the user: the path above is where the conversation lives NOW, so
+            surface where it originally ran. */}
         {conversation.origin_cwd && (
-          <InfoItem label={tSidebar("worktreeRemovedBadge")}>
+          <InfoItem label={tSidebar("originalWorkingDir")}>
             <LtrValue>{conversation.origin_cwd}</LtrValue>
           </InfoItem>
         )}

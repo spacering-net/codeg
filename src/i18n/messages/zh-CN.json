@@ -2230,7 +2230,7 @@
       "statusRunningBadge": "运行中",
       "runningCountBadge": "{count} 个会话进行中",
       "statusCancelledBadge": "已取消",
-      "worktreeRemovedBadge": "源 worktree 已删除",
+      "originalWorkingDir": "最初运行目录",
       "cliBadge": "从命令行启动",
       "conversationCountUnit": "{count} 条",
       "emptyFolderHint": "暂无会话",
@@ -2271,6 +2271,7 @@
         "untitledConversation": "未命名会话",
         "setStatus": "设为状态…",
         "deleteSelected": "删除",
+        "moveSelected": "移动到…",
         "noConversations": "此文件夹暂无会话。",
         "noConversationsWorkspace": "工作区暂无会话。",
         "noMatchingConversations": "没有匹配过滤条件的会话。",
@@ -2404,6 +2405,7 @@
       "restore": "还原",
       "attachToCurrentSession": "添加到会话",
       "rename": "重命名",
+      "moveToProject": "移动到项目…",
       "status": "状态",
       "delete": "删除",
       "importLocalSessions": "导入本地会话",
@@ -2419,6 +2421,31 @@
       "reopen": "重新打开",
       "expandSubsessions": "展开子会话",
       "collapseSubsessions": "折叠子会话"
+    },
+    "moveConversation": {
+      "title": "移动到其他项目",
+      "titleMany": "将 {count} 个会话移动到其他项目",
+      "targetLabel": "项目",
+      "targetPlaceholder": "选择项目",
+      "explain": "从下一条消息起，智能体会在 {path} 中工作，历史记录保持不变。若该智能体无法在新目录中恢复会话，会提示你重新加载或新建会话。",
+      "explainNoTarget": "从下一条消息起，智能体会在所选项目的目录中工作，历史记录保持不变。",
+      "chatFilesNote": "聊天中生成的文件仍保留在原临时目录 {path}，不会搬进项目。",
+      "chatFilesNoteMany": "这些聊天中生成的文件仍保留在各自的临时目录，不会搬进项目。",
+      "noTargets": "没有其他已打开的项目可以移入。",
+      "cancel": "取消",
+      "move": "移动",
+      "toastMoved": "已将 {count} 个会话移动到 {folder}",
+      "toastSkipped": "{count} 个会话未移动",
+      "toastFailed": "移动失败：{message}",
+      "skipReason": {
+        "not_found": "会话已不存在",
+        "not_movable": "子会话会随父会话一起移动",
+        "already_there": "已在该项目中",
+        "task_owned": "属于看板任务",
+        "busy": "智能体正在处理它，请等它完成后再试",
+        "conflict": "移动过程中会话发生了变化，请重试",
+        "target_unavailable": "目标项目已关闭或移除"
+      }
     },
     "search": {
       "dialogTitle": "搜索",
@@ -3447,7 +3474,8 @@
         },
         "errors": {
           "connectionFailed": "连接失败",
-          "sendPromptFailed": "消息发送失败：{error}"
+          "sendPromptFailed": "消息发送失败：{error}",
+          "conversationMoved": "该会话已移到 {folder}，请重新发送消息，在那里继续。"
         }
       },
       "shared": {

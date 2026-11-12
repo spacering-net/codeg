@@ -3019,6 +3019,28 @@ pub async fn clear_worktree(conn: &DatabaseConnection, id: i32) -> Result<(), Db
     Ok(())
 }
 
+/// Which of `conversation_ids` a live (not deleted) to-do task is bound to, in
+/// any status — finished tasks included. A task's conversation belongs to the
+/// task: its resume, retry and transcript view all find the session through
+/// the task's worktree and row, so "move to project" refuses these outright.
+pub async fn conversations_bound_to_tasks(
+    conn: &DatabaseConnection,
+    conversation_ids: &[i32],
+) -> Result<std::collections::HashSet<i32>, DbError> {
+    if conversation_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let rows: Vec<Option<i32>> = work_task::Entity::find()
+        .select_only()
+        .column(work_task::Column::ConversationId)
+        .filter(work_task::Column::ConversationId.is_in(conversation_ids.to_vec()))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .into_tuple()
+        .all(conn)
+        .await?;
+    Ok(rows.into_iter().flatten().collect())
+}
+
 /// Tasks in a status that is actively using their worktree — mid-run or
 /// mid-merge. Removing such a worktree would pull the directory out from under
 /// a live agent, so [`tasks_blocking_worktree_removal`] refuses on their behalf.
@@ -6087,5 +6109,44 @@ mod tests {
         .unwrap()
         .is_some());
         let _ = replacement;
+    }
+
+    /// "Move to project" refuses a task's conversation whatever the task's
+    /// status — a finished task still owns its session — but not once the task
+    /// itself is deleted.
+    #[tokio::test]
+    async fn conversations_bound_to_tasks_ignores_status_but_not_deletion() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-bound-convs").await;
+        let bind = |id: i32, conv: i32, status: WorkTaskStatus, deleted: bool| {
+            let conn = db.conn.clone();
+            async move {
+                let mut q = work_task::Entity::update_many()
+                    .col_expr(work_task::Column::ConversationId, Expr::value(Some(conv)))
+                    .col_expr(work_task::Column::Status, Expr::value(status_str(status)));
+                if deleted {
+                    q = q.col_expr(work_task::Column::DeletedAt, Expr::value(Some(Utc::now())));
+                }
+                q.filter(work_task::Column::Id.eq(id))
+                    .exec(&conn)
+                    .await
+                    .unwrap();
+            }
+        };
+        let done = create(&db.conn, draft(folder_id, "done")).await.unwrap();
+        let running = create(&db.conn, draft(folder_id, "running")).await.unwrap();
+        let deleted = create(&db.conn, draft(folder_id, "deleted")).await.unwrap();
+        bind(done.id, 11, WorkTaskStatus::Done, false).await;
+        bind(running.id, 12, WorkTaskStatus::Running, false).await;
+        bind(deleted.id, 13, WorkTaskStatus::Done, true).await;
+
+        let bound = conversations_bound_to_tasks(&db.conn, &[11, 12, 13, 14])
+            .await
+            .unwrap();
+        assert_eq!(bound, [11, 12].into_iter().collect());
+        assert!(conversations_bound_to_tasks(&db.conn, &[])
+            .await
+            .unwrap()
+            .is_empty());
     }
 }
