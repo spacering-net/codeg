@@ -45,7 +45,40 @@ const schedule=()=>{if(!queued){queued=true;requestAnimationFrame(update)}};
 addEventListener("resize",()=>{const h=measure(),v=innerHeight;if(lastHeight>0&&lastViewport>0&&v>lastViewport&&h>v&&Math.abs(h-lastHeight-(v-lastViewport))<=1)coupled=true;lastHeight=h;lastViewport=v;send(h)});
 const ro=new ResizeObserver(schedule);ro.observe(document.documentElement);if(document.body)ro.observe(document.body);
 new MutationObserver(schedule).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});
+addEventListener("message",(e)=>{
+  if(e.data&&e.data.type==="codeg-html:update"&&typeof e.data.html==="string"){
+    try{
+      coupled=false;
+      sent=0;
+      const p=new DOMParser().parseFromString(e.data.html,"text/html");
+      if(p&&p.body){
+        const curHead=document.head;
+        if(curHead){
+          let s=curHead.querySelector("style[data-update-style]");
+          if(!s){
+            s=document.createElement("style");
+            s.setAttribute("data-update-style","1");
+            curHead.appendChild(s);
+          }
+          let css="";
+          p.querySelectorAll("style").forEach(st=>{
+            if(!st.textContent.includes("color-scheme:")){
+              css+=st.textContent+"\\n";
+            }
+          });
+          s.textContent=css;
+        }
+        p.body.querySelectorAll("script").forEach(sc=>sc.remove());
+        document.body.innerHTML=p.body.innerHTML;
+        update();
+      }
+    }catch(err){}
+  }
+});
+update();
+if(document.readyState==="loading"){addEventListener("DOMContentLoaded",update)}
 addEventListener("load",update);
+parent.postMessage({type:"codeg-html:ready"},"*");
 })();</script>`
 
 /** Copy codeg's current theme tokens into the frame's variable contract. */

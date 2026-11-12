@@ -26,6 +26,7 @@ interface View {
 }
 
 const DEFAULT_VIEW: View = { preview: true, expanded: false }
+const THROTTLE_MS = 250
 
 /**
  * The documents previews built, by theme and source, the height each
@@ -70,9 +71,11 @@ export function HtmlCodePending() {
 export function HtmlCodePreview({
   source,
   children,
+  pending = false,
 }: {
   source: string
   children: ReactNode
+  pending?: boolean
 }) {
   const t = useTranslations("HtmlCodePreview")
   const { resolvedTheme } = useTheme()
@@ -85,94 +88,211 @@ export function HtmlCodePreview({
     setView(next)
   }
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const key = `${dark}\0${source}`
-  const [loaded, setLoaded] = useState<{
-    key: string
-    doc: string | null
-  } | null>(null)
+  const frameLoadedRef = useRef(false)
+  const pendingUpdateRef = useRef<string | null>(null)
+
+  // Throttling for high-frequency streamed tokens (200~300ms)
+  const [displaySource, setDisplaySource] = useState(source)
+  const lastUpdateRef = useRef(0)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingSourceRef = useRef(source)
+
+  useEffect(() => {
+    pendingSourceRef.current = source
+  }, [source])
+
+  useEffect(() => {
+    remember(views, source, view)
+  }, [source, view])
+
+  useEffect(() => {
+    if (!pending) {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDisplaySource(source)
+      lastUpdateRef.current = Date.now()
+      return
+    }
+
+    const now = Date.now()
+    const elapsed = now - lastUpdateRef.current
+
+    if (elapsed >= THROTTLE_MS) {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+      setDisplaySource(source)
+      lastUpdateRef.current = now
+    } else if (!timerRef.current) {
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null
+        setDisplaySource(pendingSourceRef.current)
+        lastUpdateRef.current = Date.now()
+      }, THROTTLE_MS - elapsed)
+    }
+  }, [source, pending])
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+    }
+  }, [])
+
+  const key = `${dark}\0${displaySource}`
+  const [frameDoc, setFrameDoc] = useState<string | null>(
+    () => frames.get(key)?.doc ?? null
+  )
   const [measured, setMeasured] = useState<{
     key: string
     height: number
   } | null>(null)
 
-  // What is on screen stays in the cache.
+  // What is on screen stays in the cache once finished.
   useEffect(() => {
+    if (pending) return
     pins.set(key, (pins.get(key) ?? 0) + 1)
     return () => {
       const count = (pins.get(key) ?? 1) - 1
       if (count > 0) pins.set(key, count)
       else pins.delete(key)
     }
-  }, [key])
+  }, [key, pending])
 
   useEffect(() => {
+    if (!displaySource.trim()) return
     const theme = readHtmlPreviewTheme()
-    if (frames.get(key)?.theme === theme) return
+    if (!pending && frames.get(key)?.theme === theme) return
     let active = true
-    buildChatHtmlDocument(source, { nonce: randomUUID(), dark, theme }).then(
+    buildChatHtmlDocument(displaySource, {
+      nonce: randomUUID(),
+      dark,
+      theme,
+      pending,
+    }).then(
       (doc) => {
-        remember(frames, key, {
-          doc,
-          theme,
-          height: frames.get(key)?.height,
-        })
-        if (active) setLoaded({ key, doc })
+        if (!active) return
+        if (!pending) {
+          remember(frames, key, {
+            doc,
+            theme,
+            height: frames.get(key)?.height ?? measured?.height,
+          })
+          setFrameDoc(doc)
+        } else {
+          // Streaming: mount the shell once with the first valid doc.
+          // All subsequent streaming deltas update via postMessage to prevent white flash / iframe teardown.
+          if (frameDoc === null) {
+            setFrameDoc(doc)
+          } else if (
+            frameLoadedRef.current &&
+            frameRef.current?.contentWindow
+          ) {
+            frameRef.current.contentWindow.postMessage(
+              { type: "codeg-html:update", html: doc },
+              "*"
+            )
+          } else {
+            pendingUpdateRef.current = doc
+          }
+        }
       },
       () => {
-        remember(frames, key, { doc: null, theme })
-        if (active) setLoaded({ key, doc: null })
+        if (!active) return
+        if (!pending) {
+          remember(frames, key, { doc: null, theme })
+          setFrameDoc(null)
+        }
       }
     )
     return () => {
       active = false
     }
-  }, [source, dark, key])
+  }, [displaySource, dark, key, pending, frameDoc, measured?.height])
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (!frameRef.current || event.source !== frameRef.current.contentWindow)
         return
       const data = event.data as { type?: unknown; height?: unknown } | null
-      if (
-        !data ||
-        data.type !== HTML_PREVIEW_SIZE_MESSAGE_TYPE ||
-        typeof data.height !== "number" ||
-        !Number.isFinite(data.height)
-      )
+      if (!data) return
+
+      if (data.type === "codeg-html:ready") {
+        frameLoadedRef.current = true
+        if (pendingUpdateRef.current && frameRef.current.contentWindow) {
+          frameRef.current.contentWindow.postMessage(
+            { type: "codeg-html:update", html: pendingUpdateRef.current },
+            "*"
+          )
+          pendingUpdateRef.current = null
+        }
         return
-      const height = Math.min(12000, Math.max(96, Math.ceil(data.height)))
-      const entry = frames.get(key)
-      if (entry) entry.height = height
-      setMeasured((prev) =>
-        prev?.key === key && prev.height === height ? prev : { key, height }
-      )
+      }
+
+      if (
+        data.type === HTML_PREVIEW_SIZE_MESSAGE_TYPE &&
+        typeof data.height === "number" &&
+        Number.isFinite(data.height)
+      ) {
+        const reported = Math.min(12000, Math.max(96, Math.ceil(data.height)))
+        const entry = frames.get(key)
+        if (entry) entry.height = reported
+        setMeasured((prev) => {
+          const nextHeight =
+            pending && prev?.height ? Math.max(prev.height, reported) : reported
+          return prev?.height === nextHeight
+            ? prev
+            : { key, height: nextHeight }
+        })
+      }
     }
     window.addEventListener("message", onMessage)
     return () => window.removeEventListener("message", onMessage)
-  }, [key])
+  }, [key, pending])
 
   const cached = frames.get(key)
-  const current = cached ?? (loaded?.key === key ? loaded : null)
-  const height =
-    measured?.key === key ? measured.height : (cached?.height ?? 160)
-  const overflows = height > 640
-  const framed = preview && Boolean(current?.doc)
-  const waiting = preview && current === null
+  const currentDoc = frameDoc ?? cached?.doc ?? null
+  const height = measured?.height ?? cached?.height ?? 160
+  // During streaming, allow frame height to expand smoothly to content height without forcing a scrollbar
+  const overflows = !pending && height > 640
+  const framed = preview && Boolean(currentDoc)
+  const waiting = preview && !framed
 
   return (
     <section
       className="not-prose group/html relative my-2 min-w-0"
       dir="ltr"
-      data-chat-html
+      data-chat-html={preview ? "preview" : "code"}
     >
       <div
         className={cn(
-          "absolute top-1 z-10 flex items-center gap-1 rounded-lg border bg-background/90 px-1 py-0.5 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover/html:opacity-100 group-focus-within/html:opacity-100 max-sm:opacity-100",
-          // Over code, keep clear of the code block's own copy and download
-          // buttons in the same corner.
+          "absolute top-1 z-10 flex items-center gap-1 rounded-lg border bg-background/90 px-1 py-0.5 shadow-sm backdrop-blur transition-opacity",
+          pending
+            ? "opacity-100"
+            : "opacity-0 group-hover/html:opacity-100 group-focus-within/html:opacity-100 max-sm:opacity-100",
           framed || waiting ? "end-1" : "end-18"
         )}
       >
+        {pending && !waiting && (
+          <span
+            role="status"
+            className="flex items-center gap-1.5 px-1.5 text-xs text-muted-foreground"
+          >
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+            </span>
+            <span className="text-[11px] font-medium max-xs:hidden">
+              {t("generating")}
+            </span>
+          </span>
+        )}
         <Button
           size="sm"
           variant={preview ? "ghost" : "secondary"}
@@ -190,15 +310,28 @@ export function HtmlCodePreview({
           {t("preview")}
         </Button>
       </div>
-      {framed && current?.doc ? (
+      {framed && currentDoc ? (
         <iframe
           ref={frameRef}
           title={t("title")}
-          className="block w-full border-0 bg-transparent transition-[height] duration-150"
+          className={cn(
+            "block w-full border-0 bg-transparent transition-[height] duration-150",
+            (!overflows || expanded) && "overflow-hidden"
+          )}
           style={{ height: expanded || !overflows ? height : 640 }}
           sandbox="allow-scripts"
           referrerPolicy="no-referrer"
-          srcDoc={current.doc}
+          srcDoc={currentDoc}
+          onLoad={() => {
+            frameLoadedRef.current = true
+            if (pendingUpdateRef.current && frameRef.current?.contentWindow) {
+              frameRef.current.contentWindow.postMessage(
+                { type: "codeg-html:update", html: pendingUpdateRef.current },
+                "*"
+              )
+              pendingUpdateRef.current = null
+            }
+          }}
         />
       ) : waiting ? (
         <HtmlCodePending />

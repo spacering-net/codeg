@@ -31,7 +31,7 @@ import {
 import { StreamdownContext, type Components } from "streamdown"
 
 import { MermaidAwarePre } from "./mermaid-block"
-import { HtmlCodePending, HtmlCodePreview } from "./html-code-preview"
+import { HtmlCodePreview } from "./html-code-preview"
 import { useChatHtmlEnabled } from "@/lib/chat-html-prefs"
 
 const JsonRenderBlock = lazy(
@@ -142,7 +142,7 @@ function JsonRenderAwarePre({ children }: { children?: ReactNode }) {
     // Only a reply still streaming has HTML on its way; in a finished one the
     // same fence (an agent can write one too) is just code.
     const pending = className.includes("language-codeg-html-pending")
-    if (pending && mode === "streaming") return <HtmlCodePending />
+    const isStreaming = pending && mode === "streaming"
     const code = (
       <MermaidAwarePre>
         {cloneElement(children, {
@@ -153,9 +153,16 @@ function JsonRenderAwarePre({ children }: { children?: ReactNode }) {
         })}
       </MermaidAwarePre>
     )
-    if (pending || className.includes("language-codeg-html-source")) return code
+    if (
+      !isStreaming &&
+      (pending || className.includes("language-codeg-html-source"))
+    ) {
+      return code
+    }
     return (
-      <HtmlCodePreview source={children.props.children}>{code}</HtmlCodePreview>
+      <HtmlCodePreview source={children.props.children} pending={isStreaming}>
+        {code}
+      </HtmlCodePreview>
     )
   }
   const source = specSourceFromPre(children)
