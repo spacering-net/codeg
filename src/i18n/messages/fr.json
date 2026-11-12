@@ -8268,6 +8268,14 @@
         "level_forge": {
           "title": "Sur une forge",
           "hint": "Un commentaire, une issue fermée ou une PR fusionnée par un assistant."
+        },
+        "level_pr_ready": {
+          "title": "Une PR prête à fusionner",
+          "hint": "Une PR surveillée dont les vérifications sont au vert et que la forge peut fusionner."
+        },
+        "level_pr": {
+          "title": "Autres nouvelles des PR",
+          "hint": "PR surveillées : vérifications en échec ou de nouveau au vert, un conflit, fusionnée, fermée."
         }
       },
       "workdir": {
@@ -8795,7 +8803,11 @@
           "delete": "Supprimer…",
           "open": "Ouvrir"
         },
-        "mergeable": "#{id} prête à fusionner : {title}"
+        "mergeable": "#{id} prête à fusionner : {title}",
+        "prReady": "Prête à fusionner : {text}",
+        "prFailed": "#{id} vérifications en échec : {title}",
+        "prStuck": "#{id} est en conflit : {title}",
+        "prChecks": "#{id} vérifications en attente {passed}/{total}"
       },
       "choice": {
         "other": "Autre",
@@ -9036,7 +9048,12 @@
       "paused": "Mise de côté",
       "canceled": "Annulée",
       "handed_over": "Reprise par vous",
-      "checking": "En vérification"
+      "checking": "En vérification",
+      "waiting_checks": "Vérifications en attente",
+      "waiting_checks_n": "Vérifications {passed}/{total}",
+      "checks_failed": "Vérifications en échec",
+      "stuck": "Bloquée",
+      "pr_closed": "PR fermée"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# fichier} other {# fichiers}}",
@@ -9045,8 +9062,18 @@
       "openSession": "Ouvrir la conversation",
       "stop": "Arrêter",
       "prOpened": "PR ouverte",
-      "prNotTracked": "Statut de la PR pas encore suivi",
-      "pastStopping": "Trop tard pour arrêter : terminée ou en cours de fusion"
+      "prNotTracked": "codeg ne la surveille pas",
+      "pastStopping": "Trop tard pour arrêter : terminée ou en cours de fusion",
+      "prChecks": "Vérifications {passed}/{total} réussies",
+      "prChecksFailed": "{n} en échec",
+      "prChecksRunning": "{n} en cours",
+      "prChecksUnknown": "Vérifications inconnues",
+      "prNoChecks": "Aucune vérification",
+      "prWaitsOnForge": "la forge la retient ({state})",
+      "prNoConflict": "pas de conflit",
+      "prHead": "tête {head}",
+      "prNotWatched": "n'est plus surveillée",
+      "prStale": "L'état de la PR peut être dépassé (dernière lecture {time})"
     },
     "ask": {
       "heading": {
@@ -9190,7 +9217,10 @@
         "changed": "Modifié pour vous",
         "undone": "Modifié puis annulé",
         "acceptance": "À vous de décider de la validation",
-        "forge": "Fait sur une forge"
+        "forge": "Fait sur une forge",
+        "pr_ready": "Prête à fusionner",
+        "pr_merged": "PR fusionnée",
+        "pr": "PR surveillée"
       },
       "session": {
         "permission": "Attend votre approbation",
@@ -9214,6 +9244,16 @@
       "item": {
         "notify": "Rappel à {time}",
         "act": "Le fait à {time}"
+      },
+      "pr": {
+        "waiting_checks": "Vérifications en attente",
+        "checks_failed": "Vérifications en échec",
+        "conflict": "En conflit",
+        "mergeable": "Prête à fusionner",
+        "no_conflict": "Pas de conflit, vérifications inconnues",
+        "open": "PR ouverte",
+        "merged": "Fusionnée",
+        "closed": "Fermée"
       }
     },
     "meet": {
@@ -9424,6 +9464,35 @@
       "again": "Refaire",
       "letBe": "Laisser tel quel",
       "open": "Ouvrir"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "Vérifications en échec",
+        "checks_passed": "Vérifications de nouveau au vert",
+        "conflict": "En conflit avec sa base",
+        "mergeable": "Prête à fusionner",
+        "no_conflict": "Pas de conflit, vérifications inconnues",
+        "merged": "Fusionnée",
+        "closed": "Fermée sans fusion"
+      },
+      "head": "Tête {head}",
+      "checks": {
+        "unknown": "Vérifications inconnues",
+        "none": "Aucune vérification",
+        "passed": "Vérifications {passed}/{total} réussies",
+        "running": "{n} en cours",
+        "partial": "certaines illisibles"
+      },
+      "more": "…et {n} de plus",
+      "noConflictNote": "Cette forge ne montre pas les vérifications : codeg ne la dit donc pas prête à fusionner.",
+      "mergeState": "La forge indique : {state}",
+      "state": {
+        "later": "La situation a changé depuis.",
+        "stopped": "N'est plus surveillée."
+      },
+      "view": "Voir la PR",
+      "gotIt": "Compris",
+      "unwatch": "Ne plus surveiller"
     }
   }
 }

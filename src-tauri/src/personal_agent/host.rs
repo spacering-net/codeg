@@ -98,6 +98,9 @@ pub async fn run(host: Arc<EngineHost>) {
     // not: a page that stops hearing it lets it go stale (8.3).
     // What waits on the owner too long is told, and what was held for
     // them goes once its time has come (1.13).
+    // The board and the sessions are read for what happened in the coding
+    // work, and the pull requests delivered are watched (6.9, 7.4).
+    host.prune_signals().await;
     let ticker = host.clone();
     tokio::spawn(async move {
         let mut every = tokio::time::interval(super::live::BUSY_REPUSH);
@@ -105,6 +108,8 @@ pub async fn run(host: Arc<EngineHost>) {
             every.tick().await;
             ticker.repush_busy();
             ticker.reach_tick().await;
+            ticker.board_tick().await;
+            ticker.session_signals().await;
         }
     });
     // The usage figures are caught up while nothing runs (8.1).

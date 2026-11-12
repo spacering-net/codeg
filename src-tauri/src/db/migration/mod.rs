@@ -64,6 +64,7 @@ mod m20261108_000001_personal_agent_bots;
 mod m20261111_000001_personal_agent_due;
 mod m20261112_000001_personal_agent_activity;
 mod m20261113_000001_personal_agent_verification;
+mod m20261114_000001_personal_agent_watch;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -134,6 +135,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261111_000001_personal_agent_due::Migration),
             Box::new(m20261112_000001_personal_agent_activity::Migration),
             Box::new(m20261113_000001_personal_agent_verification::Migration),
+            Box::new(m20261114_000001_personal_agent_watch::Migration),
         ]
     }
 }

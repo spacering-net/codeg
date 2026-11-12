@@ -145,6 +145,14 @@ pub fn pr_target(t: &work_task::Model) -> Option<(crate::forge::DeliveryTarget, 
 
 /// A task as its card shows it.
 pub fn task_facts(t: &work_task::Model) -> TaskFacts {
+    task_facts_with(t, None)
+}
+
+/// A task as its card shows it, with its pull request as the watch read it.
+pub fn task_facts_with(
+    t: &work_task::Model,
+    pr: Option<crate::models::personal_agent_overview::PrFacts>,
+) -> TaskFacts {
     let (pr_url, pr_number) = pr_of(t);
     let live = matches!(
         t.status,
@@ -171,6 +179,7 @@ pub fn task_facts(t: &work_task::Model) -> TaskFacts {
         connection_id: if live { t.connection_id.clone() } else { None },
         started_at: t.started_at,
         finished_at: t.finished_at,
+        pr,
     }
 }
 

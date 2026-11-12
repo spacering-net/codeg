@@ -8267,6 +8267,14 @@
         "level_forge": {
           "title": "forge 上的动作",
           "hint": "助手发的评论、关的 issue、合的 PR。"
+        },
+        "level_pr_ready": {
+          "title": "PR 可以合并",
+          "hint": "看护的 PR 检查全绿、平台也能合了。"
+        },
+        "level_pr": {
+          "title": "PR 的其他动态",
+          "hint": "看护的 PR：检查没过或又绿了、有冲突、已合并、已关闭。"
         }
       },
       "workdir": {
@@ -8795,7 +8803,11 @@
           "delete": "删除…",
           "open": "打开"
         },
-        "mergeable": "#{id} 可以合并了：{title}"
+        "mergeable": "#{id} 可以合并了：{title}",
+        "prReady": "可以合并了：{text}",
+        "prFailed": "#{id} 检查没过：{title}",
+        "prStuck": "#{id} 有冲突：{title}",
+        "prChecks": "#{id} 等检查 {passed}/{total}"
       },
       "choice": {
         "other": "其他",
@@ -9036,7 +9048,12 @@
       "paused": "暂停",
       "canceled": "已取消",
       "handed_over": "已接手",
-      "checking": "检查中"
+      "checking": "检查中",
+      "waiting_checks": "等检查",
+      "waiting_checks_n": "等检查 {passed}/{total}",
+      "checks_failed": "检查没过",
+      "stuck": "卡住",
+      "pr_closed": "PR 已关闭"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>，{files} 个文件",
@@ -9045,8 +9062,18 @@
       "openSession": "打开会话",
       "stop": "停止",
       "prOpened": "已提 PR",
-      "prNotTracked": "PR 状态还没跟踪",
-      "pastStopping": "已经做完或正在合并，停不了了"
+      "prNotTracked": "codeg 没在看护它",
+      "pastStopping": "已经做完或正在合并，停不了了",
+      "prChecks": "检查 {passed}/{total} 通过",
+      "prChecksFailed": "{n} 个没过",
+      "prChecksRunning": "{n} 个在跑",
+      "prChecksUnknown": "检查状态未知",
+      "prNoChecks": "没有配置检查",
+      "prWaitsOnForge": "平台还不让合（{state}）",
+      "prNoConflict": "没有冲突",
+      "prHead": "头提交 {head}",
+      "prNotWatched": "已不再看护",
+      "prStale": "PR 状态可能已过时（上次读到 {time}）"
     },
     "ask": {
       "heading": {
@@ -9190,7 +9217,10 @@
         "changed": "替你改了",
         "undone": "改过，已撤销",
         "acceptance": "验收要你定",
-        "forge": "在 forge 上做的"
+        "forge": "在 forge 上做的",
+        "pr_ready": "可以合并",
+        "pr_merged": "PR 已合并",
+        "pr": "看护的 PR"
       },
       "session": {
         "permission": "等你批准",
@@ -9214,6 +9244,16 @@
       "item": {
         "notify": "{time} 提醒",
         "act": "{time} 去做"
+      },
+      "pr": {
+        "waiting_checks": "等检查",
+        "checks_failed": "检查没过",
+        "conflict": "有冲突",
+        "mergeable": "可以合并",
+        "no_conflict": "没有冲突，检查未知",
+        "open": "PR 进行中",
+        "merged": "已合并",
+        "closed": "已关闭"
       }
     },
     "meet": {
@@ -9424,6 +9464,35 @@
       "again": "再做一次",
       "letBe": "不用了",
       "open": "打开"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "检查没过",
+        "checks_passed": "检查又绿了",
+        "conflict": "和目标分支有冲突",
+        "mergeable": "可以合并了",
+        "no_conflict": "没有冲突，检查状态未知",
+        "merged": "已合并",
+        "closed": "没合并就关了"
+      },
+      "head": "头提交 {head}",
+      "checks": {
+        "unknown": "检查状态未知",
+        "none": "没有配置检查",
+        "passed": "检查 {passed}/{total} 通过",
+        "running": "{n} 个在跑",
+        "partial": "有些读不到"
+      },
+      "more": "……还有 {n} 个",
+      "noConflictNote": "这个平台读不到检查，所以 codeg 不说它「可以合并」。",
+      "mergeState": "平台的说法：{state}",
+      "state": {
+        "later": "之后有了变化。",
+        "stopped": "已不再看护。"
+      },
+      "view": "查看 PR",
+      "gotIt": "知道了",
+      "unwatch": "不用再盯了"
     }
   }
 }

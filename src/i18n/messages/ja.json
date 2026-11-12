@@ -8268,6 +8268,14 @@
         "level_forge": {
           "title": "フォージでの操作",
           "hint": "アシスタントのコメント、Issue のクローズ、PR のマージ。"
+        },
+        "level_pr_ready": {
+          "title": "マージできる PR",
+          "hint": "見守り中の PR のチェックがすべて成功し、プラットフォームでもマージできるとき。"
+        },
+        "level_pr": {
+          "title": "PR のその他の動き",
+          "hint": "見守り中の PR：チェック失敗・再成功、コンフリクト、マージ、クローズ。"
         }
       },
       "workdir": {
@@ -8795,7 +8803,11 @@
           "delete": "削除…",
           "open": "開く"
         },
-        "mergeable": "#{id} マージできます：{title}"
+        "mergeable": "#{id} マージできます：{title}",
+        "prReady": "マージできます：{text}",
+        "prFailed": "#{id} チェック失敗：{title}",
+        "prStuck": "#{id} コンフリクトあり：{title}",
+        "prChecks": "#{id} チェック待ち {passed}/{total}"
       },
       "choice": {
         "other": "その他",
@@ -9036,7 +9048,12 @@
       "paused": "保留",
       "canceled": "キャンセル",
       "handed_over": "引き継ぎ済み",
-      "checking": "検収中"
+      "checking": "検収中",
+      "waiting_checks": "チェック待ち",
+      "waiting_checks_n": "チェック {passed}/{total}",
+      "checks_failed": "チェック失敗",
+      "stuck": "停滞",
+      "pr_closed": "PR クローズ"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>、{files} ファイル",
@@ -9045,8 +9062,18 @@
       "openSession": "会話を開く",
       "stop": "停止",
       "prOpened": "PR 作成済み",
-      "prNotTracked": "PR の状態はまだ追跡していません",
-      "pastStopping": "完了済みかマージ中のため停止できません"
+      "prNotTracked": "codeg は見守っていません",
+      "pastStopping": "完了済みかマージ中のため停止できません",
+      "prChecks": "チェック {passed}/{total} 成功",
+      "prChecksFailed": "{n} 件失敗",
+      "prChecksRunning": "{n} 件実行中",
+      "prChecksUnknown": "チェック状態は不明",
+      "prNoChecks": "チェックなし",
+      "prWaitsOnForge": "プラットフォームが保留中（{state}）",
+      "prNoConflict": "コンフリクトなし",
+      "prHead": "ヘッド {head}",
+      "prNotWatched": "見守りを終了",
+      "prStale": "PR の状態は古い可能性があります（最終確認 {time}）"
     },
     "ask": {
       "heading": {
@@ -9190,7 +9217,10 @@
         "changed": "代わりに変更",
         "undone": "変更後、元に戻した",
         "acceptance": "検収の判断が必要",
-        "forge": "フォージでの操作"
+        "forge": "フォージでの操作",
+        "pr_ready": "マージ可能",
+        "pr_merged": "PR マージ済み",
+        "pr": "見守り中の PR"
       },
       "session": {
         "permission": "承認待ち",
@@ -9214,6 +9244,16 @@
       "item": {
         "notify": "{time} にリマインド",
         "act": "{time} に実行"
+      },
+      "pr": {
+        "waiting_checks": "チェック待ち",
+        "checks_failed": "チェック失敗",
+        "conflict": "コンフリクトあり",
+        "mergeable": "マージ可能",
+        "no_conflict": "コンフリクトなし・チェック不明",
+        "open": "PR オープン",
+        "merged": "マージ済み",
+        "closed": "クローズ"
       }
     },
     "meet": {
@@ -9424,6 +9464,35 @@
       "again": "もう一度実行",
       "letBe": "そのままにする",
       "open": "開く"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "チェックが失敗",
+        "checks_passed": "チェックが再び成功",
+        "conflict": "ベースとコンフリクト",
+        "mergeable": "マージできます",
+        "no_conflict": "コンフリクトなし、チェック状態は不明",
+        "merged": "マージされました",
+        "closed": "マージされずにクローズ"
+      },
+      "head": "ヘッド {head}",
+      "checks": {
+        "unknown": "チェック状態は不明",
+        "none": "チェックなし",
+        "passed": "チェック {passed}/{total} 成功",
+        "running": "{n} 件実行中",
+        "partial": "一部は読めませんでした"
+      },
+      "more": "…ほか {n} 件",
+      "noConflictNote": "このプラットフォームではチェックを読めないため、codeg は「マージできます」とは言いません。",
+      "mergeState": "プラットフォームの状態：{state}",
+      "state": {
+        "later": "その後、状況が変わりました。",
+        "stopped": "見守りを終了しました。"
+      },
+      "view": "PR を見る",
+      "gotIt": "了解",
+      "unwatch": "見守りをやめる"
     }
   }
 }

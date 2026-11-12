@@ -200,6 +200,7 @@ describe("the roster", () => {
             work_task_id: 7,
             conversation_id: null,
             ladder: "working",
+            pr: null,
           },
         ],
       }),
@@ -252,6 +253,7 @@ describe("the roster", () => {
       work_task_id: id,
       conversation_id: null,
       ladder,
+      pr: null,
     })
     api.personalAgentBots.mockResolvedValue([
       entry(1, "Nova"),

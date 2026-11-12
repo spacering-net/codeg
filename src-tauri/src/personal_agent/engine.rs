@@ -358,6 +358,13 @@ pub struct PersonalAgentEngine {
     pub(super) reminder_lock: Mutex<()>,
     /// Serializes opening, moving and concluding rounds of acceptance (7.5).
     pub(super) accept_lock: Mutex<()>,
+    /// Serializes reading the pull requests it watches (7.4): one read of
+    /// one at a time, so what changed is told once.
+    pub(super) watch_lock: Mutex<()>,
+    /// The clock's read of the watches is running (`spawn_watch_tick`).
+    pub(super) watch_busy: AtomicBool,
+    /// Its assistant was deleted: nothing more is read or told.
+    pub(super) retired: AtomicBool,
     /// The owner's zone at the clock's last look: a change moves the
     /// repeating matters with it (1.12).
     pub(super) clock_zone: std::sync::Mutex<Option<chrono_tz::Tz>>,
@@ -397,6 +404,9 @@ impl PersonalAgentEngine {
             card_lock: Mutex::new(()),
             reminder_lock: Mutex::new(()),
             accept_lock: Mutex::new(()),
+            watch_lock: Mutex::new(()),
+            watch_busy: AtomicBool::new(false),
+            retired: AtomicBool::new(false),
             clock_zone: std::sync::Mutex::new(None),
             pump_again: AtomicBool::new(false),
             wake: Notify::new(),
@@ -686,6 +696,7 @@ impl PersonalAgentEngine {
                 _ = reconcile.tick() => {
                     self.reconcile_dispatches().await;
                     self.ask_tick().await;
+                    self.spawn_watch_tick();
                 }
                 _ = due.tick() => {
                     self.due_tick().await;
@@ -716,6 +727,10 @@ impl PersonalAgentEngine {
     /// flight and end its connection. Its dispatched work is the runtime's
     /// and goes on.
     pub(super) async fn shutdown(&self) {
+        // A read of its pull requests in flight finishes before its watches
+        // go to another (7.4); none starts after.
+        self.retired.store(true, Ordering::SeqCst);
+        drop(self.watch_lock.lock().await);
         let _ = self.cancel_turn().await;
         let conn = self.state.lock().await.connection_id.take();
         if let Some(c) = conn {

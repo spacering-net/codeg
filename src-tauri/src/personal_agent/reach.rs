@@ -185,6 +185,28 @@ pub enum What {
     AcceptVoid {
         text: String,
     },
+    /// A watched pull request (7.4): its checks failed.
+    PrFailed {
+        text: String,
+    },
+    /// Green again after failing, short of mergeable.
+    PrPassed {
+        text: String,
+    },
+    PrConflict {
+        text: String,
+    },
+    /// Its checks green and the forge would merge it.
+    PrReady {
+        text: String,
+    },
+    /// No conflict, its checks unknown (CNB).
+    PrNoConflict {
+        text: String,
+    },
+    PrClosed {
+        text: String,
+    },
     /// The reply's first words (none: it said nothing in words).
     Reply {
         text: Option<String>,
@@ -438,6 +460,14 @@ struct Words {
     why_acceptance: &'static str,
     why_used_up: &'static str,
     why_forge: &'static str,
+    pr_failed: &'static str,
+    pr_passed: &'static str,
+    pr_conflict: &'static str,
+    pr_ready: &'static str,
+    pr_no_conflict: &'static str,
+    pr_closed: &'static str,
+    why_pr: &'static str,
+    why_pr_ready: &'static str,
 }
 
 const EN: Words = Words {
@@ -477,6 +507,14 @@ const EN: Words = Words {
     why_acceptance: "It checked the work it dispatched for you.",
     why_used_up: "It sent the work back as many times as you allow.",
     why_forge: "It did this on a forge for you.",
+    pr_failed: "Checks failed: {text}",
+    pr_passed: "Checks green again: {text}",
+    pr_conflict: "Has a conflict: {text}",
+    pr_ready: "Ready to merge: {text}",
+    pr_no_conflict: "No conflict, checks unknown: {text}",
+    pr_closed: "Closed without merging: {text}",
+    why_pr: "It watches this pull request for you.",
+    why_pr_ready: "Its checks are green and the forge can merge it.",
 };
 
 const ZH_CN: Words = Words {
@@ -516,6 +554,14 @@ const ZH_CN: Words = Words {
     why_acceptance: "这是它替你派出、替你验收的活。",
     why_used_up: "已经退回到你允许的轮数。",
     why_forge: "这是它替你在代码平台上做的。",
+    pr_failed: "检查没过：{text}",
+    pr_passed: "检查又绿了：{text}",
+    pr_conflict: "有冲突：{text}",
+    pr_ready: "可以合并了：{text}",
+    pr_no_conflict: "没有冲突，检查状态未知：{text}",
+    pr_closed: "没合并就关了：{text}",
+    why_pr: "这是它替你看护的 PR。",
+    why_pr_ready: "检查全绿，平台也显示能合。",
 };
 
 const ZH_TW: Words = Words {
@@ -555,6 +601,14 @@ const ZH_TW: Words = Words {
     why_acceptance: "這是它替你派出、替你驗收的工作。",
     why_used_up: "已經退回到你允許的輪數。",
     why_forge: "這是它替你在程式碼平台上做的。",
+    pr_failed: "檢查沒過：{text}",
+    pr_passed: "檢查又綠了：{text}",
+    pr_conflict: "有衝突：{text}",
+    pr_ready: "可以合併了：{text}",
+    pr_no_conflict: "沒有衝突，檢查狀態未知：{text}",
+    pr_closed: "沒合併就關了：{text}",
+    why_pr: "這是它替你看護的 PR。",
+    why_pr_ready: "檢查全綠，平台也顯示能合併。",
 };
 
 const JA: Words = Words {
@@ -594,6 +648,14 @@ const JA: Words = Words {
     why_acceptance: "あなたの代わりに出した作業を受け入れ確認しました。",
     why_used_up: "許可された回数まで差し戻しました。",
     why_forge: "あなたの代わりにフォージ上で行いました。",
+    pr_failed: "チェックが失敗：{text}",
+    pr_passed: "チェックが再び成功：{text}",
+    pr_conflict: "コンフリクトあり：{text}",
+    pr_ready: "マージできます：{text}",
+    pr_no_conflict: "コンフリクトなし、チェック状態は不明：{text}",
+    pr_closed: "マージされずにクローズ：{text}",
+    why_pr: "あなたの代わりに見守っている PR です。",
+    why_pr_ready: "チェックがすべて成功し、プラットフォームでもマージできます。",
 };
 
 const KO: Words = Words {
@@ -633,6 +695,14 @@ const KO: Words = Words {
     why_acceptance: "대신 맡긴 작업을 대신 검수했어요.",
     why_used_up: "허용하신 횟수만큼 되돌려 보냈어요.",
     why_forge: "대신 코드 플랫폼에서 처리했어요.",
+    pr_failed: "검사 실패: {text}",
+    pr_passed: "검사가 다시 통과: {text}",
+    pr_conflict: "충돌 있음: {text}",
+    pr_ready: "병합 가능: {text}",
+    pr_no_conflict: "충돌 없음, 검사 상태 알 수 없음: {text}",
+    pr_closed: "병합 없이 닫힘: {text}",
+    why_pr: "대신 지켜보는 PR이에요.",
+    why_pr_ready: "검사가 모두 통과했고 플랫폼에서도 병합할 수 있어요.",
 };
 
 const ES: Words = Words {
@@ -672,6 +742,14 @@ const ES: Words = Words {
     why_acceptance: "Revisó el trabajo que encargó por ti.",
     why_used_up: "Lo devolvió tantas veces como permites.",
     why_forge: "Lo hizo en la forja por ti.",
+    pr_failed: "Comprobaciones fallidas: {text}",
+    pr_passed: "Comprobaciones en verde de nuevo: {text}",
+    pr_conflict: "Tiene un conflicto: {text}",
+    pr_ready: "Lista para fusionar: {text}",
+    pr_no_conflict: "Sin conflictos, comprobaciones desconocidas: {text}",
+    pr_closed: "Cerrada sin fusionar: {text}",
+    why_pr: "Vigila esta pull request por ti.",
+    why_pr_ready: "Sus comprobaciones están en verde y la forja puede fusionarla.",
 };
 
 const DE: Words = Words {
@@ -711,6 +789,14 @@ const DE: Words = Words {
     why_acceptance: "Es hat die Arbeit geprüft, die es für dich vergeben hat.",
     why_used_up: "Es hat die Arbeit so oft zurückgeschickt, wie du erlaubst.",
     why_forge: "Es hat das für dich auf der Forge erledigt.",
+    pr_failed: "Prüfungen fehlgeschlagen: {text}",
+    pr_passed: "Prüfungen wieder grün: {text}",
+    pr_conflict: "Hat einen Konflikt: {text}",
+    pr_ready: "Bereit zum Mergen: {text}",
+    pr_no_conflict: "Kein Konflikt, Prüfungen unbekannt: {text}",
+    pr_closed: "Ohne Merge geschlossen: {text}",
+    why_pr: "Es beobachtet diesen Pull Request für dich.",
+    why_pr_ready: "Die Prüfungen sind grün und die Forge kann ihn mergen.",
 };
 
 const FR: Words = Words {
@@ -751,6 +837,14 @@ const FR: Words = Words {
     why_acceptance: "Il a vérifié le travail qu'il a confié pour vous.",
     why_used_up: "Il l'a renvoyé autant de fois que vous le permettez.",
     why_forge: "Il l'a fait sur la forge pour vous.",
+    pr_failed: "Vérifications en échec : {text}",
+    pr_passed: "Vérifications de nouveau au vert : {text}",
+    pr_conflict: "En conflit : {text}",
+    pr_ready: "Prête à fusionner : {text}",
+    pr_no_conflict: "Pas de conflit, vérifications inconnues : {text}",
+    pr_closed: "Fermée sans fusion : {text}",
+    why_pr: "Il surveille cette pull request pour vous.",
+    why_pr_ready: "Ses vérifications sont au vert et la forge peut la fusionner.",
 };
 
 const PT: Words = Words {
@@ -791,6 +885,14 @@ const PT: Words = Words {
     why_acceptance: "Ele verificou o trabalho que delegou por você.",
     why_used_up: "Ele devolveu o trabalho tantas vezes quanto você permite.",
     why_forge: "Ele fez isso na forja por você.",
+    pr_failed: "Verificações falharam: {text}",
+    pr_passed: "Verificações verdes de novo: {text}",
+    pr_conflict: "Tem um conflito: {text}",
+    pr_ready: "Pronto para mesclar: {text}",
+    pr_no_conflict: "Sem conflito, verificações desconhecidas: {text}",
+    pr_closed: "Fechado sem mesclar: {text}",
+    why_pr: "Ele acompanha este pull request para você.",
+    why_pr_ready: "As verificações estão verdes e a forja pode mesclá-lo.",
 };
 
 const AR: Words = Words {
@@ -830,6 +932,14 @@ const AR: Words = Words {
     why_acceptance: "فحص العمل الذي أسنده نيابةً عنك.",
     why_used_up: "أعاد العمل بعدد المرات التي تسمح بها.",
     why_forge: "قام بذلك على منصة الشيفرة نيابةً عنك.",
+    pr_failed: "فشلت الفحوصات: {text}",
+    pr_passed: "عادت الفحوصات إلى النجاح: {text}",
+    pr_conflict: "يوجد تعارض: {text}",
+    pr_ready: "جاهز للدمج: {text}",
+    pr_no_conflict: "لا يوجد تعارض، وحالة الفحوصات غير معروفة: {text}",
+    pr_closed: "أُغلق دون دمج: {text}",
+    why_pr: "هذا طلب سحب يراقبه نيابةً عنك.",
+    why_pr_ready: "نجحت الفحوصات كلها والمنصة تستطيع دمجه.",
 };
 
 fn words(locale: AppLocale) -> &'static Words {
@@ -873,6 +983,12 @@ fn main_line(w: &Words, what: &What) -> String {
         What::AcceptAsk { text } => fill(w.accept_ask, text, 0, ""),
         What::UsedUp { text } => fill(w.used_up, text, 0, ""),
         What::AcceptVoid { text } => fill(w.accept_void, text, 0, ""),
+        What::PrFailed { text } => fill(w.pr_failed, text, 0, ""),
+        What::PrPassed { text } => fill(w.pr_passed, text, 0, ""),
+        What::PrConflict { text } => fill(w.pr_conflict, text, 0, ""),
+        What::PrReady { text } => fill(w.pr_ready, text, 0, ""),
+        What::PrNoConflict { text } => fill(w.pr_no_conflict, text, 0, ""),
+        What::PrClosed { text } => fill(w.pr_closed, text, 0, ""),
         What::Reply { text } => text.clone().unwrap_or_else(|| w.reply_empty.to_string()),
         What::Plain { text } => text.clone(),
     }
@@ -896,6 +1012,8 @@ fn reason(w: &Words, kind: &str, what: &What) -> Option<String> {
         "acceptance" => w.why_acceptance.into(),
         "used_up" => w.why_used_up.into(),
         "forge" => w.why_forge.into(),
+        "pr" => w.why_pr.into(),
+        "pr_ready" => w.why_pr_ready.into(),
         _ => return None,
     };
     Some(line)
@@ -1051,7 +1169,7 @@ impl Reach {
     }
 
     /// The first time `key` is told: true.
-    fn claim(&self, key: &str) -> bool {
+    pub(super) fn claim(&self, key: &str) -> bool {
         let mut s = self.lock();
         if !s.told.insert(key.to_string()) {
             return false;
@@ -1077,8 +1195,8 @@ impl Reach {
             let key = need_key(bot, n);
             let told = match had.get(&key) {
                 Some(seen) => seen.told,
-                // Told as its own news when it was raised (7.5).
-                None if n.kind == "acceptance" => true,
+                // Told as its own news when it was raised (7.5, 7.4).
+                None if n.kind == "acceptance" || n.kind == "mergeable" => true,
                 None => {
                     let news = news_of_need(bot, n, &key);
                     let fresh = n.since >= started;
@@ -1205,6 +1323,8 @@ pub fn need_kind(n: &NeedsYou) -> Option<&'static str> {
         "input" => "waiting",
         // An acceptance card the owner is to answer (7.5).
         "acceptance" => "acceptance",
+        // A watched pull request they can merge (7.4).
+        "mergeable" => "pr_ready",
         _ => return None,
     })
 }
@@ -1214,7 +1334,7 @@ pub fn need_kind(n: &NeedsYou) -> Option<&'static str> {
 fn news_of_need(bot: i32, n: &NeedsYou, key: &str) -> Option<News> {
     let text = n.text.clone();
     // An acceptance card was told when it was raised (7.5).
-    let kind = need_kind(n).filter(|k| !matches!(*k, "waiting" | "acceptance"))?;
+    let kind = need_kind(n).filter(|k| !matches!(*k, "waiting" | "acceptance" | "pr_ready"))?;
     let what = if kind == "approval" {
         What::Approval { text }
     } else {

@@ -446,6 +446,8 @@ describe("the settings view", () => {
       "level_acceptance",
       "level_used_up",
       "level_forge",
+      "level_pr_ready",
+      "level_pr",
     ]) {
       expect(document.querySelector(`[data-pa-pref="${item}"]`)).not.toBeNull()
     }

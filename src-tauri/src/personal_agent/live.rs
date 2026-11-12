@@ -286,6 +286,9 @@ async fn needs_of(
                     Some("unknown") => "uncertain",
                     _ => return None,
                 },
+                // A watched pull request the owner can merge now (7.4,
+                // 8.6): theirs until it moves on.
+                NoticeKind::Pr if payload["event"].as_str() == Some("mergeable") => "mergeable",
                 _ => return None,
             };
             Some((n, kind))
@@ -373,12 +376,30 @@ async fn needs_of(
 /// What the database says of assistant `row`.
 pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbFacts {
     let bot = row.id;
-    let dispatches = svc::list_dispatches(&db.conn, bot, MOVING, None, 50)
+    let mut dispatches = svc::list_dispatches(&db.conn, bot, MOVING, None, 50)
         .await
         .unwrap_or_default();
+    // Delivered as a pull request it watches: still on its hands (7.4).
+    let watched: Vec<i32> =
+        crate::db::service::personal_agent_watch_service::watching(&db.conn, Some(bot))
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|w| w.dispatch_id)
+            .filter(|id| !dispatches.iter().any(|d| d.id == *id))
+            .collect();
+    if !watched.is_empty() {
+        dispatches.extend(
+            svc::dispatches_by_ids(&db.conn, bot, &watched)
+                .await
+                .unwrap_or_default(),
+        );
+        dispatches.sort_by_key(|d| std::cmp::Reverse(d.id));
+    }
     let hand_since: HashMap<i32, DateTime<Utc>> =
         dispatches.iter().map(|d| (d.id, d.updated_at)).collect();
     let tasks = super::ladder::tasks_of(db, &dispatches).await;
+    let prs = super::watch::facts_of_tasks(db, &tasks.keys().copied().collect::<Vec<_>>()).await;
     let ids: Vec<i32> = dispatches.iter().map(|d| d.id).collect();
     let answering = super::asks::answering_dispatches(db, &ids).await;
     let views = {
@@ -389,14 +410,19 @@ pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbF
     let mut hand: Vec<HandWork> = dispatches
         .into_iter()
         .map(|d| {
+            let pr = d.work_task_id.and_then(|id| prs.get(&id)).cloned();
             let ladder = super::acceptance::ladder_with(
-                super::ladder::for_owner(
-                    super::ladder::ladder_of(&d, d.work_task_id.and_then(|id| tasks.get(&id))),
-                    answering.contains(&d.id),
+                super::watch::with_pr(
+                    super::ladder::for_owner(
+                        super::ladder::ladder_of(&d, d.work_task_id.and_then(|id| tasks.get(&id))),
+                        answering.contains(&d.id),
+                    ),
+                    pr.as_ref(),
                 ),
                 views.get(&d.id).copied(),
             );
             HandWork {
+                pr,
                 dispatch_id: d.id,
                 title: d.title,
                 mode: d.mode,

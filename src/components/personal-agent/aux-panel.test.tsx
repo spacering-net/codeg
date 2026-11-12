@@ -730,6 +730,7 @@ describe("the details' matters", () => {
       connection_id: null,
       started_at: "2026-11-04T09:00:00Z",
       finished_at: null,
+      pr: null,
     }
     api.personalAgentDispatches.mockResolvedValue([
       dispatch({
@@ -794,7 +795,7 @@ describe("the details' matters", () => {
     // owner's to close.
     const pr = card("Ship the notes")
     expect(pr.querySelector("[data-pa-task-pr]")?.textContent).toBe(
-      "PR opened · PR status not tracked yet"
+      "PR opened · codeg is not watching it"
     )
     expect(within(pr).getByRole("button", { name: "View PR" })).toBeTruthy()
     expect(within(pr).queryByRole("button", { name: "Stop" })).toBeNull()

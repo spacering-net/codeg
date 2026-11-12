@@ -8268,6 +8268,14 @@
         "level_forge": {
           "title": "على المنصة",
           "hint": "تعليق أو مشكلة مغلقة أو طلب دمج مدموج من مساعد."
+        },
+        "level_pr_ready": {
+          "title": "طلب دمج جاهز للدمج",
+          "hint": "طلب دمج مراقَب نجحت فحوصاته ويمكن للمنصة دمجه."
+        },
+        "level_pr": {
+          "title": "أخبار أخرى عن طلبات الدمج",
+          "hint": "طلبات الدمج المراقَبة: فشل الفحوصات أو عودتها للنجاح، تعارض، دمج، إغلاق."
         }
       },
       "workdir": {
@@ -8795,7 +8803,11 @@
           "delete": "حذف…",
           "open": "فتح"
         },
-        "mergeable": "#{id} جاهزة للدمج: {title}"
+        "mergeable": "#{id} جاهزة للدمج: {title}",
+        "prReady": "جاهز للدمج: {text}",
+        "prFailed": "#{id} فشلت الفحوصات: {title}",
+        "prStuck": "#{id} يوجد تعارض: {title}",
+        "prChecks": "#{id} بانتظار الفحوصات {passed}/{total}"
       },
       "choice": {
         "other": "غير ذلك",
@@ -9036,7 +9048,12 @@
       "paused": "مؤجلة",
       "canceled": "ملغاة",
       "handed_over": "انتقلت إليك",
-      "checking": "قيد الفحص"
+      "checking": "قيد الفحص",
+      "waiting_checks": "بانتظار الفحوصات",
+      "waiting_checks_n": "الفحوصات {passed}/{total}",
+      "checks_failed": "فشلت الفحوصات",
+      "stuck": "متعثّر",
+      "pr_closed": "أُغلق طلب الدمج"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>، {files, plural, zero {لا ملفات} one {ملف واحد} two {ملفان} few {# ملفات} many {# ملفًا} other {# ملف}}",
@@ -9045,8 +9062,18 @@
       "openSession": "فتح المحادثة",
       "stop": "إيقاف",
       "prOpened": "تم فتح PR",
-      "prNotTracked": "لا تتم متابعة حالة PR بعد",
-      "pastStopping": "فات أوان الإيقاف: انتهت أو قيد الدمج"
+      "prNotTracked": "لا يراقبه codeg",
+      "pastStopping": "فات أوان الإيقاف: انتهت أو قيد الدمج",
+      "prChecks": "نجح {passed} من {total} فحوصات",
+      "prChecksFailed": "فشل {n}",
+      "prChecksRunning": "{n} قيد التشغيل",
+      "prChecksUnknown": "حالة الفحوصات غير معروفة",
+      "prNoChecks": "لا توجد فحوصات",
+      "prWaitsOnForge": "المنصة لا تسمح بالدمج بعد ({state})",
+      "prNoConflict": "لا يوجد تعارض",
+      "prHead": "الرأس {head}",
+      "prNotWatched": "لم يعد مراقبًا",
+      "prStale": "قد تكون حالة طلب الدمج قديمة (آخر قراءة {time})"
     },
     "ask": {
       "heading": {
@@ -9190,7 +9217,10 @@
         "changed": "غُيّر نيابةً عنك",
         "undone": "غُيّر ثم تُراجع عنه",
         "acceptance": "القبول بانتظار قرارك",
-        "forge": "تم على المنصة"
+        "forge": "تم على المنصة",
+        "pr_ready": "جاهز للدمج",
+        "pr_merged": "تم دمج طلب الدمج",
+        "pr": "طلب دمج مراقَب"
       },
       "session": {
         "permission": "ينتظر موافقتك",
@@ -9214,6 +9244,16 @@
       "item": {
         "notify": "تذكير عند {time}",
         "act": "يفعله عند {time}"
+      },
+      "pr": {
+        "waiting_checks": "بانتظار الفحوصات",
+        "checks_failed": "فشلت الفحوصات",
+        "conflict": "يوجد تعارض",
+        "mergeable": "جاهز للدمج",
+        "no_conflict": "لا تعارض، والفحوصات غير معروفة",
+        "open": "طلب الدمج مفتوح",
+        "merged": "تم الدمج",
+        "closed": "مغلق"
       }
     },
     "meet": {
@@ -9424,6 +9464,35 @@
       "again": "التنفيذ مرة أخرى",
       "letBe": "اتركه",
       "open": "فتح"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "فشلت الفحوصات",
+        "checks_passed": "عادت الفحوصات إلى النجاح",
+        "conflict": "يتعارض مع الفرع الأساسي",
+        "mergeable": "جاهز للدمج",
+        "no_conflict": "لا يوجد تعارض، وحالة الفحوصات غير معروفة",
+        "merged": "تم الدمج",
+        "closed": "أُغلق دون دمج"
+      },
+      "head": "الرأس {head}",
+      "checks": {
+        "unknown": "حالة الفحوصات غير معروفة",
+        "none": "لا توجد فحوصات",
+        "passed": "نجح {passed} من {total} فحوصات",
+        "running": "{n} قيد التشغيل",
+        "partial": "تعذّرت قراءة بعضها"
+      },
+      "more": "…و{n} أخرى",
+      "noConflictNote": "لا تعرض هذه المنصة الفحوصات، لذلك لا يصفه codeg بأنه جاهز للدمج.",
+      "mergeState": "تقول المنصة: {state}",
+      "state": {
+        "later": "تغيّر الوضع منذ ذلك الحين.",
+        "stopped": "لم يعد مراقبًا."
+      },
+      "view": "عرض طلب الدمج",
+      "gotIt": "حسنًا",
+      "unwatch": "إيقاف المراقبة"
     }
   }
 }

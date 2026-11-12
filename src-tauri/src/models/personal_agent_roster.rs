@@ -186,6 +186,8 @@ pub struct HandWork {
     pub conversation_id: Option<i32>,
     /// Where it stands on the PR ladder (8.5).
     pub ladder: super::personal_agent_overview::Ladder,
+    /// Its pull request, watched.
+    pub pr: Option<super::personal_agent_overview::PrFacts>,
 }
 
 /// A message of its another assistant has not answered yet.

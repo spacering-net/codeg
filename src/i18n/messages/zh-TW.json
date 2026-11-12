@@ -8268,6 +8268,14 @@
         "level_forge": {
           "title": "forge 上的動作",
           "hint": "助手留的言、關的 issue、合的 PR。"
+        },
+        "level_pr_ready": {
+          "title": "PR 可以合併",
+          "hint": "看護的 PR 檢查全綠、平台也能合併了。"
+        },
+        "level_pr": {
+          "title": "PR 的其他動態",
+          "hint": "看護的 PR：檢查沒過或又綠了、有衝突、已合併、已關閉。"
         }
       },
       "workdir": {
@@ -8795,7 +8803,11 @@
           "delete": "刪除…",
           "open": "開啟"
         },
-        "mergeable": "#{id} 可以合併了：{title}"
+        "mergeable": "#{id} 可以合併了：{title}",
+        "prReady": "可以合併了：{text}",
+        "prFailed": "#{id} 檢查沒過：{title}",
+        "prStuck": "#{id} 有衝突：{title}",
+        "prChecks": "#{id} 等檢查 {passed}/{total}"
       },
       "choice": {
         "other": "其他",
@@ -9036,7 +9048,12 @@
       "paused": "暫停",
       "canceled": "已取消",
       "handed_over": "已接手",
-      "checking": "檢查中"
+      "checking": "檢查中",
+      "waiting_checks": "等檢查",
+      "waiting_checks_n": "等檢查 {passed}/{total}",
+      "checks_failed": "檢查沒過",
+      "stuck": "卡住",
+      "pr_closed": "PR 已關閉"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>，{files} 個檔案",
@@ -9045,8 +9062,18 @@
       "openSession": "開啟會話",
       "stop": "停止",
       "prOpened": "已提 PR",
-      "prNotTracked": "PR 狀態還沒追蹤",
-      "pastStopping": "已經做完或正在合併，停不下來了"
+      "prNotTracked": "codeg 沒在看護它",
+      "pastStopping": "已經做完或正在合併，停不下來了",
+      "prChecks": "檢查 {passed}/{total} 通過",
+      "prChecksFailed": "{n} 個沒過",
+      "prChecksRunning": "{n} 個在跑",
+      "prChecksUnknown": "檢查狀態未知",
+      "prNoChecks": "沒有設定檢查",
+      "prWaitsOnForge": "平台還不讓合併（{state}）",
+      "prNoConflict": "沒有衝突",
+      "prHead": "頭提交 {head}",
+      "prNotWatched": "已不再看護",
+      "prStale": "PR 狀態可能已過時（上次讀到 {time}）"
     },
     "ask": {
       "heading": {
@@ -9190,7 +9217,10 @@
         "changed": "替你改了",
         "undone": "改過，已復原",
         "acceptance": "驗收要你決定",
-        "forge": "在 forge 上做的"
+        "forge": "在 forge 上做的",
+        "pr_ready": "可以合併",
+        "pr_merged": "PR 已合併",
+        "pr": "看護的 PR"
       },
       "session": {
         "permission": "等你核准",
@@ -9214,6 +9244,16 @@
       "item": {
         "notify": "{time} 提醒",
         "act": "{time} 去做"
+      },
+      "pr": {
+        "waiting_checks": "等檢查",
+        "checks_failed": "檢查沒過",
+        "conflict": "有衝突",
+        "mergeable": "可以合併",
+        "no_conflict": "沒有衝突，檢查未知",
+        "open": "PR 進行中",
+        "merged": "已合併",
+        "closed": "已關閉"
       }
     },
     "meet": {
@@ -9424,6 +9464,35 @@
       "again": "再做一次",
       "letBe": "不用了",
       "open": "打開"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "檢查沒過",
+        "checks_passed": "檢查又綠了",
+        "conflict": "和目標分支有衝突",
+        "mergeable": "可以合併了",
+        "no_conflict": "沒有衝突，檢查狀態未知",
+        "merged": "已合併",
+        "closed": "沒合併就關了"
+      },
+      "head": "頭提交 {head}",
+      "checks": {
+        "unknown": "檢查狀態未知",
+        "none": "沒有設定檢查",
+        "passed": "檢查 {passed}/{total} 通過",
+        "running": "{n} 個在跑",
+        "partial": "有些讀不到"
+      },
+      "more": "……還有 {n} 個",
+      "noConflictNote": "這個平台讀不到檢查，所以 codeg 不說它「可以合併」。",
+      "mergeState": "平台的說法：{state}",
+      "state": {
+        "later": "之後有了變化。",
+        "stopped": "已不再看護。"
+      },
+      "view": "查看 PR",
+      "gotIt": "知道了",
+      "unwatch": "不用再盯了"
     }
   }
 }

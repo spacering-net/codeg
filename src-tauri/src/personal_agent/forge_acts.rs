@@ -610,58 +610,27 @@ impl PersonalAgentEngine {
                 _ => return Err("`kind` is required with `project_id`: issue or pr".into()),
             },
         };
-        let folder = crate::db::service::folder_service::get_folder_by_id(&self.db.conn, project)
+        // Resolved once, the first time it is named in this project (the
+        // project's `origin` and account then), and the same item after.
+        let w = self.named_item(project, kind, number).await?;
+        let repo = crate::db::service::personal_agent_watch_service::target_of(&w)
+            .ok_or("the item names no forge codeg knows")?;
+        let task_id = match (kind, w.work_task_id) {
+            ("pr", Some(t)) => Some(t),
+            ("pr", None) => self.task_of_pr(&repo, number).await.map(|t| t.id),
+            _ => None,
+        };
+        let account_name = crate::commands::forge::auth_at(&self.db, &repo)
             .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("project #{project} does not exist; use project_list"))?;
-        if folder.kind != crate::db::entities::folder::FolderKind::Regular
-            || folder.parent_id.is_some()
-        {
-            return Err(format!("#{project} is not a project; use project_list"));
-        }
-        let remote = crate::commands::forge::folder_forge_remote_core(&self.db, project)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| {
-                format!("project #{project} has no forge remote (origin) codeg recognizes")
-            })?;
-        let auth = crate::forge::resolve_forge_auth(
-            &self.db.conn,
-            remote.provider,
-            &remote.server_host,
-            None,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        let item_kind = if kind == "issue" {
-            ForgeItemKind::Issue
-        } else {
-            ForgeItemKind::Change
-        };
-        let url = remote.provider.item_url(
-            &crate::forge::web_origin(&auth),
-            &remote.owner_repo,
-            item_kind,
-            number,
-        );
-        let repo = DeliveryTarget {
-            provider: remote.provider,
-            server_host: remote.server_host.clone(),
-            account_id: auth.account_id.clone(),
-            owner_repo: remote.owner_repo.clone(),
-        };
-        let task_id = if kind == "pr" {
-            self.task_of_pr(&repo, number).await.map(|t| t.id)
-        } else {
-            None
-        };
+            .ok()
+            .map(|a| a.username);
         Ok(ForgeTarget {
             repo,
             kind: kind.into(),
             number,
             task_id,
-            url: Some(url),
-            account_name: Some(auth.username.clone()),
+            url: w.url.clone(),
+            account_name,
         })
     }
 

@@ -21,6 +21,8 @@ import {
   CircleX,
   GitMerge,
   GitPullRequest,
+  GitPullRequestArrow,
+  GitPullRequestDraft,
   BellRing,
   CircleAlert,
   CircleCheck,
@@ -141,6 +143,8 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   level_acceptance: "normal",
   level_used_up: "urgent",
   level_forge: "low",
+  level_pr_ready: "normal",
+  level_pr: "low",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -216,6 +220,8 @@ export const LEVEL_ITEMS: PersonalAgentPrefKey[] = [
   "level_acceptance",
   "level_used_up",
   "level_forge",
+  "level_pr_ready",
+  "level_pr",
 ]
 
 /** The items that take a time of day, `HH:MM`. */
@@ -325,6 +331,8 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   level_acceptance: BadgeCheck,
   level_used_up: CircleAlert,
   level_forge: GitPullRequest,
+  level_pr_ready: GitPullRequestArrow,
+  level_pr: GitPullRequestDraft,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [

@@ -8268,6 +8268,14 @@
         "level_forge": {
           "title": "Auf einer Forge",
           "hint": "Ein Kommentar, ein geschlossenes Issue oder ein gemergter PR eines Assistenten."
+        },
+        "level_pr_ready": {
+          "title": "Ein PR bereit zum Mergen",
+          "hint": "Ein beobachteter PR mit grünen Checks, den die Forge mergen kann."
+        },
+        "level_pr": {
+          "title": "Weitere PR-Neuigkeiten",
+          "hint": "Beobachtete PRs: Checks fehlgeschlagen oder wieder grün, ein Konflikt, gemergt, geschlossen."
         }
       },
       "workdir": {
@@ -8795,7 +8803,11 @@
           "delete": "Löschen…",
           "open": "Öffnen"
         },
-        "mergeable": "#{id} bereit zum Mergen: {title}"
+        "mergeable": "#{id} bereit zum Mergen: {title}",
+        "prReady": "Bereit zum Mergen: {text}",
+        "prFailed": "#{id} Checks fehlgeschlagen: {title}",
+        "prStuck": "#{id} hat einen Konflikt: {title}",
+        "prChecks": "#{id} wartet auf Checks {passed}/{total}"
       },
       "choice": {
         "other": "Andere",
@@ -9036,7 +9048,12 @@
       "paused": "Zurückgestellt",
       "canceled": "Abgebrochen",
       "handed_over": "Übernommen",
-      "checking": "Wird geprüft"
+      "checking": "Wird geprüft",
+      "waiting_checks": "Wartet auf Checks",
+      "waiting_checks_n": "Checks {passed}/{total}",
+      "checks_failed": "Checks fehlgeschlagen",
+      "stuck": "Hängt fest",
+      "pr_closed": "PR geschlossen"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# Datei} other {# Dateien}}",
@@ -9045,8 +9062,18 @@
       "openSession": "Konversation öffnen",
       "stop": "Stoppen",
       "prOpened": "PR erstellt",
-      "prNotTracked": "PR-Status wird noch nicht verfolgt",
-      "pastStopping": "Nicht mehr zu stoppen: fertig oder wird gemergt"
+      "prNotTracked": "codeg beobachtet ihn nicht",
+      "pastStopping": "Nicht mehr zu stoppen: fertig oder wird gemergt",
+      "prChecks": "Checks {passed}/{total} bestanden",
+      "prChecksFailed": "{n} fehlgeschlagen",
+      "prChecksRunning": "{n} laufen",
+      "prChecksUnknown": "Checks unbekannt",
+      "prNoChecks": "Keine Checks",
+      "prWaitsOnForge": "die Forge hält ihn zurück ({state})",
+      "prNoConflict": "kein Konflikt",
+      "prHead": "Head {head}",
+      "prNotWatched": "wird nicht mehr beobachtet",
+      "prStale": "PR-Status ist evtl. veraltet (zuletzt gelesen {time})"
     },
     "ask": {
       "heading": {
@@ -9190,7 +9217,10 @@
         "changed": "Für dich geändert",
         "undone": "Geändert, dann zurückgenommen",
         "acceptance": "Deine Abnahme-Entscheidung",
-        "forge": "Auf einer Forge erledigt"
+        "forge": "Auf einer Forge erledigt",
+        "pr_ready": "Bereit zum Mergen",
+        "pr_merged": "PR gemergt",
+        "pr": "Beobachteter PR"
       },
       "session": {
         "permission": "Wartet auf deine Freigabe",
@@ -9214,6 +9244,16 @@
       "item": {
         "notify": "Erinnerung um {time}",
         "act": "Erledigt es um {time}"
+      },
+      "pr": {
+        "waiting_checks": "Wartet auf Checks",
+        "checks_failed": "Checks fehlgeschlagen",
+        "conflict": "Hat einen Konflikt",
+        "mergeable": "Bereit zum Mergen",
+        "no_conflict": "Kein Konflikt, Checks unbekannt",
+        "open": "PR offen",
+        "merged": "Gemergt",
+        "closed": "Geschlossen"
       }
     },
     "meet": {
@@ -9424,6 +9464,35 @@
       "again": "Nochmal ausführen",
       "letBe": "So lassen",
       "open": "Öffnen"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "Checks fehlgeschlagen",
+        "checks_passed": "Checks wieder grün",
+        "conflict": "Konflikt mit der Basis",
+        "mergeable": "Bereit zum Mergen",
+        "no_conflict": "Kein Konflikt, Checks unbekannt",
+        "merged": "Gemergt",
+        "closed": "Ohne Merge geschlossen"
+      },
+      "head": "Head {head}",
+      "checks": {
+        "unknown": "Checks unbekannt",
+        "none": "Keine Checks",
+        "passed": "Checks {passed}/{total} bestanden",
+        "running": "{n} laufen",
+        "partial": "nicht alle lesbar"
+      },
+      "more": "…und {n} weitere",
+      "noConflictNote": "Diese Forge zeigt keine Checks, daher nennt codeg ihn nicht bereit zum Mergen.",
+      "mergeState": "Die Forge sagt: {state}",
+      "state": {
+        "later": "Seitdem hat sich etwas geändert.",
+        "stopped": "Wird nicht mehr beobachtet."
+      },
+      "view": "PR ansehen",
+      "gotIt": "Verstanden",
+      "unwatch": "Nicht mehr beobachten"
     }
   }
 }

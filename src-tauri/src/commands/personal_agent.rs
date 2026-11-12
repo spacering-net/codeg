@@ -226,6 +226,12 @@ async fn dispatch_infos(
 ) -> Result<Vec<DispatchInfo>, AppCommandError> {
     let mut folder_names: HashMap<i32, Option<String>> = HashMap::new();
     let tasks = crate::personal_agent::ladder::tasks_of(db, &rows).await;
+    // Their pull requests, as the watches read them (7.4).
+    let prs = crate::personal_agent::watch::facts_of_tasks(
+        db,
+        &tasks.keys().copied().collect::<Vec<_>>(),
+    )
+    .await;
     let ids: Vec<i32> = rows.iter().map(|d| d.id).collect();
     let answering = crate::personal_agent::asks::answering_dispatches(db, &ids).await;
     let answered = crate::personal_agent::asks::answered_for_owner(db, &ids).await;
@@ -243,10 +249,14 @@ async fn dispatch_infos(
     let mut out = Vec::with_capacity(rows.len());
     for d in rows {
         let task = d.work_task_id.and_then(|id| tasks.get(&id));
+        let pr = d.work_task_id.and_then(|id| prs.get(&id)).cloned();
         let ladder = crate::personal_agent::acceptance::ladder_with(
-            crate::personal_agent::ladder::for_owner(
-                crate::personal_agent::ladder::ladder_of(&d, task),
-                answering.contains(&d.id),
+            crate::personal_agent::watch::with_pr(
+                crate::personal_agent::ladder::for_owner(
+                    crate::personal_agent::ladder::ladder_of(&d, task),
+                    answering.contains(&d.id),
+                ),
+                pr.as_ref(),
             ),
             views.get(&d.id).copied(),
         );
@@ -264,7 +274,7 @@ async fn dispatch_infos(
             });
         let check = checks.get(&d.id);
         let answered_for_you = answered.get(&d.id).copied().unwrap_or(0);
-        let task = task.map(crate::personal_agent::ladder::task_facts);
+        let task = task.map(|t| crate::personal_agent::ladder::task_facts_with(t, pr));
         let folder_name = match d.folder_id {
             Some(fid) => {
                 if let std::collections::hash_map::Entry::Vacant(slot) = folder_names.entry(fid) {

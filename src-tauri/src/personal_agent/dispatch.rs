@@ -1275,6 +1275,42 @@ impl PersonalAgentEngine {
             (DispatchState::Completed, Some(t)) => self.acceptance_landed(d, t).await,
             _ => false,
         };
+        // Handed-out work that settled is a coding event (6.9); a pull
+        // request it delivered is watched from now on (7.4).
+        if matches!(
+            d.state,
+            DispatchState::Completed
+                | DispatchState::Failed
+                | DispatchState::Interrupted
+                | DispatchState::Canceled
+                | DispatchState::HandedOver
+        ) {
+            super::watch::signal(
+                &self.db,
+                "dispatch_ended",
+                format!("dispatch:{}:{}:{}", d.id, round, enum_str(&d.state)),
+                d.bot_id,
+                d.folder_id,
+                serde_json::json!({
+                    "dispatch_id": d.id,
+                    "title": d.title,
+                    "mode": d.mode,
+                    "state": d.state,
+                    "ladder": ladder,
+                    "work_task_id": d.work_task_id,
+                    "conversation_id": d.conversation_id,
+                    "cause": cause,
+                }),
+            )
+            .await;
+        }
+        if let (DispatchState::Completed, Some(t), Some(host)) =
+            (d.state, task.as_ref(), self.host_ref())
+        {
+            if ladder == crate::models::personal_agent_overview::Ladder::PrOpen {
+                host.watch_task(t, false).await;
+            }
+        }
         let source_key = format!("dispatch:{}:{}:{}:{}", d.id, round, enum_str(&d.state), cause);
         let mut summary = format!(
             "Dispatch #{} \"{}\" ({} · executor {}) {}.",
@@ -1303,8 +1339,9 @@ impl PersonalAgentEngine {
         if ladder == crate::models::personal_agent_overview::Ladder::PrOpen {
             let pr = task.as_ref().map(super::ladder::pr_of).and_then(|(url, _)| url);
             summary.push_str(&format!(
-                " It was delivered as a pull request{}, not merged: codeg does not follow PR \
-                 status yet, so its matter stays open until the owner closes it.",
+                " It was delivered as a pull request{}, not merged: codeg watches it and tells \
+                 you when its checks fail, it conflicts, it can be merged, or it is merged or \
+                 closed — its matter stays open until then.",
                 pr.map(|u| format!(" ({u})")).unwrap_or_default()
             ));
         }
@@ -1497,7 +1534,7 @@ impl PersonalAgentEngine {
                     (ItemStatus::Waiting, Some(WaitsFor::Owner))
                 }
                 // Code work is done when merged (8.5): a pull request waits on
-                // its merge, which codeg does not follow yet.
+                // its merge, which its watch tells (7.4).
                 DispatchState::Completed
                     if ladder == crate::models::personal_agent_overview::Ladder::PrOpen =>
                 {

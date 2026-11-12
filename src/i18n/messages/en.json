@@ -8267,6 +8267,14 @@
         "level_forge": {
           "title": "On a forge",
           "hint": "A comment posted, an issue closed or a pull request merged by an assistant."
+        },
+        "level_pr_ready": {
+          "title": "A PR ready to merge",
+          "hint": "A watched pull request whose checks are green and the forge can merge."
+        },
+        "level_pr": {
+          "title": "Other PR news",
+          "hint": "Watched pull requests: checks failed or green again, a conflict, merged, closed."
         }
       },
       "workdir": {
@@ -8795,7 +8803,11 @@
           "delete": "Delete…",
           "open": "Open"
         },
-        "mergeable": "#{id} ready to merge: {title}"
+        "mergeable": "#{id} ready to merge: {title}",
+        "prReady": "Ready to merge: {text}",
+        "prFailed": "#{id} checks failed: {title}",
+        "prStuck": "#{id} has a conflict: {title}",
+        "prChecks": "#{id} waiting for checks {passed}/{total}"
       },
       "choice": {
         "other": "Other",
@@ -9036,7 +9048,12 @@
       "paused": "Set aside",
       "canceled": "Canceled",
       "handed_over": "Taken over",
-      "checking": "Being checked"
+      "checking": "Being checked",
+      "waiting_checks": "Waiting for checks",
+      "waiting_checks_n": "Checks {passed}/{total}",
+      "checks_failed": "Checks failed",
+      "stuck": "Stuck",
+      "pr_closed": "PR closed"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# file} other {# files}}",
@@ -9045,8 +9062,18 @@
       "openSession": "Open session",
       "stop": "Stop",
       "prOpened": "PR opened",
-      "prNotTracked": "PR status not tracked yet",
-      "pastStopping": "Too late to stop: it has finished or is merging"
+      "prNotTracked": "codeg is not watching it",
+      "pastStopping": "Too late to stop: it has finished or is merging",
+      "prChecks": "Checks {passed}/{total} passed",
+      "prChecksFailed": "{n} failed",
+      "prChecksRunning": "{n} running",
+      "prChecksUnknown": "Checks unknown",
+      "prNoChecks": "No checks",
+      "prWaitsOnForge": "the forge holds it ({state})",
+      "prNoConflict": "no conflict",
+      "prHead": "head {head}",
+      "prNotWatched": "no longer watched",
+      "prStale": "PR status may be out of date (last read {time})"
     },
     "ask": {
       "heading": {
@@ -9190,7 +9217,10 @@
         "changed": "Changed for you",
         "undone": "Changed, then taken back",
         "acceptance": "Your call on accepting",
-        "forge": "Done on a forge"
+        "forge": "Done on a forge",
+        "pr_ready": "Ready to merge",
+        "pr_merged": "PR merged",
+        "pr": "Watched PR"
       },
       "session": {
         "permission": "Waits for your approval",
@@ -9214,6 +9244,16 @@
       "item": {
         "notify": "Reminder at {time}",
         "act": "Does it at {time}"
+      },
+      "pr": {
+        "waiting_checks": "Waiting for checks",
+        "checks_failed": "Checks failed",
+        "conflict": "Has a conflict",
+        "mergeable": "Ready to merge",
+        "no_conflict": "No conflict, checks unknown",
+        "open": "PR open",
+        "merged": "Merged",
+        "closed": "Closed"
       }
     },
     "meet": {
@@ -9424,6 +9464,35 @@
       "again": "Do it again",
       "letBe": "Let it be",
       "open": "Open"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "Checks failed",
+        "checks_passed": "Checks green again",
+        "conflict": "Conflicts with its base",
+        "mergeable": "Ready to merge",
+        "no_conflict": "No conflict, checks unknown",
+        "merged": "Merged",
+        "closed": "Closed without merging"
+      },
+      "head": "Head {head}",
+      "checks": {
+        "unknown": "Checks unknown",
+        "none": "No checks",
+        "passed": "Checks {passed}/{total} passed",
+        "running": "{n} running",
+        "partial": "not all could be read"
+      },
+      "more": "…and {n} more",
+      "noConflictNote": "This forge doesn't show checks, so codeg doesn't call it ready to merge.",
+      "mergeState": "The forge says: {state}",
+      "state": {
+        "later": "It has moved on since.",
+        "stopped": "No longer watched."
+      },
+      "view": "View PR",
+      "gotIt": "Got it",
+      "unwatch": "Stop watching"
     }
   }
 }

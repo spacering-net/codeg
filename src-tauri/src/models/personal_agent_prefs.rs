@@ -426,6 +426,16 @@ pub const NEWS: &[(&str, Level, &str)] = &[
         "what an assistant did on a forge: a comment, an issue closed, a merge",
     ),
     (
+        "pr_ready",
+        Level::Normal,
+        "a watched pull request that can be merged",
+    ),
+    (
+        "pr",
+        Level::Low,
+        "watched pull requests: checks failed or green again, a conflict, merged, closed",
+    ),
+    (
         "used_up",
         Level::Urgent,
         "work sent back as many rounds as allowed, still not right",
@@ -575,6 +585,10 @@ pub struct Prefs {
     pub level_acceptance: Level,
     #[serde(default = "low", deserialize_with = "lenient_low")]
     pub level_forge: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_pr_ready: Level,
+    #[serde(default = "low", deserialize_with = "lenient_low")]
+    pub level_pr: Level,
     #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
     pub level_used_up: Level,
 }
@@ -628,6 +642,8 @@ impl Default for Prefs {
             level_answered: Level::Low,
             level_acceptance: Level::Normal,
             level_forge: Level::Low,
+            level_pr_ready: Level::Normal,
+            level_pr: Level::Low,
             level_used_up: Level::Urgent,
         }
     }
@@ -900,6 +916,16 @@ pub const PREFS: &[PrefSpec] = &[
         label: "how urgent what an assistant did on a forge is",
     },
     PrefSpec {
+        key: "level_pr_ready",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent a watched pull request that can be merged is",
+    },
+    PrefSpec {
+        key: "level_pr",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent the rest of a watched pull request's news is",
+    },
+    PrefSpec {
         key: "level_used_up",
         kind: PrefKind::Choice(LEVELS),
         label: "how urgent work sent back as many rounds as allowed is",
@@ -1107,6 +1133,8 @@ impl Prefs {
             "answered" => self.level_answered,
             "acceptance" => self.level_acceptance,
             "forge" => self.level_forge,
+            "pr_ready" => self.level_pr_ready,
+            "pr" => self.level_pr,
             "used_up" => self.level_used_up,
             _ => Level::Normal,
         }

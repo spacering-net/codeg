@@ -1040,6 +1040,19 @@ impl PersonalAgentEngine {
         let live = svc::list_dispatches(&self.db.conn, id, super::dispatch::LIVE_STATES, None, 500)
             .await
             .map_err(|e| e.to_string())?;
+        // The pull requests it watched (7.4): the primary follows them with
+        // its work, or they are let go with it.
+        {
+            use crate::db::service::personal_agent_watch_service as wsvc;
+            let moved = if opts.hand_over {
+                wsvc::move_bot(&self.db.conn, id, primary.id).await
+            } else {
+                wsvc::end_of_bot(&self.db.conn, id, "stopped").await
+            };
+            if let Err(e) = moved {
+                tracing::warn!("[personal_agent] watches of #{id} not handed on: {e}");
+            }
+        }
         if opts.hand_over {
             let ids: Vec<i32> = live.iter().map(|d| d.id).collect();
             // Their sessions' events go to the primary now (a session still

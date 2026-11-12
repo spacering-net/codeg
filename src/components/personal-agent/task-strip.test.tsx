@@ -63,6 +63,7 @@ function facts(patch: Partial<TaskFacts> = {}): TaskFacts {
     connection_id: "c7",
     started_at: "2026-11-10T09:00:00Z",
     finished_at: null,
+    pr: null,
     ...patch,
   }
 }
@@ -210,7 +211,7 @@ describe("the task card", () => {
       "+214 −37，1 个文件"
     )
     expect(container.querySelector("[data-pa-task-pr]")?.textContent).toBe(
-      "已提 PR · PR 状态还没跟踪"
+      "已提 PR · codeg 没在看护它"
     )
     // Left out of the strip: the row above says the rung.
     expect(container.querySelector("[data-pa-ladder]")).toBeNull()

@@ -2977,6 +2977,7 @@ export type NoticeAction =
   | "undo"
   | `undo:${number}`
   | `stop:${number}`
+  | "unwatch"
   | "done"
   | "snooze:15m"
   | "snooze:1h"

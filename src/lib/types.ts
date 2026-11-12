@@ -2373,6 +2373,57 @@ export interface ForgeCardData {
   error?: string | null
 }
 
+/** What a watched pull request came to (Rust `watch::PrEvent`). */
+export type PrEvent =
+  | "checks_failed"
+  | "checks_passed"
+  | "conflict"
+  | "mergeable"
+  | "no_conflict"
+  | "merged"
+  | "closed"
+
+/** One failing check, as a PR card names it. */
+export interface PrCheckLine {
+  name: string
+  url?: string | null
+  summary?: string | null
+}
+
+/** A head's checks, counted (Rust `watch::CheckTally`). */
+export interface PrCheckTally {
+  available: boolean
+  partial: boolean
+  total: number
+  passed: number
+  failed: number
+  pending: number
+  neutral: number
+  failing: PrCheckLine[]
+}
+
+/** The card of what a watched pull request came to (7.4). */
+export interface PrCardData {
+  notice: "pr"
+  event: PrEvent
+  /** open; later: a newer card followed; stopped: no longer watched;
+   *  dismissed. */
+  state: "open" | "later" | "stopped" | "dismissed"
+  watch_id: number
+  /** `owner/repo#12` (`!12` on GitLab). */
+  target: string
+  provider: string
+  number: number
+  url: string | null
+  title: string | null
+  /** The head the checks are of, shortened. */
+  head: string
+  checks: PrCheckTally
+  merge_state: string | null
+  task_id: number | null
+  dispatch_id: number | null
+}
+
 /** One setting an assistant changed from the conversation (Rust
  *  `prefs::Applied`): the options codeg filled in for a brain or an
  *  agent, and who picked each. */
@@ -2508,12 +2559,49 @@ export type Ladder =
   | "mergeable"
   | "merging"
   | "pr_open"
+  /** A watched pull request (7.4): its head's checks running, failed; a
+   *  conflict; closed without merging. */
+  | "waiting_checks"
+  | "checks_failed"
+  | "stuck"
+  | "pr_closed"
   | "merged"
   | "done"
   | "failed"
   | "paused"
   | "canceled"
   | "handed_over"
+
+/** Where a watched pull request stands (Rust `watch::Phase`). */
+export type PrPhase =
+  | "waiting_checks"
+  | "checks_failed"
+  | "conflict"
+  | "mergeable"
+  | "no_conflict"
+  | "open"
+  | "merged"
+  | "closed"
+
+/** A watched pull request as the task card shows it (7.4, 8.5). */
+export interface PrFacts {
+  watch_id: number
+  phase: PrPhase | null
+  /** Its head's checks: passed, failed (that may not fail), running, of
+   *  how many; `checks_known` false where the forge shows none (CNB). */
+  passed: number
+  failed: number
+  pending: number
+  total: number
+  checks_known: boolean
+  head: string | null
+  merge_state: string | null
+  last_read_at: string | null
+  /** What was last read may be out of date (read long ago, or held back
+   *  by a rate limit or a failing forge). */
+  stale: boolean
+  watching: boolean
+}
 
 /** The kanban task behind a task dispatch, as its card shows it. */
 export interface TaskFacts {
@@ -2535,6 +2623,8 @@ export interface TaskFacts {
   connection_id: string | null
   started_at: string | null
   finished_at: string | null
+  /** Its pull request, as the watch last read it. */
+  pr: PrFacts | null
 }
 
 export type ItemKind = "dispatch" | "reminder" | "followup" | "question"
@@ -2744,6 +2834,8 @@ export interface PersonalAgentPrefs {
   level_acceptance: PersonalAgentNewsLevel
   level_used_up: PersonalAgentNewsLevel
   level_forge: PersonalAgentNewsLevel
+  level_pr_ready: PersonalAgentNewsLevel
+  level_pr: PersonalAgentNewsLevel
 }
 
 /** How much a kind of news may interrupt the owner (6.2). */
@@ -2807,6 +2899,11 @@ export type TodayRowKind =
   | "changed"
   // Something an assistant did on a forge (7.4).
   | "forge"
+  // A watched pull request: one to merge (waits on the owner), one watched,
+  // one merged today.
+  | "pr_ready"
+  | "pr"
+  | "pr_merged"
 
 export interface TodayRow {
   /** The same thing keeps the same key across reads. */
@@ -3028,6 +3125,8 @@ export interface BotNeedsYou {
     | "changed"
     | "input"
     | "acceptance"
+    /** A watched pull request ready to merge (7.4). */
+    | "mergeable"
     | string
   text: string
   since: string
@@ -3069,6 +3168,8 @@ export interface BotHandWork {
   conversation_id: number | null
   /** Where it stands on the PR ladder (8.5). */
   ladder: Ladder
+  /** Its pull request, watched. */
+  pr: PrFacts | null
 }
 
 export interface BotAwaitedReply {

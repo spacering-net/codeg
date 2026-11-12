@@ -77,10 +77,12 @@ pub struct TodayRow {
     ///   `waiting`: its handed-out work waits in its own session), an
     ///   assistant's `proposal`, handed-out work that `failed`, a board
     ///   `task`, a `session`, a `reminder` that came due;
-    /// - watching — handed-out work (`dispatch`), a board `task`;
+    /// - watching — handed-out work (`dispatch`), a board `task`, a watched
+    ///   pull request (`pr`, its state its rung);
     /// - the schedule — a matter (`item`);
     /// - done — handed-out work `finished`, a question `answered` for the
-    ///   owner, a setting `changed` for them.
+    ///   owner, a setting `changed` for them, a pull request merged
+    ///   (`pr_merged`).
     pub kind: &'static str,
     /// How urgent a wait is, by the owner's levels (6.2).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -553,6 +555,42 @@ pub async fn today(
         row.conversation_id = t.conversation_id;
         view.watching.push(row);
     }
+    // The pull requests the assistants watch (7.4): one ready to merge
+    // waits on the owner (its card, above).
+    for w in crate::db::service::personal_agent_watch_service::watching(&db.conn, None)
+        .await
+        .unwrap_or_default()
+    {
+        if !bot_ids.contains(&w.bot_id) || w.kind != "pr" || w.phase.as_deref() == Some("mergeable")
+        {
+            continue;
+        }
+        let label = format!(
+            "{}{}{}",
+            w.owner_repo,
+            if w.provider == "gitlab" { "!" } else { "#" },
+            w.number
+        );
+        let mut row = TodayRow::new(
+            format!("pr:{}", w.id),
+            "pr",
+            w.title
+                .as_deref()
+                .map(one_line)
+                .unwrap_or_else(|| label.clone()),
+            w.last_change_at.unwrap_or(w.created_at),
+        );
+        row.bot_id = Some(w.bot_id);
+        row.project = w.folder_id.and_then(project_of);
+        row.text = Some(label);
+        row.state = Some(w.phase.clone().unwrap_or_else(|| "open".into()));
+        row.task_id = w.work_task_id;
+        if let Some(d) = w.dispatch_id {
+            row.dispatch_id = Some(d);
+            dispatch_ids.push(d);
+        }
+        view.watching.push(row);
+    }
     view.watching.sort_by_key(|r| std::cmp::Reverse(r.at));
 
     // ── done today ──────────────────────────────────────────────────────
@@ -583,6 +621,40 @@ pub async fn today(
         row.task_id = d.work_task_id;
         row.conversation_id = d.conversation_id;
         dispatch_ids.push(d.id);
+        view.done.push(row);
+    }
+    // Pull requests merged today, as their watches read it (7.4).
+    for w in crate::db::service::personal_agent_watch_service::ended_since(&db.conn, day_start)
+        .await
+        .unwrap_or_default()
+    {
+        if !bot_ids.contains(&w.bot_id) || w.ended_reason.as_deref() != Some("merged") {
+            continue;
+        }
+        let label = format!(
+            "{}{}{}",
+            w.owner_repo,
+            if w.provider == "gitlab" { "!" } else { "#" },
+            w.number
+        );
+        let mut row = TodayRow::new(
+            format!("pr_merged:{}", w.id),
+            "pr_merged",
+            w.title
+                .as_deref()
+                .map(one_line)
+                .unwrap_or_else(|| label.clone()),
+            w.last_change_at.unwrap_or(w.updated_at),
+        );
+        row.bot_id = Some(w.bot_id);
+        row.project = w.folder_id.and_then(project_of);
+        row.text = Some(label);
+        row.state = Some("merged".into());
+        row.task_id = w.work_task_id;
+        if let Some(d) = w.dispatch_id {
+            row.dispatch_id = Some(d);
+            dispatch_ids.push(d);
+        }
         view.done.push(row);
     }
     for a in super::asks::answered_for_owner_since(db, day_start).await {

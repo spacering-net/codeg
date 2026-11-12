@@ -142,6 +142,19 @@ export function rowLine(
   const live = entry.live
   if (!live) return null
   const needs = live.needs
+  // A watched pull request to merge (7.4): the work it came from by name.
+  if (live.attention === "needs_you" && needs?.kind === "mergeable") {
+    const work = live.work_on_hand.find((w) => w.ladder === "mergeable")
+    return {
+      text: work
+        ? t("bots.roster.mergeable", {
+            id: work.dispatch_id,
+            title: work.title,
+          })
+        : t("bots.roster.prReady", { text: needs.text }),
+      tone: "ready",
+    }
+  }
   if (live.attention === "needs_you" && needs) {
     const ask =
       needs.kind === "question" ||
@@ -172,8 +185,35 @@ export function rowLine(
       tone: "ready",
     }
   }
+  // A pull request of its work that failed its checks, or conflicts.
+  const red = live.work_on_hand.find(
+    (w) => w.ladder === "checks_failed" || w.ladder === "stuck"
+  )
+  if (red) {
+    return {
+      text: t(
+        red.ladder === "stuck" ? "bots.roster.prStuck" : "bots.roster.prFailed",
+        { id: red.dispatch_id, title: red.title }
+      ),
+      tone: "plain",
+    }
+  }
   if (view.busy && live.activity) {
     return { text: activityText(t, live.activity, now), tone: "busy" }
+  }
+  // One waiting for its checks: how far they are.
+  const checking = live.work_on_hand.find(
+    (w) => w.ladder === "waiting_checks" && w.pr && w.pr.total > 0
+  )
+  if (checking?.pr) {
+    return {
+      text: t("bots.roster.prChecks", {
+        id: checking.dispatch_id,
+        passed: checking.pr.passed,
+        total: checking.pr.total,
+      }),
+      tone: "plain",
+    }
   }
   if (live.awaiting.length > 0 && live.work !== "busy") {
     return {
@@ -389,7 +429,15 @@ export function PersonalAgentRoster({
                   #{w.dispatch_id} {w.title}
                   <span className="text-muted-foreground">
                     {" · "}
-                    {tt(`ladder.${w.ladder ?? "working"}`)}
+                    {w.ladder === "waiting_checks" &&
+                    w.pr &&
+                    w.pr.checks_known &&
+                    w.pr.total > 0
+                      ? tt("ladder.waiting_checks_n", {
+                          passed: w.pr.passed,
+                          total: w.pr.total,
+                        })
+                      : tt(`ladder.${w.ladder ?? "working"}`)}
                   </span>
                 </li>
               ))}

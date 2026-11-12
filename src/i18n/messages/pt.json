@@ -8268,6 +8268,14 @@
         "level_forge": {
           "title": "Numa forja",
           "hint": "Um comentário, uma issue fechada ou um PR mesclado por um assistente."
+        },
+        "level_pr_ready": {
+          "title": "Um PR pronto para mesclar",
+          "hint": "Um PR acompanhado com verificações verdes que a forja pode mesclar."
+        },
+        "level_pr": {
+          "title": "Outras novidades de PR",
+          "hint": "PRs acompanhados: verificações falharam ou voltaram ao verde, conflito, mesclado, fechado."
         }
       },
       "workdir": {
@@ -8795,7 +8803,11 @@
           "delete": "Excluir…",
           "open": "Abrir"
         },
-        "mergeable": "#{id} pronta para mesclar: {title}"
+        "mergeable": "#{id} pronta para mesclar: {title}",
+        "prReady": "Pronto para mesclar: {text}",
+        "prFailed": "#{id} verificações falharam: {title}",
+        "prStuck": "#{id} tem um conflito: {title}",
+        "prChecks": "#{id} aguardando verificações {passed}/{total}"
       },
       "choice": {
         "other": "Outro",
@@ -9036,7 +9048,12 @@
       "paused": "Adiada",
       "canceled": "Cancelada",
       "handed_over": "Assumida por você",
-      "checking": "Em verificação"
+      "checking": "Em verificação",
+      "waiting_checks": "Aguardando verificações",
+      "waiting_checks_n": "Verificações {passed}/{total}",
+      "checks_failed": "Verificações falharam",
+      "stuck": "Travado",
+      "pr_closed": "PR fechado"
     },
     "taskCard": {
       "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# arquivo} other {# arquivos}}",
@@ -9045,8 +9062,18 @@
       "openSession": "Abrir conversa",
       "stop": "Parar",
       "prOpened": "PR aberto",
-      "prNotTracked": "O status do PR ainda não é acompanhado",
-      "pastStopping": "Não dá mais para parar: terminou ou está sendo mesclada"
+      "prNotTracked": "O codeg não está acompanhando",
+      "pastStopping": "Não dá mais para parar: terminou ou está sendo mesclada",
+      "prChecks": "Verificações {passed}/{total} aprovadas",
+      "prChecksFailed": "{n} falharam",
+      "prChecksRunning": "{n} rodando",
+      "prChecksUnknown": "Verificações desconhecidas",
+      "prNoChecks": "Sem verificações",
+      "prWaitsOnForge": "a forja ainda não libera ({state})",
+      "prNoConflict": "sem conflito",
+      "prHead": "head {head}",
+      "prNotWatched": "não é mais acompanhado",
+      "prStale": "O status do PR pode estar desatualizado (última leitura {time})"
     },
     "ask": {
       "heading": {
@@ -9190,7 +9217,10 @@
         "changed": "Alterado em seu nome",
         "undone": "Alterado e desfeito",
         "acceptance": "A aceitação depende de você",
-        "forge": "Feito numa forja"
+        "forge": "Feito numa forja",
+        "pr_ready": "Pronto para mesclar",
+        "pr_merged": "PR mesclado",
+        "pr": "PR acompanhado"
       },
       "session": {
         "permission": "Aguarda sua aprovação",
@@ -9214,6 +9244,16 @@
       "item": {
         "notify": "Lembrete às {time}",
         "act": "Faz às {time}"
+      },
+      "pr": {
+        "waiting_checks": "Aguardando verificações",
+        "checks_failed": "Verificações falharam",
+        "conflict": "Tem um conflito",
+        "mergeable": "Pronto para mesclar",
+        "no_conflict": "Sem conflito, verificações desconhecidas",
+        "open": "PR aberto",
+        "merged": "Mesclado",
+        "closed": "Fechado"
       }
     },
     "meet": {
@@ -9424,6 +9464,35 @@
       "again": "Fazer de novo",
       "letBe": "Deixar assim",
       "open": "Abrir"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "Verificações falharam",
+        "checks_passed": "Verificações verdes de novo",
+        "conflict": "Em conflito com a base",
+        "mergeable": "Pronto para mesclar",
+        "no_conflict": "Sem conflito, verificações desconhecidas",
+        "merged": "Mesclado",
+        "closed": "Fechado sem mesclar"
+      },
+      "head": "Head {head}",
+      "checks": {
+        "unknown": "Verificações desconhecidas",
+        "none": "Sem verificações",
+        "passed": "Verificações {passed}/{total} aprovadas",
+        "running": "{n} rodando",
+        "partial": "nem todas puderam ser lidas"
+      },
+      "more": "…e mais {n}",
+      "noConflictNote": "Esta forja não mostra verificações, então o codeg não o chama de pronto para mesclar.",
+      "mergeState": "A forja diz: {state}",
+      "state": {
+        "later": "Mudou desde então.",
+        "stopped": "Não é mais acompanhado."
+      },
+      "view": "Ver PR",
+      "gotIt": "Entendi",
+      "unwatch": "Parar de acompanhar"
     }
   }
 }

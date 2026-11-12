@@ -20,6 +20,8 @@
  *   out (`./acceptance-card.tsx`, 7.5).
  * - **forge**: something an assistant does on a forge — a comment, closing
  *   an issue, a merge (`./forge-card.tsx`, 7.4).
+ * - **pr**: what a pull request an assistant watches came to — checks
+ *   failed, a conflict, ready to merge, merged (`./pr-card.tsx`, 7.4).
  * - **changed**: a settings change from the conversation (13.3), the work
  *   assistants and executor configs among them (10.5); work assistants made
  *   (4.12), an executor config made or to make.
@@ -75,6 +77,7 @@ import { ChoiceCard } from "./choice-card"
 import { CollapsedText } from "./event-card"
 import { ExchangeSheet } from "./exchange-sheet"
 import { ForgeCard } from "./forge-card"
+import { PrCard } from "./pr-card"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
@@ -149,6 +152,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "reminder") return <ReminderCard item={item} />
   if (kind === "acceptance") return <AcceptanceCard item={item} />
   if (kind === "forge") return <ForgeCard item={item} />
+  if (kind === "pr") return <PrCard item={item} />
   return null
 }
 

@@ -7,8 +7,8 @@ use serde::Serialize;
 
 use crate::db::entities::work_task::WorkTaskStatus;
 
-/// A rung of the PR ladder (8.5), phase 1: the rungs codeg knows without
-/// following a PR. Code-changing work is finished at `merged`; work that
+/// A rung of the PR ladder (8.5): what codeg knows of the work, and of
+/// its pull request as the watch reads it (7.4). Code-changing work is finished at `merged`; work that
 /// only writes a report is finished at `done`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,8 +25,18 @@ pub enum Ladder {
     Mergeable,
     /// The board is landing it.
     Merging,
-    /// Delivered as a pull request; codeg does not follow its status yet.
+    /// Delivered as a pull request, open: not watched, or watched with
+    /// nothing more to say (its checks green but the forge will not merge it
+    /// yet, say).
     PrOpen,
+    /// A watched pull request whose head's checks are still running (7.4).
+    WaitingChecks,
+    /// A watched pull request whose head's checks failed.
+    ChecksFailed,
+    /// A watched pull request that cannot be merged as it is: a conflict.
+    Stuck,
+    /// A watched pull request closed without being merged.
+    PrClosed,
     Merged,
     /// Ended without a merge: a report, a conversation's work, a task the
     /// owner accepted without merging.
@@ -60,7 +70,11 @@ impl Ladder {
             Ladder::Checking => "in review, being checked and accepted",
             Ladder::Mergeable => "ready to merge (in review)",
             Ladder::Merging => "merging",
-            Ladder::PrOpen => "PR opened, not merged yet (codeg does not follow PR status yet)",
+            Ladder::PrOpen => "PR opened, not merged yet",
+            Ladder::WaitingChecks => "PR opened, its checks running",
+            Ladder::ChecksFailed => "PR opened, its checks failed",
+            Ladder::Stuck => "PR opened, stuck: it conflicts with its base",
+            Ladder::PrClosed => "PR closed without merging",
             Ladder::Merged => "merged",
             Ladder::Done => "done",
             Ladder::Failed => "failed",
@@ -69,6 +83,32 @@ impl Ladder {
             Ladder::HandedOver => "taken over by the owner",
         }
     }
+}
+
+/// A watched pull request as the task card shows it (7.4, 8.5).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PrFacts {
+    pub watch_id: i32,
+    /// Where it stands: `waiting_checks` | `checks_failed` | `conflict` |
+    /// `mergeable` | `no_conflict` | `open` | `merged` | `closed`; `None`
+    /// before its first read.
+    pub phase: Option<String>,
+    /// Its head's checks: passed, failed (that may not fail), running, of
+    /// how many; `checks_known` is false where the forge shows none (CNB).
+    pub passed: u32,
+    pub failed: u32,
+    pub pending: u32,
+    pub total: u32,
+    pub checks_known: bool,
+    /// The head the checks are of, shortened.
+    pub head: Option<String>,
+    pub merge_state: Option<String>,
+    pub last_read_at: Option<DateTime<Utc>>,
+    /// What was last read may be out of date: read longer ago than two of
+    /// its intervals, or held back by a rate limit or a failing forge.
+    pub stale: bool,
+    /// Still being read (not ended).
+    pub watching: bool,
 }
 
 /// The kanban task behind a task dispatch, as its card shows it.
@@ -94,4 +134,6 @@ pub struct TaskFacts {
     pub connection_id: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
+    /// Its pull request as the watch last read it.
+    pub pr: Option<PrFacts>,
 }

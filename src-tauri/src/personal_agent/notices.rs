@@ -476,6 +476,7 @@ impl PersonalAgentEngine {
             NoticeKind::Acceptance => return self.act_on_acceptance(&notice, action).await,
             // What an assistant does on a forge (7.4).
             NoticeKind::Forge => return self.act_on_forge(&notice, action).await,
+            NoticeKind::Pr => return self.act_on_pr(&notice, action).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.

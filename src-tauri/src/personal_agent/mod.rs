@@ -55,6 +55,7 @@ pub mod team_edit;
 pub mod templates;
 pub mod today;
 pub mod tools;
+pub mod watch;
 pub mod workdir;
 
 #[cfg(test)]

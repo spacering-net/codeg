@@ -113,6 +113,10 @@ function useOpener(
       case "dispatch":
       case "finished":
         return work ?? task ?? session
+      // A watched pull request: the work it came from, else its assistant.
+      case "pr":
+      case "pr_merged":
+        return work ?? task ?? bot
       default:
         return jump ?? work ?? bot
     }
@@ -142,6 +146,8 @@ function useRowWords() {
           : t("kind.finished")
       case "changed":
         return row.state === "undone" ? t("kind.undone") : t("kind.changed")
+      case "pr":
+        return t(`pr.${row.state ?? "open"}` as "pr.open")
       case "item": {
         const does = row.state?.endsWith(":act") ?? false
         return t(does ? "item.act" : "item.notify", { time: clock(row.at) })

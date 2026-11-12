@@ -29,6 +29,7 @@ use crate::db::entities::personal_agent_dispatch::{
 };
 use crate::db::entities::work_task::{self, WorkTaskStatus};
 use crate::db::service::personal_agent_service as svc;
+use crate::db::service::personal_agent_watch_service as wsvc;
 use crate::db::AppDatabase;
 use crate::models::personal_agent_overview::Ladder;
 use crate::models::personal_agent_roster::{Activity, BotLive, NeedsYou, StepLine, WorkState};
@@ -39,8 +40,6 @@ const SHOWN: usize = 12;
 const STEP_TARGET_MAX: usize = 80;
 /// A failed dispatch older than this no longer waits on anyone.
 pub(super) const FAILED_FRESH_DAYS: i64 = 3;
-/// The longest a forge read for `pr_status` may take.
-const PR_READ_SECS: u64 = 25;
 /// How often the usage figures are caught up while nothing runs, and the
 /// first time after start (plan 8.1).
 pub(super) const USAGE_SYNC_EVERY: std::time::Duration = std::time::Duration::from_secs(15 * 60);
@@ -1157,8 +1156,10 @@ impl PersonalAgentEngine {
         ToolOutcome::ok(text, json!({ "automations": data }))
     }
 
-    /// `pr_status`: a pull request's state and checks, read from its forge
-    /// now (phase 1 follows no PR on its own).
+    /// `pr_status`: a pull request's state and checks — the watch's read
+    /// when it is this assistant's and fresh, else the forge's now (7.4).
+    /// `watch` starts or stops watching it; `full` adds the discussion,
+    /// whole, and the checks' summaries and links.
     pub(super) async fn pr_status_call(&self, args: &Value) -> ToolOutcome {
         let db = &self.db;
         let task = if let Some(id) = int_arg(args, "dispatch_id") {
@@ -1189,36 +1190,23 @@ impl PersonalAgentEngine {
         } else {
             None
         };
-        // A task's PR is read where the task delivered it; a project and a
-        // number, in the project's own repository.
-        let (number, url, read) = if let Some(t) = &task {
+        let watch = args.get("watch").and_then(|v| v.as_bool());
+        let full = args.get("full").and_then(|v| v.as_bool()) == Some(true);
+        // A task's PR is where the task delivered it; a project and a
+        // number, where it was first resolved (the project's `origin` then).
+        let (target, number) = if let Some(t) = &task {
             let (url, recorded) = ladder::pr_of(t);
             match (ladder::pr_target(t), recorded) {
-                (Some((target, number)), _) => (
-                    number,
-                    url,
-                    tokio::time::timeout(
-                        std::time::Duration::from_secs(PR_READ_SECS),
-                        crate::commands::forge::forge_change_detail_at_core(db, &target, number),
-                    )
-                    .await,
-                ),
-                (None, Some(number)) => (
-                    number,
-                    url,
-                    tokio::time::timeout(
-                        std::time::Duration::from_secs(PR_READ_SECS),
-                        crate::commands::forge::forge_change_detail_core(
-                            db,
-                            t.folder_id,
-                            crate::forge::ChangeQuery {
-                                number,
-                                account_id: None,
-                            },
-                        ),
-                    )
-                    .await,
-                ),
+                (Some(found), _) => found,
+                // An older row without its coordinates: resolved once in
+                // its project.
+                (None, Some(n)) => match self.named_item(t.folder_id, "pr", n).await {
+                    Ok(w) => match wsvc::target_of(&w) {
+                        Some(found) => (found, n),
+                        None => return ToolOutcome::refused("the PR names no forge codeg knows"),
+                    },
+                    Err(e) => return ToolOutcome::refused(e),
+                },
                 (None, None) => {
                     return ToolOutcome::refused(format!(
                         "board task #{} has no pull request{}",
@@ -1235,22 +1223,16 @@ impl PersonalAgentEngine {
             let Ok(p) = i32::try_from(p) else {
                 return ToolOutcome::refused("no such project");
             };
-            (
-                n,
-                None,
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(PR_READ_SECS),
-                    crate::commands::forge::forge_change_detail_core(
-                        db,
-                        p,
-                        crate::forge::ChangeQuery {
-                            number: n,
-                            account_id: None,
-                        },
-                    ),
-                )
-                .await,
-            )
+            if n <= 0 {
+                return ToolOutcome::refused(format!("bad number: {n}"));
+            }
+            match self.named_item(p, "pr", n).await {
+                Ok(w) => match wsvc::target_of(&w) {
+                    Some(t) => (t, n),
+                    None => return ToolOutcome::refused("the PR names no forge codeg knows"),
+                },
+                Err(e) => return ToolOutcome::refused(e),
+            }
         } else if int_arg(args, "dispatch_id").is_some() || int_arg(args, "task_id").is_some() {
             return ToolOutcome::refused("no such board task");
         } else {
@@ -1258,99 +1240,20 @@ impl PersonalAgentEngine {
                 "name the pull request: `dispatch_id` or `task_id` of the work that made it, or `project_id` and `number`",
             );
         };
-        let detail = match read {
-            Err(_) => {
-                return ToolOutcome::refused(format!(
-                    "the forge did not answer within {PR_READ_SECS} s"
-                ))
-            }
-            Ok(Err(e)) => return ToolOutcome::refused(format!("could not read PR #{number}: {e}")),
-            Ok(Ok(d)) => d,
+        let read = match self.pr_read(&target, number, watch).await {
+            Ok(r) => r,
+            Err(e) => return ToolOutcome::refused(e),
         };
-        use crate::forge::ForgeCheckState as S;
-        let count = |s: S| detail.checks.checks.iter().filter(|c| c.state == s).count();
-        let failing: Vec<String> = detail
-            .checks
-            .checks
-            .iter()
-            .filter(|c| c.state == S::Failure && !c.allow_failure)
-            .map(|c| c.name.clone())
-            .collect();
-        let mut parts = vec![format!("PR #{} is {}", detail.number, detail.state)];
-        if detail.draft {
-            parts.push("a draft".into());
-        }
-        match detail.mergeable {
-            Some(true) => parts.push("mergeable".into()),
-            Some(false) => parts.push(format!(
-                "not mergeable{}",
-                detail
-                    .merge_state
-                    .as_deref()
-                    .map(|m| format!(" ({m})"))
-                    .unwrap_or_default()
-            )),
-            None => {}
-        }
-        parts.push(format!("{} ← {}", detail.base_ref, detail.head_ref));
-        if let Some(sha) = &detail.head_sha {
-            parts.push(format!("head {}", sha.chars().take(9).collect::<String>()));
-        }
-        if !detail.checks.available {
-            parts.push("checks not available".into());
-        } else if detail.checks.checks.is_empty() {
-            parts.push("no checks".into());
+        let more = if full {
+            Some(super::watch::full_text(db, &target, number, &read.detail).await)
         } else {
-            let pending = count(S::Queued) + count(S::Running);
-            parts.push(format!(
-                "checks: {} passed, {} failed, {} pending{}",
-                count(S::Success),
-                count(S::Failure),
-                pending,
-                if failing.is_empty() {
-                    String::new()
-                } else {
-                    format!(" (failing: {})", failing.join(", "))
-                }
-            ));
+            None
+        };
+        let mut read = read;
+        if read.url.is_none() {
+            read.url = task.as_ref().and_then(|t| ladder::pr_of(t).0);
         }
-        if let (Some(a), Some(d)) = (detail.additions, detail.deletions) {
-            parts.push(format!(
-                "+{a} −{d}{}",
-                detail
-                    .changed_files
-                    .map(|f| format!(" in {f} files"))
-                    .unwrap_or_default()
-            ));
-        }
-        if let Some(u) = &url {
-            parts.push(u.clone());
-        }
-        let mut text = parts.join(" · ");
-        if args.get("full").and_then(|v| v.as_bool()) == Some(true) {
-            text.push_str("\n\nComments and logs in full are not available yet; the checks above are what codeg reads now.");
-        }
-        ToolOutcome::ok(
-            text,
-            json!({
-                "number": detail.number,
-                "url": url,
-                "state": detail.state,
-                "draft": detail.draft,
-                "mergeable": detail.mergeable,
-                "merge_state": detail.merge_state,
-                "base": detail.base_ref,
-                "head": detail.head_ref,
-                "head_sha": detail.head_sha,
-                "additions": detail.additions,
-                "deletions": detail.deletions,
-                "changed_files": detail.changed_files,
-                "checks": detail.checks.checks.iter().map(|c| json!({
-                    "name": c.name, "state": c.state, "summary": c.summary, "url": c.url,
-                    "allow_failure": c.allow_failure,
-                })).collect::<Vec<_>>(),
-            }),
-        )
+        super::watch::pr_outcome(&read, number, more)
     }
 
     /// `usage_summary`: tokens over the last days, by day, agent, project

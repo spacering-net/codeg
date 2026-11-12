@@ -62,6 +62,11 @@ pub enum NoticeKind {
     /// to look at or do again after checking the forge.
     #[sea_orm(string_value = "forge")]
     Forge,
+    /// What a watched pull request came to (7.4): its checks failed or are
+    /// green again, it conflicts, it can be merged, it was merged or closed.
+    /// One per place it reached, on its head; a newer one supersedes it.
+    #[sea_orm(string_value = "pr")]
+    Pr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

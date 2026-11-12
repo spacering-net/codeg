@@ -6,8 +6,9 @@
  * - `LadderChip`: the rung in a word, on its tone — the work still moving
  *   pulses a dot before it, as the state chips do;
  * - `TaskStrip`: under a task's row, one line of where it stands (the rung,
- *   its branch, its project), what it changed ("+214 −37, 6 files"), a
- *   pull request it reached (and that codeg does not follow it yet), and
+ *   its branch, its project), what it changed ("+214 −37, 6 files"), the
+ *   pull request it reached as the watch last read it (its checks, its
+ *   head; "may be out of date" when the read is old or held back), and
  *   [View PR] [Open session] [Stop] — the last while it still moves.
  *
  * The result card carries the strip on the latest news of its work only;
@@ -15,7 +16,7 @@
  */
 
 import { useState } from "react"
-import { useTranslations } from "next-intl"
+import { useFormatter, useTranslations } from "next-intl"
 import { GitBranch } from "lucide-react"
 import { toast } from "sonner"
 
@@ -24,7 +25,7 @@ import { useBotId } from "@/contexts/personal-agent-context"
 import { personalAgentDispatchStop } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { openInSystemBrowser } from "@/lib/link-open"
-import type { DispatchInfo, Ladder } from "@/lib/types"
+import type { DispatchInfo, Ladder, PrFacts } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import { canOpenWork, useOpenWork, usePageScope, workTargetOf } from "./shared"
@@ -36,6 +37,10 @@ const LADDERS: readonly Ladder[] = [
   "mergeable",
   "merging",
   "pr_open",
+  "waiting_checks",
+  "checks_failed",
+  "stuck",
+  "pr_closed",
   "merged",
   "done",
   "failed",
@@ -67,8 +72,10 @@ export function ladderTone(ladder: Ladder): string {
     case "working":
     case "checking":
     case "merging":
+    case "waiting_checks":
       return "bg-sky-500/15 text-sky-700 dark:text-sky-300"
     case "waiting_you":
+    case "stuck":
       return "bg-amber-500/15 text-amber-700 dark:text-amber-300"
     case "mergeable":
       return "bg-teal-500/15 text-teal-700 dark:text-teal-300"
@@ -78,17 +85,27 @@ export function ladderTone(ladder: Ladder): string {
     case "done":
       return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
     case "failed":
+    case "checks_failed":
       return "bg-red-500/15 text-red-700 dark:text-red-300"
     default:
       return "bg-muted text-muted-foreground"
   }
 }
 
-export function LadderChip({ ladder }: { ladder: Ladder | null }) {
+export function LadderChip({
+  ladder,
+  pr,
+}: {
+  ladder: Ladder | null
+  pr?: PrFacts | null
+}) {
   const t = useTranslations("PersonalAgent.ladder")
   if (!ladder) return null
   const moving =
-    ladder === "working" || ladder === "checking" || ladder === "merging"
+    ladder === "working" ||
+    ladder === "checking" ||
+    ladder === "merging" ||
+    ladder === "waiting_checks"
   return (
     <span
       data-pa-ladder={ladder}
@@ -103,8 +120,77 @@ export function LadderChip({ ladder }: { ladder: Ladder | null }) {
           className="size-1.5 rounded-full bg-current motion-safe:animate-pulse"
         />
       ) : null}
-      {t(ladder)}
+      {ladder === "waiting_checks" && pr && pr.checks_known && pr.total > 0
+        ? t("waiting_checks_n", { passed: pr.passed, total: pr.total })
+        : t(ladder)}
     </span>
+  )
+}
+
+/** The rungs of work delivered as a pull request. */
+const PR_LADDERS: ReadonlySet<Ladder> = new Set<Ladder>([
+  "pr_open",
+  "waiting_checks",
+  "checks_failed",
+  "stuck",
+  "pr_closed",
+])
+
+/** What the watch last read of a task's pull request, in a line — and,
+ *  when that may be out of date, a second one saying so. */
+function PrLine({ d }: { d: DispatchInfo }) {
+  const t = useTranslations("PersonalAgent.taskCard")
+  const format = useFormatter()
+  const pr = d.task?.pr ?? null
+  const delivered =
+    PR_LADDERS.has(d.ladder) ||
+    (pr != null && (d.ladder === "mergeable" || d.ladder === "merged"))
+  if (!delivered) return null
+  if (!pr) {
+    return (
+      <div data-pa-task-pr>
+        <span className="text-foreground">{t("prOpened")}</span>
+        <span aria-hidden> · </span>
+        <span>{t("prNotTracked")}</span>
+      </div>
+    )
+  }
+  const time = pr.last_read_at
+    ? format.dateTime(new Date(pr.last_read_at), {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null
+  const parts: string[] = []
+  if (pr.phase !== "merged" && pr.phase !== "closed") {
+    if (!pr.checks_known) parts.push(t("prChecksUnknown"))
+    else if (pr.total === 0) parts.push(t("prNoChecks"))
+    else {
+      parts.push(t("prChecks", { passed: pr.passed, total: pr.total }))
+      if (pr.failed > 0) parts.push(t("prChecksFailed", { n: pr.failed }))
+      if (pr.pending > 0) parts.push(t("prChecksRunning", { n: pr.pending }))
+    }
+    if (pr.phase === "open" && pr.merge_state)
+      parts.push(t("prWaitsOnForge", { state: pr.merge_state }))
+    if (pr.phase === "no_conflict") parts.push(t("prNoConflict"))
+  }
+  if (pr.head) parts.push(t("prHead", { head: pr.head }))
+  if (!pr.watching && pr.phase !== "merged" && pr.phase !== "closed")
+    parts.push(t("prNotWatched"))
+  return (
+    <div data-pa-task-pr data-pa-task-pr-phase={pr.phase ?? ""}>
+      {parts.length > 0 ? (
+        <div className="tabular-nums">{parts.join(" · ")}</div>
+      ) : null}
+      {pr.stale && time ? (
+        <div
+          data-pa-task-pr-stale
+          className="text-amber-700 dark:text-amber-300"
+        >
+          {t("prStale", { time })}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -126,7 +212,9 @@ export function TaskStrip({
   if (!task) return null
   const target = workTargetOf(d)
   const canOpen = canOpenWork(target)
-  const live = LIVE_LADDERS.has(d.ladder)
+  // A task the board finished — its pull request ready to merge, say — is
+  // past stopping.
+  const live = LIVE_LADDERS.has(d.ladder) && d.state !== "completed"
   const diffTags = {
     add: (chunks: React.ReactNode) => (
       <span className="text-emerald-700 dark:text-emerald-400">{chunks}</span>
@@ -167,7 +255,7 @@ export function TaskStrip({
     >
       {chip || where.length > 0 ? (
         <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
-          {chip ? <LadderChip ladder={d.ladder} /> : null}
+          {chip ? <LadderChip ladder={d.ladder} pr={task.pr} /> : null}
           {task.branch ? (
             <span
               data-pa-task-branch
@@ -190,13 +278,7 @@ export function TaskStrip({
           {diff}
         </div>
       ) : null}
-      {d.ladder === "pr_open" ? (
-        <div data-pa-task-pr>
-          <span className="text-foreground">{t("prOpened")}</span>
-          <span aria-hidden> · </span>
-          <span>{t("prNotTracked")}</span>
-        </div>
-      ) : null}
+      <PrLine d={d} />
       {task.pr_url || canOpen || (live && !readOnly) ? (
         <div className="flex flex-wrap gap-1">
           {task.pr_url ? (
