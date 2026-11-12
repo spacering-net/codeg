@@ -1176,6 +1176,7 @@ impl DelegationListener {
                 &entry.parent_connection_id,
                 &req.verdict,
                 req.summary.as_deref(),
+                &req.thread_replies,
             )
             .await
     }
@@ -2007,6 +2008,7 @@ mod tests {
             _parent: &str,
             _verdict: &str,
             _summary: Option<&str>,
+            _thread_replies: &[crate::acp::delegation::transport::ThreadReply],
         ) -> TaskReportAck {
             TaskReportAck::rejected("no task engine in this process")
         }

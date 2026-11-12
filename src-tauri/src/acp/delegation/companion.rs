@@ -71,7 +71,7 @@ use crate::acp::delegation::transport::{
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
     BrokerListAssistantsRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
     BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
 };
 use crate::acp::delegation::assistants::{roster_for_schema, AssistantRosterEntry};
 use crate::acp::question::parse_questions;
@@ -1425,10 +1425,12 @@ async fn build_tools_call_spawn(
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
+            let thread_replies = parse_thread_replies(&arguments);
             let req = BrokerTaskCompleteRequest {
                 token: ctx.token.clone(),
                 verdict: verdict.to_string(),
                 summary,
+                thread_replies,
             };
             let round_trip =
                 Box::pin(async move { client_task_complete_round_trip(&socket, &req).await });
@@ -4233,6 +4235,32 @@ pub fn render_computer_act_result(outcome: &Value) -> Value {
     })
 }
 
+/// `task_complete`'s `thread_replies`, leniently: an entry without a number
+/// or a body is dropped rather than failing the verdict that came with it —
+/// the verdict is what settles the task, the replies are only drafts. A
+/// number sent as a string (`"7"`, `"#7"`) is still a number.
+fn parse_thread_replies(arguments: &Value) -> Vec<ThreadReply> {
+    let Some(entries) = arguments.get("thread_replies").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let number = entry.get("number").and_then(|n| {
+                n.as_i64().or_else(|| {
+                    n.as_str()
+                        .and_then(|s| s.trim().trim_start_matches('#').parse().ok())
+                })
+            })?;
+            let body = entry.get("body").and_then(|b| b.as_str())?;
+            Some(ThreadReply {
+                number,
+                body: body.to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Map a `task_progress` / `task_complete` round-trip outcome (a
 /// `{ recorded, note? }` ack) into an MCP `tools/call` result. A report that
 /// could not be attributed (no active work task for this session) is readable
@@ -4469,6 +4497,29 @@ pub fn render_task_report(report: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn thread_replies_are_read_leniently() {
+        let args = serde_json::json!({
+            "verdict": "success",
+            "thread_replies": [
+                { "number": 7, "body": "Fixed." },
+                { "number": "#9", "body": "Same cause." },
+                { "number": 3 },
+                { "body": "no number" },
+                "junk",
+            ],
+        });
+        assert_eq!(
+            parse_thread_replies(&args),
+            vec![
+                ThreadReply { number: 7, body: "Fixed.".to_string() },
+                ThreadReply { number: 9, body: "Same cause.".to_string() },
+            ]
+        );
+        assert!(parse_thread_replies(&serde_json::json!({ "verdict": "success" })).is_empty());
+        assert!(parse_thread_replies(&serde_json::json!({ "thread_replies": "x" })).is_empty());
+    }
+
     use super::*;
 
     fn ctx() -> CompanionContext {

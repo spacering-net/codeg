@@ -99,6 +99,7 @@ impl codeg_lib::acp::work_task_tools::WorkTaskToolAccess for NoTaskTools {
         _parent: &str,
         _verdict: &str,
         _summary: Option<&str>,
+        _thread_replies: &[codeg_lib::acp::delegation::transport::ThreadReply],
     ) -> codeg_lib::acp::work_task_tools::TaskReportAck {
         codeg_lib::acp::work_task_tools::TaskReportAck::rejected("no engine")
     }

@@ -151,6 +151,13 @@ pub struct Model {
     /// which already names its repository and the account that triggered it.
     #[sea_orm(column_type = "Text")]
     pub delivery: Option<String>,
+    /// JSON `{"<item number>": "<markdown>"}` — the reply drafted for each
+    /// thread a forge-sourced task handles: written by the agent through
+    /// `task_complete` (sanitized on the way in), editable by the user while
+    /// the task waits in review, and posted by the write-back once the task is
+    /// accepted. Cleared by every claim of a new run. NULL = no draft.
+    #[sea_orm(column_type = "Text")]
+    pub writeback_drafts: Option<String>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub started_at: Option<DateTimeUtc>,

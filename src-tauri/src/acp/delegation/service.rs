@@ -334,6 +334,7 @@ mod tests {
             _parent_connection_id: &str,
             _verdict: &str,
             _summary: Option<&str>,
+            _thread_replies: &[crate::acp::delegation::transport::ThreadReply],
         ) -> crate::acp::work_task_tools::TaskReportAck {
             crate::acp::work_task_tools::TaskReportAck::rejected("stub")
         }

@@ -4347,6 +4347,28 @@ export async function workTaskDefer(
   return getTransport().call("work_task_defer", { id, deferred })
 }
 
+/**
+ * The answer about a forge-sourced task's thread comment, given while
+ * accepting it: whether it is posted when the task finishes, and the reply it
+ * carries per item number (blank or missing = the outcome line alone). Only
+ * while the task is in review in generation `runSeq` — the one the dialog
+ * showed; call it before the acceptance itself, which it then binds to that
+ * generation (refused once the task ran again).
+ */
+export async function workTaskSetWriteback(
+  id: number,
+  runSeq: number,
+  writeback: boolean,
+  drafts: Record<number, string>
+): Promise<void> {
+  return getTransport().call("work_task_set_writeback", {
+    id,
+    runSeq,
+    writeback,
+    drafts,
+  })
+}
+
 /** Remove the task's worktree + branch (also retries a failed cleanup). */
 export async function workTaskCleanup(id: number): Promise<void> {
   return getTransport().call("work_task_cleanup", { id })

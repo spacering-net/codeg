@@ -57,6 +57,7 @@ mod m20261020_000001_folder_command_run_local;
 mod m20261022_000001_tool_approval;
 mod m20261022_000001_work_task_delivery;
 mod m20261106_000001_work_task_source_key;
+mod m20261112_000001_work_task_writeback_drafts;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -120,6 +121,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261022_000001_tool_approval::Migration),
             Box::new(m20261022_000001_work_task_delivery::Migration),
             Box::new(m20261106_000001_work_task_source_key::Migration),
+            Box::new(m20261112_000001_work_task_writeback_drafts::Migration),
         ]
     }
 }

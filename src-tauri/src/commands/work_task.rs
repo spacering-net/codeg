@@ -690,6 +690,62 @@ pub async fn work_task_complete_core(id: i32, delete_worktree: bool) -> Result<(
         .map_err(DbError::Validation)
 }
 
+/// The user's answer about the thread comment of a forge-sourced task in
+/// review, given in the acceptance dialog right before the acceptance itself:
+/// whether a comment is posted when the task finishes, and the reply it
+/// carries for each of the task's items (an item left out, or left blank,
+/// gets the outcome line alone). Pure DB, like the trigger dialog's own
+/// switch it overrides.
+///
+/// The text is the user's: kept as typed (normalized and capped, see
+/// `forge::thread_reply::normalize_user_reply`), never re-sanitized — what they
+/// see in the dialog is what gets posted. Replies for numbers the task does not
+/// handle are dropped.
+///
+/// `run_seq` is the generation the dialog was showing. The dialogs send their
+/// answer before EVERY acceptance, changed or not, so this is also what binds
+/// an acceptance to the reply on screen: a task sent back and reviewed again
+/// meanwhile has a newer draft, and the answer is refused rather than letting
+/// the acceptance post a reply nobody read.
+pub async fn work_task_set_writeback_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    id: i32,
+    run_seq: i32,
+    writeback: bool,
+    drafts: std::collections::BTreeMap<i64, String>,
+) -> Result<(), DbError> {
+    let task = work_task_service::get_model(&db.conn, id).await?;
+    let items = task
+        .source_meta
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<crate::forge::ForgeSourceMeta>(s).ok())
+        .map(|meta| meta.item_numbers())
+        .ok_or_else(|| {
+            DbError::Validation("this task did not come from an issue or pull request".to_string())
+        })?;
+    let drafts = crate::forge::thread_reply::drafts_json(
+        drafts,
+        &items,
+        crate::forge::thread_reply::normalize_user_reply,
+    );
+    if !work_task_service::set_writeback(&db.conn, id, run_seq, writeback, drafts.as_deref())
+        .await?
+    {
+        return Err(DbError::Validation(
+            "the task changed since this dialog opened (it left review or ran again) — \
+             nothing was accepted; reopen it to see the current reply"
+                .to_string(),
+        ));
+    }
+    emit_event(
+        emitter,
+        WORK_TASK_CHANGED_EVENT,
+        WorkTaskChange::Upsert { id },
+    );
+    Ok(())
+}
+
 /// Archive / unarchive a terminal task (pure DB; no engine needed). Archived
 /// tasks leave the default board view and the attention badge.
 pub async fn work_task_archive_core(
@@ -1098,6 +1154,20 @@ pub async fn work_task_deliver_pr(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn work_task_complete(id: i32, delete_worktree: bool) -> Result<(), DbError> {
     work_task_complete_core(id, delete_worktree).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_set_writeback(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    id: i32,
+    run_seq: i32,
+    writeback: bool,
+    drafts: std::collections::BTreeMap<i64, String>,
+) -> Result<(), DbError> {
+    work_task_set_writeback_core(&EventEmitter::Tauri(app), &db, id, run_seq, writeback, drafts)
+        .await
 }
 
 #[cfg(feature = "tauri-runtime")]

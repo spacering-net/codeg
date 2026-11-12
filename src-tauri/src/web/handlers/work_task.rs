@@ -188,6 +188,16 @@ pub struct ArchiveParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SetWritebackParams {
+    pub id: i32,
+    pub run_seq: i32,
+    pub writeback: bool,
+    #[serde(default)]
+    pub drafts: std::collections::BTreeMap<i64, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeferParams {
     pub id: i32,
     pub deferred: bool,
@@ -436,6 +446,23 @@ pub async fn work_task_archive(
     core::work_task_archive_core(&state.emitter, &state.db, params.id, params.archived)
         .await
         .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn work_task_set_writeback(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SetWritebackParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_set_writeback_core(
+        &state.emitter,
+        &state.db,
+        params.id,
+        params.run_seq,
+        params.writeback,
+        params.drafts,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     Ok(Json(()))
 }
 

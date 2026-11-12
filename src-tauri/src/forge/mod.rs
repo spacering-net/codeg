@@ -13,6 +13,7 @@ pub mod gitea;
 pub mod github;
 pub mod gitlab;
 pub mod settings;
+pub mod thread_reply;
 
 use std::sync::RwLock;
 

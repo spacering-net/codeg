@@ -215,6 +215,13 @@ beforeEach(() => {
   // Issues, so this is the pull-request badge.
   vi.mocked(forgeTabCount).mockResolvedValue(3)
   vi.mocked(workTaskLookupBySource).mockResolvedValue([])
+  // Every pull-request list asks for its CI marks; a bare mock answers
+  // `undefined`, which the page would read as a reply and throw on. Tests about
+  // the marks set their own answer.
+  vi.mocked(forgeCheckSummaries).mockResolvedValue({
+    available: false,
+    items: [],
+  })
   vi.mocked(forgeListLabels).mockResolvedValue({
     labels: [
       { name: "bug", color: "#d73a4a" },

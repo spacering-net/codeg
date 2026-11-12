@@ -2080,6 +2080,11 @@ export interface WorkTask {
    *  a task is first delivered, and always on a forge-sourced task — that
    *  one's pull request is `source_meta.result_pr`. */
   delivery?: WorkTaskDelivery | null
+  /** The reply drafted for each thread of a forge-sourced task, keyed by item
+   *  number (JSON object keys are strings) — what the write-back posts once
+   *  the task is accepted. Absent = no draft: the comment is then the outcome
+   *  line alone. */
+  writeback_drafts?: Record<string, string> | null
   /** Latest agent_progress milestone OF THIS GENERATION — present on live
    *  (preparing/running/awaiting/merging) rows only. Scoped by run_seq, so a
    *  merge in flight never narrates the work round it is landing. */
@@ -2603,6 +2608,10 @@ export interface ForgePanelSettings {
    *  position: the switch is on screen every time, and what it says when the
    *  user presses Create is what the task records. */
   writeback_default: boolean
+  /** End every comment codeg posts with the "🤖 Generated with Codeg" line.
+   *  Optional here because a blob from a build that predates it has none,
+   *  which the backend reads as on — the default. */
+  comment_footer?: boolean
   /** Standing instructions appended after a scenario's built-in wording,
    *  keyed by scenario id plus the reserved `all` (every scenario). */
   scenario_prompts: Record<string, string>

@@ -3321,19 +3321,35 @@ impl TaskEngine {
     }
 
     /// `task_complete`: stash the verdict + summary on the current generation;
-    /// the TurnComplete settle reads them to decide review vs failed.
+    /// the TurnComplete settle reads them to decide review vs failed. Thread
+    /// replies ride along as drafts — kept only for the items a forge-sourced
+    /// task handles, sanitized before anyone sees them (see
+    /// `forge::thread_reply`).
     pub async fn record_complete(
         &self,
         conn_id: &str,
         verdict: &str,
         summary: Option<&str>,
+        thread_replies: &[crate::acp::delegation::transport::ThreadReply],
     ) -> TaskReportAck {
         let entry = { self.index.lock().await.get(conn_id).copied() };
         let Some((task_id, run_seq)) = entry else {
             return TaskReportAck::rejected("this session is not executing a work task");
         };
-        match work_task_service::set_verdict(&self.db.conn, task_id, run_seq, verdict, summary)
-            .await
+        let drafts = if thread_replies.is_empty() {
+            None
+        } else {
+            self.thread_reply_drafts(task_id, thread_replies).await
+        };
+        match work_task_service::set_verdict_with_drafts(
+            &self.db.conn,
+            task_id,
+            run_seq,
+            verdict,
+            summary,
+            drafts.as_deref(),
+        )
+        .await
         {
             Ok(true) => {
                 self.emit_upsert(task_id);
@@ -3342,6 +3358,35 @@ impl TaskEngine {
             Ok(false) => TaskReportAck::rejected("the task is not running anymore"),
             Err(e) => TaskReportAck::rejected(&format!("could not record verdict: {e}")),
         }
+    }
+
+    /// The agent's thread replies as `work_task.writeback_drafts` JSON: only
+    /// for a forge-sourced task, only for its own items, with this machine's
+    /// paths made relative to the checkout and anything credential-shaped
+    /// masked. `None` = nothing worth keeping.
+    async fn thread_reply_drafts(
+        &self,
+        task_id: i32,
+        replies: &[crate::acp::delegation::transport::ThreadReply],
+    ) -> Option<String> {
+        let task = work_task_service::get_model(&self.db.conn, task_id).await.ok()?;
+        let (_, meta) = forge_thread(&task)?;
+        let mut roots: Vec<String> = Vec::new();
+        if let Some(wt_id) = task.worktree_folder_id {
+            if let Ok(wt) = get_folder_core(&self.db, wt_id).await {
+                roots.push(wt.path);
+            }
+        }
+        if let Ok(root) = get_folder_core(&self.db, task.folder_id).await {
+            roots.push(root.path);
+        }
+        let roots: Vec<&str> = roots.iter().map(String::as_str).collect();
+        let home = dirs::home_dir().map(|h| h.to_string_lossy().into_owned());
+        crate::forge::thread_reply::drafts_json(
+            replies.iter().map(|r| (r.number, r.body.clone())),
+            &meta.item_numbers(),
+            |body| crate::forge::thread_reply::sanitize_agent_reply(body, &roots, home.as_deref()),
+        )
     }
 
     // ── preflight (acceptance red/green light) ──────────────────────────────
@@ -4655,7 +4700,7 @@ impl TaskEngine {
             task_id,
             state,
             task.run_seq,
-            pin_source_meta,
+            pin_source_meta.map(|meta| (task.source_meta.as_deref(), meta)),
         )
         .await
         {
@@ -5269,7 +5314,8 @@ impl TaskEngine {
     // ── write the outcome back to the forge (best-effort) ───────────────────
 
     /// Tell the thread a task came from that it finished — a comment carrying
-    /// the outcome, the link and the diff counters, and nothing else.
+    /// the reply drafted for that thread (as the user accepted it), the
+    /// outcome, the link and the diff counters.
     ///
     /// SPAWNED, never awaited by the settle that triggers it. A local merge
     /// settles inside the folder's git lock, and a REST call has no business
@@ -5293,16 +5339,7 @@ impl TaskEngine {
         // Both kinds get a comment; WHERE it goes differs by forge, which is
         // why the item kind is carried rather than assumed (GitHub serves
         // issue and pull-request comments from one endpoint, GitLab from two).
-        let item_kind = match task.source_kind.as_deref() {
-            Some(SOURCE_KIND_ISSUE) => ForgeItemKind::Issue,
-            Some(SOURCE_KIND_PR) => ForgeItemKind::Change,
-            _ => return,
-        };
-        let Some(meta) = task
-            .source_meta
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())
-        else {
+        let Some((item_kind, meta)) = forge_thread(&task) else {
             return;
         };
         // The answer the user gave in the trigger dialog, carried on the task
@@ -5341,6 +5378,15 @@ impl TaskEngine {
         // Every item the task handles hears it, each in its own thread and on
         // its own timeline entry — one that fails is recorded as that item's
         // failure and leaves the others to go ahead.
+        // The replies the user saw when they accepted the task (see
+        // `forge::thread_reply`), and the footer as the settings say NOW — a
+        // presentation choice, not one frozen on the task. Settings that cannot
+        // be read keep the footer, its default.
+        let drafts = crate::forge::thread_reply::parse_drafts(task.writeback_drafts.as_deref());
+        let footer = crate::forge::settings::load_effective(&self.db.conn, task.folder_id)
+            .await
+            .map(|s| s.comment_footer)
+            .unwrap_or(true);
         let numbers = meta.item_numbers();
         let combined = numbers.len() > 1;
         for &number in &numbers {
@@ -5348,8 +5394,15 @@ impl TaskEngine {
             // Where it is posted shapes what it may say: a pull request's
             // thread hears what happened to that pull request, in its forge's
             // own noun.
-            let body =
-                writeback_comment_body(task_id, meta.provider, item_kind, &outcome, stats, &others);
+            let body = writeback_comment_body(
+                meta.provider,
+                item_kind,
+                &outcome,
+                stats,
+                &others,
+                drafts.get(&number).map(String::as_str),
+                footer,
+            );
             let (kind, payload) = match self
                 .forge
                 .comment_issue(&ctx, item_kind, number, &body)
@@ -6606,6 +6659,24 @@ async fn diff_stats_from(wt_path: &str, anchor: &str) -> Option<(i32, i32, i32)>
     Some((files.len() as i32, adds, dels))
 }
 
+/// The forge thread(s) a task came from: what kind of item, and its source
+/// snapshot. `None` for a task without forge provenance, or one whose snapshot
+/// cannot be read — neither has a thread to reply in.
+fn forge_thread(
+    task: &crate::db::entities::work_task::Model,
+) -> Option<(ForgeItemKind, ForgeSourceMeta)> {
+    let kind = match task.source_kind.as_deref() {
+        Some(SOURCE_KIND_ISSUE) => ForgeItemKind::Issue,
+        Some(SOURCE_KIND_PR) => ForgeItemKind::Change,
+        _ => return None,
+    };
+    let meta = task
+        .source_meta
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())?;
+    Some((kind, meta))
+}
+
 /// Row-level auto-merge eligibility: everything the sweep can decide without
 /// touching git. Mirrors what the board offers — a task whose merge button the
 /// user would not see (nothing to land) or would not press yet (red or pending
@@ -7425,6 +7496,19 @@ async fn compose_prompt(
                  `needs_review`, or `blocked`, plus a short summary).",
             ),
         });
+        // A task that will comment back in its thread(s) also drafts what the
+        // comment says. Every run but a merge: a send-back changes the work,
+        // so it must refresh the draft that describes it (a new run clears
+        // the old one).
+        if let Some((kind, meta)) = forge_thread(task).filter(|(_, m)| m.writeback == Some(true)) {
+            blocks.push(PromptInputBlock::Text {
+                text: crate::forge::thread_reply::reply_instruction(
+                    meta.provider,
+                    kind,
+                    &meta.item_numbers(),
+                ),
+            });
+        }
     }
 
     // Whatever the user added in task settings, always last: it refines the
@@ -8184,12 +8268,13 @@ impl WorkTaskToolAccess for EngineWorkTaskTools {
         parent_connection_id: &str,
         verdict: &str,
         summary: Option<&str>,
+        thread_replies: &[crate::acp::delegation::transport::ThreadReply],
     ) -> TaskReportAck {
         let Some(engine) = engine() else {
             return TaskReportAck::rejected("no task engine running in this process");
         };
         engine
-            .record_complete(parent_connection_id, verdict, summary)
+            .record_complete(parent_connection_id, verdict, summary, thread_replies)
             .await
     }
 }
@@ -8755,6 +8840,7 @@ mod tests {
             source_key: None,
             source_meta: None,
             delivery: None,
+            writeback_drafts: None,
             created_at: now,
             updated_at: now,
             started_at: None,
@@ -8896,6 +8982,66 @@ mod tests {
                 "{}: dropped the user's text",
                 intent.as_str()
             );
+        }
+    }
+
+    /// A forge task that will comment back asks its agent for the reply, on
+    /// every run but a merge — a send-back changes the work the reply
+    /// describes. One that stays silent, or has no thread at all, is not asked.
+    #[tokio::test]
+    async fn a_task_that_comments_back_asks_for_the_thread_reply() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let forge_row = |writeback: Option<bool>| {
+            let mut meta = serde_json::json!({
+                "provider": "github",
+                "server_host": "github.com",
+                "api_base": "https://api.github.com",
+                "account_id": "acc-1",
+                "owner_repo": "acme/app",
+                "number": 7,
+                "url": "https://github.com/acme/app/issues/7",
+                "title": "Fix the login flow",
+            });
+            if let Some(w) = writeback {
+                meta["writeback"] = serde_json::json!(w);
+            }
+            crate::db::entities::work_task::Model {
+                source_kind: Some(SOURCE_KIND_ISSUE.to_string()),
+                source_meta: Some(meta.to_string()),
+                ..task_row()
+            }
+        };
+        let compose = |task: crate::db::entities::work_task::Model, mode: LaunchMode| {
+            let conn = db.conn.clone();
+            async move {
+                let blocks = compose_prompt(
+                    &task_config(),
+                    &task,
+                    &mode,
+                    &WorkTaskFolderSettings::default(),
+                    true,
+                    &conn,
+                )
+                .await
+                .expect("compose");
+                texts(&blocks).join("\n")
+            }
+        };
+        let asks = |joined: &str| joined.contains("—— Reply for the work item's thread ——");
+
+        let on = compose(forge_row(Some(true)), LaunchMode::Fresh).await;
+        assert!(asks(&on), "{on}");
+        assert!(on.contains("the thread of issue #7"), "{on}");
+        let returned = compose(forge_row(Some(true)), return_mode(FollowUpIntent::Revise)).await;
+        assert!(asks(&returned), "a send-back refreshes the draft: {returned}");
+
+        for (what, task) in [
+            ("silent", forge_row(Some(false))),
+            ("never asked", forge_row(None)),
+            ("not forge", task_row()),
+        ] {
+            let joined = compose(task, LaunchMode::Fresh).await;
+            assert!(!asks(&joined), "{what}: {joined}");
         }
     }
 
@@ -12792,8 +12938,9 @@ mod tests {
         assert!(!body.to_lowercase().contains("accept"), "reads as an approval: {body}");
     }
 
-    /// The comment is a fact sheet: the link and the counters. Nothing the
-    /// agent wrote may reach a thread other people are reading.
+    /// The comment is the reply the user accepted, then the link and the
+    /// counters, then the footer. Nothing else the agent wrote — its result
+    /// summary above all — may reach a thread other people are reading.
     #[tokio::test]
     async fn a_delivered_task_comments_the_link_and_the_numbers() {
         use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
@@ -12807,6 +12954,7 @@ mod tests {
         active.deletions = Set(Some(7));
         active.result_summary =
             Set(Some("I refactored the auth module and rewrote the tests".to_string()));
+        active.writeback_drafts = Set(Some(r#"{"7":"The cause was a stale token."}"#.to_string()));
         active.update(&f.engine.db.conn).await.expect("record the run's result");
 
         f.engine
@@ -12825,13 +12973,161 @@ mod tests {
         let (kind, number, body) = &comments[0];
         assert_eq!(*number, 7, "the comment goes on the issue the task came from");
         assert_eq!(*kind, ForgeItemKind::Issue, "…in the issue's own thread");
-        assert!(body.contains("https://github.test/acme/app/pull/42"), "{body}");
-        assert!(body.contains("(3 files, +42/-7)"), "{body}");
+        assert_eq!(
+            body,
+            &format!(
+                "The cause was a stale token.\n\n\
+                 Delivered in https://github.test/acme/app/pull/42 (3 files, +42/-7).\n\n\
+                 ---\n{}",
+                crate::forge::deliver::comment_footer()
+            )
+        );
         assert!(!body.contains("refactored"), "agent text leaked: {body}");
         assert!(
             events_of(&f.engine, f.task_id).await.contains(&"forge_writeback".to_string()),
             "the comment belongs on the timeline"
         );
+    }
+
+    async fn first_comment(f: &Delivery) -> String {
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        f.forge.comments.lock().await[0].2.clone()
+    }
+
+    /// The answer given in the acceptance dialog is what reaches the thread:
+    /// it switches the comment on for a task whose trigger dialog never did,
+    /// and the reply is the user's text as typed — a mention they wrote is
+    /// theirs to make. Replies for items the task does not handle go nowhere,
+    /// and once the task has left review the answer is refused.
+    #[tokio::test]
+    async fn the_answer_given_at_acceptance_is_what_reaches_the_thread() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let emitter = EventEmitter::test_web_only(Arc::new(
+            crate::web::event_bridge::WebEventBroadcaster::new(),
+        ));
+        let run_seq = row(&f.engine, f.task_id).await.run_seq;
+        // A dialog showing an older generation's reply signs off on nothing.
+        let stale = crate::commands::work_task::work_task_set_writeback_core(
+            &emitter,
+            &f.engine.db,
+            f.task_id,
+            run_seq - 1,
+            false,
+            Default::default(),
+        )
+        .await;
+        assert!(stale.is_err(), "an answer about another run is refused");
+        assert_eq!(source_record(&row(&f.engine, f.task_id).await).writeback, None);
+
+        crate::commands::work_task::work_task_set_writeback_core(
+            &emitter,
+            &f.engine.db,
+            f.task_id,
+            run_seq,
+            true,
+            [(7, "  Fixed, thanks @alice.\r\n".to_string()), (99, "not ours".to_string())]
+                .into_iter()
+                .collect(),
+        )
+        .await
+        .expect("record the answer");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(source_record(&task).writeback, Some(true));
+        assert_eq!(
+            task.writeback_drafts.as_deref(),
+            Some(r#"{"7":"Fixed, thanks @alice."}"#)
+        );
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        let body = first_comment(&f).await;
+        assert!(body.starts_with("Fixed, thanks @alice.\n\nDelivered in "), "{body}");
+
+        let refused = crate::commands::work_task::work_task_set_writeback_core(
+            &emitter,
+            &f.engine.db,
+            f.task_id,
+            row(&f.engine, f.task_id).await.run_seq,
+            false,
+            Default::default(),
+        )
+        .await;
+        assert!(refused.is_err(), "a finished task's comment is not editable");
+        assert_eq!(source_record(&row(&f.engine, f.task_id).await).writeback, Some(true));
+    }
+
+    /// The footer is the settings' to add, read when the comment is posted.
+    #[tokio::test]
+    async fn the_footer_follows_the_settings_at_posting_time() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        enable_writeback(&f).await;
+        crate::forge::settings::save(
+            &f.engine.db.conn,
+            None,
+            Some(crate::forge::settings::ForgePanelSettings {
+                comment_footer: false,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save settings");
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        let body = first_comment(&f).await;
+        assert!(!body.contains("Generated with"), "{body}");
+        assert!(!body.contains("---"), "{body}");
+    }
+
+    /// What the agent hands in is a draft for THIS task's threads, cleaned
+    /// before anyone reads it: this machine's paths made relative to the
+    /// checkout, mentions defused. A reply for an item the task does not
+    /// handle is dropped, and a task without a thread keeps none.
+    #[tokio::test]
+    async fn the_agents_replies_are_kept_sanitized_and_only_for_its_items() {
+        use crate::acp::delegation::transport::ThreadReply;
+        let f = delivery_fixture(FakeForge::default()).await;
+        let replies = [
+            ThreadReply {
+                number: 7,
+                body: format!("Fixed in {}/a.txt, cc @bob", f.worktree.display()),
+            },
+            ThreadReply {
+                number: 8,
+                body: "someone else's".to_string(),
+            },
+        ];
+        let drafts = f.engine.thread_reply_drafts(f.task_id, &replies).await;
+        assert_eq!(drafts.as_deref(), Some(r#"{"7":"Fixed in a.txt, cc `@bob`"}"#));
+
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.source_kind = Set(None);
+        active.update(&f.engine.db.conn).await.expect("no provenance");
+        assert_eq!(f.engine.thread_reply_drafts(f.task_id, &replies).await, None);
+    }
+
+    /// A reply describes the run it came from: claiming a new run drops it.
+    #[tokio::test]
+    async fn a_new_run_drops_the_previous_runs_reply() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.writeback_drafts = Set(Some(r#"{"7":"does not hold"}"#.to_string()));
+        active.update(&f.engine.db.conn).await.expect("draft");
+        work_task_service::claim_for_run(&f.engine.db.conn, f.task_id, WorkTaskStatus::Review, "user")
+            .await
+            .expect("claim")
+            .expect("claimed");
+        assert_eq!(row(&f.engine, f.task_id).await.writeback_drafts, None);
     }
 
     /// A task whose trigger dialog left the box unchecked publishes nothing —
@@ -14086,7 +14382,10 @@ mod tests {
         assert!(comments.iter().all(|c| c.0 == ForgeItemKind::Issue));
         let nine = &comments[1].2;
         assert!(nine.contains("https://github.test/acme/app/pull/42"), "{nine}");
-        assert!(nine.ends_with("It handled this issue together with #7 and #12."), "{nine}");
+        assert!(
+            nine.contains("This issue was handled together with #7 and #12."),
+            "{nine}"
+        );
         assert!(!nine.to_lowercase().contains("close"), "{nine}");
         let events = work_task_service::list_events(&f.engine.db.conn, f.task_id, 200)
             .await

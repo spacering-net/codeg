@@ -1949,6 +1949,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::work_task::work_task_defer),
         )
         .route(
+            "/work_task_set_writeback",
+            post(handlers::work_task::work_task_set_writeback),
+        )
+        .route(
             "/work_task_cleanup",
             post(handlers::work_task::work_task_cleanup),
         )

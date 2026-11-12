@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { isWorktreeGone } from "./task-acceptance"
+import { ThreadCommentSection, useThreadComment } from "./task-thread-comment"
 import type { WorkTask } from "@/lib/types"
 
 interface TaskCompleteDialogProps {
@@ -45,6 +46,7 @@ export function TaskCompleteDialog({
   const [submitting, setSubmitting] = useState(false)
   const worktreeGone = task != null && isWorktreeGone(task)
   const hasWorktree = task?.worktree_folder_id != null && !worktreeGone
+  const comment = useThreadComment(task, open)
 
   useEffect(() => {
     if (!open || !task) return
@@ -71,6 +73,8 @@ export function TaskCompleteDialog({
     if (!task) return
     setSubmitting(true)
     try {
+      // The comment's answer first: completing is what posts it.
+      await comment.persist()
       await workTaskComplete(task.id, hasWorktree && deleteWorktree)
       onOpenChange(false)
     } catch (e) {
@@ -81,7 +85,9 @@ export function TaskCompleteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[28rem]">
+      <DialogContent
+        className={comment.applies ? "sm:max-w-[34rem]" : "sm:max-w-[28rem]"}
+      >
         <DialogHeader>
           <DialogTitle>{t("completeTitle")}</DialogTitle>
           <DialogDescription>
@@ -100,6 +106,8 @@ export function TaskCompleteDialog({
             {t("completeDeleteWorktree")}
           </Label>
         ) : null}
+
+        <ThreadCommentSection comment={comment} disabled={submitting} />
 
         <DialogFooter>
           <Button

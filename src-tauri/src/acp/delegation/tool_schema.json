@@ -324,6 +324,27 @@
         "summary": {
           "type": "string",
           "description": "Short result summary shown on the task card: what changed, and anything the reviewer should look at."
+        },
+        "thread_replies": {
+          "type": "array",
+          "description": "Only when the task context asks for it: the comment to post in the thread of each issue / pull request the task came from, written for that thread's readers. Saved as a draft the user reviews and may edit before it is posted once they accept the task.",
+          "items": {
+            "type": "object",
+            "required": [
+              "number",
+              "body"
+            ],
+            "properties": {
+              "number": {
+                "type": "integer",
+                "description": "The issue / pull request number the reply is for."
+              },
+              "body": {
+                "type": "string",
+                "description": "The reply, in Markdown."
+              }
+            }
+          }
         }
       }
     }
