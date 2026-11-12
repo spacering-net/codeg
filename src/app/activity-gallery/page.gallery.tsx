@@ -13,11 +13,16 @@
 import { useEffect, useMemo, useState } from "react"
 
 import { Message, MessageContent } from "@/components/ai-elements/message"
-import { AsyncTaskStrip } from "@/components/chat/async-task-strip"
 import { SessionDetailsCard } from "@/components/conversations/session-details-content"
 import { SessionDetailsInsights } from "@/components/layout/session-details-insights"
 import { CompletedTurnContent } from "@/components/message/completed-turn-content"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
+import {
+  LiveRunsChip,
+  LiveRunsGroups,
+  type LiveRunsList,
+} from "@/components/message/live-runs-chip"
+import { LiveTurnStats } from "@/components/message/live-turn-stats"
 import { extractDelegationSources } from "@/components/message/message-list-view"
 import { buildMessageNavEntries } from "@/components/message/message-nav-entries"
 import { MessageNavScrollContext } from "@/components/message/message-nav-scroll-context"
@@ -92,6 +97,7 @@ const DELEGATION: DelegationContextValue = {
   findByParentToolUseId: () => undefined,
   findByChildConversationId: () => undefined,
   findByTaskId: () => undefined,
+  bindingsForParent: () => [],
 }
 
 const WORKSPACE = new Proxy(
@@ -1093,11 +1099,13 @@ function StreamScenario() {
 }
 
 /**
- * The strip of background tasks over the transcript (`?view=async-tasks`):
- * `&tasks=` of them still running (default 6) — shells with an output and a
- * stop, a monitor that offers neither, a workflow on a phase, a turn the agent
- * started on its own — over the reference reply, in a pane as tall as a chat
- * column (`&height=`, default 640).
+ * The live activity row under the transcript with the work a turn left
+ * running (`?view=async-tasks`): `&tasks=` background tasks (default 6) —
+ * shells with an output and a stop, a monitor that offers neither, a workflow
+ * on a phase, a turn the agent started on its own — plus a background
+ * sub-agent and a delegation, under the reference reply, in a pane as tall as
+ * a chat column (`&height=`, default 640). The chip opens the list; `&list=1`
+ * also lays it out flat beside the row, for a screenshot.
  */
 const ASYNC_TASK_KINDS: AsyncTaskRecord[] = [
   {
@@ -1177,6 +1185,26 @@ function AsyncTasksScenario() {
     []
   )
   const [roundOpen, setRoundOpen] = useState(false)
+  const [startedAt] = useState(() => Date.now() - 95_000)
+  const runs = useMemo<LiveRunsList>(() => {
+    const subagents = [
+      {
+        key: "bg:gallery-sub",
+        part: null,
+        background: true,
+        description: "Explore the test runner configs",
+        startedAt,
+      },
+    ]
+    const delegations = [{ childConnectionId: "gallery-child", binding: null }]
+    return {
+      tasks,
+      subagents,
+      delegations,
+      count: tasks.length + subagents.length + delegations.length,
+    }
+  }, [tasks, startedAt])
+  const showList = params.get("list") === "1"
   return (
     <div
       id="gallery-root"
@@ -1184,11 +1212,6 @@ function AsyncTasksScenario() {
       className="mx-auto flex w-full max-w-[48rem] flex-col overflow-hidden border-x border-border"
       style={{ height }}
     >
-      <AsyncTaskStrip
-        tasks={tasks}
-        onStop={async () => true}
-        agentName="Claude Code"
-      />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
         <Message from="assistant">
           <MessageContent>
@@ -1203,6 +1226,28 @@ function AsyncTasksScenario() {
           </MessageContent>
         </Message>
       </div>
+      {showList && (
+        <div className="mx-auto mb-1 w-[min(26rem,calc(100%-2rem))] rounded-2xl py-1 shadow-2xl ring-1 ring-foreground/5">
+          <LiveRunsGroups
+            runs={runs}
+            onStop={() => {}}
+            stopping={new Set()}
+            agentName="Claude Code"
+            onNavigate={() => {}}
+          />
+        </div>
+      )}
+      <LiveTurnStats
+        message={null}
+        trailing={
+          <LiveRunsChip
+            runs={runs}
+            interactive
+            onStopAsyncTask={async () => true}
+            agentName="Claude Code"
+          />
+        }
+      />
     </div>
   )
 }

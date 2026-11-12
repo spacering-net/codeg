@@ -313,6 +313,7 @@ function snapshotBase() {
     configStale: false,
     configStaleKind: null,
     backgroundOutstanding: 0,
+    backgroundTasks: [],
     activeDelegations: [],
     delegatedChildren: [],
     lastError: null as string | null,
@@ -3864,6 +3865,16 @@ describe("out-of-turn wire guard + background activity", () => {
         },
       ],
       outstanding: 2,
+      outstanding_tasks: [
+        {
+          task_id: "agent2",
+          kind: "agent",
+          tool_use_id: "toolu_02",
+          description: "Survey the runners",
+          started_at_ms: 1_000,
+        },
+        { task_id: "shell1", kind: "shell", started_at_ms: 2_000 },
+      ],
       settled: [
         {
           task_id: "agent1",
@@ -3876,9 +3887,12 @@ describe("out-of-turn wire guard + background activity", () => {
       watermark: 4096,
     })
 
-    // 1. outstanding mirrored onto the connection (teardown gates only —
-    //    nothing renders the count).
+    // 1. outstanding mirrored onto the connection: the count for the teardown
+    //    gates, the tasks one by one for the composer's running list.
     expect(h.store!.getConnection(TAB)?.backgroundOutstanding).toBe(2)
+    expect(
+      h.store!.getConnection(TAB)?.backgroundTasks.map((t) => t.task_id)
+    ).toEqual(["agent2", "shell1"])
 
     // 2. overlay turn upserted into the runtime session — under the RUNTIME
     //    key (that's the session the panel renders).
@@ -3928,6 +3942,8 @@ describe("out-of-turn wire guard + background activity", () => {
       watermark: 4200,
     })
     expect(h.store!.getConnection(TAB)?.backgroundOutstanding).toBe(0)
+    // Each event is the whole set: one that omits it lists nothing.
+    expect(h.store!.getConnection(TAB)?.backgroundTasks).toEqual([])
     expect(
       useConversationRuntimeStore.getState().byConversationId.get(VIRTUAL)
         ?.backgroundTurns
@@ -8324,6 +8340,7 @@ describe("AcpConnectionsProvider mid-turn steering messages", () => {
       configStale: false,
       configStaleKind: null,
       backgroundOutstanding: 0,
+      backgroundTasks: [],
       activeDelegations: [],
       delegatedChildren: [],
       lastError: null,

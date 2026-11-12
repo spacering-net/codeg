@@ -79,6 +79,15 @@ export interface DelegationContextValue {
    * tool_call_id matches no binding — the task id is the only handle it holds.
    */
   findByTaskId(taskId: string): DelegationBinding | undefined
+  /**
+   * Every binding a parent connection's delegations left here, finished ones
+   * included, in the order they started. The composer's running list takes
+   * WHICH delegations still run from the parent's own `delegatedChildren`
+   * (the backend's word, recovered by a snapshot) and only their identity from
+   * here: a binding stays `running` forever if its completion event was
+   * missed, and an async delegation is not tied to any one reply.
+   */
+  bindingsForParent(parentConnectionId: string): DelegationBinding[]
 }
 
 const DelegationContext = createContext<DelegationContextValue | null>(null)
@@ -293,9 +302,33 @@ export function DelegationProvider({ children }: { children: ReactNode }) {
     [byToolUseId]
   )
 
+  const bindingsForParent = useCallback(
+    (parentConnectionId: string): DelegationBinding[] => {
+      const out: DelegationBinding[] = []
+      if (!parentConnectionId) return out
+      // Map order is insertion order: a binding is inserted when its
+      // delegation starts (a re-start replaces it in place).
+      for (const b of byToolUseId.values()) {
+        if (b.parentConnectionId === parentConnectionId) out.push(b)
+      }
+      return out
+    },
+    [byToolUseId]
+  )
+
   const value = useMemo(
-    () => ({ findByParentToolUseId, findByChildConversationId, findByTaskId }),
-    [findByParentToolUseId, findByChildConversationId, findByTaskId]
+    () => ({
+      findByParentToolUseId,
+      findByChildConversationId,
+      findByTaskId,
+      bindingsForParent,
+    }),
+    [
+      findByParentToolUseId,
+      findByChildConversationId,
+      findByTaskId,
+      bindingsForParent,
+    ]
   )
 
   return (

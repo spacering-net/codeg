@@ -19,10 +19,10 @@ use crate::acp::feedback::{FeedbackItem, FeedbackStatus};
 use crate::acp::plan_approval::PendingPlanApprovalState;
 use crate::acp::question::PendingQuestionState;
 use crate::acp::types::{
-    AcpEvent, AsyncTaskRecord, AvailableCommandInfo, ConfigStaleKind, ConnectionStatus,
-    EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo, RemoteControlInfo,
-    SessionConfigOptionInfo, SessionFailureRecord, SessionModeStateInfo, ToolApprovalInfo,
-    ToolCallImageInfo,
+    AcpEvent, AsyncTaskRecord, AvailableCommandInfo, BackgroundOutstandingTask, ConfigStaleKind,
+    ConnectionStatus, EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo,
+    RemoteControlInfo, SessionConfigOptionInfo, SessionFailureRecord, SessionModeStateInfo,
+    ToolApprovalInfo, ToolCallImageInfo,
 };
 use crate::models::agent::AgentType;
 use crate::models::message::MessageRole;
@@ -362,6 +362,10 @@ pub struct SessionState {
     /// dies with it). Carried on `to_snapshot()` so a client attaching
     /// mid-episode recovers the pending count without replaying events.
     pub background_outstanding: u32,
+    /// The same tasks one by one (`BackgroundActivity::outstanding_tasks`), so
+    /// a client attaching mid-episode can list WHICH background sub-agents
+    /// still run, not just how many. `apply_event` is the only writer.
+    pub background_outstanding_tasks: Vec<BackgroundOutstandingTask>,
     /// Instant of the most recent `BackgroundActivity` event. Bounds the sweep
     /// exemption: if the watcher stops reporting (task died, bug) the
     /// exemption lapses after `background_keepalive_max_age()` instead of
@@ -923,6 +927,7 @@ impl SessionState {
             feedback: Vec::new(),
             tool_approvals: Vec::new(),
             background_outstanding: 0,
+            background_outstanding_tasks: Vec::new(),
             background_activity_at: None,
             modes: None,
             current_mode: None,
@@ -1841,13 +1846,18 @@ impl SessionState {
                     }
                 }
             }
-            AcpEvent::BackgroundActivity { outstanding, .. } => {
+            AcpEvent::BackgroundActivity {
+                outstanding,
+                outstanding_tasks,
+                ..
+            } => {
                 // Mirror the watcher's authoritative accounting so the idle
                 // sweeps can exempt this connection while background work is
                 // pending. The turns/settled payloads are frontend-only; the
                 // trailing `last_activity_at = now` below additionally resets
                 // the backend idle timer on every batch of transcript activity.
                 self.background_outstanding = *outstanding;
+                self.background_outstanding_tasks = outstanding_tasks.clone();
                 self.background_activity_at = Some(Utc::now());
             }
             AcpEvent::BackgroundTaskProgress { .. } => {
@@ -2625,6 +2635,7 @@ impl SessionState {
             feedback: self.feedback.clone(),
             tool_approvals: self.tool_approvals.clone(),
             background_outstanding: self.background_outstanding,
+            background_outstanding_tasks: self.background_outstanding_tasks.clone(),
             feedback_tool_available: self.feedback_tool_available,
             native_steering_available: self.native_steering_available,
             modes: self.modes.clone(),
@@ -2759,6 +2770,10 @@ pub struct LiveSessionSnapshot {
     /// common no-background case keeps the wire shape byte-identical.
     #[serde(default, skip_serializing_if = "u32_is_zero")]
     pub background_outstanding: u32,
+    /// Those tasks one by one (see `SessionState.background_outstanding_tasks`).
+    /// Same `default` / skip-when-empty treatment as the count.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_outstanding_tasks: Vec<BackgroundOutstandingTask>,
     /// Whether this agent has the `check_user_feedback` tool (see
     /// `SessionState.feedback_tool_available`). `#[serde(default)]` so older
     /// payloads deserialize to `false`; the frontend gates the feedback bar on
@@ -3576,14 +3591,30 @@ mod tests {
         let mut s = fresh_state();
         assert!(!s.has_active_background_work(Utc::now()));
 
+        let agent = crate::acp::types::BackgroundOutstandingTask {
+            task_id: "a1".into(),
+            kind: crate::acp::types::BackgroundTaskKind::Agent,
+            tool_use_id: Some("toolu_1".into()),
+            description: Some("Run the build".into()),
+            started_at_ms: 1_000,
+        };
+        let shell = crate::acp::types::BackgroundOutstandingTask {
+            task_id: "b1".into(),
+            kind: crate::acp::types::BackgroundTaskKind::Shell,
+            tool_use_id: None,
+            description: None,
+            started_at_ms: 2_000,
+        };
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding: 2,
+            outstanding_tasks: vec![agent.clone(), shell],
             settled: vec![],
             watermark: 42,
         });
         assert_eq!(s.background_outstanding, 2);
+        assert_eq!(s.background_outstanding_tasks.len(), 2);
         let now = Utc::now();
         assert!(s.has_active_background_work(now));
 
@@ -3592,15 +3623,28 @@ mod tests {
         let long_after = now + background_keepalive_max_age() + chrono::Duration::seconds(1);
         assert!(!s.has_active_background_work(long_after));
 
-        // Settled back to zero: no exemption regardless of recency.
+        // Each event is the whole set: one that lists less REPLACES it.
+        s.apply_event(&AcpEvent::BackgroundActivity {
+            session_id: "sid".into(),
+            turns: vec![],
+            outstanding: 1,
+            outstanding_tasks: vec![agent.clone()],
+            settled: vec![],
+            watermark: 43,
+        });
+        assert_eq!(s.background_outstanding_tasks, vec![agent]);
+
+        // Settled back to zero: no exemption regardless of recency, no rows.
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding: 0,
+            outstanding_tasks: vec![],
             settled: vec![],
-            watermark: 43,
+            watermark: 44,
         });
         assert!(!s.has_active_background_work(Utc::now()));
+        assert!(s.background_outstanding_tasks.is_empty());
     }
 
     #[test]
@@ -3609,22 +3653,42 @@ mod tests {
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
-            outstanding: 3,
+            outstanding: 1,
+            outstanding_tasks: vec![crate::acp::types::BackgroundOutstandingTask {
+                task_id: "a1".into(),
+                kind: crate::acp::types::BackgroundTaskKind::Agent,
+                tool_use_id: Some("toolu_1".into()),
+                description: None,
+                started_at_ms: 1_000,
+            }],
             settled: vec![],
             watermark: 0,
         });
-        assert_eq!(s.to_snapshot().background_outstanding, 3);
+        assert_eq!(s.to_snapshot().background_outstanding, 1);
         let json = serde_json::to_value(s.to_snapshot()).unwrap();
         assert_eq!(
             json.get("background_outstanding").and_then(|v| v.as_u64()),
-            Some(3)
+            Some(1)
         );
+        assert_eq!(
+            json.get("background_outstanding_tasks"),
+            Some(&serde_json::json!([{
+                "task_id": "a1",
+                "kind": "agent",
+                "tool_use_id": "toolu_1",
+                "started_at_ms": 1000,
+            }]))
+        );
+        // And back: a client hydrating from it gets the rows whole.
+        let back: LiveSessionSnapshot = serde_json::from_value(json).unwrap();
+        assert_eq!(back.background_outstanding_tasks, s.background_outstanding_tasks);
 
         // Zero is skipped so the common no-background snapshot stays
         // byte-identical with the pre-feature wire shape.
         let zero = fresh_state();
         let json = serde_json::to_value(zero.to_snapshot()).unwrap();
         assert!(json.get("background_outstanding").is_none());
+        assert!(json.get("background_outstanding_tasks").is_none());
     }
 
     #[test]

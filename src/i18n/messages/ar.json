@@ -4338,6 +4338,13 @@
         "scheduledWakeupAt": "تنبيه مجدول في \u2066{time}\u2069",
         "scheduledTask": "مهمة مجدولة"
       },
+      "liveRuns": {
+        "count": "{count} قيد التشغيل",
+        "awaiting": "وكيل فرعي ينتظر ردك",
+        "groupDelegations": "المهام المفوَّضة",
+        "background": "في الخلفية",
+        "delegatedFallback": "وكيل فرعي مفوَّض"
+      },
       "remoteControl": {
         "title": "التحكم عن بُعد مُفعّل",
         "open": "فتح في المتصفح",

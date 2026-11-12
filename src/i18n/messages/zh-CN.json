@@ -4338,6 +4338,13 @@
         "scheduledWakeupAt": "定时唤醒（{time}）",
         "scheduledTask": "定时任务"
       },
+      "liveRuns": {
+        "count": "{count} 个运行中",
+        "awaiting": "有子智能体在等你处理",
+        "groupDelegations": "委派",
+        "background": "后台",
+        "delegatedFallback": "委派的子智能体"
+      },
       "remoteControl": {
         "title": "远程控制已开启",
         "open": "在浏览器中打开",

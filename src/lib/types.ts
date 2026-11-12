@@ -3111,6 +3111,27 @@ export interface BackgroundSettledInfo {
   interim?: boolean
 }
 
+/**
+ * One launched-but-unresolved background task (mirror of Rust
+ * `BackgroundOutstandingTask`), as the producer of `background_activity`
+ * accounts it: the Claude transcript watcher, or OpenCode's / Grok's live
+ * state. `task_id` is the id its settle carries; `tool_use_id` the launching
+ * call (the card a row takes its title from), absent when the launch was never
+ * seen; `description` the launch's own words, capped.
+ *
+ * `kind: "shell"` (Claude's background shells) is also on the AIR async-task
+ * channel, which lists it with a stop, so the composer's running list takes
+ * only `"agent"` from here.
+ */
+export interface BackgroundOutstandingTask {
+  task_id: string
+  kind: "agent" | "shell"
+  tool_use_id?: string | null
+  description?: string | null
+  /** When the producer first saw it launched (or resumed), Unix ms. */
+  started_at_ms: number
+}
+
 export type AcpEvent =
   /**
    * `parent_tool_use_id` = subagent attribution (claude-agent-acp ≥0.63 with
@@ -3429,13 +3450,16 @@ export type AcpEvent =
    * `turns` are UPSERTs keyed by `MessageTurn.id` into the conversation
    * runtime store's background overlay; `settled` entries each raise one OS
    * notification; `outstanding` mirrors into the connection for the idle-sweep
-   * exemption (nothing renders the count).
+   * exemption, and `outstanding_tasks` — the same tasks one by one, the
+   * producer's WHOLE current set on every event (absent = none) — feeds the
+   * composer's running list.
    */
   | {
       type: "background_activity"
       session_id: string
       turns?: MessageTurn[]
       outstanding: number
+      outstanding_tasks?: BackgroundOutstandingTask[]
       settled?: BackgroundSettledInfo[]
       watermark: number
     }
@@ -3975,6 +3999,9 @@ export interface LiveSessionSnapshot {
    *  mid-episode recover the pending count the one-shot `background_activity`
    *  events won't replay. Absent / omitted when zero. */
   background_outstanding?: number
+  /** Those tasks one by one (see `BackgroundOutstandingTask`). Absent /
+   *  omitted when empty. */
+  background_outstanding_tasks?: BackgroundOutstandingTask[]
   /** Whether this agent has the `check_user_feedback` tool (fixed at launch).
    *  The frontend gates the feedback bar on this — the agent's real capability —
    *  not the (possibly later-toggled) global setting. Absent → `false`. */

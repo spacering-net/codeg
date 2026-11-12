@@ -66,6 +66,7 @@ import type {
   ActiveDelegationState,
   AsyncTaskDelta,
   AsyncTaskRecord,
+  BackgroundOutstandingTask,
   AvailableCommandInfo,
   ConfigStaleKind,
   ConnectionStatus,
@@ -403,8 +404,8 @@ export interface ConnectionState {
   toolApprovals: ToolApprovalMap
   /** AIR async tasks — Claude's background shells / workflows / monitors (see
    *  `lib/async-tasks.ts` for the merge contract). Retained after they settle,
-   *  because the adapter keeps revising a finished task; the strip filters to
-   *  the live ones itself. */
+   *  because the adapter keeps revising a finished task; the composer's
+   *  running list takes the live ones itself (`lib/live-runs.ts`). */
   asyncTasks: AsyncTaskRecord[]
   /**
    * One-line localized message for this session's current turn / connection
@@ -505,6 +506,15 @@ export interface ConnectionState {
    * popover warns before interrupting that work.
    */
   backgroundOutstanding: number
+  /**
+   * The same tasks one by one, mirrored from the event's `outstanding_tasks`
+   * (and the snapshot's `background_outstanding_tasks`): the composer's
+   * running list reads the background sub-agents still running after their
+   * turn ended from here — the launch cards can't say, a transcript can't tell
+   * a live task from a dead one. Every event carries the whole set, so each
+   * one replaces it.
+   */
+  backgroundTasks: readonly BackgroundOutstandingTask[]
   /**
    * Child connection ids of the codeg delegations (`delegate_to_agent`) this
    * connection still has running, mirrored from the backend's
@@ -653,6 +663,8 @@ type Action =
       type: "SET_BACKGROUND_OUTSTANDING"
       contextKey: string
       outstanding: number
+      /** The event's `outstanding_tasks`, whole (absent on the wire = none). */
+      tasks: readonly BackgroundOutstandingTask[]
     }
   | {
       // A codeg delegation this connection started began (`running`) or
@@ -1677,6 +1689,26 @@ function ensureLiveMessage(prev: LiveMessage | null): LiveMessage {
  *  of them) keeps a stable reference through `connRenderEqual`. */
 const EMPTY_STEERED_MESSAGE_IDS: string[] = []
 const EMPTY_DELEGATED_CHILDREN: string[] = []
+const EMPTY_BACKGROUND_TASKS: readonly BackgroundOutstandingTask[] = []
+
+/** Whether two outstanding-task sets list the same tasks, the same way. */
+function sameBackgroundTasks(
+  a: readonly BackgroundOutstandingTask[],
+  b: readonly BackgroundOutstandingTask[]
+): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  return a.every((task, i) => {
+    const other = b[i]
+    return (
+      task.task_id === other.task_id &&
+      task.kind === other.kind &&
+      (task.tool_use_id ?? null) === (other.tool_use_id ?? null) &&
+      (task.description ?? null) === (other.description ?? null) &&
+      task.started_at_ms === other.started_at_ms
+    )
+  })
+}
 
 /** Last time an out-of-turn drop was logged — module-level sampling clock. */
 let lastOutOfTurnDropLogAt = 0
@@ -1995,6 +2027,7 @@ function connectionsReducer(
         configStaleKind: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
+        backgroundTasks: EMPTY_BACKGROUND_TASKS,
         delegatedChildren: EMPTY_DELEGATED_CHILDREN,
         outOfTurnToolCalls: null,
         hasPrompted: false,
@@ -2062,6 +2095,7 @@ function connectionsReducer(
         configStaleKind: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
+        backgroundTasks: EMPTY_BACKGROUND_TASKS,
         delegatedChildren: EMPTY_DELEGATED_CHILDREN,
         outOfTurnToolCalls: null,
         hasPrompted: false,
@@ -2261,6 +2295,7 @@ function connectionsReducer(
         // recovers the pending-background count the one-shot events won't
         // replay for it, so its teardown gates hold.
         backgroundOutstanding: action.patch.backgroundOutstanding,
+        backgroundTasks: action.patch.backgroundTasks,
         // Current state too, and the only way a client that attaches while a
         // delegation runs learns of it: the running frame is one-shot.
         delegatedChildren: action.patch.delegatedChildren,
@@ -2380,11 +2415,16 @@ function connectionsReducer(
     case "SET_BACKGROUND_OUTSTANDING": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
-      if (conn.backgroundOutstanding === action.outstanding) return state
+      const sameTasks = sameBackgroundTasks(conn.backgroundTasks, action.tasks)
+      if (conn.backgroundOutstanding === action.outstanding && sameTasks) {
+        return state
+      }
       const next = new Map(state)
       next.set(action.contextKey, {
         ...conn,
         backgroundOutstanding: action.outstanding,
+        // Kept by reference while unchanged, so the running list's memo holds.
+        backgroundTasks: sameTasks ? conn.backgroundTasks : action.tasks,
       })
       return next
     }
@@ -2915,7 +2955,7 @@ function connectionsReducer(
       // published on the id this connection has left and never route here
       // again. The backend drops its table, and an empty snapshot table can't
       // clear ours for us (`mergeAsyncTasks` treats empty as "nothing to say"),
-      // so without this the strip shows tasks that can never finish AND the
+      // so without this the running list shows tasks that can never finish AND the
       // idle sweep below defers on them forever. Guarded on the id actually
       // changing, so a replayed announcement stays idempotent.
       const forked = conn.sessionId !== action.sessionId
@@ -5448,6 +5488,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             type: "SET_BACKGROUND_OUTSTANDING",
             contextKey,
             outstanding: e.outstanding,
+            tasks:
+              e.outstanding_tasks && e.outstanding_tasks.length > 0
+                ? e.outstanding_tasks
+                : EMPTY_BACKGROUND_TASKS,
           })
           // 2. overlay turns → the conversation runtime store (resolved via
           //    the external-id index; unresolved = this conversation was never
@@ -5941,7 +5985,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         case "async_task": {
           // JetBrains AIR async-task delta (claude only) — Claude's background
           // shells / workflows / monitors. Merged into the connection's task
-          // table; the live rows render in `AsyncTaskStrip` under the composer.
+          // table; the live rows render in the "N running" list above the
+          // composer (`LiveRunsChip`).
           dispatch({
             type: "ASYNC_TASK",
             contextKey,

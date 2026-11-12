@@ -45,6 +45,7 @@ const DELEGATION: DelegationContextValue = {
   findByParentToolUseId: () => undefined,
   findByChildConversationId: () => undefined,
   findByTaskId: () => undefined,
+  bindingsForParent: () => [],
 }
 const WORKSPACE = new Proxy(
   {},

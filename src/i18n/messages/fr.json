@@ -4338,6 +4338,13 @@
         "scheduledWakeupAt": "Réveil programmé à {time}",
         "scheduledTask": "Tâche planifiée"
       },
+      "liveRuns": {
+        "count": "{count} en cours",
+        "awaiting": "Un sous-agent attend votre réponse",
+        "groupDelegations": "Délégations",
+        "background": "Arrière-plan",
+        "delegatedFallback": "Sous-agent délégué"
+      },
       "remoteControl": {
         "title": "Contrôle à distance activé",
         "open": "Ouvrir dans le navigateur",

@@ -4338,6 +4338,13 @@
         "scheduledWakeupAt": "예약된 깨우기 ({time})",
         "scheduledTask": "예약된 작업"
       },
+      "liveRuns": {
+        "count": "{count}개 실행 중",
+        "awaiting": "처리를 기다리는 서브 에이전트가 있습니다",
+        "groupDelegations": "위임",
+        "background": "백그라운드",
+        "delegatedFallback": "위임한 서브 에이전트"
+      },
       "remoteControl": {
         "title": "원격 제어 켜짐",
         "open": "브라우저에서 열기",

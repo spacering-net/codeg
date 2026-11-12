@@ -68,7 +68,10 @@ use tokio::sync::RwLock;
 
 use crate::acp::session_state::{background_keepalive_max_age, SessionState};
 use crate::acp::session_title::{publish_native_title, release_held_wire_title};
-use crate::acp::types::{AcpEvent, BackgroundSettledInfo, ConnectionStatus};
+use crate::acp::types::{
+    AcpEvent, BackgroundOutstandingTask, BackgroundSettledInfo, BackgroundTaskKind, ConnectionStatus,
+    BACKGROUND_TASK_DESCRIPTION_MAX_CHARS,
+};
 use crate::models::agent::AgentType;
 use crate::models::message::MessageTurn;
 use crate::parsers::claude::{
@@ -759,8 +762,31 @@ async fn run_watch(
 
 /// One launched-but-unresolved background task.
 struct TaskEntry {
-    kind: &'static str,
+    kind: BackgroundTaskKind,
+    /// The max-age valve's clock.
     started_at: Instant,
+    /// Wall-clock twin of `started_at`, for the frontend's elapsed time.
+    started_at_ms: i64,
+}
+
+impl TaskEntry {
+    fn new(kind: BackgroundTaskKind) -> Self {
+        Self {
+            kind,
+            started_at: Instant::now(),
+            started_at_ms: chrono::Utc::now().timestamp_millis(),
+        }
+    }
+}
+
+/// What a task's launch said about it: the launching call and the task's own
+/// description. Kept apart from [`TaskEntry`], and past the task's settle,
+/// because a `SendMessage` re-arms a settled sub-agent under the SAME id with
+/// no launch record of its own to read them from.
+#[derive(Clone, Default)]
+struct TaskIdentity {
+    tool_use_id: Option<String>,
+    description: Option<String>,
 }
 
 /// The current out-of-turn episode: a contiguous run of transcript records
@@ -801,6 +827,10 @@ pub(crate) struct WatchState {
     mode: Mode,
     episode: Option<Episode>,
     tasks: HashMap<String, TaskEntry>,
+    /// Task id → what its launch said ([`TaskIdentity`]). Never pruned on a
+    /// settle (a resume re-arms the id), so it shares `settled_ids`' lifetime
+    /// and is carried across a fork / `/clear` with it.
+    task_identities: HashMap<String, TaskIdentity>,
     /// Task ids that have settled at least once — a later `SendMessage` to
     /// such an id re-arms it (the resumed sub-agent will notify again).
     settled_ids: HashSet<String>,
@@ -887,7 +917,10 @@ pub(crate) struct WatchState {
     /// never outlive the tick that created them.
     turn_origin_task_ids: HashMap<String, Option<String>>,
     last_disk_activity: Option<Instant>,
-    last_emitted_outstanding: Option<u32>,
+    /// The outstanding set as last emitted, sorted (see `outstanding_tasks`).
+    /// Compared whole rather than by count: a task that settles while another
+    /// starts leaves the count alone but changes what the frontend lists.
+    last_emitted_tasks: Vec<BackgroundOutstandingTask>,
     armed_logged: bool,
     /// Base of the most recently created episode's id namespace. Episode
     /// bases must be STRICTLY increasing: two episodes created while
@@ -944,6 +977,7 @@ impl WatchState {
             mode: Mode::Foreground,
             episode: None,
             tasks: HashMap::new(),
+            task_identities: HashMap::new(),
             settled_ids: HashSet::new(),
             current_turn_launched_ids: HashSet::new(),
             was_prompting: false,
@@ -953,10 +987,10 @@ impl WatchState {
             currently_prompting: false,
             turn_origin_task_ids: HashMap::new(),
             last_disk_activity: None,
-            // Some(0), not None: consumers assume zero until told otherwise,
-            // so the first tick must not emit an accounting-only event for a
-            // connection with no background work.
-            last_emitted_outstanding: Some(0),
+            // Empty, as consumers assume until told otherwise, so the first
+            // tick must not emit an accounting-only event for a connection
+            // with no background work.
+            last_emitted_tasks: Vec::new(),
             armed_logged: false,
             last_episode_base: 0,
             epoch: None,
@@ -1026,6 +1060,7 @@ impl WatchState {
 
     fn rearm(&mut self, session_id: String, epoch: std::time::SystemTime) {
         let tasks = std::mem::take(&mut self.tasks);
+        let task_identities = std::mem::take(&mut self.task_identities);
         let settled_ids = std::mem::take(&mut self.settled_ids);
         *self = Self::new();
         // Keep the accounting across a fork/resume of the same CLI process —
@@ -1036,6 +1071,7 @@ impl WatchState {
         // set the re-arm is missed — outstanding stays 0 and closing the tab
         // could kill the resumed work.
         self.tasks = tasks;
+        self.task_identities = task_identities;
         self.settled_ids = settled_ids;
         self.session_id = Some(session_id);
         self.epoch = Some(epoch);
@@ -1054,10 +1090,12 @@ impl WatchState {
     fn adopt_rollover(&mut self, new_id: String, f: PathBuf) {
         let session_id = self.session_id.take();
         let tasks = std::mem::take(&mut self.tasks);
+        let task_identities = std::mem::take(&mut self.task_identities);
         let settled_ids = std::mem::take(&mut self.settled_ids);
         *self = Self::new();
         self.session_id = session_id;
         self.tasks = tasks;
+        self.task_identities = task_identities;
         self.settled_ids = settled_ids;
         self.pending_transcript_id = Some(new_id.clone());
         self.rolled_over_id = Some(new_id);
@@ -1148,7 +1186,7 @@ impl WatchState {
             if !keep {
                 tracing::info!(
                     "[bg-watch] expiring {} task={id} after max-age (completion never observed)",
-                    t.kind
+                    t.kind.as_str()
                 );
             }
             keep
@@ -1308,17 +1346,18 @@ impl WatchState {
             !matches!(origin, Some(task_id) if self.current_turn_launched_ids.contains(&task_id))
         });
 
-        let outstanding = self.tasks.len() as u32;
-        let accounting_changed =
-            expired_any || self.last_emitted_outstanding != Some(outstanding);
+        let outstanding_tasks = self.outstanding_tasks();
+        let outstanding = outstanding_tasks.len() as u32;
+        let accounting_changed = expired_any || self.last_emitted_tasks != outstanding_tasks;
         if changed_turns.is_empty() && settled.is_empty() && !accounting_changed {
             return None;
         }
-        self.last_emitted_outstanding = Some(outstanding);
+        self.last_emitted_tasks = outstanding_tasks.clone();
         Some(AcpEvent::BackgroundActivity {
             session_id,
             turns: changed_turns,
             outstanding,
+            outstanding_tasks,
             settled,
             watermark: self.committed,
         })
@@ -1440,6 +1479,65 @@ impl WatchState {
         Ok(lines)
     }
 
+    /// The outstanding set as the frontend lists it, oldest first (ties by
+    /// id, so the order — and the emission gate comparing it — is stable).
+    fn outstanding_tasks(&self) -> Vec<BackgroundOutstandingTask> {
+        let mut out: Vec<BackgroundOutstandingTask> = self
+            .tasks
+            .iter()
+            .map(|(id, entry)| {
+                let identity = self.task_identities.get(id).cloned().unwrap_or_default();
+                BackgroundOutstandingTask {
+                    task_id: id.clone(),
+                    kind: entry.kind,
+                    tool_use_id: identity.tool_use_id,
+                    description: identity.description,
+                    started_at_ms: entry.started_at_ms,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            a.started_at_ms
+                .cmp(&b.started_at_ms)
+                .then_with(|| a.task_id.cmp(&b.task_id))
+        });
+        out
+    }
+
+    /// Record what a launch ack says about its task: the `tool_use_id` of the
+    /// `tool_result` block it answers, and the task's description. The first
+    /// sighting wins — a resumed sub-agent's repeated ack keeps its original
+    /// launching call, the card the frontend titles it from.
+    fn remember_identity(&mut self, id: &str, record: &serde_json::Value, description: Option<&str>) {
+        if self.task_identities.contains_key(id) {
+            return;
+        }
+        let tool_use_id = record
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+            .and_then(|blocks| {
+                blocks.iter().find_map(|block| {
+                    (block.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
+                        .then(|| block.get("tool_use_id").and_then(|v| v.as_str()))
+                        .flatten()
+                })
+            })
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let description = description
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| truncate_str(s, BACKGROUND_TASK_DESCRIPTION_MAX_CHARS));
+        self.task_identities.insert(
+            id.to_string(),
+            TaskIdentity {
+                tool_use_id,
+                description,
+            },
+        );
+    }
+
     /// An interim `<task-notification>` ([`task_notification_is_interim`]):
     /// the sub-agent stopped while background work of its own still runs, or
     /// is being resumed with messages that came too late, and it notifies again
@@ -1452,10 +1550,7 @@ impl WatchState {
         let known = self.tasks.contains_key(id);
         self.tasks
             .entry(id.to_string())
-            .or_insert_with(|| TaskEntry {
-                kind: "agent",
-                started_at: Instant::now(),
-            });
+            .or_insert_with(|| TaskEntry::new(BackgroundTaskKind::Agent));
         tracing::info!("[bg-watch] interim notification task={id} known={known}, kept outstanding");
     }
 
@@ -1508,11 +1603,13 @@ impl WatchState {
                             // alive. The log fires only on first registration.
                             self.tasks.entry(id.to_string()).or_insert_with(|| {
                                 tracing::info!("[bg-watch] registered async agent task={id}");
-                                TaskEntry {
-                                    kind: "agent",
-                                    started_at: Instant::now(),
-                                }
+                                TaskEntry::new(BackgroundTaskKind::Agent)
                             });
+                            self.remember_identity(
+                                id,
+                                value,
+                                tur.get("description").and_then(|v| v.as_str()),
+                            );
                             // This turn is still `Prompting` at launch time — a
                             // later out-of-turn follow-up for this SAME id is
                             // therefore held-open content already rendering on
@@ -1534,11 +1631,9 @@ impl WatchState {
                         // reads of this identical shape.
                         self.tasks.entry(id.to_string()).or_insert_with(|| {
                             tracing::info!("[bg-watch] registered background shell task={id}");
-                            TaskEntry {
-                                kind: "shell",
-                                started_at: Instant::now(),
-                            }
+                            TaskEntry::new(BackgroundTaskKind::Shell)
                         });
+                        self.remember_identity(id, value, None);
                         // Deliberately NOT inserted into `current_turn_launched_ids`:
                         // #870 never holds a turn open for a shell (this
                         // module's own top-of-file doc comment — "a hold must
@@ -1663,10 +1758,7 @@ impl WatchState {
                                 tracing::info!("[bg-watch] re-armed resumed task={to}");
                                 self.tasks.insert(
                                     to.to_string(),
-                                    TaskEntry {
-                                        kind: "agent",
-                                        started_at: Instant::now(),
-                                    },
+                                    TaskEntry::new(BackgroundTaskKind::Agent),
                                 );
                                 // Mirrors the launch-time insert in the
                                 // `async_launched` branch above: if THIS turn
@@ -3937,6 +4029,79 @@ mod tests {
         assert!(ws.settled_ids.contains("agent1"));
     }
 
+    fn unpack_tasks(event: AcpEvent) -> (u32, Vec<BackgroundOutstandingTask>) {
+        match event {
+            AcpEvent::BackgroundActivity {
+                outstanding,
+                outstanding_tasks,
+                ..
+            } => (outstanding, outstanding_tasks),
+            other => panic!("expected BackgroundActivity, got {other:?}"),
+        }
+    }
+
+    /// Each event lists the tasks still out, not just how many — what their
+    /// launch said (the call it answers, the sub-agent's description) and when
+    /// the watch first saw them, oldest first — so the composer can say WHICH
+    /// background sub-agents still run once their turn has ended.
+    #[test]
+    fn acks_list_each_outstanding_task_with_its_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        write_lines(&path, &[&agent_ack("agent1"), &bash_ack("bash1")]);
+        let (outstanding, tasks) =
+            unpack_tasks(tick_now(&mut ws, &ledger).expect("accounting event"));
+        assert_eq!(outstanding, 2);
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|t| (
+                    t.task_id.as_str(),
+                    t.kind,
+                    t.tool_use_id.as_deref(),
+                    t.description.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "agent1",
+                    BackgroundTaskKind::Agent,
+                    Some("toolu_01"),
+                    Some("Run pnpm build")
+                ),
+                ("bash1", BackgroundTaskKind::Shell, Some("toolu_02"), None),
+            ]
+        );
+        assert!(tasks.iter().all(|t| t.started_at_ms > 0), "{tasks:?}");
+    }
+
+    /// One task settling quietly as another starts leaves the count where it
+    /// was, but not the list — the swap must still go out, or the composer
+    /// would keep listing the finished one and never the new one.
+    #[test]
+    fn a_task_swap_that_keeps_the_count_still_emits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&agent_ack("agent1")]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let (outstanding, _) = unpack_tasks(tick_now(&mut ws, &ledger).expect("launch event"));
+        assert_eq!(outstanding, 1);
+
+        write_lines(&path, &[&folded_notification("agent1"), &agent_ack("agent2")]);
+        let (outstanding, tasks) =
+            unpack_tasks(tick_prompting(&mut ws, &ledger).expect("the swap goes out"));
+        assert_eq!(outstanding, 1);
+        assert_eq!(
+            tasks.iter().map(|t| t.task_id.as_str()).collect::<Vec<_>>(),
+            vec!["agent2"]
+        );
+    }
+
     /// The `<task-notification>` CLI 2.1.300 writes for a background sub-agent
     /// that ended its run while a background command of its own still runs
     /// (measured live), and the final one it writes once the agent is done.
@@ -4799,8 +4964,13 @@ mod tests {
 
         let send = r#"{"type":"assistant","timestamp":"2026-07-07T03:52:00.000Z","uuid":"a-send","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_03","name":"SendMessage","input":{"to":"agentX","summary":"continue","message":"go on"}}]}}"#;
         write_lines(&path, &[send]);
-        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).unwrap());
+        let (outstanding, tasks) = unpack_tasks(tick_now(&mut ws, &ledger).unwrap());
         assert_eq!(outstanding, 1, "resumed sub-agent re-arms the keep-alive");
+        // The resume has no launch record of its own: the row keeps the
+        // original launch's call and description.
+        assert_eq!(tasks[0].task_id, "agentX");
+        assert_eq!(tasks[0].tool_use_id.as_deref(), Some("toolu_01"));
+        assert_eq!(tasks[0].description.as_deref(), Some("Run pnpm build"));
     }
 
     /// A page the built-in browser handed over, as codeg sends it with nothing

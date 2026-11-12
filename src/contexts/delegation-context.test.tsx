@@ -329,6 +329,53 @@ describe("DelegationProvider", () => {
     expect(screen.getByTestId("by-task-id-status")).toHaveTextContent("ok")
   })
 
+  it("lists a parent's bindings in start order, finished ones included", async () => {
+    function ParentProbe({ parent }: { parent: string }) {
+      const { bindingsForParent } = useDelegation()
+      return (
+        <div data-testid={`bindings-${parent}`}>
+          {bindingsForParent(parent)
+            .map((b) => `${b.childConnectionId}:${b.status}`)
+            .join(",")}
+        </div>
+      )
+    }
+    render(
+      <DelegationProvider>
+        <ParentProbe parent="p1" />
+        <ParentProbe parent="p2" />
+      </DelegationProvider>
+    )
+    await awaitHandlerCaptured()
+    const started = (parent: string, toolUseId: string, child: string) =>
+      ({
+        type: "delegation_started",
+        parent_connection_id: parent,
+        parent_tool_use_id: toolUseId,
+        child_connection_id: child,
+        child_conversation_id: 1,
+        agent_type: "codex",
+      }) as unknown as EventEnvelope
+    dispatch(started("p1", "pt-a", "c-a"))
+    dispatch(started("p2", "pt-x", "c-x"))
+    dispatch(started("p1", "pt-b", "c-b"))
+    dispatch({
+      type: "delegation_completed",
+      parent_connection_id: "p1",
+      parent_tool_use_id: "pt-a",
+      child_connection_id: "c-a",
+      child_conversation_id: 1,
+      agent_type: "codex",
+      result: { kind: "ok", duration_ms: 1 },
+    } as unknown as EventEnvelope)
+    // Which still RUN is the parent's own `delegatedChildren`; the list only
+    // says who each child is.
+    expect(screen.getByTestId("bindings-p1")).toHaveTextContent(
+      "c-a:ok,c-b:running"
+    )
+    expect(screen.getByTestId("bindings-p2")).toHaveTextContent("c-x:running")
+  })
+
   it("does not match a different task id, or an empty one", async () => {
     render(
       <DelegationProvider>

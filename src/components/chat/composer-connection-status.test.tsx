@@ -67,6 +67,7 @@ function connected(over: Partial<ConnectionState> = {}): ConnectionState {
     error: null,
     isViewer: false,
     backgroundOutstanding: 0,
+    backgroundTasks: [],
     asyncTasks: [],
     remoteControl: null,
     delegatedChildren: [],

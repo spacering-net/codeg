@@ -4338,6 +4338,13 @@
         "scheduledWakeupAt": "Ativação agendada para {time}",
         "scheduledTask": "Tarefa agendada"
       },
+      "liveRuns": {
+        "count": "{count} em execução",
+        "awaiting": "Um subagente está aguardando você",
+        "groupDelegations": "Delegações",
+        "background": "Segundo plano",
+        "delegatedFallback": "Subagente delegado"
+      },
       "remoteControl": {
         "title": "Controle remoto ativado",
         "open": "Abrir no navegador",

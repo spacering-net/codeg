@@ -4338,6 +4338,13 @@
         "scheduledWakeupAt": "Geplantes Aufwecken um {time}",
         "scheduledTask": "Geplante Aufgabe"
       },
+      "liveRuns": {
+        "count": "{count} laufen",
+        "awaiting": "Ein Sub-Agent wartet auf dich",
+        "groupDelegations": "Delegierungen",
+        "background": "Hintergrund",
+        "delegatedFallback": "Delegierter Sub-Agent"
+      },
       "remoteControl": {
         "title": "Fernsteuerung aktiv",
         "open": "Im Browser öffnen",

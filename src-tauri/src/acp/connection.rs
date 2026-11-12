@@ -17776,6 +17776,9 @@ struct OpenCodeSubagentLaunch {
     /// child's end has not been reported yet (see
     /// [`OpenCodeLiveState::subagent_completed`]).
     background: bool,
+    /// When the launch was first seen, Unix ms — how long a background row
+    /// in the frontend's "running" list has been going.
+    started_at_ms: i64,
 }
 
 impl OpenCodeSubagentLaunch {
@@ -17878,7 +17881,9 @@ impl OpenCodeChildAnswer {
 /// and, for an end, its settle (see [`emit_opencode_background_report`]).
 #[derive(Debug)]
 struct OpenCodeBackgroundReport {
-    outstanding: u32,
+    /// The background launches still out, whole (see
+    /// [`OpenCodeLiveState::outstanding_tasks`]).
+    outstanding: Vec<crate::acp::types::BackgroundOutstandingTask>,
     settled: Option<crate::acp::types::BackgroundSettledInfo>,
 }
 
@@ -17947,6 +17952,7 @@ impl OpenCodeLiveState {
             owner: owner.map(str::to_string),
             child: None,
             background: false,
+            started_at_ms: chrono::Utc::now().timestamp_millis(),
         });
     }
 
@@ -18060,14 +18066,30 @@ impl OpenCodeLiveState {
     }
 
     /// Background launches whose child OpenCode still follows: work the agent
-    /// process is doing that no turn is waiting for.
-    fn outstanding(&self) -> u32 {
-        let open = self
-            .subagents
+    /// process is doing that no turn is waiting for. Keyed by the child
+    /// session, the id their settle carries ([`opencode_settled`]); oldest
+    /// launch first.
+    fn outstanding_tasks(&self) -> Vec<crate::acp::types::BackgroundOutstandingTask> {
+        self.subagents
             .iter()
-            .filter(|launch| launch.background && launch.child.as_ref().is_some_and(|c| c.open))
-            .count();
-        u32::try_from(open).unwrap_or(u32::MAX)
+            .filter_map(|launch| {
+                let child = launch.child.as_ref().filter(|c| c.open)?;
+                launch
+                    .background
+                    .then(|| crate::acp::types::BackgroundOutstandingTask {
+                        task_id: child.id.clone(),
+                        kind: crate::acp::types::BackgroundTaskKind::Agent,
+                        tool_use_id: Some(launch.tool_call_id.clone()),
+                        description: launch.description.as_deref().map(|d| {
+                            crate::parsers::truncate_str(
+                                d,
+                                crate::acp::types::BACKGROUND_TASK_DESCRIPTION_MAX_CHARS,
+                            )
+                        }),
+                        started_at_ms: launch.started_at_ms,
+                    })
+            })
+            .collect()
     }
 
     /// A `subagent` launch completed — into the background when `background`
@@ -18111,7 +18133,7 @@ impl OpenCodeLiveState {
             }
         };
         Some(OpenCodeBackgroundReport {
-            outstanding: self.outstanding(),
+            outstanding: self.outstanding_tasks(),
             settled,
         })
     }
@@ -18138,7 +18160,7 @@ impl OpenCodeLiveState {
         launch.background = false;
         let settled = opencode_settled(&launch.tool_call_id, child, end);
         Some(OpenCodeBackgroundReport {
-            outstanding: self.outstanding(),
+            outstanding: self.outstanding_tasks(),
             settled: Some(settled),
         })
     }
@@ -18200,7 +18222,8 @@ async fn emit_opencode_background_report(
         Some(AcpEvent::BackgroundActivity {
             session_id: s.external_id.clone()?,
             turns: Vec::new(),
-            outstanding: report.outstanding,
+            outstanding: u32::try_from(report.outstanding.len()).unwrap_or(u32::MAX),
+            outstanding_tasks: report.outstanding,
             settled: report.settled.into_iter().collect(),
             watermark: 0,
         })
@@ -20697,6 +20720,10 @@ struct CodeBuddyLiveState {
     /// progress tick must re-send it or the id would be dropped. Entry dropped
     /// at finish, alongside `grok_subagent_to_call`.
     grok_call_child_session: HashMap<String, String>,
+    /// spawn tool_call id → what a background row needs that the pairing
+    /// throws away: the launch's description and when it paired. Entry
+    /// dropped at finish, alongside `grok_subagent_to_call`.
+    grok_spawn_identity: HashMap<String, GrokSpawnIdentity>,
     /// Spawn calls that reached a terminal wire status. A `subagent_finished`
     /// for one of these is a BACKGROUND child settling after its launch ack —
     /// the case whose result would otherwise never reach the card live; a
@@ -20834,6 +20861,60 @@ struct GrokPendingSpawn {
     call_id: String,
     description: Option<String>,
     subagent_type: Option<String>,
+}
+
+/// See `CodeBuddyLiveState::grok_spawn_identity`.
+#[derive(Debug, Clone)]
+struct GrokSpawnIdentity {
+    description: Option<String>,
+    started_at_ms: i64,
+}
+
+/// The Grok background children still running — paired spawns whose launch
+/// call already settled — whole, oldest first: `BackgroundActivity`'s
+/// `outstanding_tasks`, keyed by the subagent id their settle carries.
+fn grok_outstanding_tasks(
+    cb_state: &CodeBuddyLiveState,
+) -> Vec<crate::acp::types::BackgroundOutstandingTask> {
+    let mut out: Vec<_> = cb_state
+        .grok_subagent_to_call
+        .iter()
+        .filter(|(_, call_id)| cb_state.grok_settled_spawn_ids.contains(*call_id))
+        .map(|(subagent_id, call_id)| {
+            let identity = cb_state.grok_spawn_identity.get(call_id);
+            crate::acp::types::BackgroundOutstandingTask {
+                task_id: subagent_id.clone(),
+                kind: crate::acp::types::BackgroundTaskKind::Agent,
+                tool_use_id: Some(call_id.clone()),
+                description: identity.and_then(|i| i.description.clone()),
+                started_at_ms: identity.map_or(0, |i| i.started_at_ms),
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.started_at_ms
+            .cmp(&b.started_at_ms)
+            .then_with(|| a.task_id.cmp(&b.task_id))
+    });
+    out
+}
+
+/// `BackgroundActivity` with no turns and no settle: just the Grok background
+/// set as it stands, count and rows together.
+fn grok_background_accounting(
+    session_id: String,
+    cb_state: &CodeBuddyLiveState,
+    settled: Vec<crate::acp::types::BackgroundSettledInfo>,
+) -> AcpEvent {
+    let outstanding_tasks = grok_outstanding_tasks(cb_state);
+    AcpEvent::BackgroundActivity {
+        session_id,
+        turns: Vec::new(),
+        outstanding: u32::try_from(outstanding_tasks.len()).unwrap_or(u32::MAX),
+        outstanding_tasks,
+        settled,
+        watermark: 0,
+    }
 }
 
 /// True when a Grok tool call's ACP `_meta` identifies it as the native
@@ -21563,14 +21644,8 @@ fn map_grok_subagent_notification_inner(
     let update = params.get("update")?;
     let subagent_id = update.get("subagent_id").and_then(|v| v.as_str())?;
     // `outstanding` = paired subagents still running whose launch call already
-    // settled — i.e. background children codeg would otherwise sweep as idle.
-    let outstanding = |cb_state: &CodeBuddyLiveState| {
-        cb_state
-            .grok_subagent_to_call
-            .values()
-            .filter(|call_id| cb_state.grok_settled_spawn_ids.contains(*call_id))
-            .count() as u32
-    };
+    // settled — i.e. background children codeg would otherwise sweep as idle
+    // (`grok_outstanding_tasks`).
     match update.get("sessionUpdate").and_then(|v| v.as_str())? {
         "subagent_spawned" => {
             // First pending entry whose captured launch `(description,
@@ -21601,10 +21676,23 @@ fn map_grok_subagent_notification_inner(
                 matches(&p.description, event_field("description"))
                     && matches(&p.subagent_type, event_field("subagent_type"))
             })?;
-            let call_id = cb_state.grok_pending_spawn_ids.remove(idx)?.call_id;
+            let pending = cb_state.grok_pending_spawn_ids.remove(idx)?;
+            let call_id = pending.call_id;
             cb_state
                 .grok_subagent_to_call
                 .insert(subagent_id.to_string(), call_id.clone());
+            cb_state.grok_spawn_identity.insert(
+                call_id.clone(),
+                GrokSpawnIdentity {
+                    description: pending.description.as_deref().map(|d| {
+                        crate::parsers::truncate_str(
+                            d,
+                            crate::acp::types::BACKGROUND_TASK_DESCRIPTION_MAX_CHARS,
+                        )
+                    }),
+                    started_at_ms: chrono::Utc::now().timestamp_millis(),
+                },
+            );
             // The child's own session id — `child_session_id` when the wire
             // carries it, else the subagent id (they are the same value in
             // every capture). Remembered so later progress ticks can re-send it
@@ -21662,13 +21750,11 @@ fn map_grok_subagent_notification_inner(
             // blocking spawn (its turn is open — nothing can sweep it).
             if cb_state.grok_settled_spawn_ids.contains(&call_id) {
                 let session_id = params.get("sessionId").and_then(|v| v.as_str())?;
-                events.push(AcpEvent::BackgroundActivity {
-                    session_id: session_id.to_string(),
-                    turns: Vec::new(),
-                    outstanding: outstanding(cb_state),
-                    settled: Vec::new(),
-                    watermark: 0,
-                });
+                events.push(grok_background_accounting(
+                    session_id.to_string(),
+                    cb_state,
+                    Vec::new(),
+                ));
             }
             Some(events)
         }
@@ -21737,6 +21823,7 @@ fn map_grok_subagent_notification_inner(
         "subagent_finished" => {
             let call_id = cb_state.grok_subagent_to_call.remove(subagent_id)?;
             cb_state.grok_call_child_session.remove(&call_id);
+            cb_state.grok_spawn_identity.remove(&call_id);
             if !cb_state.grok_settled_spawn_ids.contains(&call_id) {
                 // Blocking spawn: the child's output arrives on the call's own
                 // completion frame; the settle channel would double-render it.
@@ -21752,11 +21839,10 @@ fn map_grok_subagent_notification_inner(
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(|s| crate::parsers::truncate_str(s, crate::parsers::claude::BACKGROUND_RESULT_MAX_CHARS));
-            Some(vec![AcpEvent::BackgroundActivity {
-                session_id: session_id.to_string(),
-                turns: Vec::new(),
-                outstanding: outstanding(cb_state),
-                settled: vec![crate::acp::types::BackgroundSettledInfo {
+            Some(vec![grok_background_accounting(
+                session_id.to_string(),
+                cb_state,
+                vec![crate::acp::types::BackgroundSettledInfo {
                     task_id: subagent_id.to_string(),
                     status: status.to_string(),
                     summary: None,
@@ -21764,8 +21850,7 @@ fn map_grok_subagent_notification_inner(
                     result,
                     interim: false,
                 }],
-                watermark: 0,
-            }])
+            )])
         }
         _ => None,
     }
@@ -26363,21 +26448,10 @@ async fn emit_conversation_update(
             {
                 let session_id = state.read().await.external_id.clone();
                 if let Some(session_id) = session_id {
-                    let outstanding = cb_state
-                        .grok_subagent_to_call
-                        .values()
-                        .filter(|call| cb_state.grok_settled_spawn_ids.contains(*call))
-                        .count() as u32;
                     emit_with_state(
                         state,
                         emitter,
-                        AcpEvent::BackgroundActivity {
-                            session_id,
-                            turns: Vec::new(),
-                            outstanding,
-                            settled: Vec::new(),
-                            watermark: 0,
-                        },
+                        grok_background_accounting(session_id, cb_state, Vec::new()),
                     )
                     .await;
                 }
@@ -34320,11 +34394,22 @@ mod tests {
             // live_message) — only the background report.
             [AcpEvent::BackgroundActivity {
                 outstanding,
+                outstanding_tasks,
                 settled,
                 ..
             }] => {
                 assert_eq!(*outstanding, 1);
                 assert!(settled.is_empty());
+                // …and listed: the child by the id its settle will carry,
+                // pointing at its launch call.
+                assert_eq!(outstanding_tasks.len(), 1);
+                assert_eq!(outstanding_tasks[0].task_id, "sub-1");
+                assert_eq!(
+                    outstanding_tasks[0].kind,
+                    crate::acp::types::BackgroundTaskKind::Agent
+                );
+                assert_eq!(outstanding_tasks[0].tool_use_id.as_deref(), Some("call-1"));
+                assert!(outstanding_tasks[0].started_at_ms > 0);
             }
             other => panic!("expected one BackgroundActivity, got {other:?}"),
         }
@@ -34440,11 +34525,13 @@ mod tests {
             [AcpEvent::BackgroundActivity {
                 session_id,
                 outstanding,
+                outstanding_tasks,
                 settled,
                 ..
             }] => {
                 assert_eq!(session_id, "sess-1");
                 assert_eq!(*outstanding, 0, "the settled child leaves the count");
+                assert!(outstanding_tasks.is_empty(), "…and the list");
                 assert_eq!(settled.len(), 1);
                 let s = &settled[0];
                 assert_eq!(s.task_id, "sub-1");
@@ -40127,7 +40214,9 @@ mod tests {
     }
 
     /// `(outstanding, settled)` of each `BackgroundActivity` among `events`,
-    /// checking the parts every OpenCode report shares.
+    /// checking the parts every OpenCode report shares — the rows included:
+    /// one per task still out, and in this fixture that can only be the
+    /// background child, named by its session and pointing at its launch.
     fn oc_background_reports(
         events: &[AcpEvent],
     ) -> Vec<(u32, Vec<crate::acp::types::BackgroundSettledInfo>)> {
@@ -40138,11 +40227,20 @@ mod tests {
                     session_id,
                     turns,
                     outstanding,
+                    outstanding_tasks,
                     settled,
                     watermark,
                 } => {
                     assert_eq!(session_id, OC_BG_ROOT);
                     assert!(turns.is_empty() && *watermark == 0, "{event:?}");
+                    assert_eq!(outstanding_tasks.len() as u32, *outstanding, "{event:?}");
+                    for task in outstanding_tasks {
+                        assert_eq!(task.task_id, OC_BG_CHILD);
+                        assert_eq!(task.kind, crate::acp::types::BackgroundTaskKind::Agent);
+                        assert_eq!(task.tool_use_id.as_deref(), Some(OC_BG_LAUNCH));
+                        assert_eq!(task.description.as_deref(), Some(OC_BG_TITLE));
+                        assert!(task.started_at_ms > 0, "{task:?}");
+                    }
                     Some((*outstanding, settled.clone()))
                 }
                 _ => None,
@@ -40191,6 +40289,17 @@ mod tests {
             "{turn:#?}"
         );
         assert_eq!(state.read().await.background_outstanding, 1);
+        assert_eq!(
+            state
+                .read()
+                .await
+                .background_outstanding_tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![OC_BG_CHILD],
+            "the snapshot can list the child, not just count it"
+        );
 
         // The turn answers (`TurnComplete` clears its calls).
         state.write().await.active_tool_calls.clear();
@@ -40205,6 +40314,7 @@ mod tests {
             )]
         );
         assert_eq!(state.read().await.background_outstanding, 0);
+        assert!(state.read().await.background_outstanding_tasks.is_empty());
     }
 
     /// A background child that ends while the turn that launched it still

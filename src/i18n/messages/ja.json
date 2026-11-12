@@ -4338,6 +4338,13 @@
         "scheduledWakeupAt": "スケジュールされた起動（{time}）",
         "scheduledTask": "スケジュールされたタスク"
       },
+      "liveRuns": {
+        "count": "{count} 件実行中",
+        "awaiting": "対応待ちのサブエージェントがあります",
+        "groupDelegations": "委任",
+        "background": "バックグラウンド",
+        "delegatedFallback": "委任したサブエージェント"
+      },
       "remoteControl": {
         "title": "リモートコントロール有効",
         "open": "ブラウザで開く",

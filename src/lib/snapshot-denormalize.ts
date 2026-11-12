@@ -2,6 +2,7 @@ import { stripKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import type {
   ActiveDelegationState,
   AsyncTaskRecord,
+  BackgroundOutstandingTask,
   AvailableCommandInfo,
   ConfigStaleKind,
   ConnectionStatus,
@@ -89,6 +90,9 @@ export interface SnapshotPatch {
    *  `background_activity` events won't replay. `0` when the server omitted
    *  the field. */
   backgroundOutstanding: number
+  /** Those tasks one by one (`background_outstanding_tasks`), for the
+   *  composer's running list. Empty when the server omitted the field. */
+  backgroundTasks: readonly BackgroundOutstandingTask[]
   /** AIR typed session failure table carried by the snapshot — resolved
    *  entries and their revision watermarks included. MERGED into the in-memory
    *  table by the monotonic per-id rule (`mergeSessionFailures`) on BOTH
@@ -184,6 +188,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     configStale: wire.config_stale ?? false,
     configStaleKind: wire.config_stale_kind ?? null,
     backgroundOutstanding: wire.background_outstanding ?? 0,
+    backgroundTasks: wire.background_outstanding_tasks ?? [],
     sessionFailures: wire.session_failures ?? [],
     toolApprovals: wire.tool_approvals ?? [],
     asyncTasks: wire.async_tasks ?? [],

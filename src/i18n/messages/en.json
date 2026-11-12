@@ -4338,6 +4338,13 @@
         "scheduledWakeupAt": "Scheduled wakeup for {time}",
         "scheduledTask": "Scheduled task"
       },
+      "liveRuns": {
+        "count": "{count} running",
+        "awaiting": "A sub-agent is waiting for you",
+        "groupDelegations": "Delegations",
+        "background": "Background",
+        "delegatedFallback": "Delegated sub-agent"
+      },
       "remoteControl": {
         "title": "Remote Control is on",
         "open": "Open in browser",
