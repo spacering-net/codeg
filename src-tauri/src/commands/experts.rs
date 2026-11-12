@@ -485,18 +485,16 @@ fn path_is_reparse_point(_path: &Path) -> bool {
 /// filesystem is case-insensitive but `Path` comparison is not — canonical
 /// forms can still differ in drive-letter case or user-supplied casing.
 fn paths_equivalent(a: &Path, b: &Path) -> bool {
-    if a == b {
-        return true;
-    }
     #[cfg(windows)]
     {
-        let a_s = a.as_os_str().to_string_lossy();
-        let b_s = b.as_os_str().to_string_lossy();
-        a_s.eq_ignore_ascii_case(b_s.as_ref())
+        a == b
+            || a.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
     }
     #[cfg(not(windows))]
     {
-        false
+        a == b
     }
 }
 
