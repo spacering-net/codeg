@@ -2,6 +2,7 @@
 
 import {
   readKimiMcpOAuth,
+  rebindKimiMcpOAuth,
   startKimiMcpOAuth,
   stripKimiMcpOAuth,
   updateKimiMcpOAuth,
@@ -1844,6 +1845,40 @@ function recordOutOfTurnToolCall(
   return next
 }
 
+/** Keep the Kimi OAuth bindings this client established when a newer snapshot
+ *  replaces the live message (see `rebindKimiMcpOAuth`). Matched by tool-call
+ *  id; a call the snapshot no longer has, or has settled, loses its binding. */
+function carryKimiMcpOAuth(
+  previous: LiveMessage | null,
+  hydrated: LiveMessage | null
+): LiveMessage | null {
+  if (!previous || !hydrated) return hydrated
+  const bound = new Map<string, ToolCallMeta>()
+  for (const block of previous.content) {
+    if (block.type === "tool_call" && readKimiMcpOAuth(block.info.meta)) {
+      bound.set(block.info.tool_call_id, block.info.meta)
+    }
+  }
+  if (bound.size === 0) return hydrated
+  let changed = false
+  const content = hydrated.content.map((block) => {
+    if (block.type !== "tool_call") return block
+    const previousMeta = bound.get(block.info.tool_call_id)
+    if (previousMeta === undefined) return block
+    changed = true
+    return {
+      ...block,
+      info: {
+        ...block.info,
+        // The bound name, as `mergeToolCallUpdate` keeps it while live.
+        title: readKimiMcpOAuth(previousMeta)?.toolName ?? block.info.title,
+        meta: rebindKimiMcpOAuth(previousMeta, block.info),
+      },
+    }
+  })
+  return changed ? { ...hydrated, content } : hydrated
+}
+
 type ToolCallUpdateAction = Extract<Action, { type: "TOOL_CALL_UPDATE" }>
 
 /** Fold one `tool_call_update` into the tool call it revises. Shared by the
@@ -2193,7 +2228,9 @@ function connectionsReducer(
         return next
       }
 
-      const hydratedLiveMessage = action.patch.liveMessage
+      const hydratedLiveMessage = sameSession
+        ? carryKimiMcpOAuth(current.liveMessage, action.patch.liveMessage)
+        : action.patch.liveMessage
       const hydratedPendingPermission = mergePendingPermissionWithLiveMessage(
         action.patch.pendingPermission,
         hydratedLiveMessage ?? current.liveMessage

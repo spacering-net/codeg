@@ -76,6 +76,34 @@ export function startKimiMcpOAuth(
   }
 }
 
+/** A newer snapshot replaces a live call whose opening this client saw. The
+ * snapshot keeps Kimi's latest status as the call's title (the backend's
+ * `KimiToolTitles`) but cannot carry the binding, so keep the identity bound
+ * locally and re-derive phase and URL from the snapshot's title and status,
+ * never from a URL held before. Returns null when `previous` was unbound. */
+export function rebindKimiMcpOAuth(
+  previous: Meta,
+  snapshot: { title: string; status: string; meta: Meta }
+): Meta | null {
+  const bound = readKimiMcpOAuth(previous)
+  if (!bound) return null
+  return updateKimiMcpOAuth(
+    {
+      ...snapshot.meta,
+      [KIMI_MCP_OAUTH_META]: { ...bound, phase: "pending", url: null },
+    },
+    {
+      title: snapshot.title,
+      status: null,
+      content: null,
+      raw_input: null,
+      raw_output: null,
+      meta: null,
+    },
+    snapshot.status
+  )
+}
+
 const WAIT_SUFFIX =
   "\n\nWaiting for the OAuth callback (timeout 15 min). If you cancel, call this tool again to restart the flow."
 

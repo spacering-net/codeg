@@ -2655,6 +2655,100 @@ describe("AcpConnectionsProvider permission request details", () => {
     }
   })
 
+  it("keeps a seen Kimi OAuth binding across a newer snapshot and re-derives its link", async () => {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "kimi_code", "/tmp/x", "sess-1")
+    })
+    const handlers = latestAttachHandlers()
+    const url =
+      "https://auth.example.test/authorize?state=a%2Bb&redirect_uri=http%3A%2F%2F127.0.0.1%3A43127%2Fcallback"
+    const progress = `Open this URL in your browser to authorize "notion":\n\n${url}\n\nWaiting for the OAuth callback (timeout 15 min). If you cancel, call this tool again to restart the flow.`
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "prompting",
+    } as EventEnvelope)
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "tool_call",
+      tool_call_id: "auth-1",
+      title: "mcp__notion__authenticate",
+      kind: "other",
+      status: "pending",
+      content: null,
+      raw_input: null,
+      raw_output: null,
+    } as EventEnvelope)
+    const info = (
+      id: string,
+      title: string,
+      status: string,
+      meta: Record<string, unknown> | null = null
+    ) => ({
+      type: "tool_call" as const,
+      info: {
+        tool_call_id: id,
+        title,
+        kind: "other",
+        status,
+        content: "{}",
+        raw_input: "{}",
+        raw_output_chunks: [],
+        raw_output_total_bytes: 0,
+        locations: null,
+        meta,
+        images: [],
+      },
+    })
+    const hydrate = (eventSeq: number, content: unknown[]) => {
+      h.denormalizeSnapshot.mockReturnValue({
+        ...snapshotBase(),
+        status: "prompting",
+        hasPrompted: true,
+        eventSeq,
+        liveMessage: { id: "lm", role: "assistant", content, startedAt: 1 },
+      })
+      hydrateSnapshot(handlers, {
+        event_seq: eventSeq,
+      } as unknown as LiveSessionSnapshot)
+    }
+    const call = (id: string) => {
+      const block = h
+        .store!.getConnection(TAB)!
+        .liveMessage?.content.find(
+          (b) => b.type === "tool_call" && b.info.tool_call_id === id
+        )
+      return block?.type === "tool_call" ? block.info : null
+    }
+    // The snapshot keeps Kimi's latest status as the title (the backend's
+    // `KimiToolTitles`); the URL comes from it, not from earlier local state.
+    hydrate(10, [
+      info("auth-1", progress, "in_progress", { keep: 1 }),
+      // Never seen opening: fails closed even with the very same status text.
+      info("auth-2", progress, "in_progress"),
+    ])
+    expect(call("auth-1")?.title).toBe("mcp__notion__authenticate")
+    expect(call("auth-1")?.meta).toMatchObject({
+      keep: 1,
+      "codeg.kimiMcpOAuth": { phase: "waiting", url, server: "notion" },
+    })
+    expect(call("auth-2")?.meta?.["codeg.kimiMcpOAuth"]).toBeUndefined()
+    hydrate(20, [
+      info("auth-1", "Authorized — reconnecting notion…", "in_progress"),
+    ])
+    expect(call("auth-1")?.meta?.["codeg.kimiMcpOAuth"]).toMatchObject({
+      phase: "reconnecting",
+      url: null,
+    })
+    hydrate(30, [info("auth-1", "Authenticating notion", "completed")])
+    expect(call("auth-1")?.meta?.["codeg.kimiMcpOAuth"]).toBeNull()
+    hydrate(40, [info("auth-1", progress, "in_progress")])
+    expect(call("auth-1")?.meta?.["codeg.kimiMcpOAuth"]).toBeUndefined()
+  })
+
   it("keeps a Monitor a monitor through the frames that announce it", async () => {
     // claude-agent-acp 0.98.0, recorded: the call is announced by its tool
     // name with no input, and the input follows in an update that names no
