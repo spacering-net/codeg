@@ -14,10 +14,13 @@ const deliverMock = vi.fn().mockResolvedValue("https://example.test/pull/4")
 const settingsMock = vi.fn()
 const remoteMock = vi.fn()
 
+const setWritebackMock = vi.fn().mockResolvedValue(undefined)
+
 vi.mock("@/lib/api", () => ({
   workTaskDeliverPr: (...args: unknown[]) => deliverMock(...args),
   workTaskSettingsEffective: (...args: unknown[]) => settingsMock(...args),
   folderForgeRemote: (...args: unknown[]) => remoteMock(...args),
+  workTaskSetWriteback: (...args: unknown[]) => setWritebackMock(...args),
 }))
 
 vi.mock("sonner", () => ({
@@ -140,9 +143,12 @@ describe("TaskDeliverPrDialog", () => {
       name: /Delete the worktree after pushing/,
     })
     await waitFor(() => expect(box).toBeChecked())
-    // A push-back names nothing: whether it finishes the task and the
-    // cleanup box are its only controls.
-    expect(screen.getAllByRole("checkbox")).toHaveLength(2)
+    // A push-back names nothing: whether it finishes the task, the cleanup
+    // box and whether the thread hears about it are its only controls.
+    expect(screen.getAllByRole("checkbox")).toHaveLength(3)
+    expect(
+      screen.getByRole("checkbox", { name: /Comment in the item's thread/ })
+    ).toBeInTheDocument()
     expect(
       screen.getByRole("checkbox", {
         name: "Mark the task as done after pushing",
@@ -153,6 +159,8 @@ describe("TaskDeliverPrDialog", () => {
     await waitFor(() =>
       expect(deliverMock).toHaveBeenCalledWith(7, null, false, true, true)
     )
+    // The thread's answer goes first, bound to the run on screen.
+    expect(setWritebackMock).toHaveBeenCalledWith(7, 1, false, {})
   })
 
   it("keeps the worktree when the box is unchecked", async () => {
@@ -297,8 +305,9 @@ describe("TaskDeliverPrDialog", () => {
     expect(
       screen.queryByRole("checkbox", { name: /Delete the worktree/ })
     ).toBeNull()
-    // Whether the push finishes the task is still the user's to say.
-    expect(screen.getAllByRole("checkbox")).toHaveLength(1)
+    // Whether the push finishes the task (and whether its thread hears about
+    // it) is still the user's to say.
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2)
 
     await userEvent.click(screen.getByRole("button", { name: "Push" }))
     await waitFor(() =>

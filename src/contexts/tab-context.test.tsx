@@ -2666,6 +2666,14 @@ describe("TabProvider tab groups", () => {
   describe("moveTabToGroup with index (drag drops)", () => {
     /** 4 tabs, then split-move conv-3 right → home [1,2,4], g1 [3]. */
     async function splitFour() {
+      // Conversation 3's row lives in folder 2 in the shared fixture; put it in
+      // folder 1 like the tabs here, or the tab-follows-its-row invariant
+      // re-points (and saves) it before the assertions run.
+      useAppWorkspaceStore.setState({
+        conversations: defaultConversationsMock.map((c) =>
+          c.id === 3 ? { ...c, folder_id: 1 } : c
+        ),
+      })
       await renderWithTabs([
         tabItem(1, 1, true),
         tabItem(1, 2),
@@ -3010,4 +3018,306 @@ it("leaves an empty folder scope empty after the final tab closes", async () => 
   act(() => useFolderTabsStore.getState().activateScope(2))
   expect(useTabStore.getState().rawTabs).toEqual([])
   expect(useTabStore.getState().activeTabId).toBeNull()
+})
+
+describe("TabProvider: a conversation moved to another project", () => {
+  const chatFolder: FolderDetail = {
+    id: 42,
+    name: "Chat",
+    path: "/data/chat-sessions/2026-11-12/abc",
+    git_branch: null,
+    default_agent_type: null,
+    last_opened_at: "2026-11-12T00:00:00Z",
+    sort_order: 99,
+    color: "inherit",
+    parent_id: null,
+    kind: "chat",
+    alias: null,
+    group_id: null,
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    seedWorkspaceStore()
+    listOpenedTabsMock.mockResolvedValue({ items: [], version: 0 })
+    saveOpenedTabsMock.mockImplementation(
+      (items: OpenedTab[], expected: number) =>
+        Promise.resolve({ accepted: true, version: expected + 1, tabs: items })
+    )
+    getFolderConversationMock.mockReset()
+    getFolderConversationMock.mockReturnValue(new Promise(() => {}))
+    tabsChangedHandler = null
+    subscribeMock.mockImplementation((event: string, handler: unknown) => {
+      if (event === TABS_CHANGED_EVENT)
+        tabsChangedHandler = handler as (change: TabsChanged) => void
+      return Promise.resolve(() => {})
+    })
+    onTransportReconnectMock.mockReturnValue(() => {})
+  })
+
+  async function renderWithTabs(items: OpenedTab[], version = 1) {
+    listOpenedTabsMock.mockResolvedValue({ items, version })
+    renderTabs()
+    await act(async () => {})
+  }
+
+  const store = () => useTabStore.getState()
+  const lastSaveCall = () => {
+    const calls = saveOpenedTabsMock.mock.calls
+    return calls[calls.length - 1]
+  }
+  const row = (id: number) =>
+    useAppWorkspaceStore.getState().conversations.find((c) => c.id === id)!
+  const moveRow = (id: number, patch: Partial<DbConversationSummary>) =>
+    act(() => {
+      useAppWorkspaceStore
+        .getState()
+        .applyConversationUpsert({ ...row(id), ...patch })
+    })
+
+  it("re-points the open tab in place and saves it under the new folder", async () => {
+    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
+    const before = store().rawTabs.map((t) => t.id)
+
+    moveRow(1, { folder_id: 2, origin_cwd: "/repo" })
+
+    // Same id, slot and focus — only the folder moved, and the working dir is
+    // dropped so the connection re-derives it from the new folder.
+    expect(store().rawTabs.map((t) => t.id)).toEqual(before)
+    const tab = store().rawTabs.find((t) => t.conversationId === 1)!
+    expect(tab.folderId).toBe(2)
+    expect(tab.workingDir).toBeUndefined()
+    expect(store().activeTabId).toBe(tab.id)
+    expect(screen.getByTestId("active-folder")).toHaveTextContent("2")
+
+    await waitFor(() => expect(saveOpenedTabsMock).toHaveBeenCalled(), {
+      timeout: 2000,
+    })
+    const saved = lastSaveCall()[0] as OpenedTab[]
+    expect(saved).toEqual([
+      expect.objectContaining({ conversation_id: 1, folder_id: 2 }),
+      expect.objectContaining({ conversation_id: 2, folder_id: 1 }),
+    ])
+
+    // The server's own re-pointed set then lands without a second tab.
+    act(() => {
+      tabsChangedHandler?.({
+        version: 5,
+        origin: "server",
+        tabs: [tabItem(2, 1, true), tabItem(1, 2)],
+      })
+    })
+    expect(store().rawTabs.filter((t) => t.conversationId === 1)).toHaveLength(
+      1
+    )
+    expect(store().rawTabs.map((t) => t.id)).toEqual(before)
+  })
+
+  it("corrects a remote snapshot that still has the old folder, and pushes the fix", async () => {
+    await renderWithTabs([tabItem(1, 2, true)])
+    moveRow(1, { folder_id: 2 })
+    saveOpenedTabsMock.mockClear()
+
+    // Another (stale) client saved the conversation's tab under folder 1.
+    act(() => {
+      tabsChangedHandler?.({
+        version: 9,
+        origin: "stale-client",
+        tabs: [tabItem(1, 2, true), tabItem(1, 1)],
+      })
+    })
+
+    const tab = store().rawTabs.find((t) => t.conversationId === 1)!
+    expect(tab.folderId).toBe(2)
+    await waitFor(() => expect(saveOpenedTabsMock).toHaveBeenCalled(), {
+      timeout: 2000,
+    })
+    expect(lastSaveCall()[1]).toBe(9)
+    expect(lastSaveCall()[0]).toContainEqual(
+      expect.objectContaining({ conversation_id: 1, folder_id: 2 })
+    )
+  })
+
+  it("keeps a close this client has not pushed yet when another client moves the conversation", async () => {
+    let resolveSave: (r: SaveTabsOutcome) => void = () => {}
+    saveOpenedTabsMock.mockImplementation(
+      () =>
+        new Promise<SaveTabsOutcome>((res) => {
+          resolveSave = res
+        })
+    )
+    await renderWithTabs([tabItem(1, 2, true), tabItem(1, 1)])
+    // Close conversation 1 here; the save is debounced, so the server still
+    // has it…
+    act(() => {
+      latestContext?.closeTab("conv-1-codex-1")
+    })
+    // …when another client moves it: the server re-points its tab and
+    // broadcasts the new set (the row upsert comes first).
+    moveRow(1, { folder_id: 2 })
+    act(() => {
+      tabsChangedHandler?.({
+        version: 2,
+        origin: "server",
+        tabs: [tabItem(1, 2, true), tabItem(2, 1)],
+      })
+    })
+
+    expect(store().rawTabs.some((t) => t.conversationId === 1)).toBe(false)
+    // …and the close is pushed against the version just learned.
+    await waitFor(() => expect(saveOpenedTabsMock).toHaveBeenCalled(), {
+      timeout: 2000,
+    })
+    const [items, expected] = lastSaveCall()
+    expect(expected).toBe(2)
+    expect(items).toEqual([expect.objectContaining({ conversation_id: 2 })])
+    resolveSave({ accepted: true, version: 3, tabs: items as OpenedTab[] })
+  })
+
+  it("follows a moved tab from the snapshot even before the row upsert lands", async () => {
+    await renderWithTabs([tabItem(1, 1, true)])
+    const id = store().rawTabs[0].id
+    // This client has not seen the row move yet, but its list is mid-refetch,
+    // so the snapshot's folder is not second-guessed.
+    act(() => {
+      useAppWorkspaceStore.setState({ conversationsLoading: true })
+    })
+    act(() => {
+      tabsChangedHandler?.({
+        version: 2,
+        origin: "server",
+        tabs: [tabItem(2, 1, true)],
+      })
+    })
+    // Same tab (id, focus) — not a close plus a fresh open.
+    expect(store().rawTabs).toHaveLength(1)
+    expect(store().rawTabs[0].id).toBe(id)
+    expect(store().rawTabs[0].folderId).toBe(2)
+    expect(store().activeTabId).toBe(id)
+  })
+
+  it("collapses a snapshot that lists one conversation under two folders", async () => {
+    await renderWithTabs([tabItem(1, 2, true)])
+    moveRow(1, { folder_id: 2 })
+    saveOpenedTabsMock.mockClear()
+    act(() => {
+      tabsChangedHandler?.({
+        version: 4,
+        origin: "stale-client",
+        tabs: [tabItem(1, 2, true), tabItem(1, 1), tabItem(2, 1)],
+      })
+    })
+    const forOne = store().rawTabs.filter((t) => t.conversationId === 1)
+    expect(forOne).toHaveLength(1)
+    expect(forOne[0].folderId).toBe(2)
+    const ids = store().rawTabs.map((t) => t.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    await waitFor(() => expect(saveOpenedTabsMock).toHaveBeenCalled(), {
+      timeout: 2000,
+    })
+    expect(
+      (lastSaveCall()[0] as OpenedTab[]).filter((t) => t.conversation_id === 1)
+    ).toEqual([expect.objectContaining({ folder_id: 2 })])
+  })
+
+  it("keeps one tab when the move makes it a duplicate of an open one", async () => {
+    await renderWithTabs([tabItem(2, 1, true), tabItem(1, 1)])
+    // The row was already in folder 2 per the server, but this client still
+    // listed it under folder 1 too (e.g. two clients raced the move).
+    moveRow(1, { folder_id: 2 })
+    expect(store().rawTabs.filter((t) => t.conversationId === 1)).toHaveLength(
+      1
+    )
+    expect(store().rawTabs[0].folderId).toBe(2)
+  })
+
+  it("waits for a refetch to settle before trusting the rows", async () => {
+    await renderWithTabs([tabItem(1, 1, true)])
+    act(() => {
+      useAppWorkspaceStore.setState({ conversationsLoading: true })
+    })
+    // Mid-refetch the list may be older than the tabs; nothing moves…
+    act(() => {
+      useAppWorkspaceStore.setState({
+        conversations: defaultConversationsMock.map((c) =>
+          c.id === 1 ? { ...c, folder_id: 2 } : c
+        ),
+      })
+    })
+    expect(store().rawTabs[0].folderId).toBe(1)
+    // …until it settles.
+    act(() => {
+      useAppWorkspaceStore.setState({ conversationsLoading: false })
+    })
+    expect(store().rawTabs[0].folderId).toBe(2)
+  })
+
+  it("takes a sent chat tab out of chat mode when the chat moves into a project", async () => {
+    act(() => {
+      useAppWorkspaceStore.setState({
+        allFolders: [...defaultFoldersMock, chatFolder],
+      })
+    })
+    await renderWithTabs([])
+    act(() => {
+      latestContext?.openChatModeTab()
+    })
+    const draftId = store().activeTabId!
+    act(() => {
+      latestContext?.setChatDraftWorkingDir(draftId, chatFolder.path)
+    })
+    // First send: the chat row is created and the draft binds to it, keeping
+    // its in-memory chat flag.
+    const chatRow: DbConversationSummary = {
+      ...defaultConversationsMock[0],
+      id: 7,
+      folder_id: chatFolder.id,
+      kind: "chat",
+      title: "Chat",
+    }
+    act(() => {
+      useAppWorkspaceStore.getState().applyConversationUpsert(chatRow)
+      latestContext?.bindConversationTab(
+        draftId,
+        7,
+        "codex",
+        "Chat",
+        -3,
+        chatFolder.id,
+        chatFolder.path
+      )
+    })
+    expect(store().rawTabs.find((t) => t.id === draftId)?.isChat).toBe(true)
+
+    // Moved into project 2 without closing or reopening the tab.
+    moveRow(7, { folder_id: 2, kind: "regular", origin_cwd: chatFolder.path })
+
+    const tab = store().rawTabs.find((t) => t.id === draftId)!
+    expect(tab.folderId).toBe(2)
+    expect(tab.isChat).toBe(false)
+    expect(tab.workingDir).toBeUndefined()
+    expect(tab.runtimeConversationId).toBe(-3)
+  })
+
+  it("leaves an unsent chat draft in chat mode", async () => {
+    await renderWithTabs([tabItem(1, 1)])
+    act(() => {
+      latestContext?.openChatModeTab()
+    })
+    const draftId = store().activeTabId!
+    moveRow(1, { folder_id: 2 })
+    expect(store().rawTabs.find((t) => t.id === draftId)?.isChat).toBe(true)
+  })
+
+  it("opens a conversation in its current folder whatever the caller remembered", async () => {
+    await renderWithTabs([])
+    moveRow(1, { folder_id: 2 })
+    // An automation run, or the closed-tab stack, still names folder 1.
+    act(() => {
+      latestContext?.openTab(1, 1, "codex", true, "First")
+    })
+    const tab = store().rawTabs.find((t) => t.conversationId === 1)!
+    expect(tab.folderId).toBe(2)
+    expect(tab.id).toBe("conv-2-codex-1")
+  })
 })

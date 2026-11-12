@@ -1,7 +1,8 @@
 "use client"
 
 /**
- * Live AIR async tasks, pinned above the transcript in `conversation-shell`.
+ * One live AIR async task, as the composer's running list draws it (the
+ * "Background tasks" group of `LiveRunsPopover`).
  *
  * These are the agent's NON-AGENT background jobs — Claude's
  * `Bash(run_in_background)` shells, workflows and monitors (claude-agent-acp
@@ -10,7 +11,7 @@
  * already draws the tool call that LAUNCHED such a job, but it cannot say
  * whether the job is still alive: the poll-derived card explicitly refuses to
  * claim "running" because a transcript can't tell a live task from one whose
- * CLI died, and codex's launching call simply never settles. This strip is the
+ * CLI died, and codex's launching call simply never settles. This row is the
  * authoritative answer, and it is the only surface that can offer a stop (Grok
  * has no stop request, so its rows never offer one; nor does a Claude Code
  * monitor's, which claude-agent-acp 0.98.0 publishes as unstoppable).
@@ -21,31 +22,16 @@
  * Claude Code's transcript file, which cannot say whether the turn is still
  * running; this row can, and its stop interrupts the turn.
  *
- * ABOVE the messages rather than docked under the composer: the strip is the
- * status of work happening NOW, and the composer end of the shell is where
- * transient things (a retry line, the last error) come and go while the user is
- * reading the tail of the turn. Anchored to the top it stays put while the
- * transcript scrolls under it, so a task's row doesn't shift out from under the
- * pointer on its way to the stop button.
- *
- * Only non-terminal tasks render (`liveAsyncTasks`). A settled task leaves at
- * once — its outcome belongs to the transcript, and a permanent list of
- * finished jobs would grow all session. Terminal rows stay in the reducer table
- * as the ids later corrections revise; see `lib/async-tasks.ts`.
- *
- * Every row it holds is room the transcript under it loses, so the strip
- * stays small however much runs: past one task it opens on a header — what it
- * lists and how many — that folds the list away to that one line, and the
- * list itself stops a little past three rows and scrolls. One task is a single
- * row, with nothing to fold.
+ * Only non-terminal tasks get a row (`liveAsyncTasks`). A settled task leaves
+ * at once — its outcome belongs to the transcript. Terminal rows stay in the
+ * reducer table as the ids later corrections revise; see `lib/async-tasks.ts`.
  */
 
-import { useCallback, useId, useMemo, useState } from "react"
+import { useCallback, useMemo } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import {
   Activity,
   Bot,
-  ChevronDown,
   FileText,
   Loader2,
   PauseCircle,
@@ -55,7 +41,6 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { cn } from "@/lib/utils"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
@@ -63,14 +48,11 @@ import { formatTokenCount } from "@/lib/token-format"
 import {
   AUTONOMOUS_TURN_TASK_TYPE,
   autonomousTurnCause,
-  liveAsyncTasks,
 } from "@/lib/async-tasks"
 import type { AsyncTaskRecord } from "@/lib/types"
 
-/** A line of the strip, its header's too: 2rem tall whether it carries buttons
- *  or not, so the list's height says how many rows it holds and its cap cuts
- *  through a row. */
-const ROW_BOX = "flex min-h-8 items-center gap-2 px-4 py-1 text-xs"
+/** A line of the running list: 2rem tall whether it carries buttons or not. */
+export const RUN_ROW_BOX = "flex min-h-8 items-center gap-2 px-3 py-1 text-xs"
 
 /** The adapter's friendly `taskType` vocabulary. An unmapped future type keeps
  *  the generic glyph rather than rendering nothing. */
@@ -81,114 +63,14 @@ const TASK_ICONS: Record<string, typeof TerminalIcon> = {
   [AUTONOMOUS_TURN_TASK_TYPE]: Bot,
 }
 
-export function AsyncTaskStrip({
-  tasks,
-  onStop,
-  agentName,
-}: {
-  tasks: AsyncTaskRecord[]
-  /** Resolves to the adapter's verdict: `false` means it declined to stop the
-   *  task. Undefined disables every stop button (no live connection to ask). */
-  onStop?: (taskId: string) => Promise<boolean>
-  /** The agent's display name, for the row of a turn it started on its own.
-   *  Without it that row keeps the adapter's own (English) name. */
-  agentName?: string
-}) {
-  const t = useTranslations("Folder.chat.asyncTasks")
-  // Kept while the conversation is on screen — the strip stays mounted while
-  // its tasks come and go — so a list folded away stays folded as more start.
-  const [open, setOpen] = useState(true)
-  const listId = useId()
-  // The tasks with a stop on its way. Held here, not by their rows: a row
-  // unmounts while the list is folded away, and back in view before the
-  // adapter has answered it must not offer the stop again.
-  const [stopping, setStopping] = useState<ReadonlySet<string>>(NO_TASKS)
-  const stop = useCallback(
-    async (taskId: string) => {
-      if (!onStop) return
-      setStopping((prev) => new Set(prev).add(taskId))
-      try {
-        await onStop(taskId)
-      } finally {
-        // Deliberately NOT left latched on success. The row disappears when
-        // the task's terminal state arrives on the wire, which is the real
-        // confirmation; keeping the button disabled on a `false` verdict (the
-        // adapter declined) would strand the user with no way to try again.
-        setStopping((prev) => {
-          const next = new Set(prev)
-          next.delete(taskId)
-          return next
-        })
-      }
-    },
-    [onStop]
-  )
-  const live = liveAsyncTasks(tasks)
-  if (live.length === 0) return null
-
-  // One task is a row of its own, with nothing to fold. The list keeps its
-  // place either way, so a row stays the same row as tasks come and go.
-  const several = live.length > 1
-  return (
-    <div className="border-b border-border bg-muted/30">
-      {several ? (
-        // A row like the rows under it: as tall, the chevron over their
-        // icons.
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls={open ? listId : undefined}
-          onClick={() => setOpen(!open)}
-          className={cn(
-            ROW_BOX,
-            "group/strip w-full min-w-0 cursor-pointer text-start outline-none focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-ring/50"
-          )}
-        >
-          <ChevronDown
-            aria-hidden="true"
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground transition-transform group-hover/strip:text-foreground",
-              !open && "-rotate-90 rtl:rotate-90"
-            )}
-          />
-          <span className="min-w-0 truncate font-medium text-muted-foreground group-hover/strip:text-foreground">
-            {t("title")}
-          </span>
-          <span className="shrink-0 text-muted-foreground tabular-nums">
-            {live.length}
-          </span>
-        </button>
-      ) : null}
-      {open || !several ? (
-        // Three rows and half of the next (rows are 2rem) — a row cut
-        // through says the list goes on — then it scrolls.
-        <ScrollArea className="max-h-28">
-          <div id={listId}>
-            {live.map((task) => (
-              <AsyncTaskRow
-                key={task.task_id}
-                task={task}
-                onStop={onStop ? stop : undefined}
-                stopping={stopping.has(task.task_id)}
-                agentName={agentName}
-              />
-            ))}
-          </div>
-        </ScrollArea>
-      ) : null}
-    </div>
-  )
-}
-
-const NO_TASKS: ReadonlySet<string> = new Set()
-
-function AsyncTaskRow({
+export function AsyncTaskRow({
   task,
   onStop,
   stopping,
   agentName,
 }: {
   task: AsyncTaskRecord
+  /** Undefined hides the stop (no live connection to ask). */
   onStop?: (taskId: string) => void
   /** A stop for this task is on its way. */
   stopping: boolean
@@ -264,7 +146,7 @@ function AsyncTaskRow({
   ).filter(Boolean) as string[]
 
   return (
-    <div className={ROW_BOX}>
+    <div className={RUN_ROW_BOX}>
       {paused ? (
         <PauseCircle
           aria-hidden="true"
@@ -286,7 +168,7 @@ function AsyncTaskRow({
         )}
       </span>
       {meta.length > 0 && (
-        <span className="min-w-0 truncate text-muted-foreground/70 tabular-nums">
+        <span className="min-w-0 flex-1 basis-0 truncate text-muted-foreground/70 tabular-nums">
           {meta.join(" · ")}
         </span>
       )}

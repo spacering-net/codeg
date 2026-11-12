@@ -1,6 +1,14 @@
 "use client"
 
 import {
+  readKimiMcpOAuth,
+  rebindKimiMcpOAuth,
+  startKimiMcpOAuth,
+  stripKimiMcpOAuth,
+  updateKimiMcpOAuth,
+} from "@/lib/kimi-mcp-oauth"
+
+import {
   createContext,
   useCallback,
   useContext,
@@ -58,6 +66,7 @@ import type {
   ActiveDelegationState,
   AsyncTaskDelta,
   AsyncTaskRecord,
+  BackgroundOutstandingTask,
   AvailableCommandInfo,
   ConfigStaleKind,
   ConnectionStatus,
@@ -118,6 +127,10 @@ import {
 } from "@/lib/acp-error-presentation"
 import { dismissNotification, notify, type NotifyAction } from "@/lib/notify"
 import type { SnapshotPatch } from "@/lib/snapshot-denormalize"
+import {
+  appendLiveToolRawOutput,
+  replaceLiveToolRawOutput,
+} from "@/lib/live-tool-output"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
   localizeConfigOptionLabel,
@@ -420,8 +433,8 @@ export interface ConnectionState {
   toolApprovals: ToolApprovalMap
   /** AIR async tasks — Claude's background shells / workflows / monitors (see
    *  `lib/async-tasks.ts` for the merge contract). Retained after they settle,
-   *  because the adapter keeps revising a finished task; the strip filters to
-   *  the live ones itself. */
+   *  because the adapter keeps revising a finished task; the composer's
+   *  running list takes the live ones itself (`lib/live-runs.ts`). */
   asyncTasks: AsyncTaskRecord[]
   /**
    * One-line localized message for this session's current turn / connection
@@ -522,6 +535,15 @@ export interface ConnectionState {
    * popover warns before interrupting that work.
    */
   backgroundOutstanding: number
+  /**
+   * The same tasks one by one, mirrored from the event's `outstanding_tasks`
+   * (and the snapshot's `background_outstanding_tasks`): the composer's
+   * running list reads the background sub-agents still running after their
+   * turn ended from here — the launch cards can't say, a transcript can't tell
+   * a live task from a dead one. Every event carries the whole set, so each
+   * one replaces it.
+   */
+  backgroundTasks: readonly BackgroundOutstandingTask[]
   /**
    * Child connection ids of the codeg delegations (`delegate_to_agent`) this
    * connection still has running, mirrored from the backend's
@@ -670,6 +692,8 @@ type Action =
       type: "SET_BACKGROUND_OUTSTANDING"
       contextKey: string
       outstanding: number
+      /** The event's `outstanding_tasks`, whole (absent on the wire = none). */
+      tasks: readonly BackgroundOutstandingTask[]
     }
   | {
       // A codeg delegation this connection started began (`running`) or
@@ -1072,7 +1096,6 @@ export function streamFlushDelayMs(liveRunChars: number): number {
 }
 
 type ConnectionsMap = Map<string, ConnectionState>
-const MAX_LIVE_TOOL_RAW_OUTPUT_CHARS = 200_000
 const MAX_BUFFERED_UNMAPPED_EVENTS_PER_CONNECTION = 64
 const MAX_BUFFERED_UNMAPPED_CONNECTIONS = 128
 /**
@@ -1695,6 +1718,26 @@ function ensureLiveMessage(prev: LiveMessage | null): LiveMessage {
  *  of them) keeps a stable reference through `connRenderEqual`. */
 const EMPTY_STEERED_MESSAGE_IDS: string[] = []
 const EMPTY_DELEGATED_CHILDREN: string[] = []
+const EMPTY_BACKGROUND_TASKS: readonly BackgroundOutstandingTask[] = []
+
+/** Whether two outstanding-task sets list the same tasks, the same way. */
+function sameBackgroundTasks(
+  a: readonly BackgroundOutstandingTask[],
+  b: readonly BackgroundOutstandingTask[]
+): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  return a.every((task, i) => {
+    const other = b[i]
+    return (
+      task.task_id === other.task_id &&
+      task.kind === other.kind &&
+      (task.tool_use_id ?? null) === (other.tool_use_id ?? null) &&
+      (task.description ?? null) === (other.description ?? null) &&
+      task.started_at_ms === other.started_at_ms
+    )
+  })
+}
 
 /** Last time an out-of-turn drop was logged — module-level sampling clock. */
 let lastOutOfTurnDropLogAt = 0
@@ -1866,6 +1909,40 @@ function recordOutOfTurnToolCall(
   return next
 }
 
+/** Keep the Kimi OAuth bindings this client established when a newer snapshot
+ *  replaces the live message (see `rebindKimiMcpOAuth`). Matched by tool-call
+ *  id; a call the snapshot no longer has, or has settled, loses its binding. */
+function carryKimiMcpOAuth(
+  previous: LiveMessage | null,
+  hydrated: LiveMessage | null
+): LiveMessage | null {
+  if (!previous || !hydrated) return hydrated
+  const bound = new Map<string, ToolCallMeta>()
+  for (const block of previous.content) {
+    if (block.type === "tool_call" && readKimiMcpOAuth(block.info.meta)) {
+      bound.set(block.info.tool_call_id, block.info.meta)
+    }
+  }
+  if (bound.size === 0) return hydrated
+  let changed = false
+  const content = hydrated.content.map((block) => {
+    if (block.type !== "tool_call") return block
+    const previousMeta = bound.get(block.info.tool_call_id)
+    if (previousMeta === undefined) return block
+    changed = true
+    return {
+      ...block,
+      info: {
+        ...block.info,
+        // The bound name, as `mergeToolCallUpdate` keeps it while live.
+        title: readKimiMcpOAuth(previousMeta)?.toolName ?? block.info.title,
+        meta: rebindKimiMcpOAuth(previousMeta, block.info),
+      },
+    }
+  })
+  return changed ? { ...hydrated, content } : hydrated
+}
+
 type ToolCallUpdateAction = Extract<Action, { type: "TOOL_CALL_UPDATE" }>
 
 /** Fold one `tool_call_update` into the tool call it revises. Shared by the
@@ -1875,51 +1952,21 @@ function mergeToolCallUpdate(
   info: ToolCallInfo,
   update: ToolCallUpdateAction
 ): ToolCallInfo {
-  let newChunks: string[]
-  let newTotalBytes: number
+  const output =
+    update.raw_output === null || update.raw_output_append
+      ? appendLiveToolRawOutput(info, update.raw_output)
+      : replaceLiveToolRawOutput(update.raw_output)
 
-  if (update.raw_output === null) {
-    newChunks = info.raw_output_chunks
-    newTotalBytes = info.raw_output_total_bytes
-  } else if (update.raw_output_append) {
-    newChunks = [...info.raw_output_chunks, update.raw_output]
-    newTotalBytes = info.raw_output_total_bytes + update.raw_output.length
-
-    // 超限时从头部批量移除 chunks（单次 slice 替代循环 shift）
-    if (
-      newTotalBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS &&
-      newChunks.length > 1
-    ) {
-      let evictCount = 0
-      let evictedBytes = 0
-      while (
-        evictCount < newChunks.length - 1 &&
-        newTotalBytes - evictedBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS
-      ) {
-        evictedBytes += newChunks[evictCount].length
-        evictCount++
-      }
-      if (evictCount > 0) {
-        newChunks = newChunks.slice(evictCount)
-        newTotalBytes -= evictedBytes
-      }
-    }
-  } else {
-    // 非 append 模式（替换）
-    newChunks = [update.raw_output]
-    newTotalBytes = update.raw_output.length
-  }
-
+  const oauth = readKimiMcpOAuth(info.meta)
   return {
     ...info,
-    title: update.title ?? info.title,
+    title: oauth?.toolName ?? update.title ?? info.title,
     status: update.status ?? info.status,
     content: update.content ?? info.content,
     raw_input: update.raw_input ?? info.raw_input,
-    raw_output_chunks: newChunks,
+    ...output,
     locations: update.locations ?? info.locations,
-    meta: update.meta ?? info.meta,
-    raw_output_total_bytes: newTotalBytes,
+    meta: updateKimiMcpOAuth(info.meta, update, info.status),
     images: update.images !== null ? update.images : info.images,
   }
 }
@@ -2009,6 +2056,7 @@ function connectionsReducer(
         configStaleKind: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
+        backgroundTasks: EMPTY_BACKGROUND_TASKS,
         delegatedChildren: EMPTY_DELEGATED_CHILDREN,
         outOfTurnToolCalls: null,
         hasPrompted: false,
@@ -2076,6 +2124,7 @@ function connectionsReducer(
         configStaleKind: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
+        backgroundTasks: EMPTY_BACKGROUND_TASKS,
         delegatedChildren: EMPTY_DELEGATED_CHILDREN,
         outOfTurnToolCalls: null,
         hasPrompted: false,
@@ -2214,7 +2263,9 @@ function connectionsReducer(
         return next
       }
 
-      const hydratedLiveMessage = action.patch.liveMessage
+      const hydratedLiveMessage = sameSession
+        ? carryKimiMcpOAuth(current.liveMessage, action.patch.liveMessage)
+        : action.patch.liveMessage
       const hydratedPendingPermission = mergePendingPermissionWithLiveMessage(
         action.patch.pendingPermission,
         hydratedLiveMessage ?? current.liveMessage
@@ -2273,6 +2324,7 @@ function connectionsReducer(
         // recovers the pending-background count the one-shot events won't
         // replay for it, so its teardown gates hold.
         backgroundOutstanding: action.patch.backgroundOutstanding,
+        backgroundTasks: action.patch.backgroundTasks,
         // Current state too, and the only way a client that attaches while a
         // delegation runs learns of it: the running frame is one-shot.
         delegatedChildren: action.patch.delegatedChildren,
@@ -2392,11 +2444,16 @@ function connectionsReducer(
     case "SET_BACKGROUND_OUTSTANDING": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
-      if (conn.backgroundOutstanding === action.outstanding) return state
+      const sameTasks = sameBackgroundTasks(conn.backgroundTasks, action.tasks)
+      if (conn.backgroundOutstanding === action.outstanding && sameTasks) {
+        return state
+      }
       const next = new Map(state)
       next.set(action.contextKey, {
         ...conn,
         backgroundOutstanding: action.outstanding,
+        // Kept by reference while unchanged, so the running list's memo holds.
+        backgroundTasks: sameTasks ? conn.backgroundTasks : action.tasks,
       })
       return next
     }
@@ -2470,6 +2527,7 @@ function connectionsReducer(
     case "TOOL_CALL": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
+      const meta = startKimiMcpOAuth(conn.agentType, action.title, action.meta)
       // Out-of-turn wire tool activity stays OUT of `liveMessage` (the
       // transcript overlay renders that content — grafting it here recreated
       // the garbled-timeline bug), but its context is still recorded so a
@@ -2482,11 +2540,9 @@ function connectionsReducer(
           status: action.status,
           content: action.content,
           raw_input: action.raw_input,
-          raw_output_chunks:
-            action.raw_output !== null ? [action.raw_output] : [],
-          raw_output_total_bytes: action.raw_output?.length ?? 0,
+          ...replaceLiveToolRawOutput(action.raw_output),
           locations: action.locations,
-          meta: action.meta,
+          meta,
           images: action.images ?? [],
         }
         const next = new Map(state)
@@ -2525,21 +2581,16 @@ function connectionsReducer(
                 status: action.status ?? block.info.status,
                 content: action.content ?? block.info.content,
                 raw_input: action.raw_input ?? block.info.raw_input,
-                raw_output_chunks:
-                  action.raw_output !== null
-                    ? [action.raw_output]
-                    : block.info.raw_output_chunks,
-                raw_output_total_bytes:
-                  action.raw_output !== null
-                    ? action.raw_output.length
-                    : block.info.raw_output_total_bytes,
+                ...(action.raw_output !== null
+                  ? replaceLiveToolRawOutput(action.raw_output)
+                  : appendLiveToolRawOutput(block.info, null)),
                 // The block may be the placeholder a permission request drew
                 // before this frame was applied (the agent's announcement and
                 // its request reach codeg on separate paths, either first).
                 // The announcement is what names the tool
                 // (`_meta.claudeCode.toolName`), so its `_meta` must land.
                 locations: action.locations ?? block.info.locations,
-                meta: action.meta ?? block.info.meta,
+                meta: meta ?? block.info.meta,
                 images:
                   action.images !== null ? action.images : block.info.images,
               },
@@ -2561,11 +2612,9 @@ function connectionsReducer(
               status: action.status,
               content: action.content,
               raw_input: action.raw_input,
-              raw_output_chunks:
-                action.raw_output !== null ? [action.raw_output] : [],
-              raw_output_total_bytes: action.raw_output?.length ?? 0,
+              ...replaceLiveToolRawOutput(action.raw_output),
               locations: action.locations ?? null,
-              meta: action.meta ?? null,
+              meta,
               images: action.images ?? [],
             },
           },
@@ -2645,9 +2694,7 @@ function connectionsReducer(
       let newContent: LiveContentBlock[]
 
       if (existingIndex === -1) {
-        const initialChunks =
-          action.raw_output !== null ? [action.raw_output] : []
-        const initialBytes = action.raw_output?.length ?? 0
+        const output = replaceLiveToolRawOutput(action.raw_output)
         newContent = [
           ...prev.content,
           {
@@ -2658,11 +2705,12 @@ function connectionsReducer(
               kind: action.fallback_kind,
               status:
                 action.status ??
-                (initialChunks.length > 0 ? "in_progress" : "pending"),
+                (output.raw_output_chunks.length > 0
+                  ? "in_progress"
+                  : "pending"),
               content: action.content,
               raw_input: action.raw_input,
-              raw_output_chunks: initialChunks,
-              raw_output_total_bytes: initialBytes,
+              ...output,
               locations: action.locations ?? null,
               meta: action.meta ?? null,
               images: action.images ?? [],
@@ -2936,7 +2984,7 @@ function connectionsReducer(
       // published on the id this connection has left and never route here
       // again. The backend drops its table, and an empty snapshot table can't
       // clear ours for us (`mergeAsyncTasks` treats empty as "nothing to say"),
-      // so without this the strip shows tasks that can never finish AND the
+      // so without this the running list shows tasks that can never finish AND the
       // idle sweep below defers on them forever. Guarded on the id actually
       // changing, so a replayed announcement stays idempotent.
       const forked = conn.sessionId !== action.sessionId
@@ -5289,7 +5337,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             raw_input: e.raw_input,
             raw_output: e.raw_output,
             locations: e.locations ?? null,
-            meta: (e.meta as ToolCallMeta) ?? null,
+            meta: stripKimiMcpOAuth((e.meta as ToolCallMeta) ?? null),
             images: e.images ?? null,
           })
           break
@@ -5307,7 +5355,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             raw_output: e.raw_output,
             raw_output_append: e.raw_output_append,
             locations: e.locations ?? null,
-            meta: (e.meta as ToolCallMeta) ?? null,
+            meta: stripKimiMcpOAuth((e.meta as ToolCallMeta) ?? null),
             images: e.images ?? null,
           })
           scheduleToolCallUpdateFlush()
@@ -5473,6 +5521,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             type: "SET_BACKGROUND_OUTSTANDING",
             contextKey,
             outstanding: e.outstanding,
+            tasks:
+              e.outstanding_tasks && e.outstanding_tasks.length > 0
+                ? e.outstanding_tasks
+                : EMPTY_BACKGROUND_TASKS,
           })
           // 2. overlay turns → the conversation runtime store (resolved via
           //    the external-id index; unresolved = this conversation was never
@@ -5966,7 +6018,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         case "async_task": {
           // JetBrains AIR async-task delta (claude only) — Claude's background
           // shells / workflows / monitors. Merged into the connection's task
-          // table; the live rows render in `AsyncTaskStrip` under the composer.
+          // table; the live rows render in the "N running" list above the
+          // composer (`LiveRunsChip`).
           dispatch({
             type: "ASYNC_TASK",
             contextKey,

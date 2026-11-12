@@ -30,6 +30,7 @@ export interface AskQuestion {
    *  answer envelope is keyed by that id rather than the question text (unlike
    *  the codeg-mcp ask, which the card matches by header+question). */
   id?: string
+  allowOther?: boolean
 }
 
 export interface AskQuestionAnswer {
@@ -146,6 +147,12 @@ export function parseAskQuestionInput(
       options,
       isSecret: obj.isSecret === true || obj.is_secret === true,
       id: typeof obj.id === "string" && obj.id ? obj.id : undefined,
+      allowOther:
+        obj.allowOther === false || obj.allow_other === false
+          ? false
+          : obj.allowOther === true || obj.allow_other === true
+            ? true
+            : undefined,
     })
   }
   return out

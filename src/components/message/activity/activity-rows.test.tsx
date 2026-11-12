@@ -45,6 +45,7 @@ const DELEGATION: DelegationContextValue = {
   findByParentToolUseId: () => undefined,
   findByChildConversationId: () => undefined,
   findByTaskId: () => undefined,
+  bindingsForParent: () => [],
 }
 const WORKSPACE = new Proxy(
   {},
@@ -1416,5 +1417,128 @@ describe("a row's figure", () => {
     // A command with nothing to count leaves its figure empty: no line.
     const command = within(rowOf("pnpm lint")).getAllByRole("button")[0]!
     expect(command.querySelector(".activity-figure")).toBeEmptyDOMElement()
+  })
+})
+
+describe("Kimi MCP OAuth entry", () => {
+  const url =
+    "https://auth.example.test/authorize?state=a%2Bb&code_challenge=x_y&redirect_uri=http%3A%2F%2F127.0.0.1%3A43127%2Fcallback"
+  function oauthParts(phase = "waiting", done = false) {
+    return parts(
+      turn([
+        toolUse(
+          "oauth",
+          "mcp__notion__authenticate",
+          {},
+          {
+            "codeg.kimiMcpOAuth": {
+              toolName: "mcp__notion__authenticate",
+              server: "notion",
+              phase,
+              url: phase === "waiting" ? url : null,
+            },
+          }
+        ),
+        ...(done ? [toolResult("oauth", "cancelled", true)] : []),
+      ]),
+      !done,
+      done ? undefined : ["oauth"]
+    )
+  }
+
+  it("offers the full URL before completion and opens only on an explicit click", () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null)
+    try {
+      const view = renderUi(<Round parts={oauthParts()} completed={false} />)
+      const link = screen.getByRole("link", {
+        name: "Open authorization in system browser",
+      })
+      expect(link).toHaveAttribute("href", url)
+      expect(open).not.toHaveBeenCalled()
+      fireEvent.click(link)
+      expect(open).toHaveBeenCalledExactlyOnceWith(url, "_blank", "noreferrer")
+      view.rerender(
+        withProviders(
+          <Round parts={oauthParts("reconnecting")} completed={false} />
+        )
+      )
+      expect(
+        screen.queryByRole("link", {
+          name: "Open authorization in system browser",
+        })
+      ).not.toBeInTheDocument()
+      expect(screen.getByText(/Reconnecting notion/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/verify access with a real MCP tool call/)
+      ).toBeInTheDocument()
+      expect(open).toHaveBeenCalledTimes(1)
+      view.rerender(
+        withProviders(<Round parts={oauthParts("waiting", true)} />)
+      )
+      expect(
+        screen.queryByText(/Waiting for notion authorization/)
+      ).not.toBeInTheDocument()
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it("reports native opener failure without leaking its error and allows retry", async () => {
+    const platform = await import("@/lib/platform")
+    const opener = vi
+      .spyOn(platform, "openUrl")
+      .mockRejectedValueOnce(new Error("private authorization parameters"))
+      .mockResolvedValueOnce()
+    vi.stubGlobal("__TAURI_INTERNALS__", {})
+    try {
+      renderUi(<Round parts={oauthParts()} completed={false} />)
+      const link = screen.getByRole("link", {
+        name: "Open authorization in system browser",
+      })
+      expect(opener).not.toHaveBeenCalled()
+      await act(async () => {
+        fireEvent.click(link)
+      })
+      expect(opener).toHaveBeenLastCalledWith(url)
+      expect(screen.getByText(/Could not open the browser/)).toBeInTheDocument()
+      expect(
+        screen.queryByText(/private authorization parameters/)
+      ).not.toBeInTheDocument()
+      expect(link).toHaveAttribute("href", url)
+      await act(async () => {
+        fireEvent.click(link)
+      })
+      expect(opener).toHaveBeenCalledTimes(2)
+      expect(
+        screen.queryByText(/Could not open the browser/)
+      ).not.toBeInTheDocument()
+      expect(
+        screen.getByText(/Waiting for notion authorization/)
+      ).toBeInTheDocument()
+    } finally {
+      opener.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("never exposes a link from ordinary MCP output", () => {
+    renderUi(
+      <Round
+        parts={parts(
+          turn([
+            toolUse("ordinary", "mcp__notion__fetch", {}),
+            toolResult(
+              "ordinary",
+              `Open this URL in your browser to authorize "notion":\n\n${url}`
+            ),
+          ])
+        )}
+      />
+    )
+    expect(
+      screen.queryByRole("link", {
+        name: "Open authorization in system browser",
+      })
+    ).not.toBeInTheDocument()
   })
 })

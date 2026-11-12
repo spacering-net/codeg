@@ -2242,7 +2242,7 @@
       "statusRunningBadge": "运行中",
       "runningCountBadge": "{count} 个会话进行中",
       "statusCancelledBadge": "已取消",
-      "worktreeRemovedBadge": "源 worktree 已删除",
+      "originalWorkingDir": "最初运行目录",
       "cliBadge": "从命令行启动",
       "conversationCountUnit": "{count} 条",
       "emptyFolderHint": "暂无会话",
@@ -2283,6 +2283,7 @@
         "untitledConversation": "未命名会话",
         "setStatus": "设为状态…",
         "deleteSelected": "删除",
+        "moveSelected": "移动到…",
         "noConversations": "此文件夹暂无会话。",
         "noConversationsWorkspace": "工作区暂无会话。",
         "noMatchingConversations": "没有匹配过滤条件的会话。",
@@ -2381,7 +2382,7 @@
       "fieldTitle": "标题",
       "untitled": "未命名会话",
       "sessionId": "会话 ID",
-      "externalId": "扩展 ID",
+      "externalId": "会话索引",
       "agent": "智能体",
       "model": "模型",
       "status": "状态",
@@ -2432,6 +2433,33 @@
       "reopen": "重新打开",
       "expandSubsessions": "展开子会话",
       "collapseSubsessions": "折叠子会话"
+    },
+    "moveConversation": {
+      "menuLabel": "移动到",
+      "title": "移动会话",
+      "titleMany": "移动 {count} 个会话",
+      "intro": "「{title}」将移动到以下文件夹：",
+      "introMany": "选中的 {count} 个会话将移动到以下文件夹：",
+      "untitledConversation": "未命名会话",
+      "explain": "从下一条消息起，智能体会在该文件夹中工作，历史记录保持不变。若智能体无法在新目录中恢复会话，会提示你重新加载或新建会话。",
+      "chatFilesNote": "聊天中生成的文件仍保留在原临时目录 {path}，不会搬进该文件夹。",
+      "chatFilesNoteMany": "这些聊天中生成的文件仍保留在各自的临时目录，不会搬进该文件夹。",
+      "noTargets": "没有其他已打开的文件夹",
+      "targetUnavailable": "该文件夹已关闭或移除，请另选一个。",
+      "cancel": "取消",
+      "move": "移动",
+      "toastMoved": "已将 {count} 个会话移动到 {folder}",
+      "toastSkipped": "{count} 个会话未移动",
+      "toastFailed": "移动失败：{message}",
+      "skipReason": {
+        "not_found": "会话已不存在",
+        "not_movable": "子会话会随父会话一起移动",
+        "already_there": "已在该文件夹中",
+        "task_owned": "属于看板任务",
+        "busy": "智能体正在处理它，请等它完成后再试",
+        "conflict": "移动过程中会话发生了变化，请重试",
+        "target_unavailable": "目标文件夹已关闭或移除"
+      }
     },
     "search": {
       "dialogTitle": "搜索",
@@ -2539,6 +2567,24 @@
         "loadFailed": "无法读取状态：{message}",
         "openSettings": "打开详细设置",
         "refresh": "刷新"
+      },
+      "webService": {
+        "title": "Web 服务",
+        "start": "启动 Web 服务",
+        "stop": "停止 Web 服务",
+        "cancel": "取消",
+        "confirmStart": "启动",
+        "confirmTitle": "向局域网开放 Codeg？",
+        "confirmDescription": "Web 服务将监听 {address}。同一网络中的任何设备都能凭访问令牌连上 Codeg，包括其中的终端和智能体。",
+        "tooltipNetwork": "Web 服务 · 正在监听 {address}（局域网可访问）",
+        "tooltipLocal": "Web 服务 · 正在监听 {address}（仅本机）",
+        "tooltipStopped": "Web 服务 · 已停止",
+        "hintNetwork": "正在监听 {address}。同一网络中的设备可凭访问令牌打开 Codeg。",
+        "hintLocal": "正在监听 {address}。只有本机能访问。",
+        "hintStoppedNetwork": "已停止。启动后将监听 {address}，局域网可访问。",
+        "hintStoppedLocal": "已停止。启动后将监听 {address}，仅本机可访问。",
+        "copyAddress": "复制地址",
+        "openSettings": "打开 Web 服务设置"
       }
     },
     "auxPanel": {
@@ -3443,7 +3489,8 @@
         },
         "errors": {
           "connectionFailed": "连接失败",
-          "sendPromptFailed": "消息发送失败：{error}"
+          "sendPromptFailed": "消息发送失败：{error}",
+          "conversationMoved": "该会话已移到 {folder}，请重新发送消息，在那里继续。"
         }
       },
       "shared": {
@@ -3885,14 +3932,12 @@
         "readImageLoading": "正在加载图片…",
         "readImageError": "无法加载图片",
         "shellSession": "会话 {id}",
-        "agentPromptLabel": "提示词",
         "agentModelLabel": "模型",
         "agentEffortLabel": "思考强度",
         "agentRecoveredNote": "子智能体实际已完成，以下产出因回合中断未送达主会话：",
         "agentProgressTools": "{count} 次工具调用",
         "agentProgressTurns": "{count} 轮",
         "agentProgressContext": "上下文 {pct}%",
-        "agentSessionAction": "查看子智能体会话",
         "agentSessionTitle": "子智能体会话",
         "agentSessionLoading": "正在加载子智能体的会话记录…",
         "agentSessionEmpty": "子智能体还没有写入任何内容。",
@@ -3960,6 +4005,13 @@
         "htmlPreviewHide": "收起预览"
       },
       "activity": {
+        "oauth": {
+          "waiting": "等待 {server} 授权",
+          "reconnecting": "正在重新连接 {server}…",
+          "open": "在系统浏览器中打开授权",
+          "verify": "重新连接后，请用真实 MCP 工具调用验证访问。打开浏览器不代表授权成功。",
+          "openFailed": "无法打开浏览器，请通过授权链接重试。"
+        },
         "header": {
           "label": "执行过程",
           "working": "进行中",
@@ -4125,7 +4177,9 @@
         "openFile": "打开 {filePath}",
         "collapse": "收起",
         "currentMessage": "当前消息",
-        "scrollToCurrent": "滚动到当前消息（#{ordinal}）"
+        "scrollToCurrent": "滚动到当前消息（#{ordinal}）",
+        "running": "进行中",
+        "total": "共 {count} 条"
       },
       "replyArtifacts": {
         "title": "改动文件",
@@ -4181,6 +4235,7 @@
         "resumeDelegation": "恢复任务 {task}",
         "resumeDelegationNoId": "恢复委派任务",
         "promptLabel": "指令",
+        "attachmentsLabel": "附件",
         "ackRecorded": "已记录到待办任务",
         "ackNotRecorded": "未记录到待办任务",
         "ackNotRecordedWithReason": "未记录到待办任务：{reason}",
@@ -4297,6 +4352,13 @@
         "scheduledWakeup": "定时唤醒",
         "scheduledWakeupAt": "定时唤醒（{time}）",
         "scheduledTask": "定时任务"
+      },
+      "liveRuns": {
+        "count": "{count} 个运行中",
+        "awaiting": "有子智能体在等你处理",
+        "groupDelegations": "委派",
+        "background": "后台",
+        "delegatedFallback": "委派的子智能体"
       },
       "remoteControl": {
         "title": "远程控制已开启",
@@ -4485,7 +4547,12 @@
       "permissionDenied": "权限不足，请使用 1024 以上的端口，或以更高权限运行",
       "addressUnavailable": "该地址在本机不可用",
       "bindFailed": "绑定地址失败"
-    }
+    },
+    "bindHost": "监听地址",
+    "bindHostAll": "所有网络接口（0.0.0.0）",
+    "bindHostLocal": "仅本机（127.0.0.1）",
+    "bindHostAllHint": "局域网中的设备可凭访问令牌连接此服务。",
+    "bindHostLocalHint": "只有本机能连接此服务，例如放在反向代理或 Tailscale Serve 之后使用。"
   },
   "DirectoryBrowser": {
     "title": "浏览目录",
@@ -6394,6 +6461,11 @@
     "completeDescription": "该任务没有改动任何文件，无需合并，将直接标记为已完成。",
     "completeDescriptionNoWorktree": "该任务的 worktree 已被删除，无法再合并，将直接标记为已完成。若工作分支上仍有未合并的提交，分支会被保留。",
     "completeDeleteWorktree": "完成后删除 worktree",
+    "threadCommentLabel": "任务完成后在条目下发评论",
+    "threadCommentLabelSeveral": "任务完成后在每个议题下发评论",
+    "threadCommentReplyLabel": "#{number} 的回复",
+    "threadCommentPlaceholder": "留空则只发布交付情况。",
+    "threadCommentHint": "由智能体起草，公开前请检查。Codeg 会在后面补一行交付情况；仓库设置里开着落款时还会附上 Codeg 落款。",
     "completeSubmit": "完成",
     "settingsTitle": "任务设置",
     "settingsDescription": "{folder} 中任务的默认配置。",
@@ -6453,6 +6525,9 @@
     "preflightRunning": "{name} 运行中…",
     "detailDescription": "任务详情",
     "detailSummary": "结果",
+    "detailThreadReply": "评论回复",
+    "detailThreadReplyHint": "接受任务时发布，可在接受对话框里修改。",
+    "detailThreadReplyOffHint": "不会发布：这个任务没开回写评论，可在接受对话框里打开。",
     "detailFiles": "变更文件",
     "detailFilesIncludesPr": "含 PR 自身的改动",
     "detailFilesIncludesMr": "含 MR 自身的改动",
@@ -7053,7 +7128,11 @@
     "errors": {
       "noAccount": "还没有为 {host} 配置 {provider} 账号。请在「设置 → 版本控制」中添加后再加载该仓库。",
       "unsupportedHost": "仓库面板目前仅支持 GitHub、GitLab、Gitea 和 CNB，而 {host} 不是其中任何一种。如果它是自建的 GitHub Enterprise、GitLab、Gitea、Forgejo 或 CNB 实例，请在「设置 → 版本控制」中为它添加账号。",
-      "wrongForge": "{host} 实际上是 {provider}，此前被误判为另一种代码托管服务。已自动更正，请重新加载。"
+      "wrongForge": "{host} 实际上是 {provider}，此前被误判为另一种代码托管服务。已自动更正，请重新加载。",
+      "approveHeadChanged": "你审阅之后这个拉取请求又有了新提交。请刷新、重新审阅后再批准。",
+      "approveAmbiguous": "无法确定这些工作流运行只属于这个拉取请求。请到 GitHub 上批准。",
+      "approveForbidden": "此账号无权在这里批准工作流运行：需要仓库写权限，且令牌需要 Actions（写）权限或 repo 范围。",
+      "approveNotOpen": "这个拉取请求已经不是打开状态。"
     },
     "addAccount": "添加账号",
     "empty": "暂无内容",
@@ -7164,6 +7243,7 @@
     "checksPassing": "{count} 项通过",
     "checksFailing": "{count} 项失败",
     "checksPending": "{count} 项进行中",
+    "checksNeutralCount": "{count} 项无结论",
     "checkAllowFailure": "允许失败",
     "checkSuccess": "通过",
     "checkFailure": "失败",
@@ -7201,7 +7281,7 @@
     "dialogDescriptionMr": "将在 {repo} 对应的文件夹创建一个待办任务，工作树直接检出到这个合并请求的头提交——智能体的提交叠在它上面，验收后推回同一个合并请求。",
     "instructionPlaceholder": "给智能体的补充说明（可选）…",
     "writebackLabel": "完成后回写评论",
-    "writebackHint": "任务完成后，在这个条目下发一条评论：结果、链接和改动行数。",
+    "writebackHint": "任务完成后，在这个条目下发一条评论：智能体起草的处理回复（接受任务时可审阅修改），以及工作是怎么交付的。",
     "previewToggle": "预览任务将携带的 Issue 内容",
     "previewEmpty": "（无描述）",
     "duplicateBody": "已有一个活跃任务在处理该条目：{title}（{status}）。仍要再建一个吗？",
@@ -7226,7 +7306,7 @@
     "combineScenarioFixHint": "智能体先逐个判断报告是否属实，把属实的在同一处改动里一起修好；不属实的一行都不动，带着结论回来等你处理。",
     "combineScenarioPlanFirstHint": "智能体先逐个判断报告是否属实，再为属实的那些出一份方案并停下；同意方案后退回任务，让它实施。",
     "combineWritebackLabel": "完成后在每个议题下回写评论",
-    "combineWritebackHint": "任务完成后，在每个议题下各发一条评论：结果、链接和改动行数。",
+    "combineWritebackHint": "任务完成后，在每个议题下各发一条评论：智能体为它起草的处理回复（接受任务时可审阅修改），以及工作是怎么交付的。",
     "combineTooFew": "合并处理至少要 2 个议题——只处理一个的话，请在它那一行点「处理」。",
     "combineConflictsBody": "其中有些议题已有活跃任务在处理：",
     "combineConflictItem": "#{number}——{title}（{status}）",
@@ -7259,6 +7339,8 @@
     "settingsPrDefaultHint": "打开 PR 或 MR 的处理弹层时预先选中的方式。",
     "settingsWritebackDefault": "默认回写评论",
     "settingsWritebackDefaultHint": "处理弹层里那个开关的初始状态，每个条目仍可单独改。",
+    "settingsCommentFooter": "评论末尾附 Codeg 落款",
+    "settingsCommentFooterHint": "在 codeg 发出的每条评论末尾加上「🤖 Generated with Codeg」，并链接到 Codeg 仓库。",
     "settingsPromptsIntro": "常驻提示词会拼在所选场景的内置指令之后、你在处理弹层里填的补充说明之前，内置指令不用在这里重复。它只随任务的第一轮发出；每一轮都要带的内容请写在待办任务设置的提示词里。",
     "settingsPromptsLabel": "场景",
     "settingsPromptAll": "所有场景",
@@ -7310,7 +7392,7 @@
     "autoAutoStart": "立即开始",
     "autoAutoStartHint": "新任务创建后立即排队，何时运行由任务设置里的并发上限决定。关闭时：任务留在待办中。",
     "autoWriteback": "完成后回帖",
-    "autoWritebackHint": "任务完成时，在条目下发布与发起对话框中「回帖」开关相同的简短状态评论。",
+    "autoWritebackHint": "任务完成时，在条目下发布与发起对话框中「回帖」开关相同的评论：智能体起草、你在接受任务时审阅过的处理回复，以及交付情况。",
     "autoActivity": "运行情况",
     "autoScanNow": "立即扫描",
     "autoScanNowOff": "开启一种触发方式并保存后才能扫描。",
@@ -7338,7 +7420,23 @@
     "autoSkipExcludedAuthor": "作者被排除",
     "autoSkipMissingLabel": "无匹配标签",
     "autoSkipAuthorNotIncluded": "作者不在名单",
-    "save": "保存"
+    "save": "保存",
+    "checksAwaitingApproval": "{count} 个工作流等待批准",
+    "checksApprovalShort": "待批准",
+    "approveUnknownTitle": "可能有工作流在等待批准",
+    "approveExplain": "这个拉取请求来自 fork，它的工作流要等有写权限的人批准后才会运行。批准会在仓库的 CI 上执行这些代码，请先审阅改动。",
+    "approveIncompleteHint": "没能查完所有工作流运行，GitHub 上可能还有更多在等待。",
+    "approveBlockedAmbiguous": "同一分支还有另一个打开的拉取请求，无法确定这些运行只属于这一个。请到 GitHub 上批准。",
+    "approveBlockedPermission": "此账号没有该仓库的推送权限，无法批准工作流。",
+    "approveOpenOnForge": "在 GitHub 上打开",
+    "approveWorkflows": "批准工作流运行",
+    "approving": "正在批准…",
+    "approveConfirmTitle": "批准工作流运行吗？",
+    "approveConfirmBody": "{count} 个工作流将在仓库的 CI 上运行这个拉取请求的代码（提交 {sha}）。请在审阅改动后再批准。",
+    "approveDone": "已批准 {count} 个工作流",
+    "approvePartial": "部分工作流未能批准：{names}",
+    "approveNothingHeld": "已经没有等待批准的工作流了。",
+    "mergeWorkflowsAwaiting": "有工作流等待批准"
   },
   "Canvas": {
     "title": "无限画布",

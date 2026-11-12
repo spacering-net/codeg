@@ -12,21 +12,18 @@ import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
 import type { MessageRole } from "@/lib/types"
 import { buildActivity } from "@/lib/activity/build-activity"
 import type { ActivityModel } from "@/lib/activity/types"
-import { COLLAB_AGENT_TOOL_NAME } from "@/lib/collab-tool"
 import { contextCompactionSummary } from "@/lib/context-compaction"
 import {
   findHtmlFileMentions,
   hasCodexVisualizeRef,
   splitCodexVisualizeRefs,
 } from "@/lib/codex-visualize"
-import { normalizeToolName } from "@/lib/tool-call-normalization"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { useChatMotion } from "@/hooks/use-chat-motion"
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { ActivityTimeline } from "./activity/activity-timeline"
 import type { ActivityFoot } from "./activity/timeline-foot"
 import { CodexVisualizeCard } from "./codex-visualize-card"
-import { CollabAgentCard } from "./collab-agent-card"
 import {
   ContextCompactionCard,
   isContextCompactionMeta,
@@ -224,9 +221,8 @@ const ProposedPlanPart = memo(function ProposedPlanPart({
 type ToolCallPart = Extract<AdaptedContentPart, { type: "tool-call" }>
 
 /**
- * The tool calls whose own cards the timeline hosts on its rail: codex-acp's
- * context compaction (tagged by `_meta.contextCompaction`, not by name),
- * and codex's live collab sub-agent activity.
+ * The tool call whose own card the timeline hosts on its rail: codex-acp's
+ * context compaction (tagged by `_meta.contextCompaction`, not by name).
  */
 const HostedToolCall = memo(function HostedToolCall({
   part,
@@ -239,16 +235,6 @@ const HostedToolCall = memo(function HostedToolCall({
         state={part.state}
         meta={part.meta}
         summary={contextCompactionSummary(part.meta, part.output)}
-      />
-    )
-  }
-  const toolName = normalizeToolName(part.toolName).toLowerCase()
-  if (toolName === COLLAB_AGENT_TOOL_NAME) {
-    return (
-      <CollabAgentCard
-        input={part.input ?? null}
-        errorText={part.errorText ?? null}
-        state={part.state}
       />
     )
   }

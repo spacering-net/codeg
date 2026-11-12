@@ -2242,7 +2242,7 @@
       "statusRunningBadge": "Executando",
       "runningCountBadge": "{count, plural, one {# sessão em execução} other {# sessões em execução}}",
       "statusCancelledBadge": "Cancelado",
-      "worktreeRemovedBadge": "Worktree de origem removida",
+      "originalWorkingDir": "Diretório de trabalho original",
       "cliBadge": "Iniciada pela linha de comando",
       "conversationCountUnit": "{count, plural, one {# conversa} other {# conversas}}",
       "emptyFolderHint": "Sem conversas",
@@ -2283,6 +2283,7 @@
         "untitledConversation": "Conversa sem título",
         "setStatus": "Definir status…",
         "deleteSelected": "Excluir",
+        "moveSelected": "Mover para…",
         "noConversations": "Sem conversas nesta pasta.",
         "noConversationsWorkspace": "Sem conversas na área de trabalho.",
         "noMatchingConversations": "Nenhuma conversa corresponde aos filtros.",
@@ -2381,7 +2382,7 @@
       "fieldTitle": "Título",
       "untitled": "Conversa sem título",
       "sessionId": "ID da sessão",
-      "externalId": "ID da extensão",
+      "externalId": "Índice da sessão",
       "agent": "Agente",
       "model": "Modelo",
       "status": "Estado",
@@ -2432,6 +2433,33 @@
       "reopen": "Reabrir",
       "expandSubsessions": "Expandir subconversas",
       "collapseSubsessions": "Recolher subconversas"
+    },
+    "moveConversation": {
+      "menuLabel": "Mover para",
+      "title": "Mover conversa",
+      "titleMany": "Mover {count, plural, one {# conversa} other {# conversas}}",
+      "intro": "“{title}” será movida para esta pasta:",
+      "introMany": "{count, plural, one {A conversa selecionada será movida} other {As # conversas selecionadas serão movidas}} para esta pasta:",
+      "untitledConversation": "Conversa sem título",
+      "explain": "A partir da próxima mensagem, o agente trabalha nesta pasta; o histórico permanece igual. Se o agente não conseguir retomar a sessão aqui, será oferecida a opção de recarregá-la ou iniciar uma nova sessão.",
+      "chatFilesNote": "Os arquivos criados durante o chat ficam no diretório temporário {path}; não são movidos para a pasta.",
+      "chatFilesNoteMany": "Os arquivos criados durante estes chats ficam em seus diretórios temporários; não são movidos para a pasta.",
+      "noTargets": "Não há outra pasta aberta",
+      "targetUnavailable": "Esta pasta foi fechada ou removida — escolha outra.",
+      "cancel": "Cancelar",
+      "move": "Mover",
+      "toastMoved": "{count, plural, one {# conversa movida} other {# conversas movidas}} para {folder}",
+      "toastSkipped": "{count, plural, one {# conversa não foi movida} other {# conversas não foram movidas}}",
+      "toastFailed": "Não foi possível mover: {message}",
+      "skipReason": {
+        "not_found": "Ela não existe mais",
+        "not_movable": "Subconversas são movidas junto com a conversa principal",
+        "already_there": "Ela já está nesta pasta",
+        "task_owned": "Ela pertence a uma tarefa",
+        "busy": "Um agente está trabalhando nela — tente de novo quando terminar",
+        "conflict": "Ela mudou durante a movimentação — tente de novo",
+        "target_unavailable": "A pasta foi fechada ou removida"
+      }
     },
     "search": {
       "dialogTitle": "Buscar",
@@ -2539,6 +2567,24 @@
         "loadFailed": "Não foi possível ler o estado: {message}",
         "openSettings": "Abrir configurações",
         "refresh": "Atualizar"
+      },
+      "webService": {
+        "title": "Serviço web",
+        "start": "Iniciar serviço web",
+        "stop": "Parar serviço web",
+        "cancel": "Cancelar",
+        "confirmStart": "Iniciar",
+        "confirmTitle": "Abrir o Codeg para a sua rede?",
+        "confirmDescription": "O serviço web vai escutar em {address}. Qualquer dispositivo da sua rede poderá acessar o Codeg — incluindo terminais e agentes — com o token de acesso.",
+        "tooltipNetwork": "Serviço web · escutando em {address} (acessível pela sua rede)",
+        "tooltipLocal": "Serviço web · escutando em {address} (apenas este computador)",
+        "tooltipStopped": "Serviço web · parado",
+        "hintNetwork": "Escutando em {address}. Dispositivos da sua rede podem abrir o Codeg com o token de acesso.",
+        "hintLocal": "Escutando em {address}. Apenas este computador pode acessar.",
+        "hintStoppedNetwork": "Parado. Ao iniciar, vai escutar em {address}, acessível pela sua rede.",
+        "hintStoppedLocal": "Parado. Ao iniciar, vai escutar em {address}, apenas este computador.",
+        "copyAddress": "Copiar endereço",
+        "openSettings": "Abrir configurações do serviço web"
       }
     },
     "auxPanel": {
@@ -3443,7 +3489,8 @@
         },
         "errors": {
           "connectionFailed": "Falha na conexão",
-          "sendPromptFailed": "Falha ao enviar a mensagem: {error}"
+          "sendPromptFailed": "Falha ao enviar a mensagem: {error}",
+          "conversationMoved": "Esta conversa foi movida para {folder}. Envie a mensagem novamente para continuar lá."
         }
       },
       "shared": {
@@ -3885,14 +3932,12 @@
         "readImageLoading": "Carregando imagem…",
         "readImageError": "Não foi possível carregar a imagem",
         "shellSession": "Sessão {id}",
-        "agentPromptLabel": "Instrução",
         "agentModelLabel": "Modelo",
         "agentEffortLabel": "Esforço",
         "agentRecoveredNote": "O subagente realmente terminou; seu resultado nunca foi entregue porque o turno foi abortado:",
         "agentProgressTools": "{count} chamadas de ferramentas",
         "agentProgressTurns": "{count} turnos",
         "agentProgressContext": "contexto {pct}%",
-        "agentSessionAction": "Ver a sessão do subagente",
         "agentSessionTitle": "Sessão do subagente",
         "agentSessionLoading": "Carregando a transcrição do subagente…",
         "agentSessionEmpty": "O subagente ainda não escreveu nada.",
@@ -3960,6 +4005,13 @@
         "htmlPreviewHide": "Ocultar pré-visualização"
       },
       "activity": {
+        "oauth": {
+          "waiting": "Aguardando autorização de {server}",
+          "reconnecting": "Reconectando a {server}…",
+          "open": "Abrir autorização no navegador do sistema",
+          "verify": "Após reconectar, verifique o acesso com uma chamada real de ferramenta MCP. Abrir o navegador não confirma a autorização.",
+          "openFailed": "Não foi possível abrir o navegador. Use o link de autorização para tentar novamente."
+        },
         "header": {
           "label": "Atividade",
           "working": "Em andamento",
@@ -4125,7 +4177,9 @@
         "openFile": "Abrir {filePath}",
         "collapse": "Recolher",
         "currentMessage": "Mensagem atual",
-        "scrollToCurrent": "Rolar até a mensagem atual (#{ordinal})"
+        "scrollToCurrent": "Rolar até a mensagem atual (#{ordinal})",
+        "running": "Em andamento",
+        "total": "{count, plural, one {# mensagem} other {# mensagens}}"
       },
       "replyArtifacts": {
         "title": "Arquivos alterados",
@@ -4181,6 +4235,7 @@
         "resumeDelegation": "Retomando a tarefa {task}",
         "resumeDelegationNoId": "Retomando uma tarefa delegada",
         "promptLabel": "Instrução",
+        "attachmentsLabel": "Anexos",
         "ackRecorded": "Registrado na tarefa de trabalho",
         "ackNotRecorded": "Não registrado na tarefa de trabalho",
         "ackNotRecordedWithReason": "Não registrado na tarefa de trabalho: {reason}",
@@ -4297,6 +4352,13 @@
         "scheduledWakeup": "Ativação agendada",
         "scheduledWakeupAt": "Ativação agendada para {time}",
         "scheduledTask": "Tarefa agendada"
+      },
+      "liveRuns": {
+        "count": "{count} em execução",
+        "awaiting": "Um subagente está aguardando você",
+        "groupDelegations": "Delegações",
+        "background": "Segundo plano",
+        "delegatedFallback": "Subagente delegado"
       },
       "remoteControl": {
         "title": "Controle remoto ativado",
@@ -4485,7 +4547,12 @@
       "permissionDenied": "Permissão negada. Use uma porta acima de 1024 ou execute com privilégios mais altos.",
       "addressUnavailable": "O endereço não está disponível nesta máquina",
       "bindFailed": "Falha ao vincular o endereço"
-    }
+    },
+    "bindHost": "Escutar em",
+    "bindHostAll": "Todas as interfaces (0.0.0.0)",
+    "bindHostLocal": "Apenas este computador (127.0.0.1)",
+    "bindHostAllHint": "Dispositivos da sua rede local podem acessar o serviço com o token de acesso.",
+    "bindHostLocalHint": "Apenas este computador pode acessar o serviço — por exemplo, atrás de um proxy reverso ou do Tailscale Serve."
   },
   "DirectoryBrowser": {
     "title": "Explorar diretório",
@@ -6394,6 +6461,11 @@
     "completeDescription": "Esta tarefa não alterou nenhum arquivo, então não há nada para fazer merge: ela é marcada como concluída.",
     "completeDescriptionNoWorktree": "O worktree desta tarefa foi removido, então não é mais possível fazer merge: ela é marcada como concluída. Um branch de trabalho que ainda tenha commits não mesclados é mantido.",
     "completeDeleteWorktree": "Excluir o worktree ao concluir",
+    "threadCommentLabel": "Comentar no tópico do item quando a tarefa terminar",
+    "threadCommentLabelSeveral": "Comentar no tópico de cada issue quando a tarefa terminar",
+    "threadCommentReplyLabel": "Resposta para #{number}",
+    "threadCommentPlaceholder": "Deixe em branco para publicar apenas como o trabalho foi entregue.",
+    "threadCommentHint": "Redigida pelo agente — revise antes de ficar pública. O Codeg acrescenta uma linha dizendo como o trabalho foi entregue e a assinatura do Codeg, se estiver ativada nas configurações do repositório.",
     "completeSubmit": "Concluir",
     "settingsTitle": "Configurações de tarefas",
     "settingsDescription": "Padrões para tarefas em {folder}.",
@@ -6453,6 +6525,9 @@
     "preflightRunning": "{name} em execução…",
     "detailDescription": "Detalhes da tarefa",
     "detailSummary": "Resultado",
+    "detailThreadReply": "Resposta para o tópico",
+    "detailThreadReplyHint": "Publicada quando você aceita a tarefa; pode ser editada na caixa de aceitação.",
+    "detailThreadReplyOffHint": "Não será publicada: os comentários estão desativados para esta tarefa. Você pode ativá-los na caixa de aceitação.",
     "detailFiles": "Arquivos alterados",
     "detailFilesIncludesPr": "inclui as alterações do próprio pull request",
     "detailFilesIncludesMr": "inclui as alterações do próprio merge request",
@@ -7053,7 +7128,11 @@
     "errors": {
       "noAccount": "Nenhuma conta {provider} configurada para {host}. Adicione uma em Configurações → Controle de versão para carregar este repositório.",
       "unsupportedHost": "O painel do repositório só oferece suporte a GitHub, GitLab, Gitea e CNB, e {host} não é reconhecido como nenhum deles. Se for uma instância auto-hospedada do GitHub Enterprise, GitLab, Gitea, Forgejo ou CNB, adicione uma conta para ela em Configurações → Controle de versão.",
-      "wrongForge": "{host} é um {provider}, não a forja com que estava classificado. A detecção foi corrigida — recarregue para tentar novamente."
+      "wrongForge": "{host} é um {provider}, não a forja com que estava classificado. A detecção foi corrigida — recarregue para tentar novamente.",
+      "approveHeadChanged": "Este pull request recebeu novos commits desde a sua revisão. Atualize, revise novamente e depois aprove.",
+      "approveAmbiguous": "Não é possível atribuir estas execuções só a este pull request. Aprove-as no GitHub.",
+      "approveForbidden": "Esta conta não pode aprovar execuções aqui. Ela precisa de permissão de escrita, e o token precisa da permissão Actions (escrita) ou do escopo repo.",
+      "approveNotOpen": "Este pull request não está mais aberto."
     },
     "addAccount": "Adicionar uma conta",
     "empty": "Nada por aqui",
@@ -7164,6 +7243,7 @@
     "checksPassing": "{count} com êxito",
     "checksFailing": "{count} falhadas",
     "checksPending": "{count} em curso",
+    "checksNeutralCount": "{count} sem veredicto",
     "checkAllowFailure": "pode falhar",
     "checkSuccess": "Com êxito",
     "checkFailure": "Falhada",
@@ -7201,7 +7281,7 @@
     "dialogDescriptionMr": "Cria uma tarefa pendente na pasta de {repo}, com o worktree no head deste merge request — os commits do agente ficam por cima e são enviados ao mesmo merge request quando você aceita.",
     "instructionPlaceholder": "Instrução extra para o agente (opcional)…",
     "writebackLabel": "Comentar o resultado neste item",
-    "writebackHint": "Quando a tarefa terminar, o codeg publica um comentário neste item: o resultado, o link e os números do diff.",
+    "writebackHint": "Quando a tarefa terminar, o codeg publica um comentário neste item: a resposta redigida pelo agente (você a revisa ao aceitar a tarefa) e como o trabalho foi entregue.",
     "previewToggle": "Prévia do conteúdo do issue que a tarefa levará",
     "previewEmpty": "(sem descrição)",
     "duplicateBody": "Já existe uma tarefa ativa para este item: {title} ({status}). Criar outra mesmo assim?",
@@ -7226,7 +7306,7 @@
     "combineScenarioFixHint": "O agente avalia primeiro cada relato e corrige em uma só mudança os que se sustentam; os demais ficam intactos e ele devolve a conclusão para você decidir.",
     "combineScenarioPlanFirstHint": "O agente avalia primeiro cada relato, entrega um único plano para os que se sustentam e para; aprove-o devolvendo a tarefa para a implementação.",
     "combineWritebackLabel": "Comentar o resultado em cada issue",
-    "combineWritebackHint": "Quando a tarefa terminar, o codeg publica um comentário em cada uma dessas issues: o resultado, o link e os contadores do diff.",
+    "combineWritebackHint": "Quando a tarefa terminar, o codeg publica um comentário em cada uma destas issues: a resposta que o agente redige para ela (você as revisa ao aceitar a tarefa) e como o trabalho foi entregue.",
     "combineTooFew": "Processar issues juntas exige pelo menos duas; para uma só, inicie-a na própria linha.",
     "combineConflictsBody": "Algumas dessas issues já têm uma tarefa ativa:",
     "combineConflictItem": "#{number} — {title} ({status})",
@@ -7259,6 +7339,8 @@
     "settingsPrDefaultHint": "O que vem pré-selecionado ao abrir a caixa de diálogo sobre um pull ou merge request.",
     "settingsWritebackDefault": "Comentar o resultado por padrão",
     "settingsWritebackDefaultHint": "A posição inicial daquele interruptor na caixa de diálogo — ainda dá para mudar item a item.",
+    "settingsCommentFooter": "Assinar comentários com Codeg",
+    "settingsCommentFooterHint": "Termina cada comentário publicado pelo codeg com “🤖 Generated with Codeg”, com link para o repositório do Codeg.",
     "settingsPromptsIntro": "As instruções permanentes entram depois do texto embutido do cenário escolhido e antes do que você digitar na caixa de diálogo — não precisa repetir o texto embutido aqui. Elas vão só no primeiro turno da tarefa; o que você quer em todo turno vai nos prompts das configurações de tarefas.",
     "settingsPromptsLabel": "Cenário",
     "settingsPromptAll": "Todos os cenários",
@@ -7310,7 +7392,7 @@
     "autoAutoStart": "Iniciar imediatamente",
     "autoAutoStartHint": "Coloca cada nova tarefa na fila na hora — o limite de concorrência das configurações de tarefas decide quando ela roda. Desligado: ela espera em A fazer.",
     "autoWriteback": "Comentar o resultado",
-    "autoWritebackHint": "Ao terminar a tarefa, publica o mesmo breve comentário de status que o interruptor do diálogo de início publica.",
+    "autoWritebackHint": "Quando a tarefa terminar, publica o mesmo comentário do interruptor da caixa de início: a resposta redigida pelo agente, revisada ao aceitar a tarefa, e como o trabalho foi entregue.",
     "autoActivity": "Atividade",
     "autoScanNow": "Escanear agora",
     "autoScanNowOff": "Ligue um gatilho e salve para escanear.",
@@ -7338,7 +7420,23 @@
     "autoSkipExcludedAuthor": "autor excluído",
     "autoSkipMissingLabel": "sem rótulo correspondente",
     "autoSkipAuthorNotIncluded": "autor fora da lista",
-    "save": "Salvar"
+    "save": "Salvar",
+    "checksAwaitingApproval": "{count} workflows aguardando aprovação",
+    "checksApprovalShort": "Aprovação necessária",
+    "approveUnknownTitle": "Pode haver workflows aguardando aprovação",
+    "approveExplain": "Este pull request vem de um fork, e seus workflows só serão executados quando alguém com permissão de escrita os aprovar. Aprovar executa este código na CI do repositório — revise as alterações primeiro.",
+    "approveIncompleteHint": "Não foi possível verificar todas as execuções; pode haver mais aguardando no GitHub.",
+    "approveBlockedAmbiguous": "Há outro pull request aberto a partir do mesmo branch, então não é possível atribuir estas execuções só a este. Aprove-as no GitHub.",
+    "approveBlockedPermission": "Esta conta não pode fazer push no repositório, então não pode aprovar workflows.",
+    "approveOpenOnForge": "Abrir no GitHub",
+    "approveWorkflows": "Aprovar a execução dos workflows",
+    "approving": "Aprovando…",
+    "approveConfirmTitle": "Aprovar a execução dos workflows?",
+    "approveConfirmBody": "{count} workflows vão executar o código deste pull request (commit {sha}) na CI do repositório. Aprove somente depois de revisar as alterações.",
+    "approveDone": "{count} workflows aprovados",
+    "approvePartial": "Não foi possível aprovar alguns workflows: {names}",
+    "approveNothingHeld": "Não há mais workflows aguardando aprovação.",
+    "mergeWorkflowsAwaiting": "Há workflows aguardando aprovação"
   },
   "Canvas": {
     "title": "Canvas infinito",

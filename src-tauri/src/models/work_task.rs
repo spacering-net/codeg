@@ -86,6 +86,11 @@ pub struct WorkTaskInfo {
     /// forge-sourced task — that one's pull request is `source_meta.result_pr`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<serde_json::Value>,
+    /// The reply drafted for each thread of a forge-sourced task, keyed by
+    /// item number — what the write-back posts once the task is accepted.
+    /// `None` = no draft (the comment is then the outcome line alone).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub writeback_drafts: Option<std::collections::BTreeMap<i64, String>>,
     /// Latest `agent_progress` milestone OF THIS GENERATION (filled by `list`
     /// for live tasks only — the card's realtime progress line). Scoped by
     /// `run_seq`: a retry, a follow-up and a merge each start a new one, and

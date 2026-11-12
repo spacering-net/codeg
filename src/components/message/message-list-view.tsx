@@ -34,6 +34,7 @@ import {
   mergeAdjacentBackgroundTaskGroups,
   type AdaptedContentPart,
   type AdaptedMessage,
+  type AdaptedToolCallPart,
   type MessageTurnAdapter,
   type ToolCallState,
   type UserImageDisplay,
@@ -41,6 +42,7 @@ import {
 } from "@/lib/adapters/ai-elements-adapter"
 import { TurnStats } from "./turn-stats"
 import { LiveTurnStats } from "./live-turn-stats"
+import { LiveRunsChip, type LiveRunsList } from "./live-runs-chip"
 import { SlideSlot } from "./slide-slot"
 import { ModelLabelProvider } from "./model-label-context"
 import { KnownInvocationsProvider } from "./known-invocations-context"
@@ -96,11 +98,22 @@ import {
 } from "@/lib/agent-plan"
 import type {
   AgentType,
+  AsyncTaskRecord,
   AvailableCommandInfo,
+  BackgroundOutstandingTask,
   ConnectionStatus,
   MessageTurn,
   PlanEntryInfo,
 } from "@/lib/types"
+import {
+  collectLiveRuns,
+  runningSubAgentCalls,
+  subAgentCallsById,
+} from "@/lib/live-runs"
+import {
+  useOptionalDelegation,
+  type DelegationBinding,
+} from "@/contexts/delegation-context"
 import { cn, copyTextToClipboard } from "@/lib/utils"
 import {
   VirtualizedMessageThread,
@@ -121,6 +134,7 @@ import {
   useTranscriptNavDemanded,
   type TranscriptInsights,
   type TranscriptInsightsActions,
+  type TranscriptRunningRound,
 } from "@/stores/transcript-insights-store"
 import { useModelLabels } from "@/hooks/use-model-labels"
 import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
@@ -218,6 +232,29 @@ interface MessageListViewProps {
    * (see `forkBusy`) rather than making every reply's footer flicker.
    */
   onForkFromTurn?: (turnId: string) => void
+  /**
+   * The connection's work that can outlive a turn, for the "N running" chip
+   * on the live activity row above the composer (see `LiveRunsChip`). Every
+   * surface with a connection passes it — the conversation page, a canvas
+   * card, the read-only sub-agent and task drawers (those without the stop).
+   * Omitted, the row shows the running turn's figures only. MUST be
+   * referentially stable while its contents are unchanged.
+   */
+  liveRuns?: LiveRunsSource | null
+}
+
+/** What `MessageListView` lists under its "N running" chip. */
+export interface LiveRunsSource {
+  /** The backend connection id: whose delegations these are. */
+  connectionId: string | null
+  asyncTasks: readonly AsyncTaskRecord[]
+  backgroundTasks: readonly BackgroundOutstandingTask[]
+  delegatedChildren: readonly string[]
+  /** Stops one async task. Omitted on read-only surfaces — a viewer has no
+   *  connection to send the stop on, so no row offers one. */
+  onStopAsyncTask?: (taskId: string) => Promise<boolean>
+  /** The agent's display name, for the row of a turn it started on its own. */
+  agentName?: string
 }
 
 export interface ResolvedMessageGroup {
@@ -456,6 +493,13 @@ const EMPTY_NAV_ENTRIES: MessageNavEntry[] = []
 
 // Stable empty reference for "the live reply has no plan".
 const EMPTY_PLAN_ENTRIES: PlanEntryInfo[] = []
+
+// Stable empty references for the running list's inputs.
+const EMPTY_ASYNC_TASKS: readonly AsyncTaskRecord[] = []
+const EMPTY_BACKGROUND_TASKS: readonly BackgroundOutstandingTask[] = []
+const EMPTY_IDS: readonly string[] = []
+const EMPTY_BINDINGS: readonly DelegationBinding[] = []
+const EMPTY_AGENT_CALLS: readonly AdaptedToolCallPart[] = []
 
 // A single turn's `sourceTurns` is just `[turn]`. Cache the wrapper per turn
 // object so an unchanged historical turn keeps a stable `sourceTurns` reference
@@ -1366,22 +1410,54 @@ const PendingReply = memo(function PendingReply() {
 
 type LiveStatsMessage = ComponentProps<typeof LiveTurnStats>["message"]
 
+interface LiveActivityContent {
+  /** The running turn, `null` when none runs. */
+  message: LiveStatsMessage
+  runs: LiveRunsList
+}
+
 /**
- * The running turn's figures, kept at the turn's last ones while the bar
- * slides away after it ends (the live message goes as the turn does), so the
- * figures leave with the bar instead of blanking it first. Mounted only while
- * the bar is, so a new turn starts from its own.
+ * The live activity row above the composer: the running turn's figures and the
+ * "N running" chip. While it shows (`show`) it draws what is live — so a turn
+ * that ends with work still running leaves the chip alone on the row. While it
+ * slides away it keeps its last content, so that leaves with the row instead
+ * of blanking it first. Mounted only while the row is, so a new turn starts
+ * from its own.
  */
-function HeldLiveTurnStats({ message }: { message: LiveStatsMessage | null }) {
-  const [held, setHeld] = useState(message)
-  if (message !== null && message !== held) setHeld(message)
-  const shown = message ?? held
-  // Keyed by its turn: a turn that starts while the last one's bar is still
-  // sliding away gets figures of its own, its clock from zero.
-  return shown ? (
-    <LiveTurnStats key={shown.id} message={shown} />
-  ) : (
-    <div className="h-8" />
+function HeldLiveActivityBar({
+  show,
+  message,
+  runs,
+  onStopAsyncTask,
+  agentName,
+}: LiveActivityContent & {
+  show: boolean
+  onStopAsyncTask?: (taskId: string) => Promise<boolean>
+  agentName?: string
+}) {
+  const [held, setHeld] = useState<LiveActivityContent>(() => ({
+    message,
+    runs,
+  }))
+  if (show && (held.message !== message || held.runs !== runs)) {
+    setHeld({ message, runs })
+  }
+  const shown = show ? { message, runs } : held
+  if (!shown.message && shown.runs.count === 0) return <div className="h-8" />
+  return (
+    <LiveTurnStats
+      message={shown.message}
+      trailing={
+        shown.runs.count > 0 ? (
+          <LiveRunsChip
+            runs={shown.runs}
+            interactive={show}
+            onStopAsyncTask={onStopAsyncTask}
+            agentName={agentName}
+          />
+        ) : null
+      }
+    />
   )
 }
 
@@ -1433,6 +1509,7 @@ export function MessageListView({
   onAskSelection,
   onSaveNoteSelection,
   onForkFromTurn,
+  liveRuns = null,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -2031,6 +2108,31 @@ export function MessageListView({
       : null
   const navRevealingTurnId = navJump.revealingTurnId
   const replyStreaming = connStatus === "prompting"
+  // The round the agent is on, which the navigator lists first while it runs:
+  // from the send (the prompt is in, no word back yet) to the reply settling,
+  // for a passive viewer too. Its message is the last user turn — a walk back
+  // from the end, cheap enough for every batch; the store keeps the value
+  // while it is unchanged.
+  const roundRunning = replyStreaming || lastAssistantRunning
+  const liveStartedAt = liveMessage?.startedAt ?? null
+  const runningUserTurn = useMemo(() => {
+    if (!insightsInSidebar || !roundRunning) return null
+    for (let i = timelineTurns.length - 1; i >= 0; i--) {
+      const turn = timelineTurns[i].turn
+      if (turn.role === "user") return turn
+    }
+    return null
+  }, [insightsInSidebar, roundRunning, timelineTurns])
+  const runningRound = useMemo<TranscriptRunningRound | null>(() => {
+    if (!runningUserTurn) return null
+    const sentAt = Date.parse(runningUserTurn.timestamp)
+    return {
+      turnId: runningUserTurn.id,
+      // The composer's live timer counts from the live reply's start; agree
+      // with it while one is streaming.
+      startedAt: liveStartedAt ?? (Number.isNaN(sentAt) ? null : sentAt),
+    }
+  }, [runningUserTurn, liveStartedAt])
   const transcriptInsights = useMemo<TranscriptInsights | null>(
     () =>
       insightsInSidebar
@@ -2041,6 +2143,7 @@ export function MessageListView({
               earlier: navEarlier,
               revealingTurnId: navRevealingTurnId,
               currentTurnId: currentNavTurnId,
+              running: runningRound,
             },
             plan: { entries: sidebarPlanEntries, streaming: replyStreaming },
             actions: insightsActions,
@@ -2053,6 +2156,7 @@ export function MessageListView({
       navEarlier,
       navRevealingTurnId,
       currentNavTurnId,
+      runningRound,
       sidebarPlanEntries,
       replyStreaming,
       insightsActions,
@@ -2070,16 +2174,103 @@ export function MessageListView({
     return () => retractTranscriptInsights(conversationId, insightsOwner)
   }, [insightsInSidebar, conversationId, insightsOwner])
 
+  // --- The live activity row ------------------------------------------------
+  const turnLive = liveMessage !== null && connStatus === "prompting"
+  // The streaming reply's sub-agents still at work. Only while the turn runs:
+  // a foreground sub-agent blocks its turn, and a reply that ended keeps its
+  // frozen calls (a background one is the producer's to report, below).
+  const foregroundAgents = useMemo(() => {
+    if (!turnLive) return EMPTY_AGENT_CALLS
+    const out: AdaptedToolCallPart[] = []
+    for (const item of threadItems) {
+      if (
+        item.kind === "turn" &&
+        item.phase === "streaming" &&
+        item.group.role === "assistant"
+      ) {
+        out.push(...runningSubAgentCalls(item.group.parts))
+      }
+    }
+    return out.length > 0 ? out : EMPTY_AGENT_CALLS
+  }, [turnLive, threadItems])
+  const delegation = useOptionalDelegation()
+  const runsConnectionId = liveRuns?.connectionId ?? null
+  const delegationBindings = useMemo(
+    () =>
+      delegation && runsConnectionId
+        ? delegation.bindingsForParent(runsConnectionId)
+        : EMPTY_BINDINGS,
+    [delegation, runsConnectionId]
+  )
+  const backgroundTasks = liveRuns?.backgroundTasks ?? EMPTY_BACKGROUND_TASKS
+  // A background sub-agent's row takes its title from its launch card. The
+  // thread is only searched while there is one, so the list is not rebuilt on
+  // every streaming batch for nothing.
+  const cardThread = backgroundTasks.some((task) => task.kind === "agent")
+    ? threadItems
+    : null
+  const liveRunList = useMemo<LiveRunsList>(
+    () =>
+      collectLiveRuns({
+        asyncTasks: liveRuns?.asyncTasks ?? EMPTY_ASYNC_TASKS,
+        foregroundAgents,
+        backgroundTasks,
+        findLaunchCard: (toolCallId) => {
+          if (!cardThread) return null
+          for (let i = cardThread.length - 1; i >= 0; i -= 1) {
+            const item = cardThread[i]
+            if (item.kind !== "turn" || item.group.role !== "assistant")
+              continue
+            const part = subAgentCallsById(item.group.parts).get(toolCallId)
+            if (part) return part
+          }
+          return null
+        },
+        delegatedChildren: liveRuns?.delegatedChildren ?? EMPTY_IDS,
+        delegationBindings,
+      }),
+    [
+      liveRuns?.asyncTasks,
+      liveRuns?.delegatedChildren,
+      foregroundAgents,
+      backgroundTasks,
+      cardThread,
+      delegationBindings,
+    ]
+  )
+  const activityShown = turnLive || liveRunList.count > 0
+  // Slides in over the composer as a turn starts or work starts running past
+  // one, and out once neither is left, so the transcript above eases up and
+  // back instead of jumping. Drawn under the loading and load-error states
+  // too: what runs is the connection's, not the transcript's, and its stop
+  // must not wait on the history loading.
+  const activityRow = (
+    <SlideSlot className="shrink-0" show={activityShown}>
+      <HeldLiveActivityBar
+        show={activityShown}
+        message={turnLive ? liveMessage : null}
+        runs={liveRunList}
+        onStopAsyncTask={liveRuns?.onStopAsyncTask}
+        agentName={liveRuns?.agentName}
+      />
+    </SlideSlot>
+  )
+
   const hasRenderableContent = threadItems.length > 0 || Boolean(liveMessage)
 
   if (detailLoading && !hasRenderableContent) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <span>{t("loading")}</span>
+      <SessionViewerHost>
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{t("loading")}</span>
+            </div>
+          </div>
+          {activityRow}
         </div>
-      </div>
+      </SessionViewerHost>
     )
   }
 
@@ -2097,48 +2288,59 @@ export function MessageListView({
     const showActions = Boolean(onReload || onNewSession)
     const reloading = detailLoading
     return (
-      <div role="alert" className="flex h-full items-center justify-center p-6">
-        <div className="flex max-w-md flex-col items-center gap-4 text-center">
-          <AlertCircle
-            aria-hidden="true"
-            className="h-8 w-8 text-destructive"
-          />
-          <div className="space-y-1">
-            <h3 className="text-sm font-medium">{t("errorTitle")}</h3>
-            <p className="text-sm text-muted-foreground break-words">
-              {renderedLoadError}
-            </p>
-          </div>
-          {showActions && (
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              {onReload && (
-                <Button
-                  size="sm"
-                  onClick={onReload}
-                  disabled={reloading}
-                  aria-busy={reloading}
-                >
-                  {reloading ? (
-                    <Loader2
-                      aria-hidden="true"
-                      className="me-1.5 h-4 w-4 animate-spin"
-                    />
-                  ) : (
-                    <RefreshCw aria-hidden="true" className="me-1.5 h-4 w-4" />
+      <SessionViewerHost>
+        <div className="flex h-full min-h-0 flex-col">
+          <div
+            role="alert"
+            className="flex min-h-0 flex-1 items-center justify-center p-6"
+          >
+            <div className="flex max-w-md flex-col items-center gap-4 text-center">
+              <AlertCircle
+                aria-hidden="true"
+                className="h-8 w-8 text-destructive"
+              />
+              <div className="space-y-1">
+                <h3 className="text-sm font-medium">{t("errorTitle")}</h3>
+                <p className="text-sm text-muted-foreground break-words">
+                  {renderedLoadError}
+                </p>
+              </div>
+              {showActions && (
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {onReload && (
+                    <Button
+                      size="sm"
+                      onClick={onReload}
+                      disabled={reloading}
+                      aria-busy={reloading}
+                    >
+                      {reloading ? (
+                        <Loader2
+                          aria-hidden="true"
+                          className="me-1.5 h-4 w-4 animate-spin"
+                        />
+                      ) : (
+                        <RefreshCw
+                          aria-hidden="true"
+                          className="me-1.5 h-4 w-4"
+                        />
+                      )}
+                      {t("errorActionReload")}
+                    </Button>
                   )}
-                  {t("errorActionReload")}
-                </Button>
-              )}
-              {onNewSession && (
-                <Button size="sm" variant="outline" onClick={onNewSession}>
-                  <Plus aria-hidden="true" className="me-1.5 h-4 w-4" />
-                  {t("errorActionNewSession")}
-                </Button>
+                  {onNewSession && (
+                    <Button size="sm" variant="outline" onClick={onNewSession}>
+                      <Plus aria-hidden="true" className="me-1.5 h-4 w-4" />
+                      {t("errorActionNewSession")}
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
-          )}
+          </div>
+          {activityRow}
         </div>
-      </div>
+      </SessionViewerHost>
     )
   }
 
@@ -2203,14 +2405,7 @@ export function MessageListView({
             </Button>
           )}
         </MessageThread>
-        {/* Slides in over the composer as a turn starts and out as it ends,
-            so the transcript above eases up and back instead of jumping. */}
-        <SlideSlot
-          className="shrink-0"
-          show={liveMessage !== null && connStatus === "prompting"}
-        >
-          <HeldLiveTurnStats message={liveMessage} />
-        </SlideSlot>
+        {activityRow}
         {/* Overlay stack pinned to the inline-start edge (top-left in LTR,
         top-right in RTL) — only where the plan and sub-agents have no side
         panel to go to (see `insightsInSidebar`). A flex column keeps the order

@@ -232,7 +232,7 @@ export function InfoItem({
 
 /**
  * A value with a copy button that fades in on hover (or keyboard focus). Used
- * for identifiers worth copying — the session id and the extension id.
+ * for identifiers worth copying — the session id and the session index.
  */
 function CopyableValue({
   text,
@@ -273,8 +273,13 @@ function CopyableValue({
   )
 }
 
-/** A copy button for one property row of `SessionDetailsCard`: it shows while
- *  the row is hovered or holds focus. */
+/**
+ * A copy button for one property of `SessionDetailsCard`: hidden until its
+ * cell is pointed at or holds focus (shown on a touch screen, which can't
+ * point), and while it says the copy went through. It hangs off the value's
+ * end rather than taking room beside it, so the value stays centred in its
+ * column whether it shows or not.
+ */
 function CopyPropertyButton({
   text,
   copyLabel,
@@ -296,7 +301,10 @@ function CopyPropertyButton({
       onClick={handleCopy}
       aria-label={copied ? copiedLabel : copyLabel}
       title={copied ? copiedLabel : copyLabel}
-      className="ms-auto inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-accent-foreground focus-visible:opacity-100 group-hover/prop:opacity-100 group-focus-within/prop:opacity-100"
+      className={cn(
+        "absolute start-full top-1/2 ms-0.5 inline-flex size-4 -translate-y-1/2 items-center justify-center rounded text-muted-foreground outline-none transition-[opacity,color] hover:bg-foreground/5 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 group-focus-within/prop:opacity-100 group-hover/prop:opacity-100 [@media(hover:none)]:opacity-100",
+        copied ? "opacity-100" : "opacity-0"
+      )}
     >
       {copied ? (
         <Check className="size-3 text-green-500" />
@@ -308,22 +316,13 @@ function CopyPropertyButton({
 }
 
 /**
- * An id cut in the middle when it doesn't fit: its head gives way and its
- * last characters stay, which is where two ids of one agent tell apart.
+ * One label-over-value cell of `SessionDetailsCard`'s properties, centred in
+ * its column, the value a size up from its label. The cells of a line share
+ * its width evenly and are split by hairlines.
+ * The cell groups its label and value for the hover that lights its copy
+ * button.
  */
-function MiddleTruncatedId({ value }: { value: string }) {
-  const tail = value.length > 16 ? value.slice(-8) : ""
-  const head = tail ? value.slice(0, -8) : value
-  return (
-    <span dir="ltr" title={value} className="flex min-w-0 font-mono">
-      <span className="min-w-0 truncate">{head}</span>
-      {tail && <span className="shrink-0">{tail}</span>}
-    </span>
-  )
-}
-
-/** One label–value row of `SessionDetailsCard`'s property grid. */
-function PropertyRow({
+function PropertyCell({
   label,
   children,
 }: {
@@ -331,24 +330,44 @@ function PropertyRow({
   children: ReactNode
 }) {
   return (
-    <div className="group/prop col-span-2 grid grid-cols-subgrid items-center">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="flex h-5 min-w-0 items-center gap-1 text-foreground/80">
+    <div className="group/prop min-w-0 px-1.5 text-center">
+      <dt className="truncate text-2xs leading-4 text-muted-foreground">
+        {label}
+      </dt>
+      <dd className="mt-1 flex h-5 min-w-0 items-center justify-center gap-1 text-[0.8125rem] font-medium text-foreground">
         {children}
       </dd>
     </div>
   )
 }
 
+/** A line of property cells, as wide as each other, a hairline between each
+ *  two. */
+const PROPERTY_LINE =
+  "grid min-w-0 auto-cols-fr grid-flow-col [&>*+*]:border-s [&>*+*]:border-border/60"
+
+/** The card's own colour (its `bg-muted/40` over the page), for the ring
+ *  that cuts the status dot out of the agent icon. */
+const CARD_RING =
+  "ring-[color-mix(in_oklab,var(--muted)_40%,var(--background))]"
+
+/** The part of the session index (the agent's own id for the session) shown:
+ *  its first segment, which is enough to tell two apart at a glance; the
+ *  whole one is copied. */
+function externalIdHead(value: string): string {
+  return value.split("-")[0] || value
+}
+
 /**
- * The Session Details side panel's summary of the active conversation: the
- * title on a row of its own, the agent (its icon and name) and the status
- * under it, then one row per property — the model, the branch, the
- * conversation's and the agent's session ids (copyable), and the parent
- * conversation and the assistant when it has them. The panel's room goes to
- * the plan and the message navigator under it, so this is a card; the dialog
- * (`SessionDetailsContent`) is the full view, with token usage and
- * timestamps.
+ * The Session Details side panel's summary of the active conversation, as a
+ * card. Its head: the agent's icon, the status a dot on its corner as the
+ * conversation list draws it; beside it the title, and under the title the
+ * agent's name and the model. Under a hairline its properties, label over
+ * value, a column each, centred: the branch, the conversation's id and its
+ * session index — the agent's own id for it — (both copyable); then the
+ * parent conversation and the assistant when it has them. The panel's room goes to the plan and the message
+ * navigator under it; the dialog (`SessionDetailsContent`) is the full view,
+ * with token usage and timestamps.
  *
  * `model` is the raw id the transcript recorded (the tab resolves it the way
  * the detail panel does); it is shown by the name the agent's picker uses.
@@ -366,81 +385,116 @@ export function SessionDetailsCard({
   const displayModel = modelLabel(model ?? summary.model ?? null)
   const title = formatConversationTitle(summary.title) || t("untitled")
   const knownStatus = isKnownStatus(summary.status) ? summary.status : null
+  const statusLabel = knownStatus ? tStatus(knownStatus) : summary.status
+  const agentLabel = getAgentLabel(summary.agent_type)
+  const hasExtraLine = summary.parent_id != null || summary.assistant_id != null
 
   return (
-    <section className="min-w-0 rounded-lg border border-border/70 bg-muted/40 p-3">
-      <p
-        title={title}
-        className="line-clamp-2 text-[0.8125rem] leading-[1.125rem] font-semibold [overflow-wrap:anywhere]"
-      >
-        {title}
-      </p>
-      <p className="mt-1 flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
-        {/* Decorative: the name beside it says which agent it is, and the
-            icon's SVG carries a <title> of its own that would repeat it. */}
-        <span aria-hidden="true" className="inline-flex shrink-0">
-          <AgentIcon agentType={summary.agent_type} className="size-3.5" />
-        </span>
-        <span className="truncate">{getAgentLabel(summary.agent_type)}</span>
-        <span aria-hidden="true">·</span>
-        <span className="inline-flex shrink-0 items-center gap-1 text-foreground/80">
-          <ConversationStatusDot status={knownStatus} size="sm" />
-          {knownStatus ? tStatus(knownStatus) : summary.status}
-        </span>
-      </p>
-      <dl className="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-2xs">
-        <PropertyRow label={t("model")}>
-          <span className="min-w-0 truncate" title={displayModel || undefined}>
-            {displayModel || t("none")}
-          </span>
-        </PropertyRow>
-        <PropertyRow label={t("gitBranch")}>
-          {summary.git_branch ? (
-            <span
-              dir="ltr"
-              title={summary.git_branch}
-              className="min-w-0 truncate font-mono"
-            >
-              {summary.git_branch}
-            </span>
-          ) : (
-            t("none")
-          )}
-        </PropertyRow>
-        <PropertyRow label={t("sessionId")}>
-          <span className="font-mono tabular-nums">{summary.id}</span>
-          <CopyPropertyButton
-            text={String(summary.id)}
-            copyLabel={t("copyField", { field: t("sessionId") })}
-            copiedLabel={t("copiedField", { field: t("sessionId") })}
+    <section className="min-w-0 rounded-xl border border-border/70 bg-muted/40 p-3">
+      <div className="flex min-w-0 items-start gap-3">
+        {/* Decorative: the name under the title says which agent it is, the
+            icon's SVG carries a <title> of its own that would repeat it, and
+            the status is said in words beside the name. */}
+        <span
+          data-testid="session-agent-avatar"
+          aria-hidden="true"
+          className="relative mt-0.5 flex shrink-0"
+        >
+          <AgentIcon agentType={summary.agent_type} className="size-9" />
+          <ConversationStatusDot
+            status={knownStatus}
+            className={cn(
+              "absolute -end-0.5 -bottom-0.5 size-2.5 ring-2",
+              CARD_RING
+            )}
           />
-        </PropertyRow>
-        <PropertyRow label={t("externalId")}>
-          {summary.external_id ? (
-            <>
-              <MiddleTruncatedId value={summary.external_id} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p
+            title={title}
+            className="line-clamp-2 text-sm leading-5 font-semibold text-foreground [overflow-wrap:anywhere]"
+          >
+            {title}
+          </p>
+          <p
+            data-testid="session-agent-line"
+            className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
+          >
+            <span className="max-w-[50%] shrink-0 truncate">{agentLabel}</span>
+            {displayModel && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span title={displayModel} className="min-w-0 truncate">
+                  {displayModel}
+                </span>
+              </>
+            )}
+            <span className="sr-only">{`${t("status")}: ${statusLabel}`}</span>
+          </p>
+        </div>
+      </div>
+      <dl className="mt-3 space-y-2.5 border-t border-border/60 pt-3">
+        <div className={PROPERTY_LINE}>
+          <PropertyCell label={t("gitBranch")}>
+            {summary.git_branch ? (
+              <span
+                dir="ltr"
+                title={summary.git_branch}
+                className="min-w-0 truncate"
+              >
+                {summary.git_branch}
+              </span>
+            ) : (
+              t("none")
+            )}
+          </PropertyCell>
+          <PropertyCell label={t("sessionId")}>
+            <span className="relative flex min-w-0">
+              <span className="truncate tabular-nums">{summary.id}</span>
               <CopyPropertyButton
-                text={summary.external_id}
-                copyLabel={t("copyField", { field: t("externalId") })}
-                copiedLabel={t("copiedField", { field: t("externalId") })}
+                text={String(summary.id)}
+                copyLabel={t("copyField", { field: t("sessionId") })}
+                copiedLabel={t("copiedField", { field: t("sessionId") })}
               />
-            </>
-          ) : (
-            t("none")
-          )}
-        </PropertyRow>
-        {summary.parent_id != null && (
-          <PropertyRow label={t("parentId")}>
-            <span className="font-mono tabular-nums">{summary.parent_id}</span>
-          </PropertyRow>
-        )}
-        {summary.assistant_id != null && (
-          <PropertyRow label={t("assistant")}>
-            <AssistantInline
-              id={summary.assistant_id}
-              snapshotName={summary.assistant_name ?? null}
-            />
-          </PropertyRow>
+            </span>
+          </PropertyCell>
+          <PropertyCell label={t("externalId")}>
+            {summary.external_id ? (
+              <span className="relative flex min-w-0">
+                <span
+                  dir="ltr"
+                  title={summary.external_id}
+                  className="truncate tabular-nums"
+                >
+                  {externalIdHead(summary.external_id)}
+                </span>
+                <CopyPropertyButton
+                  text={summary.external_id}
+                  copyLabel={t("copyField", { field: t("externalId") })}
+                  copiedLabel={t("copiedField", { field: t("externalId") })}
+                />
+              </span>
+            ) : (
+              t("none")
+            )}
+          </PropertyCell>
+        </div>
+        {hasExtraLine && (
+          <div className={PROPERTY_LINE}>
+            {summary.parent_id != null && (
+              <PropertyCell label={t("parentId")}>
+                <span className="tabular-nums">{summary.parent_id}</span>
+              </PropertyCell>
+            )}
+            {summary.assistant_id != null && (
+              <PropertyCell label={t("assistant")}>
+                <AssistantInline
+                  id={summary.assistant_id}
+                  snapshotName={summary.assistant_name ?? null}
+                />
+              </PropertyCell>
+            )}
+          </div>
         )}
       </dl>
     </section>

@@ -42,11 +42,13 @@ pub trait WorkTaskToolAccess: Send + Sync {
 
     /// Record the final verdict (+ optional summary) for the task driven by
     /// `parent_connection_id`; the verdict decides how the task settles when
-    /// the turn ends.
+    /// the turn ends. `thread_replies` are the comments drafted for the forge
+    /// threads the task came from (empty for most tasks).
     async fn complete(
         &self,
         parent_connection_id: &str,
         verdict: &str,
         summary: Option<&str>,
+        thread_replies: &[crate::acp::delegation::transport::ThreadReply],
     ) -> TaskReportAck;
 }

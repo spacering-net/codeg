@@ -21,6 +21,7 @@ import {
   Info,
   ChevronRight,
   SquareTerminal,
+  ListChecks,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -72,6 +73,7 @@ import {
   ConversationTagContextSubmenu,
   NewConversationTagDialog,
 } from "./conversation-tag-picker"
+import { MoveToFolderContextSubmenu } from "./move-to-folder-menu"
 import { AgentIcon } from "@/components/agent-icon"
 import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
@@ -195,6 +197,17 @@ interface SidebarConversationCardProps {
   onStatusChange: (id: number, status: ConversationStatus) => Promise<void>
   onNewConversation?: (folderId: number) => void
   onTogglePin?: (id: number, nextPinned: boolean) => void
+  /** A folder was picked in the "Move to folder" submenu — the caller asks for
+   *  confirmation. Offered on root regular and chat conversations only (a
+   *  sub-session moves with its root). */
+  onMoveToFolder?: (
+    conversation: DbConversationSummary,
+    folderId: number
+  ) => void
+  /** Opens Manage conversations on the folder this row is listed under.
+   *  Offered on root folder conversations only: a chat — and a sub-session,
+   *  which may hang under one — lives in no folder a scope there can name. */
+  onManageConversations?: (conversation: DbConversationSummary) => void
   /** Delegation-tree nesting depth (0 = root). Drives the per-level indent. */
   depth?: number
   /** True when `child_count > 0`: the conversation has delegation children, so
@@ -218,6 +231,8 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   onStatusChange,
   onNewConversation,
   onTogglePin,
+  onMoveToFolder,
+  onManageConversations,
   depth = 0,
   hasChildren = false,
   expanded = false,
@@ -753,6 +768,28 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                 )}
               </ContextMenuSubContent>
             </ContextMenuSub>
+            {onMoveToFolder &&
+              !isSubsession &&
+              (conversation.kind === "regular" ||
+                conversation.kind === "chat") && (
+                <MoveToFolderContextSubmenu
+                  currentFolderId={conversation.folder_id}
+                  onPick={(folderId) => onMoveToFolder(conversation, folderId)}
+                />
+              )}
+            {onManageConversations &&
+              !isSubsession &&
+              conversation.kind !== "chat" && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onSelect={() => onManageConversations(conversation)}
+                  >
+                    <ListChecks className="h-4 w-4" />
+                    {tSidebar("folderHeaderMenu.manageConversations")}
+                  </ContextMenuItem>
+                </>
+              )}
             <ContextMenuSeparator />
             <ContextMenuItem
               variant="destructive"

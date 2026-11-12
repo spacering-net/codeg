@@ -2242,7 +2242,7 @@
       "statusRunningBadge": "Läuft",
       "runningCountBadge": "{count, plural, one {# laufende Sitzung} other {# laufende Sitzungen}}",
       "statusCancelledBadge": "Abgebrochen",
-      "worktreeRemovedBadge": "Quell-Worktree entfernt",
+      "originalWorkingDir": "Ursprüngliches Arbeitsverzeichnis",
       "cliBadge": "Über die Kommandozeile gestartet",
       "conversationCountUnit": "{count, plural, one {# Konversation} other {# Konversationen}}",
       "emptyFolderHint": "Keine Konversationen",
@@ -2283,6 +2283,7 @@
         "untitledConversation": "Unbenannte Konversation",
         "setStatus": "Status setzen…",
         "deleteSelected": "Löschen",
+        "moveSelected": "Verschieben nach…",
         "noConversations": "Keine Konversationen in diesem Ordner.",
         "noConversationsWorkspace": "Keine Konversationen im Arbeitsbereich.",
         "noMatchingConversations": "Keine Konversationen entsprechen den Filtern.",
@@ -2381,7 +2382,7 @@
       "fieldTitle": "Titel",
       "untitled": "Unbenannte Konversation",
       "sessionId": "Sitzungs-ID",
-      "externalId": "Erweiterungs-ID",
+      "externalId": "Sitzungsindex",
       "agent": "Agent",
       "model": "Modell",
       "status": "Status",
@@ -2432,6 +2433,33 @@
       "reopen": "Erneut öffnen",
       "expandSubsessions": "Unterkonversationen einblenden",
       "collapseSubsessions": "Unterkonversationen ausblenden"
+    },
+    "moveConversation": {
+      "menuLabel": "Verschieben nach",
+      "title": "Unterhaltung verschieben",
+      "titleMany": "{count, plural, one {# Unterhaltung} other {# Unterhaltungen}} verschieben",
+      "intro": "„{title}“ wird in diesen Ordner verschoben:",
+      "introMany": "{count, plural, one {Die ausgewählte Unterhaltung wird} other {Die # ausgewählten Unterhaltungen werden}} in diesen Ordner verschoben:",
+      "untitledConversation": "Unbenannte Unterhaltung",
+      "explain": "Ab der nächsten Nachricht arbeitet der Agent in diesem Ordner; der Verlauf bleibt unverändert. Kann der Agent die Sitzung hier nicht fortsetzen, wird angeboten, sie neu zu laden oder eine neue Sitzung zu starten.",
+      "chatFilesNote": "Im Chat erstellte Dateien bleiben in seinem temporären Verzeichnis {path}; sie werden nicht in den Ordner verschoben.",
+      "chatFilesNoteMany": "In diesen Chats erstellte Dateien bleiben in ihren temporären Verzeichnissen; sie werden nicht in den Ordner verschoben.",
+      "noTargets": "Kein anderer Ordner geöffnet",
+      "targetUnavailable": "Dieser Ordner wurde geschlossen oder entfernt – wähle einen anderen.",
+      "cancel": "Abbrechen",
+      "move": "Verschieben",
+      "toastMoved": "{count, plural, one {# Unterhaltung} other {# Unterhaltungen}} nach {folder} verschoben",
+      "toastSkipped": "{count, plural, one {# Unterhaltung wurde nicht verschoben} other {# Unterhaltungen wurden nicht verschoben}}",
+      "toastFailed": "Verschieben fehlgeschlagen: {message}",
+      "skipReason": {
+        "not_found": "Sie existiert nicht mehr",
+        "not_movable": "Unter-Unterhaltungen werden mit ihrer übergeordneten verschoben",
+        "already_there": "Sie ist bereits in diesem Ordner",
+        "task_owned": "Sie gehört zu einer To-do-Aufgabe",
+        "busy": "Ein Agent arbeitet gerade daran – versuche es, wenn er fertig ist",
+        "conflict": "Sie hat sich beim Verschieben geändert – versuche es erneut",
+        "target_unavailable": "Der Ordner wurde geschlossen oder entfernt"
+      }
     },
     "search": {
       "dialogTitle": "Suchen",
@@ -2539,6 +2567,24 @@
         "loadFailed": "Status konnte nicht gelesen werden: {message}",
         "openSettings": "Alle Einstellungen öffnen",
         "refresh": "Aktualisieren"
+      },
+      "webService": {
+        "title": "Webdienst",
+        "start": "Webdienst starten",
+        "stop": "Webdienst beenden",
+        "cancel": "Abbrechen",
+        "confirmStart": "Starten",
+        "confirmTitle": "Codeg für dein Netzwerk öffnen?",
+        "confirmDescription": "Der Webdienst lauscht auf {address}. Jedes Gerät in deinem Netzwerk kann dann mit dem Zugriffstoken auf Codeg zugreifen – einschließlich Terminals und Agenten.",
+        "tooltipNetwork": "Webdienst · lauscht auf {address} (aus deinem Netzwerk erreichbar)",
+        "tooltipLocal": "Webdienst · lauscht auf {address} (nur dieser Computer)",
+        "tooltipStopped": "Webdienst · beendet",
+        "hintNetwork": "Lauscht auf {address}. Geräte in deinem Netzwerk können Codeg mit dem Zugriffstoken öffnen.",
+        "hintLocal": "Lauscht auf {address}. Nur dieser Computer kann darauf zugreifen.",
+        "hintStoppedNetwork": "Beendet. Nach dem Start lauscht er auf {address}, aus deinem Netzwerk erreichbar.",
+        "hintStoppedLocal": "Beendet. Nach dem Start lauscht er auf {address}, nur dieser Computer.",
+        "copyAddress": "Adresse kopieren",
+        "openSettings": "Webdienst-Einstellungen öffnen"
       }
     },
     "auxPanel": {
@@ -3443,7 +3489,8 @@
         },
         "errors": {
           "connectionFailed": "Verbindung fehlgeschlagen",
-          "sendPromptFailed": "Nachricht konnte nicht gesendet werden: {error}"
+          "sendPromptFailed": "Nachricht konnte nicht gesendet werden: {error}",
+          "conversationMoved": "Diese Unterhaltung wurde nach {folder} verschoben. Sende die Nachricht erneut, um dort weiterzumachen."
         }
       },
       "shared": {
@@ -3885,14 +3932,12 @@
         "readImageLoading": "Bild wird geladen…",
         "readImageError": "Das Bild konnte nicht geladen werden",
         "shellSession": "Sitzung {id}",
-        "agentPromptLabel": "Eingabe",
         "agentModelLabel": "Modell",
         "agentEffortLabel": "Aufwand",
         "agentRecoveredNote": "Der Sub-Agent wurde tatsächlich fertig; sein Ergebnis wurde nie zugestellt, weil der Turn abbrach:",
         "agentProgressTools": "{count} Tool-Aufrufe",
         "agentProgressTurns": "{count} Runden",
         "agentProgressContext": "Kontext {pct}%",
-        "agentSessionAction": "Subagent-Sitzung ansehen",
         "agentSessionTitle": "Subagent-Sitzung",
         "agentSessionLoading": "Protokoll des Subagenten wird geladen…",
         "agentSessionEmpty": "Der Subagent hat noch nichts geschrieben.",
@@ -3960,6 +4005,13 @@
         "htmlPreviewHide": "Vorschau ausblenden"
       },
       "activity": {
+        "oauth": {
+          "waiting": "Warten auf Autorisierung für {server}",
+          "reconnecting": "Verbindung zu {server} wird wiederhergestellt…",
+          "open": "Autorisierung im Systembrowser öffnen",
+          "verify": "Prüfe den Zugriff nach dem Neuverbinden mit einem echten MCP-Werkzeugaufruf. Das Öffnen des Browsers bestätigt keine Autorisierung.",
+          "openFailed": "Der Browser konnte nicht geöffnet werden. Versuche es über den Autorisierungslink erneut."
+        },
         "header": {
           "label": "Ablauf",
           "working": "Läuft",
@@ -4125,7 +4177,9 @@
         "openFile": "{filePath} öffnen",
         "collapse": "Einklappen",
         "currentMessage": "Aktuelle Nachricht",
-        "scrollToCurrent": "Zur aktuellen Nachricht (#{ordinal}) scrollen"
+        "scrollToCurrent": "Zur aktuellen Nachricht (#{ordinal}) scrollen",
+        "running": "Läuft",
+        "total": "{count, plural, one {# Nachricht} other {# Nachrichten}}"
       },
       "replyArtifacts": {
         "title": "Geänderte Dateien",
@@ -4181,6 +4235,7 @@
         "resumeDelegation": "Aufgabe {task} wird fortgesetzt",
         "resumeDelegationNoId": "Delegierte Aufgabe wird fortgesetzt",
         "promptLabel": "Anweisung",
+        "attachmentsLabel": "Anhänge",
         "ackRecorded": "In der Arbeitsaufgabe erfasst",
         "ackNotRecorded": "Nicht in der Arbeitsaufgabe erfasst",
         "ackNotRecordedWithReason": "Nicht in der Arbeitsaufgabe erfasst: {reason}",
@@ -4297,6 +4352,13 @@
         "scheduledWakeup": "Geplantes Aufwecken",
         "scheduledWakeupAt": "Geplantes Aufwecken um {time}",
         "scheduledTask": "Geplante Aufgabe"
+      },
+      "liveRuns": {
+        "count": "{count} laufen",
+        "awaiting": "Ein Sub-Agent wartet auf dich",
+        "groupDelegations": "Delegierungen",
+        "background": "Hintergrund",
+        "delegatedFallback": "Delegierter Sub-Agent"
       },
       "remoteControl": {
         "title": "Fernsteuerung aktiv",
@@ -4485,7 +4547,12 @@
       "permissionDenied": "Zugriff verweigert. Verwenden Sie einen Port über 1024 oder starten Sie mit höheren Rechten.",
       "addressUnavailable": "Die Adresse ist auf diesem Computer nicht verfügbar",
       "bindFailed": "Adresse konnte nicht gebunden werden"
-    }
+    },
+    "bindHost": "Lauschen auf",
+    "bindHostAll": "Alle Schnittstellen (0.0.0.0)",
+    "bindHostLocal": "Nur dieser Computer (127.0.0.1)",
+    "bindHostAllHint": "Geräte in deinem lokalen Netzwerk erreichen den Dienst mit dem Zugriffstoken.",
+    "bindHostLocalHint": "Nur dieser Computer erreicht den Dienst – etwa hinter einem Reverse-Proxy oder Tailscale Serve."
   },
   "DirectoryBrowser": {
     "title": "Verzeichnis durchsuchen",
@@ -6394,6 +6461,11 @@
     "completeDescription": "Diese Aufgabe hat keine Dateien geändert – es gibt nichts zu mergen, sie wird direkt als fertig markiert.",
     "completeDescriptionNoWorktree": "Der Worktree dieser Aufgabe wurde entfernt – es kann nichts mehr gemergt werden, sie wird direkt als fertig markiert. Ein Arbeitsbranch mit noch nicht gemergten Commits bleibt erhalten.",
     "completeDeleteWorktree": "Worktree nach dem Abschließen löschen",
+    "threadCommentLabel": "Nach Abschluss der Aufgabe im Thread des Eintrags kommentieren",
+    "threadCommentLabelSeveral": "Nach Abschluss der Aufgabe im Thread jedes Issues kommentieren",
+    "threadCommentReplyLabel": "Antwort für #{number}",
+    "threadCommentPlaceholder": "Leer lassen, um nur zu posten, wie die Arbeit ausgeliefert wurde.",
+    "threadCommentHint": "Vom Agenten entworfen – prüfe sie, bevor sie öffentlich wird. Codeg ergänzt eine Zeile dazu, wie die Arbeit ausgeliefert wurde, und die Codeg-Signatur, wenn sie in den Repository-Einstellungen aktiv ist.",
     "completeSubmit": "Abschließen",
     "settingsTitle": "Aufgaben-Einstellungen",
     "settingsDescription": "Standardwerte für Aufgaben in {folder}.",
@@ -6453,6 +6525,9 @@
     "preflightRunning": "{name} läuft…",
     "detailDescription": "Aufgabendetails",
     "detailSummary": "Ergebnis",
+    "detailThreadReply": "Antwort für den Thread",
+    "detailThreadReplyHint": "Wird beim Annehmen der Aufgabe gepostet – im Annahmedialog kannst du sie bearbeiten.",
+    "detailThreadReplyOffHint": "Wird nicht gepostet: Kommentieren ist für diese Aufgabe aus. Im Annahmedialog kannst du es einschalten.",
     "detailFiles": "Geänderte Dateien",
     "detailFilesIncludesPr": "inkl. der Änderungen des Pull Requests selbst",
     "detailFilesIncludesMr": "inkl. der Änderungen des Merge Requests selbst",
@@ -7053,7 +7128,11 @@
     "errors": {
       "noAccount": "Für {host} ist kein {provider}-Konto konfiguriert. Füge unter Einstellungen → Versionskontrolle eines hinzu, um dieses Repository zu laden.",
       "unsupportedHost": "Das Repository-Panel unterstützt nur GitHub, GitLab, Gitea und CNB, und {host} wird als keines davon erkannt. Falls es sich um eine selbst gehostete GitHub-Enterprise-, GitLab-, Gitea-, Forgejo- oder CNB-Instanz handelt, füge unter Einstellungen → Versionskontrolle ein Konto dafür hinzu.",
-      "wrongForge": "{host} ist ein {provider} und nicht die Forge, als die es eingestuft war. Die Erkennung wurde korrigiert — neu laden, um es erneut zu versuchen."
+      "wrongForge": "{host} ist ein {provider} und nicht die Forge, als die es eingestuft war. Die Erkennung wurde korrigiert — neu laden, um es erneut zu versuchen.",
+      "approveHeadChanged": "Dieser Pull Request hat seit deiner Prüfung neue Commits. Aktualisiere, prüfe erneut und gib dann frei.",
+      "approveAmbiguous": "Diese Workflow-Läufe lassen sich nicht eindeutig diesem Pull Request zuordnen. Gib sie auf GitHub frei.",
+      "approveForbidden": "Dieses Konto darf hier keine Workflow-Läufe freigeben. Es braucht Schreibrechte, und das Token braucht die Berechtigung Actions (Schreiben) oder den Scope repo.",
+      "approveNotOpen": "Dieser Pull Request ist nicht mehr offen."
     },
     "addAccount": "Konto hinzufügen",
     "empty": "Nichts zu zeigen",
@@ -7164,6 +7243,7 @@
     "checksPassing": "{count} bestanden",
     "checksFailing": "{count} fehlgeschlagen",
     "checksPending": "{count} laufend",
+    "checksNeutralCount": "{count} ohne Ergebnis",
     "checkAllowFailure": "darf fehlschlagen",
     "checkSuccess": "Bestanden",
     "checkFailure": "Fehlgeschlagen",
@@ -7201,7 +7281,7 @@
     "dialogDescriptionMr": "Legt in {repo}s Ordner eine To-do-Aufgabe an, deren Worktree auf dem Head dieses Merge Requests ausgecheckt ist — die Commits des Agenten kommen obendrauf und werden beim Annehmen in denselben Merge Request gepusht.",
     "instructionPlaceholder": "Optionale Zusatzanweisung für den Agenten…",
     "writebackLabel": "Ergebnis als Kommentar zurückschreiben",
-    "writebackHint": "Wenn die Aufgabe fertig ist, schreibt codeg einen Kommentar zu diesem Eintrag: Ergebnis, Link und Diff-Zahlen.",
+    "writebackHint": "Wenn die Aufgabe fertig ist, schreibt codeg einen Kommentar zu diesem Eintrag: die vom Agenten entworfene Antwort (du prüfst sie beim Annehmen der Aufgabe) und wie die Arbeit ausgeliefert wurde.",
     "previewToggle": "Issue-Inhalt der Aufgabe ansehen",
     "previewEmpty": "(keine Beschreibung)",
     "duplicateBody": "Eine aktive Aufgabe bearbeitet dieses Element bereits: {title} ({status}). Trotzdem eine weitere erstellen?",
@@ -7226,7 +7306,7 @@
     "combineScenarioFixHint": "Der Agent prüft jeden Bericht zuerst und behebt die stichhaltigen in einer gemeinsamen Änderung – die übrigen rührt er nicht an und gibt dir den Befund zur Entscheidung zurück.",
     "combineScenarioPlanFirstHint": "Der Agent prüft jeden Bericht zuerst, liefert dann einen gemeinsamen Plan für die stichhaltigen und stoppt – gib ihn frei, indem du die Aufgabe zur Umsetzung zurückgibst.",
     "combineWritebackLabel": "Ergebnis bei jedem Issue kommentieren",
-    "combineWritebackHint": "Wenn die Aufgabe fertig ist, schreibt codeg zu jedem dieser Issues einen Kommentar: Ergebnis, Link und Diff-Zahlen.",
+    "combineWritebackHint": "Wenn die Aufgabe fertig ist, schreibt codeg zu jedem dieser Issues einen Kommentar: die Antwort, die der Agent dafür entwirft (du prüfst sie beim Annehmen der Aufgabe), und wie die Arbeit ausgeliefert wurde.",
     "combineTooFew": "Gemeinsam bearbeiten geht erst ab zwei Issues – ein einzelnes startest du in seiner eigenen Zeile.",
     "combineConflictsBody": "Einige dieser Issues bearbeitet bereits eine aktive Aufgabe:",
     "combineConflictItem": "#{number} — {title} ({status})",
@@ -7259,6 +7339,8 @@
     "settingsPrDefaultHint": "Was beim Öffnen des Dialogs zu einem Pull- oder Merge-Request vorausgewählt ist.",
     "settingsWritebackDefault": "Ergebnis standardmäßig kommentieren",
     "settingsWritebackDefaultHint": "Die Ausgangsstellung dieses Schalters im Dialog — pro Eintrag weiterhin änderbar.",
+    "settingsCommentFooter": "Kommentare mit Codeg signieren",
+    "settingsCommentFooterHint": "Jeden Kommentar, den codeg schreibt, mit „🤖 Generated with Codeg“ beenden, verlinkt auf das Codeg-Repository.",
     "settingsPromptsIntro": "Ständige Anweisungen werden nach dem eingebauten Text des gewählten Szenarios und vor dem, was du im Dialog eingibst, angehängt — den eingebauten Text musst du hier nicht wiederholen. Sie gehen nur mit dem ersten Zug der Aufgabe mit; Text für jeden Zug gehört in die Prompts der Aufgaben-Einstellungen.",
     "settingsPromptsLabel": "Szenario",
     "settingsPromptAll": "Alle Szenarien",
@@ -7310,7 +7392,7 @@
     "autoAutoStart": "Sofort starten",
     "autoAutoStartHint": "Reiht jede neue Aufgabe sofort ein – wann sie läuft, entscheidet das Parallelitätslimit deiner Aufgabeneinstellungen. Aus: Sie wartet unter Zu erledigen.",
     "autoWriteback": "Ergebnis kommentieren",
-    "autoWritebackHint": "Postet nach Abschluss der Aufgabe denselben kurzen Statuskommentar wie der Schalter im Startdialog.",
+    "autoWritebackHint": "Wenn die Aufgabe fertig ist, denselben Kommentar schreiben wie der Schalter im Startdialog: die vom Agenten entworfene, beim Annehmen geprüfte Antwort und wie die Arbeit ausgeliefert wurde.",
     "autoActivity": "Aktivität",
     "autoScanNow": "Jetzt scannen",
     "autoScanNowOff": "Schalte einen Auslöser ein und speichere, um zu scannen.",
@@ -7338,7 +7420,23 @@
     "autoSkipExcludedAuthor": "ausgeschlossener Autor",
     "autoSkipMissingLabel": "kein passendes Label",
     "autoSkipAuthorNotIncluded": "Autor nicht gelistet",
-    "save": "Speichern"
+    "save": "Speichern",
+    "checksAwaitingApproval": "{count} Workflows warten auf Freigabe",
+    "checksApprovalShort": "Freigabe nötig",
+    "approveUnknownTitle": "Möglicherweise warten Workflows auf Freigabe",
+    "approveExplain": "Dieser Pull Request kommt aus einem Fork; seine Workflows laufen erst, wenn jemand mit Schreibrechten sie freigibt. Die Freigabe führt diesen Code in der CI des Repositorys aus – prüfe zuerst die Änderungen.",
+    "approveIncompleteHint": "Nicht alle Workflow-Läufe konnten geprüft werden; auf GitHub warten möglicherweise weitere.",
+    "approveBlockedAmbiguous": "Aus demselben Branch ist ein weiterer Pull Request offen, daher lassen sich diese Läufe nicht eindeutig diesem zuordnen. Gib sie auf GitHub frei.",
+    "approveBlockedPermission": "Dieses Konto kann nicht in das Repository pushen und daher keine Workflows freigeben.",
+    "approveOpenOnForge": "Auf GitHub öffnen",
+    "approveWorkflows": "Workflows zur Ausführung freigeben",
+    "approving": "Wird freigegeben…",
+    "approveConfirmTitle": "Workflows zur Ausführung freigeben?",
+    "approveConfirmBody": "{count} Workflows führen den Code dieses Pull Requests (Commit {sha}) in der CI des Repositorys aus. Gib sie erst frei, nachdem du die Änderungen geprüft hast.",
+    "approveDone": "{count} Workflows freigegeben",
+    "approvePartial": "Einige Workflows konnten nicht freigegeben werden: {names}",
+    "approveNothingHeld": "Es warten keine Workflows mehr auf Freigabe.",
+    "mergeWorkflowsAwaiting": "Workflows warten auf Freigabe"
   },
   "Canvas": {
     "title": "Unendlicher Canvas",

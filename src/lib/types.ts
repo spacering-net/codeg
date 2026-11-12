@@ -608,9 +608,11 @@ export interface DbConversationSummary {
   parent_id?: number | null
   parent_tool_use_id?: string | null
   delegation_call_id?: string | null
-  /** Set when the conversation was re-parented out of a removed worktree: the
-   *  worktree path it originally ran in. Drives the "source worktree removed"
-   *  badge. */
+  /** The directory this conversation's session was recorded in, when that
+   *  differs from its current folder's path: set when it was re-parented out of
+   *  a removed worktree, or moved to another project by the user (a moved chat
+   *  conversation remembers its scratch dir). Drives the "original working
+   *  directory" line of the hover details. */
   origin_cwd?: string | null
   /** The assistant a delegation child ran as, and its name when the
    *  delegation started (off the child row's snapshot). Absent on every other
@@ -640,6 +642,25 @@ export type ConversationChange =
   | { kind: "status"; id: number; status: string }
 
 export const CONVERSATION_CHANGED_EVENT = "conversation://changed"
+
+/** Why `moveConversations` left a conversation where it was. Mirrors the Rust
+ *  `MoveSkipReason`. */
+export type MoveSkipReason =
+  | "not_found"
+  | "not_movable"
+  | "already_there"
+  | "task_owned"
+  | "busy"
+  | "conflict"
+  | "target_unavailable"
+
+/** Result of `moveConversations`: the root conversations moved (their
+ *  delegation children moved with them) and, per conversation, why the rest
+ *  were left alone. */
+export interface MoveConversationsResult {
+  moved: number[]
+  skipped: { conversationId: number; reason: MoveSkipReason }[]
+}
 
 /** Payload for the global `folder://changed` side-channel. A folder created or
  *  updated headlessly — e.g. the automation engine minting a per-run worktree —
@@ -1635,6 +1656,7 @@ export interface QuestionSpec {
   multi_select: boolean
   options: QuestionOption[]
   is_secret?: boolean
+  allow_other?: boolean
 }
 
 /** Awaiting-answer question set on the session (mirror of `PendingQuestionState`). */
@@ -2063,6 +2085,11 @@ export interface WorkTask {
    *  a task is first delivered, and always on a forge-sourced task — that
    *  one's pull request is `source_meta.result_pr`. */
   delivery?: WorkTaskDelivery | null
+  /** The reply drafted for each thread of a forge-sourced task, keyed by item
+   *  number (JSON object keys are strings) — what the write-back posts once
+   *  the task is accepted. Absent = no draft: the comment is then the outcome
+   *  line alone. */
+  writeback_drafts?: Record<string, string> | null
   /** Latest agent_progress milestone OF THIS GENERATION — present on live
    *  (preparing/running/awaiting/merging) rows only. Scoped by run_seq, so a
    *  merge in flight never narrates the work round it is landing. */
@@ -2387,6 +2414,68 @@ export interface ForgeChangeDetail {
   changed_files: number | null
   commits: number | null
   checks: ForgeCheckList
+  /** Workflow runs held for a maintainer's approval (GitHub fork changes
+   *  only). Null when there is nothing to say — not GitHub, not a fork, or
+   *  Actions not readable. Held runs have produced NO check yet, which is why
+   *  this sits beside `checks` rather than in it. */
+  workflow_approval: ForgeWorkflowApproval | null
+}
+
+/** A workflow run held for approval (mirrors Rust ForgePendingRun). */
+export interface ForgePendingRun {
+  id: string
+  name: string
+  url: string | null
+}
+
+/** Runs a change waits on a maintainer for (mirrors Rust
+ *  ForgeWorkflowApproval). */
+export interface ForgeWorkflowApproval {
+  runs: ForgePendingRun[]
+  /** The search was cut short; there may be held runs not listed here. */
+  incomplete: boolean
+  /** The runs cannot be tied to this change alone (another open change from
+   *  the same fork branch) — approve on the forge, not here. */
+  ambiguous: boolean
+  /** Whether the account can push (what approving needs); null = unknown. */
+  can_approve: boolean | null
+}
+
+/** What an approval did (mirrors Rust ForgeApproveResult). */
+export interface ForgeApproveResult {
+  approved: number
+  failed: { name: string; message: string }[]
+  incomplete: boolean
+}
+
+/** A whole change's CI as one word (mirrors Rust ForgeCheckVerdict). */
+export type ForgeCheckVerdict = "failure" | "running" | "success" | "neutral"
+
+/** Mirrors Rust ForgeCheckCounts. */
+export interface ForgeCheckCounts {
+  passing: number
+  failing: number
+  pending: number
+  neutral: number
+  total: number
+}
+
+/** One list row's CI (mirrors Rust ForgeCheckSummary). */
+export interface ForgeCheckSummary {
+  number: number
+  /** null = the forge says this change has no checks. */
+  verdict: ForgeCheckVerdict | null
+  /** null where the forge gives a verdict without a breakdown. */
+  counts: ForgeCheckCounts | null
+  /** Workflow runs held for approval (GitHub only; 0 elsewhere). */
+  awaiting_approval: number
+}
+
+/** One page's CI summaries. A change missing from `items` is UNKNOWN — not
+ *  the same as `verdict: null` — and both draw nothing. */
+export interface ForgeCheckSummaryList {
+  available: boolean
+  items: ForgeCheckSummary[]
 }
 
 /** How a file was touched (mirrors Rust ForgeFileStatus). */
@@ -2524,6 +2613,10 @@ export interface ForgePanelSettings {
    *  position: the switch is on screen every time, and what it says when the
    *  user presses Create is what the task records. */
   writeback_default: boolean
+  /** End every comment codeg posts with the "🤖 Generated with Codeg" line.
+   *  Optional here because a blob from a build that predates it has none,
+   *  which the backend reads as on — the default. */
+  comment_footer?: boolean
   /** Standing instructions appended after a scenario's built-in wording,
    *  keyed by scenario id plus the reserved `all` (every scenario). */
   scenario_prompts: Record<string, string>
@@ -3022,6 +3115,27 @@ export interface BackgroundSettledInfo {
   interim?: boolean
 }
 
+/**
+ * One launched-but-unresolved background task (mirror of Rust
+ * `BackgroundOutstandingTask`), as the producer of `background_activity`
+ * accounts it: the Claude transcript watcher, or OpenCode's / Grok's live
+ * state. `task_id` is the id its settle carries; `tool_use_id` the launching
+ * call (the card a row takes its title from), absent when the launch was never
+ * seen; `description` the launch's own words, capped.
+ *
+ * `kind: "shell"` (Claude's background shells) is also on the AIR async-task
+ * channel, which lists it with a stop, so the composer's running list takes
+ * only `"agent"` from here.
+ */
+export interface BackgroundOutstandingTask {
+  task_id: string
+  kind: "agent" | "shell"
+  tool_use_id?: string | null
+  description?: string | null
+  /** When the producer first saw it launched (or resumed), Unix ms. */
+  started_at_ms: number
+}
+
 export type AcpEvent =
   /**
    * `parent_tool_use_id` = subagent attribution (claude-agent-acp ≥0.63 with
@@ -3340,13 +3454,16 @@ export type AcpEvent =
    * `turns` are UPSERTs keyed by `MessageTurn.id` into the conversation
    * runtime store's background overlay; `settled` entries each raise one OS
    * notification; `outstanding` mirrors into the connection for the idle-sweep
-   * exemption (nothing renders the count).
+   * exemption, and `outstanding_tasks` — the same tasks one by one, the
+   * producer's WHOLE current set on every event (absent = none) — feeds the
+   * composer's running list.
    */
   | {
       type: "background_activity"
       session_id: string
       turns?: MessageTurn[]
       outstanding: number
+      outstanding_tasks?: BackgroundOutstandingTask[]
       settled?: BackgroundSettledInfo[]
       watermark: number
     }
@@ -3886,6 +4003,9 @@ export interface LiveSessionSnapshot {
    *  mid-episode recover the pending count the one-shot `background_activity`
    *  events won't replay. Absent / omitted when zero. */
   background_outstanding?: number
+  /** Those tasks one by one (see `BackgroundOutstandingTask`). Absent /
+   *  omitted when empty. */
+  background_outstanding_tasks?: BackgroundOutstandingTask[]
   /** Whether this agent has the `check_user_feedback` tool (fixed at launch).
    *  The frontend gates the feedback bar on this — the agent's real capability —
    *  not the (possibly later-toggled) global setting. Absent → `false`. */

@@ -1635,12 +1635,22 @@ fn tag_mcp_suspect(
 ///   and remove the entry asynchronously. The guard must hold owned
 ///   `Arc<Mutex<_>>` and `String` so the spawned task has `'static`
 ///   captures.
-struct ConnectionCleanupGuard {
-    connections: Arc<tokio::sync::Mutex<HashMap<String, AgentConnection>>>,
+///
+/// That task goes through the stored `runtime` handle, never `tokio::spawn`:
+/// on a normal exit the guard drops on the driver thread AFTER `block_on`
+/// has returned, where no runtime context is entered, and `tokio::spawn`
+/// there panics ("there is no reactor running") — killing the thread and
+/// leaving the entry behind. `Handle::spawn` needs no context.
+///
+/// Generic over the map's value only so the tests can drive it without
+/// building a whole `AgentConnection`.
+struct ConnectionCleanupGuard<V: Send + 'static = AgentConnection> {
+    connections: Arc<tokio::sync::Mutex<HashMap<String, V>>>,
     connection_id: String,
+    runtime: tokio::runtime::Handle,
 }
 
-impl Drop for ConnectionCleanupGuard {
+impl<V: Send + 'static> Drop for ConnectionCleanupGuard<V> {
     fn drop(&mut self) {
         if let Ok(mut guard) = self.connections.try_lock() {
             guard.remove(&self.connection_id);
@@ -1648,7 +1658,7 @@ impl Drop for ConnectionCleanupGuard {
         }
         let connections = self.connections.clone();
         let connection_id = std::mem::take(&mut self.connection_id);
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             connections.lock().await.remove(&connection_id);
         });
     }
@@ -2166,9 +2176,10 @@ fn agent_debug_callback(
 /// codeg's own question and result tools ([`codeg_tool_auto_allow_option`]),
 /// and the history parser. So codeg turns lazy loading off, as it was through
 /// 1.1.83 (which takes the flag too). An option `qoder --acp` does not know
-/// makes it exit, but each release tried from 1.1.0 to 1.1.86 (1.1.0, 1.1.30,
-/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86) takes `--settings`,
-/// and 1.1.30 and 1.1.64 open sessions with this one as without it.
+/// makes it exit, but each release tried from 1.1.0 to 1.1.87 (1.1.0, 1.1.30,
+/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86, 1.1.87) takes
+/// `--settings`, and 1.1.30 and 1.1.64 open sessions with this one as without
+/// it.
 pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
 /// The arguments codeg adds after an npx agent's registry `args`: for Qoder,
@@ -3025,6 +3036,7 @@ pub async fn spawn_agent_connection(
     let cleanup_guard = ConnectionCleanupGuard {
         connections: cleanup_connections,
         connection_id: cleanup_connection_id,
+        runtime: connection_rt.clone(),
     };
     let connection_thread = std::thread::Builder::new()
         .name(format!("acp-conn-{conn_id}"))
@@ -8397,6 +8409,7 @@ where
             crate::acp::delegation::listener::TokenEntry {
                 parent_connection_id: parent_connection_id.to_string(),
                 working_dir: working_dir.to_path_buf(),
+                agent_hosts_tools: !host_tools.hosts_channels(),
             },
         )
         .await;
@@ -9265,6 +9278,8 @@ async fn run_connection(
                 codex_user_input_shape(agent_type, init_resp.agent_info.as_ref());
             let steering_policy =
                 steering_policy_agent(agent_type, init_resp.agent_info.as_ref());
+            let antigravity_interactions =
+                speaks_antigravity_interactions(agent_type, init_resp.agent_info.as_ref());
             tracing::info!(
                 "[ACP][{}] steering: advertised={}, agent={:?}, agent_version={:?}, policy={}{}, native={}",
                 agent_type,
@@ -9400,6 +9415,7 @@ async fn run_connection(
                 // agents could ship it someday).
                 s.native_steering_available = native_steering_available;
                 s.codex_user_input_shape = codex_user_input_shape;
+                s.antigravity_interactions = antigravity_interactions;
                 s.neutral_goal_channel = neutral_goal_channel;
                 // The vocabulary is decided HERE for every adapter, advertising
                 // or not — this assignment is what flips it from "unknown" to
@@ -10738,9 +10754,12 @@ async fn try_bridge_antigravity_ask(
     req: &RequestPermissionRequest,
     responder: Responder<RequestPermissionResponse>,
 ) -> Result<(), Responder<RequestPermissionResponse>> {
+    // The id prefix is only antigravity-acp's convention, so the connection must
+    // be antigravity-acp too: the built-in agent, or a custom agent whose
+    // running adapter names itself so (see `speaks_antigravity_interactions`).
     let tool_call_id = req.tool_call.tool_call_id.to_string();
     if !crate::acp::question::is_antigravity_interaction_id(&tool_call_id)
-        || state.read().await.agent_type != AgentType::Antigravity
+        || !state.read().await.antigravity_interactions
     {
         return Err(responder);
     }
@@ -13814,7 +13833,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.182.0) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.183.0) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -13900,7 +13919,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.182.0) answers the next prompt it runs `cancelled` even though that
+/// 2.183.0) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
@@ -17004,6 +17023,43 @@ pub(crate) fn extract_tool_call_images(
     }
 }
 
+fn extract_live_tool_call_images(
+    agent_type: AgentType,
+    content: Option<&[ToolCallContent]>,
+    raw_output: Option<&serde_json::Value>,
+) -> Option<Vec<ToolCallImageInfo>> {
+    if let Some(images) = content.and_then(extract_tool_call_images) {
+        return Some(images);
+    }
+    if agent_type != AgentType::Codex {
+        return None;
+    }
+
+    // codex-acp reports MCP content in rawOutput.result. A large result
+    // can be replaced by a text preview; those images come from history.
+    let images: Vec<_> = raw_output?
+        .pointer("/result/content")?
+        .as_array()?
+        .iter()
+        .filter_map(|block| {
+            if block.get("type")?.as_str()? != "image" {
+                return None;
+            }
+            let data = block.get("data")?.as_str()?;
+            let mime_type = block.get("mimeType")?.as_str()?;
+            if data.is_empty() || !mime_type.starts_with("image/") {
+                return None;
+            }
+            Some(ToolCallImageInfo {
+                data: data.to_string(),
+                mime_type: mime_type.to_string(),
+                uri: None,
+            })
+        })
+        .collect();
+    (!images.is_empty()).then_some(images)
+}
+
 /// If the output looks like numbered lines (`   115→content`), strip them
 /// and return `{"start_line":N,"content":"..."}` — same as the historical path.
 fn structurize_live_output(text: &str) -> String {
@@ -17791,6 +17847,9 @@ struct OpenCodeSubagentLaunch {
     /// child's end has not been reported yet (see
     /// [`OpenCodeLiveState::subagent_completed`]).
     background: bool,
+    /// When the launch was first seen, Unix ms — how long a background row
+    /// in the frontend's "running" list has been going.
+    started_at_ms: i64,
 }
 
 impl OpenCodeSubagentLaunch {
@@ -17893,7 +17952,9 @@ impl OpenCodeChildAnswer {
 /// and, for an end, its settle (see [`emit_opencode_background_report`]).
 #[derive(Debug)]
 struct OpenCodeBackgroundReport {
-    outstanding: u32,
+    /// The background launches still out, whole (see
+    /// [`OpenCodeLiveState::outstanding_tasks`]).
+    outstanding: Vec<crate::acp::types::BackgroundOutstandingTask>,
     settled: Option<crate::acp::types::BackgroundSettledInfo>,
 }
 
@@ -17962,6 +18023,7 @@ impl OpenCodeLiveState {
             owner: owner.map(str::to_string),
             child: None,
             background: false,
+            started_at_ms: chrono::Utc::now().timestamp_millis(),
         });
     }
 
@@ -18075,14 +18137,30 @@ impl OpenCodeLiveState {
     }
 
     /// Background launches whose child OpenCode still follows: work the agent
-    /// process is doing that no turn is waiting for.
-    fn outstanding(&self) -> u32 {
-        let open = self
-            .subagents
+    /// process is doing that no turn is waiting for. Keyed by the child
+    /// session, the id their settle carries ([`opencode_settled`]); oldest
+    /// launch first.
+    fn outstanding_tasks(&self) -> Vec<crate::acp::types::BackgroundOutstandingTask> {
+        self.subagents
             .iter()
-            .filter(|launch| launch.background && launch.child.as_ref().is_some_and(|c| c.open))
-            .count();
-        u32::try_from(open).unwrap_or(u32::MAX)
+            .filter_map(|launch| {
+                let child = launch.child.as_ref().filter(|c| c.open)?;
+                launch
+                    .background
+                    .then(|| crate::acp::types::BackgroundOutstandingTask {
+                        task_id: child.id.clone(),
+                        kind: crate::acp::types::BackgroundTaskKind::Agent,
+                        tool_use_id: Some(launch.tool_call_id.clone()),
+                        description: launch.description.as_deref().map(|d| {
+                            crate::parsers::truncate_str(
+                                d,
+                                crate::acp::types::BACKGROUND_TASK_DESCRIPTION_MAX_CHARS,
+                            )
+                        }),
+                        started_at_ms: launch.started_at_ms,
+                    })
+            })
+            .collect()
     }
 
     /// A `subagent` launch completed — into the background when `background`
@@ -18126,7 +18204,7 @@ impl OpenCodeLiveState {
             }
         };
         Some(OpenCodeBackgroundReport {
-            outstanding: self.outstanding(),
+            outstanding: self.outstanding_tasks(),
             settled,
         })
     }
@@ -18153,7 +18231,7 @@ impl OpenCodeLiveState {
         launch.background = false;
         let settled = opencode_settled(&launch.tool_call_id, child, end);
         Some(OpenCodeBackgroundReport {
-            outstanding: self.outstanding(),
+            outstanding: self.outstanding_tasks(),
             settled: Some(settled),
         })
     }
@@ -18215,7 +18293,8 @@ async fn emit_opencode_background_report(
         Some(AcpEvent::BackgroundActivity {
             session_id: s.external_id.clone()?,
             turns: Vec::new(),
-            outstanding: report.outstanding,
+            outstanding: u32::try_from(report.outstanding.len()).unwrap_or(u32::MAX),
+            outstanding_tasks: report.outstanding,
             settled: report.settled.into_iter().collect(),
             watermark: 0,
         })
@@ -20074,6 +20153,36 @@ fn steering_policy_agent(
     }
 }
 
+/// The `agentInfo.name` antigravity-acp reports at `initialize` (verified
+/// against 1.4.1).
+const ANTIGRAVITY_ACP_AGENT_NAME: &str = "antigravity-acp";
+
+/// Whether this connection's `interaction_<hex>` questions are antigravity-acp's
+/// own, to be bridged into the question card (pinned into
+/// `SessionState::antigravity_interactions`). The built-in Antigravity always
+/// is. A custom agent is only when the running adapter names itself
+/// antigravity-acp (a second Antigravity account registered as a custom agent,
+/// say), by the same exact-name rule as [`steering_policy_agent`]: the id
+/// prefix is antigravity-acp's convention, not a reserved namespace, and the
+/// bridge answers the permission request itself and later drops a frame under
+/// that id. No other built-in type is ever let in.
+///
+/// Live only, like the custom-agent steering policy: a custom agent's history
+/// is still codeg's transcript, which records the raw frames and not the
+/// answered card.
+fn speaks_antigravity_interactions(
+    agent_type: AgentType,
+    agent_info: Option<&agent_client_protocol::schema::v1::Implementation>,
+) -> bool {
+    match agent_type {
+        AgentType::Antigravity => true,
+        AgentType::Custom(_) => {
+            agent_info.is_some_and(|info| info.name == ANTIGRAVITY_ACP_AGENT_NAME)
+        }
+        _ => false,
+    }
+}
+
 /// codex-acp 1.12.0 swapped the question and the short tab header between a
 /// `request_user_input` property's `title` and `description`. Both generations
 /// emit both strings, so the FORM cannot be dated — but the adapter that built
@@ -20697,6 +20806,10 @@ struct CodeBuddyLiveState {
     /// progress tick must re-send it or the id would be dropped. Entry dropped
     /// at finish, alongside `grok_subagent_to_call`.
     grok_call_child_session: HashMap<String, String>,
+    /// spawn tool_call id → what a background row needs that the pairing
+    /// throws away: the launch's description and when it paired. Entry
+    /// dropped at finish, alongside `grok_subagent_to_call`.
+    grok_spawn_identity: HashMap<String, GrokSpawnIdentity>,
     /// Spawn calls that reached a terminal wire status. A `subagent_finished`
     /// for one of these is a BACKGROUND child settling after its launch ack —
     /// the case whose result would otherwise never reach the card live; a
@@ -20836,6 +20949,60 @@ struct GrokPendingSpawn {
     subagent_type: Option<String>,
 }
 
+/// See `CodeBuddyLiveState::grok_spawn_identity`.
+#[derive(Debug, Clone)]
+struct GrokSpawnIdentity {
+    description: Option<String>,
+    started_at_ms: i64,
+}
+
+/// The Grok background children still running — paired spawns whose launch
+/// call already settled — whole, oldest first: `BackgroundActivity`'s
+/// `outstanding_tasks`, keyed by the subagent id their settle carries.
+fn grok_outstanding_tasks(
+    cb_state: &CodeBuddyLiveState,
+) -> Vec<crate::acp::types::BackgroundOutstandingTask> {
+    let mut out: Vec<_> = cb_state
+        .grok_subagent_to_call
+        .iter()
+        .filter(|(_, call_id)| cb_state.grok_settled_spawn_ids.contains(*call_id))
+        .map(|(subagent_id, call_id)| {
+            let identity = cb_state.grok_spawn_identity.get(call_id);
+            crate::acp::types::BackgroundOutstandingTask {
+                task_id: subagent_id.clone(),
+                kind: crate::acp::types::BackgroundTaskKind::Agent,
+                tool_use_id: Some(call_id.clone()),
+                description: identity.and_then(|i| i.description.clone()),
+                started_at_ms: identity.map_or(0, |i| i.started_at_ms),
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.started_at_ms
+            .cmp(&b.started_at_ms)
+            .then_with(|| a.task_id.cmp(&b.task_id))
+    });
+    out
+}
+
+/// `BackgroundActivity` with no turns and no settle: just the Grok background
+/// set as it stands, count and rows together.
+fn grok_background_accounting(
+    session_id: String,
+    cb_state: &CodeBuddyLiveState,
+    settled: Vec<crate::acp::types::BackgroundSettledInfo>,
+) -> AcpEvent {
+    let outstanding_tasks = grok_outstanding_tasks(cb_state);
+    AcpEvent::BackgroundActivity {
+        session_id,
+        turns: Vec::new(),
+        outstanding: u32::try_from(outstanding_tasks.len()).unwrap_or(u32::MAX),
+        outstanding_tasks,
+        settled,
+        watermark: 0,
+    }
+}
+
 /// True when a Grok tool call's ACP `_meta` identifies it as the native
 /// `spawn_subagent` launcher (`_meta["x.ai/tool"].name`). Present on the very
 /// first frame (verified against real captures), unlike `subagent_type` which
@@ -20953,17 +21120,14 @@ fn grok_meta_marks_ask_user(
 /// card (the bridge left the question on the approval card, or a drain
 /// abandoned it) the frame settles the placeholder as usual.
 async fn take_antigravity_answered_close(
-    agent_type: AgentType,
     state: &Arc<RwLock<SessionState>>,
     tool_call_id: &str,
 ) -> bool {
-    agent_type == AgentType::Antigravity
-        && crate::acp::question::is_antigravity_interaction_id(tool_call_id)
-        && state
-            .write()
-            .await
-            .antigravity_answered_interactions
-            .remove(tool_call_id)
+    if !crate::acp::question::is_antigravity_interaction_id(tool_call_id) {
+        return false;
+    }
+    let mut s = state.write().await;
+    s.antigravity_interactions && s.antigravity_answered_interactions.remove(tool_call_id)
 }
 
 /// Record the answered card for one Antigravity question under the
@@ -21263,9 +21427,65 @@ impl KimiToolTitles {
         title
     }
 
+    /// The own title of a Kimi call still in flight.
+    fn own(&self, tool_call_id: &str) -> Option<&str> {
+        self.calls.get(tool_call_id).map(|call| call.own.as_str())
+    }
+
     fn clear(&mut self) {
         self.calls.clear();
     }
+}
+
+/// The title Kimi Code gives an `ExitPlanMode` call once its plan is shown
+/// for review (the opening frame is titled with the tool's name).
+const KIMI_EXIT_PLAN_MODE_REVIEW_TITLE: &str = "Presenting plan and exiting plan mode";
+
+/// Whether a Kimi Code frame settles an `ExitPlanMode` call `failed` although
+/// the review's own answer was not an error.
+///
+/// 2.6.0 settles every answered plan review `failed`: its tool executor turns
+/// the review's answer into a veto, so approving the plan, dismissing the
+/// review or asking for a revision ends the call exactly like a rejection,
+/// and the plan card would show an approved plan as an error. Only the
+/// wording of the result still tells them apart (see
+/// [`crate::parsers::kimi_code::kimi_plan_review_kept_ok`], which history
+/// applies to the same calls), so such a frame is forwarded as `completed`.
+/// `own_title` is the call's own title as [`KimiToolTitles`] tracks it.
+fn kimi_plan_review_misreported_failure(
+    own_title: Option<&str>,
+    fields: &agent_client_protocol::schema::v1::ToolCallUpdateFields,
+) -> bool {
+    if !matches!(
+        fields.status,
+        Some(agent_client_protocol::schema::v1::ToolCallStatus::Failed)
+    ) || !matches!(
+        own_title,
+        Some(
+            crate::parsers::kimi_code::KIMI_EXIT_PLAN_MODE_TOOL | KIMI_EXIT_PLAN_MODE_REVIEW_TITLE
+        )
+    ) {
+        return false;
+    }
+    let content_text = || {
+        fields
+            .content
+            .as_deref()?
+            .iter()
+            .find_map(|item| match item {
+                ToolCallContent::Content(c) => match &c.content {
+                    ContentBlock::Text(t) => Some(t.text.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            })
+    };
+    fields
+        .raw_output
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .or_else(content_text)
+        .is_some_and(crate::parsers::kimi_code::kimi_plan_review_kept_ok)
 }
 
 /// Whether a tool call's (lower-cased) status ends it.
@@ -21565,14 +21785,8 @@ fn map_grok_subagent_notification_inner(
     let update = params.get("update")?;
     let subagent_id = update.get("subagent_id").and_then(|v| v.as_str())?;
     // `outstanding` = paired subagents still running whose launch call already
-    // settled — i.e. background children codeg would otherwise sweep as idle.
-    let outstanding = |cb_state: &CodeBuddyLiveState| {
-        cb_state
-            .grok_subagent_to_call
-            .values()
-            .filter(|call_id| cb_state.grok_settled_spawn_ids.contains(*call_id))
-            .count() as u32
-    };
+    // settled — i.e. background children codeg would otherwise sweep as idle
+    // (`grok_outstanding_tasks`).
     match update.get("sessionUpdate").and_then(|v| v.as_str())? {
         "subagent_spawned" => {
             // First pending entry whose captured launch `(description,
@@ -21603,10 +21817,23 @@ fn map_grok_subagent_notification_inner(
                 matches(&p.description, event_field("description"))
                     && matches(&p.subagent_type, event_field("subagent_type"))
             })?;
-            let call_id = cb_state.grok_pending_spawn_ids.remove(idx)?.call_id;
+            let pending = cb_state.grok_pending_spawn_ids.remove(idx)?;
+            let call_id = pending.call_id;
             cb_state
                 .grok_subagent_to_call
                 .insert(subagent_id.to_string(), call_id.clone());
+            cb_state.grok_spawn_identity.insert(
+                call_id.clone(),
+                GrokSpawnIdentity {
+                    description: pending.description.as_deref().map(|d| {
+                        crate::parsers::truncate_str(
+                            d,
+                            crate::acp::types::BACKGROUND_TASK_DESCRIPTION_MAX_CHARS,
+                        )
+                    }),
+                    started_at_ms: chrono::Utc::now().timestamp_millis(),
+                },
+            );
             // The child's own session id — `child_session_id` when the wire
             // carries it, else the subagent id (they are the same value in
             // every capture). Remembered so later progress ticks can re-send it
@@ -21664,13 +21891,11 @@ fn map_grok_subagent_notification_inner(
             // blocking spawn (its turn is open — nothing can sweep it).
             if cb_state.grok_settled_spawn_ids.contains(&call_id) {
                 let session_id = params.get("sessionId").and_then(|v| v.as_str())?;
-                events.push(AcpEvent::BackgroundActivity {
-                    session_id: session_id.to_string(),
-                    turns: Vec::new(),
-                    outstanding: outstanding(cb_state),
-                    settled: Vec::new(),
-                    watermark: 0,
-                });
+                events.push(grok_background_accounting(
+                    session_id.to_string(),
+                    cb_state,
+                    Vec::new(),
+                ));
             }
             Some(events)
         }
@@ -21739,6 +21964,7 @@ fn map_grok_subagent_notification_inner(
         "subagent_finished" => {
             let call_id = cb_state.grok_subagent_to_call.remove(subagent_id)?;
             cb_state.grok_call_child_session.remove(&call_id);
+            cb_state.grok_spawn_identity.remove(&call_id);
             if !cb_state.grok_settled_spawn_ids.contains(&call_id) {
                 // Blocking spawn: the child's output arrives on the call's own
                 // completion frame; the settle channel would double-render it.
@@ -21753,17 +21979,11 @@ fn map_grok_subagent_notification_inner(
                 .get("output")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
-                .map(|s| {
-                    crate::parsers::truncate_str(
-                        s,
-                        crate::parsers::claude::BACKGROUND_RESULT_MAX_CHARS,
-                    )
-                });
-            Some(vec![AcpEvent::BackgroundActivity {
-                session_id: session_id.to_string(),
-                turns: Vec::new(),
-                outstanding: outstanding(cb_state),
-                settled: vec![crate::acp::types::BackgroundSettledInfo {
+                .map(|s| crate::parsers::truncate_str(s, crate::parsers::claude::BACKGROUND_RESULT_MAX_CHARS));
+            Some(vec![grok_background_accounting(
+                session_id.to_string(),
+                cb_state,
+                vec![crate::acp::types::BackgroundSettledInfo {
                     task_id: subagent_id.to_string(),
                     status: status.to_string(),
                     summary: None,
@@ -21771,8 +21991,7 @@ fn map_grok_subagent_notification_inner(
                     result,
                     interim: false,
                 }],
-                watermark: 0,
-            }])
+            )])
         }
         _ => None,
     }
@@ -25676,7 +25895,11 @@ async fn emit_conversation_update(
                     // pi announces a command with an empty result, which pi-acp
                     // renders as JSON source (see fn doc).
                     .filter(|_| !pi_result_content_is_stringify_noise(agent_type, &tc.raw_output));
-            let images = extract_tool_call_images(content_blocks);
+            let images = extract_live_tool_call_images(
+                agent_type,
+                Some(content_blocks),
+                tc.raw_output.as_ref(),
+            );
             let codex_subagent_launch = codex_subagent.is_some();
             let raw_input = codex_subagent
                 .or(synthesized_edit)
@@ -25878,10 +26101,21 @@ async fn emit_conversation_update(
             let tool_call_id = tcu.tool_call_id.to_string();
             // Read before the fields are taken apart below.
             let kimi_status = kimi_status_frame(agent_type, &tcu.fields);
+            // An answered Kimi plan review settles `failed` whatever the user
+            // chose (see `kimi_plan_review_misreported_failure`).
+            if agent_type == AgentType::KimiCode
+                && kimi_plan_review_misreported_failure(
+                    cb_state.kimi_tool_titles.own(&tool_call_id),
+                    &tcu.fields,
+                )
+            {
+                tcu.fields.status =
+                    Some(agent_client_protocol::schema::v1::ToolCallStatus::Completed);
+            }
             // The closing "Response received" frame of an Antigravity question
             // would overwrite the answered card the bridge recorded (see
             // `take_antigravity_answered_close`).
-            if take_antigravity_answered_close(agent_type, state, &tool_call_id).await {
+            if take_antigravity_answered_close(state, &tool_call_id).await {
                 return;
             }
             // A fork's copy of its own launch result: dropped before the `_meta`
@@ -26192,7 +26426,11 @@ async fn emit_conversation_update(
                 .filter(|_| {
                     !pi_result_content_is_stringify_noise(agent_type, &tcu.fields.raw_output)
                 });
-            let images = content_blocks.and_then(extract_tool_call_images);
+            let images = extract_live_tool_call_images(
+                agent_type,
+                content_blocks,
+                tcu.fields.raw_output.as_ref(),
+            );
             let codex_subagent_launch = codex_subagent.is_some();
             let raw_input = codex_subagent
                 .or(synthesized_edit)
@@ -26370,21 +26608,10 @@ async fn emit_conversation_update(
             {
                 let session_id = state.read().await.external_id.clone();
                 if let Some(session_id) = session_id {
-                    let outstanding = cb_state
-                        .grok_subagent_to_call
-                        .values()
-                        .filter(|call| cb_state.grok_settled_spawn_ids.contains(*call))
-                        .count() as u32;
                     emit_with_state(
                         state,
                         emitter,
-                        AcpEvent::BackgroundActivity {
-                            session_id,
-                            turns: Vec::new(),
-                            outstanding,
-                            settled: Vec::new(),
-                            watermark: 0,
-                        },
+                        grok_background_accounting(session_id, cb_state, Vec::new()),
                     )
                     .await;
                 }
@@ -26766,6 +26993,76 @@ mod tests {
             SessionConfigKindInfo::Select(sel) => sel,
             other => panic!("expected a select config option, got {other:?}"),
         }
+    }
+
+    // ── ConnectionCleanupGuard ──────────────────────────────────────────────
+    //
+    // The driver thread drops its guard after `block_on` returns, i.e. outside
+    // any runtime context. With the map locked at that moment the guard has to
+    // defer the removal to a task; doing that via `tokio::spawn` panicked
+    // ("there is no reactor running") and leaked the entry.
+
+    /// The exact production failure: map lock held elsewhere, guard dropped on
+    /// a thread that never entered the runtime. The drop must not panic, and
+    /// the entry must be gone once the lock is released.
+    #[test]
+    fn cleanup_guard_dropped_outside_runtime_while_map_locked_removes_entry() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let connections = Arc::new(tokio::sync::Mutex::new(HashMap::from([
+            ("conn".to_string(), ()),
+            ("other".to_string(), ()),
+        ])));
+        let held = Arc::clone(&connections)
+            .try_lock_owned()
+            .expect("lock is free");
+        let guard = ConnectionCleanupGuard {
+            connections: Arc::clone(&connections),
+            connection_id: "conn".to_string(),
+            runtime: rt.handle().clone(),
+        };
+
+        std::thread::spawn(move || drop(guard))
+            .join()
+            .expect("dropping the guard outside the runtime must not panic");
+        assert!(
+            held.contains_key("conn"),
+            "removal must wait for the lock, not race it"
+        );
+        drop(held);
+
+        rt.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while connections.lock().await.contains_key("conn") {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("deferred removal never ran");
+        });
+        assert!(connections.blocking_lock().contains_key("other"));
+    }
+
+    /// Uncontended lock: the entry is removed synchronously, before `drop`
+    /// returns, wherever the guard drops.
+    #[test]
+    fn cleanup_guard_removes_entry_synchronously_when_map_unlocked() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let connections = Arc::new(tokio::sync::Mutex::new(HashMap::from([(
+            "conn".to_string(),
+            (),
+        )])));
+        drop(ConnectionCleanupGuard {
+            connections: Arc::clone(&connections),
+            connection_id: "conn".to_string(),
+            runtime: rt.handle().clone(),
+        });
+        assert!(connections.blocking_lock().is_empty());
     }
 
     // ── PermissionQueue (#442) ──────────────────────────────────────────────
@@ -30357,6 +30654,44 @@ mod tests {
             steering_policy_agent(AgentType::Codex, Some(&claude)),
             AgentType::Codex
         );
+    }
+
+    #[test]
+    fn antigravity_interactions_follow_the_running_adapter_name() {
+        use agent_client_protocol::schema::v1::Implementation;
+        let agy = Implementation::new(ANTIGRAVITY_ACP_AGENT_NAME, "1.4.1");
+        let custom = AgentType::Custom("antigravity-b");
+        // The built-in agent needs no proof, as before.
+        assert!(speaks_antigravity_interactions(
+            AgentType::Antigravity,
+            None
+        ));
+        assert!(speaks_antigravity_interactions(
+            AgentType::Antigravity,
+            Some(&agy)
+        ));
+        // A custom registration of the same adapter.
+        assert!(speaks_antigravity_interactions(custom, Some(&agy)));
+        // Any other custom adapter, or one that reports nothing, is left alone:
+        // `interaction_` is not a reserved prefix.
+        assert!(!speaks_antigravity_interactions(custom, None));
+        for name in [
+            "acme-acp",
+            "antigravity",
+            "antigravity-acp-fork",
+            "agy_acp_server",
+        ] {
+            let other = Implementation::new(name, "1.4.1");
+            assert!(
+                !speaks_antigravity_interactions(custom, Some(&other)),
+                "{name}"
+            );
+        }
+        // A built-in type is never let in by what its adapter reports.
+        assert!(!speaks_antigravity_interactions(
+            AgentType::Codex,
+            Some(&agy)
+        ));
     }
 
     #[test]
@@ -34310,11 +34645,22 @@ mod tests {
             // live_message) — only the background report.
             [AcpEvent::BackgroundActivity {
                 outstanding,
+                outstanding_tasks,
                 settled,
                 ..
             }] => {
                 assert_eq!(*outstanding, 1);
                 assert!(settled.is_empty());
+                // …and listed: the child by the id its settle will carry,
+                // pointing at its launch call.
+                assert_eq!(outstanding_tasks.len(), 1);
+                assert_eq!(outstanding_tasks[0].task_id, "sub-1");
+                assert_eq!(
+                    outstanding_tasks[0].kind,
+                    crate::acp::types::BackgroundTaskKind::Agent
+                );
+                assert_eq!(outstanding_tasks[0].tool_use_id.as_deref(), Some("call-1"));
+                assert!(outstanding_tasks[0].started_at_ms > 0);
             }
             other => panic!("expected one BackgroundActivity, got {other:?}"),
         }
@@ -34437,11 +34783,13 @@ mod tests {
             [AcpEvent::BackgroundActivity {
                 session_id,
                 outstanding,
+                outstanding_tasks,
                 settled,
                 ..
             }] => {
                 assert_eq!(session_id, "sess-1");
                 assert_eq!(*outstanding, 0, "the settled child leaves the count");
+                assert!(outstanding_tasks.is_empty(), "…and the list");
                 assert_eq!(settled.len(), 1);
                 let s = &settled[0];
                 assert_eq!(s.task_id, "sub-1");
@@ -40211,7 +40559,9 @@ mod tests {
     }
 
     /// `(outstanding, settled)` of each `BackgroundActivity` among `events`,
-    /// checking the parts every OpenCode report shares.
+    /// checking the parts every OpenCode report shares — the rows included:
+    /// one per task still out, and in this fixture that can only be the
+    /// background child, named by its session and pointing at its launch.
     fn oc_background_reports(
         events: &[AcpEvent],
     ) -> Vec<(u32, Vec<crate::acp::types::BackgroundSettledInfo>)> {
@@ -40222,11 +40572,20 @@ mod tests {
                     session_id,
                     turns,
                     outstanding,
+                    outstanding_tasks,
                     settled,
                     watermark,
                 } => {
                     assert_eq!(session_id, OC_BG_ROOT);
                     assert!(turns.is_empty() && *watermark == 0, "{event:?}");
+                    assert_eq!(outstanding_tasks.len() as u32, *outstanding, "{event:?}");
+                    for task in outstanding_tasks {
+                        assert_eq!(task.task_id, OC_BG_CHILD);
+                        assert_eq!(task.kind, crate::acp::types::BackgroundTaskKind::Agent);
+                        assert_eq!(task.tool_use_id.as_deref(), Some(OC_BG_LAUNCH));
+                        assert_eq!(task.description.as_deref(), Some(OC_BG_TITLE));
+                        assert!(task.started_at_ms > 0, "{task:?}");
+                    }
                     Some((*outstanding, settled.clone()))
                 }
                 _ => None,
@@ -40275,6 +40634,17 @@ mod tests {
             "{turn:#?}"
         );
         assert_eq!(state.read().await.background_outstanding, 1);
+        assert_eq!(
+            state
+                .read()
+                .await
+                .background_outstanding_tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![OC_BG_CHILD],
+            "the snapshot can list the child, not just count it"
+        );
 
         // The turn answers (`TurnComplete` clears its calls).
         state.write().await.active_tool_calls.clear();
@@ -40289,6 +40659,7 @@ mod tests {
             )]
         );
         assert_eq!(state.read().await.background_outstanding, 0);
+        assert!(state.read().await.background_outstanding_tasks.is_empty());
     }
 
     /// A background child that ends while the turn that launched it still
@@ -42942,6 +43313,42 @@ mod tests {
             .unwrap_or_default()
     }
 
+    #[tokio::test]
+    async fn codex_mcp_screenshot_is_forwarded_in_the_tool_update() {
+        let events = pi_emit_chunk(
+            AgentType::Codex,
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "screenshot",
+                "status": "completed",
+                "rawOutput": {
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": "Page loaded"},
+                            {"type": "image", "data": "AQID", "mimeType": "image/jpeg"}
+                        ]
+                    },
+                    "error": null
+                }
+            }),
+        )
+        .await;
+        let images = events
+            .iter()
+            .find_map(|event| match event {
+                AcpEvent::ToolCallUpdate {
+                    tool_call_id,
+                    images: Some(images),
+                    ..
+                } if tool_call_id == "screenshot" => Some(images),
+                _ => None,
+            })
+            .expect("completed screenshot update has images");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].mime_type, "image/jpeg");
+        assert_eq!(images[0].data, "AQID");
+    }
+
     fn pi_chunk(text: &str) -> serde_json::Value {
         serde_json::json!({
             "sessionUpdate": "agent_message_chunk",
@@ -44626,6 +45033,143 @@ mod tests {
             })
             .collect();
         (titles, cb.kimi_tool_titles.calls.len())
+    }
+
+    /// The statuses emitted for a run of tool-call frames.
+    async fn tool_statuses_emitted(
+        agent_type: AgentType,
+        frames: &[serde_json::Value],
+    ) -> Vec<Option<String>> {
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-statuses".to_string(),
+            agent_type,
+            None,
+            "win".to_string(),
+            None,
+        )));
+        let emitter = EventEmitter::Noop;
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        for frame in frames {
+            let update: SessionUpdate =
+                serde_json::from_value(frame.clone()).expect("valid tool-call wire shape");
+            emit_conversation_update(
+                &state, &emitter, agent_type, update, None, &mut cache, &mut cb,
+            )
+            .await;
+        }
+        let guard = state.read().await;
+        let events = guard.recent_events_after(0).expect("events recorded");
+        events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                AcpEvent::ToolCall { status, .. } => Some(Some(status.clone())),
+                AcpEvent::ToolCallUpdate { status, .. } => Some(status.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The frames Kimi Code 2.6.0 sends for an answered plan review (captured
+    /// live), ending on `settle_status` with `result` as the call's output.
+    fn kimi_plan_review(
+        tool_call_id: &str,
+        settle_status: &str,
+        result: &str,
+    ) -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "title": "ExitPlanMode",
+                "kind": "other",
+                "status": "pending",
+                "content": [{"type": "content", "content": {"type": "text", "text": "{}"}}],
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "title": "Presenting plan and exiting plan mode",
+                "kind": "other",
+                "status": "in_progress",
+                "rawInput": {},
+                "content": [
+                    {"type": "content", "content": {"type": "text", "text": "Plan saved to: /p/plan.md\n\n# Plan\n\n1. Say hello.\n"}},
+                    {"type": "content", "content": {"type": "text", "text": "{}"}},
+                ],
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "status": settle_status,
+                "content": [{"type": "content", "content": {"type": "text", "text": result}}],
+                "rawOutput": result,
+            }),
+        ]
+    }
+
+    /// Kimi Code 2.6.0 settles every answered plan review `failed`, so an
+    /// approved plan would show as an error: the answers the review itself
+    /// meant as successes are forwarded `completed`, a rejection stays
+    /// `failed`, and nothing else is touched.
+    #[tokio::test]
+    async fn a_kimi_plan_review_settles_by_what_the_user_chose() {
+        let approved = "Exited plan mode. Plan mode deactivated. All tools are now available.\nPlan saved to: /p/plan.md\n\n## Approved Plan:\n# Plan\n";
+        for ok in [
+            approved,
+            "Plan approval dismissed. Plan mode remains active.",
+            "User requested revisions. Plan mode remains active.",
+            "User rejected the plan. Feedback:\n\nshorter please",
+        ] {
+            let statuses = tool_statuses_emitted(
+                AgentType::KimiCode,
+                &kimi_plan_review("5:call_1", "failed", ok),
+            )
+            .await;
+            assert_eq!(
+                statuses.last(),
+                Some(&Some("completed".to_string())),
+                "{ok}"
+            );
+        }
+        for rejected in [
+            "Plan rejected by user. Plan mode deactivated.",
+            "Plan rejected by user. Plan mode remains active.",
+        ] {
+            let statuses = tool_statuses_emitted(
+                AgentType::KimiCode,
+                &kimi_plan_review("5:call_2", "failed", rejected),
+            )
+            .await;
+            assert_eq!(
+                statuses.last(),
+                Some(&Some("failed".to_string())),
+                "{rejected}"
+            );
+        }
+        // 2.5.3 settled the same review `completed`; that stays as it was.
+        let statuses = tool_statuses_emitted(
+            AgentType::KimiCode,
+            &kimi_plan_review("5:call_3", "completed", approved),
+        )
+        .await;
+        assert_eq!(statuses.last(), Some(&Some("completed".to_string())));
+
+        // Only an `ExitPlanMode` call: another tool whose output happens to
+        // read the same keeps its failure.
+        let mut other = kimi_plan_review("5:call_4", "failed", approved);
+        other[0]["title"] = serde_json::json!("Bash");
+        other.remove(1);
+        let statuses = tool_statuses_emitted(AgentType::KimiCode, &other).await;
+        assert_eq!(statuses.last(), Some(&Some("failed".to_string())));
+
+        // Only Kimi Code.
+        let statuses = tool_statuses_emitted(
+            AgentType::OpenCode,
+            &kimi_plan_review("5:call_5", "failed", approved),
+        )
+        .await;
+        assert_eq!(statuses.last(), Some(&Some("failed".to_string())));
     }
 
     /// Kimi retitles a call's card with a status and never puts the call's
@@ -50854,22 +51398,45 @@ mod tests {
     #[tokio::test]
     async fn antigravity_interaction_round_trip_preserves_choice_and_gates() {
         use agent_client_protocol::Channel;
-        for (agent_type, enabled, decline, bridged) in [
-            (AgentType::Antigravity, true, false, true),
-            (AgentType::Antigravity, true, true, true),
+        // (agent, the `agentInfo.name` its adapter reported at initialize, ask
+        // feature on, user declines, bridged)
+        for (agent_type, adapter, enabled, decline, bridged) in [
+            (AgentType::Antigravity, None, true, false, true),
+            (AgentType::Antigravity, None, true, true, true),
+            // A custom agent running antigravity-acp (a second account, say).
+            (
+                AgentType::Custom("antigravity-b"),
+                Some(ANTIGRAVITY_ACP_AGENT_NAME),
+                true,
+                false,
+                true,
+            ),
+            // Any other custom adapter keeps its look-alike ids on the approval
+            // card, as does one that reported no `agentInfo`.
+            (AgentType::Custom("acme"), Some("acme-acp"), true, false, false),
+            (AgentType::Custom("antigravity-b"), None, true, false, false),
             // The ask feature's kill switch keeps the approval card, as it does
             // for every other native ask bridge.
-            (AgentType::Antigravity, false, false, false),
-            (AgentType::Codex, true, false, false),
+            (AgentType::Antigravity, None, false, false, false),
+            (AgentType::Codex, None, true, false, false),
         ] {
             let (client_end, agent_end) = Channel::duplex();
-            let state = Arc::new(RwLock::new(SessionState::new(
+            let mut session = SessionState::new(
                 "conn-test".into(),
                 agent_type,
                 None,
                 "win".into(),
                 None,
-            )));
+            );
+            // What initialize pins.
+            let adapter = adapter.map(|name| {
+                agent_client_protocol::schema::v1::Implementation::new(name, "1.4.1")
+            });
+            if session.agent_type != AgentType::Antigravity {
+                session.antigravity_interactions =
+                    speaks_antigravity_interactions(agent_type, adapter.as_ref());
+            }
+            let state = Arc::new(RwLock::new(session));
             let config = crate::acp::question::QuestionRuntimeConfig::new();
             config
                 .set(crate::acp::question::QuestionConfig { enabled })
@@ -51015,6 +51582,7 @@ mod tests {
                 })
                 .collect(),
             is_secret: false,
+            allow_other: false,
         };
         let answered = crate::acp::question::QuestionOutcome {
             answers: vec![crate::acp::question::QuestionAnsweredItem {
@@ -51030,7 +51598,8 @@ mod tests {
             declined: true,
         };
         // (agent, the card the bridge recorded, closing frame, frames for the id
-        // that reach the reducers)
+        // that reach the reducers). The custom agent is one whose adapter
+        // reported antigravity-acp at initialize.
         for (agent_type, card, (closing_status, closing_output), frames_expected) in [
             (
                 AgentType::Antigravity,
@@ -51051,19 +51620,29 @@ mod tests {
                 2,
             ),
             (
+                AgentType::Custom("antigravity-b"),
+                Some(&answered),
+                ("completed", "Response received"),
+                2,
+            ),
+            (
                 AgentType::Codex,
                 Some(&answered),
                 ("completed", "Response received"),
                 3,
             ),
         ] {
-            let state = Arc::new(RwLock::new(SessionState::new(
+            let mut session = SessionState::new(
                 "conn-agy-frames".into(),
                 agent_type,
                 None,
                 "win".into(),
                 None,
-            )));
+            );
+            if matches!(agent_type, AgentType::Custom(_)) {
+                session.antigravity_interactions = true;
+            }
+            let state = Arc::new(RwLock::new(session));
             let mut cache = ToolCallOutputCache::default();
             let mut cb = CodeBuddyLiveState::default();
             emit_conversation_update(
@@ -51123,7 +51702,7 @@ mod tests {
                 other => panic!("unexpected output {other:?} ({case})"),
             };
             match (agent_type, card) {
-                (AgentType::Antigravity, Some(outcome)) => {
+                (AgentType::Antigravity | AgentType::Custom(_), Some(outcome)) => {
                     let expected = crate::acp::question::grok_result_card_output(outcome);
                     assert_eq!(output, expected.to_string(), "{case}");
                     assert_eq!(call.label, "ask_user_question", "{case}");
@@ -51137,7 +51716,7 @@ mod tests {
                 _ => assert!(output.contains("Response received"), "{output}"),
             }
             // Each record is consumed by the frame it was waiting for.
-            if agent_type == AgentType::Antigravity {
+            if matches!(agent_type, AgentType::Antigravity | AgentType::Custom(_)) {
                 assert!(guard.antigravity_answered_interactions.is_empty(), "{case}");
             }
         }

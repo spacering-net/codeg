@@ -26,6 +26,7 @@ import {
   usesMergeRequests,
 } from "./task-acceptance"
 import type { WorkTask } from "@/lib/types"
+import { ThreadCommentSection, useThreadComment } from "./task-thread-comment"
 
 interface TaskDeliverPrDialogProps {
   open: boolean
@@ -96,6 +97,7 @@ export function TaskDeliverPrDialog({
   // here that destroys something.
   const worktreeChoiceMade = useRef(false)
   const [submitting, setSubmitting] = useState(false)
+  const comment = useThreadComment(task, open)
   // A task of several issues: which ones the pull request closes.
   const items =
     task?.source_kind === "forge_issue" && task.source_meta != null
@@ -179,6 +181,9 @@ export function TaskDeliverPrDialog({
       // neither title nor draft.
       // The closing list only travels when this delivery is the one that
       // fixes it — every other call is exactly what it always was.
+      // The comment's answer first: a delivery that finishes the task is what
+      // posts it, and it reads the answer from the task when it does.
+      await comment.persist()
       const picked = items
         .map((item) => item.number)
         .filter((n) => closes.has(n))
@@ -276,7 +281,9 @@ export function TaskDeliverPrDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[30rem]">
+      <DialogContent
+        className={comment.applies ? "sm:max-w-[34rem]" : "sm:max-w-[30rem]"}
+      >
         <DialogHeader>
           <DialogTitle>{heading}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
@@ -383,6 +390,7 @@ export function TaskDeliverPrDialog({
               </p>
             )}
           </div>
+          <ThreadCommentSection comment={comment} disabled={submitting} />
         </div>
 
         <DialogFooter>

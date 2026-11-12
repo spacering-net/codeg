@@ -83,6 +83,7 @@ import { ForgeStartDialog } from "@/components/forge/forge-start-dialog"
 import { useIsMobile } from "@/hooks/use-mobile"
 import {
   folderForgeRemote,
+  forgeCheckSummaries,
   forgeListIssues,
   forgeListLabels,
   forgeSettingsGet,
@@ -114,6 +115,7 @@ import { effectiveForgeSettings } from "@/lib/forge-settings"
 import { openUrl, subscribe } from "@/lib/platform"
 import { cn } from "@/lib/utils"
 import type {
+  ForgeCheckSummary,
   ForgeIssueList,
   ForgeIssueRow,
   ForgeLabel,
@@ -170,6 +172,12 @@ const LOOKUP_BATCH = 100
  *  the 5000/hour core one), so a per-keystroke fetch would exhaust it inside
  *  one sentence. */
 const SEARCH_DEBOUNCE_MS = 350
+
+/** Forges whose list rows carry a CI mark. CNB's checks cannot be read at all
+ *  (its detail panel says so too), so it is never asked. */
+const CHECKS_PROVIDERS: ReadonlySet<ForgeProviderId> = new Set<ForgeProviderId>(
+  ["github", "gitlab", "gitea"]
+)
 
 /** Page-number slots the strip may use. Narrow phones cannot fit the desktop
  *  seven next to the page-size select without the footer wrapping twice. */
@@ -706,6 +714,36 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
   const { setRoute } = useWorkbenchRoute()
   /** The item the right-side detail panel is open on, or `null` for closed. */
   const [detailRow, setDetailRow] = useState<ForgeIssueRow | null>(null)
+  /** "Open the panel on its Checks tab" — a row's CI mark was clicked. A fresh
+   *  nonce per click, so clicking the item already on show still switches. */
+  const [checksTabRequest, setChecksTabRequest] = useState<{
+    number: number
+    nonce: number
+  } | null>(null)
+  const checksTabNonceRef = useRef(0)
+  /**
+   * The rows' CI marks, by number, for the list they were read for.
+   *
+   * Their own state rather than fields of the rows: they arrive AFTER the
+   * list, from a separate request, and the rows themselves are replaced by
+   * writes from the panel (`adoptRow`) that know nothing about CI. A number
+   * absent from the map draws nothing — not "no checks", just no mark.
+   */
+  const [checks, setChecks] = useState<{
+    scope: string
+    byNumber: ReadonlyMap<number, ForgeCheckSummary>
+  } | null>(null)
+  /** Which request last asked about each number — so an older answer (a page
+   *  read overtaken by one row's re-read after an approval, or the other way
+   *  round) never lands over a newer one. */
+  const checksGenRef = useRef(new Map<number, number>())
+  /** The numbers a read of their marks is out for, for the list it was sent
+   *  for. A row with no mark yet holds a skeleton while its number is here. */
+  const [checksPending, setChecksPending] = useState<{
+    scope: string
+    numbers: ReadonlySet<number>
+  } | null>(null)
+  const checksSeqRef = useRef(0)
   const [newIssueOpen, setNewIssueOpen] = useState(false)
   /** The panel's preferences, EVERY scope — what a trigger dialog OPENS with,
    *  and nothing else this page reads. Loaded once and replaced in place when
@@ -758,6 +796,8 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     setCounts({})
     setStartRow(null)
     setDetailRow(null)
+    setChecks(null)
+    setChecksPending(null)
     // The selection names issues by number in THIS repository — kept across
     // a switch it would hand another project's #12 to a task — and the
     // combine dialog holds a frozen copy of it.
@@ -865,6 +905,73 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     return countsReqRef.current[which]
   }, [])
 
+  /** Read in the response, not captured: an answer for a folder or tab the
+   *  page has since left is about rows no longer on screen. */
+  const listScopeRef = useRef(listScope)
+  useEffect(() => {
+    listScopeRef.current = listScope
+  }, [listScope])
+
+  /**
+   * The CI marks for these changes — the deferred half of the list, the way
+   * github.com fills its own PR list in after the rows have drawn.
+   *
+   * Decoration in every sense: never an error the page shows, and an answer
+   * the forge could not give (`available: false`) or a request that failed
+   * leaves whatever marks were already there — a moment ago they were true,
+   * and a transient rate limit should not wipe them. A row with no mark yet
+   * holds a small skeleton while the read is out (`checksPending`); however
+   * the read ends, its numbers leave that set, so a failure falls back to
+   * drawing nothing. Only a forge that has checks to read is asked; CNB
+   * never is.
+   */
+  const fetchChecks = useCallback(
+    async (numbers: number[]) => {
+      if (effectiveFolderId == null || readable == null) return
+      if (!CHECKS_PROVIDERS.has(readable.provider)) return
+      if (numbers.length === 0) return
+      const scope = listScope
+      const gen = ++checksSeqRef.current
+      for (const n of numbers) checksGenRef.current.set(n, gen)
+      setChecksPending((prev) => {
+        const next = new Set(prev?.scope === scope ? prev.numbers : [])
+        for (const n of numbers) next.add(n)
+        return { scope, numbers: next }
+      })
+      let result
+      try {
+        result = await forgeCheckSummaries(effectiveFolderId, numbers)
+      } catch {
+        result = null
+      }
+      // Settled, whatever the outcome — but only the numbers no newer read
+      // has claimed since; that one clears its own when it lands.
+      const settled = numbers.filter((n) => checksGenRef.current.get(n) === gen)
+      setChecksPending((prev) => {
+        if (prev?.scope !== scope) return prev
+        const next = new Set(prev.numbers)
+        for (const n of settled) next.delete(n)
+        return { scope, numbers: next }
+      })
+      if (result == null) return
+      if (!result.available || listScopeRef.current !== scope) return
+      // Only the numbers no newer request has asked about since.
+      const fresh = numbers.filter((n) => checksGenRef.current.get(n) === gen)
+      if (fresh.length === 0) return
+      const got = new Map(result.items.map((item) => [item.number, item]))
+      setChecks((prev) => {
+        const next = new Map(prev?.scope === scope ? prev.byNumber : [])
+        for (const n of fresh) {
+          const item = got.get(n)
+          if (item != null) next.set(n, item)
+          else next.delete(n)
+        }
+        return { scope, byNumber: next }
+      })
+    },
+    [effectiveFolderId, readable, listScope]
+  )
+
   const fetchPage = useCallback(async () => {
     if (effectiveFolderId == null || readable == null) return
     const id = ++reqRef.current
@@ -888,6 +995,10 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
       // served from an index that lags a write by seconds.
       const data = reconcile(result, id, placementScope, adoptedRef.current)
       setLoaded({ scope: listScope, data })
+      // Every successful read of the list — a page turn, a filter, the reload
+      // button — re-reads the marks of what it brought back. Not awaited: the
+      // rows are on screen now, and the marks fill in when they come.
+      void fetchChecks(data.rows.filter((r) => r.is_pr).map((r) => r.number))
       // The badge for the tab on screen, free: this response already counted
       // exactly what a probe would have. `incomplete` withholds it — GitHub
       // says the search timed out, so the number is short of the truth, and a
@@ -929,6 +1040,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     countsScope,
     claimCount,
     recordCount,
+    fetchChecks,
     tab,
     stateFilter,
     assignedMe,
@@ -1971,7 +2083,25 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
                 link={linkFor(row)}
                 compact={isMobile || embedded}
                 selection={selectionFor(row, index)}
+                checks={
+                  row.is_pr && checks?.scope === listScope
+                    ? checks.byNumber.get(row.number)
+                    : undefined
+                }
+                checksLoading={
+                  row.is_pr &&
+                  checksPending?.scope === listScope &&
+                  checksPending.numbers.has(row.number)
+                }
                 onOpenDetail={() => setDetailRow(row)}
+                onOpenChecks={() => {
+                  setDetailRow(row)
+                  checksTabNonceRef.current += 1
+                  setChecksTabRequest({
+                    number: row.number,
+                    nonce: checksTabNonceRef.current,
+                  })
+                }}
                 onStart={() => setStartRow(row)}
               />
             ))}
@@ -2050,6 +2180,8 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
         }}
         onRowUpdated={adoptRow}
         onCommentPosted={countComment}
+        tabRequest={checksTabRequest}
+        onChecksChanged={(number) => void fetchChecks([number])}
       />
 
       {readable != null && effectiveFolderId != null ? (

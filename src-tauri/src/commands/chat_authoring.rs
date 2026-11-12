@@ -15,18 +15,20 @@
 //!     the switch off takes effect on sessions that are already running.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::acp::chat_authoring::{
     local_timezone, AuthoringContext, AuthoringOutcome, ChatAuthoringAccess, ChatAuthoringConfig,
-    ChatAuthoringRuntimeConfig, NewAutomationSpec, NewWorkTaskSpec,
+    ChatAuthoringRuntimeConfig, NewAutomationSpec, NewWorkTaskSpec, MAX_ATTACHMENT_IMAGE_BYTES,
+    MAX_ATTACHMENT_IMAGE_TOTAL_BYTES,
 };
-use crate::acp::types::PromptInputBlock;
+use crate::acp::types::{attachment_marker, PromptInputBlock};
 use crate::app_error::AppCommandError;
 use crate::db::entities::automation::{IsolationMode, TriggerKind};
 use crate::db::entities::folder::FolderKind;
@@ -176,6 +178,188 @@ fn text_prompt_blocks(prompt: &str) -> Result<Vec<serde_json::Value>, String> {
     })?])
 }
 
+/// The image formats every image-capable agent takes, told apart by their
+/// leading bytes rather than the file name: a `.png` that is really a JPEG
+/// would otherwise go out labelled `image/png`, which model APIs reject. `None`
+/// for anything else (SVG included — it is markup, and travels as a file).
+fn sniff_image_mime(head: &[u8]) -> Option<&'static str> {
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// Read up to the first 12 bytes of `path` — enough for [`sniff_image_mime`].
+async fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let file = tokio::fs::File::open(path).await?;
+    let mut head = Vec::with_capacity(12);
+    file.take(12).read_to_end(&mut head).await?;
+    Ok(head)
+}
+
+/// An attachment path as given, made absolute against the caller's working
+/// directory when it is relative — the directory the agent itself resolves
+/// relative paths in.
+fn resolve_attachment_path(raw: &str, working_dir: &Path) -> PathBuf {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        working_dir.join(path)
+    }
+}
+
+/// The `file://` uri of a resolved attachment path.
+fn file_uri(raw: &str, path: &Path) -> Result<String, String> {
+    url::Url::from_file_path(path)
+        .map(String::from)
+        .map_err(|_| format!("attachment '{raw}' is not a usable file path."))
+}
+
+/// An attachment as the inline `[name](file://…)` reference a composer file
+/// badge serializes to.
+fn file_reference(raw: &str, path: &Path) -> Result<String, String> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| raw.to_string());
+    Ok(attachment_marker(&name, &file_uri(raw, path)?))
+}
+
+/// Build a chat-authored task's prompt the way the task editor's composer
+/// builds one: the prose as a single text block, every non-image file as an
+/// inline `[name](file://…)` reference appended to that prose (one per line),
+/// and every image as an `image` block carrying its bytes inline — the shape a
+/// desktop drop stores, which the engine re-encodes at launch for agents that
+/// take images only as embedded resources. Returns the blocks plus the display
+/// text (the text block's content, which is what the editor's `getText` yields
+/// for the same draft).
+///
+/// Images are stored by value so the task still has them when it runs, however
+/// long it waits on the board; other files stay references, like a file badge
+/// in the composer, and are read by the executing agent itself.
+///
+/// All-or-nothing: an attachment that is missing, not a regular file, or over a
+/// size cap fails the whole create with a note naming it, so the LLM can fix
+/// the call rather than queue a task that silently lacks what it was told to
+/// carry.
+///
+/// With `host_reads_files` off (the caller hosts its own file access, see
+/// [`AuthoringContext::host_reads_files`]) nothing is opened, read or even
+/// stat'ed: every attachment, image or not, becomes a path reference that the
+/// executing agent reads — or is refused — inside its own sandbox.
+async fn work_task_prompt_blocks(
+    prompt: &str,
+    attachments: &[String],
+    working_dir: &Path,
+    host_reads_files: bool,
+) -> Result<(Vec<serde_json::Value>, String), String> {
+    let mut links: Vec<String> = Vec::new();
+    let mut images: Vec<PromptInputBlock> = Vec::new();
+    let mut image_total: u64 = 0;
+    for raw in attachments {
+        let path = resolve_attachment_path(raw, working_dir);
+        if !host_reads_files {
+            links.push(file_reference(raw, &path)?);
+            continue;
+        }
+        let unreadable = |e: std::io::Error| {
+            format!(
+                "attachment '{raw}' could not be read ({e}). Nothing was created — pass the \
+                 absolute path of an existing file, or drop it from `attachments`."
+            )
+        };
+        let meta = tokio::fs::metadata(&path).await.map_err(unreadable)?;
+        if !meta.is_file() {
+            return Err(format!(
+                "attachment '{raw}' is not a file. Nothing was created — attach files only \
+                 (mention a directory in `prompt` instead)."
+            ));
+        }
+        let head = read_head(&path).await.map_err(unreadable)?;
+        let Some(mime) = sniff_image_mime(&head) else {
+            links.push(file_reference(raw, &path)?);
+            continue;
+        };
+        let uri = file_uri(raw, &path)?;
+        // Checked against the size on disk BEFORE reading, so an oversized
+        // image is refused without buffering it — and again on the bytes read,
+        // for a file that grew in between.
+        let over_cap = |len: u64| {
+            format!(
+                "image '{raw}' is {} MB, over the {} MB limit for one attached image. \
+                 Nothing was created — attach a smaller image.",
+                len.div_ceil(1024 * 1024),
+                MAX_ATTACHMENT_IMAGE_BYTES / (1024 * 1024)
+            )
+        };
+        if meta.len() > MAX_ATTACHMENT_IMAGE_BYTES {
+            return Err(over_cap(meta.len()));
+        }
+        let bytes = tokio::fs::read(&path).await.map_err(unreadable)?;
+        let len = bytes.len() as u64;
+        if len > MAX_ATTACHMENT_IMAGE_BYTES {
+            return Err(over_cap(len));
+        }
+        image_total += len;
+        if image_total > MAX_ATTACHMENT_IMAGE_TOTAL_BYTES {
+            return Err(format!(
+                "the attached images add up to more than {} MB. Nothing was created — attach \
+                 fewer or smaller images.",
+                MAX_ATTACHMENT_IMAGE_TOTAL_BYTES / (1024 * 1024)
+            ));
+        }
+        images.push(PromptInputBlock::Image {
+            data: BASE64.encode(&bytes),
+            mime_type: mime.to_string(),
+            uri: Some(uri),
+        });
+    }
+
+    let mut text = prompt.to_string();
+    if !links.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(&links.join("\n"));
+    }
+    let mut blocks = text_prompt_blocks(&text)?;
+    for image in &images {
+        blocks.push(
+            serde_json::to_value(image)
+                .map_err(|e| format!("could not encode an attached image: {e}"))?,
+        );
+    }
+    Ok((blocks, text))
+}
+
+/// The advisory on a created task, saying what it carries so the LLM can tell
+/// the user the screenshots made it in.
+fn work_task_created_note(images: usize, files: usize) -> String {
+    let mut note = String::from(
+        "Queued as a to-do; the user starts it from there (or auto-processing picks it up).",
+    );
+    let plural =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    match (images, files) {
+        (0, 0) => {}
+        (i, 0) => note.push_str(&format!(" Attached {}.", plural(i, "image", "images"))),
+        (0, f) => note.push_str(&format!(" Attached {}.", plural(f, "file", "files"))),
+        (i, f) => note.push_str(&format!(
+            " Attached {} and {}.",
+            plural(i, "image", "images"),
+            plural(f, "file", "files")
+        )),
+    }
+    note
+}
+
 #[async_trait]
 impl ChatAuthoringAccess for DbChatAuthoring {
     async fn create_automation(
@@ -315,15 +499,26 @@ impl ChatAuthoringAccess for DbChatAuthoring {
             Ok(a) => a,
             Err(note) => return AuthoringOutcome::rejected(KIND_WORK_TASK, note),
         };
-        let prompt_blocks = match text_prompt_blocks(&spec.prompt) {
+        let (prompt_blocks, display_text) = match work_task_prompt_blocks(
+            &spec.prompt,
+            &spec.attachments,
+            &ctx.working_dir,
+            ctx.host_reads_files,
+        )
+        .await
+        {
             Ok(b) => b,
             Err(note) => return AuthoringOutcome::rejected(KIND_WORK_TASK, note),
         };
+        // Everything after the prose block is an image; the other attachments
+        // went into the prose as file references.
+        let images = prompt_blocks.len().saturating_sub(1);
+        let files = spec.attachments.len().saturating_sub(images);
         // `agent_type: None` deliberately stays None — that is "inherit the
         // board's settings", which is what the user configured for this project.
         let config = WorkTaskConfig {
             prompt_blocks,
-            display_text: spec.prompt.clone(),
+            display_text,
             agent_type: agent.map(|a| a.as_wire().into_owned()),
             mode_id: None,
             config_values: BTreeMap::new(),
@@ -358,11 +553,17 @@ impl ChatAuthoringAccess for DbChatAuthoring {
                 folder_name: Some(folder.name),
                 folder_path: Some(folder.path),
                 agent_type: spec.agent_type.clone(),
-                note: Some(
-                    "Queued as a to-do; the user starts it from there \
-                     (or auto-processing picks it up)."
-                        .to_string(),
-                ),
+                note: Some({
+                    let mut note = work_task_created_note(images, files);
+                    if !ctx.host_reads_files && files > 0 {
+                        note.push_str(
+                            " This agent manages its own file access, so they are referenced \
+                             by path rather than copied into the task: they must still exist, \
+                             and be readable by the agent that runs it, when the task starts.",
+                        );
+                    }
+                    note
+                }),
                 ..Default::default()
             },
             Err(e) => AuthoringOutcome::rejected(KIND_WORK_TASK, e.to_string()),
@@ -646,6 +847,7 @@ mod tests {
         AuthoringContext {
             conversation_id: None,
             working_dir: std::path::PathBuf::from(dir),
+            host_reads_files: true,
         }
     }
 
@@ -668,6 +870,7 @@ mod tests {
             prompt: "the retry test is flaky".into(),
             agent_type: None,
             folder_path: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -800,6 +1003,237 @@ mod tests {
         let cfg: WorkTaskConfig = serde_json::from_value(row.config).unwrap();
         assert!(cfg.agent_type.is_none());
         assert_eq!(cfg.prompt_blocks.len(), 1);
+    }
+
+    const PNG_HEAD: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+
+    #[test]
+    fn sniff_image_mime_reads_the_bytes_not_the_name() {
+        assert_eq!(sniff_image_mime(PNG_HEAD), Some("image/png"));
+        assert_eq!(
+            sniff_image_mime(&[0xFF, 0xD8, 0xFF, 0xE0]),
+            Some("image/jpeg")
+        );
+        assert_eq!(sniff_image_mime(b"GIF89a.."), Some("image/gif"));
+        assert_eq!(
+            sniff_image_mime(b"RIFF\0\0\0\0WEBPVP8 "),
+            Some("image/webp")
+        );
+        assert_eq!(sniff_image_mime(b"RIFF\0\0\0\0WAVE"), None);
+        assert_eq!(sniff_image_mime(b"<svg xmlns="), None);
+        assert_eq!(sniff_image_mime(b""), None);
+    }
+
+    #[test]
+    fn created_note_names_what_was_attached() {
+        assert!(!work_task_created_note(0, 0).contains("Attached"));
+        assert!(work_task_created_note(1, 0).ends_with("Attached 1 image."));
+        assert!(work_task_created_note(0, 2).ends_with("Attached 2 files."));
+        assert!(work_task_created_note(2, 1).ends_with("Attached 2 images and 1 file."));
+    }
+
+    /// Images travel by value as `image` blocks after the prose (the composer's
+    /// order); any other file becomes an inline `file://` reference appended to
+    /// the prose, which is also the display text. The image kind comes from the
+    /// bytes: a JPEG named `.png` is stored as `image/jpeg`, and a `.png` that
+    /// is not an image at all is attached as a plain file.
+    #[tokio::test]
+    async fn create_work_task_stores_images_inline_and_references_files() {
+        let (db, access, _cfg) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("shot.png");
+        std::fs::write(&shot, PNG_HEAD).unwrap();
+        let mislabelled = dir.path().join("photo.png");
+        std::fs::write(&mislabelled, [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3]).unwrap();
+        let fake = dir.path().join("fake.png");
+        std::fs::write(&fake, "not an image").unwrap();
+        let log = dir.path().join("run (1).log");
+        std::fs::write(&log, "boom").unwrap();
+
+        let mut spec = work_task_spec();
+        spec.attachments = vec![
+            shot.to_string_lossy().into_owned(),
+            log.to_string_lossy().into_owned(),
+            mislabelled.to_string_lossy().into_owned(),
+            fake.to_string_lossy().into_owned(),
+        ];
+        let out = access.create_work_task(ctx_at("/repo/app"), spec).await;
+        assert!(out.created, "note: {:?}", out.note);
+        assert!(
+            out.note
+                .as_deref()
+                .unwrap()
+                .ends_with("Attached 2 images and 2 files."),
+            "note: {:?}",
+            out.note
+        );
+
+        let row = work_task_service::get(&db.conn, out.id.unwrap())
+            .await
+            .unwrap();
+        let cfg: WorkTaskConfig = serde_json::from_value(row.config).unwrap();
+        let blocks: Vec<PromptInputBlock> = cfg
+            .prompt_blocks
+            .iter()
+            .map(|b| serde_json::from_value(b.clone()).unwrap())
+            .collect();
+        assert_eq!(blocks.len(), 3, "prose + two images: {blocks:?}");
+
+        let uri = |p: &Path| String::from(url::Url::from_file_path(p).unwrap());
+        let expected_text = format!(
+            "the retry test is flaky\n\n{}\n{}",
+            attachment_marker("run (1).log", &uri(&log)),
+            attachment_marker("fake.png", &uri(&fake)),
+        );
+        assert_eq!(
+            blocks[0],
+            PromptInputBlock::Text {
+                text: expected_text.clone()
+            }
+        );
+        assert_eq!(cfg.display_text, expected_text);
+        assert_eq!(
+            blocks[1],
+            PromptInputBlock::Image {
+                data: BASE64.encode(PNG_HEAD),
+                mime_type: "image/png".into(),
+                uri: Some(uri(&shot)),
+            }
+        );
+        match &blocks[2] {
+            PromptInputBlock::Image {
+                mime_type, uri: u, ..
+            } => {
+                assert_eq!(mime_type, "image/jpeg");
+                assert_eq!(u.as_deref(), Some(uri(&mislabelled).as_str()));
+            }
+            other => panic!("expected an image, got {other:?}"),
+        }
+    }
+
+    /// A caller that hosts its own file access (`CODEG_ACP_HOST_TOOLS=agent`)
+    /// must not get codeg to read a file for it: codeg's process is outside the
+    /// agent's sandbox. So nothing is read — an image's bytes never land in the
+    /// task, and every attachment, even one that does not exist, is only a path
+    /// reference for the executing agent to read inside its own sandbox.
+    #[tokio::test]
+    async fn create_work_task_never_reads_files_for_a_self_sandboxed_agent() {
+        let (db, access, _cfg) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("secret.png");
+        std::fs::write(&shot, PNG_HEAD).unwrap();
+        let missing = dir.path().join("gone.log");
+
+        let mut spec = work_task_spec();
+        spec.attachments = vec![
+            shot.to_string_lossy().into_owned(),
+            missing.to_string_lossy().into_owned(),
+        ];
+        let mut ctx = ctx_at("/repo/app");
+        ctx.host_reads_files = false;
+        let out = access.create_work_task(ctx, spec).await;
+        assert!(out.created, "note: {:?}", out.note);
+        assert!(
+            out.note.as_deref().unwrap().contains("referenced by path"),
+            "note: {:?}",
+            out.note
+        );
+
+        let row = work_task_service::get(&db.conn, out.id.unwrap())
+            .await
+            .unwrap();
+        let cfg: WorkTaskConfig = serde_json::from_value(row.config).unwrap();
+        assert_eq!(cfg.prompt_blocks.len(), 1, "no image block: {cfg:?}");
+        let uri = |p: &Path| String::from(url::Url::from_file_path(p).unwrap());
+        assert_eq!(
+            cfg.display_text,
+            format!(
+                "the retry test is flaky\n\n{}\n{}",
+                attachment_marker("secret.png", &uri(&shot)),
+                attachment_marker("gone.log", &uri(&missing)),
+            )
+        );
+        assert!(
+            !serde_json::to_string(&cfg.prompt_blocks)
+                .unwrap()
+                .contains(&BASE64.encode(PNG_HEAD)),
+            "the image's bytes must not be stored"
+        );
+    }
+
+    /// A relative attachment is read against the caller's working directory.
+    #[tokio::test]
+    async fn create_work_task_resolves_relative_attachments_against_the_working_dir() {
+        let (db, access, _cfg) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("shots")).unwrap();
+        std::fs::write(dir.path().join("shots/a.png"), PNG_HEAD).unwrap();
+
+        let mut spec = work_task_spec();
+        spec.folder_path = Some("/repo/app".into());
+        spec.attachments = vec!["shots/a.png".into()];
+        let ctx = AuthoringContext {
+            conversation_id: None,
+            working_dir: dir.path().to_path_buf(),
+            host_reads_files: true,
+        };
+        let out = access.create_work_task(ctx, spec).await;
+        assert!(out.created, "note: {:?}", out.note);
+        let row = work_task_service::get(&db.conn, out.id.unwrap())
+            .await
+            .unwrap();
+        let cfg: WorkTaskConfig = serde_json::from_value(row.config).unwrap();
+        assert_eq!(cfg.prompt_blocks.len(), 2);
+        assert_eq!(cfg.prompt_blocks[1]["type"], "image");
+    }
+
+    /// A missing file, a directory, or an over-cap image refuses the whole
+    /// create — softly, naming the attachment — and writes nothing.
+    #[tokio::test]
+    async fn create_work_task_refuses_bad_attachments_and_writes_nothing() {
+        let (db, access, _cfg) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("gone.png");
+        let big = dir.path().join("big.png");
+        {
+            let f = std::fs::File::create(&big).unwrap();
+            std::io::Write::write_all(&mut &f, PNG_HEAD).unwrap();
+            // Sparse: costs no disk, still reads back over the cap.
+            f.set_len(MAX_ATTACHMENT_IMAGE_BYTES + 1).unwrap();
+        }
+
+        for (path, expect) in [
+            (missing.to_string_lossy().into_owned(), "could not be read"),
+            (dir.path().to_string_lossy().into_owned(), "not a file"),
+            (big.to_string_lossy().into_owned(), "limit"),
+        ] {
+            let mut spec = work_task_spec();
+            spec.attachments = vec![path.clone()];
+            let out = access.create_work_task(ctx_at("/repo/app"), spec).await;
+            assert!(!out.created);
+            let note = out.note.unwrap();
+            assert!(note.contains(expect), "{path}: {note}");
+            assert!(
+                note.contains(&path),
+                "the note names the attachment: {note}"
+            );
+        }
+        assert!(work_task_service::list(&db.conn, None)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     /// An unresolvable target is a soft refusal telling the LLM what to pass —

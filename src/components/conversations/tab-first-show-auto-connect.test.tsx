@@ -61,6 +61,7 @@ const stubs = vi.hoisted(() => {
       hasCachedSelectors: false,
       isViewer: false,
       backgroundOutstanding: 0,
+      backgroundTasks: [],
       asyncTasks: [],
       remoteControl: null,
       delegatedChildren: [],

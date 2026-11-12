@@ -2242,7 +2242,7 @@
       "statusRunningBadge": "실행 중",
       "runningCountBadge": "{count}개 세션 실행 중",
       "statusCancelledBadge": "취소됨",
-      "worktreeRemovedBadge": "원본 worktree가 삭제됨",
+      "originalWorkingDir": "원래 작업 디렉터리",
       "cliBadge": "명령줄에서 시작됨",
       "conversationCountUnit": "{count}개",
       "emptyFolderHint": "대화 없음",
@@ -2283,6 +2283,7 @@
         "untitledConversation": "제목 없는 대화",
         "setStatus": "상태 변경…",
         "deleteSelected": "삭제",
+        "moveSelected": "이동…",
         "noConversations": "이 폴더에 대화가 없습니다.",
         "noConversationsWorkspace": "작업 공간에 대화가 없습니다.",
         "noMatchingConversations": "필터에 일치하는 대화가 없습니다.",
@@ -2381,7 +2382,7 @@
       "fieldTitle": "제목",
       "untitled": "제목 없는 대화",
       "sessionId": "세션 ID",
-      "externalId": "확장 ID",
+      "externalId": "세션 인덱스",
       "agent": "에이전트",
       "model": "모델",
       "status": "상태",
@@ -2432,6 +2433,33 @@
       "reopen": "다시 열기",
       "expandSubsessions": "하위 대화 펼치기",
       "collapseSubsessions": "하위 대화 접기"
+    },
+    "moveConversation": {
+      "menuLabel": "이동",
+      "title": "대화 이동",
+      "titleMany": "대화 {count}개 이동",
+      "intro": "“{title}” 대화를 다음 폴더로 이동합니다:",
+      "introMany": "선택한 대화 {count}개를 다음 폴더로 이동합니다:",
+      "untitledConversation": "제목 없는 대화",
+      "explain": "다음 메시지부터 에이전트는 이 폴더에서 작업합니다. 기록은 그대로 유지됩니다. 에이전트가 새 디렉터리에서 세션을 재개하지 못하면 다시 불러오거나 새 세션을 시작하라는 안내가 표시됩니다.",
+      "chatFilesNote": "채팅 중에 만든 파일은 임시 디렉터리 {path}에 남으며 폴더로 옮겨지지 않습니다.",
+      "chatFilesNoteMany": "이 채팅들에서 만든 파일은 각자의 임시 디렉터리에 남으며 폴더로 옮겨지지 않습니다.",
+      "noTargets": "열려 있는 다른 폴더가 없습니다",
+      "targetUnavailable": "이 폴더는 닫혔거나 제거되었습니다. 다른 폴더를 선택하세요.",
+      "cancel": "취소",
+      "move": "이동",
+      "toastMoved": "대화 {count}개를 {folder}(으)로 이동했습니다",
+      "toastSkipped": "대화 {count}개를 이동하지 못했습니다",
+      "toastFailed": "이동하지 못했습니다: {message}",
+      "skipReason": {
+        "not_found": "더 이상 존재하지 않습니다",
+        "not_movable": "하위 대화는 상위 대화와 함께 이동합니다",
+        "already_there": "이미 이 폴더에 있습니다",
+        "task_owned": "할 일 작업에 속해 있습니다",
+        "busy": "에이전트가 작업 중입니다. 끝난 뒤 다시 시도하세요",
+        "conflict": "이동하는 동안 변경되었습니다. 다시 시도하세요",
+        "target_unavailable": "대상 폴더가 닫혔거나 제거되었습니다"
+      }
     },
     "search": {
       "dialogTitle": "검색",
@@ -2539,6 +2567,24 @@
         "loadFailed": "상태를 읽을 수 없습니다: {message}",
         "openSettings": "전체 설정 열기",
         "refresh": "새로 고침"
+      },
+      "webService": {
+        "title": "웹 서비스",
+        "start": "웹 서비스 시작",
+        "stop": "웹 서비스 중지",
+        "cancel": "취소",
+        "confirmStart": "시작",
+        "confirmTitle": "Codeg를 네트워크에 공개할까요?",
+        "confirmDescription": "웹 서비스가 {address}에서 수신 대기합니다. 같은 네트워크의 모든 기기가 액세스 토큰으로 터미널과 에이전트를 포함한 Codeg에 접근할 수 있습니다.",
+        "tooltipNetwork": "웹 서비스 · {address}에서 수신 대기 중 (네트워크에서 접근 가능)",
+        "tooltipLocal": "웹 서비스 · {address}에서 수신 대기 중 (이 컴퓨터만)",
+        "tooltipStopped": "웹 서비스 · 중지됨",
+        "hintNetwork": "{address}에서 수신 대기 중. 네트워크의 기기가 액세스 토큰으로 Codeg를 열 수 있습니다.",
+        "hintLocal": "{address}에서 수신 대기 중. 이 컴퓨터에서만 접근할 수 있습니다.",
+        "hintStoppedNetwork": "중지됨. 시작하면 {address}에서 수신 대기하며 네트워크에서 접근할 수 있습니다.",
+        "hintStoppedLocal": "중지됨. 시작하면 {address}에서 수신 대기하며 이 컴퓨터에서만 접근할 수 있습니다.",
+        "copyAddress": "주소 복사",
+        "openSettings": "웹 서비스 설정 열기"
       }
     },
     "auxPanel": {
@@ -3443,7 +3489,8 @@
         },
         "errors": {
           "connectionFailed": "연결 실패",
-          "sendPromptFailed": "메시지 전송에 실패했습니다: {error}"
+          "sendPromptFailed": "메시지 전송에 실패했습니다: {error}",
+          "conversationMoved": "이 대화는 {folder}(으)로 이동되었습니다. 그곳에서 계속하려면 메시지를 다시 보내세요."
         }
       },
       "shared": {
@@ -3885,14 +3932,12 @@
         "readImageLoading": "이미지를 불러오는 중…",
         "readImageError": "이미지를 불러올 수 없습니다",
         "shellSession": "세션 {id}",
-        "agentPromptLabel": "프롬프트",
         "agentModelLabel": "모델",
         "agentEffortLabel": "사고 강도",
         "agentRecoveredNote": "하위 에이전트는 실제로 완료되었습니다. 턴이 중단되어 결과가 메인 세션에 전달되지 않았습니다:",
         "agentProgressTools": "도구 호출 {count}회",
         "agentProgressTurns": "{count} 턴",
         "agentProgressContext": "컨텍스트 {pct}%",
-        "agentSessionAction": "하위 에이전트 세션 보기",
         "agentSessionTitle": "하위 에이전트 세션",
         "agentSessionLoading": "하위 에이전트의 기록을 불러오는 중…",
         "agentSessionEmpty": "하위 에이전트가 아직 아무것도 기록하지 않았습니다.",
@@ -3960,6 +4005,13 @@
         "htmlPreviewHide": "미리보기 닫기"
       },
       "activity": {
+        "oauth": {
+          "waiting": "{server} 승인 대기 중",
+          "reconnecting": "{server}에 다시 연결 중…",
+          "open": "시스템 브라우저에서 승인 열기",
+          "verify": "다시 연결한 후 실제 MCP 도구 호출로 접근을 확인하세요. 브라우저를 여는 것만으로 승인이 확인되지는 않습니다.",
+          "openFailed": "브라우저를 열지 못했습니다. 승인 링크로 다시 시도하세요."
+        },
         "header": {
           "label": "실행 과정",
           "working": "진행 중",
@@ -4125,7 +4177,9 @@
         "openFile": "{filePath} 열기",
         "collapse": "접기",
         "currentMessage": "현재 메시지",
-        "scrollToCurrent": "현재 메시지(#{ordinal})로 스크롤"
+        "scrollToCurrent": "현재 메시지(#{ordinal})로 스크롤",
+        "running": "진행 중",
+        "total": "총 {count}개"
       },
       "replyArtifacts": {
         "title": "변경된 파일",
@@ -4181,6 +4235,7 @@
         "resumeDelegation": "작업 {task} 재개 중",
         "resumeDelegationNoId": "위임 작업 재개 중",
         "promptLabel": "프롬프트",
+        "attachmentsLabel": "첨부 파일",
         "ackRecorded": "작업 항목에 기록됨",
         "ackNotRecorded": "작업 항목에 기록되지 않음",
         "ackNotRecordedWithReason": "작업 항목에 기록되지 않음: {reason}",
@@ -4297,6 +4352,13 @@
         "scheduledWakeup": "예약된 깨우기",
         "scheduledWakeupAt": "예약된 깨우기 ({time})",
         "scheduledTask": "예약된 작업"
+      },
+      "liveRuns": {
+        "count": "{count}개 실행 중",
+        "awaiting": "처리를 기다리는 서브 에이전트가 있습니다",
+        "groupDelegations": "위임",
+        "background": "백그라운드",
+        "delegatedFallback": "위임한 서브 에이전트"
       },
       "remoteControl": {
         "title": "원격 제어 켜짐",
@@ -4485,7 +4547,12 @@
       "permissionDenied": "권한이 부족합니다. 1024 이상의 포트를 사용하거나 더 높은 권한으로 실행하세요",
       "addressUnavailable": "이 주소는 현재 시스템에서 사용할 수 없습니다",
       "bindFailed": "주소 바인딩에 실패했습니다"
-    }
+    },
+    "bindHost": "수신 주소",
+    "bindHostAll": "모든 인터페이스 (0.0.0.0)",
+    "bindHostLocal": "이 컴퓨터만 (127.0.0.1)",
+    "bindHostAllHint": "로컬 네트워크의 기기가 액세스 토큰으로 서비스에 접근할 수 있습니다.",
+    "bindHostLocalHint": "이 컴퓨터에서만 서비스에 접근할 수 있습니다. 예: 리버스 프록시나 Tailscale Serve 뒤에서 사용할 때."
   },
   "DirectoryBrowser": {
     "title": "디렉토리 찾아보기",
@@ -6394,6 +6461,11 @@
     "completeDescription": "이 작업은 파일을 변경하지 않아 병합할 것이 없습니다. 그대로 완료로 표시합니다.",
     "completeDescriptionNoWorktree": "이 작업의 worktree가 삭제되어 더 이상 병합할 수 없습니다. 그대로 완료로 표시합니다. 병합되지 않은 커밋이 남아 있는 작업 브랜치는 유지됩니다.",
     "completeDeleteWorktree": "완료 후 worktree 삭제",
+    "threadCommentLabel": "작업이 끝나면 항목 스레드에 댓글 남기기",
+    "threadCommentLabelSeveral": "작업이 끝나면 각 이슈 스레드에 댓글 남기기",
+    "threadCommentReplyLabel": "#{number}에 대한 답글",
+    "threadCommentPlaceholder": "비워 두면 전달 방식만 게시합니다.",
+    "threadCommentHint": "에이전트가 작성한 초안입니다. 공개되기 전에 확인하세요. Codeg는 작업이 어떻게 전달되었는지 한 줄을 덧붙이고, 저장소 설정에서 켜져 있으면 Codeg 서명도 붙입니다.",
     "completeSubmit": "완료",
     "settingsTitle": "작업 설정",
     "settingsDescription": "{folder}의 작업 기본값입니다.",
@@ -6453,6 +6525,9 @@
     "preflightRunning": "{name} 실행 중…",
     "detailDescription": "작업 상세",
     "detailSummary": "결과",
+    "detailThreadReply": "스레드 답글",
+    "detailThreadReplyHint": "작업을 승인하면 게시됩니다. 승인 대화상자에서 수정할 수 있습니다.",
+    "detailThreadReplyOffHint": "게시되지 않음: 이 작업은 댓글이 꺼져 있습니다. 승인 대화상자에서 켤 수 있습니다.",
     "detailFiles": "변경된 파일",
     "detailFilesIncludesPr": "PR 자체의 변경 포함",
     "detailFilesIncludesMr": "MR 자체의 변경 포함",
@@ -7053,7 +7128,11 @@
     "errors": {
       "noAccount": "{host}에 대한 {provider} 계정이 설정되지 않았습니다. 설정 → 버전 관리에서 추가하면 이 저장소를 불러올 수 있습니다.",
       "unsupportedHost": "리포지토리 패널은 GitHub, GitLab, Gitea, CNB만 지원하며, {host}는 그중 어느 쪽으로도 인식되지 않습니다. 자체 호스팅 GitHub Enterprise, GitLab, Gitea, Forgejo 또는 CNB 인스턴스라면 설정 → 버전 관리에서 계정을 추가하세요.",
-      "wrongForge": "{host}은(는) {provider}입니다. 다른 포지로 잘못 인식되었으나 감지 결과를 수정했습니다. 다시 불러오세요."
+      "wrongForge": "{host}은(는) {provider}입니다. 다른 포지로 잘못 인식되었으나 감지 결과를 수정했습니다. 다시 불러오세요.",
+      "approveHeadChanged": "검토한 이후 이 풀 리퀘스트에 새 커밋이 추가되었습니다. 새로 고친 뒤 다시 검토하고 승인하세요.",
+      "approveAmbiguous": "이 워크플로 실행들이 이 풀 리퀘스트만의 것인지 알 수 없습니다. GitHub에서 승인하세요.",
+      "approveForbidden": "이 계정은 여기서 워크플로 실행을 승인할 권한이 없습니다. 쓰기 권한과, 토큰의 Actions(쓰기) 권한 또는 repo 범위가 필요합니다.",
+      "approveNotOpen": "이 풀 리퀘스트는 더 이상 열려 있지 않습니다."
     },
     "addAccount": "계정 추가",
     "empty": "표시할 항목이 없습니다",
@@ -7164,6 +7243,7 @@
     "checksPassing": "{count}개 통과",
     "checksFailing": "{count}개 실패",
     "checksPending": "{count}개 진행 중",
+    "checksNeutralCount": "{count}개 판정 없음",
     "checkAllowFailure": "실패 허용",
     "checkSuccess": "통과",
     "checkFailure": "실패",
@@ -7201,7 +7281,7 @@
     "dialogDescriptionMr": "{repo} 폴더에 할 일 작업을 만들고, 워크트리를 이 병합 요청의 헤드로 체크아웃합니다. 에이전트의 커밋은 그 위에 쌓이고, 승인하면 같은 병합 요청으로 푸시됩니다.",
     "instructionPlaceholder": "에이전트에게 줄 추가 지시(선택)…",
     "writebackLabel": "완료되면 이 항목에 댓글 남기기",
-    "writebackHint": "작업이 끝나면 이 항목에 댓글을 하나 남깁니다. 결과와 링크, 변경 줄 수입니다.",
+    "writebackHint": "작업이 끝나면 이 항목에 댓글을 하나 남깁니다: 에이전트가 작성한 답글 초안(작업을 승인할 때 검토·수정 가능)과 작업이 어떻게 전달되었는지입니다.",
     "previewToggle": "작업에 포함될 Issue 내용 미리보기",
     "previewEmpty": "(설명 없음)",
     "duplicateBody": "이미 활성 작업이 이 항목을 처리 중입니다: {title}({status}). 그래도 새로 만들까요?",
@@ -7226,7 +7306,7 @@
     "combineScenarioFixHint": "에이전트가 보고를 하나씩 먼저 판단하고, 타당한 것만 하나의 변경으로 함께 고칩니다. 타당하지 않은 것은 전혀 건드리지 않고 결론과 함께 판단을 넘깁니다.",
     "combineScenarioPlanFirstHint": "에이전트가 보고를 하나씩 먼저 판단한 뒤, 타당한 것들에 대한 계획 하나를 내놓고 멈춥니다. 계획을 승인하려면 작업을 돌려보내 구현하게 하세요.",
     "combineWritebackLabel": "완료 후 각 이슈에 결과 댓글 남기기",
-    "combineWritebackHint": "작업이 끝나면 이 이슈마다 댓글을 하나씩 남깁니다. 결과, 링크, 변경 줄 수입니다.",
+    "combineWritebackHint": "작업이 끝나면 각 이슈에 댓글을 하나씩 남깁니다: 에이전트가 이슈마다 작성한 답글 초안(작업을 승인할 때 검토·수정 가능)과 작업이 어떻게 전달되었는지입니다.",
     "combineTooFew": "함께 처리하려면 이슈가 2개 이상 필요합니다. 하나만 처리하려면 그 행에서 시작하세요.",
     "combineConflictsBody": "이 이슈 중 일부는 이미 활성 작업이 처리하고 있습니다:",
     "combineConflictItem": "#{number} — {title} ({status})",
@@ -7259,6 +7339,8 @@
     "settingsPrDefaultHint": "PR 또는 MR 처리 대화상자를 열 때 미리 선택되는 방식입니다.",
     "settingsWritebackDefault": "기본으로 결과 댓글 남기기",
     "settingsWritebackDefaultHint": "처리 대화상자에 있는 스위치의 초기 상태이며, 항목마다 바꿀 수 있습니다.",
+    "settingsCommentFooter": "댓글에 Codeg 서명 붙이기",
+    "settingsCommentFooterHint": "codeg가 남기는 모든 댓글 끝에 “🤖 Generated with Codeg”를 붙이고 Codeg 저장소로 연결합니다.",
     "settingsPromptsIntro": "상시 지시문은 선택한 시나리오의 기본 문구 뒤, 처리 대화상자에 입력한 추가 설명 앞에 붙습니다(기본 문구를 여기에 다시 쓸 필요는 없습니다). 작업의 첫 턴에만 실리며, 매 턴 필요한 문장은 작업 설정의 프롬프트에 적으세요.",
     "settingsPromptsLabel": "시나리오",
     "settingsPromptAll": "모든 시나리오",
@@ -7310,7 +7392,7 @@
     "autoAutoStart": "바로 시작",
     "autoAutoStartHint": "새 작업을 바로 대기열에 넣습니다. 언제 실행될지는 작업 설정의 동시 실행 한도가 정합니다. 끄면: 할 일에서 기다립니다.",
     "autoWriteback": "결과를 댓글로 남기기",
-    "autoWritebackHint": "작업이 끝나면 트리거 대화 상자의 스위치와 같은 짧은 상태 댓글을 남깁니다.",
+    "autoWritebackHint": "작업이 끝나면 시작 대화상자의 스위치와 같은 댓글을 남깁니다: 에이전트가 작성하고 작업 승인 시 검토한 답글과 전달 방식입니다.",
     "autoActivity": "활동",
     "autoScanNow": "지금 스캔",
     "autoScanNowOff": "트리거를 켜고 저장해야 스캔할 수 있습니다.",
@@ -7338,7 +7420,23 @@
     "autoSkipExcludedAuthor": "제외된 작성자",
     "autoSkipMissingLabel": "일치하는 라벨 없음",
     "autoSkipAuthorNotIncluded": "목록에 없는 작성자",
-    "save": "저장"
+    "save": "저장",
+    "checksAwaitingApproval": "승인 대기 중인 워크플로 {count}개",
+    "checksApprovalShort": "승인 필요",
+    "approveUnknownTitle": "승인을 기다리는 워크플로가 있을 수 있습니다",
+    "approveExplain": "이 풀 리퀘스트는 포크에서 왔으며, 쓰기 권한이 있는 사람이 승인해야 워크플로가 실행됩니다. 승인하면 이 코드가 저장소의 CI에서 실행되므로 먼저 변경 사항을 검토하세요.",
+    "approveIncompleteHint": "모든 워크플로 실행을 확인하지 못했습니다. GitHub에 더 많은 대기 항목이 있을 수 있습니다.",
+    "approveBlockedAmbiguous": "같은 브랜치에서 열린 다른 풀 리퀘스트가 있어 이 실행들이 이 풀 리퀘스트만의 것인지 알 수 없습니다. GitHub에서 승인하세요.",
+    "approveBlockedPermission": "이 계정은 저장소에 푸시할 수 없어 워크플로를 승인할 수 없습니다.",
+    "approveOpenOnForge": "GitHub에서 열기",
+    "approveWorkflows": "워크플로 실행 승인",
+    "approving": "승인 중…",
+    "approveConfirmTitle": "워크플로 실행을 승인할까요?",
+    "approveConfirmBody": "워크플로 {count}개가 이 풀 리퀘스트의 코드(커밋 {sha})를 저장소의 CI에서 실행합니다. 변경 사항을 검토한 뒤에만 승인하세요.",
+    "approveDone": "워크플로 {count}개를 승인했습니다",
+    "approvePartial": "일부 워크플로를 승인하지 못했습니다: {names}",
+    "approveNothingHeld": "더 이상 승인을 기다리는 워크플로가 없습니다.",
+    "mergeWorkflowsAwaiting": "승인 대기 중인 워크플로가 있습니다"
   },
   "Canvas": {
     "title": "무한 캔버스",
