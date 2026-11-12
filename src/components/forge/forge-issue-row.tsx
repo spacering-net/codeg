@@ -290,13 +290,30 @@ export function checksFraction(
  */
 function RowChecksMark({
   summary,
+  loading,
   onOpen,
 }: {
   summary: ForgeCheckSummary | null | undefined
+  loading: boolean
   onOpen?: () => void
 }) {
   const t = useTranslations("Forge")
   const mark = checksMark(summary)
+  if (summary == null && loading) {
+    // The first answer is still on its way: hold the place the mark will
+    // take — glyph and a `n/n` — so the line does not jump when it lands. A
+    // mark already on screen stays instead while it is re-read.
+    return (
+      <span
+        className="inline-flex shrink-0 items-center gap-1"
+        data-forge-checks-loading=""
+        aria-hidden
+      >
+        <span>·</span>
+        <span className="h-3 w-9 animate-pulse rounded-sm bg-muted" />
+      </span>
+    )
+  }
   if (mark == null || summary == null) return null
   const { Icon, glyph } = CHECKS_MARK_STYLE[mark]
   const fraction = checksFraction(summary)
@@ -342,32 +359,38 @@ function RowChecksMark({
   const approval = mark === "approval"
 
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      title={label}
-      aria-label={label}
-      data-forge-checks={mark}
-      // The glyph sits outside the underline: only the words take it on
-      // hover, the way the forge's own list does.
-      className="group/checks inline-flex shrink-0 items-center gap-1 rounded-sm tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <span className="grid size-3.5 shrink-0 place-items-center">
-        <Icon className={glyph} strokeWidth={2.5} aria-hidden />
-      </span>
-      {fraction != null || approval ? (
-        <span
-          className={cn(
-            "underline-offset-2 transition-colors group-hover/checks:underline",
-            approval
-              ? "text-amber-700 dark:text-amber-400"
-              : "group-hover/checks:text-foreground"
-          )}
-        >
-          {approval ? t("checksApprovalShort") : fraction}
+    // The separator is outside the button, like the author's and the time's
+    // sit outside their text: it is punctuation, not part of the control, and
+    // so takes no underline on hover.
+    <span className="inline-flex shrink-0 items-center gap-1">
+      <span aria-hidden>·</span>
+      <button
+        type="button"
+        onClick={onOpen}
+        title={label}
+        aria-label={label}
+        data-forge-checks={mark}
+        // The glyph sits outside the underline: only the words take it on
+        // hover, the way the forge's own list does.
+        className="group/checks inline-flex items-center gap-1 rounded-sm tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="grid size-3.5 shrink-0 place-items-center">
+          <Icon className={glyph} strokeWidth={2.5} aria-hidden />
         </span>
-      ) : null}
-    </button>
+        {fraction != null || approval ? (
+          <span
+            className={cn(
+              "underline-offset-2 transition-colors group-hover/checks:underline",
+              approval
+                ? "text-amber-700 dark:text-amber-400"
+                : "group-hover/checks:text-foreground"
+            )}
+          >
+            {approval ? t("checksApprovalShort") : fraction}
+          </span>
+        ) : null}
+      </button>
+    </span>
   )
 }
 
@@ -395,6 +418,7 @@ export function ForgeIssueRowItem({
   compact = false,
   selection,
   checks,
+  checksLoading = false,
   onOpenDetail,
   onOpenChecks,
   onStart,
@@ -403,6 +427,8 @@ export function ForgeIssueRowItem({
   link: ForgeTaskLink | null
   /** This change's CI, once the page has it. Absent = draw nothing. */
   checks?: ForgeCheckSummary | null
+  /** The first read of this change's CI is in flight: hold its place. */
+  checksLoading?: boolean
   /** Opens the detail panel straight on its Checks tab. */
   onOpenChecks?: () => void
   /** Phone width: fewer labels, since the title has to stay readable. */
@@ -550,10 +576,14 @@ export function ForgeIssueRowItem({
           {row.updated_at ? (
             <span className="shrink-0">· {relative(row.updated_at)}</span>
           ) : null}
-          {/* Last, after the time: the pill is the widest thing on the line
-              and a status rather than a fact about the item, so it closes the
-              line instead of pushing the author and time apart. */}
-          <RowChecksMark summary={checks} onOpen={onOpenChecks} />
+          {/* Last, after the time: a status rather than a fact about the
+              item, so it closes the line instead of pushing the author and
+              time apart. */}
+          <RowChecksMark
+            summary={checks}
+            loading={checksLoading}
+            onOpen={onOpenChecks}
+          />
         </div>
       </div>
 

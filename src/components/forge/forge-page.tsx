@@ -737,6 +737,12 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
    *  read overtaken by one row's re-read after an approval, or the other way
    *  round) never lands over a newer one. */
   const checksGenRef = useRef(new Map<number, number>())
+  /** The numbers a read of their marks is out for, for the list it was sent
+   *  for. A row with no mark yet holds a skeleton while its number is here. */
+  const [checksPending, setChecksPending] = useState<{
+    scope: string
+    numbers: ReadonlySet<number>
+  } | null>(null)
   const checksSeqRef = useRef(0)
   const [newIssueOpen, setNewIssueOpen] = useState(false)
   /** The panel's preferences, EVERY scope — what a trigger dialog OPENS with,
@@ -791,6 +797,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     setStartRow(null)
     setDetailRow(null)
     setChecks(null)
+    setChecksPending(null)
     // The selection names issues by number in THIS repository — kept across
     // a switch it would hand another project's #12 to a task — and the
     // combine dialog holds a frozen copy of it.
@@ -909,11 +916,14 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
    * The CI marks for these changes — the deferred half of the list, the way
    * github.com fills its own PR list in after the rows have drawn.
    *
-   * Decoration in every sense: never an error the page shows, never a
-   * skeleton, and an answer the forge could not give (`available: false`) or
-   * a request that failed leaves whatever marks were already there — a
-   * moment ago they were true, and a transient rate limit should not wipe
-   * them. Only a forge that has checks to read is asked; CNB never is.
+   * Decoration in every sense: never an error the page shows, and an answer
+   * the forge could not give (`available: false`) or a request that failed
+   * leaves whatever marks were already there — a moment ago they were true,
+   * and a transient rate limit should not wipe them. A row with no mark yet
+   * holds a small skeleton while the read is out (`checksPending`); however
+   * the read ends, its numbers leave that set, so a failure falls back to
+   * drawing nothing. Only a forge that has checks to read is asked; CNB
+   * never is.
    */
   const fetchChecks = useCallback(
     async (numbers: number[]) => {
@@ -923,12 +933,27 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
       const scope = listScope
       const gen = ++checksSeqRef.current
       for (const n of numbers) checksGenRef.current.set(n, gen)
+      setChecksPending((prev) => {
+        const next = new Set(prev?.scope === scope ? prev.numbers : [])
+        for (const n of numbers) next.add(n)
+        return { scope, numbers: next }
+      })
       let result
       try {
         result = await forgeCheckSummaries(effectiveFolderId, numbers)
       } catch {
-        return
+        result = null
       }
+      // Settled, whatever the outcome — but only the numbers no newer read
+      // has claimed since; that one clears its own when it lands.
+      const settled = numbers.filter((n) => checksGenRef.current.get(n) === gen)
+      setChecksPending((prev) => {
+        if (prev?.scope !== scope) return prev
+        const next = new Set(prev.numbers)
+        for (const n of settled) next.delete(n)
+        return { scope, numbers: next }
+      })
+      if (result == null) return
       if (!result.available || listScopeRef.current !== scope) return
       // Only the numbers no newer request has asked about since.
       const fresh = numbers.filter((n) => checksGenRef.current.get(n) === gen)
@@ -2062,6 +2087,11 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
                   row.is_pr && checks?.scope === listScope
                     ? checks.byNumber.get(row.number)
                     : undefined
+                }
+                checksLoading={
+                  row.is_pr &&
+                  checksPending?.scope === listScope &&
+                  checksPending.numbers.has(row.number)
                 }
                 onOpenDetail={() => setDetailRow(row)}
                 onOpenChecks={() => {

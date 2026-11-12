@@ -652,9 +652,40 @@ describe("ForgeIssueRowItem checks mark", () => {
 
   it("closes the meta line, after the author and time", () => {
     const { mark } = mountWith(summary())
-    const line = mark()!.parentElement!
-    expect(line.lastElementChild).toBe(mark())
-    expect(mark()!.previousElementSibling).toHaveTextContent(/^· /)
+    const wrap = mark()!.parentElement!
+    expect(wrap.parentElement!.lastElementChild).toBe(wrap)
+    expect(wrap.previousElementSibling).toHaveTextContent(/^· /)
+  })
+
+  it("puts a separator dot before the mark, outside the button", () => {
+    const { mark } = mountWith(summary())
+    const dot = mark()!.previousElementSibling
+    expect(dot).toHaveTextContent(/^·$/)
+    expect(mark()).not.toHaveTextContent("·")
+  })
+
+  it("holds the place with a skeleton only while there is no mark yet", () => {
+    function mountLoading(checks: ForgeCheckSummary | undefined) {
+      return render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <ForgeIssueRowItem
+            row={row({ is_pr: true })}
+            link={null}
+            checks={checks}
+            checksLoading
+            onOpenDetail={onOpenDetail}
+            onStart={vi.fn()}
+          />
+        </NextIntlClientProvider>
+      ).container
+    }
+    const first = mountLoading(undefined)
+    expect(first.querySelector("[data-forge-checks-loading]")).not.toBeNull()
+    expect(first.querySelector("[data-forge-checks]")).toBeNull()
+    cleanup()
+    const reread = mountLoading(summary())
+    expect(reread.querySelector("[data-forge-checks-loading]")).toBeNull()
+    expect(reread.querySelector("[data-forge-checks]")).not.toBeNull()
   })
 
   it("falls back to the verdict's word without a breakdown", () => {

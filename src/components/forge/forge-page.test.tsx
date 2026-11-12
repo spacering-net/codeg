@@ -2299,6 +2299,83 @@ describe("ForgePage checks marks", () => {
     expect(container.querySelectorAll("[data-forge-checks]")).toHaveLength(1)
   })
 
+  it("holds each row's place with a skeleton until its marks land, failed or not", async () => {
+    let resolve!: (v: Awaited<ReturnType<typeof forgeCheckSummaries>>) => void
+    vi.mocked(forgeCheckSummaries).mockReturnValueOnce(
+      new Promise((r) => {
+        resolve = r
+      })
+    )
+    const { container } = mount()
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll("[data-forge-checks-loading]")
+      ).toHaveLength(2)
+    )
+    await act(async () => {
+      resolve({
+        available: true,
+        items: [
+          {
+            number: 5,
+            verdict: "success",
+            counts: {
+              passing: 3,
+              failing: 0,
+              pending: 0,
+              neutral: 0,
+              total: 3,
+            },
+            awaiting_approval: 0,
+          },
+        ],
+      })
+    })
+    // #5 drew its mark; #6, missing from the answer, draws nothing.
+    expect(
+      container.querySelectorAll("[data-forge-checks-loading]")
+    ).toHaveLength(0)
+    expect(container.querySelectorAll("[data-forge-checks]")).toHaveLength(1)
+    cleanup()
+
+    // A read that fails takes its skeletons with it.
+    let reject!: (e: unknown) => void
+    vi.mocked(forgeCheckSummaries).mockReturnValueOnce(
+      new Promise((_, r) => {
+        reject = r
+      })
+    )
+    const second = mount()
+    await waitFor(() =>
+      expect(
+        second.container.querySelectorAll("[data-forge-checks-loading]")
+      ).toHaveLength(2)
+    )
+    await act(async () => {
+      reject(new Error("rate limited"))
+    })
+    expect(
+      second.container.querySelectorAll("[data-forge-checks-loading]")
+    ).toHaveLength(0)
+  })
+
+  it("keeps a mark on screen while it is re-read, rather than a skeleton", async () => {
+    const user = userEvent.setup()
+    const { container } = mount()
+    await waitFor(() =>
+      expect(container.querySelectorAll("[data-forge-checks]")).toHaveLength(1)
+    )
+    vi.mocked(forgeCheckSummaries).mockReturnValueOnce(new Promise(() => {}))
+    await user.click(screen.getByRole("button", { name: "Refresh" }))
+    await waitFor(() => expect(forgeCheckSummaries).toHaveBeenCalledTimes(2))
+    expect(container.querySelectorAll("[data-forge-checks]")).toHaveLength(1)
+    // #5 keeps its mark, and #6 keeps its answer — "no checks" — so neither
+    // falls back to a skeleton while the re-read is out.
+    expect(
+      container.querySelectorAll("[data-forge-checks-loading]")
+    ).toHaveLength(0)
+  })
+
   it("asks nothing on the issues tab or of a forge without readable checks", async () => {
     saveForgeTab("issues")
     vi.mocked(forgeListIssues).mockResolvedValue(listOf([issue(1, "an issue")]))
