@@ -18,6 +18,7 @@ import { GoalRunPart, GoalToolCallPart } from "../goal-tool-call"
 import { isCodegMcpWorkbenchTool } from "@/lib/codeg-mcp-tool"
 import { AgentRow } from "./rows/agent-row"
 import { BackgroundTaskRows } from "./rows/background-task-rows"
+import { CollabAgentRow } from "./rows/collab-agent-row"
 import { CommandGroupRow, CommandRow } from "./rows/command-rows"
 import {
   DelegationCancelRow,
@@ -363,6 +364,8 @@ function ToolStepView({ step: given }: { step: ToolStep }) {
       return <GenericRow step={step} />
     case "agent":
       return <AgentRow step={step} />
+    case "collab-agent":
+      return <CollabAgentRow step={step} />
     case "delegation":
       return <DelegationRow step={step} />
     case "delegation-resume":
@@ -476,7 +479,6 @@ function ToolStepView({ step: given }: { step: ToolStep }) {
 function hostedKindKey(kind: string) {
   switch (kind) {
     case "agent":
-    case "collab-agent":
       return "kind.agent" as const
     case "delegation":
     case "delegation-status":
