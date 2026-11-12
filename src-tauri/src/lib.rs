@@ -2342,6 +2342,8 @@ mod tauri_app {
                 forge_commands::forge_set_item_state,
                 forge_commands::forge_create_issue,
                 forge_commands::forge_change_detail,
+                forge_commands::forge_check_summaries,
+                forge_commands::forge_approve_workflows,
                 forge_commands::forge_change_files,
                 forge_commands::forge_identity,
                 forge_commands::forge_merge_options,

@@ -7006,7 +7006,11 @@
     "errors": {
       "noAccount": "No hay ninguna cuenta de {provider} configurada para {host}. Añade una en Configuración → Control de versiones para cargar este repositorio.",
       "unsupportedHost": "El panel del repositorio solo admite GitHub, GitLab, Gitea y CNB, y {host} no se reconoce como ninguno de ellos. Si es una instancia autoalojada de GitHub Enterprise, GitLab, Gitea, Forgejo o CNB, añade una cuenta para ella en Configuración → Control de versiones.",
-      "wrongForge": "{host} es un {provider}, no la forja con la que estaba clasificado. La detección se ha corregido: vuelve a cargar para reintentar."
+      "wrongForge": "{host} es un {provider}, no la forja con la que estaba clasificado. La detección se ha corregido: vuelve a cargar para reintentar.",
+      "approveHeadChanged": "Esta pull request tiene commits nuevos desde que la revisaste. Actualiza, vuelve a revisar y luego aprueba.",
+      "approveAmbiguous": "No se puede saber si estas ejecuciones son solo de esta pull request. Apruébalas en GitHub.",
+      "approveForbidden": "Esta cuenta no puede aprobar ejecuciones aquí. Necesita permiso de escritura, y el token necesita el permiso Actions (escritura) o el alcance repo.",
+      "approveNotOpen": "Esta pull request ya no está abierta."
     },
     "addAccount": "Añadir una cuenta",
     "empty": "No hay nada aquí",
@@ -7291,7 +7295,23 @@
     "autoSkipExcludedAuthor": "autor excluido",
     "autoSkipMissingLabel": "sin etiqueta coincidente",
     "autoSkipAuthorNotIncluded": "autor no listado",
-    "save": "Guardar"
+    "save": "Guardar",
+    "checksAwaitingApproval": "{count} flujos de trabajo esperando aprobación",
+    "checksApprovalShort": "Requiere aprobación",
+    "approveUnknownTitle": "Puede haber flujos de trabajo esperando aprobación",
+    "approveExplain": "Esta pull request viene de un fork y sus flujos de trabajo no se ejecutarán hasta que alguien con permiso de escritura los apruebe. Aprobar ejecuta este código en la CI del repositorio: revisa los cambios primero.",
+    "approveIncompleteHint": "No se pudieron revisar todas las ejecuciones; puede haber más esperando en GitHub.",
+    "approveBlockedAmbiguous": "Hay otra pull request abierta desde la misma rama, así que no se puede saber si estas ejecuciones son solo de esta. Apruébalas en GitHub.",
+    "approveBlockedPermission": "Esta cuenta no puede hacer push al repositorio, así que no puede aprobar flujos de trabajo.",
+    "approveOpenOnForge": "Abrir en GitHub",
+    "approveWorkflows": "Aprobar la ejecución de flujos de trabajo",
+    "approving": "Aprobando…",
+    "approveConfirmTitle": "¿Aprobar la ejecución de flujos de trabajo?",
+    "approveConfirmBody": "{count} flujos de trabajo ejecutarán el código de esta pull request (commit {sha}) en la CI del repositorio. Aprueba solo después de revisar los cambios.",
+    "approveDone": "Se aprobaron {count} flujos de trabajo",
+    "approvePartial": "No se pudieron aprobar algunos flujos de trabajo: {names}",
+    "approveNothingHeld": "Ya no hay flujos de trabajo esperando aprobación.",
+    "mergeWorkflowsAwaiting": "Hay flujos de trabajo esperando aprobación"
   },
   "Canvas": {
     "title": "Lienzo infinito",

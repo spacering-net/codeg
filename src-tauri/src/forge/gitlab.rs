@@ -33,6 +33,7 @@ use super::auth::ResolvedAuth;
 use super::deliver::{ForgePr, NewPullRequest};
 use super::{
     count_diff_lines, sanitize_web_url, scan_timestamp, truncate_chars, urlencode_path,
+    ForgeCheckSummary, ForgeCheckSummaryList, ForgeCheckVerdict,
     urlencode_query, validate_state_filter, web_origin, ForgeChangeDetail, ForgeChangedFile,
     ForgeChangedFileList, ForgeCheck, ForgeCheckList, ForgeCheckState, ForgeComment,
     ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList, ForgeIssueRow, ForgeItemKind,
@@ -570,6 +571,9 @@ pub async fn change_detail(
         changed_files: raw.changes_count.as_deref().and_then(exact_changes_count),
         commits: None,
         checks,
+        // Only GitHub holds runs for a maintainer's approval through an API
+        // this panel can act on.
+        workflow_approval: None,
     })
 }
 
@@ -642,6 +646,112 @@ fn job_state(status: &str) -> ForgeCheckState {
         // canceled, skipped, manual — ran (or deliberately did not) and
         // produced no verdict.
         _ => ForgeCheckState::Neutral,
+    }
+}
+
+/// The GraphQL endpoint beside a REST base: `…/api/v4` → `…/api/graphql`,
+/// keeping whatever relative URL root the instance is mounted under.
+pub(crate) fn graphql_url(api_base: &str) -> String {
+    let base = api_base.trim_end_matches('/');
+    match base.strip_suffix("/v4") {
+        Some(api) => format!("{api}/graphql"),
+        None => format!("{base}/graphql"),
+    }
+}
+
+/// A head pipeline's status, folded the way [`job_state`] folds a job's — so
+/// the row and the panel's tab badge read the same words the same way.
+/// `MANUAL` (blocked on a manual job) is no verdict, as a manual job is.
+fn pipeline_verdict(status: &str, group: Option<&str>) -> ForgeCheckVerdict {
+    // "Passed with warnings" is a pass whose allowed failures are the detail.
+    if group == Some("success-with-warnings") {
+        return ForgeCheckVerdict::Success;
+    }
+    match status {
+        "SUCCESS" => ForgeCheckVerdict::Success,
+        "FAILED" => ForgeCheckVerdict::Failure,
+        "CREATED" | "WAITING_FOR_RESOURCE" | "PREPARING" | "PENDING" | "RUNNING"
+        | "SCHEDULED" | "CANCELING" | "WAITING_FOR_CALLBACK" => ForgeCheckVerdict::Running,
+        _ => ForgeCheckVerdict::Neutral,
+    }
+}
+
+/// CI summaries for one page of merge requests: each one's HEAD PIPELINE
+/// status, in one GraphQL request (the REST list carries no pipeline). No
+/// counts — a pipeline status is what GitLab's own MR list shows too.
+///
+/// Decoration, so it never fails (see [`ForgeCheckSummaryList`]): a merge
+/// request missing from the answer is unknown, and `headPipeline: null` is a
+/// change with no pipeline.
+pub async fn check_summaries(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    numbers: &[i64],
+) -> ForgeCheckSummaryList {
+    let Some(path) = super::normalize_repo(owner_repo) else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    if numbers.is_empty() {
+        return ForgeCheckSummaryList {
+            available: true,
+            items: Vec::new(),
+        };
+    }
+    let iids: Vec<String> = numbers.iter().map(i64::to_string).collect();
+    let body = serde_json::json!({
+        "query": "query($path: ID!, $iids: [String!]) { project(fullPath: $path) { \
+                  mergeRequests(iids: $iids, first: 100) { nodes { iid \
+                  headPipeline { status detailedStatus { group } } } } } }",
+        "variables": { "path": path, "iids": iids },
+    });
+    let Ok(response) = api_post(auth, &graphql_url(&auth.api_base), &body).await else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    let Ok(value) = response.json::<serde_json::Value>().await else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    // Any error leaves the answer suspect as a whole: GitLab does not tie its
+    // errors to one merge request the way GitHub's aliases do.
+    if value
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|e| !e.is_empty())
+    {
+        return ForgeCheckSummaryList::unavailable();
+    }
+    let Some(nodes) = value
+        .pointer("/data/project/mergeRequests/nodes")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    let items = nodes
+        .iter()
+        .filter_map(|node| {
+            let number = node
+                .get("iid")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|iid| iid.parse::<i64>().ok())
+                .filter(|n| numbers.contains(n))?;
+            let pipeline = node.get("headPipeline").filter(|p| p.is_object());
+            let verdict = pipeline.and_then(|p| {
+                let status = p.get("status").and_then(serde_json::Value::as_str)?;
+                let group = p
+                    .pointer("/detailedStatus/group")
+                    .and_then(serde_json::Value::as_str);
+                Some(pipeline_verdict(status, group))
+            });
+            Some(ForgeCheckSummary {
+                number,
+                verdict,
+                counts: None,
+                awaiting_approval: 0,
+            })
+        })
+        .collect();
+    ForgeCheckSummaryList {
+        available: true,
+        items,
     }
 }
 
@@ -2963,4 +3073,91 @@ mod open_items_tests {
         assert_eq!(asked[0].1.get("page").cloned(), Some(restart.to_string()));
     }
 
+}
+
+#[cfg(test)]
+mod check_summary_tests {
+    use super::*;
+    use axum::routing::post;
+    use axum::Json;
+    use std::sync::{Arc, Mutex};
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: super::super::ForgeProvider::GitLab,
+            server_host: "gitlab.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec![],
+        }
+    }
+
+    async fn serve(answer: serde_json::Value) -> (ResolvedAuth, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+        let log = seen.clone();
+        let app = axum::Router::new().route(
+            "/gitlab/api/graphql",
+            post(move |Json(body): Json<serde_json::Value>| {
+                let log = log.clone();
+                let answer = answer.clone();
+                async move {
+                    log.lock().unwrap().push(body);
+                    Json(answer)
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // Mounted under a relative URL root, which the GraphQL path keeps.
+        (auth_for(format!("http://{addr}/gitlab/api/v4")), seen)
+    }
+
+    #[test]
+    fn the_graphql_endpoint_keeps_the_relative_url_root() {
+        assert_eq!(graphql_url("https://gitlab.com/api/v4"), "https://gitlab.com/api/graphql");
+        assert_eq!(graphql_url("https://h/gitlab/api/v4/"), "https://h/gitlab/api/graphql");
+    }
+
+    #[tokio::test]
+    async fn head_pipelines_fold_into_the_row_verdicts() {
+        let (auth, seen) = serve(serde_json::json!({ "data": { "project": { "mergeRequests": { "nodes": [
+            { "iid": "1", "headPipeline": { "status": "SUCCESS", "detailedStatus": { "group": "success" } } },
+            { "iid": "2", "headPipeline": { "status": "FAILED", "detailedStatus": { "group": "success-with-warnings" } } },
+            { "iid": "3", "headPipeline": { "status": "RUNNING", "detailedStatus": { "group": "running" } } },
+            { "iid": "4", "headPipeline": { "status": "MANUAL", "detailedStatus": { "group": "manual" } } },
+            { "iid": "5", "headPipeline": null },
+            // Not asked for: dropped rather than trusted.
+            { "iid": "99", "headPipeline": { "status": "FAILED" } },
+        ] } } } }))
+        .await;
+        let list = check_summaries(&auth, "group/app", &[1, 2, 3, 4, 5, 6]).await;
+        assert!(list.available);
+        let verdict = |n: i64| list.items.iter().find(|s| s.number == n).map(|s| s.verdict);
+        assert_eq!(verdict(1), Some(Some(ForgeCheckVerdict::Success)));
+        assert_eq!(verdict(2), Some(Some(ForgeCheckVerdict::Success)), "passed with warnings");
+        assert_eq!(verdict(3), Some(Some(ForgeCheckVerdict::Running)));
+        assert_eq!(verdict(4), Some(Some(ForgeCheckVerdict::Neutral)), "blocked on a manual job");
+        assert_eq!(verdict(5), Some(None), "no pipeline: present and empty");
+        assert_eq!(verdict(6), None, "not in the answer: unknown");
+        assert_eq!(verdict(99), None);
+        assert!(list.items.iter().all(|s| s.counts.is_none() && s.awaiting_approval == 0));
+
+        let body = &seen.lock().unwrap()[0];
+        assert_eq!(body["variables"]["path"], "group/app");
+        assert_eq!(body["variables"]["iids"], serde_json::json!(["1", "2", "3", "4", "5", "6"]));
+    }
+
+    #[tokio::test]
+    async fn any_error_leaves_the_batch_unknown() {
+        let (auth, _) = serve(serde_json::json!({
+            "data": { "project": null },
+            "errors": [{ "message": "The resource that you are attempting to access does not exist" }],
+        }))
+        .await;
+        assert!(!check_summaries(&auth, "group/app", &[1]).await.available);
+    }
 }

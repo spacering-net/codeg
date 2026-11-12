@@ -7006,7 +7006,11 @@
     "errors": {
       "noAccount": "还没有为 {host} 配置 {provider} 账号。请在「设置 → 版本控制」中添加后再加载该仓库。",
       "unsupportedHost": "仓库面板目前仅支持 GitHub、GitLab、Gitea 和 CNB，而 {host} 不是其中任何一种。如果它是自建的 GitHub Enterprise、GitLab、Gitea、Forgejo 或 CNB 实例，请在「设置 → 版本控制」中为它添加账号。",
-      "wrongForge": "{host} 实际上是 {provider}，此前被误判为另一种代码托管服务。已自动更正，请重新加载。"
+      "wrongForge": "{host} 实际上是 {provider}，此前被误判为另一种代码托管服务。已自动更正，请重新加载。",
+      "approveHeadChanged": "你审阅之后这个拉取请求又有了新提交。请刷新、重新审阅后再批准。",
+      "approveAmbiguous": "无法确定这些工作流运行只属于这个拉取请求。请到 GitHub 上批准。",
+      "approveForbidden": "此账号无权在这里批准工作流运行：需要仓库写权限，且令牌需要 Actions（写）权限或 repo 范围。",
+      "approveNotOpen": "这个拉取请求已经不是打开状态。"
     },
     "addAccount": "添加账号",
     "empty": "暂无内容",
@@ -7291,7 +7295,23 @@
     "autoSkipExcludedAuthor": "作者被排除",
     "autoSkipMissingLabel": "无匹配标签",
     "autoSkipAuthorNotIncluded": "作者不在名单",
-    "save": "保存"
+    "save": "保存",
+    "checksAwaitingApproval": "{count} 个工作流等待批准",
+    "checksApprovalShort": "待批准",
+    "approveUnknownTitle": "可能有工作流在等待批准",
+    "approveExplain": "这个拉取请求来自 fork，它的工作流要等有写权限的人批准后才会运行。批准会在仓库的 CI 上执行这些代码，请先审阅改动。",
+    "approveIncompleteHint": "没能查完所有工作流运行，GitHub 上可能还有更多在等待。",
+    "approveBlockedAmbiguous": "同一分支还有另一个打开的拉取请求，无法确定这些运行只属于这一个。请到 GitHub 上批准。",
+    "approveBlockedPermission": "此账号没有该仓库的推送权限，无法批准工作流。",
+    "approveOpenOnForge": "在 GitHub 上打开",
+    "approveWorkflows": "批准工作流运行",
+    "approving": "正在批准…",
+    "approveConfirmTitle": "批准工作流运行吗？",
+    "approveConfirmBody": "{count} 个工作流将在仓库的 CI 上运行这个拉取请求的代码（提交 {sha}）。请在审阅改动后再批准。",
+    "approveDone": "已批准 {count} 个工作流",
+    "approvePartial": "部分工作流未能批准：{names}",
+    "approveNothingHeld": "已经没有等待批准的工作流了。",
+    "mergeWorkflowsAwaiting": "有工作流等待批准"
   },
   "Canvas": {
     "title": "无限画布",

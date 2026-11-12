@@ -7006,7 +7006,11 @@
     "errors": {
       "noAccount": "Für {host} ist kein {provider}-Konto konfiguriert. Füge unter Einstellungen → Versionskontrolle eines hinzu, um dieses Repository zu laden.",
       "unsupportedHost": "Das Repository-Panel unterstützt nur GitHub, GitLab, Gitea und CNB, und {host} wird als keines davon erkannt. Falls es sich um eine selbst gehostete GitHub-Enterprise-, GitLab-, Gitea-, Forgejo- oder CNB-Instanz handelt, füge unter Einstellungen → Versionskontrolle ein Konto dafür hinzu.",
-      "wrongForge": "{host} ist ein {provider} und nicht die Forge, als die es eingestuft war. Die Erkennung wurde korrigiert — neu laden, um es erneut zu versuchen."
+      "wrongForge": "{host} ist ein {provider} und nicht die Forge, als die es eingestuft war. Die Erkennung wurde korrigiert — neu laden, um es erneut zu versuchen.",
+      "approveHeadChanged": "Dieser Pull Request hat seit deiner Prüfung neue Commits. Aktualisiere, prüfe erneut und gib dann frei.",
+      "approveAmbiguous": "Diese Workflow-Läufe lassen sich nicht eindeutig diesem Pull Request zuordnen. Gib sie auf GitHub frei.",
+      "approveForbidden": "Dieses Konto darf hier keine Workflow-Läufe freigeben. Es braucht Schreibrechte, und das Token braucht die Berechtigung Actions (Schreiben) oder den Scope repo.",
+      "approveNotOpen": "Dieser Pull Request ist nicht mehr offen."
     },
     "addAccount": "Konto hinzufügen",
     "empty": "Nichts zu zeigen",
@@ -7291,7 +7295,23 @@
     "autoSkipExcludedAuthor": "ausgeschlossener Autor",
     "autoSkipMissingLabel": "kein passendes Label",
     "autoSkipAuthorNotIncluded": "Autor nicht gelistet",
-    "save": "Speichern"
+    "save": "Speichern",
+    "checksAwaitingApproval": "{count} Workflows warten auf Freigabe",
+    "checksApprovalShort": "Freigabe nötig",
+    "approveUnknownTitle": "Möglicherweise warten Workflows auf Freigabe",
+    "approveExplain": "Dieser Pull Request kommt aus einem Fork; seine Workflows laufen erst, wenn jemand mit Schreibrechten sie freigibt. Die Freigabe führt diesen Code in der CI des Repositorys aus – prüfe zuerst die Änderungen.",
+    "approveIncompleteHint": "Nicht alle Workflow-Läufe konnten geprüft werden; auf GitHub warten möglicherweise weitere.",
+    "approveBlockedAmbiguous": "Aus demselben Branch ist ein weiterer Pull Request offen, daher lassen sich diese Läufe nicht eindeutig diesem zuordnen. Gib sie auf GitHub frei.",
+    "approveBlockedPermission": "Dieses Konto kann nicht in das Repository pushen und daher keine Workflows freigeben.",
+    "approveOpenOnForge": "Auf GitHub öffnen",
+    "approveWorkflows": "Workflows zur Ausführung freigeben",
+    "approving": "Wird freigegeben…",
+    "approveConfirmTitle": "Workflows zur Ausführung freigeben?",
+    "approveConfirmBody": "{count} Workflows führen den Code dieses Pull Requests (Commit {sha}) in der CI des Repositorys aus. Gib sie erst frei, nachdem du die Änderungen geprüft hast.",
+    "approveDone": "{count} Workflows freigegeben",
+    "approvePartial": "Einige Workflows konnten nicht freigegeben werden: {names}",
+    "approveNothingHeld": "Es warten keine Workflows mehr auf Freigabe.",
+    "mergeWorkflowsAwaiting": "Workflows warten auf Freigabe"
   },
   "Canvas": {
     "title": "Unendlicher Canvas",

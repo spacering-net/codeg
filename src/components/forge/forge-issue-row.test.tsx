@@ -12,13 +12,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import type {
+  ForgeCheckSummary,
   ForgeIssueRow,
   ForgeLabel,
   ForgeTaskLink,
   WorkTaskStatus,
 } from "@/lib/types"
 
-import { ForgeIssueRowItem } from "./forge-issue-row"
+import { checksMark, ForgeIssueRowItem } from "./forge-issue-row"
 
 /** Uncoloured unless a test cares — most of them are about something else. */
 function label(name: string, color: string | null = null): ForgeLabel {
@@ -499,5 +500,113 @@ describe("ForgeIssueRowItem", () => {
         glyph(row({ is_pr: false, state: "open", draft: true }), "Open")
       ).toHaveClass("lucide-circle-dot")
     })
+  })
+})
+
+/**
+ * The row's CI mark: absent unless the forge said something worth a mark,
+ * one mark for the worst thing in priority order, words for the tooltip and
+ * the accessible name, and a click through to the panel's Checks tab.
+ */
+describe("ForgeIssueRowItem checks mark", () => {
+  function summary(
+    overrides: Partial<ForgeCheckSummary> = {}
+  ): ForgeCheckSummary {
+    return {
+      number: 42,
+      verdict: "success",
+      counts: { passing: 10, failing: 0, pending: 0, neutral: 0, total: 10 },
+      awaiting_approval: 0,
+      ...overrides,
+    }
+  }
+
+  function mountWith(
+    checks: ForgeCheckSummary | null | undefined,
+    onOpenChecks = vi.fn(),
+    compact = false
+  ) {
+    const { container } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ForgeIssueRowItem
+          row={row({ is_pr: true })}
+          link={null}
+          compact={compact}
+          checks={checks}
+          onOpenDetail={onOpenDetail}
+          onOpenChecks={onOpenChecks}
+          onStart={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    return {
+      onOpenChecks,
+      mark: () => container.querySelector("[data-forge-checks]"),
+    }
+  }
+
+  it("ranks a failure over held workflows over a run still going", () => {
+    expect(checksMark(undefined)).toBeNull()
+    expect(checksMark(summary({ verdict: null }))).toBeNull()
+    expect(
+      checksMark(summary({ verdict: "failure", awaiting_approval: 2 }))
+    ).toBe("failure")
+    expect(
+      checksMark(summary({ verdict: "running", awaiting_approval: 1 }))
+    ).toBe("approval")
+    // A held fork change usually has no checks at all yet.
+    expect(checksMark(summary({ verdict: null, awaiting_approval: 1 }))).toBe(
+      "approval"
+    )
+    expect(checksMark(summary({ verdict: "running" }))).toBe("running")
+    expect(checksMark(summary({ verdict: "neutral" }))).toBe("neutral")
+  })
+
+  it("draws nothing for an unknown summary or a change with no checks", () => {
+    cleanup()
+    expect(mountWith(undefined).mark()).toBeNull()
+    cleanup()
+    expect(
+      mountWith(summary({ verdict: null, counts: null })).mark()
+    ).toBeNull()
+  })
+
+  it("says the counts and opens the Checks tab", async () => {
+    const user = userEvent.setup()
+    const { onOpenChecks } = mountWith(
+      summary({
+        verdict: "failure",
+        counts: { passing: 9, failing: 1, pending: 2, neutral: 0, total: 12 },
+      })
+    )
+    const mark = screen.getByRole("button", {
+      name: "1 failing · 2 in progress · 9 passing",
+    })
+    expect(mark).toHaveAttribute("data-forge-checks", "failure")
+    await user.click(mark)
+    expect(onOpenChecks).toHaveBeenCalledTimes(1)
+    expect(onOpenDetail).not.toHaveBeenCalled()
+  })
+
+  it("names held workflows in words where there is room", () => {
+    const { mark } = mountWith(
+      summary({ verdict: null, counts: null, awaiting_approval: 2 })
+    )
+    expect(mark()).toHaveAttribute("data-forge-checks", "approval")
+    expect(
+      screen.getByRole("button", { name: "2 workflows awaiting approval" })
+    ).toHaveTextContent("Approval needed")
+    cleanup()
+    mountWith(
+      summary({ verdict: null, counts: null, awaiting_approval: 2 }),
+      vi.fn(),
+      true
+    )
+    expect(screen.queryByText("Approval needed")).toBeNull()
+  })
+
+  it("falls back to the verdict's word without a breakdown", () => {
+    mountWith(summary({ verdict: "running", counts: null }))
+    expect(screen.getByRole("button", { name: "Running" })).toBeInTheDocument()
   })
 })

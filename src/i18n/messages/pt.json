@@ -7006,7 +7006,11 @@
     "errors": {
       "noAccount": "Nenhuma conta {provider} configurada para {host}. Adicione uma em Configurações → Controle de versão para carregar este repositório.",
       "unsupportedHost": "O painel do repositório só oferece suporte a GitHub, GitLab, Gitea e CNB, e {host} não é reconhecido como nenhum deles. Se for uma instância auto-hospedada do GitHub Enterprise, GitLab, Gitea, Forgejo ou CNB, adicione uma conta para ela em Configurações → Controle de versão.",
-      "wrongForge": "{host} é um {provider}, não a forja com que estava classificado. A detecção foi corrigida — recarregue para tentar novamente."
+      "wrongForge": "{host} é um {provider}, não a forja com que estava classificado. A detecção foi corrigida — recarregue para tentar novamente.",
+      "approveHeadChanged": "Este pull request recebeu novos commits desde a sua revisão. Atualize, revise novamente e depois aprove.",
+      "approveAmbiguous": "Não é possível atribuir estas execuções só a este pull request. Aprove-as no GitHub.",
+      "approveForbidden": "Esta conta não pode aprovar execuções aqui. Ela precisa de permissão de escrita, e o token precisa da permissão Actions (escrita) ou do escopo repo.",
+      "approveNotOpen": "Este pull request não está mais aberto."
     },
     "addAccount": "Adicionar uma conta",
     "empty": "Nada por aqui",
@@ -7291,7 +7295,23 @@
     "autoSkipExcludedAuthor": "autor excluído",
     "autoSkipMissingLabel": "sem rótulo correspondente",
     "autoSkipAuthorNotIncluded": "autor fora da lista",
-    "save": "Salvar"
+    "save": "Salvar",
+    "checksAwaitingApproval": "{count} workflows aguardando aprovação",
+    "checksApprovalShort": "Aprovação necessária",
+    "approveUnknownTitle": "Pode haver workflows aguardando aprovação",
+    "approveExplain": "Este pull request vem de um fork, e seus workflows só serão executados quando alguém com permissão de escrita os aprovar. Aprovar executa este código na CI do repositório — revise as alterações primeiro.",
+    "approveIncompleteHint": "Não foi possível verificar todas as execuções; pode haver mais aguardando no GitHub.",
+    "approveBlockedAmbiguous": "Há outro pull request aberto a partir do mesmo branch, então não é possível atribuir estas execuções só a este. Aprove-as no GitHub.",
+    "approveBlockedPermission": "Esta conta não pode fazer push no repositório, então não pode aprovar workflows.",
+    "approveOpenOnForge": "Abrir no GitHub",
+    "approveWorkflows": "Aprovar a execução dos workflows",
+    "approving": "Aprovando…",
+    "approveConfirmTitle": "Aprovar a execução dos workflows?",
+    "approveConfirmBody": "{count} workflows vão executar o código deste pull request (commit {sha}) na CI do repositório. Aprove somente depois de revisar as alterações.",
+    "approveDone": "{count} workflows aprovados",
+    "approvePartial": "Não foi possível aprovar alguns workflows: {names}",
+    "approveNothingHeld": "Não há mais workflows aguardando aprovação.",
+    "mergeWorkflowsAwaiting": "Há workflows aguardando aprovação"
   },
   "Canvas": {
     "title": "Canvas infinito",

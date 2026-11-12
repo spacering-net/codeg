@@ -4,7 +4,9 @@ import { useTranslations } from "next-intl"
 import {
   CircleCheck,
   CircleDot,
+  CircleMinus,
   CirclePlay,
+  CircleX,
   GitMerge,
   GitPullRequestArrow,
   GitPullRequestClosed,
@@ -13,6 +15,7 @@ import {
   ListTodo,
   MessageSquare,
   RotateCcw,
+  ShieldAlert,
   type LucideIcon,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -25,7 +28,12 @@ import { formatRelative } from "@/components/conversations/sidebar-conversation-
 import { cn } from "@/lib/utils"
 import { labelSwatch } from "@/lib/forge-label-color"
 import { chipStateForLink, isDeferredLink } from "@/lib/forge-task-chip"
-import type { ForgeIssueRow, ForgeLabel, ForgeTaskLink } from "@/lib/types"
+import type {
+  ForgeCheckSummary,
+  ForgeIssueRow,
+  ForgeLabel,
+  ForgeTaskLink,
+} from "@/lib/types"
 
 /** Render-time "now" is fine here: the list re-renders on every refresh. */
 function relative(iso: string): string {
@@ -195,6 +203,124 @@ export function numberList(numbers: number[]): string {
   return numbers.map((n) => `#${n}`).join(", ")
 }
 
+/** What a row's CI mark says — one of these, or nothing. */
+export type ChecksMark =
+  | "failure"
+  | "approval"
+  | "running"
+  | "success"
+  | "neutral"
+
+/**
+ * The ONE thing a row's CI mark says, or `null` for no mark at all.
+ *
+ * A failure outranks everything — it is the verdict on the code. Workflows
+ * held for approval come next: nothing will run until somebody acts, which is
+ * what a maintainer scanning the list is looking for, and a held fork change
+ * usually has no checks at all to show instead. Then a run still going, then
+ * a clean sweep; a list of checks that all ended without a verdict is the
+ * quietest mark there is.
+ *
+ * `null` for a summary that is missing (unknown) and for a change the forge
+ * says has no checks — a repository without CI looks exactly as it did before
+ * this mark existed.
+ */
+export function checksMark(
+  summary: ForgeCheckSummary | null | undefined
+): ChecksMark | null {
+  if (summary == null) return null
+  if (summary.verdict === "failure") return "failure"
+  if (summary.awaiting_approval > 0) return "approval"
+  return summary.verdict
+}
+
+const CHECKS_MARK_GLYPH: Record<
+  ChecksMark,
+  { Icon: LucideIcon; className: string }
+> = {
+  failure: { Icon: CircleX, className: "text-rose-600" },
+  approval: { Icon: ShieldAlert, className: "text-amber-600" },
+  // Static, unlike the panel's spinner: thirty rows spinning at once would
+  // pull the eye down the list for the least urgent of the states.
+  running: { Icon: CircleDot, className: "text-amber-500" },
+  success: { Icon: CircleCheck, className: "text-emerald-600" },
+  neutral: { Icon: CircleMinus, className: "text-muted-foreground" },
+}
+
+/**
+ * The row's CI, as a mark after its number: what the forge's own pull request
+ * list shows in the same place. A button, because the full story — every
+ * check, and the approval itself — is one click away on the panel's Checks
+ * tab. Its words (counts where the forge gave them, the verdict where it gave
+ * only that) are the tooltip and the accessible name both.
+ */
+function RowChecksMark({
+  summary,
+  compact,
+  onOpen,
+}: {
+  summary: ForgeCheckSummary | null | undefined
+  compact: boolean
+  onOpen?: () => void
+}) {
+  const t = useTranslations("Forge")
+  const mark = checksMark(summary)
+  if (mark == null || summary == null) return null
+  const { Icon, className } = CHECKS_MARK_GLYPH[mark]
+
+  const parts: string[] = []
+  if (summary.awaiting_approval > 0) {
+    parts.push(
+      t("checksAwaitingApproval", { count: summary.awaiting_approval })
+    )
+  }
+  const counts = summary.counts
+  if (counts != null) {
+    if (counts.failing > 0) {
+      parts.push(t("checksFailing", { count: counts.failing }))
+    }
+    if (counts.pending > 0) {
+      parts.push(t("checksPending", { count: counts.pending }))
+    }
+    if (counts.passing > 0) {
+      parts.push(t("checksPassing", { count: counts.passing }))
+    }
+  }
+  if (parts.length === 0 || (counts == null && summary.verdict != null)) {
+    // No breakdown to give: the verdict's own word.
+    const word =
+      summary.verdict === "failure"
+        ? t("checkFailure")
+        : summary.verdict === "running"
+          ? t("checkRunning")
+          : summary.verdict === "success"
+            ? t("checkSuccess")
+            : summary.verdict === "neutral"
+              ? t("checkNeutral")
+              : null
+    if (word != null) parts.push(word)
+  }
+  const label = parts.join(" · ")
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title={label}
+      aria-label={label}
+      data-forge-checks={mark}
+      className="inline-flex items-center gap-1 rounded-sm transition-colors hover:text-foreground"
+    >
+      <Icon className={cn("size-3.5 shrink-0", className)} aria-hidden />
+      {/* Held workflows are the one state that asks somebody to act, so they
+          get a word as well as a glyph — where there is room for it. */}
+      {mark === "approval" && !compact ? (
+        <span className="text-amber-600">{t("checksApprovalShort")}</span>
+      ) : null}
+    </button>
+  )
+}
+
 /**
  * How this row takes part in the page's selection — the issues the page can
  * hand to ONE task together. Absent on rows that cannot be picked at all
@@ -218,11 +344,17 @@ export function ForgeIssueRowItem({
   link,
   compact = false,
   selection,
+  checks,
   onOpenDetail,
+  onOpenChecks,
   onStart,
 }: {
   row: ForgeIssueRow
   link: ForgeTaskLink | null
+  /** This change's CI, once the page has it. Absent = draw nothing. */
+  checks?: ForgeCheckSummary | null
+  /** Opens the detail panel straight on its Checks tab. */
+  onOpenChecks?: () => void
   /** Phone width: fewer labels, since the title has to stay readable. */
   compact?: boolean
   /** The row's tick box, when it has one (issues only). */
@@ -362,6 +494,11 @@ export function ForgeIssueRowItem({
           >
             #{row.number}
           </BrowserLink>
+          <RowChecksMark
+            summary={checks}
+            compact={compact}
+            onOpen={onOpenChecks}
+          />
           {row.author ? <span>· {row.author}</span> : null}
           {row.updated_at ? <span>· {relative(row.updated_at)}</span> : null}
         </div>

@@ -256,6 +256,17 @@ pub enum ForgeError {
     Api { status: u16, message: String },
     #[error("forge network error: {0}")]
     Network(String),
+    /// A guard refused a WRITE before (or instead of) sending it — the change
+    /// moved on since it was reviewed, the target is ambiguous, or the forge
+    /// said the account may not. Carries the i18n key the panel shows, because
+    /// each of these has a specific thing for the person to do next.
+    #[error("{message}")]
+    Refused {
+        i18n_key: &'static str,
+        message: String,
+        /// The account lacks the right, as opposed to the request being wrong.
+        forbidden: bool,
+    },
 }
 
 impl From<ForgeError> for crate::app_error::AppCommandError {
@@ -296,6 +307,18 @@ impl From<ForgeError> for crate::app_error::AppCommandError {
             ForgeError::Invalid(msg) => E::invalid_input(msg.clone()),
             ForgeError::Api { .. } | ForgeError::Network(_) => {
                 E::network("forge API request failed").with_detail(err.to_string())
+            }
+            ForgeError::Refused {
+                i18n_key,
+                message,
+                forbidden,
+            } => {
+                let base = if *forbidden {
+                    E::permission_denied(message.clone())
+                } else {
+                    E::invalid_input(message.clone())
+                };
+                base.with_i18n(*i18n_key, std::collections::BTreeMap::new())
             }
         }
     }
@@ -1635,6 +1658,14 @@ pub struct ForgeChangeDetail {
     /// CI as the forge reports it for the head commit. Empty means the forge
     /// answered and there is nothing running; see [`ForgeCheckList`].
     pub checks: ForgeCheckList,
+    /// Workflow runs that will not start until a maintainer approves them —
+    /// GitHub holds a fork's first contributions this way. `None` whenever
+    /// there is nothing to say: not GitHub, not a fork (a same-repository
+    /// change is never held), or the token cannot read Actions. Kept apart from
+    /// [`Self::checks`] because a held run has produced NO check yet: the
+    /// commit's check collections are empty, and without this the panel says
+    /// "no checks" over exactly the change that needs somebody to act.
+    pub workflow_approval: Option<ForgeWorkflowApproval>,
 }
 
 /// How a check ended up, in ONE vocabulary.
@@ -1736,6 +1767,239 @@ impl ForgeCheckList {
         }
     }
 }
+
+/// One CI verdict for a whole change, as a list row draws it.
+///
+/// Folded from counts with the SAME rules [`ForgeCheckState`] uses for the
+/// detail panel (a skipped or cancelled check is neither a pass nor a failure),
+/// so the row's mark and the panel's tab badge cannot tell two stories. GitHub's
+/// own rollup word is NOT that fold — it calls a cancelled run a failure — and is
+/// read only when the counts are unavailable (an older Enterprise Server).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForgeCheckVerdict {
+    Failure,
+    Running,
+    Success,
+    /// Every check ran without a verdict (skipped, cancelled, manual).
+    Neutral,
+}
+
+/// How many checks are in each folded state. `total` is the forge's own count
+/// and can exceed the sum: a state this fold does not recognize is counted
+/// nowhere rather than guessed into one of the four.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeCheckCounts {
+    pub passing: u32,
+    pub failing: u32,
+    pub pending: u32,
+    pub neutral: u32,
+    pub total: u32,
+}
+
+impl ForgeCheckCounts {
+    /// The verdict these counts reach, in the order a reviewer reads them: a
+    /// failure outranks a run still going, which outranks a clean sweep.
+    /// `None` when nothing was counted at all.
+    pub fn verdict(&self) -> Option<ForgeCheckVerdict> {
+        if self.failing > 0 {
+            Some(ForgeCheckVerdict::Failure)
+        } else if self.pending > 0 {
+            Some(ForgeCheckVerdict::Running)
+        } else if self.passing > 0 {
+            Some(ForgeCheckVerdict::Success)
+        } else if self.neutral > 0 {
+            Some(ForgeCheckVerdict::Neutral)
+        } else {
+            None
+        }
+    }
+}
+
+/// One change's CI, as much as a list row needs: a verdict, its counts where
+/// the forge gives them, and whether workflows are waiting on a maintainer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeCheckSummary {
+    pub number: i64,
+    /// `None` means the forge answered and this change has no checks — which a
+    /// row draws as nothing at all, exactly as before this existed.
+    pub verdict: Option<ForgeCheckVerdict>,
+    /// `None` where the forge gives a verdict but no breakdown (GitLab's
+    /// pipeline status, an older GitHub Enterprise Server).
+    pub counts: Option<ForgeCheckCounts>,
+    /// Workflow runs on the head commit held for a maintainer's approval
+    /// (GitHub only; always 0 elsewhere). Independent of `verdict`: a held fork
+    /// change typically has NO checks yet, so this is often the only thing to
+    /// draw. Best-effort on the list — the detail panel's answer is the
+    /// authoritative one (see [`ForgeWorkflowApproval`]).
+    pub awaiting_approval: u32,
+}
+
+impl ForgeCheckSummary {
+    /// A full check list, summarized — for a forge with no cheaper way to ask
+    /// (Gitea). `None` when the list itself is unknown; a PARTIAL list is
+    /// unknown too, since its counts would undercount exactly what is missing.
+    pub fn from_checks(number: i64, list: &ForgeCheckList) -> Option<Self> {
+        if !list.available || list.partial {
+            return None;
+        }
+        let mut counts = ForgeCheckCounts {
+            total: u32::try_from(list.checks.len()).unwrap_or(u32::MAX),
+            ..ForgeCheckCounts::default()
+        };
+        for check in &list.checks {
+            match check.state {
+                ForgeCheckState::Success => counts.passing += 1,
+                ForgeCheckState::Failure => counts.failing += 1,
+                ForgeCheckState::Queued | ForgeCheckState::Running => counts.pending += 1,
+                ForgeCheckState::Neutral => counts.neutral += 1,
+            }
+        }
+        Some(Self {
+            number,
+            verdict: counts.verdict(),
+            counts: Some(counts),
+            awaiting_approval: 0,
+        })
+    }
+}
+
+/// The CI summaries for one page of changes.
+///
+/// A change missing from `items` is UNKNOWN — the forge would not say, or
+/// said so with an error for that one change — and is not the same as a change
+/// with `verdict: None`, which the forge positively reported as having no
+/// checks. Both draw nothing; only the second may ever be described as "no
+/// checks". `available: false` is the whole batch being unknown.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeCheckSummaryList {
+    pub available: bool,
+    pub items: Vec<ForgeCheckSummary>,
+}
+
+impl ForgeCheckSummaryList {
+    pub fn unavailable() -> Self {
+        Self {
+            available: false,
+            items: Vec::new(),
+        }
+    }
+}
+
+/// Which changes a summary request is about. Capped at a page's worth
+/// ([`MAX_PER_PAGE`]) — the list never shows more, and a GraphQL query with an
+/// alias per change has to stay bounded.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckSummariesQuery {
+    pub numbers: Vec<i64>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+impl CheckSummariesQuery {
+    /// Positive, de-duplicated, in the order asked, and no more than a page.
+    pub fn resolve(&self) -> Vec<i64> {
+        let mut seen = std::collections::HashSet::new();
+        self.numbers
+            .iter()
+            .copied()
+            .filter(|n| *n > 0 && seen.insert(*n))
+            .take(MAX_PER_PAGE as usize)
+            .collect()
+    }
+}
+
+/// A workflow run held for approval.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ForgePendingRun {
+    /// The run id, as a string (64-bit on GitHub).
+    pub id: String,
+    pub name: String,
+    /// `http(s)` only (see [`sanitize_web_url`]).
+    pub url: Option<String>,
+}
+
+/// The runs a change is waiting on a maintainer for, and whether this panel
+/// can let one approve them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeWorkflowApproval {
+    pub runs: Vec<ForgePendingRun>,
+    /// The search was cut short (page budget, or a page that failed), so there
+    /// may be held runs that are not listed. Never read as "none are held".
+    pub incomplete: bool,
+    /// The held runs cannot be tied to THIS change alone: the same fork branch
+    /// has more than one open pull request, and GitHub does not say which one a
+    /// fork's run belongs to. Approving would then approve another change's
+    /// runs too, so the panel offers the forge's own page instead.
+    pub ambiguous: bool,
+    /// Whether the account can push to the repository (what approving needs).
+    /// `None` when that could not be read — the button stays, and the forge's
+    /// own answer decides.
+    pub can_approve: Option<bool>,
+}
+
+/// "Approve the runs held on this change" — with the head commit the person
+/// looked at, so a push that lands after they looked is not approved on their
+/// behalf.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApproveWorkflowsRequest {
+    pub number: i64,
+    pub head_sha: String,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+impl ApproveWorkflowsRequest {
+    pub fn resolve(&self) -> Result<(i64, String), ForgeError> {
+        if self.number <= 0 {
+            return Err(ForgeError::Invalid(format!(
+                "bad work item number: {}",
+                self.number
+            )));
+        }
+        let sha = self.head_sha.trim().to_ascii_lowercase();
+        // A full commit id, and nothing else: it is compared against the
+        // forge's, and an abbreviation would let "approve" match a commit the
+        // person never saw.
+        if !is_full_sha(&sha) {
+            return Err(ForgeError::Invalid(format!(
+                "bad head commit: {}",
+                self.head_sha
+            )));
+        }
+        Ok((self.number, sha))
+    }
+}
+
+/// A full hex commit id — SHA-1 (40) or SHA-256 (64).
+pub fn is_full_sha(value: &str) -> bool {
+    (value.len() == 40 || value.len() == 64) && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// What an approval did, run by run.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeApproveResult {
+    pub approved: u32,
+    /// Runs the forge refused, by name, with its reason.
+    pub failed: Vec<ForgeApproveFailure>,
+    /// Some held runs may not have been found (see
+    /// [`ForgeWorkflowApproval::incomplete`]); the ones found were approved.
+    pub incomplete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeApproveFailure {
+    pub name: String,
+    pub message: String,
+}
+
+/// i18n keys for the approval guards (see [`ForgeError::Refused`]).
+pub const APPROVE_HEAD_CHANGED_I18N_KEY: &str = "Forge.errors.approveHeadChanged";
+pub const APPROVE_AMBIGUOUS_I18N_KEY: &str = "Forge.errors.approveAmbiguous";
+pub const APPROVE_FORBIDDEN_I18N_KEY: &str = "Forge.errors.approveForbidden";
+pub const APPROVE_NOT_OPEN_I18N_KEY: &str = "Forge.errors.approveNotOpen";
 
 /// How a file was touched, in the one vocabulary both forges can be read into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]

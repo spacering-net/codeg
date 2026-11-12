@@ -7006,7 +7006,11 @@
     "errors": {
       "noAccount": "No {provider} account is configured for {host}. Add one under Settings → Version Control to load this repository.",
       "unsupportedHost": "The repository panel supports GitHub, GitLab, Gitea and CNB only, and {host} is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea, Forgejo or CNB instance, add an account for it under Settings → Version Control.",
-      "wrongForge": "{host} is a {provider}, not the forge codeg had it classified as. The detection has been corrected — reload to retry."
+      "wrongForge": "{host} is a {provider}, not the forge codeg had it classified as. The detection has been corrected — reload to retry.",
+      "approveHeadChanged": "This pull request has new commits since you reviewed it. Refresh, review again, then approve.",
+      "approveAmbiguous": "These workflow runs can't be tied to this pull request alone. Approve them on GitHub.",
+      "approveForbidden": "This account isn't allowed to approve workflow runs here. It needs write access, and the token needs the Actions (write) permission or the repo scope.",
+      "approveNotOpen": "This pull request is no longer open."
     },
     "addAccount": "Add an account",
     "empty": "Nothing here",
@@ -7291,7 +7295,23 @@
     "autoSkipExcludedAuthor": "excluded author",
     "autoSkipMissingLabel": "no matching label",
     "autoSkipAuthorNotIncluded": "author not listed",
-    "save": "Save"
+    "save": "Save",
+    "checksAwaitingApproval": "{count} workflows awaiting approval",
+    "checksApprovalShort": "Approval needed",
+    "approveUnknownTitle": "Workflows may be awaiting approval",
+    "approveExplain": "This pull request comes from a fork, and its workflows won't run until someone with write access approves them. Approving runs this code on the repository's CI — review the changes first.",
+    "approveIncompleteHint": "Not every workflow run could be checked; there may be more waiting on GitHub.",
+    "approveBlockedAmbiguous": "Another open pull request comes from the same branch, so these runs can't be tied to this one alone. Approve them on GitHub.",
+    "approveBlockedPermission": "This account can't push to the repository, so it can't approve workflows.",
+    "approveOpenOnForge": "Open on GitHub",
+    "approveWorkflows": "Approve workflows to run",
+    "approving": "Approving…",
+    "approveConfirmTitle": "Approve workflows to run?",
+    "approveConfirmBody": "{count} workflows will run this pull request's code (commit {sha}) on the repository's CI. Only approve after reviewing the changes.",
+    "approveDone": "Approved {count} workflows",
+    "approvePartial": "Some workflows could not be approved: {names}",
+    "approveNothingHeld": "No workflows are waiting for approval anymore.",
+    "mergeWorkflowsAwaiting": "Workflows are awaiting approval"
   },
   "Canvas": {
     "title": "Infinite Canvas",

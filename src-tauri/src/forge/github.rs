@@ -32,6 +32,10 @@ use serde::Deserialize;
 use super::auth::ResolvedAuth;
 use super::{
     sanitize_web_url, scan_timestamp, truncate_chars, urlencode_query, validate_state_filter,
+    ForgeApproveFailure, ForgeApproveResult, ForgeCheckCounts, ForgeCheckSummary,
+    ForgeCheckSummaryList, ForgeCheckVerdict, ForgePendingRun, ForgeWorkflowApproval,
+    APPROVE_AMBIGUOUS_I18N_KEY, APPROVE_FORBIDDEN_I18N_KEY, APPROVE_HEAD_CHANGED_I18N_KEY,
+    APPROVE_NOT_OPEN_I18N_KEY,
     ForgeChangeDetail, ForgeChangedFile, ForgeChangedFileList, ForgeCheck, ForgeCheckList,
     ForgeCheckState, ForgeComment, ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList,
     ForgeIssueRow, ForgeItemKind, ForgeLabel, ForgeLabelList, ForgeMergeMethod, ForgeMergeOptions,
@@ -675,6 +679,38 @@ pub async fn change_detail(
         .and_then(|r| r.full_name.clone())
         .filter(|full| !super::same_repo(full, &repo));
 
+    // Only an OPEN change from a FORK can have runs held for approval — GitHub
+    // never holds a same-repository push — so nothing is asked otherwise. A
+    // failure to read them costs this section and nothing else.
+    let workflow_approval = if head_repo.is_some() && raw.state == "open" && !raw.merged {
+        match pending_runs_for_pull(auth, &repo, number, &raw).await {
+            Ok(found) if !found.runs.is_empty() || found.incomplete => {
+                let can_approve = if found.runs.is_empty() {
+                    None
+                } else {
+                    can_push(auth, &repo).await
+                };
+                Some(ForgeWorkflowApproval {
+                    runs: found
+                        .runs
+                        .into_iter()
+                        .map(|run| ForgePendingRun {
+                            id: run.id.to_string(),
+                            name: run.display_name(),
+                            url: run.html_url.as_deref().and_then(sanitize_web_url),
+                        })
+                        .collect(),
+                    incomplete: found.incomplete,
+                    ambiguous: found.ambiguous,
+                    can_approve,
+                })
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     Ok(ForgeChangeDetail {
         number: if raw.number > 0 { raw.number } else { number },
         base_ref: raw.base.as_ref().map(|b| b.ref_name.clone()).unwrap_or_default(),
@@ -696,6 +732,7 @@ pub async fn change_detail(
         changed_files: raw.changed_files,
         commits: raw.commits,
         checks,
+        workflow_approval,
     })
 }
 
@@ -875,6 +912,585 @@ fn commit_status_state(state: &str) -> ForgeCheckState {
         "pending" => ForgeCheckState::Running,
         _ => ForgeCheckState::Neutral,
     }
+}
+
+// ── CI for the list, and runs held for approval ─────────────────────────────
+
+/// The GraphQL endpoint beside a REST base. github.com serves REST at
+/// `api.github.com` and GraphQL at `api.github.com/graphql`; an Enterprise
+/// Server serves REST under `/api/v3` and GraphQL at `/api/graphql`.
+pub(crate) fn graphql_url(api_base: &str) -> String {
+    let base = api_base.trim_end_matches('/');
+    match base.strip_suffix("/api/v3") {
+        Some(root) => format!("{root}/api/graphql"),
+        None => format!("{base}/graphql"),
+    }
+}
+
+/// API bases whose GraphQL schema has no per-state check counts (Enterprise
+/// Servers older than the field). Learned from the schema error the first query
+/// gets, so every later page asks the reduced query straight away.
+static NO_CHECK_COUNTS: LazyLock<RwLock<std::collections::HashSet<String>>> =
+    LazyLock::new(|| RwLock::new(std::collections::HashSet::new()));
+
+/// Suites read per change when looking for held workflows. Best-effort on the
+/// LIST — a commit rarely carries more than a handful of suites, and the detail
+/// panel's REST read is the authoritative one, paginated (see
+/// [`pending_runs_for_pull`]). A truncated read only ever MISSES a mark; it can
+/// never claim one.
+const SUMMARY_SUITES: u32 = 50;
+
+/// The GraphQL query for one page of changes: one alias per change, so a page
+/// costs ONE request whatever its size. Numbers are validated positive integers
+/// (see [`super::CheckSummariesQuery::resolve`]) and are the only thing written
+/// into the query text; the repository travels as variables.
+fn summaries_query(numbers: &[i64], with_counts: bool) -> String {
+    let rollup = if with_counts {
+        "state contexts(first: 0) { totalCount checkRunCountsByState { state count } \
+         statusContextCountsByState { state count } }"
+    } else {
+        "state"
+    };
+    let mut query =
+        String::from("query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {");
+    for n in numbers {
+        query.push_str(&format!(
+            " p{n}: pullRequest(number: {n}) {{ commits(last: 1) {{ nodes {{ commit {{ \
+             statusCheckRollup {{ {rollup} }} \
+             checkSuites(first: {SUMMARY_SUITES}) {{ nodes {{ conclusion app {{ slug }} \
+             workflowRun {{ databaseId }} }} }} }} }} }} }}"
+        ));
+    }
+    query.push_str(" } }");
+    query
+}
+
+/// A check-run state as GraphQL counts it, folded the way
+/// [`check_run_state`] folds the REST pair — so a row and the panel agree.
+fn count_check_run(counts: &mut ForgeCheckCounts, state: &str, n: u32) {
+    match state {
+        "SUCCESS" => counts.passing += n,
+        "FAILURE" | "TIMED_OUT" | "STARTUP_FAILURE" | "ACTION_REQUIRED" => counts.failing += n,
+        "QUEUED" | "IN_PROGRESS" | "PENDING" | "WAITING" | "REQUESTED" => counts.pending += n,
+        "NEUTRAL" | "SKIPPED" | "CANCELLED" | "STALE" | "COMPLETED" => counts.neutral += n,
+        _ => {}
+    }
+}
+
+/// A commit-status state as GraphQL counts it — [`commit_status_state`]'s fold.
+fn count_status_context(counts: &mut ForgeCheckCounts, state: &str, n: u32) {
+    match state {
+        "SUCCESS" => counts.passing += n,
+        "FAILURE" | "ERROR" => counts.failing += n,
+        "PENDING" | "EXPECTED" => counts.pending += n,
+        _ => {}
+    }
+}
+
+/// GitHub's own rollup word, for when no counts are to be had.
+fn rollup_verdict(state: &str) -> ForgeCheckVerdict {
+    match state {
+        "SUCCESS" => ForgeCheckVerdict::Success,
+        "FAILURE" | "ERROR" => ForgeCheckVerdict::Failure,
+        "PENDING" | "EXPECTED" => ForgeCheckVerdict::Running,
+        _ => ForgeCheckVerdict::Neutral,
+    }
+}
+
+fn count_value(node: &serde_json::Value) -> u32 {
+    node.get("count")
+        .and_then(serde_json::Value::as_u64)
+        .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX))
+}
+
+/// One change's summary out of its alias, or `None` when it cannot be read.
+fn summary_from_node(
+    number: i64,
+    node: &serde_json::Value,
+    with_counts: bool,
+) -> Option<ForgeCheckSummary> {
+    let commit = node
+        .pointer("/commits/nodes/0/commit")
+        .filter(|c| c.is_object())?;
+    let rollup = commit.get("statusCheckRollup").filter(|r| r.is_object());
+
+    let counts = match rollup {
+        Some(rollup) if with_counts => {
+            let contexts = rollup.get("contexts")?;
+            let mut counts = ForgeCheckCounts {
+                total: contexts
+                    .get("totalCount")
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
+                ..ForgeCheckCounts::default()
+            };
+            for entry in contexts
+                .get("checkRunCountsByState")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let state = entry.get("state").and_then(serde_json::Value::as_str);
+                count_check_run(&mut counts, state.unwrap_or_default(), count_value(entry));
+            }
+            for entry in contexts
+                .get("statusContextCountsByState")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let state = entry.get("state").and_then(serde_json::Value::as_str);
+                count_status_context(&mut counts, state.unwrap_or_default(), count_value(entry));
+            }
+            Some(counts)
+        }
+        _ => None,
+    };
+    let verdict = match (&counts, rollup) {
+        (Some(counts), _) => counts.verdict(),
+        (None, Some(rollup)) => rollup
+            .get("state")
+            .and_then(serde_json::Value::as_str)
+            .map(rollup_verdict),
+        (None, None) => None,
+    };
+
+    // Held workflows. Only GitHub Actions' own suites, and only ones that name
+    // a run: another App's suite can sit "action required" for reasons of its
+    // own that no approval here would clear.
+    let awaiting_approval = commit
+        .pointer("/checkSuites/nodes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|suite| {
+            suite.get("conclusion").and_then(serde_json::Value::as_str) == Some("ACTION_REQUIRED")
+                && suite.pointer("/app/slug").and_then(serde_json::Value::as_str)
+                    == Some("github-actions")
+                && suite
+                    .pointer("/workflowRun/databaseId")
+                    .is_some_and(|id| !id.is_null())
+        })
+        .count();
+
+    Some(ForgeCheckSummary {
+        number,
+        verdict,
+        counts,
+        awaiting_approval: u32::try_from(awaiting_approval).unwrap_or(u32::MAX),
+    })
+}
+
+/// Whether a GraphQL answer is the schema refusing the counts fields — the
+/// one error that a narrower query fixes.
+fn lacks_count_fields(errors: &[serde_json::Value]) -> bool {
+    errors.iter().any(|e| {
+        let message = e.get("message").and_then(serde_json::Value::as_str).unwrap_or_default();
+        let undefined = e.pointer("/extensions/code").and_then(serde_json::Value::as_str)
+            == Some("undefinedField");
+        (undefined || message.contains("doesn't exist on type"))
+            && (message.contains("CountsByState") || message.contains("totalCount"))
+    })
+}
+
+/// CI summaries for one page of pull requests, in ONE GraphQL request.
+///
+/// Decoration for the list, so it never fails: anything the forge will not
+/// answer is unknown (see [`ForgeCheckSummaryList`]) — a change whose alias
+/// came back null or with an error of its own (a fine-grained token without
+/// "Checks: read" gets exactly that) is left out, rather than reported as
+/// having no checks.
+pub async fn check_summaries(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    numbers: &[i64],
+) -> ForgeCheckSummaryList {
+    let Some(repo) = super::normalize_repo(owner_repo) else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    if numbers.is_empty() {
+        return ForgeCheckSummaryList {
+            available: true,
+            items: Vec::new(),
+        };
+    }
+    let Some((owner, name)) = repo.split_once('/') else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    let url = graphql_url(&auth.api_base);
+    let mut with_counts = !NO_CHECK_COUNTS
+        .read()
+        .is_ok_and(|set| set.contains(&auth.api_base));
+
+    // At most two passes: the second only after the schema said it has no
+    // counts, and never again for this server.
+    for _ in 0..2 {
+        let body = serde_json::json!({
+            "query": summaries_query(numbers, with_counts),
+            "variables": { "owner": owner, "name": name },
+        });
+        let Ok(response) = api_post(auth, &url, &body).await else {
+            return ForgeCheckSummaryList::unavailable();
+        };
+        let Ok(value) = response.json::<serde_json::Value>().await else {
+            return ForgeCheckSummaryList::unavailable();
+        };
+        let errors = value
+            .get("errors")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if with_counts && lacks_count_fields(&errors) {
+            if let Ok(mut set) = NO_CHECK_COUNTS.write() {
+                set.insert(auth.api_base.clone());
+            }
+            with_counts = false;
+            continue;
+        }
+        let Some(repository) = value
+            .pointer("/data/repository")
+            .filter(|r| r.is_object())
+        else {
+            return ForgeCheckSummaryList::unavailable();
+        };
+        // Aliases an error is about. An error with no path, or one about the
+        // repository as a whole, leaves nothing trustworthy.
+        let mut errored = std::collections::HashSet::new();
+        for error in &errors {
+            // `["repository", "p12", …]` is about one change. A schema error's
+            // path starts at `"query"` instead, and has no data behind it.
+            let path = error.get("path").and_then(serde_json::Value::as_array);
+            let under_repository = path
+                .and_then(|p| p.first())
+                .and_then(serde_json::Value::as_str)
+                == Some("repository");
+            match path
+                .filter(|_| under_repository)
+                .and_then(|path| path.get(1))
+                .and_then(serde_json::Value::as_str)
+            {
+                Some(alias) => {
+                    errored.insert(alias.to_string());
+                }
+                None => return ForgeCheckSummaryList::unavailable(),
+            }
+        }
+        let items = numbers
+            .iter()
+            .filter_map(|n| {
+                let alias = format!("p{n}");
+                if errored.contains(&alias) {
+                    return None;
+                }
+                let node = repository.get(&alias).filter(|v| v.is_object())?;
+                summary_from_node(*n, node, with_counts)
+            })
+            .collect();
+        return ForgeCheckSummaryList {
+            available: true,
+            items,
+        };
+    }
+    ForgeCheckSummaryList::unavailable()
+}
+
+#[derive(Debug, Deserialize)]
+struct RawRunPage {
+    #[serde(default)]
+    workflow_runs: Vec<RawRun>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawRun {
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    display_title: Option<String>,
+    #[serde(default)]
+    event: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    head_sha: String,
+    #[serde(default)]
+    head_branch: Option<String>,
+    #[serde(default)]
+    head_repository: Option<RawPullRepo>,
+    /// The pull requests GitHub ties the run to. ALWAYS empty for a run from a
+    /// fork — which is every run that can be held — so it can confirm a match
+    /// when present but never establish one.
+    #[serde(default)]
+    pull_requests: Vec<RawRunPull>,
+    #[serde(default)]
+    html_url: Option<String>,
+}
+
+impl RawRun {
+    fn display_name(&self) -> String {
+        self.name
+            .clone()
+            .filter(|n| !n.trim().is_empty())
+            .or_else(|| self.display_title.clone())
+            .unwrap_or_else(|| format!("#{}", self.id))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawRunPull {
+    #[serde(default)]
+    number: i64,
+}
+
+/// Runs held for approval that belong to a pull request, as far as can be told.
+struct HeldRuns {
+    runs: Vec<RawRun>,
+    incomplete: bool,
+    ambiguous: bool,
+}
+
+/// Pages of held runs read before giving up — 500 runs, far past anything real.
+const HELD_RUN_PAGES: u32 = 5;
+
+/// The runs held for approval on THIS pull request's head — shared by the
+/// panel (to show them) and the approval (to approve them), so the two can
+/// never pick different runs.
+///
+/// A run belongs here only if every coordinate GitHub gives agrees: a
+/// `pull_request` event, held (`action_required`), on exactly the head commit,
+/// from the head's repository AND branch (two branches of one fork can point at
+/// the same commit), and — where GitHub names its pull requests at all — naming
+/// this one. Even then a fork's run cannot be told apart from another open pull
+/// request on the same fork branch (against another base), so that case comes
+/// back `ambiguous` and must not be approved from here.
+///
+/// The first page failing is an error (nothing is known); a later page failing
+/// keeps what was read and says `incomplete`.
+async fn pending_runs_for_pull(
+    auth: &ResolvedAuth,
+    repo: &str,
+    number: i64,
+    pull: &RawPull,
+) -> Result<HeldRuns, ForgeError> {
+    let head = pull
+        .head
+        .as_ref()
+        .ok_or_else(|| ForgeError::Invalid("pull request has no head".into()))?;
+    let sha = head
+        .sha
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .filter(|sha| super::is_full_sha(sha))
+        .ok_or_else(|| ForgeError::Invalid("pull request has no head commit".into()))?;
+    // A deleted fork leaves no repository to match runs against.
+    let head_repo = head
+        .repo
+        .as_ref()
+        .and_then(|r| r.full_name.clone())
+        .ok_or_else(|| ForgeError::Invalid("pull request head repository is gone".into()))?;
+    let head_ref = head.ref_name.clone();
+
+    let mut runs = Vec::new();
+    let mut incomplete = false;
+    for page in 1..=HELD_RUN_PAGES {
+        let url = format!(
+            "{}/repos/{repo}/actions/runs?head_sha={sha}&status=action_required\
+             &event=pull_request&per_page=100&page={page}",
+            auth.api_base
+        );
+        let response = match api_get(auth, &url).await {
+            Ok(response) => response,
+            Err(e) if page == 1 => return Err(e),
+            Err(_) => {
+                incomplete = true;
+                break;
+            }
+        };
+        let more = has_next_link(response.headers());
+        let parsed: Result<RawRunPage, _> = response.json().await;
+        let batch = match parsed {
+            Ok(batch) => batch,
+            Err(e) if page == 1 => {
+                return Err(ForgeError::Network(format!("bad workflow runs payload: {e}")))
+            }
+            Err(_) => {
+                incomplete = true;
+                break;
+            }
+        };
+        runs.extend(batch.workflow_runs.into_iter().filter(|run| {
+            let held = run.conclusion.as_deref() == Some("action_required")
+                || run.status.as_deref() == Some("action_required");
+            run.id > 0
+                && held
+                && run.event == "pull_request"
+                && run.head_sha.eq_ignore_ascii_case(&sha)
+                && run.head_branch.as_deref() == Some(head_ref.as_str())
+                && run
+                    .head_repository
+                    .as_ref()
+                    .and_then(|r| r.full_name.as_deref())
+                    .is_some_and(|full| super::same_repo(full, &head_repo))
+                && (run.pull_requests.is_empty()
+                    || run.pull_requests.iter().any(|p| p.number == number))
+        }));
+        if !more {
+            break;
+        }
+        if page == HELD_RUN_PAGES {
+            incomplete = true;
+        }
+    }
+
+    // A run that names no pull request is only this one's if no OTHER open pull
+    // request comes from the same fork branch. Failing to find out is treated
+    // as ambiguous: the cost is a link to the forge instead of a button.
+    let ambiguous = if runs.iter().any(|r| r.pull_requests.is_empty()) {
+        let owner = head_repo.split('/').next().unwrap_or_default();
+        let url = format!(
+            "{}/repos/{repo}/pulls?state=open&head={}&per_page=2",
+            auth.api_base,
+            urlencode_query(&format!("{owner}:{head_ref}"))
+        );
+        match api_get(auth, &url).await {
+            Ok(response) => match response.json::<Vec<serde_json::Value>>().await {
+                Ok(pulls) => pulls.len() != 1
+                    || pulls[0].get("number").and_then(serde_json::Value::as_i64) != Some(number),
+                Err(_) => true,
+            },
+            Err(_) => true,
+        }
+    } else {
+        false
+    };
+
+    Ok(HeldRuns {
+        runs,
+        incomplete,
+        ambiguous,
+    })
+}
+
+/// Whether the account may push to the repository — what approving a held run
+/// requires. `None` when the repository could not be read.
+async fn can_push(auth: &ResolvedAuth, repo: &str) -> Option<bool> {
+    #[derive(Deserialize)]
+    struct Repo {
+        #[serde(default)]
+        permissions: Option<Permissions>,
+    }
+    #[derive(Deserialize)]
+    struct Permissions {
+        #[serde(default)]
+        admin: bool,
+        #[serde(default)]
+        maintain: bool,
+        #[serde(default)]
+        push: bool,
+    }
+    let url = format!("{}/repos/{repo}", auth.api_base);
+    let parsed: Repo = api_get(auth, &url).await.ok()?.json().await.ok()?;
+    parsed
+        .permissions
+        .map(|p| p.admin || p.maintain || p.push)
+}
+
+/// Approve the workflow runs held on a pull request's head — what github.com's
+/// "Approve workflows to run" button does.
+///
+/// Guarded three ways before anything is sent:
+/// - the pull request must still be open;
+/// - its head must still be `expected_sha`, the commit the person reviewed —
+///   a push that landed since would otherwise be approved on their behalf;
+/// - the runs must be tied to this pull request alone ([`pending_runs_for_pull`]).
+///
+/// Each run is approved on its own and never retried; the result says which
+/// went through. A refusal for want of permission on every run is the
+/// specific error the panel explains, rather than a list of identical failures.
+pub async fn approve_workflows(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    number: i64,
+    expected_sha: &str,
+) -> Result<ForgeApproveResult, ForgeError> {
+    let repo = super::normalize_repo(owner_repo)
+        .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {owner_repo}")))?;
+    if number <= 0 {
+        return Err(ForgeError::Invalid(format!("bad work item number: {number}")));
+    }
+    let url = format!("{}/repos/{repo}/pulls/{number}", auth.api_base);
+    let pull: RawPull = api_get(auth, &url)
+        .await?
+        .json()
+        .await
+        .map_err(|e| ForgeError::Network(format!("bad pull payload: {e}")))?;
+    if pull.state != "open" || pull.merged {
+        return Err(ForgeError::Refused {
+            i18n_key: APPROVE_NOT_OPEN_I18N_KEY,
+            message: format!("pull request #{number} is no longer open"),
+            forbidden: false,
+        });
+    }
+    let head_sha = pull
+        .head
+        .as_ref()
+        .and_then(|h| h.sha.as_deref())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if head_sha != expected_sha.to_ascii_lowercase() {
+        return Err(ForgeError::Refused {
+            i18n_key: APPROVE_HEAD_CHANGED_I18N_KEY,
+            message: format!(
+                "pull request #{number} has new commits since it was reviewed; refresh and review again"
+            ),
+            forbidden: false,
+        });
+    }
+    let held = pending_runs_for_pull(auth, &repo, number, &pull).await?;
+    if held.ambiguous {
+        return Err(ForgeError::Refused {
+            i18n_key: APPROVE_AMBIGUOUS_I18N_KEY,
+            message: format!(
+                "the held runs of #{number} cannot be told apart from another pull request's; \
+                 approve them on the forge"
+            ),
+            forbidden: false,
+        });
+    }
+
+    let mut approved = 0u32;
+    let mut failed = Vec::new();
+    let mut forbidden = 0usize;
+    for run in &held.runs {
+        let url = format!("{}/repos/{repo}/actions/runs/{}/approve", auth.api_base, run.id);
+        match api_post(auth, &url, &serde_json::json!({})).await {
+            Ok(_) => approved += 1,
+            Err(e) => {
+                if matches!(e, ForgeError::Auth(_)) {
+                    forbidden += 1;
+                }
+                failed.push(ForgeApproveFailure {
+                    name: run.display_name(),
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
+    if approved == 0 && !failed.is_empty() && forbidden == failed.len() {
+        return Err(ForgeError::Refused {
+            i18n_key: APPROVE_FORBIDDEN_I18N_KEY,
+            message: "this account may not approve workflow runs in this repository".into(),
+            forbidden: true,
+        });
+    }
+    Ok(ForgeApproveResult {
+        approved,
+        failed,
+        incomplete: held.incomplete,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -2922,5 +3538,460 @@ mod open_items_tests {
             .expect("listed");
         assert!(scan.resume.is_none() && scan.rows.is_empty());
         assert!(seen.lock().unwrap().is_empty());
+    }
+}
+
+/// The list's CI summaries and the held-workflow approval, against a mock
+/// GitHub that answers whatever each test scripts — every request recorded, so
+/// a test can say what was NOT sent as firmly as what was.
+#[cfg(test)]
+mod checks_and_approval_tests {
+    use super::*;
+    use axum::body::Bytes;
+    use axum::http::{Method, StatusCode, Uri};
+    use axum::response::IntoResponse;
+    use axum::Json;
+    use std::sync::{Arc, Mutex};
+
+    type Seen = Arc<Mutex<Vec<(String, String, serde_json::Value)>>>;
+    /// status, body, optional `Link` header.
+    type Reply = (u16, serde_json::Value, Option<String>);
+    type Responder = Arc<dyn Fn(&str, &str, &serde_json::Value) -> Reply + Send + Sync>;
+
+    const SHA: &str = "f5a0ccc3e4afc3e221f1188977e2a1c700a27672";
+    const OTHER_SHA: &str = "a0ee014837c86a7e34de2eba92176712f7c1072a";
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: ForgeProvider::GitHub,
+            server_host: "github.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec!["repo".into()],
+        }
+    }
+
+    async fn serve(responder: Responder) -> (ResolvedAuth, Seen) {
+        let seen: Seen = Arc::default();
+        let log = seen.clone();
+        let app = axum::Router::new().fallback(move |method: Method, uri: Uri, body: Bytes| {
+            let responder = responder.clone();
+            let log = log.clone();
+            async move {
+                let path = uri
+                    .path_and_query()
+                    .map(|p| p.as_str().to_string())
+                    .unwrap_or_default();
+                let json: serde_json::Value =
+                    serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+                log.lock()
+                    .unwrap()
+                    .push((method.to_string(), path.clone(), json.clone()));
+                let (status, value, link) = responder(method.as_str(), &path, &json);
+                let mut response =
+                    (StatusCode::from_u16(status).unwrap(), Json(value)).into_response();
+                if let Some(link) = link {
+                    response.headers_mut().insert("link", link.parse().unwrap());
+                }
+                response
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (auth_for(format!("http://{addr}")), seen)
+    }
+
+    fn not_found() -> Reply {
+        (404, serde_json::json!({ "message": "Not Found" }), None)
+    }
+
+    fn ok(value: serde_json::Value) -> Reply {
+        (200, value, None)
+    }
+
+    fn counts(runs: &[(&str, u64)], statuses: &[(&str, u64)]) -> serde_json::Value {
+        let total: u64 = runs.iter().chain(statuses).map(|(_, n)| n).sum();
+        serde_json::json!({
+            "totalCount": total,
+            "checkRunCountsByState": runs.iter().map(|(s, n)| serde_json::json!({"state": s, "count": n})).collect::<Vec<_>>(),
+            "statusContextCountsByState": statuses.iter().map(|(s, n)| serde_json::json!({"state": s, "count": n})).collect::<Vec<_>>(),
+        })
+    }
+
+    fn pr_node(rollup: serde_json::Value, suites: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "commits": { "nodes": [
+            { "commit": { "statusCheckRollup": rollup, "checkSuites": { "nodes": suites } } }
+        ] } })
+    }
+
+    #[test]
+    fn the_graphql_endpoint_sits_beside_the_rest_base() {
+        assert_eq!(graphql_url("https://api.github.com"), "https://api.github.com/graphql");
+        assert_eq!(graphql_url("https://api.github.com/"), "https://api.github.com/graphql");
+        assert_eq!(graphql_url("https://ghe.corp.com/api/v3"), "https://ghe.corp.com/api/graphql");
+        assert_eq!(graphql_url("https://ghe.corp.com/api/v3/"), "https://ghe.corp.com/api/graphql");
+    }
+
+    /// The verified shapes from a real repository: a red run, a run still
+    /// going, a fork held for approval (no rollup at all, one Actions suite
+    /// "action required"), a change with no CI, one GitHub could not resolve,
+    /// and one whose alias came back with an error of its own.
+    #[tokio::test]
+    async fn one_query_summarizes_a_page_and_unknown_is_not_empty() {
+        let (auth, seen) = serve(Arc::new(|method, path, _| {
+            assert_eq!((method, path), ("POST", "/graphql"));
+            ok(serde_json::json!({
+                "data": { "repository": {
+                    "p1": pr_node(
+                        serde_json::json!({ "state": "FAILURE", "contexts": counts(
+                            &[("SUCCESS", 9), ("FAILURE", 1), ("CANCELLED", 1)], &[]) }),
+                        serde_json::json!([{ "conclusion": "FAILURE", "app": { "slug": "github-actions" }, "workflowRun": { "databaseId": 1 } }]),
+                    ),
+                    "p2": pr_node(
+                        serde_json::json!({ "state": "PENDING", "contexts": counts(
+                            &[("SUCCESS", 7), ("QUEUED", 3)], &[("SUCCESS", 1)]) }),
+                        serde_json::json!([]),
+                    ),
+                    "p3": pr_node(
+                        serde_json::Value::Null,
+                        serde_json::json!([
+                            { "conclusion": "ACTION_REQUIRED", "app": { "slug": "github-actions" }, "workflowRun": { "databaseId": 42 } },
+                            // Another App's "action required" is not a held workflow.
+                            { "conclusion": "ACTION_REQUIRED", "app": { "slug": "some-bot" }, "workflowRun": null },
+                            // A suite that never made a run stays queued forever.
+                            { "conclusion": null, "app": { "slug": "dependabot" }, "workflowRun": null },
+                        ]),
+                    ),
+                    "p4": pr_node(serde_json::Value::Null, serde_json::json!([])),
+                    "p5": null,
+                    "p6": pr_node(serde_json::Value::Null, serde_json::json!([])),
+                    // GitHub's own rollup calls a cancelled run a failure; the
+                    // fold here does not (see `ForgeCheckState`).
+                    "p7": pr_node(
+                        serde_json::json!({ "state": "FAILURE", "contexts": counts(&[("SUCCESS", 2), ("CANCELLED", 1)], &[]) }),
+                        serde_json::json!([]),
+                    ),
+                } },
+                "errors": [
+                    { "type": "NOT_FOUND", "path": ["repository", "p5"], "message": "Could not resolve" },
+                    { "type": "FORBIDDEN", "path": ["repository", "p6", "commits"], "message": "Resource not accessible" },
+                ],
+            }))
+        }))
+        .await;
+
+        let list = check_summaries(&auth, "Acme/App", &[1, 2, 3, 4, 5, 6, 7]).await;
+        assert!(list.available);
+        let by = |n: i64| list.items.iter().find(|s| s.number == n);
+
+        let red = by(1).unwrap();
+        assert_eq!(red.verdict, Some(ForgeCheckVerdict::Failure));
+        assert_eq!(
+            red.counts,
+            Some(ForgeCheckCounts { passing: 9, failing: 1, pending: 0, neutral: 1, total: 11 })
+        );
+        let going = by(2).unwrap();
+        assert_eq!(going.verdict, Some(ForgeCheckVerdict::Running));
+        assert_eq!(going.counts.unwrap().passing, 8, "statuses count too");
+
+        let held = by(3).unwrap();
+        assert_eq!(held.verdict, None, "nothing has run yet");
+        assert_eq!(held.awaiting_approval, 1, "only GitHub Actions' own held suite");
+
+        let bare = by(4).unwrap();
+        assert_eq!((bare.verdict, bare.awaiting_approval), (None, 0), "no CI: present, and empty");
+
+        assert!(by(5).is_none(), "unresolved is unknown");
+        assert!(by(6).is_none(), "an error of its own makes it unknown, not empty");
+        assert_eq!(by(7).unwrap().verdict, Some(ForgeCheckVerdict::Success));
+
+        // ONE request, the repository as variables, numbers in the text.
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let body = &seen[0].2;
+        assert_eq!(body["variables"], serde_json::json!({ "owner": "acme", "name": "app" }));
+        assert!(body["query"].as_str().unwrap().contains("p7: pullRequest(number: 7)"));
+    }
+
+    #[tokio::test]
+    async fn nothing_to_ask_asks_nothing_and_a_refusal_is_unavailable() {
+        let (auth, seen) = serve(Arc::new(|_, _, _| (403, serde_json::json!({}), None))).await;
+        let empty = check_summaries(&auth, "acme/app", &[]).await;
+        assert!(empty.available && empty.items.is_empty());
+        assert!(seen.lock().unwrap().is_empty());
+
+        let refused = check_summaries(&auth, "acme/app", &[1]).await;
+        assert_eq!(refused, ForgeCheckSummaryList::unavailable());
+
+        // An error about the whole query (rate limit) leaves nothing to trust.
+        let (auth, _) = serve(Arc::new(|_, _, _| {
+            ok(serde_json::json!({ "data": null, "errors": [{ "type": "RATE_LIMITED", "message": "API rate limit exceeded" }] }))
+        }))
+        .await;
+        assert!(!check_summaries(&auth, "acme/app", &[1]).await.available);
+    }
+
+    /// An Enterprise Server without the per-state counts refuses the query by
+    /// SCHEMA; the reduced query is asked at once, and every later page asks it
+    /// straight away.
+    #[tokio::test]
+    async fn a_schema_without_counts_falls_back_once_and_remembers() {
+        let (auth, seen) = serve(Arc::new(|_, _, body| {
+            let query = body["query"].as_str().unwrap_or_default();
+            if query.contains("checkRunCountsByState") {
+                return ok(serde_json::json!({ "errors": [{
+                    "path": ["query", "repository", "p1", "commits", "nodes", "commit", "statusCheckRollup", "contexts", "checkRunCountsByState"],
+                    "extensions": { "code": "undefinedField", "fieldName": "checkRunCountsByState" },
+                    "message": "Field 'checkRunCountsByState' doesn't exist on type 'StatusCheckRollupContextConnection'",
+                }] }));
+            }
+            ok(serde_json::json!({ "data": { "repository": {
+                "p1": pr_node(serde_json::json!({ "state": "SUCCESS" }), serde_json::json!([])),
+            } } }))
+        }))
+        .await;
+
+        let first = check_summaries(&auth, "acme/app", &[1]).await;
+        assert_eq!(first.items[0].verdict, Some(ForgeCheckVerdict::Success));
+        assert_eq!(first.items[0].counts, None, "no breakdown to give");
+        assert_eq!(seen.lock().unwrap().len(), 2);
+
+        check_summaries(&auth, "acme/app", &[1]).await;
+        assert_eq!(seen.lock().unwrap().len(), 3, "remembered: one request");
+    }
+
+    // ── held workflows ──────────────────────────────────────────────────────
+
+    fn pull(number: i64, state: &str, head_repo: &str, head_ref: &str, sha: &str) -> serde_json::Value {
+        serde_json::json!({
+            "number": number,
+            "state": state,
+            "merged": false,
+            "head": { "ref": head_ref, "sha": sha, "repo": { "full_name": head_repo } },
+            "base": { "ref": "main", "sha": "0000000000000000000000000000000000000000", "repo": { "full_name": "acme/app" } },
+        })
+    }
+
+    fn run(id: i64, branch: &str, repo: &str, sha: &str, event: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "name": format!("Test {id}"),
+            "event": event,
+            "status": "completed",
+            "conclusion": "action_required",
+            "head_sha": sha,
+            "head_branch": branch,
+            "head_repository": { "full_name": repo },
+            "pull_requests": [],
+            "html_url": format!("https://github.test/acme/app/actions/runs/{id}"),
+        })
+    }
+
+    /// A fork pull request (#7 from `kid/app:fix`) and the held runs GitHub
+    /// lists for its head commit — including look-alikes that must NOT count.
+    fn fork_repo(open_pulls_on_branch: serde_json::Value, approve_status: u16) -> Responder {
+        Arc::new(move |method, path, _| match (method, path) {
+            ("GET", "/repos/acme/app/pulls/7") => ok(pull(7, "open", "kid/app", "fix", SHA)),
+            ("GET", p) if p.starts_with("/repos/acme/app/actions/runs?") => {
+                assert!(p.contains(&format!("head_sha={SHA}")));
+                assert!(p.contains("status=action_required"));
+                ok(serde_json::json!({ "total_count": 5, "workflow_runs": [
+                    run(101, "fix", "kid/app", SHA, "pull_request"),
+                    run(102, "fix", "kid/app", SHA, "pull_request"),
+                    // Same commit, ANOTHER branch of the same fork.
+                    run(103, "other", "kid/app", SHA, "pull_request"),
+                    // Same commit and branch name, another fork.
+                    run(104, "fix", "someone/app", SHA, "pull_request"),
+                    // Not a pull_request run.
+                    run(105, "fix", "kid/app", SHA, "pull_request_target"),
+                ] }))
+            }
+            ("GET", p) if p.starts_with("/repos/acme/app/pulls?") => {
+                assert!(p.contains("head=kid%3Afix"), "{p}");
+                ok(open_pulls_on_branch.clone())
+            }
+            ("GET", "/repos/acme/app") => {
+                ok(serde_json::json!({ "permissions": { "admin": false, "maintain": false, "push": true } }))
+            }
+            ("POST", p) if p.ends_with("/approve") => {
+                let id: i64 = p.split('/').nth(6).unwrap().parse().unwrap();
+                let status = if approve_status == 0 { if id == 101 { 201 } else { 403 } } else { approve_status };
+                (status, serde_json::json!({}), None)
+            }
+            _ => not_found(),
+        })
+    }
+
+    fn approvals(seen: &Seen) -> Vec<String> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, p, _)| m == "POST" && p.ends_with("/approve"))
+            .map(|(_, p, _)| p.clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_panel_lists_only_the_runs_this_pull_request_owns() {
+        let (auth, _) = serve(fork_repo(serde_json::json!([{ "number": 7 }]), 201)).await;
+        let detail = change_detail(&auth, "acme/app", 7).await.expect("detail");
+        let approval = detail.workflow_approval.expect("held runs");
+        let ids: Vec<&str> = approval.runs.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["101", "102"]);
+        assert!(!approval.ambiguous && !approval.incomplete);
+        assert_eq!(approval.can_approve, Some(true));
+        assert_eq!(
+            approval.runs[0].url.as_deref(),
+            Some("https://github.test/acme/app/actions/runs/101")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_same_repository_change_never_asks_about_held_runs() {
+        let (auth, seen) = serve(Arc::new(|method, path, _| match (method, path) {
+            ("GET", "/repos/acme/app/pulls/7") => ok(pull(7, "open", "acme/app", "fix", SHA)),
+            _ => not_found(),
+        }))
+        .await;
+        let detail = change_detail(&auth, "acme/app", 7).await.expect("detail");
+        assert!(detail.workflow_approval.is_none());
+        assert!(!seen.lock().unwrap().iter().any(|(_, p, _)| p.contains("/actions/runs")));
+    }
+
+    #[tokio::test]
+    async fn approval_sends_only_the_owned_runs() {
+        let (auth, seen) = serve(fork_repo(serde_json::json!([{ "number": 7 }]), 201)).await;
+        let result = approve_workflows(&auth, "acme/app", 7, SHA).await.expect("approved");
+        assert_eq!(result.approved, 2);
+        assert!(result.failed.is_empty() && !result.incomplete);
+        assert_eq!(
+            approvals(&seen),
+            ["/repos/acme/app/actions/runs/101/approve", "/repos/acme/app/actions/runs/102/approve"]
+        );
+    }
+
+    /// Two open pull requests from one fork branch (against two bases): a
+    /// fork's run names no pull request, so neither can claim it. Shown with a
+    /// link, never approved from here.
+    #[tokio::test]
+    async fn runs_shared_with_another_pull_request_are_never_approved_here() {
+        let (auth, seen) =
+            serve(fork_repo(serde_json::json!([{ "number": 7 }, { "number": 9 }]), 201)).await;
+        let detail = change_detail(&auth, "acme/app", 7).await.expect("detail");
+        assert!(detail.workflow_approval.expect("held").ambiguous);
+
+        let err = approve_workflows(&auth, "acme/app", 7, SHA).await.expect_err("refused");
+        assert!(matches!(err, ForgeError::Refused { i18n_key: APPROVE_AMBIGUOUS_I18N_KEY, .. }));
+        assert!(approvals(&seen).is_empty(), "zero approvals sent");
+    }
+
+    #[tokio::test]
+    async fn a_head_that_moved_since_review_is_refused_before_anything_is_sent() {
+        let (auth, seen) = serve(fork_repo(serde_json::json!([{ "number": 7 }]), 201)).await;
+        let err = approve_workflows(&auth, "acme/app", 7, OTHER_SHA).await.expect_err("refused");
+        assert!(matches!(err, ForgeError::Refused { i18n_key: APPROVE_HEAD_CHANGED_I18N_KEY, forbidden: false, .. }));
+        assert!(approvals(&seen).is_empty());
+        assert!(!seen.lock().unwrap().iter().any(|(_, p, _)| p.contains("/actions/runs")));
+    }
+
+    #[tokio::test]
+    async fn a_closed_change_is_not_approved() {
+        let (auth, seen) = serve(Arc::new(|method, path, _| match (method, path) {
+            ("GET", "/repos/acme/app/pulls/7") => ok(pull(7, "closed", "kid/app", "fix", SHA)),
+            _ => not_found(),
+        }))
+        .await;
+        let err = approve_workflows(&auth, "acme/app", 7, SHA).await.expect_err("refused");
+        assert!(matches!(err, ForgeError::Refused { i18n_key: APPROVE_NOT_OPEN_I18N_KEY, .. }));
+        assert!(approvals(&seen).is_empty());
+    }
+
+    #[tokio::test]
+    async fn refusals_are_reported_run_by_run_and_all_of_them_as_a_permission_error() {
+        // 101 goes through, 102 is refused.
+        let (auth, _) = serve(fork_repo(serde_json::json!([{ "number": 7 }]), 0)).await;
+        let result = approve_workflows(&auth, "acme/app", 7, SHA).await.expect("partial");
+        assert_eq!(result.approved, 1);
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].name, "Test 102");
+
+        let (auth, _) = serve(fork_repo(serde_json::json!([{ "number": 7 }]), 403)).await;
+        let err = approve_workflows(&auth, "acme/app", 7, SHA).await.expect_err("forbidden");
+        assert!(matches!(err, ForgeError::Refused { i18n_key: APPROVE_FORBIDDEN_I18N_KEY, forbidden: true, .. }));
+        let app: crate::app_error::AppCommandError = err.into();
+        assert_eq!(app.i18n_key.as_deref(), Some(APPROVE_FORBIDDEN_I18N_KEY));
+    }
+
+    /// The runs are paged; a page that fails after the first keeps what was
+    /// read and says the list may be short — never "none are held".
+    #[tokio::test]
+    async fn held_runs_are_paged_and_a_failed_page_is_incomplete_not_empty() {
+        let (auth, seen) = serve(Arc::new(|method, path, _| match (method, path) {
+            ("GET", "/repos/acme/app/pulls/7") => ok(pull(7, "open", "kid/app", "fix", SHA)),
+            ("GET", p) if p.starts_with("/repos/acme/app/actions/runs?") && p.ends_with("page=1") => (
+                200,
+                serde_json::json!({ "workflow_runs": [run(101, "fix", "kid/app", SHA, "pull_request")] }),
+                Some("<http://x/next>; rel=\"next\"".into()),
+            ),
+            ("GET", p) if p.starts_with("/repos/acme/app/actions/runs?") => {
+                (500, serde_json::json!({}), None)
+            }
+            ("GET", p) if p.starts_with("/repos/acme/app/pulls?") => ok(serde_json::json!([{ "number": 7 }])),
+            _ => not_found(),
+        }))
+        .await;
+        let detail = change_detail(&auth, "acme/app", 7).await.expect("detail");
+        let approval = detail.workflow_approval.expect("held");
+        assert_eq!(approval.runs.len(), 1);
+        assert!(approval.incomplete);
+        assert_eq!(approval.can_approve, None, "repository unreadable: unknown, not no");
+
+        let result = approve_workflows(&auth, "acme/app", 7, SHA).await.expect("approved what was found");
+        assert!(result.incomplete);
+        assert_eq!(approvals(&seen).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn actions_it_cannot_read_cost_the_section_and_nothing_else() {
+        let (auth, _) = serve(Arc::new(|method, path, _| match (method, path) {
+            ("GET", "/repos/acme/app/pulls/7") => ok(pull(7, "open", "kid/app", "fix", SHA)),
+            ("GET", p) if p.starts_with("/repos/acme/app/actions/runs?") => {
+                (403, serde_json::json!({}), None)
+            }
+            _ => not_found(),
+        }))
+        .await;
+        let detail = change_detail(&auth, "acme/app", 7).await.expect("detail still reads");
+        assert!(detail.workflow_approval.is_none());
+    }
+
+    #[test]
+    fn an_approval_names_a_full_commit_and_nothing_shorter() {
+        let req = |sha: &str| super::super::ApproveWorkflowsRequest {
+            number: 7,
+            head_sha: sha.into(),
+            account_id: None,
+        };
+        assert_eq!(req(&SHA.to_uppercase()).resolve().unwrap(), (7, SHA.to_string()));
+        assert!(req("f5a0ccc").resolve().is_err(), "an abbreviation could match an unseen commit");
+        assert!(req("").resolve().is_err());
+        assert!(req(&"z".repeat(40)).resolve().is_err());
+        let zero = super::super::ApproveWorkflowsRequest { number: 0, ..req(SHA) };
+        assert!(zero.resolve().is_err());
+    }
+
+    #[test]
+    fn a_summary_request_is_positive_unique_and_at_most_a_page() {
+        let q = super::super::CheckSummariesQuery {
+            numbers: [vec![3, 1, 3, 0, -2], (100..300).collect()].concat(),
+            account_id: None,
+        };
+        let numbers = q.resolve();
+        assert_eq!(&numbers[..2], &[3, 1]);
+        assert_eq!(numbers.len(), super::super::MAX_PER_PAGE as usize);
     }
 }

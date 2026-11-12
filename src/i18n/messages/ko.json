@@ -7006,7 +7006,11 @@
     "errors": {
       "noAccount": "{host}에 대한 {provider} 계정이 설정되지 않았습니다. 설정 → 버전 관리에서 추가하면 이 저장소를 불러올 수 있습니다.",
       "unsupportedHost": "리포지토리 패널은 GitHub, GitLab, Gitea, CNB만 지원하며, {host}는 그중 어느 쪽으로도 인식되지 않습니다. 자체 호스팅 GitHub Enterprise, GitLab, Gitea, Forgejo 또는 CNB 인스턴스라면 설정 → 버전 관리에서 계정을 추가하세요.",
-      "wrongForge": "{host}은(는) {provider}입니다. 다른 포지로 잘못 인식되었으나 감지 결과를 수정했습니다. 다시 불러오세요."
+      "wrongForge": "{host}은(는) {provider}입니다. 다른 포지로 잘못 인식되었으나 감지 결과를 수정했습니다. 다시 불러오세요.",
+      "approveHeadChanged": "검토한 이후 이 풀 리퀘스트에 새 커밋이 추가되었습니다. 새로 고친 뒤 다시 검토하고 승인하세요.",
+      "approveAmbiguous": "이 워크플로 실행들이 이 풀 리퀘스트만의 것인지 알 수 없습니다. GitHub에서 승인하세요.",
+      "approveForbidden": "이 계정은 여기서 워크플로 실행을 승인할 권한이 없습니다. 쓰기 권한과, 토큰의 Actions(쓰기) 권한 또는 repo 범위가 필요합니다.",
+      "approveNotOpen": "이 풀 리퀘스트는 더 이상 열려 있지 않습니다."
     },
     "addAccount": "계정 추가",
     "empty": "표시할 항목이 없습니다",
@@ -7291,7 +7295,23 @@
     "autoSkipExcludedAuthor": "제외된 작성자",
     "autoSkipMissingLabel": "일치하는 라벨 없음",
     "autoSkipAuthorNotIncluded": "목록에 없는 작성자",
-    "save": "저장"
+    "save": "저장",
+    "checksAwaitingApproval": "승인 대기 중인 워크플로 {count}개",
+    "checksApprovalShort": "승인 필요",
+    "approveUnknownTitle": "승인을 기다리는 워크플로가 있을 수 있습니다",
+    "approveExplain": "이 풀 리퀘스트는 포크에서 왔으며, 쓰기 권한이 있는 사람이 승인해야 워크플로가 실행됩니다. 승인하면 이 코드가 저장소의 CI에서 실행되므로 먼저 변경 사항을 검토하세요.",
+    "approveIncompleteHint": "모든 워크플로 실행을 확인하지 못했습니다. GitHub에 더 많은 대기 항목이 있을 수 있습니다.",
+    "approveBlockedAmbiguous": "같은 브랜치에서 열린 다른 풀 리퀘스트가 있어 이 실행들이 이 풀 리퀘스트만의 것인지 알 수 없습니다. GitHub에서 승인하세요.",
+    "approveBlockedPermission": "이 계정은 저장소에 푸시할 수 없어 워크플로를 승인할 수 없습니다.",
+    "approveOpenOnForge": "GitHub에서 열기",
+    "approveWorkflows": "워크플로 실행 승인",
+    "approving": "승인 중…",
+    "approveConfirmTitle": "워크플로 실행을 승인할까요?",
+    "approveConfirmBody": "워크플로 {count}개가 이 풀 리퀘스트의 코드(커밋 {sha})를 저장소의 CI에서 실행합니다. 변경 사항을 검토한 뒤에만 승인하세요.",
+    "approveDone": "워크플로 {count}개를 승인했습니다",
+    "approvePartial": "일부 워크플로를 승인하지 못했습니다: {names}",
+    "approveNothingHeld": "더 이상 승인을 기다리는 워크플로가 없습니다.",
+    "mergeWorkflowsAwaiting": "승인 대기 중인 워크플로가 있습니다"
   },
   "Canvas": {
     "title": "무한 캔버스",

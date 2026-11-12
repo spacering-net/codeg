@@ -39,7 +39,9 @@ import type {
   DeepSeekModelCatalog,
   ForgeAutoScanReport,
   ForgeAutoStatus,
+  ForgeApproveResult,
   ForgeChangeDetail,
+  ForgeCheckSummaryList,
   ForgeChangedFileList,
   ForgeComment,
   ForgeCreateResult,
@@ -6522,6 +6524,35 @@ export async function forgeChangeDetail(
   return getTransport().call("forge_change_detail", {
     folderId,
     query: { number, accountId: accountId ?? null },
+  })
+}
+
+/** CI summaries for one page of proposed changes — the list rows' marks.
+ *  Asked AFTER the list has drawn, and never an error the page shows: a forge
+ *  that cannot answer comes back `available: false`, which draws nothing. */
+export async function forgeCheckSummaries(
+  folderId: number,
+  numbers: number[],
+  accountId?: string | null
+): Promise<ForgeCheckSummaryList> {
+  return getTransport().call("forge_check_summaries", {
+    folderId,
+    query: { numbers, accountId: accountId ?? null },
+  })
+}
+
+/** Approve the workflow runs held on a pull request (GitHub). `headSha` is the
+ *  commit the person reviewed: the backend refuses if the change has moved on
+ *  since, rather than approving a push nobody looked at. */
+export async function forgeApproveWorkflows(
+  folderId: number,
+  number: number,
+  headSha: string,
+  accountId?: string | null
+): Promise<ForgeApproveResult> {
+  return getTransport().call("forge_approve_workflows", {
+    folderId,
+    request: { number, headSha, accountId: accountId ?? null },
   })
 }
 

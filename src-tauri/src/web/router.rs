@@ -1868,6 +1868,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::forge::forge_change_detail),
         )
         .route(
+            "/forge_check_summaries",
+            post(handlers::forge::forge_check_summaries),
+        )
+        .route(
+            "/forge_approve_workflows",
+            post(handlers::forge::forge_approve_workflows),
+        )
+        .route(
             "/forge_change_files",
             post(handlers::forge::forge_change_files),
         )

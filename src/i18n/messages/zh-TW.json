@@ -7006,7 +7006,11 @@
     "errors": {
       "noAccount": "尚未為 {host} 設定 {provider} 帳號。請先在「設定 → 版本控制」中新增，才能載入這個儲存庫。",
       "unsupportedHost": "儲存庫面板目前僅支援 GitHub、GitLab、Gitea 與 CNB，而 {host} 不屬於其中任何一種。如果它是自架的 GitHub Enterprise、GitLab、Gitea、Forgejo 或 CNB 執行個體，請在「設定 → 版本控制」中為它新增帳號。",
-      "wrongForge": "{host} 實際上是 {provider}，先前被誤判為另一種程式碼託管服務。已自動更正，請重新載入。"
+      "wrongForge": "{host} 實際上是 {provider}，先前被誤判為另一種程式碼託管服務。已自動更正，請重新載入。",
+      "approveHeadChanged": "你審閱之後這個拉取請求又有了新提交。請重新整理、重新審閱後再核准。",
+      "approveAmbiguous": "無法確定這些工作流程執行只屬於這個拉取請求。請到 GitHub 上核准。",
+      "approveForbidden": "此帳號無權在這裡核准工作流程執行：需要儲存庫寫入權限，且權杖需要 Actions（寫入）權限或 repo 範圍。",
+      "approveNotOpen": "這個拉取請求已經不是開啟狀態。"
     },
     "addAccount": "新增帳號",
     "empty": "暫無內容",
@@ -7291,7 +7295,23 @@
     "autoSkipExcludedAuthor": "作者被排除",
     "autoSkipMissingLabel": "無符合標籤",
     "autoSkipAuthorNotIncluded": "作者不在名單",
-    "save": "儲存"
+    "save": "儲存",
+    "checksAwaitingApproval": "{count} 個工作流程等待核准",
+    "checksApprovalShort": "待核准",
+    "approveUnknownTitle": "可能有工作流程在等待核准",
+    "approveExplain": "這個拉取請求來自 fork，它的工作流程要等有寫入權限的人核准後才會執行。核准會在儲存庫的 CI 上執行這些程式碼，請先審閱變更。",
+    "approveIncompleteHint": "沒能查完所有工作流程執行，GitHub 上可能還有更多在等待。",
+    "approveBlockedAmbiguous": "同一分支還有另一個開啟的拉取請求，無法確定這些執行只屬於這一個。請到 GitHub 上核准。",
+    "approveBlockedPermission": "此帳號沒有該儲存庫的推送權限，無法核准工作流程。",
+    "approveOpenOnForge": "在 GitHub 上開啟",
+    "approveWorkflows": "核准工作流程執行",
+    "approving": "正在核准…",
+    "approveConfirmTitle": "核准工作流程執行嗎？",
+    "approveConfirmBody": "{count} 個工作流程將在儲存庫的 CI 上執行這個拉取請求的程式碼（提交 {sha}）。請在審閱變更後再核准。",
+    "approveDone": "已核准 {count} 個工作流程",
+    "approvePartial": "部分工作流程未能核准：{names}",
+    "approveNothingHeld": "已經沒有等待核准的工作流程了。",
+    "mergeWorkflowsAwaiting": "有工作流程等待核准"
   },
   "Canvas": {
     "title": "無限畫布",

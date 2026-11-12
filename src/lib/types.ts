@@ -2383,6 +2383,68 @@ export interface ForgeChangeDetail {
   changed_files: number | null
   commits: number | null
   checks: ForgeCheckList
+  /** Workflow runs held for a maintainer's approval (GitHub fork changes
+   *  only). Null when there is nothing to say — not GitHub, not a fork, or
+   *  Actions not readable. Held runs have produced NO check yet, which is why
+   *  this sits beside `checks` rather than in it. */
+  workflow_approval: ForgeWorkflowApproval | null
+}
+
+/** A workflow run held for approval (mirrors Rust ForgePendingRun). */
+export interface ForgePendingRun {
+  id: string
+  name: string
+  url: string | null
+}
+
+/** Runs a change waits on a maintainer for (mirrors Rust
+ *  ForgeWorkflowApproval). */
+export interface ForgeWorkflowApproval {
+  runs: ForgePendingRun[]
+  /** The search was cut short; there may be held runs not listed here. */
+  incomplete: boolean
+  /** The runs cannot be tied to this change alone (another open change from
+   *  the same fork branch) — approve on the forge, not here. */
+  ambiguous: boolean
+  /** Whether the account can push (what approving needs); null = unknown. */
+  can_approve: boolean | null
+}
+
+/** What an approval did (mirrors Rust ForgeApproveResult). */
+export interface ForgeApproveResult {
+  approved: number
+  failed: { name: string; message: string }[]
+  incomplete: boolean
+}
+
+/** A whole change's CI as one word (mirrors Rust ForgeCheckVerdict). */
+export type ForgeCheckVerdict = "failure" | "running" | "success" | "neutral"
+
+/** Mirrors Rust ForgeCheckCounts. */
+export interface ForgeCheckCounts {
+  passing: number
+  failing: number
+  pending: number
+  neutral: number
+  total: number
+}
+
+/** One list row's CI (mirrors Rust ForgeCheckSummary). */
+export interface ForgeCheckSummary {
+  number: number
+  /** null = the forge says this change has no checks. */
+  verdict: ForgeCheckVerdict | null
+  /** null where the forge gives a verdict without a breakdown. */
+  counts: ForgeCheckCounts | null
+  /** Workflow runs held for approval (GitHub only; 0 elsewhere). */
+  awaiting_approval: number
+}
+
+/** One page's CI summaries. A change missing from `items` is UNKNOWN — not
+ *  the same as `verdict: null` — and both draw nothing. */
+export interface ForgeCheckSummaryList {
+  available: boolean
+  items: ForgeCheckSummary[]
 }
 
 /** How a file was touched (mirrors Rust ForgeFileStatus). */

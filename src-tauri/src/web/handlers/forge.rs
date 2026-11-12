@@ -17,7 +17,7 @@ use crate::app_state::AppState;
 use crate::commands::forge as core;
 use crate::forge::settings::{ForgePanelSettings, ForgeSettingsStore};
 use crate::forge::{
-    ChangeFilesQuery, ChangeMergeRequest, ChangeQuery, CommentDraft, CommentFilters, CountFilters,
+    ApproveWorkflowsRequest, CheckSummariesQuery, ChangeFilesQuery, ChangeMergeRequest, ChangeQuery, CommentDraft, CommentFilters, CountFilters,
     ListFilters, NewIssueDraft, StateChangeRequest,
 };
 
@@ -98,6 +98,20 @@ pub struct SetItemStateParams {
 pub struct CreateIssueParams {
     pub folder_id: i32,
     pub draft: NewIssueDraft,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckSummariesParams {
+    pub folder_id: i32,
+    pub query: CheckSummariesQuery,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApproveWorkflowsParams {
+    pub folder_id: i32,
+    pub request: ApproveWorkflowsRequest,
 }
 
 #[derive(Deserialize)]
@@ -257,6 +271,24 @@ pub async fn forge_change_detail(
 ) -> Result<Json<crate::forge::ForgeChangeDetail>, AppCommandError> {
     Ok(Json(
         core::forge_change_detail_core(&state.db, params.folder_id, params.query).await?,
+    ))
+}
+
+pub async fn forge_check_summaries(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<CheckSummariesParams>,
+) -> Result<Json<crate::forge::ForgeCheckSummaryList>, AppCommandError> {
+    Ok(Json(
+        core::forge_check_summaries_core(&state.db, params.folder_id, params.query).await?,
+    ))
+}
+
+pub async fn forge_approve_workflows(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ApproveWorkflowsParams>,
+) -> Result<Json<crate::forge::ForgeApproveResult>, AppCommandError> {
+    Ok(Json(
+        core::forge_approve_workflows_core(&state.db, params.folder_id, params.request).await?,
     ))
 }
 

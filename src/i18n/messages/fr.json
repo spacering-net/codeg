@@ -7006,7 +7006,11 @@
     "errors": {
       "noAccount": "Aucun compte {provider} n'est configuré pour {host}. Ajoutez-en un dans Paramètres → Contrôle de version pour charger ce dépôt.",
       "unsupportedHost": "Le panneau du dépôt ne prend en charge que GitHub, GitLab, Gitea et CNB, et {host} n'est reconnu comme aucun d'entre eux. S'il s'agit d'une instance auto-hébergée de GitHub Enterprise, GitLab, Gitea, Forgejo ou CNB, ajoutez-y un compte dans Paramètres → Contrôle de version.",
-      "wrongForge": "{host} est un {provider}, et non la forge sous laquelle il était classé. La détection a été corrigée — rechargez pour réessayer."
+      "wrongForge": "{host} est un {provider}, et non la forge sous laquelle il était classé. La détection a été corrigée — rechargez pour réessayer.",
+      "approveHeadChanged": "Cette pull request a reçu de nouveaux commits depuis votre examen. Actualisez, examinez à nouveau, puis approuvez.",
+      "approveAmbiguous": "Impossible d'attribuer ces exécutions à cette seule pull request. Approuvez-les sur GitHub.",
+      "approveForbidden": "Ce compte n'est pas autorisé à approuver des exécutions ici. Il faut les droits d'écriture, et le jeton doit avoir la permission Actions (écriture) ou la portée repo.",
+      "approveNotOpen": "Cette pull request n'est plus ouverte."
     },
     "addAccount": "Ajouter un compte",
     "empty": "Rien à afficher",
@@ -7291,7 +7295,23 @@
     "autoSkipExcludedAuthor": "auteur exclu",
     "autoSkipMissingLabel": "aucun label correspondant",
     "autoSkipAuthorNotIncluded": "auteur non listé",
-    "save": "Enregistrer"
+    "save": "Enregistrer",
+    "checksAwaitingApproval": "{count} workflows en attente d'approbation",
+    "checksApprovalShort": "Approbation requise",
+    "approveUnknownTitle": "Des workflows sont peut-être en attente d'approbation",
+    "approveExplain": "Cette pull request vient d'un fork : ses workflows ne s'exécuteront pas tant qu'une personne disposant des droits d'écriture ne les aura pas approuvés. Approuver exécute ce code sur la CI du dépôt — examinez d'abord les modifications.",
+    "approveIncompleteHint": "Toutes les exécutions n'ont pas pu être vérifiées ; d'autres attendent peut-être sur GitHub.",
+    "approveBlockedAmbiguous": "Une autre pull request ouverte provient de la même branche : impossible d'attribuer ces exécutions à celle-ci seule. Approuvez-les sur GitHub.",
+    "approveBlockedPermission": "Ce compte ne peut pas pousser sur le dépôt, il ne peut donc pas approuver de workflows.",
+    "approveOpenOnForge": "Ouvrir sur GitHub",
+    "approveWorkflows": "Approuver l'exécution des workflows",
+    "approving": "Approbation…",
+    "approveConfirmTitle": "Approuver l'exécution des workflows ?",
+    "approveConfirmBody": "{count} workflows vont exécuter le code de cette pull request (commit {sha}) sur la CI du dépôt. N'approuvez qu'après avoir examiné les modifications.",
+    "approveDone": "{count} workflows approuvés",
+    "approvePartial": "Certains workflows n'ont pas pu être approuvés : {names}",
+    "approveNothingHeld": "Plus aucun workflow n'attend d'approbation.",
+    "mergeWorkflowsAwaiting": "Des workflows attendent une approbation"
   },
   "Canvas": {
     "title": "Canevas infini",

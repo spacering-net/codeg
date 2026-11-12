@@ -7006,7 +7006,11 @@
     "errors": {
       "noAccount": "{host} の {provider} アカウントが設定されていません。「設定 → バージョン管理」で追加するとこのリポジトリを読み込めます。",
       "unsupportedHost": "リポジトリパネルは GitHub、GitLab、Gitea、CNB にのみ対応しており、{host} はそのいずれとしても認識できません。自己ホスト型の GitHub Enterprise、GitLab、Gitea、Forgejo、CNB インスタンスであれば、「設定 → バージョン管理」でアカウントを追加してください。",
-      "wrongForge": "{host} は {provider} でした。別のフォージとして扱われていましたが、判定を修正しました。再読み込みしてください。"
+      "wrongForge": "{host} は {provider} でした。別のフォージとして扱われていましたが、判定を修正しました。再読み込みしてください。",
+      "approveHeadChanged": "確認した後にこのプルリクエストに新しいコミットが追加されました。更新して再確認してから承認してください。",
+      "approveAmbiguous": "これらのワークフロー実行がこのプルリクエストだけのものか判断できません。GitHub 上で承認してください。",
+      "approveForbidden": "このアカウントにはここでワークフロー実行を承認する権限がありません。書き込み権限と、トークンの Actions（書き込み）権限または repo スコープが必要です。",
+      "approveNotOpen": "このプルリクエストはもうオープンではありません。"
     },
     "addAccount": "アカウントを追加",
     "empty": "表示する項目がありません",
@@ -7291,7 +7295,23 @@
     "autoSkipExcludedAuthor": "除外された作成者",
     "autoSkipMissingLabel": "一致するラベルなし",
     "autoSkipAuthorNotIncluded": "作成者がリスト外",
-    "save": "保存"
+    "save": "保存",
+    "checksAwaitingApproval": "承認待ちのワークフロー {count} 件",
+    "checksApprovalShort": "承認待ち",
+    "approveUnknownTitle": "承認待ちのワークフローがある可能性があります",
+    "approveExplain": "このプルリクエストはフォークからのもので、書き込み権限を持つ人が承認するまでワークフローは実行されません。承認するとこのコードがリポジトリの CI で実行されるため、先に変更を確認してください。",
+    "approveIncompleteHint": "すべてのワークフロー実行を確認できませんでした。GitHub 上にさらに承認待ちがある可能性があります。",
+    "approveBlockedAmbiguous": "同じブランチから別のプルリクエストも開かれているため、これらの実行がこのプルリクエストだけのものか判断できません。GitHub 上で承認してください。",
+    "approveBlockedPermission": "このアカウントにはリポジトリへのプッシュ権限がないため、ワークフローを承認できません。",
+    "approveOpenOnForge": "GitHub で開く",
+    "approveWorkflows": "ワークフローの実行を承認",
+    "approving": "承認中…",
+    "approveConfirmTitle": "ワークフローの実行を承認しますか？",
+    "approveConfirmBody": "{count} 件のワークフローが、このプルリクエストのコード（コミット {sha}）をリポジトリの CI で実行します。変更を確認してから承認してください。",
+    "approveDone": "{count} 件のワークフローを承認しました",
+    "approvePartial": "一部のワークフローを承認できませんでした: {names}",
+    "approveNothingHeld": "承認待ちのワークフローはもうありません。",
+    "mergeWorkflowsAwaiting": "承認待ちのワークフローがあります"
   },
   "Canvas": {
     "title": "無限キャンバス",
