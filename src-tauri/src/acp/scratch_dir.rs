@@ -203,9 +203,11 @@ fn is_antigravity_server_cmd(cmd: &str) -> bool {
 /// for. Antigravity's server is a PyInstaller onefile (its registry entry
 /// records each version checked).
 ///
-/// Custom agents using the same PyInstaller server binary (e.g. user-registered
-/// Antigravity instances) are identified by checking if their binary
-/// distribution for any Windows platform launches `agy_acp_server`.
+/// A custom agent that runs the same server binary (a user-registered
+/// Antigravity) leaks the same way, so it is matched by its Windows launch
+/// entry: a binary distribution whose entry (the nested `dir_entry` path, else
+/// `cmd` — on Windows hydration takes `cmd` from the `windows-*` spec) is
+/// named `agy_acp_server`. Any other custom agent keeps the ambient temp dir.
 ///
 /// An allowlist rather than a list of agents that run Git Bash, because what a
 /// redirect breaks depends on which programs a session happens to start, not on
@@ -1573,11 +1575,11 @@ mod tests {
 
     #[test]
     fn custom_antigravity_agent_is_isolated_on_windows() {
-        use std::collections::BTreeMap;
         use crate::acp::custom_registry::{
             hydrate, hydrate_test_guard, BinaryPlatformSpec, CustomAgentDef, CustomAgentSpec,
-            CustomDistributionKind,
+            CustomDistributionKind, NpxSpec,
         };
+        use std::collections::BTreeMap;
 
         fn custom_binary_def(id: &str, win_cmd: &str) -> CustomAgentDef {
             let mut binary = BTreeMap::new();
@@ -1621,13 +1623,43 @@ mod tests {
 
         let _guard = hydrate_test_guard();
         let agy = custom_binary_def("custom-antigravity", "agy_acp_server.exe");
+        // A nested entry is published as `dir_entry` and matched by its
+        // Windows path rather than the bare `cmd`.
+        let nested = custom_binary_def("custom-antigravity-nested", "./bin/agy_acp_server.exe");
         let other = custom_binary_def("custom-other", "goose.exe");
+        // Only a binary distribution can be the onefile server: an npx package
+        // whose console script happens to share the name is not matched.
+        let npx = CustomAgentDef {
+            registry_id: "custom-antigravity-npx".to_string(),
+            distribution_kind: CustomDistributionKind::Npx,
+            spec: CustomAgentSpec {
+                npx: Some(NpxSpec {
+                    package: "agy-acp-server@1.0.0".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cmd: Some("agy_acp_server".to_string()),
+                    node_required: None,
+                }),
+                ..Default::default()
+            },
+            ..custom_binary_def("custom-antigravity-npx", "unused")
+        };
 
-        let errors = hydrate(&[agy, other]);
+        let errors = hydrate(&[agy, nested, other, npx]);
         assert!(errors.is_empty(), "hydration should succeed: {errors:?}");
 
         assert!(isolates_on(true, AgentType::Custom("custom-antigravity")));
+        assert!(isolates_on(
+            true,
+            AgentType::Custom("custom-antigravity-nested")
+        ));
         assert!(!isolates_on(true, AgentType::Custom("custom-other")));
+        assert!(!isolates_on(
+            true,
+            AgentType::Custom("custom-antigravity-npx")
+        ));
+        // Not registered at all: the lookup misses and nothing changes.
+        assert!(!isolates_on(true, AgentType::Custom("custom-unregistered")));
 
         let cleanup_errors = hydrate(&[]);
         assert!(cleanup_errors.is_empty());
