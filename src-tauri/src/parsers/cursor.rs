@@ -166,7 +166,10 @@ impl CursorParser {
                     .as_deref()
                     .map(title_from_user_text)
             });
-        Some(summary_from(chat_id, &meta, &state, &sidecar, title))
+        let model = resolved_session_model(&conn, &meta);
+        Some(summary_from(
+            chat_id, &meta, &state, &sidecar, title, model,
+        ))
     }
 
     fn build_detail(&self, chat_dir: &Path, chat_id: &str) -> Option<ConversationDetail> {
@@ -223,7 +226,8 @@ impl CursorParser {
             });
         let sidecar = read_sidecar_meta(chat_dir);
         let title = meta.name.clone().or_else(|| sidecar.title.clone()).or(title);
-        let summary = summary_from(chat_id, &meta, &state, &sidecar, title);
+        let model = resolved_session_model(&conn, &meta);
+        let summary = summary_from(chat_id, &meta, &state, &sidecar, title, model);
 
         Some(ConversationDetail {
             summary,
@@ -265,6 +269,35 @@ impl CursorParser {
             out.push(summary);
         }
     }
+
+    /// Model of one Cursor session, for the sidebar chip.
+    ///
+    /// `lastUsedModel` when the store still has it. Current ACP stores do
+    /// not: the model is `content[].providerOptions.cursor.modelName` on an
+    /// assistant message. The latest such message wins. A blob that the
+    /// latest root does not reference is ignored.
+    pub(crate) fn model_for_session(&self, session_id: &str) -> Option<String> {
+        let chat_dir = self.find_chat_dir(session_id)?;
+        let conn = open_store(&chat_dir.join("store.db"))?;
+        let meta = read_chat_meta(&conn)?;
+        resolved_session_model(&conn, &meta)
+    }
+
+    /// Modification time of the session's store, for negative caching: a
+    /// failed model lookup is retried only after the store actually changed.
+    ///
+    /// Cursor writes in WAL mode, so a turn can land in `store.db-wal` while
+    /// `store.db` keeps its old mtime. The newer of the two is the cache key.
+    /// A missing WAL is not an error; a file we cannot stat is left out, and
+    /// `None` means neither file could be read (the caller must not cache
+    /// that as a permanent miss).
+    pub(crate) fn store_mtime_for_session(
+        &self,
+        session_id: &str,
+    ) -> Option<std::time::SystemTime> {
+        let chat_dir = self.find_chat_dir(session_id)?;
+        newer_mtime(&chat_dir.join("store.db"), &chat_dir.join("store.db-wal"))
+    }
 }
 
 impl Default for CursorParser {
@@ -304,6 +337,7 @@ fn summary_from(
     state: &DecodedState,
     sidecar: &SidecarMeta,
     title: Option<String>,
+    model: Option<String>,
 ) -> ConversationSummary {
     // The sidecar cwd is authoritative for ACP sessions: their stores are
     // keyed by session uuid (no md5(cwd) bucket), and the workspace refs
@@ -331,7 +365,7 @@ fn summary_from(
         ended_at,
         // user + assistant per agent turn (approximation before full decode).
         message_count: (state.turn_blob_ids.len() as u32).saturating_mul(2),
-        model: meta.last_used_model.clone(),
+        model,
         git_branch: state.git_branch.clone(),
         parent_id: None,
         parent_tool_use_id: None,
@@ -472,6 +506,97 @@ fn json_ms(v: Option<&Value>) -> Option<u64> {
     DateTime::parse_from_rfc3339(s)
         .ok()
         .and_then(|dt| u64::try_from(dt.timestamp_millis()).ok())
+}
+
+/// `lastUsedModel` when the store has it. Otherwise the newest
+/// `content[].providerOptions.cursor.modelName` on an assistant message
+/// reachable from the latest root: field 1 in order, then an inline field 4.
+/// A later assistant message that has no model name does not erase an earlier
+/// one. This does not walk the blob graph.
+fn resolved_session_model(conn: &Connection, meta: &ChatMeta) -> Option<String> {
+    if let Some(model) = meta
+        .last_used_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        return Some(model.to_string());
+    }
+    let root_id = meta.latest_root_blob_id.as_deref()?;
+    let root = read_blob(conn, root_id)?;
+    assistant_model_from_root(conn, &root)
+}
+
+/// How many field-1 message refs, counted from the end of a root, a lookup may
+/// read. The latest assistant message is last, so the cap keeps the tail; it
+/// only bounds a session whose recent messages name no model at all. Real
+/// sessions are far smaller than this.
+const ASSISTANT_MESSAGE_REF_CAP: usize = 4_000;
+
+fn assistant_model_from_root(conn: &Connection, root: &[u8]) -> Option<String> {
+    let mut refs: Vec<&[u8]> = Vec::new();
+    let mut inline: Option<&[u8]> = None;
+    for (field_no, val) in wire::Fields::new(root) {
+        match field_no {
+            1 => {
+                if let Some(id) = val.bytes().filter(|id| id.len() == 32) {
+                    refs.push(id);
+                }
+            }
+            4 => {
+                if let Some(bytes) = val.bytes().filter(|bytes| !bytes.is_empty()) {
+                    inline = Some(bytes);
+                }
+            }
+            _ => {}
+        }
+    }
+    // Newest first: the inline field-4 message, then the field-1 refs from
+    // the end. The first message that names a model is the answer, so a
+    // normal session reads one or two blobs rather than its whole history.
+    if let Some(model) = inline.and_then(model_name_of_assistant_message) {
+        return Some(model);
+    }
+    refs.iter()
+        .rev()
+        .take(ASSISTANT_MESSAGE_REF_CAP)
+        .find_map(|id| read_blob(conn, id).and_then(|blob| model_name_of_assistant_message(&blob)))
+}
+
+/// Model id on one assistant message. Only `reasoning` / `redacted-reasoning`
+/// entries carry `modelName` in real stores; `text` and `tool-call` omit it,
+/// so entries without a non-empty name are skipped. The last non-empty name
+/// in the content array wins. Anything that is not an assistant JSON message
+/// — including a user turn, a broken blob, or a leftover fingerprint object —
+/// contributes nothing.
+fn model_name_of_assistant_message(bytes: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    if value.get("role").and_then(Value::as_str) != Some("assistant") {
+        return None;
+    }
+    let content = value.get("content").and_then(Value::as_array)?;
+    let mut found = None;
+    for item in content {
+        if let Some(name) = item
+            .pointer("/providerOptions/cursor/modelName")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            found = Some(name.to_string());
+        }
+    }
+    found
+}
+
+fn newer_mtime(db: &Path, wal: &Path) -> Option<std::time::SystemTime> {
+    let db_mtime = std::fs::metadata(db).and_then(|meta| meta.modified()).ok();
+    let wal_mtime = std::fs::metadata(wal).and_then(|meta| meta.modified()).ok();
+    match (db_mtime, wal_mtime) {
+        (Some(db_mtime), Some(wal_mtime)) => Some(db_mtime.max(wal_mtime)),
+        (Some(mtime), None) | (None, Some(mtime)) => Some(mtime),
+        (None, None) => None,
+    }
 }
 
 fn read_blob(conn: &Connection, id: &[u8]) -> Option<Vec<u8>> {
@@ -1961,6 +2086,86 @@ fn read_subdirs(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Writes one ACP session store under `config_dir` for tests. `model` is the
+/// assistant `modelName`; `None` writes a reply that has no model. The file
+/// is replaced if it already exists. Tests must pass a temp directory.
+#[cfg(test)]
+pub(crate) fn write_model_session_for_test(
+    config_dir: &Path,
+    session_id: &str,
+    model: Option<&str>,
+) -> PathBuf {
+    fn push_varint(out: &mut Vec<u8>, mut value: u64) {
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                break;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+    fn push_bytes(out: &mut Vec<u8>, field: u64, data: &[u8]) {
+        push_varint(out, (field << 3) | 2);
+        push_varint(out, data.len() as u64);
+        out.extend_from_slice(data);
+    }
+
+    let dir = config_dir.join("acp-sessions").join(session_id);
+    std::fs::create_dir_all(&dir).expect("session dir");
+    let path = dir.join("store.db");
+    let _ = std::fs::remove_file(&path);
+    let conn = Connection::open(&path).expect("store");
+    conn.execute_batch(
+        "CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);
+         CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);",
+    )
+    .expect("schema");
+    let message = match model {
+        Some(model) => serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "reasoning", "providerOptions": {"cursor": {"modelName": model}}},
+                {"type": "text", "text": "ok"},
+                {"type": "tool-call"}
+            ]
+        }),
+        None => serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "ok"},
+                {"type": "tool-call"}
+            ]
+        }),
+    };
+    let message_bytes = serde_json::to_vec(&message).expect("message");
+    let message_id = [0x11u8; 32];
+    let root_id = [0x22u8; 32];
+    let mut root = Vec::new();
+    push_bytes(&mut root, 1, &message_id);
+    conn.execute(
+        "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+        rusqlite::params![hex_encode(&message_id), message_bytes],
+    )
+    .expect("message blob");
+    conn.execute(
+        "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+        rusqlite::params![hex_encode(&root_id), root],
+    )
+    .expect("root blob");
+    let meta = serde_json::json!({
+        "latestRootBlobId": hex_encode(&root_id),
+    });
+    let meta_hex = hex_encode(meta.to_string().as_bytes());
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('0', ?1)",
+        [meta_hex],
+    )
+    .expect("meta");
+    path
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2010,6 +2215,16 @@ mod tests {
             )
             .unwrap();
             Self { conn, next_id: 1 }
+        }
+
+        fn put_blob_exact(&self, id: &[u8], data: &[u8]) -> Vec<u8> {
+            self.conn
+                .execute(
+                    "INSERT OR REPLACE INTO blobs (id, data) VALUES (?1, ?2)",
+                    rusqlite::params![hex_encode(id), data],
+                )
+                .unwrap();
+            id.to_vec()
         }
 
         fn put_blob(&mut self, data: &[u8]) -> Vec<u8> {
@@ -2191,6 +2406,293 @@ mod tests {
         assert_eq!(s.folder_path.as_deref(), Some("/Users/me/proj"));
         assert_eq!(s.git_branch.as_deref(), Some("main"));
         assert!(s.ended_at.is_some());
+    }
+
+    fn blob_id(n: u8) -> [u8; 32] {
+        let mut id = [0u8; 32];
+        id[31] = n;
+        id
+    }
+
+    fn message_json(role: &str, content: Vec<Value>) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({ "role": role, "content": content })).unwrap()
+    }
+
+    fn content_part(kind: &str, model_name: Option<&str>) -> Value {
+        let mut part = serde_json::json!({ "type": kind });
+        if let Some(model_name) = model_name {
+            part["providerOptions"] = serde_json::json!({
+                "cursor": { "modelName": model_name }
+            });
+        }
+        part
+    }
+
+    /// An ACP store under `tmp/acp-sessions/<session>/`. `messages` are field-1
+    /// refs in order; `inline` is field 4. Nothing here reads `~/.cursor`.
+    fn write_acp_store(
+        tmp: &Path,
+        session: &str,
+        messages: &[Vec<u8>],
+        inline: Option<&[u8]>,
+        last_used_model: Option<&str>,
+    ) -> CursorParser {
+        let chat_dir = tmp.join("acp-sessions").join(session);
+        std::fs::create_dir_all(&chat_dir).unwrap();
+        let store = StoreBuilder::create(&chat_dir.join("store.db"));
+        let mut root = Vec::new();
+        for (index, message) in messages.iter().enumerate() {
+            let id = blob_id(index as u8 + 1);
+            store.put_blob_exact(&id, message);
+            field_bytes(1, &id, &mut root);
+        }
+        if let Some(inline) = inline {
+            field_bytes(4, inline, &mut root);
+        }
+        let root_id = blob_id(0xff);
+        store.put_blob_exact(&root_id, &root);
+        let mut meta = serde_json::json!({
+            "agentId": session,
+            "latestRootBlobId": hex_encode(&root_id),
+            "createdAt": 1_u64,
+        });
+        if let Some(model) = last_used_model {
+            meta["lastUsedModel"] = Value::String(model.to_string());
+        }
+        store.put_meta(&meta);
+        CursorParser::with_base_dir(tmp.join("chats"))
+    }
+
+    #[test]
+    fn model_for_session_reads_model_name_from_field1_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = "0198c9aa-aaaa-bbbb-cccc-ddddeeeeffff";
+        let assistant = message_json(
+            "assistant",
+            vec![content_part(
+                "reasoning",
+                Some("accounts/fireworks/models/kimi-k3"),
+            )],
+        );
+        let parser = write_acp_store(
+            tmp.path(),
+            session,
+            &[
+                message_json("system", vec![content_part("text", None)]),
+                message_json("user", vec![content_part("text", Some("not-a-model"))]),
+                assistant,
+            ],
+            None,
+            None,
+        );
+        assert_eq!(
+            parser.model_for_session(session).as_deref(),
+            Some("accounts/fireworks/models/kimi-k3")
+        );
+    }
+
+    #[test]
+    fn model_for_session_uses_the_latest_assistant_after_a_switch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = "0198c9aa-bbbb-cccc-dddd-eeeeffff0000";
+        let parser = write_acp_store(
+            tmp.path(),
+            session,
+            &[
+                message_json(
+                    "assistant",
+                    vec![content_part("reasoning", Some("grok-4.7-high"))],
+                ),
+                message_json("user", vec![content_part("text", None)]),
+                message_json(
+                    "assistant",
+                    vec![content_part("reasoning", Some("grok-4.7-xhigh-fast"))],
+                ),
+            ],
+            None,
+            None,
+        );
+        assert_eq!(
+            parser.model_for_session(session).as_deref(),
+            Some("grok-4.7-xhigh-fast")
+        );
+    }
+
+    #[test]
+    fn model_for_session_reads_an_inline_field4_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = "0198c9aa-cccc-dddd-eeee-ffff00001111";
+        let inline = message_json(
+            "assistant",
+            vec![
+                content_part("reasoning", Some("grok-4.7-high")),
+                content_part("text", None),
+                content_part("tool-call", None),
+            ],
+        );
+        let parser = write_acp_store(
+            tmp.path(),
+            session,
+            &[
+                message_json("system", vec![content_part("text", None)]),
+                message_json("user", vec![content_part("text", None)]),
+            ],
+            Some(&inline),
+            None,
+        );
+        assert_eq!(
+            parser.model_for_session(session).as_deref(),
+            Some("grok-4.7-high")
+        );
+    }
+
+    #[test]
+    fn model_for_session_keeps_an_earlier_model_when_later_messages_have_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = "0198c9aa-dddd-eeee-ffff-000011112222";
+        let inline = message_json(
+            "assistant",
+            vec![content_part("text", None), content_part("tool-call", None)],
+        );
+        let parser = write_acp_store(
+            tmp.path(),
+            session,
+            &[message_json(
+                "assistant",
+                vec![content_part("redacted-reasoning", Some("composer-2.5-fast"))],
+            )],
+            Some(&inline),
+            None,
+        );
+        assert_eq!(
+            parser.model_for_session(session).as_deref(),
+            Some("composer-2.5-fast")
+        );
+    }
+
+    #[test]
+    fn model_for_session_skips_entries_without_model_name_and_junk_blobs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = "0198c9aa-eeee-ffff-0000-111122223333";
+        let parser = write_acp_store(
+            tmp.path(),
+            session,
+            &[
+                b"{not json".to_vec(),
+                message_json(
+                    "assistant",
+                    vec![
+                        content_part("text", None),
+                        content_part("tool-call", None),
+                        content_part("reasoning", Some("cursor-grok-4.6-high")),
+                        content_part("text", Some("")),
+                    ],
+                ),
+            ],
+            None,
+            None,
+        );
+        // A blob the root does not reference, even one that names a model,
+        // must not win. The fingerprint marker is not a model source.
+        let stale = tmp
+            .path()
+            .join("acp-sessions")
+            .join(session)
+            .join("store.db");
+        let conn = Connection::open(&stale).unwrap();
+        conn.execute(
+            "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+            rusqlite::params![
+                hex_encode(&[0xab; 32]),
+                br#"{"systemPromptFingerprint":{"model":"grok-4.7"},"role":"assistant","content":[{"type":"reasoning","providerOptions":{"cursor":{"modelName":"grok-4.7"}}}]}"#
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            parser.model_for_session(session).as_deref(),
+            Some("cursor-grok-4.6-high")
+        );
+    }
+
+    #[test]
+    fn model_for_session_prefers_last_used_model_when_the_store_still_has_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = "0198c9aa-ffff-0000-1111-222233334444";
+        let parser = write_acp_store(
+            tmp.path(),
+            session,
+            &[message_json(
+                "assistant",
+                vec![content_part("reasoning", Some("grok-4.7-high"))],
+            )],
+            None,
+            Some("composer-2.5"),
+        );
+        assert_eq!(
+            parser.model_for_session(session).as_deref(),
+            Some("composer-2.5")
+        );
+    }
+
+    #[test]
+    fn model_for_session_ignores_a_missing_blob_and_a_non_assistant_role() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = "0198c9aa-0000-1111-2222-333344445555";
+        let chat_dir = tmp.path().join("acp-sessions").join(session);
+        std::fs::create_dir_all(&chat_dir).unwrap();
+        let store = StoreBuilder::create(&chat_dir.join("store.db"));
+        let assistant = message_json(
+            "assistant",
+            vec![content_part("reasoning", Some("grok-4.7-high-fast"))],
+        );
+        let present = blob_id(2);
+        store.put_blob_exact(&present, &assistant);
+        let mut root = Vec::new();
+        field_bytes(1, &blob_id(1), &mut root);
+        field_bytes(1, &present, &mut root);
+        let root_id = blob_id(0xff);
+        store.put_blob_exact(&root_id, &root);
+        store.put_meta(&serde_json::json!({
+            "latestRootBlobId": hex_encode(&root_id),
+        }));
+        let parser = CursorParser::with_base_dir(tmp.path().join("chats"));
+        assert_eq!(
+            parser.model_for_session(session).as_deref(),
+            Some("grok-4.7-high-fast")
+        );
+    }
+
+    #[test]
+    fn store_mtime_uses_the_newer_of_db_and_wal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = "0198c9aa-1111-2222-3333-444455556666";
+        let dir = tmp.path().join("acp-sessions").join(session);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("store.db");
+        let wal = dir.join("store.db-wal");
+        std::fs::write(&db, b"db").unwrap();
+        let older = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let newer = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_100);
+        std::fs::File::options()
+            .write(true)
+            .open(&db)
+            .unwrap()
+            .set_modified(older)
+            .unwrap();
+        let parser = CursorParser::with_base_dir(tmp.path().join("chats"));
+        assert_eq!(parser.store_mtime_for_session(session), Some(older));
+
+        std::fs::write(&wal, b"wal").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&wal)
+            .unwrap()
+            .set_modified(newer)
+            .unwrap();
+        assert_eq!(parser.store_mtime_for_session(session), Some(newer));
+
+        std::fs::remove_file(&wal).unwrap();
+        assert_eq!(parser.store_mtime_for_session(session), Some(older));
     }
 
     #[test]
