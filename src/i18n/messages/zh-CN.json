@@ -1893,6 +1893,11 @@
     "zcode": {
       "adapterInfo": "Codeg 通过 {adapterPackage} 桥接 ACP。请先安装并登录官方 ZCode；桥接器使用其运行时和现有配置。",
       "runtimeHint": "请先安装并登录官方 ZCode，Codeg 仅安装 ACP 桥接器。自动检测失败时，可用 ZCODE_BIN 指定 CLI 入口、ZCODE_NODE 指定 Node.js。模型和凭据在 ZCode 中管理。"
+    },
+    "quotaProbe": {
+      "label": "官方账号配额监控",
+      "description": "在对话输入框底部展示订阅配额（100% 零网络读取本地 CLI 会话日志或原生 ACP 事件流，彻底杜绝伪造请求与账号风控风险）。检测到官方账号登录模式时默认开启。",
+      "autoDisabledHint": "当前处于第三方 API Key、自定义端点或模型提供商（Model Provider）模式，已自动关闭配额监控以避免无效请求。"
     }
   },
   "AgentVocabulary": {
@@ -2526,6 +2531,24 @@
         "loadFailed": "无法读取状态：{message}",
         "openSettings": "打开详细设置",
         "refresh": "刷新"
+      },
+      "quota": {
+        "title": "额度",
+        "triggerAria": "查看智能体额度",
+        "refresh": "刷新额度",
+        "refreshing": "刷新中…",
+        "shortWindow": "5小时窗口",
+        "weeklyWindow": "周窗口",
+        "remaining": "剩余",
+        "resetsSoon": "即将重置",
+        "resetsIn": "{time}后重置",
+        "days": "天",
+        "hours": "小时",
+        "minutes": "分",
+        "seconds": "秒",
+        "spendLimit": "消费限额",
+        "noQuota": "暂无额度数据",
+        "lastUpdated": "更新于 {time}"
       }
     },
     "auxPanel": {

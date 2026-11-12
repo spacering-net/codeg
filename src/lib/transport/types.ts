@@ -32,7 +32,7 @@ export type AttachDetachReason =
  * caller invokes `detach()` or the server emits `onDetached`.
  *
  * `eventSeq` / `highWaterSeq` are the high-water mark after the initial
- * frame; subsequent `onEvent` envelopes have `envelope.seq > highWaterSeq`.
+ * frame; subsequent `onEvent` envelopes have `envelope.seq > highWaterSeq`Platform.
  */
 export interface AttachHandlers {
   onSnapshot(snapshot: LiveSessionSnapshot, eventSeq: number): void
@@ -92,6 +92,15 @@ export interface CallOptions {
    * backend can return its own structured error.
    */
   timeoutMs?: number
+  /**
+   * Optional custom URL path for WebTransport (e.g. `/api/quota/${agentType}`).
+   * If not provided, WebTransport defaults to `/api/${command}`.
+   */
+  webPath?: string
+  /**
+   * Optional HTTP method for WebTransport (defaults to "POST").
+   */
+  webMethod?: "GET" | "POST" | "PUT" | "DELETE"
 }
 
 export interface Transport {
