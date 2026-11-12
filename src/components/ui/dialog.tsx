@@ -95,7 +95,7 @@ function DialogContent({
             guardOutsidePress(event)
           }}
           className={cn(
-            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 bg-background ring-border pointer-events-auto relative grid max-h-[calc(100dvh-2rem)] w-full max-w-md gap-6 overflow-y-auto rounded-4xl p-6 shadow-2xl ring-1 duration-100 outline-none",
+            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 bg-background ring-border pointer-events-auto relative grid grid-cols-[minmax(0,1fr)] max-h-[calc(100dvh-2rem)] w-full max-w-md gap-6 overflow-y-auto rounded-4xl p-6 shadow-2xl ring-1 duration-100 outline-none",
             showCloseButton && "[&_[data-slot=dialog-header]]:pr-10",
             className
           )}
