@@ -101,6 +101,14 @@ const RECENT_ACTIVITY_WINDOW: Duration = Duration::from_secs(30);
 /// never-persisted prompt must not linger and swallow a later cron re-fire of
 /// the same text.
 const LEDGER_TTL: Duration = Duration::from_secs(600);
+/// `ScheduleWakeup` holds one wakeup per session: a later call replaces the
+/// pending one, so it is counted under this fixed id rather than a task id
+/// (its ack carries none).
+const SCHEDULED_WAKEUP_TASK_ID: &str = "scheduled-wakeup";
+/// How long past its scheduled time a wakeup stays counted. The CLI rounds
+/// the time to the minute and fires on its own timer tick (observed up to
+/// ~20 s late); a wakeup that never fires must not pin the connection.
+const WAKEUP_GRACE: Duration = Duration::from_secs(5 * 60);
 /// Max fingerprints kept (oldest evicted first). Far above any realistic
 /// number of prompts in flight between transcript flushes.
 const LEDGER_CAP: usize = 32;
@@ -757,10 +765,14 @@ async fn run_watch(
     }
 }
 
-/// One launched-but-unresolved background task.
+/// One launched-but-unresolved background task — or work the CLI holds for
+/// later, like a pending `ScheduleWakeup`.
 struct TaskEntry {
     kind: &'static str,
     started_at: Instant,
+    /// How long after `started_at` the entry expires. `None` = the background
+    /// keep-alive max age; a scheduled wakeup knows its own deadline.
+    ttl: Option<Duration>,
 }
 
 /// The current out-of-turn episode: a contiguous run of transcript records
@@ -888,6 +900,12 @@ pub(crate) struct WatchState {
     turn_origin_task_ids: HashMap<String, Option<String>>,
     last_disk_activity: Option<Instant>,
     last_emitted_outstanding: Option<u32>,
+    /// When the last `BackgroundActivity` went out. While work is pending the
+    /// count is re-sent at least every half max age, so the connection's
+    /// sweep exemption — which lapses one max age after the last event — holds
+    /// for as long as a live watcher still counts the work (a wakeup can be
+    /// scheduled close to an hour out, past that window).
+    last_emitted_at: Option<Instant>,
     armed_logged: bool,
     /// Base of the most recently created episode's id namespace. Episode
     /// bases must be STRICTLY increasing: two episodes created while
@@ -957,6 +975,7 @@ impl WatchState {
             // so the first tick must not emit an accounting-only event for a
             // connection with no background work.
             last_emitted_outstanding: Some(0),
+            last_emitted_at: None,
             armed_logged: false,
             last_episode_base: 0,
             epoch: None,
@@ -1069,7 +1088,9 @@ impl WatchState {
         let recently_active = self
             .last_disk_activity
             .is_some_and(|at| at.elapsed() < RECENT_ACTIVITY_WINDOW);
-        if !self.tasks.is_empty() || recently_active {
+        // A pending wakeup alone waits on a known clock; only running work
+        // needs the tight cadence to surface its completion promptly.
+        if self.tasks.values().any(|t| t.kind != "wakeup") || recently_active {
             POLL_ACTIVE
         } else {
             POLL_IDLE
@@ -1144,7 +1165,7 @@ impl WatchState {
             .unwrap_or(Duration::from_secs(3600));
         let before = self.tasks.len();
         self.tasks.retain(|id, t| {
-            let keep = t.started_at.elapsed() < max_age;
+            let keep = t.started_at.elapsed() < t.ttl.unwrap_or(max_age);
             if !keep {
                 tracing::info!(
                     "[bg-watch] expiring {} task={id} after max-age (completion never observed)",
@@ -1309,12 +1330,18 @@ impl WatchState {
         });
 
         let outstanding = self.tasks.len() as u32;
+        let heartbeat_due = outstanding > 0
+            && !max_age.is_zero()
+            && self
+                .last_emitted_at
+                .is_some_and(|at| at.elapsed() >= max_age / 2);
         let accounting_changed =
-            expired_any || self.last_emitted_outstanding != Some(outstanding);
+            expired_any || heartbeat_due || self.last_emitted_outstanding != Some(outstanding);
         if changed_turns.is_empty() && settled.is_empty() && !accounting_changed {
             return None;
         }
         self.last_emitted_outstanding = Some(outstanding);
+        self.last_emitted_at = Some(Instant::now());
         Some(AcpEvent::BackgroundActivity {
             session_id,
             turns: changed_turns,
@@ -1455,8 +1482,35 @@ impl WatchState {
             .or_insert_with(|| TaskEntry {
                 kind: "agent",
                 started_at: Instant::now(),
+                ttl: None,
             });
         tracing::info!("[bg-watch] interim notification task={id} known={known}, kept outstanding");
+    }
+
+    /// Count a pending `ScheduleWakeup` firing at `scheduled_for_ms` (epoch
+    /// ms) until it fires, is stopped, or is [`WAKEUP_GRACE`] overdue. A later
+    /// call replaces the earlier one, as the CLI does. One already that far
+    /// overdue (a record read long after it was written) is not counted.
+    fn register_wakeup(&mut self, scheduled_for_ms: u64) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        let ttl = Duration::from_millis(scheduled_for_ms.saturating_sub(now_ms)) + WAKEUP_GRACE;
+        if scheduled_for_ms.saturating_add(WAKEUP_GRACE.as_millis() as u64) <= now_ms {
+            return;
+        }
+        tracing::info!(
+            "[bg-watch] scheduled wakeup registered, fires in {}s",
+            scheduled_for_ms.saturating_sub(now_ms) / 1000
+        );
+        self.tasks.insert(
+            SCHEDULED_WAKEUP_TASK_ID.to_string(),
+            TaskEntry {
+                kind: "wakeup",
+                started_at: Instant::now(),
+                ttl: Some(ttl),
+            },
+        );
     }
 
     /// Task accounting for one record: launch acks; settlements via a
@@ -1491,7 +1545,23 @@ impl WatchState {
                 }
             }
             "user" => {
+                // A scheduled wakeup fired: the CLI re-sent its prompt as a
+                // turn of its own. Any later `ScheduleWakeup` re-arms it.
+                if value.get("turnOrigin").and_then(|o| o.as_str()) == Some("scheduled")
+                    && self.tasks.remove(SCHEDULED_WAKEUP_TASK_ID).is_some()
+                {
+                    tracing::info!("[bg-watch] scheduled wakeup fired");
+                }
                 if let Some(tur) = value.get("toolUseResult") {
+                    // A `ScheduleWakeup` ack: the CLI will re-send a prompt at
+                    // `scheduledFor` (epoch ms). Ending the CLI before then
+                    // loses it, so it counts as pending work.
+                    if let (Some(at_ms), Some(_)) = (
+                        tur.get("scheduledFor").and_then(|v| v.as_u64()),
+                        tur.get("clampedDelaySeconds"),
+                    ) {
+                        self.register_wakeup(at_ms);
+                    }
                     if tur.get("status").and_then(|s| s.as_str()) == Some("async_launched") {
                         if let Some(id) = tur
                             .get("agentId")
@@ -1511,6 +1581,7 @@ impl WatchState {
                                 TaskEntry {
                                     kind: "agent",
                                     started_at: Instant::now(),
+                                    ttl: None,
                                 }
                             });
                             // This turn is still `Prompting` at launch time — a
@@ -1537,6 +1608,7 @@ impl WatchState {
                             TaskEntry {
                                 kind: "shell",
                                 started_at: Instant::now(),
+                                ttl: None,
                             }
                         });
                         // Deliberately NOT inserted into `current_turn_launched_ids`:
@@ -1666,6 +1738,7 @@ impl WatchState {
                                     TaskEntry {
                                         kind: "agent",
                                         started_at: Instant::now(),
+                                        ttl: None,
                                     },
                                 );
                                 // Mirrors the launch-time insert in the
@@ -1679,6 +1752,14 @@ impl WatchState {
                                 if self.currently_prompting {
                                     self.current_turn_launched_ids.insert(to.to_string());
                                 }
+                            }
+                        }
+                        // `stop: true` ends the dynamic loop: no wakeup follows.
+                        "ScheduleWakeup" => {
+                            let stop = input.and_then(|i| i.get("stop")).and_then(|v| v.as_bool())
+                                == Some(true);
+                            if stop && self.tasks.remove(SCHEDULED_WAKEUP_TASK_ID).is_some() {
+                                tracing::info!("[bg-watch] scheduled wakeup stopped");
                             }
                         }
                         // Explicit kill: the background task's process is gone,
@@ -2241,6 +2322,33 @@ mod tests {
         format!(
             r#"{{"type":"user","timestamp":"2026-07-07T03:48:00.000Z","uuid":"{uuid}","message":{{"role":"user","content":[{{"type":"text","text":"{text}"}}]}}}}"#
         )
+    }
+
+    fn epoch_ms_in(offset_secs: i64) -> u64 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        (now + offset_secs * 1000) as u64
+    }
+
+    /// Real-shape `ScheduleWakeup` ack: the tool result plus a structured
+    /// `toolUseResult` naming when the CLI will re-send the prompt.
+    fn wakeup_ack(scheduled_for_ms: u64) -> String {
+        format!(
+            r#"{{"type":"user","timestamp":"2026-07-07T03:46:20.000Z","uuid":"u-wake-{scheduled_for_ms}","message":{{"role":"user","content":[{{"tool_use_id":"toolu_wake","type":"tool_result","content":"Next wakeup scheduled for 19:11:00 (in 1214s)."}}]}},"toolUseResult":{{"scheduledFor":{scheduled_for_ms},"clampedDelaySeconds":1200,"wasClamped":false}}}}"#
+        )
+    }
+
+    /// Real-shape fired wakeup: the prompt re-sent as a meta user record.
+    fn wakeup_fired(text: &str) -> String {
+        format!(
+            r#"{{"type":"user","timestamp":"2026-07-07T04:06:00.000Z","uuid":"u-fired","isMeta":true,"promptSource":"system","turnOrigin":"scheduled","wakeupSource":"loop_wakeup","message":{{"role":"user","content":"{text}"}}}}"#
+        )
+    }
+
+    fn wakeup_stop() -> String {
+        r#"{"type":"assistant","timestamp":"2026-07-07T03:47:40.000Z","uuid":"a-wake-stop","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_wake_stop","name":"ScheduleWakeup","input":{"stop":true}}]}}"#.to_string()
     }
 
     /// Real-shape cron-fired prompt: `isMeta:true` with bare STRING content.
@@ -4431,6 +4539,95 @@ mod tests {
             settled.is_empty(),
             "inline-awaited collection must not raise an OS notification"
         );
+    }
+
+    /// A pending `ScheduleWakeup` lives only in the CLI process: ending the
+    /// connection before it fires loses it, so it counts as outstanding work.
+    #[test]
+    fn a_pending_wakeup_counts_as_outstanding_until_it_fires() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&wakeup_ack(epoch_ms_in(20 * 60))]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).expect("ack event"));
+        assert_eq!(outstanding, 1, "ending the CLI now would lose the wakeup");
+
+        write_lines(&path, &[&wakeup_fired("Check CI again")]);
+        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).expect("fire event"));
+        assert_eq!(outstanding, 0);
+    }
+
+    #[test]
+    fn a_later_wakeup_replaces_the_pending_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(
+            &path,
+            &[
+                &wakeup_ack(epoch_ms_in(10 * 60)),
+                &wakeup_ack(epoch_ms_in(30 * 60)),
+            ],
+        );
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).expect("ack event"));
+        assert_eq!(outstanding, 1, "one wakeup slot per session");
+    }
+
+    #[test]
+    fn stopping_the_loop_clears_the_pending_wakeup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&wakeup_ack(epoch_ms_in(20 * 60))]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        unpack(tick_now(&mut ws, &ledger).expect("ack event"));
+
+        write_lines(&path, &[&wakeup_stop()]);
+        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).expect("stop event"));
+        assert_eq!(outstanding, 0);
+    }
+
+    #[test]
+    fn a_long_overdue_wakeup_is_not_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&wakeup_ack(epoch_ms_in(-60 * 60))]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let outstanding = tick_now(&mut ws, &ledger).map_or(0, |e| unpack(e).1);
+        assert_eq!(
+            outstanding, 0,
+            "a record read long after the fact pins nothing"
+        );
+    }
+
+    #[test]
+    fn a_wakeup_that_never_fires_expires_on_its_own_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&wakeup_ack(epoch_ms_in(20 * 60))]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        unpack(tick_now(&mut ws, &ledger).expect("ack event"));
+
+        // Its deadline (scheduled time + grace) passes, well before max age.
+        ws.tasks.get_mut(SCHEDULED_WAKEUP_TASK_ID).unwrap().ttl = Some(Duration::ZERO);
+        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).expect("expiry event"));
+        assert_eq!(outstanding, 0);
+    }
+
+    #[test]
+    fn a_pending_wakeup_alone_keeps_the_idle_poll_cadence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&wakeup_ack(epoch_ms_in(20 * 60))]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        unpack(tick_now(&mut ws, &ledger).expect("ack event"));
+        ws.last_disk_activity = None;
+        assert_eq!(ws.poll_delay(), POLL_IDLE);
     }
 
     /// An explicit `TaskStop` settles the task immediately — the process is
