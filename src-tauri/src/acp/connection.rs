@@ -1616,12 +1616,22 @@ fn tag_mcp_suspect(
 ///   and remove the entry asynchronously. The guard must hold owned
 ///   `Arc<Mutex<_>>` and `String` so the spawned task has `'static`
 ///   captures.
-struct ConnectionCleanupGuard {
-    connections: Arc<tokio::sync::Mutex<HashMap<String, AgentConnection>>>,
+///
+/// That task goes through the stored `runtime` handle, never `tokio::spawn`:
+/// on a normal exit the guard drops on the driver thread AFTER `block_on`
+/// has returned, where no runtime context is entered, and `tokio::spawn`
+/// there panics ("there is no reactor running") — killing the thread and
+/// leaving the entry behind. `Handle::spawn` needs no context.
+///
+/// Generic over the map's value only so the tests can drive it without
+/// building a whole `AgentConnection`.
+struct ConnectionCleanupGuard<V: Send + 'static = AgentConnection> {
+    connections: Arc<tokio::sync::Mutex<HashMap<String, V>>>,
     connection_id: String,
+    runtime: tokio::runtime::Handle,
 }
 
-impl Drop for ConnectionCleanupGuard {
+impl<V: Send + 'static> Drop for ConnectionCleanupGuard<V> {
     fn drop(&mut self) {
         if let Ok(mut guard) = self.connections.try_lock() {
             guard.remove(&self.connection_id);
@@ -1629,7 +1639,7 @@ impl Drop for ConnectionCleanupGuard {
         }
         let connections = self.connections.clone();
         let connection_id = std::mem::take(&mut self.connection_id);
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             connections.lock().await.remove(&connection_id);
         });
     }
@@ -3011,6 +3021,7 @@ pub async fn spawn_agent_connection(
     let cleanup_guard = ConnectionCleanupGuard {
         connections: cleanup_connections,
         connection_id: cleanup_connection_id,
+        runtime: connection_rt.clone(),
     };
     let connection_thread = std::thread::Builder::new()
         .name(format!("acp-conn-{conn_id}"))
@@ -26749,6 +26760,76 @@ mod tests {
             SessionConfigKindInfo::Select(sel) => sel,
             other => panic!("expected a select config option, got {other:?}"),
         }
+    }
+
+    // ── ConnectionCleanupGuard ──────────────────────────────────────────────
+    //
+    // The driver thread drops its guard after `block_on` returns, i.e. outside
+    // any runtime context. With the map locked at that moment the guard has to
+    // defer the removal to a task; doing that via `tokio::spawn` panicked
+    // ("there is no reactor running") and leaked the entry.
+
+    /// The exact production failure: map lock held elsewhere, guard dropped on
+    /// a thread that never entered the runtime. The drop must not panic, and
+    /// the entry must be gone once the lock is released.
+    #[test]
+    fn cleanup_guard_dropped_outside_runtime_while_map_locked_removes_entry() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let connections = Arc::new(tokio::sync::Mutex::new(HashMap::from([
+            ("conn".to_string(), ()),
+            ("other".to_string(), ()),
+        ])));
+        let held = Arc::clone(&connections)
+            .try_lock_owned()
+            .expect("lock is free");
+        let guard = ConnectionCleanupGuard {
+            connections: Arc::clone(&connections),
+            connection_id: "conn".to_string(),
+            runtime: rt.handle().clone(),
+        };
+
+        std::thread::spawn(move || drop(guard))
+            .join()
+            .expect("dropping the guard outside the runtime must not panic");
+        assert!(
+            held.contains_key("conn"),
+            "removal must wait for the lock, not race it"
+        );
+        drop(held);
+
+        rt.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while connections.lock().await.contains_key("conn") {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("deferred removal never ran");
+        });
+        assert!(connections.blocking_lock().contains_key("other"));
+    }
+
+    /// Uncontended lock: the entry is removed synchronously, before `drop`
+    /// returns, wherever the guard drops.
+    #[test]
+    fn cleanup_guard_removes_entry_synchronously_when_map_unlocked() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let connections = Arc::new(tokio::sync::Mutex::new(HashMap::from([(
+            "conn".to_string(),
+            (),
+        )])));
+        drop(ConnectionCleanupGuard {
+            connections: Arc::clone(&connections),
+            connection_id: "conn".to_string(),
+            runtime: rt.handle().clone(),
+        });
+        assert!(connections.blocking_lock().is_empty());
     }
 
     // ── PermissionQueue (#442) ──────────────────────────────────────────────
