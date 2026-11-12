@@ -6553,7 +6553,13 @@
     "deliverPrBackDeleteWorktree": "Supprimer le worktree après le push",
     "deliverPrBackSubmit": "Pousser",
     "deliverPrBackDone": "Poussé vers la pull request",
-    "deliverPrBackDoneMr": "Poussé vers la merge request"
+    "deliverPrBackDoneMr": "Poussé vers la merge request",
+    "deliverPrUncommitted": "{count, plural, one {# fichier n'est pas encore commité dans le worktree de cette tâche. Il est d'abord commité sur {branch}, puis poussé avec le reste.} other {# fichiers ne sont pas encore commités dans le worktree de cette tâche. Ils sont d'abord commités sur {branch}, puis poussés avec le reste.}}",
+    "deliverPrUncommittedFiles": "Fichiers à commiter",
+    "deliverPrCommitMessageLabel": "Message de commit",
+    "deliverPrUncommittedHint": "Pour que l'agent les commite lui-même, annulez et renvoyez la tâche pour un autre tour.",
+    "deliverPrCommitSubmit": "Commiter, pousser et ouvrir",
+    "deliverPrCommitPushSubmit": "Commiter et pousser"
   },
   "CustomSkillsSettings": {
     "loading": "Chargement des compétences personnalisées…",

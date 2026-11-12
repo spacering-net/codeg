@@ -6553,7 +6553,13 @@
     "deliverPrBackDeleteWorktree": "推回后删除 worktree",
     "deliverPrBackSubmit": "推送",
     "deliverPrBackDone": "已推回 PR",
-    "deliverPrBackDoneMr": "已推回合并请求"
+    "deliverPrBackDoneMr": "已推回合并请求",
+    "deliverPrUncommitted": "任务工作树里还有 {count} 个未提交的文件。会先提交到 {branch}，再和其余改动一起推送。",
+    "deliverPrUncommittedFiles": "要提交的文件",
+    "deliverPrCommitMessageLabel": "提交信息",
+    "deliverPrUncommittedHint": "想让智能体自己提交的话，取消后把任务退回再跑一轮。",
+    "deliverPrCommitSubmit": "提交、推送并创建",
+    "deliverPrCommitPushSubmit": "提交并推送"
   },
   "CustomSkillsSettings": {
     "loading": "正在加载自定义技能…",

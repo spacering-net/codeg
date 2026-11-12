@@ -15,12 +15,14 @@ const settingsMock = vi.fn()
 const remoteMock = vi.fn()
 
 const setWritebackMock = vi.fn().mockResolvedValue(undefined)
+const uncommittedMock = vi.fn()
 
 vi.mock("@/lib/api", () => ({
   workTaskDeliverPr: (...args: unknown[]) => deliverMock(...args),
   workTaskSettingsEffective: (...args: unknown[]) => settingsMock(...args),
   folderForgeRemote: (...args: unknown[]) => remoteMock(...args),
   workTaskSetWriteback: (...args: unknown[]) => setWritebackMock(...args),
+  workTaskUncommittedFiles: (...args: unknown[]) => uncommittedMock(...args),
 }))
 
 vi.mock("sonner", () => ({
@@ -131,6 +133,8 @@ beforeEach(() => {
   deliverMock.mockClear()
   settingsMock.mockReset()
   remoteMock.mockReset()
+  uncommittedMock.mockReset()
+  uncommittedMock.mockResolvedValue([])
   resetForgeProviderCacheForTests()
 })
 
@@ -599,6 +603,110 @@ describe("TaskDeliverPrDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Push" }))
     await waitFor(() =>
       expect(deliverMock).toHaveBeenCalledWith(7, null, false, false, true)
+    )
+  })
+})
+
+describe("TaskDeliverPrDialog with uncommitted files", () => {
+  const leftovers = [
+    { file: "src/login.ts", status: "M" },
+    { file: "notes/new.md", status: "A" },
+  ]
+
+  it("commits what the agent left uncommitted, titled after the task by default", async () => {
+    settingsMock.mockResolvedValue(settings())
+    uncommittedMock.mockResolvedValue(leftovers)
+    renderDialog(
+      task({
+        source_kind: "forge_issue",
+        source_meta: meta({ head_ref: null }),
+      })
+    )
+
+    expect(
+      await screen.findByText(/2 files are still uncommitted/)
+    ).toBeInTheDocument()
+    expect(uncommittedMock).toHaveBeenCalledWith(7)
+    expect(screen.getByText("src/login.ts")).toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "Commit message" })).toHaveValue(
+      "Fix login"
+    )
+    const box = screen.getByRole("checkbox", {
+      name: /Delete the worktree after delivering/,
+    })
+    await waitFor(() => expect(box).toBeChecked())
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Commit, push and open" })
+    )
+    await waitFor(() =>
+      expect(deliverMock).toHaveBeenCalledWith(
+        7,
+        "Fix login",
+        false,
+        true,
+        true,
+        undefined,
+        "Fix login"
+      )
+    )
+  })
+
+  it("will not commit without a message", async () => {
+    settingsMock.mockResolvedValue(settings())
+    uncommittedMock.mockResolvedValue(leftovers.slice(0, 1))
+    renderDialog()
+
+    expect(
+      await screen.findByText(/1 file is still uncommitted/)
+    ).toBeInTheDocument()
+    const message = screen.getByRole("textbox", { name: "Commit message" })
+    await userEvent.clear(message)
+    const submit = screen.getByRole("button", { name: "Commit and push" })
+    expect(submit).toBeDisabled()
+
+    await userEvent.type(message, "  wip  ")
+    expect(submit).toBeEnabled()
+    await userEvent.click(submit)
+    await waitFor(() => expect(deliverMock).toHaveBeenCalledTimes(1))
+    expect(deliverMock.mock.calls[0].slice(5)).toEqual([undefined, "wip"])
+  })
+
+  it("sends the closing list along with the message", async () => {
+    settingsMock.mockResolvedValue(settings())
+    uncommittedMock.mockResolvedValue(leftovers)
+    const items = [3, 5].map((number) => ({
+      number,
+      url: `https://github.com/acme/widget/issues/${number}`,
+      title: `issue ${number}`,
+    }))
+    renderDialog(
+      task({
+        source_kind: "forge_issue",
+        source_meta: meta({ head_ref: null, number: 3, items }),
+      })
+    )
+    await screen.findByText(/2 files are still uncommitted/)
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Commit, push and open" })
+    )
+    await waitFor(() => expect(deliverMock).toHaveBeenCalledTimes(1))
+    expect(deliverMock.mock.calls[0].slice(5)).toEqual([[3, 5], "Fix login"])
+  })
+
+  it("sends no message when the worktree could not be read", async () => {
+    settingsMock.mockResolvedValue(settings())
+    uncommittedMock.mockRejectedValue(new Error("git status failed"))
+    renderDialog()
+
+    await waitFor(() => expect(uncommittedMock).toHaveBeenCalled())
+    expect(
+      screen.queryByRole("textbox", { name: "Commit message" })
+    ).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Push" }))
+    await waitFor(() =>
+      expect(deliverMock).toHaveBeenCalledWith(7, null, false, true, true)
     )
   })
 })

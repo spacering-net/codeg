@@ -4345,14 +4345,30 @@ impl TaskEngine {
         delete_worktree: bool,
         mark_done: bool,
     ) -> Result<String, String> {
-        self.deliver_pr_closing(task_id, pr_title, draft, delete_worktree, mark_done, None)
-            .await
+        self.deliver_pr_closing(
+            task_id,
+            pr_title,
+            draft,
+            delete_worktree,
+            mark_done,
+            None,
+            None,
+        )
+        .await
     }
 
     /// [`Self::deliver_pr`], saying which issues the pull request closes —
     /// for a task made from several related issues only (see
     /// [`closing_list`]); `None` keeps the list already fixed for the task,
     /// or closes every issue on its first delivery.
+    ///
+    /// `commit_message` is the user's answer to a worktree the agent left
+    /// uncommitted: with one, those files are committed onto the task branch
+    /// (under the delivery's claim, after every read-only gate passed) and
+    /// delivered with the rest; without one, a dirty worktree is refused as
+    /// before — so a client that never showed the user those files cannot
+    /// publish them.
+    #[allow(clippy::too_many_arguments)]
     pub async fn deliver_pr_closing(
         self: &Arc<Self>,
         task_id: i32,
@@ -4361,6 +4377,7 @@ impl TaskEngine {
         delete_worktree: bool,
         mark_done: bool,
         closes: Option<Vec<i64>>,
+        commit_message: Option<String>,
     ) -> Result<String, String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
@@ -4414,15 +4431,28 @@ impl TaskEngine {
         // removal) is tolerant of a worktree already off disk. Publishing a
         // branch on the strength of a question git refused to answer is a very
         // different bet.
-        match task_git::has_changes(&wt.path).await {
-            Ok(false) => {}
-            Ok(true) => {
-                return Err("the task worktree still has uncommitted changes — send it back for \
-                            one more round so the agent commits them, then deliver"
-                    .to_string())
-            }
+        //
+        // A dirty worktree goes ahead only with a commit message: that is the
+        // user, having seen the files, saying "commit these too". The commit
+        // itself waits until every read-only gate below has passed and the
+        // claim is held, so a refused delivery still leaves the worktree
+        // exactly as it was.
+        let commit_message = commit_message
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty());
+        let commit_leftovers = match task_git::has_changes(&wt.path).await {
+            Ok(false) => None,
+            Ok(true) => match commit_message {
+                Some(message) => Some(message),
+                None => {
+                    return Err("the task worktree still has uncommitted changes — commit them \
+                                from the delivery dialog, or send it back for one more round so \
+                                the agent commits them, then deliver"
+                        .to_string())
+                }
+            },
             Err(e) => return Err(format!("could not read the task worktree's state: {e}")),
-        }
+        };
         // GitHub answers an empty pull request with a 422, and a push back that
         // carries nothing leaves the pull request untouched while the task
         // records a delivery. Refuse before the CAS and point at the button that
@@ -4481,9 +4511,29 @@ impl TaskEngine {
             }
         }
 
-        let expected_head = task_git::rev_parse(&wt.path, &work_branch)
+        // Ownership BEFORE the CAS and held across the whole delivery — not
+        // just the dispatch, the way a merge does it. A merge hands off to its
+        // agent session and `recover_merging` then sees a live connection; a
+        // delivery has no session at all, so this claim is the only thing
+        // telling the reconcile tick that the row's `merging` is alive and not
+        // orphaned. It doubles as mutual exclusion: two clients clicking
+        // deliver on the same task must not both run the push — nor both
+        // commit the leftovers below.
+        let Some(token) = self.claim_in_flight(task_id).await else {
+            return Err(
+                "this task is already merging — wait for the operation in flight".to_string(),
+            );
+        };
+        let expected_head = match self
+            .commit_leftovers_and_resolve(task_id, &wt.path, &work_branch, commit_leftovers)
             .await
-            .map_err(|e| format!("could not resolve the task branch: {e}"))?;
+        {
+            Ok(head) => head,
+            Err(e) => {
+                self.release_in_flight(task_id, token).await;
+                return Err(e);
+            }
+        };
         let title = pr_title
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty())
@@ -4509,18 +4559,6 @@ impl TaskEngine {
             ..Default::default()
         };
 
-        // Ownership BEFORE the CAS and held across the whole delivery — not
-        // just the dispatch, the way a merge does it. A merge hands off to its
-        // agent session and `recover_merging` then sees a live connection; a
-        // delivery has no session at all, so this claim is the only thing
-        // telling the reconcile tick that the row's `merging` is alive and not
-        // orphaned. It doubles as mutual exclusion: two clients clicking
-        // deliver on the same task must not both run the push.
-        let Some(token) = self.claim_in_flight(task_id).await else {
-            return Err(
-                "this task is already merging — wait for the operation in flight".to_string(),
-            );
-        };
         let outcome = self
             .deliver_guarded(
                 &task,
@@ -4546,6 +4584,56 @@ impl TaskEngine {
         self.release_in_flight(task_id, token).await;
         self.emit_upsert(task_id);
         outcome
+    }
+
+    /// The OID a delivery publishes — after committing what the agent left
+    /// uncommitted, when the user asked for that (`commit` is the message).
+    /// Runs under the delivery's claim; the row is read again first, because
+    /// the status gate above was read before the claim and a run or a merge
+    /// generation started since owns the worktree now. A commit that git
+    /// refuses (a hook, say) is the delivery's refusal, worded with git's own
+    /// reason — nothing has moved yet.
+    async fn commit_leftovers_and_resolve(
+        &self,
+        task_id: i32,
+        wt_path: &str,
+        work_branch: &str,
+        commit: Option<String>,
+    ) -> Result<String, String> {
+        if let Some(message) = commit {
+            let task = work_task_service::get_model(&self.db.conn, task_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            if task.status != WorkTaskStatus::Review {
+                return Err("task is not in review".to_string());
+            }
+            // `commit_all` commits onto whatever is checked out, while the
+            // push publishes `work_branch` — a checkout switched to another
+            // branch (or detached) would take the leftovers somewhere the
+            // delivery never looks, and the task would finish without them.
+            let attached = task_git::head_is_branch(wt_path, work_branch)
+                .await
+                .map_err(|e| format!("could not read the task worktree's state: {e}"))?;
+            if !attached {
+                return Err(format!(
+                    "the task worktree is not on its branch '{work_branch}', so its uncommitted \
+                     changes would not be part of the delivery — check out '{work_branch}' there, \
+                     then deliver"
+                ));
+            }
+            task_git::commit_all(&self.db.conn, wt_path, &message)
+                .await
+                .map_err(|e| match e.detail.as_deref().filter(|d| !d.is_empty()) {
+                    // git's own words — a hook's complaint is the reason.
+                    Some(detail) => {
+                        format!("could not commit the worktree's changes: {e}: {detail}")
+                    }
+                    None => format!("could not commit the worktree's changes: {e}"),
+                })?;
+        }
+        task_git::rev_parse(wt_path, work_branch)
+            .await
+            .map_err(|e| format!("could not resolve the task branch: {e}"))
     }
 
     /// What `task` is delivered from — the gate for delivering it at all. A
@@ -4606,10 +4694,10 @@ impl TaskEngine {
     /// pairing `complete_task` documents, aimed at what a DELIVERY publishes
     /// rather than at what a merge lands:
     ///
-    /// - `deliver_pr` refused a dirty worktree before the CAS, but that was
-    ///   before the push and the REST calls. `worktree remove --force` drops
-    ///   whatever appeared since without a word, and a file that was never
-    ///   committed is on no forge at all;
+    /// - `deliver_pr` refused (or committed) a dirty worktree before the CAS,
+    ///   but that was before the push and the REST calls. `worktree remove
+    ///   --force` drops whatever appeared since without a word, and a file that
+    ///   was never committed is on no forge at all;
     /// - a COMMIT made in that same window leaves `git status` spotless and is
     ///   just as unpublished — the delivery pushed `published_head`, not it. So
     ///   the branch tip is checked against the OID that actually reached the
@@ -7470,7 +7558,7 @@ async fn compose_prompt(
             )
         } else if original_work_order && cfg.deliverable.as_deref() == Some(DELIVERABLE_REPORT) {
             // Report-deliverable order (forge plan-first / review-only):
-            // the generic "commit as you like" grant would quietly undo the
+            // the generic "commit your work" grant would quietly undo the
             // task's own "analysis only" instruction several blocks earlier —
             // the licence must defer to the task text, not overrule it.
             format!(
@@ -7482,9 +7570,11 @@ async fn compose_prompt(
             )
         } else {
             format!(
-                "Commit to the current branch as you like, but do NOT merge into, rebase onto, \
-                 or push the base branch{base} — the user lands the result after review. Finish \
-                 with a short summary of what you did."
+                "Commit your work to the current branch, and leave nothing uncommitted when you \
+                 finish — the result is delivered from the branch's commits, so a file left \
+                 uncommitted is not part of it. Do NOT merge into, rebase onto, or push the base \
+                 branch{base} — the user lands the result after review. Finish with a short \
+                 summary of what you did."
             )
         };
         blocks.push(PromptInputBlock::Text {
@@ -9065,7 +9155,7 @@ mod tests {
             .into_iter()
             .find(|t| t.starts_with("—— Work task context ——"))
             .expect("guard block");
-        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
         assert!(guard.contains("do NOT create, edit, delete or commit any file"));
         // The base-branch rules survive the swap.
         assert!(guard.contains("push the base branch"));
@@ -9083,12 +9173,12 @@ mod tests {
         .expect("compose");
         assert!(texts(&working)
             .iter()
-            .any(|t| t.contains("Commit to the current branch as you like")));
+            .any(|t| t.contains("leave nothing uncommitted when you finish")));
     }
 
     /// A report-deliverable task (forge plan-first / review-only)
     /// swaps the commit licence on its ORIGINAL order — otherwise the guard's
-    /// "commit as you like", being the last block read, would quietly undo the
+    /// "commit your work", being the last block read, would quietly undo the
     /// task's own "analysis only" instruction.
     #[tokio::test]
     async fn a_report_deliverable_order_swaps_the_commit_licence() {
@@ -9115,7 +9205,7 @@ mod tests {
         .await
         .expect("compose");
         let guard = guard_of(&fresh);
-        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
         assert!(guard.contains("This turn delivers a report"));
         // The base-branch rules survive the swap.
         assert!(guard.contains("push the base branch"));
@@ -9146,7 +9236,7 @@ mod tests {
         )
         .await
         .expect("compose");
-        assert!(guard_of(&returned).contains("Commit to the current branch as you like"));
+        assert!(guard_of(&returned).contains("leave nothing uncommitted when you finish"));
 
         // Same for a retry that stands in for an interrupted review follow-up:
         // the outstanding feedback, not the original order, is the work.
@@ -9173,7 +9263,7 @@ mod tests {
         )
         .await
         .expect("compose");
-        assert!(guard_of(&retry_review).contains("Commit to the current branch as you like"));
+        assert!(guard_of(&retry_review).contains("leave nothing uncommitted when you finish"));
 
         // An unrecognized deliverable value reads as a normal task: a config
         // written by a newer build must still launch, not change meaning.
@@ -9191,7 +9281,7 @@ mod tests {
         )
         .await
         .expect("compose");
-        assert!(guard_of(&odd).contains("Commit to the current branch as you like"));
+        assert!(guard_of(&odd).contains("leave nothing uncommitted when you finish"));
     }
 
     /// A retry stands in for the turn it interrupted, and a retry/requeue note
@@ -9239,7 +9329,7 @@ mod tests {
         .expect("compose");
         let guard = guard_of(&blocks);
         assert!(guard.contains("do NOT create, edit, delete or commit any file"));
-        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
 
         // A note layered over a failed "apply the fix" return on a report
         // task: the turn underneath is a change order, so the write licence
@@ -9276,7 +9366,7 @@ mod tests {
         )
         .await
         .expect("compose");
-        assert!(guard_of(&blocks).contains("Commit to the current branch as you like"));
+        assert!(guard_of(&blocks).contains("leave nothing uncommitted when you finish"));
         assert!(texts(&blocks).join("\n").contains("it failed on CI, go again"));
 
         // The same note on a run that never reached review: still the
@@ -9488,7 +9578,7 @@ mod tests {
         assert!(joined.contains("Fix the login flow and add tests."));
         // The original order is still an order: the licence stays the working
         // one (nothing was returned, so there is no follow-up underneath).
-        assert!(joined.contains("Commit to the current branch as you like"));
+        assert!(joined.contains("leave nothing uncommitted when you finish"));
     }
 
     /// #649's requeue lands on `Fresh`, and a task can be sitting on a
@@ -9537,7 +9627,7 @@ mod tests {
 
     /// And the licence follows that same turn. A question the user asked before
     /// stopping the run is still a question after the requeue: the guard's
-    /// "commit as you like" is the last thing the agent reads, so it has to be
+    /// "commit your work" is the last thing the agent reads, so it has to be
     /// withdrawn here just as the retry arm withdraws it.
     #[tokio::test]
     async fn a_requeued_question_keeps_its_read_only_licence() {
@@ -9571,7 +9661,7 @@ mod tests {
             .into_iter()
             .find(|t| t.starts_with("—— Work task context ——"))
             .expect("guard block");
-        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
         assert!(guard.contains("do NOT create, edit, delete or commit any file"));
     }
 
@@ -12401,6 +12491,162 @@ mod tests {
         }
     }
 
+    /// The engine's own `git commit` inherits the real environment, so a
+    /// fixture that has it commit names an identity in the repository itself.
+    fn commit_identity(f: &Delivery) {
+        git_run(&f.root, &["config", "user.name", "t"]);
+        git_run(&f.root, &["config", "user.email", "t@example.com"]);
+    }
+
+    /// What the agent left uncommitted is delivered when the user hands over a
+    /// commit message: committed onto the task branch first, and THAT commit
+    /// is what gets pushed — new files and edits alike.
+    #[tokio::test]
+    async fn a_commit_message_commits_the_leftovers_and_delivers_them() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        commit_identity(&f);
+        std::fs::write(f.worktree.join("a.txt"), "one\ntwo\nthree\n").expect("write");
+        std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+
+        let listed = task_git::uncommitted_files(f.worktree.to_str().unwrap())
+            .await
+            .expect("status");
+        let mut listed: Vec<_> = listed.into_iter().map(|u| (u.file, u.status)).collect();
+        listed.sort();
+        assert_eq!(
+            listed,
+            [("a.txt".to_string(), "M".to_string()), ("new.txt".to_string(), "A".to_string())]
+        );
+
+        f.engine
+            .deliver_pr_closing(
+                f.task_id,
+                None,
+                false,
+                false,
+                true,
+                None,
+                Some("  #7 · Fix the login flow  ".into()),
+            )
+            .await
+            .expect("delivery");
+
+        let wt = f.worktree.to_str().unwrap();
+        assert!(!task_git::has_changes(wt).await.expect("status"), "nothing left behind");
+        let tip = task_git::rev_parse(wt, "task/7").await.expect("tip");
+        assert_ne!(tip, f.head, "a new commit on the task branch");
+        assert!(task_git::is_ancestor(wt, &f.head, &tip).await.expect("ancestry"));
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [("acme/app".to_string(), tip.clone(), "task/7".to_string())],
+            "the commit holding the leftovers is the one published"
+        );
+        let subject = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%s", "task/7"])
+            .current_dir(&f.worktree)
+            .output()
+            .expect("git log");
+        assert_eq!(String::from_utf8_lossy(&subject.stdout).trim(), "#7 · Fix the login flow");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+    }
+
+    /// The commit waits for every read-only gate: a delivery refused by one
+    /// leaves the worktree exactly as it was, leftovers still uncommitted.
+    /// A blank message is no message at all.
+    #[tokio::test]
+    async fn a_refused_delivery_commits_nothing() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        commit_identity(&f);
+        std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("   ".into()))
+            .await
+            .expect_err("a blank message");
+        assert!(err.contains("uncommitted changes"), "got {err}");
+
+        *f.forge.remote_base.lock().await = None;
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+            .await
+            .expect_err("the remote base is unreadable");
+        assert!(err.contains("could not read 'main'"), "got {err}");
+
+        let wt = f.worktree.to_str().unwrap();
+        assert!(task_git::has_changes(wt).await.expect("status"), "still uncommitted");
+        assert_eq!(task_git::rev_parse(wt, "task/7").await.expect("tip"), f.head);
+        assert!(f.forge.pushes.lock().await.is_empty());
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+    }
+
+    /// The leftovers are committed onto whatever is checked out, and the
+    /// delivery publishes the task branch — so a checkout on another branch,
+    /// or detached, is refused rather than committed somewhere the push never
+    /// looks: edits still uncommitted, nothing pushed, task still in review.
+    #[tokio::test]
+    async fn leftovers_off_the_task_branch_are_refused() {
+        for detach in [false, true] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            commit_identity(&f);
+            if detach {
+                git_run(&f.worktree, &["checkout", "-q", "--detach"]);
+            } else {
+                git_run(&f.worktree, &["checkout", "-q", "-b", "elsewhere"]);
+            }
+            std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+
+            let err = f
+                .engine
+                .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+                .await
+                .expect_err("off the task branch");
+            assert!(err.contains("not on its branch 'task/7'"), "got {err}");
+
+            let wt = f.worktree.to_str().unwrap();
+            assert!(task_git::has_changes(wt).await.expect("status"), "still uncommitted");
+            assert_eq!(task_git::rev_parse(wt, "HEAD").await.expect("head"), f.head);
+            assert!(f.forge.pushes.lock().await.is_empty());
+            assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+        }
+    }
+
+    /// A commit git refuses — a pre-commit hook, say — is the delivery's
+    /// refusal, in git's words, with nothing moved and the claim released:
+    /// once the hook lets it through, the same click delivers.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_commit_the_hook_rejects_refuses_the_delivery() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let f = delivery_fixture(FakeForge::default()).await;
+        commit_identity(&f);
+        std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+        let hook = f.root.join(".git").join("hooks").join("pre-commit");
+        std::fs::create_dir_all(hook.parent().unwrap()).expect("hooks dir");
+        std::fs::write(&hook, "#!/bin/sh\necho 'lint failed' >&2\nexit 1\n").expect("hook");
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+            .await
+            .expect_err("the hook refuses");
+        assert!(err.contains("could not commit"), "got {err}");
+        assert!(err.contains("lint failed"), "git's own reason: {err}");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert!(task.last_error.is_none(), "a refusal is not a card banner");
+        assert!(f.forge.pushes.lock().await.is_empty());
+
+        std::fs::remove_file(&hook).expect("drop the hook");
+        f.engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+            .await
+            .expect("the retry delivers");
+    }
+
     /// The gate lives in the engine, not the UI: this command is reachable by
     /// id from an old frontend or a direct web API call.
     ///
@@ -14166,7 +14412,15 @@ mod tests {
 
         let url = f
             .engine
-            .deliver_pr_closing(f.task_id, None, false, false, false, Some(vec![12, 7]))
+            .deliver_pr_closing(
+                f.task_id,
+                None,
+                false,
+                false,
+                false,
+                Some(vec![12, 7]),
+                None,
+            )
             .await
             .expect("first delivery");
         let body = f.forge.bodies.lock().await[0].clone();
@@ -14188,7 +14442,7 @@ mod tests {
         let round_two = commit_another_round(&f).await;
         let err = f
             .engine
-            .deliver_pr_closing(f.task_id, None, false, false, false, Some(vec![9]))
+            .deliver_pr_closing(f.task_id, None, false, false, false, Some(vec![9]), None)
             .await
             .expect_err("the list is fixed");
         assert!(err.contains("closes #7, #12"), "{err}");
@@ -14200,7 +14454,7 @@ mod tests {
         // first delivery opened.
         let again = f
             .engine
-            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![12, 7]))
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![12, 7]), None)
             .await
             .expect("same list");
         assert_eq!(again, url);
@@ -14319,7 +14573,15 @@ mod tests {
         let single = delivery_fixture(FakeForge::default()).await;
         let err = single
             .engine
-            .deliver_pr_closing(single.task_id, None, false, false, true, Some(vec![7]))
+            .deliver_pr_closing(
+                single.task_id,
+                None,
+                false,
+                false,
+                true,
+                Some(vec![7]),
+                None,
+            )
             .await
             .expect_err("a one-issue task closes its issue");
         assert!(err.contains("several issues"), "{err}");
@@ -14333,7 +14595,7 @@ mod tests {
         as_issues_task(&f).await;
         let err = f
             .engine
-            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7, 99]))
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7, 99]), None)
             .await
             .expect_err("not one of its issues");
         assert!(err.contains("#99"), "{err}");
@@ -14342,14 +14604,14 @@ mod tests {
         std::fs::write(f.worktree.join("scratch.txt"), "wip\n").expect("write");
         let err = f
             .engine
-            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![9]))
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![9]), None)
             .await
             .expect_err("uncommitted changes");
         assert!(err.contains("uncommitted"), "{err}");
         assert_eq!(source_record(&row(&f.engine, f.task_id).await).pr_closes, None);
         std::fs::remove_file(f.worktree.join("scratch.txt")).expect("clean");
         f.engine
-            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![12]))
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![12]), None)
             .await
             .expect("delivery");
         assert_eq!(
@@ -14367,7 +14629,7 @@ mod tests {
         as_issues_task(&f).await;
         enable_writeback(&f).await;
         f.engine
-            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]))
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]), None)
             .await
             .expect("delivery");
         let forge = f.forge.clone();

@@ -7,7 +7,7 @@ use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::commands::folders::{
     detect_conflicts, git_command_error, numstat_rename_sides, to_git_literal_pathspec,
 };
-use crate::models::WorkTaskChangedFile;
+use crate::models::{WorkTaskChangedFile, WorkTaskUncommittedFile};
 
 async fn run_git(path: &str, args: &[&str]) -> Result<std::process::Output, AppCommandError> {
     crate::process::tokio_command("git")
@@ -88,6 +88,60 @@ pub async fn has_changes(path: &str) -> Result<bool, AppCommandError> {
         return Err(git_command_error("status", &out.stderr));
     }
     Ok(!out.stdout.iter().all(|b| b.is_ascii_whitespace()))
+}
+
+/// What [`commit_all`] would commit, file by file — what the delivery dialog
+/// shows before the user agrees to commit it. Every untracked file is listed
+/// on its own (`-uall`), not folded into its directory, because those are
+/// exactly the ones that may be scratch the agent never meant to keep.
+pub async fn uncommitted_files(
+    path: &str,
+) -> Result<Vec<WorkTaskUncommittedFile>, AppCommandError> {
+    let out = run_git(path, &["status", "--porcelain=v1", "-z", "-uall"]).await?;
+    if !out.status.success() {
+        return Err(git_command_error("status", &out.stderr));
+    }
+    Ok(parse_porcelain_z(&out.stdout))
+}
+
+/// `git status --porcelain=v1 -z` → one entry per path. A rename or copy
+/// carries its source as the NEXT NUL-separated field, which is skipped.
+fn parse_porcelain_z(raw: &[u8]) -> Vec<WorkTaskUncommittedFile> {
+    let mut files = Vec::new();
+    let mut fields = raw.split(|b| *b == 0);
+    while let Some(entry) = fields.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+        let (x, y) = (entry[0], entry[1]);
+        let file = String::from_utf8_lossy(&entry[3..]).into_owned();
+        let status = if x == b'?' {
+            "A"
+        } else if x == b'R' || x == b'C' {
+            fields.next();
+            "R"
+        } else if x == b'D' || y == b'D' {
+            "D"
+        } else if x == b'A' {
+            "A"
+        } else {
+            "M"
+        };
+        files.push(WorkTaskUncommittedFile {
+            file,
+            status: status.to_string(),
+        });
+    }
+    files
+}
+
+/// Whether the checkout at `path` is attached to the local branch `branch`.
+/// The FULL ref, as [`worktree_add_existing_branch`] compares it: a same-name
+/// tag cannot answer for the branch. A detached `HEAD` is `false`.
+pub async fn head_is_branch(path: &str, branch: &str) -> Result<bool, AppCommandError> {
+    let head = run_git(path, &["symbolic-ref", "--quiet", "HEAD"]).await?;
+    Ok(head.status.success()
+        && String::from_utf8_lossy(&head.stdout).trim() == format!("refs/heads/{branch}"))
 }
 
 /// Stage everything and commit with the user's resolved author. Returns
@@ -932,6 +986,29 @@ pub async fn remove_worktree_and_branch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One entry per path from `git status -z`: a rename's source (the next
+    /// NUL field) is skipped rather than read as a file of its own, and a name
+    /// with spaces or non-ASCII comes through as-is (no quoting under `-z`).
+    #[test]
+    fn porcelain_z_reads_one_entry_per_path() {
+        let raw = b"?? new file.txt\0 M src/a.rs\0R  to.rs\0from.rs\0D  gone.rs\0 D gone2.rs\0A  added.rs\0MM \xc3\xa9.rs\0";
+        let got: Vec<_> = parse_porcelain_z(raw)
+            .into_iter()
+            .map(|f| (f.file, f.status))
+            .collect();
+        let want = [
+            ("new file.txt", "A"),
+            ("src/a.rs", "M"),
+            ("to.rs", "R"),
+            ("gone.rs", "D"),
+            ("gone2.rs", "D"),
+            ("added.rs", "A"),
+            ("é.rs", "M"),
+        ]
+        .map(|(f, s)| (f.to_string(), s.to_string()));
+        assert_eq!(got, want);
+    }
 
     /// Run a git command in `dir`, supplying identity via env so the test does
     /// not depend on (or mutate) the developer's global git config.

@@ -6553,7 +6553,13 @@
     "deliverPrBackDeleteWorktree": "Worktree nach dem Push löschen",
     "deliverPrBackSubmit": "Pushen",
     "deliverPrBackDone": "In den Pull Request gepusht",
-    "deliverPrBackDoneMr": "In den Merge Request gepusht"
+    "deliverPrBackDoneMr": "In den Merge Request gepusht",
+    "deliverPrUncommitted": "{count, plural, one {# Datei im Worktree dieser Aufgabe ist noch nicht committet. Sie wird zuerst auf {branch} committet und dann mit dem Rest gepusht.} other {# Dateien im Worktree dieser Aufgabe sind noch nicht committet. Sie werden zuerst auf {branch} committet und dann mit dem Rest gepusht.}}",
+    "deliverPrUncommittedFiles": "Zu committende Dateien",
+    "deliverPrCommitMessageLabel": "Commit-Nachricht",
+    "deliverPrUncommittedHint": "Soll der Agent sie selbst committen, brich ab und schick die Aufgabe für eine weitere Runde zurück.",
+    "deliverPrCommitSubmit": "Committen, pushen und öffnen",
+    "deliverPrCommitPushSubmit": "Committen und pushen"
   },
   "CustomSkillsSettings": {
     "loading": "Benutzerdefinierte Skills werden geladen…",

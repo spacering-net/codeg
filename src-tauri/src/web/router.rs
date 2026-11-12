@@ -1974,6 +1974,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::work_task::work_task_changed_files),
         )
         .route(
+            "/work_task_uncommitted_files",
+            post(handlers::work_task::work_task_uncommitted_files),
+        )
+        .route(
             "/work_task_settings_get",
             post(handlers::work_task::work_task_settings_get),
         )

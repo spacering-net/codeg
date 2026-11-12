@@ -2329,6 +2329,7 @@ mod tauri_app {
                 work_task_commands::work_task_cleanup,
                 work_task_commands::work_task_diff,
                 work_task_commands::work_task_changed_files,
+                work_task_commands::work_task_uncommitted_files,
                 work_task_commands::work_task_settings_get,
                 work_task_commands::work_task_settings_get_own,
                 work_task_commands::work_task_settings_effective,

@@ -6553,7 +6553,13 @@
     "deliverPrBackDeleteWorktree": "푸시 후 worktree 삭제",
     "deliverPrBackSubmit": "푸시",
     "deliverPrBackDone": "풀 리퀘스트에 푸시했습니다",
-    "deliverPrBackDoneMr": "병합 요청에 푸시했습니다"
+    "deliverPrBackDoneMr": "병합 요청에 푸시했습니다",
+    "deliverPrUncommitted": "작업 워크트리에 커밋되지 않은 파일이 {count}개 있습니다. 먼저 {branch}에 커밋한 뒤 나머지 변경과 함께 푸시합니다.",
+    "deliverPrUncommittedFiles": "커밋할 파일",
+    "deliverPrCommitMessageLabel": "커밋 메시지",
+    "deliverPrUncommittedHint": "에이전트가 직접 커밋하게 하려면 취소하고 작업을 되돌려 한 번 더 실행하세요.",
+    "deliverPrCommitSubmit": "커밋, 푸시 후 생성",
+    "deliverPrCommitPushSubmit": "커밋 후 푸시"
   },
   "CustomSkillsSettings": {
     "loading": "사용자 지정 스킬 불러오는 중…",

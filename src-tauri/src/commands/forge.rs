@@ -252,7 +252,7 @@ impl ForgeScenario {
 
     /// Report scenarios put the deliverable in the reply, not in commits —
     /// recorded on the task config so the engine's worktree guard grants a
-    /// matching licence instead of "commit as you like".
+    /// matching licence instead of "commit your work".
     fn is_report(self) -> bool {
         matches!(self, Self::PlanFirst | Self::ReviewOnly)
     }

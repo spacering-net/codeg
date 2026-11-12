@@ -8,7 +8,7 @@ use crate::app_state::AppState;
 use crate::commands::work_task as core;
 use crate::models::{
     WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
-    WorkTaskTemplateDraft, WorkTaskTemplateInfo,
+    WorkTaskTemplateDraft, WorkTaskTemplateInfo, WorkTaskUncommittedFile,
 };
 
 fn default_event_limit() -> u64 {
@@ -169,6 +169,10 @@ pub struct DeliverPrParams {
     /// or closes every issue on its first delivery.
     #[serde(default)]
     pub closes: Option<Vec<i64>>,
+    /// Commit what the worktree holds uncommitted, with this message, before
+    /// the push. Absent refuses a dirty worktree, as it always did.
+    #[serde(default)]
+    pub commit_message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -424,6 +428,7 @@ pub async fn work_task_deliver_pr(
         params.delete_worktree,
         params.mark_done,
         params.closes,
+        params.commit_message,
     )
     .await
     .map_err(AppCommandError::from)?;
@@ -498,6 +503,14 @@ pub async fn work_task_changed_files(
     Json(params): Json<IdParams>,
 ) -> Result<Json<Vec<WorkTaskChangedFile>>, AppCommandError> {
     let result = core::work_task_changed_files_core(&state.db, params.id).await?;
+    Ok(Json(result))
+}
+
+pub async fn work_task_uncommitted_files(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<IdParams>,
+) -> Result<Json<Vec<WorkTaskUncommittedFile>>, AppCommandError> {
+    let result = core::work_task_uncommitted_files_core(&state.db, params.id).await?;
     Ok(Json(result))
 }
 

@@ -6553,7 +6553,13 @@
     "deliverPrBackDeleteWorktree": "Excluir o worktree após enviar",
     "deliverPrBackSubmit": "Enviar",
     "deliverPrBackDone": "Enviado ao pull request",
-    "deliverPrBackDoneMr": "Enviado ao merge request"
+    "deliverPrBackDoneMr": "Enviado ao merge request",
+    "deliverPrUncommitted": "{count, plural, one {Ainda há # arquivo sem commit no worktree desta tarefa. Ele é commitado primeiro em {branch} e depois enviado com o resto.} other {Ainda há # arquivos sem commit no worktree desta tarefa. Eles são commitados primeiro em {branch} e depois enviados com o resto.}}",
+    "deliverPrUncommittedFiles": "Arquivos a commitar",
+    "deliverPrCommitMessageLabel": "Mensagem do commit",
+    "deliverPrUncommittedHint": "Para que o agente faça o commit, cancele e devolva a tarefa para mais uma rodada.",
+    "deliverPrCommitSubmit": "Commitar, enviar e abrir",
+    "deliverPrCommitPushSubmit": "Commitar e enviar"
   },
   "CustomSkillsSettings": {
     "loading": "Carregando habilidades personalizadas…",

@@ -6553,7 +6553,13 @@
     "deliverPrBackDeleteWorktree": "プッシュ後に worktree を削除",
     "deliverPrBackSubmit": "push",
     "deliverPrBackDone": "プルリクエストに push しました",
-    "deliverPrBackDoneMr": "マージリクエストに push しました"
+    "deliverPrBackDoneMr": "マージリクエストに push しました",
+    "deliverPrUncommitted": "タスクのワークツリーに未コミットのファイルが {count} 件あります。先に {branch} にコミットしてから、ほかの変更と一緒に push します。",
+    "deliverPrUncommittedFiles": "コミットするファイル",
+    "deliverPrCommitMessageLabel": "コミットメッセージ",
+    "deliverPrUncommittedHint": "エージェントにコミットさせたい場合は、キャンセルしてタスクを差し戻し、もう一巡させてください。",
+    "deliverPrCommitSubmit": "コミットして push・作成",
+    "deliverPrCommitPushSubmit": "コミットして push"
   },
   "CustomSkillsSettings": {
     "loading": "カスタムスキルを読み込み中…",

@@ -71,6 +71,7 @@ import type {
   WorkTaskEvent,
   WorkTaskFolderSettings,
   WorkTaskTemplate,
+  WorkTaskUncommittedFile,
   ConversationSummary,
   ConversationDetail,
   ConversationOutline,
@@ -4305,7 +4306,11 @@ export async function workTaskDeliverPr(
   /** Which issues the pull request closes — a task made from several related
    *  issues only, and only before its first delivery fixed the list. Omitted
    *  (`undefined`) for every other delivery. */
-  closes?: number[]
+  closes?: number[],
+  /** Commit what the worktree holds uncommitted, with this message, before
+   *  the push (see `workTaskUncommittedFiles`). Omitted, a dirty worktree is
+   *  refused. */
+  commitMessage?: string
 ): Promise<string> {
   return getTransport().call("work_task_deliver_pr", {
     id,
@@ -4314,6 +4319,7 @@ export async function workTaskDeliverPr(
     deleteWorktree,
     markDone,
     ...(closes === undefined ? {} : { closes }),
+    ...(commitMessage === undefined ? {} : { commitMessage }),
   })
 }
 
@@ -4387,6 +4393,14 @@ export async function workTaskChangedFiles(
   id: number
 ): Promise<WorkTaskChangedFile[]> {
   return getTransport().call("work_task_changed_files", { id })
+}
+
+/** What the task's worktree holds uncommitted — the files a delivery would
+ *  commit before pushing. */
+export async function workTaskUncommittedFiles(
+  id: number
+): Promise<WorkTaskUncommittedFile[]> {
+  return getTransport().call("work_task_uncommitted_files", { id })
 }
 
 /** Effective settings after the folder → global → built-in fallback — what

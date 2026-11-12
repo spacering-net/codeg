@@ -6553,7 +6553,13 @@
     "deliverPrBackDeleteWorktree": "Eliminar el worktree tras enviar",
     "deliverPrBackSubmit": "Enviar",
     "deliverPrBackDone": "Enviado al pull request",
-    "deliverPrBackDoneMr": "Enviado al merge request"
+    "deliverPrBackDoneMr": "Enviado al merge request",
+    "deliverPrUncommitted": "{count, plural, one {Queda # archivo sin confirmar en el worktree de esta tarea. Se confirma primero en {branch} y luego se envía con el resto.} other {Quedan # archivos sin confirmar en el worktree de esta tarea. Se confirman primero en {branch} y luego se envían con el resto.}}",
+    "deliverPrUncommittedFiles": "Archivos que se confirmarán",
+    "deliverPrCommitMessageLabel": "Mensaje del commit",
+    "deliverPrUncommittedHint": "Si prefieres que los confirme el agente, cancela y devuelve la tarea para otra ronda.",
+    "deliverPrCommitSubmit": "Confirmar, enviar y abrir",
+    "deliverPrCommitPushSubmit": "Confirmar y enviar"
   },
   "CustomSkillsSettings": {
     "loading": "Cargando habilidades personalizadas…",

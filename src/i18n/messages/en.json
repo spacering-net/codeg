@@ -6553,7 +6553,13 @@
     "deliverPrBackDeleteWorktree": "Delete the worktree after pushing",
     "deliverPrBackSubmit": "Push",
     "deliverPrBackDone": "Pushed to the pull request",
-    "deliverPrBackDoneMr": "Pushed to the merge request"
+    "deliverPrBackDoneMr": "Pushed to the merge request",
+    "deliverPrUncommitted": "{count, plural, one {# file is still uncommitted in this task's worktree. It is committed to {branch} first, then pushed with the rest.} other {# files are still uncommitted in this task's worktree. They are committed to {branch} first, then pushed with the rest.}}",
+    "deliverPrUncommittedFiles": "Files to commit",
+    "deliverPrCommitMessageLabel": "Commit message",
+    "deliverPrUncommittedHint": "To have the agent commit them instead, cancel and send the task back for another round.",
+    "deliverPrCommitSubmit": "Commit, push and open",
+    "deliverPrCommitPushSubmit": "Commit and push"
   },
   "CustomSkillsSettings": {
     "loading": "Loading custom skills…",

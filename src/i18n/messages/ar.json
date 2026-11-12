@@ -6553,7 +6553,13 @@
     "deliverPrBackDeleteWorktree": "حذف worktree بعد الدفع",
     "deliverPrBackSubmit": "ادفع",
     "deliverPrBackDone": "تم الدفع إلى طلب السحب",
-    "deliverPrBackDoneMr": "تم الدفع إلى طلب الدمج"
+    "deliverPrBackDoneMr": "تم الدفع إلى طلب الدمج",
+    "deliverPrUncommitted": "لا يزال في شجرة عمل هذه المهمة {count} من الملفات غير المُثبَّتة. تُثبَّت أولًا على {branch} ثم تُدفع مع بقية التغييرات.",
+    "deliverPrUncommittedFiles": "الملفات التي ستُثبَّت",
+    "deliverPrCommitMessageLabel": "رسالة الإيداع",
+    "deliverPrUncommittedHint": "إن أردت أن يثبّتها الوكيل بنفسه، فألغِ وأعد المهمة لجولة أخرى.",
+    "deliverPrCommitSubmit": "إيداع ودفع وفتح",
+    "deliverPrCommitPushSubmit": "إيداع ودفع"
   },
   "CustomSkillsSettings": {
     "loading": "جارٍ تحميل المهارات المخصّصة…",

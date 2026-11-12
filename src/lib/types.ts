@@ -2874,6 +2874,14 @@ export interface WorkTaskChangedFile {
   deletions: number
 }
 
+/** A file a task worktree holds uncommitted — what a delivery commits first
+ *  when the user agrees to. `status`: `A` added or untracked, `M` modified,
+ *  `D` deleted, `R` renamed or copied. */
+export interface WorkTaskUncommittedFile {
+  file: string
+  status: "A" | "M" | "D" | "R"
+}
+
 // --- Token usage dashboard (mirror of src-tauri/src/models/token_usage.rs) ---
 
 export type TokenUsageBucket = "day" | "week" | "month"
