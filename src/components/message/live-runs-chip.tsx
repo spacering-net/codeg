@@ -110,14 +110,16 @@ export function LiveRunsChip({
         <button
           type="button"
           disabled={!interactive}
-          className="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2 leading-none text-foreground/80 outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=open]:bg-muted data-[state=open]:text-foreground"
+          className="group/runs inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-sm leading-none text-foreground/80 outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=open]:text-foreground"
           aria-label={awaiting ? `${label} · ${t("awaiting")}` : label}
         >
           <Activity
             aria-hidden="true"
             className="size-3 shrink-0 text-primary"
           />
-          <span className="tabular-nums">{label}</span>
+          <span className="tabular-nums underline-offset-2 group-hover/runs:underline group-data-[state=open]/runs:underline">
+            {label}
+          </span>
           {awaiting ? (
             <span
               aria-hidden="true"
