@@ -18,6 +18,11 @@
  * - **reminder**: a matter that came due (`./reminder-card.tsx`).
  * - **acceptance**: a round of acceptance of code work an assistant handed
  *   out (`./acceptance-card.tsx`, 7.5).
+ * - **forge**: something an assistant does on a forge — a comment, closing
+ *   an issue, a merge (`./forge-card.tsx`, 7.4).
+ * - **changed**: a settings change from the conversation (13.3), the work
+ *   assistants and executor configs among them (10.5); work assistants made
+ *   (4.12), an executor config made or to make.
  * - **stopped**: what the owner's stop took with it — the work the turn
  *   handed out, the messages nobody had started on — and what it could not:
  *   messages another assistant is already working on, each with [Stop this
@@ -32,6 +37,7 @@ import { useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   CircleHelp,
+  Layers,
   Lightbulb,
   UserPlus,
   OctagonX,
@@ -48,9 +54,13 @@ import type {
   AgentType,
   AssistantLabelSnapshot,
   BotFace,
+  ChangedItem,
+  MadeExecutorData,
   PersonalAgentPrefKey,
+  PickedOption,
   TimelineRow,
 } from "@/lib/types"
+import { AGENT_LABELS } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAssistants } from "@/stores/assistants-store"
 import {
@@ -64,6 +74,7 @@ import { BotAvatar } from "./bot-avatar"
 import { ChoiceCard } from "./choice-card"
 import { CollapsedText } from "./event-card"
 import { ExchangeSheet } from "./exchange-sheet"
+import { ForgeCard } from "./forge-card"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
@@ -93,6 +104,7 @@ import {
   useWorkMeta,
   workTargetOf,
 } from "./shared"
+import { useBotTemplates } from "./use-templates"
 import { WORK_WELL, WorkRow } from "./work-card"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
@@ -113,11 +125,10 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "loop") return <LoopCard item={item} />
   if (kind === "stopped") return <StoppedCard item={item} />
   if (kind === "changed") {
-    return str(item.row.data, "what") === "bots" ? (
-      <BotsChangedCard item={item} />
-    ) : (
-      <ChangedCard item={item} />
-    )
+    const what = str(item.row.data, "what")
+    if (what === "bots") return <BotsChangedCard item={item} />
+    if (what === "assistant") return <AssistantChangedCard item={item} />
+    return <ChangedCard item={item} />
   }
   if (kind === "choice") {
     return str(item.row.data, "purpose") === "meet" ? (
@@ -137,6 +148,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "ask") return <AskCard item={item} />
   if (kind === "reminder") return <ReminderCard item={item} />
   if (kind === "acceptance") return <AcceptanceCard item={item} />
+  if (kind === "forge") return <ForgeCard item={item} />
   return null
 }
 
@@ -640,17 +652,15 @@ function pageOf(key: string): SettingsPage {
   if (key.startsWith("own.")) return "advanced"
   if (key.startsWith("team.division.")) return "division"
   if (key.startsWith("team.usage.")) return "executors"
+  if (key.startsWith("bot.")) return "workers"
+  if (key.startsWith("assistant.")) return "executors"
   const item = key.replace(/^prefs\./, "") as PersonalAgentPrefKey
   if (ABOUT_ITEMS.includes(item)) return "about"
   if (PROACTIVE_ITEMS.includes(item)) return "proactive"
   return COMMUNICATION_ITEMS.includes(item) ? "communication" : "automation"
 }
 
-interface Change {
-  key: string
-  from: unknown
-  to: unknown
-}
+type Change = ChangedItem
 
 function changesOf(v: unknown): Change[] {
   return Array.isArray(v)
@@ -663,11 +673,53 @@ function changesOf(v: unknown): Change[] {
     : []
 }
 
-/** An item's name and its values, as the settings view words them. */
-function useChangeText() {
+/** Display names of the uids a card's keys and values hold:
+ *  `bot:<uid>`, `assistant:<uid>` (the card's `names`). */
+type Names = Record<string, string>
+
+function namesOf(v: unknown): Names {
+  if (!v || typeof v !== "object") return {}
+  const out: Names = {}
+  for (const [k, n] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof n === "string") out[k] = n
+  }
+  return out
+}
+
+/** `bot.<uid>.<field>` / `assistant.<uid>.<field>`: whose, and which item. */
+export function teamKey(
+  key: string
+): { kind: "bot" | "assistant"; uid: string; field: string } | null {
+  const m = /^(bot|assistant)\.(.+)\.([a-z_]+)$/.exec(key)
+  return m
+    ? { kind: m[1] as "bot" | "assistant", uid: m[2], field: m[3] }
+    : null
+}
+
+/** "Codex · GPT-5.5 · High": an agent and its picks, as saved. */
+function selectionText(v: unknown): string | null {
+  if (!v || typeof v !== "object") return null
+  const snap = (v as { label_snapshot?: AssistantLabelSnapshot }).label_snapshot
+  if (!snap) return null
+  return [snap.agent, snap.mode, ...snap.options.map((o) => o.value_label)]
+    .filter(Boolean)
+    .join(" · ")
+}
+
+/** A long text, cut to a line for a change's row. */
+function clip(text: string, max = 80): string {
+  const one = text.replace(/\s+/g, " ").trim()
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one
+}
+
+/** An item's name and its values, as the settings view words them;
+ *  `names` names the work assistants and executor configs by uid. */
+function useChangeText(names: Names = {}) {
   const ts = useTranslations("PersonalAgent.settings")
   const tp = useTranslations("PersonalAgent.settings.prefs")
   const tk = useTranslations("PersonalAgent.settings.division")
+  const tt = useTranslations("PersonalAgent.notice.changed.team")
+  const tf = useTranslations("PersonalAgent.bots.face")
   const assistants = useAssistants()
   const ownLabel: Record<string, string> = {
     auto_compact_percent: ts("autoCompact"),
@@ -678,7 +730,14 @@ function useChangeText() {
     brain: ts("brain"),
   }
   const byUid = (uid: string) =>
-    assistants.find((a) => a.uid === uid)?.name ?? uid
+    names[`assistant:${uid}`] ??
+    assistants.find((a) => a.uid === uid)?.name ??
+    uid
+  const pickName = (pick: string) => {
+    if (names[pick]) return names[pick]
+    const [kind, uid] = pick.split(":")
+    return kind === "assistant" ? byUid(uid ?? "") : (uid ?? pick)
+  }
   const label = (key: string): string => {
     if (key.startsWith("prefs.")) {
       return tp(`${key.slice(6)}.title` as "reply_length.title")
@@ -690,22 +749,50 @@ function useChangeText() {
     if (key.startsWith("team.usage.")) {
       return ts("changed.usageOf", { name: byUid(key.slice(11)) })
     }
+    const team = teamKey(key)
+    if (team) {
+      const name =
+        team.kind === "bot"
+          ? (names[`bot:${team.uid}`] ?? team.uid)
+          : byUid(team.uid)
+      const field =
+        team.kind === "bot"
+          ? tt(`botField.${team.field}` as "botField.name")
+          : tt(`assistantField.${team.field}` as "assistantField.name")
+      return tt("of", { name, field })
+    }
     return key
   }
   const value = (key: string, v: unknown): string => {
-    if (key === "own.brain" && v && typeof v === "object") {
-      // "Codex · GPT-5.5 · High": the agent and the picks, as saved.
-      const snap = (v as { label_snapshot?: AssistantLabelSnapshot })
-        .label_snapshot
-      if (snap) {
+    const team = teamKey(key)
+    // "Codex · GPT-5.5 · High": the agent and the picks, as saved.
+    if (
+      key === "own.brain" ||
+      team?.field === "brain" ||
+      (team?.kind === "assistant" && team.field === "agent")
+    ) {
+      const text = selectionText(v)
+      if (text) return text
+    }
+    if (team?.field === "executor" && typeof v === "string") {
+      return byUid(v)
+    }
+    if (team?.field === "avatar" && v && typeof v === "object") {
+      const face = v as { kind?: string; shape?: string; color?: string }
+      if (face.kind === "face" && face.shape && face.color) {
         return [
-          snap.agent,
-          snap.mode,
-          ...snap.options.map((o) => o.value_label),
-        ]
-          .filter(Boolean)
-          .join(" · ")
+          tf(`shapes.${face.shape}` as "shapes.blob"),
+          tf(`colors.${face.color}` as "colors.black"),
+        ].join(" · ")
       }
+      return tt("avatarOther")
+    }
+    if (
+      team &&
+      (team.field === "instructions" || team.field === "description") &&
+      typeof v === "string"
+    ) {
+      return v.trim() ? clip(v) : tt("empty")
     }
     // A zone is its own name; only `system` has words.
     if (key === "prefs.time_zone" && typeof v === "string") {
@@ -720,8 +807,7 @@ function useChangeText() {
     }
     if (key.startsWith("team.division.")) {
       if (typeof v !== "string") return ts("team.auto")
-      const [kind, uid] = v.split(":")
-      return kind === "assistant" ? byUid(uid ?? "") : (uid ?? v)
+      return pickName(v)
     }
     if (key.startsWith("team.usage.")) {
       return v == null ? ts("changed.usageDefault") : ts("changed.usageSet")
@@ -731,6 +817,64 @@ function useChangeText() {
     return String(v)
   }
   return { label, value }
+}
+
+/** A work assistant's role by its name in the owner's language (the
+ *  templates are read only when a card shows one). */
+function TemplateName({ id }: { id: string }) {
+  const templates = useBotTemplates()
+  return <>{templates?.find((x) => x.id === id)?.name ?? id}</>
+}
+
+/** One value of a change, as its item words it. */
+function ChangeValue({
+  item,
+  value,
+  text,
+}: {
+  item: string
+  value: unknown
+  text: (key: string, v: unknown) => string
+}) {
+  if (teamKey(item)?.field === "template" && typeof value === "string") {
+    return <TemplateName id={value} />
+  }
+  return <>{text(item, value)}</>
+}
+
+/** The options codeg picked for the owner on a brain or an agent, and who
+ *  picked each: the owner's words, another executor config, the agent. */
+function PickedList({ picked }: { picked: PickedOption[] }) {
+  const t = useTranslations("PersonalAgent.bots.choice")
+  if (picked.length === 0) return null
+  return (
+    <ul
+      className="mt-0.5 space-y-0.5 ps-3 text-xs text-muted-foreground"
+      data-pa-picked
+    >
+      {picked.map((p) => (
+        <li key={p.id} className="break-words" data-pa-picked-from={p.from}>
+          <span className="text-foreground/80">{p.name}</span>
+          {": "}
+          {p.value_label}
+          <span className="ms-1 rounded bg-muted px-1 text-[0.6875rem]">
+            {t(`from.${p.from}` as "from.given")}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function pickedOf(v: unknown): PickedOption[] {
+  return Array.isArray(v)
+    ? v.filter(
+        (p): p is PickedOption =>
+          p != null &&
+          typeof p === "object" &&
+          typeof (p as PickedOption).id === "string"
+      )
+    : []
 }
 
 /** A change to the settings from the conversation (13.3): made as the owner
@@ -743,12 +887,14 @@ function ChangedCard({ item }: { item: NoticeItem }) {
   const { readOnly } = usePageScope()
   const openSettings = usePersonalAgentUi((s) => s.openSettings)
   const botName = useBotName()
-  const { label, value } = useChangeText()
   const row = item.row
   const data = row.data
+  const { label, value } = useChangeText(namesOf(data?.names))
   const state = str(data, "state") ?? "open"
   const why = str(data, "why") ?? "asked"
   const changes = changesOf(data?.changes)
+  // An executor config is also who a session's @ reaches (10.5).
+  const bothWays = changes.some((c) => c.key.startsWith("assistant."))
   const quote = str(data, "quote")
   const reason = str(data, "reason")
   const forRow = num(data, "for_row")
@@ -790,16 +936,28 @@ function ChangedCard({ item }: { item: NoticeItem }) {
     >
       <ul className="space-y-1" data-pa-changes>
         {changes.map((c) => (
-          <li key={c.key} className="text-sm break-words">
+          <li
+            key={c.key}
+            className="text-sm break-words"
+            data-pa-change={c.key}
+          >
             <span className="text-muted-foreground">{label(c.key)}</span>{" "}
             <span className="line-through decoration-muted-foreground/60">
-              {value(c.key, c.from)}
+              <ChangeValue item={c.key} value={c.from} text={value} />
             </span>
             {" → "}
-            <span className="font-medium">{value(c.key, c.to)}</span>
+            <span className="font-medium">
+              <ChangeValue item={c.key} value={c.to} text={value} />
+            </span>
+            <PickedList picked={pickedOf(c.picked)} />
           </li>
         ))}
       </ul>
+      {bothWays ? (
+        <p className="mt-2 text-xs text-muted-foreground" data-pa-both-ways>
+          {t("bothWays")}
+        </p>
+      ) : null}
       {forRow != null ? (
         <QuoteBar targetId={forRow} tone="light" className="mt-2" />
       ) : quote ? (
@@ -1131,6 +1289,218 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
             ) : null}
             {bots.length > 1 ? t("undoAll") : t("undo")}
           </Button>
+        ) : null}
+      </div>
+    </CardFrame>
+  )
+}
+
+function madeOf(v: unknown): MadeExecutorData | null {
+  const m = obj(v)
+  const a = obj(m?.assistant)
+  return m && a && typeof a.id === "number"
+    ? (m as unknown as MadeExecutorData)
+    : null
+}
+
+/** An agent's name from its wire slug. */
+function agentName(v: unknown): string | null {
+  return typeof v === "string"
+    ? (AGENT_LABELS[v as keyof typeof AGENT_LABELS] ?? v)
+    : null
+}
+
+/** A call's options as the editor reads them: `{mode_id, config_values}`,
+ *  or a flat `{option id: value}` with `mode` among them. */
+function optionsOf(
+  v: unknown
+): { mode_id?: string | null; config_values: Record<string, string> } | null {
+  const o = obj(v)
+  if (!o) return null
+  const flat = obj(o.config_values) ?? o
+  const config_values: Record<string, string> = {}
+  for (const [k, x] of Object.entries(flat)) {
+    if (k === "mode_id" || (flat === o && k === "mode")) continue
+    if (typeof x === "string") config_values[k] = x
+    else if (typeof x === "boolean" || typeof x === "number") {
+      config_values[k] = String(x)
+    }
+  }
+  const mode = str(o, "mode_id") ?? (flat === o ? str(o, "mode") : null)
+  return { mode_id: mode, config_values }
+}
+
+/** An executor config made from the conversation (10.5) — with [Undo]
+ *  (deleting it, its place in the division back) and [Edit]; one to make,
+ *  waiting on the owner: [Make it] [Not now]; or nothing made because the
+ *  agent's options could not be read: [Open editor], filled in with what
+ *  was asked. */
+function AssistantChangedCard({ item }: { item: NoticeItem }) {
+  const t = useTranslations("PersonalAgent.notice.changed.assistant")
+  const tc = useTranslations("PersonalAgent.notice.changed")
+  const tk = useTranslations("PersonalAgent.settings.division")
+  const { readOnly } = usePageScope()
+  const openExecutorEditor = usePersonalAgentUi((s) => s.openExecutorEditor)
+  const row = item.row
+  const data = row.data
+  const state = str(data, "state") ?? "open"
+  const why = str(data, "why") ?? "asked"
+  const made = madeOf(data?.made)
+  const pending = obj(data?.pending)
+  const quote = str(data, "quote")
+  const reason = str(data, "reason")
+  const error = str(data, "error")
+  const kept = Array.isArray(data?.kept) ? (data.kept as string[]) : []
+  const { busy, failed, answer } = useAnswer(Number(row.ref_id))
+  const name =
+    made?.assistant.name ??
+    str(pending, "name") ??
+    str(pending, "template") ??
+    ""
+  const agent = made?.assistant.agent ?? agentName(pending?.agent_type) ?? null
+  const picked = made ? pickedOf(made.picked) : []
+  const firstFor = (made ? changesOf(made.team) : [])
+    .map((c) => c.key)
+    .filter((k) => k.startsWith("team.division."))
+    .map((k) => tk(k.slice(14) as "code"))
+  const heading =
+    state === "editor"
+      ? t("editor")
+      : state === "applied"
+        ? why === "asked"
+          ? t("applied")
+          : t("accepted")
+        : state === "undone"
+          ? t("undone")
+          : state === "dismissed"
+            ? t("dismissed")
+            : why === "suggest"
+              ? t("suggested")
+              : t("show")
+  const openEditor = () => {
+    const prefill = pending ?? {}
+    openExecutorEditor(null, {
+      name: str(prefill, "name") ?? undefined,
+      description: str(prefill, "description") ?? undefined,
+      instructions: str(prefill, "instructions") ?? undefined,
+      template: str(prefill, "template") ?? undefined,
+      agentType: (str(prefill, "agent_type") as AgentType | null) ?? null,
+      options: optionsOf(prefill.options) ?? undefined,
+    })
+  }
+  return (
+    <CardFrame
+      item={item}
+      icon={Layers}
+      heading={heading}
+      text={[name, agent].filter(Boolean).join(" · ")}
+      failed={
+        failed ?? (state === "open" || state === "applied" ? error : null)
+      }
+    >
+      <p
+        className={cn(
+          "text-sm font-medium break-words",
+          state === "undone" && "text-muted-foreground line-through"
+        )}
+        data-pa-assistant-made={made?.assistant.id ?? ""}
+      >
+        {name}
+        {agent ? (
+          <span className="ms-1.5 text-xs font-normal text-muted-foreground">
+            {t("on", { agent })}
+          </span>
+        ) : null}
+      </p>
+      {state === "editor" ? (
+        <p className="mt-1.5 text-xs break-words text-muted-foreground">
+          {t("editorHint", { agent: agent ?? "", why: reason ?? "" })}
+        </p>
+      ) : null}
+      {picked.length > 0 ? <PickedList picked={picked} /> : null}
+      {firstFor.length > 0 ? (
+        <p className="mt-1.5 text-xs text-muted-foreground" data-pa-first-for>
+          {t("firstFor", { kinds: firstFor.join(" / ") })}
+        </p>
+      ) : null}
+      {made && state === "applied" ? (
+        <p className="mt-1.5 text-xs text-muted-foreground" data-pa-both-ways>
+          {tc("bothWays")}
+        </p>
+      ) : null}
+      {quote ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {tc("quote", { quote })}
+        </p>
+      ) : null}
+      {reason && state !== "editor" ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {tc("reason", { reason })}
+        </p>
+      ) : null}
+      {kept.length > 0 ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t("kept", { count: kept.length })}
+        </p>
+      ) : null}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {state === "open" ? (
+          <>
+            <Button
+              size="sm"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("accept")}
+              data-pa-assistant-act="accept"
+            >
+              {busy === "accept" ? (
+                <SyncedSpinner small className="size-3.5" />
+              ) : null}
+              {t("accept")}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("dismiss")}
+              data-pa-assistant-act="dismiss"
+            >
+              {tc("dismiss")}
+            </Button>
+          </>
+        ) : null}
+        {state === "editor" ? (
+          <Button
+            size="sm"
+            disabled={readOnly}
+            onClick={openEditor}
+            data-pa-assistant-act="editor"
+          >
+            {t("openEditor")}
+          </Button>
+        ) : null}
+        {state === "applied" && made ? (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("undo")}
+              data-pa-assistant-act="undo"
+            >
+              {busy === "undo" ? (
+                <SyncedSpinner small className="size-3.5" />
+              ) : null}
+              {tc("undo")}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => openExecutorEditor(made.assistant.id)}
+              data-pa-assistant-act="edit"
+            >
+              {t("edit")}
+            </Button>
+          </>
         ) : null}
       </div>
     </CardFrame>

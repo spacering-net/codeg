@@ -8246,6 +8246,28 @@
         "level_used_up": {
           "title": "Runden aufgebraucht, noch nicht richtig",
           "hint": "Arbeit, die so oft zurückgeschickt wurde, wie du erlaubst, und noch nicht stimmt."
+        },
+        "forge_comment": {
+          "title": "Kommentare auf einer Forge",
+          "hint": "Wenn ein Assistent ein Issue oder einen PR kommentiert.",
+          "auto": "Direkt posten",
+          "ask": "Erst fragen (Freigabekarte)"
+        },
+        "issue_close": {
+          "title": "Issues schließen",
+          "hint": "Wenn ein Assistent ein Issue auf einer Forge schließt.",
+          "auto": "Direkt schließen",
+          "ask": "Erst fragen (Freigabekarte)"
+        },
+        "pr_merge": {
+          "title": "PRs mergen",
+          "hint": "Nur gemergt, wenn der Head die richtige Version ist (bei aktiver Abnahme die abgenommene) und die Checks bestanden sind; der Branch-Schutz des Repos gilt weiter. CNB zeigt keine Checks und hält den Head nicht fest, daher fragt ein Merge dort immer nach.",
+          "auto": "Mergen, wenn die Checks bestanden sind",
+          "ask": "Erst fragen (Freigabekarte)"
+        },
+        "level_forge": {
+          "title": "Auf einer Forge",
+          "hint": "Ein Kommentar, ein geschlossenes Issue oder ein gemergter PR eines Assistenten."
         }
       },
       "workdir": {
@@ -8616,7 +8638,46 @@
         "accept": "Ändern",
         "dismiss": "Nicht jetzt",
         "undo": "Rückgängig",
-        "seeSettings": "In den Einstellungen ansehen"
+        "seeSettings": "In den Einstellungen ansehen",
+        "bothWays": "Ausführungsprofile sind auch die, die ein @ in einer Sitzung erreicht: Die Änderung gilt für beides.",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "Name",
+            "avatar": "Gesicht",
+            "brain": "Gehirn",
+            "executor": "Ausführungsprofil",
+            "template": "Rolle",
+            "notify": "Benachrichtigungen",
+            "muted": "stumm",
+            "hidden": "ausgeblendet"
+          },
+          "assistantField": {
+            "name": "Name",
+            "description": "Beschreibung",
+            "instructions": "Daueranweisungen",
+            "agent": "Agent und Optionen",
+            "enabled": "aktiviert"
+          },
+          "avatarOther": "eigenes Bild",
+          "empty": "(leer)"
+        },
+        "assistant": {
+          "applied": "Ausführungsprofil angelegt, wie gewünscht",
+          "accepted": "Ausführungsprofil angelegt",
+          "undone": "Rückgängig: gelöscht",
+          "dismissed": "Nicht angelegt",
+          "suggested": "Vorschlag: ein neues Ausführungsprofil",
+          "show": "Ausführungsprofil anlegen? (du wolltest solche Änderungen vorher sehen)",
+          "editor": "Ausführungsprofil konnte nicht angelegt werden",
+          "on": "mit {agent}",
+          "editorHint": "codeg konnte die Optionen von {agent} nicht lesen ({why}), daher wurde nichts angelegt. Öffne den Editor mit dem Gewünschten vorausgefüllt und wähle den Rest.",
+          "firstFor": "Erste Wahl für: {kinds}",
+          "kept": "{count, plural, one {# Eintrag wurde} other {# Einträge wurden}} seitdem geändert und bleiben so",
+          "accept": "Anlegen",
+          "edit": "Bearbeiten",
+          "openEditor": "Editor öffnen"
+        }
       },
       "retryOf": "„{title}“ wiederholen"
     },
@@ -9128,7 +9189,8 @@
         "answered": "Für dich beantwortet",
         "changed": "Für dich geändert",
         "undone": "Geändert, dann zurückgenommen",
-        "acceptance": "Deine Abnahme-Entscheidung"
+        "acceptance": "Deine Abnahme-Entscheidung",
+        "forge": "Auf einer Forge erledigt"
       },
       "session": {
         "permission": "Wartet auf deine Freigabe",
@@ -9301,6 +9363,67 @@
       "historyAsked": "Runde {round}: dir vorgelegt",
       "historyChanged": "Runde {round}: abgenommen, dann änderte sich der Arbeitsbaum",
       "historyOpen": "Runde {round}: offen"
+    },
+    "forge": {
+      "heading": {
+        "approve": "Wartet auf deine Freigabe",
+        "suggested": "Ein Vorschlag zur Freigabe",
+        "cnb": "Ein Merge auf CNB: immer deine Freigabe",
+        "acting": "Wird erledigt …",
+        "done": "Auf {provider} erledigt",
+        "refused": "Nicht erledigt",
+        "notMerged": "Nicht gemergt",
+        "failed": "Nicht geklappt",
+        "unknown": "Unklar, ob es geklappt hat",
+        "not_run": "Nicht ausgeführt: etwas hat sich geändert",
+        "dismissed": "Nicht ausgeführt"
+      },
+      "title": {
+        "comment": "Kommentar zu {target}",
+        "close": "{target} schließen",
+        "merge": "{target} mergen"
+      },
+      "merge": {
+        "head": "Head {head}",
+        "method": {
+          "merge": "Merge-Commit",
+          "squash": "Squash",
+          "rebase": "Rebase"
+        },
+        "checks": {
+          "green": "Checks: alle bestanden",
+          "none": "Checks: keine eingerichtet",
+          "unknown": "Checks: unbekannt (CNB zeigt keine Checks)"
+        },
+        "version": {
+          "accepted": "Die Version, die die Abnahme bestanden hat",
+          "green": "Checks auf diesem Head bestanden"
+        },
+        "unguaranteed": "Version nicht garantiert (der Merge nimmt keinen Head entgegen)",
+        "commit": "Merge-Commit {commit}"
+      },
+      "code": {
+        "merged": "Bereits gemergt",
+        "closed": "Ist geschlossen",
+        "draft": "Ist ein Entwurf",
+        "after_acceptance": "Der PR hat Commits nach seiner Abnahme",
+        "not_accepted": "Die Abnahme ist nicht bestanden",
+        "not_delivered": "Die abgenommene Version hat codeg nicht in diesen PR geliefert",
+        "checks_unreadable": "codeg kann die Checks nicht lesen",
+        "checks_partial": "Einige Checks waren nicht lesbar",
+        "checks_running": "Die Checks laufen noch",
+        "checks_failing": "Einige Checks schlagen fehl"
+      },
+      "notRun": "Nicht ausgeführt: {error}",
+      "failed": "Die Forge hat abgelehnt: {error}",
+      "unknown": "Die Forge hat nicht geantwortet: {error}. codeg wiederholt es nicht von selbst und prüft vorher auf der Forge.",
+      "reason": "Warum: {reason}",
+      "approve": "Freigeben",
+      "decline": "Ablehnen",
+      "look": "Ansehen",
+      "again": "Nochmal ausführen",
+      "letBe": "So lassen",
+      "open": "Öffnen"
     }
   }
 }

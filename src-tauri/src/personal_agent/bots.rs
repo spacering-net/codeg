@@ -443,7 +443,7 @@ impl PersonalAgentEngine {
     }
 
     /// An executor config's name not taken yet: `name`, or `name (2)`…
-    async fn free_executor_name(&self, name: &str) -> String {
+    pub(super) async fn free_executor_name(&self, name: &str) -> String {
         let taken: HashSet<String> = crate::db::service::assistant_service::list_all(&self.db.conn)
             .await
             .unwrap_or_default()

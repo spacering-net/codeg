@@ -2004,6 +2004,249 @@
     }
   },
   {
+    "name": "bot_update",
+    "description": "Change a work assistant: its name, face, role, brain (agent and options), the executor config it is bound to, and whether it notifies the owner, is muted or hidden. A brain named with only some of its options has the rest filled in for the owner (its own choices on the same agent first, else another executor config's, else the agent's own) and the card lists who picked each; a new brain starts its next delivery in a new session with a handover card. When the owner SAYS so, call it with `quote`: it is changed at once and the owner sees a card that undoes it (or, when they asked to see such changes first, the card comes first). When you only THINK it would help, set `suggest: true` with a `reason`: it goes on a card and changes only if they accept. The primary assistant is changed with prefs_update (`brain`) or in its settings.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "bot"
+      ],
+      "properties": {
+        "bot": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "description": "The work assistant: its name, uid or id (bot_list)."
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Its new name."
+        },
+        "shape": {
+          "type": "string",
+          "enum": [
+            "blob",
+            "pebble",
+            "squircle",
+            "pill",
+            "wedge",
+            "hexagon",
+            "cloud",
+            "drop",
+            "bean",
+            "egg",
+            "shield",
+            "burst"
+          ],
+          "description": "Its avatar's shape, with `color`; a default by its id otherwise."
+        },
+        "color": {
+          "type": "string",
+          "enum": [
+            "black",
+            "brown",
+            "red",
+            "orange",
+            "yellow",
+            "green",
+            "teal",
+            "blue",
+            "purple",
+            "magenta",
+            "gray"
+          ],
+          "description": "Its avatar's colour, with `shape`."
+        },
+        "template": {
+          "type": "string",
+          "enum": [
+            "dev",
+            "review",
+            "test",
+            "ci",
+            "docs",
+            "release",
+            "cleanup",
+            "research",
+            "blank"
+          ],
+          "description": "Its role as shown; its files stay as they are."
+        },
+        "brain": {
+          "type": "object",
+          "description": "Its brain: {agent_type, options: {option id: value}}; what you leave out is filled in.",
+          "properties": {
+            "agent_type": {
+              "type": "string"
+            },
+            "options": {
+              "type": "object"
+            }
+          }
+        },
+        "executor": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "description": "The executor config it is bound to: its name, uid or id (assistant_list)."
+        },
+        "notify": {
+          "type": "boolean",
+          "description": "Whether it tells the owner when it finishes or waits on them."
+        },
+        "muted": {
+          "type": "boolean",
+          "description": "Muted: no system notifications."
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Hidden from the roster; it still runs."
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "The owner's own words this change follows. Required unless `suggest`."
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "With `suggest`: why you think it fits the owner."
+        },
+        "suggest": {
+          "type": "boolean",
+          "description": "true when you only infer the change: it becomes a suggestion card."
+        },
+        "for": {
+          "type": "string",
+          "description": "The owner's message this follows, as the delivery numbers it (#58), so the card quotes it. Needed only when the turn carries inputs from more than one source."
+        }
+      }
+    }
+  },
+  {
+    "name": "assistant_update",
+    "description": "Make or change an executor config — the agent, options and standing instructions work is dispatched to (also the assistants @-mentioned in conversations: a change shows there too). Name one with `assistant` to change it: its name, description, standing instructions, agent and options, whether it is enabled, how the assistants may use it (`usage`), and which kinds of work it is the first pick for (`roles`). Leave `assistant` out to make one: a `name` (or a `template`, whose description, instructions and usage it starts from; the template's kind of work gets it as first pick when that has none), an `agent_type` and any options; what you leave out is filled in for the owner (another executor config's choice on that agent, else the agent's own) and the card lists who picked each. When the agent's options cannot be read, nothing is made: the owner gets a card that opens the editor prefilled. When the owner SAYS so, call it with `quote`: it is done at once with a card that undoes it (or, when they asked to see such changes first, the card comes first); when you only THINK it would help, `suggest: true` with a `reason`.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "assistant": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "description": "The executor config to change: its name, uid or id (assistant_list). Leave out to make a new one."
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Its name."
+        },
+        "description": {
+          "type": "string",
+          "description": "When to use it, in a line."
+        },
+        "instructions": {
+          "type": "string",
+          "description": "Its standing instructions."
+        },
+        "agent_type": {
+          "type": "string",
+          "description": "Its agent (`claude_code`, `codex`…)."
+        },
+        "options": {
+          "type": "object",
+          "description": "Its options: {option id: value}; what you leave out is filled in."
+        },
+        "template": {
+          "type": "string",
+          "enum": [
+            "dev",
+            "review",
+            "test",
+            "ci",
+            "docs",
+            "release",
+            "cleanup",
+            "research",
+            "blank"
+          ],
+          "description": "Making one: the role it starts from."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether it is enabled."
+        },
+        "usage": {
+          "type": "object",
+          "description": "How the assistants may use it: {dispatch: bool, modes: [task|chat|session], projects: [project id] or null for all}.",
+          "properties": {
+            "dispatch": {
+              "type": "boolean"
+            },
+            "modes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "task",
+                  "chat",
+                  "session"
+                ]
+              }
+            },
+            "projects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "code",
+              "review",
+              "test",
+              "fix_ci",
+              "docs",
+              "release",
+              "research",
+              "check"
+            ]
+          },
+          "description": "Kinds of work it becomes the first pick for."
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "The owner's own words this change follows. Required unless `suggest`."
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "With `suggest`: why you think it fits the owner."
+        },
+        "suggest": {
+          "type": "boolean",
+          "description": "true when you only infer the change: it becomes a suggestion card."
+        },
+        "for": {
+          "type": "string",
+          "description": "The owner's message this follows, as the delivery numbers it (#58), so the card quotes it. Needed only when the turn carries inputs from more than one source."
+        }
+      }
+    }
+  },
+  {
     "name": "overview",
     "description": "How everything in codeg stands, in one call — what to read first whenever the owner asks how things are going (\"what's going on?\", \"where are we?\"), before you message any assistant about its progress. It lists every assistant (its job, whether it is working and on what, the work on its hands and where each piece stands), everything that waits on the owner anywhere in codeg (questions, approvals and cards of the assistants; board tasks awaiting input, in review or failed; every other session waiting for an approval, an answer or a plan approval, the owner's own included), and what runs (board tasks, sessions, automation runs). Answer from these facts: one line per assistant, then what needs the owner; copy the numbers and ids as given (#234, board task #12), and give sessions as the links it writes. Read-only; returns at once.",
     "inputSchema": {
@@ -2082,6 +2325,130 @@
         "full": {
           "type": "boolean",
           "description": "Comments and logs in full (not available yet)."
+        }
+      }
+    }
+  },
+  {
+    "name": "forge_comment",
+    "description": "Post a comment on an issue or pull request on its forge (GitHub, GitLab, Gitea, CNB), as the account the item was resolved with. Name the item by the work it belongs to (`dispatch_id`, `task_id`) or by `project_id`, `number` and `kind`: it is resolved once and every later step uses that record. Done at once by default, with a card showing the full text and its link; when the owner asked to approve such comments first, it goes on an approval card and is posted once they approve. If the forge does not answer in time, codeg does not post it again: it looks for it on the forge and tells you.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "dispatch_id": {
+          "type": "integer",
+          "description": "The dispatch whose board task the item belongs to: the pull request it delivered (or the issue it came from)."
+        },
+        "task_id": {
+          "type": "integer",
+          "description": "The board task the item belongs to."
+        },
+        "project_id": {
+          "type": "integer",
+          "description": "With `number`: the project whose repository the item is in (from project_list)."
+        },
+        "number": {
+          "type": "integer",
+          "description": "With `project_id`: the item's number."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "issue",
+            "pr"
+          ],
+          "description": "With `project_id`: an issue or a pull request."
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 15000,
+          "description": "The comment, in Markdown."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why — shown on its card; required with `suggest`."
+        },
+        "suggest": {
+          "type": "boolean",
+          "description": "Only something you think would help, not something the owner asked for: put it on a card for them to approve; nothing is done until they do."
+        }
+      },
+      "required": [
+        "body"
+      ]
+    }
+  },
+  {
+    "name": "issue_close",
+    "description": "Close an issue on its forge. Name it by the board task that came from it (`task_id`, `dispatch_id`) or by `project_id` and `number`. Done at once by default, with a card; when the owner asked to approve closing issues first, it goes on an approval card. An issue already closed counts as closed, whoever closed it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "dispatch_id": {
+          "type": "integer",
+          "description": "The dispatch whose board task the item belongs to: the pull request it delivered (or the issue it came from)."
+        },
+        "task_id": {
+          "type": "integer",
+          "description": "The board task the item belongs to."
+        },
+        "project_id": {
+          "type": "integer",
+          "description": "With `number`: the project whose repository the item is in (from project_list)."
+        },
+        "number": {
+          "type": "integer",
+          "description": "With `project_id`: the item's number."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why — shown on its card; required with `suggest`."
+        },
+        "suggest": {
+          "type": "boolean",
+          "description": "Only something you think would help, not something the owner asked for: put it on a card for them to approve; nothing is done until they do."
+        }
+      }
+    }
+  },
+  {
+    "name": "pr_merge",
+    "description": "Merge a pull request on its forge — only the version that should be merged: while code work you dispatched is accepted on its own, the head must be the one its acceptance passed and codeg delivered; otherwise the head as read now. That head's checks must all have passed (none still running, none failing), and it goes to the forge with the merge, so a head that moves is refused there. The repository's own branch protection still applies (required reviews, required checks). Not merged, it says why. Done at once by default, with a card and the merge commit; when the owner asked to approve merges first — and always on CNB, which shows no checks and takes no head — it goes on an approval card.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "dispatch_id": {
+          "type": "integer",
+          "description": "The dispatch whose board task the item belongs to: the pull request it delivered (or the issue it came from)."
+        },
+        "task_id": {
+          "type": "integer",
+          "description": "The board task the item belongs to."
+        },
+        "project_id": {
+          "type": "integer",
+          "description": "With `number`: the project whose repository the item is in (from project_list)."
+        },
+        "number": {
+          "type": "integer",
+          "description": "With `project_id`: the item's number."
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "merge",
+            "squash",
+            "rebase"
+          ],
+          "description": "How to merge; default: the repository's own default."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why — shown on its card; required with `suggest`."
+        },
+        "suggest": {
+          "type": "boolean",
+          "description": "Only something you think would help, not something the owner asked for: put it on a card for them to approve; nothing is done until they do."
         }
       }
     }

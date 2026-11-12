@@ -18,6 +18,9 @@ import {
   BadgeCheck,
   Bell,
   BellDot,
+  CircleX,
+  GitMerge,
+  GitPullRequest,
   BellRing,
   CircleAlert,
   CircleCheck,
@@ -34,6 +37,7 @@ import {
   ListChecks,
   MessageCircleQuestion,
   MessageSquareReply,
+  MessageSquareText,
   MessagesSquare,
   Moon,
   MoonStar,
@@ -106,6 +110,9 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   auto_accept: "on",
   accept_revise: "auto",
   accept_rounds: 3,
+  forge_comment: "auto",
+  issue_close: "auto",
+  pr_merge: "auto",
   time_zone: "system",
   presence: "on",
   proactive: "on",
@@ -133,6 +140,7 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   level_answered: "low",
   level_acceptance: "normal",
   level_used_up: "urgent",
+  level_forge: "low",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -149,6 +157,9 @@ export const AUTOMATION_PRESETS: Record<
     exec_questions: "assistant",
     exec_plans: "assistant",
     accept_revise: "auto",
+    forge_comment: "auto",
+    issue_close: "auto",
+    pr_merge: "auto",
   },
   ask_more: {
     confirm_dispatch: "code",
@@ -159,6 +170,9 @@ export const AUTOMATION_PRESETS: Record<
     exec_questions: "owner",
     exec_plans: "owner",
     accept_revise: "ask",
+    forge_comment: "ask",
+    issue_close: "ask",
+    pr_merge: "ask",
   },
 }
 
@@ -201,6 +215,7 @@ export const LEVEL_ITEMS: PersonalAgentPrefKey[] = [
   "level_answered",
   "level_acceptance",
   "level_used_up",
+  "level_forge",
 ]
 
 /** The items that take a time of day, `HH:MM`. */
@@ -241,6 +256,9 @@ const CHOICES: Partial<Record<PersonalAgentPrefKey, readonly string[]>> = {
   exec_plans: ["assistant", "owner"],
   auto_accept: ["on", "off"],
   accept_revise: ["auto", "ask"],
+  forge_comment: ["auto", "ask"],
+  issue_close: ["auto", "ask"],
+  pr_merge: ["auto", "ask"],
   proactive: ["on", "off"],
   urgent_via: ["system_attention", "system", "in_page"],
   normal_via: ["system", "in_page", "today"],
@@ -276,6 +294,9 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   auto_accept: ClipboardCheck,
   accept_revise: Undo2,
   accept_rounds: Timer,
+  forge_comment: MessageSquareText,
+  issue_close: CircleX,
+  pr_merge: GitMerge,
   time_zone: Globe,
   presence: Activity,
   proactive: Sparkles,
@@ -303,6 +324,7 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   level_answered: Inbox,
   level_acceptance: BadgeCheck,
   level_used_up: CircleAlert,
+  level_forge: GitPullRequest,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
@@ -320,6 +342,9 @@ export const AUTOMATION_ITEMS: PersonalAgentPrefKey[] = [
   "exec_plans",
   "auto_accept",
   "accept_revise",
+  "forge_comment",
+  "issue_close",
+  "pr_merge",
   "messages",
   "worker_handoff",
   "retry_rounds",

@@ -602,6 +602,9 @@ export function ExecutorsPage({
   const impact = useImpact(views)
   const templates = useBotTemplates()
   const [editorRef, setEditorRef] = useState<UsageEditorHandle | null>(null)
+  // A card asked for the editor: on one config, or a new one prefilled.
+  const request = usePersonalAgentUi((s) => s.executorEditor)
+  const clearRequest = usePersonalAgentUi((s) => s.clearExecutorEditor)
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="executors">
       <PageHead title={t("nav.executors")} description={t("pages.executors")} />
@@ -652,6 +655,8 @@ export function ExecutorsPage({
             </DropdownMenuContent>
           </DropdownMenu>
         )}
+        openRequest={request}
+        onOpenRequestHandled={clearRequest}
         deleteImpact={(a) => impact(a, true)}
         disableImpact={(a) => impact(a, false)}
         editorSection={(a, prefill) => {

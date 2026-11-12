@@ -279,6 +279,13 @@ async fn needs_of(
                 // The owner's call on an acceptance, or a check to run again
                 // (7.5).
                 NoticeKind::Acceptance => "acceptance",
+                // A forge action to approve, or one in doubt (7.4).
+                NoticeKind::Forge if suggested => return None,
+                NoticeKind::Forge => match payload["phase"].as_str() {
+                    Some("approve") => "confirm",
+                    Some("unknown") => "uncertain",
+                    _ => return None,
+                },
                 _ => return None,
             };
             Some((n, kind))

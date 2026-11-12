@@ -421,6 +421,11 @@ pub const NEWS: &[(&str, Level, &str)] = &[
         "acceptance of dispatched work: ready to merge, merged, a call to make",
     ),
     (
+        "forge",
+        Level::Low,
+        "what an assistant did on a forge: a comment, an issue closed, a merge",
+    ),
+    (
         "used_up",
         Level::Urgent,
         "work sent back as many rounds as allowed, still not right",
@@ -490,6 +495,17 @@ pub struct Prefs {
         deserialize_with = "lenient_accept_rounds"
     )]
     pub accept_rounds: u32,
+    /// A comment an assistant posts on a forge (7.4): posted at once, or
+    /// put to the owner on an approval card first.
+    #[serde(default, deserialize_with = "lenient")]
+    pub forge_comment: AskFirst,
+    /// An issue an assistant closes on a forge.
+    #[serde(default, deserialize_with = "lenient")]
+    pub issue_close: AskFirst,
+    /// A pull request an assistant merges: when its head is the version to
+    /// merge and its checks are green; CNB always asks.
+    #[serde(default, deserialize_with = "lenient")]
+    pub pr_merge: AskFirst,
     /// The owner's time zone: `system`, or an IANA name (1.12).
     #[serde(default = "default_zone", deserialize_with = "lenient_zone")]
     pub time_zone: String,
@@ -557,6 +573,8 @@ pub struct Prefs {
     pub level_answered: Level,
     #[serde(default, deserialize_with = "lenient")]
     pub level_acceptance: Level,
+    #[serde(default = "low", deserialize_with = "lenient_low")]
+    pub level_forge: Level,
     #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
     pub level_used_up: Level,
 }
@@ -580,6 +598,9 @@ impl Default for Prefs {
             auto_accept: OnOff::default(),
             accept_revise: AskFirst::default(),
             accept_rounds: DEFAULT_ACCEPT_ROUNDS,
+            forge_comment: AskFirst::default(),
+            issue_close: AskFirst::default(),
+            pr_merge: AskFirst::default(),
             time_zone: default_zone(),
             presence: OnOff::default(),
             proactive: OnOff::default(),
@@ -606,6 +627,7 @@ impl Default for Prefs {
             level_changed: Level::Low,
             level_answered: Level::Low,
             level_acceptance: Level::Normal,
+            level_forge: Level::Low,
             level_used_up: Level::Urgent,
         }
     }
@@ -723,6 +745,21 @@ pub const PREFS: &[PrefSpec] = &[
             max: MAX_ACCEPT_ROUNDS,
         },
         label: "rounds of checks one piece of work gets",
+    },
+    PrefSpec {
+        key: "forge_comment",
+        kind: PrefKind::Choice(&["auto", "ask"]),
+        label: "comments you post on a forge",
+    },
+    PrefSpec {
+        key: "issue_close",
+        kind: PrefKind::Choice(&["auto", "ask"]),
+        label: "issues you close on a forge",
+    },
+    PrefSpec {
+        key: "pr_merge",
+        kind: PrefKind::Choice(&["auto", "ask"]),
+        label: "pull requests you merge",
     },
     PrefSpec {
         key: "time_zone",
@@ -858,6 +895,11 @@ pub const PREFS: &[PrefSpec] = &[
         label: "how urgent acceptance news is (ready to merge, merged, a call to make)",
     },
     PrefSpec {
+        key: "level_forge",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent what an assistant did on a forge is",
+    },
+    PrefSpec {
         key: "level_used_up",
         kind: PrefKind::Choice(LEVELS),
         label: "how urgent work sent back as many rounds as allowed is",
@@ -919,6 +961,9 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("exec_questions", json!("assistant")),
             ("exec_plans", json!("assistant")),
             ("accept_revise", json!("auto")),
+            ("forge_comment", json!("auto")),
+            ("issue_close", json!("auto")),
+            ("pr_merge", json!("auto")),
         ]),
         "ask_more" => Some(vec![
             ("confirm_dispatch", json!("code")),
@@ -929,6 +974,9 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("exec_questions", json!("owner")),
             ("exec_plans", json!("owner")),
             ("accept_revise", json!("ask")),
+            ("forge_comment", json!("ask")),
+            ("issue_close", json!("ask")),
+            ("pr_merge", json!("ask")),
         ]),
         _ => None,
     }
@@ -1058,6 +1106,7 @@ impl Prefs {
             "changed" => self.level_changed,
             "answered" => self.level_answered,
             "acceptance" => self.level_acceptance,
+            "forge" => self.level_forge,
             "used_up" => self.level_used_up,
             _ => Level::Normal,
         }
@@ -1144,6 +1193,20 @@ fn brain_value(key: &str, value: &Value) -> String {
             "off: code work ready for review waits for the owner's own review".into()
         }
         ("accept_revise", "auto") => "sent back to the executor at once".into(),
+        ("forge_comment" | "issue_close", "auto") => {
+            "done at once; the owner sees a card with what was done and where".into()
+        }
+        ("forge_comment" | "issue_close", "ask") => {
+            "put to the owner on an approval card; done once they approve".into()
+        }
+        ("pr_merge", "auto") => {
+            "merged at once when its head is the version to merge and its checks are green \
+             (CNB: always an approval card)"
+                .into()
+        }
+        ("pr_merge", "ask") => {
+            "put to the owner on an approval card; merged once they approve".into()
+        }
         ("accept_revise", "ask") => {
             "put to the owner on the acceptance card, with what you would send back".into()
         }

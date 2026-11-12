@@ -326,12 +326,29 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
         "acceptance_decide" => engine.acceptance_decide_call(&args).await,
         "prefs_update" => engine.prefs_update_call(&args).await,
         "bot_create" => engine.bot_create_call(&args).await,
+        "bot_update" => engine.bot_update_call(&args).await,
+        "assistant_update" => engine.assistant_update_call(&args).await,
         "bot_list" => engine.bot_list_call().await,
         "overview" => engine.overview_call().await,
         "board_status" => engine.board_status_call(&args).await,
         "session_list" => engine.session_list_call(&args).await,
         "automation_status" => engine.automation_status_call().await,
         "pr_status" => engine.pr_status_call(&args).await,
+        "forge_comment" => {
+            engine
+                .forge_act_call(super::forge_acts::ForgeAction::Comment, &args)
+                .await
+        }
+        "issue_close" => {
+            engine
+                .forge_act_call(super::forge_acts::ForgeAction::Close, &args)
+                .await
+        }
+        "pr_merge" => {
+            engine
+                .forge_act_call(super::forge_acts::ForgeAction::Merge, &args)
+                .await
+        }
         "usage_summary" => engine.usage_summary_call(&args).await,
         "activity_summary" => engine.activity_summary_call(&args).await,
         "bot_message" => {

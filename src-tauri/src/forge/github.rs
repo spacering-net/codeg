@@ -563,6 +563,35 @@ pub async fn set_item_state(
     Ok(raw.into_row(kind == ForgeItemKind::Change))
 }
 
+/// `GET /repos/{o}/{r}/issues/{n}` or `/pulls/{n}` — one item's state, and
+/// the commit a merged pull request landed as: what an action taken on it is
+/// checked against afterwards.
+pub async fn item_facts(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    kind: ForgeItemKind,
+    number: i64,
+) -> Result<super::ItemFacts, ForgeError> {
+    let repo = super::normalize_repo(owner_repo)
+        .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {owner_repo}")))?;
+    if number <= 0 {
+        return Err(ForgeError::Invalid(format!(
+            "bad work item number: {number}"
+        )));
+    }
+    let collection = match kind {
+        ForgeItemKind::Issue => "issues",
+        ForgeItemKind::Change => "pulls",
+    };
+    let url = format!("{}/repos/{repo}/{collection}/{number}", auth.api_base);
+    let raw: serde_json::Value = api_get(auth, &url)
+        .await?
+        .json()
+        .await
+        .map_err(|e| ForgeError::Network(format!("bad item payload: {e}")))?;
+    Ok(super::ItemFacts::from_json(&raw))
+}
+
 /// `POST /repos/{o}/{r}/issues` — open an issue, and hand back the row for it.
 ///
 /// The row is what lets the list show the new issue without a refetch, and it
@@ -712,6 +741,10 @@ pub async fn change_detail(
 struct RawCheckRunPage {
     #[serde(default)]
     check_runs: Vec<RawCheckRun>,
+    /// How many there are in all: more than this page holds means the list
+    /// is not the whole answer.
+    #[serde(default)]
+    total_count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -742,6 +775,8 @@ struct RawCheckOutput {
 struct RawCombinedStatus {
     #[serde(default)]
     statuses: Vec<RawCommitStatus>,
+    #[serde(default)]
+    total_count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -780,12 +815,18 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
     if sha.is_empty() || !sha.chars().all(|c| c.is_ascii_alphanumeric()) {
         return ForgeCheckList::unavailable();
     }
+    // A collection with more than one page holds is read as not whole: a
+    // failing check on the next page must not read as green.
+    let mut more = false;
     let runs: Option<Vec<ForgeCheck>> = async {
         let url = format!(
             "{}/repos/{repo}/commits/{sha}/check-runs?per_page={LABEL_PAGE_SIZE}",
             auth.api_base
         );
         let page: RawCheckRunPage = api_get(auth, &url).await.ok()?.json().await.ok()?;
+        if page.total_count.is_some_and(|n| n > page.check_runs.len()) {
+            more = true;
+        }
         Some(
             page.check_runs
                 .into_iter()
@@ -813,6 +854,12 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
             auth.api_base
         );
         let combined: RawCombinedStatus = api_get(auth, &url).await.ok()?.json().await.ok()?;
+        if combined
+            .total_count
+            .is_some_and(|n| n > combined.statuses.len())
+        {
+            more = true;
+        }
         Some(
             combined
                 .statuses
@@ -835,7 +882,7 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
     if runs.is_none() && statuses.is_none() {
         return ForgeCheckList::unavailable();
     }
-    let partial = runs.is_none() || statuses.is_none();
+    let partial = runs.is_none() || statuses.is_none() || more;
     let mut checks = runs.unwrap_or_default();
     // A repository can have both, and an integration that writes each way
     // writes the same NAME to both — showing it twice reads as two checks that

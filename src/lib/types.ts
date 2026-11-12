@@ -2303,6 +2303,130 @@ export interface AcceptanceCardData {
   pr_url: string | null
 }
 
+/** What an assistant does on a forge (7.4). */
+export type ForgeAction = "comment" | "close" | "merge"
+
+/** Where a forge action's card stands: waiting for the owner's approval,
+ *  running, done, turned down by codeg's rules for a merge, refused by the
+ *  forge, in doubt, not run (its premises changed on approval), declined. */
+export type ForgeCardState =
+  | "open"
+  | "acting"
+  | "done"
+  | "refused"
+  | "failed"
+  | "unknown"
+  | "not_run"
+  | "dismissed"
+
+/** Why a merge was not made, by codeg's rules of the merged version. */
+export type ForgeRefusalCode =
+  | "merged"
+  | "closed"
+  | "draft"
+  | "after_acceptance"
+  | "not_accepted"
+  | "not_delivered"
+  | "checks_unreadable"
+  | "checks_partial"
+  | "checks_running"
+  | "checks_failing"
+
+/** The item a forge action names, resolved once. */
+export interface ForgeCardTarget {
+  /** The forge's display name: GitHub, GitLab, Gitea, CNB. */
+  provider: string
+  host: string
+  repo: string
+  kind: "issue" | "pr"
+  number: number
+  url: string | null
+  account: string | null
+  task_id: number | null
+}
+
+/** A forge action card's `data` (Rust `forge_acts::raise_forge_card`). */
+export interface ForgeCardData {
+  notice: "forge"
+  action: ForgeAction
+  state: ForgeCardState
+  /** direct = done at once; confirm = the owner asked to approve such
+   *  actions; suggest = the assistant's idea; cnb = a merge there. */
+  why: "direct" | "confirm" | "suggest" | "cnb"
+  target: ForgeCardTarget
+  /** A comment's full text, as the assistant wrote it. */
+  body: string | null
+  method: "merge" | "squash" | "rebase" | null
+  /** A merge: the head it merges, its checks, what vouches for it. */
+  head: string | null
+  checks: "green" | "none" | "unknown" | null
+  version: "accepted" | "green" | null
+  /** The forge holds the head with the merge (false on CNB). */
+  guaranteed: boolean
+  code?: ForgeRefusalCode | null
+  reason: string | null
+  result?: {
+    url?: string | null
+    merge_commit?: string | null
+    comment_id?: string | null
+  } | null
+  error?: string | null
+}
+
+/** One setting an assistant changed from the conversation (Rust
+ *  `prefs::Applied`): the options codeg filled in for a brain or an
+ *  agent, and who picked each. */
+export interface ChangedItem {
+  key: string
+  from: unknown
+  to: unknown
+  picked?: PickedOption[] | null
+}
+
+/** An executor config made from the conversation (Rust
+ *  `team_edit::made_json`). */
+export interface MadeExecutorData {
+  assistant: {
+    id: number
+    uid: string
+    name: string
+    agent: string
+    agent_type: AgentType
+  }
+  picked: PickedOption[]
+  team: ChangedItem[]
+  template: string
+}
+
+/** The editor's starting fields when nothing could be made. */
+export interface ExecutorPrefill {
+  name?: string | null
+  description?: string | null
+  instructions?: string | null
+  template?: string | null
+  agent_type?: AgentType | null
+  /** `{option id: value}`, or `{mode_id, config_values}`. */
+  options?: Record<string, unknown> | null
+}
+
+/** A card about an executor config made, or to make, from the
+ *  conversation (`what: "assistant"`). */
+export interface AssistantCardData {
+  notice: "changed"
+  what: "assistant"
+  state: "applied" | "open" | "editor" | "undone" | "dismissed"
+  why: "asked" | "show" | "suggest" | "editor"
+  made: MadeExecutorData | null
+  /** What waits to be made (`open`), or the editor's prefill (`editor`). */
+  pending: Record<string, unknown> | null
+  quote: string | null
+  /** Why it was suggested — or, for `editor`, why the options could not be
+   *  read. */
+  reason: string | null
+  kept?: string[]
+  error?: string | null
+}
+
 /** A plan answer on an ask card: send it back (`revise`) with feedback. */
 export type AskPlanDecision = "approve" | "revise" | "abandon"
 
@@ -2566,6 +2690,14 @@ export interface PersonalAgentPrefs {
   accept_revise: "auto" | "ask"
   /** Rounds of checks one piece of work gets; 0 sends nothing back. */
   accept_rounds: number
+  /** A comment an assistant posts on a forge: posted at once, or put to the
+   *  owner on an approval card first (7.4). */
+  forge_comment: "auto" | "ask"
+  /** An issue an assistant closes on a forge. */
+  issue_close: "auto" | "ask"
+  /** A pull request an assistant merges: when its head is the version to
+   *  merge and its checks passed; CNB always asks. */
+  pr_merge: "auto" | "ask"
   /** The owner's time zone: `system` (follow the system's) or an IANA
    *  name (1.12). */
   time_zone: string
@@ -2611,6 +2743,7 @@ export interface PersonalAgentPrefs {
   level_answered: PersonalAgentNewsLevel
   level_acceptance: PersonalAgentNewsLevel
   level_used_up: PersonalAgentNewsLevel
+  level_forge: PersonalAgentNewsLevel
 }
 
 /** How much a kind of news may interrupt the owner (6.2). */
@@ -2672,6 +2805,8 @@ export type TodayRowKind =
   | "finished"
   | "answered"
   | "changed"
+  // Something an assistant did on a forge (7.4).
+  | "forge"
 
 export interface TodayRow {
   /** The same thing keeps the same key across reads. */

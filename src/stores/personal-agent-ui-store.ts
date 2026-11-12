@@ -47,6 +47,25 @@ export interface SettingsOpen {
   bot: number | null
 }
 
+/** The executor config editor, asked to open from a card (10.5): an
+ *  existing one by id, or a new one with its fields filled in. `key`
+ *  tells two requests for the same one apart. */
+export interface ExecutorEditorRequest {
+  key: number
+  assistantId: number | null
+  prefill: ExecutorEditorPrefill | null
+}
+
+/** A new executor config's starting fields, as a card asks for them. */
+export interface ExecutorEditorPrefill {
+  name?: string
+  description?: string
+  instructions?: string
+  template?: string
+  agentType?: AgentType | null
+  options?: { mode_id?: string | null; config_values: Record<string, string> }
+}
+
 /** A piece of handed-out work, as the card that opens it knows it: the
  *  drawer reads the dispatch's newer state by its id when it has it. */
 export interface WorkTarget {
@@ -95,6 +114,14 @@ interface PersonalAgentUiState {
   settings: SettingsOpen | null
   openSettings: (page?: SettingsPage, bot?: number | null) => void
   closeSettings: () => void
+  /** The executor configs' page, with its editor open on one (or a new one
+   *  prefilled); taken by the page once it opens it. */
+  executorEditor: ExecutorEditorRequest | null
+  openExecutorEditor: (
+    assistantId: number | null,
+    prefill?: ExecutorEditorPrefill | null
+  ) => void
+  clearExecutorEditor: () => void
   /** The assistant the page shows (`null`: the primary), picked in the
    *  roster. Switching closes what was open about the other one. */
   viewBot: number | null
@@ -135,6 +162,17 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   openSettings: (page = "identity", bot = null) =>
     set({ settings: { page, bot } }),
   closeSettings: () => set({ settings: null }),
+  executorEditor: null,
+  openExecutorEditor: (assistantId, prefill = null) =>
+    set((s) => ({
+      settings: { page: "executors", bot: null },
+      executorEditor: {
+        key: (s.executorEditor?.key ?? 0) + 1,
+        assistantId,
+        prefill,
+      },
+    })),
+  clearExecutorEditor: () => set({ executorEditor: null }),
   viewBot: null,
   setViewBot: (viewBot) =>
     set((s) =>

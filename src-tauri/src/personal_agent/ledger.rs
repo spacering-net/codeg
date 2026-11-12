@@ -263,6 +263,10 @@ impl PersonalAgentEngine {
                 }
             }
             "followup" => self.resolve_followup(op, &op_id).await,
+            // On a forge: by what the forge shows (7.4).
+            "forge" => self.resolve_forge_op(op).await,
+            // An executor config being made (10.5): by what was made.
+            "assistant_create" => self.resolve_executor_op(op).await,
             _ => OpOutcome::Pending,
         }
     }
@@ -504,6 +508,16 @@ impl PersonalAgentEngine {
         let Ok(Some(op)) = svc::get_op(&self.db.conn, op_id).await else {
             return;
         };
+        // A forge action's card follows it its own way (7.4).
+        if op.kind == "forge" {
+            self.after_forge_op(&op, outcome).await;
+            return;
+        }
+        // So does a card that makes an executor config (10.5): settled by
+        // start-up with the card itself.
+        if op.kind == "assistant_create" {
+            return;
+        }
         let card = match op.notice_id {
             Some(id) => svc::get_notice(&self.db.conn, id).await.ok().flatten(),
             None => None,
@@ -762,6 +776,20 @@ impl PersonalAgentEngine {
             .await
             .unwrap_or_default();
         for card in acting {
+            // A forge action's card settles by its own entry (7.4).
+            if card.kind == NoticeKind::Forge {
+                self.settle_forge_card_at_boot(&card).await;
+                continue;
+            }
+            // A card about an executor config: its undo, or its making (10.5).
+            if card.kind == NoticeKind::Changed
+                && serde_json::from_str::<Value>(&card.payload)
+                    .ok()
+                    .is_some_and(|p| p["what"] == "assistant")
+            {
+                self.settle_assistant_card_at_boot(&card).await;
+                continue;
+            }
             // Its own runs: an uncertain card also names the step it is
             // about.
             let ops: Vec<_> = svc::ops_of_notice(&self.db.conn, card.id)

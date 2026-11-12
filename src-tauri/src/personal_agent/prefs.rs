@@ -70,11 +70,21 @@ pub struct Applied {
     pub key: String,
     pub from: Value,
     pub to: Value,
+    /// A brain's or an agent's options codeg filled in, and who picked
+    /// each (10.5 "fill five").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picked: Option<Vec<crate::models::personal_agent_bots::PickedOption>>,
 }
 
 /// Whether a key is the account's (on the primary's row).
 fn is_account(key: &str) -> bool {
     key.starts_with("prefs.") || key.starts_with("team.")
+}
+
+/// Whether a key is a work assistant's or an executor config's (10.5): the
+/// rows themselves, not a settings blob.
+fn is_team_row(key: &str) -> bool {
+    key.starts_with("bot.") || key.starts_with("assistant.")
 }
 
 /// An own item's value, checked.
@@ -160,6 +170,38 @@ fn changes_text(changes: &[Applied]) -> String {
             let show = |v: &Value| match v {
                 Value::Null => "default".to_string(),
                 Value::String(s) => s.clone(),
+                // An agent and its options: as the editor names them.
+                Value::Object(o) if o.contains_key("label_snapshot") => {
+                    let l = &o["label_snapshot"];
+                    let opts: Vec<String> = l["options"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| {
+                                    Some(format!(
+                                        "{} {}",
+                                        x["name"].as_str()?,
+                                        x["value_label"].as_str()?
+                                    ))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let mode = l["mode"]
+                        .as_str()
+                        .map(|m| vec![m.to_string()])
+                        .unwrap_or_default();
+                    let detail: Vec<String> = mode.into_iter().chain(opts).collect();
+                    format!(
+                        "{}{}",
+                        l["agent"].as_str().unwrap_or("?"),
+                        if detail.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", detail.join(", "))
+                        }
+                    )
+                }
                 other => other.to_string(),
             };
             format!("{} {} → {}", c.key, show(&c.from), show(&c.to))
@@ -245,13 +287,23 @@ impl PersonalAgentEngine {
         let mut out: Vec<Applied> = Vec::new();
         let mut seen = BTreeSet::new();
         for c in expanded {
+            let mut picked = None;
             let (from, to) = if let Some(item) = c.key.strip_prefix("prefs.") {
                 let to = check_pref(item, &c.value)?;
                 (stored_prefs.get(item).cloned().unwrap_or(Value::Null), to)
+            } else if let Some(rest) = c.key.strip_prefix("bot.") {
+                let (from, to, p) = self.plan_bot_item(rest, &c.value).await?;
+                picked = p;
+                (from, to)
+            } else if let Some(rest) = c.key.strip_prefix("assistant.") {
+                let (from, to, p) = self.plan_assistant_item(rest, &c.value).await?;
+                picked = p;
+                (from, to)
             } else if c.key == format!("own.{BRAIN_ITEM}") {
                 let row = own.as_ref().ok_or("set the assistant up first")?;
                 let from = super::engine::brain_of(row).ok_or("set the assistant up first")?;
-                let to = self.plan_brain(&from, &c.value).await?;
+                let (to, p) = self.plan_brain(&from, &c.value).await?;
+                picked = (!p.is_empty()).then_some(p);
                 (
                     serde_json::to_value(&from).map_err(|e| e.to_string())?,
                     serde_json::to_value(&to).map_err(|e| e.to_string())?,
@@ -319,6 +371,7 @@ impl PersonalAgentEngine {
                 key: c.key,
                 from,
                 to,
+                picked,
             });
         }
         if out.iter().any(|a| is_account(&a.key))
@@ -337,16 +390,22 @@ impl PersonalAgentEngine {
     /// undo, a card's), or `{agent_type, options}` with the rest filled in
     /// as a new assistant's are (10.5 "fill five") — this brain's own
     /// choices first when it stays on the same agent.
-    async fn plan_brain(
+    pub(super) async fn plan_brain(
         &self,
         current: &crate::models::AssistantAgentConfig,
         value: &Value,
-    ) -> Result<crate::models::AssistantAgentConfig, String> {
+    ) -> Result<
+        (
+            crate::models::AssistantAgentConfig,
+            Vec<crate::models::personal_agent_bots::PickedOption>,
+        ),
+        String,
+    > {
         if value.get("label_snapshot").is_some() {
             let whole: crate::models::AssistantAgentConfig =
                 serde_json::from_value(value.clone()).map_err(|e| format!("not a brain: {e}"))?;
             super::bots::check_brain(&whole)?;
-            return Ok(whole);
+            return Ok((whole, Vec::new()));
         }
         let agent_type = match value.get("agent_type").and_then(|a| a.as_str()) {
             Some(a) => crate::models::AgentType::from_wire(a).ok_or_else(|| format!("no agent `{a}`"))?,
@@ -357,7 +416,7 @@ impl PersonalAgentEngine {
             .then(|| current.agent_options.clone())
             .into_iter()
             .collect();
-        let (config, _) = self
+        let (config, picked) = self
             .fill_options(agent_type, &given, &extra)
             .await
             .map_err(|e| match e {
@@ -369,7 +428,7 @@ impl PersonalAgentEngine {
                 super::bots::FillError::Refused(e) => e,
             })?;
         super::bots::check_brain(&config)?;
-        Ok(config)
+        Ok((config, picked))
     }
 
     /// A division pick names someone who is there.
@@ -457,7 +516,19 @@ impl PersonalAgentEngine {
             })
             .await?;
         }
-        for a in applied.iter().filter(|a| a.key != brain_key) {
+        // A work assistant's or an executor config's own row.
+        let rows: Vec<Applied> = applied
+            .iter()
+            .filter(|a| is_team_row(&a.key))
+            .cloned()
+            .collect();
+        if !rows.is_empty() {
+            self.write_team(&rows).await?;
+        }
+        for a in applied
+            .iter()
+            .filter(|a| a.key != brain_key && !is_team_row(&a.key))
+        {
             let path: Vec<&str> = if let Some(rest) = a.key.strip_prefix("team.usage.") {
                 vec!["team", "usage", rest]
             } else {
@@ -609,6 +680,20 @@ impl PersonalAgentEngine {
                 value: c.value,
             });
         }
+        self.change_settings_call("prefs", changes, args).await
+    }
+
+    /// A change from the conversation, of the settings (`prefs_update`) or
+    /// of the team (`bot_update`, `assistant_update`): the owner's words
+    /// change it (at once, or on a card first when they asked to see such
+    /// changes first); the assistant's own inference (`suggest`) only
+    /// suggests it.
+    pub(super) async fn change_settings_call(
+        self: &Arc<Self>,
+        tool: &str,
+        changes: Vec<SettingChange>,
+        args: &Value,
+    ) -> ToolOutcome {
         let suggest = args
             .get("suggest")
             .and_then(|v| v.as_bool())
@@ -637,7 +722,7 @@ impl PersonalAgentEngine {
         // the answer, whatever the settings are now. Its identity is the
         // call as made — never what it came to, which later edits change.
         let key = format!(
-            "prefs|{}",
+            "{tool}|{}",
             text_digest(
                 &json!({ "changes": changes, "suggest": suggest, "quote": quote }).to_string()
             )
@@ -685,14 +770,14 @@ impl PersonalAgentEngine {
                 &self.db.conn,
                 self.bot().await,
                 &slot,
-                "prefs",
+                if tool == "prefs" { "prefs" } else { tool },
                 json!({ "changes": changes, "suggest": suggest }),
                 &outcome.text,
                 outcome.data.clone(),
             )
             .await
             {
-                tracing::warn!("[personal-agent] prefs_update was not put in the ledger: {e}");
+                tracing::warn!("[personal-agent] {tool} was not put in the ledger: {e}");
             }
         }
         outcome
@@ -859,6 +944,7 @@ impl PersonalAgentEngine {
             "state": state,
             "why": why.as_str(),
             "changes": plan,
+            "names": self.team_names(plan).await,
             "quote": quote,
             "reason": reason,
             "for_row": for_row,
@@ -924,7 +1010,7 @@ impl PersonalAgentEngine {
     async fn record_for_primary(&self, plan: &[Applied]) {
         let account: Vec<Applied> = plan
             .iter()
-            .filter(|a| is_account(&a.key))
+            .filter(|a| is_account(&a.key) || is_team_row(&a.key))
             .cloned()
             .collect();
         if account.is_empty() {
@@ -996,6 +1082,10 @@ impl PersonalAgentEngine {
         // Work assistants made, or to make (4.12, 4.15).
         if payload.get("what").and_then(|w| w.as_str()) == Some("bots") {
             return self.act_on_bots_card(notice, action).await;
+        }
+        // An executor config made, or to make (10.5).
+        if payload.get("what").and_then(|w| w.as_str()) == Some("assistant") {
+            return self.act_on_assistant_card(notice, action).await;
         }
         let why = payload.get("why").and_then(|w| w.as_str()).unwrap_or("");
         if why == "line" {

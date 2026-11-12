@@ -445,6 +445,33 @@ describe("today", () => {
     await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
   })
 
+  it("lists what an assistant did on a forge, opening its card (7.4)", () => {
+    draw(
+      today({
+        done: [
+          row({
+            key: "forge:8",
+            kind: "forge",
+            bot_id: 2,
+            notice_id: 8,
+            row_id: 14,
+            title: "Merge acme/app#9",
+            state: "acted",
+          }),
+        ],
+      })
+    )
+    const done = document.querySelector('[data-key="forge:8"]') as HTMLElement
+    expect(done.textContent).toContain("Merge acme/app#9")
+    expect(done.textContent).toContain("Done on a forge")
+    expect(within(done).queryByRole("button", { name: "Undo" })).toBeNull()
+    fireEvent.click(within(done).getAllByRole("button")[0])
+    expect(usePersonalAgentUi.getState().pendingJump).toEqual({
+      bot: 2,
+      row: 14,
+    })
+  })
+
   it("acts on nothing where the assistants run elsewhere", () => {
     draw(
       today({

@@ -8245,6 +8245,28 @@
         "level_used_up": {
           "title": "Out of rounds",
           "hint": "Work sent back as many rounds as you allow and still not right."
+        },
+        "forge_comment": {
+          "title": "Comments on a forge",
+          "hint": "A comment an assistant posts on an issue or pull request.",
+          "auto": "Post it directly",
+          "ask": "Ask me first (approval card)"
+        },
+        "issue_close": {
+          "title": "Closing issues",
+          "hint": "An issue an assistant closes on a forge.",
+          "auto": "Close it directly",
+          "ask": "Ask me first (approval card)"
+        },
+        "pr_merge": {
+          "title": "Merging pull requests",
+          "hint": "Merged only when its head is the version to merge (the one its acceptance passed, while acceptance is on) and its checks passed; the repository's branch protection still applies. CNB can't show checks or hold the head, so a merge there always asks you.",
+          "auto": "Merge when its checks pass",
+          "ask": "Ask me first (approval card)"
+        },
+        "level_forge": {
+          "title": "On a forge",
+          "hint": "A comment posted, an issue closed or a pull request merged by an assistant."
         }
       },
       "workdir": {
@@ -8616,7 +8638,46 @@
         "accept": "Change it",
         "dismiss": "Not now",
         "undo": "Undo",
-        "seeSettings": "See in settings"
+        "seeSettings": "See in settings",
+        "bothWays": "Executor configs are also who an @ in a session reaches: this change applies to both.",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "name",
+            "avatar": "face",
+            "brain": "brain",
+            "executor": "executor config",
+            "template": "role",
+            "notify": "notifications",
+            "muted": "muted",
+            "hidden": "hidden"
+          },
+          "assistantField": {
+            "name": "name",
+            "description": "description",
+            "instructions": "standing instructions",
+            "agent": "agent and options",
+            "enabled": "enabled"
+          },
+          "avatarOther": "own picture",
+          "empty": "(empty)"
+        },
+        "assistant": {
+          "applied": "Made an executor config, as you said",
+          "accepted": "Made an executor config",
+          "undone": "Undone: deleted",
+          "dismissed": "Not made",
+          "suggested": "Suggestion: a new executor config",
+          "show": "Make an executor config? (you asked to see such changes first)",
+          "editor": "Couldn't make the executor config",
+          "on": "on {agent}",
+          "editorHint": "codeg couldn't read the options of {agent} ({why}), so nothing was made. Open the editor with what was asked filled in, and pick the rest.",
+          "firstFor": "First pick for: {kinds}",
+          "kept": "{count, plural, one {# item was} other {# items were}} changed again since, so left as is",
+          "accept": "Make it",
+          "edit": "Edit",
+          "openEditor": "Open editor"
+        }
       },
       "retryOf": "Retry “{title}”"
     },
@@ -9128,7 +9189,8 @@
         "answered": "Answered for you",
         "changed": "Changed for you",
         "undone": "Changed, then taken back",
-        "acceptance": "Your call on accepting"
+        "acceptance": "Your call on accepting",
+        "forge": "Done on a forge"
       },
       "session": {
         "permission": "Waits for your approval",
@@ -9301,6 +9363,67 @@
       "historyAsked": "Round {round}: put to you",
       "historyChanged": "Round {round}: accepted, then the worktree changed",
       "historyOpen": "Round {round}: open"
+    },
+    "forge": {
+      "heading": {
+        "approve": "Waiting for your approval",
+        "suggested": "A suggestion, for you to approve",
+        "cnb": "A merge on CNB: always yours to approve",
+        "acting": "Doing it…",
+        "done": "Done on {provider}",
+        "refused": "Not done",
+        "notMerged": "Not merged",
+        "failed": "Not done",
+        "unknown": "Not sure it went through",
+        "not_run": "Not done: things changed",
+        "dismissed": "Left undone"
+      },
+      "title": {
+        "comment": "Comment on {target}",
+        "close": "Close {target}",
+        "merge": "Merge {target}"
+      },
+      "merge": {
+        "head": "Head {head}",
+        "method": {
+          "merge": "merge commit",
+          "squash": "squash",
+          "rebase": "rebase"
+        },
+        "checks": {
+          "green": "Checks: all passed",
+          "none": "Checks: none configured",
+          "unknown": "Checks: unknown (CNB can't read checks)"
+        },
+        "version": {
+          "accepted": "The version its acceptance passed",
+          "green": "Checks passed on this head"
+        },
+        "unguaranteed": "Version not guaranteed (the forge takes no head with a merge)",
+        "commit": "Merge commit {commit}"
+      },
+      "code": {
+        "merged": "It is merged already",
+        "closed": "It is closed",
+        "draft": "It is a draft",
+        "after_acceptance": "The PR has commits after its acceptance",
+        "not_accepted": "Its acceptance has not passed",
+        "not_delivered": "The version its acceptance passed wasn't delivered to this PR by codeg",
+        "checks_unreadable": "codeg can't read its checks",
+        "checks_partial": "Some of its checks couldn't be read",
+        "checks_running": "Its checks are still running",
+        "checks_failing": "Some of its checks are failing"
+      },
+      "notRun": "Not done: {error}",
+      "failed": "The forge said no: {error}",
+      "unknown": "The forge didn't answer: {error}. codeg won't do it again on its own; it looks on the forge first.",
+      "reason": "Why: {reason}",
+      "approve": "Approve",
+      "decline": "Decline",
+      "look": "Look",
+      "again": "Do it again",
+      "letBe": "Let it be",
+      "open": "Open"
     }
   }
 }

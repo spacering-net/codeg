@@ -227,6 +227,20 @@ describe("the settings view", () => {
     )
   })
 
+  it("has commenting, closing issues and merging pull requests on “Dispatch & automation” (7.4)", () => {
+    usePersonalAgentUi.getState().openSettings("automation")
+    draw()
+    for (const item of ["forge_comment", "issue_close", "pr_merge"]) {
+      expect(document.querySelector(`[data-pa-pref="${item}"]`)).not.toBeNull()
+    }
+    expect(screen.getByText("Comments on a forge")).toBeInTheDocument()
+    expect(screen.getByText("Closing issues")).toBeInTheDocument()
+    expect(screen.getByText("Merging pull requests")).toBeInTheDocument()
+    expect(
+      screen.getByText(/CNB can't show checks or hold the head/)
+    ).toBeInTheDocument()
+  })
+
   it("picks an automation level, and warns before overwriting the owner's own", async () => {
     usePersonalAgentUi.getState().openSettings("automation")
     const { unmount } = draw()
@@ -431,6 +445,7 @@ describe("the settings view", () => {
       "level_answered",
       "level_acceptance",
       "level_used_up",
+      "level_forge",
     ]) {
       expect(document.querySelector(`[data-pa-pref="${item}"]`)).not.toBeNull()
     }

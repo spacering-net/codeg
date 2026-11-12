@@ -8246,6 +8246,28 @@
         "level_used_up": {
           "title": "回数を使い切っても不合格",
           "hint": "許可された回数まで差し戻してもまだ通らないとき。"
+        },
+        "forge_comment": {
+          "title": "フォージへのコメント",
+          "hint": "アシスタントが Issue や PR にコメントするとき。",
+          "auto": "そのまま投稿",
+          "ask": "先に確認する（承認カード）"
+        },
+        "issue_close": {
+          "title": "Issue のクローズ",
+          "hint": "アシスタントがフォージで Issue をクローズするとき。",
+          "auto": "そのままクローズ",
+          "ask": "先に確認する（承認カード）"
+        },
+        "pr_merge": {
+          "title": "PR のマージ",
+          "hint": "ヘッドがマージすべきバージョン（受け入れが有効なら受け入れ済みのもの）で、チェックがすべて成功したときだけマージします。リポジトリのブランチ保護はそのまま有効です。CNB はチェックを読めずヘッドも固定できないため、常に確認します。",
+          "auto": "チェック成功時にマージ",
+          "ask": "先に確認する（承認カード）"
+        },
+        "level_forge": {
+          "title": "フォージでの操作",
+          "hint": "アシスタントのコメント、Issue のクローズ、PR のマージ。"
         }
       },
       "workdir": {
@@ -8616,7 +8638,46 @@
         "accept": "変更する",
         "dismiss": "やめておく",
         "undo": "元に戻す",
-        "seeSettings": "設定で見る"
+        "seeSettings": "設定で見る",
+        "bothWays": "実行設定はセッションで @ する相手でもあります：変更は両方に反映されます。",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "名前",
+            "avatar": "顔",
+            "brain": "ブレイン",
+            "executor": "実行設定",
+            "template": "役割",
+            "notify": "通知",
+            "muted": "ミュート",
+            "hidden": "非表示"
+          },
+          "assistantField": {
+            "name": "名前",
+            "description": "説明",
+            "instructions": "常設指示",
+            "agent": "エージェントとオプション",
+            "enabled": "有効"
+          },
+          "avatarOther": "カスタム画像",
+          "empty": "（空）"
+        },
+        "assistant": {
+          "applied": "指示どおり実行設定を作りました",
+          "accepted": "実行設定を作りました",
+          "undone": "取り消しました：削除済み",
+          "dismissed": "作成しませんでした",
+          "suggested": "提案：新しい実行設定",
+          "show": "実行設定を作りますか？（この種の変更は先に確認する設定です）",
+          "editor": "実行設定を作れませんでした",
+          "on": "{agent} 使用",
+          "editorHint": "codeg が {agent} のオプションを読めなかったため（{why}）、作成していません。指示内容を入力済みのエディターを開き、残りを選んでください。",
+          "firstFor": "最初の担当：{kinds}",
+          "kept": "{count, plural, other {# 項目}}はその後変更されたため、そのままです",
+          "accept": "作成する",
+          "edit": "編集",
+          "openEditor": "エディターを開く"
+        }
       },
       "retryOf": "「{title}」を再試行"
     },
@@ -9128,7 +9189,8 @@
         "answered": "代わりに回答",
         "changed": "代わりに変更",
         "undone": "変更後、元に戻した",
-        "acceptance": "検収の判断が必要"
+        "acceptance": "検収の判断が必要",
+        "forge": "フォージでの操作"
       },
       "session": {
         "permission": "承認待ち",
@@ -9301,6 +9363,67 @@
       "historyAsked": "{round} 回目：あなたに確認",
       "historyChanged": "{round} 回目：合格後にワークツリーが変更",
       "historyOpen": "{round} 回目：進行中"
+    },
+    "forge": {
+      "heading": {
+        "approve": "承認待ち",
+        "suggested": "提案（承認が必要）",
+        "cnb": "CNB でのマージ：常にあなたの承認が必要",
+        "acting": "実行中…",
+        "done": "{provider} で完了",
+        "refused": "実行しませんでした",
+        "notMerged": "マージしませんでした",
+        "failed": "実行できませんでした",
+        "unknown": "完了したか不明",
+        "not_run": "実行せず：状況が変わりました",
+        "dismissed": "実行しないことにしました"
+      },
+      "title": {
+        "comment": "{target} にコメント",
+        "close": "{target} をクローズ",
+        "merge": "{target} をマージ"
+      },
+      "merge": {
+        "head": "ヘッド {head}",
+        "method": {
+          "merge": "マージコミット",
+          "squash": "スカッシュ",
+          "rebase": "リベース"
+        },
+        "checks": {
+          "green": "チェック：すべて成功",
+          "none": "チェック：設定なし",
+          "unknown": "チェック：不明（CNB はチェックを読めません）"
+        },
+        "version": {
+          "accepted": "受け入れチェックに合格したバージョン",
+          "green": "このヘッドでチェックが成功"
+        },
+        "unguaranteed": "バージョン未保証（マージ時にヘッドを指定できません）",
+        "commit": "マージコミット {commit}"
+      },
+      "code": {
+        "merged": "すでにマージ済みです",
+        "closed": "クローズされています",
+        "draft": "ドラフトです",
+        "after_acceptance": "PR に受け入れ後のコミットがあります",
+        "not_accepted": "受け入れチェックに合格していません",
+        "not_delivered": "受け入れ済みのバージョンは codeg がこの PR に渡したものではありません",
+        "checks_unreadable": "codeg はチェックを読めません",
+        "checks_partial": "一部のチェックを読めませんでした",
+        "checks_running": "チェックがまだ実行中です",
+        "checks_failing": "失敗しているチェックがあります"
+      },
+      "notRun": "実行しませんでした：{error}",
+      "failed": "フォージに拒否されました：{error}",
+      "unknown": "フォージから応答がありません：{error}。codeg が自動でやり直すことはなく、やり直す前にフォージを確認します。",
+      "reason": "理由：{reason}",
+      "approve": "承認",
+      "decline": "却下",
+      "look": "確認する",
+      "again": "もう一度実行",
+      "letBe": "そのままにする",
+      "open": "開く"
     }
   }
 }

@@ -34,6 +34,7 @@ import {
 } from "@/lib/app-error"
 import { getAgentLabel } from "@/lib/custom-agents"
 import type {
+  AgentDelegationDefaults,
   AgentType,
   AssistantAgentConfig,
   AssistantAvatar,
@@ -91,6 +92,9 @@ export interface AssistantPrefill {
   instructions?: string
   avatar?: AssistantAvatar
   agentType?: AgentType | null
+  /** The agent's options already picked (an assistant's request the agent
+   *  could not be asked about); the editor checks them as usual. */
+  options?: AgentDelegationDefaults | null
   /** Where it came from, for the host's own section (a template's id). */
   template?: string
 }
@@ -165,7 +169,11 @@ function AssistantEditorBody({
     assistant?.agent_type ?? prefill?.agentType ?? null
   )
   const [selection, setSelection] = useState<AssistantSelection>(
-    assistant ? selectionFromOptions(assistant.agent_options) : EMPTY_SELECTION
+    assistant
+      ? selectionFromOptions(assistant.agent_options)
+      : prefill?.options
+        ? selectionFromOptions(prefill.options)
+        : EMPTY_SELECTION
   )
   /** The user changed the agent or any option. */
   const [agentTouched, setAgentTouched] = useState(false)

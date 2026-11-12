@@ -22,6 +22,7 @@ import {
   type PointerEvent,
   type ReactNode,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -116,6 +117,16 @@ export interface AssistantsPanelProps {
   /** More ways to start a new one, beside [New] (the templates): each
    *  opens the editor with what it fills in. */
   createMenu?: (open: (prefill: AssistantPrefill) => void) => ReactNode
+  /** Open the editor from outside (a card in a conversation): on the
+   *  assistant with that id once it is listed, or a new one prefilled.
+   *  `key` tells two requests apart; `onOpenRequestHandled` is called once
+   *  it is taken. */
+  openRequest?: {
+    key: number
+    assistantId: number | null
+    prefill: AssistantPrefill | null
+  } | null
+  onOpenRequestHandled?: () => void
 }
 
 /** The shared surface of the list, its loading placeholder and nothing else:
@@ -181,6 +192,8 @@ export function AssistantsPanel({
   editorSection,
   onEditorSaved,
   createMenu,
+  openRequest,
+  onOpenRequestHandled,
 }: AssistantsPanelProps) {
   // The settings window has no workspace layout to keep this store live.
   useAssistantsSync()
@@ -365,6 +378,33 @@ export function AssistantsPanel({
     editorSeq.current += 1
     setEditor({ key: editorSeq.current, assistant, prefill })
   }
+
+  // A request from outside: taken once its assistant is listed (a new one
+  // at once).
+  const takenRequest = useRef<number | null>(null)
+  useEffect(() => {
+    if (!openRequest || takenRequest.current === openRequest.key) return
+    if (openRequest.assistantId != null) {
+      if (!hydrated) return
+      const target = assistants.find(
+        (a) => a.id === openRequest.assistantId && a.deleted_at == null
+      )
+      takenRequest.current = openRequest.key
+      if (target) {
+        editorSeq.current += 1
+        setEditor({ key: editorSeq.current, assistant: target, prefill: null })
+      }
+    } else {
+      takenRequest.current = openRequest.key
+      editorSeq.current += 1
+      setEditor({
+        key: editorSeq.current,
+        assistant: null,
+        prefill: openRequest.prefill,
+      })
+    }
+    onOpenRequestHandled?.()
+  }, [openRequest, hydrated, assistants, onOpenRequestHandled])
 
   const empty = hydrated && shown.length === 0
   // Nothing read yet: hold the list's place instead of leaving a gap that the

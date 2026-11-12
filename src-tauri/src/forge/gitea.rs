@@ -334,6 +334,29 @@ pub async fn set_item_state(
     Ok(raw.into_row(kind == ForgeItemKind::Change))
 }
 
+/// `GET /repos/{o}/{r}/issues/{n}` or `/pulls/{n}` — one item's state, and
+/// the commit a merged pull request landed as.
+pub async fn item_facts(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    kind: ForgeItemKind,
+    number: i64,
+) -> Result<super::ItemFacts, ForgeError> {
+    let repo = repo_ref(owner_repo)?;
+    require_number(number)?;
+    let collection = match kind {
+        ForgeItemKind::Issue => "issues",
+        ForgeItemKind::Change => "pulls",
+    };
+    let url = format!("{}/repos/{repo}/{collection}/{number}", auth.api_base);
+    let raw: serde_json::Value = api_get(auth, &url)
+        .await?
+        .json()
+        .await
+        .map_err(|e| ForgeError::Network(format!("bad item payload: {e}")))?;
+    Ok(super::ItemFacts::from_json(&raw))
+}
+
 /// `POST /repos/{o}/{r}/issues` — open an issue, and hand back the row for it.
 ///
 /// Labels are resolved from NAMES to IDS first, because that is what Gitea's
@@ -489,8 +512,14 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
     let combined: Option<RawCombinedStatus> =
         async { api_get(auth, &url).await.ok()?.json().await.ok() }.await;
     match combined {
-        Some(combined) => ForgeCheckList::available(
-            combined
+        Some(combined) => {
+            // More than one page holds: not the whole answer, so a failing
+            // status on the next page cannot read as green.
+            let more = match combined.total_count {
+                Some(n) => n > combined.statuses.len(),
+                None => combined.statuses.len() >= LABEL_PAGE_SIZE,
+            };
+            let checks = combined
                 .statuses
                 .into_iter()
                 .map(|status| ForgeCheck {
@@ -506,8 +535,13 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
                     // repository, not of the run.
                     allow_failure: false,
                 })
-                .collect(),
-        ),
+                .collect();
+            if more {
+                ForgeCheckList::partial(checks)
+            } else {
+                ForgeCheckList::available(checks)
+            }
+        }
         None => ForgeCheckList::unavailable(),
     }
 }
@@ -1440,6 +1474,8 @@ struct RawPullRepo {
 struct RawCombinedStatus {
     #[serde(default)]
     statuses: Vec<RawCommitStatus>,
+    #[serde(default)]
+    total_count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]

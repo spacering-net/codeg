@@ -109,8 +109,18 @@ pub async fn assistant_create_core(
     db: &AppDatabase,
     draft: AssistantDraft,
 ) -> Result<AssistantInfo, AppCommandError> {
+    assistant_create_as_core(emitter, db, draft, uuid::Uuid::new_v4().to_string()).await
+}
+
+/// [`assistant_create_core`] under a uid chosen beforehand.
+pub async fn assistant_create_as_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    draft: AssistantDraft,
+    uid: String,
+) -> Result<AssistantInfo, AppCommandError> {
     let _one_at_a_time = ASSISTANT_WRITE_LOCK.lock().await;
-    let assistant = assistant_service::create(&db.conn, &draft).await?;
+    let assistant = assistant_service::create_as(&db.conn, &draft, &uid).await?;
     emit_change(
         emitter,
         AssistantChange::Upsert {

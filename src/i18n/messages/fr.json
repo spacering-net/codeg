@@ -8246,6 +8246,28 @@
         "level_used_up": {
           "title": "Tours épuisés, toujours pas bon",
           "hint": "Un travail renvoyé autant de fois que vous le permettez et toujours pas bon."
+        },
+        "forge_comment": {
+          "title": "Commentaires sur une forge",
+          "hint": "Quand un assistant commente une issue ou une PR.",
+          "auto": "Le publier directement",
+          "ask": "Me demander d'abord (carte d'approbation)"
+        },
+        "issue_close": {
+          "title": "Fermer des issues",
+          "hint": "Quand un assistant ferme une issue sur une forge.",
+          "auto": "La fermer directement",
+          "ask": "Me demander d'abord (carte d'approbation)"
+        },
+        "pr_merge": {
+          "title": "Fusionner des PR",
+          "hint": "Fusionnée seulement si sa tête est la version à fusionner (celle validée par l'acceptation, si elle est activée) et ses vérifications réussies ; la protection de branche du dépôt s'applique toujours. CNB ne montre pas les vérifications et ne fige pas la tête : une fusion là-bas te demande toujours.",
+          "auto": "Fusionner quand les vérifications réussissent",
+          "ask": "Me demander d'abord (carte d'approbation)"
+        },
+        "level_forge": {
+          "title": "Sur une forge",
+          "hint": "Un commentaire, une issue fermée ou une PR fusionnée par un assistant."
         }
       },
       "workdir": {
@@ -8616,7 +8638,46 @@
         "accept": "Modifier",
         "dismiss": "Pas maintenant",
         "undo": "Annuler",
-        "seeSettings": "Voir dans les réglages"
+        "seeSettings": "Voir dans les réglages",
+        "bothWays": "Les configurations d'exécution sont aussi celles qu'un @ atteint dans une session : la modification vaut pour les deux.",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "nom",
+            "avatar": "visage",
+            "brain": "cerveau",
+            "executor": "configuration d'exécution",
+            "template": "rôle",
+            "notify": "notifications",
+            "muted": "sourdine",
+            "hidden": "masqué"
+          },
+          "assistantField": {
+            "name": "nom",
+            "description": "description",
+            "instructions": "instructions permanentes",
+            "agent": "agent et options",
+            "enabled": "activée"
+          },
+          "avatarOther": "image personnalisée",
+          "empty": "(vide)"
+        },
+        "assistant": {
+          "applied": "Configuration d'exécution créée, comme demandé",
+          "accepted": "Configuration d'exécution créée",
+          "undone": "Annulé : supprimée",
+          "dismissed": "Pas créée",
+          "suggested": "Suggestion : une nouvelle configuration d'exécution",
+          "show": "Créer la configuration d'exécution ? (tu as demandé à voir ces changements d'abord)",
+          "editor": "Impossible de créer la configuration d'exécution",
+          "on": "avec {agent}",
+          "editorHint": "codeg n'a pas pu lire les options de {agent} ({why}), rien n'a donc été créé. Ouvre l'éditeur prérempli avec ta demande et choisis le reste.",
+          "firstFor": "Premier choix pour : {kinds}",
+          "kept": "{count, plural, one {# élément a été modifié} other {# éléments ont été modifiés}} depuis, donc laissés tels quels",
+          "accept": "La créer",
+          "edit": "Modifier",
+          "openEditor": "Ouvrir l'éditeur"
+        }
       },
       "retryOf": "Relancer « {title} »"
     },
@@ -9128,7 +9189,8 @@
         "answered": "Répondu pour vous",
         "changed": "Modifié pour vous",
         "undone": "Modifié puis annulé",
-        "acceptance": "À vous de décider de la validation"
+        "acceptance": "À vous de décider de la validation",
+        "forge": "Fait sur une forge"
       },
       "session": {
         "permission": "Attend votre approbation",
@@ -9301,6 +9363,67 @@
       "historyAsked": "Tour {round} : soumis à vous",
       "historyChanged": "Tour {round} : validé, puis l'arbre de travail a changé",
       "historyOpen": "Tour {round} : en cours"
+    },
+    "forge": {
+      "heading": {
+        "approve": "En attente de ton approbation",
+        "suggested": "Une suggestion, à approuver",
+        "cnb": "Une fusion sur CNB : toujours à approuver par toi",
+        "acting": "En cours…",
+        "done": "Fait sur {provider}",
+        "refused": "Pas fait",
+        "notMerged": "Pas fusionné",
+        "failed": "Échec",
+        "unknown": "Pas sûr que ce soit passé",
+        "not_run": "Pas fait : la situation a changé",
+        "dismissed": "Laissé de côté"
+      },
+      "title": {
+        "comment": "Commenter {target}",
+        "close": "Fermer {target}",
+        "merge": "Fusionner {target}"
+      },
+      "merge": {
+        "head": "Tête {head}",
+        "method": {
+          "merge": "commit de fusion",
+          "squash": "squash",
+          "rebase": "rebase"
+        },
+        "checks": {
+          "green": "Vérifications : toutes réussies",
+          "none": "Vérifications : aucune configurée",
+          "unknown": "Vérifications : inconnues (CNB ne les expose pas)"
+        },
+        "version": {
+          "accepted": "La version validée par son acceptation",
+          "green": "Vérifications réussies sur cette tête"
+        },
+        "unguaranteed": "Version non garantie (la fusion ne prend pas de tête)",
+        "commit": "Commit de fusion {commit}"
+      },
+      "code": {
+        "merged": "Déjà fusionnée",
+        "closed": "Elle est fermée",
+        "draft": "C'est un brouillon",
+        "after_acceptance": "La PR a des commits après son acceptation",
+        "not_accepted": "Son acceptation n'est pas validée",
+        "not_delivered": "codeg n'a pas livré la version acceptée dans cette PR",
+        "checks_unreadable": "codeg ne peut pas lire ses vérifications",
+        "checks_partial": "Certaines vérifications sont illisibles",
+        "checks_running": "Ses vérifications sont encore en cours",
+        "checks_failing": "Certaines vérifications échouent"
+      },
+      "notRun": "Pas fait : {error}",
+      "failed": "La forge a refusé : {error}",
+      "unknown": "La forge n'a pas répondu : {error}. codeg ne le refait pas seul ; il vérifie d'abord sur la forge.",
+      "reason": "Pourquoi : {reason}",
+      "approve": "Approuver",
+      "decline": "Refuser",
+      "look": "Voir",
+      "again": "Refaire",
+      "letBe": "Laisser tel quel",
+      "open": "Ouvrir"
     }
   }
 }

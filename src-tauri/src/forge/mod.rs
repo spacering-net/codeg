@@ -1694,6 +1694,54 @@ impl ForgeCheckList {
     }
 }
 
+/// One item as an action taken on it is checked against afterwards: its
+/// state, and the commit a merged change landed as when the forge says. Read
+/// from the item's own JSON, which every forge serves at its own address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemFacts {
+    /// `open` / `closed` / `merged`, as [`ForgeIssueRow::state`].
+    pub state: String,
+    pub merge_commit: Option<String>,
+}
+
+impl ItemFacts {
+    /// GitHub marks a merged pull request with `merged_at` (or `merged`),
+    /// Gitea with `merged`, CNB with `is_merged` beside `state: closed`,
+    /// GitLab with `state: merged`; a GitLab merge request being merged is
+    /// `locked`, still open. The commit is `merge_commit_sha`, or GitLab's
+    /// `squash_commit_sha` for a squash.
+    pub fn from_json(v: &serde_json::Value) -> Self {
+        let text = |k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_str())
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+        };
+        let raw = text("state").unwrap_or("open").to_ascii_lowercase();
+        let flag = |k: &str| v.get(k).and_then(|m| m.as_bool()) == Some(true);
+        let merged =
+            raw == "merged" || flag("merged") || flag("is_merged") || text("merged_at").is_some();
+        let state = if merged {
+            "merged"
+        } else if raw == "closed" {
+            "closed"
+        } else {
+            "open"
+        };
+        let merge_commit = if merged {
+            text("merge_commit_sha")
+                .or_else(|| text("squash_commit_sha"))
+                .map(str::to_string)
+        } else {
+            None
+        };
+        Self {
+            state: state.to_string(),
+            merge_commit,
+        }
+    }
+}
+
 /// How a file was touched, in the one vocabulary both forges can be read into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -161,8 +161,16 @@ pub enum What {
     AcceptedPr {
         text: String,
     },
-    /// Accepted and merged.
+    /// Accepted and merged; a pull request an assistant merged.
     Merged {
+        text: String,
+    },
+    /// A comment an assistant posted on a forge (7.4).
+    Commented {
+        text: String,
+    },
+    /// An issue an assistant closed.
+    IssueClosed {
         text: String,
     },
     /// The acceptance is the owner's call.
@@ -422,11 +430,14 @@ struct Words {
     accepted: &'static str,
     accepted_pr: &'static str,
     merged: &'static str,
+    commented: &'static str,
+    issue_closed: &'static str,
     accept_ask: &'static str,
     used_up: &'static str,
     accept_void: &'static str,
     why_acceptance: &'static str,
     why_used_up: &'static str,
+    why_forge: &'static str,
 }
 
 const EN: Words = Words {
@@ -458,11 +469,14 @@ const EN: Words = Words {
     accepted: "Ready to merge: {text}",
     accepted_pr: "Accepted: {text}",
     merged: "Merged: {text}",
+    commented: "Commented on {text}",
+    issue_closed: "Closed {text}",
     accept_ask: "Your call on its acceptance: {text}",
     used_up: "Still not right after the rounds allowed: {text}",
     accept_void: "Its check no longer applies: {text}",
     why_acceptance: "It checked the work it dispatched for you.",
     why_used_up: "It sent the work back as many times as you allow.",
+    why_forge: "It did this on a forge for you.",
 };
 
 const ZH_CN: Words = Words {
@@ -494,11 +508,14 @@ const ZH_CN: Words = Words {
     accepted: "可以合并了：{text}",
     accepted_pr: "验收通过：{text}",
     merged: "已合并：{text}",
+    commented: "已评论：{text}",
+    issue_closed: "已关闭：{text}",
     accept_ask: "验收要你定：{text}",
     used_up: "退回几轮还没过：{text}",
     accept_void: "验收已失效：{text}",
     why_acceptance: "这是它替你派出、替你验收的活。",
     why_used_up: "已经退回到你允许的轮数。",
+    why_forge: "这是它替你在代码平台上做的。",
 };
 
 const ZH_TW: Words = Words {
@@ -530,11 +547,14 @@ const ZH_TW: Words = Words {
     accepted: "可以合併了：{text}",
     accepted_pr: "驗收通過：{text}",
     merged: "已合併：{text}",
+    commented: "已留言：{text}",
+    issue_closed: "已關閉：{text}",
     accept_ask: "驗收要你決定：{text}",
     used_up: "退回幾輪還沒通過：{text}",
     accept_void: "驗收已失效：{text}",
     why_acceptance: "這是它替你派出、替你驗收的工作。",
     why_used_up: "已經退回到你允許的輪數。",
+    why_forge: "這是它替你在程式碼平台上做的。",
 };
 
 const JA: Words = Words {
@@ -566,11 +586,14 @@ const JA: Words = Words {
     accepted: "マージできます：{text}",
     accepted_pr: "受け入れ済み：{text}",
     merged: "マージしました：{text}",
+    commented: "コメントしました：{text}",
+    issue_closed: "クローズしました：{text}",
     accept_ask: "受け入れの判断をお願いします：{text}",
     used_up: "許可された回数を直しても通りません：{text}",
     accept_void: "確認が無効になりました：{text}",
     why_acceptance: "あなたの代わりに出した作業を受け入れ確認しました。",
     why_used_up: "許可された回数まで差し戻しました。",
+    why_forge: "あなたの代わりにフォージ上で行いました。",
 };
 
 const KO: Words = Words {
@@ -602,11 +625,14 @@ const KO: Words = Words {
     accepted: "병합할 수 있어요: {text}",
     accepted_pr: "검수 통과: {text}",
     merged: "병합됨: {text}",
+    commented: "댓글 남김: {text}",
+    issue_closed: "닫음: {text}",
     accept_ask: "검수 결정을 기다려요: {text}",
     used_up: "허용된 횟수만큼 고쳐도 통과하지 못했어요: {text}",
     accept_void: "검수가 무효가 되었어요: {text}",
     why_acceptance: "대신 맡긴 작업을 대신 검수했어요.",
     why_used_up: "허용하신 횟수만큼 되돌려 보냈어요.",
+    why_forge: "대신 코드 플랫폼에서 처리했어요.",
 };
 
 const ES: Words = Words {
@@ -638,11 +664,14 @@ const ES: Words = Words {
     accepted: "Listo para fusionar: {text}",
     accepted_pr: "Aceptado: {text}",
     merged: "Fusionado: {text}",
+    commented: "Comentado en {text}",
+    issue_closed: "Cerrado: {text}",
     accept_ask: "Te toca decidir si se acepta: {text}",
     used_up: "Sigue sin estar bien tras las rondas permitidas: {text}",
     accept_void: "Su revisión ya no vale: {text}",
     why_acceptance: "Revisó el trabajo que encargó por ti.",
     why_used_up: "Lo devolvió tantas veces como permites.",
+    why_forge: "Lo hizo en la forja por ti.",
 };
 
 const DE: Words = Words {
@@ -674,11 +703,14 @@ const DE: Words = Words {
     accepted: "Bereit zum Mergen: {text}",
     accepted_pr: "Abgenommen: {text}",
     merged: "Gemergt: {text}",
+    commented: "Kommentiert: {text}",
+    issue_closed: "Geschlossen: {text}",
     accept_ask: "Du entscheidest über die Abnahme: {text}",
     used_up: "Nach den erlaubten Runden noch nicht richtig: {text}",
     accept_void: "Die Prüfung gilt nicht mehr: {text}",
     why_acceptance: "Es hat die Arbeit geprüft, die es für dich vergeben hat.",
     why_used_up: "Es hat die Arbeit so oft zurückgeschickt, wie du erlaubst.",
+    why_forge: "Es hat das für dich auf der Forge erledigt.",
 };
 
 const FR: Words = Words {
@@ -711,11 +743,14 @@ const FR: Words = Words {
     accepted: "Prêt à fusionner : {text}",
     accepted_pr: "Accepté : {text}",
     merged: "Fusionné : {text}",
+    commented: "Commentaire publié : {text}",
+    issue_closed: "Fermé : {text}",
     accept_ask: "À vous de décider de l'acceptation : {text}",
     used_up: "Toujours pas bon après les tours permis : {text}",
     accept_void: "Sa vérification ne vaut plus : {text}",
     why_acceptance: "Il a vérifié le travail qu'il a confié pour vous.",
     why_used_up: "Il l'a renvoyé autant de fois que vous le permettez.",
+    why_forge: "Il l'a fait sur la forge pour vous.",
 };
 
 const PT: Words = Words {
@@ -748,11 +783,14 @@ const PT: Words = Words {
     accepted: "Pronto para mesclar: {text}",
     accepted_pr: "Aceito: {text}",
     merged: "Mesclado: {text}",
+    commented: "Comentado em {text}",
+    issue_closed: "Fechado: {text}",
     accept_ask: "A decisão sobre a aceitação é sua: {text}",
     used_up: "Ainda não está certo após as rodadas permitidas: {text}",
     accept_void: "A verificação não vale mais: {text}",
     why_acceptance: "Ele verificou o trabalho que delegou por você.",
     why_used_up: "Ele devolveu o trabalho tantas vezes quanto você permite.",
+    why_forge: "Ele fez isso na forja por você.",
 };
 
 const AR: Words = Words {
@@ -784,11 +822,14 @@ const AR: Words = Words {
     accepted: "جاهز للدمج: {text}",
     accepted_pr: "تم القبول: {text}",
     merged: "تم الدمج: {text}",
+    commented: "تم التعليق على {text}",
+    issue_closed: "تم الإغلاق: {text}",
     accept_ask: "القرار لك في القبول: {text}",
     used_up: "لم يصبح صحيحًا بعد الجولات المسموح بها: {text}",
     accept_void: "لم يعد فحصه ساريًا: {text}",
     why_acceptance: "فحص العمل الذي أسنده نيابةً عنك.",
     why_used_up: "أعاد العمل بعدد المرات التي تسمح بها.",
+    why_forge: "قام بذلك على منصة الشيفرة نيابةً عنك.",
 };
 
 fn words(locale: AppLocale) -> &'static Words {
@@ -827,6 +868,8 @@ fn main_line(w: &Words, what: &What) -> String {
         What::Accepted { text } => fill(w.accepted, text, 0, ""),
         What::AcceptedPr { text } => fill(w.accepted_pr, text, 0, ""),
         What::Merged { text } => fill(w.merged, text, 0, ""),
+        What::Commented { text } => fill(w.commented, text, 0, ""),
+        What::IssueClosed { text } => fill(w.issue_closed, text, 0, ""),
         What::AcceptAsk { text } => fill(w.accept_ask, text, 0, ""),
         What::UsedUp { text } => fill(w.used_up, text, 0, ""),
         What::AcceptVoid { text } => fill(w.accept_void, text, 0, ""),
@@ -852,6 +895,7 @@ fn reason(w: &Words, kind: &str, what: &What) -> Option<String> {
         "reply" => w.why_reply.into(),
         "acceptance" => w.why_acceptance.into(),
         "used_up" => w.why_used_up.into(),
+        "forge" => w.why_forge.into(),
         _ => return None,
     };
     Some(line)

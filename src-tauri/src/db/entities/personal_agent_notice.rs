@@ -55,6 +55,13 @@ pub enum NoticeKind {
     /// question and what sending it back would say.
     #[sea_orm(string_value = "acceptance")]
     Acceptance,
+    /// One action an assistant takes on a forge (7.4) — a comment, closing
+    /// an issue, merging a pull request — at the target it named once: what
+    /// was done and where, or why not; an approval card first when the owner
+    /// asked to approve such actions; the step whose outcome cannot be told,
+    /// to look at or do again after checking the forge.
+    #[sea_orm(string_value = "forge")]
+    Forge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

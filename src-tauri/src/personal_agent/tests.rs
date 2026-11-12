@@ -10261,3 +10261,689 @@ async fn an_acceptance_card_is_the_owners_in_today_and_moves_with_handed_over_wo
     engine.act_on_notice(notice.id, "accept").await.unwrap();
     assert_eq!(rounds_of(&engine, w.d.id).await[0].state, VerificationState::Accepted);
 }
+
+// ── 2.2: the team from the conversation ─────────────────────────────────────
+
+#[tokio::test]
+async fn the_owner_changes_a_work_assistant_in_words_and_the_card_undoes_it() {
+    super::options::test_support::install(AgentType::ClaudeCode);
+    super::options::test_support::install(AgentType::Codex);
+    let (host, w, _tmp) = hosted().await;
+    let engine = host.primary();
+    let row = svc::get_bot(&engine.db.conn, w).await.unwrap().unwrap();
+    let out = call_tool(&engine, "bot_update", json!({ "bot": "Dev", "name": "Yan" })).await;
+    assert!(!out.ok && out.text.contains("quote"), "{}", out.text);
+    // A new name, and its brain on Codex with only the agent said.
+    let out = call_tool(
+        &engine,
+        "bot_update",
+        json!({ "bot": "Dev", "name": "Yan", "brain": { "agent_type": "codex" }, "quote": "call it Yan, on Codex" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let now = svc::get_bot(&engine.db.conn, w).await.unwrap().unwrap();
+    assert_eq!(now.name, "Yan");
+    assert_eq!(now.agent_type, "codex");
+    let card = last_card(&engine, "changed").await;
+    let data = data_of(&card);
+    assert_eq!(data["state"], "applied");
+    let uid = row.uid.clone().unwrap();
+    let brain = data["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["key"] == format!("bot.{uid}.brain"))
+        .expect("the brain on the card")
+        .clone();
+    assert!(
+        brain["picked"].as_array().is_some_and(|p| p.iter().any(|o| o["from"] != "given")),
+        "the options codeg picked are listed: {brain}"
+    );
+    assert_eq!(data["names"][format!("bot:{uid}")], "Yan");
+    // [Undo]: its name and brain are back.
+    engine.act_on_notice(card_id(&card), "undo").await.unwrap();
+    let back = svc::get_bot(&engine.db.conn, w).await.unwrap().unwrap();
+    assert_eq!((back.name.as_str(), back.agent_type.as_str()), (row.name.as_str(), row.agent_type.as_str()));
+
+    // Its notifications, as the roster's own menu turns them.
+    let out = call_tool(&engine, "bot_update", json!({ "bot": w, "muted": true, "quote": "mute Dev" })).await;
+    assert!(out.ok, "{}", out.text);
+    assert!(svc::get_bot(&engine.db.conn, w).await.unwrap().unwrap().muted);
+    // Its own idea: a suggestion card; nothing changes until the owner says so.
+    let out = call_tool(
+        &engine,
+        "bot_update",
+        json!({ "bot": w, "hidden": true, "suggest": true, "reason": "it has not run for weeks" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert!(!svc::get_bot(&engine.db.conn, w).await.unwrap().unwrap().hidden);
+    // The primary is changed its own way.
+    let primary = engine.bot().await;
+    let out = call_tool(&engine, "bot_update", json!({ "bot": primary, "name": "X", "quote": "x" })).await;
+    assert!(!out.ok && out.text.contains("prefs_update"), "{}", out.text);
+}
+
+#[tokio::test]
+async fn an_executor_config_is_made_from_what_the_owner_said_and_the_rest_filled_in() {
+    let (engine, _tmp) = ready().await;
+    let out = call_tool(
+        &engine,
+        "assistant_update",
+        json!({ "name": "Docs writer", "agent_type": "claude_code", "template": "docs",
+                "quote": "add one for docs on Claude Code" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert!(out.text.contains("options codeg picked for the owner"), "{}", out.text);
+    assert!(out.text.contains("first pick for: docs"), "{}", out.text);
+    let id = out.data["assistant_id"].as_i64().unwrap() as i32;
+    let uid = out.data["uid"].as_str().unwrap().to_string();
+    let made = executor(&engine, id).await;
+    assert_eq!(made.agent_type, AgentType::ClaudeCode);
+    assert_eq!(
+        made.instructions,
+        super::bot_templates::instructions(crate::models::system::AppLocale::En, "docs")
+    );
+    assert_eq!(engine.account().await.team.division.get("docs"), Some(&format!("assistant:{uid}")));
+    let card = last_card(&engine, "changed").await;
+    let data = data_of(&card);
+    assert_eq!((data["what"].as_str(), data["state"].as_str()), (Some("assistant"), Some("applied")));
+    assert!(data["made"]["picked"].as_array().is_some_and(|p| !p.is_empty()));
+    // A second one for docs does not take the first's place.
+    let out = call_tool(
+        &engine,
+        "assistant_update",
+        json!({ "name": "Docs two", "agent_type": "codex", "template": "docs", "quote": "another" }),
+    )
+    .await;
+    assert!(out.ok && !out.text.contains("first pick"), "{}", out.text);
+    // [Undo] of the first: deleted, and docs back to auto.
+    engine.act_on_notice(card_id(&card), "undo").await.unwrap();
+    assert!(!executor(&engine, id).await.is_live());
+    assert_eq!(engine.account().await.team.division.get("docs"), None);
+
+    // Changing one: its standing instructions, directly, with a card that undoes it.
+    let other = out.data["assistant_id"].as_i64().unwrap() as i32;
+    let out = call_tool(
+        &engine,
+        "assistant_update",
+        json!({ "assistant": other, "instructions": "Write for beginners.", "roles": ["research"], "quote": "make it write for beginners" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(executor(&engine, other).await.instructions, "Write for beginners.");
+    let other_uid = executor(&engine, other).await.uid;
+    assert_eq!(engine.account().await.team.division.get("research"), Some(&format!("assistant:{other_uid}")));
+    let card = last_card(&engine, "changed").await;
+    engine.act_on_notice(card_id(&card), "undo").await.unwrap();
+    assert_ne!(executor(&engine, other).await.instructions, "Write for beginners.");
+    assert_eq!(engine.account().await.team.division.get("research"), None);
+}
+
+#[tokio::test]
+async fn without_the_agents_options_nothing_is_made_and_the_editor_opens_prefilled() {
+    let (engine, _tmp) = ready().await;
+    // Gemini is not installed here: its options cannot be read.
+    let out = call_tool(
+        &engine,
+        "assistant_update",
+        json!({ "name": "Gem", "agent_type": "gemini", "instructions": "Be brief.", "quote": "add one on Gemini" }),
+    )
+    .await;
+    assert!(out.ok && out.data["state"] == "editor", "{}", out.text);
+    let live = crate::db::service::assistant_service::list_all(&engine.db.conn).await.unwrap();
+    assert!(!live.iter().any(|a| a.name == "Gem"), "nothing made");
+    let data = data_of(&last_card(&engine, "changed").await);
+    assert_eq!(data["state"], "editor");
+    assert_eq!(data["pending"]["name"], "Gem");
+    assert_eq!(data["pending"]["instructions"], "Be brief.");
+    assert_eq!(data["pending"]["agent_type"], "gemini");
+}
+
+#[tokio::test]
+async fn an_executor_config_cut_off_while_made_or_undone_is_finished_not_made_twice() {
+    let (engine, _tmp) = ready().await;
+    let out = call_tool(
+        &engine,
+        "assistant_update",
+        json!({ "name": "Docs writer", "agent_type": "claude_code", "template": "docs", "quote": "one for docs" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["assistant_id"].as_i64().unwrap() as i32;
+    let card = last_card(&engine, "changed").await;
+    let op = svc::ops_of_notice(&engine.db.conn, card_id(&card)).await.unwrap().pop().expect("its entry");
+    assert_eq!((op.kind.as_str(), op.state), ("assistant_create", ActionState::Committed));
+    assert!(op.target.as_deref().unwrap_or("").contains(&id.to_string()), "the entry records what it made");
+    // As a restart finds one cut off after the config was made: finished,
+    // the same config, nothing made again.
+    svc::op_settle(&engine.db.conn, op.op_id.as_deref().unwrap(), &[ActionState::Committed], ActionState::Prepared, None, None, None)
+        .await
+        .unwrap();
+    engine.boot_ledger().await;
+    let now = svc::get_op(&engine.db.conn, op.op_id.as_deref().unwrap()).await.unwrap().unwrap();
+    assert_eq!((now.state, now.ref_id.as_deref()), (ActionState::Committed, Some(id.to_string().as_str())));
+    let docs: Vec<_> = crate::db::service::assistant_service::list_all(&engine.db.conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.is_live() && a.name.starts_with("Docs writer"))
+        .collect();
+    assert_eq!(docs.len(), 1, "made once");
+    // An undo cut off before it finished: start-up finishes it.
+    use sea_orm::{ActiveModelTrait, Set};
+    let notice = svc::get_notice(&engine.db.conn, card_id(&card)).await.unwrap().unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(&notice.payload).unwrap();
+    payload["phase"] = json!("undoing");
+    let mut am: crate::db::entities::personal_agent_notice::ActiveModel = notice.into();
+    am.state = Set(NoticeState::Acting);
+    am.payload = Set(payload.to_string());
+    am.update(&engine.db.conn).await.unwrap();
+    engine.boot_ledger().await;
+    assert!(!executor(&engine, id).await.is_live(), "deleted");
+    assert_eq!(engine.account().await.team.division.get("docs"), None);
+    let notice = svc::get_notice(&engine.db.conn, card_id(&card)).await.unwrap().unwrap();
+    assert_eq!(notice.state, NoticeState::Undone);
+    // A making cut off before anything was made: not made, and said so.
+    set_pref(&engine, "chat_changes", json!("show")).await;
+    let out = call_tool(&engine, "assistant_update", json!({ "name": "Tester", "agent_type": "codex", "quote": "a tester" })).await;
+    assert!(out.ok && out.data["state"] == "open", "{}", out.text);
+    let card = last_card(&engine, "changed").await;
+    let notice = svc::get_notice(&engine.db.conn, card_id(&card)).await.unwrap().unwrap();
+    let mut am: crate::db::entities::personal_agent_notice::ActiveModel = notice.into();
+    am.state = Set(NoticeState::Acting);
+    am.update(&engine.db.conn).await.unwrap();
+    engine.boot_ledger().await;
+    let notice = svc::get_notice(&engine.db.conn, card_id(&card)).await.unwrap().unwrap();
+    assert_eq!(notice.state, NoticeState::Open, "open again: nothing was made");
+    assert!(!crate::db::service::assistant_service::list_all(&engine.db.conn).await.unwrap().iter().any(|a| a.name == "Tester"));
+    // Accepted now: made once.
+    engine.act_on_notice(card_id(&card), "accept").await.unwrap();
+    assert_eq!(
+        crate::db::service::assistant_service::list_all(&engine.db.conn).await.unwrap().iter().filter(|a| a.is_live() && a.name == "Tester").count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn an_executor_config_recovered_after_its_division_was_written_undoes_back_to_the_pick_before() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, _tmp) = ready().await;
+    let old = role_assistant(&engine, "Old docs", true).await;
+    let old_uid = executor(&engine, old).await.uid;
+    engine
+        .apply_settings(&[change("team.division.docs", json!(format!("assistant:{old_uid}")))])
+        .await
+        .unwrap();
+    let out = call_tool(
+        &engine,
+        "assistant_update",
+        json!({ "name": "New docs", "agent_type": "claude_code", "roles": ["docs"], "quote": "the new one does docs" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["assistant_id"].as_i64().unwrap() as i32;
+    let uid = out.data["uid"].as_str().unwrap().to_string();
+    assert_eq!(engine.account().await.team.division.get("docs"), Some(&format!("assistant:{uid}")));
+    // As a restart finds it: made, its division written, but no card yet.
+    let card = last_card(&engine, "changed").await;
+    let op = svc::ops_of_notice(&engine.db.conn, card_id(&card)).await.unwrap().pop().unwrap();
+    let mut am: action_entity::ActiveModel = op.clone().into();
+    am.state = Set(ActionState::Prepared);
+    am.notice_id = Set(None);
+    am.update(&engine.db.conn).await.unwrap();
+    engine.boot_ledger().await;
+    let recovered = last_card(&engine, "changed").await;
+    assert_ne!(recovered.id, card.id, "the card it never had");
+    let data = data_of(&recovered);
+    assert_eq!((data["what"].as_str(), data["state"].as_str()), (Some("assistant"), Some("applied")));
+    assert_eq!(data["made"]["assistant"]["id"], id);
+    // Its undo puts back the pick there was before.
+    engine.act_on_notice(card_id(&recovered), "undo").await.unwrap();
+    assert!(!executor(&engine, id).await.is_live());
+    assert_eq!(engine.account().await.team.division.get("docs"), Some(&format!("assistant:{old_uid}")));
+}
+
+#[tokio::test]
+async fn a_forge_action_names_its_item_or_is_refused() {
+    let (engine, tmp) = configured().await;
+    let out = call_tool(&engine, "forge_comment", json!({ "body": "hi" })).await;
+    assert!(!out.ok && out.text.contains("name the item"), "{}", out.text);
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let out = call_tool(&engine, "forge_comment", json!({ "project_id": project, "number": 3, "body": "hi" })).await;
+    assert!(!out.ok && out.text.contains("`kind`"), "{}", out.text);
+    let out = call_tool(&engine, "forge_comment", json!({ "project_id": project, "number": 3, "kind": "issue", "body": " " })).await;
+    assert!(!out.ok, "{}", out.text);
+    let out = call_tool(&engine, "issue_close", json!({ "project_id": project, "number": 3 })).await;
+    assert!(!out.ok && out.text.contains("forge remote"), "{}", out.text);
+    let out = call_tool(&engine, "pr_merge", json!({ "task_id": 999 })).await;
+    assert!(!out.ok, "{}", out.text);
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+mod against_a_forge {
+    use super::*;
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    use crate::db::service::personal_agent_verification_service as vsvc;
+    use crate::models::{GitHubAccount, GitHubAccountsSettings};
+    use axum::extract::{Path as UrlPath, State};
+    use axum::response::IntoResponse;
+    use axum::routing::get;
+    use axum::{Json, Router};
+    use std::sync::Mutex as StdMutex;
+
+    /// A GitHub (Enterprise) with one repository, `acme/app`.
+    #[derive(Default)]
+    struct Forge {
+        comments: Vec<serde_json::Value>,
+        /// Comment POSTs that arrived.
+        posts: usize,
+        /// The next comment POST: `lost` — stored, answered 502; `drop` —
+        /// answered 502, not stored.
+        comment_mode: Option<&'static str>,
+        head: String,
+        merged: bool,
+        merges: Vec<serde_json::Value>,
+        checks: Vec<serde_json::Value>,
+        issue_closed: bool,
+        closes: usize,
+        /// The next merge PUT: `drop` — answered 502, nothing merged.
+        merge_mode: Option<&'static str>,
+        /// What check-runs says it holds in all (more than it returns).
+        checks_total: Option<usize>,
+    }
+
+    type Shared = Arc<StdMutex<Forge>>;
+
+    fn pull(f: &Forge, n: i64) -> serde_json::Value {
+        json!({
+            "number": n, "state": if f.merged { "closed" } else { "open" }, "draft": false,
+            "merged": f.merged, "merged_at": if f.merged { json!("2026-11-12T00:00:00Z") } else { json!(null) },
+            "merge_commit_sha": if f.merged { json!("m3rg3c0mm17") } else { json!(null) },
+            "mergeable": true, "mergeable_state": "clean",
+            "head": { "ref": "fix", "sha": f.head, "repo": { "full_name": "acme/app" } },
+            "base": { "ref": "main", "sha": "base0", "repo": { "full_name": "acme/app" } },
+        })
+    }
+
+    fn issue(f: &Forge, n: i64) -> serde_json::Value {
+        json!({
+            "number": n, "title": "Login fails", "state": if f.issue_closed { "closed" } else { "open" },
+            "html_url": format!("http://forge.test/acme/app/issues/{n}"), "comments": 0,
+            "user": { "login": "alice" }, "labels": [],
+        })
+    }
+
+    async fn serve(state: Shared) -> String {
+        let app = Router::new()
+            .route(
+                "/api/v3/repos/acme/app/issues/{n}/comments",
+                get(|State(s): State<Shared>| async move { Json(serde_json::Value::from(s.lock().unwrap().comments.clone())) })
+                    .post(|State(s): State<Shared>, UrlPath(n): UrlPath<i64>, Json(body): Json<serde_json::Value>| async move {
+                        let mut f = s.lock().unwrap();
+                        f.posts += 1;
+                        let mode = f.comment_mode.take();
+                        if mode == Some("drop") {
+                            return (axum::http::StatusCode::BAD_GATEWAY, "upstream").into_response();
+                        }
+                        let id = f.comments.len() as i64 + 100;
+                        let c = json!({
+                            "id": id, "body": body["body"],
+                            "html_url": format!("http://forge.test/acme/app/issues/{n}#issuecomment-{id}"),
+                            "user": { "login": "codeg-bot" }, "created_at": "2026-11-12T00:00:00Z",
+                        });
+                        f.comments.push(c.clone());
+                        if mode == Some("lost") {
+                            return (axum::http::StatusCode::BAD_GATEWAY, "upstream").into_response();
+                        }
+                        (axum::http::StatusCode::CREATED, Json(c)).into_response()
+                    }),
+            )
+            .route(
+                "/api/v3/repos/acme/app/issues/{n}",
+                get(|State(s): State<Shared>, UrlPath(n): UrlPath<i64>| async move { Json(issue(&s.lock().unwrap(), n)) })
+                    .patch(|State(s): State<Shared>, UrlPath(n): UrlPath<i64>| async move {
+                        let mut f = s.lock().unwrap();
+                        f.issue_closed = true;
+                        f.closes += 1;
+                        Json(issue(&f, n))
+                    }),
+            )
+            .route(
+                "/api/v3/repos/acme/app/pulls/{n}",
+                get(|State(s): State<Shared>, UrlPath(n): UrlPath<i64>| async move { Json(pull(&s.lock().unwrap(), n)) }),
+            )
+            .route(
+                "/api/v3/repos/acme/app/pulls/{n}/merge",
+                axum::routing::put(|State(s): State<Shared>, Json(body): Json<serde_json::Value>| async move {
+                    let mut f = s.lock().unwrap();
+                    if f.merge_mode.take() == Some("drop") {
+                        return (axum::http::StatusCode::BAD_GATEWAY, "upstream").into_response();
+                    }
+                    if body["sha"].as_str() != Some(f.head.as_str()) {
+                        return (axum::http::StatusCode::CONFLICT, Json(json!({ "message": "Head branch was modified" })))
+                            .into_response();
+                    }
+                    f.merged = true;
+                    f.merges.push(body);
+                    Json(json!({ "sha": "m3rg3c0mm17", "merged": true })).into_response()
+                }),
+            )
+            .route(
+                "/api/v3/repos/acme/app/commits/{sha}/check-runs",
+                get(|State(s): State<Shared>| async move {
+                    let f = s.lock().unwrap();
+                    Json(json!({ "check_runs": f.checks.clone(), "total_count": f.checks_total.unwrap_or(f.checks.len()) }))
+                }),
+            )
+            .route(
+                "/api/v3/repos/acme/app/commits/{sha}/status",
+                get(|| async { Json(json!({ "statuses": [] })) }),
+            )
+            .route(
+                "/api/v3/repos/acme/app",
+                get(|| async { Json(json!({ "allow_merge_commit": true, "allow_squash_merge": true, "allow_rebase_merge": false })) }),
+            )
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    fn green(name: &str) -> serde_json::Value {
+        json!({ "id": 1, "name": name, "status": "completed", "conclusion": "success" })
+    }
+
+    /// An engine over a project on the fake forge, with an account for it.
+    async fn on_forge(engine: &PersonalAgentEngine, tmp: &tempfile::TempDir, state: Shared) -> i32 {
+        let base = serve(state).await;
+        let settings = GitHubAccountsSettings {
+            accounts: vec![GitHubAccount {
+                id: "acc-pa".into(),
+                server_url: base.clone(),
+                username: "codeg-bot".into(),
+                scopes: vec![],
+                avatar_url: None,
+                is_default: true,
+                created_at: "2026-11-12T00:00:00Z".into(),
+                provider: Some("github".into()),
+            }],
+        };
+        crate::db::service::app_metadata_service::upsert_value(
+            &engine.db.conn,
+            "github_accounts",
+            &serde_json::to_string(&settings).unwrap(),
+        )
+        .await
+        .unwrap();
+        crate::keyring_store::set_token("acc-pa", "tok-pa").unwrap();
+        let dir = tmp.path().join("app");
+        std::fs::create_dir_all(&dir).unwrap();
+        let port = base.rsplit(':').next().unwrap().to_string();
+        for args in [vec!["init", "-q"], vec!["remote", "add", "origin", &format!("http://127.0.0.1:{port}/acme/app.git")]] {
+            assert!(std::process::Command::new("git").arg("-C").arg(&dir).args(&args).status().unwrap().success());
+        }
+        crate::db::service::folder_service::add_folder(&engine.db.conn, &dir.to_string_lossy())
+            .await
+            .unwrap()
+            .id
+    }
+
+    async fn in_data_dir<F: std::future::Future<Output = ()>>(tmp: &tempfile::TempDir, f: impl FnOnce() -> F) {
+        let data = tmp.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let data = data.to_string_lossy().to_string();
+        temp_env::async_with_vars([("CODEG_DATA_DIR", Some(data.as_str()))], f()).await;
+    }
+
+    #[tokio::test]
+    async fn a_comment_goes_out_once_even_when_its_answer_is_lost() {
+        let (engine, tmp) = configured().await;
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "abc".into(), ..Default::default() }));
+        let tmp_ref = &tmp;
+        let engine_ref = &engine;
+        let state_ref = &state;
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            // At once, with a card holding the full text and its link.
+            let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 7, "kind": "pr", "body": "Fixed in abc." })).await;
+            assert!(out.ok, "{}", out.text);
+            let card = last_card(engine_ref, "forge").await;
+            let data = data_of(&card);
+            assert_eq!(data["state"], "done");
+            assert_eq!(data["body"], "Fixed in abc.");
+            assert!(data["result"]["url"].as_str().unwrap().contains("#issuecomment-"), "{data}");
+            assert_eq!(data["target"]["repo"], "acme/app");
+            let posted = state_ref.lock().unwrap().comments[0]["body"].as_str().unwrap().to_string();
+            assert!(posted.starts_with("Fixed in abc.\n\n<!-- codeg-op:pa-"), "{posted}");
+
+            // Posted, but the answer lost: unknown — and found on the forge,
+            // so [Do it again] does not post a second one.
+            state_ref.lock().unwrap().comment_mode = Some("lost");
+            let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 7, "kind": "pr", "body": "Second note." })).await;
+            assert!(out.ok && out.data["state"] == "unknown", "{}", out.text);
+            let card = last_card(engine_ref, "forge").await;
+            assert_eq!(data_of(&card)["state"], "unknown");
+            let notice = svc::get_notice(&engine_ref.db.conn, card_id(&card)).await.unwrap().unwrap();
+            assert_eq!(notice.state, NoticeState::Open, "an unknown step waits for the owner");
+            engine_ref.act_on_notice(card_id(&card), "retry").await.unwrap();
+            assert_eq!(state_ref.lock().unwrap().posts, 2, "not posted again");
+            assert_eq!(data_of(&last_card(engine_ref, "forge").await)["state"], "done");
+
+            // Not posted, and the answer lost: [Do it again] finds nothing,
+            // so it posts it.
+            state_ref.lock().unwrap().comment_mode = Some("drop");
+            let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 7, "kind": "pr", "body": "Third note." })).await;
+            assert!(out.ok && out.data["state"] == "unknown", "{}", out.text);
+            let card = last_card(engine_ref, "forge").await;
+            engine_ref.act_on_notice(card_id(&card), "retry").await.unwrap();
+            let f = state_ref.lock().unwrap();
+            assert_eq!(f.posts, 4);
+            assert_eq!(f.comments.iter().filter(|c| c["body"].as_str().unwrap().starts_with("Third note.")).count(), 1);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn asked_to_approve_first_a_comment_waits_on_its_card_and_an_issue_already_closed_is_not_closed_again() {
+        let (engine, tmp) = configured().await;
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "abc".into(), ..Default::default() }));
+        let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            set_pref(engine_ref, "forge_comment", json!("ask")).await;
+            let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 3, "kind": "issue", "body": "On it." })).await;
+            assert!(out.ok && out.data["state"] == "awaiting_owner", "{}", out.text);
+            assert_eq!(state_ref.lock().unwrap().posts, 0, "nothing posted yet");
+            let card = last_card(engine_ref, "forge").await;
+            let data = data_of(&card);
+            assert_eq!((data["state"].as_str(), data["why"].as_str()), (Some("open"), Some("confirm")));
+            assert_eq!(data["target"]["number"], 3);
+            // It waits on the owner, in Today too.
+            let view = super::super::today::today(&engine_ref.db, &engine_ref.manager, super::super::clock::now()).await.0;
+            assert!(view.needs.iter().any(|r| r.row_id == Some(card.id)), "{:#?}", view.needs);
+            engine_ref.act_on_notice(card_id(&card), "accept").await.unwrap();
+            assert_eq!(state_ref.lock().unwrap().posts, 1);
+            assert_eq!(data_of(&last_card(engine_ref, "forge").await)["state"], "done");
+
+            // Closing an issue: at once; one closed meanwhile is not closed again.
+            let out = call_tool(engine_ref, "issue_close", json!({ "project_id": project, "number": 3 })).await;
+            assert!(out.ok, "{}", out.text);
+            assert_eq!(state_ref.lock().unwrap().closes, 1);
+            set_pref(engine_ref, "issue_close", json!("ask")).await;
+            state_ref.lock().unwrap().issue_closed = false;
+            let out = call_tool(engine_ref, "issue_close", json!({ "project_id": project, "number": 4 })).await;
+            assert!(out.ok, "{}", out.text);
+            state_ref.lock().unwrap().issue_closed = true;
+            let card = last_card(engine_ref, "forge").await;
+            engine_ref.act_on_notice(card_id(&card), "accept").await.unwrap();
+            assert_eq!(state_ref.lock().unwrap().closes, 1, "not closed again");
+            assert_eq!(data_of(&last_card(engine_ref, "forge").await)["state"], "not_run");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_merge_takes_only_the_accepted_and_delivered_head_with_its_checks_green() {
+        use sea_orm::Set;
+        let (engine, tmp) = configured().await;
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "acc3pt3d".into(), checks: vec![green("build")], ..Default::default() }));
+        let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            let remote = crate::commands::forge::folder_forge_remote_core(&engine_ref.db, project).await.unwrap().unwrap();
+            let coder = role_assistant(engine_ref, "Coder", true).await;
+            let delivery = json!({
+                "provider": "github", "server_host": remote.server_host, "account_id": "acc-pa",
+                "owner_repo": "acme/app", "pr_url": "http://forge.test/acme/app/pull/7", "pr_number": 7,
+            });
+            let task = board_task(engine_ref, project, "Fix login", WorkTaskStatus::Review, |t| {
+                t.files_changed = Set(Some(1));
+                t.delivery = Set(Some(delivery.to_string()));
+            })
+            .await;
+            let d = task_dispatch(engine_ref, coder, project, task.id, "Fix login", DispatchState::Review).await;
+            // Not accepted yet: not merged.
+            let out = call_tool(engine_ref, "pr_merge", json!({ "dispatch_id": d.id })).await;
+            assert!(!out.ok && out.text.contains("acceptance has not passed"), "{}", out.text);
+            let r = vsvc::create(
+                &engine_ref.db.conn,
+                vsvc::NewRound {
+                    bot_id: Some(engine_ref.bot().await),
+                    dispatch_id: d.id,
+                    round: 1,
+                    run_seq: task.run_seq,
+                    fingerprint: "f".into(),
+                    state: VerificationState::Accepted,
+                    unchecked: false,
+                },
+            )
+            .await
+            .unwrap();
+            vsvc::write_round(&engine_ref.db.conn, r.id, vsvc::RoundWrite { delivered_head: Some(Some("acc3pt3d".into())), ..Default::default() })
+                .await
+                .unwrap();
+            // Someone pushed after the acceptance: not merged, the card says why.
+            state_ref.lock().unwrap().head = "n3wc0mm1t".into();
+            let out = call_tool(engine_ref, "pr_merge", json!({ "dispatch_id": d.id })).await;
+            assert!(!out.ok && out.text.contains("commits after its acceptance"), "{}", out.text);
+            let data = data_of(&last_card(engine_ref, "forge").await);
+            assert_eq!((data["state"].as_str(), data["code"].as_str()), (Some("refused"), Some("after_acceptance")));
+            // The accepted head, but a check failing: not merged.
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.head = "acc3pt3d".into();
+                f.checks = vec![green("build"), json!({ "id": 2, "name": "e2e", "status": "completed", "conclusion": "failure" })];
+            }
+            let out = call_tool(engine_ref, "pr_merge", json!({ "dispatch_id": d.id })).await;
+            assert!(!out.ok && out.text.contains("e2e"), "{}", out.text);
+            assert!(state_ref.lock().unwrap().merges.is_empty());
+            // Green: merged with that head, and the round records the merge.
+            state_ref.lock().unwrap().checks = vec![green("build")];
+            let out = call_tool(engine_ref, "pr_merge", json!({ "dispatch_id": d.id })).await;
+            assert!(out.ok, "{}", out.text);
+            let merges = state_ref.lock().unwrap().merges.clone();
+            assert_eq!(merges.len(), 1);
+            assert_eq!(merges[0]["sha"], "acc3pt3d");
+            assert_eq!(merges[0]["merge_method"], "merge");
+            let data = data_of(&last_card(engine_ref, "forge").await);
+            assert_eq!((data["state"].as_str(), data["version"].as_str()), (Some("done"), Some("accepted")));
+            let r = vsvc::get(&engine_ref.db.conn, r.id).await.unwrap().unwrap();
+            assert_eq!(r.merge_commit.as_deref(), Some("m3rg3c0mm17"));
+            assert_eq!(r.version_guaranteed, Some(true));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_approved_merge_whose_head_moved_is_not_merged() {
+        let (engine, tmp) = configured().await;
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "h34d1".into(), checks: vec![green("build")], ..Default::default() }));
+        let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            set_pref(engine_ref, "pr_merge", json!("ask")).await;
+            let out = call_tool(engine_ref, "pr_merge", json!({ "project_id": project, "number": 9, "method": "squash" })).await;
+            assert!(out.ok && out.data["state"] == "awaiting_owner", "{}", out.text);
+            let card = last_card(engine_ref, "forge").await;
+            let data = data_of(&card);
+            assert_eq!((data["head"].as_str(), data["checks"].as_str()), (Some("h34d1"), Some("green")));
+            state_ref.lock().unwrap().head = "h34d2".into();
+            engine_ref.act_on_notice(card_id(&card), "accept").await.unwrap();
+            assert!(state_ref.lock().unwrap().merges.is_empty());
+            let data = data_of(&last_card(engine_ref, "forge").await);
+            assert_eq!(data["state"], "not_run");
+            assert!(data["error"].as_str().unwrap().contains("head moved"), "{data}");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_comment_cut_off_by_a_restart_is_settled_by_what_the_forge_shows() {
+        let (engine, tmp) = configured().await;
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "abc".into(), ..Default::default() }));
+        let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            state_ref.lock().unwrap().comment_mode = Some("lost");
+            let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 7, "kind": "pr", "body": "Cut off." })).await;
+            assert_eq!(out.data["state"], "unknown", "{}", out.text);
+            // As a restart finds it: still prepared, attempted.
+            let card = last_card(engine_ref, "forge").await;
+            let op = svc::ops_of_notice(&engine_ref.db.conn, card_id(&card)).await.unwrap().pop().unwrap();
+            svc::op_settle(&engine_ref.db.conn, op.op_id.as_deref().unwrap(), &[ActionState::Unknown], ActionState::Prepared, None, None, None)
+                .await
+                .unwrap();
+            engine_ref.boot_ledger().await;
+            let op = svc::get_op(&engine_ref.db.conn, op.op_id.as_deref().unwrap()).await.unwrap().unwrap();
+            assert_eq!(op.state, ActionState::Committed);
+            assert_eq!(data_of(&last_card(engine_ref, "forge").await)["state"], "done");
+            assert_eq!(state_ref.lock().unwrap().posts, 1);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn checks_beyond_one_page_are_not_read_as_green_and_a_merge_at_another_head_is_not_this_one() {
+        let (engine, tmp) = configured().await;
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "h1".into(), checks: vec![green("build")], ..Default::default() }));
+        let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            // 150 checks, one page read: not the whole answer.
+            state_ref.lock().unwrap().checks_total = Some(150);
+            let out = call_tool(engine_ref, "pr_merge", json!({ "project_id": project, "number": 5 })).await;
+            assert!(!out.ok && out.text.contains("could not be read"), "{}", out.text);
+            assert_eq!(data_of(&last_card(engine_ref, "forge").await)["code"], "checks_partial");
+            state_ref.lock().unwrap().checks_total = None;
+            // The merge's answer is lost and nothing merged; then someone
+            // pushes and merges another head. Looking on the forge does not
+            // take that merge for this one.
+            state_ref.lock().unwrap().merge_mode = Some("drop");
+            let out = call_tool(engine_ref, "pr_merge", json!({ "project_id": project, "number": 5 })).await;
+            assert_eq!(out.data["state"], "unknown", "{}", out.text);
+            let card = last_card(engine_ref, "forge").await;
+            let op = svc::ops_of_notice(&engine_ref.db.conn, card_id(&card)).await.unwrap().pop().unwrap();
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.head = "h2".into();
+                f.merged = true;
+            }
+            // codeg's own look shortly after: not found, so it stays unknown.
+            engine_ref.recheck_forge_op(op.op_id.as_deref().unwrap()).await;
+            let now = svc::get_op(&engine_ref.db.conn, op.op_id.as_deref().unwrap()).await.unwrap().unwrap();
+            assert_eq!(now.state, ActionState::Unknown);
+            assert_eq!(data_of(&last_card(engine_ref, "forge").await)["state"], "unknown");
+            // [Do it again]: not this merge; and it is merged already, so nothing is done.
+            let _ = engine_ref.act_on_notice(card_id(&card), "retry").await;
+            let now = svc::get_op(&engine_ref.db.conn, op.op_id.as_deref().unwrap()).await.unwrap().unwrap();
+            assert_eq!(now.state, ActionState::NotExecuted);
+            let data = data_of(&last_card(engine_ref, "forge").await);
+            assert_eq!(data["state"], "not_run", "{data}");
+            assert!(state_ref.lock().unwrap().merges.is_empty());
+        })
+        .await;
+    }
+}

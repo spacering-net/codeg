@@ -571,6 +571,42 @@ describe("AssistantsPanel", () => {
     ).toBeInTheDocument()
     expect(within(dialog).getByLabelText("Name")).toHaveValue("Tester")
   })
+
+  it("opens the editor when asked from outside: on one once it is listed, or a new one prefilled", async () => {
+    api.describeAgentOptions.mockReturnValue(new Promise(() => {}))
+    const handled = vi.fn()
+    const { rerender } = renderPanel({
+      openRequest: { key: 1, assistantId: 2, prefill: null },
+      onOpenRequestHandled: handled,
+    })
+    let dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Planner")
+    expect(handled).toHaveBeenCalledTimes(1)
+    await userEvent
+      .setup()
+      .click(within(dialog).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AssistantsPanel
+          delegationEnabled
+          unsavedTabs={[]}
+          openRequest={{
+            key: 2,
+            assistantId: null,
+            prefill: { name: "Gem", instructions: "Be brief." },
+          }}
+          onOpenRequestHandled={handled}
+        />
+      </NextIntlClientProvider>
+    )
+    dialog = await screen.findByRole("dialog")
+    expect(
+      within(dialog).getByRole("heading", { name: "New assistant" })
+    ).toBeInTheDocument()
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Gem")
+    expect(handled).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe("copyName", () => {

@@ -8246,6 +8246,28 @@
         "level_used_up": {
           "title": "Sin rondas y aún no está bien",
           "hint": "Trabajo devuelto tantas veces como permites y que sigue sin estar bien."
+        },
+        "forge_comment": {
+          "title": "Comentarios en una forja",
+          "hint": "Cuando un asistente comenta en una issue o una PR.",
+          "auto": "Publicarlo directamente",
+          "ask": "Preguntarme antes (tarjeta de aprobación)"
+        },
+        "issue_close": {
+          "title": "Cerrar issues",
+          "hint": "Cuando un asistente cierra una issue en una forja.",
+          "auto": "Cerrarla directamente",
+          "ask": "Preguntarme antes (tarjeta de aprobación)"
+        },
+        "pr_merge": {
+          "title": "Fusionar PRs",
+          "hint": "Solo se fusiona si su cabeza es la versión a fusionar (la que pasó su aceptación, si la aceptación está activada) y sus comprobaciones pasaron; la protección de ramas del repositorio sigue vigente. CNB no muestra comprobaciones ni fija la cabeza, así que allí siempre te pregunta.",
+          "auto": "Fusionar cuando pasen las comprobaciones",
+          "ask": "Preguntarme antes (tarjeta de aprobación)"
+        },
+        "level_forge": {
+          "title": "En una forja",
+          "hint": "Un comentario, una issue cerrada o una PR fusionada por un asistente."
         }
       },
       "workdir": {
@@ -8616,7 +8638,46 @@
         "accept": "Cambiarlo",
         "dismiss": "Ahora no",
         "undo": "Deshacer",
-        "seeSettings": "Ver en los ajustes"
+        "seeSettings": "Ver en los ajustes",
+        "bothWays": "Las configuraciones de ejecución también son a quien llega una @ en una sesión: el cambio vale para ambos.",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "nombre",
+            "avatar": "cara",
+            "brain": "cerebro",
+            "executor": "configuración de ejecución",
+            "template": "rol",
+            "notify": "notificaciones",
+            "muted": "silenciado",
+            "hidden": "oculto"
+          },
+          "assistantField": {
+            "name": "nombre",
+            "description": "descripción",
+            "instructions": "instrucciones permanentes",
+            "agent": "agente y opciones",
+            "enabled": "activada"
+          },
+          "avatarOther": "imagen propia",
+          "empty": "(vacío)"
+        },
+        "assistant": {
+          "applied": "Configuración de ejecución creada, como dijiste",
+          "accepted": "Configuración de ejecución creada",
+          "undone": "Deshecho: eliminada",
+          "dismissed": "No se creó",
+          "suggested": "Sugerencia: una nueva configuración de ejecución",
+          "show": "¿Crear la configuración de ejecución? (pediste ver antes estos cambios)",
+          "editor": "No se pudo crear la configuración de ejecución",
+          "on": "con {agent}",
+          "editorHint": "codeg no pudo leer las opciones de {agent} ({why}), así que no se creó nada. Abre el editor con lo pedido ya rellenado y elige el resto.",
+          "firstFor": "Primera opción para: {kinds}",
+          "kept": "{count, plural, one {# elemento cambió} other {# elementos cambiaron}} después, así que se dejaron igual",
+          "accept": "Crearla",
+          "edit": "Editar",
+          "openEditor": "Abrir el editor"
+        }
       },
       "retryOf": "Reintentar «{title}»"
     },
@@ -9128,7 +9189,8 @@
         "answered": "Respondido en tu nombre",
         "changed": "Cambiado en tu nombre",
         "undone": "Cambiado y deshecho",
-        "acceptance": "Te toca decidir la aceptación"
+        "acceptance": "Te toca decidir la aceptación",
+        "forge": "Hecho en una forja"
       },
       "session": {
         "permission": "Espera tu aprobación",
@@ -9301,6 +9363,67 @@
       "historyAsked": "Ronda {round}: te lo preguntó",
       "historyChanged": "Ronda {round}: aceptado, luego cambió el árbol de trabajo",
       "historyOpen": "Ronda {round}: abierta"
+    },
+    "forge": {
+      "heading": {
+        "approve": "Espera tu aprobación",
+        "suggested": "Una sugerencia, para que la apruebes",
+        "cnb": "Una fusión en CNB: siempre la apruebas tú",
+        "acting": "Haciéndolo…",
+        "done": "Hecho en {provider}",
+        "refused": "No se hizo",
+        "notMerged": "No se fusionó",
+        "failed": "No se pudo hacer",
+        "unknown": "No se sabe si se hizo",
+        "not_run": "No se hizo: algo cambió",
+        "dismissed": "Se dejó sin hacer"
+      },
+      "title": {
+        "comment": "Comentar en {target}",
+        "close": "Cerrar {target}",
+        "merge": "Fusionar {target}"
+      },
+      "merge": {
+        "head": "Cabeza {head}",
+        "method": {
+          "merge": "commit de fusión",
+          "squash": "squash",
+          "rebase": "rebase"
+        },
+        "checks": {
+          "green": "Comprobaciones: todas superadas",
+          "none": "Comprobaciones: ninguna configurada",
+          "unknown": "Comprobaciones: desconocidas (CNB no las muestra)"
+        },
+        "version": {
+          "accepted": "La versión que pasó su aceptación",
+          "green": "Las comprobaciones pasaron en esta cabeza"
+        },
+        "unguaranteed": "Versión no garantizada (la fusión no admite la cabeza)",
+        "commit": "Commit de fusión {commit}"
+      },
+      "code": {
+        "merged": "Ya está fusionada",
+        "closed": "Está cerrada",
+        "draft": "Es un borrador",
+        "after_acceptance": "La PR tiene commits posteriores a su aceptación",
+        "not_accepted": "Su aceptación no ha pasado",
+        "not_delivered": "codeg no entregó a esta PR la versión aceptada",
+        "checks_unreadable": "codeg no puede leer sus comprobaciones",
+        "checks_partial": "Algunas comprobaciones no se pudieron leer",
+        "checks_running": "Sus comprobaciones siguen en curso",
+        "checks_failing": "Algunas comprobaciones fallan"
+      },
+      "notRun": "No se hizo: {error}",
+      "failed": "La forja lo rechazó: {error}",
+      "unknown": "La forja no respondió: {error}. codeg no lo repite por su cuenta; antes mira en la forja.",
+      "reason": "Por qué: {reason}",
+      "approve": "Aprobar",
+      "decline": "Rechazar",
+      "look": "Ver",
+      "again": "Hacerlo de nuevo",
+      "letBe": "Dejarlo así",
+      "open": "Abrir"
     }
   }
 }

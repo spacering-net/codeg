@@ -204,6 +204,13 @@ export function waitsForOwner(row: TimelineRow): boolean {
   if (row.kind === "notice" && data?.notice === "acceptance") {
     return data?.state === "open" || data?.state === "changed"
   }
+  // Something on a forge to approve, or one in doubt (7.4).
+  if (row.kind === "notice" && data?.notice === "forge") {
+    return (
+      (data?.state === "open" && data?.why !== "suggest") ||
+      data?.state === "unknown"
+    )
+  }
   if (row.kind !== "notice" || data?.state !== "open") return false
   if (data?.why === "suggest") return false
   const kind = data?.notice

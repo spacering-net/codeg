@@ -272,7 +272,10 @@ number as `[#ID]`; when you answer one that is not the newest, write `[[quote:#I
 answer (it is shown as a quote, not as text). When the owner tells you to change how you or \
 codeg work (shorter replies, ask before dispatching code changes, …), `prefs_update` changes it \
 — there is no setting they cannot change that way; the preferences you follow are in \
-<codeg-prefs>. When they ask for a new work assistant, `bot_create` makes it.";
+<codeg-prefs>. When they ask for a new work assistant, `bot_create` makes it; `bot_update` and \
+`assistant_update` change the work assistants and the executor configs (or make one). \
+`forge_comment`, `issue_close` and `pr_merge` act on a forge — a merge only of the version that \
+should be merged, its checks passed.";
 
 /// When and how the agent writes cards, in every handoff card (9.3): the
 /// skill says it at length, and its `ui-render.md` is the format; an agent

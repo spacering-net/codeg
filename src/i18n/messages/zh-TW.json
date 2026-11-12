@@ -8246,6 +8246,28 @@
         "level_used_up": {
           "title": "用完輪次仍沒過",
           "hint": "退回到你允許的輪數還沒通過。"
+        },
+        "forge_comment": {
+          "title": "在 forge 上留言",
+          "hint": "助手在 issue 或 PR 上留言時。",
+          "auto": "直接發",
+          "ask": "先問我（出審批卡）"
+        },
+        "issue_close": {
+          "title": "關 issue",
+          "hint": "助手在 forge 上關 issue 時。",
+          "auto": "直接關",
+          "ask": "先問我（出審批卡）"
+        },
+        "pr_merge": {
+          "title": "合併 PR",
+          "hint": "只有頭提交是該合的那個版本（開著自動驗收時，是驗收通過的那個）、而且檢查全部通過時才合；倉庫的分支保護照常起作用。CNB 讀不到檢查、合併也鎖不住頭提交，所以 CNB 上的合併總是先問你。",
+          "auto": "檢查全綠時直接合併",
+          "ask": "先問我（出審批卡）"
+        },
+        "level_forge": {
+          "title": "forge 上的動作",
+          "hint": "助手留的言、關的 issue、合的 PR。"
         }
       },
       "workdir": {
@@ -8616,7 +8638,46 @@
         "accept": "改成這樣",
         "dismiss": "不用",
         "undo": "復原",
-        "seeSettings": "去設定裡看"
+        "seeSettings": "去設定裡看",
+        "bothWays": "執行設定也是對話裡 @ 的那些助手：這裡改了，兩邊同時生效。",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "名字",
+            "avatar": "頭像",
+            "brain": "大腦",
+            "executor": "執行設定",
+            "template": "職位",
+            "notify": "通知我",
+            "muted": "靜音",
+            "hidden": "隱藏"
+          },
+          "assistantField": {
+            "name": "名稱",
+            "description": "簡介",
+            "instructions": "常駐指令",
+            "agent": "agent 與選項",
+            "enabled": "啟用"
+          },
+          "avatarOther": "自訂頭像",
+          "empty": "（空）"
+        },
+        "assistant": {
+          "applied": "照你說的建了一個執行設定",
+          "accepted": "建了一個執行設定",
+          "undone": "已撤銷：已刪除",
+          "dismissed": "沒有建",
+          "suggested": "建議：新建一個執行設定",
+          "show": "要建這個執行設定嗎？（你要求這類改動先給你看）",
+          "editor": "沒能建這個執行設定",
+          "on": "用 {agent}",
+          "editorHint": "codeg 讀不到 {agent} 的選項（{why}），所以沒有建。打開編輯器，按你說的已經填好，補選剩下的項即可。",
+          "firstFor": "設為首選：{kinds}",
+          "kept": "{count, plural, other {# 項}}之後又被改過，保持現狀",
+          "accept": "建吧",
+          "edit": "編輯",
+          "openEditor": "打開編輯器"
+        }
       },
       "retryOf": "重試「{title}」"
     },
@@ -9128,7 +9189,8 @@
         "answered": "替你答了",
         "changed": "替你改了",
         "undone": "改過，已復原",
-        "acceptance": "驗收要你決定"
+        "acceptance": "驗收要你決定",
+        "forge": "在 forge 上做的"
       },
       "session": {
         "permission": "等你核准",
@@ -9301,6 +9363,67 @@
       "historyAsked": "第 {round} 輪：問你",
       "historyChanged": "第 {round} 輪：通過後工作樹變了",
       "historyOpen": "第 {round} 輪：進行中"
+    },
+    "forge": {
+      "heading": {
+        "approve": "等你批准",
+        "suggested": "建議，等你批准",
+        "cnb": "CNB 上的合併：一律由你批准",
+        "acting": "正在做…",
+        "done": "已在 {provider} 上完成",
+        "refused": "沒有做",
+        "notMerged": "沒有合併",
+        "failed": "沒有做成",
+        "unknown": "不知道做成沒有",
+        "not_run": "沒有執行：情況變了",
+        "dismissed": "沒有做"
+      },
+      "title": {
+        "comment": "在 {target} 上留言",
+        "close": "關閉 {target}",
+        "merge": "合併 {target}"
+      },
+      "merge": {
+        "head": "頭提交 {head}",
+        "method": {
+          "merge": "合併提交",
+          "squash": "壓縮合併",
+          "rebase": "變基合併"
+        },
+        "checks": {
+          "green": "檢查：全部通過",
+          "none": "檢查：沒有設定",
+          "unknown": "檢查：未知（CNB 讀不到檢查）"
+        },
+        "version": {
+          "accepted": "驗收通過的那個版本",
+          "green": "這個頭提交的檢查都通過了"
+        },
+        "unguaranteed": "版本未保證（這個平台的合併介面不帶頭提交）",
+        "commit": "合併提交 {commit}"
+      },
+      "code": {
+        "merged": "已經合併了",
+        "closed": "已經關閉",
+        "draft": "還是草稿",
+        "after_acceptance": "PR 有驗收之後的新提交",
+        "not_accepted": "驗收還沒有通過",
+        "not_delivered": "驗收通過的版本不是 codeg 交付到這個 PR 的",
+        "checks_unreadable": "codeg 讀不到它的檢查",
+        "checks_partial": "有些檢查讀不到",
+        "checks_running": "檢查還在跑",
+        "checks_failing": "有檢查沒通過"
+      },
+      "notRun": "沒有執行：{error}",
+      "failed": "平台拒絕了：{error}",
+      "unknown": "平台沒有回應：{error}。codeg 不會自己再做一次；再做之前會先去平台上核對。",
+      "reason": "理由：{reason}",
+      "approve": "批准",
+      "decline": "拒絕",
+      "look": "查看",
+      "again": "再做一次",
+      "letBe": "不用了",
+      "open": "打開"
     }
   }
 }

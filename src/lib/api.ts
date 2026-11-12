@@ -2989,6 +2989,7 @@ export type NoticeAction =
   | "team"
   | "revise"
   | "recheck"
+  | "retry"
 
 export async function personalAgentAnswerQuestion(
   questionId: string,

@@ -281,13 +281,20 @@ pub async fn today(
     // owner says so (low).
     for n in notice_entity::Entity::find()
         .filter(notice_entity::Column::State.eq(NoticeState::Open))
-        .filter(notice_entity::Column::Kind.is_in([NoticeKind::Proposal, NoticeKind::Changed]))
+        .filter(notice_entity::Column::Kind.is_in([
+            NoticeKind::Proposal,
+            NoticeKind::Changed,
+            NoticeKind::Forge,
+        ]))
         .order_by_asc(notice_entity::Column::Id)
         .all(&db.conn)
         .await
         .unwrap_or_default()
     {
-        if payload_of(&n.payload)["why"].as_str() != Some("suggest") {
+        let payload = payload_of(&n.payload);
+        // A forge action keeps its call whole (7.4).
+        let why = payload["why"].as_str().or(payload["call"]["why"].as_str());
+        if why != Some("suggest") {
             continue;
         }
         let Some(bot) = n.bot_id.filter(|b| bots.iter().any(|x| x.id == *b)) else {
@@ -639,6 +646,39 @@ pub async fn today(
         row.row_id = n.timeline_id;
         row.notice_id = Some(n.id);
         row.undo = n.state == NoticeState::Acted;
+        view.done.push(row);
+    }
+    // What the assistants did on a forge for the owner today (7.4).
+    for n in svc::notices_since(
+        &db.conn,
+        NoticeKind::Forge,
+        &[NoticeState::Acted],
+        day_start,
+    )
+    .await
+    .unwrap_or_default()
+    {
+        let Some(bot) = n.bot_id.filter(|b| bot_ids.contains(b)) else {
+            continue;
+        };
+        let at = n.acted_at.unwrap_or(n.updated_at);
+        if at < day_start {
+            continue;
+        }
+        let title = match n.timeline_id {
+            Some(id) => svc::get_row(&db.conn, id)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| one_line(&r.body))
+                .unwrap_or_default(),
+            None => String::new(),
+        };
+        let mut row = TodayRow::new(format!("forge:{}", n.id), "forge", title, at);
+        row.bot_id = Some(bot);
+        row.state = Some("acted".into());
+        row.row_id = n.timeline_id;
+        row.notice_id = Some(n.id);
         view.done.push(row);
     }
     view.done.sort_by_key(|r| std::cmp::Reverse(r.at));

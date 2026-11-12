@@ -8245,6 +8245,28 @@
         "level_used_up": {
           "title": "用完轮次仍没过",
           "hint": "退回到你允许的轮数还没过。"
+        },
+        "forge_comment": {
+          "title": "在 forge 上评论",
+          "hint": "助手在 issue 或 PR 上发评论时。",
+          "auto": "直接发",
+          "ask": "先问我（出审批卡）"
+        },
+        "issue_close": {
+          "title": "关 issue",
+          "hint": "助手在 forge 上关 issue 时。",
+          "auto": "直接关",
+          "ask": "先问我（出审批卡）"
+        },
+        "pr_merge": {
+          "title": "合并 PR",
+          "hint": "只有头提交是该合的那个版本（开着自动验收时，是验收通过的那个）、而且检查全部通过时才合；仓库的分支保护照常起作用。CNB 读不到检查、合并也锁不住头提交，所以 CNB 上的合并总是先问你。",
+          "auto": "检查全绿时直接合并",
+          "ask": "先问我（出审批卡）"
+        },
+        "level_forge": {
+          "title": "forge 上的动作",
+          "hint": "助手发的评论、关的 issue、合的 PR。"
         }
       },
       "workdir": {
@@ -8616,7 +8638,46 @@
         "accept": "改成这样",
         "dismiss": "不用",
         "undo": "撤销",
-        "seeSettings": "去设置里看"
+        "seeSettings": "去设置里看",
+        "bothWays": "执行配置也是会话里 @ 的那些助手：这里改了，两边同时生效。",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "名字",
+            "avatar": "头像",
+            "brain": "大脑",
+            "executor": "执行配置",
+            "template": "岗位",
+            "notify": "通知我",
+            "muted": "静音",
+            "hidden": "隐藏"
+          },
+          "assistantField": {
+            "name": "名称",
+            "description": "简介",
+            "instructions": "常驻指令",
+            "agent": "agent 与选项",
+            "enabled": "启用"
+          },
+          "avatarOther": "自定义头像",
+          "empty": "（空）"
+        },
+        "assistant": {
+          "applied": "照你说的建了一个执行配置",
+          "accepted": "建了一个执行配置",
+          "undone": "已撤销：已删除",
+          "dismissed": "没有建",
+          "suggested": "建议：新建一个执行配置",
+          "show": "要建这个执行配置吗？（你要求这类改动先给你看）",
+          "editor": "没能建这个执行配置",
+          "on": "用 {agent}",
+          "editorHint": "codeg 读不到 {agent} 的选项（{why}），所以没有建。打开编辑器，按你说的已经填好，补选剩下的项即可。",
+          "firstFor": "设为首选：{kinds}",
+          "kept": "{count, plural, other {# 项}}之后又被改过，保持现状",
+          "accept": "建吧",
+          "edit": "编辑",
+          "openEditor": "打开编辑器"
+        }
       },
       "retryOf": "重试「{title}」"
     },
@@ -9128,7 +9189,8 @@
         "answered": "替你答了",
         "changed": "替你改了",
         "undone": "改过，已撤销",
-        "acceptance": "验收要你定"
+        "acceptance": "验收要你定",
+        "forge": "在 forge 上做的"
       },
       "session": {
         "permission": "等你批准",
@@ -9301,6 +9363,67 @@
       "historyAsked": "第 {round} 轮：问你",
       "historyChanged": "第 {round} 轮：通过后工作树变了",
       "historyOpen": "第 {round} 轮：进行中"
+    },
+    "forge": {
+      "heading": {
+        "approve": "等你批准",
+        "suggested": "建议，等你批准",
+        "cnb": "CNB 上的合并：总是由你批准",
+        "acting": "正在做…",
+        "done": "已在 {provider} 上完成",
+        "refused": "没有做",
+        "notMerged": "没有合并",
+        "failed": "没有做成",
+        "unknown": "不知道做成没有",
+        "not_run": "没有执行：情况变了",
+        "dismissed": "没有做"
+      },
+      "title": {
+        "comment": "在 {target} 上评论",
+        "close": "关闭 {target}",
+        "merge": "合并 {target}"
+      },
+      "merge": {
+        "head": "头提交 {head}",
+        "method": {
+          "merge": "合并提交",
+          "squash": "压缩合并",
+          "rebase": "变基合并"
+        },
+        "checks": {
+          "green": "检查：全部通过",
+          "none": "检查：没有配置",
+          "unknown": "检查：未知（CNB 读不到检查）"
+        },
+        "version": {
+          "accepted": "验收通过的那个版本",
+          "green": "这个头提交的检查都通过了"
+        },
+        "unguaranteed": "版本未保证（这个平台的合并接口不带头提交）",
+        "commit": "合并提交 {commit}"
+      },
+      "code": {
+        "merged": "已经合并了",
+        "closed": "已经关闭",
+        "draft": "还是草稿",
+        "after_acceptance": "PR 有验收之后的新提交",
+        "not_accepted": "验收还没有通过",
+        "not_delivered": "验收通过的版本不是 codeg 交付到这个 PR 的",
+        "checks_unreadable": "codeg 读不到它的检查",
+        "checks_partial": "有些检查读不到",
+        "checks_running": "检查还在跑",
+        "checks_failing": "有检查没通过"
+      },
+      "notRun": "没有执行：{error}",
+      "failed": "平台拒绝了：{error}",
+      "unknown": "平台没有回应：{error}。codeg 不会自己再做一次；再做之前会先去平台上核对。",
+      "reason": "理由：{reason}",
+      "approve": "批准",
+      "decline": "拒绝",
+      "look": "查看",
+      "again": "再做一次",
+      "letBe": "不用了",
+      "open": "打开"
     }
   }
 }

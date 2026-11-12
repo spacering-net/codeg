@@ -487,6 +487,28 @@ pub async fn set_item_state(
     Ok(raw.into_row(kind == ForgeItemKind::Change))
 }
 
+/// `GET /projects/{p}/issues/{iid}` or `/merge_requests/{iid}` — one item's
+/// state, and the commit a merged merge request landed as.
+pub async fn item_facts(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    kind: ForgeItemKind,
+    iid: i64,
+) -> Result<super::ItemFacts, ForgeError> {
+    let project = project_ref(owner_repo)?;
+    if iid <= 0 {
+        return Err(ForgeError::Invalid(format!("bad work item number: {iid}")));
+    }
+    let collection = collection_of(kind);
+    let url = format!("{}/projects/{project}/{collection}/{iid}", auth.api_base);
+    let raw: serde_json::Value = api_get(auth, &url)
+        .await?
+        .json()
+        .await
+        .map_err(|e| ForgeError::Network(format!("bad item payload: {e}")))?;
+    Ok(super::ItemFacts::from_json(&raw))
+}
+
 /// `POST /projects/{p}/issues` — open an issue, and hand back its row.
 ///
 /// Labels are COMMA-JOINED, which is lossless: GitLab forbids commas in label
@@ -622,10 +644,24 @@ async fn pipeline_jobs(auth: &ResolvedAuth, project: &str, pipeline: i64) -> For
         "{}/projects/{project}/pipelines/{pipeline}/jobs?per_page={LABEL_PAGE_SIZE}",
         auth.api_base
     );
-    let raw: Option<Vec<RawJob>> = async { api_get(auth, &url).await.ok()?.json().await.ok() }.await;
+    // A pipeline with more jobs than one page holds is read as not whole: a
+    // failing job on the next page must not read as green.
+    let raw: Option<(Vec<RawJob>, bool)> = async {
+        let response = api_get(auth, &url).await.ok()?;
+        let next = response
+            .headers()
+            .get("x-next-page")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| !v.trim().is_empty());
+        let jobs: Vec<RawJob> = response.json().await.ok()?;
+        let more = next || jobs.len() >= LABEL_PAGE_SIZE;
+        Some((jobs, more))
+    }
+    .await;
     match raw {
-        Some(jobs) => ForgeCheckList::available(
-            jobs.into_iter()
+        Some((jobs, more)) => {
+            let checks = jobs
+                .into_iter()
                 .map(|job| ForgeCheck {
                     id: format!("job-{}", job.id),
                     state: job_state(&job.status),
@@ -636,8 +672,13 @@ async fn pipeline_jobs(auth: &ResolvedAuth, project: &str, pipeline: i64) -> For
                     name: job.name,
                     allow_failure: job.allow_failure,
                 })
-                .collect(),
-        ),
+                .collect();
+            if more {
+                ForgeCheckList::partial(checks)
+            } else {
+                ForgeCheckList::available(checks)
+            }
+        }
         None => ForgeCheckList::unavailable(),
     }
 }
