@@ -2159,9 +2159,10 @@ fn agent_debug_callback(
 /// codeg's own question and result tools ([`codeg_tool_auto_allow_option`]),
 /// and the history parser. So codeg turns lazy loading off, as it was through
 /// 1.1.83 (which takes the flag too). An option `qoder --acp` does not know
-/// makes it exit, but each release tried from 1.1.0 to 1.1.86 (1.1.0, 1.1.30,
-/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86) takes `--settings`,
-/// and 1.1.30 and 1.1.64 open sessions with this one as without it.
+/// makes it exit, but each release tried from 1.1.0 to 1.1.87 (1.1.0, 1.1.30,
+/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86, 1.1.87) takes
+/// `--settings`, and 1.1.30 and 1.1.64 open sessions with this one as without
+/// it.
 pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
 /// The arguments codeg adds after an npx agent's registry `args`: for Qoder,
@@ -13812,7 +13813,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.182.0) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.183.0) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -13898,7 +13899,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.182.0) answers the next prompt it runs `cancelled` even though that
+/// 2.183.0) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
@@ -21341,9 +21342,65 @@ impl KimiToolTitles {
         title
     }
 
+    /// The own title of a Kimi call still in flight.
+    fn own(&self, tool_call_id: &str) -> Option<&str> {
+        self.calls.get(tool_call_id).map(|call| call.own.as_str())
+    }
+
     fn clear(&mut self) {
         self.calls.clear();
     }
+}
+
+/// The title Kimi Code gives an `ExitPlanMode` call once its plan is shown
+/// for review (the opening frame is titled with the tool's name).
+const KIMI_EXIT_PLAN_MODE_REVIEW_TITLE: &str = "Presenting plan and exiting plan mode";
+
+/// Whether a Kimi Code frame settles an `ExitPlanMode` call `failed` although
+/// the review's own answer was not an error.
+///
+/// 2.6.0 settles every answered plan review `failed`: its tool executor turns
+/// the review's answer into a veto, so approving the plan, dismissing the
+/// review or asking for a revision ends the call exactly like a rejection,
+/// and the plan card would show an approved plan as an error. Only the
+/// wording of the result still tells them apart (see
+/// [`crate::parsers::kimi_code::kimi_plan_review_kept_ok`], which history
+/// applies to the same calls), so such a frame is forwarded as `completed`.
+/// `own_title` is the call's own title as [`KimiToolTitles`] tracks it.
+fn kimi_plan_review_misreported_failure(
+    own_title: Option<&str>,
+    fields: &agent_client_protocol::schema::v1::ToolCallUpdateFields,
+) -> bool {
+    if !matches!(
+        fields.status,
+        Some(agent_client_protocol::schema::v1::ToolCallStatus::Failed)
+    ) || !matches!(
+        own_title,
+        Some(
+            crate::parsers::kimi_code::KIMI_EXIT_PLAN_MODE_TOOL | KIMI_EXIT_PLAN_MODE_REVIEW_TITLE
+        )
+    ) {
+        return false;
+    }
+    let content_text = || {
+        fields
+            .content
+            .as_deref()?
+            .iter()
+            .find_map(|item| match item {
+                ToolCallContent::Content(c) => match &c.content {
+                    ContentBlock::Text(t) => Some(t.text.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            })
+    };
+    fields
+        .raw_output
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .or_else(content_text)
+        .is_some_and(crate::parsers::kimi_code::kimi_plan_review_kept_ok)
 }
 
 /// Whether a tool call's (lower-cased) status ends it.
@@ -25959,6 +26016,17 @@ async fn emit_conversation_update(
             let tool_call_id = tcu.tool_call_id.to_string();
             // Read before the fields are taken apart below.
             let kimi_status = kimi_status_frame(agent_type, &tcu.fields);
+            // An answered Kimi plan review settles `failed` whatever the user
+            // chose (see `kimi_plan_review_misreported_failure`).
+            if agent_type == AgentType::KimiCode
+                && kimi_plan_review_misreported_failure(
+                    cb_state.kimi_tool_titles.own(&tool_call_id),
+                    &tcu.fields,
+                )
+            {
+                tcu.fields.status =
+                    Some(agent_client_protocol::schema::v1::ToolCallStatus::Completed);
+            }
             // The closing "Response received" frame of an Antigravity question
             // would overwrite the answered card the bridge recorded (see
             // `take_antigravity_answered_close`).
@@ -44652,6 +44720,143 @@ mod tests {
             })
             .collect();
         (titles, cb.kimi_tool_titles.calls.len())
+    }
+
+    /// The statuses emitted for a run of tool-call frames.
+    async fn tool_statuses_emitted(
+        agent_type: AgentType,
+        frames: &[serde_json::Value],
+    ) -> Vec<Option<String>> {
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-statuses".to_string(),
+            agent_type,
+            None,
+            "win".to_string(),
+            None,
+        )));
+        let emitter = EventEmitter::Noop;
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        for frame in frames {
+            let update: SessionUpdate =
+                serde_json::from_value(frame.clone()).expect("valid tool-call wire shape");
+            emit_conversation_update(
+                &state, &emitter, agent_type, update, None, &mut cache, &mut cb,
+            )
+            .await;
+        }
+        let guard = state.read().await;
+        let events = guard.recent_events_after(0).expect("events recorded");
+        events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                AcpEvent::ToolCall { status, .. } => Some(Some(status.clone())),
+                AcpEvent::ToolCallUpdate { status, .. } => Some(status.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The frames Kimi Code 2.6.0 sends for an answered plan review (captured
+    /// live), ending on `settle_status` with `result` as the call's output.
+    fn kimi_plan_review(
+        tool_call_id: &str,
+        settle_status: &str,
+        result: &str,
+    ) -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "title": "ExitPlanMode",
+                "kind": "other",
+                "status": "pending",
+                "content": [{"type": "content", "content": {"type": "text", "text": "{}"}}],
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "title": "Presenting plan and exiting plan mode",
+                "kind": "other",
+                "status": "in_progress",
+                "rawInput": {},
+                "content": [
+                    {"type": "content", "content": {"type": "text", "text": "Plan saved to: /p/plan.md\n\n# Plan\n\n1. Say hello.\n"}},
+                    {"type": "content", "content": {"type": "text", "text": "{}"}},
+                ],
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "status": settle_status,
+                "content": [{"type": "content", "content": {"type": "text", "text": result}}],
+                "rawOutput": result,
+            }),
+        ]
+    }
+
+    /// Kimi Code 2.6.0 settles every answered plan review `failed`, so an
+    /// approved plan would show as an error: the answers the review itself
+    /// meant as successes are forwarded `completed`, a rejection stays
+    /// `failed`, and nothing else is touched.
+    #[tokio::test]
+    async fn a_kimi_plan_review_settles_by_what_the_user_chose() {
+        let approved = "Exited plan mode. Plan mode deactivated. All tools are now available.\nPlan saved to: /p/plan.md\n\n## Approved Plan:\n# Plan\n";
+        for ok in [
+            approved,
+            "Plan approval dismissed. Plan mode remains active.",
+            "User requested revisions. Plan mode remains active.",
+            "User rejected the plan. Feedback:\n\nshorter please",
+        ] {
+            let statuses = tool_statuses_emitted(
+                AgentType::KimiCode,
+                &kimi_plan_review("5:call_1", "failed", ok),
+            )
+            .await;
+            assert_eq!(
+                statuses.last(),
+                Some(&Some("completed".to_string())),
+                "{ok}"
+            );
+        }
+        for rejected in [
+            "Plan rejected by user. Plan mode deactivated.",
+            "Plan rejected by user. Plan mode remains active.",
+        ] {
+            let statuses = tool_statuses_emitted(
+                AgentType::KimiCode,
+                &kimi_plan_review("5:call_2", "failed", rejected),
+            )
+            .await;
+            assert_eq!(
+                statuses.last(),
+                Some(&Some("failed".to_string())),
+                "{rejected}"
+            );
+        }
+        // 2.5.3 settled the same review `completed`; that stays as it was.
+        let statuses = tool_statuses_emitted(
+            AgentType::KimiCode,
+            &kimi_plan_review("5:call_3", "completed", approved),
+        )
+        .await;
+        assert_eq!(statuses.last(), Some(&Some("completed".to_string())));
+
+        // Only an `ExitPlanMode` call: another tool whose output happens to
+        // read the same keeps its failure.
+        let mut other = kimi_plan_review("5:call_4", "failed", approved);
+        other[0]["title"] = serde_json::json!("Bash");
+        other.remove(1);
+        let statuses = tool_statuses_emitted(AgentType::KimiCode, &other).await;
+        assert_eq!(statuses.last(), Some(&Some("failed".to_string())));
+
+        // Only Kimi Code.
+        let statuses = tool_statuses_emitted(
+            AgentType::OpenCode,
+            &kimi_plan_review("5:call_5", "failed", approved),
+        )
+        .await;
+        assert_eq!(statuses.last(), Some(&Some("failed".to_string())));
     }
 
     /// Kimi retitles a call's card with a status and never puts the call's

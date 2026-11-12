@@ -1372,7 +1372,7 @@ fn decode_step(
 }
 
 /// `agent.v1.ToolCall` oneof field number → tool name, for every variant the
-/// 2026.11.05-86047df CLI models, plus the ones earlier builds stored and
+/// 2026.11.05-86047df CLI models (2026.11.11-b912975 declares the same), plus the ones earlier builds stored and
 /// later ones dropped (`update_pr_code_tour` = 50, which the 2026.07.16 CLI
 /// modeled, and the `pi_*` tools 61–67, which 2026.10.22-27dcf5f removed), so
 /// older transcripts keep their cards. Undecoded variants still render a named
@@ -3910,8 +3910,8 @@ mod tests {
     }
 
     /// The tool variants of `agent.v1.ToolCall` as the 2026.11.05-86047df CLI
-    /// declares it (read off its bundled descriptor). Fields 54, 57, 59 and 60
-    /// of that message are not tools.
+    /// declares it (read off its bundled descriptor; 2026.11.11-b912975's is
+    /// the same). Fields 54, 57, 59 and 60 of that message are not tools.
     const CLI_86047DF_TOOL_FIELDS: &[u32] = &[
         1, 3, 4, 5, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30,
         31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 48, 49, 51, 52, 53, 55, 56,

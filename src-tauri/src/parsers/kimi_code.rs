@@ -361,6 +361,9 @@ fn parse_wire(path: &Path, agents_dir: Option<&Path>) -> WireParse {
     // paired results may load a sub-agent transcript, so an ordinary tool result
     // can never gain `agent_stats` (mirrors CodeBuddy's `agent_call_ids` gate).
     let mut agent_call_ids: HashSet<String> = HashSet::new();
+    // `toolCallId`s of `ExitPlanMode` calls, whose results 2.6.0 marks as
+    // errors whatever the user decided (see `kimi_plan_review_kept_ok`).
+    let mut exit_plan_mode_call_ids: HashSet<String> = HashSet::new();
     // `promptId` of the turn in progress, to recognize a `turn.steer` that only
     // repeats it (see `steer_repeats_turn_prompt`).
     let mut turn_prompt_id: Option<String> = None;
@@ -488,6 +491,13 @@ fn parse_wire(path: &Path, agents_dir: Option<&Path>) -> WireParse {
                                 agent_call_ids.insert(id.clone());
                             }
                         }
+                        if event.get("name").and_then(Value::as_str)
+                            == Some(KIMI_EXIT_PLAN_MODE_TOOL)
+                        {
+                            if let Some(id) = &tool_call_id {
+                                exit_plan_mode_call_ids.insert(id.clone());
+                            }
+                        }
                         wp.messages.push(block_message(
                             format!("kc-toolcall-{idx}"),
                             MessageRole::Assistant,
@@ -530,16 +540,24 @@ fn parse_wire(path: &Path, agents_dir: Option<&Path>) -> WireParse {
                             .and_then(|dir| {
                                 agent_stats_from_subagent(output_preview.as_deref(), dir)
                             });
+                        let is_error = result
+                            .and_then(|r| r.get("isError"))
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                            && !(tool_call_id
+                                .as_deref()
+                                .is_some_and(|id| exit_plan_mode_call_ids.contains(id))
+                                && result
+                                    .and_then(|r| r.get("output"))
+                                    .and_then(Value::as_str)
+                                    .is_some_and(kimi_plan_review_kept_ok));
                         wp.messages.push(block_message(
                             format!("kc-toolresult-{idx}"),
                             MessageRole::Tool,
                             ContentBlock::ToolResult {
                                 tool_use_id: tool_call_id,
                                 output_preview,
-                                is_error: result
-                                    .and_then(|r| r.get("isError"))
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false),
+                                is_error,
                                 agent_stats,
                                 // Kimi tool results are text/JSON today; image
                                 // capture (cf. main's tool-result image support)
@@ -922,6 +940,32 @@ fn tool_result_preview(result: &Value) -> Option<String> {
     } else {
         serde_json::to_string(output).ok()
     }
+}
+
+/// Kimi Code's plan-review tool.
+pub(crate) const KIMI_EXIT_PLAN_MODE_TOOL: &str = "ExitPlanMode";
+
+/// Whether an `ExitPlanMode` result is one Kimi itself means as a success.
+///
+/// The plan review answers with `isError: false` when the user approves the
+/// plan ("Exited plan mode. …"), dismisses the review ("Plan approval
+/// dismissed. …") or asks for a revision ("User requested revisions. …",
+/// "User rejected the plan. Feedback: …"), and with `isError: true` only when
+/// the user rejects it ("Plan rejected by user. …"). 2.6.0's tool executor
+/// turns every one of those answers into a veto, so the call settles `failed`
+/// over ACP and its `tool.result` carries `isError: true` in `wire.jsonl`, and
+/// an approved plan would show as an error. Read off the wording of the
+/// result instead, which 2.5.3 and 2.6.0 share; any other text keeps the
+/// status Kimi sent.
+pub(crate) fn kimi_plan_review_kept_ok(output: &str) -> bool {
+    const OK_PREFIXES: &[&str] = &[
+        "Exited plan mode.",
+        "Plan approval dismissed.",
+        "User requested revisions.",
+        "User rejected the plan. Feedback:",
+    ];
+    let output = output.trim_start();
+    OK_PREFIXES.iter().any(|prefix| output.starts_with(prefix))
 }
 
 /// True when a `tool.call` event is an `Agent` sub-agent delegation — its `name`
@@ -1621,6 +1665,82 @@ mod tests {
 
         // "New Session" placeholder title falls back to the first user prompt.
         assert_eq!(detail.summary.title.as_deref(), Some("run it"));
+    }
+
+    /// Kimi Code 2.6.0 writes every answered plan review's `tool.result` with
+    /// `isError: true`; history reads the review's answer off its wording, as
+    /// the live path does, and only a rejection stays an error.
+    #[test]
+    fn plan_review_results_follow_what_the_user_chose() {
+        let root = unique_root("planreview");
+        let sid = "sess-plan";
+        let review = |id: &str, name: &str, output: &str, t: i64| {
+            [
+                json!({"type":"context.append_loop_event","event":{"type":"tool.call","toolCallId":id,"name":name,"args":{}},"time":t}),
+                json!({"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":id,"result":{"output":output,"isError":true,"durationMs":0}},"time":t + 1}),
+            ]
+        };
+        let mut lines = vec![
+            json!({"type":"turn.prompt","input":[{"type":"text","text":"plan it"}],"origin":{"kind":"user"},"time":1782276649227i64}),
+        ];
+        lines.extend(review(
+            "call_approved",
+            "ExitPlanMode",
+            "Exited plan mode. Plan mode deactivated. All tools are now available.\n\n## Approved Plan:\n# Plan\n",
+            1782276650000,
+        ));
+        lines.extend(review(
+            "call_dismissed",
+            "ExitPlanMode",
+            "Plan approval dismissed. Plan mode remains active.",
+            1782276650010,
+        ));
+        lines.extend(review(
+            "call_rejected",
+            "ExitPlanMode",
+            "Plan rejected by user. Plan mode deactivated.",
+            1782276650020,
+        ));
+        lines.extend(review(
+            "call_bash",
+            "Bash",
+            "Exited plan mode. (a command that printed this)",
+            1782276650030,
+        ));
+        write_session(
+            &root,
+            "wd_app_deadbeef",
+            sid,
+            &json!({"title":"Plan"}),
+            &lines,
+        );
+
+        let parser = KimiCodeParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let errors: Vec<(String, bool)> = detail
+            .turns
+            .iter()
+            .flat_map(|t| &t.blocks)
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error,
+                    ..
+                } => Some((tool_use_id.clone().unwrap_or_default(), *is_error)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            errors,
+            [
+                ("call_approved".to_string(), false),
+                ("call_dismissed".to_string(), false),
+                ("call_rejected".to_string(), true),
+                ("call_bash".to_string(), true),
+            ]
+        );
+
+        std::fs::remove_dir_all(root.parent().unwrap_or(&root)).ok();
     }
 
     #[test]
