@@ -7169,6 +7169,7 @@
     "checksPassing": "{count} ناجحة",
     "checksFailing": "{count} فاشلة",
     "checksPending": "{count} قيد التنفيذ",
+    "checksNeutralCount": "{count} بلا نتيجة",
     "checkAllowFailure": "يُسمح بفشله",
     "checkSuccess": "ناجح",
     "checkFailure": "فاشل",

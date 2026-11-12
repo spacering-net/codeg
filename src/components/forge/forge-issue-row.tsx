@@ -234,25 +234,67 @@ export function checksMark(
   return summary.verdict
 }
 
-const CHECKS_MARK_GLYPH: Record<
+/**
+ * Each mark's glyph and pill tint. The tint is the glyph's own hue at low
+ * strength — a fill to give the pill a shape, a hairline ring to keep it from
+ * melting into a hovered or selected row — and the text one step darker than
+ * the glyph so the count stays readable on the tint in both themes.
+ */
+const CHECKS_MARK_STYLE: Record<
   ChecksMark,
-  { Icon: LucideIcon; className: string }
+  { Icon: LucideIcon; glyph: string; pill: string }
 > = {
-  failure: { Icon: CircleX, className: "text-rose-600" },
-  approval: { Icon: ShieldAlert, className: "text-amber-600" },
+  failure: {
+    Icon: CircleX,
+    glyph: "text-rose-600 dark:text-rose-400",
+    pill: "bg-rose-500/10 text-rose-700 ring-rose-500/20 hover:bg-rose-500/15 dark:text-rose-300",
+  },
+  approval: {
+    Icon: ShieldAlert,
+    glyph: "text-amber-600 dark:text-amber-400",
+    pill: "bg-amber-500/10 text-amber-700 ring-amber-500/25 hover:bg-amber-500/15 dark:text-amber-300",
+  },
   // Static, unlike the panel's spinner: thirty rows spinning at once would
   // pull the eye down the list for the least urgent of the states.
-  running: { Icon: CircleDot, className: "text-amber-500" },
-  success: { Icon: CircleCheck, className: "text-emerald-600" },
-  neutral: { Icon: CircleMinus, className: "text-muted-foreground" },
+  running: {
+    Icon: CircleDot,
+    glyph: "text-amber-500 dark:text-amber-400",
+    pill: "bg-amber-500/10 text-amber-700 ring-amber-500/20 hover:bg-amber-500/15 dark:text-amber-300",
+  },
+  success: {
+    Icon: CircleCheck,
+    glyph: "text-emerald-600 dark:text-emerald-400",
+    pill: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/20 hover:bg-emerald-500/15 dark:text-emerald-300",
+  },
+  neutral: {
+    Icon: CircleMinus,
+    glyph: "text-muted-foreground",
+    pill: "bg-muted text-muted-foreground ring-border hover:bg-muted/70 hover:text-foreground",
+  },
 }
 
 /**
- * The row's CI, as a mark after its number: what the forge's own pull request
- * list shows in the same place. A button, because the full story — every
- * check, and the approval itself — is one click away on the panel's Checks
- * tab. Its words (counts where the forge gave them, the verdict where it gave
- * only that) are the tooltip and the accessible name both.
+ * `passing/total`, the way the forge's own list counts a change's checks — or
+ * `null` where the forge gave a verdict without a breakdown, or counted
+ * nothing. Only a PASS counts toward the numerator: a skipped or cancelled
+ * check is not one, so a green sweep with a skipped job reads `9/10`, and the
+ * tooltip says what the missing one is.
+ */
+export function checksFraction(
+  summary: ForgeCheckSummary | null | undefined
+): string | null {
+  const counts = summary?.counts
+  if (counts == null || counts.total <= 0) return null
+  return `${counts.passing}/${counts.total}`
+}
+
+/**
+ * The row's CI, as a pill after the update time: the glyph, the
+ * `passing/total` count the forge's own pull request list shows, and — for
+ * workflows held for approval — a word. A button, because the full story —
+ * every check, and the approval itself — is one click away on the panel's
+ * Checks tab. Its words (counts where the forge gave them, the verdict where
+ * it gave only that) are the tooltip and the accessible name both.
  */
 function RowChecksMark({
   summary,
@@ -266,7 +308,8 @@ function RowChecksMark({
   const t = useTranslations("Forge")
   const mark = checksMark(summary)
   if (mark == null || summary == null) return null
-  const { Icon, className } = CHECKS_MARK_GLYPH[mark]
+  const { Icon, glyph, pill } = CHECKS_MARK_STYLE[mark]
+  const fraction = checksFraction(summary)
 
   const parts: string[] = []
   if (summary.awaiting_approval > 0) {
@@ -285,6 +328,9 @@ function RowChecksMark({
     if (counts.passing > 0) {
       parts.push(t("checksPassing", { count: counts.passing }))
     }
+    if (counts.neutral > 0) {
+      parts.push(t("checksNeutralCount", { count: counts.neutral }))
+    }
   }
   if (parts.length === 0 || (counts == null && summary.verdict != null)) {
     // No breakdown to give: the verdict's own word.
@@ -301,6 +347,9 @@ function RowChecksMark({
     if (word != null) parts.push(word)
   }
   const label = parts.join(" · ")
+  // Held workflows are the one state that asks somebody to act, so they get a
+  // word as well as a glyph — where there is room for it.
+  const approvalWord = mark === "approval" && !compact
 
   return (
     <button
@@ -309,14 +358,17 @@ function RowChecksMark({
       title={label}
       aria-label={label}
       data-forge-checks={mark}
-      className="inline-flex items-center gap-1 rounded-sm transition-colors hover:text-foreground"
+      className={cn(
+        "inline-flex h-[1.125rem] shrink-0 items-center gap-1 rounded-full px-1.5 text-[0.6875rem] leading-none font-medium tabular-nums ring-1 ring-inset transition-colors",
+        "outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        // A lone glyph gets an even pad on both sides so it stays round.
+        fraction == null && !approvalWord && "px-1",
+        pill
+      )}
     >
-      <Icon className={cn("size-3.5 shrink-0", className)} aria-hidden />
-      {/* Held workflows are the one state that asks somebody to act, so they
-          get a word as well as a glyph — where there is room for it. */}
-      {mark === "approval" && !compact ? (
-        <span className="text-amber-600">{t("checksApprovalShort")}</span>
-      ) : null}
+      <Icon className={cn("size-3 shrink-0", glyph)} aria-hidden />
+      {fraction != null ? <span>{fraction}</span> : null}
+      {approvalWord ? <span>{t("checksApprovalShort")}</span> : null}
     </button>
   )
 }
@@ -482,7 +534,7 @@ export function ForgeIssueRowItem({
               />
             ))}
         </div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
           {/* Where the title's old link went. The number is the item's name on
               the forge — both forges render it as the link to the item — so it
               is the natural place for the trip out, and putting it here keeps
@@ -490,17 +542,24 @@ export function ForgeIssueRowItem({
           <BrowserLink
             href={row.html_url}
             title={t("openItem")}
-            className="font-mono transition-colors hover:text-foreground hover:underline"
+            className="shrink-0 font-mono transition-colors hover:text-foreground hover:underline"
           >
             #{row.number}
           </BrowserLink>
+          {row.author ? (
+            <span className="min-w-0 truncate">· {row.author}</span>
+          ) : null}
+          {row.updated_at ? (
+            <span className="shrink-0">· {relative(row.updated_at)}</span>
+          ) : null}
+          {/* Last, after the time: the pill is the widest thing on the line
+              and a status rather than a fact about the item, so it closes the
+              line instead of pushing the author and time apart. */}
           <RowChecksMark
             summary={checks}
             compact={compact}
             onOpen={onOpenChecks}
           />
-          {row.author ? <span>· {row.author}</span> : null}
-          {row.updated_at ? <span>· {relative(row.updated_at)}</span> : null}
         </div>
       </div>
 

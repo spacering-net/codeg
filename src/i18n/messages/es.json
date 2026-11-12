@@ -7169,6 +7169,7 @@
     "checksPassing": "{count} correctas",
     "checksFailing": "{count} fallidas",
     "checksPending": "{count} en curso",
+    "checksNeutralCount": "{count} sin veredicto",
     "checkAllowFailure": "puede fallar",
     "checkSuccess": "Correcta",
     "checkFailure": "Fallida",

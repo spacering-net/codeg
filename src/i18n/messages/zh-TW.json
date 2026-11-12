@@ -7169,6 +7169,7 @@
     "checksPassing": "{count} 項通過",
     "checksFailing": "{count} 項失敗",
     "checksPending": "{count} 項進行中",
+    "checksNeutralCount": "{count} 項無結論",
     "checkAllowFailure": "允許失敗",
     "checkSuccess": "通過",
     "checkFailure": "失敗",

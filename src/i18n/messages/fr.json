@@ -7169,6 +7169,7 @@
     "checksPassing": "{count} réussies",
     "checksFailing": "{count} en échec",
     "checksPending": "{count} en cours",
+    "checksNeutralCount": "{count} sans verdict",
     "checkAllowFailure": "échec toléré",
     "checkSuccess": "Réussie",
     "checkFailure": "En échec",

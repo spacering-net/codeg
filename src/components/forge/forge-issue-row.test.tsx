@@ -19,7 +19,11 @@ import type {
   WorkTaskStatus,
 } from "@/lib/types"
 
-import { checksMark, ForgeIssueRowItem } from "./forge-issue-row"
+import {
+  checksFraction,
+  checksMark,
+  ForgeIssueRowItem,
+} from "./forge-issue-row"
 
 /** Uncoloured unless a test cares — most of them are about something else. */
 function label(name: string, color: string | null = null): ForgeLabel {
@@ -583,6 +587,7 @@ describe("ForgeIssueRowItem checks mark", () => {
       name: "1 failing · 2 in progress · 9 passing",
     })
     expect(mark).toHaveAttribute("data-forge-checks", "failure")
+    expect(mark).toHaveTextContent(/^9\/12$/)
     await user.click(mark)
     expect(onOpenChecks).toHaveBeenCalledTimes(1)
     expect(onOpenDetail).not.toHaveBeenCalled()
@@ -603,6 +608,38 @@ describe("ForgeIssueRowItem checks mark", () => {
       true
     )
     expect(screen.queryByText("Approval needed")).toBeNull()
+  })
+
+  it("counts passes over the total, and only a pass counts", () => {
+    expect(checksFraction(undefined)).toBeNull()
+    expect(checksFraction(summary({ counts: null }))).toBeNull()
+    expect(
+      checksFraction(
+        summary({
+          counts: { passing: 0, failing: 0, pending: 0, neutral: 0, total: 0 },
+        })
+      )
+    ).toBeNull()
+    expect(checksFraction(summary())).toBe("10/10")
+    // A skipped job is not a pass: a green sweep with one reads 9/10, and the
+    // tooltip says what the tenth is.
+    mountWith(
+      summary({
+        counts: { passing: 9, failing: 0, pending: 0, neutral: 1, total: 10 },
+      })
+    )
+    expect(
+      screen.getByRole("button", {
+        name: "9 passing · 1 without a verdict",
+      })
+    ).toHaveTextContent(/^9\/10$/)
+  })
+
+  it("closes the meta line, after the author and time", () => {
+    const { mark } = mountWith(summary())
+    const line = mark()!.parentElement!
+    expect(line.lastElementChild).toBe(mark())
+    expect(mark()!.previousElementSibling).toHaveTextContent(/^· /)
   })
 
   it("falls back to the verdict's word without a breakdown", () => {

@@ -7169,6 +7169,7 @@
     "checksPassing": "{count}개 통과",
     "checksFailing": "{count}개 실패",
     "checksPending": "{count}개 진행 중",
+    "checksNeutralCount": "{count}개 판정 없음",
     "checkAllowFailure": "실패 허용",
     "checkSuccess": "통과",
     "checkFailure": "실패",

@@ -7169,6 +7169,7 @@
     "checksPassing": "{count} 件成功",
     "checksFailing": "{count} 件失敗",
     "checksPending": "{count} 件実行中",
+    "checksNeutralCount": "{count} 件判定なし",
     "checkAllowFailure": "失敗を許容",
     "checkSuccess": "成功",
     "checkFailure": "失敗",
