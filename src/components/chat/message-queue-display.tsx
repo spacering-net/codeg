@@ -7,9 +7,11 @@ import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
 import { draftRidesBlocks } from "@/lib/prompt-draft"
 import type { QueuedMessage } from "@/hooks/use-message-queue"
+import type { PendingSessionMessage } from "@/lib/api"
 
 interface MessageQueueDisplayProps {
   queue: QueuedMessage[]
+  backendQueue?: PendingSessionMessage[]
   onReorder: (items: QueuedMessage[]) => void
   onEdit: (id: string) => void
   onDelete: (id: string) => void
@@ -144,6 +146,7 @@ function QueueItem({
 
 export function MessageQueueDisplay({
   queue,
+  backendQueue = [],
   onReorder,
   onEdit,
   onDelete,
@@ -151,6 +154,7 @@ export function MessageQueueDisplay({
   onSteerItem,
   steerChannel = "pull",
 }: MessageQueueDisplayProps) {
+  const t = useTranslations("Folder.chat.messageQueue")
   // The id whose insert is in flight. A per-row `steering` would let a
   // concurrent click on another row race the same channel; one shared id
   // both disables the clicked row and (via `steeringId !== null`) the others
@@ -177,10 +181,28 @@ export function MessageQueueDisplay({
     [onSteerItem]
   )
 
-  if (queue.length === 0) return null
+  if (queue.length === 0 && backendQueue.length === 0) return null
 
   return (
     <div className="max-h-28 overflow-y-auto pb-1">
+      {backendQueue.map((item) => (
+        <div
+          key={item.message_id}
+          className="mb-0.5 flex items-center gap-1 rounded-md border border-border/70 bg-muted/40 px-1.5 py-1 text-3xs leading-none"
+          title={item.message}
+        >
+          <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
+          <span className="max-w-40 shrink-0 truncate rounded-sm bg-muted px-1 py-0.5 text-muted-foreground">
+            {t("fromSession", {
+              name: item.source_title || `#${item.source_conversation_id}`,
+            })}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-foreground/80">
+            {item.message}
+          </span>
+          <span className="shrink-0 text-muted-foreground">{t("waiting")}</span>
+        </div>
+      ))}
       <Reorder.Group
         as="div"
         axis="y"

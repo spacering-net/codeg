@@ -5684,6 +5684,22 @@ export async function getDelegationSettings(): Promise<DelegationSettings> {
   return getTransport().call("get_delegation_settings")
 }
 
+export interface PendingSessionMessage {
+  message_id: string
+  message: string
+  source_conversation_id: number
+  source_title: string | null
+  created_at: string
+}
+
+export async function listPendingSessionMessages(
+  conversationId: number
+): Promise<PendingSessionMessage[]> {
+  return getTransport().call("list_pending_session_messages", {
+    conversationId,
+  })
+}
+
 export async function setDelegationSettings(
   settings: DelegationSettings
 ): Promise<DelegationSettings> {

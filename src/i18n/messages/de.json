@@ -3518,6 +3518,8 @@
         "mentionGroupAssistant": "Assistenten"
       },
       "messageQueue": {
+        "fromSession": "Von Sitzung: {name}",
+        "waiting": "In Warteschlange",
         "addToQueue": "Zur Warteschlange",
         "saveEdit": "Speichern",
         "cancelEdit": "Bearbeitung abbrechen",

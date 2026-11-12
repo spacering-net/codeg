@@ -14,6 +14,7 @@ import type {
   AvailableCommandInfo,
 } from "@/lib/types"
 import type { QueuedMessage } from "@/hooks/use-message-queue"
+import type { PendingSessionMessage } from "@/lib/api"
 import {
   MessageInput,
   type ComposerInjectContent,
@@ -52,6 +53,7 @@ interface ChatInputProps {
    *  tab when tiled across multiple sessions; passed through to MessageInput. */
   showActiveFlow?: boolean
   queue?: QueuedMessage[]
+  backendQueue?: PendingSessionMessage[]
   onEnqueue?: (draft: PromptDraft, modeId: string | null) => void
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
@@ -128,6 +130,7 @@ export const ChatInput = memo(function ChatInput({
   isActive,
   showActiveFlow,
   queue,
+  backendQueue,
   onEnqueue,
   onQueueReorder,
   onQueueEdit,
@@ -165,6 +168,9 @@ export const ChatInput = memo(function ChatInput({
   // and is bounded: `selectors_ready` fires on every establishment path whether
   // or not the agent has any commands, so this can never hang on a spinner.
   const commandsLoading = isConnecting || selectorsLoading
+  const hasLocalQueue = Boolean(
+    queue?.length && onQueueReorder && onQueueEdit && onQueueDelete
+  )
 
   // Active/historical conversations dock the composer at the very bottom of the
   // message list. The attached folder/branch selector row now sits at the
@@ -188,21 +194,18 @@ export const ChatInput = memo(function ChatInput({
         if (event.pointerType !== "mouse") event.stopPropagation()
       }}
     >
-      {queue &&
-        queue.length > 0 &&
-        onQueueReorder &&
-        onQueueEdit &&
-        onQueueDelete && (
-          <MessageQueueDisplay
-            queue={queue}
-            onReorder={onQueueReorder}
-            onEdit={onQueueEdit}
-            onDelete={onQueueDelete}
-            editingItemId={editingItemId ?? null}
-            onSteerItem={onQueueSteer}
-            steerChannel={steerChannel}
-          />
-        )}
+      {(hasLocalQueue || Boolean(backendQueue?.length)) && (
+        <MessageQueueDisplay
+          queue={hasLocalQueue ? queue! : []}
+          backendQueue={backendQueue}
+          onReorder={onQueueReorder ?? (() => {})}
+          onEdit={onQueueEdit ?? (() => {})}
+          onDelete={onQueueDelete ?? (() => {})}
+          editingItemId={editingItemId ?? null}
+          onSteerItem={onQueueSteer}
+          steerChannel={steerChannel}
+        />
+      )}
       <MessageInput
         onSend={onSend}
         promptCapabilities={promptCapabilities}

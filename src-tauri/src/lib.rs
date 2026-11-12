@@ -1340,6 +1340,12 @@ mod tauri_app {
                                 manager: std::sync::Arc::new(cm_state.clone_ref()),
                             },
                         ),
+                        crate::app_state::build_session_messages(
+                            &cm_state,
+                            broker.clone(),
+                            db_conn.clone(),
+                            effective_data_dir.clone(),
+                        ),
                     );
                     // Bind through the service handle rather than a bare
                     // `listener.run` spawn: it keeps the bind error and the
@@ -2093,6 +2099,7 @@ mod tauri_app {
                 logging_commands::list_log_files,
                 logging_commands::open_logs_dir,
                 delegation_commands::get_delegation_settings,
+                delegation_commands::list_pending_session_messages,
                 delegation_commands::set_delegation_settings,
                 crate::commands::mcp_service::get_codeg_mcp_service_status,
                 crate::commands::mcp_service::start_codeg_mcp_service,

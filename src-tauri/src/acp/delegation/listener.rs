@@ -15,41 +15,40 @@ use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
-use crate::acp::delegation::broker::{DelegationBroker, StatusWait};
 use crate::acp::browser_tools::{
     BrowserActOutcome, BrowserCaptureOutcome, BrowserConsoleOutcome, BrowserEvalOutcome,
     BrowserSnapshotOutcome, BrowserTabOutcome, BrowserTabsOutcome, BrowserToolAccess,
     ERROR_NO_SUCH_TAB,
 };
+use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthoringAccess};
 use crate::acp::computer_tools::{
     ComputerActOutcome, ComputerAppsOutcome, ComputerCaptureOutcome, ComputerSnapshotOutcome,
     ComputerToolAccess, ComputerVerifyOutcome, ComputerWindowsOutcome, ERROR_NO_SUCH_TARGET,
 };
+use crate::acp::delegation::assistants::assistant_not_found_message;
+use crate::acp::delegation::broker::{DelegationBroker, StatusWait};
 use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerBrowserActRequest,
     BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
     BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
-    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerComputerActRequest,
-    BrokerComputerAppsRequest, BrokerComputerCaptureRequest, BrokerComputerLaunchRequest,
-    BrokerComputerSnapshotRequest,
-    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCommitFeedbackRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
+    BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest,
+    BrokerComputerWindowsRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
     BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
-    BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
+    BrokerResponse, BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
     BrokerStatusRequest, BrokerSubmitResultRequest, BrokerTaskCompleteRequest,
     BrokerTaskProgressRequest,
 };
-use crate::acp::delegation::assistants::assistant_not_found_message;
 use crate::acp::delegation::types::{
     delegation_target_from_args, DelegationRequest, DelegationTarget, DelegationTargetError,
     DelegationTaskReport, ResumeDelegationRequest, TaskStatus,
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
+use crate::acp::result_tool::ResultToolAccess;
 #[cfg(unix)]
 use crate::acp::scratch_dir::{is_inside_sweep_scope, SUN_PATH_CAP};
-use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthoringAccess};
-use crate::acp::result_tool::ResultToolAccess;
 use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use serde_json::Value;
@@ -141,6 +140,7 @@ pub struct TokenStats {
 }
 
 pub struct DelegationListener {
+    pub session_messages: Arc<dyn crate::acp::session_messages::SessionMessageAccess>,
     pub broker: Arc<DelegationBroker>,
     pub tokens: Arc<TokenRegistry>,
     pub parent_lookup: Arc<dyn ParentSessionLookup>,
@@ -195,8 +195,10 @@ impl DelegationListener {
         browser: Arc<dyn BrowserToolAccess>,
         computer: Arc<dyn ComputerToolAccess>,
         results: Arc<dyn ResultToolAccess>,
+        session_messages: Arc<dyn crate::acp::session_messages::SessionMessageAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            session_messages,
             broker,
             tokens,
             parent_lookup,
@@ -477,6 +479,12 @@ impl DelegationListener {
             }
             BrokerMessage::CancelTask(req) => report_response(self.process_cancel_task(req).await)?,
             BrokerMessage::ResumeTask(req) => report_response(self.process_resume_task(req).await)?,
+            BrokerMessage::SessionMessage(req) => {
+                let outcome = self.process_session_message(req).await;
+                BrokerResponse {
+                    outcome: serde_json::to_value(outcome).map_err(std::io::Error::other)?,
+                }
+            }
             BrokerMessage::Feedback(req) => {
                 // at-least-once delivery: READ pending notes (no mutation),
                 // WRITE the response, and COMMIT them delivered ONLY on a
@@ -844,6 +852,34 @@ impl DelegationListener {
                 reason: req.reason,
                 external_handle: req.external_handle,
             })
+            .await
+    }
+
+    async fn process_session_message(
+        &self,
+        req: super::transport::BrokerSessionMessageRequest,
+    ) -> crate::acp::session_messages::SessionMessageOutcome {
+        use crate::acp::session_messages::SessionMessageOutcome;
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return SessionMessageOutcome::refused("unavailable", "Subsession is unavailable");
+        };
+        if !self.broker.config_snapshot().await.enabled
+            && req.input.action == crate::acp::session_messages::SessionMessageAction::Send
+        {
+            return SessionMessageOutcome::refused("disabled", "Delegation is disabled");
+        }
+        let Some(parent) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return SessionMessageOutcome::refused(
+                "unavailable",
+                "Parent session is unavailable",
+            );
+        };
+        self.session_messages
+            .request(&entry.parent_connection_id, parent, req.input)
             .await
     }
 
@@ -1409,9 +1445,7 @@ fn browser_tabs_response(outcome: BrowserTabsOutcome) -> std::io::Result<BrokerR
 /// Serialize a [`BrowserSnapshotOutcome`] into a [`BrokerResponse`] for the
 /// `BrowserSnapshot` arm — the companion renders it into the `browser_snapshot`
 /// tool result.
-fn browser_snapshot_response(
-    outcome: BrowserSnapshotOutcome,
-) -> std::io::Result<BrokerResponse> {
+fn browser_snapshot_response(outcome: BrowserSnapshotOutcome) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
@@ -1754,16 +1788,16 @@ pub fn default_socket_path(_temp_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
-    use crate::acp::scratch_dir::short_root;
+    use crate::acp::browser_tools::{NoBrowserTabs, ERROR_GRANT_REQUIRED};
+    use crate::acp::computer_tools::NoComputerDesktop;
     use crate::acp::delegation::broker::{ConversationDepthLookup, DelegationConfig};
-    use crate::models::AgentType;
     use crate::acp::delegation::spawner::{
         mock::MockSpawner, ConnectionSpawner, ResumedSpawn, SpawnerError,
     };
-    use crate::acp::browser_tools::{NoBrowserTabs, ERROR_GRANT_REQUIRED};
-    use crate::acp::computer_tools::NoComputerDesktop;
     use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
+    #[cfg(unix)]
+    use crate::acp::scratch_dir::short_root;
+    use crate::models::AgentType;
     use serde_json::json;
     use std::time::Duration;
     use tokio::io::duplex;
@@ -1797,10 +1831,7 @@ mod tests {
     }
     #[async_trait]
     impl SessionFeedbackAccess for StubFeedback {
-        async fn read_pending_feedback(
-            &self,
-            parent_connection_id: &str,
-        ) -> Vec<PendingFeedback> {
+        async fn read_pending_feedback(&self, parent_connection_id: &str) -> Vec<PendingFeedback> {
             *self.read_conn.lock().await = Some(parent_connection_id.to_string());
             self.items.lock().await.clone()
         }
@@ -1820,9 +1851,7 @@ mod tests {
     #[derive(Default)]
     struct StubQuestion {
         pending: tokio::sync::Mutex<HashMap<String, oneshot::Sender<QuestionOutcome>>>,
-        registered: tokio::sync::Mutex<
-            Vec<(String, Vec<crate::acp::question::QuestionSpec>)>,
-        >,
+        registered: tokio::sync::Mutex<Vec<(String, Vec<crate::acp::question::QuestionSpec>)>>,
         canceled: tokio::sync::Mutex<Vec<String>>,
     }
     #[async_trait]
@@ -1907,11 +1936,7 @@ mod tests {
                 note: None,
             }
         }
-        async fn snapshot(
-            &self,
-            tab_id: &str,
-            max_chars: Option<usize>,
-        ) -> BrowserSnapshotOutcome {
+        async fn snapshot(&self, tab_id: &str, max_chars: Option<usize>) -> BrowserSnapshotOutcome {
             self.calls
                 .lock()
                 .await
@@ -1965,10 +1990,7 @@ mod tests {
             ));
             BrowserActOutcome::control_required(tab_id)
         }
-        async fn tab_op(
-            &self,
-            op: crate::acp::browser_tools::BrowserTabOp,
-        ) -> BrowserTabOutcome {
+        async fn tab_op(&self, op: crate::acp::browser_tools::BrowserTabOp) -> BrowserTabOutcome {
             self.calls
                 .lock()
                 .await
@@ -2082,6 +2104,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2107,6 +2130,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2133,6 +2157,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2158,6 +2183,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2185,6 +2211,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2211,6 +2238,7 @@ mod tests {
             browser,
             Arc::new(NoComputerDesktop),
             Arc::new(crate::acp::result_tool::NoResultTool),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -2261,6 +2289,93 @@ mod tests {
             .await;
         assert_eq!(report.status, TaskStatus::Canceled);
         assert!(report.message.unwrap().contains("does not match"));
+    }
+
+    #[tokio::test]
+    async fn session_messages_resolve_the_authenticated_parent_and_allow_queue_cancel_when_disabled(
+    ) {
+        use crate::acp::session_messages::{
+            SessionDelivery, SessionMessageAccess, SessionMessageAction,
+            SessionMessageOutcome, SessionMessageRequest,
+        };
+        #[derive(Default)]
+        struct Access(std::sync::atomic::AtomicUsize);
+        #[async_trait]
+        impl SessionMessageAccess for Access {
+            async fn request(
+                &self,
+                owner: &str,
+                parent: i32,
+                _: SessionMessageRequest,
+            ) -> SessionMessageOutcome {
+                assert_eq!(owner, "parent-conn");
+                assert_eq!(parent, 42);
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                SessionMessageOutcome {
+                    accepted: true,
+                    messages: vec![],
+                    error_code: None,
+                    message: None,
+                }
+            }
+        }
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                },
+            )
+            .await;
+        let broker = make_broker(Arc::new(MockSpawner::new())).await;
+        let access = Arc::new(Access::default());
+        let mut listener = make_listener(broker.clone(), tokens, Some(42));
+        Arc::get_mut(&mut listener).unwrap().session_messages = access.clone();
+        let make_request =
+            |token: &str, action| super::super::transport::BrokerSessionMessageRequest {
+                token: token.into(),
+                input: SessionMessageRequest {
+                    conversation_id: 77,
+                    action,
+                    message: Some("next".into()),
+                    message_id: Some("queued-id".into()),
+                    delivery: SessionDelivery::Queue,
+                },
+            };
+        assert!(
+            !listener
+                .process_session_message(make_request("bad", SessionMessageAction::Send))
+                .await
+                .accepted
+        );
+        assert_eq!(access.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(
+            listener
+                .process_session_message(make_request("tok", SessionMessageAction::Send))
+                .await
+                .accepted
+        );
+        broker
+            .set_config(DelegationConfig {
+                enabled: false,
+                ..Default::default()
+            })
+            .await;
+        assert!(
+            !listener
+                .process_session_message(make_request("tok", SessionMessageAction::Send))
+                .await
+                .accepted
+        );
+        assert!(
+            listener
+                .process_session_message(make_request("tok", SessionMessageAction::Cancel))
+                .await
+                .accepted
+        );
+        assert_eq!(access.0.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -3550,7 +3665,9 @@ mod tests {
 
         let listed = browser_round_trip(
             listener.clone(),
-            BrokerMessage::BrowserTabs(BrokerBrowserTabsRequest { token: "tok".into() }),
+            BrokerMessage::BrowserTabs(BrokerBrowserTabsRequest {
+                token: "tok".into(),
+            }),
         )
         .await;
         assert_eq!(listed.outcome["tabs"][0]["tabId"], "t1");
@@ -4127,6 +4244,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             computer,
             Arc::new(crate::acp::result_tool::NoResultTool),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         )
     }
 
@@ -4314,7 +4432,9 @@ mod tests {
                 mock as Arc<dyn ConnectionSpawner>,
                 Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
             )
-            .with_assistants(Arc::new(StubAssistants(vec![assistant_info(3, "Reviewer")]))),
+            .with_assistants(Arc::new(StubAssistants(vec![assistant_info(
+                3, "Reviewer",
+            )]))),
         );
         broker
             .set_config(DelegationConfig {
@@ -4387,7 +4507,11 @@ mod tests {
     async fn an_unusable_assistant_is_refused_with_the_usable_roster() {
         let mock = Arc::new(MockSpawner::new());
         let (listener, _tokens) = assistant_listener(mock.clone()).await;
-        let refusal = serve(listener.clone(), call(json!({"assistant_id": 9, "task": "x"}))).await;
+        let refusal = serve(
+            listener.clone(),
+            call(json!({"assistant_id": 9, "task": "x"})),
+        )
+        .await;
         assert_eq!(refusal["status"], "failed");
         assert_eq!(refusal["error_code"], "assistant_not_found");
         let message = refusal["message"].as_str().unwrap();
@@ -4512,6 +4636,7 @@ mod tests {
             Arc::new(NoBrowserTabs),
             Arc::new(NoComputerDesktop),
             results.clone(),
+            Arc::new(crate::acp::session_messages::NoSessionMessages),
         );
         let ask = |token: &str| {
             BrokerMessage::ResultSchema(BrokerResultSchemaRequest {

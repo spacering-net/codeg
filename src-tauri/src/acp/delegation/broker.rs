@@ -34,11 +34,13 @@
 //!         [`DelegationBroker::cancel_by_parent_turn`]), or the LLM's own
 //!         [`DelegationBroker::cancel_task_by_id`].
 //!
-//! v1 is explicitly one-shot — no session reuse. The one exception is
-//! [`DelegationBroker::resume_delegation`]: an INTERRUPTED task (canceled, or
-//! stranded `in_progress` by a crash) can be brought back under its original
-//! `task_id` by reloading the child's recorded agent session — a continuation
-//! of the original task, never a new iteration on it.
+//! The broker tracks the original delegation task. Subsequent prompts in the
+//! same child session are managed by `SessionMessages`, which retains a
+//! live child connection when it takes ownership. Separately,
+//! [`DelegationBroker::resume_delegation`] restores an INTERRUPTED task
+//! (canceled, or stranded `in_progress` by a crash) under its original `task_id`
+//! by reloading the child's recorded agent session — a continuation of the
+//! original task, never a new iteration on it.
 //!
 //! Result durability: child output is NOT stored in codeg's DB, so the broker
 //! caches the completed text in `completed` (parent-scoped, FIFO-capped). Once
@@ -59,14 +61,14 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use tokio::sync::{Mutex, Notify};
 
+use crate::acp::agent_mentions::render_assistant_brief;
+use crate::acp::delegation::assistants::{AssistantLookup, AssistantRosterEntry, NoAssistants};
 use crate::acp::delegation::event_emitter::{DelegationEventEmitter, NoopEventEmitter};
 use crate::acp::delegation::live_reply::{ChildLiveReplyLookup, NoopChildLiveReplyLookup};
 use crate::acp::delegation::meta_writer::{
     build_delegation_meta, is_synthetic_parent_tool_use_id, DelegationMetaWriter, NoopMetaWriter,
 };
 use crate::acp::delegation::spawner::{ConnectionSpawner, DelegationLink};
-use crate::acp::agent_mentions::render_assistant_brief;
-use crate::acp::delegation::assistants::{AssistantLookup, AssistantRosterEntry, NoAssistants};
 use crate::acp::delegation::types::{
     AgentDelegationDefaults, AssistantRef, BlockedKind, BlockedOn, DelegationAssistant,
     DelegationError, DelegationOutcome, DelegationProgress, DelegationRequest,
@@ -1501,6 +1503,7 @@ const IDENTITYLESS_RENAME_POLL_ATTEMPTS: usize = 30;
 /// gymnastics.
 #[derive(Clone)]
 pub struct DelegationBroker {
+    retained_children: Arc<Mutex<std::collections::HashMap<i32, Option<u64>>>>,
     spawner: Arc<dyn ConnectionSpawner>,
     depth_lookup: Arc<dyn ConversationDepthLookup>,
     /// Writer for `meta["codeg.delegation"]` on the parent's active
@@ -1543,6 +1546,20 @@ pub struct DelegationBroker {
 }
 
 impl DelegationBroker {
+    /// The caller must first validate direct conversation ancestry in the database.
+    /// Holding this lock through teardown makes claiming ownership and disconnect atomic.
+    pub async fn retain_child_for_messaging(
+        &self,
+        child_conversation_id: i32,
+        original_turn: Option<u64>,
+    ) {
+        self.retained_children
+            .lock()
+            .await
+            .entry(child_conversation_id)
+            .or_insert(original_turn);
+    }
+
     pub fn new(
         spawner: Arc<dyn ConnectionSpawner>,
         depth_lookup: Arc<dyn ConversationDepthLookup>,
@@ -1584,6 +1601,7 @@ impl DelegationBroker {
         event_emitter: Arc<dyn DelegationEventEmitter>,
     ) -> Self {
         Self {
+            retained_children: Arc::new(Mutex::new(std::collections::HashMap::new())),
             spawner,
             depth_lookup,
             meta_writer,
@@ -2745,12 +2763,11 @@ impl DelegationBroker {
             parent_conversation_id: req.parent_conversation_id,
             parent_tool_use_id: req.parent_tool_use_id.clone(),
             delegation_call_id: call_id.clone(),
-            assistant: req
-                .assistant
-                .as_ref()
-                .map(|a| crate::acp::delegation::spawner::AssistantLink {
+            assistant: req.assistant.as_ref().map(|a| {
+                crate::acp::delegation::spawner::AssistantLink {
                     id: a.id,
                     snapshot: a.run_snapshot(),
+                }
                 }),
         };
         // The assistant's standing instructions ride the child's first prompt
@@ -3274,8 +3291,10 @@ impl DelegationBroker {
             outcome_to_summary(outcome, duration_ms),
         )
         .await;
-        // v1 one-shot: always tear down the child.
+        let retained = self.retained_children.lock().await;
+        if !retained.contains_key(&child_conversation_id) {
         let _ = self.spawner.disconnect(child_connection_id).await;
+        }
     }
 
     /// Internal helper — apply the meta write iff the parent's
@@ -3622,10 +3641,20 @@ impl DelegationBroker {
             },
         )
         .await;
+        let retained = self.retained_children.lock().await;
+        if let Some(original_turn) = retained.get(&task.child_conversation_id) {
+            if let Some(turn) = original_turn.filter(|_| cancel_turn) {
+                let _ = self
+                    .spawner
+                    .cancel_if_turn(&task.child_connection_id, turn)
+                    .await;
+            }
+        } else {
         if cancel_turn {
             let _ = self.spawner.cancel(&task.child_connection_id).await;
         }
         let _ = self.spawner.disconnect(&task.child_connection_id).await;
+        }
     }
 
     /// Backs the `get_delegation_status` tool for a single task id — a thin
@@ -4139,13 +4168,16 @@ impl DelegationBroker {
                             if inner.resuming.insert(req.task_id.clone()) {
                                 MemGate::Proceed { claimed: true }
                             } else {
-                                MemGate::Refuse(Box::new(not_resumable_report(
+                                MemGate::Refuse(Box::new(
+                                    not_resumable_report(
                                     &req.task_id,
                                     status,
                                     Some(child_conversation_id),
                                     Some(agent_type),
                                     "a resume of this task is already in progress.",
-                                ).with_assistant(assistant.as_ref())))
+                                    )
+                                    .with_assistant(assistant.as_ref()),
+                                ))
                             }
                         }
                         TaskStatus::Completed => MemGate::Refuse(Box::new(not_resumable_report(
@@ -4154,19 +4186,24 @@ impl DelegationBroker {
                             Some(child_conversation_id),
                             Some(agent_type),
                             "the task already completed — resume only applies to a \
-                             canceled or interrupted task. Start a new \
-                             delegate_to_agent call for follow-up work.",
-                        ).with_assistant(assistant.as_ref()))),
-                        _ => MemGate::Refuse(Box::new(not_resumable_report(
+                             canceled or interrupted task. Use send_to_session \
+                             with conversation_id for follow-up work in the same session.",
+                            )
+                            .with_assistant(assistant.as_ref()),
+                        )),
+                        _ => MemGate::Refuse(Box::new(
+                            not_resumable_report(
                             &req.task_id,
                             status,
                             Some(child_conversation_id),
                             Some(agent_type),
                             "the task ended in failure rather than being \
                              interrupted — resume only applies to a canceled or \
-                             interrupted task. Start a new delegate_to_agent call \
-                             to retry it.",
-                        ).with_assistant(assistant.as_ref()))),
+                             interrupted task. Use send_to_session with \
+                             conversation_id to retry in the same session.",
+                            )
+                            .with_assistant(assistant.as_ref()),
+                        )),
                     }
                 }
             } else if let Some(r) = inner.running.get(&req.task_id) {
@@ -4182,7 +4219,9 @@ impl DelegationBroker {
                          canceled or interrupted task. Poll it with \
                          get_delegation_status (or stop it with cancel_delegation) \
                          instead.",
-                    ).with_assistant(r.assistant.as_ref())))
+                        )
+                        .with_assistant(r.assistant.as_ref()),
+                    ))
                 }
             } else {
                 let claimed = inner.resuming.insert(req.task_id.clone());
@@ -4336,8 +4375,8 @@ impl DelegationBroker {
                     Some(ctx.child_conversation_id),
                     Some(ctx.agent_type),
                     "the task already completed — resume only applies to a \
-                     canceled or interrupted task. Start a new delegate_to_agent \
-                     call for follow-up work.",
+                     canceled or interrupted task. Use send_to_session with \
+                     child_conversation_id for follow-up work in the same session.",
                 );
             }
             TaskStatus::Failed | TaskStatus::Unknown => {
@@ -4724,10 +4763,8 @@ impl DelegationBroker {
                 let canceled_duration_ms = {
                     let mut inner = self.pending.inner.lock().await;
                     if inner.running.remove(&call_id).is_some() {
-                        let outcome = canceled_outcome(
-                            ctx.child_conversation_id,
-                            "canceled before await",
-                        );
+                        let outcome =
+                            canceled_outcome(ctx.child_conversation_id, "canceled before await");
                         let duration_ms = started_at.elapsed().as_millis() as u64;
                         inner.insert_completed(
                             &call_id,
@@ -5177,6 +5214,68 @@ mod tests {
         assert_eq!(broker.pending_count().await, 0);
         // complete_call disconnects the child once.
         assert_eq!(mock.disconnects.lock().await.as_slice(), &["child-conn-1"]);
+    }
+
+    #[tokio::test]
+    async fn messaging_ownership_keeps_completed_child_connection() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("retained-child".into())).await;
+        mock.queue_send(Ok(42)).await;
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+        enable_delegation(&broker).await;
+        let driver = {
+            let broker = broker.clone();
+            tokio::spawn(async move { broker.handle_request(request(1, "pt-retain")).await })
+        };
+        let call_id = loop {
+            if let Some(id) = broker.peek_first_pending_call_id().await {
+                break id;
+            }
+            tokio::task::yield_now().await;
+        };
+        broker.retain_child_for_messaging(42, Some(0)).await;
+        broker
+            .complete_call(
+                &call_id,
+                DelegationOutcome::Ok(DelegationSuccess {
+                    text: "original result".into(),
+                    child_conversation_id: 42,
+                    child_agent_type: AgentType::Codex,
+                    turn_count: 1,
+                    duration_ms: 1,
+                    token_usage: None,
+                }),
+            )
+            .await;
+        assert!(matches!(driver.await.unwrap(), DelegationOutcome::Ok(_)));
+        assert!(mock.disconnects.lock().await.is_empty());
+        assert_eq!(broker.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn retained_original_task_is_still_canceled_without_disconnect() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("retained-child".into())).await;
+        mock.queue_send(Ok(42)).await;
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+        enable_delegation(&broker).await;
+        let driver = {
+            let broker = broker.clone();
+            tokio::spawn(async move { broker.handle_request(request(1, "pt-retain-cancel")).await })
+        };
+        loop {
+            if broker.peek_first_pending_call_id().await.is_some() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        broker.retain_child_for_messaging(42, Some(0)).await;
+        broker.cancel_by_parent("parent-conn").await;
+        let _ = tokio::time::timeout(Duration::from_secs(1), driver).await;
+        assert_eq!(mock.cancels.lock().await.as_slice(), &["retained-child"]);
+        assert!(mock.disconnects.lock().await.is_empty());
     }
 
     /// `StatusWait::Infinite` (the explicit `wait_ms = 0` escape hatch) must
@@ -7662,7 +7761,9 @@ mod tests {
                 "parent-conn",
                 "tc-keyed".into(),
                 Some(DelegationMatchKey {
-                    target: crate::acp::delegation::types::DelegationTarget::Agent(AgentType::ClaudeCode),
+                    target: crate::acp::delegation::types::DelegationTarget::Agent(
+                        AgentType::ClaudeCode,
+                    ),
                     task: "do x".into(),
                     working_dir: None,
                 }),
@@ -10006,10 +10107,8 @@ mod tests {
         let mock = Arc::new(MockSpawner::new());
         let lookup = Arc::new(MockResumeLookup::default());
         *lookup.ctx.lock().await = ctx;
-        let broker = DelegationBroker::new(
-            mock.clone() as Arc<dyn ConnectionSpawner>,
-            shallow_lookup(),
-        )
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup())
         .with_status_lookup(lookup.clone() as Arc<dyn ChildStatusLookup>);
         enable_delegation(&broker).await;
         (mock, lookup, broker)
@@ -10538,7 +10637,12 @@ mod tests {
 
         // Status keeps naming it; the terminal report and event do too.
         let report = broker
-            .get_task_status("parent-conn", Some(1), ack.task_id.as_deref().unwrap(), StatusWait::Immediate)
+            .get_task_status(
+                "parent-conn",
+                Some(1),
+                ack.task_id.as_deref().unwrap(),
+                StatusWait::Immediate,
+            )
             .await;
         assert_eq!(report.assistant_id, Some(3));
         broker
@@ -10555,7 +10659,12 @@ mod tests {
             )
             .await;
         let done = broker
-            .get_task_status("parent-conn", Some(1), ack.task_id.as_deref().unwrap(), StatusWait::Immediate)
+            .get_task_status(
+                "parent-conn",
+                Some(1),
+                ack.task_id.as_deref().unwrap(),
+                StatusWait::Immediate,
+            )
             .await;
         assert_eq!(done.status, TaskStatus::Completed);
         assert_eq!(done.assistant_name.as_deref(), Some("Reviewer"));

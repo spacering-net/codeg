@@ -234,6 +234,84 @@ pub async fn set_delegation_settings_core(
 
 // -------- Tauri commands -----------------------------------------------------
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingSessionMessage {
+    pub message_id: String,
+    pub message: String,
+    pub source_conversation_id: i32,
+    pub source_title: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Read-only view of messages waiting for this conversation. Dispatch remains
+/// owned by the backend; these entries must never enter the composer's queue.
+pub async fn list_pending_session_messages_core(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Vec<PendingSessionMessage>, crate::db::error::DbError> {
+    use crate::db::entities::{conversation, session_message};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    if conversation::Entity::find_by_id(conversation_id)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(conn)
+        .await?
+        .is_none()
+    {
+        return Ok(Vec::new());
+    }
+    let mut items: Vec<_> = session_message::Entity::find()
+        .filter(session_message::Column::ConversationId.eq(conversation_id))
+        .filter(session_message::Column::Status.eq("queued"))
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|row| PendingSessionMessage {
+            message_id: row.message_id,
+            message: row.message,
+            source_conversation_id: row.sender_conversation_id,
+            source_title: None,
+            created_at: row.created_at,
+        })
+        .collect();
+    if items.is_empty() {
+        return Ok(items);
+    }
+    // Opening/reconnecting a target also resumes its persisted backend queue.
+    if let Some(service) = crate::acp::delegation::service::current() {
+        service
+            .session_messages()
+            .wake_pending(conversation_id)
+            .await;
+    }
+    let sources: BTreeMap<_, _> = conversation::Entity::find()
+        .filter(conversation::Column::Id.is_in(items.iter().map(|r| r.source_conversation_id)))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|r| (r.id, r.title))
+        .collect();
+    items.retain(|r| sources.contains_key(&r.source_conversation_id));
+    for item in &mut items {
+        item.source_title = sources.get(&item.source_conversation_id).cloned().flatten();
+    }
+    items.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then(a.message_id.cmp(&b.message_id))
+    });
+    Ok(items)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn list_pending_session_messages(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    conversation_id: i32,
+) -> Result<Vec<PendingSessionMessage>, AppCommandError> {
+    Ok(list_pending_session_messages_core(&db.conn, conversation_id).await?)
+}
+
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn get_delegation_settings(
     #[cfg(feature = "tauri-runtime")] db: tauri::State<'_, crate::db::AppDatabase>,
@@ -277,6 +355,53 @@ mod tests {
     use crate::acp::delegation::spawner::{mock::MockSpawner, ConnectionSpawner};
     use crate::acp::delegation::types::DelegationError;
     use async_trait::async_trait;
+
+    #[tokio::test]
+    async fn pending_session_messages_are_scoped_and_disappear_when_dispatched() {
+        use crate::db::{
+            entities::conversation, service::session_message_service as messages, test_helpers::*,
+        };
+        use sea_orm::sea_query::Expr;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "D:/pending-messages").await;
+        let sender = seed_conversation(&db, folder, AgentType::Codex).await;
+        let recipient = seed_conversation(&db, folder, AgentType::Codex).await;
+        let other = seed_conversation(&db, folder, AgentType::Codex).await;
+        let row = messages::enqueue(&db.conn, sender, recipient, "Review needed", "queue")
+            .await
+            .unwrap();
+        let inbox = list_pending_session_messages_core(&db.conn, recipient)
+            .await
+            .unwrap();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].source_conversation_id, sender);
+        assert!(list_pending_session_messages_core(&db.conn, other)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(messages::claim(&db.conn, &row.message_id).await.unwrap());
+        assert!(list_pending_session_messages_core(&db.conn, recipient)
+            .await
+            .unwrap()
+            .is_empty());
+        messages::enqueue(&db.conn, sender, recipient, "Another report", "queue")
+            .await
+            .unwrap();
+        conversation::Entity::update_many()
+            .col_expr(
+                conversation::Column::DeletedAt,
+                Expr::value(chrono::Utc::now()),
+            )
+            .filter(conversation::Column::Id.eq(sender))
+            .exec(&db.conn)
+            .await
+            .unwrap();
+        assert!(list_pending_session_messages_core(&db.conn, recipient)
+            .await
+            .unwrap()
+            .is_empty());
+    }
 
     struct EmptyLookup;
     #[async_trait]

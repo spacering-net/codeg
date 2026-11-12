@@ -18,6 +18,13 @@ Codeg（Code Generation）是一个多智能体编码工作台，它将多个智
 
 ## 代码检查与测试（任务完成后进行必要的检查）
 
+### 测试运行方式（必须遵守）
+
+- 功能验证只使用 Web 服务（`codeg-server`）及其浏览器页面，不使用 Windows 桌面客户端作为测试对象。
+- 永远不编译、构建或打包桌面端，也不启动桌面客户端进行测试。禁止启用 `tauri-runtime`，禁止运行 `pnpm tauri dev`、`pnpm tauri build` 或默认开启桌面 feature 的 Cargo 命令。
+- 所有后端检查、测试和构建必须显式指定 `--no-default-features`；按需启用 `server-bin` 或 `mcp-bin`。
+- 验证界面时启动 WebServer 并访问其 HTTP 地址。需要隔离数据时使用独立 `CODEG_DATA_DIR`，不得通过测试修改正在使用的桌面数据。
+
 ### 前端
 
 ```bash
@@ -31,11 +38,6 @@ pnpm build                     # 静态导出构建
 ### 后端 Rust（在 `src-tauri/` 目录下执行）
 
 ```bash
-# 桌面模式（默认 feature）
-cargo check
-cargo test --features test-utils
-cargo clippy --all-targets --features test-utils -- -D warnings
-
 # 服务器模式
 cargo check --no-default-features --features server-bin --bin codeg-server
 cargo test --no-default-features --features server-bin --bin codeg-server --lib
@@ -47,7 +49,7 @@ cargo clippy --no-default-features --features mcp-bin --bin codeg-mcp -- -D warn
 
 # 解析器快照评审（输出变化时）
 cargo insta review
-INSTA_UPDATE=auto cargo test --features test-utils     # 自动写新 .snap
+INSTA_UPDATE=auto cargo test --no-default-features --features server-bin --lib
 ```
 
 ## 架构

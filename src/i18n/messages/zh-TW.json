@@ -3518,6 +3518,8 @@
         "mentionGroupAssistant": "助手"
       },
       "messageQueue": {
+        "fromSession": "來自會話：{name}",
+        "waiting": "排隊中",
         "addToQueue": "加入佇列",
         "saveEdit": "儲存",
         "cancelEdit": "取消編輯",

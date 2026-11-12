@@ -47,6 +47,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::acp::chat_authoring::{
     NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
 };
+use crate::acp::delegation::assistants::{roster_for_schema, AssistantRosterEntry};
 use crate::acp::delegation::transport::{
     client_ask_round_trip, client_browser_act_round_trip, client_browser_capture_round_trip,
     client_browser_console_round_trip, client_browser_eval_round_trip,
@@ -60,21 +61,24 @@ use crate::acp::delegation::transport::{
     client_feedback_round_trip, client_list_assistants_round_trip, client_ping,
     client_result_schema_round_trip, client_resume_task_round_trip, client_round_trip,
     client_session_round_trip, client_status_round_trip, client_submit_result_round_trip,
-    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
-    BrokerBrowserActRequest, BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest,
-    BrokerBrowserEvalRequest, BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest,
-    BrokerBrowserTabsRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
-    BrokerCommitFeedbackRequest, BrokerComputerActRequest, BrokerComputerAppsRequest,
-    BrokerComputerCaptureRequest, BrokerComputerClipboardRequest, BrokerComputerLaunchRequest,
-    BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest, BrokerComputerWindowsRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
-    BrokerListAssistantsRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
-    BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
+    client_session_message_round_trip, client_task_complete_round_trip,
+    client_task_progress_round_trip, BrokerAskRequest, BrokerBrowserActRequest,
+    BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
+    BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
+    BrokerComputerClipboardRequest, BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest,
+    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCreateAutomationRequest,
+    BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerRequest,
+    BrokerResponse, BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
+    BrokerStatusRequest, BrokerSubmitResultRequest, BrokerSessionMessageRequest,
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
-use crate::acp::delegation::assistants::{roster_for_schema, AssistantRosterEntry};
 use crate::acp::question::parse_questions;
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
+use crate::acp::session_messages::{
+    SessionDelivery, SessionMessageAction, SessionMessageRequest,
+};
 use crate::models::AutomationAction;
 
 /// Upper bound on one broker-side cancel round-trip. Bounds both
@@ -317,7 +321,10 @@ impl CompanionFeatures {
             "delegate_to_agent"
             | "get_delegation_status"
             | "cancel_delegation"
-            | "resume_delegation" => self.delegation,
+            | "resume_delegation"
+            | "send_to_session"
+            | "manage_session_messages"
+            => self.delegation,
             _ => false,
         }
     }
@@ -1051,6 +1058,28 @@ async fn build_tools_call_spawn(
             )
             .await
         }
+        "send_to_session" | "manage_session_messages" => {
+            let input = match parse_session_message_request(&name, &arguments) {
+                Ok(input) => input,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let req = BrokerSessionMessageRequest {
+                token: ctx.token.clone(),
+                input,
+            };
+            let round_trip =
+                Box::pin(async move { client_session_message_round_trip(&socket, &req).await });
+            // Persisted messages change only through explicit message management.
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_session_message_result,
+            )
+            .await
+        }
+
         "check_user_feedback" => {
             let req = BrokerFeedbackRequest {
                 token: ctx.token.clone(),
@@ -1146,7 +1175,14 @@ async fn build_tools_call_spawn(
             // activity strip, so a canceled call cannot read a page invisibly.
             let round_trip =
                 Box::pin(async move { client_browser_snapshot_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_browser_snapshot_result).await
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_browser_snapshot_result,
+            )
+            .await
         }
         "browser_click" | "browser_hover" | "browser_type" | "browser_press_key"
         | "browser_select_option" => {
@@ -1183,7 +1219,14 @@ async fn build_tools_call_spawn(
             // strip line are in there, as for the snapshot.
             let round_trip =
                 Box::pin(async move { client_browser_console_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_browser_console_result).await
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_browser_console_result,
+            )
+            .await
         }
         "browser_screenshot" => {
             let (tab_id, request) = match browser_capture_request(&arguments) {
@@ -1199,7 +1242,14 @@ async fn build_tools_call_spawn(
             // the codeg side, which is what leaves the line on the strip.
             let round_trip =
                 Box::pin(async move { client_browser_capture_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_browser_capture_result).await
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_browser_capture_result,
+            )
+            .await
         }
         "browser_eval" => {
             let (tab_id, request) = match browser_eval_request(&arguments) {
@@ -1298,7 +1348,13 @@ async fn build_tools_call_spawn(
             };
             let round_trip =
                 Box::pin(async move { client_computer_windows_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_computer_windows_result)
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_computer_windows_result,
+            )
                 .await
         }
         "computer_screenshot" => {
@@ -1315,7 +1371,13 @@ async fn build_tools_call_spawn(
             // on the codeg side, which is what writes the activity line.
             let round_trip =
                 Box::pin(async move { client_computer_capture_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_computer_capture_result)
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_computer_capture_result,
+            )
                 .await
         }
         "computer_snapshot" => {
@@ -1330,7 +1392,13 @@ async fn build_tools_call_spawn(
             };
             let round_trip =
                 Box::pin(async move { client_computer_snapshot_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_computer_snapshot_result)
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_computer_snapshot_result,
+            )
                 .await
         }
         "computer_verify" => {
@@ -1478,6 +1546,77 @@ async fn build_tools_call_spawn(
         }
         other => LineAction::Respond(err(id, -32602, format!("unknown tool: {other}"))),
     }
+}
+
+fn parse_session_message_request(
+    name: &str,
+    arguments: &Value,
+) -> Result<SessionMessageRequest, String> {
+    let args = arguments.as_object().ok_or("arguments must be an object")?;
+    let allowed: &[&str] = if name == "send_to_session" {
+        &["conversation_id", "message", "delivery"]
+    } else {
+        &["conversation_id", "action", "message_id", "message"]
+    };
+    if let Some(key) = args.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!("unknown argument: {key}"));
+    }
+    let conversation_id = args
+        .get("conversation_id")
+        .and_then(Value::as_i64)
+        .and_then(|id| i32::try_from(id).ok())
+        .filter(|id| *id > 0)
+        .ok_or("conversation_id must be a positive integer")?;
+    let text = |key: &str| -> Result<Option<String>, String> {
+        match args.get(key) {
+            None => Ok(None),
+            Some(Value::String(value)) if !value.trim().is_empty() => Ok(Some(value.clone())),
+            _ => Err(format!("{key} must be a non-empty string")),
+        }
+    };
+    let action = if name == "send_to_session" {
+        SessionMessageAction::Send
+    } else {
+        match args.get("action").and_then(Value::as_str) {
+            Some("list") => SessionMessageAction::List,
+            Some("update") => SessionMessageAction::Update,
+            Some("cancel") => SessionMessageAction::Cancel,
+            _ => return Err("action must be list, update, or cancel".into()),
+        }
+    };
+    let message = text("message")?;
+    let message_id = text("message_id")?;
+    if matches!(
+        action,
+        SessionMessageAction::Send | SessionMessageAction::Update
+    ) && message.is_none()
+    {
+        return Err("message is required".into());
+    }
+    if matches!(
+        action,
+        SessionMessageAction::Update | SessionMessageAction::Cancel
+    ) && message_id.is_none()
+    {
+        return Err("message_id is required".into());
+    }
+    let delivery = match args.get("delivery") {
+        None => SessionDelivery::Queue,
+        Some(Value::String(value)) if value == "queue" => SessionDelivery::Queue,
+        Some(Value::String(value)) if value == "immediate" => SessionDelivery::Immediate,
+        _ => return Err("delivery must be queue or immediate".into()),
+    };
+    Ok(SessionMessageRequest {
+        conversation_id,
+        action,
+        message,
+        message_id,
+        delivery,
+    })
+}
+
+fn render_session_message_result(outcome: &Value) -> Value {
+    json!({"content": [{"type": "text", "text": outcome.to_string()}], "structuredContent": outcome, "isError": false})
 }
 
 /// Register the inflight entry and build the [`SpawnedCall`] that races the
@@ -2404,12 +2543,10 @@ pub fn browser_console_query(
         // The schema says at least one; "zero lines" is not a number of lines
         // to ask for, and quietly reading it as the default would be doing
         // something other than what was asked.
-        Some(0) => {
-            return Err(
+        Some(0) => return Err(
                 "browser_console_messages: `limit` must be at least 1; leave it out for the default"
                     .to_string(),
-            )
-        }
+        ),
         Some(n) => Some(usize::try_from(n).unwrap_or(usize::MAX)),
     };
     let min_level = match arguments.get("minLevel").or_else(|| arguments.get("min_level")) {
@@ -2468,16 +2605,15 @@ pub fn browser_capture_request(
             )),
         }
     };
-    let (generation, target) = match (text("generation")?, text("ref")?) {
+    let (generation, target) =
+        match (text("generation")?, text("ref")?) {
         (None, None) => (None, None),
         (Some(generation), Some(target)) => (Some(generation), Some(target)),
-        (None, Some(_)) => {
-            return Err(
+            (None, Some(_)) => return Err(
                 "browser_screenshot: `ref` needs the `generation` of the browser_snapshot that \
                  named it"
                     .to_string(),
-            )
-        }
+            ),
         (Some(_), None) => {
             return Err(
                 "browser_screenshot: `generation` without a `ref` names nothing to crop to; \
@@ -2490,7 +2626,11 @@ pub fn browser_capture_request(
         None | Some(Value::Null) => None,
         Some(v) => Some(
             v.as_u64()
-                .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0 && *f > 0.0).map(|f| f as u64))
+                .or_else(|| {
+                    v.as_f64()
+                        .filter(|f| f.fract() == 0.0 && *f > 0.0)
+                        .map(|f| f as u64)
+                })
                 .filter(|n| *n > 0)
                 .and_then(|n| u32::try_from(n).ok())
                 .ok_or_else(|| {
@@ -2574,7 +2714,9 @@ pub fn browser_tab_op(
         match arguments.get(key) {
             Some(Value::String(s)) if !s.trim().is_empty() => Ok(s.trim().to_string()),
             _ => Err(match key {
-                "tabId" => format!("{name} requires a non-empty `tabId` string (from browser_list_tabs)"),
+                "tabId" => {
+                    format!("{name} requires a non-empty `tabId` string (from browser_list_tabs)")
+                }
                 _ => format!("{name} requires a non-empty `{key}` string"),
             }),
         }
@@ -3062,7 +3204,11 @@ fn computer_optional_u32(arguments: &Value, tool: &str, key: &str) -> Result<Opt
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
             .as_u64()
-            .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0 && *f >= 0.0).map(|f| f as u64))
+            .or_else(|| {
+                v.as_f64()
+                    .filter(|f| f.fract() == 0.0 && *f >= 0.0)
+                    .map(|f| f as u64)
+            })
             .and_then(|n| u32::try_from(n).ok())
             .map(Some)
             .ok_or_else(|| format!("{tool}: `{key}` must be a whole non-negative number, not {v}")),
@@ -3120,8 +3266,9 @@ pub fn computer_verify_request(
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                serde_json::from_value::<VerifyPredicate>(item.clone())
-                    .map_err(|e| format!("{tool}: `expect[{i}]` is not a predicate this tool knows: {e}"))
+                serde_json::from_value::<VerifyPredicate>(item.clone()).map_err(|e| {
+                    format!("{tool}: `expect[{i}]` is not a predicate this tool knows: {e}")
+                })
             })
             .collect::<Result<_, _>>()?,
         _ => {
@@ -3258,7 +3405,11 @@ pub fn render_computer_windows_result(outcome: &Value) -> Value {
             for w in windows {
                 let s = |k: &str| w.get(k).and_then(Value::as_str).unwrap_or("");
                 let app = w.get("app");
-                let app_s = |k: &str| app.and_then(|a| a.get(k)).and_then(Value::as_str).unwrap_or("");
+                let app_s = |k: &str| {
+                    app.and_then(|a| a.get(k))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                };
                 let b = |k: &str| {
                     w.get("bounds")
                         .and_then(|b| b.get(k))
@@ -4498,17 +4649,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_four_delegation_tools() {
+    async fn tools_list_returns_seven_delegation_tools() {
         let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let resp = unwrap_respond(dispatch_for_test(line).await);
         let result = resp.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 6);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"delegate_to_agent"));
         assert!(names.contains(&"get_delegation_status"));
         assert!(names.contains(&"cancel_delegation"));
         assert!(names.contains(&"resume_delegation"));
+        assert!(names.contains(&"send_to_session"));
+        assert!(names.contains(&"manage_session_messages"));
+        let send = tools
+            .iter()
+            .find(|tool| tool["name"] == "send_to_session")
+            .unwrap();
+        assert_eq!(
+            send["inputSchema"]["properties"]["delivery"]["default"],
+            "queue"
+        );
         // resume_delegation requires only task_id; reason is optional and
         // there is deliberately NO task-text parameter (no new iterations).
         let resume = tools
@@ -5172,7 +5333,7 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 4);
+        assert_eq!(names.len(), 6);
     }
 
     #[tokio::test]
@@ -5181,7 +5342,7 @@ mod tests {
             dispatch_with_features(BOTH, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 5);
+        assert_eq!(names.len(), 7);
     }
 
     #[tokio::test]
@@ -5259,6 +5420,104 @@ mod tests {
         .to_string();
         let resp = unwrap_respond(dispatch_with_features(FEEDBACK_ONLY, &line).await);
         assert_eq!(resp.error.unwrap().code, -32602);
+    }
+
+    #[test]
+    fn subsession_parsing_defaults_to_queue_and_accepts_immediate() {
+        let args = json!({"conversation_id": 42, "message": "continue"});
+        let request = parse_session_message_request("send_to_session", &args).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap()["delivery"], "queue");
+        let args =
+            json!({"conversation_id": 42, "message": "change", "delivery": "immediate"});
+        let request = parse_session_message_request("send_to_session", &args).unwrap();
+        assert_eq!(
+            serde_json::to_value(request).unwrap()["delivery"],
+            "immediate"
+        );
+        let outcome = json!({"accepted": true, "messages": [{"id": "m1", "state": "queued", "result": null}]});
+        let rendered = render_session_message_result(&outcome);
+        assert_eq!(rendered["structuredContent"], outcome);
+        assert_eq!(
+            serde_json::from_str::<Value>(rendered["content"][0]["text"].as_str().unwrap())
+                .unwrap(),
+            outcome
+        );
+    }
+
+    #[tokio::test]
+    async fn subsession_validation_and_delegation_gating() {
+        for (name, arguments) in [
+            (
+                "send_to_session",
+                json!({"conversation_id": 0, "message": "hi"}),
+            ),
+            (
+                "send_to_session",
+                json!({"conversation_id": "1", "message": "hi"}),
+            ),
+            (
+                "send_to_session",
+                json!({"conversation_id": 1, "message": " "}),
+            ),
+            (
+                "send_to_session",
+                json!({"conversation_id": 1, "message": "hi", "delivery": "now"}),
+            ),
+            (
+                "send_to_session",
+                json!({"conversation_id": 1, "message": "hi", "extra": true}),
+            ),
+            (
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "send"}),
+            ),
+            (
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "cancel"}),
+            ),
+            (
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "update", "message_id": "m1"}),
+            ),
+        ] {
+            let line = json!({"jsonrpc":"2.0", "id":88, "method":"tools/call", "params":{"name":name,"arguments":arguments}}).to_string();
+            assert_eq!(
+                unwrap_respond(dispatch_for_test(&line).await)
+                    .error
+                    .unwrap()
+                    .code,
+                -32602
+            );
+        }
+        for name in ["send_to_session", "manage_session_messages"] {
+            let line = json!({"jsonrpc":"2.0", "id":89, "method":"tools/call", "params":{"name":name,"arguments":{"conversation_id":1,"message":"hi","action":"list"}}}).to_string();
+            let response = unwrap_respond(dispatch_with_features(FEEDBACK_ONLY, &line).await);
+            assert!(response.error.unwrap().message.contains("unknown tool"));
+        }
+        for (name, args) in [
+            (
+                "send_to_session",
+                json!({"conversation_id": 1, "message": "hi"}),
+            ),
+            (
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "list"}),
+            ),
+            (
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "cancel", "message_id":"m1"}),
+            ),
+            (
+                "manage_session_messages",
+                json!({"conversation_id": 1, "action": "update", "message_id":"m1", "message":"new"}),
+            ),
+        ] {
+            let line = json!({"jsonrpc":"2.0", "id":90, "method":"tools/call", "params":{"name":name,"arguments":args}}).to_string();
+            assert!(matches!(
+                dispatch_for_test(&line).await,
+                LineAction::Spawn(_)
+            ));
+        }
     }
 
     // -- resume_delegation validation + feature gating -----------------------
@@ -6551,14 +6810,14 @@ mod tests {
         assert!(browser_eval_request(&json!({ "tabId": "t1" }))
             .unwrap_err()
             .contains("`code`"));
-        assert!(browser_eval_request(&json!({ "tabId": "t1", "code": "   " }))
-            .unwrap_err()
-            .contains("`code`"));
         assert!(
-            browser_eval_request(&json!({ "tabId": "t1", "code": 42 }))
-                .unwrap_err()
-                .contains("must be a string")
+            browser_eval_request(&json!({ "tabId": "t1", "code": "   " }))
+            .unwrap_err()
+                .contains("`code`")
         );
+        assert!(browser_eval_request(&json!({ "tabId": "t1", "code": 42 }))
+                .unwrap_err()
+            .contains("must be a string"));
         let long = "a".repeat(MAX_EVAL_CODE_CHARS + 1);
         assert!(
             browser_eval_request(&json!({ "tabId": "t1", "code": long }))
@@ -6865,10 +7124,8 @@ mod tests {
         );
         // A single string is taken as a list of one, since that is how a model
         // that forgot the brackets meant it.
-        let (_, req) = browser_action_request(
-            "browser_select_option",
-            &with(json!({ "values": "l" })),
-        )
+        let (_, req) =
+            browser_action_request("browser_select_option", &with(json!({ "values": "l" })))
         .unwrap();
         assert_eq!(
             req.action,
@@ -6906,7 +7163,12 @@ mod tests {
         .contains("`values`"));
 
         // Every tool but press needs a ref; every tool needs the generation.
-        for name in ["browser_click", "browser_hover", "browser_type", "browser_select_option"] {
+        for name in [
+            "browser_click",
+            "browser_hover",
+            "browser_type",
+            "browser_select_option",
+        ] {
             let err = browser_action_request(
                 name,
                 &json!({ "tabId": "t1", "generation": "g", "text": "x", "values": ["v"] }),
@@ -6958,7 +7220,11 @@ mod tests {
             ("browser_open_tab", json!({}), "`url`"),
             ("browser_open_tab", json!({ "url": "  " }), "`url`"),
             ("browser_open_tab", json!({ "url": 7 }), "`url`"),
-            ("browser_navigate", json!({ "url": "https://x.test/" }), "`tabId`"),
+            (
+                "browser_navigate",
+                json!({ "url": "https://x.test/" }),
+                "`tabId`",
+            ),
             ("browser_navigate", json!({ "tabId": "t1" }), "`url`"),
             ("browser_close_tab", json!({}), "`tabId`"),
         ] {
@@ -7454,9 +7720,8 @@ mod tests {
         );
         assert!(computer_capture_request(&json!({ "targetId": "w3", "maxDimension": 0 })).is_err());
 
-        let (id, req) = computer_snapshot_request(
-            &json!({ "targetId": "w1", "maxChars": 0, "query": "Save" }),
-        )
+        let (id, req) =
+            computer_snapshot_request(&json!({ "targetId": "w1", "maxChars": 0, "query": "Save" }))
         .unwrap();
         assert_eq!(id, "w1");
         // 0 is "no cap", and passes through as such.
@@ -7698,8 +7963,16 @@ mod tests {
             }
         );
         for (tool, bad, says) in [
-            ("computer_click", json!({ "targetId": "w1", "ref": 3 }), "generation"),
-            ("computer_click", json!({ "targetId": "w1" }), "requires `ref`"),
+            (
+                "computer_click",
+                json!({ "targetId": "w1", "ref": 3 }),
+                "generation",
+            ),
+            (
+                "computer_click",
+                json!({ "targetId": "w1" }),
+                "requires `ref`",
+            ),
             (
                 "computer_click",
                 json!({ "targetId": "w1", "ref": 3, "coordinate": [1, 2], "generation": "1.1" }),
@@ -8229,7 +8502,11 @@ mod tests {
         assert_eq!(*seen.lock().await, vec!["ping"], "never forwarded");
 
         // A plain agent call is forwarded as always, without another probe.
-        let result = drive_call(&ctx, &assistant_call(json!({"agent_type": "codex", "task": "x"}))).await;
+        let result = drive_call(
+            &ctx,
+            &assistant_call(json!({"agent_type": "codex", "task": "x"})),
+        )
+        .await;
         assert_eq!(result["structuredContent"]["status"], "running");
         assert_eq!(*seen.lock().await, vec!["ping", "call"]);
     }
@@ -8260,7 +8537,11 @@ mod tests {
     #[tokio::test]
     async fn an_assistant_call_with_no_answer_from_the_parent_is_retryable() {
         // The default test socket does not exist: no answer at all.
-        let result = drive_call(&ctx(), &assistant_call(json!({"assistant_id": 3, "task": "x"}))).await;
+        let result = drive_call(
+            &ctx(),
+            &assistant_call(json!({"assistant_id": 3, "task": "x"})),
+        )
+        .await;
         assert_eq!(result["isError"], true);
         assert_eq!(
             result["structuredContent"]["error_code"],

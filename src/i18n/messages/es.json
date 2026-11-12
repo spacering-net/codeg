@@ -3518,6 +3518,8 @@
         "mentionGroupAssistant": "Asistentes"
       },
       "messageQueue": {
+        "fromSession": "De sesión: {name}",
+        "waiting": "En cola",
         "addToQueue": "Agregar a la cola",
         "saveEdit": "Guardar",
         "cancelEdit": "Cancelar edición",
