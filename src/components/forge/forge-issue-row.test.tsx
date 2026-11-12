@@ -575,6 +575,19 @@ describe("ForgeIssueRowItem checks mark", () => {
     ).toBeNull()
   })
 
+  it("draws the bare, ringless glyph for each verdict", () => {
+    const cases: [ForgeCheckSummary, string][] = [
+      [summary({ verdict: "failure" }), "lucide-x"],
+      [summary({ verdict: "running" }), "lucide-circle"],
+      [summary({ verdict: "success" }), "lucide-check"],
+      [summary({ verdict: "neutral" }), "lucide-minus"],
+    ]
+    for (const [s, cls] of cases) {
+      cleanup()
+      expect(mountWith(s).mark()!.querySelector("svg")).toHaveClass(cls)
+    }
+  })
+
   it("says the counts and opens the Checks tab", async () => {
     const user = userEvent.setup()
     const { onOpenChecks } = mountWith(
@@ -593,7 +606,7 @@ describe("ForgeIssueRowItem checks mark", () => {
     expect(onOpenDetail).not.toHaveBeenCalled()
   })
 
-  it("names held workflows in words where there is room", () => {
+  it("names held workflows in words, compact rows (the side panel) too", () => {
     const { mark } = mountWith(
       summary({ verdict: null, counts: null, awaiting_approval: 2 })
     )
@@ -607,7 +620,9 @@ describe("ForgeIssueRowItem checks mark", () => {
       vi.fn(),
       true
     )
-    expect(screen.queryByText("Approval needed")).toBeNull()
+    expect(
+      screen.getByRole("button", { name: "2 workflows awaiting approval" })
+    ).toHaveTextContent("Approval needed")
   })
 
   it("counts passes over the total, and only a pass counts", () => {

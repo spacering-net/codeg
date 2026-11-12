@@ -2,11 +2,11 @@
 
 import { useTranslations } from "next-intl"
 import {
+  Check,
+  Circle,
   CircleCheck,
   CircleDot,
-  CircleMinus,
   CirclePlay,
-  CircleX,
   GitMerge,
   GitPullRequestArrow,
   GitPullRequestClosed,
@@ -14,8 +14,10 @@ import {
   Layers,
   ListTodo,
   MessageSquare,
+  Minus,
   RotateCcw,
   ShieldAlert,
+  X,
   type LucideIcon,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -235,42 +237,32 @@ export function checksMark(
 }
 
 /**
- * Each mark's glyph and pill tint. The tint is the glyph's own hue at low
- * strength — a fill to give the pill a shape, a hairline ring to keep it from
- * melting into a hovered or selected row — and the text one step darker than
- * the glyph so the count stays readable on the tint in both themes.
+ * Each mark's glyph, in the forge's own list's vocabulary: bare strokes with
+ * no ring around them — a check, a cross, a dot — so the mark reads as small
+ * as the meta text it sits in. `box` is for a glyph drawn smaller than the
+ * others (the dot), which keeps its full-size cell so the count after it does
+ * not shift between rows.
  */
 const CHECKS_MARK_STYLE: Record<
   ChecksMark,
-  { Icon: LucideIcon; glyph: string; pill: string }
+  { Icon: LucideIcon; glyph: string }
 > = {
-  failure: {
-    Icon: CircleX,
-    glyph: "text-rose-600 dark:text-rose-400",
-    pill: "bg-rose-500/10 text-rose-700 ring-rose-500/20 hover:bg-rose-500/15 dark:text-rose-300",
-  },
+  failure: { Icon: X, glyph: "size-3.5 text-rose-600 dark:text-rose-400" },
   approval: {
     Icon: ShieldAlert,
-    glyph: "text-amber-600 dark:text-amber-400",
-    pill: "bg-amber-500/10 text-amber-700 ring-amber-500/25 hover:bg-amber-500/15 dark:text-amber-300",
+    glyph: "size-3.5 text-amber-600 dark:text-amber-400",
   },
   // Static, unlike the panel's spinner: thirty rows spinning at once would
   // pull the eye down the list for the least urgent of the states.
   running: {
-    Icon: CircleDot,
-    glyph: "text-amber-500 dark:text-amber-400",
-    pill: "bg-amber-500/10 text-amber-700 ring-amber-500/20 hover:bg-amber-500/15 dark:text-amber-300",
+    Icon: Circle,
+    glyph: "size-2 fill-current text-amber-500 dark:text-amber-400",
   },
   success: {
-    Icon: CircleCheck,
-    glyph: "text-emerald-600 dark:text-emerald-400",
-    pill: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/20 hover:bg-emerald-500/15 dark:text-emerald-300",
+    Icon: Check,
+    glyph: "size-3.5 text-emerald-600 dark:text-emerald-400",
   },
-  neutral: {
-    Icon: CircleMinus,
-    glyph: "text-muted-foreground",
-    pill: "bg-muted text-muted-foreground ring-border hover:bg-muted/70 hover:text-foreground",
-  },
+  neutral: { Icon: Minus, glyph: "size-3.5 text-muted-foreground" },
 }
 
 /**
@@ -289,7 +281,7 @@ export function checksFraction(
 }
 
 /**
- * The row's CI, as a pill after the update time: the glyph, the
+ * The row's CI, closing the meta line after the update time: the glyph, the
  * `passing/total` count the forge's own pull request list shows, and — for
  * workflows held for approval — a word. A button, because the full story —
  * every check, and the approval itself — is one click away on the panel's
@@ -298,17 +290,15 @@ export function checksFraction(
  */
 function RowChecksMark({
   summary,
-  compact,
   onOpen,
 }: {
   summary: ForgeCheckSummary | null | undefined
-  compact: boolean
   onOpen?: () => void
 }) {
   const t = useTranslations("Forge")
   const mark = checksMark(summary)
   if (mark == null || summary == null) return null
-  const { Icon, glyph, pill } = CHECKS_MARK_STYLE[mark]
+  const { Icon, glyph } = CHECKS_MARK_STYLE[mark]
   const fraction = checksFraction(summary)
 
   const parts: string[] = []
@@ -348,8 +338,8 @@ function RowChecksMark({
   }
   const label = parts.join(" · ")
   // Held workflows are the one state that asks somebody to act, so they get a
-  // word as well as a glyph — where there is room for it.
-  const approvalWord = mark === "approval" && !compact
+  // word as well as a glyph — on every width, the side panel's included.
+  const approval = mark === "approval"
 
   return (
     <button
@@ -358,17 +348,25 @@ function RowChecksMark({
       title={label}
       aria-label={label}
       data-forge-checks={mark}
-      className={cn(
-        "inline-flex h-[1.125rem] shrink-0 items-center gap-1 rounded-full px-1.5 text-[0.6875rem] leading-none font-medium tabular-nums ring-1 ring-inset transition-colors",
-        "outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        // A lone glyph gets an even pad on both sides so it stays round.
-        fraction == null && !approvalWord && "px-1",
-        pill
-      )}
+      // The glyph sits outside the underline: only the words take it on
+      // hover, the way the forge's own list does.
+      className="group/checks inline-flex shrink-0 items-center gap-1 rounded-sm tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <Icon className={cn("size-3 shrink-0", glyph)} aria-hidden />
-      {fraction != null ? <span>{fraction}</span> : null}
-      {approvalWord ? <span>{t("checksApprovalShort")}</span> : null}
+      <span className="grid size-3.5 shrink-0 place-items-center">
+        <Icon className={glyph} strokeWidth={2.5} aria-hidden />
+      </span>
+      {fraction != null || approval ? (
+        <span
+          className={cn(
+            "underline-offset-2 transition-colors group-hover/checks:underline",
+            approval
+              ? "text-amber-700 dark:text-amber-400"
+              : "group-hover/checks:text-foreground"
+          )}
+        >
+          {approval ? t("checksApprovalShort") : fraction}
+        </span>
+      ) : null}
     </button>
   )
 }
@@ -555,11 +553,7 @@ export function ForgeIssueRowItem({
           {/* Last, after the time: the pill is the widest thing on the line
               and a status rather than a fact about the item, so it closes the
               line instead of pushing the author and time apart. */}
-          <RowChecksMark
-            summary={checks}
-            compact={compact}
-            onOpen={onOpenChecks}
-          />
+          <RowChecksMark summary={checks} onOpen={onOpenChecks} />
         </div>
       </div>
 
