@@ -1600,6 +1600,30 @@ struct CompletedMcpCall {
     input_preview: Option<String>,
     output_preview: Option<String>,
     is_error: bool,
+    /// The result's `image` blocks. Live, the same call's card shows them
+    /// (codex-acp reports the result's `content` as `rawOutput`). A result over
+    /// 64 KiB was persisted as a text stand-in and has none left to show.
+    images: Vec<ImageData>,
+}
+
+/// The `image` blocks of an MCP result's `content`.
+fn mcp_result_images(result: Option<&serde_json::Value>) -> Vec<ImageData> {
+    result
+        .and_then(|result| result.get("content"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("image"))
+        .filter_map(|block| {
+            let data = block.get("data")?.as_str()?;
+            let mime_type = block.get("mimeType")?.as_str()?;
+            (!data.is_empty() && mime_type.starts_with("image/")).then(|| ImageData {
+                data: data.to_string(),
+                mime_type: mime_type.to_string(),
+                uri: None,
+            })
+        })
+        .collect()
 }
 
 /// How much of a serialized MCP result stands in for a call that answered in
@@ -1878,6 +1902,7 @@ fn completed_mcp_call(payload: &serde_json::Value) -> Option<CompletedMcpCall> {
                 && (infer_tool_call_output_is_error(item, result, output_preview.as_deref())
                     || blocks_report_failure(blocks))),
         output_preview,
+        images: mcp_result_images(result),
     })
 }
 
@@ -1953,7 +1978,7 @@ fn unwrap_completed_mcp_calls(
             output_preview: item.output_preview,
             is_error: item.is_error,
             agent_stats: None,
-            images: Vec::new(),
+            images: item.images,
             exit_code: None,
         });
     }
@@ -3341,6 +3366,11 @@ impl CodexParser {
         let mut close_agent_targets: HashMap<String, String> = HashMap::new();
         let mut active_agent_count: u32 = 0;
         let mut call_id_tool_names: HashMap<String, String> = HashMap::new();
+        // Direct MCP calls (`namespace: "mcp__<server>"`, or the older
+        // `mcp__<server>__<tool>` name). Only their outputs hand images to the
+        // card: live, codex-acp reports an MCP result's image blocks, but a
+        // `view_image` only as a link to its path.
+        let mut mcp_call_ids: HashSet<String> = HashSet::new();
         // Code-mode scripts (`custom_tool_call` named `exec`) awaiting their
         // output. A placeholder script card is pushed when the call is read, so
         // an interrupted turn still shows it in place; the output arm rewrites
@@ -4487,6 +4517,14 @@ impl CodexParser {
                                         if let Some(ref id) = tool_use_id {
                                             call_id_tool_names
                                                 .insert(id.clone(), raw_tool_name.to_string());
+                                            let is_mcp = raw_tool_name.starts_with("mcp__")
+                                                || payload
+                                                    .get("namespace")
+                                                    .and_then(|v| v.as_str())
+                                                    .is_some_and(|ns| ns.starts_with("mcp__"));
+                                            if is_mcp {
+                                                mcp_call_ids.insert(id.clone());
+                                            }
                                         }
                                         let raw_args = || {
                                             // `send_message` and friends carry a
@@ -4926,6 +4964,27 @@ impl CodexParser {
                                             output_value,
                                             output.as_deref(),
                                         );
+                                    // The item_completed preview can truncate an
+                                    // MCP image. The response item has the original.
+                                    let is_mcp = tool_use_id
+                                        .as_ref()
+                                        .is_some_and(|id| mcp_call_ids.contains(id));
+                                    let images = output_value
+                                        .filter(|_| is_mcp)
+                                        .and_then(serde_json::Value::as_array)
+                                        .into_iter()
+                                        .flatten()
+                                        .filter(|item| {
+                                            item.get("type").and_then(|v| v.as_str())
+                                                == Some("input_image")
+                                        })
+                                        .filter_map(parse_input_image_data_uri)
+                                        .map(|(mime_type, data)| ImageData {
+                                            data,
+                                            mime_type,
+                                            uri: None,
+                                        })
+                                        .collect();
                                     messages.push(UnifiedMessage {
                                         id: format!("tool-result-{}", messages.len()),
                                         role: MessageRole::Tool,
@@ -4934,7 +4993,7 @@ impl CodexParser {
                                             output_preview: output,
                                             is_error,
                                             agent_stats: None,
-                                            images: Vec::new(),
+                                            images,
                                             exit_code: None,
                                         }],
                                         timestamp,
@@ -11202,6 +11261,73 @@ mod tests {
         serde_json::json!({ "timestamp": ts, "type": msg_type, "payload": payload }).to_string()
     }
 
+    #[test]
+    fn codex_mcp_screenshot_history_uses_the_full_function_output() {
+        let ts = "2026-11-11T09:20:00Z";
+        let image_data = "AQID".repeat(20_000);
+        let lines = [
+            rollout_line(
+                ts,
+                "response_item",
+                serde_json::json!({
+                    "type": "function_call",
+                    "namespace": "mcp__cua_repl",
+                    "name": "js",
+                    "arguments": "{}",
+                    "call_id": "screenshot"
+                }),
+            ),
+            rollout_line(
+                ts,
+                "event_msg",
+                serde_json::json!({
+                    "type": "item_completed",
+                    "item": {
+                        "type": "McpToolCall",
+                        "id": "screenshot",
+                        "server": "cua_repl",
+                        "tool": "js",
+                        "status": "completed",
+                        "result": {"content": [{"type": "text", "text": "… truncated …"}]}
+                    }
+                }),
+            ),
+            rollout_line(
+                ts,
+                "response_item",
+                serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": "screenshot",
+                    "output": [
+                        {"type": "input_text", "text": "Page loaded"},
+                        {"type": "input_image", "image_url": format!("data:image/jpeg;base64,{image_data}")}
+                    ]
+                }),
+            ),
+        ];
+        let detail = parse_rollout("mcp-screenshot", &lines.join("\n"), "session-1");
+        let results: Vec<_> = detail
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.blocks)
+            .filter_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview,
+                    images,
+                    ..
+                } if id == "screenshot" => Some((output_preview, images)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 1);
+        let (output, images) = results[0];
+        assert_eq!(output.as_deref(), Some("Page loaded\n"));
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].mime_type, "image/jpeg");
+        assert_eq!(images[0].data, image_data);
+    }
+
     /// A directory of its own, for the tests that exercise the sibling-file
     /// lookup: `parse_codex_subagent_stats` scans the whole session directory,
     /// so it must not see other tests' rollouts (or the rest of `/tmp`).
@@ -13388,6 +13514,31 @@ mod tests {
             .collect()
     }
 
+    /// Each tool result's id and the `(mime_type, data)` of its images.
+    fn tool_result_images(
+        detail: &crate::models::ConversationDetail,
+    ) -> Vec<(String, Vec<(String, String)>)> {
+        detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    images,
+                    ..
+                } => Some((
+                    tool_use_id.clone().unwrap_or_default(),
+                    images
+                        .iter()
+                        .map(|img| (img.mime_type.clone(), img.data.clone()))
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn tool_results(
         detail: &crate::models::ConversationDetail,
     ) -> Vec<(String, Option<String>, bool)> {
@@ -13982,6 +14133,14 @@ mod tests {
         assert!(
             output.as_deref().is_some_and(|text| text.contains("image")),
             "a textless result must still carry its content: {output:?}"
+        );
+        // And the picture itself, as the live card shows it.
+        assert_eq!(
+            tool_result_images(&detail),
+            vec![(
+                "exec-shot".to_string(),
+                vec![("image/png".to_string(), "iVBORw0KGgo=".to_string())]
+            )]
         );
     }
 
@@ -15124,6 +15283,11 @@ mod tests {
         for (id, output, is_error) in &results {
             assert_eq!(output, &None, "{id}");
             assert!(!is_error, "{id}");
+        }
+        // Not an MCP call: live, codex-acp reports a `view_image` as a link to
+        // its path, so its card must not turn into an image card on reload.
+        for (id, images) in tool_result_images(&detail) {
+            assert!(images.is_empty(), "{id}: {images:?}");
         }
     }
 
