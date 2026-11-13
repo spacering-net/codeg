@@ -29,6 +29,7 @@ import {
   dismissAppshot,
   getAppshotSettings,
   requestAppshot,
+  requestAppshotPermission,
   setAppshotShortcut,
   takeAppshot,
   type AppshotPending,
@@ -377,9 +378,14 @@ function AppshotsControl() {
                         size="sm"
                         variant="outline"
                         onClick={() => {
-                          void computerOpenPermissionSettings(permission).catch(
-                            (e: unknown) => setError(toErrorMessage(e))
-                          )
+                          // Register/request the helper's permission first:
+                          // an unused helper may not yet appear in macOS's
+                          // list. The agent Computer Use switch stays off.
+                          void requestAppshotPermission(permission)
+                            .then(() =>
+                              computerOpenPermissionSettings(permission)
+                            )
+                            .catch((e: unknown) => setError(toErrorMessage(e)))
                         }}
                       >
                         {t(

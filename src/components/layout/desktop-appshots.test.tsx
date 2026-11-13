@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   save: vi.fn(),
   request: vi.fn(),
+  permission: vi.fn(),
+  openPermission: vi.fn(),
   attach: vi.fn(),
   switchTab: vi.fn(),
   success: vi.fn(),
@@ -40,10 +42,11 @@ vi.mock("@/lib/appshots", () => ({
   getAppshotSettings: mocks.settings,
   setAppshotShortcut: mocks.save,
   requestAppshot: mocks.request,
+  requestAppshotPermission: mocks.permission,
   attachAppshot: mocks.attach,
 }))
 vi.mock("@/lib/computer/computer-api", () => ({
-  computerOpenPermissionSettings: vi.fn(),
+  computerOpenPermissionSettings: mocks.openPermission,
 }))
 vi.mock("sonner", () => ({
   toast: { success: mocks.success, info: mocks.info },
@@ -79,6 +82,8 @@ beforeEach(() => {
   mocks.dismiss.mockResolvedValue(undefined)
   mocks.settings.mockResolvedValue({ shortcut: "", status: {} })
   mocks.request.mockResolvedValue(true)
+  mocks.permission.mockResolvedValue(undefined)
+  mocks.openPermission.mockResolvedValue(undefined)
   mocks.attach.mockResolvedValue("image")
 })
 
@@ -162,6 +167,22 @@ describe("desktop appshots", () => {
     })
     await screen.findByLabelText("Application text")
     expect(mocks.attach).not.toHaveBeenCalled()
+  })
+
+  it("requests the capture helper's permission before opening system settings", async () => {
+    mocks.take.mockResolvedValue({ Err: "Screen Recording permission missing" })
+    mount()
+    const button = await screen.findByRole("button", {
+      name: "Open Screen Recording settings",
+    })
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(mocks.openPermission).toHaveBeenCalledWith("screenRecording")
+    )
+    expect(mocks.permission).toHaveBeenCalledWith("screenRecording")
+    expect(mocks.permission.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.openPermission.mock.invocationCallOrder[0]
+    )
   })
 
   it("does not erase preview edits when the shortcut is pressed again", async () => {

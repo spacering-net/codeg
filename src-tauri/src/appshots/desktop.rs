@@ -9,8 +9,10 @@ use super::Appshot;
 use crate::acp::computer_tools::ComputerToolsRuntimeConfig;
 use crate::app_error::AppCommandError;
 use crate::computer::agent::{Blocklist, SelfIdentity};
+use crate::computer::backend::ComputerBackend;
 use crate::computer::keys::Platform;
 use crate::computer::local::LocalBackend;
+use crate::computer::protocol::OsPermission;
 use crate::computer::stop_key::StopKey;
 use crate::computer::stop_shortcut::{StopKeyStatus, StopShortcut};
 use crate::db::{service::app_metadata_service, AppDatabase};
@@ -163,6 +165,23 @@ fn main_window(window: &WebviewWindow) -> Result<(), AppCommandError> {
             "Appshots are available in the main desktop window",
         ))
     }
+}
+
+/// A separate user gesture, under the same principal as the capture, without
+/// enabling the agent's Computer Use tools or creating a sharing grant.
+#[tauri::command]
+pub async fn appshot_request_permission(
+    window: WebviewWindow,
+    permission: OsPermission,
+) -> Result<(), AppCommandError> {
+    main_window(&window)?;
+    let backend = LocalBackend::new(|_| {});
+    backend.open().await;
+    let result = backend.request_permission(permission).await;
+    backend.close_now().await;
+    result
+        .map(|_| ())
+        .map_err(|e| AppCommandError::configuration_invalid(e.to_string()))
 }
 
 #[tauri::command]

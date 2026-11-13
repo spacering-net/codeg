@@ -1,4 +1,5 @@
 import { getShellTransport } from "@/lib/transport"
+import type { OsPermission } from "@/lib/computer/types"
 import { captureFile } from "@/lib/browser/capture-file"
 import {
   emitAttachPageToSession,
@@ -36,6 +37,8 @@ export const takeAppshot = () =>
   getShellTransport().call<AppshotPending | null>("appshot_take_pending")
 export const dismissAppshot = (id: string | null) =>
   getShellTransport().call<void>("appshot_dismiss", { id })
+export const requestAppshotPermission = (permission: OsPermission) =>
+  getShellTransport().call<void>("appshot_request_permission", { permission })
 
 export function appshotText(shot: Appshot, text: string): string {
   return [

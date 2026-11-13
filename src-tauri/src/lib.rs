@@ -2120,6 +2120,7 @@ mod tauri_app {
                 crate::commands::computer_tools::set_computer_tools_preferences,
                 crate::commands::computer::computer_status,
                 crate::appshots::desktop::appshot_get_settings,
+                crate::appshots::desktop::appshot_request_permission,
                 crate::appshots::desktop::appshot_set_shortcut,
                 crate::appshots::desktop::appshot_capture,
                 crate::appshots::desktop::appshot_take_pending,

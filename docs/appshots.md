@@ -38,6 +38,10 @@ uses an independent, short-lived helper connection, so it does not enable agent
 Computer Use or create a persistent read/control grant. Existing application
 exclusions apply, including Codeg itself.
 
+The error dialog can request each permission and open its System Settings page.
+Requesting first lets macOS list the helper on a first use or after its permission
+entry was removed. The agent Computer Use switch can remain off throughout.
+
 The native result remains pending until reviewed or dismissed. Repeated requests
 do not replace a pending snapshot. A window that closes, changes process identity,
 or changes document title during capture is discarded rather than handed off.
