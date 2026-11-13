@@ -249,6 +249,10 @@ function tracker(): Tracker | undefined {
       if (event.persisted) return
       clearInterval(timer)
       current.dispose()
+      // A non-persisted pagehide can be followed by a remount in the same
+      // renderer during a Tauri navigation. Do not leave a disposed tracker
+      // in the singleton: the next Provider must create a fresh timer.
+      if (singleton === current) singleton = undefined
     })
   }
   return singleton
