@@ -4,7 +4,7 @@ import { MessagesSquare, SquarePen } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { useActiveFolder } from "@/contexts/active-folder-context"
-import { useTabActions } from "@/contexts/tab-context"
+import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { formatFolderLabelWithAlias } from "@/lib/folder-display"
 
 /**
@@ -18,6 +18,8 @@ import { formatFolderLabelWithAlias } from "@/lib/folder-display"
 export function FolderTabsEmptyState() {
   const t = useTranslations("Folder.conversation")
   const tSidebar = useTranslations("Folder.sidebar")
+  const tPanes = useTranslations("ConversationPanes")
+  const hasPanes = useTabStore((state) => state.paneState != null)
   const { activeFolder } = useActiveFolder()
   const { openNewConversationTab, openChatModeTab } = useTabActions()
   const folder = activeFolder?.kind === "chat" ? null : activeFolder
@@ -29,10 +31,17 @@ export function FolderTabsEmptyState() {
         className="h-8 w-8 text-muted-foreground/60"
       />
       <p className="text-sm text-muted-foreground">
-        {folder
-          ? t("emptyFolderScope", { name: formatFolderLabelWithAlias(folder) })
-          : t("emptyChatScope")}
+        {hasPanes
+          ? tPanes("empty")
+          : folder
+            ? t("emptyFolderScope", {
+                name: formatFolderLabelWithAlias(folder),
+              })
+            : t("emptyChatScope")}
       </p>
+      {hasPanes && (
+        <p className="text-xs text-muted-foreground">{tPanes("emptyHint")}</p>
+      )}
       <Button
         variant="outline"
         size="sm"
