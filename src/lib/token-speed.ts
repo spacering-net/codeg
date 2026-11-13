@@ -56,7 +56,7 @@ function isDense(code: number): boolean {
     return code >= 0x1100 && code <= 0x11ff
   }
   return (
-    (code >= 0x2e80 && code <= 0x303f) || // CJK radicals + symbols & punctuation (。、「」)
+    (code >= 0x2e80 && code <= 0x303f) || // CJK radicals + symbols & punctuation (。\u3001「」)
     (code >= 0x3040 && code <= 0x30ff) || // hiragana + katakana
     (code >= 0x3130 && code <= 0x318f) || // Hangul compatibility jamo
     (code >= 0x31c0 && code <= 0x4dbf) || // CJK strokes, enclosed CJK, CJK Ext A
@@ -185,64 +185,131 @@ export class TokenCountAccumulator {
   }
 }
 
+export interface TokenSpeedSample {
+  tokens: number
+  dt: number // in seconds
+}
+
 /**
- * First-order low-pass over instantaneous token rates. Time-constant based
- * (rather than per-sample alpha) so the reading doesn't depend on how regularly
- * the caller samples, and so a bursty thinking stream followed by a tool pause
- * decays toward zero instead of pinning the old reading.
+ * Rolling average velocity tracker over recent output samples.
  *
- * The accumulated weight is tracked alongside the average and divided back out
- * (the bias correction Adam uses). Without it the filter cold-starts from its
- * first sample, and a turn's first sample is routinely near-zero — it lands on
- * whatever fraction of a batched content delta had arrived by then. That made
- * the reading open at `0.0` and crawl toward the truth over several seconds.
- * With the correction it is the turn's cumulative average until `TAU_MS` has
- * elapsed, and an exponential window after that.
+ * Inspired by Hermes's implementation (`deque(maxlen=10)` in `agent/turn_usage.py`
+ * and status bar velocity calculation in `cli_status_bar_mixin.py`):
+ *
+ * 1. Window size: Tracks the last 10 active output samples (`DEFAULT_WINDOW_SIZE = 10`).
+ * 2. True throughput formula: `sum(tokens) / sum(latency)` across the window,
+ *    not the mean of instant ratios.
+ * 3. Silent gap behavior: When no new tokens are produced (e.g. during tool execution,
+ *    network pauses, or when text generation finishes before the turn ends), the tracker
+ *    preserves the rolling average velocity of the last active output samples rather than
+ *    decaying to 0. This prevents the gauge from getting stuck at "0 tokens/s".
+ * 4. Idle gap handling: If an idle gap precedes a new batch of tokens, the generation
+ *    duration for that batch is clamped so tool pauses are not treated as slow generation.
  */
 export class TokenSpeedTracker {
-  private static readonly TAU_MS = 1500
-  /** Hold the reading back until it covers a meaningful slice of wall clock. */
+  /** Maximum number of recent output samples to average over (matches Hermes's deque(maxlen=10)). */
+  static readonly DEFAULT_WINDOW_SIZE = 10
+
+  /** Hold the reading back until it covers a meaningful window of wall clock. */
   private static readonly WARMUP_MS = 300
 
+  /**
+   * Threshold (in ms) above which an interval between tokens is treated as an
+   * idle pause (tool execution, thinking pause) rather than active generation.
+   */
+  private static readonly IDLE_GAP_MS = 1500
+
+  /** Fallback duration (in seconds) for a token batch arriving after an idle gap. */
+  private static readonly FALLBACK_SAMPLE_DT_S = 0.5
+
+  private readonly windowSize: number
+  private readonly samples: TokenSpeedSample[] = []
   private lastTime: number | null = null
   private lastTokens = 0
-  private elapsed = 0
-  private ewma = 0
-  private weight = 0
+  private totalActiveDtMs = 0
 
-  reset(): void {
-    this.lastTime = null
-    this.lastTokens = 0
-    this.elapsed = 0
-    this.ewma = 0
-    this.weight = 0
+  constructor(windowSize: number = TokenSpeedTracker.DEFAULT_WINDOW_SIZE) {
+    this.windowSize = Math.max(1, windowSize)
   }
 
-  /** Feed the cumulative estimated token count at `nowMs`; returns smoothed
-   *  tok/s, or `null` while seeding / warming up. */
+  reset(): void {
+    this.samples.length = 0
+    this.lastTime = null
+    this.lastTokens = 0
+    this.totalActiveDtMs = 0
+  }
+
+  /**
+   * Feed the cumulative estimated token count at `nowMs`.
+   * Returns rolling average tok/s over the last (up to 10) output samples,
+   * or `null` while seeding / warming up.
+   */
   observe(totalTokens: number, nowMs: number): number | null {
     if (this.lastTime == null) {
       this.lastTime = nowMs
       this.lastTokens = totalTokens
-      return null
+      return this.read()
     }
-    const dt = nowMs - this.lastTime
-    if (dt <= 0) return this.read()
-    const instant = (totalTokens - this.lastTokens) / (dt / 1000)
-    this.lastTime = nowMs
-    this.lastTokens = totalTokens
-    this.elapsed += dt
-    const alpha = 1 - Math.exp(-dt / TokenSpeedTracker.TAU_MS)
-    this.ewma = this.ewma * (1 - alpha) + instant * alpha
-    // Stays exactly equal to `1 - exp(-elapsed / TAU_MS)`.
-    this.weight = this.weight * (1 - alpha) + alpha
+
+    const dtMs = nowMs - this.lastTime
+    if (dtMs <= 0) {
+      return this.read()
+    }
+
+    const deltaTokens = totalTokens - this.lastTokens
+
+    if (deltaTokens > 0) {
+      let dtSec: number
+      if (dtMs > TokenSpeedTracker.IDLE_GAP_MS) {
+        dtSec = TokenSpeedTracker.FALLBACK_SAMPLE_DT_S
+        this.totalActiveDtMs += TokenSpeedTracker.FALLBACK_SAMPLE_DT_S * 1000
+      } else {
+        dtSec = dtMs / 1000
+        this.totalActiveDtMs += dtMs
+      }
+
+      this.samples.push({ tokens: deltaTokens, dt: dtSec })
+      if (this.samples.length > this.windowSize) {
+        this.samples.shift()
+      }
+
+      this.lastTime = nowMs
+      this.lastTokens = totalTokens
+    }
+
+    // If deltaTokens <= 0, no new tokens produced.
+    // Unlike old EWMA, we do NOT push 0-token samples into the history and do NOT
+    // decay the rate to 0. We hold the rolling average velocity and leave lastTime
+    // untouched so the full duration until the next batch is measured correctly
+    // (or clamped if it exceeds IDLE_GAP_MS).
+
     return this.read()
   }
 
+  /**
+   * Compute rolling average velocity: sum(tokens) / sum(dt), matching Hermes's
+   * true throughput formula:
+   *   avg_vel = sum(output_tokens) / sum(latency) (true throughput, not mean of ratios)
+   */
   private read(): number | null {
-    if (this.elapsed < TokenSpeedTracker.WARMUP_MS || this.weight <= 0) {
+    if (
+      this.samples.length === 0 ||
+      this.totalActiveDtMs < TokenSpeedTracker.WARMUP_MS
+    ) {
       return null
     }
-    return this.ewma / this.weight
+
+    let sumTokens = 0
+    let sumDt = 0
+    for (const s of this.samples) {
+      sumTokens += s.tokens
+      sumDt += s.dt
+    }
+
+    if (sumDt <= 0) {
+      return null
+    }
+
+    return sumTokens / sumDt
   }
 }
