@@ -41,7 +41,6 @@ use crate::acp::session_state::LiveContentBlock;
 use crate::acp::types::ConnectionStatus;
 use crate::db::entities::personal_agent::{self as agent_entity, BotKind};
 use crate::db::entities::personal_agent_dispatch::{DispatchMode, DispatchState};
-use crate::db::entities::personal_agent_item::ItemStatus;
 use crate::db::entities::personal_agent_notice::{NoticeKind, NoticeState};
 use crate::db::entities::personal_agent_timeline::TimelineKind;
 use crate::db::service::personal_agent_message_service as msvc;
@@ -447,11 +446,7 @@ pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbF
     hand.reverse();
     let needs = needs_of(db, bot, &hand, &hand_since).await;
     let unread = svc::count_unseen(&db.conn, bot).await.unwrap_or(0) as u32;
-    let has_open_items =
-        !svc::list_items(&db.conn, bot, &[ItemStatus::Open, ItemStatus::Waiting], 1)
-            .await
-            .unwrap_or_default()
-            .is_empty();
+    let has_open_items = svc::has_open_matters(&db.conn, bot).await.unwrap_or(false);
     let mut awaiting = Vec::new();
     let mut names: HashMap<i32, String> = HashMap::new();
     for m in msvc::live_messages_from(&db.conn, bot)

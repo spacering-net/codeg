@@ -2750,7 +2750,12 @@ impl PersonalAgentEngine {
             (!parts.is_empty()).then(|| parts.join("\n\n"))
         };
         let mut owner_lines = Vec::with_capacity(owners.len());
+        let me = self.bot().await;
         for o in &owners {
+            let data = o
+                .data
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok());
             owner_lines.push(OwnerLine {
                 id: o.id,
                 quote: match o.reply_to {
@@ -2759,6 +2764,10 @@ impl PersonalAgentEngine {
                 },
                 clicked: super::card_acts::clicked_of(o),
                 text: o.body.clone(),
+                notes: super::mentions::hits_in(data.as_ref())
+                    .iter()
+                    .map(|h| super::mentions::delivery_note(h, me))
+                    .collect(),
             });
         }
         // Events that gave way to the owner's message follow it: the message
@@ -3086,7 +3095,8 @@ impl PersonalAgentEngine {
                 kind: enum_str(&i.kind),
                 status: enum_str(&i.status),
                 waits_for: i.waits_for.as_ref().map(enum_str),
-                time: super::reminders::time_words(&i, tz, now),
+                time: super::reminders::time_words(&i, tz, now)
+                    .or_else(|| super::mentions::Mention::of(&i).map(|m| m.describe(now))),
                 summary: i.summary,
                 dispatch,
             });
@@ -3730,6 +3740,25 @@ impl PersonalAgentEngine {
         }
         // Typed, not a card's button nor a message sent again.
         let typed = card_click.is_none() && resent_from.is_none();
+        // What it brings up (6.8): only the owner's own words — not a
+        // hand-over a card wrote for them. One sent again carries what its
+        // first copy brought up, counted then.
+        let mentioned = if let Some(from) = resent_from {
+            match svc::get_row(&self.db.conn, from).await.ok().flatten() {
+                Some(first) => super::mentions::hits_in(
+                    first
+                        .data
+                        .as_deref()
+                        .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                        .as_ref(),
+                ),
+                None => Vec::new(),
+            }
+        } else if typed && reply_data.is_none() {
+            self.mentions_in(&text).await
+        } else {
+            Vec::new()
+        };
         let mut row = NewRow::new(TimelineKind::Owner, text);
         row.status = Some(OwnerStatus::Queued);
         row.reply_to = reply_to;
@@ -3742,6 +3771,12 @@ impl PersonalAgentEngine {
         }
         if let Some(click) = card_click {
             data.insert("card_click".into(), click);
+        }
+        if !mentioned.is_empty() {
+            data.insert(
+                super::mentions::ROW_KEY.into(),
+                serde_json::json!(mentioned),
+            );
         }
         if !data.is_empty() {
             row.data = Some(serde_json::Value::Object(data));
@@ -3912,11 +3947,16 @@ impl PersonalAgentEngine {
             Some(id) => self.quote_excerpt(id).await.map(|text| (id, text)),
             None => None,
         };
+        let me = self.bot().await;
         let line = OwnerLine {
             id: row.id,
             quote,
             clicked: row.data.as_ref().and_then(super::card_acts::clicked_in),
             text: row.body.clone(),
+            notes: super::mentions::hits_in(row.data.as_ref())
+                .iter()
+                .map(|h| super::mentions::delivery_note(h, me))
+                .collect(),
         };
         // Its own time, as a delivery's: the turn may have begun before
         // midnight (6.1).

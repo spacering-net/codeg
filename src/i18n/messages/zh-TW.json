@@ -7865,9 +7865,11 @@
         "dispatch": "派活",
         "reminder": "提醒",
         "followup": "跟進",
-        "question": "提問"
+        "question": "提問",
+        "when_mentioned": "提到時提醒"
       },
-      "onDone": "完成後：{text}"
+      "onDone": "完成後：{text}",
+      "mention": "你提到 {words} 時提醒 · 已提醒 {times}/{max} 次 · 到 {until}"
     },
     "data": {
       "interactions": "每日互動",
@@ -8548,7 +8550,8 @@
       "resend": "重新傳送",
       "resent": "已重新傳送",
       "merged": "已併入進行中的回覆",
-      "received": "已收到"
+      "received": "已收到",
+      "mentioned": "你提到了「{keyword}」——提醒：{text}"
     },
     "quote": {
       "you": "你",

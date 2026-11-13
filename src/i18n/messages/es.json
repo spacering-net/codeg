@@ -7865,9 +7865,11 @@
         "dispatch": "asignación",
         "reminder": "recordatorio",
         "followup": "seguimiento",
-        "question": "pregunta"
+        "question": "pregunta",
+        "when_mentioned": "al mencionarlo"
       },
-      "onDone": "Al terminar: {text}"
+      "onDone": "Al terminar: {text}",
+      "mention": "Cuando menciones {words} · {times} de {max} veces · hasta el {until}"
     },
     "data": {
       "interactions": "Conversación diaria",
@@ -8548,7 +8550,8 @@
       "resend": "Enviar de nuevo",
       "resent": "Enviado de nuevo",
       "merged": "Incorporado a la respuesta en curso",
-      "received": "Recibido"
+      "received": "Recibido",
+      "mentioned": "Mencionaste «{keyword}» — recordatorio: {text}"
     },
     "quote": {
       "you": "Tú",

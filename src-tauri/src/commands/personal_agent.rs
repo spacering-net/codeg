@@ -195,6 +195,7 @@ fn item_info(
         at_due: i.at_due,
         act_spec: i.act_spec.as_deref().and_then(|a| serde_json::from_str(a).ok()),
         fired_at: i.fired_at,
+        mention: i.mention.as_deref().and_then(|m| serde_json::from_str(m).ok()),
     }
 }
 

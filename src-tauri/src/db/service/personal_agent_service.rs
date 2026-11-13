@@ -2043,6 +2043,7 @@ pub async fn create_item_timed(
         at_due: Set(time.at_due),
         act_spec: Set(time.act_spec),
         fired_at: Set(None),
+        mention: Set(None),
     };
     Ok(row.insert(conn).await?)
 }
@@ -2526,6 +2527,99 @@ pub async fn list_items(
         query = query.filter(item::Column::Status.is_in(statuses.to_vec()));
     }
     Ok(query.limit(limit).all(conn).await?)
+}
+
+/// Whether assistant `bot` has a matter open that it works on — not one
+/// that only waits to be mentioned (6.8).
+pub async fn has_open_matters(conn: &DatabaseConnection, bot: i32) -> Result<bool, DbError> {
+    Ok(item::Entity::find()
+        .filter(item::Column::BotId.eq(bot))
+        .filter(item::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting]))
+        .filter(item::Column::Kind.ne(ItemKind::WhenMentioned))
+        .one(conn)
+        .await?
+        .is_some())
+}
+
+/// Every open `when_mentioned` matter, of every assistant, oldest first
+/// (6.8).
+pub async fn open_mentions(conn: &DatabaseConnection) -> Result<Vec<item::Model>, DbError> {
+    Ok(item::Entity::find()
+        .filter(item::Column::Kind.eq(ItemKind::WhenMentioned))
+        .filter(item::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting]))
+        .order_by_asc(item::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// Move matter `id`'s mention from `was` to `now`, closing it as `status`
+/// when given — only while it is open and still reads `was`, so two
+/// messages never both count the same time. Whether it moved.
+pub async fn swap_mention(
+    conn: &DatabaseConnection,
+    id: i32,
+    was: &str,
+    now: &str,
+    status: Option<ItemStatus>,
+) -> Result<bool, DbError> {
+    let mut update = item::Entity::update_many()
+        .col_expr(item::Column::Mention, Expr::value(Some(now.to_string())))
+        .col_expr(item::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(item::Column::Id.eq(id))
+        .filter(item::Column::Mention.eq(was))
+        .filter(item::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting]));
+    if let Some(s) = status {
+        update = update.col_expr(item::Column::Status, Expr::value(s));
+    }
+    Ok(update.exec(conn).await?.rows_affected > 0)
+}
+
+/// A new `when_mentioned` matter of assistant `bot`: open, its reminder
+/// the summary, its keywords and how it comes up in `mention` (6.8).
+pub async fn create_mention_item(
+    conn: &DatabaseConnection,
+    bot: i32,
+    summary: String,
+    origin_timeline_id: Option<i32>,
+    mention: String,
+) -> Result<item::Model, DbError> {
+    require_bot(bot)?;
+    let now = Utc::now();
+    Ok(item::ActiveModel {
+        id: NotSet,
+        kind: Set(ItemKind::WhenMentioned),
+        dispatch_id: Set(None),
+        status: Set(ItemStatus::Open),
+        waits_for: Set(None),
+        summary: Set(summary),
+        on_done: Set(None),
+        origin_timeline_id: Set(origin_timeline_id),
+        created_at: Set(now),
+        updated_at: Set(now),
+        bot_id: Set(Some(bot)),
+        due_at: Set(None),
+        repeat: Set(None),
+        at_due: Set(None),
+        act_spec: Set(None),
+        fired_at: Set(None),
+        mention: Set(Some(mention)),
+    }
+    .insert(conn)
+    .await?)
+}
+
+/// Set matter `id`'s mention (its keywords and how it comes up).
+pub async fn set_mention(conn: &DatabaseConnection, id: i32, mention: &str) -> Result<(), DbError> {
+    item::Entity::update_many()
+        .col_expr(
+            item::Column::Mention,
+            Expr::value(Some(mention.to_string())),
+        )
+        .col_expr(item::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(item::Column::Id.eq(id))
+        .exec(conn)
+        .await?;
+    Ok(())
 }
 
 // ── dispatches ──────────────────────────────────────────────────────────────

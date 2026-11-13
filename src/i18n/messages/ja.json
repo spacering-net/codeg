@@ -7865,9 +7865,11 @@
         "dispatch": "依頼",
         "reminder": "リマインダー",
         "followup": "フォローアップ",
-        "question": "質問"
+        "question": "質問",
+        "when_mentioned": "言及時"
       },
-      "onDone": "完了後：{text}"
+      "onDone": "完了後：{text}",
+      "mention": "{words} と言ったときに知らせる · {times}/{max} 回 · {until} まで"
     },
     "data": {
       "interactions": "日別の会話",
@@ -8548,7 +8550,8 @@
       "resend": "再送信",
       "resent": "再送信済み",
       "merged": "進行中の返信に取り込まれました",
-      "received": "受け取り済み"
+      "received": "受け取り済み",
+      "mentioned": "「{keyword}」と言いました — リマインダー：{text}"
     },
     "quote": {
       "you": "あなた",

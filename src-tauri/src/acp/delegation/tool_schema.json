@@ -1674,7 +1674,7 @@
   },
   {
     "name": "item_update",
-    "description": "Update an open matter — its status, who it waits for, its summary, what to do when it is done, its time — or, without `item_id`, add one (a reminder, a follow-up, a question for the owner). Dispatches get their item automatically; do not add one for them. With `due` the matter has a time: then codeg shows the owner a reminder card (`at_due` notify, the default — you are not woken) or wakes you to do it (`at_due` act, with `act_spec`). The answer gives the time in the owner's zone with its weekday, and a repeating one's next times: tell the owner those. Done on a repeating matter is done for this time; codeg sets the next.",
+    "description": "Update an open matter — its status, who it waits for, its summary, what to do when it is done, its time — or, without `item_id`, add one (a reminder, a follow-up, a question for the owner). Dispatches get their item automatically; do not add one for them. With `due` the matter has a time: then codeg shows the owner a reminder card (`at_due` notify, the default — you are not woken) or wakes you to do it (`at_due` act, with `act_spec`). The answer gives the time in the owner's zone with its weekday, and a repeating one's next times: tell the owner those. Done on a repeating matter is done for this time; codeg sets the next. \"Next time I mention X, remind me of Y\": a `when_mentioned` matter — Y as its summary, the words that bring it up in `when_mentioned` (the owner's own words for X, in each language and spelling they use). codeg matches each message the owner types against it, without you, and hands you the reminder with that message; remind them of it in your answer. It comes up at most once a day, three times, for 90 days, unless the owner asks otherwise; only the owner cancels it (status dropped).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1687,9 +1687,10 @@
           "enum": [
             "reminder",
             "followup",
-            "question"
+            "question",
+            "when_mentioned"
           ],
-          "description": "New items only."
+          "description": "New items only. `when_mentioned` may be left out when `when_mentioned` is given."
         },
         "status": {
           "type": "string",
@@ -1792,6 +1793,40 @@
         "clear_due": {
           "type": "boolean",
           "description": "Take the matter's time away (no due, no repeat)."
+        },
+        "when_mentioned": {
+          "type": "object",
+          "description": "For a `when_mentioned` matter: the keywords that bring it up, and how it comes up. CJK keywords match anywhere in a message, others at the start of a word (three letters or fewer as a whole word). On a matter that has one, what you leave out stays and the times it came up are kept. Not with a time (`due`, `repeat`).",
+          "properties": {
+            "keywords": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "minItems": 1,
+              "maxItems": 10,
+              "description": "At least 2 characters each."
+            },
+            "cooldown_hours": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 720,
+              "description": "Hours between two times it comes up; default 24."
+            },
+            "max_times": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "description": "Times it comes up before it is done; default 3."
+            },
+            "expires_in_days": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365,
+              "description": "Days from now it lasts; default 90."
+            }
+          }
         }
       }
     }

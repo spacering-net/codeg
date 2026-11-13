@@ -2629,7 +2629,12 @@ export interface TaskFacts {
   pr: PrFacts | null
 }
 
-export type ItemKind = "dispatch" | "reminder" | "followup" | "question"
+export type ItemKind =
+  | "dispatch"
+  | "reminder"
+  | "followup"
+  | "question"
+  | "when_mentioned"
 export type ItemStatus = "open" | "waiting" | "done" | "dropped"
 export type WaitsFor = "owner" | "agent" | "time" | "external"
 
@@ -2679,6 +2684,32 @@ export interface ItemInfo {
   act_spec: ItemActSpec | null
   /** When the current occurrence fired: at or after `due_at`, it did. */
   fired_at: string | null
+  /** A `when_mentioned` matter's keywords and how it comes up (6.8). */
+  mention?: ItemMention | null
+}
+
+/** How a matter that comes up when the owner mentions something does. */
+export interface ItemMention {
+  keywords: string[]
+  cooldown_hours: number
+  max_times: number
+  /** UTC. */
+  expires_at: string
+  /** How many times it came up, and when it last did. */
+  times: number
+  last_at?: string | null
+}
+
+/** A reminder an owner's message brought up, as its row keeps it
+ *  (`data.mentioned`). */
+export interface MentionHit {
+  item_id: number
+  bot_id: number
+  by: string
+  keyword: string
+  text: string
+  times: number
+  max_times: number
 }
 
 export interface UsageReading {

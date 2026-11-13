@@ -739,6 +739,11 @@ impl PersonalAgentEngine {
         if item.kind == ItemKind::Message && matches!(op, ItemOp::Snooze(_)) {
             return Err("a message waits for its answer, not for a time".into());
         }
+        if item.kind == ItemKind::WhenMentioned && matches!(op, ItemOp::Later | ItemOp::Snooze(_)) {
+            return Err(
+                "a reminder on a mention comes up when it is mentioned, not at a time".into(),
+            );
+        }
         if matches!(item.status, ItemStatus::Done | ItemStatus::Dropped) {
             return Err(format!("matter #{item_id} is already settled"));
         }

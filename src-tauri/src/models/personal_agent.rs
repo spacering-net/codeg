@@ -503,6 +503,9 @@ pub struct ItemInfo {
     pub at_due: Option<String>,
     pub act_spec: Option<serde_json::Value>,
     pub fired_at: Option<DateTime<Utc>>,
+    /// A `when_mentioned` matter's keywords and how it comes up (6.8):
+    /// `{ keywords, cooldown_hours, max_times, expires_at, times, last_at? }`.
+    pub mention: Option<serde_json::Value>,
 }
 
 /// A context-occupancy reading.

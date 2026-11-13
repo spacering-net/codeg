@@ -43,6 +43,7 @@ pub mod host;
 pub mod ledger;
 pub mod live;
 pub mod meet;
+pub mod mentions;
 pub mod messages;
 pub mod notices;
 pub mod options;

@@ -7865,9 +7865,11 @@
         "dispatch": "atribuição",
         "reminder": "lembrete",
         "followup": "acompanhamento",
-        "question": "pergunta"
+        "question": "pergunta",
+        "when_mentioned": "ao mencionar"
       },
-      "onDone": "Ao concluir: {text}"
+      "onDone": "Ao concluir: {text}",
+      "mention": "Quando você mencionar {words} · {times} de {max} vezes · até {until}"
     },
     "data": {
       "interactions": "Conversa diária",
@@ -8548,7 +8550,8 @@
       "resend": "Enviar de novo",
       "resent": "Enviada de novo",
       "merged": "Incorporada à resposta em andamento",
-      "received": "Recebida"
+      "received": "Recebida",
+      "mentioned": "Você mencionou “{keyword}” — lembrete: {text}"
     },
     "quote": {
       "you": "Você",

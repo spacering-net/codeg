@@ -338,6 +338,7 @@ pub async fn send_message(
                 at_due: Set(None),
                 act_spec: Set(None),
                 fired_at: Set(None),
+                mention: Set(None),
             }
             .insert(&txn)
             .await?,

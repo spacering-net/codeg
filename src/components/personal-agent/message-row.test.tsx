@@ -1096,6 +1096,44 @@ describe("the bubbles", () => {
     expect(screen.queryByRole("button", { name: /Send again/ })).toBeNull()
     expect(container.querySelector("[data-pa-aside]")).toBeNull()
   })
+
+  it("shows under the message the reminders it brought up (6.8)", () => {
+    const hit = {
+      item_id: 3,
+      bot_id: 1,
+      by: "Ada",
+      keyword: "release",
+      text: "Update the Homebrew formula first",
+      times: 1,
+      max_times: 3,
+    }
+    const { container } = draw(
+      <OwnerBubble
+        item={ownerItem(
+          row(12, "owner", {
+            body: "let's cut the release",
+            status: "delivered",
+            read_at: "2026-11-09T10:00:00Z",
+            data: { merged: true, mentioned: [hit, { junk: true }] },
+          })
+        )}
+      />
+    )
+    const notes = container.querySelectorAll("[data-pa-mention]")
+    expect(notes).toHaveLength(1)
+    expect(notes[0].textContent).toBe(
+      "You mentioned “release” — reminder: Update the Homebrew formula first"
+    )
+    // With what else the line under it says.
+    expect(container.querySelector("[data-pa-state]")).toBeTruthy()
+    cleanup()
+    const none = draw(
+      <OwnerBubble
+        item={ownerItem(row(13, "owner", { body: "hi", status: "answered" }))}
+      />
+    )
+    expect(none.container.querySelector("[data-pa-mention]")).toBeNull()
+  })
 })
 
 describe("DispatchAttachments", () => {

@@ -10,17 +10,20 @@
  * the model's. Two seconds without it, a line under the bubble says what it
  * waits for: the assistant waking up, the turn before it finishing, a turn
  * about events giving way. A message whose turn never ended says so on a
- * line under it, with the way to send it again.
+ * line under it, with the way to send it again. A reminder the message
+ * brought up — the owner mentioned what one waits for (6.8) — shows under
+ * it too.
  */
 
 import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
-import { CornerDownRight, RotateCcw } from "lucide-react"
+import { Bell, CornerDownRight, RotateCcw } from "lucide-react"
 import { toast } from "sonner"
 
 import { personalAgentResend } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
+import type { MentionHit } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import type { MessageItem } from "./message-items"
@@ -35,6 +38,38 @@ interface ImageBlock {
 }
 
 type OwnerItem = Extract<MessageItem, { kind: "owner" }>
+
+/** The reminders a message brought up, as its row keeps them. */
+function hitsOf(data: unknown): MentionHit[] {
+  const list =
+    data && typeof data === "object"
+      ? (data as Record<string, unknown>).mentioned
+      : null
+  if (!Array.isArray(list)) return []
+  return list.filter(
+    (h): h is MentionHit =>
+      h != null &&
+      typeof h === "object" &&
+      typeof (h as MentionHit).keyword === "string" &&
+      typeof (h as MentionHit).text === "string"
+  )
+}
+
+/** A reminder the message brought up, under it. */
+function MentionNote({ hit }: { hit: MentionHit }) {
+  const t = useTranslations("PersonalAgent.owner")
+  return (
+    <div
+      data-pa-mention={hit.item_id}
+      className="mt-1 flex max-w-full items-start justify-end gap-1.5 pe-1 text-[0.6875rem] leading-4 text-amber-700 dark:text-amber-300"
+    >
+      <Bell className="mt-px size-3 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
+        {t("mentioned", { keyword: hit.keyword, text: hit.text })}
+      </span>
+    </div>
+  )
+}
 
 /** A message not taken this long says what it waits for. */
 export const WAIT_NOTE_AFTER_MS = 2000
@@ -90,6 +125,50 @@ export function OwnerBubble({ item }: { item: OwnerItem }) {
   // It pops on only when it comes while the message is on screen.
   const [receivedAtFirst] = useState(received)
   const waitNote = useWaitNote(unread && !readOnly, row.created_at)
+  const hits = hitsOf(row.data)
+  const stateLine = waitNote ? (
+    <div
+      data-pa-wait-note
+      className="mt-1 flex h-5 items-center pe-1 text-[0.6875rem] whitespace-nowrap text-muted-foreground"
+    >
+      <span className="activity-shimmer">{waitNote}</span>
+    </div>
+  ) : merged ? (
+    <div
+      data-pa-state
+      className="mt-1 flex h-5 items-center gap-1.5 pe-1 text-[0.6875rem] whitespace-nowrap text-muted-foreground"
+    >
+      <CornerDownRight className="size-3" aria-hidden />
+      <span>{t("merged")}</span>
+    </div>
+  ) : interrupted ? (
+    <div
+      data-pa-state
+      className="mt-1 flex h-5 items-center gap-1.5 pe-1 text-[0.6875rem] whitespace-nowrap text-muted-foreground"
+    >
+      <span className="text-amber-700 dark:text-amber-300">
+        {t("unfinished")}
+      </span>
+      {resentAs != null ? (
+        <span>{t("resent")}</span>
+      ) : readOnly ? null : (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-full px-1.5 text-foreground/80 transition-colors hover:text-foreground disabled:opacity-50"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true)
+            personalAgentResend(row.id, botId)
+              .catch((e) => toast.error(toErrorMessage(e)))
+              .finally(() => setBusy(false))
+          }}
+        >
+          <RotateCcw className="size-3" aria-hidden />
+          {t("resend")}
+        </button>
+      )}
+    </div>
+  ) : null
   return (
     <MessageRow
       rowId={row.id}
@@ -99,48 +178,13 @@ export function OwnerBubble({ item }: { item: OwnerItem }) {
       actions={{ rowId: row.id, text: row.body || null, at: row.created_at }}
       aside={unread ? <UnreadMark /> : null}
       below={
-        waitNote ? (
-          <div
-            data-pa-wait-note
-            className="mt-1 flex h-5 items-center pe-1 text-[0.6875rem] whitespace-nowrap text-muted-foreground"
-          >
-            <span className="activity-shimmer">{waitNote}</span>
-          </div>
-        ) : merged ? (
-          <div
-            data-pa-state
-            className="mt-1 flex h-5 items-center gap-1.5 pe-1 text-[0.6875rem] whitespace-nowrap text-muted-foreground"
-          >
-            <CornerDownRight className="size-3" aria-hidden />
-            <span>{t("merged")}</span>
-          </div>
-        ) : interrupted ? (
-          <div
-            data-pa-state
-            className="mt-1 flex h-5 items-center gap-1.5 pe-1 text-[0.6875rem] whitespace-nowrap text-muted-foreground"
-          >
-            <span className="text-amber-700 dark:text-amber-300">
-              {t("unfinished")}
-            </span>
-            {resentAs != null ? (
-              <span>{t("resent")}</span>
-            ) : readOnly ? null : (
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 rounded-full px-1.5 text-foreground/80 transition-colors hover:text-foreground disabled:opacity-50"
-                disabled={busy}
-                onClick={() => {
-                  setBusy(true)
-                  personalAgentResend(row.id, botId)
-                    .catch((e) => toast.error(toErrorMessage(e)))
-                    .finally(() => setBusy(false))
-                }}
-              >
-                <RotateCcw className="size-3" aria-hidden />
-                {t("resend")}
-              </button>
-            )}
-          </div>
+        stateLine || hits.length > 0 ? (
+          <>
+            {stateLine}
+            {hits.map((h) => (
+              <MentionNote key={h.item_id} hit={h} />
+            ))}
+          </>
         ) : null
       }
     >

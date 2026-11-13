@@ -12701,3 +12701,221 @@ async fn rulesvc_first_look(engine: &PersonalAgentEngine, days: i64) {
     .await
     .unwrap();
 }
+
+// ── 2.6: reminders on a mention ─────────────────────────────────────────────
+
+/// A `when_mentioned` matter of `engine`'s, made as the assistant makes one.
+async fn mention_matter(engine: &Arc<PersonalAgentEngine>, summary: &str, words: &[&str]) -> i32 {
+    let out = call(
+        engine,
+        "item_update",
+        json!({ "kind": "when_mentioned", "summary": summary, "when_mentioned": { "keywords": words } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    out.data["item_id"].as_i64().unwrap() as i32
+}
+
+/// Matter `id`'s mention, with `f` applied: time moved on, as the clock
+/// cannot be in a test.
+async fn shift_mention(engine: &PersonalAgentEngine, id: i32, f: impl FnOnce(&mut super::mentions::Mention)) {
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    let mut m = super::mentions::Mention::of(&item).unwrap();
+    f(&mut m);
+    svc::set_mention(&engine.db.conn, id, &m.to_json()).await.unwrap();
+}
+
+fn hits_of(row: &crate::models::personal_agent::TimelineRow) -> Vec<super::mentions::Hit> {
+    super::mentions::hits_in(row.data.as_ref())
+}
+
+/// "Next time I mention a release, remind me to update the formula": the
+/// message that mentions it carries the reminder to the assistant and shows
+/// it under itself; not again within a day; three times, then done.
+#[tokio::test]
+async fn a_mention_brings_its_reminder_up_with_the_message_once_a_day_three_times() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, _state) = live_connection(&engine, seg, "pa-26").await;
+    let id = mention_matter(&engine, "Update the Homebrew formula first", &["发版", "release"]).await;
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(item.kind, ItemKind::WhenMentioned);
+    assert_eq!((item.status, item.waits_for, item.due_at), (ItemStatus::Open, None, None));
+    let m = super::mentions::Mention::of(&item).unwrap();
+    assert_eq!((m.cooldown_hours, m.max_times, m.times), (24, 3, 0));
+    // It waits to be mentioned: the assistant is not "on" anything.
+    assert!(!svc::has_open_matters(&engine.db.conn, engine.bot().await).await.unwrap());
+    let list = call(&engine, "item_list", json!({})).await;
+    assert!(list.text.contains("when the owner mentions \"发版\", \"release\""), "{}", list.text);
+
+    let unrelated = engine.send_owner_message("the build is red".into(), Vec::new(), None).await.unwrap();
+    assert!(hits_of(&unrelated).is_empty());
+    svc::move_owner_rows(
+        &engine.db.conn,
+        &[unrelated.id],
+        &[OwnerStatus::Queued],
+        OwnerStatus::Answered,
+        None,
+        None,
+        svc::ReadMark::Read,
+    )
+    .await
+    .unwrap();
+
+    let first = engine.send_owner_message("准备发版了".into(), Vec::new(), None).await.unwrap();
+    let hits = hits_of(&first);
+    assert_eq!(hits.len(), 1);
+    assert_eq!((hits[0].item_id, hits[0].keyword.as_str(), hits[0].times), (id, "发版", 1));
+    engine.pump().await;
+    let (prompt, _) = take_prompt(&mut rx);
+    assert!(
+        prompt.contains(&format!(
+            "[#{}] 准备发版了\n<codeg-reminder matter=\"{id}\">The owner mentioned \"发版\": the reminder you \
+             noted (matter #{id}) is: Update the Homebrew formula first",
+            first.id
+        )),
+        "{prompt}"
+    );
+    assert!(prompt.contains("1 of 3"), "{prompt}");
+
+    // Within a day: not again.
+    let again = engine.send_owner_message("the release notes".into(), Vec::new(), None).await.unwrap();
+    assert!(hits_of(&again).is_empty(), "once a day");
+    // A day on, twice more; the third time is its last.
+    shift_mention(&engine, id, |m| m.last_at = m.last_at.map(|t| t - chrono::Duration::hours(25))).await;
+    let second = engine.send_owner_message("Release it".into(), Vec::new(), None).await.unwrap();
+    assert_eq!(hits_of(&second)[0].times, 2);
+    shift_mention(&engine, id, |m| m.last_at = m.last_at.map(|t| t - chrono::Duration::hours(25))).await;
+    let third = engine.send_owner_message("release day".into(), Vec::new(), None).await.unwrap();
+    let last = hits_of(&third);
+    assert!(last[0].last(), "{last:?}");
+    assert!(super::mentions::delivery_note(&last[0], engine.bot().await).contains("its last time"));
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(item.status, ItemStatus::Done, "used up, it is done");
+    shift_mention(&engine, id, |m| m.last_at = m.last_at.map(|t| t - chrono::Duration::hours(25))).await;
+    let after = engine.send_owner_message("release again".into(), Vec::new(), None).await.unwrap();
+    assert!(hits_of(&after).is_empty());
+}
+
+/// Only what the owner types brings one up — not a hand-over a card wrote
+/// for them; a message sent again carries what its first copy brought up,
+/// without counting it twice.
+#[tokio::test]
+async fn only_the_owners_words_bring_one_up_and_a_copy_sent_again_carries_the_first() {
+    let (engine, _tmp) = configured().await;
+    let id = mention_matter(&engine, "Bump the changelog", &["ship"]).await;
+    let card = engine.send_owner_message("hello".into(), Vec::new(), None).await.unwrap();
+    let handed = engine
+        .queue_owner_message(
+            "Please ship the fix".into(),
+            Vec::new(),
+            Some(card.id),
+            None,
+            None,
+            Some(json!({ "state": "handed" })),
+        )
+        .await
+        .unwrap();
+    assert!(hits_of(&handed).is_empty(), "a hand-over a card wrote");
+    let mine = engine.send_owner_message("ship it".into(), Vec::new(), None).await.unwrap();
+    assert_eq!(hits_of(&mine).len(), 1);
+    svc::move_owner_rows(
+        &engine.db.conn,
+        &[mine.id],
+        &[OwnerStatus::Queued],
+        OwnerStatus::Interrupted,
+        None,
+        None,
+        svc::ReadMark::Keep,
+    )
+    .await
+    .unwrap();
+    let copy = engine.resend(mine.id).await.unwrap();
+    assert_eq!(hits_of(&copy), hits_of(&mine), "the copy carries the first's");
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(super::mentions::Mention::of(&item).unwrap().times, 1, "counted once");
+}
+
+/// A reminder another assistant noted comes up in a message to this one,
+/// saying whose it is; one whose days are over is dropped by the host's
+/// clock; the tool keeps a mention without a time and its count on a change.
+#[tokio::test]
+async fn another_assistants_reminder_says_whose_and_one_past_its_days_is_dropped() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let id = mention_matter(&worker, "Check the staging config", &["deploy"]).await;
+    let out = call(&worker, "item_update", json!({ "item_id": id, "due": "2h" })).await;
+    assert!(!out.ok && out.text.contains("no time"), "{}", out.text);
+    let out = call(&worker, "item_update", json!({ "kind": "reminder", "summary": "x", "when_mentioned": { "keywords": ["deploy"] } })).await;
+    assert!(!out.ok, "{}", out.text);
+    let out = call(&worker, "item_update", json!({ "kind": "when_mentioned", "summary": "x" })).await;
+    assert!(!out.ok && out.text.contains("keywords"), "{}", out.text);
+    let out = call(&worker, "item_update", json!({ "kind": "when_mentioned", "summary": "x", "when_mentioned": { "keywords": ["a"] } })).await;
+    assert!(!out.ok && out.text.contains("too short"), "{}", out.text);
+
+    let msg = primary.send_owner_message("deploy to staging".into(), Vec::new(), None).await.unwrap();
+    let hits = hits_of(&msg);
+    assert_eq!((hits.len(), hits[0].bot_id, hits[0].by.as_str()), (1, w, "Dev"));
+    let note = super::mentions::delivery_note(&hits[0], primary.bot().await);
+    assert!(note.contains(&format!("a reminder Dev noted for them (Dev's matter #{id})")), "{note}");
+
+    // A change of its words keeps how often it came up.
+    let out = call(&worker, "item_update", json!({ "item_id": id, "when_mentioned": { "keywords": ["deploy", "上线"], "max_times": 5 } })).await;
+    assert!(out.ok, "{}", out.text);
+    let m = super::mentions::Mention::of(&svc::get_item(&worker.db.conn, id).await.unwrap().unwrap()).unwrap();
+    assert_eq!((m.keywords.len(), m.times, m.max_times), (2, 1, 5));
+    // A reminder on a mention is put off to no time from the page either.
+    assert!(worker.item_op(id, super::reminders::ItemOp::Later).await.is_err());
+
+    // Its days over: dropped.
+    host.mention_tick().await;
+    assert_eq!(svc::get_item(&worker.db.conn, id).await.unwrap().unwrap().status, ItemStatus::Open);
+    shift_mention(&worker, id, |m| m.expires_at = chrono::Utc::now() - chrono::Duration::minutes(1)).await;
+    host.mention_tick().await;
+    assert_eq!(svc::get_item(&worker.db.conn, id).await.unwrap().unwrap().status, ItemStatus::Dropped);
+    let later = primary.send_owner_message("deploy now".into(), Vec::new(), None).await.unwrap();
+    assert!(hits_of(&later).is_empty());
+}
+
+/// A change to a reminder's words worked out from a read taken before the
+/// owner's message brought it up keeps that time: no second time within a
+/// day, and no fourth.
+#[tokio::test]
+async fn a_change_to_a_reminders_words_keeps_a_time_it_came_up_meanwhile() {
+    let (engine, _tmp) = configured().await;
+    let id = mention_matter(&engine, "Update the formula", &["release"]).await;
+    let stale = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    let hit = engine.send_owner_message("cut the release".into(), Vec::new(), None).await.unwrap();
+    assert_eq!(hits_of(&hit)[0].times, 1);
+    let m = super::mentions::change(
+        &engine.db.conn,
+        &stale,
+        &json!({ "keywords": ["release", "ship"] }),
+        super::clock::now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(m.keywords.len(), 2);
+    assert_eq!(m.times, 1, "the time it came up meanwhile is kept");
+    assert!(m.last_at.is_some());
+    let stored = super::mentions::Mention::of(&svc::get_item(&engine.db.conn, id).await.unwrap().unwrap()).unwrap();
+    assert_eq!(stored, m);
+    let again = engine.send_owner_message("ship it".into(), Vec::new(), None).await.unwrap();
+    assert!(hits_of(&again).is_empty(), "still within the day");
+
+    // Closed meanwhile: not changed.
+    shift_mention(&engine, id, |m| {
+        m.times = m.max_times - 1;
+        m.last_at = m.last_at.map(|t| t - chrono::Duration::hours(25));
+    })
+    .await;
+    let stale = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    let last = engine.send_owner_message("ship".into(), Vec::new(), None).await.unwrap();
+    assert!(hits_of(&last)[0].last());
+    let err = super::mentions::change(&engine.db.conn, &stale, &json!({ "max_times": 9 }), super::clock::now())
+        .await
+        .unwrap_err();
+    assert!(err.contains("closed"), "{err}");
+    assert_eq!(svc::get_item(&engine.db.conn, id).await.unwrap().unwrap().status, ItemStatus::Done);
+}

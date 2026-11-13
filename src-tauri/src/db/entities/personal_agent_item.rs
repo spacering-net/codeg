@@ -17,6 +17,9 @@ pub enum ItemKind {
     /// comes.
     #[sea_orm(string_value = "message")]
     Message,
+    /// Comes up when the owner mentions one of its keywords (6.8).
+    #[sea_orm(string_value = "when_mentioned")]
+    WhenMentioned,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
@@ -80,6 +83,10 @@ pub struct Model {
     pub act_spec: Option<String>,
     /// When the current occurrence fired; on or after `due_at`, it has.
     pub fired_at: Option<DateTimeUtc>,
+    /// A `when_mentioned` matter's keywords and how it comes up (JSON,
+    /// `personal_agent::mentions::Mention`).
+    #[sea_orm(column_type = "Text", nullable)]
+    pub mention: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

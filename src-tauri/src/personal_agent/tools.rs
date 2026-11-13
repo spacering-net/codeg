@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 
 use super::dispatch::{executor_of, DispatchAuth, DispatchRequest, FollowupAuth};
 use super::engine::{enum_str, PersonalAgentEngine};
+use super::mentions::{self, Mention};
 use super::messages::{MessageCall, Unnamed};
 use super::reminders;
 use crate::db::entities::folder::FolderKind;
@@ -488,6 +489,9 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 if let Some(t) = reminders::time_words(&i, tz, now) {
                     line.push_str(&format!(" · {t}"));
                 }
+                if let Some(m) = Mention::of(&i) {
+                    line.push_str(&format!(" · {}", m.describe(now)));
+                }
                 if let Some(d) = &dispatch {
                     line.push_str(&format!(
                         " · dispatch #{} {} ({})",
@@ -510,6 +514,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "due_local": i.due_at.map(|t| super::due::describe(t, tz, now)),
                     "at_due": i.at_due,
                     "repeat": i.repeat.as_deref().and_then(|r| serde_json::from_str::<Value>(r).ok()),
+                    "when_mentioned": Mention::of(&i),
                 }));
             }
             let text = if lines.is_empty() {
@@ -550,6 +555,9 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "\n{t} ({})",
                     super::due::zone_label(tz, item.due_at.unwrap_or(now))
                 ));
+            }
+            if let Some(m) = Mention::of(&item) {
+                text.push_str(&format!("\ncomes up {}", m.describe(now)));
             }
             if let Some(spec) = super::due::ActSpec::parse(item.act_spec.as_deref()) {
                 text.push_str(&format!("\nto do then: {}", spec.what));
@@ -598,6 +606,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                         "at_due": item.at_due,
                         "repeat": item.repeat.as_deref().and_then(|r| serde_json::from_str::<Value>(r).ok()),
                         "act_spec": item.act_spec.as_deref().and_then(|a| serde_json::from_str::<Value>(a).ok()),
+                        "when_mentioned": Mention::of(&item),
                     },
                     "dispatch": dispatch_json,
                 }),
@@ -631,6 +640,29 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     let Ok(Some(item)) = svc::get_item_of(&db.conn, bot, id).await else {
                         return ToolOutcome::refused(format!("item #{id} does not exist"));
                     };
+                    // A matter a mention brings up has no time; its words
+                    // and how it comes up change here (6.8).
+                    match (item.kind == ItemKind::WhenMentioned, given(&args, "when_mentioned")) {
+                        (true, _) if has_time_args(&args) => {
+                            return ToolOutcome::refused(
+                                "a matter brought up by a mention has no time: change its `when_mentioned` instead",
+                            )
+                        }
+                        // Written onto how it stands then: a time it came
+                        // up meanwhile is kept.
+                        (true, Some(v)) => {
+                            if let Err(e) = mentions::change(&db.conn, &item, v, now).await {
+                                return ToolOutcome::refused(e);
+                            }
+                        }
+                        (false, Some(_)) => {
+                            return ToolOutcome::refused(
+                                "`when_mentioned` is for a matter that comes up when the owner mentions \
+                                 something: make a new one with kind when_mentioned",
+                            )
+                        }
+                        _ => {}
+                    }
                     let mut time = match reminders::time_from_args(&args, Some(&item), tz, now, mornings) {
                         Ok(t) => t,
                         Err(e) => return ToolOutcome::refused(e),
@@ -684,26 +716,75 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                                 ));
                             }
                             text.push_str(&time_answer(&i, tz, now));
+                            text.push_str(&mention_answer(&i, now));
                             ToolOutcome::ok(text, item_answer(&i, tz, now))
                         }
                         Err(e) => ToolOutcome::refused(e),
                     }
                 }
                 None => {
+                    let mentioned = given(&args, "when_mentioned");
                     let kind = match string(&args, "kind").as_deref() {
                         Some("reminder") => ItemKind::Reminder,
                         Some("followup") => ItemKind::Followup,
                         Some("question") => ItemKind::Question,
+                        Some("when_mentioned") => ItemKind::WhenMentioned,
+                        None if mentioned.is_some() => ItemKind::WhenMentioned,
                         _ => {
                             return ToolOutcome::refused(
-                                "a new item needs `kind` (reminder, followup or question); \
-                                 dispatches get theirs automatically",
+                                "a new item needs `kind` (reminder, followup, question or \
+                                 when_mentioned); dispatches get theirs automatically",
                             )
                         }
                     };
                     let Some(summary) = summary else {
                         return ToolOutcome::refused("a new item needs `summary`");
                     };
+                    // "Next time I mention X, remind me of Y" (6.8).
+                    if kind == ItemKind::WhenMentioned {
+                        if has_time_args(&args) {
+                            return ToolOutcome::refused(
+                                "a matter brought up by a mention has no time: give `when_mentioned` alone",
+                            );
+                        }
+                        let Some(v) = mentioned else {
+                            return ToolOutcome::refused(
+                                "a when_mentioned matter needs `when_mentioned`: the keywords that bring it up",
+                            );
+                        };
+                        let m = match mentions::from_args(v, None, now) {
+                            Ok(m) => m,
+                            Err(e) => return ToolOutcome::refused(e),
+                        };
+                        return match svc::create_mention_item(
+                            &db.conn,
+                            bot,
+                            summary,
+                            engine.turn_owner_row().await,
+                            m.to_json(),
+                        )
+                        .await
+                        {
+                            Ok(i) => {
+                                engine.emit(PersonalAgentChange::Item { id: i.id });
+                                ToolOutcome::ok(
+                                    format!(
+                                        "Added #{}: {}{}",
+                                        i.id,
+                                        i.summary,
+                                        mention_answer(&i, now)
+                                    ),
+                                    item_answer(&i, tz, now),
+                                )
+                            }
+                            Err(e) => ToolOutcome::refused(e.to_string()),
+                        };
+                    }
+                    if mentioned.is_some() {
+                        return ToolOutcome::refused(
+                            "`when_mentioned` makes a when_mentioned matter: leave `kind` out or set it so",
+                        );
+                    }
                     let time = match reminders::time_from_args(&args, None, tz, now, mornings) {
                         Ok(t) => t.filter(|t| t.due_at.is_some()).unwrap_or_default(),
                         Err(e) => return ToolOutcome::refused(e),
@@ -824,7 +905,36 @@ fn item_answer(
         "due_local": item.due_at.map(|t| super::due::describe(t, tz, now)),
         "at_due": item.at_due,
         "repeat": item.repeat.as_deref().and_then(|r| serde_json::from_str::<Value>(r).ok()),
+        "when_mentioned": Mention::of(item),
     })
+}
+
+/// How a matter brought up by a mention stands, for the assistant (6.8).
+fn mention_answer(
+    item: &crate::db::entities::personal_agent_item::Model,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    match Mention::of(item) {
+        Some(m) if item.status == ItemStatus::Open || item.status == ItemStatus::Waiting => {
+            format!(
+                "\nIt comes up {}. Only the owner cancels it: drop it when they say so.",
+                m.describe(now)
+            )
+        }
+        _ => String::new(),
+    }
+}
+
+/// The argument `key`, when given and not null.
+fn given<'a>(args: &'a Value, key: &str) -> Option<&'a Value> {
+    args.get(key).filter(|v| !v.is_null())
+}
+
+/// Whether the call gives a matter a time.
+fn has_time_args(args: &Value) -> bool {
+    ["due", "repeat", "at_due", "act_spec", "clear_due"]
+        .iter()
+        .any(|k| given(args, k).is_some())
 }
 
 /// What a dispatch call answers: the new dispatch, or — the call repeating

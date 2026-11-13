@@ -1105,6 +1105,18 @@ automatically. Use `item_list` / `item_read` to see where things stand, and
 `item_update` to record reminders, follow-ups and questions for the owner, or
 to close a matter.
 
+- "Next time I mention X, remind me of Y": a matter of kind
+  `when_mentioned` — Y as its summary, and `when_mentioned: { "keywords":
+  [...] }` with the words that bring it up: the owner's own words for X, in
+  each language and spelling they use ("发版", "release"). codeg matches
+  every message the owner types against it, without you, and hands you the
+  reminder with that message in a `<codeg-reminder>` line; the owner sees it
+  under their message too. Remind them of it in your answer, in a sentence.
+  It comes up at most once a day, three times, for 90 days, unless the owner
+  asks otherwise (`cooldown_hours`, `max_times`, `expires_in_days`); used up
+  or past its days, codeg closes it. Only the owner cancels one: drop it
+  (status `dropped`) when they say so, not because it came up.
+
 ## Time
 
 Every turn starts with a `<codeg-now>` line: the owner's date, time, weekday

@@ -660,6 +660,36 @@ describe("the details' matters", () => {
     expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 15, "drop")
   })
 
+  it("says what brings a reminder on a mention up, and puts it off no time (6.8)", async () => {
+    api.personalAgentItems.mockResolvedValue([
+      item({
+        id: 31,
+        kind: "when_mentioned",
+        waits_for: null,
+        summary: "Update the Homebrew formula first",
+        mention: {
+          keywords: ["release", "发版"],
+          cooldown_hours: 24,
+          max_times: 3,
+          expires_at: "2027-02-11T00:00:00Z",
+          times: 1,
+          last_at: "2026-11-13T00:00:00Z",
+        },
+      }),
+    ])
+    const { container } = draw()
+    await screen.findByText("Update the Homebrew formula first")
+    expect(
+      screen.getByText(
+        /^When you mention “release”, “发版” · 1 of 3 times · until /
+      )
+    ).toBeTruthy()
+    const card = container.querySelector<HTMLElement>("[data-pa-group='none']")!
+    expect(within(card).queryByRole("button", { name: "Later" })).toBeNull()
+    fireEvent.click(within(card).getByRole("button", { name: "Drop" }))
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 31, "drop")
+  })
+
   it("says when a matter is due, how it comes back, and puts off one waiting on time", async () => {
     const hour = 3_600_000
     api.personalAgentItems.mockResolvedValue([

@@ -7865,9 +7865,11 @@
         "dispatch": "إسناد",
         "reminder": "تذكير",
         "followup": "متابعة",
-        "question": "سؤال"
+        "question": "سؤال",
+        "when_mentioned": "عند الذكر"
       },
-      "onDone": "عند الانتهاء: {text}"
+      "onDone": "عند الانتهاء: {text}",
+      "mention": "عندما تذكر {words} · {times} من {max} مرات · حتى {until}"
     },
     "data": {
       "interactions": "المحادثة اليومية",
@@ -8548,7 +8550,8 @@
       "resend": "إرسال مجددًا",
       "resent": "أُرسلت مجددًا",
       "merged": "أُدمجت في الرد الجاري",
-      "received": "وصلت"
+      "received": "وصلت",
+      "mentioned": "ذكرتَ «{keyword}» — تذكير: {text}"
     },
     "quote": {
       "you": "أنت",

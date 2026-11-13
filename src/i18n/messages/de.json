@@ -7865,9 +7865,11 @@
         "dispatch": "Zuweisung",
         "reminder": "Erinnerung",
         "followup": "Nachfassen",
-        "question": "Frage"
+        "question": "Frage",
+        "when_mentioned": "bei Erwähnung"
       },
-      "onDone": "Wenn erledigt: {text}"
+      "onDone": "Wenn erledigt: {text}",
+      "mention": "Wenn du {words} erwähnst · {times} von {max} Mal · bis {until}"
     },
     "data": {
       "interactions": "Unterhaltung pro Tag",
@@ -8548,7 +8550,8 @@
       "resend": "Erneut senden",
       "resent": "Erneut gesendet",
       "merged": "In die laufende Antwort aufgenommen",
-      "received": "Erhalten"
+      "received": "Erhalten",
+      "mentioned": "Du hast „{keyword}“ erwähnt — Erinnerung: {text}"
     },
     "quote": {
       "you": "Du",

@@ -7865,9 +7865,11 @@
         "dispatch": "배정",
         "reminder": "리마인더",
         "followup": "후속 확인",
-        "question": "질문"
+        "question": "질문",
+        "when_mentioned": "언급 시"
       },
-      "onDone": "완료 후: {text}"
+      "onDone": "완료 후: {text}",
+      "mention": "{words}을(를) 언급하면 알림 · {times}/{max}회 · {until}까지"
     },
     "data": {
       "interactions": "일별 대화",
@@ -8548,7 +8550,8 @@
       "resend": "다시 보내기",
       "resent": "다시 보냄",
       "merged": "진행 중인 답장에 합쳐졌습니다",
-      "received": "받음"
+      "received": "받음",
+      "mentioned": "“{keyword}”을(를) 언급했어요 — 알림: {text}"
     },
     "quote": {
       "you": "나",

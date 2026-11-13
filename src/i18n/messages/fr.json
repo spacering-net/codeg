@@ -7865,9 +7865,11 @@
         "dispatch": "mission",
         "reminder": "rappel",
         "followup": "suivi",
-        "question": "question"
+        "question": "question",
+        "when_mentioned": "à la mention"
       },
-      "onDone": "Une fois terminé : {text}"
+      "onDone": "Une fois terminé : {text}",
+      "mention": "Quand vous mentionnez {words} · {times} sur {max} fois · jusqu’au {until}"
     },
     "data": {
       "interactions": "Conversation par jour",
@@ -8548,7 +8550,8 @@
       "resend": "Renvoyer",
       "resent": "Renvoyé",
       "merged": "Intégré à la réponse en cours",
-      "received": "Reçu"
+      "received": "Reçu",
+      "mentioned": "Vous avez mentionné « {keyword} » — rappel : {text}"
     },
     "quote": {
       "you": "Vous",

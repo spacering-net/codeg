@@ -114,6 +114,8 @@ pub async fn run(host: Arc<EngineHost>) {
             ticker.session_signals().await;
             // codeg's proposal rules (6.7) look, off this loop.
             ticker.spawn_rules_tick();
+            // Reminders on a mention whose days are over go (6.8).
+            ticker.mention_tick().await;
         }
     });
     // The usage figures are caught up while nothing runs (8.1).

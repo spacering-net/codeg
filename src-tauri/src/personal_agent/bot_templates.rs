@@ -290,7 +290,7 @@ fn joins(c: char) -> bool {
 /// Whether `kw` is in `hay`: anywhere for a CJK keyword; for any other, at
 /// the start of a word — the whole word when it is short ("ci" is not in
 /// "city", "review" is in "reviewers").
-fn matches(hay: &str, kw: &str) -> bool {
+pub(crate) fn matches(hay: &str, kw: &str) -> bool {
     if kw.chars().any(is_cjk) {
         return hay.contains(kw);
     }

@@ -7865,9 +7865,11 @@
         "dispatch": "dispatch",
         "reminder": "reminder",
         "followup": "follow-up",
-        "question": "question"
+        "question": "question",
+        "when_mentioned": "on mention"
       },
-      "onDone": "When done: {text}"
+      "onDone": "When done: {text}",
+      "mention": "When you mention {words} · {times} of {max} times · until {until}"
     },
     "data": {
       "interactions": "Daily conversation",
@@ -8548,7 +8550,8 @@
       "resend": "Send again",
       "resent": "Sent again",
       "merged": "Folded into the reply in progress",
-      "received": "Received"
+      "received": "Received",
+      "mentioned": "You mentioned “{keyword}” — reminder: {text}"
     },
     "quote": {
       "you": "You",

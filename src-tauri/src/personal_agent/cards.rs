@@ -58,6 +58,8 @@ pub struct OwnerLine {
     /// The button on the quoted row's card the message came from (9.2).
     pub clicked: Option<String>,
     pub text: String,
+    /// What the message brought up (6.8), each a line codeg adds after it.
+    pub notes: Vec<String>,
 }
 
 /// One role assistant, as the tool notes list it.
@@ -713,11 +715,16 @@ pub fn owner_message(m: &OwnerLine) -> String {
         (None, _) => format!("[#{}]", m.id),
     };
     let text = m.text.trim();
-    if text.is_empty() {
+    let mut out = if text.is_empty() {
         head
     } else {
         format!("{head} {text}")
+    };
+    for note in &m.notes {
+        out.push('\n');
+        out.push_str(note);
     }
+    out
 }
 
 /// The text of one delivery: the cards first (context before the request),
@@ -1008,6 +1015,7 @@ mod tests {
             quote: None,
             clicked: None,
             text: text.into(),
+            notes: Vec::new(),
         }
     }
 
@@ -1057,10 +1065,24 @@ mod tests {
             quote: Some((55, "the build is red".into())),
             clicked: None,
             text: "why?".into(),
+            notes: Vec::new(),
         };
         assert_eq!(
             delivery_text(&[], None, &[line], false),
             "[#58, replying to #55 — \"the build is red\"] why?"
+        );
+    }
+
+    /// What a message brought up (6.8) follows it, line by line.
+    #[test]
+    fn a_reminder_it_brought_up_follows_the_message() {
+        let line = OwnerLine {
+            notes: vec!["<codeg-reminder matter=\"3\">…</codeg-reminder>".into()],
+            ..owner(9, "cut the release")
+        };
+        assert_eq!(
+            owner_message(&line),
+            "[#9] cut the release\n<codeg-reminder matter=\"3\">…</codeg-reminder>"
         );
     }
 

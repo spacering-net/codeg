@@ -48,6 +48,7 @@ import {
   Bell,
   ChevronDown,
   CircleGauge,
+  Ear,
   FileText,
   Forward,
   ListTodo,
@@ -213,6 +214,7 @@ const KIND_ICON: Record<Exclude<ItemKind, "dispatch">, LucideIcon> = {
   reminder: Bell,
   followup: Forward,
   question: MessageCircleQuestionMark,
+  when_mentioned: Ear,
 }
 
 /** The folding sections, by key, and whether each starts open. */
@@ -811,8 +813,24 @@ function useSettle(item: ItemInfo | null) {
  *  it comes back when it repeats. Nothing for one with no due time. */
 function useDueNotes(): (item: ItemInfo, now: number) => string[] {
   const tw = useActivityTranslate()
+  const t = useTranslations("PersonalAgent.items")
   const locale = useLocale()
   return (item, now) => {
+    // Brought up by a mention (6.8): its words, its times, its last day.
+    if (item.mention) {
+      const m = item.mention
+      return [
+        t("mention", {
+          words: m.keywords.map((k) => `“${k}”`).join(", "),
+          times: m.times,
+          max: m.max_times,
+          until: new Date(m.expires_at).toLocaleDateString(locale, {
+            month: "short",
+            day: "numeric",
+          }),
+        }),
+      ]
+    }
     if (!item.due_at) return []
     const due = Date.parse(item.due_at)
     const when = dueWhen(tw, item.due_at, now, locale)
@@ -909,7 +927,8 @@ function ItemCard({
         >
           {td("done")}
         </Button>
-        {item.waits_for !== "time" || item.due_at != null ? (
+        {item.kind !== "when_mentioned" &&
+        (item.waits_for !== "time" || item.due_at != null) ? (
           <LaterMenu
             disabled={acting}
             onSnooze={(until) => settle("snooze", until)}
