@@ -7794,5 +7794,35 @@
         "probeFailed": "内置浏览器无法确认它能通过隧道访问远端主机。请稍后重试。"
       }
     }
+  },
+  "Appshots": {
+    "title": "应用快照",
+    "description": "采集窗口截图和可用文本，预览后添加到会话。",
+    "capture": "3 秒后截取",
+    "switchApp": "请切换到目标应用，将在 3 秒后开始截取。",
+    "shortcut": "全局快捷键",
+    "recordShortcut": "按下快捷键组合",
+    "shortcutHint": "至少使用两个修饰键，包含 Control 或 Command。留空可关闭。",
+    "shortcutInvalid": "请使用字母、数字或功能键，并搭配至少两个修饰键，包含 Control 或 Command。",
+    "shortcutFailed": "快捷键注册失败，请更换组合或再次保存重试。",
+    "clear": "清除",
+    "save": "保存快捷键",
+    "previewHint": "查看截图并编辑文本。添加到会话只会放入输入框，不会发送消息。",
+    "failedHint": "请切换到目标应用后重试。macOS 请检查 helper 的屏幕录制和辅助功能权限。",
+    "imageAlt": "采集的应用窗口",
+    "textUnavailable": "未能完整读取可用文本，仍会附加窗口截图。",
+    "truncated": "应用文本超出快照长度限制，已截断。",
+    "text": "应用文本",
+    "conversation": "目标会话",
+    "chooseConversation": "选择已打开的会话",
+    "noConversation": "请先打开一个会话，再回到此快照。",
+    "conversationGone": "该会话已关闭或输入框尚未就绪，请选择其他会话或重试。",
+    "textOnly": "仅添加了应用文本：当前 Agent 不接受图片。",
+    "added": "快照已添加到会话输入框。",
+    "accessibility": "打开辅助功能设置",
+    "screenRecording": "打开屏幕录制设置",
+    "cancel": "取消",
+    "add": "添加到会话",
+    "newConversation": "新建会话"
   }
 }
