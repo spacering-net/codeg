@@ -772,6 +772,64 @@ pub async fn personal_agent_profile_core(
     crate::personal_agent::presence::profile(&db.conn).await
 }
 
+/// The page's search (8.2): what the time machine finds for `query`, as
+/// `history_search` finds it. Where this process keeps the index the
+/// sources are caught up first; elsewhere the index is read as it is.
+pub async fn personal_agent_history_search_core(
+    db: &AppDatabase,
+    query: String,
+    scope: Option<String>,
+    since: Option<String>,
+    project_id: Option<i32>,
+    limit: Option<u32>,
+) -> Result<crate::personal_agent::history::Results, AppCommandError> {
+    use crate::personal_agent::history as h;
+    let scope = match scope.as_deref() {
+        None => h::Scope::All,
+        Some(s) => h::Scope::parse(s).ok_or_else(|| {
+            AppCommandError::invalid_input("scope is all, timeline, sessions, tasks or messages")
+        })?,
+    };
+    let prefs = crate::personal_agent::history::prefs_of(db).await;
+    let tz = crate::personal_agent::clock::zone_of(&prefs.time_zone);
+    let since = h::since_of(
+        since.as_deref().unwrap_or(""),
+        tz,
+        crate::personal_agent::clock::now(),
+    )
+    .map_err(AppCommandError::invalid_input)?;
+    let q = h::Query {
+        text: query,
+        scope,
+        since,
+        project: project_id,
+        limit: limit.unwrap_or(30) as usize,
+        skip_rows: Vec::new(),
+    };
+    let host = crate::personal_agent::host::host();
+    h::search(db, host.as_ref().map(|h| &h.history), &q)
+        .await
+        .map_err(AppCommandError::invalid_input)
+}
+
+/// How far the time machine's index is (About you).
+pub async fn personal_agent_history_status_core(
+    db: &AppDatabase,
+) -> crate::personal_agent::history::HistoryStatus {
+    let host = crate::personal_agent::host::host();
+    crate::personal_agent::history::status(db, host.as_ref().map(|h| &h.history)).await
+}
+
+/// The owner's [Rebuild] (About you): the index from nothing, at once.
+pub async fn personal_agent_history_rebuild_core(
+    db: &AppDatabase,
+) -> Result<crate::personal_agent::history::HistoryStatus, AppCommandError> {
+    let host = crate::personal_agent::host::host()
+        .ok_or_else(|| AppCommandError::invalid_input("the assistants run in another process"))?;
+    host.history_rebuild();
+    Ok(personal_agent_history_status_core(db).await)
+}
+
 /// The owner's [Stop] on a task card (8.5, 4.10): this one piece of work,
 /// where it runs. False when it is past stopping (done, merging).
 pub async fn personal_agent_dispatch_stop_core(
@@ -1582,6 +1640,35 @@ pub async fn personal_agent_profile(
     db: State<'_, AppDatabase>,
 ) -> Result<crate::personal_agent::presence::ProfileView, AppCommandError> {
     Ok(personal_agent_profile_core(&db).await)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_history_search(
+    db: State<'_, AppDatabase>,
+    query: String,
+    scope: Option<String>,
+    since: Option<String>,
+    project_id: Option<i32>,
+    limit: Option<u32>,
+) -> Result<crate::personal_agent::history::Results, AppCommandError> {
+    personal_agent_history_search_core(&db, query, scope, since, project_id, limit).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_history_status(
+    db: State<'_, AppDatabase>,
+) -> Result<crate::personal_agent::history::HistoryStatus, AppCommandError> {
+    Ok(personal_agent_history_status_core(&db).await)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_history_rebuild(
+    db: State<'_, AppDatabase>,
+) -> Result<crate::personal_agent::history::HistoryStatus, AppCommandError> {
+    personal_agent_history_rebuild_core(&db).await
 }
 
 #[cfg(feature = "tauri-runtime")]

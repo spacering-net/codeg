@@ -8476,6 +8476,18 @@
           "on": "Assistenten mit Ungelesenem",
           "off": "Aus"
         },
+        "history_sessions": {
+          "title": "Alle Unterhaltungen durchsuchen",
+          "hint": "Auch jede Unterhaltung in codeg wird durchsucht: deine Eingaben und die letzte Antwort jeder Runde. Aus: Sie werden aus dem Index entfernt.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "history_tasks": {
+          "title": "Board-Aufgaben durchsuchen",
+          "hint": "Auch die Aufgaben des Boards werden durchsucht: Titel, Auftrag und Ergebnis. Aus: Sie werden aus dem Index entfernt.",
+          "on": "An",
+          "off": "Aus"
+        },
         "level_brief": {
           "title": "Morgen-Briefing und Tagesabschluss",
           "hint": "Dein Morgen-Briefing oder der Tagesabschluss ist fertig."
@@ -8591,7 +8603,16 @@
         "presentNow": "Du bist gerade in codeg.",
         "lastActive": "Zuletzt aktiv um {time}.",
         "notSeen": "Seit dem Start von codeg nicht aktiv gewesen.",
-        "note": "Ob du gerade da bist, wird weiterhin im Moment beurteilt – ein Fenster mit Fokus und Eingaben in den letzten zwei Minuten –, um zu entscheiden, wann du benachrichtigt wirst; es wird nie gespeichert. „Morgen früh“ bei einer Erinnerung ist, wann dein Tag meist beginnt."
+        "note": "Ob du gerade da bist, wird weiterhin im Moment beurteilt – ein Fenster mit Fokus und Eingaben in den letzten zwei Minuten –, um zu entscheiden, wann du benachrichtigt wirst; es wird nie gespeichert. „Morgen früh“ bei einer Erinnerung ist, wann dein Tag meist beginnt.",
+        "history": {
+          "title": "Zeitmaschine",
+          "hint": "Was früher gesagt und getan wurde, ist durchsuchbar: von dir (Suche neben dem Namen des Assistenten) und von den Assistenten selbst. Ihre Unterhaltungen und Nachrichten untereinander werden immer durchsucht.",
+          "rebuild": "Neu aufbauen",
+          "rebuilt": "Index wird neu aufgebaut …",
+          "reading": "Unterhaltungen werden gelesen: {done} von {total} bisher ({documents} Einträge).",
+          "ready": "Aktuell: {total} Unterhaltungen, {documents} Einträge.",
+          "readyNoSessions": "{documents} Einträge."
+        }
       },
       "notifyPage": {
         "notify": "Benachrichtigen",
@@ -10080,6 +10101,36 @@
       "diffCut": "Nur der Anfang der Änderungen wird gezeigt.",
       "undo": "Rückgängig",
       "used": "Genutztes Gedächtnis:"
+    },
+    "history": {
+      "open": "Verlauf durchsuchen",
+      "title": "Zeitmaschine",
+      "description": "Durchsuche, was gesagt und getan wurde: die Unterhaltungen der Assistenten, ihre Nachrichten, alle Unterhaltungen und die Board-Aufgaben.",
+      "placeholder": "Warum haben wir X zu Y geändert …",
+      "hint": "Jedes Wort muss vorkommen. Ein oder zwei Zeichen durchsuchen die letzten 90 Tage.",
+      "none": "Nichts gefunden.",
+      "short": "Ein oder zwei Zeichen: Nur die letzten 90 Tage wurden durchsucht.",
+      "sessionsOff": "Alle Unterhaltungen sind ausgenommen (Über dich).",
+      "tasksOff": "Board-Aufgaben sind ausgenommen (Über dich).",
+      "reading": "Unterhaltungen werden noch gelesen ({done} von {total}): ältere werden vielleicht noch nicht gefunden.",
+      "untitled": "Unterhaltung #{id}",
+      "task": "Aufgabe #{id}",
+      "message": "{from} → {to}",
+      "timeline": "Mit {name}",
+      "handedOut": "von {name} vergeben",
+      "matches": "{count} Treffer",
+      "role": {
+        "owner": "Du",
+        "assistant": "Assistent",
+        "agent": "Agent"
+      },
+      "scope": {
+        "all": "Alles",
+        "timeline": "Assistenten",
+        "sessions": "Unterhaltungen",
+        "tasks": "Aufgaben",
+        "messages": "Nachrichten"
+      }
     }
   }
 }

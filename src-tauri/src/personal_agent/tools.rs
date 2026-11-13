@@ -404,6 +404,10 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
         }
         "usage_summary" => engine.usage_summary_call(&args).await,
         "activity_summary" => engine.activity_summary_call(&args).await,
+        // The time machine (8.2).
+        // Boxed: the search is a deep future, and this match is every
+        // tool's.
+        "history_search" => Box::pin(engine.history_search_call(&args)).await,
         "bot_message" => {
             let call = MessageCall {
                 to: reference(&args, "to"),

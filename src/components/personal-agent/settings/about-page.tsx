@@ -10,7 +10,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { Activity, Globe, ShieldCheck } from "lucide-react"
+import {
+  Activity,
+  Globe,
+  History,
+  LayoutGrid,
+  MessagesSquare,
+  ShieldCheck,
+} from "lucide-react"
+import { toast } from "sonner"
 
 import {
   SettingCard,
@@ -25,11 +33,18 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox"
+import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { personalAgentProfile } from "@/lib/api"
+import {
+  personalAgentHistoryRebuild,
+  personalAgentHistoryStatus,
+  personalAgentProfile,
+} from "@/lib/api"
+import { toErrorMessage } from "@/lib/app-error"
 import type {
   PersonalAgentAccount,
   PersonalAgentDayHours,
+  PersonalAgentHistoryStatus,
   PersonalAgentProfile,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -133,13 +148,13 @@ export function AboutPage({
     load()
   }, [load, prefs.time_zone, prefs.presence])
 
-  const save = (key: "time_zone" | "presence", value: string) => {
+  const save = (key: AboutKey, value: string) => {
     void patch([{ key: `prefs.${key}`, value }]).then(() => load())
   }
 
-  const restore = (["time_zone", "presence"] as const)
-    .filter((k) => prefs[k] !== DEFAULT_PREFS[k])
-    .map((k) => ({ key: `prefs.${k}`, value: DEFAULT_PREFS[k] }))
+  const restore = ABOUT_KEYS.filter((k) => prefs[k] !== DEFAULT_PREFS[k]).map(
+    (k) => ({ key: `prefs.${k}`, value: DEFAULT_PREFS[k] })
+  )
 
   const systemZone = profile?.system_zone ?? ""
   const systemItem: ZoneItem = useMemo(
@@ -282,7 +297,149 @@ export function AboutPage({
           </div>
         </SettingRow>
       </SettingCard>
+      <TimeMachineCard
+        sessions={prefs.history_sessions === "on"}
+        tasks={prefs.history_tasks === "on"}
+        disabled={disabled}
+        onSave={save}
+      />
       <SettingNote icon={ShieldCheck}>{ta("note")}</SettingNote>
     </div>
+  )
+}
+
+/** The items of this page. */
+type AboutKey = "time_zone" | "presence" | "history_sessions" | "history_tasks"
+const ABOUT_KEYS: readonly AboutKey[] = [
+  "time_zone",
+  "presence",
+  "history_sessions",
+  "history_tasks",
+]
+
+/** While the index is being read, how often it is asked how far. */
+const STATUS_EVERY_MS = 2_000
+
+/** What the time machine searches (8.2): the assistants' timelines and
+ *  messages always; every conversation and the board's tasks as the owner
+ *  chooses — off, they leave the index. How far it is, and [Rebuild]. */
+function TimeMachineCard({
+  sessions,
+  tasks,
+  disabled,
+  onSave,
+}: {
+  sessions: boolean
+  tasks: boolean
+  disabled: boolean
+  onSave: (key: AboutKey, value: string) => void
+}) {
+  const t = useTranslations("PersonalAgent.settings.about.history")
+  const tp = useTranslations("PersonalAgent.settings.prefs")
+  const [status, setStatus] = useState<PersonalAgentHistoryStatus | null>(null)
+  const [rebuilding, setRebuilding] = useState(false)
+  const seq = useRef(0)
+  const read = useCallback(() => {
+    const id = ++seq.current
+    personalAgentHistoryStatus()
+      .then((s) => {
+        if (id === seq.current) setStatus(s)
+      })
+      .catch(() => {})
+  }, [])
+  useEffect(() => {
+    read()
+  }, [read, sessions, tasks])
+  // Still reading: asked again until it is through.
+  const going =
+    status != null &&
+    (status.reading ||
+      (status.sessions_on && status.sessions_done < status.sessions_total))
+  useEffect(() => {
+    if (!going) return
+    const timer = window.setInterval(read, STATUS_EVERY_MS)
+    return () => window.clearInterval(timer)
+  }, [going, read])
+
+  const rebuild = () => {
+    setRebuilding(true)
+    personalAgentHistoryRebuild()
+      .then((s) => {
+        setStatus(s)
+        toast.message(t("rebuilt"))
+      })
+      .catch((e) => toast.error(toErrorMessage(e)))
+      .finally(() => {
+        setRebuilding(false)
+        read()
+      })
+  }
+
+  return (
+    <SettingCard>
+      <SettingRow
+        icon={History}
+        title={t("title")}
+        description={t("hint")}
+        control={
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={disabled || rebuilding}
+            onClick={rebuild}
+            data-pa-history-rebuild
+          >
+            {t("rebuild")}
+          </Button>
+        }
+      >
+        {status ? (
+          <p
+            className="text-xs text-muted-foreground"
+            data-pa-history-status={going ? "reading" : "ready"}
+          >
+            {status.sessions_on
+              ? t(going ? "reading" : "ready", {
+                  done: status.sessions_done,
+                  total: status.sessions_total,
+                  documents: status.documents,
+                })
+              : t("readyNoSessions", { documents: status.documents })}
+          </p>
+        ) : null}
+      </SettingRow>
+      <SettingRow
+        icon={MessagesSquare}
+        title={tp("history_sessions.title")}
+        description={tp("history_sessions.hint")}
+        htmlFor="pa-pref-history-sessions"
+        control={
+          <Switch
+            id="pa-pref-history-sessions"
+            data-pa-pref="history_sessions"
+            checked={sessions}
+            disabled={disabled}
+            onCheckedChange={(on) =>
+              onSave("history_sessions", on ? "on" : "off")
+            }
+          />
+        }
+      />
+      <SettingRow
+        icon={LayoutGrid}
+        title={tp("history_tasks.title")}
+        description={tp("history_tasks.hint")}
+        htmlFor="pa-pref-history-tasks"
+        control={
+          <Switch
+            id="pa-pref-history-tasks"
+            data-pa-pref="history_tasks"
+            checked={tasks}
+            disabled={disabled}
+            onCheckedChange={(on) => onSave("history_tasks", on ? "on" : "off")}
+          />
+        }
+      />
+    </SettingCard>
   )
 }

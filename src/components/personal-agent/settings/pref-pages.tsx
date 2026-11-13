@@ -201,6 +201,8 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   keep_awake: "on",
   menubar: "on",
   dock_badge: "on",
+  history_sessions: "on",
+  history_tasks: "on",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -397,6 +399,8 @@ const CHOICES: Partial<Record<PersonalAgentPrefKey, readonly string[]>> = {
   keep_awake: ["on", "off"],
   menubar: ["on", "off"],
   dock_badge: ["on", "off"],
+  history_sessions: ["on", "off"],
+  history_tasks: ["on", "off"],
   ...Object.fromEntries(LEVEL_ITEMS.map((k) => [k, NEWS_LEVELS])),
 }
 
@@ -506,6 +510,8 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   keep_awake: Coffee,
   menubar: PanelTop,
   dock_badge: Dock,
+  history_sessions: MessagesSquare,
+  history_tasks: LayoutGrid,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
@@ -536,7 +542,12 @@ export const AUTOMATION_ITEMS: PersonalAgentPrefKey[] = [
 ]
 
 /** The items of the "About you" page (`about-page.tsx`). */
-export const ABOUT_ITEMS: PersonalAgentPrefKey[] = ["time_zone", "presence"]
+export const ABOUT_ITEMS: PersonalAgentPrefKey[] = [
+  "time_zone",
+  "presence",
+  "history_sessions",
+  "history_tasks",
+]
 
 /** The proposal rules' items (6.7): each rule's switch and threshold. */
 export const RULE_ITEMS: PersonalAgentPrefKey[] = [

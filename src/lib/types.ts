@@ -2930,6 +2930,10 @@ export interface PersonalAgentPrefs {
   menubar: "on" | "off"
   /** The dock badge counts the assistants with unread (10.10; desktop). */
   dock_badge: "on" | "off"
+  /** The time machine searches every conversation in codeg (8.2). */
+  history_sessions: "on" | "off"
+  /** The time machine searches the board's tasks (8.2). */
+  history_tasks: "on" | "off"
 }
 
 /** codeg's proposal rules (6.7). */
@@ -3189,6 +3193,59 @@ export interface PersonalAgentDayHours {
 }
 
 /** The "about you" page (13.5, 1.12). */
+/** Where a time machine search looks (8.2). */
+export type PersonalAgentHistoryScope =
+  | "all"
+  | "timeline"
+  | "sessions"
+  | "tasks"
+  | "messages"
+
+/** One thing the time machine found: a timeline row, a message between
+ *  assistants, a conversation (its best matching part), a board task. */
+export interface PersonalAgentHistoryHit {
+  source: "timeline" | "message" | "session" | "task"
+  ref_id: number
+  /** Who said it: owner, assistant, agent, codeg, message, task, title,
+   *  prompt. */
+  role: string
+  title: string | null
+  /** The words around the match, each match between U+0002 and U+0003. */
+  excerpt: string
+  at: string
+  project_id: number | null
+  project: string | null
+  agent_type: string | null
+  bot_id: number | null
+  bot_name: string | null
+  peer_bot_id: number | null
+  peer_name: string | null
+  /** The timeline row it opens at. */
+  row_id: number | null
+  /** The conversation it opens. */
+  conversation_id: number | null
+  /** How many of its parts matched (a conversation's turns). */
+  matches: number
+}
+
+/** How far the time machine's index is (About you). */
+export interface PersonalAgentHistoryStatus {
+  documents: number
+  sessions_done: number
+  sessions_total: number
+  sessions_on: boolean
+  tasks_on: boolean
+  /** A pass over the conversations is going. */
+  reading: boolean
+}
+
+export interface PersonalAgentHistoryResults {
+  hits: PersonalAgentHistoryHit[]
+  /** One or two characters: only the last 90 days were looked through. */
+  short: boolean
+  status: PersonalAgentHistoryStatus
+}
+
 export interface PersonalAgentProfile {
   /** As set: `system` or a zone's name. */
   time_zone: string

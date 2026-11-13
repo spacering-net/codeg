@@ -73,6 +73,8 @@ pub struct EngineHost {
     pub(super) briefs: super::brief::BriefClock,
     /// The menu bar and the dock (`menubar`, 10.10).
     pub(super) menubar: super::menubar::MenuBar,
+    /// The time machine's readers (`history`, 8.2).
+    pub(crate) history: super::history::HistoryIndex,
 }
 
 /// Build the host and publish it. Call ONLY where the work-task engine was
@@ -127,6 +129,8 @@ pub async fn run(host: Arc<EngineHost>) {
     });
     // The usage figures are caught up while nothing runs (8.1).
     tokio::spawn(host.clone().usage_sync_loop());
+    // What the time machine searches is read as it changes (8.2).
+    tokio::spawn(host.clone().history_loop());
 
     loop {
         match rx.recv().await {
@@ -178,6 +182,7 @@ impl EngineHost {
                 rules: super::rules::RuleClock::default(),
                 briefs: super::brief::BriefClock::default(),
                 menubar: super::menubar::MenuBar::default(),
+                history: super::history::HistoryIndex::default(),
             }
         })
     }

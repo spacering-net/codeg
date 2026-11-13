@@ -170,6 +170,9 @@ interface PersonalAgentUiState {
    *  panel opens on its details, scrolled to it. */
   todayAsked: number
   showToday: () => void
+  /** The time machine's search is open (8.2). */
+  searchOpen: boolean
+  setSearchOpen: (open: boolean) => void
 }
 
 export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
@@ -235,4 +238,6 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
       auxTab: "details",
       todayAsked: s.todayAsked + 1,
     })),
+  searchOpen: false,
+  setSearchOpen: (searchOpen) => set({ searchOpen }),
 }))

@@ -41,6 +41,7 @@ pub mod dispatch;
 pub mod due;
 pub mod engine;
 pub mod forge_acts;
+pub mod history;
 pub mod host;
 pub mod ledger;
 pub mod live;

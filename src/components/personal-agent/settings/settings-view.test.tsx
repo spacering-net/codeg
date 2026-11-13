@@ -33,6 +33,15 @@ const PROFILE = vi.hoisted(() => ({
   learn_days: 28,
 }))
 
+const HISTORY = vi.hoisted(() => ({
+  documents: 120,
+  sessions_done: 3,
+  sessions_total: 8,
+  sessions_on: true,
+  tasks_on: true,
+  reading: true,
+}))
+
 const api = vi.hoisted(() => ({
   personalAgentSettingsPatch: vi.fn(async () => []),
   personalAgentBots: vi.fn(async () => []),
@@ -46,6 +55,13 @@ const api = vi.hoisted(() => ({
   personalAgentBotImpact: vi.fn(),
   personalAgentBotDelete: vi.fn(),
   personalAgentProfile: vi.fn(async () => PROFILE),
+  personalAgentHistoryStatus: vi.fn(async () => HISTORY),
+  personalAgentHistoryRebuild: vi.fn(async () => ({
+    ...HISTORY,
+    documents: 0,
+    sessions_done: 0,
+    reading: true,
+  })),
   personalAgentRosterAct: vi.fn(async () => {}),
   personalAgentRules: vi.fn(async () => []),
   personalAgentRuleReset: vi.fn(async () => []),
@@ -358,6 +374,41 @@ describe("the settings view", () => {
         [{ key: "prefs.presence", value: "off" }],
         null
       )
+    )
+  })
+
+  it("says how far the time machine is, switches what it searches and rebuilds it", async () => {
+    usePersonalAgentUi.getState().openSettings("about")
+    draw()
+    const status = await waitFor(() => {
+      const el = document.querySelector("[data-pa-history-status]")
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(status.getAttribute("data-pa-history-status")).toBe("reading")
+    expect(status.textContent).toBe(
+      "Reading conversations: 3 of 8 so far (120 entries)."
+    )
+    // Leaving the conversations out saves at once.
+    fireEvent.click(
+      document.querySelector('[data-pa-pref="history_sessions"]')!
+    )
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.history_sessions", value: "off" }],
+        null
+      )
+    )
+    fireEvent.click(document.querySelector('[data-pa-pref="history_tasks"]')!)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.history_tasks", value: "off" }],
+        null
+      )
+    )
+    fireEvent.click(document.querySelector("[data-pa-history-rebuild]")!)
+    await waitFor(() =>
+      expect(api.personalAgentHistoryRebuild).toHaveBeenCalledTimes(1)
     )
   })
 

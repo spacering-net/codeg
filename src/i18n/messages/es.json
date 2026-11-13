@@ -8476,6 +8476,18 @@
           "on": "Asistentes con mensajes sin leer",
           "off": "Desactivado"
         },
+        "history_sessions": {
+          "title": "Buscar en todas las conversaciones",
+          "hint": "También se busca en cada conversación de codeg: lo que pediste y la última respuesta de cada turno. Desactivado, salen del índice.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "history_tasks": {
+          "title": "Buscar en las tareas del tablero",
+          "hint": "También se busca en las tareas del tablero: su título, lo que se pidió y lo que resultó. Desactivado, salen del índice.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
         "level_brief": {
           "title": "Resumen de la mañana y cierre",
           "hint": "Tu resumen de la mañana o el cierre está listo."
@@ -8591,7 +8603,16 @@
         "presentNow": "Estás en codeg ahora.",
         "lastActive": "Última actividad: {time}.",
         "notSeen": "Sin actividad en codeg desde que se inició.",
-        "note": "Si estás aquí ahora se sigue viendo en el momento —una ventana con el foco y actividad en los últimos dos minutos— para decidir cuándo avisarte; nunca se guarda. «Mañana por la mañana» en un recordatorio es cuando suele empezar tu día."
+        "note": "Si estás aquí ahora se sigue viendo en el momento —una ventana con el foco y actividad en los últimos dos minutos— para decidir cuándo avisarte; nunca se guarda. «Mañana por la mañana» en un recordatorio es cuando suele empezar tu día.",
+        "history": {
+          "title": "Máquina del tiempo",
+          "hint": "Lo dicho y hecho antes se puede buscar: tú, desde la búsqueda junto al nombre del asistente, y los asistentes por su cuenta. Sus conversaciones y mensajes entre ellos siempre se buscan.",
+          "rebuild": "Reconstruir",
+          "rebuilt": "Reconstruyendo el índice…",
+          "reading": "Leyendo conversaciones: {done} de {total} por ahora ({documents} entradas).",
+          "ready": "Al día: {total} conversaciones, {documents} entradas.",
+          "readyNoSessions": "{documents} entradas."
+        }
       },
       "notifyPage": {
         "notify": "Avisarme",
@@ -10080,6 +10101,36 @@
       "diffCut": "Solo se muestra el principio de los cambios.",
       "undo": "Deshacer",
       "used": "Memoria usada:"
+    },
+    "history": {
+      "open": "Buscar en el historial",
+      "title": "Máquina del tiempo",
+      "description": "Busca lo dicho y hecho: las conversaciones de los asistentes, sus mensajes, todas las conversaciones y las tareas del tablero.",
+      "placeholder": "Por qué cambiamos X por Y…",
+      "hint": "Deben aparecer todas las palabras. Con uno o dos caracteres se buscan los últimos 90 días.",
+      "none": "No se encontró nada.",
+      "short": "Uno o dos caracteres: solo se buscó en los últimos 90 días.",
+      "sessionsOff": "Se dejan fuera todas las conversaciones (Sobre ti).",
+      "tasksOff": "Se dejan fuera las tareas del tablero (Sobre ti).",
+      "reading": "Aún leyendo conversaciones ({done} de {total}): puede que las más antiguas no aparezcan todavía.",
+      "untitled": "Conversación n.º {id}",
+      "task": "Tarea n.º {id}",
+      "message": "{from} → {to}",
+      "timeline": "Con {name}",
+      "handedOut": "encargada por {name}",
+      "matches": "{count} coincidencias",
+      "role": {
+        "owner": "Tú",
+        "assistant": "Asistente",
+        "agent": "Agente"
+      },
+      "scope": {
+        "all": "Todo",
+        "timeline": "Asistentes",
+        "sessions": "Conversaciones",
+        "tasks": "Tareas",
+        "messages": "Mensajes"
+      }
     }
   }
 }

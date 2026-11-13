@@ -594,6 +594,17 @@ impl PersonalAgentEngine {
         } else {
             self.emit(PersonalAgentChange::Agent);
         }
+        // What the time machine no longer searches leaves it now (8.2).
+        if applied.iter().any(|a| {
+            matches!(
+                a.key.as_str(),
+                "prefs.history_sessions" | "prefs.history_tasks"
+            )
+        }) {
+            if let Some(host) = self.host_ref() {
+                host.history_poke();
+            }
+        }
         Ok(())
     }
 

@@ -57,6 +57,9 @@ import type {
   PersonalAgentPresence,
   ProposalRule,
   ProposalRuleView,
+  PersonalAgentHistoryResults,
+  PersonalAgentHistoryScope,
+  PersonalAgentHistoryStatus,
   PersonalAgentProfile,
   PersonalAgentToday,
   Routine,
@@ -2817,6 +2820,34 @@ export async function personalAgentRoutineAct(
 
 export async function personalAgentProfile(): Promise<PersonalAgentProfile> {
   return getTransport().call("personal_agent_profile", {})
+}
+
+/** The time machine (8.2): what was said and done before, as the
+ *  assistants' `history_search` finds it. `since` is `YYYY-MM-DD` or `7d`. */
+export async function personalAgentHistorySearch(params: {
+  query: string
+  scope?: PersonalAgentHistoryScope
+  since?: string
+  projectId?: number
+  limit?: number
+}): Promise<PersonalAgentHistoryResults> {
+  return getTransport().call("personal_agent_history_search", {
+    query: params.query,
+    scope: params.scope ?? null,
+    since: params.since ?? null,
+    projectId: params.projectId ?? null,
+    limit: params.limit ?? null,
+  })
+}
+
+/** How far the time machine's index is. */
+export async function personalAgentHistoryStatus(): Promise<PersonalAgentHistoryStatus> {
+  return getTransport().call("personal_agent_history_status", {})
+}
+
+/** Build the time machine's index again, from nothing, at once. */
+export async function personalAgentHistoryRebuild(): Promise<PersonalAgentHistoryStatus> {
+  return getTransport().call("personal_agent_history_rebuild", {})
 }
 
 /** Stop one piece of handed-out work from its card (8.5). False when it

@@ -26,6 +26,8 @@ pub mod personal_agent_batch;
 pub mod personal_agent_brief;
 pub mod personal_agent_dispatch;
 pub mod personal_agent_event;
+pub mod personal_agent_history_cursor;
+pub mod personal_agent_history_doc;
 pub mod personal_agent_item;
 pub mod personal_agent_message;
 pub mod personal_agent_notice;

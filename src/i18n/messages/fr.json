@@ -8476,6 +8476,18 @@
           "on": "Assistants avec du non-lu",
           "off": "Désactivé"
         },
+        "history_sessions": {
+          "title": "Rechercher dans toutes les conversations",
+          "hint": "Chaque conversation de codeg est aussi recherchée : vos demandes et la dernière réponse de chaque tour. Désactivé, elles quittent l'index.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "history_tasks": {
+          "title": "Rechercher dans les tâches du tableau",
+          "hint": "Les tâches du tableau sont aussi recherchées : titre, demande et résultat. Désactivé, elles quittent l'index.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
         "level_brief": {
           "title": "Point du matin et bilan",
           "hint": "Votre point du matin ou le bilan est prêt."
@@ -8591,7 +8603,16 @@
         "presentNow": "Vous êtes dans codeg en ce moment.",
         "lastActive": "Dernière activité à {time}.",
         "notSeen": "Aucune activité dans codeg depuis son démarrage.",
-        "note": "Votre présence en ce moment reste jugée sur le vif — une fenêtre au premier plan et une saisie dans les deux dernières minutes — pour décider quand vous notifier ; elle n’est jamais conservée. « Demain matin » sur un rappel, c’est l’heure où votre journée commence d’habitude."
+        "note": "Votre présence en ce moment reste jugée sur le vif — une fenêtre au premier plan et une saisie dans les deux dernières minutes — pour décider quand vous notifier ; elle n’est jamais conservée. « Demain matin » sur un rappel, c’est l’heure où votre journée commence d’habitude.",
+        "history": {
+          "title": "Machine à remonter le temps",
+          "hint": "Ce qui a été dit et fait avant est consultable : par vous (la recherche à côté du nom de l'assistant) et par les assistants. Leurs conversations et messages entre eux sont toujours recherchés.",
+          "rebuild": "Reconstruire",
+          "rebuilt": "Reconstruction de l'index…",
+          "reading": "Lecture des conversations : {done} sur {total} pour l'instant ({documents} entrées).",
+          "ready": "À jour : {total} conversations, {documents} entrées.",
+          "readyNoSessions": "{documents} entrées."
+        }
       },
       "notifyPage": {
         "notify": "Me prévenir",
@@ -10080,6 +10101,36 @@
       "diffCut": "Seul le début des changements est affiché.",
       "undo": "Annuler",
       "used": "Mémoire utilisée :"
+    },
+    "history": {
+      "open": "Rechercher dans l'historique",
+      "title": "Machine à remonter le temps",
+      "description": "Recherchez ce qui a été dit et fait : les conversations des assistants, leurs messages, toutes les conversations et les tâches du tableau.",
+      "placeholder": "Pourquoi avons-nous changé X en Y…",
+      "hint": "Chaque mot doit y figurer. Un ou deux caractères ne cherchent que dans les 90 derniers jours.",
+      "none": "Rien trouvé.",
+      "short": "Un ou deux caractères : seuls les 90 derniers jours ont été parcourus.",
+      "sessionsOff": "Toutes les conversations sont exclues (À propos de vous).",
+      "tasksOff": "Les tâches du tableau sont exclues (À propos de vous).",
+      "reading": "Lecture des conversations en cours ({done} sur {total}) : les plus anciennes peuvent ne pas encore apparaître.",
+      "untitled": "Conversation n° {id}",
+      "task": "Tâche n° {id}",
+      "message": "{from} → {to}",
+      "timeline": "Avec {name}",
+      "handedOut": "confiée par {name}",
+      "matches": "{count} correspondances",
+      "role": {
+        "owner": "Vous",
+        "assistant": "Assistant",
+        "agent": "Agent"
+      },
+      "scope": {
+        "all": "Tout",
+        "timeline": "Assistants",
+        "sessions": "Conversations",
+        "tasks": "Tâches",
+        "messages": "Messages"
+      }
     }
   }
 }

@@ -342,6 +342,53 @@ pub async fn personal_agent_profile(
     Ok(Json(pa::personal_agent_profile_core(&state.db).await))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistorySearchParams {
+    pub query: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<i32>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+pub async fn personal_agent_history_search(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(p): Json<HistorySearchParams>,
+) -> Result<Json<crate::personal_agent::history::Results>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_history_search_core(
+            &state.db,
+            p.query,
+            p.scope,
+            p.since,
+            p.project_id,
+            p.limit,
+        )
+        .await?,
+    ))
+}
+
+pub async fn personal_agent_history_status(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<crate::personal_agent::history::HistoryStatus>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_history_status_core(&state.db).await,
+    ))
+}
+
+pub async fn personal_agent_history_rebuild(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<crate::personal_agent::history::HistoryStatus>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_history_rebuild_core(&state.db).await?,
+    ))
+}
+
 pub async fn personal_agent_today(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<crate::personal_agent::today::TodayView>, AppCommandError> {

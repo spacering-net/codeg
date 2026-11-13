@@ -76,6 +76,10 @@ import {
 } from "@/stores/personal-agent-ui-store"
 
 import { BotAvatar } from "./bot-avatar"
+import {
+  HistorySearchButton,
+  PersonalAgentHistorySearch,
+} from "./history-search"
 import { PersonalAgentAuxPanel } from "./aux-panel"
 import { PersonalAgentRoster } from "./roster"
 import { PersonalAgentComposer } from "./composer"
@@ -141,17 +145,21 @@ export function PersonalAgentPageTitle() {
         )
       }
       trail={
-        word ? (
-          <button
-            type="button"
-            className="ms-1 shrink-0 rounded-md px-1.5 py-0.5 text-xs leading-none text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-            onClick={() => showAux("details")}
-            title={t("statusWord.open")}
-            aria-live="polite"
-          >
-            {word}
-          </button>
-        ) : null
+        <>
+          {word ? (
+            <button
+              type="button"
+              className="ms-1 shrink-0 rounded-md px-1.5 py-0.5 text-xs leading-none text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+              onClick={() => showAux("details")}
+              title={t("statusWord.open")}
+              aria-live="polite"
+            >
+              {word}
+            </button>
+          ) : null}
+          {/* The time machine (8.2). */}
+          {agent ? <HistorySearchButton /> : null}
+        </>
       }
     />
   )
@@ -513,6 +521,7 @@ export function PersonalAgentPage() {
         ) : null}
         <PersonalAgentWorkDrawer />
         <RoutineEditor />
+        <PersonalAgentHistorySearch />
         <AlertDialog open={confirmNew} onOpenChange={setConfirmNew}>
           <AlertDialogContent>
             <AlertDialogHeader>

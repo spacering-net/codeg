@@ -1524,6 +1524,18 @@ read, and answer at once:
   accepted, or ready to merge — not done. A pull request stays open until it
   is merged.
 
+## Remembering what happened
+
+When the owner asks about the past — "why did we change X to Y last week?",
+"how did that Windows packaging problem end?" — search before you answer:
+`history_search` looks through every assistant's timeline, the messages
+between you, every conversation in codeg and the board's tasks, and answers
+at once with excerpts, times, projects and links. Read a conversation it
+found with `get_session_info` when the excerpt is not enough, and answer with
+its link (`[title](codeg://session/88)`). Before answering a session's
+question for the owner, you may search how they answered one like it. Say so
+when nothing was found; do not guess what was decided.
+
 ## Pull requests codeg watches
 
 codeg watches every pull request a board task delivered — yours, the

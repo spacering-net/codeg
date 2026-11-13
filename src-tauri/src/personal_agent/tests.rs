@@ -14381,3 +14381,458 @@ async fn the_menu_bar_shows_who_works_and_who_has_unread_and_its_switches_put_it
     host.menubar_pictures();
     rec.once("pictures", |v| v.pictures > before).await;
 }
+
+// ── 2.10: the time machine ──────────────────────────────────────────────────
+
+/// A conversation in `folder` as parsed: the owner asks, the agent answers.
+async fn parsed_session(
+    engine: &PersonalAgentEngine,
+    folder: i32,
+    title: &str,
+    asked: &str,
+    answered: &str,
+) -> (i32, crate::models::DbConversationDetail) {
+    let conn = &engine.db.conn;
+    let c = crate::db::service::conversation_service::create(
+        conn,
+        folder,
+        AgentType::ClaudeCode,
+        Some(title.into()),
+        None,
+    )
+    .await
+    .unwrap();
+    let summary = crate::db::service::conversation_service::get_by_id(conn, c.id)
+        .await
+        .unwrap();
+    let turn =
+        |id: &str, role: &str, blocks: serde_json::Value| -> crate::models::message::MessageTurn {
+            serde_json::from_value(
+            json!({ "id": id, "role": role, "blocks": blocks, "timestamp": chrono::Utc::now() }),
+        )
+        .unwrap()
+        };
+    let detail = crate::models::DbConversationDetail {
+        summary,
+        turns: vec![
+            turn("turn-0", "user", json!([{ "type": "text", "text": asked }])),
+            turn(
+                "turn-1",
+                "assistant",
+                json!([
+                    { "type": "text", "text": "Let me look." },
+                    { "type": "tool_use", "tool_name": "Bash", "tool_use_id": null, "input_preview": null },
+                    { "type": "text", "text": answered }
+                ]),
+            ),
+        ],
+        session_stats: None,
+        transcript_watermark: None,
+        in_flight_user_turn_id: None,
+        turns_offset: None,
+        turns_total: None,
+        assistant_turns_before_offset: None,
+        user_turns_before_offset: None,
+        prefix_hash: None,
+        uncovered_prefix_max_ts: None,
+    };
+    (c.id, detail)
+}
+
+#[test]
+fn the_time_machine_finds_what_was_said_and_done_and_leaves_out_what_the_owner_turned_off() {
+    // A thread of its own with room: in a debug build the steps' poll keeps a
+    // slot for every future it starts, more than a test thread's stack.
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(time_machine_steps())
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn time_machine_steps() {
+    use super::history::{self, Makers};
+    use crate::db::service::personal_agent_history_service as store;
+    let (host, w, _tmp) = hosted().await;
+    let engine = host.primary();
+    let p = engine.bot().await;
+    let conn = &host.db.conn;
+    let folder = crate::db::test_helpers::seed_folder(&host.db, "/tmp/pa-history").await;
+
+    // The owner asked on the timeline; the primary answered with a card.
+    let asked = svc::insert_row(
+        conn,
+        p,
+        NewRow::new(TimelineKind::Owner, "为什么把打包脚本改成 PowerShell 了？"),
+    )
+    .await
+    .unwrap();
+    let mut reply = NewRow::new(
+        TimelineKind::Reply,
+        "因为 bash 在 Windows 上要装 Git Bash。",
+    );
+    reply.data = Some(json!({ "state": "done" }));
+    svc::insert_row(conn, p, reply).await.unwrap();
+    // A reply still being written is not searched yet.
+    let mut writing = NewRow::new(TimelineKind::Reply, "半句话 PowerShell");
+    writing.data = Some(json!({ "state": "running" }));
+    let writing = svc::insert_row(conn, p, writing).await.unwrap();
+    // A message to the worker, a task on the board.
+    sent_id(
+        &say(
+            &engine,
+            json!({ "to": w.to_string(), "text": "Check the PowerShell installer on ARM." }),
+        )
+        .await,
+    );
+    board_task(
+        &engine,
+        folder,
+        "Sign the PowerShell installer",
+        WorkTaskStatus::Done,
+        |_| {},
+    )
+    .await;
+    // Two conversations: the owner's own, and one a dispatch made.
+    let (own, own_detail) = parsed_session(
+        &engine,
+        folder,
+        "Windows packaging",
+        "the PowerShell build fails",
+        "Fixed: quote the path.",
+    )
+    .await;
+    let (made, made_detail) = parsed_session(
+        &engine,
+        folder,
+        "Dispatched packaging",
+        "build with PowerShell",
+        "PowerShell build is green.",
+    )
+    .await;
+    {
+        use sea_orm::{ActiveModelTrait, Set};
+        let d = svc::create_dispatch(
+            conn,
+            NewDispatch {
+                bot_id: p,
+                mode: DispatchMode::Chat,
+                executor_assistant_id: 1,
+                executor_snapshot_json: "{}".into(),
+                folder_id: Some(folder),
+                deliverable: None,
+                title: "packaging".into(),
+                prompt: "packaging".into(),
+                origin_batch_id: None,
+                on_done: None,
+                lineage: Default::default(),
+                done_when: None,
+            },
+        )
+        .await
+        .unwrap();
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = d.into();
+        am.conversation_id = Set(Some(made));
+        am.update(conn).await.unwrap();
+    }
+    let makers = Makers::load(&host.db).await;
+    for (id, detail) in [(own, &own_detail), (made, &made_detail)] {
+        history::index_session(
+            &host.db,
+            &host.history,
+            &makers,
+            id,
+            detail.summary.updated_at,
+            detail,
+        )
+        .await;
+    }
+
+    // Found everywhere, the owner's own conversation once, above the
+    // dispatched one, with its link and its last answer.
+    let out = call_tool(&engine, "history_search", json!({ "query": "PowerShell" })).await;
+    assert!(out.ok, "{}", out.text);
+    let hits = out.data["hits"].as_array().unwrap().clone();
+    let sources: Vec<&str> = hits.iter().map(|h| h["source"].as_str().unwrap()).collect();
+    for s in ["timeline", "message", "task", "session"] {
+        assert!(sources.contains(&s), "{s} in {sources:?}");
+    }
+    assert!(
+        !hits
+            .iter()
+            .any(|h| h["ref_id"] == writing.id && h["source"] == "timeline"),
+        "not while written"
+    );
+    let at = |id: i32| {
+        hits.iter()
+            .position(|h| h["source"] == "session" && h["ref_id"] == id)
+            .unwrap()
+    };
+    assert!(at(own) < at(made), "the owner's own first: {}", out.text);
+    assert_eq!(
+        hits.iter()
+            .filter(|h| h["source"] == "session" && h["ref_id"] == own)
+            .count(),
+        1
+    );
+    assert!(
+        out.text
+            .contains(&format!("[Windows packaging](codeg://session/{own})")),
+        "{}",
+        out.text
+    );
+    assert!(out.text.contains("handed out by"), "{}", out.text);
+    assert!(out.text.contains("«PowerShell»"), "{}", out.text);
+    assert!(out.text.contains("project pa-history"), "{}", out.text);
+
+    // Chinese by any three characters; two are looked for in the last 90
+    // days.
+    let out = call_tool(&engine, "history_search", json!({ "query": "打包脚本" })).await;
+    let hits = out.data["hits"].as_array().unwrap();
+    assert_eq!(hits[0]["row_id"], asked.id);
+    assert_eq!(hits[0]["bot_id"], p);
+    // The owner's message the turn answers is not found for it.
+    let q = history::Query {
+        text: "打包脚本".into(),
+        skip_rows: vec![asked.id],
+        ..Default::default()
+    };
+    let found = history::search(&host.db, Some(&host.history), &q)
+        .await
+        .unwrap();
+    assert!(found.hits.iter().all(|h| h.row_id != Some(asked.id)));
+    let out = call_tool(&engine, "history_search", json!({ "query": "打包" })).await;
+    assert_eq!(out.data["short"], true);
+    assert!(out.text.contains("last 90 days"), "{}", out.text);
+    assert_eq!(out.data["hits"][0]["row_id"], asked.id);
+    // Scope and project.
+    let out = call_tool(
+        &engine,
+        "history_search",
+        json!({ "query": "PowerShell", "scope": "tasks" }),
+    )
+    .await;
+    assert!(out.data["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|h| h["source"] == "task"));
+    let out = call_tool(
+        &engine,
+        "history_search",
+        json!({ "query": "PowerShell", "project_id": folder + 1000 }),
+    )
+    .await;
+    assert!(out.text.starts_with("Nothing found"), "{}", out.text);
+    assert!(
+        !call_tool(
+            &engine,
+            "history_search",
+            json!({ "query": "x", "scope": "web" })
+        )
+        .await
+        .ok
+    );
+    assert!(
+        !call_tool(
+            &engine,
+            "history_search",
+            json!({ "query": "x", "since": "last week" })
+        )
+        .await
+        .ok
+    );
+
+    // Settled, the reply is found.
+    svc::update_row_data(
+        conn,
+        writing.id,
+        Some("写完了 PowerShell 的说明".into()),
+        Some(json!({ "state": "done" })),
+    )
+    .await
+    .unwrap();
+    let out = call_tool(&engine, "history_search", json!({ "query": "写完了" })).await;
+    assert_eq!(out.data["hits"][0]["row_id"], writing.id, "{}", out.text);
+
+    // The owner turns the conversations and the tasks off: they leave.
+    engine
+        .apply_settings(&[
+            change("prefs.history_sessions", json!("off")),
+            change("prefs.history_tasks", json!("off")),
+        ])
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if !store::has_source(conn, "session").await.unwrap()
+            && !store::has_source(conn, "task").await.unwrap()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(!store::has_source(conn, "session").await.unwrap());
+    assert!(!store::has_source(conn, "task").await.unwrap());
+    let out = call_tool(&engine, "history_search", json!({ "query": "PowerShell" })).await;
+    let sources: Vec<&str> = out.data["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["source"].as_str().unwrap())
+        .collect();
+    assert!(
+        sources.iter().all(|s| *s == "timeline" || *s == "message"),
+        "{sources:?}"
+    );
+    assert!(
+        out.text.contains("all conversations left out"),
+        "{}",
+        out.text
+    );
+    // A conversation parsed meanwhile — before the switch, written after
+    // the clearing — is not taken in, nor its stamp.
+    history::index_session(
+        &host.db,
+        &host.history,
+        &makers,
+        own,
+        own_detail.summary.updated_at,
+        &own_detail,
+    )
+    .await;
+    assert!(!store::has_source(conn, "session").await.unwrap());
+    assert!(!history::read_sessions(&host.db, &host.history, None).await);
+    assert!(!store::has_source(conn, "session").await.unwrap());
+    let st = history::status(&host.db, Some(&host.history)).await;
+    assert!(!st.sessions_on && !st.tasks_on);
+
+    // On again: read anew.
+    engine
+        .apply_settings(&[
+            change("prefs.history_sessions", json!("on")),
+            change("prefs.history_tasks", json!("on")),
+        ])
+        .await
+        .unwrap();
+    super::history::read_rows(&host.db, &host.history).await;
+    let out = call_tool(
+        &engine,
+        "history_search",
+        json!({ "query": "Sign the PowerShell", "scope": "tasks" }),
+    )
+    .await;
+    assert_eq!(
+        out.data["hits"].as_array().unwrap().len(),
+        1,
+        "{}",
+        out.text
+    );
+    let st = history::status(&host.db, Some(&host.history)).await;
+    assert_eq!(st.sessions_total, 2);
+    // A deleted conversation leaves the index.
+    history::index_session(
+        &host.db,
+        &host.history,
+        &makers,
+        made,
+        made_detail.summary.updated_at,
+        &made_detail,
+    )
+    .await;
+    async fn hits_for(db: &crate::db::AppDatabase, text: &str) -> Vec<super::history::Hit> {
+        let q = super::history::Query {
+            text: text.into(),
+            ..Default::default()
+        };
+        super::history::search(db, None, &q).await.unwrap().hits
+    }
+    assert!(hits_for(&host.db, "green")
+        .await
+        .iter()
+        .any(|h| h.ref_id == made));
+    crate::db::service::conversation_service::soft_delete(conn, made)
+        .await
+        .unwrap();
+    history::tidy(&host.db, &host.history).await;
+    assert!(!hits_for(&host.db, "green")
+        .await
+        .iter()
+        .any(|h| h.ref_id == made));
+    assert_eq!(
+        history::status(&host.db, Some(&host.history))
+            .await
+            .sessions_total,
+        1
+    );
+
+    // A long text is found to its end; a task's result after a long ask.
+    let mut long = NewRow::new(
+        TimelineKind::Reply,
+        format!("{} the zebrafish decision stands", "word ".repeat(2_000)),
+    );
+    long.data = Some(json!({ "state": "done" }));
+    let long = svc::insert_row(conn, p, long).await.unwrap();
+    board_task(&engine, folder, "Long ask", WorkTaskStatus::Done, |am| {
+        use sea_orm::Set;
+        am.config = Set(json!({ "display_text": "ask ".repeat(3_000) }).to_string());
+        am.result_summary = Set(Some("the octopus outcome".into()));
+    })
+    .await;
+    history::read_rows(&host.db, &host.history).await;
+    let hits = hits_for(&host.db, "zebrafish").await;
+    assert_eq!(
+        hits.first().and_then(|h| h.row_id),
+        Some(long.id),
+        "{hits:?}"
+    );
+    assert!(hits_for(&host.db, "octopus outcome")
+        .await
+        .iter()
+        .any(|h| h.source == "task"));
+
+    // A deleted assistant's rows and the messages it sent do not come up,
+    // and a rebuild does not bring them back.
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let said = svc::insert_row(
+        conn,
+        w,
+        NewRow::new(TimelineKind::Owner, "the narwhal plan for Dev"),
+    )
+    .await
+    .unwrap();
+    sent_id(
+        &say(
+            &worker,
+            json!({ "to": p.to_string(), "text": "the narwhal plan is ready" }),
+        )
+        .await,
+    );
+    history::read_rows(&host.db, &host.history).await;
+    assert_eq!(hits_for(&host.db, "narwhal").await.len(), 2);
+    {
+        use sea_orm::{ActiveModelTrait, Set};
+        let row = svc::get_bot(conn, w).await.unwrap().unwrap();
+        let mut am: crate::db::entities::personal_agent::ActiveModel = row.into();
+        am.deleted_at = Set(Some(chrono::Utc::now()));
+        am.update(conn).await.unwrap();
+    }
+    assert!(
+        hits_for(&host.db, "narwhal").await.is_empty(),
+        "not before the tidying either"
+    );
+    store::clear_all(conn).await.unwrap();
+    history::read_rows(&host.db, &host.history).await;
+    assert!(!store::has_docs(conn, "timeline", said.id).await.unwrap());
+    assert!(hits_for(&host.db, "narwhal").await.is_empty());
+    assert!(
+        !hits_for(&host.db, "zebrafish").await.is_empty(),
+        "the rest read again"
+    );
+}

@@ -845,6 +845,14 @@ pub struct Prefs {
     /// only).
     #[serde(default, deserialize_with = "lenient")]
     pub dock_badge: OnOff,
+    /// The time machine searches every conversation in codeg, not only the
+    /// assistants' timelines and messages (8.2, 13.5 About you). Off, the
+    /// conversations leave the index.
+    #[serde(default, deserialize_with = "lenient")]
+    pub history_sessions: OnOff,
+    /// The time machine searches the board's tasks.
+    #[serde(default, deserialize_with = "lenient")]
+    pub history_tasks: OnOff,
 }
 
 impl Default for Prefs {
@@ -939,6 +947,8 @@ impl Default for Prefs {
             keep_awake: OnOff::On,
             menubar: OnOff::On,
             dock_badge: OnOff::On,
+            history_sessions: OnOff::On,
+            history_tasks: OnOff::On,
         }
     }
 }
@@ -1440,6 +1450,16 @@ pub const PREFS: &[PrefSpec] = &[
         kind: PrefKind::Choice(&["on", "off"]),
         label: "the dock badge counting the assistants with unread (desktop)",
     },
+    PrefSpec {
+        key: "history_sessions",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "history_search looking through every conversation in codeg",
+    },
+    PrefSpec {
+        key: "history_tasks",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "history_search looking through the board's tasks",
+    },
 ];
 
 /// The "automation level" (13.4): a preset over the items below — not
@@ -1627,6 +1647,16 @@ impl Prefs {
     }
 
     /// Whether codeg records when the owner is in codeg (1.12).
+    /// Whether the time machine searches every conversation (8.2).
+    pub fn searches_sessions(&self) -> bool {
+        self.history_sessions == OnOff::On
+    }
+
+    /// Whether the time machine searches the board's tasks (8.2).
+    pub fn searches_tasks(&self) -> bool {
+        self.history_tasks == OnOff::On
+    }
+
     pub fn records_presence(&self) -> bool {
         self.presence == OnOff::On
     }

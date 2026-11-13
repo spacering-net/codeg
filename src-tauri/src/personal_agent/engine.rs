@@ -856,6 +856,17 @@ impl PersonalAgentEngine {
             .and_then(|t| t.owner_row_ids.last().copied())
     }
 
+    /// Every message of the owner's the turn in flight carries.
+    pub(super) async fn turn_owner_rows(&self) -> Vec<i32> {
+        self.state
+            .lock()
+            .await
+            .turn
+            .as_ref()
+            .map(|t| t.owner_row_ids.clone())
+            .unwrap_or_default()
+    }
+
     /// The reply row of the turn in flight.
     pub(super) async fn turn_reply_row(&self) -> Option<i32> {
         self.state

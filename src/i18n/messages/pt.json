@@ -8476,6 +8476,18 @@
           "on": "Assistentes com não lidos",
           "off": "Desligado"
         },
+        "history_sessions": {
+          "title": "Pesquisar em todas as conversas",
+          "hint": "Cada conversa no codeg também é pesquisada: o que você pediu e a última resposta de cada turno. Desligado, elas saem do índice.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "history_tasks": {
+          "title": "Pesquisar nas tarefas do quadro",
+          "hint": "As tarefas do quadro também são pesquisadas: título, o que foi pedido e o resultado. Desligado, elas saem do índice.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
         "level_brief": {
           "title": "Resumo da manhã e fechamento",
           "hint": "Seu resumo da manhã ou o fechamento está pronto."
@@ -8591,7 +8603,16 @@
         "presentNow": "Você está no codeg agora.",
         "lastActive": "Última atividade às {time}.",
         "notSeen": "Sem atividade no codeg desde que ele iniciou.",
-        "note": "Se você está aqui agora continua sendo avaliado na hora — uma janela em foco e atividade nos últimos dois minutos — para decidir quando notificar você; isso nunca é guardado. “Amanhã de manhã” num lembrete é quando seu dia costuma começar."
+        "note": "Se você está aqui agora continua sendo avaliado na hora — uma janela em foco e atividade nos últimos dois minutos — para decidir quando notificar você; isso nunca é guardado. “Amanhã de manhã” num lembrete é quando seu dia costuma começar.",
+        "history": {
+          "title": "Máquina do tempo",
+          "hint": "O que foi dito e feito antes pode ser pesquisado: por você (a busca ao lado do nome do assistente) e pelos próprios assistentes. As conversas deles e as mensagens entre eles são sempre pesquisadas.",
+          "rebuild": "Reconstruir",
+          "rebuilt": "Reconstruindo o índice…",
+          "reading": "Lendo conversas: {done} de {total} até agora ({documents} entradas).",
+          "ready": "Atualizado: {total} conversas, {documents} entradas.",
+          "readyNoSessions": "{documents} entradas."
+        }
       },
       "notifyPage": {
         "notify": "Avisar-me",
@@ -10080,6 +10101,36 @@
       "diffCut": "Só o começo das mudanças é mostrado.",
       "undo": "Desfazer",
       "used": "Memória usada:"
+    },
+    "history": {
+      "open": "Pesquisar histórico",
+      "title": "Máquina do tempo",
+      "description": "Pesquise o que foi dito e feito: as conversas dos assistentes, as mensagens entre eles, todas as conversas e as tarefas do quadro.",
+      "placeholder": "Por que mudamos X para Y…",
+      "hint": "Todas as palavras devem aparecer. Um ou dois caracteres pesquisam só os últimos 90 dias.",
+      "none": "Nada encontrado.",
+      "short": "Um ou dois caracteres: só os últimos 90 dias foram pesquisados.",
+      "sessionsOff": "Todas as conversas ficam de fora (Sobre você).",
+      "tasksOff": "As tarefas do quadro ficam de fora (Sobre você).",
+      "reading": "Ainda lendo conversas ({done} de {total}): as mais antigas podem não aparecer ainda.",
+      "untitled": "Conversa #{id}",
+      "task": "Tarefa #{id}",
+      "message": "{from} → {to}",
+      "timeline": "Com {name}",
+      "handedOut": "delegada por {name}",
+      "matches": "{count} correspondências",
+      "role": {
+        "owner": "Você",
+        "assistant": "Assistente",
+        "agent": "Agente"
+      },
+      "scope": {
+        "all": "Tudo",
+        "timeline": "Assistentes",
+        "sessions": "Conversas",
+        "tasks": "Tarefas",
+        "messages": "Mensagens"
+      }
     }
   }
 }

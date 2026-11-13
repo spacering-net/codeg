@@ -8475,6 +8475,18 @@
           "on": "Assistants with unread",
           "off": "Off"
         },
+        "history_sessions": {
+          "title": "Search all conversations",
+          "hint": "Every conversation in codeg is searched too: what you asked and each turn's last answer. Off, they leave the index.",
+          "on": "On",
+          "off": "Off"
+        },
+        "history_tasks": {
+          "title": "Search board tasks",
+          "hint": "The board's tasks are searched too: their title, what they were asked and what came of them. Off, they leave the index.",
+          "on": "On",
+          "off": "Off"
+        },
         "level_brief": {
           "title": "Morning brief and wrap-up",
           "hint": "Your morning brief or the wrap-up is ready."
@@ -8591,7 +8603,16 @@
         "presentNow": "You are in codeg now.",
         "lastActive": "Last active at {time}.",
         "notSeen": "Not active in codeg since it started.",
-        "note": "Whether you are here right now is still judged as it happens — a window with the focus and input in the last two minutes — to decide when to notify you; it is never kept. “Tomorrow morning” on a reminder is when your day usually starts."
+        "note": "Whether you are here right now is still judged as it happens — a window with the focus and input in the last two minutes — to decide when to notify you; it is never kept. “Tomorrow morning” on a reminder is when your day usually starts.",
+        "history": {
+          "title": "Time machine",
+          "hint": "What was said and done before, searchable by you (the search by the assistant's name) and by the assistants. Their conversations and messages to each other are always searched.",
+          "rebuild": "Rebuild",
+          "rebuilt": "Rebuilding the index…",
+          "reading": "Reading conversations: {done} of {total} so far ({documents} entries).",
+          "ready": "Up to date: {total} conversations, {documents} entries.",
+          "readyNoSessions": "{documents} entries."
+        }
       },
       "notifyPage": {
         "notify": "Notify me",
@@ -10080,6 +10101,36 @@
       "diffCut": "Only the start of the changes is shown.",
       "undo": "Undo",
       "used": "Memory used:"
+    },
+    "history": {
+      "open": "Search history",
+      "title": "Time machine",
+      "description": "Search what was said and done: the assistants' conversations, their messages, every conversation and the board's tasks.",
+      "placeholder": "Why did we change X to Y…",
+      "hint": "Every word must be there. One or two characters look through the last 90 days.",
+      "none": "Nothing found.",
+      "short": "One or two characters: only the last 90 days were looked through.",
+      "sessionsOff": "All conversations are left out (About you).",
+      "tasksOff": "The board's tasks are left out (About you).",
+      "reading": "Still reading conversations ({done} of {total}): older ones may not be found yet.",
+      "untitled": "Conversation #{id}",
+      "task": "Task #{id}",
+      "message": "{from} → {to}",
+      "timeline": "With {name}",
+      "handedOut": "handed out by {name}",
+      "matches": "{count} matches",
+      "role": {
+        "owner": "You",
+        "assistant": "Assistant",
+        "agent": "Agent"
+      },
+      "scope": {
+        "all": "All",
+        "timeline": "Assistants",
+        "sessions": "Conversations",
+        "tasks": "Tasks",
+        "messages": "Messages"
+      }
     }
   }
 }

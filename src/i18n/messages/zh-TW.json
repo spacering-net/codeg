@@ -8476,6 +8476,18 @@
           "on": "有未讀的助手數",
           "off": "關"
         },
+        "history_sessions": {
+          "title": "檢索全部對話",
+          "hint": "codeg 裡的每個對話也能搜到：你的輸入和每回合最後的回答。關掉後從索引裡刪除。",
+          "on": "開",
+          "off": "關"
+        },
+        "history_tasks": {
+          "title": "檢索看板任務",
+          "hint": "看板任務也能搜到：標題、要求和結果。關掉後從索引裡刪除。",
+          "on": "開",
+          "off": "關"
+        },
         "level_brief": {
           "title": "晨報與收尾",
           "hint": "晨報或收尾寫好了。"
@@ -8591,7 +8603,16 @@
         "presentNow": "你現在在 codeg 裡。",
         "lastActive": "最近一次操作：{time}。",
         "notSeen": "codeg 啟動以來還沒看到你的操作。",
-        "note": "你此刻在不在仍會即時判斷（有焦點的視窗、最近兩分鐘有操作），用來決定什麼時候通知你；這個不會被記下。提醒上的「明天上午」依你一天通常開始的時間。"
+        "note": "你此刻在不在仍會即時判斷（有焦點的視窗、最近兩分鐘有操作），用來決定什麼時候通知你；這個不會被記下。提醒上的「明天上午」依你一天通常開始的時間。",
+        "history": {
+          "title": "時光機",
+          "hint": "之前說過、做過的事都能搜：你在助手名字旁的搜尋裡搜，助手也會自己搜。各助手的對話和它們之間的訊息總能搜到。",
+          "rebuild": "重建索引",
+          "rebuilt": "正在重建索引…",
+          "reading": "正在讀取對話：已讀 {done}/{total} 個（共 {documents} 筆）。",
+          "ready": "已是最新：{total} 個對話，共 {documents} 筆。",
+          "readyNoSessions": "共 {documents} 筆。"
+        }
       },
       "notifyPage": {
         "notify": "通知我",
@@ -10080,6 +10101,36 @@
       "diffCut": "只顯示了差異的開頭。",
       "undo": "撤銷",
       "used": "用到的記憶："
+    },
+    "history": {
+      "open": "搜尋歷史",
+      "title": "時光機",
+      "description": "搜之前說過、做過的：各助手的對話、助手之間的訊息、全部對話和看板任務。",
+      "placeholder": "例如：為什麼把 X 改成 Y",
+      "hint": "每個詞都要出現。一兩個字只搜最近 90 天。",
+      "none": "沒有找到。",
+      "short": "一兩個字：只搜了最近 90 天。",
+      "sessionsOff": "未檢索全部對話（在「了解你」裡設定）。",
+      "tasksOff": "未檢索看板任務（在「了解你」裡設定）。",
+      "reading": "還在讀取對話（{done}/{total}）：較早的可能暫時搜不到。",
+      "untitled": "對話 #{id}",
+      "task": "任務 #{id}",
+      "message": "{from} → {to}",
+      "timeline": "與{name}的對話",
+      "handedOut": "{name}派出",
+      "matches": "{count} 處符合",
+      "role": {
+        "owner": "你",
+        "assistant": "助手",
+        "agent": "智能體"
+      },
+      "scope": {
+        "all": "全部",
+        "timeline": "助手對話",
+        "sessions": "對話",
+        "tasks": "看板任務",
+        "messages": "助手訊息"
+      }
     }
   }
 }

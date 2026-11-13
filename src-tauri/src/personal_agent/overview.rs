@@ -228,6 +228,15 @@ impl Folders {
     fn project_name(&self, id: i32) -> Option<String> {
         self.project(id).map(|(_, n)| n)
     }
+
+    /// The folders of project `id`: itself and its worktrees.
+    pub(super) fn of_project(&self, id: i32) -> Vec<i32> {
+        self.rows
+            .keys()
+            .copied()
+            .filter(|f| self.project(*f).is_some_and(|(p, _)| p == id))
+            .collect()
+    }
 }
 
 /// Every assistant (not deleted), with its live state and all that waits on
@@ -1574,10 +1583,22 @@ impl super::host::EngineHost {
     /// One incremental pass of the usage dashboard's sync, quietly: a pass
     /// already running (the usage page's) is left to finish.
     pub(super) async fn sync_usage(&self) {
-        match crate::commands::token_usage::token_usage_sync_core(
+        // The conversations it parses go to the time machine as well (8.2).
+        let index = match self.primary().prefs().await.searches_sessions() {
+            true => Some(super::history::IndexAsParsed {
+                db: &self.db,
+                index: &self.history,
+                makers: super::history::Makers::load(&self.db).await,
+            }),
+            false => None,
+        };
+        match crate::commands::token_usage::token_usage_sync_core_with(
             &self.db.conn,
             &self.emitter,
             crate::commands::token_usage::TokenUsageSyncMode::Incremental,
+            index
+                .as_ref()
+                .map(|i| i as &dyn crate::commands::token_usage::ParsedConversation),
         )
         .await
         {
