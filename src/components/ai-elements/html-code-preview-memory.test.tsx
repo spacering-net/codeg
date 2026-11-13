@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { buildChatHtmlDocument } from "@/lib/chat-html-document"
 import {
   HtmlCodePreview,
+  readHtmlPreviewMemory,
   resetHtmlPreviewCachesForTests,
 } from "./html-code-preview"
 
@@ -33,6 +34,22 @@ beforeEach(() => {
 })
 
 describe("HTML preview cache retention", () => {
+  it("exposes numeric cache counters without exposing cached content", async () => {
+    const mounted = render(preview("counter"))
+    await waitFor(() =>
+      expect(mounted.container.querySelector("iframe")).not.toBeNull()
+    )
+
+    expect(readHtmlPreviewMemory()).toMatchObject({
+      htmlFrames: 1,
+      htmlPins: 1,
+      htmlViews: 0,
+    })
+    expect(readHtmlPreviewMemory()).not.toHaveProperty("source")
+    await close(mounted)
+    expect(readHtmlPreviewMemory().htmlPins).toBe(0)
+  })
+
   it("trims entries when the last owners of more than 32 previews close", async () => {
     const sources = Array.from({ length: 40 }, (_, i) => `preview ${i}`)
     const mounted = render(<>{sources.map((s) => preview(s, s))}</>)

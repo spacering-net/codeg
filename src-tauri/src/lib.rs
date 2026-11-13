@@ -43,6 +43,7 @@ pub mod db;
 pub mod deep_link;
 pub mod folder_links;
 pub mod forge;
+pub mod frontend_memory;
 pub mod git_credential;
 pub mod git_repo;
 pub mod intern;
@@ -2037,6 +2038,7 @@ mod tauri_app {
                 windows::close_pet_panel,
                 windows::resize_pet_panel,
                 windows::focus_conversation,
+                crate::frontend_memory::report_frontend_memory,
                 crate::deep_link::take_pending_deep_link,
                 windows::update_traffic_light_position,
                 windows::update_appearance_mode,
