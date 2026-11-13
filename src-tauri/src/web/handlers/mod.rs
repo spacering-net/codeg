@@ -20,6 +20,7 @@ pub mod custom_skills;
 pub mod delegation;
 mod error;
 pub mod event_metrics;
+pub mod frontend_memory;
 pub mod experts;
 pub mod feedback;
 pub mod files;

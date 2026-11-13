@@ -59,6 +59,10 @@ pub fn build_router_with_proxy_auth(
             "/debug/event_metrics",
             get(handlers::event_metrics::get_event_metrics),
         )
+        .route(
+            "/debug/frontend_memory",
+            get(handlers::frontend_memory::get_frontend_memory),
+        )
         // ─── Conversations ───
         .route(
             "/list_conversations",
