@@ -6928,6 +6928,155 @@ describe("desktop: hydrating a connection another surface already routes", () =>
     expect(seen.filter((e) => e.type === "permission_request")).toHaveLength(1)
   })
 
+  it.each(["detach", "disconnectAll"] as const)(
+    "ignores a late snapshot after %s and reattach to the same connection",
+    async (teardown) => {
+      mountDesktop()
+      await act(async () => {})
+      await act(async () => {
+        await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+      })
+      h.denormalizeSnapshot.mockImplementation(
+        (snapshot: { event_seq: number }) => ({
+          ...patchAt(snapshot.event_seq),
+          status: snapshot.event_seq === 20 ? "connected" : "prompting",
+        })
+      )
+      const oldSnapshot = holdNextSnapshot()
+      const attach = () =>
+        h.actions!.attachDelegationChild({
+          connectionId: CONN,
+          parentConnectionId: "parent-conn",
+          parentToolUseId: "toolu_delegate",
+          agentType: "codex",
+          hydrate: true,
+        })
+      act(attach)
+      await act(async () => {
+        if (teardown === "detach") h.actions!.detachDelegationChild(CONN)
+        else await h.actions!.disconnectAll()
+      })
+      h.acpGetSessionSnapshot.mockResolvedValue({
+        connection_id: CONN,
+        event_seq: 20,
+      })
+      act(attach)
+      await act(async () => {})
+      expect(h.store!.getConnection(CONN)?.lastAppliedSeq).toBe(20)
+      expect(h.store!.getConnection(CONN)?.status).toBe("connected")
+
+      await act(async () => oldSnapshot())
+      expect(h.store!.getConnection(CONN)?.lastAppliedSeq).toBe(20)
+      expect(h.store!.getConnection(CONN)?.status).toBe("connected")
+    }
+  )
+
+  it("keeps another hydrating viewer's backlog when a child closes", async () => {
+    mountDesktop()
+    await act(async () => {})
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    const childSnapshot = holdNextSnapshot()
+    act(() => {
+      h.actions!.attachDelegationChild({
+        connectionId: CONN,
+        parentConnectionId: "parent-conn",
+        parentToolUseId: "toolu_delegate",
+        agentType: "codex",
+        hydrate: true,
+      })
+    })
+    const viewerSnapshot = holdNextSnapshot()
+    const viewerKey = "conv-2-claude_code-43"
+    let connecting: Promise<void> = Promise.resolve()
+    act(() => {
+      connecting = h.actions!.connect(
+        viewerKey,
+        "claude_code",
+        "/tmp/x",
+        "sess-2",
+        43
+      )
+    })
+    await act(async () => {})
+    act(() => {
+      h.actions!.detachDelegationChild(CONN)
+      firehose()(permissionRequest)
+    })
+    await act(async () => {
+      viewerSnapshot()
+      await connecting
+    })
+    expect(
+      h.store!.getConnection(viewerKey)?.pendingPermission?.request_id
+    ).toBe("req-late")
+    expect(h.store!.getConnection(viewerKey)?.lastAppliedSeq).toBe(6)
+    await act(async () => childSnapshot())
+    expect(h.store!.getConnection(CONN)).toBeUndefined()
+  })
+
+  it("does not convert a cancelled viewer snapshot after the tab closes", async () => {
+    mountDesktop()
+    await act(async () => {})
+    act(() => {
+      h.actions!.attachDelegationChild({
+        connectionId: CONN,
+        parentConnectionId: "parent-conn",
+        parentToolUseId: "toolu_delegate",
+        agentType: "codex",
+      })
+    })
+    const release = holdNextSnapshot()
+    let connecting: Promise<void> = Promise.resolve()
+    act(() => {
+      connecting = h.actions!.connect(
+        TAB,
+        "claude_code",
+        "/tmp/x",
+        "sess-1",
+        42
+      )
+    })
+    await act(async () => {})
+    await act(async () => {
+      await h.actions!.disconnect(TAB)
+    })
+    h.denormalizeSnapshot.mockClear()
+    await act(async () => {
+      release()
+      await connecting
+    })
+    expect(h.denormalizeSnapshot).not.toHaveBeenCalled()
+    expect(h.store!.getConnection(TAB)).toBeUndefined()
+    expect(h.store!.getConnection(CONN)).toBeDefined()
+    expect(h.acpDisconnect).not.toHaveBeenCalled()
+  })
+
+  it("does not convert a pending child snapshot after the provider unmounts", async () => {
+    const view = render(
+      <AcpConnectionsProvider>
+        <Probe />
+      </AcpConnectionsProvider>
+    )
+    await act(async () => {})
+    const release = holdNextSnapshot()
+    act(() => {
+      h.actions!.attachDelegationChild({
+        connectionId: CONN,
+        parentConnectionId: "parent-conn",
+        parentToolUseId: "toolu_delegate",
+        agentType: "codex",
+        hydrate: true,
+      })
+    })
+    view.unmount()
+    h.denormalizeSnapshot.mockClear()
+    await act(async () => release())
+    expect(h.denormalizeSnapshot).not.toHaveBeenCalled()
+    expect(h.acpDisconnect).not.toHaveBeenCalled()
+  })
+
   it("keeps for a tab attaching as a viewer what the sub-agent's card got meanwhile", async () => {
     mountDesktop()
     await act(async () => {})
