@@ -881,6 +881,21 @@ pub async fn forge_issue_detail_core(
     }
 }
 
+pub async fn forge_read_image_core(
+    db: &AppDatabase,
+    folder_id: i32,
+    upload_path: String,
+    account_id: Option<String>,
+) -> Result<forge::ForgeImage, AppCommandError> {
+    let (remote, auth) = resolve_folder_repo(db, folder_id, account_id.as_deref()).await?;
+    match remote.provider {
+        ForgeProvider::GitLab => {
+            Ok(forge::gitlab::read_image(&auth, &remote.owner_repo, &upload_path).await?)
+        }
+        _ => Err(ForgeError::Invalid("image uploads are only supported for GitLab".into()).into()),
+    }
+}
+
 /// One tab's item count under a set of filters — a badge on the workbench's
 /// Issues/PR switcher.
 ///
@@ -1956,6 +1971,18 @@ pub async fn forge_issue_detail(
     account_id: Option<String>,
 ) -> Result<forge::ForgeIssueRow, AppCommandError> {
     forge_issue_detail_core(&db, folder_id, number, account_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn forge_read_image(
+    db: tauri::State<'_, AppDatabase>,
+    folder_id: i32,
+    upload_path: String,
+    account_id: Option<String>,
+) -> Result<forge::ForgeImage, AppCommandError> {
+    let image = forge_read_image_core(&db, folder_id, upload_path, account_id).await?;
+    Ok(forge::image_cache::local_image_url(image).await?)
 }
 
 #[cfg(feature = "tauri-runtime")]

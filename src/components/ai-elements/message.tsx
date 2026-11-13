@@ -356,7 +356,10 @@ export const MessageBranchPage = ({
 // use it — they render as plain text + reference badges via PlainTextWithBadges
 // (see message/plain-text-with-badges.tsx) — so the former user-only `softBreaks`
 // / `/slash`-badging hooks were removed.
-export type MessageResponseProps = ComponentProps<typeof Streamdown>
+export type MessageResponseProps = ComponentProps<typeof Streamdown> & {
+  /** Extend parsing while retaining the shared Markdown pipeline. */
+  additionalRemarkPlugins?: ComponentProps<typeof Streamdown>["remarkPlugins"]
+}
 
 // remark-math uses dollar delimiters. `\[...\]` / `\(...\)` are rewritten
 // to `$$...$$`. Single-dollar `$...$` is disabled (`singleDollarTextMath:
@@ -551,6 +554,7 @@ function MessageResponseImpl({
   mode = FINISHED_MODE,
   parseIncompleteMarkdown = FINISHED_PARSE_INCOMPLETE_MARKDOWN,
   remend,
+  additionalRemarkPlugins,
   ...props
 }: MessageResponseProps) {
   const inReply = useAssistantReply()
@@ -567,6 +571,13 @@ function MessageResponseImpl({
   )
   const plugins = useStreamdownPlugins(
     typeof normalized === "string" ? normalized : undefined
+  )
+  const combinedRemarkPlugins = useMemo(
+    () =>
+      additionalRemarkPlugins?.length
+        ? [...remarkPlugins, ...additionalRemarkPlugins]
+        : remarkPlugins,
+    [additionalRemarkPlugins]
   )
 
   return (
@@ -598,7 +609,7 @@ function MessageResponseImpl({
         className
       )}
       plugins={plugins}
-      remarkPlugins={remarkPlugins}
+      remarkPlugins={combinedRemarkPlugins}
       rehypePlugins={rehypePlugins}
       mode={mode}
       parseIncompleteMarkdown={parseIncompleteMarkdown}
@@ -613,9 +624,9 @@ function MessageResponseImpl({
       // elements, but the link icon + safety routing on `a`, the diagram and
       // json-render blocks on `pre` and the table's scrollbars always win.
       components={{
+        ...markdownLocalImageComponents,
         ...props.components,
         ...markdownLinkComponents,
-        ...markdownLocalImageComponents,
         ...messageBlockComponents,
         ...scrollportComponents,
       }}
@@ -637,7 +648,11 @@ export const MessageResponse = memo(
     // The prose being written wraps its new characters to fade them in
     // (`animated` + `isAnimating`); done, it drops the wrapping.
     (prevProps.isAnimating ?? false) === (nextProps.isAnimating ?? false) &&
-    prevProps.animated === nextProps.animated
+    prevProps.animated === nextProps.animated &&
+    prevProps.additionalRemarkPlugins === nextProps.additionalRemarkPlugins &&
+    prevProps.remarkPlugins === nextProps.remarkPlugins &&
+    prevProps.rehypePlugins === nextProps.rehypePlugins &&
+    prevProps.components === nextProps.components
 )
 
 MessageResponse.displayName = "MessageResponse"

@@ -1,6 +1,7 @@
 import {
   getActiveRemoteConnectionId,
   getShellTransport,
+  getServerBaseUrl,
   getTransport,
   isDesktop,
   isRemoteDesktopMode,
@@ -58,6 +59,7 @@ import type {
   ForgeMergeOptions,
   ForgePanelSettings,
   ForgeRemote,
+  ForgeImage,
   ForgeSettingsStore,
   ForgeSort,
   ForgeStateAction,
@@ -6448,6 +6450,37 @@ export async function forgeIssueDetail(
     number,
     accountId: accountId ?? null,
   })
+}
+
+/** Download to the backend cache; render its binary resource URL. */
+export async function forgeReadImage(
+  folderId: number,
+  uploadPath: string,
+  accountId?: string | null
+): Promise<ForgeImage> {
+  const connectionId = getActiveRemoteConnectionId()
+  const baseUrl = getServerBaseUrl()
+  const image = await getTransport().call<ForgeImage>("forge_read_image", {
+    folderId,
+    uploadPath,
+    accountId: accountId ?? null,
+  })
+  if (connectionId != null) {
+    // Preserve the remote connection's custom auth headers and support HTTP
+    // remote servers: Rust copies the binary into this desktop's cache.
+    try {
+      return await getShellTransport().call<ForgeImage>(
+        "remote_cache_forge_image",
+        { connectionId, url: image.url }
+      )
+    } catch (error) {
+      if (isRemoteAuthenticationFailed(error)) {
+        notifyRemoteDesktopUnauthorized()
+      }
+      throw error
+    }
+  }
+  return isDesktop() ? image : { ...image, url: `${baseUrl}${image.url}` }
 }
 
 /** Everything a COUNT may be narrowed by. No page and no order: neither can

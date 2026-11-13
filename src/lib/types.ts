@@ -2509,6 +2509,12 @@ export interface ForgeChangedFileList {
   has_next: boolean
 }
 
+/** Cached image resource; account credentials and bytes stay off JSON/IPC. */
+export interface ForgeImage {
+  mime_type: string
+  url: string
+}
+
 /** A folder's `origin` remote parsed into forge coordinates. */
 export interface ForgeRemote {
   server_host: string
