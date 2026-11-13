@@ -239,8 +239,21 @@ function persist(key: string, value: string) {
     // 隐私模式 / 禁用 storage 时静默忽略，本次会话内仍然生效
     return
   }
-  // 配置同步：外观偏好随配置快照走，变更时镜像到后端（见 lib/appearance-sync）。
+  // 配置同步：外观偏好随配置快照走，用户改动时镜像到后端（见 lib/appearance-sync）。
   if (isSyncedAppearanceKey(key)) scheduleAppearanceMirror()
+}
+
+/**
+ * 只写本地、不镜像：启动时的缓存修正不是用户的改动。浏览器（服务器模式）只在
+ * 用户改动时镜像，若这里也镜像，一个全新浏览器打开即会用它几乎为空的外观整份
+ * 替换后端镜像，把别处设好的主题、CSS 等从下一次快照里抹掉。
+ */
+function persistLocalOnly(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // 同 persist
+  }
 }
 
 function readStored(key: string): string | null {
@@ -595,6 +608,8 @@ export function AppearanceProvider({
     chatContentWidthRef.current = px
     setChatContentWidthState(px)
     commitChatContentWidth(px)
+    // commitChatContentWidth 直接写 localStorage、不经 persist，这里补上镜像。
+    scheduleAppearanceMirror()
   }, [])
 
   const setUiFont = useCallback((id: string, custom = "") => {
@@ -830,7 +845,7 @@ export function AppearanceProvider({
     const sans = resolveFontStack(uiFont.id, uiFont.custom, "sans")
     if (readStored(STORAGE_KEY_UI_FONT_STACK) !== sans) {
       document.documentElement.style.setProperty("--font-sans", sans)
-      persist(STORAGE_KEY_UI_FONT_STACK, sans)
+      persistLocalOnly(STORAGE_KEY_UI_FONT_STACK, sans)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

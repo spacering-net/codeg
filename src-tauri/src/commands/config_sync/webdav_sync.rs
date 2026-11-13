@@ -704,6 +704,15 @@ pub async fn test_connection_core(settings: &ConfigSyncSettings) -> Result<(), A
 /// uploaded, or any device's next change over a snapshot another machine wrote
 /// since — destroys the only copy of that machine's settings. Uploads stay
 /// automatic; replacing an unseen snapshot never is.
+///
+/// Known limit: [`sync_lock`] serializes this process only. Two machines that
+/// both read the manifest within the same moment, before either has written,
+/// can still both upload, and the later one wins. Closing that needs
+/// conditional PUTs (`If-Match` / `If-None-Match: *`) on the payload, which the
+/// supported servers do not uniformly honour — and a server that answered them
+/// wrongly would refuse every upload. The window is the few hundred
+/// milliseconds between the GET and the PUTs, not the minutes-long one #1149
+/// reported.
 pub async fn upload_snapshot_core(
     conn: &DatabaseConnection,
     app_version: &str,
