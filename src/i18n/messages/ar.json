@@ -2400,6 +2400,9 @@
     },
     "conversationCard": {
       "untitledConversation": "محادثة بدون عنوان",
+      "history": "سجل المحادثات",
+      "historyEmpty": "لا توجد محادثات غير مفتوحة",
+      "historyLoadFailed": "تعذر تحميل سجل المحادثات",
       "newConversation": "محادثة جديدة",
       "maximize": "تكبير",
       "restore": "استعادة",

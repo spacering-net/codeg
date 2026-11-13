@@ -2400,6 +2400,9 @@
     },
     "conversationCard": {
       "untitledConversation": "Untitled conversation",
+      "history": "Conversation history",
+      "historyEmpty": "No unopened conversations",
+      "historyLoadFailed": "Could not load conversation history",
       "newConversation": "New Conversation",
       "maximize": "Maximize",
       "restore": "Restore",

@@ -2400,6 +2400,9 @@
     },
     "conversationCard": {
       "untitledConversation": "未命名會話",
+      "history": "歷史對話",
+      "historyEmpty": "沒有未開啟的歷史對話",
+      "historyLoadFailed": "無法載入歷史對話",
       "newConversation": "新增會話",
       "maximize": "最大化",
       "restore": "還原",
