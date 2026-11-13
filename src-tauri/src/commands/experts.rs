@@ -11,7 +11,7 @@
 //! database state, and updates propagate automatically when codeg upgrades
 //! and re-extracts the bundled files.
 //!
-//! `experts/skills/` is vendored from Superpowers v7.0.1 (see
+//! `experts/skills/` is vendored from Superpowers v7.0.2 (see
 //! `experts/NOTICE.md` for the pinned source and license) with two
 //! standalone-runtime adaptations. `writing-skills/package.json` carries the
 //! root `"type": "module"` marker that `render-graphs.js` needs after skill

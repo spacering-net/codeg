@@ -4471,7 +4471,7 @@ export interface AgentSkillContent {
 }
 
 /**
- * Built-in expert skills, sourced from obra/superpowers v7.0.1 and bundled into
+ * Built-in expert skills, sourced from obra/superpowers v7.0.2 and bundled into
  * the codeg binary. Experts live in a central store at `~/.codeg/skills/`
  * and are linked into agent skill directories on demand.
  */

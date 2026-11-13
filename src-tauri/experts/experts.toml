@@ -1,4 +1,4 @@
-# Expert skills metadata for the bundled obra/superpowers v7.0.1 skills.
+# Expert skills metadata for the bundled obra/superpowers v7.0.2 skills.
 # Bundled alongside skills/ and loaded at runtime; see NOTICE.md for provenance.
 # Category values must match ExpertCategory enum in commands/experts.rs.
 # Icons are lucide-react icon names referenced by the frontend.

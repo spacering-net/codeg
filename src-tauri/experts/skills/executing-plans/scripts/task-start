@@ -18,20 +18,23 @@ fi
 
 plan=$1
 n=$2
-
 # Codeg extracts and links each skill independently. Keep the shared helpers
 # beside this skill so a Windows copy fallback still works and a foreign
 # sibling skill cannot shadow the intended implementation. The sibling path
 # remains a compatibility fallback for older installations.
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-task_brief="$script_dir/task-brief"
-if [ ! -f "$task_brief" ]; then
-  task_brief="$(cd "$script_dir/../../subagent-driven-development/scripts" && pwd)/task-brief"
+sdd="$script_dir"
+if [ ! -f "$sdd/task-brief" ] || [ ! -f "$sdd/sdd-repo" ]; then
+  sdd="$(cd "$script_dir/../../subagent-driven-development/scripts" && pwd)"
 fi
 
-out=$("${BASH:-bash}" "$task_brief" "$plan" "$n")
+# BASE comes from the same repository the brief is written into (sdd-repo
+# also refuses one with no commit yet), not from the bare cwd.
+repo=$("${BASH:-bash}" "$sdd/sdd-repo" --with-commit)
+out=$("${BASH:-bash}" "$sdd/task-brief" "$plan" "$n")
 brief=$(printf '%s\n' "$out" | sed -n 's/^wrote \(.*\): [0-9][0-9]* lines$/\1/p')
 [ -n "$brief" ] || { echo "task-brief did not report a path: $out" >&2; exit 1; }
+base=$(git -C "$repo" rev-parse --verify HEAD)
 
 echo "brief: $brief"
-echo "base: $(git rev-parse HEAD)"
+echo "base: $base"
