@@ -1,0 +1,57 @@
+{
+  "description": "仅发布协议元数据；会话、轨迹和工具 ID 稳定匿名化；展开 harness JSON 字符串；保留时间与事件顺序。",
+  "files": [
+    {
+      "file": "baseline-background.jsonl",
+      "source_file": "protocol-background-debug.jsonl",
+      "source_sha256": "6388e01fb17e599a1e36b8e276fa49f86de9ac4b85ba9e91ac0902dbb64ec159",
+      "published_sha256": "cdc007f5e857ad22dfed8c5449d982d5add9bb91320c7fa83dfacaf627f3b4dc",
+      "records": 44,
+      "transform": "ID 稳定别名替换；展开 harness 事件 JSON；未删除事件。"
+    },
+    {
+      "file": "fixed-background.jsonl",
+      "source_file": "protocol-background-v2-final.jsonl",
+      "source_sha256": "6755ba4a4055e41d88e3db28c0d57cd87dac185569c95f9991d78a531335f262",
+      "published_sha256": "7c84cc5d452162eaf2c5ddaae247a6e65fed02bfc48c1e8d23d99c44ba84267e",
+      "records": 72,
+      "transform": "ID 稳定别名替换；展开 harness 事件 JSON；未删除事件。"
+    },
+    {
+      "file": "read-control.jsonl",
+      "source_file": "protocol-read-debug.jsonl",
+      "source_sha256": "7b9df696b0390e75de57a4a5df6e3ef4dc64c0b763e3aacceca804ba602571d9",
+      "published_sha256": "bd57daa9a9d92a27624ca1e0ccd4a3382b4b17e2d5f564447457735dc0e68c16",
+      "records": 32,
+      "transform": "ID 稳定别名替换；展开 harness 事件 JSON；未删除事件。"
+    },
+    {
+      "file": "sdk-baseline-result.json",
+      "source_file": "foreground-red-result.json",
+      "source_sha256": "c6a915c7542d450e3c5c8700e229567a098131fc078c4d9000d09422cb4aa451",
+      "published_sha256": "d85cd6c6b1b7eb7359b943e149883fb19a242216889170b34e0b4d817ebf9c17",
+      "transform": "仅调整 JSON 排版。"
+    },
+    {
+      "file": "sdk-fixed-result.json",
+      "source_file": "foreground-v2-green-result.json",
+      "source_sha256": "c1ff9aaa8ee3561db54b8e8cb38eff6d739b5e09add53fb05fead6707a24e3d4",
+      "published_sha256": "76cc88c95372be80a873c8111ee163e9ee986ecc5d1e3aa263f7e6c00cf30c0c",
+      "transform": "仅调整 JSON 排版。"
+    },
+    {
+      "file": "installed-result.json",
+      "source_file": "foreground-v2-installed-result.json",
+      "source_sha256": "35403676680c82b9db9e111df4292c47591e0257703e2e3d25733cda9875024f",
+      "published_sha256": "c2c99affd8536596423509aa8baad390f99602a8972321805b5114fdfa6194f6",
+      "transform": "仅调整 JSON 排版。"
+    },
+    {
+      "file": "live-result.json",
+      "source_file": "foreground-v2-live-final-result.json",
+      "source_sha256": "cf79d4452cc03bc64e6933a36847344358e1f19ea3ae057f33a85342f546f99c",
+      "published_sha256": "cd2a5d945e8f30e13a12bc0e71ba9d0778a780bba29173b4e99a39487b9fda37",
+      "transform": "仅调整 JSON 排版。"
+    }
+  ]
+}
