@@ -2389,12 +2389,14 @@ export async function listOpenedTabs(): Promise<OpenedTabsSnapshot> {
 export async function saveOpenedTabs(
   items: OpenedTab[],
   expectedVersion: number,
-  origin: string
+  origin: string,
+  paneState?: import("@/lib/conversation-panes").ConversationPaneState
 ): Promise<SaveTabsOutcome> {
   return getTransport().call("save_opened_tabs", {
     items,
     expectedVersion,
     origin,
+    ...(paneState ? { paneState } : {}),
   })
 }
 

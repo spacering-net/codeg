@@ -8,6 +8,7 @@ pub mod conversation;
 pub mod folder;
 pub mod message;
 pub mod model_provider;
+pub mod pane;
 pub mod pet;
 pub mod quick_message;
 pub mod remote_workspace_connection;
@@ -42,6 +43,7 @@ pub use message::{
     AgentExecutionStats, AgentTimelineEntry, AgentToolCall, ContentBlock, ImageData, MessageRole,
     MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
+pub use pane::PaneState;
 pub use quick_message::QuickMessageInfo;
 pub use remote_workspace_connection::{
     RemoteWorkspaceConnectionInfo, RemoteWorkspaceHeader, ToHeaderMap,
