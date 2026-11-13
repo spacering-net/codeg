@@ -4053,8 +4053,7 @@
           "taskFailed": "Tarefa falhou",
           "taskStopped": "Tarefa interrompida",
           "taskRunning": "Tarefa em execução",
-          "planUpdated": "Atualizou o plano",
-          "showMoreSteps": "{count, plural, one {Mostrar mais # etapa} other {Mostrar mais # etapas}}"
+          "planUpdated": "Atualizou o plano"
         },
         "explore": {
           "files": "{count, plural, one {# arquivo} other {# arquivos}}",

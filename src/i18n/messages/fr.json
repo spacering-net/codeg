@@ -4053,8 +4053,7 @@
           "taskFailed": "Tâche en échec",
           "taskStopped": "Tâche arrêtée",
           "taskRunning": "Tâche en cours",
-          "planUpdated": "Plan mis à jour",
-          "showMoreSteps": "{count, plural, one {Afficher # étape de plus} other {Afficher # étapes de plus}}"
+          "planUpdated": "Plan mis à jour"
         },
         "explore": {
           "files": "{count, plural, one {# fichier} other {# fichiers}}",

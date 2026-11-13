@@ -5,6 +5,7 @@ import {
   useMemo,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react"
 import { useTranslations } from "next-intl"
 
@@ -321,6 +322,7 @@ export const ActivityParts = memo(function ActivityParts({
   pinnedOnly = false,
   foot,
   headed = false,
+  revealRef,
 }: {
   model: ActivityModel
   isStreaming: boolean
@@ -331,6 +333,8 @@ export const ActivityParts = memo(function ActivityParts({
   foot?: ActivityFoot
   /** Hung under the turn's header (see `ActivityTimeline`). */
   headed?: boolean
+  /** Draws a step a long list has not (see `ActivityTimeline`). */
+  revealRef?: RefObject<((stepKey: string) => boolean) | null>
 }) {
   const render = useAssistantRenderPart(isStreaming)
   return (
@@ -341,6 +345,7 @@ export const ActivityParts = memo(function ActivityParts({
       pinnedOnly={pinnedOnly}
       foot={foot}
       headed={headed}
+      revealRef={revealRef}
     />
   )
 })

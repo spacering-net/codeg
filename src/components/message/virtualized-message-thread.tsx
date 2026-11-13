@@ -38,6 +38,9 @@ const VIEWPORT_TOP_PROBE_PX = 4
 /** Slack (px) under which the viewport counts as scrolled to the end. */
 const VIEWPORT_END_SLACK_PX = 2
 
+/** The loader row's place among the rows virtua draws (see `hasOlder`). */
+const LOAD_OLDER_ROW = Symbol("load-older-row")
+
 /** Room (rem, so it follows the app zoom) left above a part of a row that
  *  `revealFromAbove` brings into view, so it does not land on the edge. */
 const REVEAL_ROOM_REM = 1
@@ -543,6 +546,57 @@ function VirtualizedMessageThreadImpl<T>({
     return styles.middle
   }
 
+  // The rows virtua draws, the loader first when there is one. Handed over as
+  // data with a function to draw one, so only the rows in view are drawn on a
+  // render — a reply streaming into a long thread re-renders the thread on
+  // every batch, and drawing every row of it each time only for virtua to
+  // drop all but the few on screen cost a pass over the whole thread.
+  const rows = useMemo<(T | typeof LOAD_OLDER_ROW)[]>(
+    () => (hasOlder ? [LOAD_OLDER_ROW, ...items] : items),
+    [hasOlder, items]
+  )
+  const total = items.length
+  const renderRow = (row: T | typeof LOAD_OLDER_ROW, index: number) => {
+    if (row === LOAD_OLDER_ROW) {
+      return (
+        <div key="load-older-row" style={styles.first}>
+          <div className={cn("mx-auto chat-content-w px-4", className)}>
+            <button
+              type="button"
+              onClick={isLoadingOlder ? undefined : onLoadOlder}
+              disabled={isLoadingOlder}
+              className="mx-auto flex items-center gap-2 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:cursor-default disabled:hover:bg-muted/40"
+            >
+              {isLoadingOlder ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  {loadingOlderLabel}
+                </>
+              ) : (
+                loadOlderLabel
+              )}
+            </button>
+          </div>
+        </div>
+      )
+    }
+    const itemIndex = index - rowOffset
+    return (
+      <div
+        key={getItemKey(row, itemIndex)}
+        style={itemStyle(itemIndex, total)}
+        // A long reply's steps, drawn a stretch at a time inside the row,
+        // leave keeping the view still to virtua once the row is above it
+        // (see `useTimelineWindow`).
+        data-thread-row=""
+      >
+        <div className={cn("mx-auto chat-content-w px-4", className)}>
+          {renderItem(row, itemIndex)}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <MessageScrollProvider value={scrollContextValue}>
       <MessageThreadContent
@@ -562,38 +616,9 @@ function VirtualizedMessageThreadImpl<T>({
             shift={shift}
             keepMounted={keepMounted}
             onScroll={handleScroll}
+            data={rows}
           >
-            {hasOlder ? (
-              <div key="load-older-row" style={styles.first}>
-                <div className={cn("mx-auto chat-content-w px-4", className)}>
-                  <button
-                    type="button"
-                    onClick={isLoadingOlder ? undefined : onLoadOlder}
-                    disabled={isLoadingOlder}
-                    className="mx-auto flex items-center gap-2 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:cursor-default disabled:hover:bg-muted/40"
-                  >
-                    {isLoadingOlder ? (
-                      <>
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        {loadingOlderLabel}
-                      </>
-                    ) : (
-                      loadOlderLabel
-                    )}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {items.map((item, index) => (
-              <div
-                key={getItemKey(item, index)}
-                style={itemStyle(index, items.length)}
-              >
-                <div className={cn("mx-auto chat-content-w px-4", className)}>
-                  {renderItem(item, index)}
-                </div>
-              </div>
-            ))}
+            {renderRow}
           </Virtualizer>
         )}
       </MessageThreadContent>

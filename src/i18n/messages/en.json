@@ -4053,8 +4053,7 @@
           "taskFailed": "Task failed",
           "taskStopped": "Task stopped",
           "taskRunning": "Task running",
-          "planUpdated": "Updated plan",
-          "showMoreSteps": "{count, plural, one {Show # more step} other {Show # more steps}}"
+          "planUpdated": "Updated plan"
         },
         "explore": {
           "files": "{count, plural, one {# file} other {# files}}",

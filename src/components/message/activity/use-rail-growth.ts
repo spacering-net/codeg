@@ -26,6 +26,8 @@ const MAX_JOIN = 6
 const GROWTH = new Set(["activity-rail-grow", "activity-rail-extend"])
 /** The foot a list ends on (timeline-foot.tsx). */
 const FOOT = '[data-marker="working"], [data-marker="foot"]'
+/** A stretch of a long list that is not drawn (activity-timeline.tsx). */
+const SPACER = "spacer"
 
 function unmark(row: Element) {
   row.removeAttribute(ENTER)
@@ -99,12 +101,32 @@ export function useRailGrowth(
       })
     }
     const observer = new MutationObserver((records) => {
+      // A long list's window reaching its end draws its last rows where the
+      // spacer for them stood: drawn, not joining.
+      if (
+        records.some((record) =>
+          [...record.removedNodes].some(
+            (node) =>
+              node instanceof HTMLElement && node.dataset.marker === SPACER
+          )
+        )
+      ) {
+        return
+      }
       const joined: HTMLElement[] = []
       const extended: HTMLElement[] = []
       for (const record of records) {
+        // Rows join at the end, above the foot if the list has one. A long
+        // list drawn a stretch at a time (`useTimelineWindow`) also draws
+        // rows elsewhere as it scrolls, and the spacers that stand for the
+        // rest: neither is a step joining.
+        const next = record.nextSibling
+        if (next instanceof Element && !next.matches(FOOT)) continue
         const added = [...record.addedNodes].filter(
           (node): node is HTMLElement =>
-            node instanceof HTMLElement && node.parentElement === list
+            node instanceof HTMLElement &&
+            node.parentElement === list &&
+            node.dataset.marker !== SPACER
         )
         if (added.length === 0) continue
         joined.push(...added)
@@ -123,7 +145,9 @@ export function useRailGrowth(
       join(
         [...list.children].filter(
           (row): row is HTMLElement =>
-            row instanceof HTMLElement && !row.matches(FOOT)
+            row instanceof HTMLElement &&
+            !row.matches(FOOT) &&
+            row.dataset.marker !== SPACER
         ),
         []
       )

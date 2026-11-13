@@ -4053,8 +4053,7 @@
           "taskFailed": "작업 실패",
           "taskStopped": "작업 중지됨",
           "taskRunning": "작업 실행 중",
-          "planUpdated": "계획 업데이트",
-          "showMoreSteps": "나머지 {count}단계 보기"
+          "planUpdated": "계획 업데이트"
         },
         "explore": {
           "files": "파일 {count}개",

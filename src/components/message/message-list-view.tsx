@@ -29,12 +29,11 @@ import {
 } from "@/lib/context-compaction"
 import {
   createMessageTurnAdapter,
-  groupGoalRuns,
-  mergeAdjacentDelegationStatusGroups,
-  mergeAdjacentBackgroundTaskGroups,
+  mergeRunParts,
   type AdaptedContentPart,
   type AdaptedMessage,
   type AdaptedToolCallPart,
+  type MergedRunParts,
   type MessageTurnAdapter,
   type ToolCallState,
   type UserImageDisplay,
@@ -806,6 +805,9 @@ export interface MergedAssistantRunCacheEntry {
   memberKeys: string[]
   memberCompletion: boolean[]
   item: AssistantTurnItem
+  /** Its parts' merge, which the run's next merge starts from when only its
+   *  last members changed — a reply streaming in (see `mergeRunParts`). */
+  merge: MergedRunParts
 }
 export type MergedAssistantRunCache = WeakMap<
   ResolvedMessageGroup,
@@ -831,6 +833,18 @@ export function isTurnErrorGroup(group: ResolvedMessageGroup): boolean {
   )
 }
 
+type CompactionOnlyPart = {
+  meta: Record<string, unknown> | null
+  summary: string | null
+  state: ToolCallState
+  callId: string
+} | null
+
+const compactionOnlyByGroup = new WeakMap<
+  ResolvedMessageGroup,
+  CompactionOnlyPart
+>()
+
 /**
  * When a resolved group's ONLY meaningful content is a single context-compaction
  * tool-call part, return that part's `_meta`, retained summary and call id (so
@@ -841,20 +855,35 @@ export function isTurnErrorGroup(group: ResolvedMessageGroup): boolean {
  * boolean marker or the 1.3.0+ versioned object), so a non-null return is
  * unambiguous.
  */
-export function compactionOnlyPart(group: ResolvedMessageGroup): {
-  meta: Record<string, unknown> | null
-  summary: string | null
-  state: ToolCallState
-  callId: string
-} | null {
+export function compactionOnlyPart(
+  group: ResolvedMessageGroup
+): CompactionOnlyPart {
+  // Asked of every group on every batch, and a group keeps its object for as
+  // long as it reads the same.
+  let found = compactionOnlyByGroup.get(group)
+  if (found === undefined) {
+    found = findCompactionOnlyPart(group)
+    compactionOnlyByGroup.set(group, found)
+  }
+  return found
+}
+
+function findCompactionOnlyPart(
+  group: ResolvedMessageGroup
+): CompactionOnlyPart {
   if (group.role !== "assistant") return null
   if (group.resources.length > 0 || group.images.length > 0) return null
-  const meaningful = group.parts.filter(
-    (p) => !(p.type === "text" && p.text.trim().length === 0)
-  )
-  if (meaningful.length !== 1) return null
-  const only = meaningful[0]
-  if (only.type !== "tool-call" || !isContextCompactionMeta(only.meta)) {
+  let only: AdaptedContentPart | null = null
+  for (const part of group.parts) {
+    if (part.type === "text" && part.text.trim().length === 0) continue
+    if (only) return null
+    only = part
+  }
+  if (
+    !only ||
+    only.type !== "tool-call" ||
+    !isContextCompactionMeta(only.meta)
+  ) {
     return null
   }
   return {
@@ -1015,20 +1044,21 @@ export function mergeConsecutiveAssistantTurns(
     } else if (reuseCachedMergedRun()) {
       // Reused — nothing to rebuild.
     } else {
-      const allParts = buffer.flatMap((it) => it.group.parts)
       // A goal run straddling these merged sub-turns is still live only if the
       // final sub-turn is streaming; once it settles (stop / turn end / reload)
       // the unfinished-run shimmer must stop. Mirror groupGoalRuns' per-turn
       // isStreaming gate at the merge layer.
       const mergedStreaming = buffer.some((it) => it.phase === "streaming")
       // Collapse runs of single-poll delegation-status and background-task
-      // groups (each polling round is its own turn) into one.
-      const mergedParts = groupGoalRuns(
-        mergeAdjacentBackgroundTaskGroups(
-          mergeAdjacentDelegationStatusGroups(allParts)
-        ),
-        mergedStreaming
+      // groups (each polling round is its own turn) into one, and a goal's
+      // lifecycle into its run — starting from the run's last merge where
+      // only its last members changed, as they do while it streams.
+      const merge = mergeRunParts(
+        buffer.map((it) => it.group.parts),
+        mergedStreaming,
+        mergeCache?.get(buffer[0].group)?.merge ?? null
       )
+      const mergedParts = merge.parts
       const last = buffer[buffer.length - 1]
       const first = buffer[0]
 
@@ -1104,6 +1134,7 @@ export function mergeConsecutiveAssistantTurns(
         memberKeys: buffer.map((it) => it.key),
         memberCompletion: buffer.map((it) => it.isResponseComplete),
         item: merged,
+        merge,
       })
     }
 
@@ -1358,7 +1389,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
           models={group.models}
           previousUserIndex={previousUserIndex}
           isResponseComplete={isResponseComplete}
-          copyText={extractTextFromParts(group.parts)}
+          // The row shows nothing until the reply is done; joining all of a
+          // long reply's prose on every batch while it streams bought nothing.
+          copyText={isResponseComplete ? extractTextFromParts(group.parts) : ""}
           completedAt={group.completed_at}
           forkDisabled={forkDisabled || forkPointUnnamed}
           forkDisabledReason={forkPointUnnamed ? "unnamed" : "busy"}

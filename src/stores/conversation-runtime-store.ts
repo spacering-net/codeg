@@ -1119,6 +1119,22 @@ export function isLiveTurnId(id: string): boolean {
  */
 const inferredToolNames = new WeakMap<ToolCallInfo, string>()
 
+/**
+ * A call's Kimi todo write (`kimiTodoWriteEntries` of its input), by the call's
+ * info, for the same reason as `inferredToolNames`: the builder asks of every
+ * call twice per token, and each ask parses the call's input.
+ */
+const kimiTodosByInfo = new WeakMap<ToolCallInfo, PlanEntryInfo[] | null>()
+
+function kimiTodosOf(info: ToolCallInfo): PlanEntryInfo[] | null {
+  let entries = kimiTodosByInfo.get(info)
+  if (entries === undefined) {
+    entries = kimiTodoWriteEntries(info.raw_input)
+    kimiTodosByInfo.set(info, entries)
+  }
+  return entries
+}
+
 export function buildStreamingTurnsFromLiveMessage(
   conversationId: number,
   liveMessage: LiveMessage
@@ -1142,7 +1158,7 @@ export function buildStreamingTurnsFromLiveMessage(
   let latestKimiTodoEntries: PlanEntryInfo[] | null = null
   for (const block of content) {
     if (block.type === "tool_call") {
-      const entries = kimiTodoWriteEntries(block.info.raw_input)
+      const entries = kimiTodosOf(block.info)
       if (entries) latestKimiTodoEntries = entries
     }
   }
@@ -1511,7 +1527,7 @@ export function buildStreamingTurnsFromLiveMessage(
         // over. Fail-safe: if Kimi never emitted the plan, the converted plan
         // still shows (no data loss). Identity is the exact Kimi todo-write input
         // shape because the real tool name "TodoList" is never on the live wire.
-        const kimiTodos = kimiTodoWriteEntries(block.info.raw_input)
+        const kimiTodos = kimiTodosOf(block.info)
         if (kimiTodos) {
           if (!hasLivePlan) {
             currentBlocks.push({ type: "plan", entries: kimiTodos })
@@ -1641,7 +1657,105 @@ export function buildStreamingTurnsFromLiveMessage(
       timestamp: group.timestamp ?? timestamp,
     }))
 
-  return { turns, inProgressToolCallIds }
+  return keepUnchangedStreamingTurns(`${conversationId}:${liveMessage.id}`, {
+    turns,
+    inProgressToolCallIds,
+  })
+}
+
+/**
+ * The last build of each live message (`<conversation>:<message id>`), so the
+ * next one can hand back what did not change. A live message is rebuilt into
+ * turns on every batch, yet nearly all of a long reply reads as it did the
+ * batch before — only the round being written moves. Kept, its turns keep
+ * their objects, and everything downstream that caches by identity (the turn
+ * adapter, the merged reply, the activity model, the per-turn file changes)
+ * keeps its work: a batch then costs what it changed, not the whole reply. A
+ * few at a time — the messages streaming now.
+ */
+const lastStreamingBuilds = new Map<string, BuiltStreamingTurns>()
+const LAST_STREAMING_BUILDS = 8
+
+/** Whether two values built from the same live content read the same: equal
+ *  primitives, or plain objects and arrays of such, field by field. */
+function sameBuiltValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (
+    typeof a !== "object" ||
+    typeof b !== "object" ||
+    a === null ||
+    b === null
+  ) {
+    return false
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false
+    }
+    for (let i = 0; i < a.length; i++) {
+      if (!sameBuiltValue(a[i], b[i])) return false
+    }
+    return true
+  }
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const keys = Object.keys(left)
+  if (keys.length !== Object.keys(right).length) return false
+  for (const key of keys) {
+    if (!(key in right) || !sameBuiltValue(left[key], right[key])) return false
+  }
+  return true
+}
+
+function sameBuiltTurn(a: MessageTurn, b: MessageTurn): boolean {
+  if (a.role !== b.role || a.timestamp !== b.timestamp) return false
+  if (a.blocks.length !== b.blocks.length) return false
+  for (let i = 0; i < a.blocks.length; i++) {
+    if (!sameBuiltValue(a.blocks[i], b.blocks[i])) return false
+  }
+  return true
+}
+
+function keepUnchangedStreamingTurns(
+  key: string,
+  built: BuiltStreamingTurns
+): BuiltStreamingTurns {
+  const previous = lastStreamingBuilds.get(key)
+  let kept = built
+  if (previous) {
+    const previousById = new Map(previous.turns.map((turn) => [turn.id, turn]))
+    let unchanged = built.turns.length === previous.turns.length
+    const turns = built.turns.map((turn, index) => {
+      const before = previousById.get(turn.id)
+      if (before && sameBuiltTurn(before, turn)) {
+        if (previous.turns[index] !== before) unchanged = false
+        return before
+      }
+      unchanged = false
+      return turn
+    })
+    const before = previous.inProgressToolCallIds
+    const now = built.inProgressToolCallIds
+    let sameIds = before.size === now.size
+    if (sameIds) {
+      for (const id of now) {
+        if (!before.has(id)) {
+          sameIds = false
+          break
+        }
+      }
+    }
+    kept = {
+      turns: unchanged ? previous.turns : turns,
+      inProgressToolCallIds: sameIds ? before : now,
+    }
+  }
+  lastStreamingBuilds.delete(key)
+  lastStreamingBuilds.set(key, kept)
+  if (lastStreamingBuilds.size > LAST_STREAMING_BUILDS) {
+    lastStreamingBuilds.delete(lastStreamingBuilds.keys().next().value!)
+  }
+  return kept
 }
 
 /** Metadata backfilled onto a local assistant turn by the post-turn reparse. */
@@ -5277,6 +5391,7 @@ export function resetConversationRuntimeStore(): void {
   pendingSessionReleases.clear()
   timelineCache = new WeakMap()
   timelinePrefixCache = new WeakMap()
+  lastStreamingBuilds.clear()
   useConversationRuntimeStore.setState({
     byConversationId: new Map(),
     conversationIdByExternalId: new Map(),

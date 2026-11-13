@@ -720,11 +720,9 @@ export const CommandGroupRow = memo(function CommandGroupRow({
             what: t("header.commands", { count: steps.length }),
             onFold: () => setOpen(false),
           }}
-        >
-          {steps.map((step) => (
-            <CommandRow key={step.key} step={step} inGroup />
-          ))}
-        </ActivityMembers>
+          members={steps}
+          renderMember={(step) => <CommandRow step={step} inGroup />}
+        />
       )}
     >
       <span

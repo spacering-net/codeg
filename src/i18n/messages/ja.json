@@ -4053,8 +4053,7 @@
           "taskFailed": "タスク失敗",
           "taskStopped": "タスク停止",
           "taskRunning": "タスク実行中",
-          "planUpdated": "計画を更新",
-          "showMoreSteps": "残り {count} ステップを表示"
+          "planUpdated": "計画を更新"
         },
         "explore": {
           "files": "ファイル {count} 件",

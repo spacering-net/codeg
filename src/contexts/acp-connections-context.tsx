@@ -959,21 +959,23 @@ export const STREAM_FLUSH_MAX_MS = 192
 /** Characters of re-rendered live content that buy one more frame. */
 const STREAM_FLUSH_CHARS_PER_FRAME = 8 * 1024
 /**
- * What one re-rendered non-prose block costs, in prose-equivalent characters.
+ * What one non-prose block of the live turn adds to a batch, in
+ * prose-equivalent characters.
  *
- * Measured in the real component tree (jsdom, React 19), re-rendering a live
- * turn the way a batch does — growing prose costs 0.00075 ms/char, while each
- * block that re-renders whole costs a FLAT 0.02 ms (a collapsed thinking
- * block) to 0.18 ms (a plan card), with a tool card at 0.06 ms. That is 30 to
- * 235 prose-equivalent characters; 128 sits inside the range, so 64 cards buy
- * one extra frame.
+ * A block no batch changes is no longer drawn again (see `liveRerenderChars`),
+ * yet each batch still walks it: the live message is rebuilt into turns and
+ * compared, the reply merged and its activity model rebuilt from the parts it
+ * kept. Measured in the browser on a reply of 600 calls and 300 stretches of
+ * prose (Edge, CPU slowed 4×): a text batch costs 0.02 ms more per block, where
+ * the prose it grows costs about 0.006 ms per character — three to four
+ * characters a block. 16 keeps a margin over that: a reply of a thousand
+ * blocks streams in 32 ms batches instead of being held to the ceiling, five
+ * batches a second, as when every block was redrawn on every batch (then 30 to
+ * 235 characters each, measured in jsdom).
  *
- * Flat, not proportional to the block's content, because that is what the
- * measurement shows: a collapsed thinking block costs the same at 200 and at
- * 4000 characters, since the cards render clamped previews and Radix keeps
- * closed content unmounted.
+ * Flat, not proportional to the block's content: what it holds is not drawn.
  */
-const STREAM_FLUSH_BLOCK_CHARS = 128
+const STREAM_FLUSH_BLOCK_CHARS = 16
 /**
  * Deltas one connection may coalesce before the window is cut short. A safety
  * valve for a burst the timer can't keep up with, not a cadence knob — it
@@ -996,15 +998,16 @@ const STREAM_QUEUE_CAP = 256
  *   value, so an unchanged run bails out before the markdown renderer.
  *   (Measured: eight extra settled 8 KB blocks cost nothing.)
  * - Everything else — tool cards, closed thinking blocks, plan cards,
- *   steering notes — re-renders on EVERY batch regardless. They memoize on
- *   the part object, and `createMessageTurnAdapter` refuses to cache a
- *   streaming turn (`cacheable = !isStreaming && !inProgress`), so each batch
- *   hands them freshly built objects. Charged a flat
- *   `STREAM_FLUSH_BLOCK_CHARS` each.
+ *   steering notes — is not drawn again unless the batch changed it: the
+ *   rounds of the live message that read the same keep their objects
+ *   (`buildStreamingTurnsFromLiveMessage`), so the adapter, the merged reply
+ *   and the rows they feed keep theirs. Each is still walked on every batch,
+ *   though, and a long reply's timeline draws only the rows in view: charged
+ *   a small flat `STREAM_FLUSH_BLOCK_CHARS` each.
  *
- * A turn that has run a hundred tools and is now writing its summary has a
+ * A turn that has run a thousand tools and is now writing its summary has a
  * short run and a real per-batch cost; sizing from the run alone would leave
- * it on a single frame while it burns a third of every one.
+ * it on a single frame while it burns most of every one.
  */
 export function liveRerenderChars(
   content: readonly LiveContentBlock[] | undefined

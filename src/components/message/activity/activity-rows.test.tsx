@@ -1,5 +1,12 @@
 import { useState, type ReactElement } from "react"
-import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -384,7 +391,7 @@ describe("jumping to a failure", () => {
 })
 
 describe("long replies", () => {
-  function edits(count: number): MessageTurn {
+  function edits(count: number, failAt?: number): MessageTurn {
     const blocks: ContentBlock[] = []
     for (let i = 0; i < count; i++) {
       blocks.push(
@@ -394,20 +401,40 @@ describe("long replies", () => {
           new_string: "b",
         })
       )
-      blocks.push(toolResult(`e${i}`, "ok"))
+      blocks.push(
+        i === failAt
+          ? toolResult(`e${i}`, "String to replace not found", true)
+          : toolResult(`e${i}`, "ok")
+      )
     }
     return turn(blocks)
   }
 
-  it("opens a giant reply with its head and tail and a way to see the rest", () => {
-    renderUi(<Round parts={parts(edits(200))} />)
-    const more = screen.getByRole("button", { name: "Show 130 more steps" })
-    expect(screen.getAllByText("Edited")).toHaveLength(70)
-    fireEvent.click(more)
-    expect(screen.getAllByText("Edited")).toHaveLength(200)
+  const spacers = (container: HTMLElement) =>
+    container.querySelectorAll<HTMLElement>('li[data-marker="spacer"]')
+
+  it("draws a giant reply a stretch at a time, the rest a scroll away", () => {
+    const view = renderUi(<Round parts={parts(edits(200))} />)
+    // Opened at its head: the rows near it, then one spacer as tall as the
+    // rest, for the list to keep its height. No fold to click through.
+    const drawn = screen.getAllByText("Edited")
+    expect(drawn.length).toBeGreaterThan(0)
+    expect(drawn.length).toBeLessThan(200)
+    expect(rowOf("f0.ts")).toBeTruthy()
+    expect(screen.queryByText("f199.ts")).toBeNull()
+    expect(screen.queryByRole("button", { name: /more step/ })).toBeNull()
+    const [after] = spacers(view.container)
+    expect(after).toHaveAttribute("aria-hidden", "true")
+    expect(Number.parseFloat(after!.style.height)).toBeGreaterThan(0)
   })
 
-  it("folds a streaming reply's rows away one at a time as it grows", () => {
+  it("draws a short reply whole", () => {
+    const view = renderUi(<Round parts={parts(edits(40))} />)
+    expect(screen.getAllByText("Edited")).toHaveLength(40)
+    expect(spacers(view.container)).toHaveLength(0)
+  })
+
+  it("keeps drawing the rows that join a live reply resting at its end", () => {
     // At work on its latest call: no prose after it yet, which would be one
     // more row on the rail.
     const running = (count: number): MessageTurn => {
@@ -418,22 +445,72 @@ describe("long replies", () => {
       <Round parts={parts(running(count), true)} completed={false} />
     )
     const view = renderUi(live(150))
-    expect(screen.getAllByText("Edited")).toHaveLength(150)
-    expect(screen.queryByRole("button", { name: /more step/ })).toBeNull()
+    expect(screen.getAllByText("Edited").length).toBeLessThan(150)
+    expect(screen.queryByText("f0.ts")).toBeNull()
     const late = rowOf("f149.ts")
-    // Past the fold, the oldest row past the head goes, not a whole chunk —
-    // and the rows that stay are the same rows, not drawn again.
     view.rerender(withProviders(live(151)))
-    expect(
-      screen.getByRole("button", { name: "Show 1 more step" })
-    ).toBeTruthy()
-    expect(screen.getAllByText("Edited")).toHaveLength(150)
+    expect(rowOf("f150.ts")).toBeTruthy()
+    // The rows that stay are the same rows, not drawn again.
     expect(rowOf("f149.ts")).toBe(late)
-    view.rerender(withProviders(live(152)))
+  })
+
+  it("draws a failure far down the reply when the header points to it", async () => {
+    renderUi(<Round parts={parts(edits(200, 150))} />)
+    expect(screen.queryByText("f150.ts")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "1 failed" }))
+    await waitFor(() => expect(rowOf("f150.ts")).toBeTruthy())
+  })
+})
+
+describe("long runs of commands", () => {
+  function commands(count: number, failAt?: number): MessageTurn {
+    const blocks: ContentBlock[] = []
+    for (let i = 0; i < count; i++) {
+      blocks.push(toolUse(`c${i}`, "Bash", { command: `npm run task${i}` }))
+      blocks.push(
+        i === failAt
+          ? toolResult(`c${i}`, "npm ERR! missing script", true)
+          : toolResult(`c${i}`, "ok")
+      )
+    }
+    return turn(blocks)
+  }
+
+  it("draws a long group's members a stretch at a time", () => {
+    // Still at it: the group stays open as it grows.
+    const running = commands(150)
+    const live = { ...running, blocks: running.blocks.slice(0, -1) }
+    const view = renderUi(<Round parts={parts(live, true)} completed={false} />)
+    const drawn = view.container.querySelectorAll(
+      'li.activity-child[data-step-key^="tool:c"]'
+    )
+    expect(drawn.length).toBeGreaterThan(0)
+    expect(drawn.length).toBeLessThan(150)
+    // Live, it rests on its newest members.
+    expect(screen.getByText("npm run task149")).toBeTruthy()
+    expect(screen.queryByText("npm run task0")).toBeNull()
     expect(
-      screen.getByRole("button", { name: "Show 2 more steps" })
-    ).toBeTruthy()
-    expect(screen.getAllByText("Edited")).toHaveLength(150)
+      view.container.querySelectorAll('li.activity-child[data-marker="spacer"]')
+    ).toHaveLength(1)
+  })
+
+  it("draws a group's failed first member when the header points to it", async () => {
+    // Live, its members rest on the newest; the first shares the group's key.
+    const running = commands(150, 0)
+    const live = { ...running, blocks: running.blocks.slice(0, -1) }
+    renderUi(<Round parts={parts(live, true)} completed={false} />)
+    expect(screen.queryByText("npm run task0")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "1 failed" }))
+    await waitFor(() => expect(screen.getByText("npm run task0")).toBeTruthy())
+  })
+
+  it("draws a failed member far down a folded group when the header points to it", async () => {
+    renderUi(<Round parts={parts(commands(150, 120))} />)
+    expect(screen.queryByText("npm run task120")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "1 failed" }))
+    await waitFor(() =>
+      expect(screen.getByText("npm run task120")).toBeTruthy()
+    )
   })
 })
 

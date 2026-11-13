@@ -4053,8 +4053,7 @@
           "taskFailed": "任务失败",
           "taskStopped": "任务已停止",
           "taskRunning": "任务运行中",
-          "planUpdated": "更新了计划",
-          "showMoreSteps": "显示其余 {count} 步"
+          "planUpdated": "更新了计划"
         },
         "explore": {
           "files": "{count} 个文件",

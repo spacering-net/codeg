@@ -38,6 +38,8 @@ function List({
           key={row}
           data-row={row}
           data-body={row === body ? "" : undefined}
+          // A stretch of a long list not drawn (activity-timeline.tsx).
+          data-marker={row.startsWith("spacer") ? "spacer" : undefined}
         />
       ))}
       {foot ? <li key="foot" data-row="foot" data-marker="working" /> : null}
@@ -229,6 +231,38 @@ describe("useRailGrowth", () => {
       b: "extend",
       c: "enter",
     })
+  })
+
+  it("leaves the rows a long list draws as it scrolls alone", async () => {
+    // Drawn a stretch at a time: rows come in above the ones drawn, and the
+    // spacer standing for the rest comes and goes. None of it is a step
+    // joining the list.
+    const view = render(<List rows={["c", "d"]} live foot />)
+    view.rerender(<List rows={["spacer-a", "a", "b", "c", "d"]} live foot />)
+    expect(await marks(view.container)).toEqual({
+      "spacer-a": "",
+      a: "",
+      b: "",
+      c: "",
+      d: "",
+      foot: "",
+    })
+    view.rerender(
+      <List rows={["spacer-a", "a", "b", "c", "d", "spacer-b"]} live foot />
+    )
+    expect((await marks(view.container))["spacer-b"]).toBe("")
+    // The window reaching the end: the spacer goes, the rows it stood for
+    // are drawn above the foot. Drawn, not joining.
+    view.rerender(
+      <List rows={["spacer-a", "a", "b", "c", "d", "x", "y"]} live foot />
+    )
+    const reached = await marks(view.container)
+    expect([reached.x, reached.y]).toEqual(["", ""])
+    // A step joining at the end, the window resting there, still does.
+    view.rerender(
+      <List rows={["spacer-a", "a", "b", "c", "d", "x", "y", "e"]} live foot />
+    )
+    expect((await marks(view.container)).e).toBe("enter")
   })
 
   it("clears its marks when the list settles", async () => {

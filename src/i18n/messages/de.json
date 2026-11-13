@@ -4053,8 +4053,7 @@
           "taskFailed": "Aufgabe fehlgeschlagen",
           "taskStopped": "Aufgabe gestoppt",
           "taskRunning": "Aufgabe läuft",
-          "planUpdated": "Plan aktualisiert",
-          "showMoreSteps": "{count, plural, one {# weiteren Schritt zeigen} other {# weitere Schritte zeigen}}"
+          "planUpdated": "Plan aktualisiert"
         },
         "explore": {
           "files": "{count, plural, one {# Datei} other {# Dateien}}",

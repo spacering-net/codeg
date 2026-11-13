@@ -4053,8 +4053,7 @@
           "taskFailed": "فشلت المهمة",
           "taskStopped": "أوقفت المهمة",
           "taskRunning": "المهمة قيد التشغيل",
-          "planUpdated": "حدّث الخطة",
-          "showMoreSteps": "{count, plural, zero {لا خطوات أخرى} one {عرض خطوة أخرى} two {عرض خطوتين أخريين} few {عرض # خطوات أخرى} many {عرض # خطوة أخرى} other {عرض # خطوة أخرى}}"
+          "planUpdated": "حدّث الخطة"
         },
         "explore": {
           "files": "{count, plural, zero {لا ملفات} one {ملف واحد} two {ملفان} few {# ملفات} many {# ملفاً} other {# ملف}}",
