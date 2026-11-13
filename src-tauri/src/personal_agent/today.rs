@@ -64,6 +64,8 @@ pub struct TodayView {
     /// The handed-out work rows point at (`dispatch_id`), for the page to
     /// open as it opens a work card. Filled by the page call.
     pub dispatches: Vec<crate::models::personal_agent::DispatchInfo>,
+    /// The morning brief or the wrap-up being prepared (6.4).
+    pub brief: Option<super::brief::TodayBrief>,
 }
 
 /// One row: what it is, whose it is, and what opens it.
@@ -127,7 +129,7 @@ pub struct TodayProject {
 }
 
 impl TodayRow {
-    fn new(key: String, kind: &'static str, title: String, at: DateTime<Utc>) -> Self {
+    pub(super) fn new(key: String, kind: &'static str, title: String, at: DateTime<Utc>) -> Self {
         Self {
             key,
             kind,
@@ -209,9 +211,21 @@ pub async fn today(
     manager: &ConnectionManager,
     now: DateTime<Utc>,
 ) -> (TodayView, Vec<dispatch_entity::Model>) {
+    today_from(db, manager, now, None).await
+}
+
+/// [`today`], with what was done counted from `done_from` rather than the
+/// day's start: the morning brief's "since the last one" (6.4).
+pub async fn today_from(
+    db: &AppDatabase,
+    manager: &ConnectionManager,
+    now: DateTime<Utc>,
+    done_from: Option<DateTime<Utc>>,
+) -> (TodayView, Vec<dispatch_entity::Model>) {
     let prefs = account_prefs(db).await;
     let tz = clock::zone_of(&prefs.time_zone);
     let (day_start, day_end) = day_of(now, tz);
+    let done_from = done_from.unwrap_or(day_start);
     let bots = svc::list_bots(&db.conn).await.unwrap_or_default();
     let folders = Folders::load(db).await;
     let tasks = board(db, None).await;
@@ -702,7 +716,7 @@ pub async fn today(
             dispatch_entity::Column::State
                 .is_in([DispatchState::Completed, DispatchState::Canceled]),
         )
-        .filter(dispatch_entity::Column::FinishedAt.gte(day_start))
+        .filter(dispatch_entity::Column::FinishedAt.gte(done_from))
         .order_by_desc(dispatch_entity::Column::FinishedAt)
         .all(&db.conn)
         .await
@@ -727,7 +741,7 @@ pub async fn today(
         view.done.push(row);
     }
     // Pull requests merged today, as their watches read it (7.4).
-    for w in crate::db::service::personal_agent_watch_service::ended_since(&db.conn, day_start)
+    for w in crate::db::service::personal_agent_watch_service::ended_since(&db.conn, done_from)
         .await
         .unwrap_or_default()
     {
@@ -760,7 +774,7 @@ pub async fn today(
         }
         view.done.push(row);
     }
-    for a in super::asks::answered_for_owner_since(db, day_start).await {
+    for a in super::asks::answered_for_owner_since(db, done_from).await {
         if !bot_ids.contains(&a.bot_id) {
             continue;
         }
@@ -782,7 +796,7 @@ pub async fn today(
         &db.conn,
         NoticeKind::Changed,
         &[NoticeState::Acted, NoticeState::Undone],
-        day_start,
+        done_from,
     )
     .await
     .unwrap_or_default()
@@ -799,7 +813,7 @@ pub async fn today(
         };
         // Changed today, or changed before and taken back today.
         let at = n.acted_at.unwrap_or(n.updated_at);
-        if at < day_start && n.state != NoticeState::Undone {
+        if at < done_from && n.state != NoticeState::Undone {
             continue;
         }
         let title = match n.timeline_id {
@@ -828,7 +842,7 @@ pub async fn today(
         &db.conn,
         NoticeKind::Forge,
         &[NoticeState::Acted],
-        day_start,
+        done_from,
     )
     .await
     .unwrap_or_default()
@@ -837,7 +851,7 @@ pub async fn today(
             continue;
         };
         let at = n.acted_at.unwrap_or(n.updated_at);
-        if at < day_start {
+        if at < done_from {
             continue;
         }
         let title = match n.timeline_id {
@@ -858,7 +872,7 @@ pub async fn today(
     }
     // The routines' reports today, "no change" among them (6.2: low).
     for run in crate::db::service::personal_agent_routine_service::runs_between(
-        &db.conn, day_start, day_end,
+        &db.conn, done_from, day_end,
     )
     .await
     .unwrap_or_default()
@@ -898,6 +912,8 @@ pub async fn today(
         view.done.push(row);
     }
     view.done.sort_by_key(|r| std::cmp::Reverse(r.at));
+
+    view.brief = super::brief::today_note(db, now).await;
 
     dispatch_ids.sort_unstable();
     dispatch_ids.dedup();

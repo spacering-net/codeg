@@ -19,6 +19,7 @@ import {
   Bell,
   BellDot,
   CircleX,
+  Coffee,
   FolderGit2,
   FolderPlus,
   GitBranch,
@@ -50,6 +51,7 @@ import {
   MessagesSquare,
   Moon,
   MoonStar,
+  Newspaper,
   Repeat,
   Reply,
   RotateCcw,
@@ -60,6 +62,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Sunrise,
+  Sunset,
   Text,
   Timer,
   TriangleAlert,
@@ -84,6 +87,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { isDesktop } from "@/lib/transport"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -158,6 +162,7 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   level_routine_paused: "urgent",
   level_proposal: "normal",
   level_proposal_low: "low",
+  level_brief: "normal",
   rule_failed: "on",
   rule_failed_hours: 2,
   rule_review: "on",
@@ -175,6 +180,19 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   rule_repeat: "on",
   rule_repeat_count: 3,
   rule_suggest: "on",
+  brief: "on",
+  brief_time: "hours",
+  brief_at: "08:30",
+  brief_needs: "on",
+  brief_night: "on",
+  brief_bots: "on",
+  brief_schedule: "on",
+  brief_loose: "on",
+  brief_yesterday: "on",
+  brief_suggestions: 3,
+  wrap: "auto",
+  wrap_tonight: "on",
+  keep_awake: "on",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -217,17 +235,24 @@ export const DISTURB_PRESETS: Record<
   "quiet" | "standard" | "more",
   Partial<PersonalAgentPrefs>
 > = {
-  quiet: { normal_via: "today", low_via: "today", ...rulePreset("quiet") },
+  quiet: {
+    normal_via: "today",
+    low_via: "today",
+    wrap: "ask",
+    ...rulePreset("quiet"),
+  },
   standard: {
     normal_via: "system",
     low_via: "today",
     focus_wait: 3,
+    wrap: "auto",
     ...rulePreset("standard"),
   },
   more: {
     normal_via: "system",
     low_via: "digest",
     focus_wait: 0,
+    wrap: "auto",
     ...rulePreset("more"),
   },
 }
@@ -296,6 +321,7 @@ export const LEVEL_ITEMS: PersonalAgentPrefKey[] = [
   "level_routine_paused",
   "level_proposal",
   "level_proposal_low",
+  "level_brief",
 ]
 
 /** The items that take a time of day, `HH:MM`. */
@@ -303,6 +329,7 @@ const CLOCK_ITEMS: ReadonlySet<PersonalAgentPrefKey> = new Set([
   "quiet_from",
   "quiet_to",
   "morning_at",
+  "brief_at",
 ])
 
 /** Whether `item` takes a time of day. */
@@ -347,6 +374,17 @@ const CHOICES: Partial<Record<PersonalAgentPrefKey, readonly string[]>> = {
   quiet_hours: ["auto", "fixed", "none"],
   quiet_lets: ["reminders", "urgent"],
   morning: ["hours", "fixed"],
+  brief: ["on", "off"],
+  brief_time: ["hours", "fixed"],
+  brief_needs: ["on", "off"],
+  brief_night: ["on", "off"],
+  brief_bots: ["on", "off"],
+  brief_schedule: ["on", "off"],
+  brief_loose: ["on", "off"],
+  brief_yesterday: ["on", "off"],
+  wrap: ["auto", "ask", "off"],
+  wrap_tonight: ["on", "off"],
+  keep_awake: ["on", "off"],
   ...Object.fromEntries(LEVEL_ITEMS.map((k) => [k, NEWS_LEVELS])),
 }
 
@@ -363,6 +401,7 @@ export const COUNT_MAX: Partial<Record<PersonalAgentPrefKey, number>> = {
   rule_uncommitted_hours: 720,
   rule_idle_days: 90,
   rule_repeat_count: 20,
+  brief_suggestions: 5,
 }
 
 const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
@@ -420,6 +459,7 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   level_routine_paused: CalendarX,
   level_proposal: Lightbulb,
   level_proposal_low: Lightbulb,
+  level_brief: Newspaper,
   rule_failed: TriangleAlert,
   rule_failed_hours: Timer,
   rule_review: Hourglass,
@@ -437,6 +477,19 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   rule_repeat: Repeat,
   rule_repeat_count: Timer,
   rule_suggest: Lightbulb,
+  brief: Newspaper,
+  brief_time: Sunrise,
+  brief_at: AlarmClock,
+  brief_needs: Hand,
+  brief_night: MoonStar,
+  brief_bots: MessagesSquare,
+  brief_schedule: CalendarClock,
+  brief_loose: ListChecks,
+  brief_yesterday: Activity,
+  brief_suggestions: Lightbulb,
+  wrap: Sunset,
+  wrap_tonight: Moon,
+  keep_awake: Coffee,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
@@ -489,6 +542,28 @@ export const RULE_ITEMS: PersonalAgentPrefKey[] = [
   "rule_suggest",
 ]
 
+/** The parts of the morning brief (6.4), each on or off. */
+export const BRIEF_PART_ITEMS: PersonalAgentPrefKey[] = [
+  "brief_needs",
+  "brief_night",
+  "brief_bots",
+  "brief_schedule",
+  "brief_loose",
+  "brief_yesterday",
+]
+
+/** The morning brief's and the wrap-up's items (6.4, 6.5). */
+export const BRIEF_ITEMS: PersonalAgentPrefKey[] = [
+  "brief",
+  "brief_time",
+  "brief_at",
+  ...BRIEF_PART_ITEMS,
+  "brief_suggestions",
+  "wrap",
+  "wrap_tonight",
+  "keep_awake",
+]
+
 /** The items of "Proactive & notifications", the kinds of news included. */
 export const PROACTIVE_ITEMS: PersonalAgentPrefKey[] = [
   "proactive",
@@ -502,6 +577,7 @@ export const PROACTIVE_ITEMS: PersonalAgentPrefKey[] = [
   "quiet_lets",
   "morning",
   "morning_at",
+  ...BRIEF_ITEMS,
   ...LEVEL_ITEMS,
   ...RULE_ITEMS,
 ]
@@ -927,6 +1003,22 @@ export function ProactivePage({ account, disabled }: PageProps) {
       <SettingCard data-pa-pref-group="morning">
         {row("morning")}
         {prefs.morning === "fixed" ? row("morning_at") : null}
+      </SettingCard>
+      <SettingCard data-pa-pref-group="brief">
+        {row("brief")}
+        {prefs.brief === "on" ? (
+          <>
+            {row("brief_time")}
+            {prefs.brief_time === "fixed" ? row("brief_at") : null}
+            {BRIEF_PART_ITEMS.map(row)}
+            {row("brief_suggestions")}
+          </>
+        ) : null}
+      </SettingCard>
+      <SettingCard data-pa-pref-group="wrap">
+        {row("wrap")}
+        {row("wrap_tonight")}
+        {isDesktop() ? row("keep_awake") : null}
       </SettingCard>
       <ProposalRules prefs={prefs} disabled={disabled} />
       <div className="space-y-1.5">

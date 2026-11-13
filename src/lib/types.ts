@@ -2877,6 +2877,8 @@ export interface PersonalAgentPrefs {
   level_proposal: PersonalAgentNewsLevel
   /** codeg's other proposal cards. */
   level_proposal_low: PersonalAgentNewsLevel
+  /** The morning brief and the wrap-up (6.4, 6.5). */
+  level_brief: PersonalAgentNewsLevel
   /** codeg's proposal rules (6.7): each on or off, with its threshold. */
   rule_failed: "on" | "off"
   rule_failed_hours: number
@@ -2896,6 +2898,26 @@ export interface PersonalAgentPrefs {
   rule_repeat_count: number
   /** The assistants' own suggestions (`suggest: true`). */
   rule_suggest: "on" | "off"
+  /** The morning brief (6.4): whether there is one, when it is prepared —
+   *  a quarter of an hour before the usual start, or at `brief_at` — its
+   *  parts, and how many suggestions it may make (0: none). */
+  brief: "on" | "off"
+  brief_time: "hours" | "fixed"
+  brief_at: string
+  brief_needs: "on" | "off"
+  brief_night: "on" | "off"
+  brief_bots: "on" | "off"
+  brief_schedule: "on" | "off"
+  brief_loose: "on" | "off"
+  brief_yesterday: "on" | "off"
+  brief_suggestions: number
+  /** The day's wrap-up (6.5): near the end of the usual day and when asked,
+   *  only when asked, or never brought. */
+  wrap: "auto" | "ask" | "off"
+  /** "Tonight I can do" in the wrap-up. */
+  wrap_tonight: "on" | "off"
+  /** The computer kept awake while work chosen for tonight runs (desktop). */
+  keep_awake: "on" | "off"
 }
 
 /** codeg's proposal rules (6.7). */
@@ -3043,6 +3065,77 @@ export interface PersonalAgentToday {
   at: string
   /** The handed-out work rows point at. */
   dispatches: DispatchInfo[]
+  /** The morning brief or the wrap-up being prepared (6.4). */
+  brief?: TodayBrief | null
+}
+
+/** A morning brief or a wrap-up "today" mentions. */
+export interface TodayBrief {
+  id: number
+  kind: "brief" | "wrap"
+  state: string
+  row_id: number | null
+}
+
+/** A work assistant's line in a morning brief (6.4). */
+export interface BriefBotLine {
+  bot_id: number
+  name: string
+  done: number
+  done_titles: string[]
+  doing: string[]
+  stuck: number
+  stuck_text: string | null
+}
+
+/** A loose end in a morning brief: a matter untouched for a week, a
+ *  worktree with changes left uncommitted, a session left in progress. */
+export interface BriefLoose {
+  kind: "item" | "worktree" | "session"
+  id: number
+  bot_id: number | null
+  title: string
+  project: string | null
+  since: string
+}
+
+/** A message a "tonight" card sent, and what came back (6.5). */
+export interface BriefTonightMessage {
+  id: number
+  to_bot_id: number
+  to_name: string
+  text: string
+  state: string
+  reply: string | null
+  at: string
+}
+
+/** What codeg gathered for a morning brief or a wrap-up (6.4, 6.5): the
+ *  card codeg writes itself, with no brain to write it, draws these. */
+export interface BriefMaterial {
+  kind: "brief" | "wrap"
+  day: string
+  since: string
+  at: string
+  needs: TodayRow[]
+  night: TodayRow[]
+  tonight: TodayRow[]
+  tonight_messages?: BriefTonightMessage[]
+  schedule: TodayRow[]
+  running: TodayRow[]
+  tomorrow?: TodayRow[]
+  bots: BriefBotLine[]
+  loose: BriefLoose[]
+  yesterday: {
+    date: string
+    total: number
+    by_project: [string, number][]
+    by_agent: [string, number][]
+  } | null
+  hours: string | null
+  suggestions: number
+  dispatches: DispatchInfo[]
+  off?: string[]
 }
 
 /** A project the projects card lists when getting to know the owner (5.4,

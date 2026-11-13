@@ -16,6 +16,7 @@ pub mod folder_service;
 pub mod import_service;
 pub mod model_provider_service;
 pub mod personal_agent_activity_service;
+pub mod personal_agent_brief_service;
 pub mod personal_agent_message_service;
 pub mod personal_agent_service;
 pub mod personal_agent_verification_service;

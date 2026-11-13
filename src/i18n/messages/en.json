@@ -8102,7 +8102,7 @@
           "standard": "Standard",
           "more": "More",
           "custom": "Custom",
-          "quietHint": "Only urgent news and your reminders notify you; the rest waits in Today.",
+          "quietHint": "Only urgent news and your reminders notify you; the rest waits in Today, and the wrap-up comes only when you ask.",
           "standardHint": "Normal news notifies you while you are around and not typing; while you type it waits till you stop, and while you are away it is gathered for your return.",
           "moreHint": "Normal news notifies you even while you type, and low news comes as one notification at most every two hours.",
           "customHint": "Some of the items below are set your own way.",
@@ -8387,6 +8387,85 @@
         "rule_repeat_count": {
           "title": "Requests before the routine offer",
           "hint": "Requests before the routine offer"
+        },
+        "brief": {
+          "title": "Morning brief",
+          "hint": "Each day the primary assistant sums up what needs you, what happened since the last one and the day's plan, and brings it when you first show up.",
+          "on": "On",
+          "off": "Off"
+        },
+        "brief_time": {
+          "title": "Prepared",
+          "hint": "It is brought to you when you show up either way.",
+          "hours": "A quarter of an hour before your day usually starts",
+          "fixed": "A fixed time"
+        },
+        "brief_at": {
+          "title": "Prepared at",
+          "hint": "The time the morning brief is prepared."
+        },
+        "brief_needs": {
+          "title": "What needs you",
+          "hint": "Everything waiting on you, how long it has waited and why.",
+          "on": "On",
+          "off": "Off"
+        },
+        "brief_night": {
+          "title": "Since the last brief",
+          "hint": "Work finished or failed, pull requests that moved, routine reports, what the assistants did for you — and how last night's work went.",
+          "on": "On",
+          "off": "Off"
+        },
+        "brief_bots": {
+          "title": "Each work assistant",
+          "hint": "A line each: what it finished, what it is on, where it is stuck. Hidden ones are left out.",
+          "on": "On",
+          "off": "Off"
+        },
+        "brief_schedule": {
+          "title": "Today's schedule",
+          "hint": "Reminders and routines still to come today.",
+          "on": "On",
+          "off": "Off"
+        },
+        "brief_loose": {
+          "title": "Loose ends",
+          "hint": "Matters untouched for a week, worktrees with changes left uncommitted for a day, sessions you left in progress.",
+          "on": "On",
+          "off": "Off"
+        },
+        "brief_yesterday": {
+          "title": "Your yesterday",
+          "hint": "The projects and agents you used yesterday, and how many sessions you opened.",
+          "on": "On",
+          "off": "Off"
+        },
+        "brief_suggestions": {
+          "title": "Suggestions, at most",
+          "hint": "What the brief may suggest, each with why; 0: none."
+        },
+        "wrap": {
+          "title": "Wrap-up of the day",
+          "hint": "What got done, what still runs, what needs you tomorrow, and what the assistants could do tonight. You can always ask for it: “that's it for today”.",
+          "auto": "Near the end of your usual day",
+          "ask": "Only when I say “that's it for today”",
+          "off": "Off"
+        },
+        "wrap_tonight": {
+          "title": "“Tonight I can do”",
+          "hint": "The wrap-up offers work for tonight on cards you say yes to; the next brief tells how it went.",
+          "on": "On",
+          "off": "Off"
+        },
+        "keep_awake": {
+          "title": "Keep the computer awake for tonight's work",
+          "hint": "While work you chose for tonight runs, the computer doesn't sleep on its own — only on mains power.",
+          "on": "On",
+          "off": "Off"
+        },
+        "level_brief": {
+          "title": "Morning brief and wrap-up",
+          "hint": "Your morning brief or the wrap-up is ready."
         }
       },
       "workdir": {
@@ -8800,7 +8879,15 @@
           "openEditor": "Open editor"
         }
       },
-      "retryOf": "Retry “{title}”"
+      "retryOf": "Retry “{title}”",
+      "tonight": {
+        "open": "Tonight I can do",
+        "acted": "On for tonight",
+        "dismissed": "Not tonight",
+        "accept": "Do it tonight",
+        "dismiss": "Not now",
+        "awake": "The computer stays awake until this work is done."
+      }
     },
     "exchange": {
       "sentTo": "Sent a message to <peer></peer>",
@@ -9375,7 +9462,9 @@
         "asked": "Routine waits for you",
         "reported": "Routine report",
         "silent": "Routine: no change"
-      }
+      },
+      "preparingBrief": "Preparing your morning brief…",
+      "preparingWrap": "Preparing the day's wrap-up…"
     },
     "meet": {
       "name": {
@@ -9900,6 +9989,41 @@
           "title": "The assistants' own suggestions",
           "hint": "Off: the assistants don't suggest anything, and a call with suggest is told you don't take suggestions now."
         }
+      }
+    },
+    "brief": {
+      "title": "Morning brief",
+      "byCodeg": "codeg wrote this from its records — the assistant couldn't write it.",
+      "part": {
+        "needs": "Needs you",
+        "tonight": "Last night's work",
+        "night": "Since the last brief",
+        "running": "Watching",
+        "schedule": "Today",
+        "bots": "The assistants",
+        "loose": "Loose ends",
+        "yesterday": "Your yesterday"
+      },
+      "more": "…and {count} more",
+      "bot": {
+        "done": "finished {count} ({titles})",
+        "idle": "finished nothing",
+        "doing": "on {what}",
+        "stuck": "{count} waiting on you"
+      },
+      "loose": {
+        "item": "untouched for {days, plural, one {# day} other {# days}}",
+        "worktree": "changes uncommitted for {days, plural, one {# day} other {# days}}",
+        "session": "left in progress"
+      },
+      "sessions": "{count, plural, one {# session} other {# sessions}}",
+      "nothing": "Nothing needs you today.",
+      "replyBrief": "Morning brief",
+      "replyWrap": "Wrap-up of the day",
+      "message": {
+        "to": "To {name}:",
+        "answered": "answered: {text}",
+        "open": "no answer yet"
       }
     }
   }

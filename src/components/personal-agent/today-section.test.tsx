@@ -43,6 +43,7 @@ const tasksView = vi.hoisted(() => ({
 }))
 vi.mock("@/contexts/tasks-view-context", () => ({
   useTasksView: () => tasksView,
+  useOptionalTasksView: () => tasksView,
 }))
 const dialogs = vi.hoisted(() => ({ openDetail: vi.fn() }))
 vi.mock("@/components/tasks/use-task-dialogs", () => ({
@@ -62,7 +63,7 @@ import {
   usePersonalAgentRoster,
 } from "@/stores/personal-agent-roster-store"
 
-import { TodaySection } from "./today-section"
+import { BriefRows, TodaySection } from "./today-section"
 
 function row(
   patch: Partial<TodayRow> & Pick<TodayRow, "key" | "kind">
@@ -597,5 +598,40 @@ describe("today", () => {
     expect(scroll).toHaveBeenCalled()
     const ui = usePersonalAgentUi.getState()
     expect([ui.auxOpen, ui.auxTab]).toEqual([true, "details"])
+  })
+})
+
+describe("the morning brief (6.4)", () => {
+  it("says while it is being prepared", () => {
+    draw(
+      today({
+        brief: { id: 1, kind: "brief", state: "preparing", row_id: null },
+      })
+    )
+    expect(screen.getByText("Preparing your morning brief…")).toBeTruthy()
+    expect(screen.getByText("Nothing needs you today")).toBeTruthy()
+  })
+
+  it("opens what a brief's rows are about, as today's do", () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <BriefRows
+          rows={[
+            row({
+              key: "task:7",
+              kind: "task",
+              title: "Ship it",
+              task_id: 7,
+              state: "review",
+            }),
+          ]}
+          dispatches={[]}
+        />
+      </NextIntlClientProvider>
+    )
+    fireEvent.click(screen.getByText("Ship it"))
+    expect(dialogs.openDetail).toHaveBeenCalledWith(7)
+    // Nothing is settled from a brief.
+    expect(screen.queryByRole("button", { name: "Done" })).toBe(null)
   })
 })

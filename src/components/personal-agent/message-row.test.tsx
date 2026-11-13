@@ -556,6 +556,29 @@ describe("the bubbles", () => {
     expect(items.map((i) => i.textContent)).toContain("Quote")
   })
 
+  it("names a reply that is the morning brief or the wrap-up (6.4)", () => {
+    for (const [kind, words] of [
+      ["brief", "Morning brief"],
+      ["wrap", "Wrap-up of the day"],
+    ] as const) {
+      const item = itemOf(
+        [
+          row(10, "reply", {
+            batch_id: 7,
+            body: "Good morning.",
+            data: { state: "done", brief: { id: 3, kind } },
+          }),
+        ],
+        "reply"
+      ) as Extract<MessageItem, { kind: "reply" }>
+      const { container, unmount } = draw(<ReplyBubble item={item} />)
+      const tag = container.querySelector("[data-pa-reply-brief]")
+      expect(tag?.getAttribute("data-pa-reply-brief")).toBe(kind)
+      expect(tag?.textContent).toBe(words)
+      unmount()
+    }
+  })
+
   it("keeps a reply with code in one bubble", () => {
     const item = itemOf(
       [

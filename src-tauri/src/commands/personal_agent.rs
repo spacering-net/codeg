@@ -221,7 +221,7 @@ pub async fn personal_agent_dispatches_core(
 
 /// Dispatches as the page shows them: where each stands on the PR ladder,
 /// its task, its folder, how often its assistant answered for the owner.
-async fn dispatch_infos(
+pub(crate) async fn dispatch_infos(
     db: &AppDatabase,
     rows: Vec<crate::db::entities::personal_agent_dispatch::Model>,
 ) -> Result<Vec<DispatchInfo>, AppCommandError> {

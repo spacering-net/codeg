@@ -8103,7 +8103,7 @@
           "standard": "Standard",
           "more": "Plus",
           "custom": "Personnalisé",
-          "quietHint": "Seuls l'urgent et vos rappels vous préviennent ; le reste attend dans Aujourd'hui.",
+          "quietHint": "Seuls l'urgent et vos rappels vous préviennent ; le reste attend dans Aujourd'hui, et le bilan ne vient que si vous le demandez.",
           "standardHint": "Le normal vous prévient quand vous êtes là et ne tapez pas ; pendant que vous tapez, il attend que vous arrêtiez, et pendant votre absence il est regroupé pour votre retour.",
           "moreHint": "Le normal vous prévient même pendant que vous tapez, et le faible arrive en une seule notification, au plus toutes les deux heures.",
           "customHint": "Certains des éléments ci-dessous sont réglés à votre façon.",
@@ -8388,6 +8388,85 @@
         "rule_repeat_count": {
           "title": "Demandes avant de proposer une routine",
           "hint": "Demandes avant de proposer une routine"
+        },
+        "brief": {
+          "title": "Point du matin",
+          "hint": "Chaque jour, l'assistant principal résume ce qui vous attend, ce qui s'est passé depuis le dernier et le programme du jour, et vous l'apporte à votre arrivée.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "brief_time": {
+          "title": "Préparé",
+          "hint": "Dans les deux cas, il vous est apporté à votre arrivée.",
+          "hours": "Un quart d'heure avant le début habituel de votre journée",
+          "fixed": "Une heure fixe"
+        },
+        "brief_at": {
+          "title": "Préparé à",
+          "hint": "L'heure à laquelle le point du matin est préparé."
+        },
+        "brief_needs": {
+          "title": "Ce qui vous attend",
+          "hint": "Tout ce qui vous attend, depuis quand et pourquoi.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "brief_night": {
+          "title": "Depuis le dernier point",
+          "hint": "Travail terminé ou en échec, pull requests qui ont bougé, rapports de routines, ce que les assistants ont fait pour vous — et le travail de la nuit.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "brief_bots": {
+          "title": "Chaque assistant de travail",
+          "hint": "Une ligne chacun : ce qu'il a fini, ce qu'il fait, où il bloque. Les masqués sont omis.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "brief_schedule": {
+          "title": "Le programme du jour",
+          "hint": "Rappels et routines encore à venir aujourd'hui.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "brief_loose": {
+          "title": "Choses en suspens",
+          "hint": "Sujets intouchés depuis une semaine, worktrees avec des modifications non validées depuis un jour, sessions laissées en cours.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "brief_yesterday": {
+          "title": "Votre journée d'hier",
+          "hint": "Les projets et agents utilisés hier, et le nombre de sessions ouvertes.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "brief_suggestions": {
+          "title": "Suggestions, au plus",
+          "hint": "Combien de suggestions il peut faire, chacune avec sa raison ; 0 : aucune."
+        },
+        "wrap": {
+          "title": "Bilan du jour",
+          "hint": "Ce qui est fait, ce qui tourne encore, ce qui vous attend demain et ce que les assistants pourraient faire cette nuit. Vous pouvez toujours le demander : « c'est tout pour aujourd'hui ».",
+          "auto": "Vers la fin de votre journée habituelle",
+          "ask": "Seulement quand je dis « c'est tout pour aujourd'hui »",
+          "off": "Désactivé"
+        },
+        "wrap_tonight": {
+          "title": "« Ce soir je peux »",
+          "hint": "Le bilan propose du travail pour la nuit sur des cartes que vous acceptez ; le point suivant dit comment ça s'est passé.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "keep_awake": {
+          "title": "Garder l'ordinateur éveillé pour le travail de la nuit",
+          "hint": "Tant que tourne le travail choisi pour la nuit, l'ordinateur ne se met pas en veille de lui-même — seulement sur secteur.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "level_brief": {
+          "title": "Point du matin et bilan",
+          "hint": "Votre point du matin ou le bilan est prêt."
         }
       },
       "workdir": {
@@ -8800,7 +8879,15 @@
           "openEditor": "Ouvrir l'éditeur"
         }
       },
-      "retryOf": "Relancer « {title} »"
+      "retryOf": "Relancer « {title} »",
+      "tonight": {
+        "open": "Ce soir je peux",
+        "acted": "Prévu pour ce soir",
+        "dismissed": "Pas ce soir",
+        "accept": "Le faire ce soir",
+        "dismiss": "Pas maintenant",
+        "awake": "L'ordinateur reste éveillé jusqu'à la fin de ce travail."
+      }
     },
     "exchange": {
       "sentTo": "Message envoyé à <peer></peer>",
@@ -9375,7 +9462,9 @@
         "asked": "La routine vous attend",
         "reported": "Rapport de routine",
         "silent": "Routine : aucun changement"
-      }
+      },
+      "preparingBrief": "Préparation de votre point du matin…",
+      "preparingWrap": "Préparation du bilan du jour…"
     },
     "meet": {
       "name": {
@@ -9900,6 +9989,41 @@
           "title": "Suggestions des assistants",
           "hint": "Désactivé : les assistants ne proposent rien, et un appel avec suggest apprend que vous n’en acceptez pas pour l’instant."
         }
+      }
+    },
+    "brief": {
+      "title": "Point du matin",
+      "byCodeg": "codeg l'a rédigé à partir de ses relevés — l'assistant n'a pas pu.",
+      "part": {
+        "needs": "Vous attend",
+        "tonight": "Le travail de la nuit",
+        "night": "Depuis le dernier point",
+        "running": "En suivi",
+        "schedule": "Aujourd'hui",
+        "bots": "Les assistants",
+        "loose": "Choses en suspens",
+        "yesterday": "Votre journée d'hier"
+      },
+      "more": "…et {count} de plus",
+      "bot": {
+        "done": "{count} terminé(s) ({titles})",
+        "idle": "rien terminé",
+        "doing": "sur {what}",
+        "stuck": "{count} vous attend(ent)"
+      },
+      "loose": {
+        "item": "intouché depuis {days, plural, one {# jour} other {# jours}}",
+        "worktree": "modifications non validées depuis {days, plural, one {# jour} other {# jours}}",
+        "session": "laissée en cours"
+      },
+      "sessions": "{count, plural, one {# session} other {# sessions}}",
+      "nothing": "Rien ne vous attend aujourd'hui.",
+      "replyBrief": "Point du matin",
+      "replyWrap": "Bilan du jour",
+      "message": {
+        "to": "À {name} :",
+        "answered": "réponse : {text}",
+        "open": "pas encore de réponse"
       }
     }
   }

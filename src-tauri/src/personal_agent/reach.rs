@@ -222,6 +222,14 @@ pub enum What {
         rule: String,
         text: String,
     },
+    /// The morning brief is ready: how many things wait on the owner.
+    Brief {
+        needs: usize,
+    },
+    /// The day's wrap-up: how many things need the owner tomorrow.
+    Wrap {
+        needs: usize,
+    },
     /// The reply's first words (none: it said nothing in words).
     Reply {
         text: Option<String>,
@@ -329,6 +337,9 @@ pub fn decide(
 ) -> Route {
     // Their reminders are theirs: through mute and quiet hours.
     let reminder = kind == "reminder";
+    // A brief or a wrap-up is brought to the owner when they are here: their
+    // quiet hours are over for them then (6.4).
+    let summary = kind == "brief" && att.present;
     if !reminder && switches.silent() {
         return Route::Drop;
     }
@@ -339,7 +350,7 @@ pub fn decide(
         return Route::Drop;
     }
     let level = prefs.level_of(kind);
-    if quiet {
+    if quiet && !summary {
         let lets = reminder || (prefs.quiet_lets == QuietLets::Urgent && level == Level::Urgent);
         if !lets {
             return if level == Level::Low {
@@ -496,6 +507,12 @@ struct Words {
     rule_behind: &'static str,
     why_proposal: &'static str,
     why_proposal_low: &'static str,
+    brief: &'static str,
+    brief_none: &'static str,
+    wrap: &'static str,
+    wrap_none: &'static str,
+    why_brief: &'static str,
+    why_wrap: &'static str,
 }
 
 const EN: Words = Words {
@@ -555,6 +572,12 @@ const EN: Words = Words {
     rule_behind: "Behind its target, with conflicts: {text}",
     why_proposal: "codeg noticed it; the card has a next step.",
     why_proposal_low: "codeg noticed it; nothing urgent.",
+    brief: "Good morning — {n} waiting on you",
+    brief_none: "Good morning — your brief is ready",
+    wrap: "The day's wrap-up — {n} for you tomorrow",
+    wrap_none: "The day's wrap-up is ready",
+    why_brief: "Your morning brief.",
+    why_wrap: "Your usual end of day is near, or you asked for it.",
 };
 
 const ZH_CN: Words = Words {
@@ -614,6 +637,12 @@ const ZH_CN: Words = Words {
     rule_behind: "落后目标分支且有冲突：{text}",
     why_proposal: "codeg 发现的，卡片上有下一步。",
     why_proposal_low: "codeg 发现的，不急。",
+    brief: "早上好，{n} 件需要你",
+    brief_none: "早上好，晨报准备好了",
+    wrap: "今天的收尾：明天 {n} 件需要你",
+    wrap_none: "今天的收尾好了",
+    why_brief: "这是你的晨报。",
+    why_wrap: "你快收工了，或者你让它收尾。",
 };
 
 const ZH_TW: Words = Words {
@@ -673,6 +702,12 @@ const ZH_TW: Words = Words {
     rule_behind: "落後目標分支且有衝突：{text}",
     why_proposal: "codeg 發現的，卡片上有下一步。",
     why_proposal_low: "codeg 發現的，不急。",
+    brief: "早安，{n} 件需要你",
+    brief_none: "早安，晨報準備好了",
+    wrap: "今天的收尾：明天 {n} 件需要你",
+    wrap_none: "今天的收尾好了",
+    why_brief: "這是你的晨報。",
+    why_wrap: "你快收工了，或者你請它收尾。",
 };
 
 const JA: Words = Words {
@@ -732,6 +767,12 @@ const JA: Words = Words {
     rule_behind: "ターゲットより遅れていて競合があります：{text}",
     why_proposal: "codeg が気づきました。カードに次の一歩があります。",
     why_proposal_low: "codeg が気づきました。急ぎではありません。",
+    brief: "おはようございます — 対応が必要なことが {n} 件",
+    brief_none: "おはようございます — 朝のまとめができました",
+    wrap: "今日のまとめ — 明日あなたが必要なことが {n} 件",
+    wrap_none: "今日のまとめができました",
+    why_brief: "あなたの朝のまとめです。",
+    why_wrap: "いつもの終業時刻が近いか、まとめを頼まれました。",
 };
 
 const KO: Words = Words {
@@ -791,6 +832,12 @@ const KO: Words = Words {
     rule_behind: "대상 브랜치보다 뒤처져 있고 충돌이 있어요: {text}",
     why_proposal: "codeg가 발견했어요. 카드에 다음 단계가 있어요.",
     why_proposal_low: "codeg가 발견했어요. 급하지 않아요.",
+    brief: "좋은 아침이에요 — {n}건이 당신을 기다려요",
+    brief_none: "좋은 아침이에요 — 아침 브리핑이 준비됐어요",
+    wrap: "오늘의 마무리 — 내일 {n}건이 당신을 기다려요",
+    wrap_none: "오늘의 마무리가 준비됐어요",
+    why_brief: "아침 브리핑이에요.",
+    why_wrap: "평소 퇴근 시간이 다가왔거나, 마무리를 부탁하셨어요.",
 };
 
 const ES: Words = Words {
@@ -850,6 +897,12 @@ const ES: Words = Words {
     rule_behind: "Detrás de su rama destino, con conflictos: {text}",
     why_proposal: "codeg lo notó; la tarjeta tiene el siguiente paso.",
     why_proposal_low: "codeg lo notó; nada urgente.",
+    brief: "Buenos días: {n} cosas te necesitan",
+    brief_none: "Buenos días: tu resumen está listo",
+    wrap: "Cierre del día: {n} cosas te necesitan mañana",
+    wrap_none: "El cierre del día está listo",
+    why_brief: "Tu resumen de la mañana.",
+    why_wrap: "Se acerca tu hora habitual de terminar, o lo pediste.",
 };
 
 const DE: Words = Words {
@@ -909,6 +962,12 @@ const DE: Words = Words {
     rule_behind: "Hinter dem Zielbranch, mit Konflikten: {text}",
     why_proposal: "codeg hat es bemerkt; die Karte hat einen nächsten Schritt.",
     why_proposal_low: "codeg hat es bemerkt; nichts Dringendes.",
+    brief: "Guten Morgen – {n} Dinge brauchen dich",
+    brief_none: "Guten Morgen – dein Briefing ist fertig",
+    wrap: "Tagesabschluss – morgen brauchen dich {n} Dinge",
+    wrap_none: "Der Tagesabschluss ist fertig",
+    why_brief: "Dein Morgen-Briefing.",
+    why_wrap: "Dein üblicher Feierabend ist nah, oder du hast danach gefragt.",
 };
 
 const FR: Words = Words {
@@ -969,6 +1028,12 @@ const FR: Words = Words {
     rule_behind: "En retard sur sa branche cible, avec des conflits : {text}",
     why_proposal: "codeg l'a remarqué ; la carte propose la suite.",
     why_proposal_low: "codeg l'a remarqué ; rien d'urgent.",
+    brief: "Bonjour — {n} choses vous attendent",
+    brief_none: "Bonjour — votre point du matin est prêt",
+    wrap: "Bilan du jour — {n} choses vous attendent demain",
+    wrap_none: "Le bilan du jour est prêt",
+    why_brief: "Votre point du matin.",
+    why_wrap: "Votre fin de journée habituelle approche, ou vous l'avez demandé.",
 };
 
 const PT: Words = Words {
@@ -1029,6 +1094,12 @@ const PT: Words = Words {
     rule_behind: "Atrás do branch de destino, com conflitos: {text}",
     why_proposal: "O codeg percebeu; o cartão tem o próximo passo.",
     why_proposal_low: "O codeg percebeu; nada urgente.",
+    brief: "Bom dia — {n} coisas precisam de você",
+    brief_none: "Bom dia — seu resumo está pronto",
+    wrap: "Fechamento do dia — {n} coisas precisam de você amanhã",
+    wrap_none: "O fechamento do dia está pronto",
+    why_brief: "Seu resumo da manhã.",
+    why_wrap: "Seu horário habitual de encerrar está próximo, ou você pediu.",
 };
 
 const AR: Words = Words {
@@ -1088,6 +1159,12 @@ const AR: Words = Words {
     rule_behind: "متأخر عن الفرع الهدف وبه تعارضات: {text}",
     why_proposal: "لاحظ codeg ذلك؛ في البطاقة الخطوة التالية.",
     why_proposal_low: "لاحظ codeg ذلك؛ ليس عاجلًا.",
+    brief: "صباح الخير — {n} أمور تحتاجك",
+    brief_none: "صباح الخير — موجز الصباح جاهز",
+    wrap: "ختام اليوم — {n} أمور تحتاجك غدًا",
+    wrap_none: "ختام اليوم جاهز",
+    why_brief: "موجز صباحك.",
+    why_wrap: "اقترب موعد انتهاء يومك المعتاد، أو طلبت ذلك.",
 };
 
 fn words(locale: AppLocale) -> &'static Words {
@@ -1158,6 +1235,10 @@ fn main_line(w: &Words, what: &What) -> String {
             };
             fill(t, text, 0, "")
         }
+        What::Brief { needs: 0 } => w.brief_none.to_string(),
+        What::Brief { needs } => fill(w.brief, "", *needs as i64, ""),
+        What::Wrap { needs: 0 } => w.wrap_none.to_string(),
+        What::Wrap { needs } => fill(w.wrap, "", *needs as i64, ""),
         What::Reply { text } => text.clone().unwrap_or_else(|| w.reply_empty.to_string()),
         What::Plain { text } => text.clone(),
     }
@@ -1187,6 +1268,10 @@ fn reason(w: &Words, kind: &str, what: &What) -> Option<String> {
         "routine_paused" => w.why_routine_paused.into(),
         "proposal" => w.why_proposal.into(),
         "proposal_low" => w.why_proposal_low.into(),
+        "brief" => match what {
+            What::Wrap { .. } => w.why_wrap.into(),
+            _ => w.why_brief.into(),
+        },
         _ => return None,
     };
     Some(line)
@@ -2243,6 +2328,17 @@ mod tests {
             );
             assert!(fill(w.away, "", 3, "").contains('3'), "{locale:?}");
             assert!(fill(w.more, "", 2, "").contains('2'), "{locale:?}");
+            // The morning brief and the wrap-up say how many (6.4, 6.5).
+            for (what, n) in [
+                (What::Brief { needs: 4 }, "4"),
+                (What::Wrap { needs: 5 }, "5"),
+            ] {
+                assert!(main_line(w, &what).contains(n), "{locale:?}");
+            }
+            assert_ne!(
+                main_line(w, &What::Brief { needs: 0 }),
+                main_line(w, &What::Wrap { needs: 0 })
+            );
             for t in [
                 w.waiting, w.approval, w.waited, w.session, w.done, w.failed, w.review, w.reminder,
             ] {

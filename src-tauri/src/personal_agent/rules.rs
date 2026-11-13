@@ -1715,7 +1715,9 @@ impl PersonalAgentEngine {
     /// The owner does not take the assistants' suggestions now (they turned
     /// them off, or muted them from a card): what a `suggest` call answers.
     pub(super) async fn suggestions_closed(&self) -> Option<ToolOutcome> {
-        if self.prefs().await.rule_on("suggest") {
+        // What a wrap-up offers for tonight is the owner's "tonight I can
+        // do", not the assistants' suggestions (6.5).
+        if self.prefs().await.rule_on("suggest") || self.tonight_offer().await.is_some() {
             return None;
         }
         Some(ToolOutcome::refused(

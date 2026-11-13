@@ -8102,7 +8102,7 @@
           "standard": "标准",
           "more": "多提醒",
           "custom": "自定义",
-          "quietHint": "只有紧急的消息和你设的提醒会通知你，其余进「今日」。",
+          "quietHint": "只有紧急的消息和你设的提醒会通知你，其余进「今日」；收尾只在你说时出。",
           "standardHint": "一般的消息在你在场、没在打字时通知你；打字时等你停手再说，离开时攒到你回来。",
           "moreHint": "一般的消息打字时也照常通知；低级的消息合并成一条，最多每 2 小时一次。",
           "customHint": "下面有几项是你自己调过的。",
@@ -8387,6 +8387,85 @@
         "rule_repeat_count": {
           "title": "重复的请求：第几次时提议",
           "hint": "重复的请求：第几次时提议"
+        },
+        "brief": {
+          "title": "晨报",
+          "hint": "主助手每天汇总需要你的事、上次晨报以来的进展和今天的安排，在你当天第一次出现时送到。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_time": {
+          "title": "什么时候准备",
+          "hint": "无论哪种，都在你出现时送到。",
+          "hours": "按作息，通常开始前 15 分钟",
+          "fixed": "固定时刻"
+        },
+        "brief_at": {
+          "title": "准备时刻",
+          "hint": "晨报在这个时刻准备。"
+        },
+        "brief_needs": {
+          "title": "需要你",
+          "hint": "所有等你的事：等了多久、为什么需要你。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_night": {
+          "title": "夜里的进展",
+          "hint": "完成或失败的活、有变化的 PR、例程报告、助手替你做的事，以及昨晚做的活怎么样了。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_bots": {
+          "title": "各助手",
+          "hint": "每个工作助手一行：做完了什么、在做什么、卡在哪。隐藏的不列。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_schedule": {
+          "title": "今天的安排",
+          "hint": "今天还会到的提醒和例程。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_loose": {
+          "title": "没收尾的事",
+          "hint": "一周没动的事项、改动一天以上没提交的工作树、你没收尾的会话。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_yesterday": {
+          "title": "昨天的你",
+          "hint": "昨天在哪些项目、用了哪些 agent、开了几个会话。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_suggestions": {
+          "title": "建议条数",
+          "hint": "晨报里最多给几条建议，每条写明为什么；0 表示不要。"
+        },
+        "wrap": {
+          "title": "收尾",
+          "hint": "今天完成的、还在跑的、明天需要你的，以及今晚助手可以做的。随时说「今天到这」也会出。",
+          "auto": "快收工时自动出",
+          "ask": "只在我说「今天到这」时",
+          "off": "关"
+        },
+        "wrap_tonight": {
+          "title": "「今晚我可以做」",
+          "hint": "收尾时把今晚能做的活写成卡片，你点了才做；第二天晨报汇报结果。",
+          "on": "开",
+          "off": "关"
+        },
+        "keep_awake": {
+          "title": "今晚做时防睡眠",
+          "hint": "你点了「今晚做」的活在跑时，电脑不会自动睡眠；只在接着电源时生效。",
+          "on": "开",
+          "off": "关"
+        },
+        "level_brief": {
+          "title": "晨报与收尾",
+          "hint": "晨报或收尾写好了。"
         }
       },
       "workdir": {
@@ -8800,7 +8879,15 @@
           "openEditor": "打开编辑器"
         }
       },
-      "retryOf": "重试「{title}」"
+      "retryOf": "重试「{title}」",
+      "tonight": {
+        "open": "今晚我可以做",
+        "acted": "今晚做",
+        "dismissed": "今晚不做",
+        "accept": "今晚做",
+        "dismiss": "不用",
+        "awake": "电脑会保持唤醒到这些活结束。"
+      }
     },
     "exchange": {
       "sentTo": "已发消息给 <peer></peer>",
@@ -9375,7 +9462,9 @@
         "asked": "例程等你确认",
         "reported": "例程报告",
         "silent": "例程：没有变化"
-      }
+      },
+      "preparingBrief": "正在准备晨报…",
+      "preparingWrap": "正在准备收尾…"
     },
     "meet": {
       "name": {
@@ -9900,6 +9989,41 @@
           "title": "助手的建议",
           "hint": "关掉后助手不再提建议；带 suggest 的调用会被告知「你现在不收建议」。"
         }
+      }
+    },
+    "brief": {
+      "title": "晨报",
+      "byCodeg": "这份由 codeg 按记录写成——助手没能写。",
+      "part": {
+        "needs": "需要你",
+        "tonight": "昨晚做的",
+        "night": "上次晨报以来",
+        "running": "在盯",
+        "schedule": "今天的安排",
+        "bots": "各助手",
+        "loose": "没收尾的事",
+        "yesterday": "昨天的你"
+      },
+      "more": "……还有 {count} 件",
+      "bot": {
+        "done": "做完 {count} 件（{titles}）",
+        "idle": "没有做完的",
+        "doing": "在做 {what}",
+        "stuck": "{count} 件等你"
+      },
+      "loose": {
+        "item": "{days} 天没动",
+        "worktree": "改动 {days} 天没提交",
+        "session": "没收尾"
+      },
+      "sessions": "{count} 个会话",
+      "nothing": "今天没有需要你的事。",
+      "replyBrief": "晨报",
+      "replyWrap": "收尾",
+      "message": {
+        "to": "发给 {name}：",
+        "answered": "回复：{text}",
+        "open": "还没回复"
       }
     }
   }

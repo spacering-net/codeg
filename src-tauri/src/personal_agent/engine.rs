@@ -467,6 +467,7 @@ impl PersonalAgentEngine {
     #[cfg(test)]
     pub(crate) async fn boot_for_test(&self) {
         self.boot_reconcile().await;
+        self.reconcile_briefs().await;
     }
 
     /// Whether the turn in flight was asked to give way to the owner's
@@ -673,6 +674,8 @@ impl PersonalAgentEngine {
     /// no live connection, so whatever was running was interrupted.
     pub(super) async fn boot(&self) {
         self.boot_reconcile().await;
+        // A brief whose turn codeg went down in (6.4).
+        self.reconcile_briefs().await;
         self.booted.store(true, Ordering::SeqCst);
         self.nudge();
     }
@@ -797,6 +800,21 @@ impl PersonalAgentEngine {
             .turn
             .as_ref()
             .and_then(|t| t.owner_row_ids.last().copied())
+    }
+
+    /// The reply row of the turn in flight.
+    pub(super) async fn turn_reply_row(&self) -> Option<i32> {
+        self.state
+            .lock()
+            .await
+            .turn
+            .as_ref()
+            .and_then(|t| t.reply_row_id)
+    }
+
+    /// The worker this engine runs; `None` for the primary's.
+    pub(super) fn fixed_bot_id(&self) -> Option<i32> {
+        self.fixed_bot
     }
 
     /// Whether a turn is running.
@@ -1737,17 +1755,24 @@ impl PersonalAgentEngine {
             None => auto_quote,
         };
         let finished_at = Utc::now();
-        // What it reports for stays on it (6.9).
-        let routine = svc::get_row(&self.db.conn, row_id)
+        // What it reports for stays on it (6.9), and the brief or wrap-up
+        // it is (6.4) — as the brief records it, should a checkpoint have
+        // written over the tag.
+        let had = svc::get_row(&self.db.conn, row_id)
             .await
             .ok()
             .flatten()
             .and_then(|r| r.data)
             .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
-            .map(|d| d["routine"].clone())
             .unwrap_or(serde_json::Value::Null);
+        let routine = had["routine"].clone();
+        let brief = match had["brief"].clone() {
+            serde_json::Value::Null => super::brief::tag_of_row(&self.db, row_id).await,
+            tag => tag,
+        };
         let data = serde_json::json!({
             "routine": routine,
+            "brief": brief,
             "state": outcome.state,
             "why": outcome.why,
             "stop_reason": outcome.stop_reason,
@@ -1879,6 +1904,8 @@ impl PersonalAgentEngine {
                 // Nor to conclude its rounds of acceptance: their checks'
                 // verdicts do (7.5).
                 self.conclude_all_undecided().await;
+                // Nor to write the morning brief: codeg writes it (6.4).
+                self.briefs_unreachable().await;
                 self.emit(PersonalAgentChange::Status);
             }
             if !self.pump_again.load(Ordering::SeqCst) {
@@ -1900,6 +1927,9 @@ impl PersonalAgentEngine {
         let events = svc::pending_events(&self.db.conn, self.bot().await)
             .await
             .map_err(|e| e.to_string())?;
+        // The morning brief and the wrap-up go in a delivery of their own,
+        // after the owner's messages (6.4).
+        let events = super::brief::solo(events, !owners.is_empty());
         if owners.is_empty() && !events.iter().any(|e| e.wake) {
             return Ok(());
         }
@@ -2694,6 +2724,7 @@ impl PersonalAgentEngine {
                 e.kind != msvc::MESSAGE_EVENT
                     && e.kind != svc::ASK_EVENT
                     && e.kind != super::acceptance::ACCEPT_EVENT
+                    && !super::brief::is_brief_event(e)
             })
             .cloned()
             .collect();
@@ -2708,6 +2739,11 @@ impl PersonalAgentEngine {
             .filter(|e| e.kind == super::acceptance::ACCEPT_EVENT)
         {
             asks.push(self.acceptance_block(e).await);
+        }
+        // The morning brief or the wrap-up: its materials, and what to
+        // write (6.4, 6.5).
+        for e in events.iter().filter(|e| super::brief::is_brief_event(e)) {
+            asks.push(self.brief_block(e).await);
         }
         // What started it — recorded only, for the status, the statistics
         // and the `<codeg-now>` line.
@@ -2725,6 +2761,10 @@ impl PersonalAgentEngine {
             .any(|e| e.kind == super::routines::ROUTINE_EVENT)
         {
             BatchTrigger::Routine
+        } else if events.iter().any(|e| e.kind == super::brief::BRIEF_EVENT) {
+            BatchTrigger::Brief
+        } else if events.iter().any(|e| e.kind == super::brief::WRAP_EVENT) {
+            BatchTrigger::Wrap
         } else {
             BatchTrigger::Event
         };
@@ -2736,6 +2776,8 @@ impl PersonalAgentEngine {
                 BatchTrigger::Message => "another assistant's message",
                 BatchTrigger::Reminder => "a matter came due that you are to do",
                 BatchTrigger::Routine => "a routine of yours came round",
+                BatchTrigger::Brief => "the owner's morning brief is due",
+                BatchTrigger::Wrap => "the owner's wrap-up of the day is due",
                 _ => "news of work you dispatched or of your matters",
             };
             cards_text.insert(0, self.now_line(before, started_by).await);
@@ -2876,6 +2918,7 @@ impl PersonalAgentEngine {
             .await
             .unwrap_or_default();
         self.note_routine_batch(&events, batch.id).await;
+        self.note_brief_batch(&events, batch.id).await;
         // The reply exists from the start: it streams in place and settles
         // in place.
         let started_at = Utc::now();
@@ -2894,10 +2937,17 @@ impl PersonalAgentEngine {
         } else {
             None
         };
+        // The morning brief or the wrap-up it writes (6.4, 6.5).
+        let brief = if owners.is_empty() && messages.is_empty() {
+            Self::brief_tag(&events)
+        } else {
+            None
+        };
         reply.data = Some(serde_json::json!({
             "state": "running",
             "started_at": started_at,
             "routine": routine,
+            "brief": brief,
         }));
         let reply = svc::insert_row(&self.db.conn, self.bot().await, reply).await.ok();
         let token = format!("pa-{}-{}", batch.id, uuid::Uuid::new_v4().simple());
@@ -3477,6 +3527,9 @@ impl PersonalAgentEngine {
             reply_words.clone(),
         )
         .await;
+        // The brief or wrap-up it wrote is the owner's to have (6.4).
+        self.settle_brief_batch(turn.batch_id, interrupted, canceled, turn.reply_row_id)
+            .await;
         self.after_turn_bookkeeping(&turn).await;
     }
 

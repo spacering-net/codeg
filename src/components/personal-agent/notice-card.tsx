@@ -41,6 +41,7 @@ import {
   CircleHelp,
   Layers,
   Lightbulb,
+  Moon,
   UserPlus,
   OctagonX,
   Repeat,
@@ -72,6 +73,7 @@ import {
 
 import { AcceptanceCard } from "./acceptance-card"
 import { AskCard } from "./ask-card"
+import { BriefCard } from "./brief-card"
 import { BotAvatar } from "./bot-avatar"
 import { ChoiceCard } from "./choice-card"
 import { CollapsedText } from "./event-card"
@@ -158,6 +160,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "pr") return <PrCard item={item} />
   if (kind === "routine") return <RoutineCard item={item} />
   if (kind === "rule") return <RuleCard item={item} />
+  if (kind === "brief") return <BriefCard item={item} />
   return null
 }
 
@@ -231,39 +234,51 @@ function ActionCard({
   const confirm = !uncertain && str(data, "why") === "confirm"
   // Work a restart interrupted, to retry (7.3).
   const retry = display?.retry === true
+  // Offered for tonight at the wrap-up (6.5).
+  const tonight = !uncertain && !confirm && data?.tonight === true
   const isMessage = action === "message"
   const tc = (k: "open" | "acted" | "dismissed" | "accept" | "dismiss") =>
     t(`confirm.${k}` as "confirm.open")
 
-  const heading = confirm
+  const heading = tonight
     ? state === "acting"
       ? t("acting")
       : state === "acted"
-        ? tc("acted")
+        ? t("tonight.acted")
         : state === "dismissed"
-          ? tc("dismissed")
+          ? t("tonight.dismissed")
           : state === "unknown"
             ? t("unknown")
-            : tc("open")
-    : uncertain
+            : t("tonight.open")
+    : confirm
       ? state === "acting"
-        ? t("uncertain.acting")
-        : state === "acted"
-          ? t("uncertain.acted")
-          : state === "dismissed"
-            ? t("uncertain.dismissed")
-            : state === "resolved"
-              ? t("uncertain.resolved")
-              : t("uncertain.open")
-      : state === "acting"
         ? t("acting")
         : state === "acted"
-          ? t("acted")
+          ? tc("acted")
           : state === "dismissed"
-            ? t("dismissed")
+            ? tc("dismissed")
             : state === "unknown"
               ? t("unknown")
-              : t("open")
+              : tc("open")
+      : uncertain
+        ? state === "acting"
+          ? t("uncertain.acting")
+          : state === "acted"
+            ? t("uncertain.acted")
+            : state === "dismissed"
+              ? t("uncertain.dismissed")
+              : state === "resolved"
+                ? t("uncertain.resolved")
+                : t("uncertain.open")
+        : state === "acting"
+          ? t("acting")
+          : state === "acted"
+            ? t("acted")
+            : state === "dismissed"
+              ? t("dismissed")
+              : state === "unknown"
+                ? t("unknown")
+                : t("open")
   // Waiting for the owner: open, or — a run cut off with no telling — not
   // sure it ran, which can be run again or let be.
   const answerable = state === "open" || state === "unknown"
@@ -275,7 +290,7 @@ function ActionCard({
       ? t("unknownHint")
       : null
   const shownError = failed ?? (state === "open" ? error : null)
-  const Icon = uncertain ? CircleHelp : Lightbulb
+  const Icon = uncertain ? CircleHelp : tonight ? Moon : Lightbulb
   return (
     <MessageRow
       rowId={row.id}
@@ -343,6 +358,14 @@ function ActionCard({
           </p>
         ) : null}
         {text ? <CollapsedText text={text} /> : null}
+        {tonight && state === "open" && data?.keep_awake === true ? (
+          <p
+            className="mt-2 text-xs text-muted-foreground"
+            data-pa-tonight-awake
+          >
+            {t("tonight.awake")}
+          </p>
+        ) : null}
         {answerable ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {uncertain && openable ? (
@@ -368,7 +391,9 @@ function ActionCard({
                   ? t("again")
                   : confirm
                     ? tc("accept")
-                    : t("accept")}
+                    : tonight
+                      ? t("tonight.accept")
+                      : t("accept")}
             </Button>
             <Button
               size="sm"
@@ -380,10 +405,13 @@ function ActionCard({
                 ? t("uncertain.dismiss")
                 : confirm
                   ? tc("dismiss")
-                  : t("dismiss")}
+                  : tonight
+                    ? t("tonight.dismiss")
+                    : t("dismiss")}
             </Button>
-            {/* The assistant's own suggestion (6.7). */}
-            {!uncertain && !confirm && state === "open" ? (
+            {/* The assistant's own suggestion (6.7); tonight's offer is
+                the owner's "tonight I can do", not that. */}
+            {!uncertain && !confirm && !tonight && state === "open" ? (
               <MuteKindButton
                 noticeId={Number(row.ref_id)}
                 disabled={busy != null}

@@ -312,6 +312,57 @@ pub enum MorningMode {
     Fixed,
 }
 
+/// When the morning brief is prepared (6.4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BriefTime {
+    /// A quarter of an hour before the owner's usual start, once codeg has
+    /// learned it; else when they first show up in the day.
+    #[default]
+    Hours,
+    /// `brief_at`, every day.
+    Fixed,
+}
+
+/// The day's wrap-up (6.5).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WrapMode {
+    /// codeg brings it near the end of the owner's usual day, and when they
+    /// ask.
+    #[default]
+    Auto,
+    /// Only when the owner asks ("that's it for today").
+    Ask,
+    Off,
+}
+
+/// The fixed time the morning brief is prepared, until the owner sets
+/// another.
+pub const DEFAULT_BRIEF_AT: &str = "08:30";
+/// Suggestions a morning brief carries at most.
+pub const DEFAULT_BRIEF_SUGGESTIONS: u32 = 3;
+pub const MAX_BRIEF_SUGGESTIONS: u32 = 5;
+
+fn default_brief_at() -> String {
+    DEFAULT_BRIEF_AT.into()
+}
+
+fn lenient_brief_at<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    lenient_clock(d, default_brief_at)
+}
+
+fn default_brief_suggestions() -> u32 {
+    DEFAULT_BRIEF_SUGGESTIONS
+}
+
+fn lenient_brief_suggestions<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_u64()
+        .map(|n| n.min(MAX_BRIEF_SUGGESTIONS as u64) as u32)
+        .unwrap_or(DEFAULT_BRIEF_SUGGESTIONS))
+}
+
 /// The default quiet hours, until the usual hours are learned.
 pub const DEFAULT_QUIET_FROM: &str = "22:00";
 pub const DEFAULT_QUIET_TO: &str = "08:00";
@@ -517,6 +568,7 @@ pub const NEWS: &[(&str, Level, &str)] = &[
         "codeg's other proposals: changes left uncommitted, a matter gone quiet, a new project, \
          a branch behind with conflicts, a request they keep making",
     ),
+    ("brief", Level::Normal, "the morning brief and the day's wrap-up"),
 ];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -680,6 +732,8 @@ pub struct Prefs {
     pub level_proposal: Level,
     #[serde(default = "low", deserialize_with = "lenient_low")]
     pub level_proposal_low: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_brief: Level,
     /// codeg's proposal rules (6.7), each on or off, with how long before
     /// it says something. A rule the owner muted from a card is off here.
     #[serde(default, deserialize_with = "lenient")]
@@ -738,6 +792,40 @@ pub struct Prefs {
     /// The assistants' own suggestions (`suggest: true`).
     #[serde(default, deserialize_with = "lenient")]
     pub rule_suggest: OnOff,
+    /// The morning brief (6.4): whether there is one, when it is prepared,
+    /// the parts it has, and how many suggestions it may make.
+    #[serde(default, deserialize_with = "lenient")]
+    pub brief: OnOff,
+    #[serde(default, deserialize_with = "lenient")]
+    pub brief_time: BriefTime,
+    #[serde(default = "default_brief_at", deserialize_with = "lenient_brief_at")]
+    pub brief_at: String,
+    #[serde(default, deserialize_with = "lenient")]
+    pub brief_needs: OnOff,
+    #[serde(default, deserialize_with = "lenient")]
+    pub brief_night: OnOff,
+    #[serde(default, deserialize_with = "lenient")]
+    pub brief_bots: OnOff,
+    #[serde(default, deserialize_with = "lenient")]
+    pub brief_schedule: OnOff,
+    #[serde(default, deserialize_with = "lenient")]
+    pub brief_loose: OnOff,
+    #[serde(default, deserialize_with = "lenient")]
+    pub brief_yesterday: OnOff,
+    #[serde(
+        default = "default_brief_suggestions",
+        deserialize_with = "lenient_brief_suggestions"
+    )]
+    pub brief_suggestions: u32,
+    /// The day's wrap-up (6.5), and the "tonight I can do" it offers.
+    #[serde(default, deserialize_with = "lenient")]
+    pub wrap: WrapMode,
+    #[serde(default, deserialize_with = "lenient")]
+    pub wrap_tonight: OnOff,
+    /// The computer kept awake while work the owner had done tonight runs
+    /// (desktop only).
+    #[serde(default, deserialize_with = "lenient")]
+    pub keep_awake: OnOff,
 }
 
 impl Default for Prefs {
@@ -797,6 +885,7 @@ impl Default for Prefs {
             level_used_up: Level::Urgent,
             level_proposal: Level::Normal,
             level_proposal_low: Level::Low,
+            level_brief: Level::Normal,
             rule_failed: OnOff::On,
             rule_failed_hours: RULE_FAILED_HOURS,
             rule_review: OnOff::On,
@@ -814,6 +903,19 @@ impl Default for Prefs {
             rule_repeat: OnOff::On,
             rule_repeat_count: RULE_REPEAT_COUNT,
             rule_suggest: OnOff::On,
+            brief: OnOff::On,
+            brief_time: BriefTime::Hours,
+            brief_at: default_brief_at(),
+            brief_needs: OnOff::On,
+            brief_night: OnOff::On,
+            brief_bots: OnOff::On,
+            brief_schedule: OnOff::On,
+            brief_loose: OnOff::On,
+            brief_yesterday: OnOff::On,
+            brief_suggestions: DEFAULT_BRIEF_SUGGESTIONS,
+            wrap: WrapMode::Auto,
+            wrap_tonight: OnOff::On,
+            keep_awake: OnOff::On,
         }
     }
 }
@@ -1125,6 +1227,11 @@ pub const PREFS: &[PrefSpec] = &[
         label: "how urgent codeg's other proposals are",
     },
     PrefSpec {
+        key: "level_brief",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent the morning brief and the wrap-up are",
+    },
+    PrefSpec {
         key: "rule_failed",
         kind: PrefKind::Choice(&["on", "off"]),
         label: "codeg's card on work that failed with nobody on it",
@@ -1223,6 +1330,73 @@ pub const PREFS: &[PrefSpec] = &[
         kind: PrefKind::Choice(&["on", "off"]),
         label: "the assistants' own suggestions (`suggest: true`)",
     },
+    PrefSpec {
+        key: "brief",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the morning brief",
+    },
+    PrefSpec {
+        key: "brief_time",
+        kind: PrefKind::Choice(&["hours", "fixed"]),
+        label: "when the morning brief is prepared",
+    },
+    PrefSpec {
+        key: "brief_at",
+        kind: PrefKind::Clock,
+        label: "the fixed time the morning brief is prepared",
+    },
+    PrefSpec {
+        key: "brief_needs",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the brief's part on what waits on the owner",
+    },
+    PrefSpec {
+        key: "brief_night",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the brief's part on what happened since the last one",
+    },
+    PrefSpec {
+        key: "brief_bots",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the brief's line for each work assistant",
+    },
+    PrefSpec {
+        key: "brief_schedule",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the brief's part on the day's schedule",
+    },
+    PrefSpec {
+        key: "brief_loose",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the brief's part on loose ends",
+    },
+    PrefSpec {
+        key: "brief_yesterday",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the brief's part on the owner's yesterday",
+    },
+    PrefSpec {
+        key: "brief_suggestions",
+        kind: PrefKind::Count {
+            max: MAX_BRIEF_SUGGESTIONS,
+        },
+        label: "suggestions in the morning brief, at most (0: none)",
+    },
+    PrefSpec {
+        key: "wrap",
+        kind: PrefKind::Choice(&["auto", "ask", "off"]),
+        label: "the day's wrap-up",
+    },
+    PrefSpec {
+        key: "wrap_tonight",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "\"tonight I can do\" in the wrap-up",
+    },
+    PrefSpec {
+        key: "keep_awake",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "keeping the computer awake while work chosen for tonight runs (desktop)",
+    },
 ];
 
 /// The "automation level" (13.4): a preset over the items below — not
@@ -1254,6 +1428,7 @@ pub fn disturb_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             [
                 ("normal_via", json!("today")),
                 ("low_via", json!("today")),
+                ("wrap", json!("ask")),
             ]
             .into_iter()
             .chain(rule_preset(level))
@@ -1264,6 +1439,7 @@ pub fn disturb_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
                 ("normal_via", json!("system")),
                 ("low_via", json!("today")),
                 ("focus_wait", json!(DEFAULT_FOCUS_WAIT)),
+                ("wrap", json!("auto")),
             ]
             .into_iter()
             .chain(rule_preset(level))
@@ -1274,6 +1450,7 @@ pub fn disturb_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
                 ("normal_via", json!("system")),
                 ("low_via", json!("digest")),
                 ("focus_wait", json!(0)),
+                ("wrap", json!("auto")),
             ]
             .into_iter()
             .chain(rule_preset(level))
@@ -1476,6 +1653,7 @@ impl Prefs {
             "used_up" => self.level_used_up,
             "proposal" => self.level_proposal,
             "proposal_low" => self.level_proposal_low,
+            "brief" => self.level_brief,
             _ => Level::Normal,
         }
     }
@@ -1489,6 +1667,21 @@ impl Prefs {
     /// Whether codeg reaches out to the owner with more than reminders.
     pub fn proactive(&self) -> bool {
         self.proactive == OnOff::On
+    }
+
+    /// Whether part `part` of the morning brief (`needs`, `night`, `bots`,
+    /// `schedule`, `loose`, `yesterday`) is wanted.
+    pub fn brief_part(&self, part: &str) -> bool {
+        let on = match part {
+            "needs" => self.brief_needs,
+            "night" => self.brief_night,
+            "bots" => self.brief_bots,
+            "schedule" => self.brief_schedule,
+            "loose" => self.brief_loose,
+            "yesterday" => self.brief_yesterday,
+            _ => return false,
+        };
+        on == OnOff::On
     }
 
     /// Whether proposal rule `rule` (6.7: `failed`, `review`, `session`,
@@ -1674,6 +1867,21 @@ fn brain_value(key: &str, value: &Value) -> String {
         ("quiet_lets", "urgent") => "their reminders and what is urgent".into(),
         ("morning", "hours") => "when their day usually starts".into(),
         ("morning", "fixed") => "the fixed time below".into(),
+        ("brief_time", "hours") => {
+            "a quarter of an hour before their usual start (when they first show up, until \
+             codeg has learned it)"
+                .into()
+        }
+        ("brief_time", "fixed") => "the fixed time below".into(),
+        ("brief_suggestions", _) => match value.as_u64() {
+            Some(0) => "none".into(),
+            Some(n) => format!("at most {n}"),
+            None => value.to_string(),
+        },
+        ("wrap", "auto") => {
+            "codeg brings it near the end of their usual day, and when they ask".into()
+        }
+        ("wrap", "ask") => "only when they ask (\"that's it for today\")".into(),
         (_, w) if !w.is_empty() => w.to_string(),
         _ => value.to_string(),
     }
@@ -1744,6 +1952,74 @@ fn rules_line(prefs: &Prefs) -> String {
     )
 }
 
+/// The morning brief's and the wrap-up's items (6.4, 6.5).
+fn is_brief_item(key: &str) -> bool {
+    key.starts_with("brief") || key.starts_with("wrap") || key == "keep_awake"
+}
+
+/// The morning brief and the wrap-up, in one line: codeg brings them; the
+/// primary writes them.
+fn brief_line(prefs: &Prefs, worker: bool) -> String {
+    let brief = if prefs.brief == OnOff::Off {
+        "off".to_string()
+    } else {
+        let when = match prefs.brief_time {
+            BriefTime::Hours => {
+                "prepared a quarter of an hour before their usual start".to_string()
+            }
+            BriefTime::Fixed => format!("prepared at {}", prefs.brief_at),
+        };
+        let parts: Vec<&str> = [
+            (prefs.brief_needs, "what waits on them"),
+            (prefs.brief_night, "what happened since the last one"),
+            (prefs.brief_bots, "each work assistant"),
+            (prefs.brief_schedule, "the day's schedule"),
+            (prefs.brief_loose, "loose ends"),
+            (prefs.brief_yesterday, "their yesterday"),
+        ]
+        .iter()
+        .filter(|(on, _)| *on == OnOff::On)
+        .map(|(_, w)| *w)
+        .collect();
+        format!(
+            "on, {when}, brought to them when they show up; parts: {}; suggestions: {}",
+            if parts.is_empty() {
+                "none".into()
+            } else {
+                parts.join(", ")
+            },
+            match prefs.brief_suggestions {
+                0 => "none".to_string(),
+                n => format!("at most {n}"),
+            }
+        )
+    };
+    let wrap = match prefs.wrap {
+        WrapMode::Auto => "codeg brings it near the end of their usual day, and when they ask",
+        WrapMode::Ask => "only when they ask",
+        WrapMode::Off => "codeg does not bring it; when they ask, it is still done",
+    };
+    let writer = if worker {
+        "the primary assistant writes them"
+    } else {
+        "you write them when codeg hands you the materials; \"that's it for today\" is wrap_up"
+    };
+    format!(
+        "- the morning brief ({writer}): {brief}. The wrap-up: {wrap}; \"tonight I can do\": {}; \
+         the computer kept awake for tonight's work: {}",
+        if prefs.wrap_tonight == OnOff::On {
+            "on"
+        } else {
+            "off"
+        },
+        if prefs.keep_awake == OnOff::On {
+            "on (desktop)"
+        } else {
+            "off"
+        },
+    )
+}
+
 /// The preferences as the brain reads them: `<codeg-prefs>`. A worker is
 /// not told how the primary hands work to workers.
 pub fn prefs_block(prefs: &Prefs, worker: bool) -> String {
@@ -1752,6 +2028,7 @@ pub fn prefs_block(prefs: &Prefs, worker: bool) -> String {
         .iter()
         .filter(|s| !(worker && s.key == "worker_handoff"))
         .filter(|s| !s.key.starts_with("level_") && !s.key.starts_with("rule_"))
+        .filter(|s| !is_brief_item(s.key))
         .map(|s| {
             let v = map.get(s.key).cloned().unwrap_or(Value::Null);
             format!("- {}: {}", s.label, brain_value(s.key, &v))
@@ -1759,6 +2036,7 @@ pub fn prefs_block(prefs: &Prefs, worker: bool) -> String {
         .collect();
     lines.push(levels_line(&map));
     lines.push(rules_line(prefs));
+    lines.push(brief_line(prefs, worker));
     format!(
         "<codeg-prefs>\n\
 The owner's preferences, as they set them in codeg — every assistant follows the same ones. The \

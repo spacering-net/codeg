@@ -8103,7 +8103,7 @@
           "standard": "Padrão",
           "more": "Mais",
           "custom": "Personalizado",
-          "quietHint": "Só o urgente e seus lembretes avisam você; o resto espera em Hoje.",
+          "quietHint": "Só o urgente e seus lembretes avisam você; o resto espera em Hoje, e o fechamento só vem quando você pede.",
           "standardHint": "O normal avisa quando você está presente e não está digitando; enquanto digita, espera você parar, e enquanto está fora é reunido para quando voltar.",
           "moreHint": "O normal avisa até enquanto você digita, e o baixo chega em uma única notificação, no máximo a cada duas horas.",
           "customHint": "Alguns dos itens abaixo estão do seu jeito.",
@@ -8388,6 +8388,85 @@
         "rule_repeat_count": {
           "title": "Pedidos até sugerir uma rotina",
           "hint": "Pedidos até sugerir uma rotina"
+        },
+        "brief": {
+          "title": "Resumo da manhã",
+          "hint": "Todo dia o assistente principal resume o que precisa de você, o que aconteceu desde o último e o plano do dia, e entrega quando você chega.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_time": {
+          "title": "Preparado",
+          "hint": "De qualquer forma, chega quando você aparece.",
+          "hours": "Quinze minutos antes de seu dia costumar começar",
+          "fixed": "Um horário fixo"
+        },
+        "brief_at": {
+          "title": "Preparado às",
+          "hint": "O horário em que o resumo é preparado."
+        },
+        "brief_needs": {
+          "title": "O que precisa de você",
+          "hint": "Tudo o que espera por você, há quanto tempo e por quê.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_night": {
+          "title": "Desde o último resumo",
+          "hint": "Trabalho concluído ou com falha, pull requests que mudaram, relatórios de rotinas, o que os assistentes fizeram por você e como foi o trabalho da noite.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_bots": {
+          "title": "Cada assistente de trabalho",
+          "hint": "Uma linha cada: o que terminou, no que está, onde travou. Os ocultos ficam de fora.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_schedule": {
+          "title": "A agenda de hoje",
+          "hint": "Lembretes e rotinas que ainda vêm hoje.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_loose": {
+          "title": "Pontas soltas",
+          "hint": "Assuntos parados há uma semana, worktrees com mudanças sem commit há um dia, sessões que você deixou pela metade.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_yesterday": {
+          "title": "Seu dia de ontem",
+          "hint": "Os projetos e agentes que você usou ontem e quantas sessões abriu.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_suggestions": {
+          "title": "Sugestões, no máximo",
+          "hint": "Quantas sugestões pode fazer, cada uma com o porquê; 0: nenhuma."
+        },
+        "wrap": {
+          "title": "Fechamento do dia",
+          "hint": "O que foi feito, o que ainda roda, o que precisa de você amanhã e o que os assistentes podem fazer à noite. Você sempre pode pedir: “por hoje é só”.",
+          "auto": "Perto do fim do seu dia habitual",
+          "ask": "Só quando eu disser “por hoje é só”",
+          "off": "Desligado"
+        },
+        "wrap_tonight": {
+          "title": "“Hoje à noite posso”",
+          "hint": "O fechamento oferece trabalho para a noite em cartões que você aprova; o próximo resumo conta como foi.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "keep_awake": {
+          "title": "Manter o computador acordado para o trabalho da noite",
+          "hint": "Enquanto o trabalho escolhido para a noite roda, o computador não dorme sozinho — só ligado na tomada.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "level_brief": {
+          "title": "Resumo da manhã e fechamento",
+          "hint": "Seu resumo da manhã ou o fechamento está pronto."
         }
       },
       "workdir": {
@@ -8800,7 +8879,15 @@
           "openEditor": "Abrir o editor"
         }
       },
-      "retryOf": "Tentar de novo “{title}”"
+      "retryOf": "Tentar de novo “{title}”",
+      "tonight": {
+        "open": "Hoje à noite posso",
+        "acted": "Para hoje à noite",
+        "dismissed": "Hoje não",
+        "accept": "Fazer hoje à noite",
+        "dismiss": "Agora não",
+        "awake": "O computador fica acordado até esse trabalho terminar."
+      }
     },
     "exchange": {
       "sentTo": "Mensagem enviada para <peer></peer>",
@@ -9375,7 +9462,9 @@
         "asked": "Rotina aguarda você",
         "reported": "Relatório da rotina",
         "silent": "Rotina: sem mudanças"
-      }
+      },
+      "preparingBrief": "Preparando seu resumo da manhã…",
+      "preparingWrap": "Preparando o fechamento do dia…"
     },
     "meet": {
       "name": {
@@ -9900,6 +9989,41 @@
           "title": "Sugestões dos assistentes",
           "hint": "Desligado: os assistentes não sugerem nada, e uma chamada com suggest fica sabendo que você não aceita sugestões agora."
         }
+      }
+    },
+    "brief": {
+      "title": "Resumo da manhã",
+      "byCodeg": "O codeg escreveu a partir dos registros — o assistente não conseguiu.",
+      "part": {
+        "needs": "Precisa de você",
+        "tonight": "O trabalho da noite",
+        "night": "Desde o último resumo",
+        "running": "Acompanhando",
+        "schedule": "Hoje",
+        "bots": "Os assistentes",
+        "loose": "Pontas soltas",
+        "yesterday": "Seu dia de ontem"
+      },
+      "more": "…e mais {count}",
+      "bot": {
+        "done": "terminou {count} ({titles})",
+        "idle": "não terminou nada",
+        "doing": "em {what}",
+        "stuck": "{count} esperando você"
+      },
+      "loose": {
+        "item": "parado há {days, plural, one {# dia} other {# dias}}",
+        "worktree": "mudanças sem commit há {days, plural, one {# dia} other {# dias}}",
+        "session": "pela metade"
+      },
+      "sessions": "{count, plural, one {# sessão} other {# sessões}}",
+      "nothing": "Nada precisa de você hoje.",
+      "replyBrief": "Resumo da manhã",
+      "replyWrap": "Fechamento do dia",
+      "message": {
+        "to": "Para {name}:",
+        "answered": "respondeu: {text}",
+        "open": "ainda sem resposta"
       }
     }
   }

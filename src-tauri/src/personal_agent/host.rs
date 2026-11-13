@@ -69,6 +69,8 @@ pub struct EngineHost {
     pub(super) reach: super::reach::Reach,
     /// When codeg's proposal rules look next (`rules`, 6.7).
     pub(super) rules: super::rules::RuleClock,
+    /// The morning brief's and the wrap-up's look (`brief`, 6.4, 6.5).
+    pub(super) briefs: super::brief::BriefClock,
 }
 
 /// Build the host and publish it. Call ONLY where the work-task engine was
@@ -116,6 +118,9 @@ pub async fn run(host: Arc<EngineHost>) {
             ticker.spawn_rules_tick();
             // Reminders on a mention whose days are over go (6.8).
             ticker.mention_tick().await;
+            // The morning brief and the wrap-up, and the computer kept
+            // awake for tonight's work (6.4, 6.5), off this loop.
+            ticker.spawn_brief_tick();
         }
     });
     // The usage figures are caught up while nothing runs (8.1).
@@ -169,6 +174,7 @@ impl EngineHost {
                 live: super::live::LiveHub::new(true),
                 reach: super::reach::Reach::default(),
                 rules: super::rules::RuleClock::default(),
+                briefs: super::brief::BriefClock::default(),
             }
         })
     }

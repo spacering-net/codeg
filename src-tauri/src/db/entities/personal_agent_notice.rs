@@ -79,6 +79,10 @@ pub enum NoticeKind {
     /// branch behind with conflicts — with the next step on it.
     #[sea_orm(string_value = "rule")]
     Rule,
+    /// The morning brief codeg wrote itself, with no brain to write it
+    /// (6.4): nothing to answer, its rows open what they are about.
+    #[sea_orm(string_value = "brief")]
+    Brief,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

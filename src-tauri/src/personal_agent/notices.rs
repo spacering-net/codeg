@@ -417,7 +417,11 @@ impl PersonalAgentEngine {
             .dispatch_card(&v, batch, Some(reason), Some(subject), "proposal")
             .await
         {
-            Ok(id) => suggested(id, "dispatch"),
+            Ok(id) => {
+                // In a wrap-up's turn: for tonight (6.5).
+                self.mark_tonight(id).await;
+                suggested(id, "dispatch")
+            }
             Err(e) => super::tools::ToolOutcome::refused(e),
         }
     }
@@ -442,7 +446,10 @@ impl PersonalAgentEngine {
             .propose_followup(dispatch_id, message, intent, batch, Some(subject), Some(reason))
             .await
         {
-            Ok(id) => suggested(id, "follow-up"),
+            Ok(id) => {
+                self.mark_tonight(id).await;
+                suggested(id, "follow-up")
+            }
             Err(e) => super::tools::ToolOutcome::refused(e),
         }
     }
@@ -483,7 +490,10 @@ impl PersonalAgentEngine {
             )
             .await
         {
-            Ok(id) => suggested(id, "message"),
+            Ok(id) => {
+                self.mark_tonight(id).await;
+                suggested(id, "message")
+            }
             Err(e) => super::tools::ToolOutcome::refused(e),
         }
     }
@@ -592,6 +602,7 @@ impl PersonalAgentEngine {
             NoticeKind::Routine => return self.act_on_routine(&notice, action).await,
             // One of codeg's proposal rules (6.7).
             NoticeKind::Rule => return self.act_on_rule(&notice, action, text).await,
+            NoticeKind::Brief => return Err("a brief has nothing to answer".into()),
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.
@@ -716,6 +727,9 @@ impl PersonalAgentEngine {
         match ran {
             Ok(result) => {
                 self.tell_brain(&notice, &proposal, "approved", result.as_ref())
+                    .await;
+                // A "tonight" card: what it made is tonight's work (6.5).
+                self.tonight_taken(notice.timeline_id, result.as_ref())
                     .await;
                 // A routine's run, confirmed: it runs as that work (6.9).
                 if routine_confirm(&notice) {

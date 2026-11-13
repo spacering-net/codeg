@@ -32,10 +32,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useTasksView } from "@/contexts/tasks-view-context"
+import {
+  useOptionalTasksView,
+  useTasksView,
+} from "@/contexts/tasks-view-context"
 import { personalAgentItemAct, personalAgentNoticeAct } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import type { PersonalAgentToday, TodayRow } from "@/lib/types"
+import type { DispatchInfo, PersonalAgentToday, TodayRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useRoster } from "@/stores/personal-agent-roster-store"
@@ -67,9 +70,9 @@ type Opener = (row: TodayRow) => (() => void) | null
 
 /** The way each row opens, from the page around it. */
 function useOpener(
-  today: PersonalAgentToday,
+  today: Pick<PersonalAgentToday, "dispatches">,
   inDrawer: boolean,
-  openTask: (id: number) => void
+  openTask: ((id: number) => void) | null
 ): Opener {
   const entries = useRoster()
   const openSession = useSessionLinkOpener()
@@ -90,7 +93,8 @@ function useOpener(
       row.bot_id != null && row.row_id != null ? () => toBot(row.row_id) : null
     // Nothing of its own to open: its assistant.
     const bot = row.bot_id != null ? () => toBot(null) : null
-    const task = row.task_id != null ? () => openTask(row.task_id!) : null
+    const task =
+      row.task_id != null && openTask ? () => openTask(row.task_id!) : null
     const session =
       row.conversation_id != null
         ? () => openSession(row.conversation_id!)
@@ -263,18 +267,34 @@ function TodayBody({
   const now = useNow()
   const opener = useOpener(today, inDrawer, openTask)
   const shown = GROUPS.filter((g) => today[g].length > 0)
-  if (shown.length === 0) {
-    return (
+  // The morning brief or the wrap-up, while it is being written (6.4).
+  const preparing =
+    today.brief?.state === "preparing" ? (
       <p
         className="text-xs leading-5 text-muted-foreground"
-        data-pa-today-empty
+        data-pa-today-brief={today.brief.kind}
       >
-        {t("empty")}
+        <span className="activity-shimmer">
+          {t(today.brief.kind === "wrap" ? "preparingWrap" : "preparingBrief")}
+        </span>
       </p>
+    ) : null
+  if (shown.length === 0) {
+    return (
+      <div className="flex flex-col gap-1">
+        {preparing}
+        <p
+          className="text-xs leading-5 text-muted-foreground"
+          data-pa-today-empty
+        >
+          {t("empty")}
+        </p>
+      </div>
     )
   }
   return (
     <div className="flex flex-col gap-3">
+      {preparing}
       {shown.map((g) => (
         <TodayGroup key={g} group={g} count={today[g].length}>
           {(all) =>
@@ -549,6 +569,77 @@ function TodayRowCard({
           {actions}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/** The rows of a morning brief codeg wrote itself (6.4): each opens what it
+ *  is about, as "today"'s rows do; nothing is settled from them. */
+export function BriefRows({
+  rows,
+  dispatches,
+}: {
+  rows: TodayRow[]
+  dispatches: DispatchInfo[]
+}) {
+  const view = useOptionalTasksView()
+  return view ? (
+    <BriefRowsWithTasks rows={rows} dispatches={dispatches} />
+  ) : (
+    <BriefRowList rows={rows} dispatches={dispatches} openTask={null} />
+  )
+}
+
+function BriefRowsWithTasks({
+  rows,
+  dispatches,
+}: {
+  rows: TodayRow[]
+  dispatches: DispatchInfo[]
+}) {
+  const { tasks, refetch } = useTasksView()
+  const allFolders = useAppWorkspaceStore((s) => s.allFolders)
+  const folderNames = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const f of allFolders) map.set(f.id, f.alias ?? f.name)
+    return map
+  }, [allFolders])
+  const { openDetail, dialogs } = useTaskDialogs({
+    tasks,
+    refetch,
+    folderNames,
+    defaultFolderId: null,
+  })
+  return (
+    <>
+      <BriefRowList rows={rows} dispatches={dispatches} openTask={openDetail} />
+      {dialogs}
+    </>
+  )
+}
+
+function BriefRowList({
+  rows,
+  dispatches,
+  openTask,
+}: {
+  rows: TodayRow[]
+  dispatches: DispatchInfo[]
+  openTask: ((id: number) => void) | null
+}) {
+  const now = useNow()
+  const opener = useOpener({ dispatches }, false, openTask)
+  return (
+    <div className="flex flex-col gap-1.5">
+      {rows.map((row) => (
+        <TodayRowCard
+          key={row.key}
+          row={row}
+          now={now}
+          onOpen={opener(row)}
+          readOnly
+        />
+      ))}
     </div>
   )
 }

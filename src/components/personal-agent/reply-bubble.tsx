@@ -17,9 +17,11 @@ import { useTranslations } from "next-intl"
 import {
   CircleAlert,
   CornerDownRight,
+  Newspaper,
   Repeat,
   RotateCcw,
   Square,
+  Sunset,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -202,8 +204,16 @@ function routineOf(
   }
 }
 
+/** The morning brief or the wrap-up a reply is (6.4, 6.5). */
+function briefOf(v: unknown): "brief" | "wrap" | null {
+  if (!v || typeof v !== "object") return null
+  const kind = (v as { kind?: unknown }).kind
+  return kind === "brief" || kind === "wrap" ? kind : null
+}
+
 export function ReplyBubble({ item }: { item: ReplyItem }) {
   const tr = useTranslations("PersonalAgent.routines")
+  const tb = useTranslations("PersonalAgent.brief")
   const scope = usePageScope()
   const { liveReplies, liveTexts } = usePersonalAgent()
   const row = item.row
@@ -268,8 +278,22 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
 
   // The routine it reports for (6.9).
   const routine = routineOf(row?.data?.routine)
+  // The morning brief or the wrap-up it is (6.4, 6.5).
+  const brief = briefOf(row?.data?.brief)
+  const BriefIcon = brief === "wrap" ? Sunset : Newspaper
   const quote = (
     <>
+      {brief ? (
+        <p
+          className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground"
+          data-pa-reply-brief={brief}
+        >
+          <BriefIcon className="size-3 shrink-0" aria-hidden />
+          <span className="min-w-0 truncate">
+            {tb(brief === "wrap" ? "replyWrap" : "replyBrief")}
+          </span>
+        </p>
+      ) : null}
       {routine ? (
         <p
           className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground"

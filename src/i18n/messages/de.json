@@ -8103,7 +8103,7 @@
           "standard": "Standard",
           "more": "Mehr",
           "custom": "Benutzerdefiniert",
-          "quietHint": "Nur Dringendes und deine Erinnerungen benachrichtigen dich; der Rest wartet in „Heute“.",
+          "quietHint": "Nur Dringendes und deine Erinnerungen benachrichtigen dich; der Rest wartet in „Heute“, und der Tagesabschluss kommt nur auf Wunsch.",
           "standardHint": "Normales benachrichtigt dich, wenn du da bist und nicht tippst; während du tippst, wartet es, bis du aufhörst, und während du weg bist, wird es für deine Rückkehr gesammelt.",
           "moreHint": "Normales benachrichtigt dich auch beim Tippen, und Niedriges kommt als eine Benachrichtigung, höchstens alle zwei Stunden.",
           "customHint": "Einige der Punkte unten sind nach deinen Wünschen eingestellt.",
@@ -8388,6 +8388,85 @@
         "rule_repeat_count": {
           "title": "Bitten bis zum Routine-Vorschlag",
           "hint": "Bitten bis zum Routine-Vorschlag"
+        },
+        "brief": {
+          "title": "Morgen-Briefing",
+          "hint": "Der Hauptassistent fasst jeden Tag zusammen, was dich braucht, was seit dem letzten passiert ist und was ansteht – und bringt es, sobald du da bist.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "brief_time": {
+          "title": "Vorbereitet",
+          "hint": "So oder so bekommst du es, wenn du da bist.",
+          "hours": "Eine Viertelstunde vor deinem üblichen Start",
+          "fixed": "Eine feste Uhrzeit"
+        },
+        "brief_at": {
+          "title": "Vorbereitet um",
+          "hint": "Die Uhrzeit, zu der das Briefing vorbereitet wird."
+        },
+        "brief_needs": {
+          "title": "Was dich braucht",
+          "hint": "Alles, was auf dich wartet, wie lange schon und warum.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "brief_night": {
+          "title": "Seit dem letzten Briefing",
+          "hint": "Erledigte oder fehlgeschlagene Arbeit, bewegte Pull Requests, Routineberichte, was die Assistenten für dich getan haben – und wie die Arbeit von letzter Nacht lief.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "brief_bots": {
+          "title": "Jeder Arbeitsassistent",
+          "hint": "Je eine Zeile: was er erledigt hat, woran er ist, wo er hängt. Ausgeblendete fehlen.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "brief_schedule": {
+          "title": "Der heutige Plan",
+          "hint": "Erinnerungen und Routinen, die heute noch kommen.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "brief_loose": {
+          "title": "Offene Enden",
+          "hint": "Eine Woche unberührte Punkte, Worktrees mit seit einem Tag nicht committeten Änderungen, Sitzungen, die du offen gelassen hast.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "brief_yesterday": {
+          "title": "Dein Gestern",
+          "hint": "Welche Projekte und Agenten du gestern genutzt hast und wie viele Sitzungen du geöffnet hast.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "brief_suggestions": {
+          "title": "Vorschläge, höchstens",
+          "hint": "Wie viele Vorschläge es machen darf, jeweils mit Begründung; 0: keine."
+        },
+        "wrap": {
+          "title": "Tagesabschluss",
+          "hint": "Was erledigt ist, was noch läuft, was dich morgen braucht und was die Assistenten heute Nacht tun könnten. Du kannst jederzeit sagen: „Das war's für heute“.",
+          "auto": "Kurz vor deinem üblichen Feierabend",
+          "ask": "Nur wenn ich „Das war's für heute“ sage",
+          "off": "Aus"
+        },
+        "wrap_tonight": {
+          "title": "„Heute Nacht kann ich“",
+          "hint": "Der Abschluss bietet Arbeit für heute Nacht auf Karten an, denen du zustimmst; das nächste Briefing berichtet.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "keep_awake": {
+          "title": "Rechner für die Arbeit heute Nacht wach halten",
+          "hint": "Solange die Arbeit läuft, die du für heute Nacht gewählt hast, geht der Rechner nicht von selbst schlafen – nur am Netzteil.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "level_brief": {
+          "title": "Morgen-Briefing und Tagesabschluss",
+          "hint": "Dein Morgen-Briefing oder der Tagesabschluss ist fertig."
         }
       },
       "workdir": {
@@ -8800,7 +8879,15 @@
           "openEditor": "Editor öffnen"
         }
       },
-      "retryOf": "„{title}“ wiederholen"
+      "retryOf": "„{title}“ wiederholen",
+      "tonight": {
+        "open": "Heute Nacht kann ich",
+        "acted": "Für heute Nacht dran",
+        "dismissed": "Heute Nacht nicht",
+        "accept": "Heute Nacht machen",
+        "dismiss": "Nicht jetzt",
+        "awake": "Der Rechner bleibt wach, bis diese Arbeit fertig ist."
+      }
     },
     "exchange": {
       "sentTo": "Nachricht an <peer></peer> gesendet",
@@ -9375,7 +9462,9 @@
         "asked": "Routine wartet auf dich",
         "reported": "Routinebericht",
         "silent": "Routine: keine Änderung"
-      }
+      },
+      "preparingBrief": "Dein Morgen-Briefing wird vorbereitet…",
+      "preparingWrap": "Der Tagesabschluss wird vorbereitet…"
     },
     "meet": {
       "name": {
@@ -9900,6 +9989,41 @@
           "title": "Vorschläge der Assistenten",
           "hint": "Aus: Die Assistenten schlagen nichts vor; ein Aufruf mit suggest erfährt, dass du gerade keine Vorschläge annimmst."
         }
+      }
+    },
+    "brief": {
+      "title": "Morgen-Briefing",
+      "byCodeg": "codeg hat es aus seinen Aufzeichnungen geschrieben – der Assistent konnte es nicht.",
+      "part": {
+        "needs": "Braucht dich",
+        "tonight": "Die Arbeit von letzter Nacht",
+        "night": "Seit dem letzten Briefing",
+        "running": "Im Blick",
+        "schedule": "Heute",
+        "bots": "Die Assistenten",
+        "loose": "Offene Enden",
+        "yesterday": "Dein Gestern"
+      },
+      "more": "…und {count} weitere",
+      "bot": {
+        "done": "{count} erledigt ({titles})",
+        "idle": "nichts erledigt",
+        "doing": "an {what}",
+        "stuck": "{count} wartet auf dich"
+      },
+      "loose": {
+        "item": "seit {days, plural, one {# Tag} other {# Tagen}} unberührt",
+        "worktree": "Änderungen seit {days, plural, one {# Tag} other {# Tagen}} nicht committet",
+        "session": "offen gelassen"
+      },
+      "sessions": "{count, plural, one {# Sitzung} other {# Sitzungen}}",
+      "nothing": "Heute braucht dich nichts.",
+      "replyBrief": "Morgen-Briefing",
+      "replyWrap": "Tagesabschluss",
+      "message": {
+        "to": "An {name}:",
+        "answered": "Antwort: {text}",
+        "open": "noch keine Antwort"
       }
     }
   }

@@ -380,6 +380,8 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
         "routine_list" => engine.routine_list_call().await,
         "routine_create" => engine.routine_create_call(&args).await,
         "routine_update" => engine.routine_update_call(&args).await,
+        // "That's it for today" (6.5).
+        "wrap_up" => engine.wrap_up_call().await,
         "overview" => engine.overview_call().await,
         "board_status" => engine.board_status_call(&args).await,
         "session_list" => engine.session_list_call(&args).await,

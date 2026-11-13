@@ -405,3 +405,24 @@ describe("a card held for the owner's confirmation", () => {
     expect(screen.getByRole("button", { name: "Don't" })).toBeInTheDocument()
   })
 })
+
+describe("tonight's work and the morning brief (6.4, 6.5)", () => {
+  it("offers work for tonight, kept awake for, without the switch over suggestions", async () => {
+    api.personalAgentNoticeAct.mockResolvedValue(card({ state: "acted" }))
+    draw(
+      card({ state: "open", why: "proposal", tonight: true, keep_awake: true })
+    )
+    expect(screen.getByText("Tonight I can do")).toBeTruthy()
+    expect(
+      screen.getByText("The computer stays awake until this work is done.")
+    ).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Don't suggest these" })).toBe(
+      null
+    )
+    expect(screen.getByRole("button", { name: "Not now" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Do it tonight" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept", null)
+    )
+  })
+})
