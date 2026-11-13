@@ -817,7 +817,12 @@ impl PersonalAgentEngine {
                 workdir::write_file(&dir, file, &now).map_err(|e| e.to_string())?;
             }
         }
-        workdir::commit_all(&dir, "role changed on the opening card").await;
+        workdir::commit_only(
+            &dir,
+            "role changed on the opening card",
+            &[workdir::SOUL_FILE, workdir::RULES_FILE],
+        )
+        .await;
         // Its executor config, where it is still the old role's.
         if let Some(id) = row.executor_assistant_id {
             if let Ok(Some(a)) = crate::db::service::assistant_service::get(&self.db.conn, id).await

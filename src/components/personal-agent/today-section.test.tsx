@@ -446,6 +446,31 @@ describe("today", () => {
     await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
   })
 
+  it("lists what an assistant remembered, and takes it back (7.7)", async () => {
+    draw(
+      today({
+        done: [
+          row({
+            key: "memory:8",
+            kind: "memory",
+            bot_id: 2,
+            notice_id: 8,
+            row_id: 12,
+            title: "Memory updated — new: Release days",
+            state: "acted",
+            undo: true,
+          }),
+        ],
+      })
+    )
+    const line = document.querySelector('[data-key="memory:8"]') as HTMLElement
+    expect(line.textContent).toContain("Remembered")
+    fireEvent.click(within(line).getByRole("button", { name: "Undo" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(8, "undo", 2)
+    )
+  })
+
   it("lists what an assistant did on a forge, opening its card (7.4)", () => {
     draw(
       today({

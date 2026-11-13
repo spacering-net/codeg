@@ -160,6 +160,7 @@ export function useStatusWord(): string | null {
   const status = snapshot.status
   if (status.engine !== "here") return t("elsewhere")
   if (needsOwner) return t("waiting")
+  if (status.turn?.flush) return t("noting")
   if (status.turn?.kind === "compaction") return t("compacting")
   if (status.turn) return t("replying")
   return t("idle")

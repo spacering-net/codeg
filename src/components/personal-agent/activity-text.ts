@@ -89,6 +89,9 @@ export function doingText(
       return t("activity.plan")
     case "compact":
       return t("activity.compact")
+    // The notes before a compaction (7.7).
+    case "notes":
+      return t("activity.notes")
     case "dispatch":
       return target
         ? t("activity.dispatch", { target })
@@ -171,6 +174,8 @@ export function doneText(t: Translate, step: StepLine): string {
       return t("did.plan")
     case "compact":
       return t("did.compact")
+    case "notes":
+      return t("did.notes")
     case "fetch":
       return t("did.fetch")
     case "question":

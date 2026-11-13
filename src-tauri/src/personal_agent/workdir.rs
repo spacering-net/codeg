@@ -430,27 +430,543 @@ async fn git(path: &Path, args: &[&str]) -> Result<std::process::Output, String>
     }
 }
 
+/// Every write of a working directory's history, one at a time: a turn's
+/// commit, the owner's edit, an undo — so none of them finds the index
+/// locked by another, and each commits only what is its own.
+static GIT_WRITE: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 /// Commit whatever changed in the working directory. Best-effort: a missing
 /// git or a broken repository costs the history, never the turn.
 pub async fn commit_all(path: &Path, message: &str) -> bool {
+    commit(path, message).await.is_some()
+}
+
+/// [`commit_all`], with the commit made: `None` when nothing was committed.
+pub async fn commit(path: &Path, message: &str) -> Option<String> {
+    let _held = GIT_WRITE.lock().await;
+    commit_locked(path, message, None).await
+}
+
+/// Commit only `names`, as they are now (one deleted, as deleted): the
+/// owner's own edit, apart from whatever an assistant's turn has left
+/// uncommitted — that stays the turn's.
+pub async fn commit_only(path: &Path, message: &str, names: &[&str]) -> Option<String> {
+    let _held = GIT_WRITE.lock().await;
+    commit_locked(path, message, Some(names)).await
+}
+
+async fn commit_locked(path: &Path, message: &str, only: Option<&[&str]>) -> Option<String> {
     if !path.join(".git").exists() {
-        return false;
+        return None;
     }
-    if git(path, &["add", "-A"]).await.is_err() {
-        return false;
-    }
-    // Nothing staged: no empty commit per turn.
-    if git(path, &["diff", "--cached", "--quiet"]).await.is_ok() {
-        return false;
-    }
-    match git(path, &["commit", "-q", "--no-verify", "-m", message]).await {
-        Ok(_) => true,
-        Err(e) => {
-            tracing::warn!("[personal_agent] workdir commit failed: {e}");
-            false
+    // Pathspecs read literally: an entry's name may hold `[` or `]`.
+    let spec = |head: &[&str], names: &[&str]| -> Vec<String> {
+        let mut args: Vec<String> = ["--literal-pathspecs"]
+            .iter()
+            .chain(head)
+            .map(|s| s.to_string())
+            .collect();
+        if !names.is_empty() {
+            args.push("--".into());
+            args.extend(names.iter().map(|s| s.to_string()));
+        }
+        args
+    };
+    // A name git knows nothing of (gone, never committed) would fail the
+    // whole command: only the ones on disk or in the last commit.
+    let mut known: Vec<&str> = Vec::new();
+    for n in only.unwrap_or(&[]) {
+        if path.join(n).exists()
+            || git(path, &["cat-file", "-e", &format!("HEAD:{n}")])
+                .await
+                .is_ok()
+        {
+            known.push(n);
         }
     }
+    let names = known.as_slice();
+    if only.is_some() && names.is_empty() {
+        return None;
+    }
+    let run = |args: Vec<String>| async move {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        git(path, &refs).await
+    };
+    if run(spec(&["add", "-A"], names)).await.is_err() {
+        return None;
+    }
+    // Nothing staged: no empty commit per turn.
+    if run(spec(&["diff", "--cached", "--quiet"], names))
+        .await
+        .is_ok()
+    {
+        return None;
+    }
+    let commit = match only {
+        None => spec(&["commit", "-q", "--no-verify", "-m", message], &[]),
+        Some(_) => spec(
+            &["commit", "-q", "--no-verify", "-m", message, "--only"],
+            names,
+        ),
+    };
+    if let Err(e) = run(commit).await {
+        tracing::warn!("[personal_agent] workdir commit failed: {e}");
+        return None;
+    }
+    let head = git(path, &["rev-parse", "HEAD"]).await.ok()?;
+    Some(String::from_utf8_lossy(&head.stdout).trim().to_string())
 }
+
+// ── the memory a commit changed (7.7) ───────────────────────────────────────
+
+/// What an assistant's memory is, for its memory cards: the owner's
+/// profile, the index, the entries — and its persona and rules.
+pub fn memory_kind(name: &str) -> Option<&'static str> {
+    match name {
+        USER_FILE => Some("user"),
+        MEMORY_FILE => Some("index"),
+        SOUL_FILE => Some("soul"),
+        RULES_FILE => Some("rules"),
+        n if entry_file(n).is_some() => Some("entry"),
+        _ => None,
+    }
+}
+
+/// One file of an assistant's memory a commit changed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MemoryFile {
+    pub path: String,
+    /// `added`, `modified` or `deleted`.
+    pub status: String,
+    /// `entry`, `index`, `user`, `soul` or `rules` ([`memory_kind`]).
+    pub kind: String,
+    /// What the page calls it: an entry by [`entry_title`], a fixed file by
+    /// its name.
+    pub title: String,
+}
+
+/// A file as commit `rev` has it; `None` when it has none.
+async fn show_at(path: &Path, rev: &str, name: &str) -> Option<String> {
+    let out = git(path, &["show", &format!("{rev}:{name}")]).await.ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The commit before `rev`; `None` for the first.
+async fn parent_of(path: &Path, rev: &str) -> Option<String> {
+    let out = git(path, &["rev-parse", "--verify", "-q", &format!("{rev}^")])
+        .await
+        .ok()?;
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!sha.is_empty()).then_some(sha)
+}
+
+/// The files of the assistant's memory commit `rev` changed, in the
+/// commit's order.
+pub async fn memory_changes(path: &Path, rev: &str) -> Vec<MemoryFile> {
+    let Ok(out) = git(
+        path,
+        &[
+            "diff-tree",
+            "-r",
+            "--root",
+            "--no-commit-id",
+            "--name-status",
+            "--no-renames",
+            "-z",
+            rev,
+        ],
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+    let raw = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut parts = raw.split('\0').filter(|p| !p.is_empty());
+    let mut changed = Vec::new();
+    while let (Some(code), Some(name)) = (parts.next(), parts.next()) {
+        let Some(kind) = memory_kind(name) else {
+            continue;
+        };
+        let status = match code.chars().next() {
+            Some('A') => "added",
+            Some('D') => "deleted",
+            _ => "modified",
+        };
+        changed.push((name.to_string(), status, kind));
+    }
+    if changed.is_empty() {
+        return Vec::new();
+    }
+    let parent = parent_of(path, rev).await;
+    let mut files = Vec::with_capacity(changed.len());
+    for (name, status, kind) in changed {
+        let title = if kind == "entry" {
+            // A deleted entry is named as it was.
+            let at = if status == "deleted" {
+                parent.as_deref()
+            } else {
+                Some(rev)
+            };
+            let (content, index) = match at {
+                Some(at) => (
+                    show_at(path, at, &name).await.unwrap_or_default(),
+                    show_at(path, at, MEMORY_FILE).await.unwrap_or_default(),
+                ),
+                None => (String::new(), String::new()),
+            };
+            entry_title(&index, &name, &content)
+        } else {
+            name.clone()
+        };
+        files.push(MemoryFile {
+            path: name,
+            status: status.to_string(),
+            kind: kind.to_string(),
+            title,
+        });
+    }
+    files
+}
+
+/// Most of a memory card's diff kept on it.
+pub const MEMORY_DIFF_BYTES: usize = 24 * 1024;
+
+/// What commit `rev` changed in `files`, as a unified diff, at most
+/// [`MEMORY_DIFF_BYTES`] (cut at a line) — and whether it was cut.
+pub async fn memory_diff(path: &Path, rev: &str, files: &[MemoryFile]) -> (String, bool) {
+    if files.is_empty() {
+        return (String::new(), false);
+    }
+    let mut args: Vec<&str> = vec![
+        "--literal-pathspecs",
+        "show",
+        "--format=",
+        "--no-color",
+        "--no-renames",
+        "--no-ext-diff",
+        rev,
+        "--",
+    ];
+    args.extend(files.iter().map(|f| f.path.as_str()));
+    let Ok(out) = git(path, &args).await else {
+        return (String::new(), false);
+    };
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    if text.len() <= MEMORY_DIFF_BYTES {
+        return (text, false);
+    }
+    let mut kept = String::new();
+    for line in text.split_inclusive('\n') {
+        if kept.len() + line.len() > MEMORY_DIFF_BYTES {
+            break;
+        }
+        kept.push_str(line);
+    }
+    (kept, true)
+}
+
+/// How an undo of a memory change went.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct MemoryUndo {
+    /// The files put back as they were before the change.
+    pub back: Vec<String>,
+    /// The files left as they are: changed again since, in a way the undo
+    /// cannot be fitted into.
+    pub kept: Vec<String>,
+    /// The commit the undo made.
+    pub commit: Option<String>,
+}
+
+/// Take back what commit `rev` changed in `files`, and commit that alone.
+/// A file still as the change left it goes back as it was before; one
+/// changed again since has the change taken out of it (git's three-way
+/// merge) where that fits, and is left as it is where it does not — so a
+/// later edit is never lost to an undo.
+pub async fn undo_memory(
+    path: &Path,
+    rev: &str,
+    files: &[MemoryFile],
+    message: &str,
+) -> Result<MemoryUndo, String> {
+    let _held = GIT_WRITE.lock().await;
+    if !path.join(".git").exists() {
+        return Err("the working directory has no history".into());
+    }
+    let parent = parent_of(path, rev).await;
+    let mut undo = MemoryUndo::default();
+    // The index last: its lines follow what became of the entries.
+    let mut order: Vec<&MemoryFile> = files.iter().collect();
+    order.sort_by_key(|f| f.kind == "index");
+    for f in order {
+        let target = resolve(path, &f.path).map_err(|e| e.to_string())?;
+        let at = if f.status == "deleted" {
+            None
+        } else {
+            show_at(path, rev, &f.path).await
+        };
+        let before = match parent.as_deref() {
+            Some(p) if f.status != "added" => show_at(path, p, &f.path).await,
+            _ => None,
+        };
+        let now = match std::fs::read(&target) {
+            Ok(b) => Some(String::from_utf8_lossy(&b).into_owned()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.to_string()),
+        };
+        let put = match (now.as_deref(), at.as_deref(), before.as_deref()) {
+            // The index is a list of lines: the change's lines taken out and
+            // put back as lines, whatever was added around them since — but
+            // never the line of an entry left as it is, even when the index
+            // itself is still as the change left it.
+            (Some(n), Some(a), Some(b)) if f.kind == "index" => {
+                let kept = undo.kept.clone();
+                Some(Some(undo_lines(n, a, b, |line| !links_to(line, &kept))))
+            }
+            _ if now == at => Some(before),
+            (Some(n), Some(a), Some(b)) => merge3(path, n, a, b).await.map(Some),
+            _ => None,
+        };
+        match put {
+            Some(Some(content)) => {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                std::fs::write(&target, content).map_err(|e| e.to_string())?;
+                undo.back.push(f.path.clone());
+            }
+            Some(None) => {
+                match std::fs::remove_file(&target) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.to_string()),
+                }
+                undo.back.push(f.path.clone());
+            }
+            None => undo.kept.push(f.path.clone()),
+        }
+    }
+    // The index follows what became of the entries, whichever commit its
+    // lines went in with (an edit of the owner's may have taken a turn's
+    // line): none for an entry taken out, one for an entry brought back.
+    let of = |status: &str| -> Vec<String> {
+        files
+            .iter()
+            .filter(|f| f.kind == "entry" && f.status == status && undo.back.contains(&f.path))
+            .map(|f| f.path.clone())
+            .collect()
+    };
+    let (taken, brought) = (of("added"), of("deleted"));
+    if !taken.is_empty() || !brought.is_empty() {
+        let text = read_text(path, MEMORY_FILE);
+        let mut lines: Vec<String> = text
+            .lines()
+            .filter(|l| !links_to(l, &taken))
+            .map(str::to_string)
+            .collect();
+        let was = match parent.as_deref() {
+            Some(p) => show_at(path, p, MEMORY_FILE).await.unwrap_or_default(),
+            None => String::new(),
+        };
+        for name in &brought {
+            let one = std::slice::from_ref(name);
+            if lines.iter().any(|l| links_to(l, one)) {
+                continue;
+            }
+            if let Some(line) = was.lines().find(|l| links_to(l, one)) {
+                lines.push(line.to_string());
+            }
+        }
+        let mut fixed = lines.join("\n");
+        if !fixed.is_empty() && (text.ends_with('\n') || text.is_empty()) {
+            fixed.push('\n');
+        }
+        if fixed != text {
+            std::fs::write(path.join(MEMORY_FILE), &fixed).map_err(|e| e.to_string())?;
+            if !undo.back.iter().any(|p| p == MEMORY_FILE) {
+                undo.back.push(MEMORY_FILE.to_string());
+            }
+        }
+    }
+    let names: Vec<&str> = undo.back.iter().map(String::as_str).collect();
+    undo.commit = commit_locked(path, message, Some(&names)).await;
+    Ok(undo)
+}
+
+/// Whether an index line links to one of `names` (`](memory/x.md)`, also as
+/// `](./memory/x.md)`).
+fn links_to(line: &str, names: &[String]) -> bool {
+    names
+        .iter()
+        .any(|n| line.contains(&format!("]({n})")) || line.contains(&format!("](./{n})")))
+}
+
+/// `current` with the lines a change added (from `before` to `at`) taken
+/// out and the lines it removed put back — each after the line it followed,
+/// where that is still there — leaving every other line as it is now. Only
+/// lines `may` allows are touched.
+fn undo_lines(current: &str, at: &str, before: &str, may: impl Fn(&str) -> bool) -> String {
+    use std::collections::HashMap;
+    let count = |text: &str| {
+        let mut m: HashMap<String, i32> = HashMap::new();
+        for l in text.lines() {
+            *m.entry(l.to_string()).or_default() += 1;
+        }
+        m
+    };
+    let (in_at, in_before) = (count(at), count(before));
+    let mut lines: Vec<String> = current.lines().map(str::to_string).collect();
+    // Added by the change: out, as many times as it added them.
+    for (line, n) in &in_at {
+        let extra = n - in_before.get(line).copied().unwrap_or(0);
+        if extra <= 0 || !may(line) {
+            continue;
+        }
+        for _ in 0..extra {
+            if let Some(i) = lines.iter().rposition(|l| l == line) {
+                lines.remove(i);
+            }
+        }
+    }
+    // Removed by it: back, after the line before it.
+    let before_lines: Vec<&str> = before.lines().collect();
+    let mut left = in_at.clone();
+    for (i, line) in before_lines.iter().enumerate() {
+        let had = left.get(*line).copied().unwrap_or(0);
+        if had > 0 {
+            left.insert(line.to_string(), had - 1);
+            continue;
+        }
+        if !may(line) || lines.iter().any(|l| l == line) {
+            continue;
+        }
+        let at_pos = before_lines[..i]
+            .iter()
+            .rev()
+            .find_map(|prev| lines.iter().position(|l| l == prev))
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        lines.insert(at_pos, line.to_string());
+    }
+    let mut out = lines.join("\n");
+    if current.ends_with('\n') || (current.is_empty() && before.ends_with('\n')) {
+        out.push('\n');
+    }
+    out
+}
+
+/// `current` with the change from `base` to `other` merged in; `None` when
+/// they conflict (or git cannot say).
+async fn merge3(path: &Path, current: &str, base: &str, other: &str) -> Option<String> {
+    let dir = path
+        .join(".git")
+        .join(format!("codeg-undo-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).ok()?;
+    let files = [("current", current), ("base", base), ("other", other)];
+    let mut merged = None;
+    if files
+        .iter()
+        .all(|(n, c)| std::fs::write(dir.join(n), c).is_ok())
+    {
+        let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        let (cur, b, o) = (p("current"), p("base"), p("other"));
+        // Exit 0: merged cleanly; above: that many conflicts.
+        if let Ok(out) = git(path, &["merge-file", "-p", "-q", &cur, &b, &o]).await {
+            merged = Some(String::from_utf8_lossy(&out.stdout).into_owned());
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    merged
+}
+
+/// What the page calls entry `name` (`memory/x.md`): the title its index
+/// line links it by (`- [Release days](memory/release-days.md) — …`), else
+/// its frontmatter `name`, its first heading, or its file name — as the
+/// page's list does.
+pub fn entry_title(index: &str, name: &str, content: &str) -> String {
+    let linked = [format!("]({name})"), format!("](./{name})")];
+    for line in index.lines() {
+        for pat in &linked {
+            if let Some(end) = line.find(pat.as_str()) {
+                let head = &line[..end];
+                if let Some(start) = head.rfind('[') {
+                    let t = head[start + 1..].trim();
+                    if !t.is_empty() {
+                        return t.to_string();
+                    }
+                }
+            }
+        }
+    }
+    let mut lines = content.lines();
+    if content.starts_with("---") {
+        let _ = lines.next();
+        for l in lines.by_ref() {
+            if l.trim_end() == "---" {
+                break;
+            }
+            if let Some(v) = l.strip_prefix("name:") {
+                let v = v.trim().trim_matches(['"', '\'']).trim();
+                if !v.is_empty() {
+                    return v.to_string();
+                }
+            }
+        }
+    }
+    if let Some(h) = content.lines().find_map(|l| {
+        let t = l.trim_start_matches('#');
+        (t.len() < l.len() && l.len() - t.len() <= 6 && t.starts_with([' ', '\t']))
+            .then(|| t.trim())
+            .filter(|t| !t.is_empty())
+    }) {
+        return h.to_string();
+    }
+    let file = name.rsplit('/').next().unwrap_or(name);
+    file.strip_suffix(".md").unwrap_or(file).to_string()
+}
+
+/// The entries a turn read (7.7): of the paths its `read` calls named, the
+/// ones that are an entry of this working directory — by name, with what the
+/// page calls it, in the order first read, at most [`USED_MAX`].
+pub fn used_entries(path: &Path, reads: &[String]) -> Vec<(String, String)> {
+    let root = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let folder = root.join(MEMORY_DIR);
+    let index = read_text(path, MEMORY_FILE);
+    let mut out: Vec<(String, String)> = Vec::new();
+    for read in reads {
+        let given = Path::new(read);
+        let abs = if given.is_absolute() {
+            given.to_path_buf()
+        } else {
+            path.join(given)
+        };
+        let Ok(real) = std::fs::canonicalize(&abs) else {
+            continue;
+        };
+        if real.parent() != Some(folder.as_path()) {
+            continue;
+        }
+        let Some(file) = real.file_name().and_then(|f| f.to_str()) else {
+            continue;
+        };
+        let name = format!("{MEMORY_DIR}/{file}");
+        if entry_file(&name).is_none() || out.iter().any(|(n, _)| *n == name) {
+            continue;
+        }
+        let Ok(Some(content)) = read_file(path, &name) else {
+            continue;
+        };
+        let title = entry_title(&index, &name, &content);
+        out.push((name, title));
+        if out.len() >= USED_MAX {
+            break;
+        }
+    }
+    out
+}
+
+/// Most entries a reply says it used.
+pub const USED_MAX: usize = 8;
 
 /// Read one of the editable files, or an entry. `None` when it does not
 /// exist.
@@ -1259,6 +1775,15 @@ Only the first 200 lines of the index are loaded: keep it well under that —
 one line per entry, the detail in the entry's file. Do not save what the
 timeline or the open matters already keep.
 
+The owner sees what you change: a turn that changed `USER.md`, `MEMORY.md`,
+an entry, `SOUL.md` or `AGENTS.md` shows them a memory card with the diff,
+which they can undo. When they undo one you are told: do not write it back
+on your own.
+
+Before codeg compacts your context it may first send a `<codeg-flush>` turn:
+append the day's points so far to that day's log, as it says, and reply with
+`[[silent]]` alone — nothing else in that turn.
+
 ## Continuity
 
 Your sessions may be replaced (the owner switches the agent, a context
@@ -1616,5 +2141,349 @@ mod tests {
         assert!(cut);
         assert!(head.len() <= INDEX_MAX_BYTES);
         assert!(head.lines().all(|l| l.ends_with('x')), "cut at a line");
+    }
+
+    // ── memory cards (7.7) ──────────────────────────────────────────────────
+
+    async fn memory_repo() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("pa");
+        ensure_initialized(&dir, AppLocale::En).await.unwrap();
+        (tmp, dir)
+    }
+
+    fn shape(files: &[MemoryFile]) -> Vec<(&str, &str, &str, &str)> {
+        files
+            .iter()
+            .map(|f| {
+                (
+                    f.path.as_str(),
+                    f.status.as_str(),
+                    f.kind.as_str(),
+                    f.title.as_str(),
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_commit_says_which_of_its_files_are_the_assistants_memory() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(
+            &dir,
+            "memory/release.md",
+            "---\nname: release\n---\nFridays\n",
+        )
+        .unwrap();
+        write_file(
+            &dir,
+            MEMORY_FILE,
+            "# Memory\n- [Release days](memory/release.md) — when\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("log").join("2026-11-13.md"), "- a note\n").unwrap();
+        std::fs::write(dir.join("notes.txt"), "scratch\n").unwrap();
+        let rev = commit(&dir, "turn 1").await.expect("a commit");
+        let files = memory_changes(&dir, &rev).await;
+        assert_eq!(
+            shape(&files),
+            vec![
+                ("MEMORY.md", "modified", "index", "MEMORY.md"),
+                ("memory/release.md", "added", "entry", "Release days"),
+            ]
+        );
+        let (diff, cut) = memory_diff(&dir, &rev, &files).await;
+        assert!(
+            diff.contains("+Fridays") && diff.contains("+- [Release days]"),
+            "{diff}"
+        );
+        assert!(
+            !diff.contains("a note") && !diff.contains("scratch") && !cut,
+            "{diff}"
+        );
+        // The log and other files alone are no memory change.
+        std::fs::write(
+            dir.join("log").join("2026-11-13.md"),
+            "- a note\n- another\n",
+        )
+        .unwrap();
+        let rev = commit(&dir, "turn 2").await.expect("a commit");
+        assert!(memory_changes(&dir, &rev).await.is_empty());
+        // Nothing changed: no commit.
+        assert!(commit(&dir, "turn 3").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_undo_takes_back_that_change_and_keeps_what_came_after() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [A](memory/a.md) — a\n").unwrap();
+        write_file(&dir, "memory/a.md", "A1\n").unwrap();
+        commit(&dir, "turn 1").await.unwrap();
+        // The change: an entry added, one edited, the persona edited.
+        let soul = read_text(&dir, SOUL_FILE);
+        write_file(
+            &dir,
+            MEMORY_FILE,
+            "# Memory\n- [A](memory/a.md) — a\n- [B](memory/b.md) — b\n",
+        )
+        .unwrap();
+        write_file(&dir, "memory/b.md", "B\n").unwrap();
+        write_file(&dir, "memory/a.md", "A2\n").unwrap();
+        write_file(&dir, SOUL_FILE, &format!("{soul}Be brief.\n")).unwrap();
+        let change = commit(&dir, "turn 2").await.unwrap();
+        let files = memory_changes(&dir, &change).await;
+        assert_eq!(files.len(), 4, "{files:?}");
+        // Later: another entry and its line, and `a` edited again.
+        write_file(
+            &dir,
+            MEMORY_FILE,
+            "# Memory\n- [A](memory/a.md) — a\n- [B](memory/b.md) — b\n- [C](memory/c.md) — c\n",
+        )
+        .unwrap();
+        write_file(&dir, "memory/c.md", "C\n").unwrap();
+        write_file(&dir, "memory/a.md", "A3\n").unwrap();
+        commit(&dir, "turn 3").await.unwrap();
+
+        let undo = undo_memory(&dir, &change, &files, "owner: undo")
+            .await
+            .unwrap();
+        assert!(
+            !dir.join("memory/b.md").exists(),
+            "the entry it added is gone"
+        );
+        assert_eq!(read_text(&dir, SOUL_FILE), soul, "the persona is back");
+        assert_eq!(
+            read_text(&dir, "memory/a.md"),
+            "A3\n",
+            "edited again since: left as it is"
+        );
+        assert_eq!(
+            read_text(&dir, MEMORY_FILE),
+            "# Memory\n- [A](memory/a.md) — a\n- [C](memory/c.md) — c\n",
+            "its line out, the later one kept"
+        );
+        assert_eq!(undo.kept, vec!["memory/a.md".to_string()]);
+        assert_eq!(undo.back.len(), 3, "{undo:?}");
+        let made = undo.commit.expect("one more commit");
+        let log = git(&dir, &["log", "-1", "--format=%s", &made])
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "owner: undo");
+        let status = git(&dir, &["status", "--porcelain"]).await.unwrap();
+        assert!(status.stdout.is_empty(), "all of it committed");
+    }
+
+    #[tokio::test]
+    async fn an_undo_brings_back_an_entry_the_change_deleted() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(
+            &dir,
+            MEMORY_FILE,
+            "# Memory\n- [A](memory/a.md) — a\n- [B](memory/b.md) — b\n",
+        )
+        .unwrap();
+        write_file(&dir, "memory/a.md", "A\n").unwrap();
+        write_file(&dir, "memory/b.md", "B\n").unwrap();
+        commit(&dir, "turn 1").await.unwrap();
+        delete_entry(&dir, "memory/a.md").unwrap();
+        let change = commit(&dir, "turn 2").await.unwrap();
+        let files = memory_changes(&dir, &change).await;
+        assert_eq!(
+            shape(&files),
+            vec![
+                ("MEMORY.md", "modified", "index", "MEMORY.md"),
+                ("memory/a.md", "deleted", "entry", "A"),
+            ]
+        );
+        // A line added at the end since.
+        let index = read_text(&dir, MEMORY_FILE);
+        write_file(
+            &dir,
+            MEMORY_FILE,
+            &format!("{index}- [C](memory/c.md) — c\n"),
+        )
+        .unwrap();
+        commit(&dir, "turn 3").await.unwrap();
+        let undo = undo_memory(&dir, &change, &files, "owner: undo")
+            .await
+            .unwrap();
+        assert!(undo.kept.is_empty(), "{undo:?}");
+        assert_eq!(read_text(&dir, "memory/a.md"), "A\n");
+        assert_eq!(
+            read_text(&dir, MEMORY_FILE),
+            "# Memory\n- [A](memory/a.md) — a\n- [B](memory/b.md) — b\n- [C](memory/c.md) — c\n"
+        );
+    }
+
+    /// An entry edited since is left as it is — and so is its line, though
+    /// the index is still as the change left it; either way of linking.
+    #[tokio::test]
+    async fn an_entry_left_as_it_is_keeps_its_index_line() {
+        for link in ["memory/a.md", "./memory/a.md"] {
+            let (_tmp, dir) = memory_repo().await;
+            let index = read_text(&dir, MEMORY_FILE);
+            write_file(&dir, "memory/a.md", "A1\n").unwrap();
+            write_file(&dir, MEMORY_FILE, &format!("{index}- [A]({link}) — a\n")).unwrap();
+            let change = commit(&dir, "turn 1").await.unwrap();
+            let files = memory_changes(&dir, &change).await;
+            write_file(&dir, "memory/a.md", "A2\n").unwrap();
+            commit(&dir, "turn 2").await.unwrap();
+            let undo = undo_memory(&dir, &change, &files, "owner: undo")
+                .await
+                .unwrap();
+            assert_eq!(undo.kept, vec!["memory/a.md".to_string()], "{link}");
+            assert_eq!(read_text(&dir, "memory/a.md"), "A2\n");
+            assert!(
+                read_text(&dir, MEMORY_FILE).contains(&format!("- [A]({link}) — a")),
+                "{link}: {}",
+                read_text(&dir, MEMORY_FILE)
+            );
+        }
+    }
+
+    /// The owner deletes another entry mid-turn: their commit takes the whole
+    /// index, the turn's new line with it, and the turn's own commit has the
+    /// entry alone. Undoing the turn still takes its line out.
+    #[tokio::test]
+    async fn an_entry_taken_back_takes_its_line_whichever_commit_had_it() {
+        let (_tmp, dir) = memory_repo().await;
+        let index = read_text(&dir, MEMORY_FILE);
+        write_file(&dir, "memory/old.md", "old\n").unwrap();
+        write_file(
+            &dir,
+            MEMORY_FILE,
+            &format!("{index}- [Old](memory/old.md) — old\n"),
+        )
+        .unwrap();
+        commit(&dir, "turn 1").await.unwrap();
+        // Mid-turn: the assistant adds `new` and its line…
+        write_file(&dir, "memory/new.md", "new\n").unwrap();
+        let mid = read_text(&dir, MEMORY_FILE);
+        write_file(
+            &dir,
+            MEMORY_FILE,
+            &format!("{mid}- [New](memory/new.md) — new\n"),
+        )
+        .unwrap();
+        // …and the owner deletes `old` from the page.
+        delete_entry(&dir, "memory/old.md").unwrap();
+        commit_only(
+            &dir,
+            "owner: delete memory/old.md",
+            &["memory/old.md", MEMORY_FILE],
+        )
+        .await
+        .unwrap();
+        let turn = commit(&dir, "turn 2").await.unwrap();
+        let files = memory_changes(&dir, &turn).await;
+        assert_eq!(
+            shape(&files),
+            vec![("memory/new.md", "added", "entry", "New")]
+        );
+        let undo = undo_memory(&dir, &turn, &files, "owner: undo")
+            .await
+            .unwrap();
+        assert!(!dir.join("memory/new.md").exists());
+        assert_eq!(
+            read_text(&dir, MEMORY_FILE),
+            index,
+            "no line left pointing nowhere"
+        );
+        assert!(undo.back.contains(&MEMORY_FILE.to_string()));
+        let status = git(&dir, &["status", "--porcelain"]).await.unwrap();
+        assert!(status.stdout.is_empty(), "committed");
+    }
+
+    #[tokio::test]
+    async fn an_edit_of_the_owners_commits_only_their_file() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "the assistant's, mid-turn\n").unwrap();
+        write_file(&dir, USER_FILE, "# The owner\nCall me Sam.\n").unwrap();
+        let rev = commit_only(&dir, "owner: edit USER.md", &[USER_FILE])
+            .await
+            .expect("committed");
+        let files = memory_changes(&dir, &rev).await;
+        assert_eq!(
+            shape(&files),
+            vec![("USER.md", "modified", "user", "USER.md")]
+        );
+        // The turn's own file is still the turn's to commit.
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        assert_eq!(memory_changes(&dir, &rev).await[0].path, "memory/x.md");
+        // A file git never had, gone again: nothing to commit, no error.
+        assert!(commit_only(&dir, "owner: delete", &["memory/never.md"])
+            .await
+            .is_none());
+    }
+
+    #[test]
+    fn an_entry_is_called_what_the_page_calls_it() {
+        let index =
+            "# Memory\n- [Release days](memory/release.md) — when\n- [Old](./memory/old.md)\n";
+        assert_eq!(entry_title(index, "memory/release.md", "x"), "Release days");
+        assert_eq!(entry_title(index, "memory/old.md", "x"), "Old");
+        let fm = "---\nname: \"hours\"\ntype: fact\n---\n# Heading\n";
+        assert_eq!(entry_title("", "memory/h.md", fm), "hours");
+        assert_eq!(
+            entry_title("", "memory/h.md", "intro\n## The heading\n"),
+            "The heading"
+        );
+        assert_eq!(
+            entry_title("", "memory/plain-name.md", "no title"),
+            "plain-name"
+        );
+    }
+
+    #[test]
+    fn a_reply_used_the_entries_its_reads_named() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("pa");
+        std::fs::create_dir_all(dir.join(MEMORY_DIR)).unwrap();
+        std::fs::write(
+            dir.join(MEMORY_FILE),
+            "- [Release days](memory/release.md) — when\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join(MEMORY_DIR).join("release.md"), "Fridays\n").unwrap();
+        std::fs::write(dir.join(MEMORY_DIR).join("hours.md"), "# Your hours\n").unwrap();
+        std::fs::write(tmp.path().join("elsewhere.md"), "x").unwrap();
+        let reads = vec![
+            dir.join(MEMORY_DIR)
+                .join("release.md")
+                .to_string_lossy()
+                .into_owned(),
+            "memory/hours.md".to_string(),
+            "memory/release.md".to_string(),
+            dir.join(MEMORY_FILE).to_string_lossy().into_owned(),
+            tmp.path()
+                .join("elsewhere.md")
+                .to_string_lossy()
+                .into_owned(),
+            "memory/gone.md".to_string(),
+        ];
+        assert_eq!(
+            used_entries(&dir, &reads),
+            vec![
+                ("memory/release.md".to_string(), "Release days".to_string()),
+                ("memory/hours.md".to_string(), "Your hours".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_index_undo_moves_only_the_changes_lines() {
+        let before = "# M\n- a\n- b\n";
+        let at = "# M\n- a\n- x\n";
+        // Since: a line at the end.
+        let now = "# M\n- a\n- x\n- c\n";
+        assert_eq!(
+            undo_lines(now, at, before, |_| true),
+            "# M\n- a\n- b\n- c\n"
+        );
+        // A line it may not touch stays.
+        assert_eq!(
+            undo_lines(now, at, before, |l| l != "- x"),
+            "# M\n- a\n- b\n- x\n- c\n"
+        );
     }
 }

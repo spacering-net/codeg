@@ -837,6 +837,45 @@ pub async fn today_from(
         row.undo = n.state == NoticeState::Acted;
         view.done.push(row);
     }
+    // What the assistants remembered today (7.7): low, each with its undo.
+    for n in svc::notices_since(
+        &db.conn,
+        NoticeKind::Memory,
+        &[NoticeState::Acted, NoticeState::Undone],
+        done_from,
+    )
+    .await
+    .unwrap_or_default()
+    {
+        let Some(bot) = n.bot_id.filter(|b| bot_ids.contains(b)) else {
+            continue;
+        };
+        // Remembered today, or remembered before and taken back today.
+        if n.created_at < done_from && n.state != NoticeState::Undone {
+            continue;
+        }
+        let title = match n.timeline_id {
+            Some(id) => svc::get_row(&db.conn, id)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| one_line(&r.body))
+                .unwrap_or_default(),
+            None => String::new(),
+        };
+        let at = n.acted_at.unwrap_or(n.updated_at);
+        let mut row = TodayRow::new(format!("memory:{}", n.id), "memory", title, at);
+        row.bot_id = Some(bot);
+        row.state = Some(if n.state == NoticeState::Undone {
+            "undone".into()
+        } else {
+            "acted".into()
+        });
+        row.row_id = n.timeline_id;
+        row.notice_id = Some(n.id);
+        row.undo = n.state == NoticeState::Acted;
+        view.done.push(row);
+    }
     // What the assistants did on a forge for the owner today (7.4).
     for n in svc::notices_since(
         &db.conn,

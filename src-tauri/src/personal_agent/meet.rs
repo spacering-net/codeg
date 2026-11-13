@@ -532,7 +532,8 @@ impl PersonalAgentEngine {
             match workdir::write_file(&dir, workdir::USER_FILE, &updated) {
                 Ok(()) => {
                     tokio::spawn(async move {
-                        workdir::commit_all(&dir, "owner: what to call them").await;
+                        workdir::commit_only(&dir, "owner: what to call them", &[workdir::USER_FILE])
+                            .await;
                     });
                 }
                 Err(e) => tracing::warn!("[personal-agent] USER.md was not written: {e}"),

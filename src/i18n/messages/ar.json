@@ -8467,6 +8467,16 @@
         "level_brief": {
           "title": "موجز الصباح وختام اليوم",
           "hint": "موجز صباحك أو ختام اليوم جاهز."
+        },
+        "flush": {
+          "title": "ملاحظات قبل الترتيب",
+          "hint": "قبل أن يرتّب codeg سياق المساعد، يدوّن المساعد في سجله نقاط اليوم حتى الآن كي لا يضيع ما يستحق الحفظ. يستغرق ذلك دقيقتين على الأكثر، ثم يستمر الترتيب في كل الأحوال.",
+          "on": "تشغيل",
+          "off": "إيقاف"
+        },
+        "level_memory": {
+          "title": "تغييرات الذاكرة",
+          "hint": "غيّر مساعد ما يتذكره أو شخصيته أو قواعده."
         }
       },
       "workdir": {
@@ -8587,7 +8597,8 @@
       "compacting": "يرتّب سياقه…",
       "waiting": "بانتظار تأكيدك",
       "elsewhere": "يعمل في عملية أخرى (للقراءة فقط)",
-      "open": "عرض الحالة"
+      "open": "عرض الحالة",
+      "noting": "يدوّن نقاط اليوم…"
     },
     "menu": {
       "more": "المزيد",
@@ -8759,7 +8770,8 @@
       "turnFailed": "فشل أحد الردود: {error}",
       "turnInterrupted": "لم يكتمل أحد الردود",
       "turnPreempted": "أفسح أحد الردود المجال لرسالتك",
-      "workdirChanged": "نُقل مجلد العمل إلى {path}"
+      "workdirChanged": "نُقل مجلد العمل إلى {path}",
+      "notesFirst": " · دُوّنت نقاط اليوم أولًا"
     },
     "matters": {
       "noneOpen": "لا شيء مفتوح الآن.",
@@ -9129,7 +9141,8 @@
       "awaitingReply": "ينتظر ردّ {name}",
       "needsAnswer": "يحتاج إلى إجابتك",
       "needsApproval": "يحتاج إلى موافقتك",
-      "workPrefix": "⁦#{id}⁩ {title}: {activity}"
+      "workPrefix": "⁦#{id}⁩ {title}: {activity}",
+      "notes": "يدوّن نقاط اليوم قبل الترتيب"
     },
     "did": {
       "edit": "عدّل {target} ⁦+{added} −{removed}⁩",
@@ -9167,7 +9180,8 @@
       "question": "سألك: {target}",
       "questionSome": "سألك",
       "other": "{target}",
-      "otherPlain": "أنجز خطوة"
+      "otherPlain": "أنجز خطوة",
+      "notes": "دوّن نقاط اليوم"
     },
     "needs": {
       "answer": "يحتاج إلى إجابتك: {text}",
@@ -9421,7 +9435,9 @@
         "forge": "تم على المنصة",
         "pr_ready": "جاهز للدمج",
         "pr_merged": "تم دمج طلب الدمج",
-        "pr": "طلب دمج مراقَب"
+        "pr": "طلب دمج مراقَب",
+        "memory": "تذكّر",
+        "memoryUndone": "تذكّر ثم تراجع"
       },
       "session": {
         "permission": "ينتظر موافقتك",
@@ -10025,6 +10041,33 @@
         "answered": "ردّ: {text}",
         "open": "لا رد بعد"
       }
+    },
+    "memory": {
+      "title": "تذكّرت",
+      "undoneTitle": "تم التراجع عن تغيير الذاكرة",
+      "added": "{count, plural, other {# إدخالات جديدة}}",
+      "updated": "{count, plural, other {تحديث # إدخالات}}",
+      "removed": "{count, plural, other {حذف # إدخالات}}",
+      "changedFile": "تغيّر {file}",
+      "sep": " · ",
+      "listSep": "، ",
+      "file": {
+        "index": "فهرس الذاكرة",
+        "user": "ملفك الشخصي",
+        "soul": "شخصيته",
+        "rules": "قواعده"
+      },
+      "status": {
+        "added": "جديد",
+        "modified": "محدَّث",
+        "deleted": "محذوف"
+      },
+      "kept": "تُركت كما هي لأنها تغيّرت بعد ذلك: {files}",
+      "showDiff": "عرض التغييرات",
+      "hideDiff": "إخفاء التغييرات",
+      "diffCut": "يُعرض بداية التغييرات فقط.",
+      "undo": "تراجع",
+      "used": "الذاكرة المستخدمة:"
     }
   }
 }

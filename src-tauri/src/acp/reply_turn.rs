@@ -48,6 +48,8 @@ const MAX_INPUT_BYTES: usize = 256 * 1024;
 /// The tail of a call's output kept: where a test run's summary and an exit
 /// code are.
 const MAX_OUTPUT_CHARS: usize = 4000;
+/// Most paths a turn's reads keep (7.7: the memory a reply used).
+const MAX_READS: usize = 64;
 
 static QUOTE_MARKER: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?i)\[\[quote:#?(\d+)\]\]").expect("valid regex"));
@@ -109,6 +111,9 @@ pub struct ReplySnapshot {
     pub step_count: u32,
     /// The ids of every quote marker the turn wrote, in order.
     pub quotes: Vec<i64>,
+    /// The paths its `read` calls named, first read first: what of the
+    /// assistant's memory the reply used (7.7).
+    pub reads: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +210,8 @@ struct ReplyTurn {
     quotes: Vec<i64>,
     /// The last steps, oldest first.
     history: VecDeque<PastStep>,
+    /// The paths its `read` calls named, each once.
+    reads: Vec<String>,
 }
 
 impl ReplyTurn {
@@ -225,6 +232,7 @@ impl ReplyTurn {
             awaiting: Vec::new(),
             quotes: Vec::new(),
             history: VecDeque::new(),
+            reads: Vec::new(),
         }
     }
 
@@ -371,6 +379,34 @@ impl ReplyTurn {
                 self.tools.insert(id.to_string(), step);
             }
         }
+        // What the turn read: every path a `read` call names — its
+        // locations, and the file its input asks for.
+        let named: Vec<String> = match self.tools.get(id) {
+            Some(t) if t.kind == "read" => {
+                let mut named: Vec<String> = data.locations.map(all_locations).unwrap_or_default();
+                if let Some(input) = t.input.as_ref() {
+                    for key in [
+                        "file_path",
+                        "path",
+                        "filePath",
+                        "absolute_path",
+                        "absolutePath",
+                    ] {
+                        if let Some(p) = input.get(key).and_then(|v| v.as_str()) {
+                            named.push(p.to_string());
+                        }
+                    }
+                }
+                named.extend(t.path.clone());
+                named
+            }
+            _ => Vec::new(),
+        };
+        for p in named {
+            if !p.is_empty() && self.reads.len() < MAX_READS && !self.reads.contains(&p) {
+                self.reads.push(p);
+            }
+        }
     }
 
     fn wait(&mut self, key: String, tool_id: Option<&str>, kind: &str, title: String) {
@@ -502,6 +538,7 @@ impl ReplyTurn {
             last_text: self.last_text(),
             step_count: self.steps,
             quotes,
+            reads: self.reads.clone(),
         }
     }
 
@@ -614,6 +651,19 @@ impl CallData<'_> {
             _ => {}
         }
     }
+}
+
+/// Every path a call's locations name.
+fn all_locations(v: &serde_json::Value) -> Vec<String> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|l| l.get("path").and_then(|p| p.as_str()))
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn first_location(v: &serde_json::Value) -> Option<String> {
@@ -1405,6 +1455,60 @@ mod tests {
         assert_eq!(steps.len(), MAX_HISTORY);
         assert_eq!(steps.first().unwrap().n, 21);
         assert_eq!(steps.last().unwrap().n, (MAX_HISTORY + 20) as u32);
+    }
+
+    /// The memory a reply used comes from its `read` calls' own paths (7.7):
+    /// every location and the file the input names, once each; another
+    /// kind of call, or a sub-agent's read, names none.
+    #[test]
+    fn a_turn_keeps_the_paths_its_reads_named() {
+        let snap = run(&[
+            full_tool(
+                "r1",
+                "read",
+                "Read release.md",
+                r#"{"file_path":"/w/memory/release.md"}"#,
+            ),
+            full_tool(
+                "e1",
+                "edit",
+                "Edit hours.md",
+                r#"{"file_path":"/w/memory/hours.md"}"#,
+            ),
+            child_tool("r2", "task-1"),
+            full_tool(
+                "r3",
+                "read",
+                "Read again",
+                r#"{"file_path":"/w/memory/release.md"}"#,
+            ),
+            done(),
+        ]);
+        assert_eq!(
+            snap.reads,
+            vec![
+                "/w/src/parser.rs".to_string(),
+                "/w/memory/release.md".to_string()
+            ]
+        );
+        // An update naming where it read counts as well.
+        let later = run(&[
+            tool("r1", "Read", "in_progress"),
+            AcpEvent::ToolCallUpdate {
+                tool_call_id: "r1".into(),
+                title: None,
+                status: Some("completed".into()),
+                content: None,
+                raw_input: None,
+                raw_output: None,
+                raw_output_append: None,
+                locations: Some(serde_json::json!([{ "path": "memory/hours.md" }])),
+                meta: None,
+                images: None,
+            },
+            done(),
+        ]);
+        assert_eq!(later.reads, vec!["memory/hours.md".to_string()]);
     }
 
     #[test]

@@ -569,6 +569,11 @@ pub const NEWS: &[(&str, Level, &str)] = &[
          a branch behind with conflicts, a request they keep making",
     ),
     ("brief", Level::Normal, "the morning brief and the day's wrap-up"),
+    (
+        "memory",
+        Level::Low,
+        "what an assistant changed in its memory, persona or rules",
+    ),
 ];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -623,6 +628,10 @@ pub struct Prefs {
     /// (7.5); off, it waits for the owner's review as before.
     #[serde(default, deserialize_with = "lenient")]
     pub auto_accept: OnOff,
+    /// Before codeg compacts an assistant's context, the assistant notes
+    /// the day's points so far in its log (7.7).
+    #[serde(default, deserialize_with = "lenient")]
+    pub flush: OnOff,
     /// Work its assistant wants changed after the check: sent back at once,
     /// or put to the owner on the acceptance card first.
     #[serde(default, deserialize_with = "lenient")]
@@ -734,6 +743,8 @@ pub struct Prefs {
     pub level_proposal_low: Level,
     #[serde(default, deserialize_with = "lenient")]
     pub level_brief: Level,
+    #[serde(default = "low", deserialize_with = "lenient_low")]
+    pub level_memory: Level,
     /// codeg's proposal rules (6.7), each on or off, with how long before
     /// it says something. A rule the owner muted from a card is off here.
     #[serde(default, deserialize_with = "lenient")]
@@ -845,6 +856,7 @@ impl Default for Prefs {
             exec_questions: ExecAnswers::default(),
             exec_plans: ExecAnswers::default(),
             auto_accept: OnOff::default(),
+            flush: OnOff::On,
             accept_revise: AskFirst::default(),
             accept_rounds: DEFAULT_ACCEPT_ROUNDS,
             forge_comment: AskFirst::default(),
@@ -886,6 +898,7 @@ impl Default for Prefs {
             level_proposal: Level::Normal,
             level_proposal_low: Level::Low,
             level_brief: Level::Normal,
+            level_memory: Level::Low,
             rule_failed: OnOff::On,
             rule_failed_hours: RULE_FAILED_HOURS,
             rule_review: OnOff::On,
@@ -1020,6 +1033,11 @@ pub const PREFS: &[PrefSpec] = &[
         key: "auto_accept",
         kind: PrefKind::Choice(&["on", "off"]),
         label: "checking and accepting the code work you dispatched",
+    },
+    PrefSpec {
+        key: "flush",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "noting the day's points in the log before the context is compacted",
     },
     PrefSpec {
         key: "accept_revise",
@@ -1230,6 +1248,11 @@ pub const PREFS: &[PrefSpec] = &[
         key: "level_brief",
         kind: PrefKind::Choice(LEVELS),
         label: "how urgent the morning brief and the wrap-up are",
+    },
+    PrefSpec {
+        key: "level_memory",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent an assistant's memory changes are",
     },
     PrefSpec {
         key: "rule_failed",
@@ -1654,8 +1677,15 @@ impl Prefs {
             "proposal" => self.level_proposal,
             "proposal_low" => self.level_proposal_low,
             "brief" => self.level_brief,
+            "memory" => self.level_memory,
             _ => Level::Normal,
         }
+    }
+
+    /// Whether an assistant notes the day's points before codeg compacts
+    /// its context (7.7).
+    pub fn flushes(&self) -> bool {
+        self.flush == OnOff::On
     }
 
     /// Whether code work an assistant dispatched is checked and accepted
@@ -1793,6 +1823,14 @@ fn brain_value(key: &str, value: &Value) -> String {
         }
         ("auto_accept", "off") => {
             "off: code work ready for review waits for the owner's own review".into()
+        }
+        ("flush", "on") => {
+            "on: before codeg compacts your context, it asks you to note the day's points so far \
+             in your log first"
+                .into()
+        }
+        ("flush", "off") => {
+            "off: codeg compacts your context without asking for notes first".into()
         }
         ("accept_revise", "auto") => "sent back to the executor at once".into(),
         ("forge_comment" | "issue_close", "auto") => {

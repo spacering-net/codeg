@@ -13695,3 +13695,499 @@ async fn codeg_brings_the_wrap_up_near_the_end_of_the_usual_day_once() {
         .await;
     assert_eq!(briefs_of(&host, "wrap", late).await.len(), 1, "once a day");
 }
+
+// ── 2.8: memory cards, the memory a reply used, notes before compacting ────
+
+/// The next prompt sent on the connection: its text, and its tag (a
+/// compaction and the notes before one have none). `None`: nothing sent.
+fn next_prompt(
+    rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>,
+) -> Option<(String, Option<String>)> {
+    loop {
+        match rx.try_recv() {
+            Ok(ConnectionCommand::Prompt {
+                blocks,
+                reply_token,
+                ..
+            }) => {
+                let text = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        crate::acp::types::PromptInputBlock::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return Some((text, reply_token));
+            }
+            Ok(_) => continue,
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Whether the turn on the connection was told to stop.
+fn cancel_sent(rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>) -> bool {
+    loop {
+        match rx.try_recv() {
+            Ok(ConnectionCommand::Cancel) => return true,
+            Ok(_) => continue,
+            Err(_) => return false,
+        }
+    }
+}
+
+async fn workdir_now(engine: &PersonalAgentEngine) -> std::path::PathBuf {
+    engine.workdir_of(&engine.agent_row().await.unwrap())
+}
+
+/// A live session whose context reads `percent` full.
+async fn filled(
+    engine: &PersonalAgentEngine,
+    conn: &str,
+    percent: u64,
+) -> (i32, tokio::sync::mpsc::Receiver<ConnectionCommand>, State) {
+    let seg = open_segment(engine).await;
+    let (rx, state) = live_connection(engine, seg, conn).await;
+    state.write().await.usage = Some(crate::acp::session_state::UsageInfo {
+        used: percent * 2_000,
+        size: 200_000,
+    });
+    (seg, rx, state)
+}
+
+/// The owner's message delivered and its turn started: the turn's tag.
+async fn owner_delivery(
+    engine: &Arc<PersonalAgentEngine>,
+    rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>,
+    state: &State,
+    text_of: &str,
+) -> String {
+    engine
+        .send_owner_message(text_of.into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(rx);
+    start_prompt(state, Some(&token)).await;
+    token
+}
+
+#[tokio::test]
+async fn a_turn_that_changes_memory_brings_a_card_that_takes_it_back() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-28a").await;
+    let dir = workdir_now(&engine).await;
+    let soul = workdir::read_text(&dir, workdir::SOUL_FILE);
+
+    owner_delivery(&engine, &mut rx, &state, "we ship on Fridays").await;
+    // The assistant writes an entry, its index line, and edits its persona.
+    workdir::write_file(
+        &dir,
+        "memory/release.md",
+        "---\nname: release\ntype: fact\n---\nFridays.\n",
+    )
+    .unwrap();
+    let index = workdir::read_text(&dir, workdir::MEMORY_FILE);
+    workdir::write_file(
+        &dir,
+        workdir::MEMORY_FILE,
+        &format!("{index}- [Release days](memory/release.md) — we ship on Fridays\n"),
+    )
+    .unwrap();
+    workdir::write_file(&dir, workdir::SOUL_FILE, &format!("{soul}Be brief.\n")).unwrap();
+    std::fs::write(dir.join("log").join("today.md"), "- shipping day noted\n").unwrap();
+    emit(&engine, &state, "pa-28a", text("Noted."), true).await;
+    emit(&engine, &state, "pa-28a", turn_complete("end_turn"), true).await;
+
+    let cards: Vec<_> = notice_rows(&engine)
+        .await
+        .into_iter()
+        .filter(|r| data_of(r)["notice"] == "memory")
+        .collect();
+    assert_eq!(cards.len(), 1, "one card for the turn");
+    let card = &cards[0];
+    let data = data_of(card);
+    assert_eq!(data["state"], "acted");
+    let files: Vec<(String, String, String)> = data["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["path"].as_str().unwrap().to_string(),
+                f["status"].as_str().unwrap().to_string(),
+                f["title"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        files,
+        vec![
+            ("MEMORY.md".into(), "modified".into(), "MEMORY.md".into()),
+            ("SOUL.md".into(), "modified".into(), "SOUL.md".into()),
+            (
+                "memory/release.md".into(),
+                "added".into(),
+                "Release days".into()
+            ),
+        ],
+        "the log is no memory"
+    );
+    assert!(data["diff"].as_str().unwrap().contains("+Be brief."));
+    assert!(
+        card.body.contains("new: Release days") && card.body.contains("persona"),
+        "{}",
+        card.body
+    );
+    let id = notice_id_of(card);
+    let notice = svc::get_notice(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(notice.kind, NoticeKind::Memory);
+    assert_eq!(notice.state, NoticeState::Acted);
+    assert_eq!(
+        notice.level,
+        crate::db::entities::personal_agent_notice::NoticeLevel::Low
+    );
+
+    // A turn that changes no memory brings none.
+    owner_delivery(&engine, &mut rx, &state, "thanks").await;
+    std::fs::write(
+        dir.join("log").join("today.md"),
+        "- shipping day noted\n- thanked\n",
+    )
+    .unwrap();
+    emit(&engine, &state, "pa-28a", text("Anytime."), true).await;
+    emit(&engine, &state, "pa-28a", turn_complete("end_turn"), true).await;
+    assert_eq!(
+        notice_rows(&engine)
+            .await
+            .iter()
+            .filter(|r| data_of(r)["notice"] == "memory")
+            .count(),
+        1
+    );
+
+    // Undo: the files as they were, one more commit, the assistant told.
+    let row = engine.act_on_notice(id, "undo").await.unwrap();
+    let data = data_of(
+        &svc::get_row(&engine.db.conn, row.id)
+            .await
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(data["state"], "undone");
+    assert!(data["undo_commit"].is_string());
+    assert!(!dir.join("memory/release.md").exists());
+    assert_eq!(workdir::read_text(&dir, workdir::MEMORY_FILE), index);
+    assert_eq!(workdir::read_text(&dir, workdir::SOUL_FILE), soul);
+    let notice = svc::get_notice(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(notice.state, NoticeState::Undone);
+    let told = svc::pending_events(&engine.db.conn, engine.bot().await)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == super::memory::MEMORY_EVENT)
+        .expect("the assistant is told");
+    assert!(
+        told.summary.contains("undid") && told.summary.contains("Release days"),
+        "{}",
+        told.summary
+    );
+    assert!(!told.wake, "told with its next delivery, not woken for it");
+    let seg_now = svc::get_segment(&engine.db.conn, seg)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        SegmentState::parse(&seg_now.state).persona_resend,
+        "its persona is handed over again"
+    );
+    // Once.
+    assert!(engine.act_on_notice(id, "undo").await.is_err());
+    // Today lists it, taken back.
+    let (today, _) = super::today::today(&engine.db, &engine.manager, super::clock::now()).await;
+    let mem: Vec<_> = today.done.iter().filter(|r| r.kind == "memory").collect();
+    assert_eq!(mem.len(), 1);
+    assert_eq!(mem[0].state.as_deref(), Some("undone"));
+    assert!(!mem[0].undo);
+}
+
+#[tokio::test]
+async fn a_reply_names_the_memory_it_read() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-28b").await;
+    let dir = workdir_now(&engine).await;
+    workdir::write_file(&dir, "memory/release.md", "Fridays.\n").unwrap();
+    let index = workdir::read_text(&dir, workdir::MEMORY_FILE);
+    workdir::write_file(
+        &dir,
+        workdir::MEMORY_FILE,
+        &format!("{index}- [Release days](memory/release.md) — when we ship\n"),
+    )
+    .unwrap();
+    workdir::commit(&dir, "set up").await.unwrap();
+
+    let token = owner_delivery(&engine, &mut rx, &state, "when do we ship?").await;
+    let read = AcpEvent::ToolCall {
+        tool_call_id: "r1".into(),
+        title: "Read release.md".into(),
+        kind: "read".into(),
+        status: "completed".into(),
+        content: None,
+        raw_input: None,
+        raw_output: None,
+        locations: Some(json!([{ "path": dir.join("memory/release.md").to_string_lossy() }])),
+        meta: None,
+        images: None,
+    };
+    emit(&engine, &state, "pa-28b", read, true).await;
+    emit(
+        &engine,
+        &state,
+        "pa-28b",
+        tool("e1", "Read MEMORY.md"),
+        true,
+    )
+    .await;
+    emit(&engine, &state, "pa-28b", text("On Fridays."), true).await;
+    emit(&engine, &state, "pa-28b", turn_complete("end_turn"), true).await;
+    let batch: i32 = token.split('-').nth(1).unwrap().parse().unwrap();
+    let reply = reply_of(&engine, batch).await;
+    assert_eq!(
+        data_of(&reply)["memories"],
+        json!([{ "name": "memory/release.md", "title": "Release days" }])
+    );
+}
+
+#[tokio::test]
+async fn notes_go_before_an_automatic_compaction_and_the_compaction_follows() {
+    let (engine, _tmp) = configured().await;
+    let (seg, mut rx, state) = filled(&engine, "pa-28c", 75).await;
+    let first = engine
+        .send_owner_message("hello".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (notes, token) = next_prompt(&mut rx).expect("the notes first");
+    assert!(
+        token.is_none(),
+        "no reply: nothing shows in the conversation"
+    );
+    assert!(
+        notes.contains("<codeg-flush>") && notes.contains("[[silent]]"),
+        "{notes}"
+    );
+    let prefs = engine.prefs().await;
+    let day = super::brief::day_key(super::clock::now(), super::clock::zone_of(&prefs.time_zone));
+    assert!(notes.contains(&format!("log/{day}.md")), "{notes}");
+    let status = engine.snapshot().await.status;
+    let turn = status.turn.expect("a turn");
+    assert!(turn.flush && !turn.for_owner);
+    let queued = svc::get_row(&engine.db.conn, first.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        queued.status,
+        Some(OwnerStatus::Queued),
+        "the message waits for the compaction"
+    );
+    start_prompt(&state, None).await;
+    let dir = workdir_now(&engine).await;
+    std::fs::write(
+        dir.join("log").join(format!("{day}.md")),
+        "- shipping on Fridays\n",
+    )
+    .unwrap();
+    emit(&engine, &state, "pa-28c", text("[[silent]]"), true).await;
+    emit(&engine, &state, "pa-28c", turn_complete("end_turn"), true).await;
+    assert!(!engine.turn_in_flight_for_test().await);
+    assert!(
+        notice_rows(&engine)
+            .await
+            .iter()
+            .all(|r| data_of(r)["notice"] != "memory"),
+        "the log is no memory"
+    );
+    assert!(
+        svc::page(&engine.db.conn, engine.bot().await, None, 200)
+            .await
+            .unwrap()
+            .0
+            .iter()
+            .all(|r| r.kind != TimelineKind::Reply),
+        "no reply row"
+    );
+
+    // Then the compaction, not the notes again.
+    engine.pump().await;
+    let (compact, _) = next_prompt(&mut rx).expect("the compaction");
+    assert_eq!(compact, "/compact");
+    start_prompt(&state, None).await;
+    state.write().await.usage = Some(crate::acp::session_state::UsageInfo {
+        used: 10_000,
+        size: 200_000,
+    });
+    emit(&engine, &state, "pa-28c", turn_complete("end_turn"), true).await;
+    let markers = compaction_markers(&engine).await;
+    let last = markers.last().expect("a compaction marker");
+    assert_eq!(last["status"], "ok");
+    assert_eq!(last["notes"], "ok");
+    // And the owner's messages after it.
+    engine.pump().await;
+    let (delivery, token) = next_prompt(&mut rx).expect("the delivery");
+    assert!(token.is_some());
+    assert!(delivery.contains("hello"), "{delivery}");
+    let _ = seg;
+}
+
+/// The owner writes while the notes are taken (4.7): they are cut short and
+/// the message goes first, uncompacted; the notes are asked for again before
+/// the next compaction.
+#[tokio::test]
+async fn the_owner_writing_cuts_the_notes_short_and_goes_first() {
+    let (engine, _tmp) = configured().await;
+    let (_seg, mut rx, state) = filled(&engine, "pa-28h", 75).await;
+    engine
+        .send_owner_message("hello".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    assert!(next_prompt(&mut rx).unwrap().0.contains("<codeg-flush>"));
+    start_prompt(&state, None).await;
+    engine
+        .send_owner_message("are you there?".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    assert!(cancel_sent(&mut rx), "the notes give way");
+    emit(&engine, &state, "pa-28h", turn_complete("cancelled"), true).await;
+    engine.pump().await;
+    let (delivery, token) = next_prompt(&mut rx).expect("the messages, first");
+    assert!(
+        token.is_some() && delivery.contains("hello") && delivery.contains("are you there?"),
+        "{delivery}"
+    );
+    assert!(
+        compaction_markers(&engine).await.is_empty(),
+        "not compacted before them"
+    );
+    start_prompt(&state, token.as_deref()).await;
+    emit(&engine, &state, "pa-28h", text("Here."), true).await;
+    emit(&engine, &state, "pa-28h", turn_complete("end_turn"), true).await;
+    // Still full: the next delivery takes the notes again, then compacts.
+    engine
+        .send_owner_message("one more".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    assert!(next_prompt(&mut rx).unwrap().0.contains("<codeg-flush>"));
+    start_prompt(&state, None).await;
+    emit(&engine, &state, "pa-28h", text("[[silent]]"), true).await;
+    emit(&engine, &state, "pa-28h", turn_complete("end_turn"), true).await;
+    engine.pump().await;
+    assert_eq!(next_prompt(&mut rx).unwrap().0, "/compact");
+    start_prompt(&state, None).await;
+    emit(&engine, &state, "pa-28h", turn_complete("end_turn"), true).await;
+    assert_eq!(
+        compaction_markers(&engine).await.last().unwrap()["notes"],
+        "ok"
+    );
+}
+
+#[tokio::test]
+async fn notes_that_run_too_long_are_stopped_and_the_compaction_goes_on() {
+    let (engine, _tmp) = configured().await;
+    let (_seg, mut rx, state) = filled(&engine, "pa-28d", 75).await;
+    engine
+        .set_flush_limit_for_test(std::time::Duration::from_millis(40))
+        .await;
+    engine
+        .send_owner_message("hello".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    assert!(next_prompt(&mut rx).unwrap().0.contains("<codeg-flush>"));
+    start_prompt(&state, None).await;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(cancel_sent(&mut rx), "stopped after its time");
+    emit(&engine, &state, "pa-28d", turn_complete("cancelled"), true).await;
+    engine.pump().await;
+    assert_eq!(next_prompt(&mut rx).unwrap().0, "/compact");
+    start_prompt(&state, None).await;
+    emit(&engine, &state, "pa-28d", turn_complete("end_turn"), true).await;
+    assert_eq!(
+        compaction_markers(&engine).await.last().unwrap()["notes"],
+        "timeout"
+    );
+}
+
+#[tokio::test]
+async fn the_owners_compaction_takes_notes_first_and_their_stop_stops_both() {
+    let (engine, _tmp) = configured().await;
+    let (_seg, mut rx, state) = filled(&engine, "pa-28e", 20).await;
+    engine.compact_now().await.unwrap();
+    assert!(next_prompt(&mut rx).unwrap().0.contains("<codeg-flush>"));
+    let turn = engine.snapshot().await.status.turn.unwrap();
+    assert!(turn.flush);
+    assert_eq!(
+        turn.compaction_initiator,
+        Some(crate::models::personal_agent::CompactInitiator::Owner)
+    );
+    start_prompt(&state, None).await;
+    emit(&engine, &state, "pa-28e", text("[[silent]]"), true).await;
+    emit(&engine, &state, "pa-28e", turn_complete("end_turn"), true).await;
+    // Below the threshold, nothing queued: the owner asked, so it compacts.
+    engine.pump().await;
+    assert_eq!(next_prompt(&mut rx).unwrap().0, "/compact");
+    start_prompt(&state, None).await;
+    emit(&engine, &state, "pa-28e", turn_complete("end_turn"), true).await;
+    let last = compaction_markers(&engine).await.last().cloned().unwrap();
+    assert_eq!(last["initiator"], "owner");
+    assert_eq!(last["notes"], "ok");
+
+    // Again — and the owner stops it while the notes are taken.
+    engine.compact_now().await.unwrap();
+    assert!(next_prompt(&mut rx).unwrap().0.contains("<codeg-flush>"));
+    start_prompt(&state, None).await;
+    engine.cancel_turn().await.unwrap();
+    assert!(cancel_sent(&mut rx));
+    emit(&engine, &state, "pa-28e", turn_complete("cancelled"), true).await;
+    engine.pump().await;
+    assert!(next_prompt(&mut rx).is_none(), "no compaction after a stop");
+    assert_eq!(compaction_markers(&engine).await.len(), 1);
+}
+
+#[tokio::test]
+async fn with_notes_off_or_after_an_overflow_it_compacts_at_once() {
+    let (engine, _tmp) = configured().await;
+    let (seg, mut rx, _state) = filled(&engine, "pa-28f", 75).await;
+    // After an overflow: a full context has no room for notes.
+    engine
+        .update_segment_state(seg, |s| s.force_compact = true)
+        .await;
+    engine
+        .send_owner_message("hello".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    assert_eq!(next_prompt(&mut rx).unwrap().0, "/compact");
+
+    let (engine, _tmp) = configured().await;
+    engine
+        .apply_settings(&[change("prefs.flush", json!("off"))])
+        .await
+        .unwrap();
+    let (_seg, mut rx, _state) = filled(&engine, "pa-28g", 75).await;
+    engine
+        .send_owner_message("hello".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    assert_eq!(
+        next_prompt(&mut rx).unwrap().0,
+        "/compact",
+        "notes off: straight to it"
+    );
+}

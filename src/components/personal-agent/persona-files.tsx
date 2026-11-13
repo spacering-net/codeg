@@ -122,13 +122,17 @@ export function withoutEntryLine(index: string, entry: string): string {
 
 export function PersonaFiles({
   botId: forBot,
+  initial = null,
 }: {
   /** Whose files: left out, the page's own assistant's. */
   botId?: number | null
+  /** The file to open on — a memory entry a card or a reply names (7.7);
+   *  one that is not there opens the persona. */
+  initial?: string | null
 } = {}) {
   const t = useTranslations("PersonalAgent.settings")
   const [files, setFiles] = useState<PersonalAgentFile[] | null>(null)
-  const [active, setActive] = useState("SOUL.md")
+  const [active, setActive] = useState(initial ?? "SOUL.md")
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -141,6 +145,7 @@ export function PersonaFiles({
         if (cancelled) return
         setFiles(list)
         setDrafts(Object.fromEntries(list.map((f) => [f.name, f.content])))
+        setActive((a) => (list.some((f) => f.name === a) ? a : "SOUL.md"))
       })
       .catch((e) => toast.error(toErrorMessage(e)))
     return () => {

@@ -161,6 +161,11 @@ function useRowWords() {
           : t("kind.finished")
       case "changed":
         return row.state === "undone" ? t("kind.undone") : t("kind.changed")
+      // What an assistant remembered (7.7).
+      case "memory":
+        return row.state === "undone"
+          ? t("kind.memoryUndone")
+          : t("kind.memory")
       case "pr":
         return t(`pr.${row.state ?? "open"}` as "pr.open")
       case "item": {
@@ -521,7 +526,7 @@ function TodayRowCard({
   const actions = readOnly ? null : row.kind === "reminder" ||
     row.kind === "item" ? (
     <MatterActions row={row} />
-  ) : row.kind === "changed" && row.undo ? (
+  ) : (row.kind === "changed" || row.kind === "memory") && row.undo ? (
     <UndoAction row={row} />
   ) : null
   const body = (

@@ -564,6 +564,8 @@ pub struct TurnInfo {
     /// It carries messages of the owner's (else it is about events only,
     /// and gives way when the owner writes: 4.7).
     pub for_owner: bool,
+    /// The notes before a compaction (7.7).
+    pub flush: bool,
 }
 
 /// Where the engine runs, as seen from this process.

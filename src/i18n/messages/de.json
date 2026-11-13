@@ -8467,6 +8467,16 @@
         "level_brief": {
           "title": "Morgen-Briefing und Tagesabschluss",
           "hint": "Dein Morgen-Briefing oder der Tagesabschluss ist fertig."
+        },
+        "flush": {
+          "title": "Notizen vor dem Aufräumen",
+          "hint": "Bevor codeg den Kontext eines Assistenten aufräumt, notiert dieser die bisherigen Punkte des Tages in seinem Log, damit nichts Wichtiges verloren geht. Das dauert höchstens zwei Minuten; danach wird so oder so aufgeräumt.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "level_memory": {
+          "title": "Gedächtnisänderungen",
+          "hint": "Ein Assistent hat sein Gedächtnis, seine Persona oder seine Regeln geändert."
         }
       },
       "workdir": {
@@ -8587,7 +8597,8 @@
       "compacting": "Räumt seinen Kontext auf…",
       "waiting": "Wartet auf dich",
       "elsewhere": "Läuft in einem anderen Prozess (schreibgeschützt)",
-      "open": "Status anzeigen"
+      "open": "Status anzeigen",
+      "noting": "Notiert die Punkte des Tages…"
     },
     "menu": {
       "more": "Mehr",
@@ -8759,7 +8770,8 @@
       "turnFailed": "Eine Antwort ist fehlgeschlagen: {error}",
       "turnInterrupted": "Eine Antwort wurde nicht fertig",
       "turnPreempted": "Eine Antwort machte deiner Nachricht Platz",
-      "workdirChanged": "Das Arbeitsverzeichnis wurde nach {path} verschoben"
+      "workdirChanged": "Das Arbeitsverzeichnis wurde nach {path} verschoben",
+      "notesFirst": " · vorher die Punkte des Tages notiert"
     },
     "matters": {
       "noneOpen": "Gerade ist nichts offen.",
@@ -9129,7 +9141,8 @@
       "awaitingReply": "Wartet auf die Antwort von {name}",
       "needsAnswer": "Braucht deine Antwort",
       "needsApproval": "Braucht deine Freigabe",
-      "workPrefix": "#{id} {title}: {activity}"
+      "workPrefix": "#{id} {title}: {activity}",
+      "notes": "Notiert vor dem Aufräumen die Punkte des Tages"
     },
     "did": {
       "edit": "{target} bearbeitet +{added} −{removed}",
@@ -9167,7 +9180,8 @@
       "question": "Hat dich gefragt: {target}",
       "questionSome": "Hat dich gefragt",
       "other": "{target}",
-      "otherPlain": "Einen Schritt gemacht"
+      "otherPlain": "Einen Schritt gemacht",
+      "notes": "Hat die Punkte des Tages notiert"
     },
     "needs": {
       "answer": "Braucht deine Antwort: {text}",
@@ -9421,7 +9435,9 @@
         "forge": "Auf einer Forge erledigt",
         "pr_ready": "Bereit zum Mergen",
         "pr_merged": "PR gemergt",
-        "pr": "Beobachteter PR"
+        "pr": "Beobachteter PR",
+        "memory": "Gemerkt",
+        "memoryUndone": "Gemerkt, dann zurückgenommen"
       },
       "session": {
         "permission": "Wartet auf deine Freigabe",
@@ -10025,6 +10041,33 @@
         "answered": "Antwort: {text}",
         "open": "noch keine Antwort"
       }
+    },
+    "memory": {
+      "title": "Gemerkt",
+      "undoneTitle": "Gedächtnisänderung rückgängig gemacht",
+      "added": "{count, plural, one {# neuer Eintrag} other {# neue Einträge}}",
+      "updated": "{count, plural, one {# Eintrag aktualisiert} other {# Einträge aktualisiert}}",
+      "removed": "{count, plural, one {# Eintrag entfernt} other {# Einträge entfernt}}",
+      "changedFile": "{file} geändert",
+      "sep": " · ",
+      "listSep": ", ",
+      "file": {
+        "index": "den Gedächtnisindex",
+        "user": "dein Profil",
+        "soul": "seine Persona",
+        "rules": "seine Regeln"
+      },
+      "status": {
+        "added": "Neu",
+        "modified": "Geändert",
+        "deleted": "Entfernt"
+      },
+      "kept": "Unverändert gelassen (seitdem erneut geändert): {files}",
+      "showDiff": "Änderungen zeigen",
+      "hideDiff": "Änderungen ausblenden",
+      "diffCut": "Nur der Anfang der Änderungen wird gezeigt.",
+      "undo": "Rückgängig",
+      "used": "Genutztes Gedächtnis:"
     }
   }
 }

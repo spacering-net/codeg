@@ -8467,6 +8467,16 @@
         "level_brief": {
           "title": "晨報與收尾",
           "hint": "晨報或收尾寫好了。"
+        },
+        "flush": {
+          "title": "壓縮前記要點",
+          "hint": "codeg 壓縮助手的上下文之前，先讓它把今天到現在的要點記進日誌，值得留下的不會遺失。最多兩分鐘，之後照常壓縮。",
+          "on": "開",
+          "off": "關"
+        },
+        "level_memory": {
+          "title": "記憶更新",
+          "hint": "助手改了它的記憶、人設或規則。"
         }
       },
       "workdir": {
@@ -8587,7 +8597,8 @@
       "compacting": "正在整理上下文…",
       "waiting": "等你確認",
       "elsewhere": "在另一個程序執行（唯讀）",
-      "open": "查看狀態"
+      "open": "查看狀態",
+      "noting": "記要點…"
     },
     "menu": {
       "more": "更多",
@@ -8759,7 +8770,8 @@
       "turnFailed": "一次回覆失敗了：{error}",
       "turnInterrupted": "一次回覆沒有完成",
       "turnPreempted": "一次回覆讓位給了你的訊息",
-      "workdirChanged": "工作目錄換到了 {path}"
+      "workdirChanged": "工作目錄換到了 {path}",
+      "notesFirst": "（先記了要點）"
     },
     "matters": {
       "noneOpen": "目前沒有進行中的事項。",
@@ -9129,7 +9141,8 @@
       "awaitingReply": "等 {name} 回覆",
       "needsAnswer": "需要你回答",
       "needsApproval": "需要你核准",
-      "workPrefix": "#{id} {title}：{activity}"
+      "workPrefix": "#{id} {title}：{activity}",
+      "notes": "壓縮前記要點"
     },
     "did": {
       "edit": "改了 {target} +{added} −{removed}",
@@ -9167,7 +9180,8 @@
       "question": "問了你：{target}",
       "questionSome": "問了你",
       "other": "{target}",
-      "otherPlain": "做了一步"
+      "otherPlain": "做了一步",
+      "notes": "記下了今天的要點"
     },
     "needs": {
       "answer": "需要你回答：{text}",
@@ -9421,7 +9435,9 @@
         "forge": "在 forge 上做的",
         "pr_ready": "可以合併",
         "pr_merged": "PR 已合併",
-        "pr": "看護的 PR"
+        "pr": "看護的 PR",
+        "memory": "記住了",
+        "memoryUndone": "記住了，又撤銷了"
       },
       "session": {
         "permission": "等你核准",
@@ -10025,6 +10041,33 @@
         "answered": "回覆：{text}",
         "open": "還沒回覆"
       }
+    },
+    "memory": {
+      "title": "記住了",
+      "undoneTitle": "已撤銷這次記憶更新",
+      "added": "新增 {count} 條",
+      "updated": "更新 {count} 條",
+      "removed": "刪除 {count} 條",
+      "changedFile": "改了{file}",
+      "sep": "；",
+      "listSep": "、",
+      "file": {
+        "index": "記憶索引",
+        "user": "你的資料",
+        "soul": "人設",
+        "rules": "規則"
+      },
+      "status": {
+        "added": "新增",
+        "modified": "更新",
+        "deleted": "刪除"
+      },
+      "kept": "之後又改過、沒撤回：{files}",
+      "showDiff": "展開差異",
+      "hideDiff": "收起差異",
+      "diffCut": "只顯示了差異的開頭。",
+      "undo": "撤銷",
+      "used": "用到的記憶："
     }
   }
 }

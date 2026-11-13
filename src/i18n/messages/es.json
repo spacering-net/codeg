@@ -8467,6 +8467,16 @@
         "level_brief": {
           "title": "Resumen de la mañana y cierre",
           "hint": "Tu resumen de la mañana o el cierre está listo."
+        },
+        "flush": {
+          "title": "Notas antes de ordenar",
+          "hint": "Antes de que codeg ordene el contexto de un asistente, este anota en su registro lo importante del día hasta ahora, para no perder nada que valga la pena. Tarda hasta dos minutos; luego se ordena igual.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "level_memory": {
+          "title": "Cambios en la memoria",
+          "hint": "Un asistente cambió lo que recuerda, su personalidad o sus reglas."
         }
       },
       "workdir": {
@@ -8587,7 +8597,8 @@
       "compacting": "Ordenando su contexto…",
       "waiting": "Esperando tu confirmación",
       "elsewhere": "Se ejecuta en otro proceso (solo lectura)",
-      "open": "Ver el estado"
+      "open": "Ver el estado",
+      "noting": "Anotando lo del día…"
     },
     "menu": {
       "more": "Más",
@@ -8759,7 +8770,8 @@
       "turnFailed": "Falló una respuesta: {error}",
       "turnInterrupted": "Una respuesta no terminó",
       "turnPreempted": "Una respuesta dio paso a tu mensaje",
-      "workdirChanged": "El directorio de trabajo se movió a {path}"
+      "workdirChanged": "El directorio de trabajo se movió a {path}",
+      "notesFirst": " · antes anotó lo del día"
     },
     "matters": {
       "noneOpen": "Ahora no hay nada pendiente.",
@@ -9129,7 +9141,8 @@
       "awaitingReply": "Esperando la respuesta de {name}",
       "needsAnswer": "Necesita tu respuesta",
       "needsApproval": "Necesita tu aprobación",
-      "workPrefix": "#{id} {title}: {activity}"
+      "workPrefix": "#{id} {title}: {activity}",
+      "notes": "Anotando lo del día antes de ordenar"
     },
     "did": {
       "edit": "Editó {target} +{added} −{removed}",
@@ -9167,7 +9180,8 @@
       "question": "Te preguntó: {target}",
       "questionSome": "Te preguntó",
       "other": "{target}",
-      "otherPlain": "Dio un paso"
+      "otherPlain": "Dio un paso",
+      "notes": "Anotó lo del día"
     },
     "needs": {
       "answer": "Necesita tu respuesta: {text}",
@@ -9421,7 +9435,9 @@
         "forge": "Hecho en una forja",
         "pr_ready": "Lista para fusionar",
         "pr_merged": "PR fusionada",
-        "pr": "PR vigilada"
+        "pr": "PR vigilada",
+        "memory": "Recordado",
+        "memoryUndone": "Recordado y luego deshecho"
       },
       "session": {
         "permission": "Espera tu aprobación",
@@ -10025,6 +10041,33 @@
         "answered": "respondió: {text}",
         "open": "aún sin respuesta"
       }
+    },
+    "memory": {
+      "title": "Recordado",
+      "undoneTitle": "Cambio de memoria deshecho",
+      "added": "{count, plural, one {# entrada nueva} other {# entradas nuevas}}",
+      "updated": "{count, plural, one {# entrada actualizada} other {# entradas actualizadas}}",
+      "removed": "{count, plural, one {# entrada eliminada} other {# entradas eliminadas}}",
+      "changedFile": "cambió {file}",
+      "sep": " · ",
+      "listSep": ", ",
+      "file": {
+        "index": "el índice de la memoria",
+        "user": "tu perfil",
+        "soul": "su personalidad",
+        "rules": "sus reglas"
+      },
+      "status": {
+        "added": "Nueva",
+        "modified": "Actualizada",
+        "deleted": "Eliminada"
+      },
+      "kept": "Se quedan como están (cambiaron después): {files}",
+      "showDiff": "Ver cambios",
+      "hideDiff": "Ocultar cambios",
+      "diffCut": "Solo se muestra el principio de los cambios.",
+      "undo": "Deshacer",
+      "used": "Memoria usada:"
     }
   }
 }

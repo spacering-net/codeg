@@ -56,12 +56,19 @@ interface OwnPageProps {
   disabled: boolean
 }
 
-export function PersonaPage({ bot }: { bot: number | null }) {
+export function PersonaPage({
+  bot,
+  entry = null,
+}: {
+  bot: number | null
+  /** The file to open on (7.7). */
+  entry?: string | null
+}) {
   const t = useTranslations("PersonalAgent.settings")
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="persona">
       <PageHead title={t("nav.persona")} description={t("pages.persona")} />
-      <PersonaFiles botId={bot} />
+      <PersonaFiles key={entry ?? ""} botId={bot} initial={entry} />
     </div>
   )
 }

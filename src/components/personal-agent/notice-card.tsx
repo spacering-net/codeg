@@ -25,6 +25,8 @@
  * - **changed**: a settings change from the conversation (13.3), the work
  *   assistants and executor configs among them (10.5); work assistants made
  *   (4.12), an executor config made or to make.
+ * - **memory**: what a turn changed in the assistant's memory, persona or
+ *   rules, with its diff and [Undo] (`./memory-card.tsx`, 7.7).
  * - **stopped**: what the owner's stop took with it — the work the turn
  *   handed out, the messages nobody had started on — and what it could not:
  *   messages another assistant is already working on, each with [Stop this
@@ -79,6 +81,7 @@ import { ChoiceCard } from "./choice-card"
 import { CollapsedText } from "./event-card"
 import { ExchangeSheet } from "./exchange-sheet"
 import { ForgeCard } from "./forge-card"
+import { MemoryCard } from "./memory-card"
 import { PrCard } from "./pr-card"
 import { RoutineCard } from "./routine-card"
 import { RuleCard } from "./rule-card"
@@ -161,6 +164,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "routine") return <RoutineCard item={item} />
   if (kind === "rule") return <RuleCard item={item} />
   if (kind === "brief") return <BriefCard item={item} />
+  if (kind === "memory") return <MemoryCard item={item} />
   return null
 }
 

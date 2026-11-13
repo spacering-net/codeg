@@ -12,9 +12,10 @@
  * While it is written, its actions (on hover) can stop it.
  */
 
-import { useMemo, useState } from "react"
+import { Fragment, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
+  Brain,
   CircleAlert,
   CornerDownRight,
   Newspaper,
@@ -30,7 +31,9 @@ import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentResend } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { useBotId } from "@/contexts/personal-agent-context"
+import type { ReplyMemory } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { DispatchAttachments } from "./dispatch-attachments"
 import { BlockingPrompts } from "./live-turn"
@@ -204,6 +207,51 @@ function routineOf(
   }
 }
 
+/** The entries of its memory a reply used (7.7). */
+function memoriesOf(v: unknown): ReplyMemory[] {
+  return Array.isArray(v)
+    ? v.filter(
+        (m): m is ReplyMemory =>
+          m != null &&
+          typeof m === "object" &&
+          typeof (m as ReplyMemory).name === "string" &&
+          (m as ReplyMemory).name.startsWith("memory/") &&
+          typeof (m as ReplyMemory).title === "string"
+      )
+    : []
+}
+
+/** "Memory used: Release days · Your hours" under a reply — each opens
+ *  that entry on the persona page (7.7). */
+function UsedMemory({ memories }: { memories: ReplyMemory[] }) {
+  const t = useTranslations("PersonalAgent.memory")
+  const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  if (memories.length === 0) return null
+  return (
+    <p
+      className="mt-1.5 flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground"
+      data-pa-reply-memories
+    >
+      <Brain className="size-3 shrink-0" aria-hidden />
+      <span>{t("used")}</span>
+      {memories.map((m, i) => (
+        <Fragment key={m.name}>
+          {i > 0 ? <span aria-hidden>·</span> : null}
+          <button
+            type="button"
+            className="min-w-0 truncate underline-offset-2 hover:text-foreground hover:underline"
+            title={m.name}
+            data-pa-reply-memory={m.name}
+            onClick={() => openSettings("persona", null, m.name)}
+          >
+            {m.title || m.name}
+          </button>
+        </Fragment>
+      ))}
+    </p>
+  )
+}
+
 /** The morning brief or the wrap-up a reply is (6.4, 6.5). */
 function briefOf(v: unknown): "brief" | "wrap" | null {
   if (!v || typeof v !== "object") return null
@@ -333,6 +381,9 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
       ))}
       {view.dispatches.length > 0 ? (
         <DispatchAttachments rows={view.dispatches} />
+      ) : null}
+      {!view.running ? (
+        <UsedMemory memories={memoriesOf(row?.data?.memories)} />
       ) : null}
       {view.ending ? <Ending ending={view.ending} /> : null}
       {view.resend.length > 0 && !scope.readOnly ? (

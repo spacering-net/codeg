@@ -1190,10 +1190,12 @@ function useRunLogLine(): (row: TimelineRow) => string {
                 after: Math.round(after),
               })
             : ""
-        return t(`compaction.${status}` as "compaction.ok", {
+        const said = t(`compaction.${status}` as "compaction.ok", {
           who: t(`by.${who}` as "by.auto"),
           range,
         })
+        // Notes taken before it (7.7).
+        return str(data, "notes") === "ok" ? `${said}${t("notesFirst")}` : said
       }
       case "compaction_paused":
         return t("compactionPaused")

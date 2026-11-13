@@ -230,6 +230,14 @@ pub enum What {
     Wrap {
         needs: usize,
     },
+    /// An assistant changed what it remembers (7.7): the entries by title,
+    /// and whether its persona, its rules or the owner's profile changed.
+    Memory {
+        titles: Vec<String>,
+        soul: bool,
+        rules: bool,
+        user: bool,
+    },
     /// The reply's first words (none: it said nothing in words).
     Reply {
         text: Option<String>,
@@ -513,6 +521,11 @@ struct Words {
     wrap_none: &'static str,
     why_brief: &'static str,
     why_wrap: &'static str,
+    memory: &'static str,
+    memory_soul: &'static str,
+    memory_rules: &'static str,
+    memory_user: &'static str,
+    why_memory: &'static str,
 }
 
 const EN: Words = Words {
@@ -578,6 +591,11 @@ const EN: Words = Words {
     wrap_none: "The day's wrap-up is ready",
     why_brief: "Your morning brief.",
     why_wrap: "Your usual end of day is near, or you asked for it.",
+    memory: "Remembered: {text}",
+    memory_soul: "persona",
+    memory_rules: "rules",
+    memory_user: "your profile",
+    why_memory: "It changed what it remembers; the card can undo it.",
 };
 
 const ZH_CN: Words = Words {
@@ -643,6 +661,11 @@ const ZH_CN: Words = Words {
     wrap_none: "今天的收尾好了",
     why_brief: "这是你的晨报。",
     why_wrap: "你快收工了，或者你让它收尾。",
+    memory: "记住了：{text}",
+    memory_soul: "人设",
+    memory_rules: "规则",
+    memory_user: "你的资料",
+    why_memory: "它改了记忆，卡片上可以撤销。",
 };
 
 const ZH_TW: Words = Words {
@@ -708,6 +731,11 @@ const ZH_TW: Words = Words {
     wrap_none: "今天的收尾好了",
     why_brief: "這是你的晨報。",
     why_wrap: "你快收工了，或者你請它收尾。",
+    memory: "記住了：{text}",
+    memory_soul: "人設",
+    memory_rules: "規則",
+    memory_user: "你的資料",
+    why_memory: "它改了記憶，卡片上可以撤銷。",
 };
 
 const JA: Words = Words {
@@ -773,6 +801,11 @@ const JA: Words = Words {
     wrap_none: "今日のまとめができました",
     why_brief: "あなたの朝のまとめです。",
     why_wrap: "いつもの終業時刻が近いか、まとめを頼まれました。",
+    memory: "覚えました：{text}",
+    memory_soul: "人格設定",
+    memory_rules: "ルール",
+    memory_user: "あなたのプロフィール",
+    why_memory: "記憶を更新しました。カードから元に戻せます。",
 };
 
 const KO: Words = Words {
@@ -838,6 +871,11 @@ const KO: Words = Words {
     wrap_none: "오늘의 마무리가 준비됐어요",
     why_brief: "아침 브리핑이에요.",
     why_wrap: "평소 퇴근 시간이 다가왔거나, 마무리를 부탁하셨어요.",
+    memory: "기억했어요: {text}",
+    memory_soul: "페르소나",
+    memory_rules: "규칙",
+    memory_user: "당신의 프로필",
+    why_memory: "기억을 바꿨어요. 카드에서 되돌릴 수 있어요.",
 };
 
 const ES: Words = Words {
@@ -903,6 +941,11 @@ const ES: Words = Words {
     wrap_none: "El cierre del día está listo",
     why_brief: "Tu resumen de la mañana.",
     why_wrap: "Se acerca tu hora habitual de terminar, o lo pediste.",
+    memory: "Recordado: {text}",
+    memory_soul: "personalidad",
+    memory_rules: "reglas",
+    memory_user: "tu perfil",
+    why_memory: "Cambió lo que recuerda; la tarjeta permite deshacerlo.",
 };
 
 const DE: Words = Words {
@@ -968,6 +1011,11 @@ const DE: Words = Words {
     wrap_none: "Der Tagesabschluss ist fertig",
     why_brief: "Dein Morgen-Briefing.",
     why_wrap: "Dein üblicher Feierabend ist nah, oder du hast danach gefragt.",
+    memory: "Gemerkt: {text}",
+    memory_soul: "Persona",
+    memory_rules: "Regeln",
+    memory_user: "dein Profil",
+    why_memory: "Es hat sein Gedächtnis geändert; auf der Karte lässt sich das rückgängig machen.",
 };
 
 const FR: Words = Words {
@@ -1034,6 +1082,11 @@ const FR: Words = Words {
     wrap_none: "Le bilan du jour est prêt",
     why_brief: "Votre point du matin.",
     why_wrap: "Votre fin de journée habituelle approche, ou vous l'avez demandé.",
+    memory: "Mémorisé : {text}",
+    memory_soul: "personnalité",
+    memory_rules: "règles",
+    memory_user: "votre profil",
+    why_memory: "Il a modifié sa mémoire ; la carte permet d’annuler.",
 };
 
 const PT: Words = Words {
@@ -1100,6 +1153,11 @@ const PT: Words = Words {
     wrap_none: "O fechamento do dia está pronto",
     why_brief: "Seu resumo da manhã.",
     why_wrap: "Seu horário habitual de encerrar está próximo, ou você pediu.",
+    memory: "Memorizado: {text}",
+    memory_soul: "persona",
+    memory_rules: "regras",
+    memory_user: "seu perfil",
+    why_memory: "Mudou o que lembra; o cartão permite desfazer.",
 };
 
 const AR: Words = Words {
@@ -1165,6 +1223,11 @@ const AR: Words = Words {
     wrap_none: "ختام اليوم جاهز",
     why_brief: "موجز صباحك.",
     why_wrap: "اقترب موعد انتهاء يومك المعتاد، أو طلبت ذلك.",
+    memory: "تذكّرت: {text}",
+    memory_soul: "الشخصية",
+    memory_rules: "القواعد",
+    memory_user: "ملفك الشخصي",
+    why_memory: "غيّر ما يتذكره؛ يمكنك التراجع من البطاقة.",
 };
 
 fn words(locale: AppLocale) -> &'static Words {
@@ -1239,6 +1302,27 @@ fn main_line(w: &Words, what: &What) -> String {
         What::Brief { needs } => fill(w.brief, "", *needs as i64, ""),
         What::Wrap { needs: 0 } => w.wrap_none.to_string(),
         What::Wrap { needs } => fill(w.wrap, "", *needs as i64, ""),
+        What::Memory {
+            titles,
+            soul,
+            rules,
+            user,
+        } => {
+            let mut parts = titles.clone();
+            for (on, word) in [
+                (*user, w.memory_user),
+                (*soul, w.memory_soul),
+                (*rules, w.memory_rules),
+            ] {
+                if on {
+                    parts.push(word.to_string());
+                }
+            }
+            if parts.is_empty() {
+                parts.push("MEMORY.md".into());
+            }
+            fill(w.memory, &glimpse(&parts.join(", ")), 0, "")
+        }
         What::Reply { text } => text.clone().unwrap_or_else(|| w.reply_empty.to_string()),
         What::Plain { text } => text.clone(),
     }
@@ -1272,6 +1356,7 @@ fn reason(w: &Words, kind: &str, what: &What) -> Option<String> {
             What::Wrap { .. } => w.why_wrap.into(),
             _ => w.why_brief.into(),
         },
+        "memory" => w.why_memory.into(),
         _ => return None,
     };
     Some(line)
@@ -2339,6 +2424,21 @@ mod tests {
                 main_line(w, &What::Brief { needs: 0 }),
                 main_line(w, &What::Wrap { needs: 0 })
             );
+            // A memory card names what it changed (7.7).
+            let memory = main_line(
+                w,
+                &What::Memory {
+                    titles: vec!["Release days".into()],
+                    soul: true,
+                    rules: false,
+                    user: false,
+                },
+            );
+            assert!(
+                memory.contains("Release days") && memory.contains(w.memory_soul),
+                "{locale:?}: {memory}"
+            );
+            assert!(w.memory.contains("{text}"), "{locale:?}");
             for t in [
                 w.waiting, w.approval, w.waited, w.session, w.done, w.failed, w.review, w.reminder,
             ] {

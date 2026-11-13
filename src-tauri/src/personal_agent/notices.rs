@@ -603,6 +603,8 @@ impl PersonalAgentEngine {
             // One of codeg's proposal rules (6.7).
             NoticeKind::Rule => return self.act_on_rule(&notice, action, text).await,
             NoticeKind::Brief => return Err("a brief has nothing to answer".into()),
+            // What a turn changed in its memory (7.7).
+            NoticeKind::Memory => return self.act_on_memory(&notice, action).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.

@@ -164,6 +164,30 @@ describe("PersonaFiles", () => {
     expect(outside("Fact")).toHaveLength(0)
   })
 
+  it("opens on the entry a card or a reply names, else on the persona (7.7)", async () => {
+    const { unmount } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PersonaFiles initial="memory/release-days.md" />
+      </NextIntlClientProvider>
+    )
+    await screen.findByRole("navigation")
+    expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toContain(
+      "Fridays."
+    )
+    unmount()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PersonaFiles initial="memory/gone.md" />
+      </NextIntlClientProvider>
+    )
+    await screen.findByRole("navigation")
+    await waitFor(() =>
+      expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toBe(
+        "# Persona\n\nCalm."
+      )
+    )
+  })
+
   it("saves the file that is open", async () => {
     draw()
     fireEvent.click(await screen.findByRole("button", { name: "Likes tea" }))

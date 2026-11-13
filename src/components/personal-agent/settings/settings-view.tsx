@@ -154,7 +154,9 @@ export function SettingsView() {
           />
         )
       case "persona":
-        return agent ? <PersonaPage bot={target} /> : null
+        return agent ? (
+          <PersonaPage bot={target} entry={settings?.entry ?? null} />
+        ) : null
       case "execution":
         return agent && worker ? (
           <ExecutionPage agent={agent} bot={target} disabled={readOnly} />

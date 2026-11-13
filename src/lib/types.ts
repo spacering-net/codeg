@@ -2741,6 +2741,8 @@ export interface PersonalAgentTurnInfo {
   compaction_initiator: CompactInitiator | null
   /** It carries the owner's messages (else it gives way when they write). */
   for_owner?: boolean
+  /** The notes before a compaction (7.7): it gives way to the owner. */
+  flush?: boolean
 }
 
 export interface PersonalAgentStatus {
@@ -2808,6 +2810,9 @@ export interface PersonalAgentPrefs {
   /** Code work an assistant dispatched is checked and accepted on its own
    *  (7.5). */
   auto_accept: "on" | "off"
+  /** Before codeg compacts an assistant's context, it notes the day's
+   *  points in its log (7.7). */
+  flush: "on" | "off"
   /** Work its assistant wants changed after the check: sent back at once, or
    *  put to the owner first. */
   accept_revise: "auto" | "ask"
@@ -2879,6 +2884,8 @@ export interface PersonalAgentPrefs {
   level_proposal_low: PersonalAgentNewsLevel
   /** The morning brief and the wrap-up (6.4, 6.5). */
   level_brief: PersonalAgentNewsLevel
+  /** What an assistant changed in its memory, persona or rules (7.7). */
+  level_memory: PersonalAgentNewsLevel
   /** codeg's proposal rules (6.7): each on or off, with its threshold. */
   rule_failed: "on" | "off"
   rule_failed_hours: number
@@ -3008,6 +3015,8 @@ export type TodayRowKind =
   | "finished"
   | "answered"
   | "changed"
+  // What an assistant remembered (7.7).
+  | "memory"
   // Something an assistant did on a forge (7.4).
   | "forge"
   // A watched pull request: one to merge (waits on the owner), one watched,
@@ -8010,3 +8019,19 @@ export interface Routine {
 
 /** The owner's buttons on a routine. */
 export type RoutineAction = "run_now" | "pause" | "resume" | "delete"
+
+/** One file of an assistant's memory a turn changed (7.7). */
+export interface MemoryFileChange {
+  path: string
+  status: "added" | "modified" | "deleted"
+  kind: "entry" | "index" | "user" | "soul" | "rules"
+  /** An entry's title as the persona page shows it; a fixed file's name. */
+  title: string
+}
+
+/** An entry of its memory a reply used (7.7). */
+export interface ReplyMemory {
+  /** `memory/<name>.md`. */
+  name: string
+  title: string
+}

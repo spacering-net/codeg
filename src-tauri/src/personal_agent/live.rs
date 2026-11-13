@@ -714,11 +714,11 @@ impl PersonalAgentEngine {
             None => false,
         };
         let turn = match self.turn_view().await {
-            Some(t) if t.compaction => Some((
+            Some(t) if t.compaction || t.flush => Some((
                 t.batch_id,
                 Some(StepLine {
                     n: 0,
-                    kind: "compact".into(),
+                    kind: if t.flush { "notes" } else { "compact" }.into(),
                     target: None,
                     status: Some("in_progress".into()),
                     awaiting: false,

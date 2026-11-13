@@ -559,6 +559,20 @@ owner), and earlier interactions can be read with `timeline_read`.\n\
 
 /// The name, persona and rules, after the owner changed any of them between
 /// turns.
+/// What the notes before a compaction ask of the assistant (7.7): the
+/// day's points so far into its log, nothing else, and a silent reply.
+pub fn flush_text(day: &str, silent: &str) -> String {
+    format!(
+        "<codeg-flush>\nYour context is about to be compacted: what is only in it will be lost. \
+         Before it is, append to `log/{day}.md` (create it if it is missing) the points from today \
+         so far that are worth keeping — decisions made, what you learned about the owner and \
+         their work, what is in progress and what comes next — briefly, as a list, without \
+         repeating what the file already has. A lasting fact or lesson goes into your memory as \
+         usual. Do nothing else now: no messages, no dispatches. Then reply with exactly \
+         {silent} and nothing else.\n</codeg-flush>"
+    )
+}
+
 pub fn persona_update(name: &str, soul: &str, rules: &str) -> String {
     let name = match name_line(name) {
         Some(line) => format!("{line}\n"),

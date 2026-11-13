@@ -8466,6 +8466,16 @@
         "level_brief": {
           "title": "Morning brief and wrap-up",
           "hint": "Your morning brief or the wrap-up is ready."
+        },
+        "flush": {
+          "title": "Notes before tidying up",
+          "hint": "Before codeg tidies up an assistant's context, the assistant first notes the day's points so far in its log, so nothing worth keeping is lost. It takes up to two minutes; then the tidying goes on either way.",
+          "on": "On",
+          "off": "Off"
+        },
+        "level_memory": {
+          "title": "Memory changes",
+          "hint": "An assistant changed what it remembers, its persona or its rules."
         }
       },
       "workdir": {
@@ -8587,7 +8597,8 @@
       "compacting": "Tidying its context…",
       "waiting": "Waiting for you",
       "elsewhere": "Runs in another process (read-only)",
-      "open": "Show the status"
+      "open": "Show the status",
+      "noting": "Noting today's points…"
     },
     "menu": {
       "more": "More",
@@ -8759,7 +8770,8 @@
       "turnFailed": "A reply failed: {error}",
       "turnInterrupted": "A reply did not finish",
       "turnPreempted": "A reply made way for your message",
-      "workdirChanged": "The working directory moved to {path}"
+      "workdirChanged": "The working directory moved to {path}",
+      "notesFirst": " · today's points noted first"
     },
     "matters": {
       "noneOpen": "Nothing open right now.",
@@ -9129,7 +9141,8 @@
       "awaitingReply": "Waiting for {name} to reply",
       "needsAnswer": "Needs your answer",
       "needsApproval": "Needs your approval",
-      "workPrefix": "#{id} {title}: {activity}"
+      "workPrefix": "#{id} {title}: {activity}",
+      "notes": "Noting today's points before tidying up"
     },
     "did": {
       "edit": "Edited {target} +{added} −{removed}",
@@ -9167,7 +9180,8 @@
       "question": "Asked you: {target}",
       "questionSome": "Asked you",
       "other": "{target}",
-      "otherPlain": "Took a step"
+      "otherPlain": "Took a step",
+      "notes": "Noted today's points"
     },
     "needs": {
       "answer": "Needs your answer: {text}",
@@ -9421,7 +9435,9 @@
         "forge": "Done on a forge",
         "pr_ready": "Ready to merge",
         "pr_merged": "PR merged",
-        "pr": "Watched PR"
+        "pr": "Watched PR",
+        "memory": "Remembered",
+        "memoryUndone": "Remembered, then taken back"
       },
       "session": {
         "permission": "Waits for your approval",
@@ -10025,6 +10041,33 @@
         "answered": "answered: {text}",
         "open": "no answer yet"
       }
+    },
+    "memory": {
+      "title": "Remembered",
+      "undoneTitle": "Memory change undone",
+      "added": "{count, plural, one {# new entry} other {# new entries}}",
+      "updated": "{count, plural, one {# entry updated} other {# entries updated}}",
+      "removed": "{count, plural, one {# entry removed} other {# entries removed}}",
+      "changedFile": "{file} changed",
+      "sep": " · ",
+      "listSep": ", ",
+      "file": {
+        "index": "the memory index",
+        "user": "your profile",
+        "soul": "its persona",
+        "rules": "its rules"
+      },
+      "status": {
+        "added": "New",
+        "modified": "Updated",
+        "deleted": "Removed"
+      },
+      "kept": "Left as they are, changed again since: {files}",
+      "showDiff": "Show changes",
+      "hideDiff": "Hide changes",
+      "diffCut": "Only the start of the changes is shown.",
+      "undo": "Undo",
+      "used": "Memory used:"
     }
   }
 }

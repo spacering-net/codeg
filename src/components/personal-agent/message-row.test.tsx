@@ -579,6 +579,36 @@ describe("the bubbles", () => {
     }
   })
 
+  it("names the memory a reply used, each opening its entry (7.7)", () => {
+    usePersonalAgentUi.setState({ settings: null })
+    const item = itemOf(
+      [
+        row(11, "reply", {
+          batch_id: 7,
+          body: "On Fridays.",
+          data: {
+            state: "done",
+            memories: [
+              { name: "memory/release.md", title: "Release days" },
+              { name: "memory/hours.md", title: "Your hours" },
+              { name: "USER.md", title: "not an entry" },
+            ],
+          },
+        }),
+      ],
+      "reply"
+    ) as Extract<MessageItem, { kind: "reply" }>
+    const { container } = draw(<ReplyBubble item={item} />)
+    const line = container.querySelector("[data-pa-reply-memories]")
+    expect(line?.textContent).toBe("Memory used:Release days·Your hours")
+    fireEvent.click(screen.getByText("Your hours"))
+    expect(usePersonalAgentUi.getState().settings).toEqual({
+      page: "persona",
+      bot: null,
+      entry: "memory/hours.md",
+    })
+  })
+
   it("keeps a reply with code in one bubble", () => {
     const item = itemOf(
       [

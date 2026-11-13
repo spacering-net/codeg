@@ -58,7 +58,8 @@ export function PersonalAgentChromeActions({
   const configured = snapshot?.agent != null
   const readOnly = status?.engine !== "here"
   const turn = status?.turn ?? null
-  const compacting = turn?.kind === "compaction"
+  // The notes before a compaction are part of it (7.7).
+  const compacting = turn?.kind === "compaction" || turn?.flush === true
   const hasSession = status?.segment?.conversation_id != null
   const act = async (fn: () => Promise<void>, done?: string) => {
     setActing(true)

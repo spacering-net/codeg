@@ -150,7 +150,22 @@ struct CompactionRun {
     command: String,
     before: Option<UsageReading>,
     forced: bool,
+    /// How the notes before it went (7.7): `ok`, `failed`, `timeout`;
+    /// `None` when none were taken.
+    notes: Option<&'static str>,
 }
+
+/// Notes before compacting in flight (7.7): the compaction it comes ahead
+/// of, and whether codeg stopped it for running too long.
+#[derive(Debug, Clone, Copy)]
+struct FlushRun {
+    then: CompactInitiator,
+    timed_out: bool,
+}
+
+/// How long the notes before a compaction may take: then codeg stops them,
+/// and compacts.
+pub const FLUSH_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Which cards a delivery carried, cleared from the segment only when it
 /// completes.
@@ -205,6 +220,9 @@ struct ActiveTurn {
     /// message of theirs, so it was told to stop and give way. When it
     /// stops, its events ride with the owner's message, not as a failure.
     preempted: bool,
+    /// For a delivery: the notes before a compaction (7.7) — no reply; it
+    /// gives way to the owner's message like any turn without one (4.7).
+    flush: Option<FlushRun>,
 }
 
 /// How a turn ended.
@@ -237,6 +255,8 @@ struct ReplyContent {
     last_text_n: Option<u32>,
     step_count: u32,
     quotes: Vec<i64>,
+    /// The paths its `read` calls named (7.7).
+    reads: Vec<String>,
 }
 
 impl ReplyContent {
@@ -246,6 +266,7 @@ impl ReplyContent {
             last_text_n: s.last_text.as_ref().map(|t| t.n),
             step_count: s.step_count,
             quotes: s.quotes.clone(),
+            reads: s.reads.clone(),
         }
     }
 
@@ -274,6 +295,15 @@ impl ReplyContent {
                 .get("quotes")
                 .and_then(|q| q.as_array())
                 .map(|q| q.iter().filter_map(|v| v.as_i64()).collect())
+                .unwrap_or_default(),
+            reads: data
+                .get("reads")
+                .and_then(|q| q.as_array())
+                .map(|q| {
+                    q.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default(),
         }
     }
@@ -315,6 +345,15 @@ pub(super) struct EngineState {
     pub(super) last_error: Option<String>,
     /// Deliver the next batch without another compaction attempt.
     skip_compaction_once: bool,
+    /// The segment whose notes were just taken, for the compaction they
+    /// precede: the next decision compacts without taking them again.
+    flushed: Option<i32>,
+    /// How those notes went, for that compaction's record.
+    flush_outcome: Option<&'static str>,
+    /// The owner's compaction, due once its notes are taken.
+    owner_compact: bool,
+    /// How long notes may take ([`FLUSH_LIMIT`]; shorter in tests).
+    flush_limit: Option<std::time::Duration>,
     /// Agent compactions already recorded, by tool-call id.
     seen_compactions: HashSet<String>,
     /// Dispatched conversations, by `connection_id`.
@@ -525,6 +564,7 @@ impl PersonalAgentEngine {
                 command: "/compact".into(),
                 before: None,
                 forced,
+                notes: None,
             }),
             carried: Carried {
                 state_card,
@@ -540,6 +580,7 @@ impl PersonalAgentEngine {
             auto_quote: None,
             ledger_scope: vec![batch_id],
             preempted: false,
+            flush: None,
         });
     }
 
@@ -584,6 +625,7 @@ impl PersonalAgentEngine {
             auto_quote: None,
             ledger_scope: vec![batch_id],
             preempted: false,
+            flush: None,
         });
         row.id
     }
@@ -644,6 +686,12 @@ impl PersonalAgentEngine {
     }
 
     /// Whether a turn is on record.
+    /// How long the notes before a compaction may run here (7.7).
+    #[cfg(test)]
+    pub(crate) async fn set_flush_limit_for_test(&self, limit: std::time::Duration) {
+        self.state.lock().await.flush_limit = Some(limit);
+    }
+
     #[cfg(test)]
     pub(crate) async fn turn_in_flight_for_test(&self) -> bool {
         self.state.lock().await.turn.is_some()
@@ -1730,7 +1778,14 @@ impl PersonalAgentEngine {
                 serde_json::to_value(&snap.last_text).unwrap_or_default(),
             );
             map.insert("step_count".into(), snap.step_count.into());
-            map.insert("quotes".into(), serde_json::to_value(&snap.quotes).unwrap_or_default());
+            map.insert(
+                "quotes".into(),
+                serde_json::to_value(&snap.quotes).unwrap_or_default(),
+            );
+            map.insert(
+                "reads".into(),
+                serde_json::to_value(&snap.reads).unwrap_or_default(),
+            );
         }
         if let Ok(true) = svc::checkpoint_reply_row(&self.db.conn, row_id, data).await {
             if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row_id).await {
@@ -1770,9 +1825,20 @@ impl PersonalAgentEngine {
             serde_json::Value::Null => super::brief::tag_of_row(&self.db, row_id).await,
             tag => tag,
         };
+        // The memory it used: the entries its reads named (7.7).
+        let memories: Vec<serde_json::Value> = match self.agent_row().await {
+            Some(agent) if !content.reads.is_empty() => {
+                workdir::used_entries(&self.workdir_of(&agent), &content.reads)
+                    .into_iter()
+                    .map(|(name, title)| serde_json::json!({ "name": name, "title": title }))
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         let data = serde_json::json!({
             "routine": routine,
             "brief": brief,
+            "memories": memories,
             "state": outcome.state,
             "why": outcome.why,
             "stop_reason": outcome.stop_reason,
@@ -1921,6 +1987,22 @@ impl PersonalAgentEngine {
         let Some(row) = self.agent_row().await else {
             return Ok(());
         };
+        // The compaction the owner asked for, now that its notes are taken
+        // (7.7).
+        if std::mem::take(&mut self.state.lock().await.owner_compact) {
+            let session = self.ensure_session(&row).await?;
+            if !session.fresh {
+                let reading = self
+                    .context_reading(&session.conn_id, session.segment.conversation_id)
+                    .await;
+                if let CompactionStart::Started = self
+                    .start_compaction(&row, &session, CompactInitiator::Owner, reading, false)
+                    .await?
+                {
+                    return Ok(());
+                }
+            }
+        }
         let owners = svc::queued_owner_rows(&self.db.conn, self.bot().await)
             .await
             .map_err(|e| e.to_string())?;
@@ -1949,8 +2031,20 @@ impl PersonalAgentEngine {
                 skip_once,
                 reading.map(|r| r.percent),
             );
+            // Notes were just taken for this compaction (7.7): not again.
+            let flushed = self.state.lock().await.flushed.take() == Some(session.segment.id);
             match decision {
                 PreDelivery::Compact { forced } => {
+                    // Notes before compacting, first (7.7) — not after an
+                    // overflow: a full context has no room for them either.
+                    if !forced
+                        && !flushed
+                        && self.prefs().await.flushes()
+                        && self.compact_command(&row, &session).await?.is_some()
+                        && self.start_flush(&session, CompactInitiator::Auto).await
+                    {
+                        return Ok(());
+                    }
                     match self
                         .start_compaction(&row, &session, CompactInitiator::Auto, reading, forced)
                         .await?
@@ -2301,6 +2395,215 @@ impl PersonalAgentEngine {
         Ok(conn_id)
     }
 
+    /// The command that compacts this session's agent; `None` when none is
+    /// known (it is never compacted then).
+    async fn compact_command(
+        &self,
+        row: &agent_entity::Model,
+        session: &Session,
+    ) -> Result<Option<String>, String> {
+        let config = brain_of(row).ok_or("the personal agent's agent is not readable")?;
+        let agent_type = AgentType::from_wire(&session.segment.agent_type).unwrap_or(config.agent_type);
+        let settings = settings_of(row);
+        let advertised = match self.manager.get_state(&session.conn_id).await {
+            Some(state) => state.read().await.available_commands.clone(),
+            None => Vec::new(),
+        };
+        Ok(compact::resolve_compact_command(
+            settings.compact_command_for(agent_type),
+            agent_type,
+            &advertised,
+        ))
+    }
+
+    /// Notes before compacting (7.7): an internal turn, ahead of the
+    /// compaction `then` is — the assistant appends the day's points so far
+    /// to its log, and says nothing. No reply row: the owner sees no turn
+    /// in the conversation, only that it is busy. A message of the owner's
+    /// cuts it short (4.7) and goes first; codeg stops it after
+    /// [`FLUSH_LIMIT`]. Otherwise, however it ends, the compaction follows.
+    /// False when it could not be sent: compact at once.
+    async fn start_flush(self: &Arc<Self>, session: &Session, then: CompactInitiator) -> bool {
+        let prefs = self.prefs().await;
+        let tz = super::clock::zone_of(&prefs.time_zone);
+        let day = super::brief::day_key(super::clock::now(), tz);
+        let text = format!(
+            "{}\n\n{}",
+            self.now_line(None, "your context is about to be compacted")
+                .await,
+            cards::flush_text(&day, super::routines::SILENT)
+        );
+        let reading = self
+            .context_reading(&session.conn_id, session.segment.conversation_id)
+            .await;
+        let Ok(batch) = svc::create_batch_with(
+            &self.db.conn,
+            self.bot().await,
+            session.segment.id,
+            BatchKind::Delivery,
+            Some(serde_json::json!({
+                "flush": true,
+                "then": then,
+                "day": day,
+                "usage_before": reading.map(|r| r.percent),
+            })),
+            Some(BatchTrigger::Flush),
+        )
+        .await
+        else {
+            return false;
+        };
+        let start_seq = self.current_seq(&session.conn_id).await;
+        // Registered before the send, for the reason `start_compaction` gives.
+        {
+            let mut st = self.state.lock().await;
+            st.turn = Some(ActiveTurn {
+                batch_id: batch.id,
+                segment_id: session.segment.id,
+                kind: BatchKind::Delivery,
+                conn_id: session.conn_id.clone(),
+                start_seq,
+                started_at: Utc::now(),
+                owner_row_ids: Vec::new(),
+                compaction: None,
+                carried: Carried::default(),
+                overflow: false,
+                error: None,
+                usage_after: None,
+                compaction_reported: None,
+                agent_compacted: false,
+                reply_row_id: None,
+                reply_token: None,
+                auto_quote: None,
+                ledger_scope: vec![batch.id],
+                preempted: false,
+                flush: Some(FlushRun {
+                    then,
+                    timed_out: false,
+                }),
+            });
+            // Taken once per compaction, however it ends.
+            st.flushed = Some(session.segment.id);
+            st.flush_outcome = None;
+            st.last_error = None;
+        }
+        let sent = self
+            .manager
+            .send_personal_agent_prompt(
+                &self.db,
+                &session.conn_id,
+                vec![PromptInputBlock::Text { text }],
+                Some(session.folder_id),
+                session.segment.conversation_id,
+                None,
+            )
+            .await;
+        if let Err(e) = sent {
+            self.clear_turn(batch.id).await;
+            let _ = svc::finish_batch(
+                &self.db.conn,
+                batch.id,
+                BatchStatus::Failed,
+                None,
+                Some(e.to_string()),
+                None,
+            )
+            .await;
+            self.state.lock().await.flush_outcome = Some("failed");
+            return false;
+        }
+        let limit = self.state.lock().await.flush_limit.unwrap_or(FLUSH_LIMIT);
+        let me = Arc::clone(self);
+        let batch_id = batch.id;
+        tokio::spawn(async move {
+            tokio::time::sleep(limit).await;
+            me.flush_overdue(batch_id).await;
+        });
+        self.emit(PersonalAgentChange::Status);
+        true
+    }
+
+    /// The notes of `batch_id` ran past their time: stopped, and the
+    /// compaction goes on.
+    async fn flush_overdue(&self, batch_id: i32) {
+        let conn = {
+            let mut st = self.state.lock().await;
+            match st.turn.as_mut() {
+                Some(t) if t.batch_id == batch_id => match t.flush.as_mut() {
+                    Some(f) => {
+                        f.timed_out = true;
+                        t.conn_id.clone()
+                    }
+                    None => return,
+                },
+                _ => return,
+            }
+        };
+        tracing::info!("[personal_agent] the notes before compacting ran too long: stopped");
+        if let Err(e) = self.manager.cancel(&self.db.conn, &conn).await {
+            tracing::info!("[personal_agent] could not stop the notes: {e}");
+        }
+    }
+
+    /// The notes before a compaction ended (7.7): recorded, committed — a
+    /// memory card when they changed memory — and the compaction is next.
+    /// The owner stopping them stops the compaction too; the owner writing
+    /// meanwhile has their message go first, uncompacted, and the notes are
+    /// taken again before the next compaction.
+    async fn finish_flush(&self, turn: ActiveTurn, end: TurnEnd) {
+        let Some(run) = turn.flush else {
+            return;
+        };
+        let stop = match &end {
+            TurnEnd::Completed(stop) => stop.clone(),
+            TurnEnd::Lost(_) => None,
+        };
+        let canceled = matches!(stop.as_deref(), Some("cancelled" | "canceled"));
+        let (status, outcome) = match &end {
+            TurnEnd::Lost(_) => (BatchStatus::Interrupted, "failed"),
+            _ if turn.overflow => (BatchStatus::Interrupted, "failed"),
+            _ if canceled && turn.preempted => (BatchStatus::Canceled, "preempted"),
+            _ if canceled && run.timed_out => (BatchStatus::Canceled, "timeout"),
+            _ if canceled => (BatchStatus::Canceled, "stopped"),
+            _ if stop.as_deref() == Some("rejected") => (BatchStatus::Failed, "failed"),
+            _ => (BatchStatus::Completed, "ok"),
+        };
+        let error = match &end {
+            TurnEnd::Lost(why) => Some(why.clone()),
+            TurnEnd::Completed(_) => turn.error.clone(),
+        };
+        let _ = svc::finish_batch(
+            &self.db.conn,
+            turn.batch_id,
+            status,
+            stop,
+            error,
+            Some(serde_json::json!({ "flush": true, "then": run.then, "outcome": outcome })),
+        )
+        .await;
+        if turn.overflow {
+            self.on_overflow(turn.segment_id).await;
+        }
+        self.after_turn_bookkeeping(&turn).await;
+        let mut st = self.state.lock().await;
+        st.flush_outcome = Some(outcome);
+        match (run.then, outcome) {
+            // The owner wrote (4.7): their message goes next, uncompacted —
+            // the notes were not taken, so they are asked for again before
+            // the next compaction.
+            (_, "preempted") => {
+                st.skip_compaction_once = true;
+                st.flushed = None;
+                st.flush_outcome = None;
+            }
+            // The owner stopped it: no compaction now — theirs, nor codeg's
+            // before the batch waiting, as stopping a compaction does.
+            (_, "stopped") => st.skip_compaction_once = true,
+            (CompactInitiator::Owner, _) => st.owner_compact = true,
+            _ => {}
+        }
+    }
+
     /// Send the compact command, when there is one. Never fails the delivery
     /// it precedes: a compaction that cannot start says so and lets it go.
     async fn start_compaction(
@@ -2311,19 +2614,14 @@ impl PersonalAgentEngine {
         before: Option<UsageReading>,
         forced: bool,
     ) -> Result<CompactionStart, String> {
-        let config = brain_of(row).ok_or("the personal agent's agent is not readable")?;
-        let agent_type = AgentType::from_wire(&session.segment.agent_type).unwrap_or(config.agent_type);
-        let settings = settings_of(row);
-        let advertised = match self.manager.get_state(&session.conn_id).await {
-            Some(state) => state.read().await.available_commands.clone(),
-            None => Vec::new(),
-        };
-        let Some(command) = compact::resolve_compact_command(
-            settings.compact_command_for(agent_type),
-            agent_type,
-            &advertised,
-        ) else {
+        let Some(command) = self.compact_command(row, session).await? else {
             return Ok(CompactionStart::NoCommand);
+        };
+        // The notes taken for it, if any (7.7).
+        let notes = {
+            let mut st = self.state.lock().await;
+            st.flushed = None;
+            st.flush_outcome.take()
         };
         let batch = svc::create_batch(
             &self.db.conn,
@@ -2334,6 +2632,7 @@ impl PersonalAgentEngine {
                 "command": command,
                 "initiator": initiator,
                 "forced": forced,
+                "notes": notes,
                 "before": before.map(|b| serde_json::json!({
                     "percent": b.percent, "used": b.used, "size": b.size, "source": b.source,
                 })),
@@ -2360,6 +2659,7 @@ impl PersonalAgentEngine {
                     command: command.clone(),
                     before,
                     forced,
+                    notes,
                 }),
                 carried: Carried::default(),
                 overflow: false,
@@ -2372,6 +2672,7 @@ impl PersonalAgentEngine {
                 auto_quote: None,
                 ledger_scope: Vec::new(),
                 preempted: false,
+                flush: None,
             });
             st.last_check = Some(CompactCheck {
                 at: Utc::now(),
@@ -2975,6 +3276,7 @@ impl PersonalAgentEngine {
                 auto_quote,
                 ledger_scope,
                 preempted: false,
+                flush: None,
             });
             st.last_error = None;
         }
@@ -3309,6 +3611,7 @@ impl PersonalAgentEngine {
                 turn
             };
             match turn.kind {
+                BatchKind::Delivery if turn.flush.is_some() => self.finish_flush(turn, end).await,
                 BatchKind::Delivery => self.finish_delivery(turn, end, capture).await,
                 BatchKind::Compaction => self.finish_compaction(turn, end).await,
             }
@@ -3600,10 +3903,13 @@ impl PersonalAgentEngine {
             if let Ok(json) = serde_json::to_string(&state) {
                 let _ = svc::set_segment_state(&self.db.conn, seg.id, json).await;
             }
+            // Committed here, as the turn settles: the commit is this turn's
+            // alone, and its memory card says what of it was memory (7.7).
             let message = format!("personal agent: session {} turn {}", seg.seq, turn.batch_id);
-            tokio::spawn(async move {
-                workdir::commit_all(&workdir, &message).await;
-            });
+            if let Some(rev) = workdir::commit(&workdir, &message).await {
+                self.memory_card(&workdir, &rev, turn.batch_id, seg.id)
+                    .await;
+            }
         }
     }
 
@@ -3656,6 +3962,7 @@ impl PersonalAgentEngine {
                 "command": run.command,
                 "initiator": run.initiator,
                 "forced": run.forced,
+                "notes": run.notes,
                 "status": status,
                 "before": run.before.map(|b| b.percent),
                 "after": after.map(|a| a.percent),
@@ -3694,6 +4001,7 @@ impl PersonalAgentEngine {
                 "status": status,
                 "command": run.command,
                 "forced": run.forced,
+                "notes": run.notes,
                 "before_percent": run.before.map(|b| (b.percent * 10.0).round() / 10.0),
                 "before_tokens": run.before.and_then(|b| b.used),
                 "after_percent": after.map(|a| (a.percent * 10.0).round() / 10.0),
@@ -4056,6 +4364,14 @@ impl PersonalAgentEngine {
         let session = self.ensure_session(&row).await?;
         if session.fresh {
             return Err("the session is new; there is nothing to compact".into());
+        }
+        if self.compact_command(&row, &session).await?.is_none() {
+            return Err("no compact command is known for this agent".into());
+        }
+        // Notes first (7.7); the compaction follows when they are taken.
+        if self.prefs().await.flushes() && self.start_flush(&session, CompactInitiator::Owner).await
+        {
+            return Ok(());
         }
         let reading = self
             .context_reading(&session.conn_id, session.segment.conversation_id)
@@ -4521,9 +4837,12 @@ impl PersonalAgentEngine {
                 self.update_segment_state(seg.id, |s| s.persona_resend = true).await;
             }
         }
+        // Only the file they saved: what a turn left uncommitted stays the
+        // turn's, for its memory card (7.7).
         let message = format!("owner: edit {name}");
+        let name = name.to_string();
         tokio::spawn(async move {
-            workdir::commit_all(&workdir, &message).await;
+            workdir::commit_only(&workdir, &message, &[name.as_str()]).await;
         });
         Ok(())
     }
@@ -4535,8 +4854,9 @@ impl PersonalAgentEngine {
         let workdir = self.workdir_of(&row);
         workdir::delete_entry(&workdir, name).map_err(|e| e.to_string())?;
         let message = format!("owner: delete {name}");
+        let name = name.to_string();
         tokio::spawn(async move {
-            workdir::commit_all(&workdir, &message).await;
+            workdir::commit_only(&workdir, &message, &[name.as_str(), workdir::MEMORY_FILE]).await;
         });
         Ok(())
     }
@@ -4616,8 +4936,13 @@ impl PersonalAgentEngine {
             batch_id: t.batch_id,
             kind: t.kind,
             started_at: t.started_at,
-            compaction_initiator: t.compaction.as_ref().map(|c| c.initiator),
+            compaction_initiator: t
+                .compaction
+                .as_ref()
+                .map(|c| c.initiator)
+                .or(t.flush.map(|f| f.then)),
             for_owner: !t.owner_row_ids.is_empty(),
+            flush: t.flush.is_some(),
         });
         status.last_check = last_check;
         status.last_error = last_error;
@@ -4660,6 +4985,8 @@ impl PersonalAgentEngine {
 pub(super) struct TurnView {
     pub(super) batch_id: i32,
     pub(super) compaction: bool,
+    /// The notes before a compaction (7.7).
+    pub(super) flush: bool,
     pub(super) conn_id: String,
     /// The tag the connection builds the reply under.
     pub(super) token: Option<String>,
@@ -4671,6 +4998,7 @@ impl PersonalAgentEngine {
         st.turn.as_ref().map(|t| TurnView {
             batch_id: t.batch_id,
             compaction: t.kind == BatchKind::Compaction,
+            flush: t.flush.is_some(),
             conn_id: t.conn_id.clone(),
             token: t.reply_token.clone(),
         })

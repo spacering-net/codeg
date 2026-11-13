@@ -50,6 +50,9 @@ export type SettingsPage =
 export interface SettingsOpen {
   page: SettingsPage
   bot: number | null
+  /** The persona page's file to open on: a memory entry a card or a reply
+   *  names (7.7). */
+  entry?: string | null
 }
 
 /** The executor config editor, asked to open from a card (10.5): an
@@ -128,7 +131,11 @@ interface PersonalAgentUiState {
    *  request made before the page mounts (another window's "open the
    *  executor configs") finds it open. */
   settings: SettingsOpen | null
-  openSettings: (page?: SettingsPage, bot?: number | null) => void
+  openSettings: (
+    page?: SettingsPage,
+    bot?: number | null,
+    entry?: string | null
+  ) => void
   closeSettings: () => void
   /** The executor configs' page, with its editor open on one (or a new one
    *  prefilled); taken by the page once it opens it. */
@@ -182,8 +189,8 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   openWork: (work) => set({ work, workOpen: true }),
   setWorkOpen: (workOpen) => set({ workOpen }),
   settings: null,
-  openSettings: (page = "identity", bot = null) =>
-    set({ settings: { page, bot } }),
+  openSettings: (page = "identity", bot = null, entry = null) =>
+    set({ settings: entry ? { page, bot, entry } : { page, bot } }),
   closeSettings: () => set({ settings: null }),
   executorEditor: null,
   openExecutorEditor: (assistantId, prefill = null) =>

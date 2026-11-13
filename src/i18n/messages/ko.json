@@ -8467,6 +8467,16 @@
         "level_brief": {
           "title": "아침 브리핑과 하루 마무리",
           "hint": "아침 브리핑이나 하루 마무리가 준비됐어요."
+        },
+        "flush": {
+          "title": "정리 전에 메모",
+          "hint": "codeg가 어시스턴트의 컨텍스트를 정리하기 전에 오늘 지금까지의 요점을 로그에 적게 해요. 남길 만한 게 사라지지 않아요. 최대 2분이고, 그다음엔 그대로 정리해요.",
+          "on": "켜기",
+          "off": "끄기"
+        },
+        "level_memory": {
+          "title": "기억 변경",
+          "hint": "어시스턴트가 기억, 페르소나 또는 규칙을 바꿨어요."
         }
       },
       "workdir": {
@@ -8587,7 +8597,8 @@
       "compacting": "컨텍스트 정리 중…",
       "waiting": "확인을 기다리는 중",
       "elsewhere": "다른 프로세스에서 실행 중(읽기 전용)",
-      "open": "상태 보기"
+      "open": "상태 보기",
+      "noting": "요점 메모 중…"
     },
     "menu": {
       "more": "더 보기",
@@ -8759,7 +8770,8 @@
       "turnFailed": "답장이 실패했습니다: {error}",
       "turnInterrupted": "답장이 완료되지 않았습니다",
       "turnPreempted": "답장이 보낸 메시지에 자리를 내주었습니다",
-      "workdirChanged": "작업 디렉터리를 {path}(으)로 옮겼습니다"
+      "workdirChanged": "작업 디렉터리를 {path}(으)로 옮겼습니다",
+      "notesFirst": " · 먼저 요점 메모"
     },
     "matters": {
       "noneOpen": "지금 진행 중인 일이 없습니다.",
@@ -9129,7 +9141,8 @@
       "awaitingReply": "{name}의 답장 기다리는 중",
       "needsAnswer": "내 답변 필요",
       "needsApproval": "내 승인 필요",
-      "workPrefix": "#{id} {title}: {activity}"
+      "workPrefix": "#{id} {title}: {activity}",
+      "notes": "정리 전에 오늘의 요점 메모"
     },
     "did": {
       "edit": "{target} 수정함 +{added} −{removed}",
@@ -9167,7 +9180,8 @@
       "question": "나에게 질문함: {target}",
       "questionSome": "나에게 질문함",
       "other": "{target}",
-      "otherPlain": "한 단계 진행함"
+      "otherPlain": "한 단계 진행함",
+      "notes": "오늘의 요점을 메모했어요"
     },
     "needs": {
       "answer": "내 답변 필요: {text}",
@@ -9421,7 +9435,9 @@
         "forge": "포지에서 한 일",
         "pr_ready": "병합 가능",
         "pr_merged": "PR 병합됨",
-        "pr": "지켜보는 PR"
+        "pr": "지켜보는 PR",
+        "memory": "기억했어요",
+        "memoryUndone": "기억했다가 되돌림"
       },
       "session": {
         "permission": "승인 대기",
@@ -10025,6 +10041,33 @@
         "answered": "답장: {text}",
         "open": "아직 답장 없음"
       }
+    },
+    "memory": {
+      "title": "기억했어요",
+      "undoneTitle": "이 기억 변경을 되돌렸어요",
+      "added": "{count}개 추가",
+      "updated": "{count}개 업데이트",
+      "removed": "{count}개 삭제",
+      "changedFile": "{file} 변경",
+      "sep": " · ",
+      "listSep": ", ",
+      "file": {
+        "index": "기억 색인",
+        "user": "당신의 프로필",
+        "soul": "페르소나",
+        "rules": "규칙"
+      },
+      "status": {
+        "added": "추가",
+        "modified": "업데이트",
+        "deleted": "삭제"
+      },
+      "kept": "그 뒤에 다시 바뀌어 그대로 뒀어요: {files}",
+      "showDiff": "변경 내용 보기",
+      "hideDiff": "변경 내용 숨기기",
+      "diffCut": "변경 내용의 앞부분만 보여요.",
+      "undo": "되돌리기",
+      "used": "사용한 기억:"
     }
   }
 }

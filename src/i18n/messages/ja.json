@@ -8467,6 +8467,16 @@
         "level_brief": {
           "title": "朝のまとめと 1 日のまとめ",
           "hint": "朝のまとめ、または 1 日のまとめができました。"
+        },
+        "flush": {
+          "title": "整理前にメモ",
+          "hint": "codeg がアシスタントのコンテキストを整理する前に、今日ここまでの要点をログに書き留めさせます。残すべきことが失われません。最長 2 分で、その後はいつもどおり整理します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "level_memory": {
+          "title": "記憶の更新",
+          "hint": "アシスタントが記憶・人格設定・ルールを変えました。"
         }
       },
       "workdir": {
@@ -8587,7 +8597,8 @@
       "compacting": "コンテキストを整理中…",
       "waiting": "あなたの確認待ち",
       "elsewhere": "別のプロセスで実行中（読み取り専用）",
-      "open": "状態を表示"
+      "open": "状態を表示",
+      "noting": "要点をメモ中…"
     },
     "menu": {
       "more": "その他",
@@ -8759,7 +8770,8 @@
       "turnFailed": "返信に失敗しました：{error}",
       "turnInterrupted": "返信が完了しませんでした",
       "turnPreempted": "返信があなたのメッセージに道を譲りました",
-      "workdirChanged": "作業ディレクトリを {path} に移しました"
+      "workdirChanged": "作業ディレクトリを {path} に移しました",
+      "notesFirst": "（先に要点をメモ）"
     },
     "matters": {
       "noneOpen": "現在進行中のものはありません。",
@@ -9129,7 +9141,8 @@
       "awaitingReply": "{name} の返信待ち",
       "needsAnswer": "あなたの回答が必要",
       "needsApproval": "あなたの承認が必要",
-      "workPrefix": "#{id} {title}：{activity}"
+      "workPrefix": "#{id} {title}：{activity}",
+      "notes": "整理の前に今日の要点をメモ"
     },
     "did": {
       "edit": "{target} を編集しました +{added} −{removed}",
@@ -9167,7 +9180,8 @@
       "question": "あなたに質問しました：{target}",
       "questionSome": "あなたに質問しました",
       "other": "{target}",
-      "otherPlain": "1 ステップ進めました"
+      "otherPlain": "1 ステップ進めました",
+      "notes": "今日の要点をメモした"
     },
     "needs": {
       "answer": "あなたの回答が必要：{text}",
@@ -9421,7 +9435,9 @@
         "forge": "フォージでの操作",
         "pr_ready": "マージ可能",
         "pr_merged": "PR マージ済み",
-        "pr": "見守り中の PR"
+        "pr": "見守り中の PR",
+        "memory": "覚えました",
+        "memoryUndone": "覚えたが取り消し"
       },
       "session": {
         "permission": "承認待ち",
@@ -10025,6 +10041,33 @@
         "answered": "返答: {text}",
         "open": "まだ返答なし"
       }
+    },
+    "memory": {
+      "title": "覚えました",
+      "undoneTitle": "この記憶の更新を取り消しました",
+      "added": "{count} 件追加",
+      "updated": "{count} 件更新",
+      "removed": "{count} 件削除",
+      "changedFile": "{file}を変更",
+      "sep": "・",
+      "listSep": "、",
+      "file": {
+        "index": "記憶のインデックス",
+        "user": "あなたのプロフィール",
+        "soul": "人格設定",
+        "rules": "ルール"
+      },
+      "status": {
+        "added": "追加",
+        "modified": "更新",
+        "deleted": "削除"
+      },
+      "kept": "その後また変更されたため残しました：{files}",
+      "showDiff": "差分を表示",
+      "hideDiff": "差分を隠す",
+      "diffCut": "差分の先頭だけを表示しています。",
+      "undo": "元に戻す",
+      "used": "使った記憶："
     }
   }
 }

@@ -83,6 +83,10 @@ pub enum NoticeKind {
     /// (6.4): nothing to answer, its rows open what they are about.
     #[sea_orm(string_value = "brief")]
     Brief,
+    /// What a turn changed in the assistant's memory, persona or rules
+    /// (7.7): the files and the diff, and the way to take it back.
+    #[sea_orm(string_value = "memory")]
+    Memory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
