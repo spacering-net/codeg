@@ -198,10 +198,7 @@ describe("GitLab repository Markdown", () => {
     rerender(preview(`![shot](${UPLOAD})`, 8))
     await screen.findByRole("img", { name: "shot" })
     await act(async () => finish({ mime_type: "image/png", url: "OLD" }))
-    expect(container.querySelector("img")).toHaveAttribute(
-      "src",
-      IMAGE.url
-    )
+    expect(container.querySelector("img")).toHaveAttribute("src", IMAGE.url)
     expect(mocks.read).toHaveBeenCalledWith(8, UPLOAD)
   })
 })
