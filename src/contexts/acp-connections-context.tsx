@@ -5110,6 +5110,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         streamingEvents += events.length
       }
 
+      let runtimeDetailTurns = 0
+      let runtimeLocalTurns = 0
+      let runtimeBackgroundTurns = 0
+      let runtimeOptimisticTurns = 0
+      let runtimePendingBackgroundSettlements = 0
+      let runtimeLiveBlocks = 0
+      const runtimeSessions =
+        useConversationRuntimeStore.getState().byConversationId
+      for (const session of runtimeSessions.values()) {
+        runtimeDetailTurns += session.detail?.turns.length ?? 0
+        runtimeLocalTurns += session.localTurns.length
+        runtimeBackgroundTurns += session.backgroundTurns.length
+        runtimeOptimisticTurns += session.optimisticTurns.length
+        runtimePendingBackgroundSettlements +=
+          session.pendingBackgroundSettlements.length
+        runtimeLiveBlocks += session.liveMessage?.content.length ?? 0
+      }
+
       const openKeys = new Set(openTabKeysRef.current)
       for (const keys of extraLiveKeysRef.current.values()) {
         for (const key of keys) openKeys.add(key)
@@ -5129,6 +5147,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         streamingEvents,
         pendingToolUpdates: pendingToolCallUpdates.current.length,
         eventSubscribers: eventSubscribersRef.current.size,
+        runtimeSessions: runtimeSessions.size,
+        runtimeDetailTurns,
+        runtimeLocalTurns,
+        runtimeBackgroundTurns,
+        runtimeOptimisticTurns,
+        runtimePendingBackgroundSettlements,
+        runtimeLiveBlocks,
+        overlayFoldRefetchEntries: overlayFoldRefetchAt.size,
+        selectorsCacheEntries: selectorsCache.size,
       }
     })
     return unregister
