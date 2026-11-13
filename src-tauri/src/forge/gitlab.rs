@@ -79,7 +79,54 @@ async fn read_image_in(
     let key = super::image_cache::cache_key(&[
         "gitlab", &auth.api_base, &auth.account_id, &auth.token, &project, &url,
     ]);
-    super::image_cache::get_or_download(cache_root, key, max_bytes, || api_get(auth, &url)).await
+    super::image_cache::get_or_download(cache_root, key, max_bytes, || image_get(auth, &url)).await
+}
+
+/// A file in object storage is answered, in GitLab's default "direct" download
+/// mode, with a redirect to a signed storage URL on another origin. The shared
+/// client stops there so `PRIVATE-TOKEN` never leaves GitLab's origin; follow
+/// that one hop here without any credential. The URL's signature is the
+/// authorization, exactly as when a browser follows the same redirect.
+async fn image_get(auth: &ResolvedAuth, url: &str) -> Result<reqwest::Response, ForgeError> {
+    let client = super::http_client()?;
+    let response = client
+        .get(url)
+        .header("PRIVATE-TOKEN", &auth.token)
+        .header("User-Agent", "codeg")
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| ForgeError::Network(e.to_string()))?;
+    if !response.status().is_redirection() {
+        return finish(response).await;
+    }
+    let status = response.status().as_u16();
+    let location = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| response.url().join(value).ok())
+        .filter(|location| matches!(location.scheme(), "http" | "https"))
+        .ok_or_else(|| ForgeError::Api {
+            status,
+            message: "GitLab redirected the image download to an invalid location".into(),
+        })?;
+    // No credential header on this request. A further cross-origin redirect
+    // stops in the shared client and is reported as a failed download.
+    let storage = client
+        .get(location)
+        .header("User-Agent", "codeg")
+        .send()
+        .await
+        .map_err(|e| ForgeError::Network(e.without_url().to_string()))?;
+    if storage.status().is_success() {
+        Ok(storage)
+    } else {
+        Err(ForgeError::Api {
+            status: storage.status().as_u16(),
+            message: "Object storage image download failed".into(),
+        })
+    }
 }
 
 /// Accept upload coordinates only, never a client-supplied host, repository or
@@ -1705,6 +1752,84 @@ mod tests {
                 "/gitlab/api/v4/projects/group%2Fsub%2Fproj/uploads/b1f62467989935311a5735eff346a6c7/%E5%9B%BE%20%231.png".into(),
                 "tok-test".into(),
             )]
+        );
+    }
+
+    #[tokio::test]
+    async fn image_download_follows_object_storage_redirect_without_the_token() {
+        let cache = tempfile::tempdir().unwrap();
+        let png = STANDARD.decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6TAAAAABJRU5ErkJggg==",
+        )
+        .unwrap();
+        type Seen = Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+        let storage_seen: Seen = Default::default();
+        let captured = storage_seen.clone();
+        let body = png.clone();
+        let storage = axum::Router::new().route(
+            "/bucket/{*path}",
+            get(
+                move |axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+                      headers: axum::http::HeaderMap| {
+                    let captured = captured.clone();
+                    let body = body.clone();
+                    async move {
+                        captured.lock().unwrap().push((
+                            uri.to_string(),
+                            headers
+                                .get("private-token")
+                                .map(|v| v.to_str().unwrap().to_string()),
+                        ));
+                        axum::http::Response::builder()
+                            .header("content-type", "image/png")
+                            .body(axum::body::Body::from(body))
+                            .unwrap()
+                    }
+                },
+            ),
+        );
+        let storage_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let storage_addr = storage_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(storage_listener, storage).await.unwrap() });
+
+        // A different port is a different origin: the shared client stops at
+        // this redirect, as it would at an S3/GCS host.
+        let signed = format!("http://{storage_addr}/bucket/image.png?X-Amz-Signature=abc");
+        let gitlab_seen = Arc::new(AtomicUsize::new(0));
+        let hits = gitlab_seen.clone();
+        let gitlab = axum::Router::new().route(
+            "/{*path}",
+            get(move |headers: axum::http::HeaderMap| {
+                let hits = hits.clone();
+                let signed = signed.clone();
+                async move {
+                    assert_eq!(headers.get("private-token").unwrap(), "tok-test");
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    axum::http::Response::builder()
+                        .status(302)
+                        .header("location", signed)
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                }
+            }),
+        );
+        let gitlab_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let gitlab_addr = gitlab_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(gitlab_listener, gitlab).await.unwrap() });
+
+        let auth = auth_for(format!("http://{gitlab_addr}/api/v4"));
+        let image = read_image_in(&auth, "group/proj", IMAGE_UPLOAD, cache.path(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(
+            std::fs::read(super::super::image_cache::cached_path(&image)).unwrap(),
+            png
+        );
+        assert_eq!(gitlab_seen.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *storage_seen.lock().unwrap(),
+            vec![("/bucket/image.png?X-Amz-Signature=abc".to_string(), None)]
         );
     }
 
