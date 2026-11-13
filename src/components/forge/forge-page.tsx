@@ -72,6 +72,7 @@ import {
 import { OPEN_FORGE_SETTINGS_EVENT } from "@/components/forge/forge-chrome-actions"
 import { GIT_TOOLBAR_ICON_BUTTON_CLASS } from "@/components/layout/git-toolbar-controls"
 import { ForgeIssueDetailSheet } from "@/components/forge/forge-issue-detail-sheet"
+import { ForgeMarkdownProvider } from "@/components/forge/forge-markdown"
 import { ForgeCombineDialog } from "@/components/forge/forge-combine-dialog"
 import {
   ForgeIssueRowItem,
@@ -2161,28 +2162,30 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
           the panel open behind the dialog, and comes back to a footer that now
           carries the new task's chip. (The drawer survives the dialog on its
           own — see the Radix-layer shield in `drawer.tsx`.) */}
-      <ForgeIssueDetailSheet
-        row={detail}
-        link={detail != null ? linkFor(detail) : null}
-        // The panel's comment thread needs one coordinate the row does not
-        // carry: which folder's remote the item belongs to. Same value the
-        // list was fetched with, so a folder switch (which closes the panel —
-        // see the reset effect above) cannot leave the two disagreeing.
-        folderId={effectiveFolderId}
-        // CNB's issue list carries no description; the panel reads the item
-        // itself when it opens. Every other forge ships the body with the row.
-        issueBodyOnDemand={remote?.provider === "cnb"}
-        onOpenChange={(open) => {
-          if (!open) setDetailRow(null)
-        }}
-        onStart={() => {
-          if (detail != null) setStartRow(detail)
-        }}
-        onRowUpdated={adoptRow}
-        onCommentPosted={countComment}
-        tabRequest={checksTabRequest}
-        onChecksChanged={(number) => void fetchChecks([number])}
-      />
+      <ForgeMarkdownProvider folderId={effectiveFolderId} remote={remote}>
+        <ForgeIssueDetailSheet
+          row={detail}
+          link={detail != null ? linkFor(detail) : null}
+          // The panel's comment thread needs one coordinate the row does not
+          // carry: which folder's remote the item belongs to. Same value the
+          // list was fetched with, so a folder switch (which closes the panel —
+          // see the reset effect above) cannot leave the two disagreeing.
+          folderId={effectiveFolderId}
+          // CNB's issue list carries no description; the panel reads the item
+          // itself when it opens. Every other forge ships the body with the row.
+          issueBodyOnDemand={remote?.provider === "cnb"}
+          onOpenChange={(open) => {
+            if (!open) setDetailRow(null)
+          }}
+          onStart={() => {
+            if (detail != null) setStartRow(detail)
+          }}
+          onRowUpdated={adoptRow}
+          onCommentPosted={countComment}
+          tabRequest={checksTabRequest}
+          onChecksChanged={(number) => void fetchChecks([number])}
+        />
+      </ForgeMarkdownProvider>
 
       {readable != null && effectiveFolderId != null ? (
         <ForgeNewIssueDialog

@@ -37,7 +37,7 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react"
-import { MessageResponse } from "@/components/ai-elements/message"
+import { ForgeMarkdown } from "@/components/forge/forge-markdown"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import {
   UnifiedDiffPreview,
@@ -979,7 +979,7 @@ function CommentCard({ comment }: { comment: ForgeComment }) {
         </header>
         {body ? (
           <div className="break-words px-3 py-2 text-[0.8125rem] leading-relaxed">
-            <MessageResponse className={BODY_MARKDOWN}>{body}</MessageResponse>
+            <ForgeMarkdown className={BODY_MARKDOWN}>{body}</ForgeMarkdown>
           </div>
         ) : (
           <p className="px-3 py-2 text-xs italic text-muted-foreground">
@@ -2434,9 +2434,7 @@ function Conversation({
             // come out as the author wrote them, and link clicks go through
             // the app's link-safety routing rather than the webview.
             <div className="break-words text-[0.8125rem] leading-relaxed">
-              <MessageResponse className={BODY_MARKDOWN}>
-                {body}
-              </MessageResponse>
+              <ForgeMarkdown className={BODY_MARKDOWN}>{body}</ForgeMarkdown>
             </div>
           ) : (
             // Left where the text would be, as a comment's own empty body is —

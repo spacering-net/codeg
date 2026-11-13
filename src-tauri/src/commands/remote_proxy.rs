@@ -448,6 +448,52 @@ pub async fn remote_http_call(
     })
 }
 
+/// Cache a previously issued forge image locally. The image URL is a narrow,
+/// capability-bearing resource path, never a caller-supplied host or file.
+#[tauri::command]
+pub async fn remote_cache_forge_image(
+    db: State<'_, AppDatabase>,
+    connection_id: i32,
+    url: String,
+) -> Result<crate::forge::ForgeImage, AppCommandError> {
+    use crate::forge::{image_cache, ForgeError};
+
+    if !image_cache::valid_image_url(&url) {
+        return Err(AppCommandError::invalid_input("Invalid cached forge image URL"));
+    }
+    let conn = remote_workspace_connection_service::get(&db.conn, connection_id)
+        .await
+        .map_err(AppCommandError::db)?
+        .ok_or_else(|| AppCommandError::not_found("Remote connection not found"))?;
+    let endpoint = format!("{}{}", conn.base_url.trim_end_matches('/'), url);
+    let key = image_cache::cache_key(&[
+        "codeg-server", &connection_id.to_string(), &conn.base_url, &conn.token, &url,
+    ]);
+    let client = crate::forge::http_client()?;
+    let image = image_cache::get_or_download(
+        &crate::paths::codeg_forge_images_root(),
+        key,
+        image_cache::IMAGE_MAX_BYTES,
+        || async {
+            let response = client.get(endpoint)
+                .bearer_auth(conn.token.trim())
+                .headers(conn.headers.to_header_map())
+                .header("X-Requested-With", "XMLHttpRequest")
+                .send().await
+                .map_err(|error| ForgeError::Network(error.without_url().to_string()))?;
+            match response.status().as_u16() {
+                200 => Ok(response),
+                401 => Err(ForgeError::Auth("Remote workspace token was rejected".into())),
+                status => Err(ForgeError::Api { status, message: "Remote image download failed".into() }),
+            }
+        },
+    ).await.map_err(|error| match error {
+        ForgeError::Auth(message) => AppCommandError::authentication_failed(message),
+        error => error.into(),
+    })?;
+    Ok(image_cache::local_image_url(image).await?)
+}
+
 // ─── Multipart upload proxy ───────────────────────────────────────────
 
 /// Hard ceiling for `read_local_file_for_upload`. Mirrors the server-side

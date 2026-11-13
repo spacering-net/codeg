@@ -12,12 +12,20 @@ pub mod envelope;
 pub mod gitea;
 pub mod github;
 pub mod gitlab;
+pub(crate) mod image_cache;
 pub mod settings;
 pub mod thread_reply;
 
 use std::sync::RwLock;
 
 pub use auth::{host_profile, resolve_forge_auth, strip_base_path, HostProfile, ResolvedAuth};
+
+/// Cached image resource. Neither credentials nor image bytes cross JSON/IPC.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ForgeImage {
+    pub mime_type: String,
+    pub url: String,
+}
 
 /// The forge a host speaks. Everything provider-specific downstream — REST
 /// base, auth header, the shape of a "pull request", which ref a proposed

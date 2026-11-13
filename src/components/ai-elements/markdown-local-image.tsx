@@ -191,7 +191,7 @@ function LocalMarkdownImage({
   )
 }
 
-function MarkdownImageSpan({
+export function MarkdownImageSpan({
   // The parser node is not a DOM attribute.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   node: _node,

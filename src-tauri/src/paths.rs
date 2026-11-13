@@ -108,6 +108,12 @@ pub fn codeg_uploads_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(CODEG_DIR_NAME).join(UPLOADS_DIR_NAME))
 }
 
+/// Disposable forge image files, beside uploads under the active data root.
+/// Entries expire after seven days and the cache has a bounded disk budget.
+pub fn codeg_forge_images_root() -> PathBuf {
+    codeg_uploads_root().with_file_name("cache").join("forge-images")
+}
+
 /// Root directory for the user-selected workspace background image.
 ///
 /// Resolution mirrors [`codeg_pets_root`] exactly:
