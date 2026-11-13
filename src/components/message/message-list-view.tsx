@@ -88,6 +88,7 @@ import {
   Plus,
   RefreshCw,
   ListTodo,
+  Undo2Icon,
 } from "lucide-react"
 import { useCreateTaskFromMessage } from "./use-create-task-from-message"
 import { Button } from "@/components/ui/button"
@@ -232,6 +233,7 @@ interface MessageListViewProps {
    * (see `forkBusy`) rather than making every reply's footer flicker.
    */
   onForkFromTurn?: (turnId: string) => void
+  onUndoToPoint?: (turnId: string, userTurnIndex: number) => void
   /**
    * The connection's work that can outlive a turn, for the "N running" chip
    * on the live activity row above the composer (see `LiveRunsChip`). Every
@@ -284,6 +286,7 @@ export type ThreadRenderItem =
       isResponseComplete: boolean
       showStats: boolean
       isRoleTransition: boolean
+      userTurnIndex?: number
       previousUserIndex: number | null
       /** The newest assistant reply in the thread. Together with the view's
        *  `armed` flag this is what makes a run "the current round" — see the
@@ -1140,6 +1143,37 @@ export function mergeConsecutiveAssistantTurns(
   return result
 }
 
+const UserMessageUndoButton = memo(function UserMessageUndoButton({
+  turnId,
+  userTurnIndex,
+  disabled,
+  onUndoToPoint,
+}: {
+  turnId: string
+  userTurnIndex: number
+  disabled?: boolean
+  onUndoToPoint: (turnId: string, userTurnIndex: number) => void
+}) {
+  const t = useTranslations("Folder.chat.messageList")
+  const handleClick = useCallback(() => {
+    if (disabled) return
+    onUndoToPoint(turnId, userTurnIndex)
+  }, [disabled, onUndoToPoint, turnId, userTurnIndex])
+
+  return (
+    <MessageAction
+      tooltip={disabled ? t("undoBusy") : t("undoToThisPoint")}
+      aria-label={t("undoToThisPoint")}
+      className="opacity-0 group-hover/user-msg:opacity-100 transition-opacity self-end"
+      onClick={handleClick}
+      disabled={disabled}
+      size="icon-xs"
+    >
+      <Undo2Icon size={12} />
+    </MessageAction>
+  )
+})
+
 const UserMessageCopyButton = memo(function UserMessageCopyButton({
   parts,
 }: {
@@ -1267,7 +1301,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   onRoundOpenChange,
   foldEpoch = 0,
   onForkFromTurn,
+  onUndoToPoint,
   forkDisabled = false,
+  userTurnIndex = 0,
   isThreadTail = false,
 }: {
   group: ResolvedMessageGroup
@@ -1281,7 +1317,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   onRoundOpenChange?: (open: boolean) => void
   foldEpoch?: number
   onForkFromTurn?: (turnId: string) => void
+  onUndoToPoint?: (turnId: string, userTurnIndex: number) => void
   forkDisabled?: boolean
+  userTurnIndex?: number
   /** Whether nothing follows this group in the thread — the one position where
    *  a turn the backend cannot name still forks where the user pointed. */
   isThreadTail?: boolean
@@ -1321,6 +1359,18 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
         ) : null}
         {group.role === "user" ? (
           <div className="group/user-msg flex w-fit ml-auto max-w-full items-start gap-1">
+            {onUndoToPoint && !dimmed ? (
+              <UserMessageUndoButton
+                turnId={
+                  sourceTurns?.[0]?.source_turn_id ??
+                  sourceTurns?.[0]?.id ??
+                  group.id
+                }
+                userTurnIndex={userTurnIndex}
+                disabled={forkDisabled}
+                onUndoToPoint={onUndoToPoint}
+              />
+            ) : null}
             <UserMessageTaskButton parts={group.parts} />
             <UserMessageCopyButton parts={group.parts} />
             <MessageContent>
@@ -1509,6 +1559,7 @@ export function MessageListView({
   onAskSelection,
   onSaveNoteSelection,
   onForkFromTurn,
+  onUndoToPoint,
   liveRuns = null,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
@@ -1719,6 +1770,7 @@ export function MessageListView({
     // previousUserIndex points at the closest preceding user turn (used by the
     // post-stream stats row's "jump to previous user message" button).
     let lastUserIdx: number | null = null
+    let userTurnCount = 0
     let lastAssistantItem: AssistantTurnItem | null = null
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx]
@@ -1742,6 +1794,7 @@ export function MessageListView({
 
       if (item.group.role === "user") {
         lastUserIdx = idx
+        item.userTurnIndex = userTurnCount++
       }
 
       // showStats: only on the last assistant turn before a non-assistant or end
@@ -1858,6 +1911,8 @@ export function MessageListView({
                 onRoundOpenChange={handleRoundOpenChange}
                 foldEpoch={fold.epoch}
                 onForkFromTurn={onForkFromTurn}
+                onUndoToPoint={onUndoToPoint}
+                userTurnIndex={item.userTurnIndex ?? 0}
                 forkDisabled={forkBusy}
                 isThreadTail={item.isThreadTail}
               />
@@ -1894,6 +1949,7 @@ export function MessageListView({
       fold.epoch,
       handleRoundOpenChange,
       onForkFromTurn,
+      onUndoToPoint,
       forkBusy,
     ]
   )

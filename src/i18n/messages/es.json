@@ -2360,7 +2360,9 @@
         "toolError": "Error",
         "turnFailed": "Turno fallido"
       },
-      "moreActions": "Más acciones"
+      "moreActions": "Más acciones",
+      "undoSessionFailed": "No se pudo revertir hasta este punto: {error}",
+      "undoSessionBusy": "No se puede revertir mientras hay un turno en curso"
     },
     "sessionDetails": {
       "menuLabel": "Detalles de la sesión",
@@ -3842,7 +3844,9 @@
         "jumpToPreviousUserMessage": "Ir al mensaje del usuario",
         "showMore": "Mostrar más",
         "showLess": "Mostrar menos",
-        "resizeWidth": "Arrastra para cambiar el ancho del chat · doble clic para restablecer"
+        "resizeWidth": "Arrastra para cambiar el ancho del chat · doble clic para restablecer",
+        "undoToThisPoint": "Revertir hasta este punto",
+        "undoBusy": "No se puede revertir mientras hay un turno en curso"
       },
       "liveTurnStats": {
         "elapsedHours": "{value} h",

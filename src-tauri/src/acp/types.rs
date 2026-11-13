@@ -2390,6 +2390,16 @@ pub struct ForkResultInfo {
     pub sibling_conversation_id: i32,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoToPointResult {
+    pub new_session_id: Option<String>,
+    pub restored_workspace: bool,
+    pub context_rewound_natively: bool,
+    pub restored_prompt_text: String,
+    pub warning: Option<String>,
+}
+
 #[cfg(test)]
 mod envelope_tests {
     use super::*;

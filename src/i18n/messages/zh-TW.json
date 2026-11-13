@@ -2360,7 +2360,9 @@
         "toolError": "錯誤",
         "turnFailed": "本輪失敗"
       },
-      "moreActions": "更多操作"
+      "moreActions": "更多操作",
+      "undoSessionFailed": "回滾失敗：{error}",
+      "undoSessionBusy": "回滾失敗：目前有回合正在進行"
     },
     "sessionDetails": {
       "menuLabel": "對話詳情",
@@ -3842,7 +3844,9 @@
         "jumpToPreviousUserMessage": "跳轉到上一條使用者訊息",
         "showMore": "展開",
         "showLess": "收合",
-        "resizeWidth": "拖曳調整聊天區域寬度 · 雙擊恢復預設"
+        "resizeWidth": "拖曳調整聊天區域寬度 · 雙擊恢復預設",
+        "undoToThisPoint": "回滾到此節點",
+        "undoBusy": "目前有回合正在進行，暫不可回滾"
       },
       "liveTurnStats": {
         "elapsedHours": "{value} 小時",

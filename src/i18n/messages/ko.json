@@ -2360,7 +2360,9 @@
         "toolError": "오류",
         "turnFailed": "턴 실패"
       },
-      "moreActions": "추가 작업"
+      "moreActions": "추가 작업",
+      "undoSessionFailed": "이 시점으로 되돌리기 실패: {error}",
+      "undoSessionBusy": "턴이 진행 중일 때는 되돌릴 수 없습니다"
     },
     "sessionDetails": {
       "menuLabel": "세션 세부 정보",
@@ -3842,7 +3844,9 @@
         "jumpToPreviousUserMessage": "이전 사용자 메시지로 이동",
         "showMore": "더보기",
         "showLess": "접기",
-        "resizeWidth": "드래그하여 채팅 너비 조정 · 더블 클릭하여 초기화"
+        "resizeWidth": "드래그하여 채팅 너비 조정 · 더블 클릭하여 초기화",
+        "undoToThisPoint": "이 시점으로 되돌리기",
+        "undoBusy": "턴이 진행 중일 때는 되돌릴 수 없습니다"
       },
       "liveTurnStats": {
         "elapsedHours": "{value}시간",

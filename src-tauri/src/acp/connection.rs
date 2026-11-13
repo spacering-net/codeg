@@ -1380,6 +1380,12 @@ pub enum ConnectionCommand {
         reply:
             tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
     },
+    /// Open a fresh `session/new` on the existing agent connection, used when
+    /// rolling back to turn 0 or when an agent does not support `session/fork`.
+    ResetSession {
+        reply:
+            tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
+    },
     /// Inject a live-feedback message into the RUNNING turn over the ACP
     /// `_session/steering` extension (native push channel — see
     /// `manager::submit_feedback`). Carries the same `PromptInputBlock`s a
@@ -16399,6 +16405,61 @@ async fn run_conversation_loop(
                     }
                     Err(e) => {
                         tracing::error!("[ACP] Fork failed: {e}");
+                        let _ = reply.send(Err(e));
+                    }
+                }
+            }
+            Some(ConnectionCommand::ResetSession { reply }) => {
+                if cb_state.grok_agent_turn.is_some() {
+                    let _ = reply.send(Err(AcpError::TurnInProgress));
+                    continue;
+                }
+                let cx = session.connection();
+                let sid = session.session_id().clone();
+                let inherited_mode_id =
+                    live_mode_for_fork(&*state.read().await, session.modes().as_ref());
+                state.write().await.grok_catalog_broadcast = None;
+                let claude = state.read().await.claude_session_options();
+                let req = new_session_request_for(
+                    agent_type,
+                    std::path::Path::new(cwd),
+                    mcp_servers.to_vec(),
+                    &claude,
+                    false,
+                );
+                let res: Result<
+                    (
+                        agent_client_protocol::schema::v1::NewSessionResponse,
+                        Option<serde_json::Value>,
+                    ),
+                    AcpError,
+                > = send_capturing_models(
+                    &cx,
+                    agent_client_protocol::schema::v1::AGENT_METHOD_NAMES.session_new,
+                    req,
+                )
+                .await
+                .map_err(|e| AcpError::protocol(agent_error_text(&e)));
+                match res {
+                    Ok((new_resp, models_raw)) => {
+                        let mut fork_response =
+                            agent_client_protocol::schema::v1::ForkSessionResponse::new(
+                                new_resp.session_id,
+                            );
+                        fork_response.modes = new_resp.modes;
+                        fork_response.models = new_resp.models;
+                        fork_response.config_options = new_resp.config_options;
+                        return Ok(Some(ForkExitInfo {
+                            fork_response,
+                            fork_models_raw: models_raw,
+                            inherited_mode_id,
+                            original_session_id: sid.0.to_string(),
+                            reply,
+                            connection: cx,
+                        }));
+                    }
+                    Err(e) => {
+                        tracing::error!("[ACP] ResetSession failed: {e}");
                         let _ = reply.send(Err(e));
                     }
                 }

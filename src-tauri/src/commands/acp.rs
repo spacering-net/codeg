@@ -12471,6 +12471,27 @@ pub async fn acp_fork(
         .await
 }
 
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_undo_to_point(
+    connection_id: Option<String>,
+    conversation_id: i32,
+    turn_id: String,
+    user_turn_index: Option<i32>,
+    db: State<'_, AppDatabase>,
+    manager: State<'_, ConnectionManager>,
+) -> Result<crate::acp::types::UndoToPointResult, AcpError> {
+    manager
+        .undo_to_point(
+            &db,
+            connection_id.as_deref(),
+            conversation_id,
+            &turn_id,
+            user_turn_index,
+        )
+        .await
+}
+
 /// Stop one AIR async task. `Ok(false)` = the adapter declined (unknown,
 /// already terminal, or a stop already in flight) — a real answer, not a
 /// failure.

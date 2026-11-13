@@ -31,6 +31,7 @@ use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
 use crate::acp::types::{
     AcpEvent, AgentOptionsSnapshot, ConfigStaleKind, ConnectionInfo, ConnectionStatus,
     ForkResultInfo, PermissionAnswerOrigin, PromptCapabilitiesInfo, PromptInputBlock,
+    UndoToPointResult,
 };
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::service::conversation_service;
@@ -221,6 +222,46 @@ fn is_reserved_turn_id(id: &str) -> bool {
 /// Build the bounded preview string for a `user_prompt_sent` notification from
 /// the `Text` blocks of a user prompt. Joins the (trimmed, non-empty) text
 /// blocks with a space and caps the kept text at `USER_PROMPT_PREVIEW_MAX_CHARS`
+fn build_rollback_context_notice(turns: &[crate::models::message::MessageTurn]) -> String {
+    let mut lines = Vec::new();
+    lines.push(
+        "[System Notice: The user rolled back this conversation and restored the workspace files \
+         to the state right after the turns below. Subsequent turns were discarded. Continue from \
+         this state:]"
+            .to_string(),
+    );
+    let mut total_chars = 0usize;
+    const MAX_HISTORY_CHARS: usize = 12_000;
+    for turn in turns {
+        let role = match turn.role {
+            crate::models::message::TurnRole::User => "User",
+            crate::models::message::TurnRole::Assistant => "Assistant",
+            crate::models::message::TurnRole::System => "System",
+        };
+        let text = turn
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                crate::models::message::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let snippet = crate::parsers::truncate_str(trimmed, 1500);
+        total_chars += snippet.len();
+        lines.push(format!("{role}: {snippet}"));
+        if total_chars >= MAX_HISTORY_CHARS {
+            lines.push("... (earlier/later history truncated)".to_string());
+            break;
+        }
+    }
+    lines.join("\n\n")
+}
+
 /// chars (a `...` marker is appended past the cap). Returns `None` when the
 /// prompt carries no text (e.g. image-only) — the notification fires for text
 /// messages only.
@@ -1519,7 +1560,7 @@ impl ConnectionManager {
         conversation_id: Option<i32>,
         delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
-        internal_suffix: Vec<PromptInputBlock>,
+        mut internal_suffix: Vec<PromptInputBlock>,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -1976,6 +2017,68 @@ impl ConnectionManager {
             } else {
                 None
             };
+
+        if delegation.is_none() {
+            if let Some(conv_id) = conversation_id_for_status {
+                if let Ok(Some(notice)) =
+                    crate::db::service::conversation_rollback_service::take_pending_context_notice(
+                        &db.conn, conv_id,
+                    )
+                    .await
+                {
+                    internal_suffix.insert(0, PromptInputBlock::Text { text: notice });
+                }
+
+                let prompt_text_for_cp = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        PromptInputBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let cp_turn_id = user_message
+                    .as_ref()
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_else(|| {
+                        format!("cp-{}-{}", conv_id, chrono::Utc::now().timestamp_millis())
+                    });
+                let cp_turn_index =
+                    crate::db::service::conversation_rollback_service::count_checkpoints(
+                        &db.conn, conv_id,
+                    )
+                    .await
+                    .unwrap_or(0) as i32;
+                let shadow_tree_hash = if let Some(ws_dir) = launch_dir.clone() {
+                    tokio::task::spawn_blocking(move || {
+                        crate::workspace_checkpoint::capture_workspace_snapshot(
+                            std::path::Path::new(&ws_dir),
+                        )
+                    })
+                    .await
+                    .ok()
+                    .and_then(|res| {
+                        res.map_err(|e| tracing::warn!("[checkpoint] snapshot skipped: {e}"))
+                            .ok()
+                    })
+                } else {
+                    None
+                };
+                if let Err(e) = crate::db::service::conversation_rollback_service::record_checkpoint(
+                    &db.conn,
+                    conv_id,
+                    cp_turn_id,
+                    cp_turn_index,
+                    prompt_text_for_cp,
+                    shadow_tree_hash,
+                    None,
+                )
+                .await
+                {
+                    tracing::warn!(conversation_id = conv_id, error = %e, "[checkpoint] failed to record checkpoint");
+                }
+            }
+        }
 
         // We hold `_prompt_guard` here, so call the lock-free inner helper —
         // re-entering `send_prompt` would try to acquire the same mutex and
@@ -2632,6 +2735,265 @@ impl ConnectionManager {
                 )))
             }
         }
+    }
+
+    /// Roll back a conversation in-place to right before the specified user
+    /// turn: restores workspace files from the shadow-git checkpoint, rewinds
+    /// the agent session via `session/fork` (or resets to `session/new` +
+    /// injects a rollback notice + preserved history when `session/fork` is
+    /// unavailable), and returns the undone user prompt text so the frontend
+    /// can prefill the composer.
+    pub async fn undo_to_point(
+        &self,
+        db: &AppDatabase,
+        conn_id: Option<&str>,
+        conversation_id: i32,
+        turn_id: &str,
+        user_turn_index: Option<i32>,
+    ) -> Result<UndoToPointResult, AcpError> {
+        // If a live connection is attached, serialize against concurrent prompts
+        // and reject while a turn is in flight.
+        let mut live_ctx = None;
+        let mut _prompt_guard = None;
+        if let Some(cid) = conn_id {
+            let (state_arc, cmd_tx, emitter) = {
+                let connections = self.connections.lock().await;
+                let conn = connections
+                    .get(cid)
+                    .ok_or_else(|| AcpError::ConnectionNotFound(cid.into()))?;
+                (
+                    conn.state.clone(),
+                    conn.cmd_tx.clone(),
+                    conn.emitter.clone(),
+                )
+            };
+            let prompt_lock = self.clone_prompt_lock(cid).await?;
+            let guard = prompt_lock.lock_owned().await;
+            if state_arc.read().await.turn_in_flight {
+                return Err(AcpError::TurnInProgress);
+            }
+            _prompt_guard = Some(guard);
+            live_ctx = Some((state_arc, cmd_tx, emitter));
+        }
+
+        let (detail, _) =
+            crate::commands::conversations::get_folder_conversation_core(&db.conn, conversation_id)
+                .await
+                .map_err(|e| AcpError::protocol(e.message))?;
+
+        // Locate the target user turn by id, or fallback to `user_turn_index`-th user turn.
+        let target_pos = detail
+            .turns
+            .iter()
+            .position(|t| t.id == turn_id)
+            .or_else(|| {
+                let idx = user_turn_index? as usize;
+                detail
+                    .turns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| matches!(t.role, crate::models::message::TurnRole::User))
+                    .nth(idx)
+                    .map(|(pos, _)| pos)
+            });
+
+        let computed_user_idx = target_pos
+            .map(|pos| {
+                detail.turns[..pos]
+                    .iter()
+                    .filter(|t| matches!(t.role, crate::models::message::TurnRole::User))
+                    .count() as i32
+            })
+            .or(user_turn_index)
+            .unwrap_or(0);
+
+        let preserved_turns: Vec<crate::models::message::MessageTurn> = match target_pos {
+            Some(pos) => detail.turns[..pos].to_vec(),
+            None => Vec::new(),
+        };
+
+        let checkpoint =
+            crate::db::service::conversation_rollback_service::find_checkpoint_for_undo(
+                &db.conn,
+                conversation_id,
+                turn_id,
+                Some(computed_user_idx),
+            )
+            .await
+            .map_err(|e| AcpError::protocol(e.to_string()))?;
+
+        let restored_prompt_text = target_pos
+            .and_then(|pos| detail.turns.get(pos))
+            .map(|t| {
+                t.blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        crate::models::message::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .filter(|s| !s.is_empty())
+            .or_else(|| checkpoint.as_ref().map(|c| c.user_prompt_text.clone()))
+            .unwrap_or_default();
+
+        // 1. Restore workspace files if we have a shadow-git tree hash.
+        let mut restored_workspace = false;
+        let mut warning: Option<String> = None;
+        if let Some(tree_hash) = checkpoint.as_ref().and_then(|c| c.shadow_tree_hash.clone()) {
+            let folder_path = match detail.summary.origin_cwd.clone() {
+                Some(p) => Some(p),
+                None => crate::db::service::folder_service::get_folder_by_id(
+                    &db.conn,
+                    detail.summary.folder_id,
+                )
+                .await
+                .ok()
+                .flatten()
+                .map(|f| f.path),
+            };
+            if let Some(ws) = folder_path {
+                match tokio::task::spawn_blocking(move || {
+                    crate::workspace_checkpoint::restore_workspace_snapshot(
+                        std::path::Path::new(&ws),
+                        &tree_hash,
+                    )
+                })
+                .await
+                {
+                    Ok(Ok(())) => restored_workspace = true,
+                    Ok(Err(e)) => {
+                        tracing::warn!(conversation_id, error = %e, "[undo] workspace restore failed");
+                        warning = Some(format!("Workspace restore failed: {e}"));
+                    }
+                    Err(e) => {
+                        tracing::warn!(conversation_id, error = %e, "[undo] workspace restore task failed");
+                        warning = Some(format!("Workspace restore task failed: {e}"));
+                    }
+                }
+            }
+        } else {
+            warning = Some("No workspace snapshot recorded for this turn; only conversation/context rolled back.".to_string());
+        }
+
+        // 2. Rewind agent context (native session/fork if supported & not turn 0, else ResetSession + notice).
+        let mut new_session_id: Option<String> = None;
+        let mut context_rewound_natively = false;
+        let mut preserved_turns_json: Option<String> = None;
+        let mut pending_context_notice: Option<String> = None;
+
+        if let Some((ref state_arc, ref cmd_tx, _)) = live_ctx {
+            let agent_type = state_arc.read().await.agent_type;
+            let prev_assistant_turn = preserved_turns
+                .iter()
+                .rev()
+                .find(|t| matches!(t.role, crate::models::message::TurnRole::Assistant));
+
+            let fork_point = prev_assistant_turn.and_then(|prev| {
+                crate::acp::fork::resolve_fork_point(&detail.turns, &prev.id, agent_type)
+            });
+
+            if !preserved_turns.is_empty() && fork_point.is_some() {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                if cmd_tx
+                    .send(ConnectionCommand::Fork {
+                        fork_point,
+                        reply: reply_tx,
+                    })
+                    .await
+                    .is_ok()
+                {
+                    if let Ok(Ok(res)) = reply_rx.await {
+                        new_session_id = Some(res.forked_session_id);
+                        context_rewound_natively = true;
+                    }
+                }
+            }
+
+            if !context_rewound_natively {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                if cmd_tx
+                    .send(ConnectionCommand::ResetSession { reply: reply_tx })
+                    .await
+                    .is_ok()
+                {
+                    if let Ok(Ok(res)) = reply_rx.await {
+                        new_session_id = Some(res.forked_session_id);
+                    }
+                }
+                if preserved_turns.is_empty() {
+                    context_rewound_natively = true;
+                    preserved_turns_json = Some("[]".to_string());
+                } else {
+                    preserved_turns_json = serde_json::to_string(&preserved_turns).ok();
+                    pending_context_notice = Some(build_rollback_context_notice(&preserved_turns));
+                }
+            }
+        } else {
+            // Offline rollback: clear external_id so next connect starts fresh,
+            // preserve pre-rollback turns in DB, and queue context notice.
+            if preserved_turns.is_empty() {
+                context_rewound_natively = true;
+                preserved_turns_json = Some("[]".to_string());
+            } else {
+                preserved_turns_json = serde_json::to_string(&preserved_turns).ok();
+                pending_context_notice = Some(build_rollback_context_notice(&preserved_turns));
+            }
+        }
+
+        // 3. Persist updated conversation external_id, rollback state, and prune later checkpoints.
+        {
+            use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+            if let Ok(Some(row)) =
+                crate::db::entities::conversation::Entity::find_by_id(conversation_id)
+                    .one(&db.conn)
+                    .await
+            {
+                let mut active: crate::db::entities::conversation::ActiveModel = row.into();
+                if let Some(ref sid) = new_session_id {
+                    active.external_id = Set(Some(sid.clone()));
+                } else if live_ctx.is_none() {
+                    active.external_id = Set(None);
+                }
+                active.message_count =
+                    Set(crate::parsers::message_turn_count(&preserved_turns));
+                active.updated_at = Set(chrono::Utc::now());
+                let _ = active.update(&db.conn).await;
+            }
+        }
+
+        let _ = crate::db::service::conversation_rollback_service::upsert_rollback_state(
+            &db.conn,
+            conversation_id,
+            preserved_turns_json,
+            pending_context_notice,
+        )
+        .await;
+
+        let _ = crate::db::service::conversation_rollback_service::delete_checkpoints_from(
+            &db.conn,
+            conversation_id,
+            computed_user_idx,
+        )
+        .await;
+
+        if let Some((_, _, ref emitter)) = live_ctx {
+            crate::commands::conversations::emit_conversation_upsert(
+                emitter,
+                &db.conn,
+                conversation_id,
+            )
+            .await;
+        }
+
+        Ok(UndoToPointResult {
+            new_session_id,
+            restored_workspace,
+            context_rewound_natively,
+            restored_prompt_text,
+            warning,
+        })
     }
 
     /// Persist the two-row fork layout: re-point the current row at S2 under a

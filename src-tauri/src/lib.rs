@@ -68,6 +68,7 @@ pub mod turn_timings;
 pub mod update;
 pub mod web;
 pub mod work_task;
+pub mod workspace_checkpoint;
 pub mod workspace_state;
 pub mod workspace_transfer;
 
@@ -2156,6 +2157,7 @@ mod tauri_app {
                 acp_commands::acp_describe_agent_options,
                 acp_commands::acp_cancel,
                 acp_commands::acp_fork,
+                acp_commands::acp_undo_to_point,
                 acp_commands::acp_stop_async_task,
                 acp_commands::acp_respond_permission,
                 acp_commands::acp_answer_question,

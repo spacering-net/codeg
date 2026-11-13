@@ -2360,7 +2360,9 @@
         "toolError": "エラー",
         "turnFailed": "ターン失敗"
       },
-      "moreActions": "その他の操作"
+      "moreActions": "その他の操作",
+      "undoSessionFailed": "この地点へのロールバックに失敗しました: {error}",
+      "undoSessionBusy": "ターン実行中はロールバックできません"
     },
     "sessionDetails": {
       "menuLabel": "セッション詳細",
@@ -3842,7 +3844,9 @@
         "jumpToPreviousUserMessage": "前のユーザーメッセージへ",
         "showMore": "もっと見る",
         "showLess": "折りたたむ",
-        "resizeWidth": "ドラッグでチャット幅を調整 · ダブルクリックで元に戻す"
+        "resizeWidth": "ドラッグでチャット幅を調整 · ダブルクリックで元に戻す",
+        "undoToThisPoint": "この地点まで戻す",
+        "undoBusy": "ターン実行中はロールバックできません"
       },
       "liveTurnStats": {
         "elapsedHours": "{value}時間",

@@ -419,6 +419,33 @@ export async function acpFork(
   }
 }
 
+export interface UndoToPointResult {
+  newSessionId: string | null
+  restoredWorkspace: boolean
+  contextRewoundNatively: boolean
+  restoredPromptText: string
+  warning: string | null
+}
+
+export async function acpUndoToPoint(
+  connectionId: string | null | undefined,
+  conversationId: number,
+  turnId: string,
+  userTurnIndex?: number | null
+): Promise<UndoToPointResult> {
+  try {
+    return await getTransport().call("acp_undo_to_point", {
+      connectionId: connectionId ?? null,
+      conversationId,
+      turnId,
+      userTurnIndex: userTurnIndex ?? null,
+    })
+  } catch (e) {
+    if (isTurnInProgressRejection(e)) throw new TurnBusyError()
+    throw e
+  }
+}
+
 /**
  * Stop one AIR async task (`_session/async_task/stop`).
  *

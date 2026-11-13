@@ -1053,6 +1053,7 @@ pub fn build_router_with_proxy_auth(
         )
         .route("/acp_cancel", post(handlers::acp::acp_cancel))
         .route("/acp_fork", post(handlers::acp::acp_fork))
+        .route("/acp_undo_to_point", post(handlers::acp::acp_undo_to_point))
         .route(
             "/acp_stop_async_task",
             post(handlers::acp::acp_stop_async_task),

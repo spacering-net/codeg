@@ -2360,7 +2360,9 @@
         "toolError": "Fehler",
         "turnFailed": "Runde fehlgeschlagen"
       },
-      "moreActions": "Weitere Aktionen"
+      "moreActions": "Weitere Aktionen",
+      "undoSessionFailed": "Zurücksetzen zu diesem Punkt fehlgeschlagen: {error}",
+      "undoSessionBusy": "Zurücksetzen während eines laufenden Durchlaufs nicht möglich"
     },
     "sessionDetails": {
       "menuLabel": "Sitzungsdetails",
@@ -3842,7 +3844,9 @@
         "jumpToPreviousUserMessage": "Zur Benutzernachricht springen",
         "showMore": "Mehr anzeigen",
         "showLess": "Weniger anzeigen",
-        "resizeWidth": "Ziehen, um die Chat-Breite zu ändern · Doppelklick zum Zurücksetzen"
+        "resizeWidth": "Ziehen, um die Chat-Breite zu ändern · Doppelklick zum Zurücksetzen",
+        "undoToThisPoint": "Bis zu diesem Punkt rückgängig machen",
+        "undoBusy": "Zurücksetzen während eines laufenden Durchlaufs nicht möglich"
       },
       "liveTurnStats": {
         "elapsedHours": "{value} Std",

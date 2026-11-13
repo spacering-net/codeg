@@ -378,6 +378,17 @@ pub struct AcpForkParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpUndoToPointParams {
+    #[serde(default)]
+    pub connection_id: Option<String>,
+    pub conversation_id: i32,
+    pub turn_id: String,
+    #[serde(default)]
+    pub user_turn_index: Option<i32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpSetModeParams {
     pub connection_id: String,
     pub mode_id: String,
@@ -500,6 +511,29 @@ pub async fn acp_fork(
                 }
                 _ => AppCommandError::task_execution_failed(message),
             }
+        })?;
+    Ok(Json(result))
+}
+
+pub async fn acp_undo_to_point(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpUndoToPointParams>,
+) -> Result<Json<crate::acp::types::UndoToPointResult>, AppCommandError> {
+    let result = state
+        .connection_manager
+        .undo_to_point(
+            &state.db,
+            params.connection_id.as_deref(),
+            params.conversation_id,
+            &params.turn_id,
+            params.user_turn_index,
+        )
+        .await
+        .map_err(|e| match e {
+            AcpError::TurnInProgress => {
+                AppCommandError::new(AppErrorCode::TurnInProgress, e.to_string())
+            }
+            _ => AppCommandError::task_execution_failed(e.to_string()),
         })?;
     Ok(Json(result))
 }

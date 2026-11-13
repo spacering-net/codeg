@@ -95,6 +95,7 @@ import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { leftChromeReserve, rightChromeReserve } from "@/lib/window-chrome"
 import {
   acpFork,
+  acpUndoToPoint,
   acpStopAsyncTask,
   createChatConversation,
   createChatDir,
@@ -1479,6 +1480,82 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
+  const handleUndoToPoint = useCallback(
+    async (turnId: string, userTurnIndex: number) => {
+      const convId = dbConvIdRef.current
+      if (convId == null) return
+      const connectionId = conn.connectionId ?? null
+      if (connectionId && connStatusRef.current === "prompting") {
+        notify({
+          level: "warning",
+          key: `undo-busy:${convId}`,
+          title: t("undoSessionBusy"),
+        })
+        return
+      }
+      const preUndoSession = useConversationRuntimeStore
+        .getState()
+        .byConversationId.get(effectiveConversationId)
+      const staleLiveTurnIds = (preUndoSession?.localTurns ?? []).map(
+        (item) => item.id
+      )
+      try {
+        const result = await acpUndoToPoint(
+          connectionId,
+          convId,
+          turnId,
+          userTurnIndex
+        )
+        if (result.newSessionId) {
+          sessionIdRef.current = result.newSessionId
+          setExternalId(effectiveConversationId, result.newSessionId)
+        }
+        refreshConversations()
+        refetchDetail(effectiveConversationId, {
+          preserveLive: true,
+          dropLiveTurnIds: staleLiveTurnIds,
+        })
+        if (result.restoredPromptText) {
+          setComposerInject({
+            text: result.restoredPromptText,
+            mode: "replace",
+          })
+        }
+        if (result.warning) {
+          notify({
+            level: "warning",
+            key: `undo-warning:${convId}`,
+            title: result.warning,
+          })
+        }
+      } catch (err) {
+        notify({
+          level: "error",
+          key: `undo-failed:${convId}`,
+          title:
+            err instanceof TurnBusyError
+              ? t("undoSessionBusy")
+              : t("undoSessionFailed", {
+                  error:
+                    err instanceof Error
+                      ? err.message
+                      : typeof err === "object" && err !== null
+                        ? JSON.stringify(err)
+                        : String(err),
+                }),
+        })
+      }
+    },
+    [
+      conn.connectionId,
+      effectiveConversationId,
+      refetchDetail,
+      refreshConversations,
+      setExternalId,
+      t,
+    ]
+  )
+
   /** Stop one AIR async task. Returns the adapter's verdict so the row can
    *  release its button; `false` (the adapter declined) is reported, because
    *  nothing else would tell the user their click did nothing — a successful
@@ -2208,6 +2285,9 @@ const ConversationTabView = memo(function ConversationTabView({
             conn.supportsFork
               ? handleForkFromTurn
               : undefined
+          }
+          onUndoToPoint={
+            hasPersistedConversation ? handleUndoToPoint : undefined
           }
         />
       </ActivityLiveProvider>

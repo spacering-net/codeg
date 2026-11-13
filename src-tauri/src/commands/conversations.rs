@@ -1694,6 +1694,19 @@ pub async fn get_folder_conversation_core(
             summary.external_id = Some(new_ext_id);
         }
     }
+    if let Ok(Some(rb_state)) =
+        crate::db::service::conversation_rollback_service::get_rollback_state(conn, conversation_id)
+            .await
+    {
+        if let Some(json) = rb_state.preserved_turns_json {
+            if let Ok(mut preserved) =
+                serde_json::from_str::<Vec<crate::models::message::MessageTurn>>(&json)
+            {
+                preserved.append(&mut turns);
+                turns = preserved;
+            }
+        }
+    }
     summary.message_count = crate::parsers::message_turn_count(&turns);
     // The transcript is the richer source for the session's model. Codex is
     // the concrete case: an ACP-driven row is created before any

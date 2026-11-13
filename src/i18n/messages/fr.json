@@ -2360,7 +2360,9 @@
         "toolError": "Erreur",
         "turnFailed": "Échec du tour"
       },
-      "moreActions": "Plus d’actions"
+      "moreActions": "Plus d’actions",
+      "undoSessionFailed": "Échec du retour à ce point : {error}",
+      "undoSessionBusy": "Impossible de revenir en arrière pendant un tour en cours"
     },
     "sessionDetails": {
       "menuLabel": "Détails de la session",
@@ -3842,7 +3844,9 @@
         "jumpToPreviousUserMessage": "Aller au message utilisateur",
         "showMore": "Afficher plus",
         "showLess": "Afficher moins",
-        "resizeWidth": "Faites glisser pour ajuster la largeur du chat · double-clic pour réinitialiser"
+        "resizeWidth": "Faites glisser pour ajuster la largeur du chat · double-clic pour réinitialiser",
+        "undoToThisPoint": "Revenir à ce point",
+        "undoBusy": "Impossible de revenir en arrière pendant un tour en cours"
       },
       "liveTurnStats": {
         "elapsedHours": "{value} h",
