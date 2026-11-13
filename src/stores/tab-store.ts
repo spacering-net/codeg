@@ -1441,21 +1441,29 @@ function syncCurrentPaneState() {
 
 function applyPaneSnapshot(
   shared: ConversationPaneState,
-  local: ConversationPaneState | null
+  local: ConversationPaneState | null,
+  unconfirmedTabIds: ReadonlySet<string> = new Set()
 ) {
   const state = useTabStore.getState()
-  let panes = restoreConversationPanes(shared, state.rawTabs, local)
-  const draft = state.rawTabs.find(
-    (tab) => tab.id === state.activeTabId && tab.conversationId == null
+  let panes = restoreConversationPanes(
+    shared,
+    state.rawTabs,
+    local,
+    unconfirmedTabIds
   )
-  if (draft) {
-    const owner = paneForTab(panes, draft.id)
+  const localActive = state.rawTabs.find(
+    (tab) =>
+      tab.id === state.activeTabId &&
+      (tab.conversationId == null || unconfirmedTabIds.has(tab.id))
+  )
+  if (localActive) {
+    const owner = paneForTab(panes, localActive.id)
     if (owner) {
       panes = {
         ...panes,
         activePaneId: owner.id,
         panes: panes.panes.map((pane) =>
-          pane.id === owner.id ? { ...pane, active: draft.id } : pane
+          pane.id === owner.id ? { ...pane, active: localActive.id } : pane
         ),
       }
     }
@@ -3855,6 +3863,11 @@ function applyRemoteSnapshot(change: TabsChanged) {
 
   const prev = useTabStore.getState()
   const previousPanes = prev.paneState
+  const sharedPanes = isConversationPaneState(change.pane_state)
+    ? change.pane_state
+    : null
+  // 共享空布局也需要留待手动开启，但不能越过本机关闭开关接管普通工作区。
+  if (sharedPanes) dormantSharedPanes = sharedPanes
   const initializingPanes =
     prev.panesEnabled && paneBootstrapRequested && !previousPanes
   // ── Three-way merge against `serverKnownTabKeys` (the common ancestor) ──────
@@ -3960,14 +3973,15 @@ function applyRemoteSnapshot(change: TabsChanged) {
     if (
       previousPanes ||
       initializingPanes ||
-      isConversationPaneState(change.pane_state) ||
+      (prev.panesEnabled && sharedPanes) ||
       folders.length === 0 ||
       useFolderTabsStore.getState().enabled
     ) {
       lastSavedPayload = diverged ? null : JSON.stringify([])
       useTabStore.setState({ rawTabs: [], activeTabId: null })
-      if (isConversationPaneState(change.pane_state)) {
-        applyPaneSnapshot(change.pane_state, previousPanes)
+      if (sharedPanes && prev.panesEnabled) {
+        if (previousPanes) applyPaneSnapshot(sharedPanes, previousPanes)
+        else initializePaneState(sharedPanes)
       } else if (initializingPanes) {
         initializePaneState(null)
       }
@@ -4055,11 +4069,15 @@ function applyRemoteSnapshot(change: TabsChanged) {
     ? null
     : JSON.stringify(buildPersistItems(nextTabs, nextActiveId))
   useTabStore.setState({ rawTabs: nextTabs, activeTabId: nextActiveId })
-  if (isConversationPaneState(change.pane_state)) {
-    dormantSharedPanes = change.pane_state
+  if (sharedPanes) {
     if (prev.panesEnabled) {
-      if (previousPanes) applyPaneSnapshot(change.pane_state, previousPanes)
-      else initializePaneState(change.pane_state)
+      if (previousPanes) {
+        applyPaneSnapshot(
+          sharedPanes,
+          previousPanes,
+          new Set(unsyncedLocal.map((tab) => tab.id))
+        )
+      } else initializePaneState(sharedPanes)
     }
     paneBootstrapRequested = false
   } else if (initializingPanes) {

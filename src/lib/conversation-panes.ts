@@ -200,7 +200,8 @@ export function persistedConversationPanes(
 export function restoreConversationPanes(
   shared: ConversationPaneState,
   tabs: PaneTab[],
-  local: ConversationPaneState | null
+  local: ConversationPaneState | null,
+  unconfirmedTabIds: ReadonlySet<string> = new Set()
 ): ConversationPaneState {
   const localId = new Map(tabs.map((tab) => [canonicalPaneTabId(tab), tab.id]))
   const panes = shared.panes.map((pane) => {
@@ -222,9 +223,9 @@ export function restoreConversationPanes(
       active: pane.active ? (localId.get(pane.active) ?? null) : null,
     }
   })
-  // 远端快照不含本机草稿；保留其归属和分屏，不把未发送内容当成远端删除。
+  // 草稿和刚发送但尚未确认的会话都属于本机新意图，旧快照不能把它们搬到其他 Pane。
   for (const tab of tabs) {
-    if (tab.conversationId != null) continue
+    if (tab.conversationId != null && !unconfirmedTabIds.has(tab.id)) continue
     const old = local ? paneForTab(local, tab.id) : undefined
     const target =
       panes.find((pane) => pane.id === old?.id) ??

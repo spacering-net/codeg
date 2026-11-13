@@ -111,6 +111,32 @@ describe("会话 Pane", () => {
     expect(useTabStore.getState().rawTabs.filter(isTabInScope)).toHaveLength(1)
   })
 
+  it.each([false, true])(
+    "灵动岛关闭时，远端清空标签不改变普通工作区（跟随文件夹：%s）",
+    async (followFolder) => {
+      localStorage.removeItem(CONVERSATION_PANES_PREF_KEY)
+      await hydrate()
+      useFolderTabsStore.getState().setEnabled(followFolder)
+      const shared = initialConversationPanes()
+      shared.panes[0].name = "Remote empty Pane"
+
+      useTabStore.getState().handleTabsChanged({
+        tabs: [],
+        version: 1,
+        origin: "another-client",
+        pane_state: shared,
+      })
+
+      expect(useTabStore.getState().panesEnabled).toBe(false)
+      expect(useTabStore.getState().paneState).toBeNull()
+      expect(useTabStore.getState().rawTabs).toHaveLength(followFolder ? 0 : 1)
+      useTabStore.getState().setPanesEnabled(true)
+      expect(useTabStore.getState().paneState!.panes[0].name).toBe(
+        "Remote empty Pane"
+      )
+    }
+  )
+
   it("关闭后保留所有会话与 Pane，重新启用恢复名称、布局和草稿归属", async () => {
     await hydrate()
     const disconnect = vi.fn()
@@ -318,6 +344,36 @@ describe("会话 Pane", () => {
     expect(
       useTabStore.getState().paneState!.panes[0].assignments
     ).toHaveProperty(tabId)
+  })
+
+  it("远端旧快照不移动或抢走本机刚发送且服务端尚未确认的会话", async () => {
+    await hydrate()
+    const first = useTabStore.getState().paneState!.activePaneId
+    useTabStore.getState().createPane()
+    const second = useTabStore.getState().paneState!.activePaneId
+    const state = useTabStore.getState()
+    const shared = persistedConversationPanes(state.paneState!, state.rawTabs)
+    shared.activePaneId = first
+    const draft = state.openNewConversationTab(2, "/repo-2")
+    useTabStore
+      .getState()
+      .bindConversationTab(draft.tabId, 3, "codex", "Just sent", -42)
+
+    useTabStore.getState().handleTabsChanged({
+      version: 2,
+      origin: "another-client",
+      tabs: opened,
+      pane_state: shared,
+    })
+
+    const reconciled = useTabStore.getState()
+    expect(reconciled.activeTabId).toBe(draft.tabId)
+    expect(reconciled.paneState!.activePaneId).toBe(second)
+    expect(paneForTab(reconciled.paneState!, draft.tabId)?.id).toBe(second)
+    expect(
+      reconciled.rawTabs.find((tab) => tab.id === draft.tabId)
+        ?.runtimeConversationId
+    ).toBe(-42)
   })
 
   it("重启恢复多个 Pane、选中位置和本机未发送草稿", async () => {
