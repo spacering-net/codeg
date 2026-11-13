@@ -10,6 +10,10 @@ import {
 import { formatElapsedLabel } from "@/lib/format-elapsed"
 import { cn } from "@/lib/utils"
 import {
+  useChatProcessCollapse,
+  type ChatProcessCollapseMode,
+} from "@/lib/chat-process-collapse"
+import {
   Collapsible,
   CollapsibleContent,
 } from "@/components/ui/instant-collapsible"
@@ -74,6 +78,16 @@ const manualFold = new WeakMap<
   { epoch: number; open: boolean }
 >()
 
+interface ProcessFoldChoice {
+  mode: ChatProcessCollapseMode
+  epoch: number
+  settled: boolean
+  open?: boolean
+}
+
+// 与现有手动折叠相同，保留虚拟列表卸载前的选择，并随 parts 回收。
+const processFold = new WeakMap<AdaptedContentPart[], ProcessFoldChoice>()
+
 export const CompletedTurnContent = memo(function CompletedTurnContent({
   parts,
   durationMs,
@@ -103,6 +117,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   pending?: boolean
 }) {
   const tElapsed = useTranslations("Folder.chat.liveTurnStats")
+  const collapseMode = useChatProcessCollapse()
   const split = useMemo(() => splitAssistantTurnParts(parts), [parts])
 
   const [localOpen, setLocalOpen] = useState(() => {
@@ -135,10 +150,44 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
     }
   }
 
-  const open = currentRound ? roundOpen : localOpen
+  // 结束后折叠模式在结束时重置一次；之后用户仍可重新展开。
+  const settled = collapseMode === "after-completion" && completed
+  const [processChoice, setProcessChoice] = useState<ProcessFoldChoice>(
+    () =>
+      processFold.get(parts) ?? {
+        mode: collapseMode,
+        epoch: foldEpoch,
+        settled,
+      }
+  )
+  const choiceMatches =
+    processChoice.mode === collapseMode &&
+    processChoice.epoch === foldEpoch &&
+    processChoice.settled === settled
+  if (!choiceMatches) {
+    setProcessChoice({ mode: collapseMode, epoch: foldEpoch, settled })
+  }
+  const open =
+    collapseMode === "current"
+      ? currentRound
+        ? roundOpen
+        : localOpen
+      : ((choiceMatches ? processChoice.open : undefined) ??
+        (collapseMode === "after-completion" && !completed))
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
+      if (collapseMode !== "current") {
+        const choice = {
+          mode: collapseMode,
+          epoch: foldEpoch,
+          settled,
+          open: next,
+        }
+        processFold.set(parts, choice)
+        setProcessChoice(choice)
+        return
+      }
       if (currentRound) {
         onRoundOpenChange?.(next)
         return
@@ -146,13 +195,22 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
       manualFold.set(parts, { epoch: foldEpoch, open: next })
       setLocalOpen(next)
     },
-    [currentRound, foldEpoch, onRoundOpenChange, parts]
+    [collapseMode, settled, currentRound, foldEpoch, onRoundOpenChange, parts]
   )
 
   const elapsed =
     typeof durationMs === "number" && durationMs > 0
       ? formatElapsedLabel(durationMs, tElapsed)
       : null
+
+  // Streamdown's incomplete-markdown repair (remend) may only run on text that
+  // is still being written. On settled text it appends a closer after spans
+  // that are ALREADY complete — a glob inside code, an identifier like `_meta`
+  // — leaving a stray `*` / `_`; landing after a final code fence, that closer
+  // reopens the block (#555). Every branch below renders some slice of this one
+  // turn, so they all get the same answer.
+  const isStreaming = !completed
+  const { awaitingUser } = useActivityLive()
 
   // Folding trades the process away to keep the answer. With no answer left
   // over there is nothing to keep, and the reply would fold to a lone header —
@@ -165,8 +223,15 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   // has not been written yet, so applying it would withhold the toggle for the
   // whole stream and hand it over one beat before the turn ends. Folding a live
   // reply is then an explicit choice; the round settling re-applies the rule.
-  const foldable =
+  const canFold =
     split.progress.length > 0 && (!completed || hasVisibleAnswer(split.answer))
+  const failureKey = useMemo(
+    () => buildActivity(parts, { isStreaming }).summary.firstUnrecoveredKey,
+    [parts, isStreaming]
+  )
+  // 自动折叠不能遮住失败或等待用户处理的交互。
+  const foldable =
+    canFold && (collapseMode === "current" || (!failureKey && !awaitingUser))
   // What is drawn: a reply that cannot fold shows its steps whatever `open`
   // says.
   const bodyOpen = foldable ? open : true
@@ -191,14 +256,6 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   }
   const animateEnter = openMark.open === bodyOpen && openMark.animateEnter
 
-  // Streamdown's incomplete-markdown repair (remend) may only run on text that
-  // is still being written. On settled text it appends a closer after spans
-  // that are ALREADY complete — a glob inside code, an identifier like `_meta`
-  // — leaving a stray `*` / `_`; landing after a final code fence, that closer
-  // reopens the block (#555). Every branch below renders some slice of this one
-  // turn, so they all get the same answer.
-  const isStreaming = !completed
-
   // While the agent is still at it, the prose after its last step is one more
   // step, not yet the answer: on the rail, as prose between steps is, with the
   // turning ring under it. Until the reply ends there is no telling an aside
@@ -221,9 +278,6 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
     () => buildActivity(parts, { isStreaming, keepAnswer: proseOnRail }),
     [parts, isStreaming, proseOnRail]
   )
-  // The header's red "N failed": open the turn at the first failure nothing
-  // redid — the row, and the group it is folded into.
-  const failureKey = activity.summary.firstUnrecoveredKey
   const jumpToFailure = useCallback(() => {
     if (!failureKey) return
     openDisclosures(disclosureKeysFor(activity.items, failureKey))
@@ -257,7 +311,6 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   // above it. It has nothing to fold, so no row once the agent stops. A live
   // reply with its steps folded ends on the turning mark under whatever does
   // end it instead.
-  const { awaitingUser } = useActivityLive()
   const working = isStreaming && !awaitingUser
   const footShown =
     bodyOpen && (working || (foldable && activity.items.length > 0))
