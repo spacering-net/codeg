@@ -4963,6 +4963,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       cancelHydrationEchoes(contextKey)
       const echoes: EventEnvelope[] = []
       let cancelled = false
+      let cancelSnapshot = () => {}
+      // Settle the frontend wait when its surface goes away, even if native
+      // IPC never answers. Otherwise the suspended async function still owns
+      // the old Provider's store/dispatch after its buffers have been cleared.
+      const cancelledSnapshot = new Promise<null>((resolve) => {
+        cancelSnapshot = () => resolve(null)
+      })
       const lists =
         hydrationEchoesRef.current.get(connectionId) ??
         new Set<EventEnvelope[]>()
@@ -4984,12 +4991,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         cancelled = true
         stop()
         echoes.length = 0
+        cancelSnapshot()
       }
       hydrationEchoOwnersRef.current.set(contextKey, { connectionId, cancel })
       return {
         echoes,
         /** Successful snapshots keep the backlog for replay after stopping. */
         stop,
+        cancelledSnapshot,
         get cancelled() {
           return cancelled
         },
@@ -7086,6 +7095,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     const reverseMap = reverseMapRef.current
     const attachSubs = attachSubscriptionsRef.current
     const hydrationOwners = hydrationEchoOwnersRef.current
+    const pendingConnectRequests = pendingConnectRequestsRef.current
     // Capture the store ref at effect-setup time so the cleanup
     // function doesn't read a moving target (`storeRef.current` is the
     // same object across renders by design, but the lint rule
@@ -7093,6 +7103,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     // because in the general case a ref's `.current` can be replaced).
     const store = storeRef.current
     return () => {
+      // Cancelled waits settle immediately; their finally blocks must not
+      // replay a queued connect into a Provider that has just unmounted.
+      pendingConnectRequests.clear()
       for (const owner of Array.from(hydrationOwners.values())) {
         owner.cancel()
       }
@@ -7231,7 +7244,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // merely unreachable.
       let connectionGone = false
       try {
-        const snapshot = await acpGetSessionSnapshot(connectionId)
+        const snapshot = await Promise.race([
+          acpGetSessionSnapshot(connectionId),
+          backlog.cancelledSnapshot,
+        ])
         if (snapshot && !backlog.cancelled)
           patch = denormalizeSnapshot(snapshot)
         else connectionGone = true
@@ -8464,7 +8480,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         let patch: import("@/lib/snapshot-denormalize").SnapshotPatch | null =
           null
         try {
-          const snapshot = await acpGetSessionSnapshot(connectionId)
+          const snapshot = await Promise.race([
+            acpGetSessionSnapshot(connectionId),
+            backlog.cancelledSnapshot,
+          ])
           if (snapshot && !backlog.cancelled)
             patch = denormalizeSnapshot(snapshot)
         } catch (e) {
