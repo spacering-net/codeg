@@ -3962,6 +3962,25 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // Stop button until the app restarts. Always mutate through
   // `bindConnectionRoute` / `releaseConnectionRoute`.
   const reverseMapRef = useRef(new Map<string, Set<string>>())
+  // A snapshot may still be pending when its surface closes. Its firehose
+  // capture belongs to that surface, not to the lifetime of the IPC promise.
+  const hydrationEchoOwnersRef = useRef(
+    new Map<string, { connectionId: string; cancel: () => void }>()
+  )
+  const cancelHydrationEchoes = useCallback(
+    (contextKey: string, connectionId?: string) => {
+      const owner = hydrationEchoOwnersRef.current.get(contextKey)
+      if (owner && (!connectionId || owner.connectionId === connectionId)) {
+        owner.cancel()
+      }
+    },
+    []
+  )
+  const cancelAllHydrationEchoes = useCallback(() => {
+    for (const owner of Array.from(hydrationEchoOwnersRef.current.values())) {
+      owner.cancel()
+    }
+  }, [])
 
   /** Route `connectionId`'s firehose events to `contextKey` too. Idempotent. */
   const bindConnectionRoute = useCallback(
@@ -3974,18 +3993,19 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   )
 
   /**
-   * Drop ONLY this surface's route. A no-op for a connection this contextKey
-   * never routed, and — the load-bearing part — it leaves every OTHER surface
-   * watching the same connection routed.
+   * Drop ONLY this surface's route and any snapshot capture it still owns.
+   * A hydrating surface may not have a route yet. Every OTHER surface
+   * watching or hydrating the same connection remains intact.
    */
   const releaseConnectionRoute = useCallback(
     (connectionId: string, contextKey: string) => {
+      cancelHydrationEchoes(contextKey, connectionId)
       const keys = reverseMapRef.current.get(connectionId)
       if (!keys) return
       keys.delete(contextKey)
       if (keys.size === 0) reverseMapRef.current.delete(connectionId)
     },
-    []
+    [cancelHydrationEchoes]
   )
 
   // contextKey → active EventStream subscription handle. Populated only for
@@ -4938,16 +4958,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // (`applyHydrationBacklog`).
   const hydrationEchoesRef = useRef(new Map<string, Set<EventEnvelope[]>>())
 
-  const beginHydrationEchoes = useCallback((connectionId: string) => {
-    const echoes: EventEnvelope[] = []
-    const lists =
-      hydrationEchoesRef.current.get(connectionId) ?? new Set<EventEnvelope[]>()
-    lists.add(echoes)
-    hydrationEchoesRef.current.set(connectionId, lists)
-    return {
-      echoes,
-      /** Stop recording. Idempotent. */
-      stop: () => {
+  const beginHydrationEchoes = useCallback(
+    (contextKey: string, connectionId: string) => {
+      cancelHydrationEchoes(contextKey)
+      const echoes: EventEnvelope[] = []
+      let cancelled = false
+      let cancelSnapshot = () => {}
+      // Settle the frontend wait when its surface goes away, even if native
+      // IPC never answers. Otherwise the suspended async function still owns
+      // the old Provider's store/dispatch after its buffers have been cleared.
+      const cancelledSnapshot = new Promise<null>((resolve) => {
+        cancelSnapshot = () => resolve(null)
+      })
+      const lists =
+        hydrationEchoesRef.current.get(connectionId) ??
+        new Set<EventEnvelope[]>()
+      lists.add(echoes)
+      hydrationEchoesRef.current.set(connectionId, lists)
+      const stop = () => {
         lists.delete(echoes)
         if (
           lists.size === 0 &&
@@ -4955,9 +4983,29 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         ) {
           hydrationEchoesRef.current.delete(connectionId)
         }
-      },
-    }
-  }, [])
+        if (hydrationEchoOwnersRef.current.get(contextKey)?.cancel === cancel) {
+          hydrationEchoOwnersRef.current.delete(contextKey)
+        }
+      }
+      const cancel = () => {
+        cancelled = true
+        stop()
+        echoes.length = 0
+        cancelSnapshot()
+      }
+      hydrationEchoOwnersRef.current.set(contextKey, { connectionId, cancel })
+      return {
+        echoes,
+        /** Successful snapshots keep the backlog for replay after stopping. */
+        stop,
+        cancelledSnapshot,
+        get cancelled() {
+          return cancelled
+        },
+      }
+    },
+    [cancelHydrationEchoes]
+  )
 
   // ── RAF batching for tool_call_update events ──
   const pendingToolCallUpdates = useRef<
@@ -7046,6 +7094,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const reverseMap = reverseMapRef.current
     const attachSubs = attachSubscriptionsRef.current
+    const hydrationOwners = hydrationEchoOwnersRef.current
+    const pendingConnectRequests = pendingConnectRequestsRef.current
     // Capture the store ref at effect-setup time so the cleanup
     // function doesn't read a moving target (`storeRef.current` is the
     // same object across renders by design, but the lint rule
@@ -7053,6 +7103,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     // because in the general case a ref's `.current` can be replaced).
     const store = storeRef.current
     return () => {
+      // Cancelled waits settle immediately; their finally blocks must not
+      // replay a queued connect into a Provider that has just unmounted.
+      pendingConnectRequests.clear()
+      for (const owner of Array.from(hydrationOwners.values())) {
+        owner.cancel()
+      }
       // A connection can be routed by several surfaces (see `reverseMapRef`);
       // tear it down at most once, only if at least one of them OWNS it, and
       // not while any owner still has work in flight.
@@ -7180,7 +7236,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // arrived while the snapshot was in flight — including what another
       // surface already routing it received meanwhile. Mirrors the legacy
       // owner path in `connect()`.
-      const backlog = beginHydrationEchoes(connectionId)
+      const backlog = beginHydrationEchoes(contextKey, connectionId)
       let patch: import("@/lib/snapshot-denormalize").SnapshotPatch | null =
         null
       // `null` (as opposed to a thrown error) is the backend saying it holds no
@@ -7188,8 +7244,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // merely unreachable.
       let connectionGone = false
       try {
-        const snapshot = await acpGetSessionSnapshot(connectionId)
-        if (snapshot) patch = denormalizeSnapshot(snapshot)
+        const snapshot = await Promise.race([
+          acpGetSessionSnapshot(connectionId),
+          backlog.cancelledSnapshot,
+        ])
+        if (snapshot && !backlog.cancelled)
+          patch = denormalizeSnapshot(snapshot)
         else connectionGone = true
       } catch (e) {
         console.warn(
@@ -7199,6 +7259,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         )
       }
       backlog.stop()
+      if (backlog.cancelled) return true
       // Detach race: the tab may have disconnected (disconnect() removed the
       // entry) while the snapshot fetch was in flight. Re-check the store still
       // holds THIS viewer connection BEFORE applying the snapshot, seeding
@@ -8113,6 +8174,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
 
   const disconnectAll = useCallback(async () => {
     const promises: Promise<void>[] = []
+    cancelAllHydrationEchoes()
     pendingConnectRequestsRef.current.clear()
     for (const [contextKey, conn] of storeRef.current.connections) {
       // Viewers attach to a connection another client owns — detach our
@@ -8150,6 +8212,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     await Promise.all(promises)
     dispatch({ type: "REMOVE_ALL" })
   }, [
+    cancelAllHydrationEchoes,
     discardStreamingQueues,
     dispatch,
     retireTurnFailures,
@@ -8412,13 +8475,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // order as `connectAsViewer` — anything that lands while the fetch is in
       // flight is kept, in the unmapped buffer or as an echo of another
       // surface's delivery, and deduped by seq once routed).
-      const backlog = beginHydrationEchoes(connectionId)
+      const backlog = beginHydrationEchoes(connectionId, connectionId)
       void (async () => {
         let patch: import("@/lib/snapshot-denormalize").SnapshotPatch | null =
           null
         try {
-          const snapshot = await acpGetSessionSnapshot(connectionId)
-          if (snapshot) patch = denormalizeSnapshot(snapshot)
+          const snapshot = await Promise.race([
+            acpGetSessionSnapshot(connectionId),
+            backlog.cancelledSnapshot,
+          ])
+          if (snapshot && !backlog.cancelled)
+            patch = denormalizeSnapshot(snapshot)
         } catch (e) {
           console.warn(
             "[acp-context] child snapshot fetch failed for",
@@ -8427,6 +8494,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           )
         }
         backlog.stop()
+        if (backlog.cancelled) return
         // The viewer may have closed while the snapshot was in flight —
         // never hydrate or install routing for a detached child.
         const still = storeRef.current.connections.get(connectionId)
