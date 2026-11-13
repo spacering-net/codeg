@@ -173,6 +173,27 @@ export function getSavedPrefsForConnect(agentType: string): {
   }
 }
 
+/**
+ * The user's last selections for an agent, as a picker seed: the same data
+ * [`getSavedPrefsForConnect`] ships to the backend, with `configValues`
+ * normalized to an object so callers can spread it into their own state.
+ *
+ * Read by every surface that creates a conversation with its own agent picker
+ * — the task editor and the automation editor — because their selections start
+ * out unset and would otherwise fall back to the agent's own default. A new
+ * conversation is expected to open on the permission the user last chose; the
+ * chat composer is the writer of that memory (see `saveModePreference` /
+ * `saveConfigPreference`), and these editors write to it too, so "last chosen"
+ * means the last choice made in ANY of them.
+ */
+export function getSavedSelections(agentType: string): {
+  modeId: string | null
+  configValues: Record<string, string>
+} {
+  const { modeId, configValues } = getSavedPrefsForConnect(agentType)
+  return { modeId, configValues: configValues ?? {} }
+}
+
 // ── Save (user actions only) ──
 
 export function saveModePreference(
