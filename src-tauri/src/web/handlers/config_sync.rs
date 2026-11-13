@@ -27,10 +27,11 @@ use crate::commands::config_sync::snapshot::{
     rollback_dir, ConfigManifest, RollbackSnapshotInfo,
 };
 use crate::commands::config_sync::webdav_sync::{
-    download_and_apply_core, load_settings, load_state, merge_settings, peek_remote_core,
+    download_and_apply_core, load_settings, load_state_view, merge_settings, peek_remote_core,
     save_settings_core, test_connection_core, upload_snapshot_core, ConfigSyncSettingsInput,
-    ConfigSyncSettingsView, ConfigSyncState, DownloadOutcome, UploadOutcome,
+    ConfigSyncSettingsView, ConfigSyncState, DownloadOutcome, UploadOutcome, UploadRequest,
 };
+use crate::commands::config_sync::appearance::{mirror_appearance_core, AppearanceValues};
 use crate::commands::config_sync::APP_VERSION;
 
 #[derive(Deserialize)]
@@ -43,6 +44,20 @@ pub struct SettingsParams {
 #[serde(rename_all = "camelCase")]
 pub struct ContentParams {
     pub content: String,
+}
+
+/// `{}` from the plain "sync now" button; the token only after the user
+/// confirmed replacing a remote snapshot this device had not seen.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UploadParams {
+    pub overwrite_remote_sha256: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppearanceParams {
+    pub values: AppearanceValues,
 }
 
 #[derive(Deserialize)]
@@ -71,7 +86,7 @@ pub async fn config_sync_update_settings(
 pub async fn config_sync_get_state(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<ConfigSyncState>, AppCommandError> {
-    Ok(Json(load_state(&state.db.conn).await))
+    Ok(Json(load_state_view(&state.db.conn).await))
 }
 
 pub async fn config_sync_test_connection(
@@ -85,8 +100,26 @@ pub async fn config_sync_test_connection(
 
 pub async fn config_sync_upload_now(
     Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<UploadParams>,
 ) -> Result<Json<UploadOutcome>, AppCommandError> {
-    upload_snapshot_core(&state.db.conn, APP_VERSION, true)
+    upload_snapshot_core(
+        &state.db.conn,
+        APP_VERSION,
+        UploadRequest {
+            force: true,
+            automatic: false,
+            overwrite_remote_sha256: params.overwrite_remote_sha256.as_deref(),
+        },
+    )
+    .await
+    .map(Json)
+}
+
+pub async fn config_sync_mirror_appearance(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AppearanceParams>,
+) -> Result<Json<()>, AppCommandError> {
+    mirror_appearance_core(&state.db.conn, params.values)
         .await
         .map(Json)
 }
@@ -151,4 +184,33 @@ pub async fn config_sync_apply_rollback(
     apply_rollback_core(&state.db.conn, &state.emitter, &rollback_dir(), &params.id)
         .await
         .map(Json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The plain "sync now" button posts `{}`; the overwrite confirmation adds
+    /// the camelCase token. Both must reach `upload_snapshot_core` unchanged.
+    #[test]
+    fn upload_params_accept_an_empty_body_and_the_overwrite_token() {
+        let plain: UploadParams = serde_json::from_str("{}").expect("empty body");
+        assert_eq!(plain.overwrite_remote_sha256, None);
+        let explicit_null: UploadParams =
+            serde_json::from_str(r#"{"overwriteRemoteSha256":null}"#).expect("null");
+        assert_eq!(explicit_null.overwrite_remote_sha256, None);
+        let confirmed: UploadParams =
+            serde_json::from_str(r#"{"overwriteRemoteSha256":"abc"}"#).expect("token");
+        assert_eq!(confirmed.overwrite_remote_sha256.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn appearance_params_carry_a_string_map() {
+        let params: AppearanceParams =
+            serde_json::from_str(r#"{"values":{"codeg-theme-color":"red"}}"#).expect("parse");
+        assert_eq!(
+            params.values.get("codeg-theme-color").map(String::as_str),
+            Some("red")
+        );
+    }
 }

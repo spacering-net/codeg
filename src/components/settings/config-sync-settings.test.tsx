@@ -76,6 +76,7 @@ import {
   peekRemoteConfig,
   pickConfigFileToImport,
   updateConfigSyncSettings,
+  uploadConfigNow,
 } from "@/lib/config-sync"
 
 const t = enMessages.ConfigSyncSettings
@@ -645,5 +646,112 @@ describe("ConfigSyncSettings — background status", () => {
       statusHandler?.({ lastSyncAt: null, lastError: "connection refused" })
     })
     await screen.findByText(/connection refused/)
+  })
+})
+
+describe("ConfigSyncSettings — a remote snapshot this machine has not seen", () => {
+  const conflict = {
+    sha256: "remote-sha",
+    sourceDevice: "work-laptop",
+    createdAt: "2026-06-06T10:00:00Z",
+  }
+
+  /// #1149: "sync now" used to replace whatever was on the server.
+  it("asks before replacing it, naming the snapshot that would be lost", async () => {
+    vi.mocked(uploadConfigNow).mockResolvedValueOnce({
+      uploaded: false,
+      sha256: "local",
+      counts: {},
+      syncedAt: "",
+      conflict,
+    })
+    await renderLoaded()
+    fireEvent.click(screen.getByRole("button", { name: t.uploadButton }))
+    await screen.findByText(t.overwriteConfirmTitle)
+    expect(toastSuccess).not.toHaveBeenCalled()
+    expect(screen.getAllByText(/work-laptop/).length).toBeGreaterThan(0)
+    // Behind the (modal) dialog, so outside the accessibility tree for now.
+    expect(screen.getByRole("alert", { hidden: true })).toHaveTextContent(
+      t.conflictTitle
+    )
+
+    vi.mocked(uploadConfigNow).mockResolvedValueOnce({
+      uploaded: true,
+      sha256: "local",
+      counts: {},
+      syncedAt: "2026-06-06T11:00:00Z",
+    })
+    fireEvent.click(
+      screen.getByRole("button", { name: t.overwriteConfirmAction })
+    )
+    await waitFor(() =>
+      expect(uploadConfigNow).toHaveBeenLastCalledWith({
+        overwriteRemoteSha256: "remote-sha",
+      })
+    )
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(t.uploaded))
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("does not claim success when the snapshot changed again meanwhile", async () => {
+    vi.mocked(getConfigSyncState).mockResolvedValue({
+      lastUploadedSha256: null,
+      lastUploadedTarget: null,
+      lastSyncAt: null,
+      lastError: null,
+      conflict,
+    })
+    vi.mocked(uploadConfigNow).mockResolvedValueOnce({
+      uploaded: false,
+      sha256: "local",
+      counts: {},
+      syncedAt: "",
+      conflict: { ...conflict, sha256: "newer" },
+    })
+    await renderLoaded()
+    fireEvent.click(screen.getByRole("button", { name: t.conflictOverwrite }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: t.overwriteConfirmAction })
+    )
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(t.conflictChanged)
+    )
+    expect(toastSuccess).not.toHaveBeenCalled()
+    expect(screen.getByRole("alert")).toBeInTheDocument()
+  })
+
+  it("shows the background uploader holding back, and restoring clears it", async () => {
+    await renderLoaded()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    act(() => {
+      statusHandler?.({ lastSyncAt: null, lastError: null, conflict })
+    })
+    await screen.findByRole("alert")
+
+    vi.mocked(peekRemoteConfig).mockResolvedValue(manifest())
+    vi.mocked(downloadAndApplyConfig).mockResolvedValue({
+      manifest: manifest(),
+      applied: {
+        domains: { appearance: 2 },
+        total: 2,
+        appearance: {
+          "codeg-theme-color": "yellow",
+          "codeg-zoom-level": "125",
+        },
+      },
+      rollbackPath: null,
+    })
+    fireEvent.click(screen.getByRole("button", { name: t.conflictRestore }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: t.restoreConfirmAction })
+    )
+    await waitFor(() =>
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    )
+    // The restored appearance lands in this window's storage — where the
+    // providers and the pre-paint script read it — not only in the database.
+    expect(window.localStorage.getItem("codeg-theme-color")).toBe("yellow")
+    expect(window.localStorage.getItem("codeg-zoom-level")).toBe("125")
+    expect(screen.getByText(/Last restored/)).toBeInTheDocument()
   })
 })

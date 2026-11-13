@@ -98,6 +98,11 @@ import {
   type WorkspaceBgFillMode,
 } from "@/lib/workspace-background"
 import { downloadWorkspaceBgMarket } from "@/lib/workspace-background-market"
+import {
+  isSyncedAppearanceKey,
+  mirrorAppearanceOnLaunch,
+  scheduleAppearanceMirror,
+} from "@/lib/appearance-sync"
 
 function syncTrafficLightPosition(zoom: number) {
   if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window))
@@ -232,7 +237,10 @@ function persist(key: string, value: string) {
     localStorage.setItem(key, value)
   } catch {
     // 隐私模式 / 禁用 storage 时静默忽略，本次会话内仍然生效
+    return
   }
+  // 配置同步：外观偏好随配置快照走，变更时镜像到后端（见 lib/appearance-sync）。
+  if (isSyncedAppearanceKey(key)) scheduleAppearanceMirror()
 }
 
 function readStored(key: string): string | null {
@@ -808,6 +816,9 @@ export function AppearanceProvider({
     } catch {
       // localStorage unavailable
     }
+    // 本机桌面窗口的 localStorage 就是这台机器的外观：启动时镜像一次，让配置
+    // 快照从第一次上传起就带上它（浏览器不在启动时镜像，见 lib/appearance-sync）。
+    mirrorAppearanceOnLaunch()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

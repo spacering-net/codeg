@@ -126,12 +126,18 @@ impl ConfigSyncSettings {
     /// "b/c"}` produce the same key. (`sanitize_path_segment` rejects both
     /// today; the separator is what keeps that from becoming load-bearing.)
     fn remote_target(&self) -> String {
+        format!("{}\u{0}{}", self.remote_location(), self.protection())
+    }
+
+    /// WHERE the pair lives, without HOW it is protected. This is what "have I
+    /// seen the snapshot that is up there" is scoped to: turning encryption on
+    /// or re-keying changes [`Self::remote_target`] (so the next tick
+    /// re-uploads), but it must not make this machine's own last upload look
+    /// like somebody else's.
+    pub(crate) fn remote_location(&self) -> String {
         format!(
-            "{}\u{0}{}\u{0}{}\u{0}{}",
-            self.server_url,
-            self.remote_dir,
-            self.profile,
-            self.protection()
+            "{}\u{0}{}\u{0}{}",
+            self.server_url, self.remote_dir, self.profile
         )
     }
 }
@@ -239,7 +245,55 @@ pub struct ConfigSyncState {
     pub last_uploaded_target: Option<String>,
     pub last_sync_at: Option<String>,
     pub last_error: Option<String>,
+    /// The remote snapshot this device has SEEN: the one it last wrote or last
+    /// pulled, identified by the manifest's payload checksum (which works for
+    /// encrypted payloads too) and scoped to its location. An upload only ever
+    /// replaces a remote snapshot that matches this — anything else was written
+    /// by another machine after we last looked, and overwriting it would lose
+    /// that machine's configuration with nothing left to recover it from.
+    pub known_remote: Option<RemoteRef>,
+    /// Write-ahead record of payloads about to be PUT. A PUT that landed but
+    /// whose response (or the state save after it) was lost leaves the remote
+    /// holding OUR snapshot under a checksum `known_remote` does not name; this
+    /// is what keeps that from reading as another machine's write. Bounded.
+    pub inflight_remote: Vec<RemoteRef>,
+    pub last_pulled_at: Option<String>,
+    /// Set when an upload was refused because the remote holds a snapshot this
+    /// device has not seen. Cleared by a successful upload or restore.
+    pub conflict: Option<RemoteConflict>,
 }
+
+/// A remote snapshot, by location and payload checksum.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteRef {
+    pub location: String,
+    pub sha256: String,
+}
+
+impl RemoteRef {
+    fn is(&self, location: &str, sha256: &str) -> bool {
+        self.location == location && self.sha256 == sha256
+    }
+}
+
+/// What the panel needs to say "the server holds a snapshot from DESKTOP-42,
+/// taken at 19:04, that this machine has not restored".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteConflict {
+    pub location: String,
+    /// The value to hand back as `overwrite_remote_sha256` to replace exactly
+    /// this snapshot: the manifest's payload checksum, or — for a manifest this
+    /// build cannot read — the checksum of the manifest file itself.
+    pub sha256: String,
+    pub source_device: Option<String>,
+    pub created_at: Option<String>,
+}
+
+/// How many write-ahead entries to keep. More than one so that a retry after a
+/// lost response does not forget the attempt before it.
+const MAX_INFLIGHT: usize = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -250,6 +304,25 @@ pub struct UploadOutcome {
     pub sha256: String,
     pub counts: BTreeMap<String, usize>,
     pub synced_at: String,
+    /// Present when nothing was sent because the remote holds a snapshot this
+    /// device has not seen. Not an error: nothing failed, a decision is needed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<RemoteConflict>,
+}
+
+/// What an upload is allowed to do.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UploadRequest<'a> {
+    /// Bypass the unchanged-hash skip (the manual "sync now" button). Never
+    /// bypasses the remote check.
+    pub force: bool,
+    /// Started by the background timer, which must stand down while an apply
+    /// is suppressing it.
+    pub automatic: bool,
+    /// The user confirmed replacing the remote snapshot with this checksum
+    /// ([`RemoteConflict::sha256`]). Honoured only if the remote still holds
+    /// exactly that one.
+    pub overwrite_remote_sha256: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,10 +333,18 @@ pub struct DownloadOutcome {
     pub rollback_path: Option<String>,
 }
 
-/// Every remote read/write funnels through here. An upload is two PUTs; two
-/// concurrent uploads would interleave into a manifest from one snapshot and a
-/// config from another.
-fn remote_lock() -> &'static Mutex<()> {
+/// One config-sync operation at a time, held for the WHOLE operation — not
+/// just its network requests.
+///
+/// An upload is "read state → collect snapshot → read the remote → decide →
+/// PUT → write state"; a restore is "GET → apply → write state"; an import or
+/// rollback rewrites local configuration. Locking only the requests left room
+/// for an upload that collected its snapshot before a restore to PUT it after
+/// the restore had recorded the remote as seen — pushing stale defaults over
+/// the very snapshot the user just restored — and for two uploads to write
+/// each other's stale state. Two concurrent uploads would also interleave into
+/// a manifest from one snapshot and a config from another.
+pub(super) fn sync_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
@@ -546,6 +627,39 @@ pub async fn load_state(conn: &DatabaseConnection) -> ConfigSyncState {
     }
 }
 
+/// The state as the panel should see it: a conflict recorded for another
+/// location (the user has since repointed the sync) is not this one's.
+pub async fn load_state_view(conn: &DatabaseConnection) -> ConfigSyncState {
+    let settings = load_settings(conn).await;
+    let mut state = load_state(conn).await;
+    let location = settings.remote_location();
+    if state
+        .conflict
+        .as_ref()
+        .is_some_and(|conflict| conflict.location != location)
+    {
+        state.conflict = None;
+    }
+    state
+}
+
+/// For the writes an upload's safety depends on (the write-ahead record and
+/// the promotion of a recognised snapshot): if they cannot be persisted, the
+/// upload must not happen — a PUT whose record was lost is exactly what would
+/// later be mistaken for another machine's snapshot.
+async fn try_save_state(
+    conn: &DatabaseConnection,
+    state: &ConfigSyncState,
+) -> Result<(), AppCommandError> {
+    let serialized = serde_json::to_string(state).map_err(|e| {
+        AppCommandError::task_execution_failed("Serialize config sync state")
+            .with_detail(e.to_string())
+    })?;
+    app_metadata_service::upsert_value(conn, CONFIG_SYNC_STATE_KEY, &serialized)
+        .await
+        .map_err(AppCommandError::db)
+}
+
 pub async fn save_state(conn: &DatabaseConnection, state: &ConfigSyncState) {
     let Ok(serialized) = serde_json::to_string(state) else {
         return;
@@ -578,20 +692,40 @@ fn client_for(settings: &ConfigSyncSettings) -> Result<WebdavClient, AppCommandE
 pub async fn test_connection_core(settings: &ConfigSyncSettings) -> Result<(), AppCommandError> {
     let client = client_for(settings)?;
     let dir = remote_dir_path(settings)?;
-    let _guard = remote_lock().lock().await;
+    let _guard = sync_lock().lock().await;
     client.probe(&dir).await.map_err(AppCommandError::from)
 }
 
-/// Collect → hash → skip-if-unchanged → upload.
+/// Collect → hash → skip-if-unchanged → look at the remote → upload.
 ///
-/// `force` bypasses only the hash comparison (the manual "sync now" button);
-/// it never bypasses validation.
+/// The look is what keeps this from being a silent overwrite. The remote holds
+/// exactly one snapshot and no history, so replacing one this device has never
+/// seen — a fresh install's defaults over the configuration another machine
+/// uploaded, or any device's next change over a snapshot another machine wrote
+/// since — destroys the only copy of that machine's settings. Uploads stay
+/// automatic; replacing an unseen snapshot never is.
 pub async fn upload_snapshot_core(
     conn: &DatabaseConnection,
     app_version: &str,
-    force: bool,
+    request: UploadRequest<'_>,
 ) -> Result<UploadOutcome, AppCommandError> {
+    let _operation = sync_lock().lock().await;
+
     let settings = load_settings(conn).await;
+    let mut state = load_state(conn).await;
+    if request.automatic && super::auto_sync::is_auto_sync_suppressed() {
+        // An apply that started between the timer's admission check and this
+        // lock. It holds the lock while it writes, so reaching here means it is
+        // done — but say nothing rather than race it if it is not.
+        return Ok(UploadOutcome {
+            uploaded: false,
+            sha256: String::new(),
+            counts: BTreeMap::new(),
+            synced_at: state.last_sync_at.clone().unwrap_or_default(),
+            conflict: None,
+        });
+    }
+
     let snapshot = collect_snapshot_core(conn).await?;
     let bytes = serialize_snapshot(&snapshot)?;
     let hash = sha256_hex(&bytes);
@@ -601,10 +735,10 @@ pub async fn upload_snapshot_core(
     // bytes AND the same destination. A hash on its own would say "already
     // uploaded" about a server that has never been written to.
     let target = settings.remote_target();
-    let mut state = load_state(conn).await;
+    let location = settings.remote_location();
     let already_there = state.last_uploaded_sha256.as_deref() == Some(hash.as_str())
         && state.last_uploaded_target.as_deref() == Some(target.as_str());
-    if !force && already_there {
+    if !request.force && already_there {
         // The common case on a timer: nothing changed, so nothing is sent and
         // no request is made at all.
         return Ok(UploadOutcome {
@@ -612,11 +746,68 @@ pub async fn upload_snapshot_core(
             sha256: hash,
             counts,
             synced_at: state.last_sync_at.clone().unwrap_or_default(),
+            conflict: None,
         });
     }
 
     let client = client_for(&settings)?;
     let dir = remote_dir_path(&settings)?;
+
+    let remote = match read_remote_head(&client, &dir).await {
+        Ok(remote) => remote,
+        Err(err) => {
+            state.last_error = Some(err.message.clone());
+            save_state(conn, &state).await;
+            return Err(err);
+        }
+    };
+
+    if let Some(head) = &remote {
+        match judge_remote(&client, &dir, &settings, &state, &location, head, request).await {
+            RemoteVerdict::Replaceable => {}
+            RemoteVerdict::Recognised => {
+                // Ours after all (a write-ahead entry, or a row from before this
+                // was tracked). Promote it durably BEFORE a new write-ahead entry
+                // goes in: the alternative — replacing the record — forgets this
+                // snapshot if the next attempt also fails, and the one after it
+                // would then refuse to replace our own upload.
+                state.known_remote = Some(RemoteRef {
+                    location: location.clone(),
+                    sha256: head.token.clone(),
+                });
+                state.inflight_remote.clear();
+                try_save_state(conn, &state).await?;
+            }
+            RemoteVerdict::Unseen => {
+                let conflict = RemoteConflict {
+                    location: location.clone(),
+                    sha256: head.token.clone(),
+                    source_device: head.manifest.as_ref().map(|m| m.source_device.clone()),
+                    created_at: head.manifest.as_ref().map(|m| m.created_at.clone()),
+                };
+                if state.conflict.as_ref() != Some(&conflict) {
+                    tracing::info!(
+                        "[CONFIG-SYNC] not uploading to {dir}: the remote holds a snapshot this \
+                         device has not seen (from {}, {}, sha256 {}); restore it or confirm \
+                         the overwrite",
+                        conflict.source_device.as_deref().unwrap_or("an unreadable manifest"),
+                        conflict.created_at.as_deref().unwrap_or("unknown time"),
+                        short_sha(&conflict.sha256),
+                    );
+                    state.conflict = Some(conflict.clone());
+                    save_state(conn, &state).await;
+                }
+                return Ok(UploadOutcome {
+                    uploaded: false,
+                    sha256: hash,
+                    counts,
+                    synced_at: state.last_sync_at.clone().unwrap_or_default(),
+                    conflict: Some(conflict),
+                });
+            }
+        }
+    }
+
     // What goes on the wire, which is also what the manifest's checksum has to
     // cover — its job is catching a truncated transfer.
     let (payload, encryption) = seal_for_upload(&settings, bytes).await?;
@@ -624,9 +815,18 @@ pub async fn upload_snapshot_core(
     let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| {
         AppCommandError::task_execution_failed("Serialize manifest").with_detail(e.to_string())
     })?;
+    let written = RemoteRef {
+        location: location.clone(),
+        sha256: manifest.config.sha256.clone(),
+    };
+
+    // Write-ahead, and fail closed: see `inflight_remote`.
+    state.inflight_remote.push(written.clone());
+    let overflow = state.inflight_remote.len().saturating_sub(MAX_INFLIGHT);
+    state.inflight_remote.drain(..overflow);
+    try_save_state(conn, &state).await?;
 
     let result = async {
-        let _guard = remote_lock().lock().await;
         client.ensure_dir(&dir).await?;
         client
             .put(&format!("{dir}/{CONFIG_FILE_NAME}"), payload)
@@ -641,16 +841,25 @@ pub async fn upload_snapshot_core(
     let synced_at = chrono::Utc::now().to_rfc3339();
     match result {
         Ok(()) => {
+            tracing::info!(
+                "[CONFIG-SYNC] uploaded the configuration to {dir} ({}, sha256 {})",
+                if request.automatic { "automatic" } else { "manual" },
+                short_sha(&written.sha256),
+            );
             state.last_uploaded_sha256 = Some(hash.clone());
             state.last_uploaded_target = Some(target);
             state.last_sync_at = Some(synced_at.clone());
             state.last_error = None;
+            state.known_remote = Some(written);
+            state.inflight_remote.clear();
+            state.conflict = None;
             save_state(conn, &state).await;
             Ok(UploadOutcome {
                 uploaded: true,
                 sha256: hash,
                 counts,
                 synced_at,
+                conflict: None,
             })
         }
         Err(err) => {
@@ -660,6 +869,154 @@ pub async fn upload_snapshot_core(
             Err(app_error)
         }
     }
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
+}
+
+/// The remote manifest as far as the overwrite decision needs it.
+struct RemoteHead {
+    /// What identifies this exact remote snapshot: the payload checksum the
+    /// manifest names, or the manifest file's own checksum when it cannot be
+    /// parsed (so even a broken remote can be named, and replaced, on purpose).
+    token: String,
+    manifest: Option<ConfigManifest>,
+}
+
+/// `None` = nothing up there yet.
+async fn read_remote_head(
+    client: &WebdavClient,
+    dir: &str,
+) -> Result<Option<RemoteHead>, AppCommandError> {
+    let bytes = client
+        .get(&format!("{dir}/{MANIFEST_FILE_NAME}"))
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(bytes.map(|bytes| match parse_manifest(&bytes) {
+        Ok(manifest) => RemoteHead {
+            token: manifest.config.sha256.clone(),
+            manifest: Some(manifest),
+        },
+        Err(_) => RemoteHead {
+            token: sha256_hex(&bytes),
+            manifest: None,
+        },
+    }))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RemoteVerdict {
+    /// Seen before, or the user named it: replace it.
+    Replaceable,
+    /// This device's own upload that the state did not record as seen.
+    Recognised,
+    /// Written by someone else since this device last looked.
+    Unseen,
+}
+
+async fn judge_remote(
+    client: &WebdavClient,
+    dir: &str,
+    settings: &ConfigSyncSettings,
+    state: &ConfigSyncState,
+    location: &str,
+    head: &RemoteHead,
+    request: UploadRequest<'_>,
+) -> RemoteVerdict {
+    if request.overwrite_remote_sha256 == Some(head.token.as_str()) {
+        return RemoteVerdict::Replaceable;
+    }
+    if state
+        .known_remote
+        .as_ref()
+        .is_some_and(|known| known.is(location, &head.token))
+    {
+        return RemoteVerdict::Replaceable;
+    }
+    if state
+        .inflight_remote
+        .iter()
+        .any(|entry| entry.is(location, &head.token))
+    {
+        return RemoteVerdict::Recognised;
+    }
+    if is_legacy_own_upload(client, dir, settings, state, location, head).await {
+        return RemoteVerdict::Recognised;
+    }
+    RemoteVerdict::Unseen
+}
+
+/// A state row written before `known_remote` existed records only the
+/// PLAINTEXT hash of this device's last upload. Without this, every existing
+/// user would find their own snapshot "unseen" after upgrading and auto-sync
+/// would stall until they confirmed an overwrite of their own configuration.
+///
+/// Exact, not heuristic: a plaintext payload's checksum IS the plaintext hash;
+/// an encrypted one is fetched, verified against its manifest, decrypted, and
+/// hashed. Anything that fails along the way is treated as not ours.
+async fn is_legacy_own_upload(
+    client: &WebdavClient,
+    dir: &str,
+    settings: &ConfigSyncSettings,
+    state: &ConfigSyncState,
+    location: &str,
+    head: &RemoteHead,
+) -> bool {
+    if state.known_remote.is_some() {
+        return false;
+    }
+    let (Some(last_hash), Some(last_target)) = (
+        state.last_uploaded_sha256.as_deref(),
+        state.last_uploaded_target.as_deref(),
+    ) else {
+        return false;
+    };
+    // Same location; the protection suffix may differ (encryption switched
+    // since), which the comparison below handles on its own.
+    let same_location = last_target == location
+        || last_target
+            .strip_prefix(location)
+            .is_some_and(|rest| rest.starts_with('\u{0}'));
+    if !same_location {
+        return false;
+    }
+    let Some(manifest) = &head.manifest else {
+        return false;
+    };
+    if manifest.encryption == ENCRYPTION_NONE {
+        return manifest.config.sha256 == last_hash;
+    }
+
+    let payload = match client.get(&format!("{dir}/{CONFIG_FILE_NAME}")).await {
+        Ok(Some(payload)) => payload,
+        _ => return false,
+    };
+    if validate_manifest(manifest, &payload).is_err() {
+        return false;
+    }
+    match open_encrypted_for_comparison(settings, payload).await {
+        Some(plain) => sha256_hex(&plain) == last_hash,
+        None => false,
+    }
+}
+
+/// Decrypt with the stored passphrase, whatever the local `encrypt` switch says
+/// — this only compares, it never applies.
+async fn open_encrypted_for_comparison(
+    settings: &ConfigSyncSettings,
+    payload: Vec<u8>,
+) -> Option<Vec<u8>> {
+    if settings.passphrase.is_empty() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    let envelope = crypto::parse_envelope(value).ok()?;
+    let passphrase = settings.passphrase.clone();
+    tokio::task::spawn_blocking(move || crypto::decrypt(&envelope, &passphrase))
+        .await
+        .ok()?
+        .ok()
 }
 
 /// Wrap the snapshot when encryption is on. Argon2 is deliberately expensive,
@@ -735,12 +1092,14 @@ pub async fn download_and_apply_core(
     conn: &DatabaseConnection,
     emitter: &EventEmitter,
 ) -> Result<DownloadOutcome, AppCommandError> {
+    // Held across the apply and the state write too, not just the GETs: see
+    // `sync_lock`.
+    let _operation = sync_lock().lock().await;
     let settings = load_settings(conn).await;
     let client = client_for(&settings)?;
     let dir = remote_dir_path(&settings)?;
 
     let (manifest_bytes, config_bytes) = {
-        let _guard = remote_lock().lock().await;
         let manifest_bytes = client
             .get(&format!("{dir}/{MANIFEST_FILE_NAME}"))
             .await
@@ -775,6 +1134,24 @@ pub async fn download_and_apply_core(
         super::local_io::save_rollback(conn, &super::snapshot::rollback_dir()).await;
     let applied = apply_snapshot_core(conn, emitter, &snapshot).await?;
 
+    // This device has now seen the remote snapshot, so its next upload — the
+    // merged configuration — may replace it. The apply is additive, so nothing
+    // the remote carried is lost by that.
+    let mut state = load_state(conn).await;
+    state.known_remote = Some(RemoteRef {
+        location: settings.remote_location(),
+        sha256: manifest.config.sha256.clone(),
+    });
+    state.inflight_remote.clear();
+    state.conflict = None;
+    state.last_pulled_at = Some(chrono::Utc::now().to_rfc3339());
+    save_state(conn, &state).await;
+    tracing::info!(
+        "[CONFIG-SYNC] restored the snapshot from {} ({}) out of {dir}",
+        manifest.source_device,
+        manifest.created_at,
+    );
+
     Ok(DownloadOutcome {
         manifest,
         applied,
@@ -792,7 +1169,7 @@ pub async fn peek_remote_core(
     let dir = remote_dir_path(&settings)?;
 
     let bytes = {
-        let _guard = remote_lock().lock().await;
+        let _guard = sync_lock().lock().await;
         client
             .get(&format!("{dir}/{MANIFEST_FILE_NAME}"))
             .await
@@ -1454,6 +1831,7 @@ mod tests {
                 last_uploaded_target: Some(load_settings(&db.conn).await.remote_target()),
                 last_sync_at: Some("2026-01-01T00:00:00Z".to_string()),
                 last_error: None,
+                ..Default::default()
             },
         )
         .await;
@@ -1468,6 +1846,7 @@ mod tests {
             last_uploaded_target: Some("https://dav.example.com/dav\u{0}codeg\u{0}work".to_string()),
             last_sync_at: Some("2026-01-01T00:00:00Z".to_string()),
             last_error: None,
+            ..Default::default()
         };
         save_state(&db.conn, &state).await;
         let loaded = load_state(&db.conn).await;
@@ -1497,7 +1876,7 @@ mod tests {
         let state = load_state(&db.conn).await;
         assert_eq!(state.last_uploaded_sha256.as_deref(), Some(hash.as_str()));
         assert_eq!(state.last_uploaded_target, None);
-        upload_snapshot_core(&db.conn, "1.0.0", false)
+        upload_snapshot_core(&db.conn, "1.0.0", UploadRequest::default())
             .await
             .expect_err("an unstamped baseline must not skip the upload");
     }
@@ -1511,7 +1890,7 @@ mod tests {
 
         // No server is configured, so reaching the transport at all would
         // surface as an error rather than a skip.
-        let outcome = upload_snapshot_core(&db.conn, "1.0.0", false)
+        let outcome = upload_snapshot_core(&db.conn, "1.0.0", UploadRequest::default())
             .await
             .expect("skip without network");
         assert!(!outcome.uploaded);
@@ -1543,7 +1922,7 @@ mod tests {
         )
         .await
         .expect("save");
-        let outcome = upload_snapshot_core(&db.conn, "1.0.0", false)
+        let outcome = upload_snapshot_core(&db.conn, "1.0.0", UploadRequest::default())
             .await
             .expect("same target, same bytes: skip");
         assert!(!outcome.uploaded);
@@ -1570,7 +1949,7 @@ mod tests {
             save_settings_core(&db.conn, input()).await.expect("save");
             seed_uploaded_baseline(&db).await;
             save_settings_core(&db.conn, retarget).await.expect("save");
-            upload_snapshot_core(&db.conn, "1.0.0", false)
+            upload_snapshot_core(&db.conn, "1.0.0", UploadRequest::default())
                 .await
                 .expect_err("a new target must be uploaded to, not skipped");
         }
