@@ -31,6 +31,7 @@ pub mod personal_agent_history_doc;
 pub mod personal_agent_item;
 pub mod personal_agent_message;
 pub mod personal_agent_notice;
+pub mod personal_agent_profile;
 pub mod personal_agent_segment;
 pub mod personal_agent_thread;
 pub mod personal_agent_timeline;

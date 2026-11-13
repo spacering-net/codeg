@@ -1772,6 +1772,20 @@ impl EngineHost {
             now,
         );
         let level = ctx.prefs.level_of(news.kind);
+        // What did not go out at once, counted for the weekly review (3.1):
+        // news the owner silenced or is looking at is not held back.
+        let held = match route {
+            Route::Digest => Some("merged"),
+            Route::HoldAway | Route::HoldFocus => Some("deferred"),
+            Route::Drop if !viewed && !BotSwitches::of(&row).silent() && ctx.prefs.proactive() => {
+                Some("kept")
+            }
+            _ => None,
+        };
+        if let Some(what) = held {
+            let day = presence::hours_day(now, clock::zone_of(&ctx.prefs.time_zone));
+            super::profile::count_held(&self.db, day, what).await;
+        }
         match route {
             Route::Drop => {}
             Route::Now { in_page, attention } => {
@@ -2161,6 +2175,7 @@ mod tests {
             end,
             learned: true,
             days: 7,
+            set: false,
         };
         Hours {
             workday: d,

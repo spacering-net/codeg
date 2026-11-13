@@ -8361,6 +8361,18 @@
           "on": "オン",
           "off": "オフ"
         },
+        "rule_undo": {
+          "title": "取り消しの多い変更",
+          "hint": "週の振り返りで：言われたとおりに行った変更を何度も取り消したとき、先に見せるようにするか尋ねます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_idle_bot": {
+          "title": "使われていない作業アシスタント",
+          "hint": "週の振り返りで：2 週間呼ばれていない作業アシスタントを、非表示にするか削除するか尋ねます。",
+          "on": "オン",
+          "off": "オフ"
+        },
         "rule_failed_hours": {
           "title": "失敗カードまでの時間",
           "hint": "失敗カードまでの時間"
@@ -8488,6 +8500,19 @@
           "on": "オン",
           "off": "オフ"
         },
+        "reactions": {
+          "title": "カードへの反応を記録",
+          "hint": "カードの種類ごとにあなたの対応を記録します。同じ提案カードを 3 回続けて閉じると 1 段階下げ、週の振り返りでお知らせします。オフにすると下げず、下げたものも元に戻します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "weekly_review": {
+          "title": "週の振り返り",
+          "hint": "1 週間を数字で振り返ります：依頼した作業、代わりに答えた質問、日ごと・アシスタントごとの使用量、codeg が調整したこと。",
+          "brief": "週の最初の朝のブリーフィング",
+          "wrap": "金曜日のまとめ",
+          "off": "オフ"
+        },
         "level_brief": {
           "title": "朝のまとめと 1 日のまとめ",
           "hint": "朝のまとめ、または 1 日のまとめができました。"
@@ -8612,6 +8637,59 @@
           "reading": "会話を読み込み中：{done}/{total} 件（{documents} 項目）。",
           "ready": "最新です：会話 {total} 件、{documents} 項目。",
           "readyNoSessions": "{documents} 項目。"
+        },
+        "setByYou": "あなたが設定",
+        "change": "変更",
+        "backToLearned": "学習した時間に戻す（{span}）",
+        "backToLearning": "自動学習に戻す",
+        "start": "開始",
+        "end": "終了",
+        "save": "保存",
+        "cancel": "キャンセル",
+        "seen": {
+          "title": "codeg が見ていること",
+          "hint": "codeg の会話から集計します（アシスタント自身の会話は除く）。会話の中身は読みません。気にしないよう指定したプロジェクトはアシスタントに伝えず、「あなた待ち」では後ろに並びます。",
+          "projects": "プロジェクト（直近 7 / 30 日）",
+          "noProjects": "まだプロジェクトはありません。",
+          "projectCounts": "会話 {recent} / {all} 件",
+          "mind": "再び気にする",
+          "dontMind": "気にしない",
+          "agents": "エージェント（直近 30 日）"
+        },
+        "reactions": {
+          "none": "直近 30 日のカードはありません。",
+          "off": "記録しません：自動で下げることはありません。",
+          "kind": "カード",
+          "raised": "表示",
+          "acted": "対応",
+          "dismissed": "閉じた",
+          "undone": "取り消し",
+          "wait": "所要",
+          "minutes": "{n} 分",
+          "kinds": {
+            "proposal": "確認カード",
+            "uncertain": "不確かな手順",
+            "loop": "止めたやり取り",
+            "changed": "変更",
+            "choice": "選択",
+            "reminder": "リマインダー",
+            "acceptance": "受け入れ確認",
+            "forge": "フォージ操作",
+            "pr": "プルリクエスト",
+            "routine": "ルーチン",
+            "rule": "提案",
+            "memory": "メモリ"
+          }
+        },
+        "clear": {
+          "title": "学習内容を消去",
+          "hint": "記録した在席時間と自動で下げたカードを忘れ、プロジェクト・エージェント・カードへの反応は今から数え直します。あなたが設定したものは残ります。",
+          "clearedAt": "前回の消去：{when}。",
+          "button": "消去…",
+          "confirmTitle": "codeg の学習内容を消去しますか？",
+          "confirmBody": "作業時間は codeg が学び直すまで既定値に戻り（あなたが設定した時間は残ります）、自動で下げた提案カードは元に戻ります。元に戻せません。",
+          "cancel": "キャンセル",
+          "confirm": "消去"
         }
       },
       "notifyPage": {
@@ -8622,6 +8700,12 @@
         "hidden": "非表示",
         "hiddenHint": "これまでどおり動きますが、通知せず、名簿にも表示されず、バッジにも数えません。名簿の下の「非表示 N 人」から見られます。",
         "note": "ここの設定にかかわらず、設定したリマインダーは届きます。レベルと静かな時間帯は「環境設定 → プロアクティブと通知」にあります。"
+      },
+      "grade": {
+        "firstPass": "一発合格 {rate}%（{pass}/{settled}）",
+        "average": "平均 {time}",
+        "minutes": "{n} 分",
+        "hours": "{h} 時間 {m} 分"
       }
     },
     "statusWord": {
@@ -9903,7 +9987,9 @@
         "makeIt": "ルーティンにする",
         "useAnother": "別のものを使う",
         "resume": "再開",
-        "open": "ルーティンを開く"
+        "open": "ルーティンを開く",
+        "confirm": "確認待ちのルーチン",
+        "confirmChange": "確認待ちのルーチン変更"
       }
     },
     "rules": {
@@ -9930,7 +10016,9 @@
         "uncommitted": "コミットされていない変更",
         "idle": "しばらく動きのない事項",
         "new_project": "新しいプロジェクト",
-        "behind": "ブランチが遅れていて競合あり"
+        "behind": "ブランチが遅れていて競合あり",
+        "undo": "取り消した変更",
+        "idle_bot": "使われていない作業アシスタント"
       },
       "wait": {
         "permission": "承認待ち",
@@ -9965,6 +10053,13 @@
         },
         "behind": {
           "rebase": "rebase を依頼"
+        },
+        "undo": {
+          "ask_first": "先に見せるようにする"
+        },
+        "idle_bot": {
+          "hide": "非表示にする",
+          "delete": "削除…"
         }
       },
       "done": {
@@ -9975,7 +10070,10 @@
         "opened": "開きました。",
         "closed": "事項を閉じました。",
         "watching": "このプロジェクトを見守ります。",
-        "rebasing": "rebase を依頼しました。"
+        "rebasing": "rebase を依頼しました。",
+        "asking_first": "今後の変更はまずカードでお見せします。",
+        "hidden": "非表示にしました。非表示のアシスタントから戻せます。",
+        "deleted": "削除しました。"
       },
       "hand": {
         "failed": "「{title}」が失敗したまま誰も対応していません。何が起きたか調べて、どうするか提案して。",
@@ -10037,8 +10135,18 @@
         "suggest": {
           "title": "アシスタントからの提案",
           "hint": "オフにするとアシスタントは提案しません。suggest 付きの呼び出しには「今は提案を受け付けない」と伝えます。"
+        },
+        "undo": {
+          "title": "取り消しの多い変更",
+          "hint": "週の振り返りで：言われたとおりに行った変更を何度も取り消したとき、先に見せるようにするか尋ねます。"
+        },
+        "idle_bot": {
+          "title": "使われていない作業アシスタント",
+          "hint": "週の振り返りで：2 週間呼ばれていない作業アシスタントを、非表示にするか削除するか尋ねます。"
         }
-      }
+      },
+      "undoDetail": "この 2 週間、言われたとおりに行った変更 {made} 件のうち {undone} 件を取り消しました。",
+      "idleBotDetail": "2 週間誰も呼んでいません。"
     },
     "brief": {
       "title": "朝のまとめ",
@@ -10073,6 +10181,29 @@
         "to": "{name} へ：",
         "answered": "返答: {text}",
         "open": "まだ返答なし"
+      },
+      "week": {
+        "title": "先週（{first} – {last}）",
+        "titleSoFar": "今週ここまで（{first} – {last}）",
+        "mode": {
+          "task": "ボード",
+          "chat": "チャット",
+          "session": "セッション"
+        },
+        "work": "依頼 {count} 件（{modes}）· 完了 {completed}、失敗 {failed} · 一発合格 {firstPass}/{settled}",
+        "byBot": "アシスタント別：{list}",
+        "doneForYou": "代わりにやったこと：受け入れで差し戻し {caught} · 自動再試行 {retried} · ルーチン完了 {routines} · マージ {merged}",
+        "asks": "作業からの質問：{count} 件 · アシスタントが回答 {answered} · あなたへ {forwarded}",
+        "between": "アシスタント間：メッセージ {messages} 件、{threads} スレッド · 停止 {loops}",
+        "unblock": "あなた待ちへの対応は平均 {minutes} 分（{count} 件）",
+        "unblockBefore": "あなた待ちへの対応は平均 {minutes} 分（{count} 件、前週 {before} 分）",
+        "held": "防いだ割り込み：まとめた {merged} · 後回し {deferred} · 今日だけ {kept}",
+        "proposals": "提案：{count} 件 · 採用 {taken} · 見送り {dismissed}",
+        "undone": "取り消し：変更 {changesUndone}/{changes} · メモリ {memoryUndone}/{memory}",
+        "reminders": "リマインダー：{count} 件 · 完了 {done} · 延期 {snoozed}",
+        "lowered": "codeg が下げたもの：{rules}",
+        "tokens": "トークン：{total}",
+        "botTokens": "{total}（自身 {own}、依頼した作業 {handed}）"
       }
     },
     "memory": {

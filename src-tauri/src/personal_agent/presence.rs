@@ -325,10 +325,14 @@ pub struct DayHours {
     /// night belongs to its evening.
     pub start: u32,
     pub end: u32,
-    /// Learned from the record; else the defaults.
+    /// Known: learned from the record, or set by the owner; else the
+    /// defaults.
     pub learned: bool,
     /// The days it was learned from.
     pub days: u32,
+    /// The owner set it (2.11): it stands whatever the record says.
+    #[serde(default)]
+    pub set: bool,
 }
 
 impl DayHours {
@@ -338,6 +342,7 @@ impl DayHours {
             end: DEFAULT_END,
             learned: false,
             days: 0,
+            set: false,
         }
     }
 }
@@ -459,6 +464,7 @@ pub fn learn(rows: &[(NaiveDate, u32, u32)], today: NaiveDate) -> Hours {
             end: median(spans.iter().map(|s| s.1).collect()),
             learned: true,
             days,
+            set: false,
         }
     };
     Hours {
@@ -468,8 +474,23 @@ pub fn learn(rows: &[(NaiveDate, u32, u32)], today: NaiveDate) -> Hours {
 }
 
 /// The owner's usual hours now: learned from the record, or the defaults
-/// with the record off.
+/// with the record off — and, over either, the hours they set themselves
+/// (2.11), which no later learning overrides.
 pub async fn hours(db: &DatabaseConnection, prefs: &Prefs, now: DateTime<Utc>) -> Hours {
+    let learned = learned_hours(db, prefs, now).await;
+    let set =
+        crate::db::service::personal_agent_profile_service::get(db, super::profile::HOURS_KEY)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+    super::profile::apply(learned, &set)
+}
+
+/// The usual hours as learned from the record alone; the defaults with the
+/// record off.
+pub async fn learned_hours(db: &DatabaseConnection, prefs: &Prefs, now: DateTime<Utc>) -> Hours {
     if !prefs.records_presence() {
         return Hours::default();
     }
@@ -522,9 +543,10 @@ pub fn about_owner(p: &Presence, hours: &Hours, tz: Tz, now: DateTime<Utc>) -> S
     out
 }
 
-/// The "about you" page (13.5, 1.12): the time zone as set and as it is,
-/// every zone there is to pick, the record's switch, whether the owner is
-/// in codeg, and the hours codeg sees.
+/// The "about you" page (13.5, 1.12, 2.11): the time zone as set and as it
+/// is, every zone there is to pick, the record's switch, whether the owner
+/// is in codeg, the hours codeg sees (with theirs over them), the projects
+/// and agents it sees them use, and how they answer its cards.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProfileView {
     /// As set: `system` or a zone's name.
@@ -538,13 +560,41 @@ pub struct ProfileView {
     pub present: bool,
     pub last_active: Option<DateTime<Utc>>,
     pub hours: Hours,
+    /// What the record alone says (the defaults with it off): what the
+    /// hours go back to when the owner lets go of theirs.
+    pub learned_hours: Hours,
     pub learn_days: i64,
+    /// The record of how the owner answers cards is kept (5.2).
+    pub reactions: bool,
+    /// What is seen counts from here: [`super::profile::OBSERVE_DAYS`] back,
+    /// or when the owner cleared it.
+    pub seen_since: DateTime<Utc>,
+    pub cleared_at: Option<DateTime<Utc>>,
+    pub projects: Vec<super::profile::ProjectSeen>,
+    /// Projects the owner asked codeg not to mind that are not among the
+    /// ones seen: by id and name, to take back.
+    pub excluded: Vec<(i32, String)>,
+    pub agents: Vec<super::profile::AgentShare>,
+    /// Empty with the record of their answers off.
+    pub cards: Vec<super::profile::CardReaction>,
 }
 
-pub async fn profile(db: &DatabaseConnection) -> ProfileView {
+pub async fn profile(app: &crate::db::AppDatabase) -> ProfileView {
+    let db = &app.conn;
     let prefs = account_prefs(db).await.unwrap_or_default();
     let now = clock::now();
     let p = now_state();
+    let observed = super::profile::observe(app, now).await;
+    let seen: std::collections::HashSet<i32> =
+        observed.projects.iter().map(|p| p.folder_id).collect();
+    let folders = super::overview::Folders::load(app).await;
+    let excluded = super::profile::excluded(app)
+        .await
+        .into_iter()
+        .filter(|f| !seen.contains(f))
+        .filter_map(|f| folders.project(f).filter(|(id, _)| *id == f))
+        .collect();
+    let reactions = prefs.records_reactions();
     ProfileView {
         zone: clock::zone_of(&prefs.time_zone).name().to_string(),
         system_zone: clock::system_tz().name().to_string(),
@@ -553,7 +603,19 @@ pub async fn profile(db: &DatabaseConnection) -> ProfileView {
         present: p.present,
         last_active: p.last_active,
         hours: hours(db, &prefs, now).await,
+        learned_hours: learned_hours(db, &prefs, now).await,
         learn_days: LEARN_DAYS,
+        reactions,
+        seen_since: observed.since,
+        cleared_at: super::profile::cleared_at(app).await,
+        projects: observed.projects,
+        excluded,
+        agents: observed.agents,
+        cards: if reactions {
+            super::profile::reactions(app, now).await
+        } else {
+            Vec::new()
+        },
         time_zone: prefs.time_zone,
     }
 }
@@ -798,6 +860,7 @@ mod tests {
                 end: 18 * 60 + 40,
                 learned: true,
                 days: 12,
+                set: false,
             },
             ..Hours::default()
         };

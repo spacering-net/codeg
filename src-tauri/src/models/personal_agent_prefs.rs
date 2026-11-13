@@ -337,6 +337,18 @@ pub enum WrapMode {
     Off,
 }
 
+/// Where the weekly review goes (6.6).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WeeklyReview {
+    /// The week before, in the first morning brief of a workday each week.
+    #[default]
+    Brief,
+    /// The week so far, in Friday's wrap-up.
+    Wrap,
+    Off,
+}
+
 /// The fixed time the morning brief is prepared, until the owner sets
 /// another.
 pub const DEFAULT_BRIEF_AT: &str = "08:30";
@@ -853,6 +865,22 @@ pub struct Prefs {
     /// The time machine searches the board's tasks.
     #[serde(default, deserialize_with = "lenient")]
     pub history_tasks: OnOff,
+    /// codeg keeps count of how the owner answers each kind of card, and
+    /// lowers a kind they keep dismissing (5.2, 13.5 About you). Off, it
+    /// lowers nothing and what it lowered goes back.
+    #[serde(default, deserialize_with = "lenient")]
+    pub reactions: OnOff,
+    /// The weekly review (6.6).
+    #[serde(default, deserialize_with = "lenient")]
+    pub weekly_review: WeeklyReview,
+    /// The weekly review asks whether to show changes first when the owner
+    /// undid many of those made at their word (6.6, 3.1).
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_undo: OnOff,
+    /// The weekly review asks whether to hide or delete a work assistant
+    /// not woken for two weeks.
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_idle_bot: OnOff,
 }
 
 impl Default for Prefs {
@@ -949,6 +977,10 @@ impl Default for Prefs {
             dock_badge: OnOff::On,
             history_sessions: OnOff::On,
             history_tasks: OnOff::On,
+            reactions: OnOff::On,
+            weekly_review: WeeklyReview::Brief,
+            rule_undo: OnOff::On,
+            rule_idle_bot: OnOff::On,
         }
     }
 }
@@ -1374,6 +1406,16 @@ pub const PREFS: &[PrefSpec] = &[
         label: "the assistants' own suggestions (`suggest: true`)",
     },
     PrefSpec {
+        key: "rule_undo",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the weekly review asking to show changes first when the owner undoes many",
+    },
+    PrefSpec {
+        key: "rule_idle_bot",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the weekly review asking to hide or delete a work assistant idle two weeks",
+    },
+    PrefSpec {
         key: "brief",
         kind: PrefKind::Choice(&["on", "off"]),
         label: "the morning brief",
@@ -1459,6 +1501,16 @@ pub const PREFS: &[PrefSpec] = &[
         key: "history_tasks",
         kind: PrefKind::Choice(&["on", "off"]),
         label: "history_search looking through the board's tasks",
+    },
+    PrefSpec {
+        key: "reactions",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg counting how the owner answers each kind of card, to lower a kind they keep dismissing",
+    },
+    PrefSpec {
+        key: "weekly_review",
+        kind: PrefKind::Choice(&["brief", "wrap", "off"]),
+        label: "the weekly review",
     },
 ];
 
@@ -1661,6 +1713,44 @@ impl Prefs {
         self.presence == OnOff::On
     }
 
+    /// Whether codeg learns from how the owner answers cards (5.2).
+    pub fn records_reactions(&self) -> bool {
+        self.reactions == OnOff::On
+    }
+
+    /// Set the level of news kind `kind` (one of [`NEWS`]); `false` for a
+    /// kind there is none of.
+    pub fn set_level(&mut self, kind: &str, level: Level) -> bool {
+        let slot = match kind {
+            "reminder" => &mut self.level_reminder,
+            "forwarded" => &mut self.level_forwarded,
+            "approval" => &mut self.level_approval,
+            "waiting" => &mut self.level_waiting,
+            "question" => &mut self.level_question,
+            "confirm" => &mut self.level_confirm,
+            "stuck" => &mut self.level_stuck,
+            "done" => &mut self.level_done,
+            "reply" => &mut self.level_reply,
+            "exchange" => &mut self.level_exchange,
+            "changed" => &mut self.level_changed,
+            "answered" => &mut self.level_answered,
+            "acceptance" => &mut self.level_acceptance,
+            "forge" => &mut self.level_forge,
+            "pr_ready" => &mut self.level_pr_ready,
+            "pr" => &mut self.level_pr,
+            "routine" => &mut self.level_routine,
+            "routine_paused" => &mut self.level_routine_paused,
+            "used_up" => &mut self.level_used_up,
+            "proposal" => &mut self.level_proposal,
+            "proposal_low" => &mut self.level_proposal_low,
+            "brief" => &mut self.level_brief,
+            "memory" => &mut self.level_memory,
+            _ => return false,
+        };
+        *slot = level;
+        true
+    }
+
     /// Whether a dispatch in `mode` goes to the owner as a card first.
     pub fn confirms(&self, mode: DispatchMode) -> bool {
         match self.confirm_dispatch {
@@ -1779,6 +1869,8 @@ impl Prefs {
             "behind" => self.rule_behind,
             "repeat" => self.rule_repeat,
             "suggest" => self.rule_suggest,
+            "undo" => self.rule_undo,
+            "idle_bot" => self.rule_idle_bot,
             _ => return false,
         };
         on == OnOff::On
@@ -1825,9 +1917,16 @@ fn brain_value(key: &str, value: &Value) -> String {
         }
         ("when_unsure", "ask") => "ask the owner first".into(),
         ("chat_changes", "apply") => {
-            "prefs_update changes what the owner asks for at once; they can undo it".into()
+            "the settings, assistants, executor configs and routines the owner asks to change \
+             (prefs_update, bot_update, assistant_update, routine_create, routine_update) change \
+             at once; they can undo it"
+                .into()
         }
-        ("chat_changes", "show") => "prefs_update puts it on a card for the owner first".into(),
+        ("chat_changes", "show") => {
+            "what the owner asks to change in the settings, assistants, executor configs and \
+             routines goes on a card for them first"
+                .into()
+        }
         ("confirm_dispatch", "never") => "dispatches go out directly".into(),
         ("confirm_dispatch", "code") => {
             "a dispatch that changes code (task or session) goes to the owner as a card to \
@@ -1970,6 +2069,16 @@ fn brain_value(key: &str, value: &Value) -> String {
             "codeg brings it near the end of their usual day, and when they ask".into()
         }
         ("wrap", "ask") => "only when they ask (\"that's it for today\")".into(),
+        ("reactions", "on") => {
+            "on: codeg counts how they answer each kind of card; a kind they dismissed three \
+             times in a row is lowered one level, and the weekly review says so"
+                .into()
+        }
+        ("reactions", "off") => "off: nothing is lowered, and what codeg lowered is back".into(),
+        ("weekly_review", "brief") => {
+            "in the first morning brief of each week, about the week before".into()
+        }
+        ("weekly_review", "wrap") => "in Friday's wrap-up, about the week so far".into(),
         (_, w) if !w.is_empty() => w.to_string(),
         _ => value.to_string(),
     }
@@ -2017,6 +2126,8 @@ fn rules_line(prefs: &Prefs) -> String {
         "new_project",
         "behind",
         "repeat",
+        "undo",
+        "idle_bot",
     ];
     let on: Vec<String> = rules
         .iter()
@@ -2042,7 +2153,10 @@ fn rules_line(prefs: &Prefs) -> String {
 
 /// The morning brief's and the wrap-up's items (6.4, 6.5).
 fn is_brief_item(key: &str) -> bool {
-    key.starts_with("brief") || key.starts_with("wrap") || key == "keep_awake"
+    key.starts_with("brief")
+        || key.starts_with("wrap")
+        || key == "keep_awake"
+        || key == "weekly_review"
 }
 
 /// What the desktop shows of the assistants outside codeg's windows (10.10).
@@ -2109,9 +2223,14 @@ fn brief_line(prefs: &Prefs, worker: bool) -> String {
     } else {
         "you write them when codeg hands you the materials; \"that's it for today\" is wrap_up"
     };
+    let weekly = match prefs.weekly_review {
+        WeeklyReview::Brief => "in the first morning brief of each week, about the week before",
+        WeeklyReview::Wrap => "in Friday's wrap-up, about the week so far",
+        WeeklyReview::Off => "off",
+    };
     format!(
         "- the morning brief ({writer}): {brief}. The wrap-up: {wrap}; \"tonight I can do\": {}; \
-         the computer kept awake for tonight's work: {}",
+         the computer kept awake for tonight's work: {}; the weekly review: {weekly}",
         if prefs.wrap_tonight == OnOff::On {
             "on"
         } else {

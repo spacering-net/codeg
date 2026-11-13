@@ -8810,10 +8810,10 @@ async fn the_owner_present_and_their_hours_reach_the_brain() {
     set_pref(&engine, "presence", json!("off")).await;
     let line = engine.now_line(None, "the owner's message").await;
     assert!(!line.contains("usual hours"), "{line}");
-    let profile = super::presence::profile(&engine.db.conn).await;
+    let profile = super::presence::profile(&engine.db).await;
     assert!(!profile.presence && !profile.hours.workday.learned);
     set_pref(&engine, "presence", json!("on")).await;
-    let profile = super::presence::profile(&engine.db.conn).await;
+    let profile = super::presence::profile(&engine.db).await;
     assert!(profile.presence && profile.hours.workday.learned && profile.hours.workday.days >= 5);
     assert_eq!((profile.hours.workday.start, profile.hours.workday.end), (10 * 60 + 30, 19 * 60));
     assert_eq!(profile.time_zone, "system");
@@ -14834,5 +14834,653 @@ async fn time_machine_steps() {
     assert!(
         !hits_for(&host.db, "zebrafish").await.is_empty(),
         "the rest read again"
+    );
+}
+
+// ── 2.11 the profile and the weekly review ──────────────────────────────────
+
+#[test]
+fn the_profile_takes_the_owners_hours_and_the_week_is_stated_with_its_questions() {
+    // A thread of its own with room, as the time machine's test.
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(profile_steps())
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn profile_steps() {
+    use super::prefs::SettingChange;
+    use super::{presence, profile, weekly};
+    use crate::commands::personal_agent::{
+        personal_agent_profile_update_core as update, ProfileOp,
+    };
+    use crate::db::entities::personal_agent_notice::{NoticeKind, NoticeLevel, NoticeState};
+    use crate::db::service::personal_agent_service::NewNotice;
+    use crate::models::personal_agent_prefs::ChatChanges;
+    use chrono::{Duration, TimeZone, Utc};
+    use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+
+    let (host, w, _tmp) = hosted().await;
+    let engine = host.primary();
+    let p = engine.bot().await;
+    let db = &host.db;
+    let conn = &db.conn;
+    engine
+        .apply_settings(&[SettingChange {
+            key: "prefs.time_zone".into(),
+            value: json!("Asia/Shanghai"),
+        }])
+        .await
+        .unwrap();
+    let tz: chrono_tz::Tz = "Asia/Shanghai".parse().unwrap();
+    // Wednesday 2026-11-11, Shanghai.
+    let sh = |h: u32, m: u32| {
+        tz.with_ymd_and_hms(2026, 11, 11, h, m, 0)
+            .unwrap()
+            .with_timezone(&Utc)
+    };
+
+    // ── 1. the owner's hours win, and later learning does not override ──
+    let view = update(
+        db,
+        ProfileOp::Hours {
+            day: "workday".into(),
+            start: Some("10:00".into()),
+            end: Some("20:00".into()),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(view.hours.workday.set && view.hours.workday.learned);
+    assert_eq!(
+        (view.hours.workday.start, view.hours.workday.end),
+        (600, 1200)
+    );
+    assert!(!view.learned_hours.workday.set, "what is learned is apart");
+    assert!(!view.hours.restday.set);
+    let prefs = engine.prefs().await;
+    let h = presence::hours(conn, &prefs, sh(12, 0)).await;
+    assert!(
+        super::reach::is_quiet(&prefs, &h, tz, sh(9, 30)),
+        "before their 10:00"
+    );
+    assert!(!super::reach::is_quiet(&prefs, &h, tz, sh(12, 0)));
+    assert!(!super::reach::is_quiet(&prefs, &h, tz, sh(19, 59)));
+    assert!(
+        super::reach::is_quiet(&prefs, &h, tz, sh(20, 0)),
+        "after their 20:00"
+    );
+    let day = presence::hours_day(sh(12, 0), tz);
+    assert_eq!(
+        super::brief::brief_early_at(&prefs, &h, tz, day),
+        Some(sh(9, 45)),
+        "the brief comes a quarter before their start"
+    );
+    // A month of 09:00–18:00 is learned; theirs still stands.
+    for back in 1..=20 {
+        let d = presence::hours_day(sh(12, 0), tz) - Duration::days(back);
+        if super::due::is_rest_day(d) {
+            continue;
+        }
+        for minute in [9 * 60, 9 * 60 + 5, 13 * 60, 17 * 60 + 50, 17 * 60 + 55] {
+            for _ in 0..3 {
+                crate::db::service::personal_agent_activity_service::add_minute(
+                    conn,
+                    d,
+                    minute / presence::SLOT_MINUTES,
+                    Utc::now(),
+                )
+                .await
+                .unwrap();
+            }
+        }
+    }
+    let learned = presence::learned_hours(conn, &prefs, sh(12, 0)).await;
+    assert!(learned.workday.learned && !learned.workday.set);
+    assert_eq!(learned.workday.start, 9 * 60);
+    let h = presence::hours(conn, &prefs, sh(12, 0)).await;
+    assert_eq!(
+        (h.workday.start, h.workday.end),
+        (600, 1200),
+        "not overridden"
+    );
+    // With the record off it stands too.
+    let mut off = prefs.clone();
+    off.presence = crate::models::personal_agent_prefs::OnOff::Off;
+    assert_eq!(
+        presence::hours(conn, &off, sh(12, 0)).await.workday.start,
+        600
+    );
+    // Out of the day, or shorter than an hour: refused.
+    assert!(update(
+        db,
+        ProfileOp::Hours {
+            day: "workday".into(),
+            start: Some("03:00".into()),
+            end: Some("12:00".into()),
+        },
+    )
+    .await
+    .is_err());
+    assert!(update(
+        db,
+        ProfileOp::Hours {
+            day: "workday".into(),
+            start: Some("10:00".into()),
+            end: None,
+        },
+    )
+    .await
+    .is_err());
+    // Let go: back to what is learned.
+    let view = update(
+        db,
+        ProfileOp::Hours {
+            day: "workday".into(),
+            start: None,
+            end: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!view.hours.workday.set);
+    assert_eq!(view.hours.workday.start, 9 * 60);
+
+    // ── 2. the projects seen, one not minded ───────────────────────────────
+    let a = crate::db::test_helpers::seed_folder(db, "/tmp/pa-profile-a").await;
+    let b = crate::db::test_helpers::seed_folder(db, "/tmp/pa-profile-b").await;
+    for _ in 0..3 {
+        crate::db::test_helpers::seed_conversation(db, a, AgentType::ClaudeCode).await;
+    }
+    let in_b = crate::db::test_helpers::seed_conversation(db, b, AgentType::Codex).await;
+    let seen = profile::observe(db, Utc::now()).await;
+    assert_eq!(seen.projects.len(), 2);
+    assert_eq!(seen.projects[0].folder_id, a, "most active first");
+    assert_eq!(seen.projects[0].recent, 3);
+    assert_eq!(seen.agents[0].agent_type, "claude_code");
+    assert_eq!(seen.agents[0].percent, 75);
+    let view = update(
+        db,
+        ProfileOp::Project {
+            folder_id: b,
+            excluded: true,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(view.projects.iter().any(|x| x.folder_id == b && x.excluded));
+    let folders = super::overview::Folders::load(db).await;
+    let recent = profile::recent_projects(db, &folders, Utc::now()).await;
+    assert!(recent.contains(&a) && !recent.contains(&b));
+    let line = profile::owner_line(&profile::observe(db, Utc::now()).await).unwrap();
+    assert!(
+        line.contains("pa-profile-a") && !line.contains("pa-profile-b"),
+        "{line}"
+    );
+    let _ = in_b;
+
+    // ── 3. grades ──────────────────────────────────────────────────────────
+    let new = |title: &str, bot: i32| NewDispatch {
+        bot_id: bot,
+        mode: DispatchMode::Chat,
+        executor_assistant_id: 7,
+        executor_snapshot_json: json!({ "assistant_id": 7, "name": "Dev", "agent_type": "codex" })
+            .to_string(),
+        folder_id: Some(a),
+        deliverable: None,
+        title: title.into(),
+        prompt: title.into(),
+        origin_batch_id: None,
+        on_done: None,
+        lineage: Default::default(),
+        done_when: None,
+    };
+    let mut made = Vec::new();
+    for (i, (state, turns, minutes)) in [
+        (DispatchState::Completed, 1, 10),
+        (DispatchState::Completed, 2, 50),
+        (DispatchState::Failed, 1, 5),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let d = svc::create_dispatch(conn, new(&format!("work {i}"), w))
+            .await
+            .unwrap();
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = d.clone().into();
+        am.state = Set(state);
+        am.turns = Set(turns);
+        am.finished_at = Set(Some(d.created_at + Duration::minutes(minutes)));
+        am.update(conn).await.unwrap();
+        made.push(d.id);
+    }
+    let (by_bot, by_exec) = profile::grades(db, Utc::now()).await;
+    let g = &by_bot[&w];
+    assert_eq!((g.dispatches, g.settled, g.first_pass), (3, 3, 1));
+    assert_eq!(g.first_pass_rate, Some(33));
+    assert_eq!(g.avg_minutes, Some(30));
+    assert_eq!(by_exec[&7].dispatches, 3);
+    let executors = crate::commands::personal_agent::personal_agent_grades_core(db).await;
+    assert_eq!(executors.bots[&w].first_pass, 1);
+
+    // ── 4. the week ────────────────────────────────────────────────────────
+    // Four changes made at the owner's word, three undone.
+    for (i, undone) in [true, true, true, false].into_iter().enumerate() {
+        let mut row = NewRow::new(TimelineKind::Notice, format!("changed {i}"));
+        row.data = Some(json!({ "notice": "changed", "why": "owner" }));
+        let (n, _) = svc::create_notice_with_row(
+            conn,
+            p,
+            NewNotice {
+                kind: NoticeKind::Changed,
+                subject_key: None,
+                level: NoticeLevel::Low,
+                batch_id: None,
+                payload: json!({ "why": "owner" }),
+            },
+            row,
+        )
+        .await
+        .unwrap();
+        svc::move_notice(conn, n.id, &[NoticeState::Open], NoticeState::Acted)
+            .await
+            .unwrap();
+        if undone {
+            svc::move_notice(conn, n.id, &[NoticeState::Acted], NoticeState::Undone)
+                .await
+                .unwrap();
+        }
+    }
+    // A worker nobody woke for three weeks.
+    let idle = worker_row(&engine, "Idle").await;
+    {
+        let row = crate::db::entities::personal_agent::Entity::find_by_id(idle)
+            .one(conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut am: crate::db::entities::personal_agent::ActiveModel = row.into();
+        am.created_at = Set(Utc::now() - Duration::days(21));
+        am.update(conn).await.unwrap();
+    }
+    // Tokens of the work the worker handed out.
+    let conv = crate::db::test_helpers::seed_conversation(db, a, AgentType::Codex).await;
+    {
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel =
+            svc::get_dispatch(conn, made[0])
+                .await
+                .unwrap()
+                .unwrap()
+                .into();
+        am.conversation_id = Set(Some(conv));
+        am.update(conn).await.unwrap();
+        crate::db::entities::token_usage_turn::ActiveModel {
+            conversation_id: Set(conv),
+            turn_key: Set("t1".into()),
+            occurred_at: Set(Utc::now()),
+            model: Set(None),
+            input_tokens: Set(1000),
+            output_tokens: Set(234),
+            cache_creation_tokens: Set(0),
+            cache_read_tokens: Set(0),
+            total_tokens: Set(1234),
+            duration_ms: Set(0),
+            ..Default::default()
+        }
+        .insert(conn)
+        .await
+        .unwrap();
+    }
+    profile::count_held(db, presence::hours_day(Utc::now(), tz), "merged").await;
+    profile::count_held(db, presence::hours_day(Utc::now(), tz), "merged").await;
+    profile::count_held(db, presence::hours_day(Utc::now(), tz), "deferred").await;
+    let prefs = engine.prefs().await;
+    let today = presence::hours_day(Utc::now(), tz);
+    let span = weekly::WeekSpan {
+        first: weekly::monday_of(today),
+        end: weekly::monday_of(today) + Duration::days(7),
+    };
+    let week = weekly::gather(db, &prefs, span, Utc::now()).await;
+    assert_eq!(week.dispatched, 3);
+    assert_eq!(
+        (week.completed, week.failed, week.first_pass, week.settled),
+        (2, 1, 1, 3)
+    );
+    assert_eq!(week.by_bot[0].id, w);
+    assert_eq!(week.by_executor[0].name, "Dev");
+    assert_eq!((week.changes, week.changes_undone), (4, 3));
+    assert_eq!(week.tokens, 1234);
+    assert_eq!(week.tokens_by_bot[0].bot_id, w);
+    assert_eq!(week.tokens_by_bot[0].handed_out, 1234);
+    assert_eq!((week.held.merged, week.held.deferred), (2, 1));
+    assert!(week.so_far);
+    let undo = week
+        .asks
+        .iter()
+        .find(|x| x.rule == "undo")
+        .expect("asks about the undoing");
+    assert_eq!((undo.undone, undo.made), (3, 4));
+    let asked_idle: Vec<_> = week.asks.iter().filter(|x| x.rule == "idle_bot").collect();
+    assert_eq!(
+        asked_idle.len(),
+        1,
+        "only the one nobody woke: {asked_idle:?}"
+    );
+    assert_eq!(asked_idle[0].bot_id, Some(idle));
+    // The brain's materials state it.
+    let m = super::brief::Material {
+        kind: "brief".into(),
+        day: today.format("%Y-%m-%d").to_string(),
+        week: Some(week.clone()),
+        ..Default::default()
+    };
+    assert!(!m.is_empty(), "a week to review is something to say");
+    let text = super::brief::material_text(&m, tz);
+    assert!(
+        text.contains(&format!("## The week {}", week.label)),
+        "{text}"
+    );
+    assert!(text.contains("tokens by assistant: Dev"), "{text}");
+    assert!(
+        text.contains("the owner undid 3 of the 4 changes"),
+        "{text}"
+    );
+
+    // ── 5. its questions, as cards ─────────────────────────────────────────
+    engine.raise_week_asks(&week, &prefs).await;
+    engine.raise_week_asks(&week, &prefs).await;
+    let cards =
+        crate::db::service::personal_agent_rule_service::open_of_kind(conn, NoticeKind::Rule)
+            .await
+            .unwrap();
+    assert_eq!(cards.len(), 2, "once a week each");
+    let card_of = |rule: &str| {
+        cards
+            .iter()
+            .find(|n| {
+                serde_json::from_str::<serde_json::Value>(&n.payload).unwrap()["rule"] == rule
+            })
+            .unwrap()
+            .id
+    };
+    engine
+        .act_on_notice(card_of("undo"), "ask_first")
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.prefs().await.chat_changes,
+        ChatChanges::Show,
+        "show such changes first"
+    );
+    // Deleting goes through the page; the card does not delete.
+    assert!(engine
+        .act_on_notice(card_of("idle_bot"), "delete")
+        .await
+        .is_err());
+    engine
+        .act_on_notice(card_of("idle_bot"), "hide")
+        .await
+        .unwrap();
+    assert!(svc::get_bot(conn, idle).await.unwrap().unwrap().hidden);
+    // Hidden: not asked about again.
+    let again = weekly::gather(db, &engine.prefs().await, span, Utc::now()).await;
+    assert!(again.asks.iter().all(|x| x.rule != "idle_bot"));
+    assert!(
+        again.asks.iter().all(|x| x.rule != "undo"),
+        "changes are shown first now"
+    );
+
+    // ── 6. the record of answers off: what codeg lowered goes back ─────────
+    crate::db::service::personal_agent_rule_service::set_data(
+        conn,
+        "failed",
+        crate::db::service::personal_agent_rule_service::RULE_ITSELF,
+        &json!({ "quiet_since": Utc::now().to_rfc3339() }),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    assert!(super::rules::quiet_since(db, "failed").await.is_some());
+    engine
+        .apply_settings(&[SettingChange {
+            key: "prefs.reactions".into(),
+            value: json!("off"),
+        }])
+        .await
+        .unwrap();
+    assert!(super::rules::quiet_since(db, "failed").await.is_none());
+    assert!(super::presence::profile(db).await.cards.is_empty());
+    assert!(
+        !super::rules::after_answer(db, "failed", false).await,
+        "nothing is lowered with it off"
+    );
+
+    // ── 7. clearing forgets what was learned, keeps what they set ──────────
+    update(
+        db,
+        ProfileOp::Hours {
+            day: "restday".into(),
+            start: Some("11:00".into()),
+            end: Some("16:00".into()),
+        },
+    )
+    .await
+    .unwrap();
+    let view = update(db, ProfileOp::Clear).await.unwrap();
+    assert!(view.cleared_at.is_some());
+    assert!(
+        !view.learned_hours.workday.learned,
+        "the minutes are forgotten"
+    );
+    assert!(view.hours.restday.set, "theirs stays");
+    assert!(view.projects.is_empty() || view.seen_since > Utc::now() - Duration::minutes(1));
+}
+
+#[tokio::test]
+async fn routines_the_owner_asked_to_see_first_wait_on_a_card_and_count_among_the_changes_undone() {
+    use super::prefs::SettingChange;
+    use crate::db::entities::personal_agent_notice::NoticeKind;
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let db = &engine.db;
+    let prefs = engine.prefs().await;
+    let today = super::presence::hours_day(chrono::Utc::now(), chrono_tz::UTC);
+    let span = super::weekly::WeekSpan {
+        first: super::weekly::monday_of(today),
+        end: super::weekly::monday_of(today) + chrono::Duration::days(7),
+    };
+    // Made at the owner's word: the made card stays open (its [Undo] is on
+    // it) and still counts as made; one undone.
+    let mut cards = Vec::new();
+    for i in 0..4 {
+        let out = call(
+            &engine,
+            "routine_create",
+            json!({ "title": format!("Check {i}"), "what": "Look.", "cron": "0 9 * * *" }),
+        )
+        .await;
+        assert!(out.ok, "{}", out.text);
+        cards.push(out.data["notice_id"].as_i64().unwrap() as i32);
+    }
+    engine.act_on_notice(cards[0], "undo").await.unwrap();
+    let week = super::weekly::gather(db, &prefs, span, chrono::Utc::now()).await;
+    assert_eq!(
+        (week.changes, week.changes_undone),
+        (4, 1),
+        "kept routines are made too"
+    );
+    assert!(
+        week.asks.iter().all(|a| a.rule != "undo"),
+        "one of four is no pattern"
+    );
+    // Two more undone: three of four.
+    engine.act_on_notice(cards[1], "undo").await.unwrap();
+    engine.act_on_notice(cards[2], "undo").await.unwrap();
+    let week = super::weekly::gather(db, &prefs, span, chrono::Utc::now()).await;
+    let undo = week.asks.iter().find(|a| a.rule == "undo").expect("asked");
+    assert_eq!((undo.undone, undo.made), (3, 4));
+    // Clearing what codeg learned: those undos count no more.
+    super::profile::clear(db).await.unwrap();
+    let week = super::weekly::gather(db, &prefs, span, chrono::Utc::now()).await;
+    assert!(week.asks.iter().all(|a| a.rule != "undo"), "cleared");
+
+    // The owner sees such changes first: a routine waits on a card.
+    engine
+        .apply_settings(&[SettingChange {
+            key: "prefs.chat_changes".into(),
+            value: json!("show"),
+        }])
+        .await
+        .unwrap();
+    let before = rsvc::list_of(&db.conn, bot).await.unwrap().len();
+    let out = call(
+        &engine,
+        "routine_create",
+        json!({ "title": "Nightly", "what": "Tidy up.", "cron": "0 2 * * *" }),
+    )
+    .await;
+    assert!(
+        out.ok && out.text.contains("sees such changes first"),
+        "{}",
+        out.text
+    );
+    assert_eq!(
+        rsvc::list_of(&db.conn, bot).await.unwrap().len(),
+        before,
+        "nothing made yet"
+    );
+    let notice = out.data["notice_id"].as_i64().unwrap() as i32;
+    let n = svc::get_notice(&db.conn, notice).await.unwrap().unwrap();
+    assert_eq!(n.kind, NoticeKind::Routine);
+    let card = routine_cards(&engine, "proposal").await;
+    assert_eq!(data_of(card.last().unwrap())["confirm"], true);
+    // Not a suggestion: "don't suggest these" does not apply to it.
+    assert_eq!(
+        super::rules::rule_of_card(&n, &data_of(card.last().unwrap())),
+        None
+    );
+    // It waits on the owner.
+    let row = svc::get_bot(&db.conn, bot).await.unwrap().unwrap();
+    let (_, needs) = super::live::live_from_db_with_needs(db, &row).await;
+    assert!(needs.iter().any(|x| x.kind == "changed"), "{needs:?}");
+    // Said yes to: made, as the owner's own.
+    engine.act_on_notice(notice, "accept").await.unwrap();
+    let made = rsvc::list_of(&db.conn, bot).await.unwrap();
+    let nightly = made.iter().find(|r| r.title == "Nightly").unwrap();
+    assert_eq!(nightly.source, "owner");
+    // A change too.
+    let out = call(
+        &engine,
+        "routine_update",
+        json!({ "routine_id": nightly.id, "action": "pause" }),
+    )
+    .await;
+    assert!(
+        out.ok && out.text.contains("sees such changes first"),
+        "{}",
+        out.text
+    );
+    assert!(
+        rsvc::get(&db.conn, nightly.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled,
+        "not yet"
+    );
+    // A new time: the card shows the routine as it would be, what it is
+    // beside it.
+    let out = call(
+        &engine,
+        "routine_update",
+        json!({ "routine_id": nightly.id, "cron": "30 4 * * *" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let card = routine_cards(&engine, "proposal").await;
+    let shown = data_of(card.last().unwrap());
+    assert_eq!(shown["routine"]["cron"], "30 4 * * *");
+    assert_eq!(shown["routine"]["id"], nightly.id);
+    assert_eq!(shown["before"]["cron"], "0 2 * * *");
+    let cron = |db: &crate::db::AppDatabase| {
+        let conn = db.conn.clone();
+        let id = nightly.id;
+        async move { rsvc::get(&conn, id).await.unwrap().unwrap().cron }
+    };
+    assert_eq!(cron(db).await.as_deref(), Some("0 2 * * *"), "not yet");
+    engine
+        .act_on_notice(out.data["notice_id"].as_i64().unwrap() as i32, "accept")
+        .await
+        .unwrap();
+    assert_eq!(cron(db).await.as_deref(), Some("30 4 * * *"));
+    // The assistant's own suggestion still is one, and is refused while the
+    // owner takes none.
+    let out = call(
+        &engine,
+        "routine_create",
+        json!({ "title": "Idea", "what": "x", "cron": "0 3 * * *", "suggest": true }),
+    )
+    .await;
+    assert!(out.ok && out.text.starts_with("Suggested"), "{}", out.text);
+}
+
+#[tokio::test]
+async fn clearing_what_was_learned_starts_the_count_of_dismissed_cards_anew() {
+    use crate::db::entities::personal_agent_notice::{NoticeKind, NoticeLevel, NoticeState};
+    use crate::db::service::personal_agent_service::NewNotice;
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let db = &engine.db;
+    let dismiss = |object: String| {
+        let engine = engine.clone();
+        async move {
+            let (n, _) = svc::create_notice_with_row(
+                &engine.db.conn,
+                bot,
+                NewNotice {
+                    kind: NoticeKind::Rule,
+                    subject_key: Some(super::rules::subject("failed", &object)),
+                    level: NoticeLevel::Normal,
+                    batch_id: None,
+                    payload: json!({ "rule": "failed", "object": object, "episode": object }),
+                },
+                NewRow::new(TimelineKind::Notice, "failed"),
+            )
+            .await
+            .unwrap();
+            svc::move_notice(
+                &engine.db.conn,
+                n.id,
+                &[NoticeState::Open],
+                NoticeState::Dismissed,
+            )
+            .await
+            .unwrap();
+            // Answers are ordered by when: one per moment.
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    };
+    dismiss("dispatch:1".into()).await;
+    dismiss("dispatch:2".into()).await;
+    super::profile::clear(db).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    dismiss("dispatch:3".into()).await;
+    assert!(
+        !super::rules::after_answer(db, "failed", false).await,
+        "the two before clearing count no more"
+    );
+    dismiss("dispatch:4".into()).await;
+    dismiss("dispatch:5".into()).await;
+    assert!(
+        super::rules::after_answer(db, "failed", false).await,
+        "three since: lowered"
     );
 }

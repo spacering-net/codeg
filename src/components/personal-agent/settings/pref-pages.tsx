@@ -31,6 +31,7 @@ import {
   GitPullRequestDraft,
   CalendarCheck,
   CalendarClock,
+  CalendarRange,
   CalendarX,
   BellRing,
   CircleAlert,
@@ -53,6 +54,7 @@ import {
   MessagesSquare,
   Moon,
   MoonStar,
+  MousePointerClick,
   Newspaper,
   NotebookPen,
   PanelTop,
@@ -71,6 +73,7 @@ import {
   Timer,
   TriangleAlert,
   Undo2,
+  UserX,
   Waypoints,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
@@ -203,6 +206,10 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   dock_badge: "on",
   history_sessions: "on",
   history_tasks: "on",
+  reactions: "on",
+  weekly_review: "brief",
+  rule_undo: "on",
+  rule_idle_bot: "on",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -401,6 +408,8 @@ const CHOICES: Partial<Record<PersonalAgentPrefKey, readonly string[]>> = {
   dock_badge: ["on", "off"],
   history_sessions: ["on", "off"],
   history_tasks: ["on", "off"],
+  reactions: ["on", "off"],
+  weekly_review: ["brief", "wrap", "off"],
   ...Object.fromEntries(LEVEL_ITEMS.map((k) => [k, NEWS_LEVELS])),
 }
 
@@ -512,6 +521,10 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   dock_badge: Dock,
   history_sessions: MessagesSquare,
   history_tasks: LayoutGrid,
+  reactions: MousePointerClick,
+  weekly_review: CalendarRange,
+  rule_undo: Undo2,
+  rule_idle_bot: UserX,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
@@ -547,6 +560,7 @@ export const ABOUT_ITEMS: PersonalAgentPrefKey[] = [
   "presence",
   "history_sessions",
   "history_tasks",
+  "reactions",
 ]
 
 /** The proposal rules' items (6.7): each rule's switch and threshold. */
@@ -568,6 +582,8 @@ export const RULE_ITEMS: PersonalAgentPrefKey[] = [
   "rule_repeat",
   "rule_repeat_count",
   "rule_suggest",
+  "rule_undo",
+  "rule_idle_bot",
 ]
 
 /** The parts of the morning brief (6.4), each on or off. */
@@ -590,6 +606,7 @@ export const BRIEF_ITEMS: PersonalAgentPrefKey[] = [
   "wrap",
   "wrap_tonight",
   "keep_awake",
+  "weekly_review",
 ]
 
 /** What the desktop shows outside codeg's windows (10.10). */
@@ -1056,6 +1073,7 @@ export function ProactivePage({ account, disabled }: PageProps) {
         {row("wrap")}
         {row("wrap_tonight")}
         {isDesktop() ? row("keep_awake") : null}
+        {row("weekly_review")}
       </SettingCard>
       <ProposalRules prefs={prefs} disabled={disabled} />
       <div className="space-y-1.5">

@@ -594,6 +594,14 @@ impl PersonalAgentEngine {
         } else {
             self.emit(PersonalAgentChange::Agent);
         }
+        // The owner turned codeg's learning from their answers off (what
+        // it lowered goes back) or on again (it counts from now) (5.3).
+        if applied
+            .iter()
+            .any(|a| a.key == "prefs.reactions" && a.from != a.to)
+        {
+            super::profile::put_back_lowered(&self.db).await;
+        }
         // What the time machine no longer searches leaves it now (8.2).
         if applied.iter().any(|a| {
             matches!(

@@ -19,6 +19,7 @@ pub mod personal_agent_activity_service;
 pub mod personal_agent_brief_service;
 pub mod personal_agent_history_service;
 pub mod personal_agent_message_service;
+pub mod personal_agent_profile_service;
 pub mod personal_agent_service;
 pub mod personal_agent_verification_service;
 pub mod personal_agent_routine_service;

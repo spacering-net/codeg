@@ -2934,6 +2934,18 @@ export interface PersonalAgentPrefs {
   history_sessions: "on" | "off"
   /** The time machine searches the board's tasks (8.2). */
   history_tasks: "on" | "off"
+  /** codeg counts how the owner answers each kind of card and lowers a
+   *  proposal rule whose cards they keep dismissing (5.2). */
+  reactions: "on" | "off"
+  /** The weekly review (6.6): in the first morning brief of each week, in
+   *  Friday's wrap-up, or not at all. */
+  weekly_review: "brief" | "wrap" | "off"
+  /** The weekly review asks whether to show changes first when the owner
+   *  undoes many of those made at their word. */
+  rule_undo: "on" | "off"
+  /** The weekly review asks whether to hide or delete a work assistant
+   *  not woken for two weeks. */
+  rule_idle_bot: "on" | "off"
 }
 
 /** codeg's proposal rules (6.7). */
@@ -2948,6 +2960,8 @@ export const PROPOSAL_RULES = [
   "behind",
   "repeat",
   "suggest",
+  "undo",
+  "idle_bot",
 ] as const
 export type ProposalRule = (typeof PROPOSAL_RULES)[number]
 
@@ -3154,6 +3168,86 @@ export interface BriefMaterial {
   suggestions: number
   dispatches: DispatchInfo[]
   off?: string[]
+  /** What codeg sees of the owner lately (5.2). */
+  owner?: string | null
+  /** The weekly review, when this one carries it (6.6). */
+  week?: BriefWeek | null
+}
+
+/** A name and how many, in the weekly review. */
+export interface BriefWeekCount {
+  id: number
+  name: string
+  n: number
+}
+
+/** One assistant's tokens in the week: its brain's and its handed-out
+ *  work's. */
+export interface BriefWeekTokens {
+  bot_id: number
+  name: string
+  own: number
+  handed_out: number
+}
+
+/** The weekly review (6.6, 3.1): the week's figures from codeg's records. */
+export interface BriefWeek {
+  label: string
+  first: string
+  last: string
+  so_far: boolean
+  dispatched: number
+  by_bot: BriefWeekCount[]
+  by_executor: BriefWeekCount[]
+  by_mode: Record<string, number>
+  completed: number
+  failed: number
+  settled: number
+  first_pass: number
+  caught: number
+  retried: number
+  routine_done: number
+  merged: number
+  asked: number
+  plans: number
+  answered_by: BriefWeekCount[]
+  forwarded: number
+  messages: number
+  threads: number
+  loops: number
+  tokens: number
+  tokens_by_day: [string, number][]
+  tokens_by_bot: BriefWeekTokens[]
+  unblock_minutes: number | null
+  unblocked: number
+  unblock_before: number | null
+  held: { merged: number; deferred: number; kept: number }
+  briefs: number
+  wraps: number
+  tonight: number
+  proposals: number
+  proposals_taken: number
+  proposals_dismissed: number
+  muted_rules: string[]
+  lowered: string[]
+  changes: number
+  changes_undone: number
+  memory: number
+  memory_undone: number
+  reminders: number
+  reminders_done: number
+  reminders_snoozed: number
+  repeat_offers: number
+  idle_items: number
+  hours_note: string | null
+  asks: {
+    rule: "undo" | "idle_bot"
+    bot_id: number | null
+    name: string | null
+    undone: number
+    made: number
+    since: string | null
+  }[]
 }
 
 /** A project the projects card lists when getting to know the owner (5.4,
@@ -3186,13 +3280,15 @@ export interface PersonalAgentPresence {
 export interface PersonalAgentDayHours {
   start: number
   end: number
-  /** Learned from the record; else the defaults (09:00–18:00). */
+  /** Known: learned from the record, or set by the owner; else the
+   *  defaults (09:00–18:00). */
   learned: boolean
   /** The days it was learned from. */
   days: number
+  /** The owner set it: it stands whatever is learned. */
+  set: boolean
 }
 
-/** The "about you" page (13.5, 1.12). */
 /** Where a time machine search looks (8.2). */
 export type PersonalAgentHistoryScope =
   | "all"
@@ -3246,6 +3342,69 @@ export interface PersonalAgentHistoryResults {
   status: PersonalAgentHistoryStatus
 }
 
+/** A project the owner worked in (5.1). */
+export interface PersonalAgentProjectSeen {
+  folder_id: number
+  name: string
+  /** Conversations with activity in the last 7 / 30 days. */
+  recent: number
+  sessions: number
+  last_at: string
+  /** The owner asked codeg not to mind it. */
+  excluded: boolean
+}
+
+/** An agent's share of the owner's conversations (5.1). */
+export interface PersonalAgentAgentShare {
+  agent_type: string
+  sessions: number
+  percent: number
+}
+
+/** How the owner answered one kind of card (5.1). */
+export interface PersonalAgentCardReaction {
+  kind: string
+  raised: number
+  acted: number
+  dismissed: number
+  muted: number
+  undone: number
+  expired: number
+  open: number
+  /** The median minutes to act. */
+  act_minutes: number | null
+}
+
+/** How an assistant's or an executor config's handed-out work went over
+ *  the last 30 days (2.11). */
+export interface PersonalAgentGrade {
+  dispatches: number
+  settled: number
+  first_pass: number
+  /** Percent; `null` with nothing settled. */
+  first_pass_rate: number | null
+  avg_minutes: number | null
+}
+
+export interface PersonalAgentGrades {
+  /** By assistant id. */
+  bots: Record<string, PersonalAgentGrade>
+  /** By executor config id. */
+  executors: Record<string, PersonalAgentGrade>
+}
+
+/** A change on the "about you" page (5.3). */
+export type PersonalAgentProfileOp =
+  | {
+      op: "hours"
+      day: "workday" | "restday"
+      start?: string | null
+      end?: string | null
+    }
+  | { op: "project"; folder_id: number; excluded: boolean }
+  | { op: "clear" }
+
+/** The "about you" page (13.5, 1.12, 2.11). */
 export interface PersonalAgentProfile {
   /** As set: `system` or a zone's name. */
   time_zone: string
@@ -3261,8 +3420,24 @@ export interface PersonalAgentProfile {
     workday: PersonalAgentDayHours
     restday: PersonalAgentDayHours
   }
+  /** What the record alone says: what the hours go back to. */
+  learned_hours: {
+    workday: PersonalAgentDayHours
+    restday: PersonalAgentDayHours
+  }
   /** The days the hours are learned from. */
   learn_days: number
+  /** How the owner answers cards is counted. */
+  reactions: boolean
+  /** What is seen counts from here (30 days back, or since cleared). */
+  seen_since: string
+  cleared_at: string | null
+  projects: PersonalAgentProjectSeen[]
+  /** Not-minded projects not among those seen: `[id, name]`. */
+  excluded: [number, string][]
+  agents: PersonalAgentAgentShare[]
+  /** Empty with the record of their answers off. */
+  cards: PersonalAgentCardReaction[]
 }
 
 /** How the assistants may use an executor config (10.5). */
@@ -3579,6 +3754,8 @@ export interface ExecutorView {
   workers: PersonalAgentBotSummary[]
   division: DivisionKind[]
   usage: ExecutorUsage
+  /** How its work went over the last 30 days (2.11). */
+  grade: PersonalAgentGrade
 }
 
 /** One of the personal agent's files: a fixed one (`SOUL.md`, `AGENTS.md`,

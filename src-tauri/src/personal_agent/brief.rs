@@ -283,17 +283,24 @@ pub struct Material {
     /// The parts the owner left out.
     #[serde(default)]
     pub off: Vec<String>,
+    /// What codeg sees of the owner lately (5.2): their projects and agents.
+    #[serde(default)]
+    pub owner: Option<String>,
+    /// The weekly review (6.6), when this is the one to carry it.
+    #[serde(default)]
+    pub week: Option<super::weekly::Week>,
 }
 
 impl Material {
     /// Nothing waits on the owner, nothing happened, nothing is on the
-    /// schedule: a brief with nothing to say (6.4).
+    /// schedule, no week to review: a brief with nothing to say (6.4).
     pub fn is_empty(&self) -> bool {
         self.needs.is_empty()
             && self.night.is_empty()
             && self.tonight.is_empty()
             && self.tonight_messages.is_empty()
             && self.schedule.is_empty()
+            && self.week.is_none()
     }
 
     /// How many things wait on the owner.
@@ -576,13 +583,23 @@ pub async fn gather(
             m.yesterday = yesterday(db, day).await;
         }
         m.suggestions = prefs.brief_suggestions;
+        m.owner = super::profile::owner_line(&super::profile::observe(db, now).await);
+    }
+    // The week to review, when this is the one to carry it (6.6) — and
+    // something happened in it: a week of nothing says nothing.
+    let given = super::weekly::given(db).await;
+    if let Some(w) = super::weekly::due_week(prefs.weekly_review, kind, day, given.as_deref()) {
+        let week = super::weekly::gather(db, prefs, w, now).await;
+        if !week.is_quiet() {
+            m.week = Some(week);
+        }
     }
     // Their usual hours, as codeg sees them.
     let hours = presence::hours(&db.conn, prefs, now).await;
     let d = hours.on(day);
     if d.learned {
         m.hours = Some(format!(
-            "{}–{} on a {} (learned from {} days)",
+            "{}–{} on a {} ({})",
             presence::clock_words(d.start),
             presence::clock_words(d.end),
             if due::is_rest_day(day) {
@@ -590,7 +607,11 @@ pub async fn gather(
             } else {
                 "workday"
             },
-            d.days
+            if d.set {
+                "as the owner set them".to_string()
+            } else {
+                format!("learned from {} days", d.days)
+            }
         ));
     }
     rows.sort_by_key(|d| d.id);
@@ -1263,6 +1284,31 @@ pub fn material_text(m: &Material, tz: Tz) -> String {
             part(&mut out, "The owner's yesterday", vec![line], 1);
         }
     }
+    if let Some(o) = &m.owner {
+        part(
+            &mut out,
+            "What codeg sees of the owner",
+            vec![format!("- {o}")],
+            1,
+        );
+    }
+    if let Some(w) = &m.week {
+        let lines = super::weekly::lines(w);
+        // Every line of it: "…and N more" is for lists of rows.
+        let n = lines.len().min(PART_MAX);
+        part(
+            &mut out,
+            &format!(
+                "The week {} ({} – {}{})",
+                w.label,
+                w.first,
+                w.last,
+                if w.so_far { ", so far" } else { "" }
+            ),
+            lines,
+            n,
+        );
+    }
     if let Some(h) = &m.hours {
         part(&mut out, "Their usual hours", vec![format!("- {h}")], 1);
     }
@@ -1285,12 +1331,38 @@ instructions: write only what is in them, and copy the numbers and ids as they a
     )
 }
 
+/// What the brain is asked to write of the week, when the materials have
+/// one (6.6).
+fn week_ask(m: &Material, cards: CardUse) -> String {
+    let Some(w) = &m.week else {
+        return String::new();
+    };
+    let how = match cards {
+        CardUse::Never => "in a few plain lines",
+        _ => {
+            "as a part of its own on the card: a chart of the tokens by day and a table of each              assistant's work and tokens (its own and its handed-out work's), then the figures              in short lines"
+        }
+    };
+    let asks = if w.asks.is_empty() {
+        String::new()
+    } else {
+        " codeg puts its questions (in the materials) on cards right after yours: say them in a          line, with no buttons for them."
+            .to_string()
+    };
+    format!(
+        " Add the week ({}{}) {how}. State the numbers as they are — no praise, no blame, no          advice beyond what the materials say.{asks}",
+        if w.so_far { "so far" } else { "before" },
+        if w.so_far { "" } else { ", the weekly review" },
+    )
+}
+
 /// What the brain is asked to write from the materials.
 fn ask_text(m: &Material, cards: CardUse) -> String {
     let card = match cards {
         CardUse::Never => "Write it as short plain text (the owner takes no cards), in those parts",
         _ => "Write a sentence or two to open, then one card (ui-render) in parts",
     };
+    let week = week_ask(m, cards);
     if m.kind == WRAP {
         let tonight = if m.candidates.is_empty() {
             "There is nothing to offer for tonight.".to_string()
@@ -1305,7 +1377,7 @@ fn ask_text(m: &Material, cards: CardUse) -> String {
         format!(
             "Write the owner's wrap-up of the day now. {card}: done today; still running (mark \
              what will run overnight); what needs them tomorrow. Leave out a part with nothing in \
-             it; no dispatch buttons on the card (9.3). {tonight}"
+             it; no dispatch buttons on the card (9.3).{week} {tonight}"
         )
     } else {
         let suggest = match m.suggestions {
@@ -1318,9 +1390,9 @@ fn ask_text(m: &Material, cards: CardUse) -> String {
             "Write the owner's morning brief now. {card}: needs you (each with a button: \
              `pa.open` with the open it has — open it, go approve it — or `pa.reply` \"Hand it to \
              you\" for one you can take), watching, done, today's schedule, suggestions, and a \
-             last line \"That's all.\". Leave out a part with nothing in it. {suggest} Work you \
-             are sure the owner wants done, dispatch; one that is only your idea, with `suggest: \
-             true`."
+             last line \"That's all.\". Leave out a part with nothing in it.{week} {suggest} Work \
+             you are sure the owner wants done, dispatch; one that is only your idea, with \
+             `suggest: true`."
         )
     }
 }
@@ -1734,7 +1806,13 @@ impl PersonalAgentEngine {
                 )
                 .await;
                 match made {
-                    Ok(Some(b)) => b,
+                    Ok(Some(b)) => {
+                        if let Some(w) = &m.week {
+                            super::weekly::note_given_of(&self.db, &m, &prefs).await;
+                            self.raise_week_asks(w, &prefs).await;
+                        }
+                        b
+                    }
                     Ok(None) => match bsvc::by_key(&self.db.conn, bot, &key).await.ok().flatten() {
                         Some(b) => b,
                         None => return ToolOutcome::refused("the wrap-up could not be recorded"),
@@ -2074,9 +2152,9 @@ impl EngineHost {
         }
         let since = super::today::day_of(now, tz).0;
         let m = gather(&self.db, &self.manager, WRAP, now, since, prefs).await;
-        // Nothing runs and nothing waits on the owner: nothing to wrap up
-        // — for a while.
-        if m.running.is_empty() && m.needs.is_empty() {
+        // Nothing runs, nothing waits on the owner, no week to review:
+        // nothing to wrap up — for a while.
+        if m.running.is_empty() && m.needs.is_empty() && m.week.is_none() {
             self.briefs.wrap_later(now);
             return;
         }
@@ -2113,6 +2191,9 @@ impl EngineHost {
         let Ok(Some(b)) = made else {
             return;
         };
+        if m.week.is_some() {
+            super::weekly::note_given_of(&self.db, &m, &self.primary.prefs().await).await;
+        }
         if empty {
             return;
         }
@@ -2198,7 +2279,6 @@ impl EngineHost {
             if !bsvc::swap_state(&self.db.conn, b.id, from, DELIVERED, BriefWrite::default())
                 .await
                 .unwrap_or(false)
-                || stale
             {
                 continue;
             }
@@ -2207,6 +2287,14 @@ impl EngineHost {
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default();
+            // The week's questions come after it — an earlier day's too:
+            // the next brief does not review that week again.
+            if let Some(w) = &m.week {
+                self.primary.raise_week_asks(w, &prefs).await;
+            }
+            if stale {
+                continue;
+            }
             let what = if b.kind == WRAP {
                 super::reach::What::Wrap {
                     needs: m.needs_count() + m.tomorrow.len(),
@@ -2286,6 +2374,7 @@ mod tests {
             end,
             learned: true,
             days: 10,
+            set: false,
         };
         Hours {
             workday: d,

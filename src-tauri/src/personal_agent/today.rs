@@ -585,7 +585,14 @@ pub async fn today_from(
         view.schedule.push(row);
     }
     view.schedule.sort_by_key(|r| r.at);
-    view.needs.sort_by_key(|r| (level_rank(r.level), r.at));
+    // Within a level, what is in a project the owner worked in lately (or
+    // in none) before what is in one they left or asked codeg not to mind;
+    // then the longest waiting first (5.2).
+    let recent = super::profile::recent_projects(db, &folders, now).await;
+    view.needs.sort_by_key(|r| {
+        let aside = r.project.as_ref().is_some_and(|p| !recent.contains(&p.id));
+        (level_rank(r.level), aside, r.at)
+    });
 
     // ── watching ────────────────────────────────────────────────────────
     // Handed-out work moving outside the board — a task is the board's row

@@ -9,6 +9,7 @@
 
 import {
   forwardRef,
+  useEffect,
   useImperativeHandle,
   useMemo,
   useState,
@@ -59,6 +60,7 @@ import { Switch } from "@/components/ui/switch"
 import {
   openSettingsWindow,
   personalAgentBotCopy,
+  personalAgentGrades,
   personalAgentSettingsPatch,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -70,6 +72,8 @@ import type {
   ExecutorView,
   PersonalAgentAccount,
   PersonalAgentBotSummary,
+  PersonalAgentGrade,
+  PersonalAgentGrades,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -123,6 +127,37 @@ function useProjects() {
   )
 }
 
+// ── grades ──────────────────────────────────────────────────────────────────
+
+/** A grade in a few words (2.11): "first pass 80% (8/10) · 12 min on
+ *  average"; `null` with nothing settled. */
+export function useGradeText(): (
+  g: PersonalAgentGrade | undefined
+) => string | null {
+  const t = useTranslations("PersonalAgent.settings.grade")
+  return (g) => {
+    if (!g || g.first_pass_rate == null) return null
+    const parts = [
+      t("firstPass", {
+        rate: g.first_pass_rate,
+        pass: g.first_pass,
+        settled: g.settled,
+      }),
+    ]
+    if (g.avg_minutes != null) {
+      const time =
+        g.avg_minutes >= 60
+          ? t("hours", {
+              h: Math.floor(g.avg_minutes / 60),
+              m: g.avg_minutes % 60,
+            })
+          : t("minutes", { n: g.avg_minutes })
+      parts.push(t("average", { time }))
+    }
+    return parts.join(" · ")
+  }
+}
+
 // ── work assistants ─────────────────────────────────────────────────────────
 
 export function WorkersPage({
@@ -147,6 +182,19 @@ export function WorkersPage({
   const [adding, setAdding] = useState(false)
   const [deleting, setDeleting] = useState<number | null>(null)
   const [copying, setCopying] = useState<number | null>(null)
+  const [grades, setGrades] = useState<PersonalAgentGrades | null>(null)
+  const gradeText = useGradeText()
+  useEffect(() => {
+    let alive = true
+    personalAgentGrades()
+      .then((g) => {
+        if (alive) setGrades(g)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
   const workers = (bots ?? []).filter((b) => b.kind === "worker")
   const goTo = (id: number) => {
     setViewBot(id)
@@ -225,6 +273,14 @@ export function WorkersPage({
                         .filter(Boolean)
                         .join(" · ")}
                     </span>
+                    {gradeText(grades?.bots[String(w.id)]) ? (
+                      <span
+                        className="block truncate text-xs text-muted-foreground"
+                        data-pa-worker-grade={w.id}
+                      >
+                        {gradeText(grades?.bots[String(w.id)])}
+                      </span>
+                    ) : null}
                   </span>
                 </button>
                 <Button
@@ -429,6 +485,7 @@ function ExecutorLine({
   const tKind = useTranslations("PersonalAgent.settings.division")
   const openWork = useOpenWork()
   const botName = useBotName()
+  const gradeText = useGradeText()
   if (!view) return null
   // "Only kanban tasks · only on 2 projects"; nothing for the default.
   const usage = view.usage
@@ -502,6 +559,14 @@ function ExecutorLine({
           dispatches: view.dispatches_14d,
           completed: view.completed_14d,
         })}
+      </span>
+    )
+  }
+  const grade = gradeText(view.grade)
+  if (grade) {
+    chips.push(
+      <span key="grade" data-pa-executor-grade={view.assistant_id}>
+        {grade}
       </span>
     )
   }

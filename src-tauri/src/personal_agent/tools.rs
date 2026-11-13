@@ -135,6 +135,8 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             // Whose each one is: the work assistants bound to it (4.4).
             let me = engine.bot().await;
             let bots = svc::list_bots(&db.conn).await.unwrap_or_default();
+            // How each one's work went lately: who to hand work to (5.2).
+            let (_, grades) = super::profile::grades(db, crate::personal_agent::clock::now()).await;
             let mut rows: Vec<Value> = Vec::new();
             let mut open_lines = Vec::new();
             let mut closed_lines = Vec::new();
@@ -176,14 +178,20 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "modes": usage.modes,
                     "projects": usage.projects,
                     "bound_to": owners.iter().map(|b| b.id).collect::<Vec<_>>(),
+                    "grade": grades.get(&a.id),
                 }));
                 let what = if a.description.trim().is_empty() {
                     String::new()
                 } else {
                     format!(" — {}", a.description.trim())
                 };
+                let grade = grades
+                    .get(&a.id)
+                    .and_then(super::profile::grade_words)
+                    .map(|g| format!(" [{g}]"))
+                    .unwrap_or_default();
                 let line = format!(
-                    "#{} {} ({}){what}{}{whose}",
+                    "#{} {} ({}){what}{}{grade}{whose}",
                     a.id,
                     a.name,
                     a.label_snapshot.agent,

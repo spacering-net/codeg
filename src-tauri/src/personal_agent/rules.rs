@@ -21,7 +21,13 @@
 //! - **Converging**: [`QUIET_AFTER`] of a rule's cards dismissed in a row
 //!   lower it one level (urgent → normal → low: no notification) until the
 //!   owner puts it back, or acts on one of its cards. "Don't suggest these"
-//!   on a card turns its rule off; the preferences turn it on again.
+//!   on a card turns its rule off; the preferences turn it on again. With
+//!   the owner's record of their answers off (`reactions`), nothing is
+//!   lowered (5.2).
+//! - **The weekly review's questions** (6.6) are rules too, raised with the
+//!   review: the changes the owner keeps undoing (`undo` — show such
+//!   changes first?) and a work assistant nobody woke for two weeks
+//!   (`idle_bot` — hide it or delete it?).
 //!
 //! The scan runs on the host's clock every [`SCAN_EVERY_SECS`] seconds, off
 //! its loop; the rules that read git or a forge look every
@@ -85,6 +91,8 @@ pub const ALL: &[&str] = &[
     "behind",
     "repeat",
     "suggest",
+    "undo",
+    "idle_bot",
 ];
 /// The rules that read git or a forge: looked at less often.
 const SLOW: &[&str] = &["pr_review", "uncommitted", "behind"];
@@ -223,6 +231,10 @@ pub async fn after_answer(db: &AppDatabase, rule: &str, acted: bool) -> bool {
     if !SCANNED.contains(&rule) {
         return false;
     }
+    // The owner keeps no record of their answers: nothing is lowered.
+    if !acted && !records_reactions(db).await {
+        return false;
+    }
     let mut record = rule_record(db, rule).await;
     if acted {
         if record.get("quiet_since").is_some_and(|v| !v.is_null()) {
@@ -249,6 +261,16 @@ pub async fn after_answer(db: &AppDatabase, rule: &str, acted: bool) -> bool {
     record["quiet_since"] = json!(Utc::now().to_rfc3339());
     write_record(db, rule, &record).await;
     true
+}
+
+/// Whether the owner has codeg learn from how they answer its cards (5.2).
+async fn records_reactions(db: &AppDatabase) -> bool {
+    match svc::primary_bot(&db.conn).await.ok().flatten() {
+        Some(p) => AccountView::from_settings(&p.settings)
+            .prefs
+            .records_reactions(),
+        None => true,
+    }
 }
 
 /// The owner put a lowered rule back (the preferences' [Put back]).
@@ -314,7 +336,8 @@ pub fn rule_of_card(n: &notice_entity::Model, data: &Value) -> Option<&'static s
         }
         NoticeKind::Routine => match payload["what"].as_str() {
             Some("repeat") => Some("repeat"),
-            Some("proposal") => Some("suggest"),
+            // One shown first because the owner asked so is no suggestion.
+            Some("proposal") if payload["why"].as_str() != Some("confirm") => Some("suggest"),
             _ => None,
         },
         NoticeKind::Proposal => (data["why"].as_str() == Some("proposal")).then_some("suggest"),
@@ -1337,10 +1360,28 @@ impl PersonalAgentEngine {
             "idle" => &["hand", "close"],
             "new_project" => &["watch"],
             "behind" => &["rebase"],
+            "undo" => &["ask_first"],
+            "idle_bot" => &["hide", "delete"],
             _ => &[],
         };
         if !allowed.contains(&action) {
             return Err(format!("`{action}` does not apply to this card"));
+        }
+        // An assistant that is gone already: the question is moot.
+        if rule == "idle_bot" && action == "hide" {
+            let id = facts["bot_id"].as_i64().and_then(|v| i32::try_from(v).ok());
+            let alive = match id {
+                Some(id) => svc::get_bot(&self.db.conn, id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some(),
+                None => false,
+            };
+            if !alive {
+                self.expire_rule_card(notice).await;
+                return Err("that assistant is gone".into());
+            }
         }
         // Taken first: a second answer is told it was answered.
         if !svc::move_notice(
@@ -1384,6 +1425,38 @@ impl PersonalAgentEngine {
                     .map(|_| ("watching".into(), json!({ "folder_id": folder })))
             }
             ("behind", "rebase") => self.rebase_behind(&facts).await,
+            ("undo", "ask_first") => self
+                .apply_settings(&[super::prefs::SettingChange {
+                    key: "prefs.chat_changes".into(),
+                    value: json!("show"),
+                }])
+                .await
+                .map(|_| ("asking_first".into(), json!({}))),
+            ("idle_bot", "hide") => {
+                let id = id_of("bot_id").ok_or("the card names no assistant")?;
+                match self.host_ref() {
+                    Some(h) => h
+                        .roster_act(id, crate::models::personal_agent_roster::RosterAct::Hide)
+                        .await
+                        .map(|_| ("hidden".into(), json!({ "bot_id": id }))),
+                    None => Err("the assistants run in another codeg".into()),
+                }
+            }
+            // The page deleted it, with the owner's choices on what goes
+            // with it: the card only says so.
+            ("idle_bot", "delete") => {
+                let id = id_of("bot_id").ok_or("the card names no assistant")?;
+                if svc::get_bot(&self.db.conn, id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some()
+                {
+                    Err("the assistant is still there".into())
+                } else {
+                    Ok(("deleted".into(), json!({ "bot_id": id })))
+                }
+            }
             // `hand`, `summary`: the assistant's to judge, as the owner's
             // message.
             _ => {

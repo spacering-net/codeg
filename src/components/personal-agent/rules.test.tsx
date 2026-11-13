@@ -24,6 +24,8 @@ const api = vi.hoisted(() => ({
   personalAgentRules: vi.fn(),
   personalAgentRuleReset: vi.fn(),
   personalAgentConversationTarget: vi.fn(),
+  personalAgentBotImpact: vi.fn(),
+  personalAgentBotDelete: vi.fn(),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({ openUrl: vi.fn() }))
@@ -160,6 +162,99 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+})
+
+describe("the weekly review's questions (2.11)", () => {
+  it("asks to show the changes the owner keeps undoing first", async () => {
+    const { container } = draw(
+      row({
+        notice: "rule",
+        rule: "undo",
+        state: "open",
+        object: "changes",
+        since: "2026-11-13T01:00:00Z",
+        lowered: false,
+        facts: { undone: 3, made: 4, week: "2026-W46" },
+      })
+    )
+    expect(screen.getByText("Changes you undid")).toBeTruthy()
+    expect(
+      screen.getByText(
+        "You undid 3 of the 4 changes made at your word in the last two weeks."
+      )
+    ).toBeTruthy()
+    fireEvent.click(
+      container.querySelector('[data-pa-rule-act="ask_first"]') as HTMLElement
+    )
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(
+        41,
+        "ask_first",
+        7,
+        undefined
+      )
+    )
+  })
+
+  it("hides an idle work assistant, or deletes it through the usual confirmation", async () => {
+    api.personalAgentBotImpact.mockResolvedValue({
+      bot_id: 9,
+      name: "Docs",
+      running: [],
+      unanswered_messages: 0,
+      executor: null,
+      division: [],
+      workdir: "/tmp/docs",
+      workdir_custom: false,
+    })
+    api.personalAgentBotDelete.mockResolvedValue(undefined)
+    const idle = {
+      notice: "rule",
+      rule: "idle_bot",
+      state: "open",
+      object: "bot:9",
+      since: "2026-10-20T01:00:00Z",
+      lowered: false,
+      facts: { bot_id: 9, name: "Docs", since: "2026-10-20T01:00:00Z" },
+    }
+    const { container } = draw(row(idle))
+    expect(screen.getByText("An idle work assistant")).toBeTruthy()
+    expect(screen.getByText("Docs")).toBeTruthy()
+    fireEvent.click(
+      container.querySelector('[data-pa-rule-act="hide"]') as HTMLElement
+    )
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(
+        41,
+        "hide",
+        7,
+        undefined
+      )
+    )
+    // [Delete…] asks first; the card settles once it is gone.
+    fireEvent.click(
+      container.querySelector('[data-pa-rule-act="delete"]') as HTMLElement
+    )
+    expect(api.personalAgentNoticeAct).not.toHaveBeenCalledWith(41, "delete", 7)
+    const confirm = await waitFor(() => {
+      const el = document.querySelector(
+        "[data-pa-delete-confirm]"
+      ) as HTMLButtonElement | null
+      expect(el?.disabled).toBe(false)
+      return el!
+    })
+    fireEvent.click(confirm)
+    await waitFor(() =>
+      expect(api.personalAgentBotDelete).toHaveBeenCalledWith(9, {
+        hand_over: true,
+        delete_executor: false,
+        delete_workdir: false,
+      })
+    )
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(41, "delete", 7)
+    )
+  })
 })
 
 describe("a rule's card", () => {

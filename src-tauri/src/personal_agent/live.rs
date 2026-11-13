@@ -299,6 +299,14 @@ async fn needs_of(
                 NoticeKind::Routine if payload["what"].as_str() == Some("paused") => {
                     "routine_paused"
                 }
+                // A routine (or a change to one) the owner asked to see
+                // first (13.5): theirs to confirm, as a changed setting is.
+                NoticeKind::Routine
+                    if payload["what"].as_str() == Some("proposal")
+                        && payload["why"].as_str() == Some("confirm") =>
+                {
+                    "changed"
+                }
                 _ => return None,
             };
             Some((n, kind))

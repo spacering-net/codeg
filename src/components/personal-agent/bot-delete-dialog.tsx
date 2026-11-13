@@ -33,10 +33,13 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 export function BotDeleteDialog({
   botId,
   onOpenChange,
+  onDeleted,
 }: {
   /** The work assistant to delete; `null` closes it. */
   botId: number | null
   onOpenChange: (open: boolean) => void
+  /** It is gone (a card that asked about it settles). */
+  onDeleted?: () => void
 }) {
   const t = useTranslations("PersonalAgent.bots.delete")
   const tk = useTranslations("PersonalAgent.settings.division")
@@ -80,6 +83,7 @@ export function BotDeleteDialog({
         delete_workdir: dropWorkdir,
       })
       if (viewBot === botId) setViewBot(null)
+      onDeleted?.()
       onOpenChange(false)
     } catch (e) {
       setError(toErrorMessage(e))

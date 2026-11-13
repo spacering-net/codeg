@@ -557,6 +557,8 @@ impl PersonalAgentEngine {
         let me = self.bot().await;
         let mut text = Vec::new();
         let mut data = Vec::new();
+        // How each one's handed-out work went lately (5.1).
+        let (grades, _) = super::profile::grades(&self.db, Utc::now()).await;
         for (row, live, needs) in all {
             let role = self.role_line(row);
             let you = if row.id == me { " (you)" } else { "" };
@@ -609,6 +611,9 @@ impl PersonalAgentEngine {
             if live.unread > 0 {
                 parts.push(format!("{} unread for the owner", live.unread));
             }
+            if let Some(g) = grades.get(&row.id).and_then(super::profile::grade_words) {
+                parts.push(format!("its handed-out work: {g}"));
+            }
             text.push(parts.join(" · "));
             data.push(json!({
                 "id": row.id,
@@ -631,6 +636,7 @@ impl PersonalAgentEngine {
                 })).collect::<Vec<_>>(),
                 "unread": live.unread,
                 "activity_known": live.activity_known,
+                "grade": grades.get(&row.id),
             }));
         }
         (text, data)

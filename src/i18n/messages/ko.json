@@ -8361,6 +8361,18 @@
           "on": "켜기",
           "off": "끄기"
         },
+        "rule_undo": {
+          "title": "자주 되돌린 변경",
+          "hint": "주간 회고에서: 말씀대로 바로 한 변경을 여러 번 되돌렸다면, 먼저 보여 드릴지 물어봐요.",
+          "on": "켜기",
+          "off": "끄기"
+        },
+        "rule_idle_bot": {
+          "title": "쉬고 있는 작업 어시스턴트",
+          "hint": "주간 회고에서: 2주 동안 한 번도 깨우지 않은 작업 어시스턴트를 숨길지 삭제할지 물어봐요.",
+          "on": "켜기",
+          "off": "끄기"
+        },
         "rule_failed_hours": {
           "title": "실패 카드까지 시간",
           "hint": "실패 카드까지 시간"
@@ -8488,6 +8500,19 @@
           "on": "켜기",
           "off": "끄기"
         },
+        "reactions": {
+          "title": "카드에 대한 반응 기록",
+          "hint": "카드 종류별로 어떻게 처리했는지 기록해요. 같은 제안 카드를 3번 연속 닫으면 한 단계 낮추고 주간 회고에서 알려 드려요. 끄면 낮추지 않고, 낮춘 것도 되돌려요.",
+          "on": "켜기",
+          "off": "끄기"
+        },
+        "weekly_review": {
+          "title": "주간 회고",
+          "hint": "한 주를 숫자로 돌아봐요: 맡긴 일, 대신 답한 질문, 날짜·어시스턴트별 사용량, codeg가 조정한 것.",
+          "brief": "주의 첫 아침 브리핑",
+          "wrap": "금요일 마무리",
+          "off": "끄기"
+        },
         "level_brief": {
           "title": "아침 브리핑과 하루 마무리",
           "hint": "아침 브리핑이나 하루 마무리가 준비됐어요."
@@ -8612,6 +8637,59 @@
           "reading": "대화를 읽는 중: {done}/{total}개 ({documents}개 항목).",
           "ready": "최신 상태: 대화 {total}개, {documents}개 항목.",
           "readyNoSessions": "{documents}개 항목."
+        },
+        "setByYou": "직접 설정함",
+        "change": "변경",
+        "backToLearned": "학습한 시간으로 되돌리기 ({span})",
+        "backToLearning": "자동 학습으로 되돌리기",
+        "start": "시작",
+        "end": "끝",
+        "save": "저장",
+        "cancel": "취소",
+        "seen": {
+          "title": "codeg가 보는 것",
+          "hint": "codeg의 대화에서 집계해요(어시스턴트 자신의 대화는 제외). 대화 내용은 읽지 않아요. 신경 쓰지 않기로 한 프로젝트는 어시스턴트에게 알리지 않고 '나를 기다림'에서 뒤로 가요.",
+          "projects": "프로젝트(최근 7 / 30일)",
+          "noProjects": "아직 프로젝트가 없어요.",
+          "projectCounts": "대화 {recent} / {all}개",
+          "mind": "다시 신경 쓰기",
+          "dontMind": "신경 쓰지 않기",
+          "agents": "에이전트(최근 30일)"
+        },
+        "reactions": {
+          "none": "최근 30일 동안 카드가 없어요.",
+          "off": "기록하지 않아요: 자동으로 낮추지 않아요.",
+          "kind": "카드",
+          "raised": "표시",
+          "acted": "처리",
+          "dismissed": "닫음",
+          "undone": "되돌림",
+          "wait": "걸린 시간",
+          "minutes": "{n}분",
+          "kinds": {
+            "proposal": "확인 카드",
+            "uncertain": "불확실한 단계",
+            "loop": "멈춘 대화",
+            "changed": "변경",
+            "choice": "선택",
+            "reminder": "알림",
+            "acceptance": "검수",
+            "forge": "포지 작업",
+            "pr": "풀 리퀘스트",
+            "routine": "루틴",
+            "rule": "제안",
+            "memory": "메모리"
+          }
+        },
+        "clear": {
+          "title": "학습 내용 지우기",
+          "hint": "기록한 접속 시간과 자동으로 낮춘 카드를 잊고, 프로젝트·에이전트·카드 반응은 지금부터 다시 세요. 직접 설정한 것은 남아요.",
+          "clearedAt": "마지막으로 지운 시각: {when}.",
+          "button": "지우기…",
+          "confirmTitle": "codeg가 학습한 내용을 지울까요?",
+          "confirmBody": "작업 시간은 codeg가 다시 배울 때까지 기본값으로 돌아가고(직접 설정한 시간은 남아요), 자동으로 낮춘 제안 카드는 원래대로 돌아가요. 되돌릴 수 없어요.",
+          "cancel": "취소",
+          "confirm": "지우기"
         }
       },
       "notifyPage": {
@@ -8622,6 +8700,12 @@
         "hidden": "숨기기",
         "hiddenHint": "평소처럼 돌아가지만 알림을 보내지 않고, 명단에 보이지 않으며 배지에도 세지 않습니다. 명단 아래 “N명 숨김”에서 볼 수 있습니다.",
         "note": "여기 설정과 상관없이 내가 설정한 리마인더는 옵니다. 수준과 조용한 시간은 “환경설정 → 능동 기능과 알림”에 있습니다."
+      },
+      "grade": {
+        "firstPass": "한 번에 통과 {rate}% ({pass}/{settled})",
+        "average": "평균 {time}",
+        "minutes": "{n}분",
+        "hours": "{h}시간 {m}분"
       }
     },
     "statusWord": {
@@ -9903,7 +9987,9 @@
         "makeIt": "루틴으로 만들기",
         "useAnother": "다른 것 사용",
         "resume": "재개",
-        "open": "루틴 열기"
+        "open": "루틴 열기",
+        "confirm": "확인할 루틴",
+        "confirmChange": "확인할 루틴 변경"
       }
     },
     "rules": {
@@ -9930,7 +10016,9 @@
         "uncommitted": "커밋하지 않은 변경 사항",
         "idle": "한동안 진행이 없는 항목",
         "new_project": "새 프로젝트",
-        "behind": "브랜치가 뒤처지고 충돌이 있어요"
+        "behind": "브랜치가 뒤처지고 충돌이 있어요",
+        "undo": "되돌린 변경",
+        "idle_bot": "쉬고 있는 작업 어시스턴트"
       },
       "wait": {
         "permission": "승인 대기",
@@ -9965,6 +10053,13 @@
         },
         "behind": {
           "rebase": "rebase 맡기기"
+        },
+        "undo": {
+          "ask_first": "먼저 보여 주기로 바꾸기"
+        },
+        "idle_bot": {
+          "hide": "숨기기",
+          "delete": "삭제…"
         }
       },
       "done": {
@@ -9975,7 +10070,10 @@
         "opened": "열었어요.",
         "closed": "항목을 닫았어요.",
         "watching": "이제 이 프로젝트를 지켜볼게요.",
-        "rebasing": "rebase를 맡겼어요."
+        "rebasing": "rebase를 맡겼어요.",
+        "asking_first": "이제 요청하신 변경은 먼저 카드로 보여 드려요.",
+        "hidden": "숨겼어요. 숨긴 어시스턴트에서 다시 찾을 수 있어요.",
+        "deleted": "삭제했어요."
       },
       "hand": {
         "failed": "“{title}”이(가) 실패했는데 아무도 처리하지 않았어요. 무엇이 잘못됐는지 살펴보고 제안해 줘.",
@@ -10037,8 +10135,18 @@
         "suggest": {
           "title": "어시스턴트의 제안",
           "hint": "끄면 어시스턴트가 제안하지 않고, suggest 호출에는 “지금은 제안을 받지 않음”이라고 알려요."
+        },
+        "undo": {
+          "title": "자주 되돌린 변경",
+          "hint": "주간 회고에서: 말씀대로 바로 한 변경을 여러 번 되돌렸다면, 먼저 보여 드릴지 물어봐요."
+        },
+        "idle_bot": {
+          "title": "쉬고 있는 작업 어시스턴트",
+          "hint": "주간 회고에서: 2주 동안 한 번도 깨우지 않은 작업 어시스턴트를 숨길지 삭제할지 물어봐요."
         }
-      }
+      },
+      "undoDetail": "최근 2주 동안 말씀대로 바로 한 변경 {made}개 중 {undone}개를 되돌렸어요.",
+      "idleBotDetail": "2주 동안 아무도 깨우지 않았어요."
     },
     "brief": {
       "title": "아침 브리핑",
@@ -10073,6 +10181,29 @@
         "to": "{name}에게:",
         "answered": "답장: {text}",
         "open": "아직 답장 없음"
+      },
+      "week": {
+        "title": "지난주 ({first} – {last})",
+        "titleSoFar": "이번 주 지금까지 ({first} – {last})",
+        "mode": {
+          "task": "보드",
+          "chat": "채팅",
+          "session": "세션"
+        },
+        "work": "맡긴 일 {count}건({modes}) · 완료 {completed}, 실패 {failed} · 한 번에 통과 {firstPass}/{settled}",
+        "byBot": "어시스턴트별: {list}",
+        "doneForYou": "대신 처리한 일: 검수에서 돌려보냄 {caught} · 자동 재시도 {retried} · 루틴 완료 {routines} · 병합 {merged}",
+        "asks": "작업에서 온 질문: {count}건 · 어시스턴트가 답함 {answered} · 나에게 옴 {forwarded}",
+        "between": "어시스턴트끼리: 메시지 {messages}개, 스레드 {threads}개 · 중단 {loops}",
+        "unblock": "기다리던 일을 평균 {minutes}분 만에 처리했어요({count}건)",
+        "unblockBefore": "기다리던 일을 평균 {minutes}분 만에 처리했어요({count}건, 전주 {before}분)",
+        "held": "막아 준 방해: 묶음 {merged} · 미룸 {deferred} · 오늘에만 {kept}",
+        "proposals": "제안: {count}개 · 수락 {taken} · 거절 {dismissed}",
+        "undone": "되돌림: 변경 {changesUndone}/{changes} · 메모리 {memoryUndone}/{memory}",
+        "reminders": "알림: {count}건 · 완료 {done} · 미룸 {snoozed}",
+        "lowered": "codeg가 낮춘 것: {rules}",
+        "tokens": "토큰: {total}",
+        "botTokens": "{total} (자체 {own}, 맡긴 일 {handed})"
       }
     },
     "memory": {

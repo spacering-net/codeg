@@ -6,7 +6,8 @@
  * night's work and how it went, what happened since the last brief, what
  * the assistants watch, the day's schedule, a line for each work assistant,
  * loose ends, the owner's yesterday — each row opening what it is about, as
- * "today"'s rows do. Nothing is settled from it.
+ * "today"'s rows do — and, once a week, the week's figures (6.6). Nothing is
+ * settled from it.
  */
 
 import { useTranslations } from "next-intl"
@@ -17,6 +18,8 @@ import type {
   BriefLoose,
   BriefMaterial,
   BriefTonightMessage,
+  BriefWeek,
+  BriefWeekCount,
   DispatchInfo,
   TodayRow,
 } from "@/lib/types"
@@ -162,6 +165,206 @@ function LooseLine({ loose, at }: { loose: BriefLoose; at: string }) {
   )
 }
 
+/** A token count in a few characters: 1.2M, 34.5k. */
+export function tokensShort(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function counts(v: BriefWeekCount[]): string {
+  return v
+    .slice(0, 6)
+    .map((c) => `${c.name} ${c.n}`)
+    .join(", ")
+}
+
+/** The week's figures (6.6, 3.1), as codeg gathered them. */
+export function WeekPart({ week }: { week: BriefWeek }) {
+  const t = useTranslations("PersonalAgent.brief.week")
+  const most = Math.max(1, ...week.tokens_by_day.map(([, n]) => n))
+  const modes = Object.entries(week.by_mode)
+    .map(([m, n]) => `${t(`mode.${m}` as "mode.task")} ${n}`)
+    .join(" · ")
+  const lines: { key: string; text: string }[] = [
+    {
+      key: "work",
+      text: t("work", {
+        count: week.dispatched,
+        modes: modes || "—",
+        completed: week.completed,
+        failed: week.failed,
+        firstPass: week.first_pass,
+        settled: week.settled,
+      }),
+    },
+  ]
+  if (week.by_bot.length > 0) {
+    lines.push({
+      key: "byBot",
+      text: t("byBot", { list: counts(week.by_bot) }),
+    })
+  }
+  if (week.caught + week.retried + week.routine_done + week.merged > 0) {
+    lines.push({
+      key: "done",
+      text: t("doneForYou", {
+        caught: week.caught,
+        retried: week.retried,
+        routines: week.routine_done,
+        merged: week.merged,
+      }),
+    })
+  }
+  if (week.asked > 0) {
+    lines.push({
+      key: "asks",
+      text: t("asks", {
+        count: week.asked,
+        answered: week.answered_by.reduce((a, c) => a + c.n, 0),
+        forwarded: week.forwarded,
+      }),
+    })
+  }
+  if (week.messages > 0 || week.loops > 0) {
+    lines.push({
+      key: "between",
+      text: t("between", {
+        messages: week.messages,
+        threads: week.threads,
+        loops: week.loops,
+      }),
+    })
+  }
+  if (week.unblock_minutes != null) {
+    lines.push({
+      key: "unblock",
+      text:
+        week.unblock_before != null
+          ? t("unblockBefore", {
+              minutes: week.unblock_minutes,
+              count: week.unblocked,
+              before: week.unblock_before,
+            })
+          : t("unblock", {
+              minutes: week.unblock_minutes,
+              count: week.unblocked,
+            }),
+    })
+  }
+  const held = week.held.merged + week.held.deferred + week.held.kept
+  if (held > 0) {
+    lines.push({
+      key: "held",
+      text: t("held", {
+        merged: week.held.merged,
+        deferred: week.held.deferred,
+        kept: week.held.kept,
+      }),
+    })
+  }
+  if (week.proposals > 0) {
+    lines.push({
+      key: "proposals",
+      text: t("proposals", {
+        count: week.proposals,
+        taken: week.proposals_taken,
+        dismissed: week.proposals_dismissed,
+      }),
+    })
+  }
+  if (week.changes + week.memory > 0) {
+    lines.push({
+      key: "undone",
+      text: t("undone", {
+        changes: week.changes,
+        changesUndone: week.changes_undone,
+        memory: week.memory,
+        memoryUndone: week.memory_undone,
+      }),
+    })
+  }
+  if (week.reminders > 0) {
+    lines.push({
+      key: "reminders",
+      text: t("reminders", {
+        count: week.reminders,
+        done: week.reminders_done,
+        snoozed: week.reminders_snoozed,
+      }),
+    })
+  }
+  if (week.lowered.length > 0) {
+    lines.push({
+      key: "lowered",
+      text: t("lowered", { rules: week.lowered.join(", ") }),
+    })
+  }
+  return (
+    <Part
+      name="week"
+      title={t(week.so_far ? "titleSoFar" : "title", {
+        first: week.first.slice(5),
+        last: week.last.slice(5),
+      })}
+    >
+      <ul className="flex flex-col gap-0.5" data-pa-brief-week={week.label}>
+        {lines.map((l) => (
+          <li
+            key={l.key}
+            className="text-xs leading-5 break-words text-muted-foreground"
+            data-pa-week-line={l.key}
+          >
+            {l.text}
+          </li>
+        ))}
+      </ul>
+      {week.tokens > 0 ? (
+        <div className="flex flex-col gap-1" data-pa-week-tokens>
+          <p className="text-xs text-muted-foreground">
+            {t("tokens", { total: tokensShort(week.tokens) })}
+          </p>
+          <div className="flex h-10 items-end gap-1">
+            {week.tokens_by_day.map(([day, n]) => (
+              <div
+                key={day}
+                className="flex min-w-0 flex-1 flex-col items-center gap-0.5"
+                title={`${day} · ${tokensShort(n)}`}
+              >
+                <div
+                  className="w-full rounded-sm bg-primary/60"
+                  style={{ height: `${Math.max(2, (n / most) * 32)}px` }}
+                />
+                <span className="text-[0.625rem] leading-none text-muted-foreground tabular-nums">
+                  {day.slice(8)}
+                </span>
+              </div>
+            ))}
+          </div>
+          {week.tokens_by_bot.length > 0 ? (
+            <ul className="flex flex-col gap-0.5">
+              {week.tokens_by_bot.map((b) => (
+                <li
+                  key={b.bot_id}
+                  className="text-xs leading-5 text-muted-foreground"
+                  data-pa-week-bot={b.bot_id}
+                >
+                  <span className="font-medium text-foreground">{b.name}</span>{" "}
+                  {t("botTokens", {
+                    total: tokensShort(b.own + b.handed_out),
+                    own: tokensShort(b.own),
+                    handed: tokensShort(b.handed_out),
+                  })}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </Part>
+  )
+}
+
 export function BriefCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.brief")
   const row = item.row
@@ -170,6 +373,7 @@ export function BriefCard({ item }: { item: NoticeItem }) {
   const bots = Array.isArray(m?.bots) ? m.bots : []
   const loose = Array.isArray(m?.loose) ? m.loose : []
   const y = m?.yesterday ?? null
+  const week = m?.week ?? null
   const messages = Array.isArray(m?.tonight_messages) ? m.tonight_messages : []
   const parts: { name: string; rows: TodayRow[] }[] = [
     { name: "needs", rows: rowsOf(m?.needs) },
@@ -182,7 +386,8 @@ export function BriefCard({ item }: { item: NoticeItem }) {
     parts.every((p) => p.rows.length === 0) &&
     messages.length === 0 &&
     bots.length === 0 &&
-    loose.length === 0
+    loose.length === 0 &&
+    week == null
   return (
     <MessageRow
       rowId={row.id}
@@ -249,6 +454,7 @@ export function BriefCard({ item }: { item: NoticeItem }) {
             </p>
           </Part>
         ) : null}
+        {week ? <WeekPart week={week} /> : null}
         {nothing ? (
           <p className="text-xs text-muted-foreground">{t("nothing")}</p>
         ) : null}

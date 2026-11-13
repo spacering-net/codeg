@@ -206,6 +206,27 @@ describe("routine cards", () => {
     )
   })
 
+  it("one the owner asked to see first is theirs to confirm, not a suggestion (2.11)", async () => {
+    const { container } = draw(
+      row({
+        notice: "routine",
+        what: "proposal",
+        state: "open",
+        confirm: true,
+        routine: { ...ROUTINE, id: null },
+        draft: ROUTINE,
+      })
+    )
+    expect(screen.getByText("Routine to confirm")).toBeTruthy()
+    expect(screen.queryByText("Suggested routine")).toBeNull()
+    // "Don't suggest these" is for suggestions.
+    expect(container.querySelector("[data-pa-mute-kind]")).toBeNull()
+    fireEvent.click(screen.getByText("Make it"))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(31, "accept", 7)
+    )
+  })
+
   it("an offer for a request the owner keeps making opens the editor prefilled", () => {
     const draft = { ...ROUTINE, kind: "dispatch", dispatch: { mode: "chat" } }
     draw(

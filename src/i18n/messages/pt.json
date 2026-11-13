@@ -8361,6 +8361,18 @@
           "on": "Ligado",
           "off": "Desligado"
         },
+        "rule_undo": {
+          "title": "Muitas alterações desfeitas",
+          "hint": "Na revisão semanal: se você desfez muitas das alterações feitas a seu pedido, perguntar se deve mostrá-las primeiro.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_idle_bot": {
+          "title": "Assistentes de trabalho ociosos",
+          "hint": "Na revisão semanal: um assistente de trabalho que ninguém acordou em duas semanas — ocultar ou excluir?",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
         "rule_failed_hours": {
           "title": "Horas até o cartão de falha",
           "hint": "Horas até o cartão de falha"
@@ -8488,6 +8500,19 @@
           "on": "Ligado",
           "off": "Desligado"
         },
+        "reactions": {
+          "title": "Aprender com suas respostas aos cartões",
+          "hint": "O codeg conta como você responde a cada tipo de cartão. Um cartão de proposta descartado três vezes seguidas desce um nível, e a revisão semanal avisa. Desligado: nada é rebaixado, e o que foi volta.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "weekly_review": {
+          "title": "Revisão semanal",
+          "hint": "A semana em números: trabalho delegado, perguntas respondidas por você, tokens por dia e por assistente, e o que o codeg ajustou.",
+          "brief": "No primeiro resumo matinal da semana",
+          "wrap": "No fechamento de sexta",
+          "off": "Desligado"
+        },
         "level_brief": {
           "title": "Resumo da manhã e fechamento",
           "hint": "Seu resumo da manhã ou o fechamento está pronto."
@@ -8612,6 +8637,59 @@
           "reading": "Lendo conversas: {done} de {total} até agora ({documents} entradas).",
           "ready": "Atualizado: {total} conversas, {documents} entradas.",
           "readyNoSessions": "{documents} entradas."
+        },
+        "setByYou": "definido por você",
+        "change": "Alterar",
+        "backToLearned": "Voltar ao aprendido ({span})",
+        "backToLearning": "Deixar o codeg aprender",
+        "start": "Início",
+        "end": "Fim",
+        "save": "Salvar",
+        "cancel": "Cancelar",
+        "seen": {
+          "title": "O que o codeg vê",
+          "hint": "A partir das conversas no codeg (sem as dos próprios assistentes), nunca do conteúdo. Um projeto que você pedir para ignorar não é contado aos assistentes e vai para o fim em \"Precisa de você\".",
+          "projects": "Projetos (últimos 7 / 30 dias)",
+          "noProjects": "Nenhum projeto ainda.",
+          "projectCounts": "{recent} / {all} conversas",
+          "mind": "Voltar a considerar",
+          "dontMind": "Ignorar",
+          "agents": "Agentes (últimos 30 dias)"
+        },
+        "reactions": {
+          "none": "Nenhum cartão nos últimos 30 dias.",
+          "off": "Não contado: nada é rebaixado.",
+          "kind": "Cartão",
+          "raised": "Exibidos",
+          "acted": "Tratados",
+          "dismissed": "Descartados",
+          "undone": "Desfeitos",
+          "wait": "Levou",
+          "minutes": "{n} min",
+          "kinds": {
+            "proposal": "Cartões a confirmar",
+            "uncertain": "Passos incertos",
+            "loop": "Trocas interrompidas",
+            "changed": "Alterações",
+            "choice": "Escolhas",
+            "reminder": "Lembretes",
+            "acceptance": "Aceitação",
+            "forge": "Ações na forja",
+            "pr": "Pull requests",
+            "routine": "Rotinas",
+            "rule": "Propostas",
+            "memory": "Memória"
+          }
+        },
+        "clear": {
+          "title": "Limpar o que o codeg aprendeu",
+          "hint": "Esquece os minutos anotados no codeg e os cartões rebaixados; projetos, agentes e respostas aos cartões contam a partir de agora. O que você definiu fica.",
+          "clearedAt": "Última limpeza: {when}.",
+          "button": "Limpar…",
+          "confirmTitle": "Limpar o que o codeg aprendeu?",
+          "confirmBody": "Seus horários voltam ao padrão até o codeg aprender de novo (os que você definiu ficam), e os cartões de proposta rebaixados voltam. Não pode ser desfeito.",
+          "cancel": "Cancelar",
+          "confirm": "Limpar"
         }
       },
       "notifyPage": {
@@ -8622,6 +8700,12 @@
         "hidden": "Ocultar",
         "hiddenHint": "Continua rodando, mas nunca avisa você, fica fora da lista e do contador; “N ocultos” no pé da lista o mostra.",
         "note": "Seus lembretes chegam seja qual for o ajuste aqui. Os níveis e as horas de silêncio ficam em Preferências → Proatividade e notificações."
+      },
+      "grade": {
+        "firstPass": "de primeira {rate}% ({pass}/{settled})",
+        "average": "{time} em média",
+        "minutes": "{n} min",
+        "hours": "{h} h {m} min"
       }
     },
     "statusWord": {
@@ -9903,7 +9987,9 @@
         "makeIt": "Transformar em rotina",
         "useAnother": "Usar outra",
         "resume": "Retomar",
-        "open": "Abrir rotinas"
+        "open": "Abrir rotinas",
+        "confirm": "Rotina a confirmar",
+        "confirmChange": "Alteração de rotina a confirmar"
       }
     },
     "rules": {
@@ -9930,7 +10016,9 @@
         "uncommitted": "Alterações não commitadas",
         "idle": "Um assunto parado",
         "new_project": "Um projeto novo",
-        "behind": "Branch atrasado, com conflitos"
+        "behind": "Branch atrasado, com conflitos",
+        "undo": "Alterações que você desfez",
+        "idle_bot": "Um assistente de trabalho ocioso"
       },
       "wait": {
         "permission": "Aguardando sua aprovação",
@@ -9965,6 +10053,13 @@
         },
         "behind": {
           "rebase": "Pedir um rebase"
+        },
+        "undo": {
+          "ask_first": "Mostrar primeiro"
+        },
+        "idle_bot": {
+          "hide": "Ocultar",
+          "delete": "Excluir…"
         }
       },
       "done": {
@@ -9975,7 +10070,10 @@
         "opened": "Aberto.",
         "closed": "Assunto fechado.",
         "watching": "Os assistentes agora acompanham este projeto.",
-        "rebasing": "Devolvido para rebase."
+        "rebasing": "Devolvido para rebase.",
+        "asking_first": "As alterações que você pedir virão primeiro como cartão.",
+        "hidden": "Ocultado. Ele continua entre os assistentes ocultos.",
+        "deleted": "Excluído."
       },
       "hand": {
         "failed": "“{title}” falhou e ninguém pegou. Veja o que deu errado e me diga o que sugere.",
@@ -10037,8 +10135,18 @@
         "suggest": {
           "title": "Sugestões dos assistentes",
           "hint": "Desligado: os assistentes não sugerem nada, e uma chamada com suggest fica sabendo que você não aceita sugestões agora."
+        },
+        "undo": {
+          "title": "Muitas alterações desfeitas",
+          "hint": "Na revisão semanal: se você desfez muitas das alterações feitas a seu pedido, perguntar se deve mostrá-las primeiro."
+        },
+        "idle_bot": {
+          "title": "Assistentes de trabalho ociosos",
+          "hint": "Na revisão semanal: um assistente de trabalho que ninguém acordou em duas semanas — ocultar ou excluir?"
         }
-      }
+      },
+      "undoDetail": "Você desfez {undone} das {made} alterações feitas a seu pedido nas últimas duas semanas.",
+      "idleBotDetail": "Ninguém o acordou em duas semanas."
     },
     "brief": {
       "title": "Resumo da manhã",
@@ -10073,6 +10181,29 @@
         "to": "Para {name}:",
         "answered": "respondeu: {text}",
         "open": "ainda sem resposta"
+      },
+      "week": {
+        "title": "Semana passada ({first} – {last})",
+        "titleSoFar": "Esta semana até agora ({first} – {last})",
+        "mode": {
+          "task": "quadro",
+          "chat": "chat",
+          "session": "sessão"
+        },
+        "work": "Delegados {count} ({modes}) · concluídos {completed}, falharam {failed} · de primeira {firstPass} de {settled}",
+        "byBot": "Por assistente: {list}",
+        "doneForYou": "Feito por você: {caught} devolvidos na aceitação · {retried} repetidos · {routines} rotinas · {merged} mesclados",
+        "asks": "Perguntas do trabalho: {count} · respondidas pelos assistentes {answered} · vieram a você {forwarded}",
+        "between": "Entre assistentes: {messages} mensagens em {threads} conversas · {loops} interrompidas",
+        "unblock": "Você respondeu ao que esperava em {minutes} min em média ({count})",
+        "unblockBefore": "Você respondeu ao que esperava em {minutes} min em média ({count}; semana anterior {before} min)",
+        "held": "Interrupções evitadas: {merged} agrupadas · {deferred} adiadas · {kept} só em Hoje",
+        "proposals": "Propostas: {count} · aceitas {taken} · recusadas {dismissed}",
+        "undone": "Desfeitos: {changesUndone} de {changes} alterações · {memoryUndone} de {memory} na memória",
+        "reminders": "Lembretes: {count} · feitos {done} · adiados {snoozed}",
+        "lowered": "O codeg rebaixou: {rules}",
+        "tokens": "Tokens: {total}",
+        "botTokens": "{total} — próprio {own}, trabalho delegado {handed}"
       }
     },
     "memory": {

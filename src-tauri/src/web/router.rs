@@ -458,6 +458,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_profile),
         )
         .route(
+            "/personal_agent_profile_update",
+            post(handlers::personal_agent::personal_agent_profile_update),
+        )
+        .route(
+            "/personal_agent_grades",
+            post(handlers::personal_agent::personal_agent_grades),
+        )
+        .route(
             "/personal_agent_history_search",
             post(handlers::personal_agent::personal_agent_history_search),
         )

@@ -373,6 +373,26 @@ pub async fn personal_agent_history_search(
     ))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ProfileUpdateParams {
+    pub op: pa::ProfileOp,
+}
+
+pub async fn personal_agent_profile_update(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(p): Json<ProfileUpdateParams>,
+) -> Result<Json<crate::personal_agent::presence::ProfileView>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_profile_update_core(&state.db, p.op).await?,
+    ))
+}
+
+pub async fn personal_agent_grades(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<pa::GradesView>, AppCommandError> {
+    Ok(Json(pa::personal_agent_grades_core(&state.db).await))
+}
+
 pub async fn personal_agent_history_status(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<crate::personal_agent::history::HistoryStatus>, AppCommandError> {

@@ -8361,6 +8361,18 @@
           "on": "An",
           "off": "Aus"
         },
+        "rule_undo": {
+          "title": "Viele Änderungen rückgängig gemacht",
+          "hint": "Im Wochenrückblick: Wenn du viele auf dein Wort hin gemachte Änderungen rückgängig gemacht hast, fragen, ob solche Änderungen zuerst gezeigt werden sollen.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_idle_bot": {
+          "title": "Untätige Arbeitsassistenten",
+          "hint": "Im Wochenrückblick: ein Arbeitsassistent, den zwei Wochen niemand geweckt hat — ausblenden oder löschen?",
+          "on": "An",
+          "off": "Aus"
+        },
         "rule_failed_hours": {
           "title": "Stunden bis zur Fehlschlag-Karte",
           "hint": "Stunden bis zur Fehlschlag-Karte"
@@ -8488,6 +8500,19 @@
           "on": "An",
           "off": "Aus"
         },
+        "reactions": {
+          "title": "Aus deinen Antworten auf Karten lernen",
+          "hint": "codeg zählt, wie du auf jede Art Karte antwortest. Eine Vorschlagskarte, die du dreimal hintereinander verwirfst, wird eine Stufe herabgesetzt; der Wochenrückblick sagt es. Aus: Nichts wird herabgesetzt, Herabgesetztes kommt zurück.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "weekly_review": {
+          "title": "Wochenrückblick",
+          "hint": "Die Woche in Zahlen: vergebene Arbeit, für dich beantwortete Fragen, Tokens pro Tag und pro Assistent und was codeg angepasst hat.",
+          "brief": "Im ersten Morgenbriefing der Woche",
+          "wrap": "Im Tagesabschluss am Freitag",
+          "off": "Aus"
+        },
         "level_brief": {
           "title": "Morgen-Briefing und Tagesabschluss",
           "hint": "Dein Morgen-Briefing oder der Tagesabschluss ist fertig."
@@ -8612,6 +8637,59 @@
           "reading": "Unterhaltungen werden gelesen: {done} von {total} bisher ({documents} Einträge).",
           "ready": "Aktuell: {total} Unterhaltungen, {documents} Einträge.",
           "readyNoSessions": "{documents} Einträge."
+        },
+        "setByYou": "von dir festgelegt",
+        "change": "Ändern",
+        "backToLearned": "Zurück zum Gelernten ({span})",
+        "backToLearning": "codeg lernen lassen",
+        "start": "Beginn",
+        "end": "Ende",
+        "save": "Speichern",
+        "cancel": "Abbrechen",
+        "seen": {
+          "title": "Was codeg sieht",
+          "hint": "Aus den Unterhaltungen in codeg (ohne die der Assistenten selbst), nie aus ihrem Inhalt. Ein Projekt, das codeg nicht beachten soll, wird den Assistenten nicht genannt und steht unter „Braucht dich“ hinten.",
+          "projects": "Projekte (letzte 7 / 30 Tage)",
+          "noProjects": "Noch kein Projekt.",
+          "projectCounts": "{recent} / {all} Unterhaltungen",
+          "mind": "Wieder beachten",
+          "dontMind": "Nicht beachten",
+          "agents": "Agenten (letzte 30 Tage)"
+        },
+        "reactions": {
+          "none": "Keine Karten in den letzten 30 Tagen.",
+          "off": "Nicht gezählt: Nichts wird herabgesetzt.",
+          "kind": "Karte",
+          "raised": "Gezeigt",
+          "acted": "Erledigt",
+          "dismissed": "Verworfen",
+          "undone": "Rückgängig",
+          "wait": "Gebraucht",
+          "minutes": "{n} Min.",
+          "kinds": {
+            "proposal": "Zu bestätigende Karten",
+            "uncertain": "Unsichere Schritte",
+            "loop": "Gestoppte Wechsel",
+            "changed": "Änderungen",
+            "choice": "Auswahlen",
+            "reminder": "Erinnerungen",
+            "acceptance": "Abnahme",
+            "forge": "Forge-Aktionen",
+            "pr": "Pull-Requests",
+            "routine": "Routinen",
+            "rule": "Vorschläge",
+            "memory": "Gedächtnis"
+          }
+        },
+        "clear": {
+          "title": "Gelerntes löschen",
+          "hint": "Vergisst die in codeg notierten Minuten und herabgesetzten Karten; Projekte, Agenten und Kartenantworten zählen ab jetzt. Was du selbst festgelegt hast, bleibt.",
+          "clearedAt": "Zuletzt gelöscht: {when}.",
+          "button": "Löschen …",
+          "confirmTitle": "Gelerntes von codeg löschen?",
+          "confirmBody": "Deine üblichen Zeiten gehen auf die Standardwerte zurück, bis codeg sie neu lernt (selbst festgelegte bleiben), und herabgesetzte Vorschlagskarten kommen zurück. Das lässt sich nicht rückgängig machen.",
+          "cancel": "Abbrechen",
+          "confirm": "Löschen"
         }
       },
       "notifyPage": {
@@ -8622,6 +8700,12 @@
         "hidden": "Ausblenden",
         "hiddenHint": "Er läuft weiter, benachrichtigt dich aber nie, steht nicht in der Liste und zählt nicht im Badge; „N ausgeblendet“ unten in der Liste zeigt ihn.",
         "note": "Deine Erinnerungen kommen, egal was hier eingestellt ist. Stufen und Ruhezeiten findest du unter Präferenzen → Proaktiv & Benachrichtigungen."
+      },
+      "grade": {
+        "firstPass": "beim ersten Mal {rate} % ({pass}/{settled})",
+        "average": "im Schnitt {time}",
+        "minutes": "{n} Min.",
+        "hours": "{h} Std. {m} Min."
       }
     },
     "statusWord": {
@@ -9903,7 +9987,9 @@
         "makeIt": "Zur Routine machen",
         "useAnother": "Eine andere nehmen",
         "resume": "Fortsetzen",
-        "open": "Routinen öffnen"
+        "open": "Routinen öffnen",
+        "confirm": "Zu bestätigende Routine",
+        "confirmChange": "Zu bestätigende Routinenänderung"
       }
     },
     "rules": {
@@ -9930,7 +10016,9 @@
         "uncommitted": "Nicht committete Änderungen",
         "idle": "Ein ruhender Vorgang",
         "new_project": "Ein neues Projekt",
-        "behind": "Branch im Rückstand, mit Konflikten"
+        "behind": "Branch im Rückstand, mit Konflikten",
+        "undo": "Rückgängig gemachte Änderungen",
+        "idle_bot": "Ein untätiger Arbeitsassistent"
       },
       "wait": {
         "permission": "Wartet auf deine Freigabe",
@@ -9965,6 +10053,13 @@
         },
         "behind": {
           "rebase": "Rebase veranlassen"
+        },
+        "undo": {
+          "ask_first": "Solche Änderungen zuerst zeigen"
+        },
+        "idle_bot": {
+          "hide": "Ausblenden",
+          "delete": "Löschen …"
         }
       },
       "done": {
@@ -9975,7 +10070,10 @@
         "opened": "Geöffnet.",
         "closed": "Vorgang geschlossen.",
         "watching": "Die Assistenten behalten dieses Projekt jetzt im Blick.",
-        "rebasing": "Zum Rebase zurückgegeben."
+        "rebasing": "Zum Rebase zurückgegeben.",
+        "asking_first": "Änderungen, um die du bittest, kommen jetzt zuerst als Karte.",
+        "hidden": "Ausgeblendet. Er ist weiter unter den ausgeblendeten Assistenten.",
+        "deleted": "Gelöscht."
       },
       "hand": {
         "failed": "„{title}“ ist fehlgeschlagen, und niemand hat sich darum gekümmert. Sieh nach, was schiefging, und sag mir, was du vorschlägst.",
@@ -10037,8 +10135,18 @@
         "suggest": {
           "title": "Vorschläge der Assistenten",
           "hint": "Aus: Die Assistenten schlagen nichts vor; ein Aufruf mit suggest erfährt, dass du gerade keine Vorschläge annimmst."
+        },
+        "undo": {
+          "title": "Viele Änderungen rückgängig gemacht",
+          "hint": "Im Wochenrückblick: Wenn du viele auf dein Wort hin gemachte Änderungen rückgängig gemacht hast, fragen, ob solche Änderungen zuerst gezeigt werden sollen."
+        },
+        "idle_bot": {
+          "title": "Untätige Arbeitsassistenten",
+          "hint": "Im Wochenrückblick: ein Arbeitsassistent, den zwei Wochen niemand geweckt hat — ausblenden oder löschen?"
         }
-      }
+      },
+      "undoDetail": "Du hast {undone} der {made} auf dein Wort hin gemachten Änderungen der letzten zwei Wochen rückgängig gemacht.",
+      "idleBotDetail": "Seit zwei Wochen hat ihn niemand geweckt."
     },
     "brief": {
       "title": "Morgen-Briefing",
@@ -10073,6 +10181,29 @@
         "to": "An {name}:",
         "answered": "Antwort: {text}",
         "open": "noch keine Antwort"
+      },
+      "week": {
+        "title": "Letzte Woche ({first} – {last})",
+        "titleSoFar": "Diese Woche bisher ({first} – {last})",
+        "mode": {
+          "task": "Board",
+          "chat": "Chat",
+          "session": "Sitzung"
+        },
+        "work": "Vergeben {count} ({modes}) · erledigt {completed}, fehlgeschlagen {failed} · beim ersten Mal {firstPass} von {settled}",
+        "byBot": "Nach Assistent: {list}",
+        "doneForYou": "Für dich erledigt: {caught} bei der Abnahme zurückgeschickt · {retried} wiederholt · {routines} Routinen · {merged} gemergt",
+        "asks": "Fragen aus der Arbeit: {count} · von den Assistenten beantwortet {answered} · an dich {forwarded}",
+        "between": "Zwischen den Assistenten: {messages} Nachrichten in {threads} Fäden · {loops} gestoppt",
+        "unblock": "Was auf dich wartete, hast du im Schnitt in {minutes} Min. beantwortet ({count})",
+        "unblockBefore": "Was auf dich wartete, hast du im Schnitt in {minutes} Min. beantwortet ({count}; Vorwoche {before} Min.)",
+        "held": "Ersparte Unterbrechungen: {merged} gebündelt · {deferred} zurückgehalten · {kept} nur in Heute",
+        "proposals": "Vorschläge: {count} · angenommen {taken} · abgelehnt {dismissed}",
+        "undone": "Rückgängig: {changesUndone} von {changes} Änderungen · {memoryUndone} von {memory} im Gedächtnis",
+        "reminders": "Erinnerungen: {count} fällig · erledigt {done} · verschoben {snoozed}",
+        "lowered": "codeg hat herabgesetzt: {rules}",
+        "tokens": "Tokens: {total}",
+        "botTokens": "{total} — eigene {own}, vergebene Arbeit {handed}"
       }
     },
     "memory": {

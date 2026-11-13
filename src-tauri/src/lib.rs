@@ -1912,6 +1912,8 @@ mod tauri_app {
                 crate::commands::personal_agent::personal_agent_item_act,
                 crate::commands::personal_agent::personal_agent_presence,
                 crate::commands::personal_agent::personal_agent_profile,
+                crate::commands::personal_agent::personal_agent_profile_update,
+                crate::commands::personal_agent::personal_agent_grades,
                 crate::commands::personal_agent::personal_agent_history_search,
                 crate::commands::personal_agent::personal_agent_history_status,
                 crate::commands::personal_agent::personal_agent_history_rebuild,

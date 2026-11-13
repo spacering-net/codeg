@@ -195,6 +195,93 @@ describe("the brief codeg wrote itself", () => {
     expect(screen.getByText("Last night's work")).toBeTruthy()
   })
 
+  it("states the week once a week: work, tokens by day and by assistant", () => {
+    const { container } = draw(
+      card(
+        material({
+          week: {
+            label: "2026-W46",
+            first: "2026-11-09",
+            last: "2026-11-15",
+            so_far: false,
+            dispatched: 5,
+            by_bot: [{ id: 2, name: "Dev", n: 4 }],
+            by_executor: [{ id: 7, name: "Codex", n: 5 }],
+            by_mode: { task: 3, session: 2 },
+            completed: 4,
+            failed: 1,
+            settled: 5,
+            first_pass: 3,
+            caught: 1,
+            retried: 2,
+            routine_done: 0,
+            merged: 0,
+            asked: 3,
+            plans: 1,
+            answered_by: [{ id: 2, name: "Dev", n: 2 }],
+            forwarded: 1,
+            messages: 0,
+            threads: 0,
+            loops: 0,
+            tokens: 1_500_000,
+            tokens_by_day: [
+              ["2026-11-09", 1_000_000],
+              ["2026-11-10", 500_000],
+            ],
+            tokens_by_bot: [
+              { bot_id: 2, name: "Dev", own: 200_000, handed_out: 1_300_000 },
+            ],
+            unblock_minutes: 14,
+            unblocked: 6,
+            unblock_before: 20,
+            held: { merged: 3, deferred: 1, kept: 0 },
+            briefs: 4,
+            wraps: 2,
+            tonight: 1,
+            proposals: 4,
+            proposals_taken: 2,
+            proposals_dismissed: 2,
+            muted_rules: [],
+            lowered: ["idle"],
+            changes: 4,
+            changes_undone: 3,
+            memory: 0,
+            memory_undone: 0,
+            reminders: 0,
+            reminders_done: 0,
+            reminders_snoozed: 0,
+            repeat_offers: 0,
+            idle_items: 0,
+            hours_note: null,
+            asks: [],
+          },
+        })
+      )
+    )
+    const week = container.querySelector("[data-pa-brief-part='week']")!
+    expect(week.textContent).toContain("Last week (11-09 – 11-15)")
+    expect(
+      container.querySelector("[data-pa-week-line='work']")?.textContent
+    ).toBe(
+      "Handed out 5 (board 3 · session 2) · completed 4, failed 1 · first time 3 of 5"
+    )
+    expect(
+      container.querySelector("[data-pa-week-line='unblock']")?.textContent
+    ).toContain("the week before 20 min")
+    expect(
+      container.querySelector("[data-pa-week-line='lowered']")?.textContent
+    ).toBe("codeg lowered: idle")
+    expect(container.querySelector("[data-pa-week-line='reminders']")).toBe(
+      null
+    )
+    expect(
+      container.querySelector("[data-pa-week-tokens]")?.textContent
+    ).toContain("Tokens: 1.5M")
+    expect(container.querySelector("[data-pa-week-bot='2']")?.textContent).toBe(
+      "Dev 1.5M — its own 200.0k, its handed-out work 1.3M"
+    )
+  })
+
   it("says when nothing needs the owner", () => {
     draw(card(material({ needs: [], bots: [], loose: [], yesterday: null })))
     expect(screen.getByText("Nothing needs you today.")).toBeTruthy()

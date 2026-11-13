@@ -8360,6 +8360,18 @@
           "on": "On",
           "off": "Off"
         },
+        "rule_undo": {
+          "title": "Many changes undone",
+          "hint": "In the weekly review: when you undid many of the changes made at your word, ask whether to show such changes first.",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_idle_bot": {
+          "title": "Idle work assistants",
+          "hint": "In the weekly review: a work assistant nobody woke for two weeks — hide it or delete it?",
+          "on": "On",
+          "off": "Off"
+        },
         "rule_failed_hours": {
           "title": "Hours before the failed-work card",
           "hint": "Hours before the failed-work card"
@@ -8487,6 +8499,19 @@
           "on": "On",
           "off": "Off"
         },
+        "reactions": {
+          "title": "Learn from how you answer cards",
+          "hint": "codeg counts how you answer each kind of card. A proposal card you dismiss three times in a row is lowered one level, and the weekly review says so. Off: nothing is lowered, and what was lowered goes back.",
+          "on": "On",
+          "off": "Off"
+        },
+        "weekly_review": {
+          "title": "Weekly review",
+          "hint": "The week in figures: work handed out, questions answered for you, tokens by day and by assistant, and what codeg adjusted.",
+          "brief": "In the first morning brief of the week",
+          "wrap": "In Friday's wrap-up",
+          "off": "Off"
+        },
         "level_brief": {
           "title": "Morning brief and wrap-up",
           "hint": "Your morning brief or the wrap-up is ready."
@@ -8612,6 +8637,59 @@
           "reading": "Reading conversations: {done} of {total} so far ({documents} entries).",
           "ready": "Up to date: {total} conversations, {documents} entries.",
           "readyNoSessions": "{documents} entries."
+        },
+        "setByYou": "set by you",
+        "change": "Change",
+        "backToLearned": "Back to what codeg learned ({span})",
+        "backToLearning": "Let codeg learn it",
+        "start": "Start",
+        "end": "End",
+        "save": "Save",
+        "cancel": "Cancel",
+        "seen": {
+          "title": "What codeg sees",
+          "hint": "From the conversations in codeg (the assistants' own left out), never their words. A project you tell codeg not to mind is left out of what the assistants are told and goes last in \"Needs you\".",
+          "projects": "Projects (last 7 / 30 days)",
+          "noProjects": "No project yet.",
+          "projectCounts": "{recent} / {all} conversations",
+          "mind": "Mind it again",
+          "dontMind": "Don't mind it",
+          "agents": "Agents (last 30 days)"
+        },
+        "reactions": {
+          "none": "No cards in the last 30 days.",
+          "off": "Not counted: nothing is lowered.",
+          "kind": "Card",
+          "raised": "Raised",
+          "acted": "Handled",
+          "dismissed": "Dismissed",
+          "undone": "Undone",
+          "wait": "Took you",
+          "minutes": "{n} min",
+          "kinds": {
+            "proposal": "Cards to confirm",
+            "uncertain": "Unsure steps",
+            "loop": "Stopped exchanges",
+            "changed": "Changes",
+            "choice": "Choices",
+            "reminder": "Reminders",
+            "acceptance": "Acceptance",
+            "forge": "Forge actions",
+            "pr": "Pull requests",
+            "routine": "Routines",
+            "rule": "Proposals",
+            "memory": "Memory"
+          }
+        },
+        "clear": {
+          "title": "Clear what codeg learned",
+          "hint": "Forgets the minutes noted in codeg and the cards it lowered; projects, agents and card answers count from now. What you set yourself stays.",
+          "clearedAt": "Last cleared {when}.",
+          "button": "Clear…",
+          "confirmTitle": "Clear what codeg learned?",
+          "confirmBody": "Your usual hours go back to the defaults until codeg learns them again (the hours you set stay), and the proposal cards it lowered go back. This cannot be undone.",
+          "cancel": "Cancel",
+          "confirm": "Clear"
         }
       },
       "notifyPage": {
@@ -8622,6 +8700,12 @@
         "hidden": "Hide",
         "hiddenHint": "It runs as ever, but never notifies you, stays off the roster and out of the badge; “N hidden” at the roster's foot shows it.",
         "note": "Your reminders come whatever is set here. The levels and quiet hours are in Preferences → Proactive & notifications."
+      },
+      "grade": {
+        "firstPass": "first time {rate}% ({pass}/{settled})",
+        "average": "{time} on average",
+        "minutes": "{n} min",
+        "hours": "{h} h {m} min"
       }
     },
     "statusWord": {
@@ -9903,7 +9987,9 @@
         "makeIt": "Make it a routine",
         "useAnother": "Use another",
         "resume": "Resume",
-        "open": "Open routines"
+        "open": "Open routines",
+        "confirm": "Routine to confirm",
+        "confirmChange": "Routine change to confirm"
       }
     },
     "rules": {
@@ -9930,7 +10016,9 @@
         "uncommitted": "Changes left uncommitted",
         "idle": "A matter gone quiet",
         "new_project": "A new project",
-        "behind": "A branch behind, with conflicts"
+        "behind": "A branch behind, with conflicts",
+        "undo": "Changes you undid",
+        "idle_bot": "An idle work assistant"
       },
       "wait": {
         "permission": "Waiting for your approval",
@@ -9965,6 +10053,13 @@
         },
         "behind": {
           "rebase": "Have it rebased"
+        },
+        "undo": {
+          "ask_first": "Show me such changes first"
+        },
+        "idle_bot": {
+          "hide": "Hide it",
+          "delete": "Delete it…"
         }
       },
       "done": {
@@ -9975,7 +10070,10 @@
         "opened": "Opened.",
         "closed": "Matter closed.",
         "watching": "The assistants keep an eye on this project now.",
-        "rebasing": "Sent back to be rebased."
+        "rebasing": "Sent back to be rebased.",
+        "asking_first": "Changes you ask for now come to you as a card first.",
+        "hidden": "Hidden. It is still there under the hidden assistants.",
+        "deleted": "Deleted."
       },
       "hand": {
         "failed": "\"{title}\" failed and nobody has picked it up. Look into what went wrong and tell me what you suggest.",
@@ -10037,8 +10135,18 @@
         "suggest": {
           "title": "The assistants' own suggestions",
           "hint": "Off: the assistants don't suggest anything, and a call with suggest is told you don't take suggestions now."
+        },
+        "undo": {
+          "title": "Many changes undone",
+          "hint": "In the weekly review: when you undid many of the changes made at your word, ask whether to show such changes first."
+        },
+        "idle_bot": {
+          "title": "Idle work assistants",
+          "hint": "In the weekly review: a work assistant nobody woke for two weeks — hide it or delete it?"
         }
-      }
+      },
+      "undoDetail": "You undid {undone} of the {made} changes made at your word in the last two weeks.",
+      "idleBotDetail": "Nobody has woken it for two weeks."
     },
     "brief": {
       "title": "Morning brief",
@@ -10073,6 +10181,29 @@
         "to": "To {name}:",
         "answered": "answered: {text}",
         "open": "no answer yet"
+      },
+      "week": {
+        "title": "Last week ({first} – {last})",
+        "titleSoFar": "This week so far ({first} – {last})",
+        "mode": {
+          "task": "board",
+          "chat": "chat",
+          "session": "session"
+        },
+        "work": "Handed out {count} ({modes}) · completed {completed}, failed {failed} · first time {firstPass} of {settled}",
+        "byBot": "By assistant: {list}",
+        "doneForYou": "Done for you: {caught} sent back by acceptance · {retried} retried · {routines} routine runs · {merged} merged",
+        "asks": "Questions from the work: {count} · answered by the assistants {answered} · came to you {forwarded}",
+        "between": "Between the assistants: {messages} messages on {threads} threads · {loops} stopped",
+        "unblock": "You answered what waited on you in {minutes} min on average ({count})",
+        "unblockBefore": "You answered what waited on you in {minutes} min on average ({count}; the week before {before} min)",
+        "held": "Interruptions spared: {merged} merged · {deferred} held until you were free · {kept} kept to Today",
+        "proposals": "Proposals: {count} · taken {taken} · declined {dismissed}",
+        "undone": "Undone: {changesUndone} of {changes} changes · {memoryUndone} of {memory} memory changes",
+        "reminders": "Reminders: {count} came due · done {done} · snoozed {snoozed}",
+        "lowered": "codeg lowered: {rules}",
+        "tokens": "Tokens: {total}",
+        "botTokens": "{total} — its own {own}, its handed-out work {handed}"
       }
     },
     "memory": {

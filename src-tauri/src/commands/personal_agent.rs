@@ -769,7 +769,81 @@ pub async fn personal_agent_avatar_png_core(
 pub async fn personal_agent_profile_core(
     db: &AppDatabase,
 ) -> crate::personal_agent::presence::ProfileView {
-    crate::personal_agent::presence::profile(&db.conn).await
+    crate::personal_agent::presence::profile(db).await
+}
+
+/// A change the owner makes on the "about you" page (5.3, 2.11).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum ProfileOp {
+    /// Their hours of a kind of day (`workday`, `restday`): `start` and
+    /// `end` as `HH:MM`; neither, back to what codeg learns.
+    Hours {
+        day: String,
+        #[serde(default)]
+        start: Option<String>,
+        #[serde(default)]
+        end: Option<String>,
+    },
+    /// A project codeg is (not) to mind.
+    Project { folder_id: i32, excluded: bool },
+    /// Forget what codeg learned of them.
+    Clear,
+}
+
+/// The owner changes their profile: their hours, a project not to mind,
+/// or clearing what codeg learned. Returns the page anew.
+pub async fn personal_agent_profile_update_core(
+    db: &AppDatabase,
+    op: ProfileOp,
+) -> Result<crate::personal_agent::presence::ProfileView, AppCommandError> {
+    use crate::personal_agent::profile;
+    match op {
+        ProfileOp::Hours { day, start, end } => {
+            let span = match (start.as_deref(), end.as_deref()) {
+                (Some(s), Some(e)) => {
+                    Some(profile::span_of(s, e).map_err(AppCommandError::invalid_input)?)
+                }
+                (None, None) => None,
+                _ => {
+                    return Err(AppCommandError::invalid_input(
+                        "give both the start and the end, or neither",
+                    ))
+                }
+            };
+            profile::set_hours(db, &day, span)
+                .await
+                .map_err(AppCommandError::invalid_input)?;
+        }
+        ProfileOp::Project {
+            folder_id,
+            excluded,
+        } => {
+            profile::set_excluded(db, folder_id, excluded)
+                .await
+                .map_err(AppCommandError::invalid_input)?;
+        }
+        ProfileOp::Clear => {
+            profile::clear(db)
+                .await
+                .map_err(AppCommandError::invalid_input)?;
+        }
+    }
+    Ok(personal_agent_profile_core(db).await)
+}
+
+/// Each assistant's and each executor config's grade (2.11): how its work
+/// went over the last 30 days.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GradesView {
+    pub bots: HashMap<i32, crate::personal_agent::profile::Grade>,
+    pub executors: HashMap<i32, crate::personal_agent::profile::Grade>,
+}
+
+pub async fn personal_agent_grades_core(db: &AppDatabase) -> GradesView {
+    let (bots, executors) =
+        crate::personal_agent::profile::grades(db, crate::personal_agent::clock::now()).await;
+    GradesView { bots, executors }
 }
 
 /// The page's search (8.2): what the time machine finds for `query`, as
@@ -947,6 +1021,7 @@ pub async fn personal_agent_executors_core(
     let bots = svc::list_bots(&db.conn).await?;
     let recent = svc::dispatches_to_executors(&db.conn, 5_000).await?;
     let since = Utc::now() - Duration::days(14);
+    let (_, grades) = crate::personal_agent::profile::grades(db, Utc::now()).await;
     let live = [
         DispatchState::Queued,
         DispatchState::Running,
@@ -1017,6 +1092,7 @@ pub async fn personal_agent_executors_core(
                 .collect(),
             division,
             usage: account.team.usage_of(&a.uid),
+            grade: grades.get(&a.id).cloned().unwrap_or_default(),
         });
     }
     Ok(out)
@@ -1640,6 +1716,23 @@ pub async fn personal_agent_profile(
     db: State<'_, AppDatabase>,
 ) -> Result<crate::personal_agent::presence::ProfileView, AppCommandError> {
     Ok(personal_agent_profile_core(&db).await)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_profile_update(
+    db: State<'_, AppDatabase>,
+    op: ProfileOp,
+) -> Result<crate::personal_agent::presence::ProfileView, AppCommandError> {
+    personal_agent_profile_update_core(&db, op).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_grades(
+    db: State<'_, AppDatabase>,
+) -> Result<GradesView, AppCommandError> {
+    Ok(personal_agent_grades_core(&db).await)
 }
 
 #[cfg(feature = "tauri-runtime")]

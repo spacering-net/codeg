@@ -1234,7 +1234,7 @@ fn who(role: &str) -> &'static str {
     }
 }
 
-fn agent_label(wire: &str) -> String {
+pub(super) fn agent_label(wire: &str) -> String {
     crate::models::AgentType::from_wire(wire)
         .map(|a| a.to_string())
         .unwrap_or_else(|| wire.to_string())

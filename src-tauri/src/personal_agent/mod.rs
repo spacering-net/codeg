@@ -54,6 +54,7 @@ pub mod notices;
 pub mod options;
 pub mod prefs;
 pub mod presence;
+pub mod profile;
 pub mod reach;
 pub mod reminders;
 pub mod routines;
@@ -64,6 +65,7 @@ pub mod templates;
 pub mod today;
 pub mod tools;
 pub mod watch;
+pub mod weekly;
 pub mod workdir;
 
 #[cfg(test)]

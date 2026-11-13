@@ -125,11 +125,13 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
   const spin = (a: NoticeAction) =>
     busy === a ? <SyncedSpinner small className="size-3.5" /> : null
 
+  // Shown first because the owner asked so (13.5), not suggested.
+  const confirm = data.confirm === true
   const heading =
     what === "proposal"
       ? routineId != null
-        ? t("proposalChange")
-        : t("proposal")
+        ? t(confirm ? "confirmChange" : "proposalChange")
+        : t(confirm ? "confirm" : "proposal")
       : t(what)
   const stateNote = (() => {
     if (state === "undone") return t("undone")
@@ -297,7 +299,9 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
                   {spin("dismiss")}
                   {t("dismiss")}
                 </Button>
-                <MuteKindButton noticeId={noticeId} disabled={busy != null} />
+                {confirm ? null : (
+                  <MuteKindButton noticeId={noticeId} disabled={busy != null} />
+                )}
               </>
             ) : null}
             {what === "repeat" && open ? (

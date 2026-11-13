@@ -27,10 +27,42 @@ const PROFILE = vi.hoisted(() => ({
   present: true,
   last_active: "2026-11-11T02:00:00Z",
   hours: {
-    workday: { start: 570, end: 1110, learned: true, days: 12 },
-    restday: { start: 540, end: 1080, learned: false, days: 0 },
+    workday: { start: 570, end: 1110, learned: true, days: 12, set: false },
+    restday: { start: 540, end: 1080, learned: false, days: 0, set: false },
+  },
+  learned_hours: {
+    workday: { start: 570, end: 1110, learned: true, days: 12, set: false },
+    restday: { start: 540, end: 1080, learned: false, days: 0, set: false },
   },
   learn_days: 28,
+  reactions: true,
+  seen_since: "2026-10-12T02:00:00Z",
+  cleared_at: null as string | null,
+  projects: [
+    {
+      folder_id: 3,
+      name: "codeg",
+      recent: 5,
+      sessions: 9,
+      last_at: "2026-11-11T01:00:00Z",
+      excluded: false,
+    },
+  ],
+  excluded: [[8, "old-site"]] as [number, string][],
+  agents: [{ agent_type: "claude_code", sessions: 9, percent: 90 }],
+  cards: [
+    {
+      kind: "rule",
+      raised: 6,
+      acted: 3,
+      dismissed: 2,
+      muted: 1,
+      undone: 0,
+      expired: 0,
+      open: 0,
+      act_minutes: 12,
+    },
+  ],
 }))
 
 const HISTORY = vi.hoisted(() => ({
@@ -55,6 +87,14 @@ const api = vi.hoisted(() => ({
   personalAgentBotImpact: vi.fn(),
   personalAgentBotDelete: vi.fn(),
   personalAgentProfile: vi.fn(async () => PROFILE),
+  personalAgentProfileUpdate: vi.fn(async () => ({
+    ...PROFILE,
+    hours: {
+      ...PROFILE.hours,
+      workday: { start: 600, end: 1200, learned: true, days: 12, set: true },
+    },
+  })),
+  personalAgentGrades: vi.fn(async () => ({ bots: {}, executors: {} })),
   personalAgentHistoryStatus: vi.fn(async () => HISTORY),
   personalAgentHistoryRebuild: vi.fn(async () => ({
     ...HISTORY,
@@ -412,6 +452,97 @@ describe("the settings view", () => {
     )
   })
 
+  it("changes the owner's hours, minds projects, counts answers and clears", async () => {
+    usePersonalAgentUi.getState().openSettings("about")
+    draw()
+    const edit = await waitFor(() => {
+      const el = document.querySelector('[data-pa-hours-edit="workday"]')
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    })
+    fireEvent.click(edit)
+    fireEvent.change(
+      document.querySelector('[data-pa-hours-start="workday"]')!,
+      { target: { value: "10:00" } }
+    )
+    fireEvent.change(document.querySelector('[data-pa-hours-end="workday"]')!, {
+      target: { value: "20:00" },
+    })
+    fireEvent.click(document.querySelector('[data-pa-hours-save="workday"]')!)
+    await waitFor(() =>
+      expect(api.personalAgentProfileUpdate).toHaveBeenCalledWith({
+        op: "hours",
+        day: "workday",
+        start: "10:00",
+        end: "20:00",
+      })
+    )
+    // Theirs now: said so, and they can let go of it.
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector('[data-pa-hours="workday"]')
+          ?.getAttribute("data-set")
+      ).toBe("true")
+    )
+    expect(
+      document.querySelector('[data-pa-hours="workday"]')?.textContent
+    ).toContain("set by you")
+    fireEvent.click(document.querySelector('[data-pa-hours-unset="workday"]')!)
+    await waitFor(() =>
+      expect(api.personalAgentProfileUpdate).toHaveBeenCalledWith({
+        op: "hours",
+        day: "workday",
+        start: null,
+        end: null,
+      })
+    )
+    // A project seen, one not minded.
+    const project = document.querySelector('[data-pa-seen-project="3"]')!
+    expect(project.textContent).toContain("5 / 9 conversations")
+    fireEvent.click(document.querySelector('[data-pa-seen-exclude="3"]')!)
+    await waitFor(() =>
+      expect(api.personalAgentProfileUpdate).toHaveBeenCalledWith({
+        op: "project",
+        folder_id: 3,
+        excluded: true,
+      })
+    )
+    expect(
+      document
+        .querySelector('[data-pa-seen-project="8"]')
+        ?.getAttribute("data-excluded")
+    ).toBe("true")
+    expect(
+      document.querySelector('[data-pa-seen-agent="claude_code"]')?.textContent
+    ).toContain("90%")
+    // How they answer proposals.
+    const row = document.querySelector('[data-pa-reaction="rule"]')!
+    expect(row.textContent).toContain("Proposals")
+    expect(row.textContent).toContain("12 min")
+    fireEvent.click(document.querySelector('[data-pa-pref="reactions"]')!)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.reactions", value: "off" }],
+        null
+      )
+    )
+    // Clearing asks first.
+    fireEvent.click(document.querySelector("[data-pa-profile-clear]")!)
+    fireEvent.click(
+      await waitFor(() => {
+        const el = document.querySelector("[data-pa-profile-clear-confirm]")
+        expect(el).not.toBeNull()
+        return el as HTMLElement
+      })
+    )
+    await waitFor(() =>
+      expect(api.personalAgentProfileUpdate).toHaveBeenCalledWith({
+        op: "clear",
+      })
+    )
+  })
+
   it("shows a zone the owner set, and restores the system's", async () => {
     ctx.snapshot = snapshot({
       prefs: { ...PREFS, time_zone: "Europe/Berlin", presence: "off" },
@@ -681,5 +812,55 @@ describe("the settings view", () => {
       })
     )
     api.personalAgentBots.mockResolvedValue([])
+  })
+
+  it("shows each work assistant's grade (2.11)", async () => {
+    const flags = {
+      sort_order: 0,
+      pinned_at: null,
+      section: null,
+      hidden: false,
+      muted: false,
+      unread_mark: false,
+      notify: true,
+    }
+    api.personalAgentBots.mockResolvedValue([
+      {
+        id: 7,
+        kind: "worker",
+        uid: "u7",
+        name: "Reviewer",
+        avatar: { kind: "face", shape: "blob", color: "blue" },
+        template: null,
+        executor_assistant_id: null,
+        created_at: "2026-11-10T00:00:00Z",
+        roster: flags,
+        live: { bot_id: 7, updated_at: "2026-11-10T00:00:00Z" },
+      },
+    ] as never)
+    api.personalAgentGrades.mockResolvedValue({
+      bots: {
+        "7": {
+          dispatches: 12,
+          settled: 10,
+          first_pass: 8,
+          first_pass_rate: 80,
+          avg_minutes: 75,
+        },
+      },
+      executors: {},
+    })
+    usePersonalAgentUi.getState().openSettings("workers")
+    draw()
+    const grade = await waitFor(() => {
+      const el = document.querySelector('[data-pa-worker-grade="7"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(grade.textContent).toBe(
+      "first time 80% (8/10) · 1 h 15 min on average"
+    )
+    api.personalAgentBots.mockResolvedValue([])
+    api.personalAgentGrades.mockResolvedValue({ bots: {}, executors: {} })
   })
 })

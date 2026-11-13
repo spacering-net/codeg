@@ -8360,6 +8360,18 @@
           "on": "开",
           "off": "关"
         },
+        "rule_undo": {
+          "title": "撤销得多的改动",
+          "hint": "周回顾里：你撤销了不少按你的话直接做的改动时，问你要不要改成「先给我看」。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_idle_bot": {
+          "title": "闲着的工作助手",
+          "hint": "周回顾里：两周都没被叫醒的工作助手，问你要不要隐藏或删掉。",
+          "on": "开",
+          "off": "关"
+        },
         "rule_failed_hours": {
           "title": "失败没人管：多少小时后出卡",
           "hint": "失败没人管：多少小时后出卡"
@@ -8487,6 +8499,19 @@
           "on": "开",
           "off": "关"
         },
+        "reactions": {
+          "title": "记录你对卡片的反应",
+          "hint": "codeg 记下你对每类卡片的处理方式。同一条提议卡你连续关掉 3 次，就降一级，周回顾里会告诉你。关掉后不再降级，已降的恢复原级。",
+          "on": "开",
+          "off": "关"
+        },
+        "weekly_review": {
+          "title": "周回顾",
+          "hint": "用数字回顾一周：派出的活、替你代答的、按天和按助手的用量，以及 codeg 调整了什么。",
+          "brief": "每周第一个工作日的晨报",
+          "wrap": "周五的收尾",
+          "off": "关"
+        },
         "level_brief": {
           "title": "晨报与收尾",
           "hint": "晨报或收尾写好了。"
@@ -8612,6 +8637,59 @@
           "reading": "正在读取会话：已读 {done}/{total} 个（共 {documents} 条）。",
           "ready": "已是最新：{total} 个会话，共 {documents} 条。",
           "readyNoSessions": "共 {documents} 条。"
+        },
+        "setByYou": "你设的",
+        "change": "修改",
+        "backToLearned": "改回学到的（{span}）",
+        "backToLearning": "改回自动学习",
+        "start": "开始",
+        "end": "结束",
+        "save": "保存",
+        "cancel": "取消",
+        "seen": {
+          "title": "codeg 看到的",
+          "hint": "来自 codeg 里的会话（不含助手自己的），不读会话内容。设为不关注的项目，不会告诉助手，在「需要你」里排在后面。",
+          "projects": "项目（最近 7 / 30 天）",
+          "noProjects": "还没有项目。",
+          "projectCounts": "{recent} / {all} 个会话",
+          "mind": "恢复关注",
+          "dontMind": "不关注",
+          "agents": "agent 占比（最近 30 天）"
+        },
+        "reactions": {
+          "none": "最近 30 天没有卡片。",
+          "off": "不记录：卡片不会自动降级。",
+          "kind": "卡片",
+          "raised": "出现",
+          "acted": "处理",
+          "dismissed": "关掉",
+          "undone": "撤销",
+          "wait": "用时",
+          "minutes": "{n} 分钟",
+          "kinds": {
+            "proposal": "待确认的卡片",
+            "uncertain": "不确定的步骤",
+            "loop": "停下的往来",
+            "changed": "已改",
+            "choice": "选择",
+            "reminder": "提醒",
+            "acceptance": "验收",
+            "forge": "对外动作",
+            "pr": "PR",
+            "routine": "例程",
+            "rule": "提议",
+            "memory": "记忆"
+          }
+        },
+        "clear": {
+          "title": "清空学到的",
+          "hint": "忘掉记下的在场时间和自动降级；项目、agent 和卡片反应从现在起重新算。你自己设的保留。",
+          "clearedAt": "上次清空：{when}。",
+          "button": "清空…",
+          "confirmTitle": "清空 codeg 学到的？",
+          "confirmBody": "作息回到默认值，等 codeg 重新学（你设的作息保留）；自动降级的提议卡恢复原级。清空后无法恢复。",
+          "cancel": "取消",
+          "confirm": "清空"
         }
       },
       "notifyPage": {
@@ -8622,6 +8700,12 @@
         "hidden": "隐藏",
         "hiddenHint": "照常运行，但不通知你、不在名册里显示、不计入角标；名册底部「已隐藏 N 个」点开能看。",
         "note": "无论这里怎么设，你设的提醒照常送到。级别和安静时段在「偏好 → 主动与通知」。"
+      },
+      "grade": {
+        "firstPass": "一次过 {rate}%（{pass}/{settled}）",
+        "average": "平均 {time}",
+        "minutes": "{n} 分钟",
+        "hours": "{h} 小时 {m} 分"
       }
     },
     "statusWord": {
@@ -9903,7 +9987,9 @@
         "makeIt": "做成例程",
         "useAnother": "换一个",
         "resume": "恢复",
-        "open": "打开例程"
+        "open": "打开例程",
+        "confirm": "待确认的例程",
+        "confirmChange": "待确认的例程改动"
       }
     },
     "rules": {
@@ -9930,7 +10016,9 @@
         "uncommitted": "改动还没提交",
         "idle": "事项很久没动了",
         "new_project": "新项目",
-        "behind": "分支落后且有冲突"
+        "behind": "分支落后且有冲突",
+        "undo": "你撤销的改动",
+        "idle_bot": "闲着的工作助手"
       },
       "wait": {
         "permission": "等你批准",
@@ -9965,6 +10053,13 @@
         },
         "behind": {
           "rebase": "派人 rebase"
+        },
+        "undo": {
+          "ask_first": "改成「先给我看」"
+        },
+        "idle_bot": {
+          "hide": "隐藏",
+          "delete": "删掉…"
         }
       },
       "done": {
@@ -9975,7 +10070,10 @@
         "opened": "已打开。",
         "closed": "事项已关掉。",
         "watching": "以后会帮你盯这个项目。",
-        "rebasing": "已派人 rebase。"
+        "rebasing": "已派人 rebase。",
+        "asking_first": "以后你要改的设置会先给你看，点了才改。",
+        "hidden": "已隐藏，在隐藏的助手里还能找到。",
+        "deleted": "已删掉。"
       },
       "hand": {
         "failed": "「{title}」失败了，一直没人处理。帮我看看是怎么回事，告诉我你的建议。",
@@ -10037,8 +10135,18 @@
         "suggest": {
           "title": "助手的建议",
           "hint": "关掉后助手不再提建议；带 suggest 的调用会被告知「你现在不收建议」。"
+        },
+        "undo": {
+          "title": "撤销得多的改动",
+          "hint": "周回顾里：你撤销了不少按你的话直接做的改动时，问你要不要改成「先给我看」。"
+        },
+        "idle_bot": {
+          "title": "闲着的工作助手",
+          "hint": "周回顾里：两周都没被叫醒的工作助手，问你要不要隐藏或删掉。"
         }
-      }
+      },
+      "undoDetail": "最近两周按你的话直接做的 {made} 处改动，你撤销了 {undone} 处。",
+      "idleBotDetail": "已经两周没被叫醒了。"
     },
     "brief": {
       "title": "晨报",
@@ -10073,6 +10181,29 @@
         "to": "发给 {name}：",
         "answered": "回复：{text}",
         "open": "还没回复"
+      },
+      "week": {
+        "title": "上周（{first} – {last}）",
+        "titleSoFar": "本周至今（{first} – {last}）",
+        "mode": {
+          "task": "看板",
+          "chat": "对话",
+          "session": "会话"
+        },
+        "work": "派活 {count} 件（{modes}）· 完成 {completed}，失败 {failed} · 一次过 {firstPass}/{settled}",
+        "byBot": "按助手：{list}",
+        "doneForYou": "替你办完的：验收拦下 {caught} · 自动重试 {retried} · 例程完成 {routines} · 合并 PR {merged}",
+        "asks": "执行会话的提问：{count} 次 · 助手代答 {answered} · 转给你 {forwarded}",
+        "between": "助手之间：{messages} 条消息，{threads} 条往来线 · 停下 {loops} 次",
+        "unblock": "你处理等你的事平均用 {minutes} 分钟（{count} 次）",
+        "unblockBefore": "你处理等你的事平均用 {minutes} 分钟（{count} 次；前一周 {before} 分钟）",
+        "held": "替你挡下的打扰：合并 {merged} · 延后 {deferred} · 只进今日 {kept}",
+        "proposals": "提议：{count} 张 · 接受 {taken} · 不用 {dismissed}",
+        "undone": "撤销：改动 {changesUndone}/{changes} · 记忆 {memoryUndone}/{memory}",
+        "reminders": "提醒：到点 {count} · 完成 {done} · 推迟 {snoozed}",
+        "lowered": "codeg 降了级：{rules}",
+        "tokens": "用量：{total} tokens",
+        "botTokens": "{total}（自己 {own}，派出的活 {handed}）"
       }
     },
     "memory": {

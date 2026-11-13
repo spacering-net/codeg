@@ -2460,7 +2460,13 @@ impl PersonalAgentEngine {
                         Ok(spec) => self
                             .make_routine(
                                 &spec,
-                                "suggest",
+                                // One the owner asked for, shown to them
+                                // first, is theirs.
+                                if payload["why"].as_str() == Some("confirm") {
+                                    "owner"
+                                } else {
+                                    "suggest"
+                                },
                                 MakeAuth::Card {
                                     notice_id: notice.id,
                                 },
@@ -2837,8 +2843,15 @@ impl PersonalAgentEngine {
         ToolOutcome::ok(lines.join("\n"), json!({ "routines": views }))
     }
 
+    /// The owner asked to see the changes they ask for first (13.5).
+    async fn shows_changes_first(&self) -> bool {
+        self.prefs().await.chat_changes == crate::models::personal_agent_prefs::ChatChanges::Show
+    }
+
     /// `routine_create`: made at once and run once as a test, with a card
-    /// saying so (undo); with `suggest`, a proposal card the owner answers.
+    /// saying so (undo); with `suggest` — or with the owner's "show me such
+    /// changes first" (`chat_changes`, 13.5) — a proposal card the owner
+    /// answers.
     pub async fn routine_create_call(self: &Arc<Self>, args: &Value) -> ToolOutcome {
         let draft: Draft = match serde_json::from_value(strip(args)) {
             Ok(d) => d,
@@ -2855,27 +2868,43 @@ impl PersonalAgentEngine {
         let owner = self.owner_tz().await;
         let zone = zone_of(spec.timezone.as_deref(), owner).name().to_string();
         let batch = self.current_batch().await;
+        let suggest = args["suggest"].as_bool() == Some(true);
         // The owner does not take suggestions now (6.7).
-        if args["suggest"].as_bool() == Some(true) {
+        if suggest {
             if let Some(no) = self.suggestions_closed().await {
                 return no;
             }
         }
-        if args["suggest"].as_bool() == Some(true) {
+        // The owner sees such changes first (13.5).
+        let confirm = !suggest && self.shows_changes_first().await;
+        if suggest || confirm {
             let data = json!({
                 "notice": "routine",
                 "what": "proposal",
                 "state": "open",
+                "confirm": confirm,
                 "routine": summary_of(&spec, None, None, &zone),
                 "draft": spec.draft(),
                 "reason": reason,
             });
             return match self
                 .raise_routine_card(
-                    format!("Suggested routine: {}", spec.title),
-                    json!({ "what": "proposal", "why": "suggest", "draft": spec.draft() }),
+                    if confirm {
+                        format!("Routine to confirm: {}", spec.title)
+                    } else {
+                        format!("Suggested routine: {}", spec.title)
+                    },
+                    json!({
+                        "what": "proposal",
+                        "why": if confirm { "confirm" } else { "suggest" },
+                        "draft": spec.draft(),
+                    }),
                     data,
-                    NoticeLevel::Low,
+                    if confirm {
+                        NoticeLevel::Normal
+                    } else {
+                        NoticeLevel::Low
+                    },
                     None,
                     batch,
                 )
@@ -2883,9 +2912,15 @@ impl PersonalAgentEngine {
             {
                 Ok((n, _)) => ToolOutcome::ok(
                     format!(
-                        "Suggested: the routine \"{}\" is on card #{} for the owner; it is made \
-                         (and run once) only if they say so. You will hear how they answered.",
-                        spec.title, n.id
+                        "{}: the routine \"{}\" is on card #{} for the owner; it is made (and run \
+                         once) only if they say so. You will hear how they answered.",
+                        if confirm {
+                            "The owner sees such changes first"
+                        } else {
+                            "Suggested"
+                        },
+                        spec.title,
+                        n.id
                     ),
                     json!({ "notice_id": n.id, "state": "awaiting_owner" }),
                 ),
@@ -2955,7 +2990,8 @@ impl PersonalAgentEngine {
 
     /// `routine_update`: change one of this assistant's routines, or pause,
     /// resume, delete or run it now. Made at once, with a card that can undo
-    /// it; with `suggest`, a proposal card.
+    /// it; with `suggest`, or with the owner's "show me such changes first",
+    /// a proposal card.
     pub async fn routine_update_call(self: &Arc<Self>, args: &Value) -> ToolOutcome {
         let Some(id) = args["routine_id"]
             .as_i64()
@@ -3002,35 +3038,58 @@ impl PersonalAgentEngine {
         let reason = args["reason"].as_str().map(str::to_string);
         let owner = self.owner_tz().await;
         let batch = self.current_batch().await;
+        let suggest = args["suggest"].as_bool() == Some(true);
         // The owner does not take suggestions now (6.7).
-        if args["suggest"].as_bool() == Some(true) {
+        if suggest {
             if let Some(no) = self.suggestions_closed().await {
                 return no;
             }
         }
-        if args["suggest"].as_bool() == Some(true) {
+        // The owner sees such changes first (13.5).
+        let confirm = !suggest && self.shows_changes_first().await;
+        if suggest || confirm {
             let view = routine_view(&self.db.conn, r.clone(), owner, 1).await;
+            // What the owner says yes to: a change of its fields shows the
+            // routine as it would be (as it is now kept beside it); a pause,
+            // a resume, a delete or a run shows it as it is.
+            let shown = match &spec {
+                Some(s) => {
+                    let zone = zone_of(s.timezone.as_deref(), owner).name().to_string();
+                    summary_of(s, Some(r.id), None, &zone)
+                }
+                None => serde_json::to_value(&view).unwrap_or(Value::Null),
+            };
             let data = json!({
                 "notice": "routine",
                 "what": "proposal",
                 "state": "open",
-                "routine": view,
+                "confirm": confirm,
+                "routine": shown,
+                "before": view,
                 "action": action,
                 "draft": spec.as_ref().map(Spec::draft),
                 "reason": reason,
             });
             return match self
                 .raise_routine_card(
-                    format!("Suggested change to routine: {}", r.title),
+                    if confirm {
+                        format!("Routine change to confirm: {}", r.title)
+                    } else {
+                        format!("Suggested change to routine: {}", r.title)
+                    },
                     json!({
                         "what": "proposal",
-                        "why": "suggest",
+                        "why": if confirm { "confirm" } else { "suggest" },
                         "routine_id": r.id,
                         "action": action,
                         "draft": spec.as_ref().map(Spec::draft),
                     }),
                     data,
-                    NoticeLevel::Low,
+                    if confirm {
+                        NoticeLevel::Normal
+                    } else {
+                        NoticeLevel::Low
+                    },
                     None,
                     batch,
                 )
@@ -3038,9 +3097,15 @@ impl PersonalAgentEngine {
             {
                 Ok((n, _)) => ToolOutcome::ok(
                     format!(
-                        "Suggested: the change to routine #{} is on card #{} for the owner; it is \
-                         made only if they say so.",
-                        r.id, n.id
+                        "{}: the change to routine #{} is on card #{} for the owner; it is made \
+                         only if they say so.",
+                        if confirm {
+                            "The owner sees such changes first"
+                        } else {
+                            "Suggested"
+                        },
+                        r.id,
+                        n.id
                     ),
                     json!({ "notice_id": n.id, "state": "awaiting_owner" }),
                 ),

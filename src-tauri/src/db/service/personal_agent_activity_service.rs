@@ -69,6 +69,14 @@ pub async fn since(
         .collect())
 }
 
+/// Forget every day (the owner cleared what codeg learned, 5.3).
+pub async fn clear(conn: &DatabaseConnection) -> Result<u64, DbError> {
+    Ok(activity::Entity::delete_many()
+        .exec(conn)
+        .await?
+        .rows_affected)
+}
+
 /// Forget the days before `keep_from`.
 pub async fn prune(conn: &DatabaseConnection, keep_from: NaiveDate) -> Result<u64, DbError> {
     let res = activity::Entity::delete_many()

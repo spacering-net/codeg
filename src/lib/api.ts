@@ -59,8 +59,10 @@ import type {
   ProposalRuleView,
   PersonalAgentHistoryResults,
   PersonalAgentHistoryScope,
+  PersonalAgentGrades,
   PersonalAgentHistoryStatus,
   PersonalAgentProfile,
+  PersonalAgentProfileOp,
   PersonalAgentToday,
   Routine,
   RoutineAction,
@@ -2822,6 +2824,19 @@ export async function personalAgentProfile(): Promise<PersonalAgentProfile> {
   return getTransport().call("personal_agent_profile", {})
 }
 
+/** The owner changes their profile (5.3): their hours, a project codeg is
+ *  not to mind, or clearing what codeg learned. The page comes back anew. */
+export async function personalAgentProfileUpdate(
+  op: PersonalAgentProfileOp
+): Promise<PersonalAgentProfile> {
+  return getTransport().call("personal_agent_profile_update", { op })
+}
+
+/** Each assistant's and executor config's grade over the last 30 days. */
+export async function personalAgentGrades(): Promise<PersonalAgentGrades> {
+  return getTransport().call("personal_agent_grades", {})
+}
+
 /** The time machine (8.2): what was said and done before, as the
  *  assistants' `history_search` finds it. `since` is `YYYY-MM-DD` or `7d`. */
 export async function personalAgentHistorySearch(params: {
@@ -3109,6 +3124,11 @@ export type NoticeAction =
   | "close"
   | "watch"
   | "rebase"
+  // The weekly review's questions (6.6): show changes first; hide or (once
+  // the page deleted it) delete an idle work assistant.
+  | "ask_first"
+  | "hide"
+  | "delete"
 
 export async function personalAgentAnswerQuestion(
   questionId: string,

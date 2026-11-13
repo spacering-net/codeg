@@ -6,7 +6,10 @@
  * a round of acceptance, a rebase, keeping an eye on a project, closing a
  * matter); what needs judging goes to the assistant as the owner's message,
  * in their words. [Not now] keeps the topic quiet a week; "Don't suggest
- * these" turns the rule off. A card whose thing is gone says so.
+ * these" turns the rule off. A card whose thing is gone says so. The weekly
+ * review's questions (6.6) are such cards too: show the changes the owner
+ * keeps undoing first; hide or delete a work assistant nobody woke for two
+ * weeks (the delete goes through the usual confirmation).
  */
 
 import { useState } from "react"
@@ -20,6 +23,8 @@ import {
   Hourglass,
   MessageCircleQuestion,
   TriangleAlert,
+  Undo2,
+  UserX,
   type LucideIcon,
 } from "lucide-react"
 
@@ -36,6 +41,7 @@ import { cn } from "@/lib/utils"
 
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
+import { BotDeleteDialog } from "./bot-delete-dialog"
 import { MutedNote, MuteKindButton } from "./mute-kind"
 import { useWhen } from "./routine-bits"
 import { useSessionLinkOpener } from "./session-link"
@@ -53,6 +59,8 @@ const ICONS: Partial<Record<ProposalRule, LucideIcon>> = {
   idle: BellRing,
   new_project: FolderPlus,
   behind: GitBranch,
+  undo: Undo2,
+  idle_bot: UserX,
 }
 
 /** Each rule's next steps, the first the main one. */
@@ -65,6 +73,8 @@ const STEPS: Partial<Record<ProposalRule, readonly NoticeAction[]>> = {
   idle: ["hand", "close"],
   new_project: ["watch"],
   behind: ["rebase"],
+  undo: ["ask_first"],
+  idle_bot: ["hide", "delete"],
 }
 
 /** The states a step leaves the card in, as the server writes them. */
@@ -77,6 +87,9 @@ const DONE_STATES = [
   "closed",
   "watching",
   "rebasing",
+  "asking_first",
+  "hidden",
+  "deleted",
 ] as const
 
 function asRule(v: string | null): ProposalRule | null {
@@ -100,6 +113,10 @@ function nameOf(rule: ProposalRule, f: Facts): string {
       return str(f, "name") ?? ""
     case "idle":
       return str(f, "summary") ?? ""
+    case "idle_bot":
+      return str(f, "name") ?? ""
+    case "undo":
+      return ""
     default:
       return str(f, "title") ?? ""
   }
@@ -118,6 +135,7 @@ export function RuleCard({ item }: { item: NoticeItem }) {
   const noticeId = Number(row.ref_id)
   const [busy, setBusy] = useState<NoticeAction | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<number | null>(null)
 
   const rule = asRule(str(data, "rule"))
   if (!rule) return null
@@ -160,6 +178,12 @@ export function RuleCard({ item }: { item: NoticeItem }) {
 
   const act = async (a: NoticeAction) => {
     if (!Number.isFinite(noticeId) || busy) return
+    // Deleting asks first, as everywhere: the card settles once it is gone.
+    if (rule === "idle_bot" && a === "delete") {
+      const id = num(facts, "bot_id")
+      if (id != null) setDeleting(id)
+      return
+    }
     // Where it is: opened at once, the card settled after.
     if (a === "open") {
       const conv = num(facts, "conversation_id")
@@ -218,6 +242,13 @@ export function RuleCard({ item }: { item: NoticeItem }) {
         return str(facts, "author")
           ? t("byAuthor", { author: str(facts, "author") ?? "" })
           : null
+      case "undo":
+        return t("undoDetail", {
+          undone: num(facts, "undone") ?? 0,
+          made: num(facts, "made") ?? 0,
+        })
+      case "idle_bot":
+        return t("idleBotDetail")
       default:
         return null
     }
@@ -344,6 +375,22 @@ export function RuleCard({ item }: { item: NoticeItem }) {
           </p>
         ) : null}
       </div>
+      {rule === "idle_bot" ? (
+        <BotDeleteDialog
+          botId={deleting}
+          onOpenChange={(o) => {
+            if (!o) setDeleting(null)
+          }}
+          onDeleted={() => {
+            setBusy("delete")
+            personalAgentNoticeAct(noticeId, "delete", botId)
+              .catch((e) =>
+                setFailed(e instanceof Error ? e.message : String(e))
+              )
+              .finally(() => setBusy(null))
+          }}
+        />
+      ) : null}
     </MessageRow>
   )
 }

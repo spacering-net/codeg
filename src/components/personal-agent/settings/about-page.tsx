@@ -1,11 +1,12 @@
 "use client"
 
 /**
- * "About you" (13.5, 1.12): the owner's time zone — every time the
- * assistants read or write is in it — and whether codeg records when they
- * are in codeg, to learn their usual hours. The hours codeg sees are shown,
- * read-only (changing them comes with the profile, 2.11). Each item saves
- * the moment it changes.
+ * "About you" (13.5, 1.12, 2.11): the owner's time zone — every time the
+ * assistants read or write is in it —, whether codeg records when they are
+ * in codeg to learn their usual hours (each kind of day changeable: what
+ * they set stands), what codeg sees of their projects and agents, how they
+ * answer its cards, what the time machine searches, and clearing what
+ * codeg learned. Each item saves the moment it changes.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -39,16 +40,24 @@ import {
   personalAgentHistoryRebuild,
   personalAgentHistoryStatus,
   personalAgentProfile,
+  personalAgentProfileUpdate,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { getAgentLabel } from "@/lib/custom-agents"
 import type {
+  AgentType,
   PersonalAgentAccount,
-  PersonalAgentDayHours,
   PersonalAgentHistoryStatus,
   PersonalAgentProfile,
+  PersonalAgentProfileOp,
 } from "@/lib/types"
-import { cn } from "@/lib/utils"
 
+import {
+  ClearLearned,
+  HoursLine,
+  ReactionsCard,
+  SeenCard,
+} from "./about-profile"
 import { DEFAULT_PREFS, PageHead } from "./pref-pages"
 import { useSettingsPatch } from "./use-settings"
 
@@ -56,14 +65,6 @@ import { useSettingsPatch } from "./use-settings"
 interface ZoneItem {
   value: string
   label: string
-}
-
-/** A time of the hours: `HH:MM` (past 24:00 is the next morning's). */
-export function hoursClock(minutes: number): string {
-  const m = ((minutes % 1440) + 1440) % 1440
-  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(
-    m % 60
-  ).padStart(2, "0")}`
 }
 
 /** `at` in `zone`, `HH:MM`; empty when the browser does not know it. */
@@ -78,44 +79,6 @@ function clockIn(zone: string, at: Date): string {
   } catch {
     return ""
   }
-}
-
-function HoursLine({
-  kind,
-  hours,
-}: {
-  kind: "workday" | "restday"
-  hours: PersonalAgentDayHours
-}) {
-  const t = useTranslations("PersonalAgent.settings.about")
-  const span = t(hours.end >= 1440 ? "spanOvernight" : "span", {
-    start: hoursClock(hours.start),
-    end: hoursClock(hours.end),
-  })
-  return (
-    <div
-      className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs"
-      data-pa-hours={kind}
-      data-learned={hours.learned ? "true" : "false"}
-    >
-      <span className="text-muted-foreground">{t(kind)}</span>
-      <span className="flex items-baseline gap-2">
-        <span
-          className={cn(
-            "font-medium tabular-nums",
-            !hours.learned && "text-muted-foreground"
-          )}
-        >
-          {span}
-        </span>
-        <span className="text-muted-foreground">
-          {hours.learned
-            ? t("learnedFrom", { count: hours.days })
-            : t("stillLearning")}
-        </span>
-      </span>
-    </div>
-  )
 }
 
 export function AboutPage({
@@ -142,11 +105,18 @@ export function AboutPage({
       })
       .catch(() => {})
   }, [])
-  // Read again whenever either item changes (here, in another window, or
-  // from the conversation).
+  // Read again whenever an item it shows changes (here, in another window,
+  // or from the conversation).
   useEffect(() => {
     load()
-  }, [load, prefs.time_zone, prefs.presence])
+  }, [load, prefs.time_zone, prefs.presence, prefs.reactions])
+
+  /** A change of the profile itself: the page comes back with it. */
+  const change = useCallback(async (op: PersonalAgentProfileOp) => {
+    const id = ++seq.current
+    const p = await personalAgentProfileUpdate(op)
+    if (id === seq.current) setProfile(p)
+  }, [])
 
   const save = (key: AboutKey, value: string) => {
     void patch([{ key: `prefs.${key}`, value }]).then(() => load())
@@ -273,8 +243,20 @@ export function AboutPage({
             </p>
             {profile ? (
               <>
-                <HoursLine kind="workday" hours={profile.hours.workday} />
-                <HoursLine kind="restday" hours={profile.hours.restday} />
+                <HoursLine
+                  kind="workday"
+                  hours={profile.hours.workday}
+                  learned={profile.learned_hours?.workday ?? null}
+                  disabled={disabled}
+                  onChange={change}
+                />
+                <HoursLine
+                  kind="restday"
+                  hours={profile.hours.restday}
+                  learned={profile.learned_hours?.restday ?? null}
+                  disabled={disabled}
+                  onChange={change}
+                />
               </>
             ) : null}
             {!recording ? (
@@ -297,11 +279,30 @@ export function AboutPage({
           </div>
         </SettingRow>
       </SettingCard>
+      {profile ? (
+        <SeenCard
+          profile={profile}
+          agentName={(a) => getAgentLabel(a as AgentType)}
+          disabled={disabled}
+          onChange={change}
+        />
+      ) : null}
+      <ReactionsCard
+        on={prefs.reactions === "on"}
+        profile={profile}
+        disabled={disabled}
+        onSwitch={(on) => save("reactions", on ? "on" : "off")}
+      />
       <TimeMachineCard
         sessions={prefs.history_sessions === "on"}
         tasks={prefs.history_tasks === "on"}
         disabled={disabled}
         onSave={save}
+      />
+      <ClearLearned
+        disabled={disabled}
+        clearedAt={profile?.cleared_at ?? null}
+        onClear={() => change({ op: "clear" })}
       />
       <SettingNote icon={ShieldCheck}>{ta("note")}</SettingNote>
     </div>
@@ -309,12 +310,18 @@ export function AboutPage({
 }
 
 /** The items of this page. */
-type AboutKey = "time_zone" | "presence" | "history_sessions" | "history_tasks"
+type AboutKey =
+  | "time_zone"
+  | "presence"
+  | "history_sessions"
+  | "history_tasks"
+  | "reactions"
 const ABOUT_KEYS: readonly AboutKey[] = [
   "time_zone",
   "presence",
   "history_sessions",
   "history_tasks",
+  "reactions",
 ]
 
 /** While the index is being read, how often it is asked how far. */
