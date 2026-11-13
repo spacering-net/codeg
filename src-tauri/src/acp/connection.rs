@@ -2159,10 +2159,10 @@ fn agent_debug_callback(
 /// codeg's own question and result tools ([`codeg_tool_auto_allow_option`]),
 /// and the history parser. So codeg turns lazy loading off, as it was through
 /// 1.1.83 (which takes the flag too). An option `qoder --acp` does not know
-/// makes it exit, but each release tried from 1.1.0 to 1.1.87 (1.1.0, 1.1.30,
-/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86, 1.1.87) takes
-/// `--settings`, and 1.1.30 and 1.1.64 open sessions with this one as without
-/// it.
+/// makes it exit, but each release tried from 1.1.0 to 1.1.88 (1.1.0, 1.1.30,
+/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86, 1.1.87, 1.1.88)
+/// takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this one as
+/// without it.
 pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
 /// The arguments codeg adds after an npx agent's registry `args`: for Qoder,
@@ -13811,7 +13811,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.183.0) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.184.0) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -13897,7 +13897,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.183.0) answers the next prompt it runs `cancelled` even though that
+/// 2.184.0) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
@@ -18949,6 +18949,24 @@ fn unwrap_codebuddy_deferred_output(agent_type: AgentType, text: &str) -> Option
     obj.get("text").and_then(|t| t.as_str()).map(str::to_string)
 }
 
+/// A CodeBuddy tool result's live text as the cards read it: a deferred MCP
+/// result peeled to its inner text ([`unwrap_codebuddy_deferred_output`]),
+/// and a Read result without the line-range hint 2.184.0 appends for the model
+/// ([`crate::parsers::codebuddy::strip_read_range_hint`], which history applies
+/// to the same results). Any other agent's text passes through untouched.
+fn codebuddy_live_tool_text(agent_type: AgentType, text: String) -> String {
+    if agent_type != AgentType::CodeBuddy {
+        return text;
+    }
+    let text = unwrap_codebuddy_deferred_output(agent_type, &text).unwrap_or(text);
+    let kept = crate::parsers::codebuddy::strip_read_range_hint(&text);
+    if kept.len() == text.len() {
+        text
+    } else {
+        kept.to_string()
+    }
+}
+
 /// True when a CodeBuddy tool call's ACP `_meta` identifies it as a native
 /// sub-agent (`Agent`) invocation. CodeBuddy tags this in `_meta` from the FIRST
 /// frame (`codebuddy.ai/toolName == "Agent"`) and later adds
@@ -21016,8 +21034,8 @@ fn grok_meta_marks_ask_user(
 /// answered card the bridge recorded, and so must be dropped. Consumes the
 /// record.
 ///
-/// Measured against antigravity-acp 1.4.1, 1.4.3 and 1.4.4: each question opens
-/// a `tool_call` (`interaction_<hex>`, titled with the question,
+/// Measured against antigravity-acp 1.4.1, 1.4.3, 1.4.4, 1.4.5 and 1.5.0: each
+/// question opens a `tool_call` (`interaction_<hex>`, titled with the question,
 /// `rawInput: {}`, `pending`), is asked through `session/request_permission`
 /// under the same id, and is closed by a `tool_call_update` carrying only
 /// `status` and a fixed `rawOutput` ("Response received" / "Interaction
@@ -21357,11 +21375,11 @@ const KIMI_EXIT_PLAN_MODE_REVIEW_TITLE: &str = "Presenting plan and exiting plan
 /// Whether a Kimi Code frame settles an `ExitPlanMode` call `failed` although
 /// the review's own answer was not an error.
 ///
-/// 2.6.0 settles every answered plan review `failed`: its tool executor turns
-/// the review's answer into a veto, so approving the plan, dismissing the
-/// review or asking for a revision ends the call exactly like a rejection,
-/// and the plan card would show an approved plan as an error. Only the
-/// wording of the result still tells them apart (see
+/// 2.6.0 and 2.6.1 settle every answered plan review `failed`: their tool
+/// executor turns the review's answer into a veto, so approving the plan,
+/// dismissing the review or asking for a revision ends the call exactly like
+/// a rejection, and the plan card would show an approved plan as an error.
+/// Only the wording of the result still tells them apart (see
 /// [`crate::parsers::kimi_code::kimi_plan_review_kept_ok`], which history
 /// applies to the same calls), so such a frame is forwarded as `completed`.
 /// `own_title` is the call's own title as [`KimiToolTitles`] tracks it.
@@ -25805,7 +25823,7 @@ async fn emit_conversation_update(
                     content_blocks,
                     synthesized_edit.is_none() && kiro_tool.is_none(),
                 )
-                    .map(|c| unwrap_codebuddy_deferred_output(agent_type, &c).unwrap_or(c))
+                    .map(|c| codebuddy_live_tool_text(agent_type, c))
                     // pi announces a command with an empty result, which pi-acp
                     // renders as JSON source (see fn doc).
                     .filter(|_| !pi_result_content_is_stringify_noise(agent_type, &tc.raw_output));
@@ -25853,7 +25871,7 @@ async fn emit_conversation_update(
                 Some(answers)
             } else {
                 json_value_to_text(&tc.raw_output)
-                    .map(|text| unwrap_codebuddy_deferred_output(agent_type, &text).unwrap_or(text))
+                    .map(|text| codebuddy_live_tool_text(agent_type, text))
                     .map(|text| structurize_live_output(&text))
             };
             let raw_output =
@@ -26333,7 +26351,7 @@ async fn emit_conversation_update(
                 .and_then(|c| {
                     serialize_tool_call_content(c, synthesized_edit.is_none() && kiro_tool.is_none())
                 })
-                .map(|c| unwrap_codebuddy_deferred_output(agent_type, &c).unwrap_or(c))
+                .map(|c| codebuddy_live_tool_text(agent_type, c))
                 // Symmetric with the ToolCall arm — and the arm that matters:
                 // pi's empty opening frame is a `tool_call_update`.
                 .filter(|_| {
@@ -26414,7 +26432,7 @@ async fn emit_conversation_update(
             } else {
                 json_value_to_text(&tcu.fields.raw_output)
                     .or(viewed_result)
-                    .map(|text| unwrap_codebuddy_deferred_output(agent_type, &text).unwrap_or(text))
+                    .map(|text| codebuddy_live_tool_text(agent_type, text))
                     .map(|text| structurize_live_output(&text))
             };
             let (raw_output, raw_output_append) = match raw_output_text {
@@ -44855,6 +44873,88 @@ mod tests {
         )
         .await;
         assert_eq!(statuses.last(), Some(&Some("failed".to_string())));
+    }
+
+    /// The `content` and `raw_output` of every `ToolCallUpdate` the frames
+    /// emit, in order.
+    async fn tool_update_outputs_emitted(
+        agent_type: AgentType,
+        frames: &[serde_json::Value],
+    ) -> Vec<(Option<String>, Option<String>)> {
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-outputs".to_string(),
+            agent_type,
+            None,
+            "win".to_string(),
+            None,
+        )));
+        let emitter = EventEmitter::Noop;
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        for frame in frames {
+            let update: SessionUpdate =
+                serde_json::from_value(frame.clone()).expect("valid tool-call wire shape");
+            emit_conversation_update(
+                &state, &emitter, agent_type, update, None, &mut cache, &mut cb,
+            )
+            .await;
+        }
+        let guard = state.read().await;
+        let events = guard.recent_events_after(0).expect("events recorded");
+        events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                AcpEvent::ToolCallUpdate {
+                    content,
+                    raw_output,
+                    ..
+                } => Some((content.clone(), raw_output.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// CodeBuddy 2.184.0 ends a Read result with a line-range hint for the
+    /// model; the card gets the file lines alone, as 2.183.0 sent them.
+    #[tokio::test]
+    async fn a_codebuddy_read_card_drops_the_range_hint() {
+        let lines = "   1→outside one\n   2→outside two\n   3→";
+        let sent = format!(
+            "{lines}\n<system-reminder data-role=\"tool-hint\">Read lines 1-2 of 2.</system-reminder>"
+        );
+        // The settling frame as 2.184.0 sends it (captured, `_meta` trimmed).
+        let frames = [
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "call_read",
+                "title": "Read /p/out.txt",
+                "kind": "read",
+                "status": "pending",
+                "rawInput": {"file_path": "/p/out.txt"},
+            }),
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call_read",
+                "status": "completed",
+                "rawOutput": {"type": "text", "text": sent},
+                "content": [{"type": "content", "content": {"type": "text", "text": sent}}],
+                "_meta": {"codebuddy.ai/toolName": "Read"},
+            }),
+        ];
+        let outputs = tool_update_outputs_emitted(AgentType::CodeBuddy, &frames).await;
+        let (content, raw_output) = outputs.last().expect("the settling update");
+        assert_eq!(
+            raw_output.as_deref(),
+            crate::parsers::strip_numbered_lines(lines).as_deref()
+        );
+        let content = content.as_deref().expect("content");
+        assert!(content.contains("outside two"), "{content}");
+        assert!(!content.contains("tool-hint"), "{content}");
+
+        // Only CodeBuddy's results are touched.
+        let outputs = tool_update_outputs_emitted(AgentType::OpenCode, &frames).await;
+        let (content, _) = outputs.last().expect("the settling update");
+        assert!(content.as_deref().unwrap_or_default().contains("tool-hint"));
     }
 
     /// Kimi retitles a call's card with a status and never puts the call's

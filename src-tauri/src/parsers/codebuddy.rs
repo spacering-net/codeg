@@ -902,6 +902,45 @@ fn deferred_result_envelope(value: &Value) -> Option<String> {
     .ok()
 }
 
+/// `text` without the line-range hint CodeBuddy (2.184.0 on) appends to a Read
+/// result, or `text` itself when it has none.
+///
+/// The hint is one line addressed to the model, after the numbered lines and
+/// the empty `N→` line that ends them:
+/// `\n<system-reminder data-role="tool-hint">Read lines 1-2 of 2.</system-reminder>`
+/// (a partial read gets a `[Truncated: …]` notice naming the next offset, a
+/// read past the end "Read 0 lines from line N"). It reaches codeg live, in a
+/// `session/load` replay and in the transcript's `output.text`, and left in
+/// place it would become the last line of the file card's text. Only a hint
+/// that closes the text, right after a numbered line, is taken off, so any
+/// other result keeps its text as sent; what is left is exactly what 2.183.0
+/// sent for the same read.
+pub(crate) fn strip_read_range_hint(text: &str) -> &str {
+    const OPEN: &str = "\n<system-reminder data-role=\"tool-hint\">";
+    const CLOSE: &str = "</system-reminder>";
+    let Some(body) = text.strip_suffix(CLOSE) else {
+        return text;
+    };
+    let Some(at) = body.rfind(OPEN) else {
+        return text;
+    };
+    let hint = &body[at + OPEN.len()..];
+    if hint.contains('\n') || hint.contains("<system-reminder") {
+        return text;
+    }
+    let kept = &text[..at];
+    let last_line = kept.rsplit('\n').next().unwrap_or(kept);
+    let is_numbered = last_line
+        .trim_start()
+        .split_once('→')
+        .is_some_and(|(num, _)| !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()));
+    if is_numbered {
+        kept
+    } else {
+        text
+    }
+}
+
 /// `function_call_result.output` is `{type:"text", text}`; fall back to the raw
 /// string or `providerData.toolResult.content`. Deferred MCP tools first surface
 /// their structured `mcpMeta` envelope (see `deferred_result_envelope`).
@@ -912,10 +951,10 @@ fn tool_output_preview(value: &Value) -> Option<String> {
     if let Some(output) = value.get("output") {
         if let Some(text) = output.as_str() {
             if !text.is_empty() {
-                return Some(text.to_string());
+                return Some(strip_read_range_hint(text).to_string());
             }
         } else if let Some(text) = output.get("text").and_then(|t| t.as_str()) {
-            return Some(text.to_string());
+            return Some(strip_read_range_hint(text).to_string());
         }
     }
     let content = value.get("providerData")?.get("toolResult")?.get("content")?;
@@ -2105,6 +2144,82 @@ mod tests {
         assert!(
             !read_output.contains("1→"),
             "line-number prefixes must be stripped, got: {read_output}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A 2.184.0 Read result as its transcript stores it: the numbered lines,
+    /// the empty `N→` line and the line-range hint for the model (captured).
+    const READ_2184: &str = "   1→outside one\n   2→outside two\n   3→\n<system-reminder data-role=\"tool-hint\">Read lines 1-2 of 2.</system-reminder>";
+
+    #[test]
+    fn read_range_hint_comes_off_and_leaves_what_2183_sent() {
+        assert_eq!(
+            strip_read_range_hint(READ_2184),
+            "   1→outside one\n   2→outside two\n   3→"
+        );
+        // A partial read's notice and a read past the end (captured).
+        let partial = " 119→big line 119\n 120→\n<system-reminder data-role=\"tool-hint\">[Truncated: PARTIAL view — big.txt: showing lines 100-119 (total unknown). Call Read with offset=120 limit=20 for the next page, or Grep to find a specific section. Do NOT answer from this page alone if the answer may be further in the file.]</system-reminder>";
+        assert_eq!(strip_read_range_hint(partial), " 119→big line 119\n 120→");
+        let past_end = "1000→\n<system-reminder data-role=\"tool-hint\">Read 0 lines from line 1000 (total unknown).</system-reminder>";
+        assert_eq!(strip_read_range_hint(past_end), "1000→");
+    }
+
+    #[test]
+    fn a_tool_hint_after_anything_but_numbered_lines_stays() {
+        // A background task snapshot's hint follows prose, not numbered lines.
+        let snapshot = "Status: running\n<system-reminder data-role=\"tool-hint\">Do NOT poll TaskOutput in a loop.</system-reminder>";
+        assert_eq!(strip_read_range_hint(snapshot), snapshot);
+        // Not at the end, another role, or spanning lines: kept as sent.
+        let not_last = format!("{READ_2184}\nmore");
+        assert_eq!(strip_read_range_hint(&not_last), not_last);
+        let other_role = "   1→a\n   2→\n<system-reminder data-role=\"other\">x</system-reminder>";
+        assert_eq!(strip_read_range_hint(other_role), other_role);
+        let multi_line =
+            "   1→a\n   2→\n<system-reminder data-role=\"tool-hint\">x\ny</system-reminder>";
+        assert_eq!(strip_read_range_hint(multi_line), multi_line);
+        assert_eq!(strip_read_range_hint("   1→a\n   2→b"), "   1→a\n   2→b");
+    }
+
+    #[test]
+    fn read_result_with_a_range_hint_shows_only_the_file_lines() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-readhint-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-readhint";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"message","role":"user","timestamp":1781821844000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"read it"}]}),
+                json!({"type":"function_call","timestamp":1781821845000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Read","callId":"r1","arguments":"{\"file_path\": \"/x\"}"}),
+                json!({"type":"function_call_result","timestamp":1781821845100i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Read","callId":"r1","status":"completed",
+                       "output":{"type":"text","text":READ_2184}}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let read_output = detail
+            .turns
+            .iter()
+            .flat_map(|t| &t.blocks)
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview,
+                    ..
+                } if id == "r1" => output_preview.clone(),
+                _ => None,
+            })
+            .expect("read tool result");
+        assert_eq!(
+            Some(read_output),
+            crate::parsers::strip_numbered_lines("   1→outside one\n   2→outside two\n   3→"),
+            "the card gets the same lines as for 2.183.0's result"
         );
 
         std::fs::remove_dir_all(&root).ok();

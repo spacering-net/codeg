@@ -5536,8 +5536,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // daemon's job workers.
             //
             // Two behaviours around a Stop, the same in 2.171.0, 2.177.0, 2.177.1,
-            // 2.179.0, 2.179.2, 2.179.3, 2.180.0, 2.181.0, 2.182.0 and 2.183.0,
-            // need codeg's help.
+            // 2.179.0, 2.179.2, 2.179.3, 2.180.0, 2.181.0, 2.182.0, 2.183.0 and
+            // 2.184.0, need codeg's help.
             // CodeBuddy answers a `session/prompt` that starts within 500 ms of a
             // `session/cancel` it took mid-turn with `cancelled`, without running
             // the prompt or keeping it in its history, so codeg holds the first
@@ -5777,9 +5777,49 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // bundle still has no auto-update scheduler, `--acp` still does not
             // prune sessions, and an install without optional dependencies
             // still runs whole turns.
+            //
+            // 2.184.0 keeps `bin/codebuddy` byte for byte and its inlined ACP
+            // SDK transport (1.9.0, 32 MiB line limit), so the 33 MiB line
+            // still stalls stdin and `$/cancel_request` still leaves a prompt
+            // running until `session/cancel`; `package.json` changes its
+            // version and the sandbox-cli pins (5.12.0-beta.9 to
+            // 5.13.0-beta.2). `initialize` and the unauthenticated
+            // `session/new` answer exactly as 2.183.0 does (`protocolVersion:
+            // 1`), the modes, `thought_level`, `sandbox`, `multitask` and the
+            // command names are unchanged, and no `sessionUpdate` kind,
+            // `session/*` method or `_codebuddy.ai/*` notification came or
+            // went. The default model's id is now `auto` (was `default-model`,
+            // still named Auto); a saved `default-model` is no longer listed,
+            // so codeg skips it and the session starts on `auto`, and 2.184.0
+            // loads a 2.183.0 session on `auto`. A Read result now ends with a
+            // `<system-reminder data-role="tool-hint">` line for the model
+            // ("Read lines 1-2 of 2.", or a truncation notice naming the next
+            // offset for a partial read), live, in the `session/load` replay
+            // and in the transcript's `output.text`, and its `_meta` gains
+            // `codebuddy.ai/rawResponse`. codeg takes that line off before it
+            // numbers the card (`parsers::codebuddy::strip_read_range_hint`,
+            // live and in history), which leaves exactly what 2.183.0 sent. A
+            // model's native refusal still answers `refusal`, now with
+            // `_meta["codebuddy.ai/providerRefusal"]: true` and the refusal
+            // text as an agent message instead of an internal-error
+            // `errorMessage`. Transcripts add a `model_calls` list to
+            // `providerData.rawUsage`, which the parser does not read, and
+            // `usage_update` is unchanged because codeg does not ask for those
+            // metrics. After a Stop that cancels a pending permission request,
+            // one `session_info_update` (`permissionResolved`) is no longer
+            // sent; codeg never read it. Apart from these, the recorded turns
+            // (2.183.0's set, plus partial and out-of-cwd reads, a refusal and
+            // back-to-back prompts) and their transcripts match 2.183.0 apart
+            // from usage numbers and timing. A stdio server named `codeg-mcp`
+            // still asks once per call, for `DeferExecuteTool`, and Allow once
+            // runs it. Of three Stops during a sub-agent, the cancelled prompt
+            // was answered after 27 ms, 20 ms and, behind the background
+            // summary request, 12.1 s. The headless bundle still has no
+            // auto-update scheduler, `--acp` still does not prune sessions, and
+            // an install without optional dependencies still runs whole turns.
             distribution: AgentDistribution::Npx {
-                version: "2.183.0",
-                package: "@tencent-ai/codebuddy-code@2.183.0",
+                version: "2.184.0",
+                package: "@tencent-ai/codebuddy-code@2.184.0",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -6420,9 +6460,31 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `turn.step.interrupted`, none of which the parser reads. The MCP
             // respawn and tool-update probes were not re-run, and this time the
             // modules behind them changed.
+            //
+            // 2.6.1 is a patch release, and the mandated check passes verbatim.
+            // `package.json` changes only its version and the order of its
+            // devDependencies. 10 of the bundle's 3676 modules changed, for
+            // faster reopening of long sessions (#4888) and for compaction and
+            // context counting that also use the model's reported usage
+            // (#4907); no `packages/acp-server`, tool, MCP, session-lock or
+            // `wire.jsonl` writer module changed, and the models.dev refresh
+            // leaves the `moonshotai` rows alone. By its source Kimi may now
+            // compact a long session earlier, which codeg sees only as the same
+            // "Compacting conversation context…" and "Compaction completed."
+            // text (not reproduced live). A live A/B against a fresh 2.6.0
+            // matched on `initialize` (`protocolVersion: 1`), `session/new`
+            // (the model, thinking and mode values for all four block shapes,
+            // the 14 slash commands), text, Bash, MCP, question and Skill turns,
+            // the deny rule, a turn cancelled mid-tool, the lock texts, the
+            // steering refusal, the model requests and the wire record types.
+            // 2.6.1 resumes and loads a session 2.6.0 wrote, with the same
+            // replay as 2.6.0's own, and codeg's parser reads the sessions both
+            // versions wrote alike. An approved or dismissed plan review still
+            // settles `ExitPlanMode` `failed` with `isError`, so the 2.6.0
+            // workaround above stays.
             distribution: AgentDistribution::Npx {
-                version: "2.6.0",
-                package: "@moonshot-ai/kimi-code@2.6.0",
+                version: "2.6.1",
+                package: "@moonshot-ai/kimi-code@2.6.1",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -7375,7 +7437,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // "Bypass Permissions" (`bypassPermissions` is accepted as an alias
             // for it, `plan` is rejected) — re-read live on 1.1.64, 1.1.65,
             // 1.1.67, 1.1.71, 1.1.72, 1.1.73, 1.1.74, 1.1.75, 1.1.81, 1.1.83,
-            // 1.1.84, 1.1.86 and 1.1.87, and nothing in codeg names them.
+            // 1.1.84, 1.1.86, 1.1.87 and 1.1.88, and nothing in codeg names
+            // them.
             // Session logs land as
             // `$QODER_CONFIG_DIR/projects/<encoded-cwd>/<sessionId>.jsonl`
             // (default `~/.qoder/...`) in the Claude-Code-style chunk-log
@@ -7610,9 +7673,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // resolves past the cmd wrappers `qoder` points at — they strip
             // inline JSON's quotes on the way to the CLI — and spawns the real
             // CLI directly (see `acp::qoder`). An option `qoder --acp` does
-            // not know makes it exit, but each release tried from 1.1.0 to 1.1.87
+            // not know makes it exit, but each release tried from 1.1.0 to 1.1.88
             // (1.1.0, 1.1.30, 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84,
-            // 1.1.86, 1.1.87) takes the flag, and 1.1.30 and 1.1.64 open
+            // 1.1.86, 1.1.87, 1.1.88) takes the flag, and 1.1.30 and 1.1.64 open
             // sessions with it as without it.
             //
             // 1.1.86 follows 1.1.85, which codeg skipped. Both change only the
@@ -7665,6 +7728,23 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // session 1.1.86 wrote. Every session logs `lazy=false` with the
             // flag.
             //
+            // 1.1.88 again changes only the two bundles and the version
+            // strings, with the same files byte-identical as above and the
+            // Windows `rg.exe` again differing only in its signature. Qoder's
+            // changelog lists a new title-generation prompt and two TUI fixes
+            // (MCP tools after `/new` or `/clear`, prompt suggestions); the rest
+            // is telemetry, enterprise BYOK inference that needs an enterprise
+            // login, and skill and hook error handling. With minified names
+            // stripped, the ACP agent's 53 methods, its `sessionUpdate` kinds
+            // and `session/*` methods, the transcript record types (the turn
+            // budget attachments included; only the budget's prompt text
+            // changed), the compaction records, the permission options and the
+            // lazy-load gate are unchanged. The A/B against 1.1.87 again stops
+            // short of a model turn for the same two reasons, and up to there
+            // the same requests, transcripts and config-dir cases match, as do
+            // loading, resuming and forking a session 1.1.87 wrote. Every
+            // session logs `lazy=false` with the flag.
+            //
             // `QODER_EXPOSE_TOKEN_USAGE` turns OFF qoder's own token-count
             // redaction, and without it every qoder session reports zero tokens
             // everywhere codeg can see. The CLI passes each response's usage
@@ -7686,8 +7766,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // 1.1.67, `Dr` / `qMA` in 1.1.71, `yr` / `VMA` in 1.1.72, `Or` /
             // `m1A` in 1.1.73, `Or` / `_1A` in 1.1.74, `Lr` / `xGA` in 1.1.75,
             // `xr` / `K4A` in 1.1.81, `Ii` / `POA` in 1.1.83, `ki` / `ROA` in
-            // 1.1.84, `Ri` / `QJA` in 1.1.86 and `wi` / `bJA` in 1.1.87 (the
-            // minified names change every build), so grepping the bundle for
+            // 1.1.84, `Ri` / `QJA` in 1.1.86, `wi` / `bJA` in 1.1.87 and `yi` /
+            // `w9A` in 1.1.88 (the minified names change every build), so
+            // grepping the bundle for
             // the full literal returns nothing — grep the bare suffix instead,
             // the same trap `parsers::qoder` documents for the config-dir vars.
             //
@@ -7695,8 +7776,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `runtime_env` override it, so a user who wants the redaction back
             // sets `QODER_EXPOSE_TOKEN_USAGE=0` in the agent's env settings.
             distribution: AgentDistribution::Npx {
-                version: "1.1.87",
-                package: "@qoder-ai/qodercli@1.1.87",
+                version: "1.1.88",
+                package: "@qoder-ai/qodercli@1.1.88",
                 cmd: "qoder",
                 // The launch adds `--settings` after these (see 1.1.84 above).
                 args: &["--acp"],
@@ -7884,8 +7965,44 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // and `client_edit_file` refuse content that looks like
             // `view_file`'s numbered output, without sending
             // `fs/write_text_file`, though the call still ends `completed`.
+            //
+            // 1.5.0, checked against 1.4.5: every archive is still flat with the
+            // same two executables and modes, and the Windows server is still
+            // the PyInstaller onefile with Python 3.14 on both architectures.
+            // The Linux server is about 110 MB smaller because its native code
+            // shrank, while its Python grew slightly. Of the server's own
+            // Python, `server.py`, `tools.py`, `model_selection.py`,
+            // `settings.py`, `paths.py`, `main.py`, `client_info.py` and the
+            // version string changed, and `token_usage_tracker.py` is new.
+            // `config_options.py`, `hooks.py`, `oauth/` and the MCP and gateway
+            // modules are byte-identical, `server.py::_ask_user_handler` is
+            // unchanged, and so are the protobuf fields the history parser
+            // reads, Step 154 included. The vendored ACP SDK moved to schema
+            // 1.23, and the Go harness is a real rebuild rather than new build
+            // stamps, though its tool names and the frames and history steps
+            // codeg reads did not move. `initialize` (`protocolVersion: 1`),
+            // the API-key and gateway selectors and flat `models` list, the
+            // slash commands, a model then thinking-level switch, a saved 1.3.0
+            // variant id, a gateway turn that calls a tool on a wire MCP server
+            // (asked and auto-approved), a Stop during a pending permission,
+            // `session/load` replay, the native question frames with their
+            // Step 154 records, and the file tools all answer as 1.4.5 does.
+            // What moved: a `usage_update` and the `available_commands_update`
+            // now arrive before the `session/new` answer, which the ACP runtime
+            // parks and replays into the session once codeg attaches it (see
+            // `acp::agent_session`). `usage_update.used` no longer counts
+            // cached tokens twice, so the context ring reads lower on a turn
+            // that hit the cache, and the prompt answer's `usage`, which codeg
+            // does not record for this agent, splits its counts differently. An
+            // Agent Platform session lists Gemini 4 Carbon first and defaults to
+            // `gemini-4-carbon-medium`; every 1.4.5 id is still offered.
+            // `client_view_file` now shows at most 800 lines (45 KiB) per call
+            // and refuses content with NUL bytes as binary, but still asks
+            // `fs/read_text_file` for the whole file, so lines of a
+            // 16,480,000-byte file reached the model only with the 16 MiB
+            // allowance. Google sign-in, Linux and Windows were not run live.
             distribution: AgentDistribution::Binary {
-                version: "1.4.5",
+                version: "1.5.0",
                 // Never resolvable on PATH (there is no standalone CLI by
                 // this name); it exists because `Binary` requires one, and
                 // for dir-tree agents `installed_binary_path` ignores it in
@@ -7902,32 +8019,32 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.5-darwin-arm64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.0-darwin-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.5-darwin-x86_64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.0-darwin-x86_64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.5-linux-arm64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.0-linux-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.5-linux-x86_64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.0-linux-x86_64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.5-windows-arm64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.5.0-windows-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.5-windows-x86_64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.5.0-windows-x86_64.zip",
                         sha256: None,
                     },
                 ],
@@ -8349,7 +8466,7 @@ mod tests {
                 dir_entry,
                 ..
             } => {
-                assert_eq!(version, "1.4.5");
+                assert_eq!(version, "1.5.0");
                 assert_eq!(cmd, "agy_acp_server");
                 let entry = dir_entry.expect("antigravity must use dir-tree extraction");
                 assert_eq!(entry.unix, "agy_acp_server.par");
@@ -8359,7 +8476,7 @@ mod tests {
                 assert!(platforms.iter().any(|p| p.platform == "darwin-x86_64"));
                 for platform in platforms {
                     assert!(
-                        platform.url.contains("/agy-acp-server-1.4.5-"),
+                        platform.url.contains("/agy-acp-server-1.5.0-"),
                         "{} URL lost the release name: {}",
                         platform.platform,
                         platform.url
@@ -8793,16 +8910,16 @@ mod tests {
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.183.0",
-            "@tencent-ai/codebuddy-code@2.183.0",
+            "2.184.0",
+            "@tencent-ai/codebuddy-code@2.184.0",
             Some("22.0.0"),
         );
         // Kimi Code must never land on 0.37.0–0.38.0: every session in that
         // range dies on the codeg-mcp stdio entry (see the registry entry).
         assert_npx_version(
             AgentType::KimiCode,
-            "2.6.0",
-            "@moonshot-ai/kimi-code@2.6.0",
+            "2.6.1",
+            "@moonshot-ai/kimi-code@2.6.1",
             Some("22.19.0"),
         );
         assert_npx_version(
@@ -8826,8 +8943,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Qoder,
-            "1.1.87",
-            "@qoder-ai/qodercli@1.1.87",
+            "1.1.88",
+            "@qoder-ai/qodercli@1.1.88",
             Some("20.0.0"),
         );
         assert_npx_version(

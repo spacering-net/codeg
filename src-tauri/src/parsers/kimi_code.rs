@@ -951,12 +951,12 @@ pub(crate) const KIMI_EXIT_PLAN_MODE_TOOL: &str = "ExitPlanMode";
 /// plan ("Exited plan mode. …"), dismisses the review ("Plan approval
 /// dismissed. …") or asks for a revision ("User requested revisions. …",
 /// "User rejected the plan. Feedback: …"), and with `isError: true` only when
-/// the user rejects it ("Plan rejected by user. …"). 2.6.0's tool executor
-/// turns every one of those answers into a veto, so the call settles `failed`
-/// over ACP and its `tool.result` carries `isError: true` in `wire.jsonl`, and
-/// an approved plan would show as an error. Read off the wording of the
-/// result instead, which 2.5.3 and 2.6.0 share; any other text keeps the
-/// status Kimi sent.
+/// the user rejects it ("Plan rejected by user. …"). The tool executor of
+/// 2.6.0 and 2.6.1 turns every one of those answers into a veto, so the call
+/// settles `failed` over ACP and its `tool.result` carries `isError: true` in
+/// `wire.jsonl`, and an approved plan would show as an error. Read off the
+/// wording of the result instead, which 2.5.3 through 2.6.1 share; any other
+/// text keeps the status Kimi sent.
 pub(crate) fn kimi_plan_review_kept_ok(output: &str) -> bool {
     const OK_PREFIXES: &[&str] = &[
         "Exited plan mode.",
