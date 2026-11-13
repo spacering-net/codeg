@@ -100,6 +100,9 @@ export function SessionSettingsPicker({
     })
     .join(", ")}`
   const parts = settings.filter((setting) => setting.summary)
+  const mobileSummary =
+    parts.find((setting) => setting.kind !== "switch" && setting.isModel) ??
+    parts[0]
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -119,7 +122,7 @@ export function SessionSettingsPicker({
             // The agent's mark is one, so it would shrink inside its 14px
             // AgentIcon box, off the line the values are centered on. Hold
             // such SVGs at the box's size.
-            className="max-w-full min-w-0 shrink gap-1 bg-primary/10 px-2 text-muted-foreground hover:bg-primary/15 hover:text-foreground aria-expanded:bg-primary/15 aria-expanded:text-foreground dark:hover:bg-primary/15 [&_svg:not([class*='size-'])]:size-3.5"
+            className="h-10 max-w-full min-w-0 shrink touch-manipulation gap-1 bg-primary/10 px-2 text-muted-foreground hover:bg-primary/15 hover:text-foreground aria-expanded:bg-primary/15 aria-expanded:text-foreground dark:hover:bg-primary/15 md:h-6 [&_svg:not([class*='size-'])]:size-3.5"
           >
             <TriggerIcon agentType={agentType} />
             {/* `overflow-hidden`: when even the shortest form of every value
@@ -134,13 +137,15 @@ export function SessionSettingsPicker({
                   {index > 0 ? (
                     <span
                       aria-hidden
-                      className="shrink-0 px-1 text-muted-foreground/50"
+                      className="hidden shrink-0 px-1 text-muted-foreground/50 md:inline"
                     >
                       /
                     </span>
                   ) : null}
                   <span
                     className={cn(
+                      // 手机优先显示模型名，其他设置仍在同一个面板中完整可编辑。
+                      setting !== mobileSummary && "hidden md:inline",
                       [...(setting.summary ?? "")].length <= 8
                         ? "shrink-0"
                         : "min-w-12 shrink truncate"

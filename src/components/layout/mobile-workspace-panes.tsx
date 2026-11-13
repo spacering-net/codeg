@@ -1,8 +1,10 @@
 "use client"
 
 import type { ReactNode } from "react"
+import { ConversationPaneSwitcher } from "@/components/layout/conversation-pane-switcher"
 import { OverlayHostHiddenProvider } from "@/components/ui/overlay-host-hidden"
 import { cn } from "@/lib/utils"
+import { useTabStore } from "@/stores/tab-store"
 
 /** Pane changes hide live conversations without releasing their runtimes. */
 export function MobileWorkspacePanes({
@@ -14,6 +16,7 @@ export function MobileWorkspacePanes({
   children: ReactNode
   files: ReactNode
 }) {
+  const hasPanes = useTabStore((state) => state.paneState != null)
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
       <OverlayHostHiddenProvider hidden={!showConversation}>
@@ -26,6 +29,11 @@ export function MobileWorkspacePanes({
           aria-hidden={!showConversation}
           inert={!showConversation || undefined}
         >
+          {hasPanes && (
+            <div className="relative h-[3.25rem] shrink-0">
+              <ConversationPaneSwitcher mobile />
+            </div>
+          )}
           <div className="relative flex-1 min-h-0 overflow-hidden">
             {children}
           </div>

@@ -179,6 +179,14 @@ async function openPopover(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("SessionSettingsPicker — the chip", () => {
+  it("keeps only the model summary on mobile without removing desktop settings", () => {
+    renderPicker()
+    const chip = trigger()
+    expect(within(chip).getByText("Opus 5.5")).not.toHaveClass("hidden")
+    expect(within(chip).getByText("High")).toHaveClass("hidden", "md:inline")
+    expect(chip).toHaveClass("h-10", "md:h-6")
+  })
+
   it("joins the values with / — model, effort, then mode", () => {
     renderPicker({
       configOptions: CLAUDE.map((option) =>

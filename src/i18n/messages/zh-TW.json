@@ -1,4 +1,22 @@
 {
+  "ConversationPanes": {
+    "label": "Pane",
+    "create": "新增 Pane",
+    "rename": "重新命名",
+    "remove": "移除 Pane",
+    "move": "移動到 Pane",
+    "name": "Pane 名稱",
+    "save": "儲存",
+    "cancel": "取消",
+    "removeDraftTitle": "移除包含未傳送內容的 Pane？",
+    "removeDraftDescription": "此 Pane 中的未傳送內容將不再顯示。歷史對話會保留，執行中的工作繼續執行。",
+    "empty": "此 Pane 尚未開啟對話",
+    "emptyHint": "從左側開啟對話，或新增對話。",
+    "settingsTitle": "多專案靈動島",
+    "settingsDescription": "將不同專案的對話整理到命名 Pane 中，分別保留分頁群組和分割布局。",
+    "enabled": "啟用多專案靈動島",
+    "enabledDescription": "預設關閉。關閉後恢復一般分頁，已建立的 Pane 會保留，下次開啟可繼續使用。此設定僅影響目前裝置。"
+  },
   "HtmlCodePreview": {
     "code": "程式碼",
     "preview": "預覽",
@@ -2137,6 +2155,13 @@
     }
   },
   "Folder": {
+    "mobileTabs": {
+      "title": "已開啟的分頁",
+      "open": "切換分頁（{count}）",
+      "conversations": "對話",
+      "files": "檔案與預覽",
+      "empty": "尚未開啟分頁"
+    },
     "workspaceStatus": {
       "degradedTitle": "即時更新不可用",
       "degradedHint": "監聽器啟動失敗（如目錄無讀取權限）。請手動重新整理以取得最新變更。",

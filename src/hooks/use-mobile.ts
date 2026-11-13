@@ -2,7 +2,9 @@
 
 import { useMediaQuery } from "./use-media-query"
 
-const MOBILE_BREAKPOINT = "(max-width: 767px)"
+// 手机横屏仍使用单列；宽度相同的鼠标设备继续保留桌面工作区。
+const MOBILE_BREAKPOINT =
+  "(max-width: 767px), (max-width: 1023px) and (pointer: coarse)"
 
 export function useIsMobile(): boolean {
   return useMediaQuery(MOBILE_BREAKPOINT)
