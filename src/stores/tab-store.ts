@@ -4,7 +4,7 @@ import {
   useFolderTabsStore,
   type TabScope,
 } from "@/stores/folder-tabs-store"
-import { create } from "zustand"
+import { create, type StoreApi, type UseBoundStore } from "zustand"
 import { useShallow } from "zustand/react/shallow"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { registerBackendScopedStoreReset } from "@/stores/backend-scoped-store-reset"
@@ -15,6 +15,19 @@ import {
 } from "@/lib/api"
 import { resolveDefaultAgent } from "@/lib/resolve-default-agent"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { getConversationPanesEnabled } from "@/lib/conversation-pane-prefs"
+import {
+  canonicalPaneTabId,
+  emptyConversationPane,
+  initialConversationPanes,
+  isConversationPaneState,
+  normalizeConversationPanes,
+  paneForTab,
+  persistedConversationPanes,
+  restoreConversationPanes,
+  type ConversationPane,
+  type ConversationPaneState,
+} from "@/lib/conversation-panes"
 import {
   firstLeafId,
   isLayoutNode,
@@ -164,6 +177,14 @@ export interface TabStoreState {
   previewReplacedTabIds: string[]
   draftRetargetRequests: DraftRetargetRequest[]
   tabsHydrated: boolean
+  panesEnabled: boolean
+  setPanesEnabled: (enabled: boolean) => void
+  paneState: ConversationPaneState | null
+  createPane: () => void
+  switchPane: (paneId: string) => void
+  renamePane: (paneId: string, name: string) => void
+  removePane: (paneId: string) => void
+  moveTabToPane: (tabId: string, paneId: string) => void
   /**
    * IDEA-style split groups (device-local, like tile mode). `groupLayout` is
    * the splitter tree (leaves = groups); `groupOf` maps tab id → group id
@@ -398,6 +419,10 @@ let version = 0
 let applyingRemote = false
 let remoteActivationPending = false
 let pendingRemote: TabsChanged | null = null
+let pendingRestorePanes: ConversationPaneState | null = null
+let paneBootstrapRequested = false
+let dormantSharedPanes: ConversationPaneState | null = null
+let regularGroupViews: Record<string, GroupView> = {}
 let lastSavedPayload: string | null = null
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 // Conversation tabs the SERVER is known to hold, as of the last snapshot this
@@ -618,6 +643,19 @@ function buildPersistItems(
     }))
 }
 
+function tabSavePayload(
+  tabs: TabItemInternal[],
+  active: string | null,
+  paneState: ConversationPaneState | null = useTabStore.getState().paneState
+): string {
+  const items = buildPersistItems(tabs, active)
+  return JSON.stringify(
+    paneState
+      ? { items, pane_state: persistedConversationPanes(paneState, tabs) }
+      : items
+  )
+}
+
 /** Resolve a tab's group: its assignment when it points at a live leaf, else
  *  the first leaf. Exported for the strip / detail-panel render filters. */
 export function groupOfTab(
@@ -830,6 +868,7 @@ function readPersistedGroupState(): {
 } {
   pendingRestoreDrafts = []
   pendingRestoreActiveDraft = null
+  pendingRestorePanes = null
   const fallback = () => ({
     groupLayout: singleGroupLayout() as LayoutNode,
     groupOf: {} as Record<string, string>,
@@ -847,6 +886,9 @@ function readPersistedGroupState(): {
         pendingRestoreDrafts = sanitizeDrafts(parsed.drafts)
         pendingRestoreActiveDraft =
           typeof parsed.activeDraft === "string" ? parsed.activeDraft : null
+        pendingRestorePanes = isConversationPaneState(parsed.paneState)
+          ? parsed.paneState
+          : null
         return {
           groupLayout: parsed.layout,
           groupOf: sanitizeStringRecord(parsed.assignments),
@@ -873,6 +915,7 @@ function readPersistedGroupState(): {
  *  blob. */
 function persistGroupState() {
   if (typeof window === "undefined") return
+  syncCurrentPaneState()
   const st = useTabStore.getState()
   // Both gates matter: pre-hydration the state is transient, and after a FAILED
   // hydration it is missing every conversation tab — writing either would
@@ -945,6 +988,10 @@ function persistGroupState() {
   }
   const activeTab = st.rawTabs.find((t) => t.id === st.activeTabId)
   const blob = JSON.stringify({
+    // 关闭灵动岛只改变当前设备的视图，不能清掉稍后需要恢复的 Pane 和草稿归属。
+    ...(st.paneState || pendingRestorePanes
+      ? { paneState: st.paneState ?? pendingRestorePanes }
+      : {}),
     layout: normal.layout,
     assignments,
     selection: canonicalSelection(normal.selection),
@@ -1030,7 +1077,14 @@ function shallowRecordEqual(
 }
 
 /** View filtering is deliberately separate from rawTabs and the CAS payload. */
-export function isTabInScope(tab: Pick<TabItem, "folderId">) {
+export function isTabInScope(
+  tab: Pick<TabItem, "folderId"> & Partial<Pick<TabItem, "id">>
+) {
+  const panes = useTabStore.getState().paneState
+  if (panes) {
+    const owner = tab.id ? paneForTab(panes, tab.id) : undefined
+    return !owner || owner.id === panes.activePaneId
+  }
   const state = useFolderTabsStore.getState()
   return !state.enabled || folderScope(tab.folderId) === state.scope
 }
@@ -1040,9 +1094,14 @@ export function useVisibleConversationTabs() {
   const scope = useFolderTabsStore((s) => s.scope)
   return useTabStore(
     useShallow((s) =>
-      enabled
-        ? s.tabs.filter((tab) => folderScope(tab.folderId) === scope)
-        : s.tabs
+      s.paneState
+        ? s.tabs.filter(
+            (tab) =>
+              paneForTab(s.paneState!, tab.id)?.id === s.paneState!.activePaneId
+          )
+        : enabled
+          ? s.tabs.filter((tab) => folderScope(tab.folderId) === scope)
+          : s.tabs
     )
   )
 }
@@ -1051,19 +1110,20 @@ export function useVisibleConversationTabs() {
  *  folder's own layout, already narrowed to its tabs once the tab set is
  *  known; narrowing here as well covers the moments before that. */
 export function useVisibleConversationLayout() {
+  const paneState = useTabStore((s) => s.paneState)
   const enabled = useFolderTabsStore((s) => s.enabled)
   const tabs = useVisibleConversationTabs()
   const layout = useTabStore((s) => s.groupLayout)
   const groupOf = useTabStore((s) => s.groupOf)
   return useMemo(
     () =>
-      enabled
+      enabled && !paneState
         ? normalizeTree(
             layout,
             new Set(tabs.map((tab) => groupOfTab(groupOf, layout, tab.id)))
           )
         : layout,
-    [enabled, tabs, groupOf, layout]
+    [enabled, tabs, groupOf, layout, paneState]
   )
 }
 
@@ -1112,16 +1172,23 @@ type GroupResolutionState = Pick<
   TabStoreState,
   "rawTabs" | "groupOf" | "groupLayout"
 > &
-  Partial<Pick<TabStoreState, "groupViews">>
+  Partial<Pick<TabStoreState, "groupViews" | "paneState">>
 
 /** What a tab's group resolves against: the view on screen for a tab it
  *  shows, else the tab's own folder view — parked, or not built yet and so
  *  still the normal-mode one it will be narrowed from. */
 function groupViewOfTab(
   state: GroupResolutionState,
-  tab: Pick<TabItem, "folderId">
+  tab: Pick<TabItem, "folderId"> & Partial<Pick<TabItem, "id">>
 ): Pick<GroupView, "groupOf" | "layout"> {
   const onScreen = { groupOf: state.groupOf, layout: state.groupLayout }
+  if (state.paneState && tab.id) {
+    const pane = paneForTab(state.paneState, tab.id)
+    if (pane && pane.id !== state.paneState.activePaneId) {
+      return { groupOf: pane.assignments, layout: pane.layout }
+    }
+    return onScreen
+  }
   if (isTabInScope(tab)) return onScreen
   const views = state.groupViews ?? {}
   return views[folderGroupViewKey(tab)] ?? views[ALL_GROUP_VIEW] ?? onScreen
@@ -1140,7 +1207,9 @@ export function shellGroupOfTab(
   const view = tab
     ? groupViewOfTab(state, tab)
     : { groupOf: state.groupOf, layout: state.groupLayout }
-  return groupOfTab(view.groupOf, view.layout, tabId)
+  const groupId = groupOfTab(view.groupOf, view.layout, tabId)
+  const pane = state.paneState ? paneForTab(state.paneState, tabId) : undefined
+  return pane ? `${pane.id}/${groupId}` : groupId
 }
 
 /**
@@ -1191,10 +1260,11 @@ function projectGroupView(
  * rawTabs/tabs — no recursion with `recomputeTabs`.
  */
 function applyGroupInvariants() {
+  syncCurrentPaneState()
   const st = useTabStore.getState()
   const visibleTabs = st.rawTabs.filter(isTabInScope)
   if (
-    useFolderTabsStore.getState().enabled &&
+    (st.paneState || useFolderTabsStore.getState().enabled) &&
     st.activeTabId != null &&
     !visibleTabs.some((t) => t.id === st.activeTabId)
   ) {
@@ -1226,7 +1296,9 @@ function applyGroupInvariants() {
     for (const tab of visibleTabs) {
       liveGroups.add(groupOf[tab.id] ?? firstLeaf)
     }
-    layout = normalizeTree(layout, liveGroups)
+    // Pane 的空组可能承载另一端尚未持久化的草稿，不能按本机可见成员删掉。
+    // 本地主动关闭造成的空组已由 syncCurrentPaneState 在加载前收拢。
+    if (!st.paneState) layout = normalizeTree(layout, liveGroups)
     if (layout !== st.groupLayout) {
       // Leaves may have merged away — re-validate assignments against the
       // normalized tree so every entry still points at a live leaf.
@@ -1305,10 +1377,144 @@ function applyGroupInvariants() {
  *  for every activeTabId-only write (rawTabs writes get the same invariant
  *  pass via `recomputeTabs`). */
 function focusTab(tabId: string) {
+  const panes = useTabStore.getState().paneState
+  const owner = panes ? paneForTab(panes, tabId) : undefined
+  if (owner && panes?.activePaneId !== owner.id) {
+    useTabStore.getState().switchPane(owner.id)
+  }
   if (useTabStore.getState().activeTabId !== tabId) {
     useTabStore.setState({ activeTabId: tabId })
   }
   applyGroupInvariants()
+}
+
+function paneFields(pane: ConversationPane) {
+  return {
+    groupLayout: pane.layout,
+    groupOf: pane.assignments,
+    groupSelection: pane.selection,
+    tileByGroup: pane.tileByGroup,
+    activeTabId: pane.active,
+  }
+}
+
+/** 活跃 Pane 沿用现有分屏字段；后台 Pane 保存快照，切换不关闭任何会话视图。 */
+function syncCurrentPaneState() {
+  const state = useTabStore.getState()
+  if (!state.paneState) return
+  const current = state.paneState.panes.find(
+    (pane) => pane.id === state.paneState!.activePaneId
+  )
+  if (!current) return
+  const openIds = new Set(state.rawTabs.map((tab) => tab.id))
+  const assignments: Record<string, string> = Object.fromEntries(
+    Object.entries(current.assignments).filter(([tabId]) => !openIds.has(tabId))
+  )
+  for (const tab of state.rawTabs) {
+    const owner = paneForTab(state.paneState, tab.id)
+    if (owner && owner.id !== current.id) continue
+    assignments[tab.id] = groupOfTab(state.groupOf, state.groupLayout, tab.id)
+  }
+  const next = normalizeConversationPanes(
+    {
+      ...state.paneState,
+      panes: state.paneState.panes.map((pane) =>
+        pane.id === current.id
+          ? {
+              ...pane,
+              layout: state.groupLayout,
+              assignments,
+              selection: state.groupSelection,
+              tileByGroup: state.tileByGroup,
+              active: state.activeTabId,
+            }
+          : pane
+      ),
+    },
+    state.rawTabs
+  )
+  if (JSON.stringify(next) !== JSON.stringify(state.paneState)) {
+    const active = next.panes.find((pane) => pane.id === next.activePaneId)!
+    useTabStore.setState({ paneState: next, ...paneFields(active) })
+  }
+}
+
+function applyPaneSnapshot(
+  shared: ConversationPaneState,
+  local: ConversationPaneState | null
+) {
+  const state = useTabStore.getState()
+  let panes = restoreConversationPanes(shared, state.rawTabs, local)
+  const draft = state.rawTabs.find(
+    (tab) => tab.id === state.activeTabId && tab.conversationId == null
+  )
+  if (draft) {
+    const owner = paneForTab(panes, draft.id)
+    if (owner) {
+      panes = {
+        ...panes,
+        activePaneId: owner.id,
+        panes: panes.panes.map((pane) =>
+          pane.id === owner.id ? { ...pane, active: draft.id } : pane
+        ),
+      }
+    }
+  }
+  const active = panes.panes.find((pane) => pane.id === panes.activePaneId)!
+  useTabStore.setState({
+    paneState: panes,
+    ...paneFields(active),
+    tabDrag: null,
+  })
+}
+
+function initializePaneState(shared: ConversationPaneState | null | undefined) {
+  dormantSharedPanes = isConversationPaneState(shared) ? shared : null
+  const current = useTabStore.getState()
+  if (!current.panesEnabled) {
+    paneBootstrapRequested = false
+    return
+  }
+  if (!current.paneState) {
+    regularGroupViews = {
+      ...current.groupViews,
+      [groupViewKey(useFolderTabsStore.getState())]: groupViewOnScreen(current),
+    }
+  }
+  if (isConversationPaneState(shared)) {
+    applyPaneSnapshot(shared, pendingRestorePanes)
+  } else {
+    const state = useTabStore.getState()
+    const initial = initialConversationPanes()
+    const pane = initial.panes[0]
+    pane.layout = state.groupLayout
+    pane.assignments = Object.fromEntries(
+      state.rawTabs.map((tab) => [
+        tab.id,
+        state.groupOf[tab.id] ??
+          state.groupOf[canonicalPaneTabId(tab)] ??
+          firstLeafId(state.groupLayout),
+      ])
+    )
+    pane.selection = state.groupSelection
+    pane.tileByGroup = state.tileByGroup
+    pane.active = state.activeTabId
+    const panes = pendingRestorePanes
+      ? restoreConversationPanes(
+          persistedConversationPanes(pendingRestorePanes, state.rawTabs),
+          state.rawTabs,
+          pendingRestorePanes
+        )
+      : normalizeConversationPanes(initial, state.rawTabs)
+    const active = panes.panes.find((item) => item.id === panes.activePaneId)!
+    useTabStore.setState({
+      paneState: panes,
+      ...paneFields(active),
+      groupViews: {},
+    })
+  }
+  pendingRestorePanes = null
+  paneBootstrapRequested = false
 }
 
 /** A draft holding nothing to lose: no saved text, and its composer reports
@@ -1628,6 +1834,8 @@ function initialTabState() {
     previewReplacedTabIds: [] as string[],
     draftRetargetRequests: [] as DraftRetargetRequest[],
     tabsHydrated: false,
+    panesEnabled: false,
+    paneState: null as ConversationPaneState | null,
     ...readPersistedGroupState(),
     tabDrag: null as TabStoreState["tabDrag"],
     childSummaries: new Map<number, DbConversationSummary>(),
@@ -1637,8 +1845,173 @@ function initialTabState() {
   }
 }
 
-export const useTabStore = create<TabStoreState>()((set, get) => ({
+type TabStore = UseBoundStore<StoreApi<TabStoreState>>
+
+export const useTabStore: TabStore = create<TabStoreState>()((set, get) => ({
   ...initialTabState(),
+
+  setPanesEnabled: (enabled) => {
+    if (get().panesEnabled === enabled) return
+    if (enabled) {
+      set({ panesEnabled: true })
+      if (get().tabsHydrated && tabsSnapshotLoaded) {
+        initializePaneState(dormantSharedPanes)
+        recomputeTabs()
+      } else {
+        paneBootstrapRequested = true
+      }
+      return
+    }
+
+    syncCurrentPaneState()
+    const previous = get()
+    if (previous.paneState) {
+      pendingRestorePanes = previous.paneState
+      dormantSharedPanes = persistedConversationPanes(
+        previous.paneState,
+        previous.rawTabs
+      )
+    }
+    set({ panesEnabled: false, paneState: null, tabDrag: null })
+    paneBootstrapRequested = false
+    if (!previous.paneState) return
+
+    // 回到既有文件夹范围与分屏视图，所有会话仍保留在 rawTabs 中继续后台运行。
+    const key = groupViewKey(useFolderTabsStore.getState())
+    const arriving =
+      regularGroupViews[key] ??
+      regularGroupViews[ALL_GROUP_VIEW] ??
+      groupViewOnScreen(previous)
+    const views = { ...regularGroupViews }
+    delete views[key]
+    const visible = previous.rawTabs.filter(isTabInScope)
+    set({
+      groupLayout: arriving.layout,
+      groupOf: arriving.groupOf,
+      groupSelection: arriving.selection,
+      tileByGroup: arriving.tileByGroup,
+      groupViews: views,
+      activeTabId: visible.some((tab) => tab.id === previous.activeTabId)
+        ? previous.activeTabId
+        : (visible[0]?.id ?? null),
+    })
+    recomputeTabs()
+    get().syncActiveFolderId()
+  },
+
+  createPane: () => {
+    syncCurrentPaneState()
+    const previous = get().paneState
+    if (!previous || previous.panes.length >= 64) return
+    const pane = emptyConversationPane(
+      `pane-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      `Pane ${previous.nextOrdinal}`
+    )
+    set({
+      paneState: {
+        ...previous,
+        activePaneId: pane.id,
+        nextOrdinal: previous.nextOrdinal + 1,
+        panes: [...previous.panes, pane],
+      },
+      ...paneFields(pane),
+      tabDrag: null,
+    })
+    persistGroupState()
+    runtime.activateConversationPane()
+  },
+
+  switchPane: (paneId) => {
+    syncCurrentPaneState()
+    const previous = get().paneState
+    const pane = previous?.panes.find((item) => item.id === paneId)
+    if (!previous || !pane || previous.activePaneId === paneId) return
+    set({
+      paneState: { ...previous, activePaneId: paneId },
+      ...paneFields(pane),
+      tabDrag: null,
+    })
+    applyGroupInvariants()
+    runtime.activateConversationPane()
+  },
+
+  renamePane: (paneId, name) => {
+    const paneState = get().paneState
+    const trimmed = name.trim().slice(0, 80)
+    if (!paneState || !trimmed) return
+    set({
+      paneState: {
+        ...paneState,
+        panes: paneState.panes.map((pane) =>
+          pane.id === paneId ? { ...pane, name: trimmed } : pane
+        ),
+      },
+    })
+    persistGroupState()
+  },
+
+  removePane: (paneId) => {
+    syncCurrentPaneState()
+    const state = get()
+    const paneState = state.paneState
+    if (!paneState || paneState.panes.length <= 1) return
+    const index = paneState.panes.findIndex((pane) => pane.id === paneId)
+    if (index < 0) return
+    const closing = paneState.panes[index]
+    const panes = paneState.panes.filter((pane) => pane.id !== paneId)
+    const activePaneId =
+      paneState.activePaneId === paneId
+        ? panes[Math.min(index, panes.length - 1)].id
+        : paneState.activePaneId
+    const active = panes.find((pane) => pane.id === activePaneId)!
+    // 移除工作布局只关闭标签；忙碌连接由现有卸载守卫保留，不调用停止或断连。
+    set({
+      rawTabs: state.rawTabs.filter(
+        (tab) =>
+          !Object.prototype.hasOwnProperty.call(closing.assignments, tab.id)
+      ),
+      paneState: { ...paneState, activePaneId, panes },
+      ...paneFields(active),
+    })
+    recomputeTabs()
+  },
+
+  moveTabToPane: (tabId, paneId) => {
+    syncCurrentPaneState()
+    const state = get()
+    const paneState = state.paneState
+    if (!paneState || !state.rawTabs.some((tab) => tab.id === tabId)) return
+    const source = paneForTab(paneState, tabId)
+    const target = paneState.panes.find((pane) => pane.id === paneId)
+    if (!source || !target || source.id === target.id) return
+    const group =
+      (target.active ? target.assignments[target.active] : undefined) ??
+      firstLeafId(target.layout)
+    const panes = paneState.panes.map((pane) => {
+      const assignments = { ...pane.assignments }
+      if (pane.id === source.id) delete assignments[tabId]
+      if (pane.id === target.id) assignments[tabId] = group
+      return {
+        ...pane,
+        layout:
+          pane.id === source.id
+            ? normalizeTree(pane.layout, new Set(Object.values(assignments)))
+            : pane.layout,
+        assignments,
+        active: pane.id === target.id ? tabId : pane.active,
+      }
+    })
+    const next = normalizeConversationPanes(
+      { ...paneState, activePaneId: target.id, panes },
+      state.rawTabs
+    )
+    set({
+      paneState: next,
+      ...paneFields(next.panes.find((pane) => pane.id === target.id)!),
+    })
+    recomputeTabs()
+    runtime.activateConversationPane()
+  },
 
   openTab: (
     requestedFolderId,
@@ -1654,6 +2027,13 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       agentType
     )
     useFolderTabsStore.getState().activateScope(folderScope(folderId))
+    const owner = get().paneState
+      ? get().rawTabs.find(
+          (tab) =>
+            tab.conversationId === conversationId && tab.agentType === agentType
+        )
+      : undefined
+    if (owner) focusTab(owner.id)
     const prevState = get()
     const existingIndex = findTabIndexForConversation(
       prevState.rawTabs,
@@ -1780,7 +2160,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
       let draftKeyHandedOver = false
 
-      if (useFolderTabsStore.getState().enabled && !next.some(isTabInScope)) {
+      if (
+        (prevState.paneState || useFolderTabsStore.getState().enabled) &&
+        !next.some(isTabInScope)
+      ) {
         set({ rawTabs: next, activeTabId: null })
       } else if (next.length === 0) {
         if (useAppWorkspaceStore.getState().folders.length === 0) {
@@ -1903,7 +2286,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   closeAllTabs: () => {
-    if (useFolderTabsStore.getState().enabled) {
+    if (get().paneState || useFolderTabsStore.getState().enabled) {
       const st = get()
       for (const [tab, slot] of batchCloseSlots(st.rawTabs, isTabInScope)) {
         pushClosedTab(snapshotConversationTab(tab, slot))
@@ -2674,6 +3057,9 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   hydrate: () => {
+    const panesEnabled = getConversationPanesEnabled()
+    set({ panesEnabled })
+    paneBootstrapRequested = panesEnabled
     let cancelled = false
     void (async () => {
       let snapshotLoaded = false
@@ -2734,14 +3120,16 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
             ? { groupOf: { ...get().groupOf, ...draftGroups } }
             : {}),
         })
+        initializePaneState(snap.pane_state)
         recomputeTabs()
         // Baseline from the POST-restore state: drafts never enter the payload,
         // so restoring focus onto a draft simply means no tab carries
         // `is_active`. Seeding that as the baseline keeps the restore free of a
         // CAS save (and of the focus broadcast that would follow it).
-        lastSavedPayload = JSON.stringify(
-          buildPersistItems(withDrafts, restoredActive)
-        )
+        lastSavedPayload =
+          get().paneState && !snap.pane_state
+            ? null
+            : tabSavePayload(get().rawTabs, get().activeTabId)
       } catch (err) {
         console.error("[TabStore] listOpenedTabs failed:", err)
         if (!cancelled) {
@@ -2813,6 +3201,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   runSaveEffect: () => {
+    syncCurrentPaneState()
     const st = get()
     if (!st.tabsHydrated) return
 
@@ -2824,7 +3213,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     }
 
     const items = buildPersistItems(st.rawTabs, st.activeTabId)
-    const payload = JSON.stringify(items)
+    const payload = tabSavePayload(st.rawTabs, st.activeTabId)
+    const panes = st.paneState
+      ? persistedConversationPanes(st.paneState, st.rawTabs)
+      : undefined
     // Reverted to the last-saved state → cancel any save still armed.
     if (payload === lastSavedPayload) {
       if (saveTimer) {
@@ -2838,7 +3230,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const expectedVersion = version
     saveTimer = setTimeout(() => {
       saveTimer = null
-      saveOpenedTabs(items, expectedVersion, TAB_ORIGIN)
+      saveOpenedTabs(items, expectedVersion, TAB_ORIGIN, panes)
         .then((res) => {
           version = Math.max(version, res.version)
           if (!res.accepted) {
@@ -2852,6 +3244,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
               version: res.version,
               origin: "server",
               tabs: res.tabs,
+              pane_state: res.pane_state,
             })
             return
           }
@@ -2862,9 +3255,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
           if (res.version === version) {
             serverKnownTabKeys = snapshotSyncKeys(res.tabs)
           }
-          const current = JSON.stringify(
-            buildPersistItems(get().rawTabs, get().activeTabId)
-          )
+          const current = tabSavePayload(get().rawTabs, get().activeTabId)
           if (current !== lastSavedPayload) {
             set({ saveReconcileTick: get().saveReconcileTick + 1 })
           }
@@ -3039,6 +3430,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         version: snap.version,
         origin: "server",
         tabs: snap.items,
+        pane_state: snap.pane_state,
       }
       if (!get().tabsHydrated) {
         const pending = pendingRemote
@@ -3359,6 +3751,11 @@ export function useTabActions() {
   return useTabStore(
     useShallow((s) => ({
       openTab: s.openTab,
+      createPane: s.createPane,
+      switchPane: s.switchPane,
+      renamePane: s.renamePane,
+      removePane: s.removePane,
+      moveTabToPane: s.moveTabToPane,
       closeTab: s.closeTab,
       closeConversationTab: s.closeConversationTab,
       closeOtherTabs: s.closeOtherTabs,
@@ -3410,6 +3807,9 @@ export function resetTabStore() {
   applyingRemote = false
   remoteActivationPending = false
   pendingRemote = null
+  paneBootstrapRequested = false
+  dormantSharedPanes = null
+  regularGroupViews = {}
   lastSavedPayload = null
   serverKnownTabKeys = new Set()
   lastGroupBlob = null
@@ -3454,6 +3854,9 @@ function applyRemoteSnapshot(change: TabsChanged) {
   const snapshotItems = change.tabs.filter((it) => it.conversation_id != null)
 
   const prev = useTabStore.getState()
+  const previousPanes = prev.paneState
+  const initializingPanes =
+    prev.panesEnabled && paneBootstrapRequested && !previousPanes
   // ── Three-way merge against `serverKnownTabKeys` (the common ancestor) ──────
   // A snapshot is the SERVER's set, not a newer truth about ours: the two can
   // have diverged in both directions since the last sync. Classify per tab
@@ -3554,10 +3957,31 @@ function applyRemoteSnapshot(change: TabsChanged) {
 
   // Never leave the workspace blank: synthesize a draft when empty.
   if (nextTabs.length === 0) {
-    if (folders.length === 0 || useFolderTabsStore.getState().enabled) {
+    if (
+      previousPanes ||
+      initializingPanes ||
+      isConversationPaneState(change.pane_state) ||
+      folders.length === 0 ||
+      useFolderTabsStore.getState().enabled
+    ) {
       lastSavedPayload = diverged ? null : JSON.stringify([])
       useTabStore.setState({ rawTabs: [], activeTabId: null })
+      if (isConversationPaneState(change.pane_state)) {
+        applyPaneSnapshot(change.pane_state, previousPanes)
+      } else if (initializingPanes) {
+        initializePaneState(null)
+      }
       recomputeTabs()
+      lastSavedPayload = diverged
+        ? null
+        : tabSavePayload(
+            useTabStore.getState().rawTabs,
+            useTabStore.getState().activeTabId
+          )
+      if (initializingPanes && !change.pane_state) {
+        applyingRemote = false
+        lastSavedPayload = null
+      }
       return
     }
     const replacement = makeReplacementDraftTab()
@@ -3608,7 +4032,7 @@ function applyRemoteSnapshot(change: TabsChanged) {
     nextActiveId = nextTabs[0].id
   }
 
-  if (useFolderTabsStore.getState().enabled) {
+  if (!previousPanes && useFolderTabsStore.getState().enabled) {
     // Remote clients synchronize open membership, but cannot move this client's
     // explicit folder scope or steal its current local selection.
     const visible = nextTabs.filter(isTabInScope)
@@ -3631,7 +4055,29 @@ function applyRemoteSnapshot(change: TabsChanged) {
     ? null
     : JSON.stringify(buildPersistItems(nextTabs, nextActiveId))
   useTabStore.setState({ rawTabs: nextTabs, activeTabId: nextActiveId })
+  if (isConversationPaneState(change.pane_state)) {
+    dormantSharedPanes = change.pane_state
+    if (prev.panesEnabled) {
+      if (previousPanes) applyPaneSnapshot(change.pane_state, previousPanes)
+      else initializePaneState(change.pane_state)
+    }
+    paneBootstrapRequested = false
+  } else if (initializingPanes) {
+    initializePaneState(null)
+  }
   recomputeTabs()
+  if (useTabStore.getState().paneState) {
+    lastSavedPayload = diverged
+      ? null
+      : tabSavePayload(
+          useTabStore.getState().rawTabs,
+          useTabStore.getState().activeTabId
+        )
+  }
+  if (initializingPanes && !change.pane_state) {
+    applyingRemote = false
+    lastSavedPayload = null
+  }
 }
 
 // A scope change swaps the view on screen: the leaving view's group state is
@@ -3641,6 +4087,7 @@ function applyRemoteSnapshot(change: TabsChanged) {
 useFolderTabsStore.subscribe((next, previous) => {
   if (next.scope === previous.scope && next.enabled === previous.enabled) return
   const st = useTabStore.getState()
+  if (st.paneState) return
   const leavingKey = groupViewKey(previous)
   const arrivingKey = groupViewKey(next)
   // Only a folder SWITCH offers the folder's last tab back. Turning the mode on
@@ -3698,6 +4145,7 @@ useFolderTabsStore.subscribe((next, previous) => {
  *  starts every folder from the normal-mode layout). */
 export function dropParkedFolderGroupViews() {
   const st = useTabStore.getState()
+  if (st.paneState) return
   if (useFolderTabsStore.getState().enabled) return
   if (Object.keys(st.groupViews).length === 0) return
   useTabStore.setState({ groupViews: {} })
