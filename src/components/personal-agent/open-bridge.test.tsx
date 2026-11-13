@@ -79,6 +79,6 @@ describe("following a notification in the workspace", () => {
 
   it("hands the roster's avatars over for the notifications' icons", () => {
     render(<PersonalAgentOpenBridge />)
-    expect(h.upload).toHaveBeenCalledWith(h.roster)
+    expect(h.upload).toHaveBeenCalledWith(h.roster, false)
   })
 })

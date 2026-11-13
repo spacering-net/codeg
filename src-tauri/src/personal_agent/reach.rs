@@ -1371,6 +1371,12 @@ fn body_of(w: &Words, news: &News) -> String {
     }
 }
 
+/// What the primary is called in `locale` while the owner has not named
+/// it (the menu bar's list, 10.10).
+pub fn primary_name(locale: AppLocale) -> &'static str {
+    words(locale).primary
+}
+
 /// The name a notification goes under.
 fn title_of(w: &Words, row: &agent_entity::Model) -> String {
     let name = row.name.trim();

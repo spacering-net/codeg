@@ -691,25 +691,45 @@ pub async fn notification_prefs_sync_core(
     .map_err(AppCommandError::task_execution_failed)
 }
 
-/// An assistant's face, drawn by the page, for the system notifications the
-/// desktop posts under its name (1.13). Only where the assistants run.
+/// An assistant's face, drawn by the page: `png` for the system
+/// notifications the desktop posts under its name (1.13), `tray` the strip
+/// of frames the menu bar shows (10.10). One not given is removed: the
+/// avatar has no such picture now (an emoji has no notification icon).
+/// Only where the assistants run.
 pub async fn personal_agent_avatar_png_core(
     db: &AppDatabase,
     bot_id: i32,
-    png: String,
+    png: Option<String>,
+    tray: Option<String>,
 ) -> Result<(), AppCommandError> {
     use base64::Engine as _;
     let Some(host) = crate::personal_agent::host::host() else {
         return Ok(());
     };
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(png.trim().as_bytes())
-        .map_err(|e| AppCommandError::invalid_input(format!("not base64: {e}")))?;
-    if bytes.len() > crate::personal_agent::reach::AVATAR_MAX_BYTES
-        || !bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+    let decode = |b64: Option<String>| -> Result<Option<Vec<u8>>, AppCommandError> {
+        let Some(b64) = b64 else {
+            return Ok(None);
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64.trim().as_bytes())
+            .map_err(|e| AppCommandError::invalid_input(format!("not base64: {e}")))?;
+        if bytes.len() > crate::personal_agent::reach::AVATAR_MAX_BYTES
+            || !bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        {
+            return Err(AppCommandError::invalid_input(
+                "not a PNG of at most 256 KB",
+            ));
+        }
+        Ok(Some(bytes))
+    };
+    let png = decode(png)?;
+    let tray = decode(tray)?;
+    if tray
+        .as_deref()
+        .is_some_and(|b| crate::personal_agent::menubar::frames_of(b).is_none())
     {
         return Err(AppCommandError::invalid_input(
-            "not a PNG of at most 256 KB",
+            "the tray's picture is a strip of at most 8 square frames",
         ));
     }
     if svc::get_bot(&db.conn, bot_id)
@@ -720,16 +740,28 @@ pub async fn personal_agent_avatar_png_core(
     {
         return Err(AppCommandError::not_found("no such assistant"));
     }
-    let path = host.avatar_png(bot_id);
-    let write = || -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("png.tmp");
-        std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, &path)
-    };
-    write().map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+    let tray_path = crate::personal_agent::menubar::tray_png(host.data_dir(), bot_id);
+    for (path, bytes) in [(host.avatar_png(bot_id), png), (tray_path, tray)] {
+        let write = || -> std::io::Result<()> {
+            match &bytes {
+                Some(bytes) => {
+                    if let Some(dir) = path.parent() {
+                        std::fs::create_dir_all(dir)?;
+                    }
+                    let tmp = path.with_extension("png.tmp");
+                    std::fs::write(&tmp, bytes)?;
+                    std::fs::rename(&tmp, &path)
+                }
+                None => match std::fs::remove_file(&path) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                    _ => Ok(()),
+                },
+            }
+        };
+        write().map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    }
+    host.menubar_pictures();
+    Ok(())
 }
 
 /// The "about you" page (13.5, 1.12): the owner's time zone, the record's
@@ -1576,9 +1608,10 @@ pub async fn notification_prefs_sync(
 pub async fn personal_agent_avatar_png(
     db: State<'_, AppDatabase>,
     bot_id: i32,
-    png: String,
+    png: Option<String>,
+    tray: Option<String>,
 ) -> Result<(), AppCommandError> {
-    personal_agent_avatar_png_core(&db, bot_id, png).await
+    personal_agent_avatar_png_core(&db, bot_id, png, tray).await
 }
 
 #[cfg(feature = "tauri-runtime")]

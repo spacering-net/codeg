@@ -1651,7 +1651,15 @@ mod tauri_app {
                     match id.as_str() {
                         windows::TRAY_MENU_ID_SHOW => windows::show_main_window(app),
                         windows::TRAY_MENU_ID_QUIT => app.exit(0),
-                        _ => {}
+                        windows::TRAY_MENU_ID_SETTINGS => windows::tray_open_settings(app),
+                        other => {
+                            if let Some(bot) = other
+                                .strip_prefix(windows::TRAY_MENU_ID_BOT_PREFIX)
+                                .and_then(|n| n.parse::<i32>().ok())
+                            {
+                                windows::tray_open_bot(app, bot);
+                            }
+                        }
                     }
                     return;
                 }

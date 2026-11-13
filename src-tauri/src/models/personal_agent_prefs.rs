@@ -837,6 +837,14 @@ pub struct Prefs {
     /// (desktop only).
     #[serde(default, deserialize_with = "lenient")]
     pub keep_awake: OnOff,
+    /// The menu bar icon shows the busy assistant's face, the count of
+    /// assistants with unread and the recent ones (10.10; desktop only).
+    #[serde(default, deserialize_with = "lenient")]
+    pub menubar: OnOff,
+    /// The dock badge counts the assistants with unread (10.10; desktop
+    /// only).
+    #[serde(default, deserialize_with = "lenient")]
+    pub dock_badge: OnOff,
 }
 
 impl Default for Prefs {
@@ -929,6 +937,8 @@ impl Default for Prefs {
             wrap: WrapMode::Auto,
             wrap_tonight: OnOff::On,
             keep_awake: OnOff::On,
+            menubar: OnOff::On,
+            dock_badge: OnOff::On,
         }
     }
 }
@@ -1419,6 +1429,16 @@ pub const PREFS: &[PrefSpec] = &[
         key: "keep_awake",
         kind: PrefKind::Choice(&["on", "off"]),
         label: "keeping the computer awake while work chosen for tonight runs (desktop)",
+    },
+    PrefSpec {
+        key: "menubar",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the busy assistant's face, the unread count and the recent assistants in the menu bar (desktop)",
+    },
+    PrefSpec {
+        key: "dock_badge",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the dock badge counting the assistants with unread (desktop)",
     },
 ];
 
@@ -1995,6 +2015,23 @@ fn is_brief_item(key: &str) -> bool {
     key.starts_with("brief") || key.starts_with("wrap") || key == "keep_awake"
 }
 
+/// What the desktop shows of the assistants outside codeg's windows (10.10).
+fn is_desktop_item(key: &str) -> bool {
+    matches!(key, "menubar" | "dock_badge")
+}
+
+/// The menu bar and the dock badge, in one line.
+fn desktop_line(prefs: &Prefs) -> String {
+    let on = |v: OnOff| if v == OnOff::On { "on" } else { "off" };
+    format!(
+        "- on the desktop, outside codeg's windows (codeg draws them): the menu bar icon with the \
+         busy assistant's face, the count of assistants with unread and the recent ones: {}; the \
+         dock badge counting the assistants with unread: {}",
+        on(prefs.menubar),
+        on(prefs.dock_badge),
+    )
+}
+
 /// The morning brief and the wrap-up, in one line: codeg brings them; the
 /// primary writes them.
 fn brief_line(prefs: &Prefs, worker: bool) -> String {
@@ -2066,7 +2103,7 @@ pub fn prefs_block(prefs: &Prefs, worker: bool) -> String {
         .iter()
         .filter(|s| !(worker && s.key == "worker_handoff"))
         .filter(|s| !s.key.starts_with("level_") && !s.key.starts_with("rule_"))
-        .filter(|s| !is_brief_item(s.key))
+        .filter(|s| !is_brief_item(s.key) && !is_desktop_item(s.key))
         .map(|s| {
             let v = map.get(s.key).cloned().unwrap_or(Value::Null);
             format!("- {}: {}", s.label, brain_value(s.key, &v))
@@ -2075,6 +2112,7 @@ pub fn prefs_block(prefs: &Prefs, worker: bool) -> String {
     lines.push(levels_line(&map));
     lines.push(rules_line(prefs));
     lines.push(brief_line(prefs, worker));
+    lines.push(desktop_line(prefs));
     format!(
         "<codeg-prefs>\n\
 The owner's preferences, as they set them in codeg — every assistant follows the same ones. The \
@@ -2304,6 +2342,37 @@ impl AccountView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The brain changes a preference by its key, as `prefs_update` names
+    /// them: one it does not name, it does not know it can change.
+    #[test]
+    fn prefs_update_names_every_preference() {
+        let tools: Value =
+            serde_json::from_str(include_str!("../acp/delegation/tool_schema.json")).unwrap();
+        let text = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "prefs_update")
+            .and_then(|t| t["description"].as_str())
+            .unwrap()
+            .to_string();
+        let named = |key: &str| {
+            text.match_indices(key).any(|(at, _)| {
+                let word =
+                    |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+                !word(text[..at].chars().next_back())
+                    && !word(text[at + key.len()..].chars().next())
+            })
+        };
+        let missing: Vec<&str> = PREFS
+            .iter()
+            .map(|s| s.key)
+            .chain([AUTOMATION_KEY, DISTURB_KEY])
+            .filter(|k| !named(k))
+            .collect();
+        assert!(missing.is_empty(), "not named by prefs_update: {missing:?}");
+    }
 
     #[test]
     fn prefs_read_leniently_item_by_item() {

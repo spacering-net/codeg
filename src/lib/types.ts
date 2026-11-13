@@ -2925,6 +2925,11 @@ export interface PersonalAgentPrefs {
   wrap_tonight: "on" | "off"
   /** The computer kept awake while work chosen for tonight runs (desktop). */
   keep_awake: "on" | "off"
+  /** The menu bar shows the busy assistant's face, the unread count and
+   *  the recent assistants (10.10; desktop). */
+  menubar: "on" | "off"
+  /** The dock badge counts the assistants with unread (10.10; desktop). */
+  dock_badge: "on" | "off"
 }
 
 /** codeg's proposal rules (6.7). */

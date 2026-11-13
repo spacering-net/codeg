@@ -51,6 +51,11 @@ const api = vi.hoisted(() => ({
   personalAgentRuleReset: vi.fn(async () => []),
 }))
 vi.mock("@/lib/api", () => api)
+const shell = vi.hoisted(() => ({ desktop: false }))
+vi.mock("@/lib/transport", async (orig) => ({
+  ...(await orig<typeof import("@/lib/transport")>()),
+  isDesktop: () => shell.desktop,
+}))
 vi.mock("@/lib/platform", () => ({
   subscribe: () => Promise.resolve(() => {}),
 }))
@@ -476,6 +481,8 @@ describe("the settings view", () => {
         null
       )
     )
+    // No menu bar or dock in a browser.
+    expect(document.querySelector('[data-pa-pref-group="desktop"]')).toBeNull()
     unmount()
     api.personalAgentSettingsPatch.mockClear()
     // Fixed quiet hours and morning: their times show and save as HH:MM.
@@ -531,6 +538,21 @@ describe("the settings view", () => {
         null
       )
     )
+  })
+
+  it("on the desktop, switches the menu bar's faces and the dock's badge", async () => {
+    shell.desktop = true
+    try {
+      usePersonalAgentUi.getState().openSettings("proactive")
+      draw()
+      const group = document.querySelector('[data-pa-pref-group="desktop"]')
+      expect(group?.querySelector('[data-pa-pref="menubar"]')).not.toBeNull()
+      expect(group?.querySelector('[data-pa-pref="dock_badge"]')).not.toBeNull()
+      expect(screen.getByText("Busy assistants in the menu bar")).toBeTruthy()
+      expect(screen.getByText("Dock badge")).toBeTruthy()
+    } finally {
+      shell.desktop = false
+    }
   })
 
   it("turns an assistant's own notifications on and off on its “Notifications” page", async () => {

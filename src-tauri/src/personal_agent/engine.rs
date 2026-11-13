@@ -135,6 +135,12 @@ pub struct SegmentState {
     /// changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefs_given: Option<crate::models::personal_agent_prefs::Prefs>,
+    /// What the agent knows them to be since: what it was given, with what
+    /// it changed itself (`prefs_update`) on top. The next delivery also
+    /// says what differs from this — one the owner put back meanwhile,
+    /// which against `prefs_given` is no change at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefs_believed: Option<crate::models::personal_agent_prefs::Prefs>,
 }
 
 impl SegmentState {
@@ -1346,6 +1352,31 @@ impl PersonalAgentEngine {
 
     async fn current_segment_id(&self) -> Option<i32> {
         self.state.lock().await.connection_segment
+    }
+
+    /// The preferences it changed itself (`prefs_update`, applied at once)
+    /// it knows them to be: if the owner puts one back before the next
+    /// delivery, that delivery says so (against what it was given, it
+    /// would be no change at all).
+    pub(super) async fn note_prefs_believed(&self, applied: &[super::prefs::Applied]) {
+        let Some(seg) = self.current_segment_id().await else {
+            return;
+        };
+        self.update_segment_state(seg, |s| {
+            let Some(base) = s.prefs_believed.as_ref().or(s.prefs_given.as_ref()) else {
+                return;
+            };
+            let mut map = base.to_map();
+            for a in applied {
+                if let Some(item) = a.key.strip_prefix("prefs.") {
+                    map.insert(item.to_string(), a.to.clone());
+                }
+            }
+            s.prefs_believed = Some(crate::models::personal_agent_prefs::Prefs::parse(Some(
+                &serde_json::Value::Object(map),
+            )));
+        })
+        .await;
     }
 
     async fn record_permission_request(
@@ -2962,11 +2993,24 @@ impl PersonalAgentEngine {
         if carried.handoff || carried.state_card {
             cards_text.push(crate::models::personal_agent_prefs::prefs_block(&prefs_now, worker_bot));
             prefs_handed = true;
-        } else if seg_state.prefs_given.as_ref() != Some(&prefs_now) {
+        } else if seg_state.prefs_given.as_ref() != Some(&prefs_now)
+            || seg_state
+                .prefs_believed
+                .as_ref()
+                .is_some_and(|b| *b != prefs_now)
+        {
             use crate::models::personal_agent_prefs as p;
             match &seg_state.prefs_given {
                 Some(old) => {
-                    let changes = p::prefs_changes(old, &prefs_now, worker_bot);
+                    let mut changes = p::prefs_changes(old, &prefs_now, worker_bot);
+                    // What it changed itself and the owner put back since.
+                    if let Some(believed) = &seg_state.prefs_believed {
+                        for c in p::prefs_changes(believed, &prefs_now, worker_bot) {
+                            if !changes.contains(&c) {
+                                changes.push(c);
+                            }
+                        }
+                    }
                     if !changes.is_empty() {
                         cards_text.push(p::prefs_update_card(&changes, &prefs_now, worker_bot));
                     }
@@ -3354,8 +3398,11 @@ impl PersonalAgentEngine {
                 .await;
         }
         if prefs_handed {
-            self.update_segment_state(session.segment.id, |s| s.prefs_given = Some(prefs_now.clone()))
-                .await;
+            self.update_segment_state(session.segment.id, |s| {
+                s.prefs_given = Some(prefs_now.clone());
+                s.prefs_believed = None;
+            })
+            .await;
         }
         self.emit(PersonalAgentChange::Status);
         Ok(())

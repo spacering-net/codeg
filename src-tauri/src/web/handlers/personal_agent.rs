@@ -369,14 +369,17 @@ pub async fn notification_prefs_sync(
 #[serde(rename_all = "camelCase")]
 pub struct AvatarPngParams {
     pub bot_id: i32,
-    pub png: String,
+    #[serde(default)]
+    pub png: Option<String>,
+    #[serde(default)]
+    pub tray: Option<String>,
 }
 
 pub async fn personal_agent_avatar_png(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AvatarPngParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    pa::personal_agent_avatar_png_core(&state.db, params.bot_id, params.png).await?;
+    pa::personal_agent_avatar_png_core(&state.db, params.bot_id, params.png, params.tray).await?;
     Ok(Json(()))
 }
 

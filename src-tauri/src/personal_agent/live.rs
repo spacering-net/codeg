@@ -934,11 +934,14 @@ impl EngineHost {
         });
     }
 
-    async fn push_live(&self, bot: i32) {
+    async fn push_live(self: &Arc<Self>, bot: i32) {
         let Ok(Some(row)) = svc::get_bot(&self.db.conn, bot).await else {
+            // Gone: the menu bar lets it go.
+            self.menubar_poke();
             return;
         };
         let (live, needs) = self.live_with_needs(&row).await;
+        self.menubar_saw(&live);
         // What waits on the owner now: what is new reaches them (1.13).
         self.reach_needs(&row, &needs).await;
         let busy = live.work == WorkState::Busy;
@@ -960,6 +963,9 @@ impl EngineHost {
     /// The roster itself changed: pages read it again.
     pub fn emit_roster(&self) {
         emit_event(&self.emitter, PERSONAL_AGENT_BOTS_EVENT, BotsChange::Roster);
+        if let Some(me) = self.me.upgrade() {
+            me.menubar_poke();
+        }
     }
 
     /// Push every busy assistant again, changed or not.

@@ -62,7 +62,7 @@ pub struct EngineHost {
     /// The host runs: engines are booted and driven as they are made.
     running: AtomicBool,
     /// Itself, handed to each engine it makes.
-    me: std::sync::Weak<EngineHost>,
+    pub(super) me: std::sync::Weak<EngineHost>,
     /// The assistants' live states pushed to the pages (`live`).
     pub(super) live: super::live::LiveHub,
     /// What reaches the owner, and when (`reach`, 1.13).
@@ -71,6 +71,8 @@ pub struct EngineHost {
     pub(super) rules: super::rules::RuleClock,
     /// The morning brief's and the wrap-up's look (`brief`, 6.4, 6.5).
     pub(super) briefs: super::brief::BriefClock,
+    /// The menu bar and the dock (`menubar`, 10.10).
+    pub(super) menubar: super::menubar::MenuBar,
 }
 
 /// Build the host and publish it. Call ONLY where the work-task engine was
@@ -175,6 +177,7 @@ impl EngineHost {
                 reach: super::reach::Reach::default(),
                 rules: super::rules::RuleClock::default(),
                 briefs: super::brief::BriefClock::default(),
+                menubar: super::menubar::MenuBar::default(),
             }
         })
     }
@@ -245,6 +248,12 @@ impl EngineHost {
             // what the assistants do on their own (5.4).
             primary.meet_on_start().await;
         });
+        // The desktop's tray and dock show the assistants (10.10).
+        #[cfg(feature = "tauri-runtime")]
+        if let EventEmitter::Tauri(app) = &self.emitter {
+            let sink = super::menubar::TraySink::new(app.clone(), self.data_dir.clone());
+            self.menubar_start(sink).await;
+        }
     }
 
     /// Whether an assistant's engine owns connection `conn_id`: its own
@@ -256,6 +265,11 @@ impl EngineHost {
             }
         }
         false
+    }
+
+    /// codeg's data directory.
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
     }
 
     /// Where assistant `bot`'s face is drawn for the system notifications

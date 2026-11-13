@@ -8464,6 +8464,18 @@
           "on": "Activado",
           "off": "Desactivado"
         },
+        "menubar": {
+          "title": "Asistentes ocupados en la barra de menús",
+          "hint": "Mientras un asistente trabaja, el icono de codeg en la barra de menús pasa a ser su cara, que parpadea de vez en cuando. Al lado, cuántos asistentes tienen algo sin leer; su menú muestra los cinco más recientes.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "dock_badge": {
+          "title": "Globo del Dock",
+          "hint": "El número en el icono de codeg en el Dock o la barra de tareas: cuántos asistentes tienen algo sin leer, sin contar los ocultos ni los silenciados.",
+          "on": "Asistentes con mensajes sin leer",
+          "off": "Desactivado"
+        },
         "level_brief": {
           "title": "Resumen de la mañana y cierre",
           "hint": "Tu resumen de la mañana o el cierre está listo."

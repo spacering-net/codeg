@@ -8,10 +8,19 @@ const h = vi.hoisted(() => ({
   deliver: vi.fn(async () => {}),
   attention: vi.fn(async () => true),
   shown: [] as { title: string; opts: NotificationOptions; n: unknown }[],
+  subscribed: new Map<string, (payload: unknown) => void>(),
 }))
 
 vi.mock("sonner", () => ({ toast: h.toast }))
-vi.mock("@/lib/transport", () => ({ isDesktop: () => h.desktop }))
+vi.mock("@/lib/transport", () => ({
+  isDesktop: () => h.desktop,
+  getShellTransport: () => ({
+    subscribe: async (event: string, cb: (payload: unknown) => void) => {
+      h.subscribed.set(event, cb)
+      return () => h.subscribed.delete(event)
+    },
+  }),
+}))
 vi.mock("@/lib/notification", () => ({
   deliverSystemNotification: h.deliver,
   getNotificationPermission: () => h.permission,
@@ -239,5 +248,23 @@ describe("the assistants' notifications in a window", () => {
     expect(await a).toBe(false)
     expect(await claimNotification("alone")).toBe(true)
     expect(await claimNotification("alone")).toBe(false)
+  })
+})
+
+describe("an assistant picked in the desktop's menu bar", () => {
+  it("is opened as a followed notification's assistant", async () => {
+    h.desktop = true
+    const followed: PersonalAgentNotifyLink[] = []
+    const off = listenPersonalAgentFollow((l) => followed.push(l))
+    await Promise.resolve()
+    await Promise.resolve()
+    const tray = h.subscribed.get("workspace://follow-personal-agent")
+    expect(tray).toBeTruthy()
+    tray?.({ kind: "bot", bot_id: 4, row_id: null })
+    tray?.({ kind: "conversation", conversation_id: 1, folder_id: null })
+    expect(followed).toEqual([{ kind: "bot", bot_id: 4, row_id: null }])
+    off()
+    expect(h.subscribed.size).toBe(0)
+    h.desktop = false
   })
 })

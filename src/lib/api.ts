@@ -2731,13 +2731,20 @@ export async function notificationPrefsSync(
   })
 }
 
-/** An assistant's avatar as a PNG (base64, no `data:` prefix), for the
- *  icon of the notifications the desktop backend posts (1.13). */
+/** An assistant's avatar as PNGs (base64, no `data:` prefix): the icon of
+ *  the notifications the desktop backend posts (1.13), and the strip of
+ *  frames its menu bar shows (10.10). `null`: it has none — an old one
+ *  goes. */
 export async function personalAgentAvatarPng(
   botId: number,
-  png: string
+  png: string | null,
+  tray: string | null
 ): Promise<void> {
-  return getTransport().call("personal_agent_avatar_png", { botId, png })
+  return getTransport().call("personal_agent_avatar_png", {
+    botId,
+    png,
+    tray,
+  })
 }
 
 /** The "about you" page (1.12): the owner's time zone, the record's switch,

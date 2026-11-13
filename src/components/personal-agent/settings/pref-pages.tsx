@@ -21,6 +21,7 @@ import {
   BellDot,
   CircleX,
   Coffee,
+  Dock,
   FolderGit2,
   FolderPlus,
   GitBranch,
@@ -54,6 +55,7 @@ import {
   MoonStar,
   Newspaper,
   NotebookPen,
+  PanelTop,
   Repeat,
   Reply,
   RotateCcw,
@@ -197,6 +199,8 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   wrap: "auto",
   wrap_tonight: "on",
   keep_awake: "on",
+  menubar: "on",
+  dock_badge: "on",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -391,6 +395,8 @@ const CHOICES: Partial<Record<PersonalAgentPrefKey, readonly string[]>> = {
   wrap: ["auto", "ask", "off"],
   wrap_tonight: ["on", "off"],
   keep_awake: ["on", "off"],
+  menubar: ["on", "off"],
+  dock_badge: ["on", "off"],
   ...Object.fromEntries(LEVEL_ITEMS.map((k) => [k, NEWS_LEVELS])),
 }
 
@@ -498,6 +504,8 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   wrap: Sunset,
   wrap_tonight: Moon,
   keep_awake: Coffee,
+  menubar: PanelTop,
+  dock_badge: Dock,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
@@ -573,6 +581,9 @@ export const BRIEF_ITEMS: PersonalAgentPrefKey[] = [
   "keep_awake",
 ]
 
+/** What the desktop shows outside codeg's windows (10.10). */
+export const DESKTOP_ITEMS: PersonalAgentPrefKey[] = ["menubar", "dock_badge"]
+
 /** The items of "Proactive & notifications", the kinds of news included. */
 export const PROACTIVE_ITEMS: PersonalAgentPrefKey[] = [
   "proactive",
@@ -580,6 +591,7 @@ export const PROACTIVE_ITEMS: PersonalAgentPrefKey[] = [
   "normal_via",
   "low_via",
   "focus_wait",
+  ...DESKTOP_ITEMS,
   "quiet_hours",
   "quiet_from",
   "quiet_to",
@@ -1002,6 +1014,11 @@ export function ProactivePage({ account, disabled }: PageProps) {
           ] as const
         ).map(row)}
       </SettingCard>
+      {isDesktop() ? (
+        <SettingCard data-pa-pref-group="desktop">
+          {DESKTOP_ITEMS.map(row)}
+        </SettingCard>
+      ) : null}
       <SettingCard data-pa-pref-group="quiet">
         {row("quiet_hours")}
         {prefs.quiet_hours === "fixed"

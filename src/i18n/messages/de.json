@@ -8464,6 +8464,18 @@
           "on": "An",
           "off": "Aus"
         },
+        "menubar": {
+          "title": "Beschäftigte Assistenten in der Menüleiste",
+          "hint": "Während ein Assistent arbeitet, wird das Menüleistensymbol von codeg zu seinem Gesicht, das ab und zu blinzelt. Daneben steht, wie viele Assistenten Ungelesenes haben; das Menü zeigt die fünf zuletzt aktiven.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "dock_badge": {
+          "title": "Dock-Kennzeichen",
+          "hint": "Die Zahl am codeg-Symbol im Dock oder in der Taskleiste: wie viele Assistenten Ungelesenes haben, ausgeblendete und stummgeschaltete nicht mitgezählt.",
+          "on": "Assistenten mit Ungelesenem",
+          "off": "Aus"
+        },
         "level_brief": {
           "title": "Morgen-Briefing und Tagesabschluss",
           "hint": "Dein Morgen-Briefing oder der Tagesabschluss ist fertig."

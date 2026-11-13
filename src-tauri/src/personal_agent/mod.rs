@@ -47,6 +47,7 @@ pub mod live;
 pub mod meet;
 pub mod memory;
 pub mod mentions;
+pub mod menubar;
 pub mod messages;
 pub mod notices;
 pub mod options;

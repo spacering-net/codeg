@@ -24,6 +24,7 @@ import {
 import type { ImperativePanelGroupHandle } from "react-resizable-panels"
 import { FolderTitleBar } from "@/components/layout/folder-title-bar"
 import { Sidebar } from "@/components/layout/sidebar"
+import { WorkspaceDocumentTitle } from "@/components/layout/workspace-document-title"
 import { StatusBar } from "@/components/layout/status-bar"
 import {
   AppWorkspaceProvider,
@@ -32,7 +33,6 @@ import {
 import { AssistantsSync } from "@/stores/assistants-store"
 import { ConversationTagsSync } from "@/stores/conversation-tags-store"
 import { ConversationTagsManagerHost } from "@/components/conversations/conversation-tags-manager"
-import { useActiveFolder } from "@/contexts/active-folder-context"
 import { TaskProvider } from "@/contexts/task-context"
 import { AlertProvider } from "@/contexts/alert-context"
 import {
@@ -120,16 +120,6 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { usePlatform } from "@/hooks/use-platform"
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer"
 import { OverlayHostHiddenProvider } from "@/components/ui/overlay-host-hidden"
-
-function WorkspaceDocumentTitle() {
-  const { activeFolder } = useActiveFolder()
-
-  useEffect(() => {
-    document.title = activeFolder ? `${activeFolder.name} - codeg` : "codeg"
-  }, [activeFolder])
-
-  return null
-}
 
 const TOAST_DURATION_MS = 15000
 const WORKSPACE_PANEL_GROUP_ID = "workspace-panel-group"
@@ -1546,7 +1536,6 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                 <ConversationRuntimeProvider>
                   <WorkspaceProvider>
                     <TabProvider>
-                      <WorkspaceDocumentTitle />
                       <TabKeysSync />
                       <BrowserEventsBridge />
                       {/* Beside the events bridge and not inside it: that one
@@ -1594,6 +1583,9 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                                         {/* Another window's "open the
                                             assistants page's settings". */}
                                         <PersonalAgentOpenBridge />
+                                        {/* Inside the assistants' provider:
+                                            the web's title counts them. */}
+                                        <WorkspaceDocumentTitle />
                                         <FolderLayoutShell>
                                           {children}
                                         </FolderLayoutShell>

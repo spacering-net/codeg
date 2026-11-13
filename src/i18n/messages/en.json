@@ -8463,6 +8463,18 @@
           "on": "On",
           "off": "Off"
         },
+        "menubar": {
+          "title": "Busy assistants in the menu bar",
+          "hint": "While an assistant works, codeg's menu bar icon becomes its face, blinking now and then. Beside it, how many assistants have something unread; its menu lists the five latest.",
+          "on": "On",
+          "off": "Off"
+        },
+        "dock_badge": {
+          "title": "Dock badge",
+          "hint": "The number on codeg's dock or taskbar icon: how many assistants have something unread, the hidden and muted ones aside.",
+          "on": "Assistants with unread",
+          "off": "Off"
+        },
         "level_brief": {
           "title": "Morning brief and wrap-up",
           "hint": "Your morning brief or the wrap-up is ready."

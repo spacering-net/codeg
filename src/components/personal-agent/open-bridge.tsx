@@ -5,14 +5,16 @@
  * window asks (`openPersonalAgentPage`), or when the workspace was opened on
  * `?pa=<page>` (the web, when no workspace tab was open to ask). Follows a
  * notification the owner opened (1.13): the assistant on its card, or the
- * conversation it points at. And on the desktop hands the backend each
- * assistant's avatar as a PNG, for the icon of the notifications it posts.
+ * conversation it points at, or one of the menu bar's assistants (10.10).
+ * And on the desktop hands the backend each assistant's avatar as PNGs, for
+ * the icon of the notifications it posts and the menu bar's face.
  */
 
 import { useEffect, useRef } from "react"
 
 import { usePrimaryAgent } from "@/contexts/personal-agent-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useReducedMotion } from "@/hooks/use-chat-motion"
 import { uploadAvatarPngs } from "@/lib/personal-agent-avatar-png"
 import { listenPersonalAgentFollow } from "@/lib/personal-agent-notify"
 import {
@@ -34,6 +36,7 @@ export function PersonalAgentOpenBridge() {
   const openSession = useSessionLinkOpener()
   const { snapshot } = usePrimaryAgent()
   const entries = useRoster()
+  const still = useReducedMotion()
   const primaryId = snapshot?.agent?.id ?? null
 
   useEffect(() => {
@@ -90,8 +93,8 @@ export function PersonalAgentOpenBridge() {
   )
 
   useEffect(() => {
-    if (entries) uploadAvatarPngs(entries)
-  }, [entries])
+    if (entries) uploadAvatarPngs(entries, still)
+  }, [entries, still])
 
   return null
 }

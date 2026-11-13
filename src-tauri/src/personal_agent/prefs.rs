@@ -839,6 +839,7 @@ impl PersonalAgentEngine {
             if let Err(e) = self.write_settings(&plan).await {
                 return ToolOutcome::refused(e);
             }
+            self.note_prefs_believed(&plan).await;
         }
         let card = match self
             .raise_changed(

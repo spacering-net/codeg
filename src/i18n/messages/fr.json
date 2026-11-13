@@ -8464,6 +8464,18 @@
           "on": "Activé",
           "off": "Désactivé"
         },
+        "menubar": {
+          "title": "Assistants occupés dans la barre des menus",
+          "hint": "Pendant qu'un assistant travaille, l'icône de codeg dans la barre des menus devient son visage, qui cligne des yeux de temps en temps. À côté, le nombre d'assistants avec du non-lu ; son menu liste les cinq plus récents.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "dock_badge": {
+          "title": "Pastille du Dock",
+          "hint": "Le nombre sur l'icône de codeg dans le Dock ou la barre des tâches : combien d'assistants ont du non-lu, hors masqués et en sourdine.",
+          "on": "Assistants avec du non-lu",
+          "off": "Désactivé"
+        },
         "level_brief": {
           "title": "Point du matin et bilan",
           "hint": "Votre point du matin ou le bilan est prêt."

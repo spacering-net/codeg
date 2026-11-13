@@ -30,12 +30,14 @@ import {
   getNotificationPermission,
 } from "@/lib/notification"
 import { avatarPngDataUrl } from "@/lib/personal-agent-avatar-png"
-import { isDesktop } from "@/lib/transport"
+import { getShellTransport, isDesktop } from "@/lib/transport"
 import type { PersonalAgentNotify, PersonalAgentNotifyLink } from "@/lib/types"
 import { requestWindowAttention } from "@/lib/window-attention"
 
 /** The window event a followed notification raises. */
 export const PERSONAL_AGENT_FOLLOW_EVENT = "codeg:personal-agent-follow"
+/** The desktop's event an assistant picked in the menu bar raises. */
+export const TRAY_FOLLOW_EVENT = "workspace://follow-personal-agent"
 
 const CLAIM_PREFIX = "codeg:pa-notify:"
 /** A claim is read back this long after it is written: the last writer of
@@ -69,7 +71,27 @@ export function listenPersonalAgentFollow(
     if (link && typeof link === "object") onLink(link)
   }
   window.addEventListener(PERSONAL_AGENT_FOLLOW_EVENT, handler)
-  return () => window.removeEventListener(PERSONAL_AGENT_FOLLOW_EVENT, handler)
+  // The desktop's menu bar opens an assistant the same way (10.10).
+  let cancelled = false
+  let off: (() => void) | null = null
+  if (isDesktop()) {
+    void getShellTransport()
+      .subscribe<PersonalAgentNotifyLink>(TRAY_FOLLOW_EVENT, (link) => {
+        if (link && typeof link === "object" && link.kind === "bot") {
+          onLink(link)
+        }
+      })
+      .then((unlisten) => {
+        if (cancelled) unlisten()
+        else off = unlisten
+      })
+      .catch(() => {})
+  }
+  return () => {
+    cancelled = true
+    off?.()
+    window.removeEventListener(PERSONAL_AGENT_FOLLOW_EVENT, handler)
+  }
 }
 
 function pruneClaims(now: number) {

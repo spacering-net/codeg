@@ -194,9 +194,10 @@ function SidebarNavButton({
  * The assistants' badge on the sidebar (1.13): how many assistants have
  * something the owner has not seen — not the hidden or muted ones, nor the
  * one the page is showing them right now — and whether any (not hidden)
- * waits on them. Until the roster is read, the primary's own.
+ * waits on them. Until the roster is read, the primary's own. The web's
+ * page title counts them too (10.10).
  */
-function useAssistantsBadge(
+export function useAssistantsBadge(
   primaryId: number | null,
   primaryUnseen: number,
   primaryNeeds: boolean

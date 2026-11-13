@@ -8464,6 +8464,18 @@
           "on": "Ligado",
           "off": "Desligado"
         },
+        "menubar": {
+          "title": "Assistentes ocupados na barra de menus",
+          "hint": "Enquanto um assistente trabalha, o ícone do codeg na barra de menus vira o rosto dele, que pisca de vez em quando. Ao lado, quantos assistentes têm algo não lido; o menu lista os cinco mais recentes.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "dock_badge": {
+          "title": "Indicador no Dock",
+          "hint": "O número no ícone do codeg no Dock ou na barra de tarefas: quantos assistentes têm algo não lido, sem contar os ocultos e silenciados.",
+          "on": "Assistentes com não lidos",
+          "off": "Desligado"
+        },
         "level_brief": {
           "title": "Resumo da manhã e fechamento",
           "hint": "Seu resumo da manhã ou o fechamento está pronto."

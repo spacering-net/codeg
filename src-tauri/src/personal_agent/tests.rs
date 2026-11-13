@@ -4822,6 +4822,85 @@ async fn the_brain_is_given_the_preferences_and_told_what_changed() {
 }
 
 #[tokio::test]
+async fn a_preference_the_brain_changed_and_the_owner_put_back_is_told() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "c-prefs-back").await;
+    engine
+        .send_owner_message("no badge on the dock".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    // On the owner's word, in the turn.
+    let out = call_tool(
+        &engine,
+        "prefs_update",
+        json!({
+            "changes": [{ "key": "dock_badge", "value": "off" }],
+            "quote": "no badge on the dock",
+        }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    emit(
+        &engine,
+        &state,
+        "c-prefs-back",
+        turn_complete("end_turn"),
+        true,
+    )
+    .await;
+
+    // Left as it set it: the next delivery says so, as ever.
+    engine
+        .send_owner_message("ok".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(
+        prompt.contains("dock badge counting the assistants with unread (desktop) → off"),
+        "{prompt}"
+    );
+    start_prompt(&state, Some(&token)).await;
+    let out = call_tool(
+        &engine,
+        "prefs_update",
+        json!({
+            "changes": [{ "key": "menubar", "value": "off" }],
+            "quote": "and the menu bar",
+        }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    emit(
+        &engine,
+        &state,
+        "c-prefs-back",
+        turn_complete("end_turn"),
+        true,
+    )
+    .await;
+
+    // The owner puts it back on the settings page before the next delivery:
+    // against what it was given that is no change, but it knows otherwise.
+    engine
+        .apply_settings(&[change("prefs.menubar", json!("on"))])
+        .await
+        .unwrap();
+    engine
+        .send_owner_message("thanks".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (prompt, _) = take_prompt(&mut rx);
+    assert!(prompt.contains("kind=\"prefs-update\""), "{prompt}");
+    assert!(prompt.contains("menu bar (desktop) → on"), "{prompt}");
+}
+
+#[tokio::test]
 async fn dispatches_that_change_code_wait_for_the_owner_when_they_asked() {
     let (engine, tmp) = configured().await;
     let coder = role_assistant(&engine, "Coder", true).await;
@@ -14190,4 +14269,115 @@ async fn with_notes_off_or_after_an_overflow_it_compacts_at_once() {
         "/compact",
         "notes off: straight to it"
     );
+}
+
+// ── 2.9: the menu bar and the dock ──────────────────────────────────────────
+
+use super::menubar::{MenuBarSink, TrayView};
+
+/// The menu bar as a test sees it: each view drawn.
+#[derive(Default)]
+struct TrayRecord(std::sync::Mutex<Vec<TrayView>>);
+
+impl MenuBarSink for TrayRecord {
+    fn show(&self, view: &TrayView) {
+        self.0.lock().unwrap().push(view.clone());
+    }
+}
+
+impl TrayRecord {
+    fn last(&self) -> TrayView {
+        self.0.lock().unwrap().last().cloned().unwrap_or_default()
+    }
+
+    /// The view drawn once `ok` holds of it (within 3 s), else the last.
+    async fn once(&self, what: &str, ok: impl Fn(&TrayView) -> bool) -> TrayView {
+        for _ in 0..60 {
+            let v = self.last();
+            if ok(&v) {
+                return v;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("{what}: {:?}", self.last());
+    }
+}
+
+#[tokio::test]
+async fn the_menu_bar_shows_who_works_and_who_has_unread_and_its_switches_put_it_back() {
+    let (host, w, _tmp) = hosted().await;
+    host.live.set_enabled(true);
+    let primary = host.primary().bot().await;
+    let rec = Arc::new(TrayRecord::default());
+    host.menubar_start(rec.clone()).await;
+    let first = rec.last();
+    assert!(first.menubar);
+    assert_eq!((first.face, first.count, first.badge), (None, 0, 0));
+    let mut listed: Vec<i32> = first.recent.iter().map(|r| r.id).collect();
+    listed.sort();
+    assert_eq!(listed, [primary, w]);
+    assert!(first.recent.iter().any(|r| r.id == primary && r.primary));
+
+    // It works: its face is shown; a push saying it rests takes it away.
+    let row = svc::get_bot(&host.db.conn, w).await.unwrap().unwrap();
+    let mut live = host.live_of(&row).await;
+    live.work = WorkState::Busy;
+    host.menubar_saw(&live);
+    rec.once("its face", |v| v.face == Some(w)).await;
+    host.touch(w);
+    rec.once("at rest", |v| v.face.is_none()).await;
+
+    // Unread: counted beside the icon and on the dock, marked in the menu.
+    host.roster_act(w, RosterAct::MarkUnread).await.unwrap();
+    let v = rec.once("one unread", |v| v.count == 1).await;
+    assert_eq!(v.badge, 1);
+    assert!(v.recent.iter().any(|r| r.id == w && r.unread));
+    // Muted: still marked in the menu, counted nowhere.
+    host.roster_act(w, RosterAct::Mute).await.unwrap();
+    let v = rec.once("muted", |v| v.count == 0).await;
+    assert_eq!(v.badge, 0);
+    assert!(v.recent.iter().any(|r| r.id == w && r.unread));
+    host.roster_act(w, RosterAct::Unmute).await.unwrap();
+    rec.once("unmuted", |v| v.count == 1).await;
+
+    // The switches: the menu bar as it was, the badge gone.
+    let engine = host.primary();
+    engine
+        .apply_settings(&[change("prefs.menubar", json!("off"))])
+        .await
+        .unwrap();
+    let v = rec.once("menu bar off", |v| !v.menubar).await;
+    assert_eq!(
+        v,
+        TrayView {
+            badge: 1,
+            ..TrayView::default()
+        }
+    );
+    engine
+        .apply_settings(&[change("prefs.dock_badge", json!("off"))])
+        .await
+        .unwrap();
+    rec.once("badge off", |v| v.badge == 0).await;
+    engine
+        .apply_settings(&[
+            change("prefs.menubar", json!("on")),
+            change("prefs.dock_badge", json!("on")),
+        ])
+        .await
+        .unwrap();
+    rec.once("both on", |v| v.menubar && v.badge == 1).await;
+
+    // Hidden: not listed, not counted, its face never shown.
+    host.roster_act(w, RosterAct::Hide).await.unwrap();
+    let v = rec.once("hidden", |v| v.count == 0).await;
+    assert!(v.recent.iter().all(|r| r.id != w));
+    host.menubar_saw(&live);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(rec.last().face, None, "a hidden one's face is not shown");
+
+    // A face handed over again is drawn anew.
+    let before = rec.last().pictures;
+    host.menubar_pictures();
+    rec.once("pictures", |v| v.pictures > before).await;
 }
