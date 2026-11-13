@@ -316,28 +316,6 @@ async fn async_main(
     // config at build time, so this must run before the first one is constructed.
     codeg_lib::init_proxy_from_db(&db.conn).await;
 
-    // Reclaim orphaned chat scratch dirs (pre-send drafts that never bound to a
-    // conversation, plus dirs left behind by deleted chat conversations).
-    // Background, non-blocking; failures are logged but non-fatal.
-    {
-        let gc_conn = db.conn.clone();
-        let gc_data_dir = data_dir.clone();
-        tokio::spawn(async move {
-            match codeg_lib::commands::conversations::gc_orphan_chat_dirs_core(
-                &gc_conn,
-                &gc_data_dir,
-            )
-            .await
-            {
-                Ok(n) if n > 0 => {
-                    tracing::info!("[SERVER] chat-dir GC: reclaimed {n} orphan scratch dir(s)")
-                }
-                Ok(_) => {}
-                Err(err) => tracing::error!("[SERVER] chat-dir GC failed: {err}"),
-            }
-        });
-    }
-
     // Create shared broadcaster + internal ACP event bus.
     let broadcaster = Arc::new(WebEventBroadcaster::new());
     let event_bus_metrics = Arc::new(codeg_lib::acp::EventBusMetrics::default());
@@ -358,21 +336,8 @@ async fn async_main(
         codeg_lib::cli_run::wire::RuntimeKind::Server,
     );
     let cli_access = codeg_lib::cli_run::CliAccess::new(cli_runs.clone(), data_dir.clone());
-    let (
-        delegation_broker,
-        delegation_tokens,
-        delegation_socket_path,
-        feedback_config,
-        question_config,
-        session_info_config,
-        chat_authoring_config,
-        browser_tools_config,
-        computer_tools_config,
-    ) = codeg_lib::app_state::build_delegation_stack(
-        &connection_manager,
-        db.conn.clone(),
-        data_dir.clone(),
-    );
+    let delegation =
+        codeg_lib::boot::DelegationStack::build(&connection_manager, &db.conn, &data_dir);
     let state = Arc::new(AppState {
         db,
         connection_manager,
@@ -386,85 +351,43 @@ async fn async_main(
         workspace_transfer: Arc::new(
             codeg_lib::workspace_transfer::WorkspaceTransferManager::new_from_env(),
         ),
-        pet_state: pet_state_handle.clone(),
-        delegation_broker: delegation_broker.clone(),
-        delegation_tokens: delegation_tokens.clone(),
-        delegation_socket_path: delegation_socket_path.clone(),
-        feedback_config: feedback_config.clone(),
-        question_config: question_config.clone(),
-        session_info_config: session_info_config.clone(),
-        chat_authoring_config: chat_authoring_config.clone(),
-        browser_tools_config: browser_tools_config.clone(),
-        computer_tools_config: computer_tools_config.clone(),
+        pet_state: pet_state_handle,
+        delegation_broker: delegation.broker.clone(),
+        delegation_tokens: delegation.tokens.clone(),
+        delegation_socket_path: delegation.socket_path.clone(),
+        feedback_config: delegation.feedback.clone(),
+        question_config: delegation.question.clone(),
+        session_info_config: delegation.session_info.clone(),
+        chat_authoring_config: delegation.chat_authoring.clone(),
+        browser_tools_config: delegation.browser_tools.clone(),
+        computer_tools_config: delegation.computer_tools.clone(),
         computer_service: std::sync::OnceLock::new(),
         system_op_lock: codeg_lib::app_state::default_system_op_lock(),
         update_state: codeg_lib::app_state::default_update_state(),
         cli_runs,
         cli_access,
     });
-    state
-        .connection_manager
-        .install_chat_channel(state.chat_channel_manager.clone_ref());
-
     // Logging phase 3: wire the emitter so the Logs viewer's live tail
     // (`logs://appended`) reaches WS clients.
     if let Some(hub) = codeg_lib::logging::hub::log_hub() {
         hub.set_emitter(state.emitter.clone());
     }
 
-    // Apply persisted delegation settings (depth, enabled) before
-    // the listener starts accepting so even the first companion request
-    // sees the operator's configured behavior. Cancellation is handled
-    // out-of-band via MCP `notifications/cancelled` — no broker-side
-    // timeout to apply here.
-    codeg_lib::commands::delegation::apply_persisted_config(&state.db.conn, &delegation_broker)
-        .await;
-    // Same for the live-feedback enable flag, so the first companion launch
-    // sees the operator's configured behavior.
-    codeg_lib::commands::feedback::apply_persisted_feedback_config(
+    // The daemon, started the same way the desktop app starts it (`boot`,
+    // steps in its order); what sits between the steps here is what only the
+    // server has.
+    codeg_lib::boot::spawn_startup_housekeeping(&state.db.conn, &state.data_dir, &state.emitter);
+
+    // Persisted terminal and tool settings into their live runtimes before
+    // the delegation listener accepts and before the server takes a request,
+    // so even the first companion launch sees the operator's configured
+    // behavior.
+    codeg_lib::boot::apply_persisted_settings(
         &state.db.conn,
-        &feedback_config,
+        &state.connection_manager,
+        &delegation,
     )
     .await;
-    // Same for the ask-user-question enable flag.
-    codeg_lib::commands::question::apply_persisted_question_config(
-        &state.db.conn,
-        &question_config,
-    )
-    .await;
-    // Same for the get-session-info enable flag.
-    codeg_lib::commands::session_info::apply_persisted_session_info_config(
-        &state.db.conn,
-        &session_info_config,
-    )
-    .await;
-    // Same for the chat-authoring flags, so the first companion launch knows
-    // whether to advertise `create_automation` / `create_work_task`.
-    codeg_lib::commands::chat_authoring::apply_persisted_chat_authoring_config(
-        &state.db.conn,
-        &chat_authoring_config,
-    )
-    .await;
-    // And the browser-tools switch, so the popover reports it truthfully.
-    // Server mode never advertises the group (there are no native tabs here),
-    // but the flag is one setting shared by both runtimes.
-    codeg_lib::commands::browser_tools::apply_persisted_browser_tools_config(
-        &state.db.conn,
-        &state.browser_tools_config,
-    )
-    .await;
-    // And the computer-use switches: the popover reports them, and — where
-    // the person running this server lets it share the screen it runs on —
-    // the computer service below starts from them.
-    codeg_lib::commands::computer_tools::apply_persisted_computer_tools_config(
-        &state.db.conn,
-        &state.computer_tools_config,
-    )
-    .await;
-    // The generative-UI skill's central copy, and the move from 0.35.0's
-    // `json-render`: before the server takes a request, so the move can never
-    // undo a change made on the settings page.
-    codeg_lib::commands::generative_ui::install_generative_ui_skill(&state.db.conn).await;
     // Computer use: only where whoever runs this server says so, by
     // CODEG_COMPUTER_USE — the server's web clients then share this
     // machine's windows with agents, and Stop them, from the panel. Nothing
@@ -501,262 +424,42 @@ async fn async_main(
              install.ps1 to move it to %LOCALAPPDATA%\\codeg-server."
         );
     }
-    // Before accepting connections: keep ACP model terminal fallbacks aligned
-    // with the same default-shell preference the built-in terminal uses, and
-    // seed the command-color opt-in that every launch env is built from.
-    let terminal_shell_config = state.connection_manager.terminal_shell_config();
-    codeg_lib::commands::system_settings::apply_persisted_terminal_settings(
-        &state.db.conn,
-        &terminal_shell_config,
-    )
-    .await;
-
-    // Spawn the delegation listener so companion processes can round-trip
-    // through the broker. Path is PID-scoped, so the listener owns it for
-    // the lifetime of the process.
-    {
-        let listener = codeg_lib::acp::delegation::listener::DelegationListener::new(
-            delegation_broker,
-            delegation_tokens,
-            Arc::new(codeg_lib::acp::manager::ConnectionManagerParentLookup {
-                manager: Arc::new(state.connection_manager.clone_ref()),
-            }),
-            Arc::new(codeg_lib::acp::manager::ConnectionManagerFeedbackLookup {
-                manager: Arc::new(state.connection_manager.clone_ref()),
-            }),
-            Arc::new(codeg_lib::acp::manager::ConnectionManagerQuestionLookup {
-                manager: Arc::new(state.connection_manager.clone_ref()),
-            }),
-            Arc::new(codeg_lib::commands::session_info::DbSessionInfoLookup::new(
-                Arc::new(codeg_lib::db::AppDatabase {
-                    conn: state.db.conn.clone(),
-                }),
-            )),
-            Arc::new(codeg_lib::work_task::EngineWorkTaskTools),
-            Arc::new(codeg_lib::commands::chat_authoring::DbChatAuthoring::new(
-                Arc::new(codeg_lib::db::AppDatabase {
-                    conn: state.db.conn.clone(),
-                }),
-                state.emitter.clone(),
-                chat_authoring_config.clone(),
-            )),
-            // No native webviews in this process: what a web user sees in a
-            // "browser tab" is an iframe their own browser renders, which
-            // nothing here can reach.
-            Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs),
-            // The screen this server runs on, where it is let share it
-            // (`CODEG_COMPUTER_USE`); none otherwise.
-            match state.computer_service.get() {
-                Some(service) => Arc::new(codeg_lib::commands::computer::McpComputerTools::new(
-                    service.clone(),
-                ))
-                    as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
-                None => Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop),
-            },
-            Arc::new(codeg_lib::acp::result_tool::ConnectionManagerResultLookup {
-                manager: Arc::new(state.connection_manager.clone_ref()),
-            }),
-        );
-        // Bind through the service handle rather than a bare `listener.run`
-        // spawn: it keeps the bind error and the accept-loop handle around, so
-        // the workspace status indicator can report why the broker socket is
-        // down and rebind it without restarting the server.
-        let service = codeg_lib::acp::delegation::service::DelegationService::new(
-            listener,
-            delegation_socket_path.clone(),
-        );
-        codeg_lib::acp::delegation::service::install(service.clone());
-        tokio::spawn(async move {
-            if let Err(e) = service.start().await {
-                tracing::error!("[delegation] listener failed to start: {e}");
-            }
-        });
-    }
-
-    // Install bundled expert skills into the central store
-    // (`~/.codeg/skills/`). Runs in the background; failures are logged
-    // but non-fatal.
-    tokio::spawn(async move {
-        let report = codeg_lib::commands::experts::ensure_central_experts_installed().await;
-        if !report.errors.is_empty() {
-            tracing::error!(
-                "[Experts] install finished with {} error(s): {:?}",
-                report.errors.len(),
-                report.errors
-            );
-        } else {
-            tracing::info!(
-                "[Experts] install ok: installed={} updated={} pending_review={}",
-                report.installed_count,
-                report.updated_count,
-                report.pending_user_review.len()
-            );
-        }
-    });
-
-    // Install bundled scientific-research skills into the same central store.
-    // Runs in the background; failures are logged but non-fatal.
-    tokio::spawn(async move {
-        let report = codeg_lib::commands::science::ensure_central_science_installed().await;
-        if !report.errors.is_empty() {
-            tracing::error!(
-                "[Science] install finished with {} error(s): {:?}",
-                report.errors.len(),
-                report.errors
-            );
-        } else {
-            tracing::info!(
-                "[Science] install ok: installed={} updated={} pending_review={}",
-                report.installed_count,
-                report.updated_count,
-                report.pending_user_review.len()
-            );
-        }
-    });
-
-    // Start chat channel background tasks (event subscriber, command dispatcher, scheduler, auto-connect)
-    state
-        .chat_channel_manager
-        .start_background(
-            state.event_broadcaster.clone(),
-            state.acp_event_bus.clone(),
-            state.db.conn.clone(),
-            state.data_dir.clone(),
-            state.connection_manager.clone_ref(),
-            state.emitter.clone(),
-        )
-        .await;
-
-    // Spawn the LifecycleSubscriber for cross-connection DB writes. The
-    // broker is supplied so TurnComplete on a delegation child resolves the
-    // parent's pending `delegate_to_agent` tool_use_id and emits
-    // `DelegationCompleted`.
-    tokio::spawn(codeg_lib::lifecycle_subscriber_task(
-        state.db.conn.clone(),
-        state.connection_manager.clone_ref(),
-        state.acp_event_bus.clone(),
-        Some(state.delegation_broker.clone()),
-    ));
-
-    // Spawn the desktop pet state mapper so server-mode browsers viewing
-    // /pet receive `pet://state` and `pet://oneshot` over the WebSocket
-    // bridge, just like the Tauri webview does in desktop mode. ACP events
-    // come through the typed bus; folder/app side-channels stay on the
-    // JSON broadcaster.
-    tokio::spawn(codeg_lib::pet_state_mapper::pet_state_subscriber_task(
-        state.acp_event_bus.clone(),
-        state.event_broadcaster.clone(),
-        state.emitter.clone(),
-        pet_state_handle,
-    ));
-
-    // Spawn the idle sweep so connections abandoned without an explicit
-    // disconnect (e.g. browser tab closed, panic survivors) are reaped.
-    // Override the 60-second default via `CODEG_ACP_IDLE_TIMEOUT_SECS`
-    // (set to `0` to disable).
-    if let Some(idle_timeout) = codeg_lib::idle_timeout_from_env() {
-        tokio::spawn(codeg_lib::idle_sweep_task(
-            state.connection_manager.clone_ref(),
-            idle_timeout,
-            std::time::Duration::from_secs(codeg_lib::SWEEP_INTERVAL_SECS),
-        ));
-    }
-
-    // Reclaim scratch directories lost track of mid-session. Deliberately NOT
-    // gated on `idle_timeout_from_env` like the sweep above: setting
-    // `CODEG_ACP_IDLE_TIMEOUT_SECS=0` disables idle disconnects, not disk
-    // reclamation.
-    tokio::spawn(codeg_lib::scratch_sweep_task());
-
-    // Office watch preview servers: reap dead children + ref0 stragglers.
-    if let Some(idle_timeout) = codeg_lib::office_watch::idle_timeout_from_env() {
-        tokio::spawn(codeg_lib::office_watch::office_watch_idle_sweep_task(
-            idle_timeout,
-            std::time::Duration::from_secs(codeg_lib::office_watch::SWEEP_INTERVAL_SECS),
-        ));
-    }
-
-    // Automation engine (mirrors lib.rs setup): manual + scheduled fires,
-    // event-bus completion, reconcile, boot recovery. One per process.
-    if let Some(engine) = codeg_lib::automation::build_engine(
-        codeg_lib::db::AppDatabase {
-            conn: state.db.conn.clone(),
+    let daemon = codeg_lib::boot::Daemon {
+        conn: &state.db.conn,
+        data_dir: &state.data_dir,
+        connection_manager: &state.connection_manager,
+        chat_channels: &state.chat_channel_manager,
+        broadcaster: &state.event_broadcaster,
+        bus: &state.acp_event_bus,
+        emitter: &state.emitter,
+        pet_state: &state.pet_state,
+        delegation: &delegation,
+    };
+    codeg_lib::boot::start_delegation_service(
+        &daemon,
+        // No native webviews in this process: what a web user sees in a
+        // "browser tab" is an iframe their own browser renders, which nothing
+        // here can reach.
+        Arc::new(codeg_lib::acp::browser_tools::NoBrowserTabs),
+        // The screen this server runs on, where it is let share it
+        // (`CODEG_COMPUTER_USE`); none otherwise.
+        match state.computer_service.get() {
+            Some(service) => Arc::new(codeg_lib::commands::computer::McpComputerTools::new(
+                service.clone(),
+            ))
+                as Arc<dyn codeg_lib::acp::computer_tools::ComputerToolAccess>,
+            None => Arc::new(codeg_lib::acp::computer_tools::NoComputerDesktop),
         },
-        state.connection_manager.clone_ref(),
-        state.emitter.clone(),
-        state.acp_event_bus.clone(),
-        state.data_dir.clone(),
-    ) {
-        tokio::spawn(codeg_lib::automation::run_automation_engine(engine));
-    }
+    );
+    // Awaited: every enabled channel has had its auto-connect attempt before
+    // the server binds.
+    codeg_lib::boot::start_chat_channels(&daemon).await;
+    let daemon_services = codeg_lib::boot::spawn_daemon_services(&daemon);
 
-    // Headless `codeg-cli` runs (mirrors lib.rs setup): the policy backstop
-    // here; the loopback listener and its discovery file once the server has
-    // its own socket (below), so a server that fails to start publishes none.
+    // Headless `codeg-cli` runs: the policy backstop here; the loopback
+    // listener and its discovery file once the server has its own socket
+    // (below), so a server that fails to start publishes none.
     state.cli_runs.spawn_background();
-
-    // Work-task engine (mirrors lib.rs setup): manual pipeline, event-bus
-    // settlement, merging git-truth recovery. One per process.
-    if let Some(engine) = codeg_lib::work_task::build_task_engine(
-        codeg_lib::db::AppDatabase {
-            conn: state.db.conn.clone(),
-        },
-        state.connection_manager.clone_ref(),
-        state.emitter.clone(),
-        state.acp_event_bus.clone(),
-        state.data_dir.clone(),
-    ) {
-        tokio::spawn(codeg_lib::work_task::run_task_engine(engine));
-        // Repository-panel auto-processing (mirrors lib.rs setup): only where
-        // the task engine runs, since it mints tasks unattended.
-        if let Some(processor) = codeg_lib::forge::auto::build(
-            codeg_lib::db::AppDatabase {
-                conn: state.db.conn.clone(),
-            },
-            state.emitter.clone(),
-        ) {
-            tokio::spawn(codeg_lib::forge::auto::run(processor));
-        }
-    }
-
-    // Config-sync uploader (mirrors lib.rs setup): sleeps a minute, then
-    // compares the configuration's hash every interval and uploads only when
-    // it changed. Does nothing at all until a WebDAV endpoint is configured.
-    {
-        let db_for_sync = state.db.conn.clone();
-        let emitter = std::sync::Arc::new(state.emitter.clone());
-        tokio::spawn(async move {
-            codeg_lib::commands::config_sync::auto_sync::run_auto_sync_loop(
-                db_for_sync,
-                emitter,
-                codeg_lib::commands::config_sync::APP_VERSION.to_string(),
-            )
-            .await;
-        });
-    }
-
-    // The Codex model list refresher (mirrors lib.rs setup).
-    if let Some(scheduler) = codeg_lib::acp::codex_catalog_refresh::build(state.emitter.clone()) {
-        tokio::spawn(codeg_lib::acp::codex_catalog_refresh::run(scheduler));
-    }
-
-    // Label worktree folders registered before aliases were seeded at creation
-    // with the branch they have checked out (mirrors lib.rs setup). Background;
-    // changed folders are broadcast, so a browser that already fetched its
-    // folder list still picks them up.
-    {
-        let db = codeg_lib::db::AppDatabase {
-            conn: state.db.conn.clone(),
-        };
-        let emitter = state.emitter.clone();
-        tokio::spawn(async move {
-            let n =
-                codeg_lib::commands::folders::backfill_worktree_folder_aliases(&emitter, &db).await;
-            if n > 0 {
-                tracing::info!("[folders] labeled {n} worktree folder(s) by branch");
-            }
-        });
-    }
 
     // Sweep abandoned upload staging files from any prior run before
     // serving the first request. The quota log/validate ran earlier in
@@ -867,7 +570,7 @@ async fn async_main(
     state.cli_access.stop().await;
     // Graceful shutdown: release any live office watch preview servers
     // (kill_on_drop is the backstop, but this frees their ports promptly).
-    codeg_lib::office_watch::stop_all_office_watches();
+    daemon_services.stop();
     ExitCode::SUCCESS
 }
 
