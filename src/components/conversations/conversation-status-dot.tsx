@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react"
 import type { ConversationStatus } from "@/lib/types"
-import { STATUS_COLORS } from "@/lib/types"
+import { STATUS_COLORS, UNREAD_COLOR } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 type ConversationStatusDotSize = "xs" | "sm" | "md"
@@ -13,6 +13,13 @@ interface ConversationStatusDotProps {
   className?: string
   title?: string
   children?: ReactNode
+  /**
+   * The user has not looked at this conversation's latest turn yet. Overrides
+   * the status colour with `UNREAD_COLOR` — an overlay, not a status of its
+   * own: the conversation is still `pending_review` underneath, and clearing
+   * the flag reveals that blue again.
+   */
+  unread?: boolean
 }
 
 const SIZE_CLASS: Record<ConversationStatusDotSize, string> = {
@@ -29,8 +36,12 @@ export function ConversationStatusDot({
   className,
   title,
   children,
+  unread,
 }: ConversationStatusDotProps) {
-  const colorClass = (status && STATUS_COLORS[status]) || FALLBACK_COLOR
+  const colorClass =
+    (unread && UNREAD_COLOR) ||
+    (status && STATUS_COLORS[status]) ||
+    FALLBACK_COLOR
   return (
     <span
       className={cn(
