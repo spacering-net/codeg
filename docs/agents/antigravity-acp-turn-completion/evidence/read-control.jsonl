@@ -1,0 +1,32 @@
+{"elapsed_ms": 0, "direction": "client_to_agent", "id": 1, "method": "initialize", "param_keys": ["protocolVersion", "clientInfo", "clientCapabilities"]}
+{"elapsed_ms": 8672, "direction": "agent_to_client", "id": 1, "result_keys": ["protocolVersion", "agentCapabilities", "authMethods", "agentInfo"], "agentInfo": {"name": "antigravity-acp", "title": "Google Antigravity", "version": "1.4.5"}, "selected_config": {}, "param_keys": []}
+{"elapsed_ms": 8703, "direction": "client_to_agent", "id": 2, "method": "session/new", "param_keys": ["cwd", "mcpServers"]}
+{"elapsed_ms": 14500, "direction": "agent_to_client", "id": 2, "result_keys": ["sessionId", "modes", "configOptions", "models", "_meta"], "sessionId": "id-1", "selected_config": {"model": "gemini-3.8-flash", "thinking_level": "high", "mode": "default"}, "param_keys": []}
+{"elapsed_ms": 14500, "direction": "client_to_agent", "id": 5, "method": "session/set_config_option", "param_keys": ["sessionId", "configId", "value"]}
+{"elapsed_ms": 14500, "direction": "agent_to_client", "method": "session/update", "param_keys": ["sessionId", "update"], "sessionUpdate": "usage_update"}
+{"elapsed_ms": 14500, "direction": "agent_to_client", "method": "session/update", "param_keys": ["sessionId", "update"], "sessionUpdate": "available_commands_update"}
+{"elapsed_ms": 14500, "direction": "agent_to_client", "id": 5, "result_keys": ["configOptions"], "selected_config": {"model": "gemini-3.8-flash", "thinking_level": "high", "mode": "default"}, "param_keys": []}
+{"elapsed_ms": 14500, "direction": "client_to_agent", "id": 3, "method": "session/prompt", "param_keys": ["sessionId", "prompt"]}
+{"elapsed_ms": 14500, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "trajectoryStateUpdate"], "trajectoryStateUpdate": {"trajectoryId": "id-1", "state": "STATE_RUNNING"}}}
+{"elapsed_ms": 14578, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "stepUpdate"], "stepUpdate": {"trajectoryId": "id-1", "stepIndex": 0, "state": "STATE_DONE"}}}
+{"elapsed_ms": 197859, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "stepUpdate"], "stepUpdate": {"trajectoryId": "id-1", "stepIndex": 1, "state": "STATE_ACTIVE"}}}
+{"elapsed_ms": 197859, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "stepUpdate"], "stepUpdate": {"trajectoryId": "id-1", "stepIndex": 1, "state": "STATE_ACTIVE"}}}
+{"elapsed_ms": 197859, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "usageUpdate"], "usageUpdate": {}}}
+{"elapsed_ms": 197859, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "stepUpdate"], "stepUpdate": {"trajectoryId": "id-1", "stepIndex": 1, "state": "STATE_ACTIVE"}}}
+{"elapsed_ms": 197859, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "toolCall"], "toolCall": {"id": "call_11517169265666831835", "name": "client_view_file", "trajectoryId": "id-1"}}}
+{"elapsed_ms": 197859, "direction": "agent_to_client", "method": "session/update", "param_keys": ["sessionId", "update"], "sessionUpdate": "usage_update"}
+{"elapsed_ms": 197859, "direction": "agent_to_client", "id": 0, "method": "fs/read_text_file", "param_keys": ["sessionId", "path"]}
+{"elapsed_ms": 197859, "direction": "agent_to_client", "method": "session/update", "param_keys": ["sessionId", "update"], "sessionUpdate": "tool_call", "toolCallId": "id-2", "status": "in_progress"}
+{"elapsed_ms": 197859, "direction": "client_to_agent", "id": 0, "result_keys": ["content"], "selected_config": {}, "param_keys": []}
+{"elapsed_ms": 197875, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "stepUpdate"], "stepUpdate": {"trajectoryId": "id-1", "stepIndex": 1, "state": "STATE_DONE"}}}
+{"elapsed_ms": 297047, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "stepUpdate"], "stepUpdate": {"trajectoryId": "id-1", "stepIndex": 2, "state": "STATE_ACTIVE"}}}
+{"elapsed_ms": 297047, "direction": "agent_to_client", "method": "session/update", "param_keys": ["sessionId", "update"], "sessionUpdate": "agent_message_chunk"}
+{"elapsed_ms": 297047, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "stepUpdate"], "stepUpdate": {"trajectoryId": "id-1", "stepIndex": 2, "state": "STATE_ACTIVE"}}}
+{"elapsed_ms": 297047, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "stepUpdate"], "stepUpdate": {"trajectoryId": "id-1", "stepIndex": 2, "state": "STATE_ACTIVE"}}}
+{"elapsed_ms": 297094, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "stepUpdate"], "stepUpdate": {"trajectoryId": "id-1", "stepIndex": 2, "state": "STATE_DONE"}}}
+{"elapsed_ms": 297094, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "usageUpdate"], "usageUpdate": {}}}
+{"elapsed_ms": 297094, "direction": "agent_to_client", "method": "session/update", "param_keys": ["sessionId", "update"], "sessionUpdate": "usage_update"}
+{"elapsed_ms": 297109, "direction": "harness", "event": {"event_keys": ["seqNum", "timestampMicros", "trajectoryStateUpdate"], "trajectoryStateUpdate": {"trajectoryId": "id-1", "state": "STATE_FULLY_IDLE"}}}
+{"elapsed_ms": 297109, "direction": "agent_to_client", "method": "session/update", "param_keys": ["sessionId", "update"], "sessionUpdate": "tool_call_update", "toolCallId": "id-2", "status": "completed"}
+{"elapsed_ms": 297109, "direction": "agent_to_client", "id": 3, "result_keys": ["stopReason", "usage"], "stopReason": "end_turn", "selected_config": {}, "param_keys": []}
+{"elapsed_ms": 297234, "direction": "probe", "event": "finished"}
