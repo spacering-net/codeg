@@ -178,7 +178,7 @@ async fn send_dispatch_message(
         }
     };
     let (status, error_detail) = match &send_result {
-        Ok(_) => ("sent", None),
+        Ok(outcome) => (outcome.status_str(), None),
         Err(e) => {
             tracing::error!(
                 "[ChatChannel] failed to send response for {:?} to channel {}: {e}",
