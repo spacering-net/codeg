@@ -260,7 +260,11 @@ fn user_prompt_text_preview(blocks: &[PromptInputBlock]) -> Option<String> {
 /// channel and the history parse honestly reports no title. This value only
 /// ever reaches `seed_auto_title_if_empty` / a fresh row's `title`, never
 /// `refresh_auto_title`, so it cannot displace a name the agent published.
-fn delegation_child_title_seed(blocks: &[PromptInputBlock]) -> Option<String> {
+/// Title candidate from the prompt's own prose (text blocks only, no
+/// attachment filenames). This is the ONLY shape eligible for
+/// `adopt_prompt_title`: words the user actually typed may name the chat,
+/// while an upload such as `报告.pdf` must never rename it.
+fn prompt_text_title(blocks: &[PromptInputBlock]) -> Option<String> {
     let joined = blocks
         .iter()
         .filter_map(|b| match b {
@@ -273,8 +277,12 @@ fn delegation_child_title_seed(blocks: &[PromptInputBlock]) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" ");
     let trimmed = joined.trim();
-    if !trimmed.is_empty() {
-        return Some(crate::parsers::title_from_user_text(trimmed));
+    (!trimmed.is_empty()).then(|| crate::parsers::title_from_user_text(trimmed))
+}
+
+fn delegation_child_title_seed(blocks: &[PromptInputBlock]) -> Option<String> {
+    if let Some(title) = prompt_text_title(blocks) {
+        return Some(title);
     }
     crate::acp::types::attachment_names_from_prompt(blocks)
         .map(|names| crate::parsers::title_from_user_text(&names))
@@ -1933,11 +1941,18 @@ impl ConnectionManager {
         } else {
             None
         };
-        // Seed an unlocked title from the first prompt so the sidebar is not
-        // "Untitled" while the agent is still working. Native ACP titles
-        // (session_info_update) replace this later via refresh_auto_title.
-        // Delegation children are already seeded at row create.
-        let first_prompt_title = if delegation.is_none() {
+        // Seed an unlocked title from the prompt so the sidebar is not
+        // "Untitled" while the agent is still working. Only the prompt's own
+        // prose may ADOPT (replace a non-Chinese agent title, and only on the
+        // opening prompt — see `adopt_prompt_title`); attachment-only prompts
+        // merely seed an empty row, so an upload like `报告.pdf` never renames
+        // a chat. Delegation children are already seeded at row create.
+        let prompt_prose_title = if delegation.is_none() {
+            prompt_text_title(&blocks)
+        } else {
+            None
+        };
+        let prompt_seed_title = if prompt_prose_title.is_none() && delegation.is_none() {
             delegation_child_title_seed(&blocks)
         } else {
             None
@@ -2005,10 +2020,9 @@ impl ConnectionManager {
                     .await;
                 }
                 if let (Some(cid), Some(title)) =
-                    (conversation_id_for_status, first_prompt_title)
+                    (conversation_id_for_status, prompt_prose_title)
                 {
-                    match conversation_service::seed_auto_title_if_empty(&db.conn, cid, title)
-                        .await
+                    match conversation_service::adopt_prompt_title(&db.conn, cid, title).await
                     {
                         Ok(true) => {
                             crate::commands::conversations::emit_conversation_upsert(
@@ -2028,6 +2042,26 @@ impl ConnectionManager {
                             conversation_id = cid,
                             error = %e,
                             "[manager] first-prompt title seed failed"
+                        ),
+                    }
+                } else if let (Some(cid), Some(title)) =
+                    (conversation_id_for_status, prompt_seed_title)
+                {
+                    // Attachment-only prompt: fill an empty name, never rename.
+                    match conversation_service::seed_auto_title_if_empty(&db.conn, cid, title)
+                        .await
+                    {
+                        Ok(true) => {
+                            crate::commands::conversations::emit_conversation_upsert(
+                                &emitter, &db.conn, cid,
+                            )
+                            .await;
+                        }
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!(
+                            conversation_id = cid,
+                            error = %e,
+                            "[manager] attachment title seed failed"
                         ),
                     }
                 }
@@ -7786,6 +7820,25 @@ mod tests {
         assert_eq!(
             delegation_child_title_seed(&blocks),
             Some(crate::parsers::title_from_user_text(task))
+        );
+    }
+
+    /// Attachment filenames are never adoption material: an upload like
+    /// `报告.pdf` must not rename an already-titled chat, so the prose-only
+    /// candidate is `None` while the generic seed still covers empty rows.
+    #[test]
+    fn prompt_text_title_ignores_attachment_only_prompts() {
+        let blocks = vec![PromptInputBlock::ResourceLink {
+            uri: "file:///tmp/报告.pdf".into(),
+            name: "报告.pdf".into(),
+            mime_type: None,
+            description: None,
+        }];
+        assert!(prompt_text_title(&blocks).is_none());
+        assert!(delegation_child_title_seed(&blocks).is_some());
+        assert_eq!(
+            prompt_text_title(&[PromptInputBlock::Text { text: " 你好 ".into() }]).as_deref(),
+            Some(crate::parsers::title_from_user_text("你好").as_str())
         );
     }
 
