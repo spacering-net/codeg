@@ -1,197 +1,263 @@
-"""
-Colorblind-Friendly Color Palettes for Scientific Visualization
+"""Curated sRGB palettes for scientific figures.
 
-This module provides carefully curated color palettes optimized for
-scientific publications and accessibility.
+Sources were checked 2026-10-01. Palette selection alone never establishes
+accessibility: audit the rendered foreground/background contrast and add
+redundant encodings.
 
-Usage:
-    from color_palettes import OKABE_ITO, apply_palette
-    import matplotlib.pyplot as plt
-
-    apply_palette('okabe_ito')
-    plt.plot([1, 2, 3], [1, 4, 9])
+Paul Tol values and recommended fixed order:
+https://sronpersonalpages.nl/~pault/data/colourschemes.pdf
+(SRON/EPS/TN/09-002, issue 3.2, 18 August 2021)
 """
 
-# Okabe-Ito Palette (2008)
-# The most widely recommended colorblind-friendly palette
-OKABE_ITO = {
-    'orange': '#E69F00',
-    'sky_blue': '#56B4E9',
-    'bluish_green': '#009E73',
-    'yellow': '#F0E442',
-    'blue': '#0072B2',
-    'vermillion': '#D55E00',
-    'reddish_purple': '#CC79A7',
-    'black': '#000000'
+from __future__ import annotations
+
+from typing import Final
+
+# Okabe-Ito colors as reproduced in Wong, Nature Methods 8, 441 (2011).
+OKABE_ITO: Final = {
+    "orange": "#E69F00",
+    "sky_blue": "#56B4E9",
+    "bluish_green": "#009E73",
+    "yellow": "#F0E442",
+    "blue": "#0072B2",
+    "vermillion": "#D55E00",
+    "reddish_purple": "#CC79A7",
+    "black": "#000000",
 }
-
-OKABE_ITO_LIST = ['#E69F00', '#56B4E9', '#009E73', '#F0E442',
-                   '#0072B2', '#D55E00', '#CC79A7', '#000000']
-
-# Wong Palette (Nature Methods)
-WONG = ['#000000', '#E69F00', '#56B4E9', '#009E73',
-        '#F0E442', '#0072B2', '#D55E00', '#CC79A7']
-
-# Paul Tol Palettes (https://personal.sron.nl/~pault/)
-TOL_BRIGHT = ['#4477AA', '#EE6677', '#228833', '#CCBB44',
-              '#66CCEE', '#AA3377', '#BBBBBB']
-
-TOL_MUTED = ['#332288', '#88CCEE', '#44AA99', '#117733',
-             '#999933', '#DDCC77', '#CC6677', '#882255', '#AA4499']
-
-TOL_LIGHT = ['#77AADD', '#EE8866', '#EEDD88', '#FFAABB',
-             '#99DDFF', '#44BB99', '#BBCC33', '#AAAA00', '#DDDDDD']
-
-TOL_HIGH_CONTRAST = ['#004488', '#DDAA33', '#BB5566']
-
-# Sequential colormaps (for continuous data)
-SEQUENTIAL_COLORMAPS = [
-    'viridis',   # Default, perceptually uniform
-    'plasma',    # Perceptually uniform
-    'inferno',   # Perceptually uniform
-    'magma',     # Perceptually uniform
-    'cividis',   # Optimized for colorblind viewers
-    'YlOrRd',    # Yellow-Orange-Red
-    'YlGnBu',    # Yellow-Green-Blue
-    'Blues',     # Single hue
-    'Greens',    # Single hue
-    'Purples',   # Single hue
+OKABE_ITO_LIST: Final = [
+    "#E69F00",
+    "#56B4E9",
+    "#009E73",
+    "#F0E442",
+    "#0072B2",
+    "#D55E00",
+    "#CC79A7",
+    "#000000",
 ]
 
-# Diverging colormaps (for data with meaningful center)
-DIVERGING_COLORMAPS_SAFE = [
-    'RdYlBu',    # Red-Yellow-Blue (reversed is common)
-    'RdBu',      # Red-Blue
-    'PuOr',      # Purple-Orange (excellent for colorblind)
-    'BrBG',      # Brown-Blue-Green (good for colorblind)
-    'PRGn',      # Purple-Green (use with caution)
-    'PiYG',      # Pink-Yellow-Green (use with caution)
+# These five meet 3:1 against white in sRGB. Still use markers/line styles.
+OKABE_ITO_ON_WHITE: Final = [
+    "#0072B2",
+    "#D55E00",
+    "#009E73",
+    "#CC79A7",
+    "#000000",
 ]
 
-# Diverging colormaps to AVOID (red-green combinations)
-DIVERGING_COLORMAPS_AVOID = [
-    'RdGn',      # Red-Green (problematic!)
-    'RdYlGn',    # Red-Yellow-Green (problematic!)
+# Compatibility alias: Wong presents the same eight colors in another order.
+WONG: Final = [
+    "#000000",
+    "#E69F00",
+    "#56B4E9",
+    "#009E73",
+    "#F0E442",
+    "#0072B2",
+    "#D55E00",
+    "#CC79A7",
 ]
 
-# Fluorophore colors (traditional - use with caution)
-FLUOROPHORES_TRADITIONAL = {
-    'DAPI': '#0000FF',    # Blue
-    'GFP': '#00FF00',     # Green (problematic for colorblind)
-    'RFP': '#FF0000',     # Red
-    'Cy5': '#FF00FF',     # Magenta
-    'YFP': '#FFFF00',     # Yellow
+# Paul Tol qualitative schemes in the fixed sequence recommended in issue 3.2.
+TOL_BRIGHT: Final = [
+    "#4477AA",
+    "#EE6677",
+    "#228833",
+    "#CCBB44",
+    "#66CCEE",
+    "#AA3377",
+    "#BBBBBB",
+]
+TOL_HIGH_CONTRAST: Final = ["#004488", "#DDAA33", "#BB5566"]
+TOL_VIBRANT: Final = [
+    "#EE7733",
+    "#0077BB",
+    "#33BBEE",
+    "#EE3377",
+    "#CC3311",
+    "#009988",
+    "#BBBBBB",
+]
+TOL_MUTED: Final = [
+    "#CC6677",
+    "#332288",
+    "#DDCC77",
+    "#117733",
+    "#88CCEE",
+    "#882255",
+    "#44AA99",
+    "#999933",
+    "#AA4499",
+]
+TOL_MEDIUM_CONTRAST: Final = [
+    "#6699CC",
+    "#004488",
+    "#EECC66",
+    "#994455",
+    "#997700",
+    "#EE99AA",
+]
+TOL_PALE: Final = [
+    "#BBCCEE",
+    "#CCEEFF",
+    "#CCDDAA",
+    "#EEEEBB",
+    "#FFCCCC",
+    "#DDDDDD",
+]
+TOL_DARK: Final = [
+    "#222255",
+    "#225555",
+    "#225522",
+    "#666633",
+    "#663333",
+    "#555555",
+]
+TOL_LIGHT: Final = [
+    "#77AADD",
+    "#EE8866",
+    "#EEDD88",
+    "#FFAABB",
+    "#99DDFF",
+    "#44BB99",
+    "#BBCC33",
+    "#AAAA00",
+    "#DDDDDD",
+]
+
+PALETTES: Final = {
+    "okabe_ito": OKABE_ITO_LIST,
+    "okabe_ito_on_white": OKABE_ITO_ON_WHITE,
+    "wong": WONG,
+    "tol_bright": TOL_BRIGHT,
+    "tol_high_contrast": TOL_HIGH_CONTRAST,
+    "tol_vibrant": TOL_VIBRANT,
+    "tol_muted": TOL_MUTED,
+    "tol_medium_contrast": TOL_MEDIUM_CONTRAST,
+    "tol_pale": TOL_PALE,
+    "tol_dark": TOL_DARK,
+    "tol_light": TOL_LIGHT,
 }
 
-# Fluorophore colors (colorblind-friendly alternatives)
-FLUOROPHORES_ACCESSIBLE = {
-    'Channel1': '#0072B2',  # Blue
-    'Channel2': '#E69F00',  # Orange (instead of green)
-    'Channel3': '#D55E00',  # Vermillion (instead of red)
-    'Channel4': '#CC79A7',  # Magenta
-    'Channel5': '#F0E442',  # Yellow
+PALETTE_METADATA: Final = {
+    "okabe_ito": {
+        "kind": "qualitative",
+        "source": "https://www.nature.com/articles/nmeth.1618",
+        "caveat": "Yellow and other light colors need outlines on white.",
+    },
+    "okabe_ito_on_white": {
+        "kind": "qualitative-subset",
+        "source": "derived from Okabe-Ito by WCAG sRGB contrast calculation",
+        "caveat": "At most five categories; use redundant encodings.",
+    },
+    "tol_bright": {
+        "kind": "qualitative",
+        "source": "https://sronpersonalpages.nl/~pault/data/colourschemes.pdf",
+        "maximum_categories": 7,
+    },
+    "tol_high_contrast": {
+        "kind": "qualitative",
+        "source": "https://sronpersonalpages.nl/~pault/data/colourschemes.pdf",
+        "maximum_categories": 3,
+        "caveat": "Designed to retain separation in grayscale.",
+    },
+    "tol_vibrant": {
+        "kind": "qualitative",
+        "source": "https://sronpersonalpages.nl/~pault/data/colourschemes.pdf",
+        "maximum_categories": 7,
+    },
+    "tol_muted": {
+        "kind": "qualitative",
+        "source": "https://sronpersonalpages.nl/~pault/data/colourschemes.pdf",
+        "maximum_categories": 9,
+    },
+    "tol_medium_contrast": {
+        "kind": "qualitative-pairs",
+        "source": "https://sronpersonalpages.nl/~pault/data/colourschemes.pdf",
+        "maximum_categories": 6,
+    },
+    "tol_pale": {
+        "kind": "text-background",
+        "source": "https://sronpersonalpages.nl/~pault/data/colourschemes.pdf",
+        "caveat": "Not intended for plot lines or categorical maps.",
+    },
+    "tol_dark": {
+        "kind": "text-foreground",
+        "source": "https://sronpersonalpages.nl/~pault/data/colourschemes.pdf",
+        "caveat": "Not intended as a multi-category plot palette.",
+    },
+    "tol_light": {
+        "kind": "labeled-cell-fill",
+        "source": "https://sronpersonalpages.nl/~pault/data/colourschemes.pdf",
+        "maximum_categories": 9,
+    },
 }
 
-# Genomics/Bioinformatics
-DNA_BASES = {
-    'A': '#00CC00',  # Green
-    'C': '#0000CC',  # Blue
-    'G': '#FFB300',  # Orange
-    'T': '#CC0000',  # Red
+SEQUENTIAL_COLORMAPS: Final = [
+    "viridis",
+    "plasma",
+    "inferno",
+    "magma",
+    "cividis",
+]
+
+# Candidates, not blanket accessibility certifications. Center and normalization
+# must match the scientific meaning, and rendered contrast still needs review.
+DIVERGING_COLORMAP_CANDIDATES: Final = ["RdBu_r", "PuOr", "BrBG"]
+DIVERGING_COLORMAPS_SAFE = DIVERGING_COLORMAP_CANDIDATES  # Compatibility alias.
+DIVERGING_COLORMAPS_AVOID: Final = ["RdYlGn"]
+
+FLUOROPHORES_TRADITIONAL: Final = {
+    "DAPI": "#0000FF",
+    "GFP": "#00FF00",
+    "RFP": "#FF0000",
+    "Cy5": "#FF00FF",
+    "YFP": "#FFFF00",
+}
+FLUOROPHORES_ACCESSIBLE: Final = {
+    "Channel1": "#0072B2",
+    "Channel2": "#E69F00",
+    "Channel3": "#D55E00",
+    "Channel4": "#CC79A7",
+    "Channel5": "#F0E442",
+}
+DNA_BASES: Final = {
+    "A": "#00CC00",
+    "C": "#0000CC",
+    "G": "#FFB300",
+    "T": "#CC0000",
+}
+DNA_BASES_ACCESSIBLE: Final = {
+    "A": "#009E73",
+    "C": "#0072B2",
+    "G": "#E69F00",
+    "T": "#D55E00",
 }
 
-DNA_BASES_ACCESSIBLE = {
-    'A': '#009E73',  # Bluish Green
-    'C': '#0072B2',  # Blue
-    'G': '#E69F00',  # Orange
-    'T': '#D55E00',  # Vermillion
-}
 
-
-def apply_palette(palette_name='okabe_ito'):
-    """
-    Apply a color palette to matplotlib's default color cycle.
-
-    Parameters
-    ----------
-    palette_name : str
-        Name of the palette to apply. Options:
-        'okabe_ito', 'wong', 'tol_bright', 'tol_muted',
-        'tol_light', 'tol_high_contrast'
-
-    Returns
-    -------
-    list
-        List of colors in the palette
-
-    Examples
-    --------
-    >>> apply_palette('okabe_ito')
-    >>> plt.plot([1, 2, 3], [1, 4, 9])  # Uses Okabe-Ito colors
-    """
+def get_palette(palette_name: str = "okabe_ito_on_white") -> list[str]:
+    """Return a copy of a named palette."""
     try:
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("matplotlib not installed")
-        return None
+        return list(PALETTES[palette_name])
+    except KeyError as exc:
+        available = ", ".join(sorted(PALETTES))
+        raise ValueError(
+            f"palette {palette_name!r} not found; available: {available}"
+        ) from exc
 
-    palettes = {
-        'okabe_ito': OKABE_ITO_LIST,
-        'wong': WONG,
-        'tol_bright': TOL_BRIGHT,
-        'tol_muted': TOL_MUTED,
-        'tol_light': TOL_LIGHT,
-        'tol_high_contrast': TOL_HIGH_CONTRAST,
-    }
 
-    if palette_name not in palettes:
-        available = ', '.join(palettes.keys())
-        raise ValueError(f"Palette '{palette_name}' not found. Available: {available}")
-
-    colors = palettes[palette_name]
-    plt.rcParams['axes.prop_cycle'] = plt.cycler(color=colors)
+def apply_palette(palette_name: str = "okabe_ito_on_white") -> list[str]:
+    """Apply a named palette to Matplotlib, importing it only when requested."""
+    try:
+        import matplotlib as mpl
+    except ImportError as exc:
+        raise RuntimeError(
+            "Matplotlib is required to apply a palette; "
+            "install the pinned snapshot documented in SKILL.md"
+        ) from exc
+    colors = get_palette(palette_name)
+    mpl.rcParams["axes.prop_cycle"] = mpl.cycler(color=colors)
     return colors
 
 
-def get_palette(palette_name='okabe_ito'):
-    """
-    Get a color palette as a list.
-
-    Parameters
-    ----------
-    palette_name : str
-        Name of the palette
-
-    Returns
-    -------
-    list
-        List of color hex codes
-    """
-    palettes = {
-        'okabe_ito': OKABE_ITO_LIST,
-        'wong': WONG,
-        'tol_bright': TOL_BRIGHT,
-        'tol_muted': TOL_MUTED,
-        'tol_light': TOL_LIGHT,
-        'tol_high_contrast': TOL_HIGH_CONTRAST,
-    }
-
-    if palette_name not in palettes:
-        available = ', '.join(palettes.keys())
-        raise ValueError(f"Palette '{palette_name}' not found. Available: {available}")
-
-    return palettes[palette_name]
-
-
 if __name__ == "__main__":
-    print("Available colorblind-friendly palettes:")
-    print(f"  - Okabe-Ito: {len(OKABE_ITO_LIST)} colors")
-    print(f"  - Wong: {len(WONG)} colors")
-    print(f"  - Tol Bright: {len(TOL_BRIGHT)} colors")
-    print(f"  - Tol Muted: {len(TOL_MUTED)} colors")
-    print(f"  - Tol Light: {len(TOL_LIGHT)} colors")
-    print(f"  - Tol High Contrast: {len(TOL_HIGH_CONTRAST)} colors")
-
-    print("\nOkabe-Ito palette (most recommended):")
-    for name, color in OKABE_ITO.items():
-        print(f"  {name:15s}: {color}")
+    for palette_name in sorted(PALETTES):
+        print(f"{palette_name}: {', '.join(PALETTES[palette_name])}")

@@ -1,0 +1,52 @@
+{
+  "schema_version": "2.0",
+  "review_id": "REVIEW-LOCAL-001",
+  "material": {
+    "status": "unpublished_confidential",
+    "contains_personal_or_sensitive_data": false
+  },
+  "authorization": {
+    "basis": "journal_invitation",
+    "documented": false,
+    "local_processing_authorized": false,
+    "external_processing_authorized": false
+  },
+  "reviewer": {
+    "capacity": "assigned_reviewer",
+    "human_accountable": false,
+    "competence_areas": [
+      "subject_matter"
+    ],
+    "competence_limits": [],
+    "conflict_status": "not_assessed",
+    "conflicts": []
+  },
+  "venue_policy": {
+    "checked": false,
+    "peer_review_model": "unknown",
+    "confidential_editor_notes_supported": false
+  },
+  "ai_use": {
+    "policy": "not_stated",
+    "planned": "local_deterministic_tools",
+    "permission_confirmed": false,
+    "disclosure_planned": false
+  },
+  "handling": {
+    "local_only": true,
+    "external_service_use": false,
+    "data_reuse_permitted": false,
+    "retention_rule": "delete_after_review",
+    "deletion_or_retention_record_planned": false
+  },
+  "scope": {
+    "manuscript_type": "randomized_trial",
+    "requested_focus": [
+      "methods",
+      "statistics",
+      "reporting"
+    ],
+    "out_of_scope": [],
+    "specialist_review_needed": []
+  }
+}

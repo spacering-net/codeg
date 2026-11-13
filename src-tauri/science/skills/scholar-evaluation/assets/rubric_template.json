@@ -1,0 +1,301 @@
+{
+  "schema_version": "2.0",
+  "rubric_id": "RUBRIC-SYNTHETIC-001",
+  "title": "Developmental scholarly-work evidence rubric",
+  "intended_use": {
+    "purpose": "developmental_review_of_scholarly_work",
+    "unit_of_assessment": "scholarly_work",
+    "allowed_contexts": [
+      "draft feedback",
+      "research idea feedback",
+      "retrospective methods review"
+    ],
+    "prohibited_uses": [
+      "admissions",
+      "awards",
+      "discipline",
+      "funding",
+      "hiring",
+      "promotion",
+      "tenure",
+      "other_high_impact_personnel_decision"
+    ]
+  },
+  "construct": {
+    "label": "Traceable support for a scholarly work's claims and methods",
+    "definition": "The degree to which a scholarly work states a bounded question, situates its contribution, uses fit-for-purpose methods, aligns analysis with claims, and documents transparent and responsible practices using traceable evidence.",
+    "boundaries": [
+      "The construct applies to a scholarly work, not a person or organization.",
+      "Scores describe evidence against this rubric and do not establish merit, readiness, impact, or a decision outcome.",
+      "Disciplinary experts must adapt criterion interpretation before use."
+    ],
+    "limitations": [
+      "This template has not established content validity for any discipline or decision context.",
+      "Ordinal ratings and weights are judgments rather than natural measurements.",
+      "Literature coverage, rater interpretation, missing evidence, and rubric choices can change results."
+    ]
+  },
+  "provenance": {
+    "rubric_version": "1.1",
+    "owner_role": "qualified accountable assessment-methods owner",
+    "source_ids": [
+      "SOURCE-DORA-DECLARATION",
+      "SOURCE-DORA-INDICATORS-2024",
+      "SOURCE-LEIDEN-2015",
+      "SOURCE-COARA-2022",
+      "SOURCE-HONG-KONG-2020",
+      "SOURCE-SCOPE-2021",
+      "SOURCE-TESTING-STANDARDS-2014"
+    ],
+    "content_validity_status": "not_established",
+    "content_validity_evidence_ref": "",
+    "last_reviewed_date": "2026-10-01"
+  },
+  "scale": {
+    "minimum": 0,
+    "maximum": 4,
+    "step": 1,
+    "anchors": [
+      {
+        "score": 0,
+        "label": "Observed lack of support",
+        "description": "Inspected, traceable evidence demonstrates that the criterion is unsupported or contradicted; unavailable evidence is missing, not zero."
+      },
+      {
+        "score": 1,
+        "label": "Limited support",
+        "description": "Some relevant evidence is present, but major gaps or unresolved contradictions remain."
+      },
+      {
+        "score": 2,
+        "label": "Mixed support",
+        "description": "Evidence partly supports the criterion, with material limitations or uncertainty."
+      },
+      {
+        "score": 3,
+        "label": "Substantial support",
+        "description": "Traceable evidence substantially supports the criterion and important limitations are stated."
+      },
+      {
+        "score": 4,
+        "label": "Strong support",
+        "description": "Multiple appropriate evidence elements coherently support the criterion and boundaries are handled explicitly."
+      }
+    ]
+  },
+  "criteria": [
+    {
+      "criterion_id": "question_scope",
+      "label": "Question and scope",
+      "construct_component": "Clarity, boundedness, significance rationale, assumptions, and feasible scope",
+      "weight": 0.15,
+      "required": true,
+      "anchors": [
+        {
+          "score": 0,
+          "description": "Inspected question and scope records demonstrate incoherent or incompatible objectives and boundaries."
+        },
+        {
+          "score": 1,
+          "description": "A question is suggested, but scope or assumptions are materially unclear."
+        },
+        {
+          "score": 2,
+          "description": "The question is identifiable, with mixed clarity, feasibility, or boundary specification."
+        },
+        {
+          "score": 3,
+          "description": "The question, scope, assumptions, and success conditions are substantially clear and feasible."
+        },
+        {
+          "score": 4,
+          "description": "The question and boundaries are precise, justified, feasible, and explicitly connected to success conditions."
+        }
+      ],
+      "evidence_requirements": [
+        "A stable locator for the stated question or objective",
+        "A stable locator for scope, assumptions, and boundary conditions",
+        "A stable locator for the significance rationale"
+      ],
+      "limitations": [
+        "Significance is context-dependent and must be interpreted by relevant disciplinary experts."
+      ]
+    },
+    {
+      "criterion_id": "literature_contribution",
+      "label": "Literature grounding and contribution claim",
+      "construct_component": "Traceable engagement with relevant prior work and a bounded comparison-based contribution claim",
+      "weight": 0.2,
+      "required": true,
+      "anchors": [
+        {
+          "score": 0,
+          "description": "Inspected comparisons contradict the claimed contribution or provide no support for it."
+        },
+        {
+          "score": 1,
+          "description": "Prior work is referenced selectively or the contribution claim is largely unsupported."
+        },
+        {
+          "score": 2,
+          "description": "Relevant prior work and comparison evidence are present, with material coverage or inference gaps."
+        },
+        {
+          "score": 3,
+          "description": "The work is substantially grounded in relevant literature and the contribution claim is bounded by traceable comparisons."
+        },
+        {
+          "score": 4,
+          "description": "Search boundaries, contrary evidence, and comparison dimensions are explicit and strongly support a carefully limited contribution claim."
+        }
+      ],
+      "evidence_requirements": [
+        "A documented literature-search or source-selection boundary",
+        "Traceable primary sources for comparison claims",
+        "A stable locator for contrary, null, or competing evidence considered"
+      ],
+      "limitations": [
+        "Absence from a search result does not establish novelty.",
+        "Coverage varies by discipline, language, database, date, and access."
+      ]
+    },
+    {
+      "criterion_id": "method_design",
+      "label": "Method and design fit",
+      "construct_component": "Alignment of design, data or materials, methods, ethics, and validity safeguards with the question",
+      "weight": 0.25,
+      "required": true,
+      "anchors": [
+        {
+          "score": 0,
+          "description": "The inspected methods cannot address the stated question."
+        },
+        {
+          "score": 1,
+          "description": "Methods are partly described but have major unresolved alignment or validity problems."
+        },
+        {
+          "score": 2,
+          "description": "The design is partly fit for purpose, with material weaknesses or incomplete safeguards."
+        },
+        {
+          "score": 3,
+          "description": "The design is substantially aligned, reproducibly described, and addresses major validity and ethics concerns."
+        },
+        {
+          "score": 4,
+          "description": "The design is strongly justified against alternatives, with comprehensive safeguards, transparent choices, and bounded claims."
+        }
+      ],
+      "evidence_requirements": [
+        "A stable locator for the design and method rationale",
+        "A stable locator for data, sampling, materials, or corpus boundaries",
+        "A stable locator for ethics, validity threats, and mitigation"
+      ],
+      "limitations": [
+        "Method quality depends on disciplinary norms and the stated inferential target."
+      ]
+    },
+    {
+      "criterion_id": "analysis_claims",
+      "label": "Analysis, claims, and uncertainty",
+      "construct_component": "Fit of analysis, robustness checks, uncertainty representation, and proportionality of conclusions",
+      "weight": 0.2,
+      "required": true,
+      "anchors": [
+        {
+          "score": 0,
+          "description": "The inspected analysis is incompatible with or contradicts the stated claims."
+        },
+        {
+          "score": 1,
+          "description": "Analysis is present but major assumptions, alternatives, or uncertainty are unaddressed."
+        },
+        {
+          "score": 2,
+          "description": "Analysis partly supports the claims, with material robustness or uncertainty limitations."
+        },
+        {
+          "score": 3,
+          "description": "Analysis substantially supports proportionate claims and reports important uncertainty and alternatives."
+        },
+        {
+          "score": 4,
+          "description": "Analysis, robustness checks, uncertainty, alternatives, and claim boundaries form a coherent and transparent evidentiary chain."
+        }
+      ],
+      "evidence_requirements": [
+        "A stable locator for analysis procedures and assumptions",
+        "A stable locator for uncertainty or qualitative confidence treatment",
+        "A stable locator for robustness checks and alternative explanations"
+      ],
+      "limitations": [
+        "Criterion-level uncertainty records rater judgment range and is not a statistical confidence interval."
+      ]
+    },
+    {
+      "criterion_id": "transparency_integrity",
+      "label": "Transparency, integrity, and reproducibility",
+      "construct_component": "Complete reporting, traceability, responsible practice, openness where appropriate, and recognition of limitations",
+      "weight": 0.2,
+      "required": true,
+      "anchors": [
+        {
+          "score": 0,
+          "description": "Inspected records demonstrate failed traceability or reporting safeguards for this work."
+        },
+        {
+          "score": 1,
+          "description": "Some transparency elements are present, but major omissions prevent checking or reuse."
+        },
+        {
+          "score": 2,
+          "description": "Reporting and provenance are partly traceable, with material gaps or unjustified restrictions."
+        },
+        {
+          "score": 3,
+          "description": "Reporting, provenance, limitations, and responsible-practice safeguards are substantially traceable and appropriate."
+        },
+        {
+          "score": 4,
+          "description": "The work provides strong, accessible traceability and justified openness or restrictions across methods, outputs, limitations, and contributions."
+        }
+      ],
+      "evidence_requirements": [
+        "Stable locators for methods, materials, data, code, or justified access restrictions",
+        "A stable locator for limitations, conflicts, and ethical safeguards",
+        "A stable locator for contribution and provenance records"
+      ],
+      "limitations": [
+        "Open practice must account for privacy, safety, sovereignty, consent, and disciplinary constraints."
+      ]
+    }
+  ],
+  "rater_protocol": {
+    "minimum_raters": 2,
+    "training_required": true,
+    "training_ref": "LOCAL-RATER-TRAINING-REQUIRED",
+    "calibration_required": true,
+    "calibration_ref": "LOCAL-RATER-CALIBRATION-REQUIRED",
+    "agreement_method": "exact_within_step_and_mean_absolute_difference",
+    "inter_rater_reliability_status": "not_established",
+    "inter_rater_reliability_ref": "",
+    "drift_monitoring_required": true,
+    "drift_review_ref": "LOCAL-RATER-DRIFT-REVIEW-REQUIRED"
+  },
+  "governance": {
+    "accountable_committee_required": true,
+    "committee_owner_role": "qualified accountable human committee chair",
+    "conflict_disclosure_required": true,
+    "recusal_required": true,
+    "appeal_process_required": true,
+    "appeal_process_ref": "LOCAL-APPEAL-PROCESS-REQUIRED",
+    "accessibility_accommodations_required": true,
+    "accessibility_process_ref": "LOCAL-ACCESSIBILITY-PROCESS-REQUIRED",
+    "data_protection_review_required": true,
+    "data_protection_process_ref": "LOCAL-DATA-PROTECTION-REVIEW-REQUIRED",
+    "subgroup_bias_review_required": true,
+    "subgroup_review_ref": "LOCAL-SUBGROUP-BIAS-REVIEW-REQUIRED",
+    "review_cycle_ref": "LOCAL-RUBRIC-REVIEW-CYCLE-REQUIRED"
+  }
+}

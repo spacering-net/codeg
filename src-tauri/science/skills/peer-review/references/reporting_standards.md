@@ -1,290 +1,253 @@
-# Scientific Reporting Standards and Guidelines
+# Reporting Guidelines and Domain Metadata Standards
 
-This document catalogs major reporting standards and guidelines across scientific disciplines. When reviewing manuscripts, verify that authors have followed the appropriate guidelines for their study type and discipline.
+Reviewed against primary or official sources on **2026-10-01**; source-specific access limitations are recorded in the ledger. The dated evidence record is `assets/source_ledger.csv`; the machine-readable selector catalog is `assets/reporting_guidelines.json`.
 
-## Clinical Trials and Medical Research
+## What reporting guidelines do—and do not do
 
-### CONSORT (Consolidated Standards of Reporting Trials)
-**Purpose:** Randomized controlled trials (RCTs)
-**Key Requirements:**
-- Trial design, participants, and interventions clearly described
-- Primary and secondary outcomes specified
-- Sample size calculation and statistical methods
-- Participant flow through trial (enrollment, allocation, follow-up, analysis)
-- Baseline characteristics of participants
-- Numbers analyzed in each group
-- Outcomes and estimation with confidence intervals
-- Adverse events
-- Trial registration number and protocol access
+A reporting guideline identifies information that should be reported so readers can understand and appraise a study. It is not, by itself:
 
-**Reference:** http://www.consort-statement.org/
+- A method for designing or conducting the study
+- A risk-of-bias tool
+- A statistical reanalysis
+- A measure of truth, importance, novelty, or manuscript merit
+- A publication recommendation
 
-### STROBE (Strengthening the Reporting of Observational Studies in Epidemiology)
-**Purpose:** Observational studies (cohort, case-control, cross-sectional)
-**Key Requirements:**
-- Study design clearly stated
-- Setting, eligibility criteria, and participant sources
-- Variables clearly defined
-- Data sources and measurement methods
-- Bias assessment
-- Sample size justification
-- Statistical methods including handling of missing data
-- Participant flow and characteristics
-- Main results with confidence intervals
-- Limitations discussed
+Checklist completion must never be converted automatically into a quality score. A fully reported study can have serious design problems; an incompletely reported study may be impossible to assess. Record missing information as a reporting gap, then separately assess any design, conduct, analysis, reproducibility, or ethics concern using appropriate evidence and expertise.
 
-**Reference:** https://www.strobe-statement.org/
+Use the guideline’s current statement together with its explanation and elaboration. Check applicable extensions and the target venue’s instructions. Do not copy checklist wording into a review when a specific, contextual comment is more useful.
 
-### PRISMA (Preferred Reporting Items for Systematic Reviews and Meta-Analyses)
-**Purpose:** Systematic reviews and meta-analyses
-**Key Requirements:**
-- Protocol registration
-- Systematic search strategy across multiple databases
-- Inclusion/exclusion criteria
-- Study selection process
-- Data extraction methods
-- Quality assessment of included studies
-- Statistical methods for meta-analysis
-- Assessment of publication bias
-- Heterogeneity assessment
-- PRISMA flow diagram showing study selection
-- Summary of findings tables
+## Selection workflow
 
-**Reference:** http://www.prisma-statement.org/
+1. Identify the **report kind**: results, protocol, abstract, or data release.
+2. Identify the **study design**, not merely the topic or journal section.
+3. Add cross-cutting features: AI intervention, diagnostic AI, routinely collected data, clustered design, qualitative interviews, and so on.
+4. Select the current base guideline and applicable extensions.
+5. Use the official checklist to record `reported`, `partly_reported`, `not_reported`, `not_applicable`, or `not_assessed`.
+6. Explain `not_applicable`; do not treat it as a defect.
+7. Keep reporting coverage separate from methodological appraisal.
 
-### SPIRIT (Standard Protocol Items: Recommendations for Interventional Trials)
-**Purpose:** Clinical trial protocols
-**Key Requirements:**
-- Administrative information (title, registration, funding)
-- Introduction (rationale, objectives)
-- Methods (design, participants, interventions, outcomes, sample size)
-- Ethics and dissemination
-- Trial schedule and assessments
+Run:
 
-**Reference:** https://www.spirit-statement.org/
+```bash
+python3 scripts/select_reporting_guidelines.py \
+  assets/study_profile_template.json \
+  --coverage assets/reporting_checklist_template.csv
+```
 
-### CARE (CAse REport guidelines)
-**Purpose:** Case reports
-**Key Requirements:**
-- Patient information and demographics
-- Clinical findings
-- Timeline of events
-- Diagnostic assessment
-- Therapeutic interventions
-- Follow-up and outcomes
-- Patient perspective
-- Informed consent
+The bundled catalog is a dated aid, not a live registry. Consult the [EQUATOR Network](https://www.equator-network.org/) and official guideline site when the study type is unclear or a newer extension may apply.
 
-**Reference:** https://www.care-statement.org/
+## Major current health-research guidelines
 
-## Animal Research
+### Randomized trial results — CONSORT 2025
 
-### ARRIVE (Animal Research: Reporting of In Vivo Experiments)
-**Purpose:** Studies involving animal research
-**Key Requirements:**
-- Title indicates study involves animals
-- Abstract provides accurate summary
-- Background and objectives clearly stated
-- Ethical statement and approval
-- Housing and husbandry details
-- Animal details (species, strain, sex, age, weight)
-- Experimental procedures in detail
-- Experimental animals (number, allocation, welfare assessment)
-- Statistical methods appropriate
-- Exclusion criteria stated
-- Sample size determination
-- Randomization and blinding described
-- Outcome measures defined
-- Adverse events reported
+- Current statement: **CONSORT 2025**, published 14 April 2025
+- Structure: 30 main checklist items and a participant flow diagram
+- Supersedes: CONSORT 2010
+- Use for: reports of randomized trials
+- Review with: explanation and elaboration plus design/intervention extensions
+- Important boundary: the statement explicitly says it is not a quality assessment instrument
 
-**Reference:** https://arriveguidelines.org/
+Check registration, protocol and statistical analysis plan consistency, allocation, participant flow, outcomes and harms, effect estimates and uncertainty, protocol changes, data sharing, conflicts, and patient/public involvement where applicable.
 
-## Genomics and Molecular Biology
+Official sources: [CONSORT–SPIRIT](https://www.consort-spirit.org/) and the [CONSORT 2025 statement](https://www.bmj.com/content/389/bmj-2024-081123).
 
-### MIAME (Minimum Information About a Microarray Experiment)
-**Purpose:** Microarray experiments
-**Key Requirements:**
-- Experimental design clearly described
-- Array design information
-- Samples (origin, preparation, labeling)
-- Hybridization procedures and parameters
-- Image acquisition and quantification
-- Normalization and data transformation
-- Raw and processed data availability
-- Database accession numbers
+### Randomized trial protocols — SPIRIT 2025
 
-**Reference:** http://fged.org/projects/miame/
+- Current statement: **SPIRIT 2025**, published 28 April 2025
+- Structure: 34 main checklist items and a participant timeline
+- Supersedes: SPIRIT 2013
+- Use for: randomized trial protocols
 
-### MINSEQE (Minimum Information about a high-throughput Nucleotide Sequencing Experiment)
-**Purpose:** High-throughput sequencing (RNA-seq, ChIP-seq, etc.)
-**Key Requirements:**
-- Experimental design and biological context
-- Sample information (source, preparation, QC)
-- Library preparation (protocol, adapters, size selection)
-- Sequencing platform and parameters
-- Data processing pipeline (alignment, quantification, normalization)
-- Quality control metrics
-- Raw data deposition (SRA, GEO, ENA)
-- Processed data and analysis code availability
+Compare the protocol with registration, statistical analysis plan, ethics records, amendments, and any completed-trial report. Explicitly stated non-applicability with rationale is not missing reporting.
 
-### MIGS/MIMS (Minimum Information about a Genome/Metagenome Sequence)
-**Purpose:** Genome and metagenome sequencing
-**Key Requirements:**
-- Sample origin and environmental context
-- Sequencing methods and coverage
-- Assembly methods and quality metrics
-- Annotation approach
-- Quality control and contamination screening
-- Data deposition in INSDC databases
+Official sources: [CONSORT–SPIRIT](https://www.consort-spirit.org/) and the [SPIRIT 2025 statement](https://www.bmj.com/content/389/bmj-2024-081477).
 
-**Reference:** https://gensc.org/
+### Systematic reviews — PRISMA 2020
 
-## Structural Biology
+- Current statement: **PRISMA 2020** (named 2020; published 2021)
+- Structure: 27 main items, expanded checklist, abstract checklist, and flow diagrams
+- Use for: completed systematic reviews, primarily reviews of intervention effects
+- Protocols: use PRISMA-P
+- Extensions: use the appropriate extension for scoping, diagnostic, individual-participant-data, network, equity, harms, or other specialized reviews
 
-### PDB (Protein Data Bank) Deposition Requirements
-**Purpose:** Macromolecular structure determination
-**Key Requirements:**
-- Atomic coordinates deposited
-- Structure factors for X-ray structures
-- Restraints and experimental data for NMR
-- EM maps and metadata for cryo-EM
-- Model quality validation metrics
-- Experimental conditions (crystallization, sample preparation)
-- Data collection parameters
-- Refinement statistics
+PRISMA explicitly does not assess review conduct or methodological quality. Use appropriate methods and risk-of-bias tools separately.
 
-**Reference:** https://www.wwpdb.org/
+Official sources: [PRISMA 2020 resources](https://www.prisma-statement.org/prisma-2020) and the [primary statement](https://www.bmj.com/content/372/bmj.n71).
 
-## Proteomics and Mass Spectrometry
+### Observational studies — STROBE
 
-### MIAPE (Minimum Information About a Proteomics Experiment)
-**Purpose:** Proteomics experiments
-**Key Requirements:**
-- Sample processing and fractionation
-- Separation methods (2D gel, LC)
-- Mass spectrometry parameters (instrument, acquisition)
-- Database search and validation parameters
-- Peptide and protein identification criteria
-- Quantification methods
-- Statistical analysis
-- Data deposition (PRIDE, PeptideAtlas)
+- Current base statement: **STROBE 2007**
+- Structure: 22 main items with cohort, case-control, cross-sectional, and combined checklists
+- Use for: reports of observational epidemiologic studies
+- Extensions: examples include RECORD for routinely collected health data, STREGA for genetic association studies, STROBE-MR, and domain-specific extensions
 
-**Reference:** http://www.psidev.info/
+STROBE helps identify whether selection, measurement, bias, confounding, missing data, sensitivity analyses, and generalizability are reported. It does not establish that those methods were adequate.
 
-## Neuroscience
+Official source: [STROBE](https://www.strobe-statement.org/).
 
-### COBIDAS (Committee on Best Practices in Data Analysis and Sharing)
-**Purpose:** MRI and fMRI studies
-**Key Requirements:**
-- Scanner and sequence parameters
-- Preprocessing pipeline details
-- Software versions and parameters
-- Statistical analysis approach
-- Multiple comparison correction
-- ROI definitions
-- Data sharing (raw data, analysis scripts)
+### Diagnostic accuracy — STARD 2015
 
-**Reference:** https://www.humanbrainmapping.org/cobidas
+- Current base statement: **STARD 2015**
+- Structure: 30 main items and a flow diagram
+- Use for: studies estimating diagnostic accuracy against a reference standard
 
-## Flow Cytometry
+Separately assess risk of bias and applicability with a suitable tool such as the current QUADAS family when relevant. STARD’s official implementation guidance explicitly says not to use the reporting checklist as a design-quality tool.
 
-### MIFlowCyt (Minimum Information about a Flow Cytometry Experiment)
-**Purpose:** Flow cytometry experiments
-**Key Requirements:**
-- Experimental overview and purpose
-- Sample characteristics and preparation
-- Instrument information and settings
-- Reagents (antibodies, fluorophores, concentrations)
-- Compensation and controls
-- Gating strategy
-- Data analysis approach
-- Data availability
+Official source: [STARD 2015](https://www.equator-network.org/reporting-guidelines/stard/).
 
-**Reference:** http://flowcyt.org/
+### AI-centered diagnostic accuracy — STARD-AI
 
-## Ecology and Environmental Science
+- Current statement: **STARD-AI 2025**
+- Published: 15 September 2025; an author correction was published 13 July 2026
+- Structure: 40 items, including 18 new or modified items relative to STARD 2015
+- Use for: AI-centered diagnostic accuracy studies, including suitable diagnostic classification tasks
 
-### MIAPPE (Minimum Information About a Plant Phenotyping Experiment)
-**Purpose:** Plant phenotyping studies
-**Key Requirements:**
-- Investigation and study metadata
-- Biological material information
-- Environmental parameters
-- Experimental design and factors
-- Phenotypic measurements and methods
-- Data file descriptions
+Check dataset practices, index-test specification, evaluation, algorithmic bias and fairness, applicability, and generalizability. If the primary aim is development or evaluation of a multivariable prediction model, use TRIPOD+AI instead.
 
-**Reference:** https://www.miappe.org/
+Official source: [STARD-AI](https://www.nature.com/articles/s41591-025-03953-8).
 
-## Chemistry and Chemical Biology
+### Clinical prediction models — TRIPOD+AI
 
-### MIRIBEL (Minimum Information Reporting in Bio-Nano Experimental Literature)
-**Purpose:** Nanomaterial characterization
-**Key Requirements:**
-- Nanomaterial composition and structure
-- Size, shape, and morphology characterization
-- Surface chemistry and functionalization
-- Purity and stability
-- Experimental conditions
-- Characterization methods
+- Current statement: **TRIPOD+AI 2024**
+- Structure: 27 main items plus a 13-item abstract checklist
+- Replaces: TRIPOD 2015
+- Use for: development, evaluation, or updating of diagnostic or prognostic prediction models using regression or machine-learning methods
 
-## Quality Assessment and Bias
+Do not select it solely because software called “AI” appears in a paper. Select it when the study’s primary object is a prediction model. Relevant extensions include TRIPOD-Cluster, TRIPOD-SRMA, and TRIPOD-LLM.
 
-### CAMARADES (Collaborative Approach to Meta-Analysis and Review of Animal Data from Experimental Studies)
-**Purpose:** Quality assessment for animal studies in systematic reviews
-**Key Items:**
-- Publication in peer-reviewed journal
-- Statement of temperature control
-- Randomization to treatment
-- Blinded assessment of outcome
-- Avoidance of anesthetic with marked intrinsic properties
-- Use of appropriate animal model
-- Sample size calculation
-- Compliance with regulatory requirements
-- Statement of conflict of interest
-- Study pre-registration
+Official sources: [TRIPOD](https://www.tripod-statement.org/) and the [TRIPOD+AI statement](https://www.bmj.com/content/385/bmj-2023-078378).
 
-### SYRCLE's Risk of Bias Tool
-**Purpose:** Assessing risk of bias in animal intervention studies
-**Domains:**
-- Selection bias (sequence generation, baseline characteristics, allocation concealment)
-- Performance bias (random housing, blinding of personnel)
-- Detection bias (random outcome assessment, blinding of assessors)
-- Attrition bias (incomplete outcome data)
-- Reporting bias (selective outcome reporting)
-- Other sources of bias
+### Case reports — CARE
 
-## General Principles Across Guidelines
+- Current base checklist: **CARE 2013**
+- Explanation and elaboration/manual: 2017
+- Structure: 13 main items
+- Use for: clinical case reports
 
-### Common Requirements
-1. **Transparency:** All methods, materials, and analyses fully described
-2. **Reproducibility:** Sufficient detail for independent replication
-3. **Data Availability:** Raw data and analysis code shared or deposited
-4. **Registration:** Studies pre-registered where applicable
-5. **Ethics:** Appropriate approvals and consent documented
-6. **Conflicts of Interest:** Disclosed for all authors
-7. **Statistical Rigor:** Methods appropriate and fully described
-8. **Completeness:** All outcomes reported, including negative results
+Check timeline, diagnostic reasoning, interventions, outcomes, adverse events, patient perspective where available, informed consent, privacy, and venue requirements.
 
-### Red Flags for Non-Compliance
-- Methods section lacks critical details
-- No mention of following reporting guidelines
-- Data availability statement missing or vague
-- No database accession numbers for omics data
-- No trial registration for clinical studies
-- Sample size not justified
-- Statistical methods inadequately described
-- Missing flow diagrams (CONSORT, PRISMA)
-- Selective reporting of outcomes
+Official source: [CARE checklist](https://www.care-statement.org/checklist).
 
-## How to Use This Reference
+### In vivo animal research — ARRIVE 2.0
 
-When reviewing a manuscript:
-1. Identify the study type and discipline
-2. Find the relevant reporting guideline(s)
-3. Check if authors mention following the guideline
-4. Verify that key requirements are addressed
-5. Note any missing elements in your review
-6. Suggest the appropriate guideline if not mentioned
+- Current statement: **ARRIVE 2.0**, published July 2020
+- Structure: Essential 10 plus 11 Recommended Set items
+- Use for: research involving live animals across bioscience disciplines
 
-Many journals require authors to complete reporting checklists at submission. Reviewers should verify compliance even if a checklist was submitted.
+The Essential 10 are a minimum reporting set, not a ranking. Review study design, sample size, inclusion/exclusion, randomization, blinding, outcome measures, statistics, animal details, procedures, and results; also assess ethics, welfare, humane endpoints, adverse events, protocol registration, data access, and interests.
+
+Official source: [ARRIVE 2.0](https://arriveguidelines.org/arrive-guidelines).
+
+### Quality improvement — SQUIRE 2.0
+
+- Current statement: **SQUIRE 2.0**, published 2015
+- Structure: 18 main items
+- Use for: system-level work intended to improve healthcare quality, safety, value, or equity where methods seek to relate outcomes to the intervention
+
+SQUIRE states that every item should be considered, but not every element belongs in every manuscript. Attend to local context, rationale, intervention evolution, measures, analysis, ethics, unintended consequences, and sustainability.
+
+Official source: [SQUIRE 2.0](https://www.squire-statement.org/index.cfm?fuseaction=page.viewPage&pageID=471&nodeID=1).
+
+### Health economic evaluations — CHEERS 2022
+
+- Current statement: **CHEERS 2022**
+- Structure: 28 main items
+- Replaces: CHEERS 2013
+- Use for: economic evaluations of health interventions
+
+Assess perspective, comparators, time horizon, discounting, outcome and cost measurement, model assumptions, heterogeneity, distributional effects where applicable, uncertainty, engagement, funding, and conflicts. Use a separate critical-appraisal framework for methodological quality.
+
+Official source: [ISPOR CHEERS](https://www.ispor.org/heor-resources/good-practices/cheers).
+
+### Qualitative research — SRQR and COREQ
+
+- **SRQR**: broad qualitative research reporting standard
+- **COREQ**: 32-item checklist specifically for interviews and focus groups
+
+Select by methods, not by the presence of quotations. Review researcher reflexivity, sampling, context, data collection, analytic process, credibility, participant voice, ethics, and limitations without imposing one epistemology on all qualitative traditions.
+
+Official registry records: [SRQR](https://www.equator-network.org/reporting-guidelines/srqr) and [COREQ](https://www.equator-network.org/reporting-guidelines/coreq/).
+
+## AI extensions and overlap
+
+Use the guideline that matches the study’s primary design and claim:
+
+- Randomized trial of an AI intervention: CONSORT 2025 plus CONSORT-AI 2020
+- Protocol for such a trial: SPIRIT 2025 plus SPIRIT-AI 2020
+- AI diagnostic accuracy: STARD-AI
+- Prediction model development or performance evaluation: TRIPOD+AI
+- Biomedical LLM development, tuning, prompt engineering, or evaluation, including non-prediction tasks: TRIPOD-LLM 2025; add TRIPOD+AI when prediction-model reporting also applies
+- Medical imaging AI: consider current modality guidance in addition to the design-specific base
+
+The 2020 AI extensions were written against CONSORT 2010 and SPIRIT 2013. Use their substantive requirements with the current base guidelines, mapping by meaning rather than reusing old item numbers. The [official extension index](https://www.consort-spirit.org/extensions) distinguishes extensions built on the 2025 checklists from those built on the previous versions. [CONSORT-AI](https://www.equator-network.org/reporting-guidelines/consort-artificial-intelligence/) and [SPIRIT-AI](https://www.equator-network.org/reporting-guidelines/spirit-artificial-intelligence/) remain listed in EQUATOR.
+
+TRIPOD-LLM has 19 main items and a separate abstract checklist. In the local selector, `llm_study` with feature `large_language_model` selects it without incorrectly classifying a summarization or question-answering evaluation as a prediction model. See the [TRIPOD-LLM record](https://www.equator-network.org/reporting-guidelines/the-tripod-llm-reporting-guideline-for-studies-using-large-language-models/).
+
+Multiple guidelines can apply, but do not create redundant demands. State which base and extension address each concern. The catalog is intentionally selective: abstract-specific checklists and many extensions require manual selection from the official source.
+
+## Domain metadata standards: verified legacy status
+
+These standards describe minimum experiment or repository metadata. They complement, rather than replace, study-design reporting and methodological appraisal.
+
+### MIAME and MINSEQE
+
+**Retain with qualification.** NCBI GEO’s official guidance states that its submission procedures support:
+
+- MIAME for microarray experiments
+- MINSEQE for high-throughput functional genomics sequencing experiments
+
+The October 2026 live fetch returned a browser challenge; official search-indexed GEO guidance still describes both standards. Verify the current repository’s fields, file formats, raw/processed data expectations, and accession requirements; do not treat this as an executed repository submission check.
+
+Official implementation source: [GEO and MIAME/MINSEQE](https://www.ncbi.nlm.nih.gov/geo/info/MIAME.html).
+
+### MIAPE
+
+**Retain as a modular current-qualified standard.** The HUPO Proteomics Standards Initiative lists released components with separate versions, including mass spectrometry, mass-spectrometry informatics, quantification, gel electrophoresis, gel informatics, chromatography, and capillary electrophoresis.
+
+Select only components relevant to the actual workflow and verify current repository expectations. Do not present “MIAPE” as one unversioned universal checklist.
+
+Official source: [HUPO-PSI MIAPE](https://www.psidev.info/miape).
+
+### MIFlowCyt
+
+**Retain with qualification.** ISAC continues to identify MIFlowCyt 1.0 as an ISAC recommendation for experiment overview, samples, instrumentation, and data analysis. Also check current FCS, gating, panel, controls, and FlowRepository requirements.
+
+Official source: [ISAC MIFlowCyt](https://isac-net.org/miflowcyt-2/).
+
+### MIAPPE
+
+**Use MIAPPE 1.2**, released October 2024, for plant phenotyping metadata. It remains compatible with 1.1; version 2.0 was still in early development on the verification date.
+
+Official source: [MIAPPE releases](https://www.miappe.org/releases).
+
+### MIGS and MIMS
+
+**Do not present standalone MIGS/MIMS as the current umbrella.** The Genomic Standards Consortium now organizes these legacy checklists within **MIxS** (Minimum Information about any Sequence), alongside newer checklists and environmental packages. Select the current MIxS release and applicable checklist plus environmental extension; GSC now calls their pairing a combination (older documents use package).
+
+Official source: [GSC standards](https://www.gensc.org/pages/standards-intro.html).
+
+## Other study types
+
+The EQUATOR database contains hundreds of guidelines. Common additional choices include:
+
+- Protocols: design-specific protocol guidance
+- Routinely collected health data: RECORD
+- Clinical practice guidelines: RIGHT and AGREE reporting guidance
+- Surveys: design-appropriate survey reporting guidance
+- Implementation studies: current implementation-reporting guidance
+- Mixed methods: current mixed-methods guidance
+- Laboratory and omics studies: study-design reporting plus current repository metadata standards
+
+If no suitable guideline exists, say so. Do not force the nearest checklist or invent one.
+
+## Coverage language for reviews
+
+Use:
+
+> “Item 12 is not reported clearly enough to determine the analysis population. Please identify the included participants and reconcile this denominator with Figure 1.”
+
+Avoid:
+
+> “The manuscript scores 18/30 on CONSORT and is therefore low quality.”
+
+Report counts or item identifiers only as navigation aids. The local selector deliberately emits no percentage or merit score.

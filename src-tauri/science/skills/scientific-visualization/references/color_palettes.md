@@ -1,348 +1,227 @@
-# Scientific Color Palettes and Guidelines
+# Color, Contrast, and Palette Selection
 
-## Overview
+Reviewed 2026-10-01. Source IDs resolve in `sources.md`. A named “colorblind-safe” palette is not a guarantee that a rendered figure is accessible: background, line thickness, adjacency, text, category count, display/print conversion, and redundant encoding all matter.
 
-Color choice in scientific visualization is critical for accessibility, clarity, and accurate data representation. This reference provides colorblind-friendly palettes and best practices for color usage.
+## Start with data semantics
 
-## Colorblind-Friendly Palettes
+- **Qualitative:** unordered categories. Hue can separate groups; lightness should not imply an unintended ranking.
+- **Sequential:** ordered low-to-high values. Use monotonic perceived lightness.
+- **Diverging:** departure around a meaningful center. Use a neutral midpoint and document the normalization.
+- **Cyclic:** periodic values where endpoints meet.
 
-### Okabe-Ito Palette (Recommended for Categories)
+Do not use a diverging map merely because values contain positive and negative numbers; the center must have scientific meaning. Do not use a rainbow map as a generic ordered scale. Paul Tol documents false visual transitions, lack of inherent magnitude ordering, and color-vision problems in ordinary rainbow schemes [TOL].
 
-The Okabe-Ito palette is specifically designed to be distinguishable by people with all forms of color blindness.
-
-```python
-# Okabe-Ito colors (RGB values)
-okabe_ito = {
-    'orange': '#E69F00',      # RGB: (230, 159, 0)
-    'sky_blue': '#56B4E9',    # RGB: (86, 180, 233)
-    'bluish_green': '#009E73', # RGB: (0, 158, 115)
-    'yellow': '#F0E442',      # RGB: (240, 228, 66)
-    'blue': '#0072B2',        # RGB: (0, 114, 178)
-    'vermillion': '#D55E00',  # RGB: (213, 94, 0)
-    'reddish_purple': '#CC79A7', # RGB: (204, 121, 167)
-    'black': '#000000'        # RGB: (0, 0, 0)
-}
-```
-
-**Usage in Matplotlib:**
-```python
-import matplotlib.pyplot as plt
-
-colors = ['#E69F00', '#56B4E9', '#009E73', '#F0E442',
-          '#0072B2', '#D55E00', '#CC79A7', '#000000']
-plt.rcParams['axes.prop_cycle'] = plt.cycler(color=colors)
-```
-
-**Usage in Seaborn:**
-```python
-import seaborn as sns
-
-okabe_ito_palette = ['#E69F00', '#56B4E9', '#009E73', '#F0E442',
-                      '#0072B2', '#D55E00', '#CC79A7']
-sns.set_palette(okabe_ito_palette)
-```
-
-**Usage in Plotly:**
-```python
-import plotly.graph_objects as go
-
-okabe_ito_plotly = ['#E69F00', '#56B4E9', '#009E73', '#F0E442',
-                     '#0072B2', '#D55E00', '#CC79A7']
-fig = go.Figure()
-# Apply to discrete color scale
-```
-
-### Wong Palette (Alternative for Categories)
-
-Another excellent colorblind-friendly palette by Bang Wong (Nature Methods).
+With Matplotlib, colormap and normalization are separate:
 
 ```python
-wong_palette = {
-    'black': '#000000',
-    'orange': '#E69F00',
-    'sky_blue': '#56B4E9',
-    'green': '#009E73',
-    'yellow': '#F0E442',
-    'blue': '#0072B2',
-    'vermillion': '#D55E00',
-    'purple': '#CC79A7'
-}
-```
-
-### Paul Tol Palettes
-
-Paul Tol has designed multiple scientifically-optimized palettes for different use cases.
-
-**Bright Palette (up to 7 categories):**
-```python
-tol_bright = ['#4477AA', '#EE6677', '#228833', '#CCBB44',
-              '#66CCEE', '#AA3377', '#BBBBBB']
-```
-
-**Muted Palette (up to 9 categories):**
-```python
-tol_muted = ['#332288', '#88CCEE', '#44AA99', '#117733',
-             '#999933', '#DDCC77', '#CC6677', '#882255', '#AA4499']
-```
-
-**High Contrast (3 categories only):**
-```python
-tol_high_contrast = ['#004488', '#DDAA33', '#BB5566']
-```
-
-## Sequential Colormaps (Continuous Data)
-
-Sequential colormaps represent data from low to high values with a single hue.
-
-### Perceptually Uniform Colormaps
-
-These colormaps have uniform perceptual change across the color scale.
-
-**Viridis (default in Matplotlib):**
-- Colorblind-friendly
-- Prints well in grayscale
-- Perceptually uniform
-```python
-plt.imshow(data, cmap='viridis')
-```
-
-**Cividis:**
-- Optimized for colorblind viewers
-- Designed specifically for deuteranopia/protanopia
-```python
-plt.imshow(data, cmap='cividis')
-```
-
-**Plasma, Inferno, Magma:**
-- Perceptually uniform alternatives to viridis
-- Good for different aesthetic preferences
-```python
-plt.imshow(data, cmap='plasma')
-```
-
-### When to Use Sequential Maps
-- Heatmaps showing intensity
-- Geographic elevation data
-- Probability distributions
-- Any single-variable continuous data (low → high)
-
-## Diverging Colormaps (Negative to Positive)
-
-Diverging colormaps have a neutral middle color with two contrasting colors at extremes.
-
-### Colorblind-Safe Diverging Maps
-
-**RdYlBu (Red-Yellow-Blue):**
-```python
-plt.imshow(data, cmap='RdYlBu_r')  # _r reverses: blue (low) to red (high)
-```
-
-**PuOr (Purple-Orange):**
-- Excellent for colorblind viewers
-```python
-plt.imshow(data, cmap='PuOr')
-```
-
-**BrBG (Brown-Blue-Green):**
-- Good colorblind accessibility
-```python
-plt.imshow(data, cmap='BrBG')
-```
-
-### Avoid These Diverging Maps
-- **RdGn (Red-Green)**: Problematic for red-green colorblindness
-- **RdYlGn (Red-Yellow-Green)**: Same issue
-
-### When to Use Diverging Maps
-- Correlation matrices
-- Change/difference data (positive vs. negative)
-- Deviation from a central value
-- Temperature anomalies
-
-## Special Purpose Palettes
-
-### For Genomics/Bioinformatics
-
-**Sequence type identification:**
-```python
-# DNA/RNA bases
-nucleotide_colors = {
-    'A': '#00CC00',  # Green
-    'C': '#0000CC',  # Blue
-    'G': '#FFB300',  # Orange
-    'T': '#CC0000',  # Red
-    'U': '#CC0000'   # Red (RNA)
-}
-```
-
-**Gene expression:**
-- Use sequential colormaps (viridis, YlOrRd) for expression levels
-- Use diverging colormaps (RdBu) for log2 fold change
-
-### For Microscopy
-
-**Fluorescence channels:**
-```python
-# Traditional fluorophore colors (use with caution)
-fluorophore_colors = {
-    'DAPI': '#0000FF',      # Blue - DNA
-    'GFP': '#00FF00',       # Green (problematic for colorblind)
-    'RFP': '#FF0000',       # Red
-    'Cy5': '#FF00FF'        # Magenta
-}
-
-# Colorblind-friendly alternatives
-fluorophore_alt = {
-    'Channel1': '#0072B2',  # Blue
-    'Channel2': '#E69F00',  # Orange (instead of green)
-    'Channel3': '#D55E00',  # Vermillion
-    'Channel4': '#CC79A7'   # Magenta
-}
-```
-
-## Color Usage Best Practices
-
-### Categorical Data (Qualitative Color Schemes)
-
-**Do:**
-- Use distinct, saturated colors from Okabe-Ito or Wong palette
-- Limit to 7-8 categories max in one plot
-- Use consistent colors for same categories across figures
-- Add patterns/markers when colors alone might be insufficient
-
-**Don't:**
-- Use red/green combinations
-- Use rainbow (jet) colormap for categories
-- Use similar hues that are hard to distinguish
-
-### Continuous Data (Sequential/Diverging Schemes)
-
-**Do:**
-- Use perceptually uniform colormaps (viridis, plasma, cividis)
-- Choose diverging maps when data has meaningful center point
-- Include colorbar with labeled ticks
-- Test appearance in grayscale
-
-**Don't:**
-- Use rainbow (jet) colormap - not perceptually uniform
-- Use red-green diverging maps
-- Omit colorbar on heatmaps
-
-## Testing for Colorblind Accessibility
-
-### Online Simulators
-- **Coblis**: https://www.color-blindness.com/coblis-color-blindness-simulator/
-- **Color Oracle**: Free downloadable tool for Windows/Mac/Linux
-- **Sim Daltonism**: Mac application
-
-### Types of Color Vision Deficiency
-- **Deuteranopia** (~5% of males): Cannot distinguish green
-- **Protanopia** (~2% of males): Cannot distinguish red
-- **Tritanopia** (<1%): Cannot distinguish blue (rare)
-
-### Python Tools
-```python
-# Using colorspacious to simulate colorblind vision
-from colorspacious import cspace_convert
-
-def simulate_deuteranopia(image_rgb):
-    from colorspacious import cspace_convert
-    # Convert to colorblind simulation
-    # (Implementation would require colorspacious library)
-    pass
-```
-
-## Implementation Examples
-
-### Setting Global Matplotlib Style
-```python
-import matplotlib.pyplot as plt
 import matplotlib as mpl
 
-# Set Okabe-Ito as default color cycle
-okabe_ito_colors = ['#E69F00', '#56B4E9', '#009E73', '#F0E442',
-                     '#0072B2', '#D55E00', '#CC79A7']
-mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=okabe_ito_colors)
-
-# Set default colormap to viridis
-mpl.rcParams['image.cmap'] = 'viridis'
+norm = mpl.colors.TwoSlopeNorm(vmin=-2, vcenter=0, vmax=5)
+image = ax.imshow(values, cmap="RdBu_r", norm=norm)
+fig.colorbar(image, ax=ax, label="Change (unit)")
 ```
 
-### Seaborn with Custom Palette
+Use `LogNorm` for strictly positive orders of magnitude, `SymLogNorm` for signed data with a disclosed linear zone, `BoundaryNorm` for meaningful classes, and `TwoSlopeNorm` for unequal ranges around a center [MPL-NORM].
+
+## Okabe-Ito / Wong colors
+
+The eight colors commonly reproduced from Wong’s Nature Methods article are [WONG]:
+
+```python
+OKABE_ITO = [
+    "#E69F00",  # orange
+    "#56B4E9",  # sky blue
+    "#009E73",  # bluish green
+    "#F0E442",  # yellow
+    "#0072B2",  # blue
+    "#D55E00",  # vermillion
+    "#CC79A7",  # reddish purple
+    "#000000",  # black
+]
+```
+
+Several light colors do not reach 3:1 against white. For thin lines or required graphical objects on white, start with the bundled five-color subset:
+
+```python
+OKABE_ITO_ON_WHITE = [
+    "#0072B2",
+    "#D55E00",
+    "#009E73",
+    "#CC79A7",
+    "#000000",
+]
+```
+
+This subset is derived by WCAG sRGB contrast calculation; it is not a published palette or a compliance certification. Use marker/line-style redundancy and audit the actual rendering.
+
+## Paul Tol qualitative schemes
+
+Paul Tol’s canonical site moved to `sronpersonalpages.nl` in July 2026. The current technical note remains SRON/EPS/TN/09-002, issue 3.2, dated 2021-08-18 [TOL] [TOL-HOME].
+
+The note states that the bright, high-contrast, vibrant, muted, and medium-contrast qualitative schemes are color-blind safe under its design/testing assumptions. It also states:
+
+- high-contrast is the strongest choice for grayscale/monochrome separation;
+- medium-contrast provides three pairs but weaker grayscale separation;
+- light is reasonably distinct and intended mainly for labeled cell fills;
+- pale/dark are not sufficiently distinct for multi-series lines or maps and are meant for text backgrounds/foregrounds;
+- most multi-color qualitative schemes do not remain fully separable in grayscale.
+
+Bundled fixed-order values:
+
+```python
+TOL_BRIGHT = [
+    "#4477AA", "#EE6677", "#228833", "#CCBB44",
+    "#66CCEE", "#AA3377", "#BBBBBB",
+]
+
+TOL_HIGH_CONTRAST = ["#004488", "#DDAA33", "#BB5566"]
+
+TOL_VIBRANT = [
+    "#EE7733", "#0077BB", "#33BBEE", "#EE3377",
+    "#CC3311", "#009988", "#BBBBBB",
+]
+
+TOL_MUTED = [
+    "#CC6677", "#332288", "#DDCC77", "#117733", "#88CCEE",
+    "#882255", "#44AA99", "#999933", "#AA4499",
+]
+
+TOL_MEDIUM_CONTRAST = [
+    "#6699CC", "#004488", "#EECC66",
+    "#994455", "#997700", "#EE99AA",
+]
+```
+
+The maximum intended series counts are 7, 3, 7, 9, and 6 respectively. Do not interpolate qualitative palettes.
+
+## ColorBrewer
+
+ColorBrewer 2.0 is an authoritative interactive resource for sequential, diverging, and qualitative cartographic schemes. It allows filtering by “colorblind safe,” “print friendly,” and “photocopy safe,” and exposes the supported number of data classes [COLORBREWER].
+
+Use the exact class count shown by ColorBrewer. A scheme marked safe at one class count may not be marked safe at another. ColorBrewer’s flags are design guidance for its intended mapping context, not a WCAG conformance result for arbitrary line widths, backgrounds, or text.
+
+Matplotlib exposes many ColorBrewer-derived maps. Verify the exact map direction and class count rather than relying on its name.
+
+## Perceptually uniform continuous maps
+
+Matplotlib recommends selecting maps based on data semantics and discusses lightness behavior in its colormap guide [MPL-CMAP]. Common continuous candidates:
+
+- `viridis`, `plasma`, `inferno`, `magma`: perceptually uniform sequential families;
+- `cividis`: designed with color-vision deficiencies in mind;
+- `RdBu_r`, `PuOr`, `BrBG`: possible diverging candidates after checking the center, direction, contrast, and grayscale behavior.
+
+No list is universally safe. A map can be perceptually uniform yet still fail to distinguish a narrow feature at the chosen size, or lose detail during RGB-to-CMYK conversion.
+
+## WCAG contrast: what to test
+
+WCAG 2.2 is normative for web content [WCAG22]:
+
+- normal text: 4.5:1 against its background (SC 1.4.3 AA);
+- large text: 3:1 (SC 1.4.3 AA);
+- graphical objects required to understand content: 3:1 against adjacent colors (SC 1.4.11 AA);
+- color must not be the only visual means of conveying information (SC 1.4.1 A).
+
+W3C’s understanding document uses line and pie charts as examples and explains that required graphical objects are tested against adjacent colors; all data-series colors do not automatically need 3:1 against each other when they do not overlap [WCAG-NONTEXT].
+
+Run:
+
+```bash
+uv run --isolated --no-project --python 3.13 \
+  python scripts/palette_audit.py \
+  --palette okabe_ito_on_white \
+  --background FFFFFF \
+  --role graphical
+```
+
+The CLI reports:
+
+- exact WCAG sRGB contrast against the chosen background;
+- pairwise contrast;
+- pairwise CIE L* separation after removing hue.
+
+Its default grayscale threshold (ΔL* 10) is a heuristic. It is not a WCAG threshold and does not simulate every color-vision deficiency, printer, profile, or viewing condition.
+
+## Redundant encoding
+
+Use at least one non-color cue:
+
+```python
+colors = ["#0072B2", "#D55E00", "#009E73"]
+linestyles = ["-", "--", "-."]
+markers = ["o", "s", "^"]
+
+for index, series in enumerate(series_list):
+    ax.plot(
+        x,
+        series,
+        color=colors[index],
+        linestyle=linestyles[index],
+        marker=markers[index],
+        markevery=5,
+        label=labels[index],
+    )
+```
+
+For bars, use edge contrast, labels, and restrained hatching. For images, consider accessible channel combinations plus separate grayscale panels. Direct labels often outperform distant legends.
+
+## Missing and out-of-range colors
+
+Assign explicit colors to missing and out-of-range values:
+
+```python
+import matplotlib as mpl
+
+cmap = mpl.colormaps["viridis"].with_extremes(
+    bad="#777777",
+    under="#222222",
+    over="#FDE725",
+)
+```
+
+Label these states in the colorbar/legend. Never let missing values default to the low end of a quantitative scale.
+
+## Seaborn and Plotly
+
+Seaborn 0.13.2 accepts palette names, lists, and dictionaries through `palette=`/`set_palette()`. Apply a Matplotlib style before Seaborn only if the subsequent `sns.set_theme()` call will not overwrite the intended rc settings; pass `rc=` explicitly when needed [SEABORN-PALETTE] [SEABORN-THEME].
+
 ```python
 import seaborn as sns
 
-# Set Paul Tol muted palette
-tol_muted = ['#332288', '#88CCEE', '#44AA99', '#117733',
-             '#999933', '#DDCC77', '#CC6677', '#882255', '#AA4499']
-sns.set_palette(tol_muted)
-
-# For heatmaps
-sns.heatmap(data, cmap='viridis', annot=True)
+sns.set_theme(style="ticks", context="paper")
+sns.set_palette(OKABE_ITO_ON_WHITE)
 ```
 
-### Plotly with Discrete Colors
-```python
-import plotly.express as px
-
-# Use Okabe-Ito for categorical data
-okabe_ito_plotly = ['#E69F00', '#56B4E9', '#009E73', '#F0E442',
-                     '#0072B2', '#D55E00', '#CC79A7']
-
-fig = px.scatter(df, x='x', y='y', color='category',
-                 color_discrete_sequence=okabe_ito_plotly)
-```
-
-## Grayscale Compatibility
-
-All figures should remain interpretable in grayscale. Test by converting to grayscale:
+For Plotly, set categorical colors explicitly and add symbols/dashes:
 
 ```python
-# Convert figure to grayscale for testing
-fig.savefig('figure_gray.png', dpi=300, colormap='gray')
+fig = px.scatter(
+    frame,
+    x="x",
+    y="y",
+    color="group",
+    symbol="group",
+    color_discrete_sequence=OKABE_ITO_ON_WHITE,
+)
 ```
 
-**Strategies for grayscale compatibility:**
-1. Use different line styles (solid, dashed, dotted)
-2. Use different marker shapes (circles, squares, triangles)
-3. Add hatching patterns to bars
-4. Ensure sufficient luminance contrast between colors
+Check the static export too. Interactive hover does not replace contrast, labels, keyboard operation, alt text, or a static fallback.
 
-## Color Spaces
+## Color management
 
-### RGB vs CMYK
-- **RGB** (Red, Green, Blue): For digital/screen display
-- **CMYK** (Cyan, Magenta, Yellow, Black): For print
+- Work in sRGB unless the publisher or calibrated workflow requires another space.
+- Preserve ICC profiles in scientific raster images when relevant.
+- Preview print conversion when the publisher converts RGB to CMYK.
+- Do not alter raw intensity data merely to obtain attractive colors.
+- Record channel mappings, color limits, normalization, and any color-space conversion.
+- Avoid transparency when blending with an unknown background can change contrast.
 
-**Important:** Colors appear different in print vs. screen. When preparing for print:
-1. Convert to CMYK color space
-2. Check color appearance in CMYK preview
-3. Ensure sufficient contrast remains
+## Review checklist
 
-### Matplotlib Color Spaces
-```python
-# Save for print (CMYK)
-# Note: Direct CMYK support limited; use PDF and let publisher convert
-fig.savefig('figure.pdf', dpi=300)
-
-# For RGB (digital)
-fig.savefig('figure.png', dpi=300)
-```
-
-## Common Mistakes
-
-1. **Using jet/rainbow colormap**: Not perceptually uniform; avoid
-2. **Red-green combinations**: ~8% of males cannot distinguish
-3. **Too many colors**: More than 7-8 becomes difficult to distinguish
-4. **Inconsistent color meaning**: Same color should mean same thing across figures
-5. **Missing colorbar**: Always include for continuous data
-6. **Low contrast**: Ensure colors differ sufficiently
-7. **Relying solely on color**: Add texture, patterns, or markers
-
-## Resources
-
-- **ColorBrewer**: http://colorbrewer2.org/ - Choose palettes by colorblind-safe option
-- **Paul Tol's palettes**: https://personal.sron.nl/~pault/
-- **Okabe-Ito palette origin**: "Color Universal Design" (Okabe & Ito, 2008)
-- **Matplotlib colormaps**: https://matplotlib.org/stable/tutorials/colors/colormaps.html
-- **Seaborn palettes**: https://seaborn.pydata.org/tutorial/color_palettes.html
+- [ ] Palette type matches data semantics.
+- [ ] Center, limits, normalization, and missing-value color are explicit.
+- [ ] Foreground/background contrast was audited at final size.
+- [ ] Color is redundant with shape, line style, hatching, labels, or layout.
+- [ ] Grayscale was inspected without treating it as a complete accessibility test.
+- [ ] Print/profile conversion was reviewed when relevant.
+- [ ] Palette and category mapping are consistent across figures.
+- [ ] Underlying values and an accessible text/table alternative are available.

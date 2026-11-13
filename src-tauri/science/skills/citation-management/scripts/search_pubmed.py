@@ -6,6 +6,7 @@ Search PubMed using E-utilities API and export results.
 
 import sys
 import os
+import re
 import requests
 import argparse
 import json
@@ -13,6 +14,15 @@ import time
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Optional
 from datetime import datetime
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+
+from _common import (  # noqa: E402
+    citation_key,
+    format_pages,
+    protect_title,
+    render_entry,
+)
 
 class PubMedSearcher:
     """Search PubMed using NCBI E-utilities API."""
@@ -50,12 +60,14 @@ class PubMedSearcher:
             List of PMIDs
         """
         # Build query with filters
-        full_query = query
+        if max_results < 1:
+            raise ValueError('max_results must be positive')
+        full_query = f'({query})'
         
         # Add date range
         if date_start or date_end:
-            start = date_start or '1900'
-            end = date_end or datetime.now().strftime('%Y')
+            start = (date_start or '1900').replace('-', '/')
+            end = (date_end or datetime.now().strftime('%Y')).replace('-', '/')
             full_query += f' AND {start}:{end}[Publication Date]'
         
         # Add publication types
@@ -64,14 +76,26 @@ class PubMedSearcher:
             full_query += f' AND ({pub_type_query})'
         
         print(f'Searching PubMed: {full_query}', file=sys.stderr)
-        
+
+        # PubMed ESearch exposes only the first 10000 matches in total,
+        # so say so rather than letting the caller believe they got everything.
+        if max_results > 10000:
+            print(
+                f'Note: PubMed ESearch exposes only the first 10000 matches; '
+                f'requesting 10000 rather than {max_results}. Narrow the query '
+                f'or split it by date range for a larger set.',
+                file=sys.stderr,
+            )
+            max_results = 10000
+
         # ESearch to get PMIDs
         esearch_url = self.base_url + 'esearch.fcgi'
         params = {
             'db': 'pubmed',
             'term': full_query,
             'retmax': max_results,
-            'retmode': 'json'
+            'retmode': 'json',
+            'tool': 'citation-management',
         }
         
         if self.email:
@@ -84,6 +108,8 @@ class PubMedSearcher:
             response.raise_for_status()
             
             data = response.json()
+            if data.get('error') or data.get('esearchresult', {}).get('errorlist'):
+                raise ValueError('ESearch returned a query error')
             pmids = data['esearchresult']['idlist']
             count = int(data['esearchresult']['count'])
             
@@ -92,7 +118,7 @@ class PubMedSearcher:
             return pmids
             
         except Exception as e:
-            print(f'Error searching PubMed: {e}', file=sys.stderr)
+            print(f'Error searching PubMed ({type(e).__name__}); request details omitted', file=sys.stderr)
             return []
     
     def fetch_metadata(self, pmids: List[str]) -> List[Dict]:
@@ -121,7 +147,7 @@ class PubMedSearcher:
                 'db': 'pubmed',
                 'id': ','.join(batch),
                 'retmode': 'xml',
-                'rettype': 'abstract'
+                'tool': 'citation-management',
             }
             
             if self.email:
@@ -130,27 +156,45 @@ class PubMedSearcher:
                 params['api_key'] = self.api_key
             
             try:
+                time.sleep(self.delay)
                 response = self.session.get(efetch_url, params=params, timeout=60)
                 response.raise_for_status()
                 
                 # Parse XML
                 root = ET.fromstring(response.content)
+                if root.find('.//ERROR') is not None:
+                    raise ValueError('EFetch returned an error')
                 articles = root.findall('.//PubmedArticle')
+                batch_metadata = []
                 
                 for article in articles:
                     metadata = self._extract_metadata_from_xml(article)
                     if metadata:
-                        metadata_list.append(metadata)
-                
-                # Rate limiting
-                time.sleep(self.delay)
+                        batch_metadata.append(metadata)
+                if {record['pmid'] for record in batch_metadata} != set(batch):
+                    print('Error: EFetch omitted requested records or returned unsupported book records', file=sys.stderr)
+                    raise ValueError('Incomplete EFetch batch')
+                metadata_list.extend(batch_metadata)
                 
             except Exception as e:
-                print(f'Error fetching metadata for batch: {e}', file=sys.stderr)
-                continue
+                print(f'Error fetching metadata for batch ({type(e).__name__}); request details omitted', file=sys.stderr)
+                # Never export a failed batch as a complete bibliography.
+                return []
         
         return metadata_list
     
+    @staticmethod
+    def _element_text(element: Optional[ET.Element]) -> str:
+        """Flatten an element's text, including any inline markup children.
+
+        PubMed terminates titles with a full stop that is not part of the
+        title; a trailing `?` or `!` is, so only the period is dropped.
+        """
+        if element is None:
+            return ''
+        text = ' '.join(''.join(element.itertext()).split())
+        return text[:-1] if text.endswith('.') else text
+
     def _extract_metadata_from_xml(self, article: ET.Element) -> Optional[Dict]:
         """Extract metadata from PubmedArticle XML element."""
         try:
@@ -187,22 +231,35 @@ class PubMedSearcher:
             if not year:
                 medline_date = article_elem.findtext('.//Journal/JournalIssue/PubDate/MedlineDate', '')
                 if medline_date:
-                    import re
                     year_match = re.search(r'\d{4}', medline_date)
                     if year_match:
                         year = year_match.group()
-            
+
+            # Structured abstracts split into several labelled AbstractText
+            # elements; taking only the first drops most of the abstract.
+            sections = []
+            for chunk in article_elem.findall('.//Abstract/AbstractText'):
+                text = ''.join(chunk.itertext()).strip()
+                if not text:
+                    continue
+                label = chunk.get('Label')
+                sections.append(f'{label}: {text}' if label else text)
+            abstract = ' '.join(sections)
+
+
             metadata = {
                 'pmid': pmid,
                 'doi': doi,
-                'title': article_elem.findtext('.//ArticleTitle', ''),
+                # itertext, not findtext: titles carry inline markup such as
+                # <i> and <sup>, and findtext returns only the leading run.
+                'title': self._element_text(article_elem.find('.//ArticleTitle')),
                 'authors': ' and '.join(authors),
                 'journal': journal.findtext('.//Title', ''),
                 'year': year,
                 'volume': journal.findtext('.//JournalIssue/Volume', ''),
                 'issue': journal.findtext('.//JournalIssue/Issue', ''),
                 'pages': article_elem.findtext('.//Pagination/MedlinePgn', ''),
-                'abstract': article_elem.findtext('.//Abstract/AbstractText', '')
+                'abstract': abstract
             }
             
             return metadata
@@ -212,58 +269,33 @@ class PubMedSearcher:
             return None
     
     def metadata_to_bibtex(self, metadata: Dict) -> str:
-        """Convert metadata to BibTeX format."""
-        # Generate citation key
-        if metadata.get('authors'):
-            first_author = metadata['authors'].split(' and ')[0]
-            if ',' in first_author:
-                last_name = first_author.split(',')[0].strip()
-            else:
-                last_name = first_author.split()[0]
-        else:
-            last_name = 'Unknown'
-        
-        year = metadata.get('year', 'XXXX')
-        citation_key = f'{last_name}{year}pmid{metadata.get("pmid", "")}'
-        
-        # Build BibTeX entry
-        lines = [f'@article{{{citation_key},']
-        
-        if metadata.get('authors'):
-            lines.append(f'  author  = {{{metadata["authors"]}}},')
-        
-        if metadata.get('title'):
-            lines.append(f'  title   = {{{metadata["title"]}}},')
-        
-        if metadata.get('journal'):
-            lines.append(f'  journal = {{{metadata["journal"]}}},')
-        
-        if metadata.get('year'):
-            lines.append(f'  year    = {{{metadata["year"]}}},')
-        
-        if metadata.get('volume'):
-            lines.append(f'  volume  = {{{metadata["volume"]}}},')
-        
-        if metadata.get('issue'):
-            lines.append(f'  number  = {{{metadata["issue"]}}},')
-        
-        if metadata.get('pages'):
-            pages = metadata['pages'].replace('-', '--')
-            lines.append(f'  pages   = {{{pages}}},')
-        
-        if metadata.get('doi'):
-            lines.append(f'  doi     = {{{metadata["doi"]}}},')
-        
+        """Convert metadata to BibTeX format.
+
+        Uses the shared key scheme rather than appending the PMID, so an entry
+        found here and the same paper found via Crossref or OpenAlex collide
+        and can be deduplicated.
+        """
+        key = citation_key(
+            metadata.get('authors', ''),
+            metadata.get('year', ''),
+            metadata.get('title', ''),
+        )
+
+        fields = {
+            'author': metadata.get('authors', ''),
+            'title': protect_title(metadata.get('title', '')),
+            'journal': metadata.get('journal', ''),
+            'year': metadata.get('year', ''),
+            'volume': metadata.get('volume', ''),
+            'number': metadata.get('issue', ''),
+            'pages': format_pages(metadata.get('pages')),
+            'doi': metadata.get('doi') or '',
+        }
+
         if metadata.get('pmid'):
-            lines.append(f'  note    = {{PMID: {metadata["pmid"]}}},')
-        
-        # Remove trailing comma
-        if lines[-1].endswith(','):
-            lines[-1] = lines[-1][:-1]
-        
-        lines.append('}')
-        
-        return '\n'.join(lines)
+            fields['note'] = f'PMID: {metadata["pmid"]}'
+
+        return render_entry('article', key, fields)
 
 
 def main():
@@ -350,6 +382,8 @@ def main():
     if not query:
         parser.print_help()
         sys.exit(1)
+    if args.limit < 1:
+        parser.error('--limit must be positive')
     
     # Parse publication types
     pub_types = None
@@ -372,6 +406,9 @@ def main():
     
     # Fetch metadata
     metadata_list = searcher.fetch_metadata(pmids)
+    if not metadata_list:
+        print('Error: incomplete PubMed metadata retrieval; no output written', file=sys.stderr)
+        sys.exit(2)
     
     # Format output
     if args.format == 'json':
@@ -395,4 +432,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

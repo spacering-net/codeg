@@ -19,7 +19,7 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/K-Dense-AI/scientific-agent-skills.git"
-PINNED_SHA="4d97e293dc6f604fb6b63dcd49b9028df413d65b"
+PINNED_SHA="526ebce143bc326f44471554e33d66a19c840360"  # v2.72.0
 
 # Resolve repo-root-relative paths from this script's location.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,7 +71,7 @@ if [ -n "$(git -C "$SRC" status --porcelain --ignored)" ]; then
   exit 1
 fi
 
-cleanup() { [ -n "$CLEANUP_SRC" ] && rm -rf "$CLEANUP_SRC"; }
+cleanup() { if [ -n "$CLEANUP_SRC" ]; then rm -rf "$CLEANUP_SRC"; fi; }
 trap cleanup EXIT
 
 # ── License gate + presence check (hard, before touching the dest tree) ──────

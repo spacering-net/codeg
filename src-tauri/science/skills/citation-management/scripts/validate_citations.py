@@ -9,18 +9,52 @@ import re
 import requests
 import argparse
 import json
+import time
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
+from urllib.parse import quote
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+
+from _common import parse_bibtex_file as _parse_bibtex_file  # noqa: E402
+
+# Typical reference-list lengths, as (minimum, typical maximum, display name).
+#
+# These are editorial rules of thumb drawn from what published papers at these
+# venues tend to carry -- not sourced submission requirements, most of which do
+# not cap references at all. They drive warnings only; a bibliography is never
+# wrong merely for being short.
+VENUE_STANDARDS = {
+    'nature': (35, 50, 'Nature'),
+    'science': (35, 50, 'Science'),
+    'cell': (35, 50, 'Cell'),
+    'multidisciplinary': (35, 50, 'High-impact Multidisciplinary Journal'),
+    'neurips': (30, 45, 'NeurIPS'),
+    'icml': (30, 45, 'ICML'),
+    'iclr': (30, 45, 'ICLR'),
+    'cvpr': (30, 45, 'CVPR'),
+    'acl': (30, 45, 'ACL'),
+    'ml_cs_conf': (30, 45, 'ML/CS Conference'),
+    'review': (40, 65, 'Comprehensive Literature Review'),
+    'market_research': (40, 65, 'Market Research Report'),
+    'literature_review': (40, 65, 'Literature Review / Market Research'),
+    'nejm': (30, 45, 'NEJM'),
+    'lancet': (30, 45, 'The Lancet'),
+    'jama': (30, 45, 'JAMA'),
+    'medical': (30, 45, 'Medical Journal'),
+}
+
 
 class CitationValidator:
     """Validate BibTeX entries for errors and inconsistencies."""
-    
+
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'CitationValidator/1.0 (Citation Management Tool)'
         })
-        
+        self.venue_standards = VENUE_STANDARDS
+
         # Required fields by entry type
         self.required_fields = {
             'article': ['author', 'title', 'journal', 'year'],
@@ -50,47 +84,7 @@ class CitationValidator:
         Returns:
             List of entry dictionaries
         """
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-        except Exception as e:
-            print(f'Error reading file: {e}', file=sys.stderr)
-            return []
-        
-        entries = []
-        
-        # Match BibTeX entries
-        pattern = r'@(\w+)\s*\{\s*([^,\s]+)\s*,(.*?)\n\}'
-        matches = re.finditer(pattern, content, re.DOTALL | re.IGNORECASE)
-        
-        for match in matches:
-            entry_type = match.group(1).lower()
-            citation_key = match.group(2).strip()
-            fields_text = match.group(3)
-            
-            # Parse fields
-            fields = {}
-            field_pattern = r'(\w+)\s*=\s*\{([^}]*)\}|(\w+)\s*=\s*"([^"]*)"'
-            field_matches = re.finditer(field_pattern, fields_text)
-            
-            for field_match in field_matches:
-                if field_match.group(1):
-                    field_name = field_match.group(1).lower()
-                    field_value = field_match.group(2)
-                else:
-                    field_name = field_match.group(3).lower()
-                    field_value = field_match.group(4)
-                
-                fields[field_name] = field_value.strip()
-            
-            entries.append({
-                'type': entry_type,
-                'key': citation_key,
-                'fields': fields,
-                'raw': match.group(0)
-            })
-        
-        return entries
+        return _parse_bibtex_file(filepath)
     
     def validate_entry(self, entry: Dict) -> Tuple[List[Dict], List[Dict]]:
         """
@@ -198,7 +192,7 @@ class CitationValidator:
         
         return errors, warnings
     
-    def verify_doi(self, doi: str) -> Tuple[bool, Optional[Dict]]:
+    def verify_doi(self, doi: str) -> Tuple[Optional[bool], Optional[Dict]]:
         """
         Verify DOI resolves correctly and get metadata.
         
@@ -206,35 +200,60 @@ class CitationValidator:
             doi: Digital Object Identifier
             
         Returns:
-            Tuple of (is_valid, metadata)
+            (True, metadata) when registered, (False, None) on resolver 404,
+            or (None, None) when the lookup could not be completed.
         """
+        # Ask the registration agency, not the publisher. A HEAD request to
+        # doi.org follows the redirect to the publisher, and several publishers
+        # answer HEAD with 403 or 405 behind a bot check -- which made a
+        # perfectly good DOI look unresolvable.
         try:
-            url = f'https://doi.org/{doi}'
-            response = self.session.head(url, timeout=10, allow_redirects=True)
-            
-            if response.status_code < 400:
-                # DOI resolves, now get metadata from CrossRef
-                crossref_url = f'https://api.crossref.org/works/{doi}'
-                metadata_response = self.session.get(crossref_url, timeout=10)
-                
-                if metadata_response.status_code == 200:
-                    data = metadata_response.json()
-                    message = data.get('message', {})
-                    
-                    # Extract key metadata
-                    metadata = {
-                        'title': message.get('title', [''])[0],
-                        'year': self._extract_year_crossref(message),
-                        'authors': self._format_authors_crossref(message.get('author', [])),
-                    }
-                    return True, metadata
-                else:
-                    return True, None  # DOI resolves but no CrossRef metadata
-            else:
-                return False, None
-                
-        except Exception:
-            return False, None
+            time.sleep(0.21)  # Stay below Crossref's public single-record limit.
+            crossref_url = f'https://api.crossref.org/works/{quote(doi, safe="")}'
+            metadata_response = self.session.get(crossref_url, timeout=10)
+
+            if metadata_response.status_code == 200:
+                data = metadata_response.json()
+                message = data.get('message', {})
+                if not isinstance(message, dict) or str(message.get('DOI', '')).lower() != doi.lower():
+                    return None, None
+
+                # Extract key metadata
+                metadata = {
+                    'title': (message.get('title') or [''])[0],
+                    'year': self._extract_year_crossref(message),
+                    'authors': self._format_authors_crossref(message.get('author', [])),
+                }
+                return True, metadata
+
+            if metadata_response.status_code == 404:
+                # Not a Crossref DOI. DataCite registers datasets and many
+                # preprints, so check there before calling it broken.
+                datacite_url = f'https://api.datacite.org/dois/{quote(doi, safe="")}'
+                datacite_response = self.session.get(datacite_url, timeout=10)
+                if datacite_response.status_code == 200:
+                    record = datacite_response.json().get('data', {})
+                    if str(record.get('id', '')).lower() == doi.lower():
+                        return True, None
+                    return None, None
+                if datacite_response.status_code != 404:
+                    return None, None
+                # Other agencies mint DOIs too. Check the resolver itself,
+                # without following publishers' bot-blocked landing pages.
+                resolver = self.session.get(f'https://doi.org/{quote(doi, safe="/")}',
+                                            allow_redirects=False, timeout=10)
+                if resolver.status_code == 404:
+                    return False, None
+                if resolver.status_code in (301, 302, 303, 307, 308) and resolver.headers.get('Location'):
+                    return True, None
+                return None, None
+
+            # Any other status is a transport problem on our side, not
+            # evidence that the DOI is bad.
+            return None, None
+
+        except (requests.exceptions.RequestException, ValueError, TypeError, AttributeError):
+            return None, None
     
     def detect_duplicates(self, entries: List[Dict]) -> List[Dict]:
         """
@@ -404,7 +423,15 @@ class CitationValidator:
                     print(f'Verifying DOI {i+1}: {doi}', file=sys.stderr)
                     is_valid, metadata = self.verify_doi(doi)
                     
-                    if not is_valid:
+                    if is_valid is None:
+                        all_warnings.append({
+                            'type': 'doi_unverified',
+                            'entry': entry['key'],
+                            'doi': doi,
+                            'severity': 'medium',
+                            'message': f'Entry {entry["key"]}: DOI lookup inconclusive; retry or verify manually: {doi}'
+                        })
+                    elif is_valid is False:
                         doi_errors.append({
                             'type': 'invalid_doi',
                             'entry': entry['key'],
@@ -418,31 +445,11 @@ class CitationValidator:
         # Count and Venue verification logic
         count_errors = []
         count_warnings = []
-        
+
         target_min = None
         target_max = None
         venue_name = None
-        
-        self.venue_standards = {
-            'nature': (35, 50, 'Nature'),
-            'science': (35, 50, 'Science'),
-            'cell': (35, 50, 'Cell'),
-            'multidisciplinary': (35, 50, 'High-impact Multidisciplinary Journal'),
-            'neurips': (30, 45, 'NeurIPS'),
-            'icml': (30, 45, 'ICML'),
-            'iclr': (30, 45, 'ICLR'),
-            'cvpr': (30, 45, 'CVPR'),
-            'acl': (30, 45, 'ACL'),
-            'ml_cs_conf': (30, 45, 'ML/CS Conference'),
-            'review': (40, 65, 'Comprehensive Literature Review'),
-            'market_research': (40, 65, 'Market Research Report'),
-            'literature_review': (40, 65, 'Literature Review / Market Research'),
-            'nejm': (30, 45, 'NEJM'),
-            'lancet': (30, 45, 'The Lancet'),
-            'jama': (30, 45, 'JAMA'),
-            'medical': (30, 45, 'Medical Journal')
-        }
-        
+
         if venue:
             v_lower = venue.lower().strip()
             if v_lower in self.venue_standards:
@@ -455,26 +462,25 @@ class CitationValidator:
             venue_name = f"Custom threshold (min: {min_count})"
             target_max = None
             
+        # A reference list is never *wrong* for being short -- the right length
+        # is whatever the argument needs -- so a shortfall is reported as a
+        # warning. `--min-count` is the exception: an explicit floor the caller
+        # asked to have enforced, so falling under it is an error.
         total_count = len(entries)
         if target_min is not None:
-            # Determine critical threshold (e.g. 70% of target minimum)
-            critical_min = int(target_min * 0.7)
-            if critical_min < 1:
-                critical_min = 1
-                
-            if total_count < critical_min:
+            if min_count is not None and total_count < min_count:
                 count_errors.append({
-                    'type': 'critically_low_citation_count',
+                    'type': 'below_requested_minimum',
                     'severity': 'high',
-                    'message': f'Total citation entries count ({total_count}) is critically low for {venue_name or "specified standard"}. Expected at least {target_min} citations.'
+                    'message': f'Total citation entries ({total_count}) is below the requested minimum of {min_count}.'
                 })
             elif total_count < target_min:
                 count_warnings.append({
                     'type': 'low_citation_count',
                     'severity': 'medium',
-                    'message': f'Total citation entries count ({total_count}) is below the recommended standard for {venue_name or "specified standard"}. Expected {target_min}-{target_max or "+"} citations.'
+                    'message': f'Total citation entries ({total_count}) is below the {venue_name or "specified standard"} rule of thumb of {target_min}-{target_max or "+"}. This is a heuristic, not a submission requirement.'
                 })
-        
+
         # Manuscript checking logic
         manuscript_results = {
             'checked': False,
@@ -519,29 +525,35 @@ class CitationValidator:
             # Check the count of ACTUALLY used citations
             actual_count = len(cited_keys) - len(missing_keys)
             if target_min is not None:
-                critical_min = int(target_min * 0.7)
-                if critical_min < 1:
-                    critical_min = 1
-                if actual_count < critical_min:
+                if min_count is not None and actual_count < min_count:
                     count_errors.append({
-                        'type': 'critically_low_manuscript_citation_count',
+                        'type': 'manuscript_below_requested_minimum',
                         'severity': 'high',
-                        'message': f'The number of cited references in the manuscript ({actual_count}) is critically low for {venue_name or "specified standard"}. Expected at least {target_min} actually cited references.'
+                        'message': f'The manuscript cites {actual_count} references, below the requested minimum of {min_count}.'
                     })
                 elif actual_count < target_min:
                     count_warnings.append({
                         'type': 'low_manuscript_citation_count',
                         'severity': 'medium',
-                        'message': f'The number of cited references in the manuscript ({actual_count}) is below the recommended standard for {venue_name or "specified standard"}. Expected {target_min}-{target_max or "+"} cited references.'
+                        'message': f'The manuscript cites {actual_count} references, below the {venue_name or "specified standard"} rule of thumb of {target_min}-{target_max or "+"}. This is a heuristic, not a submission requirement.'
                     })
-        
+
         all_errors.extend(count_errors)
         all_warnings.extend(count_warnings)
-        
+
+        # Count entries carrying at least one high-severity error, rather than
+        # subtracting the error count -- several errors can land on one entry,
+        # which previously drove this figure negative.
+        entries_with_errors = {
+            error['entry'] for error in all_errors
+            if error.get('severity') == 'high' and error.get('entry')
+        }
+        bib_keys_present = {entry['key'] for entry in entries}
+
         return {
             'filepath': filepath,
             'total_entries': len(entries),
-            'valid_entries': len(entries) - len([e for e in all_errors if e['severity'] == 'high']),
+            'valid_entries': len(entries) - len(entries_with_errors & bib_keys_present),
             'errors': all_errors,
             'warnings': all_warnings,
             'duplicates': duplicates,
@@ -597,14 +609,8 @@ def main():
     )
     
     parser.add_argument(
-        '--auto-fix',
-        action='store_true',
-        help='Attempt to auto-fix common issues (not implemented yet)'
-    )
-    
-    parser.add_argument(
         '--report',
-        help='Output file for JSON validation report'
+        help='Output file for the JSON validation report'
     )
     
     parser.add_argument(
@@ -705,4 +711,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

@@ -1,0 +1,331 @@
+{
+  "schema_version": "2.0",
+  "project_id": "HG-SYN-001",
+  "status": "draft",
+  "updated_on": "2026-07-23",
+  "human_owner": "Accountable human investigator",
+  "observation": {
+    "statement": "In a synthetic demonstration dataset, units measured after condition X had a different mean value of outcome Y than units measured after the comparator condition.",
+    "provenance": "Synthetic demonstration only; no human, animal, clinical, proprietary, or security-sensitive data.",
+    "source_ids": [
+      "SRC-SYN-001"
+    ],
+    "uncertainties": [
+      "The synthetic pattern could reflect the generating process, selection, measurement, or random variation."
+    ]
+  },
+  "research_question": {
+    "statement": "In the synthetic target system, what is the effect of assigning condition X rather than the comparator on outcome Y after one measurement interval?",
+    "framework": "PICO",
+    "question_type": "causal",
+    "population_or_system": "Synthetic independent units meeting the declared eligibility rule",
+    "intervention_or_exposure": "Assignment to synthetic condition X",
+    "comparator": "Assignment to the synthetic comparator condition",
+    "outcome": "Validated synthetic outcome Y",
+    "timeframe": "One prespecified measurement interval"
+  },
+  "hypotheses": [
+    {
+      "hypothesis_id": "H1",
+      "statement": "Condition X changes outcome Y through the proposed synthetic process M.",
+      "mechanism": "Condition X changes intermediate M before outcome Y is measured.",
+      "status": "candidate",
+      "source_ids": [
+        "SRC-SYN-001"
+      ],
+      "assumptions": [
+        "The synthetic assignment and measurement procedures operate as declared."
+      ],
+      "boundary_conditions": [
+        "The candidate is limited to the declared synthetic units and one-interval horizon."
+      ],
+      "uncertainties": [
+        "The intermediate may be a marker rather than a mediator."
+      ],
+      "prediction_ids": [
+        "P1"
+      ],
+      "rival_hypothesis_ids": [
+        "H2"
+      ]
+    },
+    {
+      "hypothesis_id": "H2",
+      "statement": "The observed difference in outcome Y is produced by a synthetic measurement drift rather than process M.",
+      "mechanism": "A time-linked offset changes the recorded outcome without changing the target construct.",
+      "status": "candidate",
+      "source_ids": [
+        "SRC-SYN-001"
+      ],
+      "assumptions": [
+        "The synthetic measurement offset is not removed by calibration."
+      ],
+      "boundary_conditions": [
+        "The candidate applies only to measurements from the affected synthetic acquisition period."
+      ],
+      "uncertainties": [
+        "The size and stability of any offset are unknown."
+      ],
+      "prediction_ids": [
+        "P2"
+      ],
+      "rival_hypothesis_ids": [
+        "H1"
+      ]
+    }
+  ],
+  "causal_estimands": [
+    {
+      "estimand_id": "E1",
+      "linked_hypothesis_ids": [
+        "H1"
+      ],
+      "population": "Synthetic eligible units",
+      "intervention_or_exposure": "Assignment to condition X",
+      "comparator": "Assignment to comparator",
+      "outcome": "Outcome Y measured with method M-OUTCOME",
+      "time_horizon": "One measurement interval",
+      "population_summary": "Difference in population mean outcome Y",
+      "intercurrent_event_strategy": "Not applicable in the synthetic demonstration",
+      "identification_assumptions": [
+        "Random assignment, no interference, consistent treatment versions, and valid outcome measurement."
+      ]
+    }
+  ],
+  "predictions": [
+    {
+      "prediction_id": "P1",
+      "hypothesis_id": "H1",
+      "statement": "Under matched acquisition conditions, assignment to X will precede a change in intermediate M and then outcome Y.",
+      "observable": "Ordered changes in intermediate M and outcome Y",
+      "conditions": "Synthetic units are randomly assigned and measured with calibrated instruments.",
+      "expected_pattern": "Intermediate M changes before outcome Y in X but not comparator units.",
+      "falsifier": "Outcome Y changes without the prespecified change in intermediate M under a successful manipulation and valid measurements.",
+      "rival_hypothesis_ids": [
+        "H2"
+      ],
+      "measurement_ids": [
+        "M-INTERMEDIATE",
+        "M-OUTCOME"
+      ],
+      "analysis_ids": [
+        "A1"
+      ]
+    },
+    {
+      "prediction_id": "P2",
+      "hypothesis_id": "H2",
+      "statement": "A reference quantity measured in the same acquisition period will show a similar offset even though process M cannot affect it.",
+      "observable": "Offset in the negative-control reference quantity",
+      "conditions": "The same acquisition and calibration workflow is used.",
+      "expected_pattern": "The reference quantity and outcome Y shift together by acquisition period.",
+      "falsifier": "The reference quantity remains stable while outcome Y changes reproducibly across independently calibrated periods.",
+      "rival_hypothesis_ids": [
+        "H1"
+      ],
+      "measurement_ids": [
+        "M-NEGATIVE-CONTROL",
+        "M-OUTCOME"
+      ],
+      "analysis_ids": [
+        "A2"
+      ]
+    }
+  ],
+  "alternative_explanations": [
+    {
+      "alternative_id": "ALT1",
+      "statement": "Synthetic selection into the analyzed set creates the observed difference.",
+      "linked_hypothesis_ids": [
+        "H1",
+        "H2"
+      ],
+      "risk_types": [
+        "selection_bias"
+      ],
+      "discriminating_prediction_ids": [
+        "P1",
+        "P2"
+      ]
+    }
+  ],
+  "null_hypotheses": [
+    {
+      "null_id": "N1",
+      "statement": "The population mean of outcome Y is equal under assignment to X and comparator at the prespecified horizon.",
+      "linked_prediction_ids": [
+        "P1"
+      ],
+      "rejection_or_compatibility_rule": "Use the prespecified interval estimate and decision rule in analysis A1; do not equate failure to reject with equivalence."
+    },
+    {
+      "null_id": "N2",
+      "statement": "The synthetic negative-control reference mean is equal across acquisition periods.",
+      "linked_prediction_ids": [
+        "P2"
+      ],
+      "rejection_or_compatibility_rule": "Use analysis A2 as a bias diagnostic; failure to reject does not prove absence of drift when precision or reference sensitivity is insufficient."
+    }
+  ],
+  "negative_controls": [
+    {
+      "control_id": "NC1",
+      "control_type": "negative_outcome",
+      "rationale": "The reference quantity cannot be changed by process M but shares the synthetic acquisition workflow.",
+      "expected_result": "No difference by assigned condition after accounting for acquisition period.",
+      "failure_implication": "A non-null control result raises concern about acquisition, selection, or analysis bias.",
+      "linked_prediction_ids": [
+        "P2"
+      ]
+    }
+  ],
+  "operationalizations": [
+    {
+      "measurement_id": "M-INTERMEDIATE",
+      "construct": "Synthetic intermediate M",
+      "variable": "m_value",
+      "role": "mediator",
+      "operational_definition": "Calibrated continuous synthetic measurement at the prespecified early time.",
+      "instrument_or_method": "Deterministic synthetic measurement procedure",
+      "unit": "synthetic units",
+      "timing": "Early prespecified time",
+      "population_or_system": "Synthetic eligible units",
+      "validity_evidence_source_ids": [
+        "SRC-SYN-001"
+      ],
+      "reliability_plan": "Repeat the deterministic check on an independent synthetic batch.",
+      "missingness_plan": "Report missingness by assignment and use the prespecified sensitivity analysis.",
+      "blinding_or_masking": "Synthetic analyst label is masked until validation completes.",
+      "threshold_rationale": "No threshold; analyze the continuous measurement."
+    },
+    {
+      "measurement_id": "M-OUTCOME",
+      "construct": "Synthetic outcome Y",
+      "variable": "y_value",
+      "role": "outcome",
+      "operational_definition": "Calibrated continuous synthetic outcome at one interval.",
+      "instrument_or_method": "Deterministic synthetic measurement procedure",
+      "unit": "synthetic units",
+      "timing": "One prespecified measurement interval",
+      "population_or_system": "Synthetic eligible units",
+      "validity_evidence_source_ids": [
+        "SRC-SYN-001"
+      ],
+      "reliability_plan": "Verify calibration and repeatability before unmasking assignment.",
+      "missingness_plan": "Report reasons and analyze under the prespecified primary and sensitivity assumptions.",
+      "blinding_or_masking": "Outcome acquisition and validation are masked to assignment.",
+      "threshold_rationale": "No threshold; estimate the continuous mean contrast."
+    },
+    {
+      "measurement_id": "M-NEGATIVE-CONTROL",
+      "construct": "Synthetic reference quantity",
+      "variable": "reference_value",
+      "role": "negative_control",
+      "operational_definition": "Stable synthetic reference measured in the same acquisition workflow.",
+      "instrument_or_method": "Deterministic synthetic reference procedure",
+      "unit": "synthetic reference units",
+      "timing": "Concurrent with outcome Y",
+      "population_or_system": "Synthetic acquisition batches",
+      "validity_evidence_source_ids": [
+        "SRC-SYN-001"
+      ],
+      "reliability_plan": "Check repeatability across synthetic batches.",
+      "missingness_plan": "Treat a missing reference as an acquisition-quality failure.",
+      "blinding_or_masking": "Reference processing is independent of assignment labels.",
+      "threshold_rationale": "Use the prespecified calibration tolerance."
+    }
+  ],
+  "analysis_plan": {
+    "analyses": [
+      {
+        "analysis_id": "A1",
+        "prediction_ids": [
+          "P1"
+        ],
+        "estimand_ids": [
+          "E1"
+        ],
+        "analysis_population": "All randomized synthetic eligible units under the declared estimand strategy",
+        "method": "Estimate the prespecified mean contrast with its uncertainty interval.",
+        "effect_or_summary_measure": "Difference in population means",
+        "uncertainty_method": "Prespecified interval estimate under the declared independent-unit assumptions",
+        "missing_data_plan": "Primary declared assumption plus a bounded sensitivity analysis",
+        "multiplicity_plan": "A1 is the sole confirmatory contrast; all additional contrasts are exploratory.",
+        "sensitivity_analyses": [
+          "Repeat under the prespecified alternative missingness assumption."
+        ],
+        "decision_rule": "Interpret compatibility with predicted patterns and rivals; do not select a hypothesis automatically.",
+        "exploratory_or_confirmatory": "confirmatory"
+      },
+      {
+        "analysis_id": "A2",
+        "prediction_ids": [
+          "P2"
+        ],
+        "estimand_ids": [],
+        "analysis_population": "All synthetic acquisition batches with valid reference measurements",
+        "method": "Estimate reference shifts by acquisition period and assigned condition.",
+        "effect_or_summary_measure": "Difference in reference means",
+        "uncertainty_method": "Prespecified interval estimate",
+        "missing_data_plan": "Report and exclude acquisition failures according to the locked quality rule.",
+        "multiplicity_plan": "Negative-control analysis is interpreted as a bias diagnostic, not a candidate-selection score.",
+        "sensitivity_analyses": [
+          "Repeat after excluding the prespecified failed-calibration batch category."
+        ],
+        "decision_rule": "A non-null reference shift triggers investigation and limits causal interpretation.",
+        "exploratory_or_confirmatory": "confirmatory"
+      }
+    ],
+    "harking_control": "Freeze this record before viewing the target synthetic outcomes and label later candidates or analyses exploratory.",
+    "deviation_reporting": "Preserve the original plan and log each deviation with date, rationale, decision owner, result-awareness status, and interpretive impact."
+  },
+  "evidence": {
+    "ledger_path": "local-evidence-ledger.csv",
+    "source_ids": [
+      "SRC-SYN-001"
+    ],
+    "search_boundary_id": "SEARCH-SYN-001",
+    "evidence_limitations": [
+      "The bundled row is synthetic and demonstrates structure only."
+    ]
+  },
+  "risk_register": {
+    "confounding": [
+      "Synthetic assignment failure or implementation differences could act as common causes."
+    ],
+    "selection_bias": [
+      "Post-assignment exclusion could make analyzed groups non-comparable."
+    ],
+    "collider_bias": [
+      "Restricting analysis to a jointly caused quality indicator could open bias."
+    ],
+    "reverse_causation": [
+      "Temporal ordering is built into the synthetic design but must be verified."
+    ],
+    "measurement_bias": [
+      "Acquisition-period drift could change recorded outcome Y."
+    ],
+    "other": [
+      "Random variation and model misspecification remain possible."
+    ]
+  },
+  "ethics_and_feasibility": {
+    "human_subjects_gate": "not_applicable",
+    "animal_research_gate": "not_applicable",
+    "biosafety_gate": "not_applicable",
+    "dual_use_gate": "not_applicable",
+    "regulatory_gate": "not_applicable",
+    "data_governance_gate": "approved",
+    "feasibility_status": "feasible_for_planning",
+    "required_reviews": [],
+    "unresolved_blocks": []
+  },
+  "ai_use": {
+    "used": false,
+    "sensitive_or_unpublished_data_sent_externally": false,
+    "local_policy_checked": true,
+    "citation_verification_required": true,
+    "human_accountable": true,
+    "diversity_mitigation": "Generate independent rivals before any authorized AI-assisted expansion and retain human-origin candidates."
+  }
+}

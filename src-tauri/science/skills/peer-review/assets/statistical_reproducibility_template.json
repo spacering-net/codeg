@@ -1,0 +1,210 @@
+{
+  "schema_version": "2.0",
+  "checklist_id": "STAT-REPRO-SYNTHETIC-001",
+  "study_design": "randomized_trial",
+  "specialist_review": {
+    "needed": "undetermined",
+    "areas": [],
+    "requested": false
+  },
+  "items": [
+    {
+      "id": "question.estimand_alignment",
+      "category": "question",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Check alignment among the question, target quantity, design, analysis, and interpretation"
+    },
+    {
+      "id": "design.unit_and_independence",
+      "category": "design",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Identify the experimental or observational unit and assess dependence"
+    },
+    {
+      "id": "design.sample_size_precision",
+      "category": "design",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess prospective sample-size or precision justification and assumptions"
+    },
+    {
+      "id": "design.allocation_randomization",
+      "category": "design",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess sequence generation, allocation concealment, or sampling procedures as applicable"
+    },
+    {
+      "id": "design.blinding",
+      "category": "design",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess who was blinded or masked and likely consequences when blinding was infeasible"
+    },
+    {
+      "id": "data.inclusion_exclusion",
+      "category": "data",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Trace prespecified inclusion, exclusion, attrition, and analysis populations"
+    },
+    {
+      "id": "data.missing_data",
+      "category": "data",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess missingness amounts, reasons, assumptions, methods, and sensitivity analyses"
+    },
+    {
+      "id": "data.outliers_transformations",
+      "category": "data",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Check rules for exclusions, transformations, detection limits, and influential observations"
+    },
+    {
+      "id": "analysis.prespecification",
+      "category": "analysis",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Compare analyses with the protocol, registration, and statistical analysis plan"
+    },
+    {
+      "id": "analysis.method_design_alignment",
+      "category": "analysis",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess whether methods match the design, outcome type, estimand, and sampling structure"
+    },
+    {
+      "id": "analysis.assumptions_diagnostics",
+      "category": "analysis",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess model assumptions, diagnostics, robustness, and fallback analyses"
+    },
+    {
+      "id": "analysis.multiplicity",
+      "category": "analysis",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess outcome hierarchy, repeated looks, multiple comparisons, and error control"
+    },
+    {
+      "id": "analysis.clustering_repeated_measures",
+      "category": "analysis",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess clustering, pairing, repeated measures, nesting, and time dependence"
+    },
+    {
+      "id": "results.effect_sizes_uncertainty",
+      "category": "results",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Check effect estimates and compatible uncertainty intervals, not thresholded p-values alone"
+    },
+    {
+      "id": "results.denominators_flow",
+      "category": "results",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Reconcile denominators, participant or sample flow, exclusions, and analysis populations"
+    },
+    {
+      "id": "results.complete_outcomes_harms",
+      "category": "results",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Check all prespecified outcomes, null findings, adverse events, and deviations"
+    },
+    {
+      "id": "reproducibility.data_materials_access",
+      "category": "reproducibility",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess data, materials, protocol, repository, and justified access restrictions"
+    },
+    {
+      "id": "reproducibility.code_environment_parameters",
+      "category": "reproducibility",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess code, software versions, environments, seeds, parameters, and run instructions"
+    },
+    {
+      "id": "reproducibility.provenance_versions",
+      "category": "reproducibility",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Trace data provenance, transformations, versioned artifacts, and accession identifiers"
+    },
+    {
+      "id": "ethics.approval_consent_governance",
+      "category": "ethics",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Assess approvals, consent, welfare, privacy, governance, and conflicts as applicable"
+    },
+    {
+      "id": "interpretation.claim_evidence_causality",
+      "category": "interpretation",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Check claim strength against design, evidence, uncertainty, alternatives, and generalizability"
+    },
+    {
+      "id": "integrity.deviations_selective_reporting",
+      "category": "integrity",
+      "applicability": "applicable",
+      "status": "not_assessed",
+      "evidence_locations": [],
+      "note": "",
+      "requested_action": "Check unexplained deviations, outcome switching, selective reporting, and internal inconsistencies"
+    }
+  ]
+}

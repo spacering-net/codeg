@@ -1,552 +1,257 @@
-# Common Methodological and Statistical Issues in Scientific Manuscripts
-
-This document catalogs frequent issues encountered during peer review, organized by category. Use this as a reference to identify potential problems and provide constructive feedback.
-
-## Statistical Issues
-
-### 1. P-Value Misuse and Misinterpretation
-
-**Common Problems:**
-- P-hacking (selective reporting of significant results)
-- Multiple testing without correction (familywise error rate inflation)
-- Interpreting non-significance as proof of no effect
-- Focusing exclusively on p-values without effect sizes
-- Dichotomizing continuous p-values at arbitrary thresholds (p=0.049 vs p=0.051)
-- Confusing statistical significance with biological/clinical significance
-
-**How to Identify:**
-- Suspiciously high proportion of p-values just below 0.05
-- Many tests performed but no correction mentioned
-- Statements like "no difference was found" from non-significant results
-- No effect sizes or confidence intervals reported
-- Language suggesting p-values indicate strength of effect
-
-**What to Recommend:**
-- Report effect sizes with confidence intervals
-- Apply appropriate multiple testing corrections (Bonferroni, FDR, Holm-Bonferroni)
-- Interpret non-significance cautiously (lack of evidence ≠ evidence of lack)
-- Pre-register analyses to avoid p-hacking
-- Consider equivalence testing for "no difference" claims
-
-### 2. Inappropriate Statistical Tests
-
-**Common Problems:**
-- Using parametric tests when assumptions are violated (non-normal data, unequal variances)
-- Analyzing paired data with unpaired tests
-- Using t-tests for multiple groups instead of ANOVA with post-hoc tests
-- Treating ordinal data as continuous
-- Ignoring repeated measures structure
-- Using correlation when regression is more appropriate
-
-**How to Identify:**
-- No mention of assumption checking
-- Small sample sizes with parametric tests
-- Multiple pairwise t-tests instead of ANOVA
-- Likert scales analyzed with t-tests
-- Time-series data analyzed without accounting for repeated measures
-
-**What to Recommend:**
-- Check assumptions explicitly (normality tests, Q-Q plots)
-- Use non-parametric alternatives when appropriate
-- Apply proper corrections for multiple comparisons after ANOVA
-- Use mixed-effects models for repeated measures
-- Consider ordinal regression for ordinal outcomes
-
-### 3. Sample Size and Power Issues
-
-**Common Problems:**
-- No sample size justification or power calculation
-- Underpowered studies claiming "no effect"
-- Post-hoc power calculations (which are uninformative)
-- Stopping rules not pre-specified
-- Unequal group sizes without justification
-
-**How to Identify:**
-- Small sample sizes (n<30 per group for typical designs)
-- No mention of power analysis in methods
-- Statements about post-hoc power
-- Wide confidence intervals suggesting imprecision
-- Claims of "no effect" with large p-values and small n
-
-**What to Recommend:**
-- Conduct a priori power analysis based on expected effect size
-- Report achieved power or precision (confidence interval width)
-- Acknowledge when studies are underpowered
-- Consider effect sizes and confidence intervals for interpretation
-- Pre-register sample size and stopping rules
-
-### 4. Missing Data Problems
-
-**Common Problems:**
-- Complete case analysis without justification (listwise deletion)
-- Not reporting extent or pattern of missingness
-- Assuming data are missing completely at random (MCAR) without testing
-- Inappropriate imputation methods
-- Not performing sensitivity analyses
-
-**How to Identify:**
-- Different n values across analyses without explanation
-- No discussion of missing data
-- Participants "excluded from analysis"
-- Simple mean imputation used
-- No sensitivity analyses comparing complete vs. imputed data
-
-**What to Recommend:**
-- Report extent and patterns of missingness
-- Test MCAR assumption (Little's test)
-- Use appropriate methods (multiple imputation, maximum likelihood)
-- Perform sensitivity analyses
-- Consider intention-to-treat analysis for trials
-
-### 5. Circular Analysis and Double-Dipping
-
-**Common Problems:**
-- Using the same data for selection and inference
-- Defining ROIs based on contrast then testing that contrast in same ROI
-- Selecting outliers then testing for differences
-- Post-hoc subgroup analyses presented as planned
-- HARKing (Hypothesizing After Results are Known)
-
-**How to Identify:**
-- ROIs or features selected based on results
-- Unexpected subgroup analyses
-- Post-hoc analyses not clearly labeled as exploratory
-- No data-independent validation
-- Introduction that perfectly predicts findings
-
-**What to Recommend:**
-- Use independent datasets for selection and testing
-- Pre-register analyses and hypotheses
-- Clearly distinguish confirmatory vs. exploratory analyses
-- Use cross-validation or hold-out datasets
-- Correct for selection bias
-
-### 6. Pseudoreplication
-
-**Common Problems:**
-- Technical replicates treated as biological replicates
-- Multiple measurements from same subject treated as independent
-- Clustered data analyzed without accounting for clustering
-- Non-independence in spatial or temporal data
-
-**How to Identify:**
-- n defined as number of measurements rather than biological units
-- Multiple cells from same animal counted as independent
-- Repeated measures not acknowledged
-- No mention of random effects or clustering
-
-**What to Recommend:**
-- Define n as biological replicates (animals, patients, independent samples)
-- Use mixed-effects models for nested or clustered data
-- Account for repeated measures explicitly
-- Average technical replicates before analysis
-- Report both technical and biological replication
-
-## Experimental Design Issues
-
-### 7. Lack of Appropriate Controls
-
-**Common Problems:**
-- Missing negative controls
-- Missing positive controls for validation
-- No vehicle controls for drug studies
-- No time-matched controls for longitudinal studies
-- No batch controls
-
-**How to Identify:**
-- Methods section lists only experimental groups
-- No mention of controls in figures
-- Unclear baseline or reference condition
-- Cross-batch comparisons without controls
-
-**What to Recommend:**
-- Include negative controls to assess specificity
-- Include positive controls to validate methods
-- Use vehicle controls matched to experimental treatment
-- Include sham surgery controls for surgical interventions
-- Include batch controls for cross-batch comparisons
-
-### 8. Confounding Variables
-
-**Common Problems:**
-- Systematic differences between groups besides intervention
-- Batch effects not controlled or corrected
-- Order effects in sequential experiments
-- Time-of-day effects not controlled
-- Experimenter effects not blinded
-
-**How to Identify:**
-- Groups differ in multiple characteristics
-- Samples processed in different batches by group
-- No randomization of sample order
-- No mention of blinding
-- Baseline characteristics differ between groups
-
-**What to Recommend:**
-- Randomize experimental units to conditions
-- Block on known confounders
-- Randomize sample processing order
-- Use blinding to minimize bias
-- Perform batch correction if needed
-- Report and adjust for baseline differences
-
-### 9. Insufficient Replication
-
-**Common Problems:**
-- Single experiment without replication
-- Technical replicates mistaken for biological replication
-- Small n justified by "typical for the field"
-- No independent validation of key findings
-- Cherry-picking representative examples
-
-**How to Identify:**
-- Methods state "experiment performed once"
-- n=3 with no justification
-- "Representative image shown"
-- Key claims based on single experiment
-- No validation in independent dataset
-
-**What to Recommend:**
-- Perform independent biological replicates (typically ≥3)
-- Validate key findings in independent cohorts
-- Report all replicates, not just representative examples
-- Conduct power analysis to justify sample size
-- Show individual data points, not just summary statistics
-
-## Reproducibility Issues
-
-### 10. Insufficient Methodological Detail
-
-**Common Problems:**
-- Methods not described in sufficient detail for replication
-- Key reagents not specified (vendor, catalog number)
-- Software versions and parameters not reported
-- Antibodies not validated
-- Cell line authentication not verified
-
-**How to Identify:**
-- Vague descriptions ("standard protocols were used")
-- No information on reagent sources
-- Generic software mentioned without versions
-- No antibody validation information
-- Cell lines not authenticated
-
-**What to Recommend:**
-- Provide detailed protocols or cite specific protocols
-- Include reagent vendors, catalog numbers, lot numbers
-- Report software versions and all parameters
-- Include antibody validation (Western blot, specificity tests)
-- Report cell line authentication method (STR profiling)
-- Make protocols available (protocols.io, supplementary materials)
-
-### 11. Data and Code Availability
-
-**Common Problems:**
-- No data availability statement
-- "Data available upon request" (often unfulfilled)
-- No code provided for computational analyses
-- Custom software not made available
-- No clear documentation
-
-**How to Identify:**
-- Missing data availability statement
-- No repository accession numbers
-- Computational methods with no code
-- Custom pipelines without access
-- No README or documentation
-
-**What to Recommend:**
-- Deposit raw data in appropriate repositories (GEO, SRA, Dryad, Zenodo)
-- Share analysis code on GitHub or similar
-- Provide clear documentation and README files
-- Include requirements.txt or environment files
-- Make custom software available with installation instructions
-- Use DOIs for permanent data citation
-
-### 12. Lack of Method Validation
-
-**Common Problems:**
-- New methods not compared to gold standard
-- Assays not validated for specificity, sensitivity, linearity
-- No spike-in controls
-- Cross-reactivity not tested
-- Detection limits not established
-
-**How to Identify:**
-- Novel assays presented without validation
-- No comparison to existing methods
-- No positive/negative controls shown
-- Claims of specificity without evidence
-- No standard curves or controls
-
-**What to Recommend:**
-- Validate new methods against established approaches
-- Show specificity (knockdown/knockout controls)
-- Demonstrate linearity and dynamic range
-- Include positive and negative controls
-- Report limits of detection and quantification
-- Show reproducibility across replicates and operators
-
-## Interpretation Issues
-
-### 13. Overstatement of Results
-
-**Common Problems:**
-- Causal language for correlational data
-- Mechanistic claims without mechanistic evidence
-- Extrapolating beyond data (species, conditions, populations)
-- Claiming "first to show" without thorough literature review
-- Overgeneralizing from limited samples
-
-**How to Identify:**
-- "X causes Y" from observational data
-- Mechanism proposed without direct testing
-- Mouse data presented as relevant to humans without caveats
-- Claims of novelty with missing citations
-- Broad claims from narrow samples
-
-**What to Recommend:**
-- Use appropriate language ("associated with" vs. "caused by")
-- Distinguish correlation from causation
-- Acknowledge limitations of model systems
-- Provide thorough literature context
-- Be specific about generalizability
-- Propose mechanisms as hypotheses, not conclusions
-
-### 14. Cherry-Picking and Selective Reporting
-
-**Common Problems:**
-- Reporting only significant results
-- Showing "representative" images that may not be typical
-- Excluding outliers without justification
-- Not reporting negative or contradictory findings
-- Switching between different statistical approaches
-
-**How to Identify:**
-- All reported results are significant
-- "Representative of 3 experiments" with no quantification
-- Data exclusions mentioned in results but not methods
-- Supplementary data contradicts main findings
-- Multiple analysis approaches with only one reported
-
-**What to Recommend:**
-- Report all planned analyses regardless of outcome
-- Quantify and show variability across replicates
-- Pre-specify outlier exclusion criteria
-- Include negative results
-- Pre-register analysis plan
-- Report effect sizes and confidence intervals for all comparisons
-
-### 15. Ignoring Alternative Explanations
-
-**Common Problems:**
-- Preferred explanation presented without considering alternatives
-- Contradictory evidence dismissed without discussion
-- Off-target effects not considered
-- Confounding variables not acknowledged
-- Limitations section minimal or absent
-
-**How to Identify:**
-- Single interpretation presented as fact
-- Prior contradictory findings not cited or discussed
-- No consideration of alternative mechanisms
-- No discussion of limitations
-- Specificity assumed without controls
-
-**What to Recommend:**
-- Discuss alternative explanations
-- Address contradictory findings from literature
-- Include appropriate specificity controls
-- Acknowledge and discuss limitations thoroughly
-- Consider and test alternative hypotheses
-
-## Figure and Data Presentation Issues
-
-### 16. Inappropriate Data Visualization
-
-**Common Problems:**
-- Bar graphs for continuous data (hiding distributions)
-- No error bars or error bars not defined
-- Truncated y-axes exaggerating differences
-- Dual y-axes creating misleading comparisons
-- Too many significant figures
-- Colors not colorblind-friendly
-
-**How to Identify:**
-- Bar graphs with few data points
-- Unclear what error bars represent (SD, SEM, CI?)
-- Y-axis doesn't start at zero for ratio/percentage data
-- Left and right y-axes with different scales
-- Values reported to excessive precision (p=0.04562)
-- Red-green color schemes
-
-**What to Recommend:**
-- Show individual data points with scatter/box/violin plots
-- Always define error bars (SD, SEM, 95% CI)
-- Start y-axis at zero or indicate breaks clearly
-- Avoid dual y-axes; use separate panels instead
-- Report appropriate significant figures
-- Use colorblind-friendly palettes (viridis, colorbrewer)
-- Include sample sizes in figure legends
-
-### 17. Image Manipulation Concerns
-
-**Common Problems:**
-- Excessive contrast/brightness adjustment
-- Spliced gels or images without indication
-- Duplicated images or panels
-- Uneven background in Western blots
-- Selective cropping
-- Over-processed microscopy images
-
-**How to Identify:**
-- Suspicious patterns or discontinuities
-- Very high contrast with no background
-- Similar features in different panels
-- Straight lines suggesting splicing
-- Inconsistent backgrounds
-- Loss of detail suggesting over-processing
-
-**What to Recommend:**
-- Apply adjustments uniformly across images
-- Indicate spliced gels with dividing lines
-- Show full, uncropped images in supplementary materials
-- Provide original images if requested
-- Follow journal image integrity policies
-- Use appropriate image analysis tools
-
-## Study Design Issues
-
-### 18. Poorly Defined Hypotheses and Outcomes
-
-**Common Problems:**
-- No clear hypothesis stated
-- Primary outcome not specified
-- Multiple outcomes without correction
-- Outcomes changed after data collection
-- Fishing expeditions presented as hypothesis-driven
-
-**How to Identify:**
-- Introduction doesn't state clear testable hypothesis
-- Multiple outcomes with unclear hierarchy
-- Outcomes in results don't match those in methods
-- Exploratory study presented as confirmatory
-- Many tests with no multiple testing correction
-
-**What to Recommend:**
-- State clear, testable hypotheses
-- Designate primary and secondary outcomes a priori
-- Pre-register studies when possible
-- Apply appropriate corrections for multiple outcomes
-- Clearly distinguish exploratory from confirmatory analyses
-- Report all pre-specified outcomes
-
-### 19. Baseline Imbalance and Selection Bias
-
-**Common Problems:**
-- Groups differ at baseline
-- Selection criteria applied differentially
-- Healthy volunteer bias
-- Survivorship bias
-- Indication bias in observational studies
-
-**How to Identify:**
-- Table 1 shows significant baseline differences
-- Inclusion criteria different between groups
-- Response rate <50% with no analysis
-- Analysis only includes completers
-- Groups self-selected rather than randomized
-
-**What to Recommend:**
-- Report baseline characteristics in Table 1
-- Use randomization to ensure balance
-- Adjust for baseline differences in analysis
-- Report response rates and compare responders vs. non-responders
-- Consider propensity score matching for observational data
-- Use intention-to-treat analysis
-
-### 20. Temporal and Batch Effects
-
-**Common Problems:**
-- Samples processed in batches by condition
-- Temporal trends not accounted for
-- Instrument drift over time
-- Different operators for different groups
-- Reagent lot changes between groups
-
-**How to Identify:**
-- All treatment samples processed on same day
-- Controls from different time period
-- No mention of batch or time effects
-- Different technicians for groups
-- Long study duration with no temporal analysis
-
-**What to Recommend:**
-- Randomize samples across batches/time
-- Include batch as covariate in analysis
-- Perform batch correction (ComBat, limma)
-- Include quality control samples across batches
-- Report and test for temporal trends
-- Balance operators across conditions
-
-## Reporting Issues
-
-### 21. Incomplete Statistical Reporting
-
-**Common Problems:**
-- Test statistics not reported
-- Degrees of freedom missing
-- Exact p-values replaced with inequalities (p<0.05)
-- No confidence intervals
-- No effect sizes
-- Sample sizes not reported per group
-
-**How to Identify:**
-- Only p-values given with no test statistics
-- p-values reported as p<0.05 rather than exact values
-- No measures of uncertainty
-- Effect magnitude unclear
-- n reported for total but not per group
-
-**What to Recommend:**
-- Report complete test statistics (t, F, χ², etc. with df)
-- Report exact p-values (except p<0.001)
-- Include 95% confidence intervals
-- Report effect sizes (Cohen's d, odds ratios, correlation coefficients)
-- Report n for each group in every analysis
-- Consider CONSORT-style flow diagram
-
-### 22. Methods-Results Mismatch
-
-**Common Problems:**
-- Methods describe analyses not performed
-- Results include analyses not described in methods
-- Different sample sizes in methods vs. results
-- Methods mention controls not shown
-- Statistical methods don't match what was done
-
-**How to Identify:**
-- Analyses in results without methodological description
-- Methods describe experiments not in results
-- Numbers don't match between sections
-- Controls mentioned but not shown
-- Different software mentioned than used
-
-**What to Recommend:**
-- Ensure complete concordance between methods and results
-- Describe all analyses performed in methods
-- Remove methodological descriptions of experiments not performed
-- Verify all numbers are consistent
-- Update methods to match actual analyses conducted
-
-## How to Use This Reference
-
-When reviewing manuscripts:
-1. Read through methods and results systematically
-2. Check for common issues in each category
-3. Note specific problems with evidence
-4. Provide constructive suggestions for improvement
-5. Distinguish major issues (affect validity) from minor issues (affect clarity)
-6. Prioritize reproducibility and transparency
-
-This is not an exhaustive list but covers the most frequently encountered issues. Always consider the specific context and discipline when evaluating potential problems.
+# Common Issues in Manuscript Review
+
+Use this reference as a prompt for inquiry, not a defect checklist. A possible issue becomes a review comment only when it is relevant to the study and supported by a manuscript location, supplied artifact, or applicable method principle.
+
+Do not infer misconduct, poor quality, or manuscript merit from a missing reporting item. Separate:
+
+- **Not reported:** the manuscript does not provide enough information to assess the point.
+- **Potential design or analysis problem:** the reported method may not answer the stated question.
+- **Demonstrated inconsistency:** two supplied artifacts or manuscript locations conflict.
+- **Integrity concern:** credible evidence should be described neutrally and routed through the journal process, normally in confidential editor notes.
+
+## Claim–evidence alignment
+
+Check each central claim against the design, analysis, result, and uncertainty that support it.
+
+Common mismatches:
+
+- Causal wording from an observational or otherwise non-identifying design
+- Mechanistic conclusions supported only by association or prediction
+- Conclusions based on a secondary, exploratory, or post hoc outcome without labeling
+- Directionally correct claims that overstate magnitude or precision
+- Population, setting, intervention, comparator, outcome, or time-horizon extrapolation
+- “No effect,” “equivalent,” or “safe” conclusions from imprecise or non-significant results
+- Abstract or conclusion claims that omit material harms, uncertainty, subgroup caveats, or null findings
+- Novelty claims that are broader than the search or cited literature supports
+
+Constructive response:
+
+1. Identify the claim and its location.
+2. Identify the relevant result or missing evidence.
+3. Explain the alignment problem.
+4. Request a bounded remedy: narrow wording, add uncertainty, clarify exploratory status, provide the prespecified analysis, or justify the inference.
+
+Use `scripts/validate_claim_evidence.py` for a local identifier-based matrix. Its report never echoes claim text.
+
+## Study question, design, and units
+
+### Question–design mismatch
+
+Check whether the population, intervention or exposure, comparator, outcomes, timing, and target quantity align from objectives through interpretation. For trials, identify the estimand when relevant. For prediction, distinguish model development from performance evaluation. For diagnostic studies, distinguish diagnostic accuracy from clinical utility.
+
+### Experimental or observational unit
+
+Potential issues include:
+
+- Technical replicates treated as independent biological units
+- Multiple cells, images, lesions, eyes, visits, or samples per subject analyzed as independent
+- Cluster assignment analyzed at the individual level without accounting for clustering
+- Paired or repeated observations analyzed as unpaired
+- Site, operator, batch, family, spatial, or temporal dependence ignored
+
+Request a clear definition of the unit, nesting, repeated measures, and analysis that reflects dependence. Do not assume a mixed model is always the correct remedy; the model must match the design and question.
+
+### Selection, allocation, and masking
+
+Assess, as applicable:
+
+- Sampling frame, recruitment, eligibility, and exclusions
+- Sequence generation and allocation concealment
+- Prospective stopping rules
+- Blinding or masking of participants, personnel, outcome assessors, and analysts
+- Consequences and mitigation when masking is infeasible
+- Baseline measurement timing and post-allocation exclusions
+
+Avoid treating baseline significance tests as proof of successful randomization. Focus on chance imbalance, clinically important imbalance, prespecified adjustment, and departures from the randomized comparison.
+
+### Confounding and causal identification
+
+For causal claims, ask:
+
+- What target causal contrast is intended?
+- Which assumptions connect the design and analysis to that contrast?
+- Were confounders selected using subject-matter reasoning rather than outcome-driven screening?
+- Could adjustment introduce collider or mediator bias?
+- Are time-varying treatment, censoring, immortal time, or informative observation processes relevant?
+- Are negative controls, sensitivity analyses, or alternative explanations appropriate?
+
+Do not demand a specific causal method without showing why it fits the data-generating process.
+
+## Sample size, precision, and replication
+
+Avoid fixed heuristics such as “n < 30 is too small” or “three replicates are sufficient.” Adequacy depends on the target effect or precision, variability, design effect, event count, model complexity, multiplicity, attrition, and decision context.
+
+Check:
+
+- Prospective rationale for sample size or precision
+- Inputs, assumptions, software or method, and allowance for attrition or clustering
+- Whether the primary outcome and analysis match the calculation
+- Event and outcome information relative to model complexity
+- Effective sample size after dependence, missingness, weighting, or splitting
+- Independent biological replication and validation where the claim requires it
+- Precision of estimates, not only nominal power
+
+Observed or post hoc power calculated from the observed effect generally adds little beyond the estimate and its interval. Request effect estimates and uncertainty rather than “achieved power.”
+
+## Statistical analysis
+
+### Analysis–design alignment
+
+Check whether the analysis respects:
+
+- Outcome scale and distribution
+- Pairing, clustering, repeated measures, censoring, and competing events
+- Sampling design, weights, matching, stratification, or blocking
+- Outcome hierarchy and prespecified estimand
+- Non-inferiority or equivalence margins and analysis populations
+- Longitudinal timing and informative dropout
+
+Do not prescribe “parametric” or “non-parametric” methods from sample size alone.
+
+### Assumptions and diagnostics
+
+The relevant assumptions depend on the estimand and model. A standalone normality test is not a universal gatekeeper and can be uninformative in very small or large samples. Look for design-aware diagnostics, residual behavior, influential observations, functional form, calibration, proportional hazards where applicable, and sensitivity to reasonable alternatives.
+
+Comments should identify the assumption at risk and why it matters. “Check normality” without specifying the modeled quantity or consequence is not actionable.
+
+### Effect estimates and uncertainty
+
+Flag:
+
+- Thresholded interpretation of p-values
+- P-values used as effect size, importance, or probability that a hypothesis is true
+- “Significant” versus “not significant” used as evidence of a difference between effects
+- Missing effect estimates, compatible intervals, denominators, or units
+- Excessive precision or inconsistent rounding
+- Confidence, credible, or prediction intervals described incorrectly
+- Clinical or practical importance conflated with statistical compatibility
+
+Prefer estimates, uncertainty, assumptions, and context. The ASA p-value principles and SAMPL reporting guidance are indexed in `assets/source_ledger.csv`.
+
+### Multiplicity and analysis flexibility
+
+Assess:
+
+- Number and hierarchy of outcomes, time points, subgroups, contrasts, and models
+- Interim looks, adaptive changes, or repeated data inspection
+- Family or false-discovery control when required by the inferential aim
+- Transparent labeling of confirmatory and exploratory analyses
+- Consistency with protocol, registration, and statistical analysis plan
+- Complete reporting rather than selective presentation of favorable analyses
+
+Not every collection of analyses requires the same correction. Ask authors to state the inferential family and rationale instead of automatically demanding Bonferroni adjustment.
+
+### Missing data and intercurrent events
+
+Check:
+
+- Amount and reasons by group and time
+- Distinction between intercurrent events and missing observations when relevant
+- Assumptions behind complete-case, imputation, weighting, likelihood, or other methods
+- Inclusion of variables and uncertainty in multiple imputation
+- Sensitivity analyses to plausible departures from assumptions
+- Alignment between the target quantity, data collection, and missing-data strategy
+
+Do not require a test that data are “missing completely at random”; missingness assumptions are not generally established by a single diagnostic test.
+
+### Outliers, transformations, and limits
+
+Check whether exclusions, transformations, winsorization, detection-limit handling, and influential-observation rules were prespecified or transparently justified. Request sensitivity analyses when conclusions depend materially on discretionary handling. Do not demand deletion merely because a value is extreme.
+
+### Subgroups and heterogeneity
+
+Look for prespecification, adequate interaction analysis, multiplicity, uncertainty, biological or clinical rationale, and consistency of direction. Within-group significance and between-group non-significance do not establish subgroup differences.
+
+### Prediction and machine learning
+
+Check:
+
+- Clear target population, outcome, prediction time, and intended use
+- Separation of training, tuning, and evaluation without leakage
+- Representative evaluation data and transportability
+- Handling of missing values and preprocessing within resampling folds
+- Calibration as well as discrimination when relevant
+- Uncertainty around performance and decision consequences
+- Overfitting, optimism correction, and external evaluation
+- Model and preprocessing availability, versioning, and human oversight
+- Fairness analyses tied to intended use, not demographic metrics without context
+
+TRIPOD+AI applies to regression and machine-learning prediction models; STARD-AI applies when diagnostic accuracy is the primary evaluation target.
+
+## Reproducibility and transparency
+
+Check whether another qualified researcher could understand and, where permissions allow, repeat the work:
+
+- Protocol, registration, amendments, and analysis plan
+- Data provenance, processing stages, exclusions, and versioned identifiers
+- Reagents, materials, instruments, software, package versions, parameters, and seeds
+- Code, environment or lock file, run order, and computational resources
+- Data, code, model, and material availability statements
+- Repository accession numbers and persistent identifiers
+- Clear, justified restrictions for privacy, consent, security, licensing, or community governance
+
+“Available on request” is not automatically invalid, and open release is not always ethical or lawful. Evaluate whether the access route is specific, feasible, and consistent with governance.
+
+Do not claim to have reproduced an analysis unless it was actually run with documented inputs, environment, commands, and outputs.
+
+## Figures, tables, and images
+
+Assess the supplied artifact directly; do not infer manipulation from low-resolution rendering alone.
+
+Check:
+
+- Axes, units, denominators, scales, legends, and uncertainty definitions
+- Individual data or distribution display when summary graphics conceal relevant structure
+- Accessibility and redundant encoding beyond color alone
+- Consistency among text, tables, figures, and supplements
+- Sample sizes and exclusions for each panel or analysis
+- Image acquisition, processing, normalization, scale bars, and representative-image selection
+- Disclosed splicing or adjustments and availability of source images when policy requires
+- Avoidance of deceptive truncation, area/volume encoding, or dual-axis implication
+
+Possible duplication or manipulation should be documented neutrally by location and referred to the editor under the journal’s image-integrity process. Do not accuse authors of fabrication.
+
+## Ethics, welfare, privacy, and integrity
+
+Check what is applicable:
+
+- Ethics committee or institutional review and identifiers
+- Consent, assent, waiver, or lawful basis
+- Trial registration and prospective protocol availability
+- Animal welfare, humane endpoints, and relevant ARRIVE items
+- Privacy, identifiability, community governance, and controlled access
+- Funding, sponsor role, author conflicts, and contributor roles
+- Dual-use, biosafety, environmental, or security considerations
+- Prior publication, overlapping reports, and transparent secondary analyses
+
+If a concern cannot safely be raised with authors, use the confidential editor channel. State the evidence and uncertainty; do not investigate people, contact institutions, or reveal the manuscript outside the authorized process.
+
+## Citations and references
+
+Check:
+
+- Every consequential literature claim has an appropriate source
+- The cited source supports the stated proposition
+- Primary sources are used for methods, data, and policies when available
+- Retracted or corrected work is handled appropriately
+- Contradictory and relevant evidence is represented fairly
+- Self-citation requests are necessary, specific, and not coercive
+- Citation identifiers and reference entries are internally consistent
+
+The local `scripts/audit_citations.py` checks Pandoc-style keys such as `[@ref-id]` against a CSV. It does not verify source existence or support and must not be described as doing so.
+
+## Writing actionable comments
+
+For each major or minor comment, include:
+
+- **Location**
+- **Observation**
+- **Evidence or criterion**
+- **Why it matters**
+- **Requested action**
+
+Prefer: “At Methods, paragraph 3, the experimental unit is unclear. Because three measurements appear to come from each participant, please define the unit and explain how within-participant dependence was handled.”
+
+Avoid: “The statistics are bad.”
+
+Requests for new experiments should be necessary to support an existing central claim, ethically and practically proportionate, and distinguished from optional future work. Often the appropriate remedy is to narrow a claim, add a limitation, provide missing analysis detail, or share an existing artifact.

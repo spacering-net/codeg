@@ -1,0 +1,63 @@
+{
+  "schema_version": "2.0",
+  "evaluation_id": "EVALUATION-SYNTHETIC-001",
+  "work_id": "WORK-SYNTHETIC-001",
+  "data_classification": "synthetic",
+  "evidence": [
+    {
+      "evidence_id": "EVIDENCE-SYNTHETIC-QUESTION",
+      "criterion_ids": [
+        "question_scope"
+      ],
+      "source_type": "section",
+      "locator_ref": "LOCAL-WORK-SECTION-QUESTION",
+      "claim_ref": "LOCAL-CLAIM-QUESTION",
+      "access_status": "available",
+      "verification_status": "verified"
+    },
+    {
+      "evidence_id": "EVIDENCE-SYNTHETIC-LITERATURE",
+      "criterion_ids": [
+        "literature_contribution"
+      ],
+      "source_type": "section",
+      "locator_ref": "LOCAL-WORK-SECTION-LITERATURE",
+      "claim_ref": "LOCAL-CLAIM-CONTRIBUTION",
+      "access_status": "available",
+      "verification_status": "verified"
+    },
+    {
+      "evidence_id": "EVIDENCE-SYNTHETIC-METHOD",
+      "criterion_ids": [
+        "method_design"
+      ],
+      "source_type": "protocol",
+      "locator_ref": "LOCAL-WORK-PROTOCOL",
+      "claim_ref": "LOCAL-CLAIM-METHOD",
+      "access_status": "available",
+      "verification_status": "verified"
+    },
+    {
+      "evidence_id": "EVIDENCE-SYNTHETIC-ANALYSIS",
+      "criterion_ids": [
+        "analysis_claims"
+      ],
+      "source_type": "section",
+      "locator_ref": "LOCAL-WORK-SECTION-ANALYSIS",
+      "claim_ref": "LOCAL-CLAIM-ANALYSIS",
+      "access_status": "available",
+      "verification_status": "verified"
+    },
+    {
+      "evidence_id": "EVIDENCE-SYNTHETIC-TRANSPARENCY",
+      "criterion_ids": [
+        "transparency_integrity"
+      ],
+      "source_type": "other_local_record",
+      "locator_ref": "LOCAL-WORK-TRANSPARENCY-RECORD",
+      "claim_ref": "LOCAL-CLAIM-TRANSPARENCY",
+      "access_status": "available",
+      "verification_status": "verified"
+    }
+  ]
+}

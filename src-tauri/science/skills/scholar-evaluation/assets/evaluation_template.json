@@ -1,0 +1,50 @@
+{
+  "schema_version": "2.0",
+  "evaluation_id": "EVALUATION-SYNTHETIC-001",
+  "rubric_id": "RUBRIC-SYNTHETIC-001",
+  "work_id": "WORK-SYNTHETIC-001",
+  "data_classification": "synthetic",
+  "purpose": "developmental_review_of_scholarly_work",
+  "ratings": [
+    {
+      "criterion_id": "question_scope",
+      "status": "missing",
+      "score": null,
+      "uncertainty": null,
+      "evidence_ids": [],
+      "rationale_ref": "LOCAL-MISSING-RATIONALE-QUESTION"
+    },
+    {
+      "criterion_id": "literature_contribution",
+      "status": "missing",
+      "score": null,
+      "uncertainty": null,
+      "evidence_ids": [],
+      "rationale_ref": "LOCAL-MISSING-RATIONALE-LITERATURE"
+    },
+    {
+      "criterion_id": "method_design",
+      "status": "missing",
+      "score": null,
+      "uncertainty": null,
+      "evidence_ids": [],
+      "rationale_ref": "LOCAL-MISSING-RATIONALE-METHOD"
+    },
+    {
+      "criterion_id": "analysis_claims",
+      "status": "missing",
+      "score": null,
+      "uncertainty": null,
+      "evidence_ids": [],
+      "rationale_ref": "LOCAL-MISSING-RATIONALE-ANALYSIS"
+    },
+    {
+      "criterion_id": "transparency_integrity",
+      "status": "missing",
+      "score": null,
+      "uncertainty": null,
+      "evidence_ids": [],
+      "rationale_ref": "LOCAL-MISSING-RATIONALE-TRANSPARENCY"
+    }
+  ]
+}

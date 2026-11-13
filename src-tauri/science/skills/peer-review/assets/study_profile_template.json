@@ -1,0 +1,12 @@
+{
+  "schema_version": "2.0",
+  "profile_id": "PROFILE-SYNTHETIC-RCT",
+  "study_types": [
+    "randomized_trial"
+  ],
+  "report_kind": "results",
+  "features": [],
+  "domains": [
+    "health"
+  ]
+}

@@ -1,0 +1,2 @@
+source_id,claim_ids,title,authors_or_organization,publication_date,source_type,identifier,url,accessed_on,relation,study_design_or_document_type,limitations,notes
+SRC-SYN-001,OBS1;H1;H2;P1;P2,"Synthetic source record for schema demonstration","Synthetic Example Group",2026-07-23,other,SYNTHETIC:HG-001,https://example.invalid/hypothesis-generation/synthetic-source,2026-07-23,contextual,"Synthetic documentation record","Not scientific evidence; does not support a real-world claim","Replace this row with verified sources and preserve challenging as well as supportive evidence"

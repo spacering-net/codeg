@@ -1,0 +1,4 @@
+claim_id,location,claim_type,claim_summary,evidence_ids,support_level,alignment_issue,limitation,requested_action
+CLAIM-SYN-001,Abstract:results,primary_outcome,Synthetic primary outcome claim for structural testing,FIG-SYN-001;syn-analysis-001,supported,none,,
+CLAIM-SYN-002,Discussion:paragraph-2,generalization,Synthetic broad generalization claim for structural testing,TAB-SYN-001,partly_supported,population,Synthetic sample does not represent the stated target population,Narrow the claim to the studied population or provide justified external evidence
+CLAIM-SYN-003,Results:paragraph-4,safety,Synthetic safety claim awaiting evidence mapping,,not_assessed,none,,Map the claim to adverse-event denominators and uncertainty before review

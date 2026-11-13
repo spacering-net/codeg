@@ -30,7 +30,7 @@ Validation should be performed:
 ```
 Valid:   10.1038/s41586-021-03819-2
 Valid:   10.1126/science.aam9317
-Invalid: 10.1038/invalid
+Syntactically plausible but requires lookup: 10.1038/invalid
 Invalid: doi:10.1038/... (should omit "doi:" prefix in BibTeX)
 ```
 
@@ -60,17 +60,21 @@ python scripts/validate_citations.py references.bib --check-dois
 
 **Process**:
 1. Extract all DOIs from BibTeX file
-2. Query doi.org resolver for each
-3. Query CrossRef API for metadata
-4. Compare metadata with BibTeX entry
-5. Report discrepancies
+2. Query Crossref `/works/{doi}`; on 404, query DataCite `/dois/{doi}`
+3. If both lack a record, GET `doi.org/{doi}` without following the redirect
+4. A registration record or resolver redirect confirms registration; resolver 404 is an error
+5. Report timeouts, 429/5xx, and malformed responses as `doi_unverified` warnings
+
+The script does not compare bibliographic fields or test the publisher landing
+page. Review title/authors/year manually; a registered DOI can still identify
+the wrong work. Retraction status also requires a separate publisher check.
 
 #### Common Issues
 
 **Broken DOIs**:
 - Typos in DOI
 - Publisher changed DOI (rare)
-- Article retracted
+- A retracted article normally retains its DOI; check its publication status separately
 - Solution: Find correct DOI from publisher site
 
 **Mismatched metadata**:
@@ -148,7 +152,7 @@ doi OR url    % At least one required
 #### Validation Script
 
 ```bash
-python scripts/validate_citations.py references.bib --check-required-fields
+python scripts/validate_citations.py references.bib
 ```
 
 **Output**:
@@ -215,7 +219,7 @@ author = {{World Health Organization}}
 
 **Automated validation**:
 ```bash
-python scripts/validate_citations.py references.bib --check-authors
+python scripts/validate_citations.py references.bib
 ```
 
 **Checks for**:
@@ -241,7 +245,7 @@ year = {1665}    % Hooke's Micrographia (very old)
 ```bibtex
 year = {24}      % Two digits (ambiguous)
 year = {202}     % Typo
-year = {2025}    % Future (unless accepted/in press)
+year = {3025}    % Implausible future year
 year = {0}       % Obviously wrong
 ```
 
@@ -367,7 +371,7 @@ url = {bit.ly/...}  % URL shortener (not permanent)
 
 **Automated detection**:
 ```bash
-python scripts/validate_citations.py references.bib --check-duplicates
+python scripts/validate_citations.py references.bib
 ```
 
 **Output**:
@@ -454,15 +458,13 @@ title = {Title with {Protected} Text}
 #### Validation
 
 ```bash
-python scripts/validate_citations.py references.bib --check-syntax
+python scripts/validate_citations.py references.bib
 ```
 
-**Checks**:
-- Valid BibTeX structure
-- Balanced braces
-- Proper commas
-- Valid entry types
-- Unique citation keys
+The bundled parser checks entries it can parse and duplicate keys; it is not
+a complete BibTeX syntax validator. Malformed entries may be skipped, and
+`@string` macros are not expanded. Compare input/output counts and compile the
+bibliography with the actual BibTeX/Biber toolchain before submission.
 
 ## Validation Workflow
 
@@ -474,8 +476,8 @@ Run comprehensive validation:
 python scripts/validate_citations.py references.bib
 ```
 
-**Checks all**:
-- DOI resolution
+**Checks**:
+- DOI registration only when `--check-dois` is requested
 - Required fields
 - Author formatting
 - Data consistency
@@ -539,27 +541,29 @@ Examine validation report:
 1. Standardize formatting
 2. Add URLs for accessibility
 
-### Step 4: Auto-Fix
+### Step 4: Apply the safe corrections
 
-Use auto-fix for safe corrections:
+`validate_citations.py` only reports; `format_bibtex.py` is what rewrites.
+Send the result to a new file so the original survives a bad run:
 
 ```bash
-python scripts/validate_citations.py references.bib \
-  --auto-fix \
+python scripts/format_bibtex.py references.bib \
   --output fixed_references.bib
 ```
 
-**Auto-fix can**:
-- Fix page range format (- to --)
+**It can**:
+- Fix page range format (- to --), and expand abbreviated ranges (1123-30)
 - Remove "pp." from pages
 - Standardize author separators
-- Fix common syntax errors
+- Strip URL prefixes from DOIs
 - Normalize field order
+- Rewrite citation keys to one scheme (`--rekey`)
+- Drop duplicates by DOI or key (`--deduplicate`)
 
-**Auto-fix cannot**:
+**It cannot**:
 - Add missing information
 - Find correct DOIs
-- Determine which duplicate to keep
+- Determine which duplicate to keep — it keeps the first
 - Fix semantic errors
 
 ### Step 5: Manual Review
@@ -581,14 +585,9 @@ Validate after fixes:
 python scripts/validate_citations.py fixed_references.bib --verbose
 ```
 
-Should show:
-```
-✓ All DOIs valid
-✓ All required fields present
-✓ No duplicates found
-✓ Syntax valid
-✓ 150/150 entries valid
-```
+Inspect `errors`, `warnings`, and `duplicates` in the JSON report. Zero high-severity
+errors does not mean every DOI was verified: review any `doi_unverified` warnings
+and compile the bibliography separately.
 
 ## Validation Checklist
 
@@ -601,7 +600,7 @@ Use this checklist before final submission:
 
 ### Completeness
 - [ ] All entries have required fields
-- [ ] Modern papers (2000+) have DOIs
+- [ ] DOIs are included when assigned; absence is verified, not inferred from year
 - [ ] Authors properly formatted
 - [ ] Journals/conferences properly named
 
@@ -641,7 +640,7 @@ python scripts/validate_citations.py refs.bib
 python scripts/validate_citations.py refs.bib
 
 # Before submission
-python scripts/validate_citations.py refs.bib --strict
+python scripts/validate_citations.py refs.bib --check-dois
 ```
 
 ### 2. Use Automated Tools
@@ -652,15 +651,14 @@ Don't validate manually - use scripts:
 - Catches errors humans miss
 - Generates reports
 
-### 3. Keep Backup
+### 3. Write to a new file and diff before replacing
+
+`format_bibtex.py` writes only where you tell it to: with neither `--output`
+nor `--in-place` it prints to stdout and leaves the input alone.
 
 ```bash
-# Before auto-fix
-cp references.bib references_backup.bib
-
-# Run auto-fix
-python scripts/validate_citations.py references.bib \
-  --auto-fix \
+# Reformat into a separate file
+python scripts/format_bibtex.py references.bib \
   --output references_fixed.bib
 
 # Review changes
@@ -692,7 +690,7 @@ For entries that can't be fixed:
   year = {1950},
   volume = {12},
   pages = {34--56},
-  note = {DOI not available for publications before 2000}
+  note = {No DOI found in the checked publisher record}
 }
 ```
 
@@ -792,7 +790,7 @@ title = {Study of H\textsubscript{2}O}  % H₂O
    note = {Complete pagination not yet assigned — online-first publication}
    ```
 
-**CRITICAL**: Never leave an `@article` entry without `volume`, `pages`, and `doi` unless you have exhausted all search options and documented the reason.
+Verify applicable fields against the publisher record. Online-first volume/pages, DOI-less articles, and article-number journals are valid cases; log the reason for absence and use the style-appropriate locator without fabricating metadata.
 
 ### Issue 4: Cannot Find Duplicate
 

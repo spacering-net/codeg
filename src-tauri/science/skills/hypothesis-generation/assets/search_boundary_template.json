@@ -1,0 +1,23 @@
+{
+  "schema_version": "2.0",
+  "search_boundary_id": "SEARCH-SYN-001",
+  "searched_on": "2026-07-23",
+  "searched_by": "Accountable human or authorized research assistant",
+  "purpose": "Demonstrate a bounded, traceable search record for a synthetic hypothesis package.",
+  "databases_or_indexes": [
+    "Synthetic index for format demonstration"
+  ],
+  "queries": [
+    "synthetic condition X outcome Y mechanism",
+    "synthetic condition X alternative explanation measurement drift"
+  ],
+  "date_limits": "No date restriction in the synthetic demonstration.",
+  "language_limits": "Synthetic English records only.",
+  "inclusion_scope": "Sources bearing on the observation, candidate process, measurement, rivals, and methods.",
+  "exclusion_scope": "No real scientific sources were screened in this synthetic template.",
+  "known_limitations": [
+    "This is a schema example and cannot support novelty, priority, or an evidence claim."
+  ],
+  "last_result_screened_or_stop_rule": "Replace with the actual result depth, saturation rule, or protocol completion statement.",
+  "novelty_status": "not_assessed"
+}

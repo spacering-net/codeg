@@ -5,7 +5,7 @@ from:
 
 - **Project:** K-Dense-AI/scientific-agent-skills
 - **Source:** https://github.com/K-Dense-AI/scientific-agent-skills.git
-- **Pinned commit:** `4d97e293dc6f604fb6b63dcd49b9028df413d65b`
+- **Pinned commit:** `526ebce143bc326f44471554e33d66a19c840360`
 - **License:** MIT (see below), Copyright (c) 2025 K-Dense Inc.
 
 Only MIT-licensed, self-contained skills are included. Re-sync with

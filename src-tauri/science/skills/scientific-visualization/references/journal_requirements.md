@@ -1,320 +1,170 @@
-# Journal-Specific Figure Requirements
-
-## Overview
-
-Different journals have specific technical requirements for figures. This reference compiles common requirements from major scientific publishers. **Always check the specific journal's author guidelines for the most current requirements.**
-
-## Nature Portfolio (Nature, Nature Methods, etc.)
-
-### Technical Specifications
-- **File formats**:
-  - Vector: PDF, EPS, AI (preferred for graphs)
-  - Raster: TIFF, PNG (for images)
-  - Never: PowerPoint, Word, JPEG
-
-- **Resolution**:
-  - Line art: 1000-1200 DPI
-  - Combination (line art + images): 600 DPI
-  - Photographs/microscopy: 300 DPI minimum
-
-- **Color space**: RGB (Nature is digital-first)
-
-- **Dimensions**:
-  - Single column: 89 mm (3.5 inches)
-  - 1.5 column: 120 mm (4.7 inches)
-  - Double column: 183 mm (7.2 inches)
-  - Maximum height: 247 mm (9.7 inches)
-
-- **Fonts**:
-  - Arial or Helvetica (or similar sans-serif)
-  - Minimum 5-7 pt at final size
-  - Embed all fonts in PDF/EPS
-
-### Nature Specific Guidelines
-- Panel labels: a, b, c (lowercase, bold) in top-left corner
-- Scale bars required for microscopy images
-- Gel images: Include molecular weight markers
-- Cropping: Indicate with line breaks
-- Statistics: Mark significance; define symbols in legend
-- Source data: Required for all graphs
-
-### File Naming
-Format: `FirstAuthorLastName_FigureNumber.ext`
-Example: `Smith_Fig1.pdf`
-
-## Science (AAAS)
-
-### Technical Specifications
-- **File formats**:
-  - Vector: EPS, PDF (preferred)
-  - Raster: TIFF
-  - Acceptable: AI, PSD (Photoshop)
-
-- **Resolution**:
-  - Line art: 1000 DPI minimum
-  - Photographs: 300 DPI minimum
-  - Combination: 600 DPI minimum
-
-- **Color space**: RGB
-
-- **Dimensions**:
-  - Single column: 5.5 cm (2.17 inches)
-  - 1.5 column: 12 cm (4.72 inches)
-  - Full width: 17.5 cm (6.89 inches)
-  - Maximum height: 23.3 cm (9.17 inches)
-
-- **Fonts**:
-  - Helvetica (or Arial)
-  - 6-8 pt minimum at final size
-  - Consistent across all figures
-
-### Science Specific Guidelines
-- Panel labels: (A), (B), (C) in parentheses
-- Minimal text within figures (details in caption)
-- High contrast for web and print
-- Error bars required; define in caption
-- Avoid excessive whitespace
-
-### File Naming
-Format: `Manuscript#_Fig#.ext`
-Example: `abn1234_Fig1.eps`
-
-## Cell Press (Cell, Neuron, Molecular Cell, etc.)
-
-### Technical Specifications
-- **File formats**:
-  - Vector: PDF, EPS (preferred for graphs/diagrams)
-  - Raster: TIFF (for photographs)
-
-- **Resolution**:
-  - Line art: 1000 DPI
-  - Photographs: 300 DPI
-  - Combination: 600 DPI
-
-- **Color space**: RGB
-
-- **Dimensions**:
-  - Single column: 85 mm (3.35 inches)
-  - Double column: 178 mm (7.01 inches)
-  - Maximum height: 230 mm (9.06 inches)
-
-- **Fonts**:
-  - Arial or Helvetica only
-  - 8-12 pt for axis labels
-  - 6-8 pt for tick labels
-
-### Cell Press Specific Guidelines
-- Panel labels: (A), (B), (C) or A, B, C in top-left
-- Related panels should match in size
-- Scale bars mandatory for microscopy
-- Western blots: Include molecular weight markers
-- Arrows/arrowheads: 2 pt minimum width
-- Line widths: 1-2 pt for data
-
-## PLOS (Public Library of Science)
-
-### Technical Specifications
-- **File formats**:
-  - Vector: EPS, PDF (preferred)
-  - Raster: TIFF, PNG
-  - TIFF with LZW compression acceptable
-
-- **Resolution**:
-  - Minimum 300 DPI at final size (all figure types)
-  - 600 DPI preferred for line art
-
-- **Color space**: RGB
-
-- **Dimensions**:
-  - Single column: 8.3 cm (3.27 inches)
-  - 1.5 column: 11.4 cm (4.49 inches)
-  - Double column: 17.3 cm (6.81 inches)
-  - Maximum height: 23.3 cm (9.17 inches)
-
-- **Fonts**:
-  - Sans-serif preferred (Arial, Helvetica)
-  - 8-12 pt for labels at final size
-
-### PLOS Specific Guidelines
-- Figures should be understandable without caption
-- Color required only if adding information
-- All figures convertible to grayscale
-- Panel labels optional but recommended
-- Open access: Figures must be CC-BY licensed
-- Source data files encouraged
-
-## ACS (American Chemical Society)
-
-### Technical Specifications
-- **File formats**:
-  - Preferred: TIFF, PDF, EPS
-  - Application files: AI, CDX (ChemDraw), CDL
-  - Acceptable: PNG (not for publication)
-
-- **Resolution**:
-  - Minimum 300 DPI at final size
-  - 600 DPI for line art and chemical structures
-  - 1200 DPI for detailed structures
-
-- **Color space**: RGB or CMYK (check specific journal)
-
-- **Dimensions**:
-  - Single column: 3.25 inches (8.25 cm)
-  - Double column: 7 inches (17.78 cm)
-
-- **Fonts**:
-  - Embedded fonts required
-  - Consistent sizing across figures
-
-### ACS Specific Guidelines
-- Chemical structures: Use ChemDraw or equivalent
-- Atom labels: 10-12 pt
-- Bond thickness: 2 pt
-- Panel labels: Lowercase bold (a, b, c)
-- High contrast required (many ACS journals grayscale print)
-
-## Elsevier Journals (varies by journal)
-
-### Technical Specifications
-- **File formats**:
-  - Vector: EPS, PDF
-  - Raster: TIFF, JPEG (only for photographs)
-
-- **Resolution**:
-  - Line art: 1000 DPI minimum
-  - Photographs: 300 DPI minimum
-  - Combination: 600 DPI minimum
-
-- **Color space**: RGB (for online); CMYK (for print journals)
-
-- **Dimensions**: Vary by journal
-  - Common single column: 90 mm
-  - Common double column: 190 mm
-
-- **Fonts**:
-  - Preferred: Arial, Times, Symbol
-  - Minimum 6 pt at final size
-
-### Elsevier Specific Guidelines
-- Check individual journal guidelines (highly variable)
-- Some journals charge for color in print
-- Panel labels typically (A), (B), (C) or A, B, C
-- Graphical abstract often required (separate from figures)
-
-## IEEE (Engineering/Computer Science)
-
-### Technical Specifications
-- **File formats**:
-  - Vector: PDF, EPS (preferred)
-  - Raster: TIFF, PNG
-
-- **Resolution**:
-  - Photographs/graphics: 300 DPI minimum at final size
-  - Line art: 600 DPI minimum
-
-- **Color space**: RGB (online); CMYK (print)
-
-- **Dimensions**:
-  - Single column: 3.5 inches (8.9 cm)
-  - Double column: 7.16 inches (18.2 cm)
-
-- **Fonts**:
-  - Sans-serif preferred
-  - Minimum 8-10 pt at final size
-
-### IEEE Specific Guidelines
-- Figures should be readable in black and white
-- Color figures incur no charge (online publication)
-- Panel labels: (a), (b), (c) in lowercase
-- Captions below figures (not on separate page)
-- Use IEEE graphics checker tool before submission
-
-## BMC (BioMed Central) - Open Access
-
-### Technical Specifications
-- **File formats**:
-  - Any standard format accepted
-  - Preferred: TIFF, PDF, EPS, PNG
-
-- **Resolution**:
-  - Minimum 600 DPI for line art
-  - Minimum 300 DPI for photographs
-
-- **Color space**: RGB
-
-- **Dimensions**:
-  - Flexible, but consider readability
-  - Maximum width typically 140 mm
-
-- **Fonts**:
-  - Embedded and readable
-
-### BMC Specific Guidelines
-- Open access: CC-BY license required
-- Figure files uploaded separately
-- Panel labels as appropriate for field
-- Source data encouraged
-- Accessibility important (colorblind-friendly)
-
-## Common Requirements Across Journals
-
-### Universal Best Practices
-1. **Never use JPEG for graphs/plots**: Compression artifacts
-2. **Embed all fonts**: In PDF/EPS files
-3. **Layer structure**: Flatten images (merge layers in Photoshop)
-4. **RGB vs CMYK**: Most journals now RGB (digital-first)
-5. **High resolution**: Always better to start high, reduce if needed
-6. **Consistency**: Same style across all figures in manuscript
-7. **File size**: Balance quality with reasonable file sizes (typically <10 MB per figure)
-
-### Submitting Figures
-- **Initial submission**: Lower resolution often acceptable (for review)
-- **Revision/acceptance**: High-resolution required
-- **Separate files**: Each figure as separate file
-- **File naming**: Clear, systematic naming
-- **Supporting information**: May have different requirements
-
-## Quick Reference Table
-
-| Publisher | Single Column | Double Column | Min DPI (photos) | Min DPI (line art) | Preferred Format |
-|-----------|---------------|---------------|------------------|-------------------|------------------|
-| Nature | 89 mm | 183 mm | 300 | 1000 | EPS, PDF |
-| Science | 5.5 cm | 17.5 cm | 300 | 1000 | EPS, PDF |
-| Cell Press | 85 mm | 178 mm | 300 | 1000 | EPS, PDF |
-| PLOS | 8.3 cm | 17.3 cm | 300 | 600 | EPS, TIFF |
-| ACS | 3.25 in | 7 in | 300 | 600 | TIFF, EPS |
-
-## Checking Requirements
-
-### Before Submission Checklist
-1. Read journal's author guidelines (figure section)
-2. Check file format requirements
-3. Verify resolution requirements
-4. Confirm size specifications (width × height)
-5. Check font requirements
-6. Verify color space (RGB vs CMYK)
-7. Check panel labeling style
-8. Review supplementary materials requirements
-9. Confirm file naming conventions
-10. Check file size limits
-
-### Useful Tools
-- **ImageJ/Fiji**: Check/adjust DPI
-- **Adobe Acrobat**: Verify embedded fonts, check PDF properties
-- **GIMP**: Free alternative to Photoshop for raster editing
-- **Inkscape**: Free vector graphics editor
-
-## Resources
-
-- **Journal websites**: Always check "Author Guidelines" or "Instructions for Authors"
-- **Publisher resources**: Many provide templates and tools
-- **Format conversion**: Use reputable tools; check output quality
-- **Help desks**: Contact journal staff if unclear
-
-## Notes
-
-- Requirements change periodically - always verify current guidelines
-- Preprint servers (bioRxiv, arXiv) often have different requirements
-- Conference proceedings may have separate requirements
-- Some journals offer figure preparation services (often paid)
-- Supplementary figures may have relaxed requirements compared to main text figures
+# Publisher and Journal Figure Snapshots
+
+Reviewed 2026-10-01 against official pages, except the explicitly historical Science snapshot below. Requirements are date-sensitive and often depend on the journal, article type, figure type, and submission phase. Verify the live target-journal page before submission. Source IDs resolve in `sources.md`.
+
+The machine-readable subset in `assets/publisher_profiles.json` is for planning and deterministic screening only. `scripts/export_plan.py` never claims compliance.
+
+## Nature (flagship journal)
+
+**Scope:** `Nature` final submission after acceptance in principle, not all Nature Portfolio journals [NATURE-FINAL] [NATURE-FIG].
+
+- Standard widths: 89 mm single column, 183 mm double column; 120-136 mm is possible for one-and-a-half columns.
+- Full page depth: 247 mm.
+- Panels: lowercase bold upright `a`, `b`, `c`, 8 pt.
+- Other text: 5-7 pt at final size; Helvetica or Arial preferred.
+- Keep text and line art editable; do not outline or rasterize them.
+- Preferred line/graph containers include AI, PostScript, vector EPS, and PDF.
+- Preferred raster source: layered PSD or TIFF. The final-submission page states 300-600 dpi for photographs; minimum 300 dpi at maximum use size.
+- The newer research-figure guide recommends export images at 450 dpi or above because online proofs top out at 450 dpi. This is a recommendation layered on the final-submission minimum, not a universal 450 dpi rule.
+- RGB is recommended; final print conversion may use CMYK.
+- Type 42 fonts are requested. The figure guide explicitly gives `matplotlib.rcParams["pdf.fonttype"] = 42`.
+- High-quality JPEG can be accepted when it is the only option for a photograph. Therefore, “Nature never accepts JPEG” is false.
+- Extended Data has different rules: RGB, maximum 300 ppi, maximum 10 MB, and JPEG preferred with TIFF/EPS alternatives.
+
+Do not apply these flagship rules automatically to Nature Communications, Scientific Reports, npj journals, or Nature Reviews; each has its own page.
+
+## Science (AAAS flagship journal)
+
+**Scope:** historical `Science` snapshot accessed 2026-07-23, with separate initial and revised stages [SCIENCE-INITIAL] [SCIENCE-REVISED]. Both pages blocked direct and fresh extraction on 2026-10-01. The numbers below remain provisional until live instructions are checked.
+
+### Initial submission
+
+- A single manuscript file with embedded figures is preferred.
+- Figures should be 300 dpi for review.
+- Printed widths are usually 5.7 cm (one column), 12.1 cm (two columns), or 18.4 cm (three columns).
+- Vector creation is preferred.
+- Use sans serif, preferably Helvetica. Lettering should be about 7 pt after reduction and no smaller than 5 pt.
+- Avoid red/green combinations and similar hues as sole identifiers; add shape/texture where needed.
+- Scales should not extend beyond the plotted data merely as empty range.
+
+### Revised manuscript
+
+- Upload each figure separately.
+- Preferred vector formats: PDF, EPS, or AI.
+- Raster illustrations/diagrams and photographs/microscopy: TIFF.
+- Vector/raster combinations: PDF or EPS.
+- Line art without a vector original: at least 300 dpi at final size, preferably higher.
+- Color and grayscale images: at least 300 dpi at final size.
+- Upsampling is not permitted.
+- PowerPoint and figures embedded in Word are not accepted at this stage.
+
+The 2026-07-23 snapshot did **not** state the older blanket “1,000 dpi line art / 600 dpi combination” numbers that this skill previously claimed.
+
+Science Advances and other AAAS journals publish separate figure guides; do not reuse the flagship profile without checking.
+
+## Cell Press
+
+**Scope:** general Cell Press figure page; exceptions are explicitly listed for STAR Protocols and `Cell` Leading Edge [CELL-FIG].
+
+### Initial submission and review
+
+- Cell Press accepts a wide range of formats, sizes, and resolutions.
+- Figures may be embedded or uploaded separately.
+- Individual 1-2 MB files are recommended for reviewer convenience.
+
+### Final production
+
+- Upload each main figure as one separate file containing all its panels; keep titles/legends in the manuscript.
+- Recommended overall maximum: 16.5 × 20 cm. This is framed as a recommendation.
+- Two-column article widths: 8.5 cm, 11.4 cm, and 17.4 cm.
+- Three-column formats: 5.5 cm, 11.4 cm, and 17.4 cm.
+- Maximum individual file size: 20 MB.
+- TIFF and PDF are preferred for most journals/types. EPS, JPEG, and CDX are accepted. Special cases differ.
+- Color/grayscale: at least 300 dpi; black-and-white: at least 500 dpi; line art: at least 1,000 dpi at final size.
+- RGB, Arial, capital panel letters, 6-8 pt text, and 0.5-1.5 pt strokes.
+- Embed fonts. General production guidance says flatten layers, except specified `Cell` Leading Edge material.
+- Do not use red and green together as the only distinction.
+
+Cell Press requires minimal image processing, original unprocessed data on request, and disclosure of processing/stitching. Its current policy prohibits generative AI/AI-assisted alteration of research/data images, including brightness, contrast, or color-balance adjustment performed by such tools.
+
+## PLOS research journals
+
+**Scope:** current PLOS Computational Biology page, consistent with the sampled PLOS research-journal figure pages [PLOS-FIG]. Verify the selected PLOS journal.
+
+- Formatting requirements are waived until provisional Editorial Accept.
+- Final figure format: TIFF or EPS.
+- Width: 789-2250 px at 300 dpi, equivalent to 6.68-19.05 cm.
+- Text-column alignment recommendation: no wider than 13.2 cm.
+- Maximum height: 2625 px at 300 dpi, equivalent to 22.23 cm.
+- Resolution: 300-600 dpi at final dimensions. The page warns that above 600 may trigger resizing and below 300 will degrade output.
+- The summary table says less than 10 MB; the detailed section says 10 MB or less. The planner conservatively uses the stricter boundary and flags the inconsistency.
+- Text: Arial, Times, or Symbol, 8-12 pt.
+- Color mode: RGB 8-bit/channel or grayscale.
+- Put all panels of one figure in one single-page file. TIFF must have no alpha channel and must use LZW compression.
+- The pixel bounds are expressed at 300 dpi: a 600 dpi raster at the same physical size contains twice as many pixels per axis. The screen compares physical size via its 300 dpi equivalent, not an absolute 2250-pixel cap.
+- Captions remain in the manuscript; filenames are `Fig1.tif`, `Fig2.eps`, and so on.
+- Do not increase pixel count and present that as improved resolution.
+
+For manuscripts submitted on or after 2026-04-01, original uncropped, minimally adjusted blot/gel images must be supplied before acceptance. Adjustments must not alter scientific information and must be applied consistently.
+
+## Elsevier
+
+**Scope:** publisher-general artwork instructions. Elsevier explicitly says journal-specific Guides for Authors can override them [ELSEVIER-FORMAT] [ELSEVIER-SIZE].
+
+- Recommended containers: TIFF for halftones/bitmaps, EPS for vector-based images (including embedded images), and PDF for vector/text material.
+- JPEG and Microsoft Office files are accepted in the general checklist; use the journal page to decide suitability.
+- RGB is preferred unless the journal says otherwise.
+- General target widths: 90 mm single, 140 mm one-and-a-half, 190 mm full; 30 mm is the listed minimal size.
+- General raster targets at final size: 300 dpi halftone, 500 dpi combination, 1,000 dpi line art.
+- General lettering rule of thumb: 7 pt normal text, not smaller than 6 pt for sub/superscripts.
+
+These are publisher defaults, not universal Elsevier-journal hard limits.
+
+## IEEE journals
+
+**Scope:** IEEE Author Center journal graphics page, modified 2025-02-25 [IEEE-SIZE].
+
+- Acceptable vector formats listed on the page: PS, EPS, PDF.
+- Non-vector color/grayscale graphics: **greater than** 300 dpi.
+- Black-and-white line art: **greater than** 600 dpi.
+- One-column width: 3.5 in / 88.9 mm.
+- Two-column width: 7.16 in / 182 mm.
+- IEEE warns that increasing resolution after creation does not improve quality.
+
+Conference and magazine instructions can differ; use their separate Author Center pages.
+
+## BMC
+
+**Scope:** BMC Bioinformatics, used as a current BMC-journal example rather than a guaranteed BMC-wide profile [BMC-BIOINFO].
+
+- Web widths: 600 px standard, 1200 px high resolution.
+- PDF widths: 85 mm half page, 170 mm full page.
+- Maximum figure-plus-legend height: 225 mm.
+- Approximately 300 dpi at final size.
+- Fonts embedded; lines wider than 0.25 pt at final width.
+- Accepted formats include EPS, PDF, Word, PowerPoint, TIFF, JPEG, PNG, BMP, and CDX; JPEG is described as less suitable for graphical images.
+- One composite file per multi-panel figure; individual file maximum 10 MB.
+
+BMC Bioinformatics now redirects to Springer Nature Link. The approximate DPI target has no numeric tolerance and the height includes the legend; the planner reports these as review items rather than unconditional passes.
+
+## ACS Publications
+
+**Scope:** legacy “Preparing Manuscript Graphics,” currently hosted on the official ACS Paragon Plus site with an explicit update date of 2006-01-21 [ACS-GRAPHICS]. It is not a current universal digital-export profile; use the selected journal’s Author Guidelines.
+
+- Listed maximum dimensions: 3.25 in single column, 7 in double column, 9.5 in length.
+- Lettering should be no smaller than 5 pt after reduction; Helvetica/Arial are suggested.
+- Lines should be no thinner than 1 pt on that general page.
+- The page mentions using the best available resolution and 600+ dpi printing, but it does not establish a universal per-figure digital file-format/DPI rule for all ACS journals.
+
+Use the selected ACS journal’s current Author Guidelines for formats, color, resolution, and TOC/abstract graphics. The planner intentionally does not invent missing ACS-wide requirements.
+
+## Rules that are not universal
+
+Do not present these as cross-publisher laws:
+
+- “JPEG is never accepted.” Several publishers accept it for photographs or specific workflows.
+- “All line art must be 1,000/1,200 dpi.” Vector output is often preferred, and current Science revised guidance says at least 300 dpi when vector is unavailable.
+- “All publishers require grayscale compatibility.” Accessibility guidance varies; use redundant encoding regardless.
+- “All figures must be RGB.” RGB is often preferred, but Nature accepts RGB or CMYK for final print artwork and target-journal rules can differ.
+- “All figures need error bars/significance stars.” The right display depends on the estimand, data, and analysis.
+- “A matching DPI/width means compliant.” Technical metadata is only one part of submission review.
+
+## Submission-stage workflow
+
+1. Identify exact journal, article type, figure type, and current stage.
+2. Save the live official page URL and access date.
+3. Create a plan with `scripts/export_plan.py`.
+4. Export with explicit dimensions and settings.
+5. Inspect the delivered file with `scripts/image_metadata.py`.
+6. Review fonts, embedded rasters, image integrity, accessibility, caption, and source data manually.
+7. Re-check official instructions immediately before upload.
