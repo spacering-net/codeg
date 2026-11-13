@@ -8290,6 +8290,102 @@
         "level_routine_paused": {
           "title": "例程被暫停",
           "hint": "連續失敗 3 次，或者它用的執行設定不能用了。"
+        },
+        "level_proposal": {
+          "title": "提議：卡在你身上的",
+          "hint": "失敗沒人管、待驗收太久、PR 等你審查。"
+        },
+        "level_proposal_low": {
+          "title": "提議：其他",
+          "hint": "改動沒提交、事項太久沒動、新專案、分支落後、重複的請求。"
+        },
+        "rule_failed": {
+          "title": "失敗沒人管",
+          "hint": "派工作或看板任務失敗了一直沒人處理。卡片出在派出它的助手那裡。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_review": {
+          "title": "待驗收太久",
+          "hint": "看板任務待驗收，這一輪還沒驗收過。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_session": {
+          "title": "工作階段一直等你",
+          "hint": "任何工作階段等你核准或回答，而你不在那個工作階段裡。緊急。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_pr_review": {
+          "title": "PR 等你審查",
+          "hint": "在你連上的專案裡；從 codeg 第一次看到這個請求時算起。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_uncommitted": {
+          "title": "改動沒提交",
+          "hint": "專案或工作樹裡有沒提交的改動。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_idle": {
+          "title": "事項太久沒動",
+          "hint": "沒收尾的事項一直沒有變化。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_new_project": {
+          "title": "新專案",
+          "hint": "codeg 裡加了新專案，你在裡面開過工作階段：要不要幫你盯著？",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_behind": {
+          "title": "分支落後",
+          "hint": "助手派出的任務分支落後目標分支，而且有衝突。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_repeat": {
+          "title": "重複的請求",
+          "hint": "30 天內相近的請求到第幾次時，提議做成例程。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_suggest": {
+          "title": "助手的建議",
+          "hint": "關掉後助手不再提建議；帶 suggest 的呼叫會被告知「你現在不收建議」。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_failed_hours": {
+          "title": "失敗沒人管：多少小時後出卡",
+          "hint": "失敗沒人管：多少小時後出卡"
+        },
+        "rule_review_hours": {
+          "title": "待驗收太久：多少小時後出卡",
+          "hint": "待驗收太久：多少小時後出卡"
+        },
+        "rule_session_minutes": {
+          "title": "工作階段一直等你：多少分鐘後出卡",
+          "hint": "工作階段一直等你：多少分鐘後出卡"
+        },
+        "rule_pr_review_days": {
+          "title": "PR 等你審查：多少天後出卡",
+          "hint": "PR 等你審查：多少天後出卡"
+        },
+        "rule_uncommitted_hours": {
+          "title": "改動沒提交：多少小時後出卡",
+          "hint": "改動沒提交：多少小時後出卡"
+        },
+        "rule_idle_days": {
+          "title": "事項太久沒動：多少天後出卡",
+          "hint": "事項太久沒動：多少天後出卡"
+        },
+        "rule_repeat_count": {
+          "title": "重複的請求：第幾次時提議",
+          "hint": "重複的請求：第幾次時提議"
         }
       },
       "workdir": {
@@ -9667,6 +9763,140 @@
         "useAnother": "換一個",
         "resume": "恢復",
         "open": "打開例程"
+      }
+    },
+    "rules": {
+      "mute": "這類別再提",
+      "muted": "這類不會再提。",
+      "mutedRestore": "在偏好裡重新開啟",
+      "notNow": "不用",
+      "failed": "沒辦成：{error}",
+      "since": "自 {when}",
+      "lowered": "這類提議你連續 3 次都沒用，已不再發通知。",
+      "loweredNow": "已關掉。這類已經連續 3 次沒用，以後不再發通知（可在偏好裡改回）。",
+      "dismissed": "已關掉，一週內不再提。",
+      "expired": "已經不需要了：情況變了。",
+      "openPr": "開啟 PR",
+      "byAuthor": "{author} 提的",
+      "worktreeOf": "{project} 的工作樹",
+      "sessions": "裡面有 {n} 個工作階段",
+      "behindDetail": "{branch} 落後於 {base}，合併會有衝突。",
+      "heading": {
+        "failed": "失敗了，沒人處理",
+        "review": "等驗收很久了",
+        "session": "有工作階段在等你",
+        "pr_review": "PR 等你審查",
+        "uncommitted": "改動還沒提交",
+        "idle": "事項很久沒動了",
+        "new_project": "新專案",
+        "behind": "分支落後且有衝突"
+      },
+      "wait": {
+        "permission": "等你核准",
+        "question": "在問你",
+        "plan": "等你核准計畫"
+      },
+      "step": {
+        "failed": {
+          "retry": "重試",
+          "hand": "交給助手看看"
+        },
+        "review": {
+          "check": "讓助手先驗收",
+          "remind": "提醒我"
+        },
+        "session": {
+          "open": "開啟工作階段"
+        },
+        "pr_review": {
+          "summary": "先出一份審查摘要"
+        },
+        "uncommitted": {
+          "open": "開啟",
+          "hand": "交給助手整理提交"
+        },
+        "idle": {
+          "hand": "繼續跟",
+          "close": "關掉"
+        },
+        "new_project": {
+          "watch": "以後幫我盯這個專案"
+        },
+        "behind": {
+          "rebase": "派人 rebase"
+        }
+      },
+      "done": {
+        "handed": "已交給助手。",
+        "retried": "已重試。",
+        "checking": "已開始驗收，檢查完由助手下結論。",
+        "reminding": "明天上午提醒你。",
+        "opened": "已開啟。",
+        "closed": "事項已關掉。",
+        "watching": "以後會幫你盯這個專案。",
+        "rebasing": "已派人 rebase。"
+      },
+      "hand": {
+        "failed": "「{title}」失敗了，一直沒人處理。幫我看看是怎麼回事，告訴我你的建議。",
+        "review": "看板任務「{title}」等驗收很久了。先幫我驗收：派人檢查改動，再告訴我結論。",
+        "remind": "驗收看板任務「{title}」",
+        "prReview": "{project} 的 PR #{number} 等我審查有一陣了，先幫我出一份審查摘要：{url}",
+        "uncommitted": "{name}（{path}）有未提交的改動有一陣了，幫我看看並整理提交。",
+        "idle": "事項「{summary}」很久沒動了，繼續跟一下。"
+      },
+      "prefs": {
+        "title": "提議卡",
+        "hint": "codeg 自己留意這些情況（不呼叫模型），發現了就出一張卡，寫明依據和下一步。每條都可以單獨關掉、改時間。",
+        "mutedMark": "在卡上點了「這類別再提」，已關掉。",
+        "loweredMark": "你連續 3 次都沒用，已不再發通知。",
+        "putBack": "改回",
+        "counts": "近 30 天：出了 {raised} 張，用了 {acted} 張，關掉 {dismissed} 張",
+        "unit": {
+          "hours": "小時",
+          "minutes": "分鐘",
+          "days": "天",
+          "times": "次"
+        },
+        "failed": {
+          "title": "失敗沒人管",
+          "hint": "派工作或看板任務失敗了一直沒人處理。卡片出在派出它的助手那裡。"
+        },
+        "review": {
+          "title": "待驗收太久",
+          "hint": "看板任務待驗收，這一輪還沒驗收過。"
+        },
+        "session": {
+          "title": "工作階段一直等你",
+          "hint": "任何工作階段等你核准或回答，而你不在那個工作階段裡。緊急。"
+        },
+        "pr_review": {
+          "title": "PR 等你審查",
+          "hint": "在你連上的專案裡；從 codeg 第一次看到這個請求時算起。"
+        },
+        "uncommitted": {
+          "title": "改動沒提交",
+          "hint": "專案或工作樹裡有沒提交的改動。"
+        },
+        "idle": {
+          "title": "事項太久沒動",
+          "hint": "沒收尾的事項一直沒有變化。"
+        },
+        "new_project": {
+          "title": "新專案",
+          "hint": "codeg 裡加了新專案，你在裡面開過工作階段：要不要幫你盯著？"
+        },
+        "behind": {
+          "title": "分支落後",
+          "hint": "助手派出的任務分支落後目標分支，而且有衝突。"
+        },
+        "repeat": {
+          "title": "重複的請求",
+          "hint": "30 天內相近的請求到第幾次時，提議做成例程。"
+        },
+        "suggest": {
+          "title": "助手的建議",
+          "hint": "關掉後助手不再提建議；帶 suggest 的呼叫會被告知「你現在不收建議」。"
+        }
       }
     }
   }

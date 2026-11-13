@@ -578,6 +578,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_routine_act),
         )
         .route(
+            "/personal_agent_rules",
+            post(handlers::personal_agent::personal_agent_rules),
+        )
+        .route(
+            "/personal_agent_rule_reset",
+            post(handlers::personal_agent::personal_agent_rule_reset),
+        )
+        .route(
             "/personal_agent_answer_question",
             post(handlers::personal_agent::personal_agent_answer_question),
         )

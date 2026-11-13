@@ -12,10 +12,11 @@
  * decides from that whether the owner is present, and (with their record
  * on) learns their usual hours.
  *
- * Two more things ride along (1.13): how long since the owner last typed
- * into something editable here (a composer, an editor, a terminal) — typing
- * is focus, and normal news waits for them to stop — and the assistant
- * whose conversation this window is showing them, which is not notified.
+ * More rides along (1.13): how long since the owner last typed into
+ * something editable here (a composer, an editor, a terminal) — typing is
+ * focus, and normal news waits for them to stop — the assistant whose
+ * conversation this window is showing them, which is not notified, and the
+ * session its workspace has in front (6.7), which gets no "waiting" card.
  * A change of either goes out at once (typing: the first after a while).
  *
  * Some windows are not the owner at work — the login page, the desktop pet,
@@ -27,6 +28,8 @@ import { useEffect } from "react"
 
 import { personalAgentPresence } from "@/lib/api"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+import { useTabStore } from "@/stores/tab-store"
+import { useWorkbenchRouteStore } from "@/stores/workbench-route-store"
 
 /** How often a window with the focus beats. */
 export const BEAT_EVERY_MS = 30_000
@@ -88,6 +91,17 @@ export function isTyping(target: EventTarget | null): boolean {
   return false
 }
 
+/** The session (conversation) this window's workspace has in front — only
+ *  while the conversations are what it shows, not Today, the board or
+ *  another page over them: a session waiting on the owner while they are in
+ *  it gets no card (6.7). */
+export function conversationInFront(): number | null {
+  if (useWorkbenchRouteStore.getState().route !== "conversations") return null
+  const { tabs, activeTabId } = useTabStore.getState()
+  if (activeTabId == null) return null
+  return tabs.find((t) => t.id === activeTabId)?.conversationId ?? null
+}
+
 /** Start beating for this window; returns the stop. */
 export function startPresenceHeartbeat(): () => void {
   const id = newWindowId()
@@ -109,10 +123,13 @@ export function startPresenceHeartbeat(): () => void {
     const idleMs = lastInput == null ? null : Math.max(0, now - lastInput)
     const typedMs = lastTyped == null ? null : Math.max(0, now - lastTyped)
     const viewing = usePersonalAgentUi.getState().viewing
+    const inFront = conversationInFront()
     sentInput = lastInput
     sentTyped = lastTyped
     Promise.resolve()
-      .then(() => personalAgentPresence(id, hasFocus, idleMs, typedMs, viewing))
+      .then(() =>
+        personalAgentPresence(id, hasFocus, idleMs, typedMs, viewing, inFront)
+      )
       .catch(() => {})
   }
 
@@ -159,12 +176,26 @@ export function startPresenceHeartbeat(): () => void {
   const offViewing = usePersonalAgentUi.subscribe((s, prev) => {
     if (s.viewing !== prev.viewing) beat()
   })
+  // So did the session in front (6.7): another tab, or another page over
+  // the conversations.
+  let lastInFront = conversationInFront()
+  const inFrontChanged = () => {
+    const now = conversationInFront()
+    if (now !== lastInFront) {
+      lastInFront = now
+      beat()
+    }
+  }
+  const offTabs = useTabStore.subscribe(inFrontChanged)
+  const offRoute = useWorkbenchRouteStore.subscribe(inFrontChanged)
   if (focused()) arrived()
   beat()
 
   return () => {
     stopped = true
     offViewing()
+    offTabs()
+    offRoute()
     window.clearInterval(timer)
     for (const type of INPUTS) window.removeEventListener(type, onInput, opts)
     window.removeEventListener("focus", onFocus)

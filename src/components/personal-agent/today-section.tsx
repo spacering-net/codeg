@@ -136,6 +136,7 @@ function useOpener(
 /** The words of a row: what it is, a second line under it. */
 function useRowWords() {
   const t = useTranslations("PersonalAgent.today")
+  const tr = useTranslations("PersonalAgent.rules")
   const locale = useLocale()
   const clock = (iso: string) =>
     new Date(iso).toLocaleTimeString(locale, {
@@ -170,6 +171,9 @@ function useRowWords() {
         return row.state === "silent"
           ? t("routine.silent")
           : t("routine.reported")
+      // One of codeg's proposal rules (6.7): what it found.
+      case "rule":
+        return tr(`heading.${row.state ?? "idle"}` as "heading.idle")
       default:
         return t(`kind.${row.kind}` as "kind.approval")
     }

@@ -72,6 +72,13 @@ pub enum NoticeKind {
     /// making a routine, one codeg paused.
     #[sea_orm(string_value = "routine")]
     Routine,
+    /// One of codeg's proposal rules (6.7) found something worth the
+    /// owner's time — work failed with nobody on it, review waiting long, a
+    /// session waiting on them, a pull request waiting for their review,
+    /// changes left uncommitted, a matter gone quiet, a new project, a
+    /// branch behind with conflicts — with the next step on it.
+    #[sea_orm(string_value = "rule")]
+    Rule,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

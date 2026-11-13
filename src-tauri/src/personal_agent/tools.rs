@@ -57,6 +57,24 @@ fn int(args: &Value, key: &str) -> Option<i64> {
     args.get(key).and_then(|v| v.as_i64().or_else(|| v.as_str()?.trim().parse().ok()))
 }
 
+/// `suggest: true` (6.7): the call is only the assistant's idea — `Some`
+/// with its `reason`, or the refusal when it gave none.
+fn suggestion(args: &Value) -> Option<Result<String, ToolOutcome>> {
+    if args.get("suggest").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    Some(
+        args.get("reason")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.chars().take(1_000).collect::<String>())
+            .ok_or_else(|| {
+                ToolOutcome::refused("a suggestion needs `reason`: why you think it fits the owner")
+            }),
+    )
+}
+
 fn string(args: &Value, key: &str) -> Option<String> {
     args.get(key)
         .and_then(|v| v.as_str())
@@ -276,6 +294,16 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 Err(e) => return ToolOutcome::refused(e),
             };
             valid.lineage = engine.lineage_of(input.as_ref()).await;
+            // Only the assistant's idea: a card, run if the owner accepts.
+            if let Some(reason) = suggestion(&args) {
+                return match reason {
+                    Ok(reason) => match engine.suggestions_closed().await {
+                        Some(no) => no,
+                        None => engine.suggest_dispatch(valid, reason).await,
+                    },
+                    Err(no) => no,
+                };
+            }
             // In a delivery the ledger keeps a re-delivered turn from making
             // the same dispatch twice; it decides nothing else.
             let auth = match engine.ledger_batch().await {
@@ -314,6 +342,19 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 if let Err(e) = engine.input_for(Some(&named), Unnamed::Refuse).await {
                     return ToolOutcome::refused(e);
                 }
+            }
+            if let Some(reason) = suggestion(&args) {
+                return match reason {
+                    Ok(reason) => match engine.suggestions_closed().await {
+                        Some(no) => no,
+                        None => {
+                            engine
+                                .suggest_followup(id, message, string(&args, "intent"), reason)
+                                .await
+                        }
+                    },
+                    Err(no) => no,
+                };
             }
             let auth = match engine.ledger_batch().await {
                 Some((batch_id, scope)) => FollowupAuth::Ledgered { batch_id, scope },
@@ -368,6 +409,15 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 wants_reply: args.get("wants_reply").and_then(|v| v.as_bool()),
                 for_input: reference(&args, "for"),
             };
+            if let Some(reason) = suggestion(&args) {
+                return match reason {
+                    Ok(reason) => match engine.suggestions_closed().await {
+                        Some(no) => no,
+                        None => engine.suggest_message(call, reason).await,
+                    },
+                    Err(no) => no,
+                };
+            }
             match engine.message_or_confirm(call).await {
                 Ok(Err(card)) => card.outcome("message"),
                 Err(e) => ToolOutcome::refused(e),

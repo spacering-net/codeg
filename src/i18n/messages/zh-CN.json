@@ -8289,6 +8289,102 @@
         "level_routine_paused": {
           "title": "例程被暂停",
           "hint": "连续失败 3 次，或者它用的执行配置不能用了。"
+        },
+        "level_proposal": {
+          "title": "提议：卡在你身上的",
+          "hint": "失败没人管、待验收太久、PR 等你评审。"
+        },
+        "level_proposal_low": {
+          "title": "提议：其他",
+          "hint": "改动没提交、事项太久没动、新项目、分支落后、重复的请求。"
+        },
+        "rule_failed": {
+          "title": "失败没人管",
+          "hint": "派活或看板任务失败了一直没人处理。卡片出在派出它的助手那里。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_review": {
+          "title": "待验收太久",
+          "hint": "看板任务待验收，这一轮还没验收过。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_session": {
+          "title": "会话一直等你",
+          "hint": "任何会话等你批准或回答，而你不在那个会话里。紧急。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_pr_review": {
+          "title": "PR 等你评审",
+          "hint": "在你连上的项目里；从 codeg 第一次看到这个请求时算起。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_uncommitted": {
+          "title": "改动没提交",
+          "hint": "项目或工作树里有没提交的改动。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_idle": {
+          "title": "事项太久没动",
+          "hint": "没收尾的事项一直没有变化。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_new_project": {
+          "title": "新项目",
+          "hint": "codeg 里加了新项目，你在里面开过会话：要不要帮你盯着？",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_behind": {
+          "title": "分支落后",
+          "hint": "助手派出的任务分支落后目标分支，而且有冲突。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_repeat": {
+          "title": "重复的请求",
+          "hint": "30 天内相近的请求到第几次时，提议做成例程。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_suggest": {
+          "title": "助手的建议",
+          "hint": "关掉后助手不再提建议；带 suggest 的调用会被告知「你现在不收建议」。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_failed_hours": {
+          "title": "失败没人管：多少小时后出卡",
+          "hint": "失败没人管：多少小时后出卡"
+        },
+        "rule_review_hours": {
+          "title": "待验收太久：多少小时后出卡",
+          "hint": "待验收太久：多少小时后出卡"
+        },
+        "rule_session_minutes": {
+          "title": "会话一直等你：多少分钟后出卡",
+          "hint": "会话一直等你：多少分钟后出卡"
+        },
+        "rule_pr_review_days": {
+          "title": "PR 等你评审：多少天后出卡",
+          "hint": "PR 等你评审：多少天后出卡"
+        },
+        "rule_uncommitted_hours": {
+          "title": "改动没提交：多少小时后出卡",
+          "hint": "改动没提交：多少小时后出卡"
+        },
+        "rule_idle_days": {
+          "title": "事项太久没动：多少天后出卡",
+          "hint": "事项太久没动：多少天后出卡"
+        },
+        "rule_repeat_count": {
+          "title": "重复的请求：第几次时提议",
+          "hint": "重复的请求：第几次时提议"
         }
       },
       "workdir": {
@@ -9667,6 +9763,140 @@
         "useAnother": "换一个",
         "resume": "恢复",
         "open": "打开例程"
+      }
+    },
+    "rules": {
+      "mute": "这类别再提",
+      "muted": "这类不会再提。",
+      "mutedRestore": "在偏好里重新打开",
+      "notNow": "不用",
+      "failed": "没办成：{error}",
+      "since": "自 {when}",
+      "lowered": "这类提议你连续 3 次都没用，已不再发通知。",
+      "loweredNow": "已关掉。这类已经连续 3 次没用，以后不再发通知（可在偏好里改回）。",
+      "dismissed": "已关掉，一周内不再提。",
+      "expired": "已经不需要了：情况变了。",
+      "openPr": "打开 PR",
+      "byAuthor": "{author} 提的",
+      "worktreeOf": "{project} 的工作树",
+      "sessions": "里面有 {n} 个会话",
+      "behindDetail": "{branch} 落后于 {base}，合并会有冲突。",
+      "heading": {
+        "failed": "失败了，没人处理",
+        "review": "等验收很久了",
+        "session": "有会话在等你",
+        "pr_review": "PR 等你评审",
+        "uncommitted": "改动还没提交",
+        "idle": "事项很久没动了",
+        "new_project": "新项目",
+        "behind": "分支落后且有冲突"
+      },
+      "wait": {
+        "permission": "等你批准",
+        "question": "在问你",
+        "plan": "等你批准计划"
+      },
+      "step": {
+        "failed": {
+          "retry": "重试",
+          "hand": "交给助手看看"
+        },
+        "review": {
+          "check": "让助手先验收",
+          "remind": "提醒我"
+        },
+        "session": {
+          "open": "打开会话"
+        },
+        "pr_review": {
+          "summary": "先出一份评审摘要"
+        },
+        "uncommitted": {
+          "open": "打开",
+          "hand": "交给助手整理提交"
+        },
+        "idle": {
+          "hand": "继续跟",
+          "close": "关掉"
+        },
+        "new_project": {
+          "watch": "以后帮我盯这个项目"
+        },
+        "behind": {
+          "rebase": "派人 rebase"
+        }
+      },
+      "done": {
+        "handed": "已交给助手。",
+        "retried": "已重试。",
+        "checking": "已开始验收，检查完由助手下结论。",
+        "reminding": "明天上午提醒你。",
+        "opened": "已打开。",
+        "closed": "事项已关掉。",
+        "watching": "以后会帮你盯这个项目。",
+        "rebasing": "已派人 rebase。"
+      },
+      "hand": {
+        "failed": "「{title}」失败了，一直没人处理。帮我看看是怎么回事，告诉我你的建议。",
+        "review": "看板任务「{title}」等验收很久了。先帮我验收：派人检查改动，再告诉我结论。",
+        "remind": "验收看板任务「{title}」",
+        "prReview": "{project} 的 PR #{number} 等我评审有一阵了，先帮我出一份评审摘要：{url}",
+        "uncommitted": "{name}（{path}）有未提交的改动有一阵了，帮我看看并整理提交。",
+        "idle": "事项「{summary}」很久没动了，继续跟一下。"
+      },
+      "prefs": {
+        "title": "提议卡",
+        "hint": "codeg 自己留意这些情况（不调模型），发现了就出一张卡，写明依据和下一步。每条都可以单独关掉、改时间。",
+        "mutedMark": "在卡上点了「这类别再提」，已关掉。",
+        "loweredMark": "你连续 3 次都没用，已不再发通知。",
+        "putBack": "改回",
+        "counts": "近 30 天：出了 {raised} 张，用了 {acted} 张，关掉 {dismissed} 张",
+        "unit": {
+          "hours": "小时",
+          "minutes": "分钟",
+          "days": "天",
+          "times": "次"
+        },
+        "failed": {
+          "title": "失败没人管",
+          "hint": "派活或看板任务失败了一直没人处理。卡片出在派出它的助手那里。"
+        },
+        "review": {
+          "title": "待验收太久",
+          "hint": "看板任务待验收，这一轮还没验收过。"
+        },
+        "session": {
+          "title": "会话一直等你",
+          "hint": "任何会话等你批准或回答，而你不在那个会话里。紧急。"
+        },
+        "pr_review": {
+          "title": "PR 等你评审",
+          "hint": "在你连上的项目里；从 codeg 第一次看到这个请求时算起。"
+        },
+        "uncommitted": {
+          "title": "改动没提交",
+          "hint": "项目或工作树里有没提交的改动。"
+        },
+        "idle": {
+          "title": "事项太久没动",
+          "hint": "没收尾的事项一直没有变化。"
+        },
+        "new_project": {
+          "title": "新项目",
+          "hint": "codeg 里加了新项目，你在里面开过会话：要不要帮你盯着？"
+        },
+        "behind": {
+          "title": "分支落后",
+          "hint": "助手派出的任务分支落后目标分支，而且有冲突。"
+        },
+        "repeat": {
+          "title": "重复的请求",
+          "hint": "30 天内相近的请求到第几次时，提议做成例程。"
+        },
+        "suggest": {
+          "title": "助手的建议",
+          "hint": "关掉后助手不再提建议；带 suggest 的调用会被告知「你现在不收建议」。"
+        }
       }
     }
   }

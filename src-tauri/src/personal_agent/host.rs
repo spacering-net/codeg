@@ -67,6 +67,8 @@ pub struct EngineHost {
     pub(super) live: super::live::LiveHub,
     /// What reaches the owner, and when (`reach`, 1.13).
     pub(super) reach: super::reach::Reach,
+    /// When codeg's proposal rules look next (`rules`, 6.7).
+    pub(super) rules: super::rules::RuleClock,
 }
 
 /// Build the host and publish it. Call ONLY where the work-task engine was
@@ -110,6 +112,8 @@ pub async fn run(host: Arc<EngineHost>) {
             ticker.reach_tick().await;
             ticker.board_tick().await;
             ticker.session_signals().await;
+            // codeg's proposal rules (6.7) look, off this loop.
+            ticker.spawn_rules_tick();
         }
     });
     // The usage figures are caught up while nothing runs (8.1).
@@ -162,6 +166,7 @@ impl EngineHost {
                 me: me.clone(),
                 live: super::live::LiveHub::new(true),
                 reach: super::reach::Reach::default(),
+                rules: super::rules::RuleClock::default(),
             }
         })
     }

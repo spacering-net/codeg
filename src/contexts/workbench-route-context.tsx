@@ -4,10 +4,13 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react"
+
+import { useWorkbenchRouteStore } from "@/stores/workbench-route-store"
 
 /**
  * The view occupying the main content region. `"conversations"` is the default
@@ -77,6 +80,12 @@ export function WorkbenchRouteProvider({ children }: { children: ReactNode }) {
 
   const setRoute = useCallback((id: WorkbenchRouteId) => setRouteId(id), [])
   const openConversations = useCallback(() => setRouteId("conversations"), [])
+  // Told outside React too: the presence heartbeat reports the session in
+  // front only while the conversations are what this window shows.
+  useEffect(() => {
+    useWorkbenchRouteStore.setState({ route: routeId })
+    return () => useWorkbenchRouteStore.setState({ route: null })
+  }, [routeId])
 
   const value = useMemo<WorkbenchRouteContextValue>(
     () => ({

@@ -8290,6 +8290,102 @@
         "level_routine_paused": {
           "title": "Rotina pausada",
           "hint": "Falhou três vezes seguidas ou a configuração de execução não pode ser usada."
+        },
+        "level_proposal": {
+          "title": "Propostas: o que depende de você",
+          "hint": "Falha sem ninguém cuidando, revisão demorando, PR esperando sua revisão."
+        },
+        "level_proposal_low": {
+          "title": "Outras propostas",
+          "hint": "Alterações não commitadas, assuntos parados, projetos novos, branches atrasados, pedidos repetidos."
+        },
+        "rule_failed": {
+          "title": "Falha sem ninguém cuidando",
+          "hint": "Trabalho delegado ou tarefa do quadro que falhou e ninguém retomou. O cartão aparece no assistente que delegou.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_review": {
+          "title": "Esperando revisão há muito tempo",
+          "hint": "Uma tarefa do quadro em revisão ainda sem rodada de aceite.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_session": {
+          "title": "Uma sessão esperando você",
+          "hint": "Qualquer sessão esperando sua aprovação ou resposta enquanto você não está nela. Urgente.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_pr_review": {
+          "title": "Um PR esperando sua revisão",
+          "hint": "Nos projetos conectados; conta desde que o codeg viu o pedido.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_uncommitted": {
+          "title": "Alterações não commitadas",
+          "hint": "Um projeto ou worktree com alterações que ninguém commitou.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_idle": {
+          "title": "Um assunto parado",
+          "hint": "Um assunto aberto sem mudanças.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_new_project": {
+          "title": "Um projeto novo",
+          "hint": "Um projeto novo no codeg em que você trabalha: acompanhar?",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_behind": {
+          "title": "Branch atrasado",
+          "hint": "Uma tarefa delegada cujo branch ficou atrás do destino e teria conflitos.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_repeat": {
+          "title": "Um pedido repetido",
+          "hint": "Com esse número de pedidos parecidos em 30 dias, sugere virar rotina.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_suggest": {
+          "title": "Sugestões dos assistentes",
+          "hint": "Desligado: os assistentes não sugerem nada, e uma chamada com suggest fica sabendo que você não aceita sugestões agora.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_failed_hours": {
+          "title": "Horas até o cartão de falha",
+          "hint": "Horas até o cartão de falha"
+        },
+        "rule_review_hours": {
+          "title": "Horas até o cartão de revisão",
+          "hint": "Horas até o cartão de revisão"
+        },
+        "rule_session_minutes": {
+          "title": "Minutos até o cartão de sessão",
+          "hint": "Minutos até o cartão de sessão"
+        },
+        "rule_pr_review_days": {
+          "title": "Dias até o cartão de pedido de revisão",
+          "hint": "Dias até o cartão de pedido de revisão"
+        },
+        "rule_uncommitted_hours": {
+          "title": "Horas até o cartão de alterações não commitadas",
+          "hint": "Horas até o cartão de alterações não commitadas"
+        },
+        "rule_idle_days": {
+          "title": "Dias até o cartão de assunto parado",
+          "hint": "Dias até o cartão de assunto parado"
+        },
+        "rule_repeat_count": {
+          "title": "Pedidos até sugerir uma rotina",
+          "hint": "Pedidos até sugerir uma rotina"
         }
       },
       "workdir": {
@@ -9667,6 +9763,140 @@
         "useAnother": "Usar outra",
         "resume": "Retomar",
         "open": "Abrir rotinas"
+      }
+    },
+    "rules": {
+      "mute": "Não sugerir isso",
+      "muted": "Isso não será mais sugerido.",
+      "mutedRestore": "Reativar nas preferências",
+      "notNow": "Agora não",
+      "failed": "Não deu certo: {error}",
+      "since": "desde {when}",
+      "lowered": "Você dispensou as três últimas, então elas não notificam mais.",
+      "loweredNow": "Dispensada. São três seguidas, então não notificam mais (dá para reverter nas preferências).",
+      "dismissed": "Dispensada. Não volta por uma semana.",
+      "expired": "Não é mais preciso: a situação mudou.",
+      "openPr": "Abrir o PR",
+      "byAuthor": "de {author}",
+      "worktreeOf": "worktree de {project}",
+      "sessions": "{n, plural, one {# sessão} other {# sessões}} nele",
+      "behindDetail": "{branch} está atrás de {base} e o merge teria conflitos.",
+      "heading": {
+        "failed": "Falhou e ninguém está cuidando",
+        "review": "Esperando revisão há muito tempo",
+        "session": "Uma sessão está esperando você",
+        "pr_review": "Um PR espera sua revisão",
+        "uncommitted": "Alterações não commitadas",
+        "idle": "Um assunto parado",
+        "new_project": "Um projeto novo",
+        "behind": "Branch atrasado, com conflitos"
+      },
+      "wait": {
+        "permission": "Aguardando sua aprovação",
+        "question": "Perguntando a você",
+        "plan": "Um plano para aprovar"
+      },
+      "step": {
+        "failed": {
+          "retry": "Tentar de novo",
+          "hand": "Pedir ao assistente para olhar"
+        },
+        "review": {
+          "check": "Pedir ao assistente para aceitar antes",
+          "remind": "Me lembre"
+        },
+        "session": {
+          "open": "Abrir a sessão"
+        },
+        "pr_review": {
+          "summary": "Um resumo da revisão antes"
+        },
+        "uncommitted": {
+          "open": "Abrir",
+          "hand": "Pedir ao assistente para commitar"
+        },
+        "idle": {
+          "hand": "Continuar acompanhando",
+          "close": "Fechar"
+        },
+        "new_project": {
+          "watch": "Acompanhar este projeto"
+        },
+        "behind": {
+          "rebase": "Pedir um rebase"
+        }
+      },
+      "done": {
+        "handed": "Passado ao assistente.",
+        "retried": "Tentado de novo.",
+        "checking": "Em verificação; o assistente vai concluir.",
+        "reminding": "Lembrete amanhã de manhã.",
+        "opened": "Aberto.",
+        "closed": "Assunto fechado.",
+        "watching": "Os assistentes agora acompanham este projeto.",
+        "rebasing": "Devolvido para rebase."
+      },
+      "hand": {
+        "failed": "“{title}” falhou e ninguém pegou. Veja o que deu errado e me diga o que sugere.",
+        "review": "A tarefa do quadro “{title}” espera revisão há muito tempo. Verifique antes: peça para alguém olhar as alterações e me diga a conclusão.",
+        "remind": "Revisar a tarefa do quadro “{title}”",
+        "prReview": "O PR #{number} em {project} espera minha revisão há um tempo. Me dê antes um resumo: {url}",
+        "uncommitted": "{name} ({path}) tem alterações não commitadas há um tempo. Veja e faça commits organizados.",
+        "idle": "O assunto “{summary}” está parado há um tempo. Retome."
+      },
+      "prefs": {
+        "title": "Cartões de proposta",
+        "hint": "O codeg procura isso sozinho, sem modelo, e mostra um cartão com o próximo passo. Cada um pode ser desligado ou ajustado.",
+        "mutedMark": "Desligado com “Não sugerir isso” em um cartão.",
+        "loweredMark": "Você dispensou três seguidas, então não notificam mais.",
+        "putBack": "Restaurar",
+        "counts": "Últimos 30 dias: {raised} cartões, {acted} usados, {dismissed} dispensados",
+        "unit": {
+          "hours": "horas",
+          "minutes": "min",
+          "days": "dias",
+          "times": "pedidos"
+        },
+        "failed": {
+          "title": "Falha sem ninguém cuidando",
+          "hint": "Trabalho delegado ou tarefa do quadro que falhou e ninguém retomou. O cartão aparece no assistente que delegou."
+        },
+        "review": {
+          "title": "Esperando revisão há muito tempo",
+          "hint": "Uma tarefa do quadro em revisão ainda sem rodada de aceite."
+        },
+        "session": {
+          "title": "Uma sessão esperando você",
+          "hint": "Qualquer sessão esperando sua aprovação ou resposta enquanto você não está nela. Urgente."
+        },
+        "pr_review": {
+          "title": "Um PR esperando sua revisão",
+          "hint": "Nos projetos conectados; conta desde que o codeg viu o pedido."
+        },
+        "uncommitted": {
+          "title": "Alterações não commitadas",
+          "hint": "Um projeto ou worktree com alterações que ninguém commitou."
+        },
+        "idle": {
+          "title": "Um assunto parado",
+          "hint": "Um assunto aberto sem mudanças."
+        },
+        "new_project": {
+          "title": "Um projeto novo",
+          "hint": "Um projeto novo no codeg em que você trabalha: acompanhar?"
+        },
+        "behind": {
+          "title": "Branch atrasado",
+          "hint": "Uma tarefa delegada cujo branch ficou atrás do destino e teria conflitos."
+        },
+        "repeat": {
+          "title": "Um pedido repetido",
+          "hint": "Com esse número de pedidos parecidos em 30 dias, sugere virar rotina."
+        },
+        "suggest": {
+          "title": "Sugestões dos assistentes",
+          "hint": "Desligado: os assistentes não sugerem nada, e uma chamada com suggest fica sabendo que você não aceita sugestões agora."
+        }
       }
     }
   }

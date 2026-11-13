@@ -240,6 +240,26 @@ pub async fn merge_base(path: &str, a: &str, b: &str) -> Result<String, AppComma
     Ok(sha)
 }
 
+/// Whether merging `b` into `a` would conflict, read without touching any
+/// worktree or index (`git merge-tree --write-tree`, git 2.38+). `None`
+/// when this git cannot say (too old, an unknown revision).
+pub async fn merge_conflicts(
+    path: &str,
+    a: &str,
+    b: &str,
+) -> Result<Option<bool>, AppCommandError> {
+    let out = run_git(
+        path,
+        &["merge-tree", "--write-tree", "--no-messages", "--name-only", a, b],
+    )
+    .await?;
+    Ok(match out.status.code() {
+        Some(0) => Some(false),
+        Some(1) => Some(true),
+        _ => None,
+    })
+}
+
 /// Whether an object is present in this repository AND is a commit. The probe
 /// a pinned sha needs after a fetch: a force-pushed pull request leaves the
 /// recorded head unreachable, and `worktree add` on it would fail with git's

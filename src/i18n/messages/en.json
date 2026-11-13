@@ -8289,6 +8289,102 @@
         "level_routine_paused": {
           "title": "A routine paused",
           "hint": "Failed three times in a row, or its executor config can't be used."
+        },
+        "level_proposal": {
+          "title": "codeg's proposals: stuck on you",
+          "hint": "Work failed with nobody on it, waiting long for review, a pull request waiting for your review."
+        },
+        "level_proposal_low": {
+          "title": "codeg's other proposals",
+          "hint": "Uncommitted changes, quiet matters, new projects, branches behind, repeated requests."
+        },
+        "rule_failed": {
+          "title": "Work failed with nobody on it",
+          "hint": "Dispatched work or a board task that failed and nobody picked up. On the card of the assistant that dispatched it.",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_review": {
+          "title": "Waiting long for review",
+          "hint": "A board task in review with no round of acceptance yet.",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_session": {
+          "title": "A session waiting for you",
+          "hint": "Any session waiting for your approval or answer while you're not in it. Urgent.",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_pr_review": {
+          "title": "A pull request waiting for your review",
+          "hint": "In the projects you connected; counted from when codeg first saw the request.",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_uncommitted": {
+          "title": "Changes left uncommitted",
+          "hint": "A project or worktree with changes nobody committed.",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_idle": {
+          "title": "A matter gone quiet",
+          "hint": "An open matter with no change.",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_new_project": {
+          "title": "A new project",
+          "hint": "A project added to codeg that you work in: keep an eye on it?",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_behind": {
+          "title": "A branch behind, with conflicts",
+          "hint": "A task an assistant dispatched whose branch fell behind its target and would conflict.",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_repeat": {
+          "title": "A request you keep making",
+          "hint": "At this many alike requests in 30 days, offers to make it a routine.",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_suggest": {
+          "title": "The assistants' own suggestions",
+          "hint": "Off: the assistants don't suggest anything, and a call with suggest is told you don't take suggestions now.",
+          "on": "On",
+          "off": "Off"
+        },
+        "rule_failed_hours": {
+          "title": "Hours before the failed-work card",
+          "hint": "Hours before the failed-work card"
+        },
+        "rule_review_hours": {
+          "title": "Hours before the review card",
+          "hint": "Hours before the review card"
+        },
+        "rule_session_minutes": {
+          "title": "Minutes before the session card",
+          "hint": "Minutes before the session card"
+        },
+        "rule_pr_review_days": {
+          "title": "Days before the review-request card",
+          "hint": "Days before the review-request card"
+        },
+        "rule_uncommitted_hours": {
+          "title": "Hours before the uncommitted-changes card",
+          "hint": "Hours before the uncommitted-changes card"
+        },
+        "rule_idle_days": {
+          "title": "Days before the quiet-matter card",
+          "hint": "Days before the quiet-matter card"
+        },
+        "rule_repeat_count": {
+          "title": "Requests before the routine offer",
+          "hint": "Requests before the routine offer"
         }
       },
       "workdir": {
@@ -9667,6 +9763,140 @@
         "useAnother": "Use another",
         "resume": "Resume",
         "open": "Open routines"
+      }
+    },
+    "rules": {
+      "mute": "Don't suggest these",
+      "muted": "This kind won't be suggested again.",
+      "mutedRestore": "Turn it back on in preferences",
+      "notNow": "Not now",
+      "failed": "Didn't work: {error}",
+      "since": "since {when}",
+      "lowered": "You passed on the last three of these, so they no longer notify you.",
+      "loweredNow": "Dismissed. That's three in a row, so these won't notify you any more (change it back in preferences).",
+      "dismissed": "Dismissed. Not again for a week.",
+      "expired": "No longer needed: things changed.",
+      "openPr": "Open the PR",
+      "byAuthor": "by {author}",
+      "worktreeOf": "worktree of {project}",
+      "sessions": "{n, plural, one {# session} other {# sessions}} in it",
+      "behindDetail": "{branch} is behind {base}, and merging would conflict.",
+      "heading": {
+        "failed": "Failed, and nobody's on it",
+        "review": "Waiting long for review",
+        "session": "A session is waiting for you",
+        "pr_review": "A pull request waits for your review",
+        "uncommitted": "Changes left uncommitted",
+        "idle": "A matter gone quiet",
+        "new_project": "A new project",
+        "behind": "A branch behind, with conflicts"
+      },
+      "wait": {
+        "permission": "Waiting for your approval",
+        "question": "Asking you",
+        "plan": "A plan to approve"
+      },
+      "step": {
+        "failed": {
+          "retry": "Retry",
+          "hand": "Have the assistant look"
+        },
+        "review": {
+          "check": "Have the assistant accept it first",
+          "remind": "Remind me"
+        },
+        "session": {
+          "open": "Open the session"
+        },
+        "pr_review": {
+          "summary": "Get a review summary first"
+        },
+        "uncommitted": {
+          "open": "Open",
+          "hand": "Have the assistant commit it"
+        },
+        "idle": {
+          "hand": "Keep after it",
+          "close": "Close it"
+        },
+        "new_project": {
+          "watch": "Keep an eye on this project"
+        },
+        "behind": {
+          "rebase": "Have it rebased"
+        }
+      },
+      "done": {
+        "handed": "Handed to the assistant.",
+        "retried": "Retried.",
+        "checking": "Being checked; the assistant will conclude.",
+        "reminding": "You'll be reminded tomorrow morning.",
+        "opened": "Opened.",
+        "closed": "Matter closed.",
+        "watching": "The assistants keep an eye on this project now.",
+        "rebasing": "Sent back to be rebased."
+      },
+      "hand": {
+        "failed": "\"{title}\" failed and nobody has picked it up. Look into what went wrong and tell me what you suggest.",
+        "review": "The board task \"{title}\" has waited long for review. Check it for me first: have someone look at the changes, then tell me what you conclude.",
+        "remind": "Review the board task \"{title}\"",
+        "prReview": "Pull request #{number} in {project} has waited for my review for a while. Give me a review summary first: {url}",
+        "uncommitted": "{name} ({path}) has had uncommitted changes for a while. Look at them and get them committed sensibly.",
+        "idle": "The matter \"{summary}\" has not moved in a while. Pick it up again."
+      },
+      "prefs": {
+        "title": "Proposal cards",
+        "hint": "codeg looks for these itself, without a model, and puts a card with the next step in front of you. Each can be turned off or given another threshold.",
+        "mutedMark": "Turned off with \"Don't suggest these\" on a card.",
+        "loweredMark": "You passed on three in a row, so these no longer notify you.",
+        "putBack": "Put it back",
+        "counts": "Last 30 days: {raised} cards, {acted} used, {dismissed} dismissed",
+        "unit": {
+          "hours": "hours",
+          "minutes": "min",
+          "days": "days",
+          "times": "requests"
+        },
+        "failed": {
+          "title": "Work failed with nobody on it",
+          "hint": "Dispatched work or a board task that failed and nobody picked up. On the card of the assistant that dispatched it."
+        },
+        "review": {
+          "title": "Waiting long for review",
+          "hint": "A board task in review with no round of acceptance yet."
+        },
+        "session": {
+          "title": "A session waiting for you",
+          "hint": "Any session waiting for your approval or answer while you're not in it. Urgent."
+        },
+        "pr_review": {
+          "title": "A pull request waiting for your review",
+          "hint": "In the projects you connected; counted from when codeg first saw the request."
+        },
+        "uncommitted": {
+          "title": "Changes left uncommitted",
+          "hint": "A project or worktree with changes nobody committed."
+        },
+        "idle": {
+          "title": "A matter gone quiet",
+          "hint": "An open matter with no change."
+        },
+        "new_project": {
+          "title": "A new project",
+          "hint": "A project added to codeg that you work in: keep an eye on it?"
+        },
+        "behind": {
+          "title": "A branch behind, with conflicts",
+          "hint": "A task an assistant dispatched whose branch fell behind its target and would conflict."
+        },
+        "repeat": {
+          "title": "A request you keep making",
+          "hint": "At this many alike requests in 30 days, offers to make it a routine."
+        },
+        "suggest": {
+          "title": "The assistants' own suggestions",
+          "hint": "Off: the assistants don't suggest anything, and a call with suggest is told you don't take suggestions now."
+        }
       }
     }
   }

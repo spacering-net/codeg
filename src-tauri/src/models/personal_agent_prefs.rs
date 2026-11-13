@@ -345,6 +345,65 @@ fn lenient_focus_wait<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> 
         .unwrap_or(DEFAULT_FOCUS_WAIT))
 }
 
+// ── codeg's proposal rules (6.7): how long before each says something ───────
+
+/// Hours dispatched work or a board task stays failed with nobody on it.
+pub const RULE_FAILED_HOURS: u32 = 2;
+/// Hours a board task waits for review without a round of acceptance.
+pub const RULE_REVIEW_HOURS: u32 = 24;
+/// Minutes a session waits for the owner's answer or approval.
+pub const RULE_SESSION_MINUTES: u32 = 10;
+/// Days a pull request waits for the owner's review.
+pub const RULE_PR_REVIEW_DAYS: u32 = 2;
+/// Hours a project or worktree keeps changes nobody committed.
+pub const RULE_UNCOMMITTED_HOURS: u32 = 24;
+/// Days a matter goes without a change.
+pub const RULE_IDLE_DAYS: u32 = 7;
+/// The how-manyth alike request makes the "make it a routine?" offer.
+pub const RULE_REPEAT_COUNT: u32 = 3;
+const RULE_MAX_HOURS: u32 = 24 * 30;
+const RULE_MAX_MINUTES: u32 = 24 * 60;
+const RULE_MAX_DAYS: u32 = 90;
+const RULE_MAX_COUNT: u32 = 20;
+
+macro_rules! rule_count {
+    ($default_fn:ident, $lenient_fn:ident, $default:expr, $max:expr) => {
+        fn $default_fn() -> u32 {
+            $default
+        }
+
+        fn $lenient_fn<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+            let v = Value::deserialize(d)?;
+            Ok(v.as_u64()
+                .map(|n| n.min($max as u64) as u32)
+                .unwrap_or($default))
+        }
+    };
+}
+
+rule_count!(default_rule_failed_hours, lenient_rule_failed_hours, RULE_FAILED_HOURS, RULE_MAX_HOURS);
+rule_count!(default_rule_review_hours, lenient_rule_review_hours, RULE_REVIEW_HOURS, RULE_MAX_HOURS);
+rule_count!(
+    default_rule_session_minutes,
+    lenient_rule_session_minutes,
+    RULE_SESSION_MINUTES,
+    RULE_MAX_MINUTES
+);
+rule_count!(
+    default_rule_pr_review_days,
+    lenient_rule_pr_review_days,
+    RULE_PR_REVIEW_DAYS,
+    RULE_MAX_DAYS
+);
+rule_count!(
+    default_rule_uncommitted_hours,
+    lenient_rule_uncommitted_hours,
+    RULE_UNCOMMITTED_HOURS,
+    RULE_MAX_HOURS
+);
+rule_count!(default_rule_idle_days, lenient_rule_idle_days, RULE_IDLE_DAYS, RULE_MAX_DAYS);
+rule_count!(default_rule_repeat_count, lenient_rule_repeat_count, RULE_REPEAT_COUNT, RULE_MAX_COUNT);
+
 /// A time of day as the owner sets it: `HH:MM`, 00:00 to 23:59.
 pub fn check_clock(raw: &str) -> Result<String, String> {
     let s = raw.trim();
@@ -445,6 +504,18 @@ pub const NEWS: &[(&str, Level, &str)] = &[
         "used_up",
         Level::Urgent,
         "work sent back as many rounds as allowed, still not right",
+    ),
+    (
+        "proposal",
+        Level::Normal,
+        "codeg's proposals about what is stuck on them: work failed with nobody on it, work \
+         waiting long for review, a pull request waiting for their review",
+    ),
+    (
+        "proposal_low",
+        Level::Low,
+        "codeg's other proposals: changes left uncommitted, a matter gone quiet, a new project, \
+         a branch behind with conflicts, a request they keep making",
     ),
 ];
 
@@ -605,6 +676,68 @@ pub struct Prefs {
     pub level_routine_paused: Level,
     #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
     pub level_used_up: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_proposal: Level,
+    #[serde(default = "low", deserialize_with = "lenient_low")]
+    pub level_proposal_low: Level,
+    /// codeg's proposal rules (6.7), each on or off, with how long before
+    /// it says something. A rule the owner muted from a card is off here.
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_failed: OnOff,
+    #[serde(
+        default = "default_rule_failed_hours",
+        deserialize_with = "lenient_rule_failed_hours"
+    )]
+    pub rule_failed_hours: u32,
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_review: OnOff,
+    #[serde(
+        default = "default_rule_review_hours",
+        deserialize_with = "lenient_rule_review_hours"
+    )]
+    pub rule_review_hours: u32,
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_session: OnOff,
+    #[serde(
+        default = "default_rule_session_minutes",
+        deserialize_with = "lenient_rule_session_minutes"
+    )]
+    pub rule_session_minutes: u32,
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_pr_review: OnOff,
+    #[serde(
+        default = "default_rule_pr_review_days",
+        deserialize_with = "lenient_rule_pr_review_days"
+    )]
+    pub rule_pr_review_days: u32,
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_uncommitted: OnOff,
+    #[serde(
+        default = "default_rule_uncommitted_hours",
+        deserialize_with = "lenient_rule_uncommitted_hours"
+    )]
+    pub rule_uncommitted_hours: u32,
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_idle: OnOff,
+    #[serde(
+        default = "default_rule_idle_days",
+        deserialize_with = "lenient_rule_idle_days"
+    )]
+    pub rule_idle_days: u32,
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_new_project: OnOff,
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_behind: OnOff,
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_repeat: OnOff,
+    #[serde(
+        default = "default_rule_repeat_count",
+        deserialize_with = "lenient_rule_repeat_count"
+    )]
+    pub rule_repeat_count: u32,
+    /// The assistants' own suggestions (`suggest: true`).
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_suggest: OnOff,
 }
 
 impl Default for Prefs {
@@ -662,6 +795,25 @@ impl Default for Prefs {
             level_routine: Level::Normal,
             level_routine_paused: Level::Urgent,
             level_used_up: Level::Urgent,
+            level_proposal: Level::Normal,
+            level_proposal_low: Level::Low,
+            rule_failed: OnOff::On,
+            rule_failed_hours: RULE_FAILED_HOURS,
+            rule_review: OnOff::On,
+            rule_review_hours: RULE_REVIEW_HOURS,
+            rule_session: OnOff::On,
+            rule_session_minutes: RULE_SESSION_MINUTES,
+            rule_pr_review: OnOff::On,
+            rule_pr_review_days: RULE_PR_REVIEW_DAYS,
+            rule_uncommitted: OnOff::On,
+            rule_uncommitted_hours: RULE_UNCOMMITTED_HOURS,
+            rule_idle: OnOff::On,
+            rule_idle_days: RULE_IDLE_DAYS,
+            rule_new_project: OnOff::On,
+            rule_behind: OnOff::On,
+            rule_repeat: OnOff::On,
+            rule_repeat_count: RULE_REPEAT_COUNT,
+            rule_suggest: OnOff::On,
         }
     }
 }
@@ -962,6 +1114,115 @@ pub const PREFS: &[PrefSpec] = &[
         kind: PrefKind::Choice(LEVELS),
         label: "how urgent work sent back as many rounds as allowed is",
     },
+    PrefSpec {
+        key: "level_proposal",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent codeg's proposals about what is stuck on the owner are",
+    },
+    PrefSpec {
+        key: "level_proposal_low",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent codeg's other proposals are",
+    },
+    PrefSpec {
+        key: "rule_failed",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg's card on work that failed with nobody on it",
+    },
+    PrefSpec {
+        key: "rule_failed_hours",
+        kind: PrefKind::Count {
+            max: RULE_MAX_HOURS,
+        },
+        label: "hours failed work waits before that card",
+    },
+    PrefSpec {
+        key: "rule_review",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg's card on a board task waiting long for review",
+    },
+    PrefSpec {
+        key: "rule_review_hours",
+        kind: PrefKind::Count {
+            max: RULE_MAX_HOURS,
+        },
+        label: "hours a task waits for review before that card",
+    },
+    PrefSpec {
+        key: "rule_session",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg's card on a session waiting for the owner",
+    },
+    PrefSpec {
+        key: "rule_session_minutes",
+        kind: PrefKind::Count {
+            max: RULE_MAX_MINUTES,
+        },
+        label: "minutes a session waits before that card",
+    },
+    PrefSpec {
+        key: "rule_pr_review",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg's card on a pull request waiting for the owner's review",
+    },
+    PrefSpec {
+        key: "rule_pr_review_days",
+        kind: PrefKind::Count {
+            max: RULE_MAX_DAYS,
+        },
+        label: "days a review request waits before that card",
+    },
+    PrefSpec {
+        key: "rule_uncommitted",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg's card on changes left uncommitted",
+    },
+    PrefSpec {
+        key: "rule_uncommitted_hours",
+        kind: PrefKind::Count {
+            max: RULE_MAX_HOURS,
+        },
+        label: "hours changes stay uncommitted before that card",
+    },
+    PrefSpec {
+        key: "rule_idle",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg's card on a matter gone quiet",
+    },
+    PrefSpec {
+        key: "rule_idle_days",
+        kind: PrefKind::Count {
+            max: RULE_MAX_DAYS,
+        },
+        label: "days without a change before that card",
+    },
+    PrefSpec {
+        key: "rule_new_project",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg's card on a new project the owner works in",
+    },
+    PrefSpec {
+        key: "rule_behind",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg's card on a dispatched task's branch behind its target with conflicts",
+    },
+    PrefSpec {
+        key: "rule_repeat",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg's offer to make a request the owner keeps making a routine",
+    },
+    PrefSpec {
+        key: "rule_repeat_count",
+        kind: PrefKind::Count {
+            max: RULE_MAX_COUNT,
+        },
+        label: "the how-manyth alike request in 30 days makes that offer",
+    },
+    PrefSpec {
+        key: "rule_suggest",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "the assistants' own suggestions (`suggest: true`)",
+    },
 ];
 
 /// The "automation level" (13.4): a preset over the items below — not
@@ -989,22 +1250,63 @@ pub fn preset(key: &str, level: &str) -> Option<Vec<(&'static str, Value)>> {
 /// the owner at every level.
 pub fn disturb_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
     match level {
-        "quiet" => Some(vec![
-            ("normal_via", json!("today")),
-            ("low_via", json!("today")),
-        ]),
-        "standard" => Some(vec![
-            ("normal_via", json!("system")),
-            ("low_via", json!("today")),
-            ("focus_wait", json!(DEFAULT_FOCUS_WAIT)),
-        ]),
-        "more" => Some(vec![
-            ("normal_via", json!("system")),
-            ("low_via", json!("digest")),
-            ("focus_wait", json!(0)),
-        ]),
+        "quiet" => Some(
+            [
+                ("normal_via", json!("today")),
+                ("low_via", json!("today")),
+            ]
+            .into_iter()
+            .chain(rule_preset(level))
+            .collect(),
+        ),
+        "standard" => Some(
+            [
+                ("normal_via", json!("system")),
+                ("low_via", json!("today")),
+                ("focus_wait", json!(DEFAULT_FOCUS_WAIT)),
+            ]
+            .into_iter()
+            .chain(rule_preset(level))
+            .collect(),
+        ),
+        "more" => Some(
+            [
+                ("normal_via", json!("system")),
+                ("low_via", json!("digest")),
+                ("focus_wait", json!(0)),
+            ]
+            .into_iter()
+            .chain(rule_preset(level))
+            .collect(),
+        ),
         _ => None,
     }
+}
+
+/// The proposal rules at each disturbance level (13.4): "quiet" keeps only a
+/// session waiting and work failed with nobody on it; "more" halves every
+/// threshold. The assistants' own suggestions are not the level's.
+fn rule_preset(level: &str) -> Vec<(&'static str, Value)> {
+    let quiet = level == "quiet";
+    let on = |keep: bool| json!(if keep { "on" } else { "off" });
+    let time = |n: u32| json!(if level == "more" { n.div_ceil(2) } else { n });
+    vec![
+        ("rule_failed", on(true)),
+        ("rule_failed_hours", time(RULE_FAILED_HOURS)),
+        ("rule_review", on(!quiet)),
+        ("rule_review_hours", time(RULE_REVIEW_HOURS)),
+        ("rule_session", on(true)),
+        ("rule_session_minutes", time(RULE_SESSION_MINUTES)),
+        ("rule_pr_review", on(!quiet)),
+        ("rule_pr_review_days", time(RULE_PR_REVIEW_DAYS)),
+        ("rule_uncommitted", on(!quiet)),
+        ("rule_uncommitted_hours", time(RULE_UNCOMMITTED_HOURS)),
+        ("rule_idle", on(!quiet)),
+        ("rule_idle_days", time(RULE_IDLE_DAYS)),
+        ("rule_new_project", on(!quiet)),
+        ("rule_behind", on(!quiet)),
+        ("rule_repeat", on(!quiet)),
+    ]
 }
 
 /// The items each automation level sets, and to what.
@@ -1172,6 +1474,8 @@ impl Prefs {
             "routine" => self.level_routine,
             "routine_paused" => self.level_routine_paused,
             "used_up" => self.level_used_up,
+            "proposal" => self.level_proposal,
+            "proposal_low" => self.level_proposal_low,
             _ => Level::Normal,
         }
     }
@@ -1185,6 +1489,47 @@ impl Prefs {
     /// Whether codeg reaches out to the owner with more than reminders.
     pub fn proactive(&self) -> bool {
         self.proactive == OnOff::On
+    }
+
+    /// Whether proposal rule `rule` (6.7: `failed`, `review`, `session`,
+    /// `pr_review`, `uncommitted`, `idle`, `new_project`, `behind`,
+    /// `repeat`, `suggest`) is on.
+    pub fn rule_on(&self, rule: &str) -> bool {
+        let on = match rule {
+            "failed" => self.rule_failed,
+            "review" => self.rule_review,
+            "session" => self.rule_session,
+            "pr_review" => self.rule_pr_review,
+            "uncommitted" => self.rule_uncommitted,
+            "idle" => self.rule_idle,
+            "new_project" => self.rule_new_project,
+            "behind" => self.rule_behind,
+            "repeat" => self.rule_repeat,
+            "suggest" => self.rule_suggest,
+            _ => return false,
+        };
+        on == OnOff::On
+    }
+
+    /// How long rule `rule` waits before it says something, as a duration;
+    /// `None` for a rule that says it at once.
+    pub fn rule_after(&self, rule: &str) -> Option<chrono::Duration> {
+        let h = |n: u32| chrono::Duration::hours(n as i64);
+        Some(match rule {
+            "failed" => h(self.rule_failed_hours),
+            "review" => h(self.rule_review_hours),
+            "session" => chrono::Duration::minutes(self.rule_session_minutes as i64),
+            "pr_review" => chrono::Duration::days(self.rule_pr_review_days as i64),
+            "uncommitted" => h(self.rule_uncommitted_hours),
+            "idle" => chrono::Duration::days(self.rule_idle_days as i64),
+            _ => return None,
+        })
+    }
+
+    /// The how-manyth alike request makes the routine offer (at least the
+    /// second).
+    pub fn repeat_count(&self) -> usize {
+        self.rule_repeat_count.max(2) as usize
     }
 }
 
@@ -1294,6 +1639,10 @@ fn brain_value(key: &str, value: &Value) -> String {
                 .into()
         }
         ("presence", "off") => "off: nothing is noted; their hours are the defaults".into(),
+        (k, "on") if k.starts_with("rule_") => "on: codeg puts a card in front of the owner".into(),
+        (k, "off") if k.starts_with("rule_") => {
+            "off: no such card (the owner may have muted it from one)".into()
+        }
         ("proactive", "on") => {
             "on: codeg tells the owner when something is stuck on them, ready or done".into()
         }
@@ -1349,6 +1698,52 @@ fn levels_line(map: &Map<String, Value>) -> String {
     )
 }
 
+/// codeg's proposal rules (6.7), in one line: the ones on with their
+/// thresholds, the ones off, and the assistants' own suggestions.
+fn rules_line(prefs: &Prefs) -> String {
+    let after = |rule: &str| match rule {
+        "failed" => format!("{} h", prefs.rule_failed_hours),
+        "review" => format!("{} h", prefs.rule_review_hours),
+        "session" => format!("{} min", prefs.rule_session_minutes),
+        "pr_review" => format!("{} d", prefs.rule_pr_review_days),
+        "uncommitted" => format!("{} h", prefs.rule_uncommitted_hours),
+        "idle" => format!("{} d", prefs.rule_idle_days),
+        "repeat" => format!("the {}th alike request", prefs.repeat_count()),
+        _ => String::new(),
+    };
+    let rules = [
+        "failed",
+        "review",
+        "session",
+        "pr_review",
+        "uncommitted",
+        "idle",
+        "new_project",
+        "behind",
+        "repeat",
+    ];
+    let on: Vec<String> = rules
+        .iter()
+        .filter(|r| prefs.rule_on(r))
+        .map(|r| match after(r) {
+            a if a.is_empty() => r.to_string(),
+            a => format!("{r} ({a})"),
+        })
+        .collect();
+    let off: Vec<&str> = rules.iter().copied().filter(|r| !prefs.rule_on(r)).collect();
+    format!(
+        "- codeg's proposal cards (it raises them itself; nothing for you to do): on — {}; off \
+         — {}. Your own suggestions (`suggest: true`): {}",
+        if on.is_empty() { "none".into() } else { on.join(", ") },
+        if off.is_empty() { "none".into() } else { off.join(", ") },
+        if prefs.rule_on("suggest") {
+            "the owner takes them"
+        } else {
+            "the owner does not take them now — do not suggest"
+        }
+    )
+}
+
 /// The preferences as the brain reads them: `<codeg-prefs>`. A worker is
 /// not told how the primary hands work to workers.
 pub fn prefs_block(prefs: &Prefs, worker: bool) -> String {
@@ -1356,13 +1751,14 @@ pub fn prefs_block(prefs: &Prefs, worker: bool) -> String {
     let mut lines: Vec<String> = PREFS
         .iter()
         .filter(|s| !(worker && s.key == "worker_handoff"))
-        .filter(|s| !s.key.starts_with("level_"))
+        .filter(|s| !s.key.starts_with("level_") && !s.key.starts_with("rule_"))
         .map(|s| {
             let v = map.get(s.key).cloned().unwrap_or(Value::Null);
             format!("- {}: {}", s.label, brain_value(s.key, &v))
         })
         .collect();
     lines.push(levels_line(&map));
+    lines.push(rules_line(prefs));
     format!(
         "<codeg-prefs>\n\
 The owner's preferences, as they set them in codeg — every assistant follows the same ones. The \

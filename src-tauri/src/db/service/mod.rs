@@ -20,6 +20,7 @@ pub mod personal_agent_message_service;
 pub mod personal_agent_service;
 pub mod personal_agent_verification_service;
 pub mod personal_agent_routine_service;
+pub mod personal_agent_rule_service;
 pub mod personal_agent_watch_service;
 pub mod quick_message_service;
 pub mod remote_workspace_connection_service;

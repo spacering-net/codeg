@@ -256,6 +256,25 @@ pub async fn meet_projects(db: &AppDatabase) -> Vec<MeetProject> {
     out
 }
 
+/// The projects connected, from the record (`meet`).
+pub(super) fn connected_of(meet: &Value) -> Vec<i32> {
+    meet["projects"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_i64().and_then(|n| i32::try_from(n).ok()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The projects connected, from the primary's settings.
+pub(super) fn connected_in_settings(settings: &str) -> Vec<i32> {
+    serde_json::from_str::<Value>(settings)
+        .map(|s| connected_of(&s[MEET_KEY]))
+        .unwrap_or_default()
+}
+
 fn payload_of(n: &notice_entity::Model) -> Value {
     serde_json::from_str(&n.payload).unwrap_or(Value::Null)
 }
@@ -279,6 +298,24 @@ impl PersonalAgentEngine {
         {
             tracing::warn!("[personal-agent] the record of meeting the owner was not written: {e}");
         }
+    }
+
+    /// One more project the owner wants an eye kept on (6.7's "new project"
+    /// card): connected as on the projects card. Whether it was not already.
+    pub(super) async fn connect_project(&self, id: i32) -> Result<bool, String> {
+        let _one = MEET.lock().await;
+        let mut ids = connected_of(&self.meet_record().await.unwrap_or(Value::Null));
+        if ids.contains(&id) {
+            return Ok(false);
+        }
+        ids.push(id);
+        let Ok(Some(primary)) = svc::primary_bot(&self.db.conn).await else {
+            return Err("there is no primary assistant".into());
+        };
+        svc::patch_settings(&self.db.conn, primary.id, &json!({ MEET_KEY: { "projects": ids } }))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(true)
     }
 
     /// Raise a card of getting to know the owner, once: `None` when it was

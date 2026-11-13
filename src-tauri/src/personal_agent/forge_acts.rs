@@ -319,6 +319,12 @@ impl PersonalAgentEngine {
         if suggest && reason.is_none() {
             return ToolOutcome::refused("a suggestion needs `reason`: why you think it fits");
         }
+        // The owner does not take suggestions now (6.7).
+        if suggest {
+            if let Some(no) = self.suggestions_closed().await {
+                return no;
+            }
+        }
         let key = call_key(action, args);
         let subject = format!("forge:{key}");
         let ledger = self.ledger_batch().await;

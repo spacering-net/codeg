@@ -624,6 +624,22 @@ impl PersonalAgentEngine {
         self.open_acceptance_round(d, task, &wt, fp, &rounds).await;
     }
 
+    /// The owner asked on a card for this review to be accepted (6.7): its
+    /// round opens now, whatever the "auto acceptance" setting says.
+    /// Whether a round stands for this generation of the task afterwards.
+    pub(super) async fn accept_on_request(
+        self: &Arc<Self>,
+        d: &dispatch_entity::Model,
+        task: &work_task::Model,
+    ) -> bool {
+        self.ensure_round(d, task).await;
+        vsvc::rounds_of(&self.db.conn, d.id)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|r| r.run_seq == task.run_seq && r.state != VerificationState::Stale)
+    }
+
     /// Whether the task's preflight has run (or will not): the check waits
     /// for its light.
     async fn preflight_settled(&self, task: &work_task::Model) -> bool {

@@ -34,6 +34,7 @@ pub mod personal_agent_timeline;
 pub mod personal_agent_verification;
 pub mod personal_agent_routine;
 pub mod personal_agent_routine_run;
+pub mod personal_agent_rule_state;
 pub mod personal_agent_watch;
 pub mod personal_agent_watch_name;
 pub mod personal_agent_signal;

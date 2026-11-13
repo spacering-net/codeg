@@ -634,6 +634,12 @@ impl PersonalAgentEngine {
         if suggest && reason.is_none() {
             return ToolOutcome::refused("a suggestion needs `reason`: why it fits the owner");
         }
+        // The owner does not take suggestions now (6.7).
+        if suggest {
+            if let Some(no) = self.suggestions_closed().await {
+                return no;
+            }
+        }
         if !suggest && quote.is_none() {
             return ToolOutcome::refused(
                 "`quote` the owner's words this follows; one you only think would help is a \

@@ -2958,7 +2958,7 @@ async fn a_card_cut_off_mid_run_is_settled_by_its_entry_after_a_restart() {
     // A follow-up card whose send was claimed, never attempted.
     let (id, mut rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-21", DispatchState::Completed).await;
     let follow = engine
-        .propose_followup(id, "look again".into(), None, None)
+        .propose_followup(id, "look again".into(), None, None, None, None)
         .await
         .unwrap();
     let row = engine.act_on_notice(follow, "accept").await.unwrap();
@@ -8696,7 +8696,7 @@ async fn the_owner_present_and_their_hours_reach_the_brain() {
     let window = format!("test-{}", uuid::Uuid::new_v4());
     let state = super::presence::beat(
         &engine.db.conn,
-        super::presence::Beat { window: window.clone(), focused: true, idle_ms: Some(0), typed_ms: None, viewing: None },
+        super::presence::Beat { window: window.clone(), focused: true, idle_ms: Some(0), typed_ms: None, viewing: None, viewing_conversation: None },
     )
     .await;
     assert!(state.present);
@@ -8741,7 +8741,7 @@ async fn the_owner_present_and_their_hours_reach_the_brain() {
     assert!(profile.zones.contains(&"Asia/Shanghai") && profile.zones.contains(&profile.zone.as_str()));
     super::presence::beat(
         &engine.db.conn,
-        super::presence::Beat { window, focused: false, idle_ms: Some(0), typed_ms: None, viewing: None },
+        super::presence::Beat { window, focused: false, idle_ms: Some(0), typed_ms: None, viewing: None, viewing_conversation: None },
     )
     .await;
 }
@@ -8813,6 +8813,7 @@ fn owner_here(typed: Option<chrono::DateTime<chrono::Utc>>) -> super::presence::
         last_typed: typed,
         window_focused: false,
         viewing: vec![],
+        viewing_conversations: vec![],
     }
 }
 
@@ -12137,4 +12138,566 @@ async fn a_work_assistants_routine_can_go_back_to_its_own_executor_config() {
     let run = worker.run_now(r, "now").await.unwrap();
     let d = dispatch_state(&engine, run.dispatch_id.expect("handed out")).await;
     assert_eq!(d.executor_assistant_id, made.executor.id);
+}
+
+// ── 2.5: proposal rules ─────────────────────────────────────────────────────
+
+/// A chat dispatch of `engine`'s that failed `hours_ago`.
+async fn failed_dispatch(
+    engine: &PersonalAgentEngine,
+    executor: i32,
+    title: &str,
+    hours_ago: i64,
+) -> crate::db::entities::personal_agent_dispatch::Model {
+    use sea_orm::{ActiveModelTrait, Set};
+    let d = svc::create_dispatch(
+        &engine.db.conn,
+        NewDispatch {
+            bot_id: engine.bot().await,
+            mode: DispatchMode::Chat,
+            executor_assistant_id: executor,
+            executor_snapshot_json: "{}".into(),
+            folder_id: None,
+            deliverable: None,
+            title: title.into(),
+            prompt: title.into(),
+            origin_batch_id: None,
+            on_done: None,
+            lineage: Default::default(),
+            done_when: None,
+        },
+    )
+    .await
+    .unwrap();
+    let d = svc::update_dispatch(
+        &engine.db.conn,
+        d.id,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Failed),
+            error: Some(Some("the agent crashed".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = d.into();
+    am.updated_at = Set(chrono::Utc::now() - chrono::Duration::hours(hours_ago));
+    am.update(&engine.db.conn).await.unwrap()
+}
+
+async fn rule_cards(engine: &PersonalAgentEngine, rule: &str) -> Vec<crate::db::entities::personal_agent_timeline::Model> {
+    let mut rows: Vec<_> = notice_rows(engine)
+        .await
+        .into_iter()
+        .filter(|r| data_of(r)["notice"] == "rule" && data_of(r)["rule"] == rule)
+        .collect();
+    rows.sort_by_key(|r| r.id);
+    rows
+}
+
+async fn notice_of(engine: &PersonalAgentEngine, row: &crate::db::entities::personal_agent_timeline::Model) -> crate::db::entities::personal_agent_notice::Model {
+    svc::get_notice(&engine.db.conn, notice_id_of(row)).await.unwrap().unwrap()
+}
+
+
+/// Run git in `dir` as a fixed author, asserting it worked.
+fn rules_git(dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[tokio::test]
+async fn failed_work_nobody_picks_up_gets_a_card_where_it_was_dispatched_once() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let coder = role_assistant(&primary, "Coder", true).await;
+    let old = failed_dispatch(&worker, coder, "Fix the flaky test", 3).await;
+    let fresh = failed_dispatch(&worker, coder, "Bump the lockfile", 1).await;
+    let now = super::clock::now();
+    host.rules_tick_at(now).await;
+    let cards = rule_cards(&worker, "failed").await;
+    assert_eq!(cards.len(), 1, "only the one failed two hours ago");
+    let d = data_of(&cards[0]);
+    assert_eq!(d["facts"]["dispatch_id"], old.id);
+    assert_eq!(d["state"], "open");
+    assert!(rule_cards(&primary, "failed").await.is_empty(), "the dispatcher's card, not the primary's");
+    let n = notice_of(&worker, &cards[0]).await;
+    assert_eq!(n.subject_key.as_deref(), Some(format!("rule:failed:dispatch:{}", old.id).as_str()));
+    assert_eq!(n.level, crate::db::entities::personal_agent_notice::NoticeLevel::Normal);
+    // The assistant hears of it with its next delivery, not woken.
+    let events = svc::pending_events(&worker.db.conn, w).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "proposal" && !e.wake && e.summary.contains("rule `failed`")));
+    // Looked at again: still one card per topic.
+    host.rules_tick_at(now + chrono::Duration::minutes(2)).await;
+    assert_eq!(rule_cards(&worker, "failed").await.len(), 1);
+    // The owner says not now: it is dismissed, and the same thing failing
+    // again within the week brings no new card.
+    worker.act_on_notice(n.id, "dismiss").await.unwrap();
+    assert_eq!(data_of(&rule_cards(&worker, "failed").await[0])["state"], "dismissed");
+    let _ = fresh;
+    {
+        use sea_orm::{ActiveModelTrait, Set};
+        let d = svc::get_dispatch(&worker.db.conn, old.id).await.unwrap().unwrap();
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = d.into();
+        am.updated_at = Set(chrono::Utc::now() - chrono::Duration::hours(4));
+        am.update(&worker.db.conn).await.unwrap();
+    }
+    host.rules_tick_at(now + chrono::Duration::minutes(4)).await;
+    assert_eq!(rule_cards(&worker, "failed").await.len(), 1, "quiet for a week after not now");
+    // A week after the not-now, it may come again.
+    {
+        use sea_orm::{ActiveModelTrait, Set};
+        let mut am: crate::db::entities::personal_agent_notice::ActiveModel =
+            notice_of(&worker, &rule_cards(&worker, "failed").await[0]).await.into();
+        am.acted_at = Set(Some(chrono::Utc::now() - chrono::Duration::days(8)));
+        am.update(&worker.db.conn).await.unwrap();
+    }
+    host.rules_tick_at(now + chrono::Duration::minutes(6)).await;
+    assert_eq!(rule_cards(&worker, "failed").await.len(), 2);
+    // The rule off: nothing more.
+    set_pref(&primary, "rule_failed", json!("off")).await;
+    failed_dispatch(&worker, coder, "Another one", 5).await;
+    host.rules_tick_at(now + chrono::Duration::minutes(8)).await;
+    assert_eq!(rule_cards(&worker, "failed").await.len(), 2);
+}
+
+#[tokio::test]
+async fn three_not_nows_lower_a_rule_until_the_owner_puts_it_back() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let coder = role_assistant(&primary, "Coder", true).await;
+    let mut now = super::clock::now();
+    for i in 0..3 {
+        failed_dispatch(&worker, coder, &format!("Job {i}"), 3).await;
+        host.rules_tick_at(now).await;
+        now += chrono::Duration::minutes(2);
+        let cards = rule_cards(&worker, "failed").await;
+        let open = cards.iter().find(|c| data_of(c)["state"] == "open").unwrap();
+        let row = worker.act_on_notice(notice_id_of(open), "dismiss").await.unwrap();
+        assert_eq!(row.data.as_ref().unwrap()["lowered_now"], i == 2, "{i}");
+    }
+    assert!(super::rules::quiet_since(&primary.db, "failed").await.is_some());
+    // Lowered one level: normal → low, no notification.
+    failed_dispatch(&worker, coder, "Job 3", 3).await;
+    host.rules_tick_at(now).await;
+    let cards = rule_cards(&worker, "failed").await;
+    let open = cards.iter().find(|c| data_of(c)["state"] == "open").unwrap();
+    assert_eq!(data_of(open)["lowered"], true);
+    assert_eq!(
+        notice_of(&worker, open).await.level,
+        crate::db::entities::personal_agent_notice::NoticeLevel::Low
+    );
+    let views = super::rules::rule_views(&primary.db).await;
+    let v = views.iter().find(|v| v.rule == "failed").unwrap();
+    assert!(v.quiet_since.is_some() && v.dismissed == 3, "{v:?}");
+    // The owner puts it back: the next card is at its level again, and the
+    // three before do not count.
+    super::rules::reset_rule(&primary.db, "failed").await.unwrap();
+    assert!(super::rules::quiet_since(&primary.db, "failed").await.is_none());
+    worker.act_on_notice(notice_id_of(open), "dismiss").await.unwrap();
+    assert!(super::rules::quiet_since(&primary.db, "failed").await.is_none(), "one not-now after the reset");
+}
+
+#[tokio::test]
+async fn dont_suggest_these_turns_the_rule_off_until_the_preferences_turn_it_on() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let coder = role_assistant(&primary, "Coder", true).await;
+    let now = super::clock::now();
+    failed_dispatch(&worker, coder, "Job A", 3).await;
+    host.rules_tick_at(now).await;
+    let card = rule_cards(&worker, "failed").await.remove(0);
+    let row = worker.act_on_notice(notice_id_of(&card), "mute").await.unwrap();
+    let data = row.data.unwrap();
+    assert_eq!((data["state"].as_str(), data["muted"].as_str()), (Some("dismissed"), Some("failed")));
+    assert_eq!(notice_of(&worker, &card).await.state, NoticeState::Muted);
+    assert!(!primary.prefs().await.rule_on("failed"));
+    let views = super::rules::rule_views(&primary.db).await;
+    assert!(views.iter().find(|v| v.rule == "failed").unwrap().muted_at.is_some());
+    // Nothing more of it.
+    failed_dispatch(&worker, coder, "Job B", 3).await;
+    host.rules_tick_at(now + chrono::Duration::minutes(2)).await;
+    assert_eq!(rule_cards(&worker, "failed").await.len(), 1);
+    // The preferences turn it on again.
+    set_pref(&primary, "rule_failed", json!("on")).await;
+    host.rules_tick_at(now + chrono::Duration::minutes(4)).await;
+    assert_eq!(rule_cards(&worker, "failed").await.len(), 2);
+    // A card the owner's own settings raised has no such button.
+    let err = worker.act_on_notice(notice_id_of(&card), "mute").await.unwrap_err();
+    assert!(err.contains("answered") || err.contains("no kind"), "{err}");
+}
+
+#[tokio::test]
+async fn the_assistants_suggestions_go_on_cards_and_stop_when_the_owner_says_so() {
+    let (engine, _tmp) = configured().await;
+    let researcher = role_assistant(&engine, "Researcher", true).await;
+    let args = json!({
+        "mode": "chat", "assistant_id": researcher, "title": "Look at the release notes",
+        "prompt": "Summarize them.", "suggest": true,
+    });
+    let out = call(&engine, "dispatch", args.clone()).await;
+    assert!(!out.ok && out.text.contains("reason"), "{}", out.text);
+    let mut args = args;
+    args["reason"] = json!("They read them every Monday.");
+    let out = call(&engine, "dispatch", args.clone()).await;
+    assert!(out.ok && out.text.contains("suggestion"), "{}", out.text);
+    assert!(all_dispatches(&engine).await.is_empty(), "nothing went out");
+    let cards: Vec<_> = notice_rows(&engine)
+        .await
+        .into_iter()
+        .filter(|r| data_of(r)["notice"] == "proposal")
+        .collect();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(data_of(&cards[0])["why"], "proposal");
+    assert_eq!(data_of(&cards[0])["detail"], "They read them every Monday.");
+    // The same again: the card stands.
+    let again = call(&engine, "dispatch", args.clone()).await;
+    assert!(again.ok && again.text.contains("Already with the owner"), "{}", again.text);
+    // "Don't suggest these": dismissed, the suggestions off, and every
+    // suggest call says so.
+    engine.act_on_notice(notice_id_of(&cards[0]), "mute").await.unwrap();
+    assert!(!engine.prefs().await.rule_on("suggest"));
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert!(events.iter().any(|e| e.summary.contains("declined your proposed dispatch")), "{events:?}");
+    let out = call(&engine, "dispatch", args.clone()).await;
+    assert!(!out.ok && out.text.contains("does not take suggestions"), "{}", out.text);
+    let out = call(
+        &engine,
+        "prefs_update",
+        json!({ "changes": [{ "key": "reply_length", "value": "short" }], "suggest": true, "reason": "They skim." }),
+    )
+    .await;
+    assert!(!out.ok && out.text.contains("does not take suggestions"), "{}", out.text);
+    // On again: a declined one is not suggested again within the week.
+    set_pref(&engine, "rule_suggest", json!("on")).await;
+    let out = call(&engine, "dispatch", args).await;
+    assert!(!out.ok && out.text.contains("declined this same suggestion"), "{}", out.text);
+}
+
+#[tokio::test]
+async fn a_session_waiting_on_the_owner_gets_a_card_unless_they_are_in_it() {
+    use crate::web::event_bridge::EventEmitter;
+    let (host, _w, tmp) = hosted().await;
+    let primary = host.primary();
+    let project = crate::db::test_helpers::seed_folder(&primary.db, &tmp.path().join("app").to_string_lossy()).await;
+    let conv = crate::db::test_helpers::seed_conversation(&primary.db, project, AgentType::Codex).await;
+    primary
+        .manager
+        .insert_test_connection_live("c-wait", AgentType::Codex, None, EventEmitter::Noop)
+        .await;
+    let ask = |minutes: i64| crate::acp::question::PendingQuestionState {
+        question_id: "q1".into(),
+        questions: vec![crate::acp::question::QuestionSpec {
+            id: "a".into(),
+            question: "Keep the old API?".into(),
+            header: "API".into(),
+            multi_select: false,
+            options: vec![],
+            is_secret: false,
+        }],
+        created_at: chrono::Utc::now() - chrono::Duration::minutes(minutes),
+    };
+    {
+        let st = primary.manager.get_state("c-wait").await.unwrap();
+        let mut s = st.write().await;
+        s.conversation_id = Some(conv);
+        s.folder_id = Some(project);
+        s.pending_question = Some(ask(15));
+    }
+    // The owner is in that session: they see it.
+    host.reach.set_attending(Some(super::presence::Attending {
+        viewing_conversations: vec![conv],
+        ..owner_here(None)
+    }));
+    let now = super::clock::now();
+    host.rules_tick_at(now).await;
+    assert!(rule_cards(&primary, "session").await.is_empty());
+    // Away from it: the card, urgent, and no second nudge of the same.
+    host.reach.set_attending(Some(owner_away()));
+    host.rules_tick_at(now + chrono::Duration::minutes(2)).await;
+    let cards = rule_cards(&primary, "session").await;
+    assert_eq!(cards.len(), 1);
+    assert_eq!(data_of(&cards[0])["facts"]["conversation_id"], conv);
+    assert_eq!(
+        notice_of(&primary, &cards[0]).await.level,
+        crate::db::entities::personal_agent_notice::NoticeLevel::Urgent
+    );
+    assert!(host.session_nudges_for_test(chrono::Utc::now()).await.is_empty());
+    // Answered: the card waits on nobody.
+    {
+        let st = primary.manager.get_state("c-wait").await.unwrap();
+        st.write().await.pending_question = None;
+    }
+    host.rules_tick_at(now + chrono::Duration::minutes(4)).await;
+    assert_eq!(data_of(&rule_cards(&primary, "session").await[0])["state"], "expired");
+    // Asked again: a new card ([Open the session] settles it).
+    {
+        let st = primary.manager.get_state("c-wait").await.unwrap();
+        st.write().await.pending_question = Some(ask(12));
+    }
+    host.rules_tick_at(now + chrono::Duration::minutes(6)).await;
+    let cards = rule_cards(&primary, "session").await;
+    assert_eq!(cards.len(), 2);
+    let row = primary.act_on_notice(notice_id_of(&cards[1]), "open").await.unwrap();
+    assert_eq!(row.data.unwrap()["state"], "opened");
+}
+
+#[tokio::test]
+async fn work_waiting_long_for_review_and_a_branch_behind_with_conflicts_go_to_its_dispatcher() {
+    use sea_orm::Set;
+    let (host, w, tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    set_pref(&primary, "auto_accept", json!("off")).await;
+    let coder = role_assistant(&primary, "Coder", true).await;
+    // A repository whose `work` branch conflicts with `main` moved on.
+    let dir = tmp.path().join("repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    rules_git(&dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    rules_git(&dir, &["add", "."]);
+    rules_git(&dir, &["commit", "-q", "-m", "base"]);
+    rules_git(&dir, &["checkout", "-q", "-b", "work"]);
+    std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+    rules_git(&dir, &["commit", "-q", "-am", "work"]);
+    rules_git(&dir, &["checkout", "-q", "main"]);
+    std::fs::write(dir.join("a.txt"), "three\n").unwrap();
+    rules_git(&dir, &["commit", "-q", "-am", "main moved"]);
+    let project = crate::db::test_helpers::seed_folder(&primary.db, &dir.to_string_lossy()).await;
+    let t = board_task(&primary, project, "Fix the parser", WorkTaskStatus::Review, |t| {
+        t.base_branch = Set(Some("main".into()));
+        t.work_branch = Set(Some("work".into()));
+        t.files_changed = Set(Some(1));
+        t.settled_at = Set(Some(chrono::Utc::now() - chrono::Duration::hours(25)));
+    })
+    .await;
+    task_dispatch(&worker, coder, project, t.id, "Fix the parser", DispatchState::Review).await;
+    // The owner's own task, in review as long.
+    let mine = board_task(&primary, project, "My own thing", WorkTaskStatus::Review, |t| {
+        t.settled_at = Set(Some(chrono::Utc::now() - chrono::Duration::hours(30)));
+    })
+    .await;
+    let now = super::clock::now();
+    host.rules_tick_at(now).await;
+    let review = rule_cards(&worker, "review").await;
+    assert_eq!(review.len(), 1);
+    assert_eq!(data_of(&review[0])["facts"]["task_id"], t.id);
+    let own = rule_cards(&primary, "review").await;
+    assert_eq!(own.len(), 1);
+    assert_eq!(data_of(&own[0])["facts"]["task_id"], mine.id);
+    let behind = rule_cards(&worker, "behind").await;
+    assert_eq!(behind.len(), 1, "a branch behind main with a conflict");
+    assert_eq!(data_of(&behind[0])["facts"]["base"], "main");
+    // [Remind me]: the owner's reminder for tomorrow morning.
+    let row = primary.act_on_notice(notice_id_of(&own[0]), "remind").await.unwrap();
+    let data = row.data.unwrap();
+    assert_eq!(data["state"], "reminding");
+    let item = svc::get_item(&primary.db.conn, data["item_id"].as_i64().unwrap() as i32).await.unwrap().unwrap();
+    assert_eq!(item.kind, ItemKind::Reminder);
+    assert!(item.due_at.unwrap() > chrono::Utc::now());
+    // A clean branch (main merged in) is not behind with conflicts.
+    rules_git(&dir, &["checkout", "-q", "work"]);
+    rules_git(&dir, &["checkout", "-q", "main", "--", "a.txt"]);
+    rules_git(&dir, &["commit", "-q", "-am", "take main"]);
+    rules_git(&dir, &["merge", "-q", "main", "-m", "merge main", "-s", "ours"]);
+    rules_git(&dir, &["checkout", "-q", "main"]);
+    host.rules_tick_at(now + chrono::Duration::minutes(31)).await;
+    assert_eq!(data_of(&rule_cards(&worker, "behind").await[0])["state"], "expired");
+}
+
+#[tokio::test]
+async fn changes_left_uncommitted_a_new_project_and_a_quiet_matter() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (host, w, tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let dir = tmp.path().join("app");
+    std::fs::create_dir_all(&dir).unwrap();
+    rules_git(&dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(dir.join("README.md"), "hi\n").unwrap();
+    rules_git(&dir, &["add", "."]);
+    rules_git(&dir, &["commit", "-q", "-m", "init"]);
+    let app = crate::db::test_helpers::seed_folder(&primary.db, &dir.to_string_lossy()).await;
+    // The first look notes the projects there are.
+    let t0 = super::clock::now();
+    host.rules_tick_at(t0).await;
+    // A change nobody commits.
+    std::fs::write(dir.join("README.md"), "hi there\n").unwrap();
+    host.rules_tick_at(t0 + chrono::Duration::minutes(31)).await;
+    assert!(rule_cards(&primary, "uncommitted").await.is_empty(), "not a day yet");
+    host.rules_tick_at(t0 + chrono::Duration::hours(25)).await;
+    let cards = rule_cards(&primary, "uncommitted").await;
+    assert_eq!(cards.len(), 1);
+    assert_eq!(data_of(&cards[0])["facts"]["folder_id"], app);
+    assert_eq!(
+        notice_of(&primary, &cards[0]).await.level,
+        crate::db::entities::personal_agent_notice::NoticeLevel::Low
+    );
+    // Committed: the card is moot.
+    rules_git(&dir, &["commit", "-q", "-am", "done"]);
+    host.rules_tick_at(t0 + chrono::Duration::hours(26)).await;
+    assert_eq!(data_of(&rule_cards(&primary, "uncommitted").await[0])["state"], "expired");
+    // A project added since, worked in: [Keep an eye on it] connects it.
+    let other = tmp.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let fresh = crate::db::test_helpers::seed_folder(&primary.db, &other.to_string_lossy()).await;
+    host.rules_tick_at(t0 + chrono::Duration::hours(27)).await;
+    assert!(rule_cards(&primary, "new_project").await.is_empty(), "no session in it yet");
+    crate::db::test_helpers::seed_conversation(&primary.db, fresh, AgentType::Codex).await;
+    host.rules_tick_at(t0 + chrono::Duration::hours(28)).await;
+    let cards = rule_cards(&primary, "new_project").await;
+    assert_eq!(cards.len(), 1);
+    assert_eq!(data_of(&cards[0])["facts"]["folder_id"], fresh);
+    let row = primary.act_on_notice(notice_id_of(&cards[0]), "watch").await.unwrap();
+    assert_eq!(row.data.unwrap()["state"], "watching");
+    let p = svc::primary_bot(&primary.db.conn).await.unwrap().unwrap();
+    assert!(super::meet::connected_in_settings(&p.settings).contains(&fresh));
+    // A matter of the worker's untouched for eight days: [Close] drops it.
+    let item = svc::create_item(
+        &worker.db.conn,
+        w,
+        ItemKind::Followup,
+        None,
+        ItemStatus::Open,
+        None,
+        "Chase the vendor about the licence".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let mut am: crate::db::entities::personal_agent_item::ActiveModel = item.clone().into();
+    am.updated_at = Set(chrono::Utc::now() - chrono::Duration::days(8));
+    am.update(&worker.db.conn).await.unwrap();
+    host.rules_tick_at(t0 + chrono::Duration::hours(29)).await;
+    let cards = rule_cards(&worker, "idle").await;
+    assert_eq!(cards.len(), 1);
+    worker.act_on_notice(notice_id_of(&cards[0]), "close").await.unwrap();
+    let item = svc::get_item(&worker.db.conn, item.id).await.unwrap().unwrap();
+    assert_eq!(item.status, ItemStatus::Dropped);
+    // A rule's thing the owner acted on, and its own next steps only.
+    let err = worker.act_on_notice(notice_id_of(&cards[0]), "watch").await.unwrap_err();
+    assert!(err.contains("answered") || err.contains("does not apply"), "{err}");
+}
+
+#[tokio::test]
+async fn the_repeat_offer_follows_its_rule_and_count() {
+    let (engine, _tmp) = configured().await;
+    set_pref(&engine, "rule_repeat", json!("off")).await;
+    for _ in 0..3 {
+        engine
+            .send_owner_message("Summarize yesterday's merged pull requests".into(), Vec::new(), None)
+            .await
+            .unwrap();
+    }
+    assert!(routine_cards(&engine, "repeat").await.is_empty(), "the rule is off");
+    set_pref(&engine, "rule_repeat", json!("on")).await;
+    set_pref(&engine, "rule_repeat_count", json!(5)).await;
+    engine
+        .send_owner_message("Summarize yesterday's merged pull requests".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    assert!(routine_cards(&engine, "repeat").await.is_empty(), "the fourth of five");
+    engine
+        .send_owner_message("Summarize yesterday's merged pull requests".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    let offers = routine_cards(&engine, "repeat").await;
+    assert_eq!(offers.len(), 1);
+    // "Don't suggest these" on it turns the offer off.
+    engine.act_on_notice(notice_id_of(&offers[0]), "mute").await.unwrap();
+    assert!(!engine.prefs().await.rule_on("repeat"));
+}
+
+#[tokio::test]
+async fn failed_work_stays_due_however_long_it_waits_and_never_started_work_starts_again() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let coder = role_assistant(&primary, "Coder", true).await;
+    // codeg first looked ten days ago.
+    rulesvc_first_look(&primary, 10).await;
+    set_pref(&primary, "rule_failed_hours", json!(96)).await;
+    // Failed four days ago and still failed (a long weekend): due.
+    let weekend = failed_dispatch(&worker, coder, "Fix the release script", 100).await;
+    // Failed well before codeg first looked: old news.
+    failed_dispatch(&worker, coder, "Ancient failure", 24 * 20).await;
+    let now = super::clock::now();
+    host.rules_tick_at(now).await;
+    let cards = rule_cards(&worker, "failed").await;
+    assert_eq!(cards.len(), 1, "{:?}", cards.iter().map(data_of).collect::<Vec<_>>());
+    assert_eq!(data_of(&cards[0])["facts"]["dispatch_id"], weekend.id);
+    // It never got a session (it failed starting): [Retry] hands the same
+    // work out again.
+    let before = all_dispatches(&worker).await.len();
+    let row = worker.act_on_notice(notice_id_of(&cards[0]), "retry").await.unwrap();
+    let data = row.data.unwrap();
+    assert_eq!(data["state"], "retried");
+    assert_eq!(data["retry_of"], weekend.id);
+    let all = all_dispatches(&worker).await;
+    assert_eq!(all.len(), before + 1);
+    let again = all.iter().find(|d| d.id == data["dispatch_id"].as_i64().unwrap() as i32).unwrap();
+    assert_eq!((again.title.as_str(), again.prompt.as_str()), ("Fix the release script", "Fix the release script"));
+}
+
+#[tokio::test]
+async fn retry_starts_again_work_whose_connection_went_away_before_a_session() {
+    let (host, w, tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let coder = role_assistant(&primary, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&primary.db, &tmp.path().join("p").to_string_lossy()).await;
+    // A conversation was made and a connection recorded, but the first
+    // prompt failed before any session: the connection is gone.
+    let conv = crate::db::test_helpers::seed_conversation(&primary.db, project, AgentType::ClaudeCode).await;
+    let d = failed_dispatch(&worker, coder, "Draft the changelog", 3).await;
+    {
+        use sea_orm::{ActiveModelTrait, Set};
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = d.clone().into();
+        am.conversation_id = Set(Some(conv));
+        am.connection_id = Set(Some("gone-conn".into()));
+        am.thread_id = Set(Some(77));
+        am.for_input = Set(Some("owner:5".into()));
+        am.update(&worker.db.conn).await.unwrap();
+    }
+    host.rules_tick_at(super::clock::now()).await;
+    let card = rule_cards(&worker, "failed").await.remove(0);
+    let before = all_dispatches(&worker).await.len();
+    let row = worker.act_on_notice(notice_id_of(&card), "retry").await.unwrap();
+    let data = row.data.unwrap();
+    assert_eq!((data["state"].as_str(), data["retry_of"].as_i64()), (Some("retried"), Some(d.id as i64)));
+    let all = all_dispatches(&worker).await;
+    assert_eq!(all.len(), before + 1);
+    let again = all.iter().find(|x| x.id == data["dispatch_id"].as_i64().unwrap() as i32).unwrap();
+    assert_eq!(again.title, "Draft the changelog");
+    assert_eq!((again.thread_id, again.for_input.as_deref()), (Some(77), Some("owner:5")));
+}
+
+/// Make codeg's first look at failed work `days` ago.
+async fn rulesvc_first_look(engine: &PersonalAgentEngine, days: i64) {
+    crate::db::service::personal_agent_rule_service::set_data(
+        &engine.db.conn,
+        "failed",
+        "",
+        &json!({ "first_look": (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339() }),
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
 }

@@ -55,6 +55,8 @@ import type {
   BotTemplate,
   PersonalAgentSettingChange,
   PersonalAgentPresence,
+  ProposalRule,
+  ProposalRuleView,
   PersonalAgentProfile,
   PersonalAgentToday,
   Routine,
@@ -2702,7 +2704,9 @@ export async function personalAgentPresence(
   focused: boolean,
   idleMs: number | null,
   typedMs: number | null = null,
-  viewing: number | null = null
+  viewing: number | null = null,
+  /** The session (conversation) this window's workspace has in front. */
+  viewingConversation: number | null = null
 ): Promise<PersonalAgentPresence> {
   return getTransport().call("personal_agent_presence", {
     window,
@@ -2710,6 +2714,7 @@ export async function personalAgentPresence(
     idleMs,
     typedMs,
     viewing,
+    viewingConversation,
   })
 }
 
@@ -2778,6 +2783,19 @@ export async function personalAgentRoutineSave(
 }
 
 /** Run a routine now, pause, resume or delete it. */
+/** codeg's proposal rules (6.7): muted from a card, lowered after the
+ *  owner kept dismissing their cards, and how their cards fared. */
+export async function personalAgentRules(): Promise<ProposalRuleView[]> {
+  return getTransport().call("personal_agent_rules", {})
+}
+
+/** Put a rule codeg lowered back where it was. */
+export async function personalAgentRuleReset(
+  rule: ProposalRule
+): Promise<ProposalRuleView[]> {
+  return getTransport().call("personal_agent_rule_reset", { rule })
+}
+
 export async function personalAgentRoutineAct(
   bot: number | null | undefined,
   routineId: number,
@@ -3043,6 +3061,16 @@ export type NoticeAction =
   | "recheck"
   | "retry"
   | "resume"
+  // codeg's proposal rule cards (6.7): their next steps, and "don't suggest
+  // these" on any suggestion.
+  | "mute"
+  | "check"
+  | "remind"
+  | "open"
+  | "summary"
+  | "close"
+  | "watch"
+  | "rebase"
 
 export async function personalAgentAnswerQuestion(
   questionId: string,

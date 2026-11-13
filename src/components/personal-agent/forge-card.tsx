@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils"
 import { CollapsedText } from "./event-card"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
+import { MutedNote, MuteKindButton } from "./mute-kind"
 import { AGENT_SURFACE, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
@@ -308,6 +309,9 @@ export function ForgeCard({ item }: { item: NoticeItem }) {
                 >
                   {t("decline")}
                 </Button>
+                {why === "suggest" ? (
+                  <MuteKindButton noticeId={noticeId} disabled={disabled} />
+                ) : null}
               </>
             ) : null}
             {state === "unknown" ? (
@@ -353,6 +357,7 @@ export function ForgeCard({ item }: { item: NoticeItem }) {
             ) : null}
           </div>
         ) : null}
+        <MutedNote data={data} />
         {shownError ? (
           <p role="alert" className="mt-2 text-xs break-words text-destructive">
             {tn("failed", { error: shownError })}

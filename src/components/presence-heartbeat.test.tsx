@@ -7,13 +7,16 @@ const api = vi.hoisted(() => ({
       focused: boolean,
       idleMs: number | null,
       typedMs?: number | null,
-      viewing?: number | null
+      viewing?: number | null,
+      viewingConversation?: number | null
     ) => Promise<{ present: boolean; last_active: string | null }>
   >(async () => ({ present: true, last_active: null })),
 }))
 vi.mock("@/lib/api", () => api)
 
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+import { useTabStore } from "@/stores/tab-store"
+import { useWorkbenchRouteStore } from "@/stores/workbench-route-store"
 
 import {
   BEAT_EVERY_MS,
@@ -51,6 +54,8 @@ afterEach(() => {
   stop?.()
   stop = null
   usePersonalAgentUi.setState({ viewing: null })
+  useWorkbenchRouteStore.setState({ route: null })
+  useTabStore.setState({ tabs: [], activeTabId: null })
   document.body.innerHTML = ""
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -249,5 +254,25 @@ describe("the presence heartbeat", () => {
     usePersonalAgentUi.getState().setViewing(null)
     await flush()
     expect(api.personalAgentPresence.mock.calls[1][4]).toBeNull()
+  })
+
+  it("says which session the conversations show, only while they show", async () => {
+    useTabStore.setState({
+      tabs: [{ id: "t1", conversationId: 9 }] as never,
+      activeTabId: "t1",
+    })
+    // No workbench in this window: no session in front.
+    stop = startPresenceHeartbeat()
+    await flush()
+    expect(api.personalAgentPresence.mock.calls[0][5]).toBeNull()
+    api.personalAgentPresence.mockClear()
+    useWorkbenchRouteStore.setState({ route: "conversations" })
+    await flush()
+    expect(api.personalAgentPresence.mock.calls).toHaveLength(1)
+    expect(api.personalAgentPresence.mock.calls[0][5]).toBe(9)
+    // Today, the board or another page over them: the session is hidden.
+    useWorkbenchRouteStore.setState({ route: "tasks" })
+    await flush()
+    expect(api.personalAgentPresence.mock.calls[1][5]).toBeNull()
   })
 })

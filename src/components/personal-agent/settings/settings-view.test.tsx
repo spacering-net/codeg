@@ -47,6 +47,8 @@ const api = vi.hoisted(() => ({
   personalAgentBotDelete: vi.fn(),
   personalAgentProfile: vi.fn(async () => PROFILE),
   personalAgentRosterAct: vi.fn(async () => {}),
+  personalAgentRules: vi.fn(async () => []),
+  personalAgentRuleReset: vi.fn(async () => []),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
@@ -501,12 +503,13 @@ describe("the settings view", () => {
         null
       )
     )
-    // A level of the owner's own making is not overwritten unasked.
+    // A level of the owner's own making is not overwritten unasked: "more"
+    // also halves the proposal rules' six thresholds (6.7).
     api.personalAgentSettingsPatch.mockClear()
     fireEvent.click(document.querySelector('[data-pa-level="more"]')!)
     expect(api.personalAgentSettingsPatch).not.toHaveBeenCalled()
     expect(
-      await screen.findByText("This overwrites 3 items you changed.")
+      await screen.findByText("This overwrites 9 items you changed.")
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Switch" }))
     await waitFor(() =>

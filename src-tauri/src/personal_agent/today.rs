@@ -294,6 +294,7 @@ pub async fn today(
             NoticeKind::Changed,
             NoticeKind::Forge,
             NoticeKind::Routine,
+            NoticeKind::Rule,
         ]))
         .order_by_asc(notice_entity::Column::Id)
         .all(&db.conn)
@@ -301,9 +302,49 @@ pub async fn today(
         .unwrap_or_default()
     {
         let payload = payload_of(&n.payload);
+        // One of codeg's proposal rules (6.7): the ones whose thing no
+        // other row stands for (failed work, a task, a session have theirs).
+        if n.kind == NoticeKind::Rule {
+            let rule = payload["rule"].as_str().unwrap_or("");
+            if !matches!(rule, "pr_review" | "uncommitted" | "idle" | "new_project") {
+                continue;
+            }
+            let Some(bot) = n.bot_id.filter(|b| bots.iter().any(|x| x.id == *b)) else {
+                continue;
+            };
+            let facts = &payload["facts"];
+            let title = ["title", "name", "summary", "project"]
+                .iter()
+                .find_map(|k| facts[*k].as_str())
+                .map(one_line)
+                .unwrap_or_default();
+            let mut row = TodayRow::new(format!("rule:{}", n.id), "rule", title, n.created_at);
+            row.level = Some(match n.level {
+                crate::db::entities::personal_agent_notice::NoticeLevel::Urgent => Level::Urgent,
+                crate::db::entities::personal_agent_notice::NoticeLevel::Normal => Level::Normal,
+                crate::db::entities::personal_agent_notice::NoticeLevel::Low => Level::Low,
+            });
+            row.bot_id = Some(bot);
+            row.row_id = n.timeline_id;
+            row.notice_id = Some(n.id);
+            row.state = Some(rule.to_string());
+            row.text = match rule {
+                "pr_review" => facts["number"]
+                    .as_i64()
+                    .map(|num| format!("{} #{num}", facts["project"].as_str().unwrap_or(""))),
+                "uncommitted" | "new_project" => facts["path"].as_str().map(one_line),
+                _ => None,
+            };
+            view.needs.push(row);
+            continue;
+        }
         // A forge action keeps its call whole (7.4).
         let why = payload["why"].as_str().or(payload["call"]["why"].as_str());
-        if why != Some("suggest") {
+        // The assistant's own suggestion of a dispatch, a follow-up or a
+        // message (6.7) has its topic so.
+        let suggested = n.kind == NoticeKind::Proposal
+            && n.subject_key.as_deref().is_some_and(|k| k.starts_with("suggest:"));
+        if why != Some("suggest") && !suggested {
             continue;
         }
         let Some(bot) = n.bot_id.filter(|b| bots.iter().any(|x| x.id == *b)) else {

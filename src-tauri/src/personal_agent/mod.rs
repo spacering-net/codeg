@@ -51,6 +51,7 @@ pub mod presence;
 pub mod reach;
 pub mod reminders;
 pub mod routines;
+pub mod rules;
 pub mod starter;
 pub mod team_edit;
 pub mod templates;

@@ -90,8 +90,6 @@ pub const MAX_WHAT_CHARS: usize = 4_000;
 /// the last month, alike by this much (Jaccard over character trigrams).
 pub const REPEAT_DAYS: i64 = 30;
 pub const REPEAT_ALIKE: f64 = 0.5;
-/// Two earlier ones alike: this is the third.
-pub const REPEAT_EARLIER: usize = 2;
 /// Shorter messages are not requests to repeat ("ok", "go on").
 pub const REPEAT_MIN_CHARS: usize = 8;
 /// The forge-polled event kind.
@@ -2625,6 +2623,11 @@ impl PersonalAgentEngine {
     /// a month, offer the owner a routine for it. The note for the tool's
     /// answer, when one was offered.
     pub async fn offer_routine_for_dispatch(&self, d: &dispatch_entity::Model) -> Option<String> {
+        // The owner turned the offer off (6.7).
+        let prefs = self.prefs().await;
+        if !prefs.proactive() || !prefs.rule_on("repeat") {
+            return None;
+        }
         // Work a routine handed out is a routine already.
         if rsvc::run_of_dispatch(&self.db.conn, d.id)
             .await
@@ -2666,7 +2669,7 @@ impl PersonalAgentEngine {
                 alike_earlier.push(x);
             }
         }
-        if alike_earlier.len() < REPEAT_EARLIER {
+        if alike_earlier.len() + 1 < prefs.repeat_count() {
             return None;
         }
         let owner = self.owner_tz().await;
@@ -2694,8 +2697,8 @@ impl PersonalAgentEngine {
             .offer_routine(&d.title, draft, titles, "dispatch", Some(d.id))
             .await?;
         Some(format!(
-            "This is the {}rd request like it in {REPEAT_DAYS} days, so codeg put card #{id} in front of \
-             the owner offering to make it a routine; you may mention it at the end of your reply.",
+            "This is request number {} like it in {REPEAT_DAYS} days, so codeg put card #{id} in front \
+             of the owner offering to make it a routine; you may mention it at the end of your reply.",
             alike_earlier.len() + 1
         ))
     }
@@ -2705,6 +2708,11 @@ impl PersonalAgentEngine {
     pub(super) async fn offer_routine_for_message(&self, row_id: i32, text: &str) {
         let text = text.trim();
         if text.chars().count() < REPEAT_MIN_CHARS {
+            return;
+        }
+        // The owner turned the offer off (6.7).
+        let prefs = self.prefs().await;
+        if !prefs.proactive() || !prefs.rule_on("repeat") {
             return;
         }
         let bot = self.bot().await;
@@ -2720,7 +2728,7 @@ impl PersonalAgentEngine {
                 b.trim().chars().count() >= REPEAT_MIN_CHARS && alike(b, text) >= REPEAT_ALIKE
             })
             .collect();
-        if alike_earlier.len() < REPEAT_EARLIER {
+        if alike_earlier.len() + 1 < prefs.repeat_count() {
             return;
         }
         let owner = self.owner_tz().await;
@@ -2738,6 +2746,7 @@ impl PersonalAgentEngine {
             cron: Some(weekly_at(owner, clock::now())),
             ..Default::default()
         };
+        let alike_earlier_count = alike_earlier.len();
         if let Some(id) = self
             .offer_routine(&title, draft, alike_earlier, "message", None)
             .await
@@ -2749,9 +2758,10 @@ impl PersonalAgentEngine {
                 &format!("repeat:{id}"),
                 None,
                 format!(
-                    "The owner has asked for something like #{row_id} three times in {REPEAT_DAYS} days; \
+                    "The owner has asked for something like #{row_id} {} times in {REPEAT_DAYS} days; \
                      codeg put card #{id} in front of them offering to make it a routine — no need to \
-                     offer it again yourself."
+                     offer it again yourself.",
+                    alike_earlier_count + 1
                 ),
                 Some(json!({ "notice_id": id })),
                 false,
@@ -2845,6 +2855,12 @@ impl PersonalAgentEngine {
         let owner = self.owner_tz().await;
         let zone = zone_of(spec.timezone.as_deref(), owner).name().to_string();
         let batch = self.current_batch().await;
+        // The owner does not take suggestions now (6.7).
+        if args["suggest"].as_bool() == Some(true) {
+            if let Some(no) = self.suggestions_closed().await {
+                return no;
+            }
+        }
         if args["suggest"].as_bool() == Some(true) {
             let data = json!({
                 "notice": "routine",
@@ -2986,6 +3002,12 @@ impl PersonalAgentEngine {
         let reason = args["reason"].as_str().map(str::to_string);
         let owner = self.owner_tz().await;
         let batch = self.current_batch().await;
+        // The owner does not take suggestions now (6.7).
+        if args["suggest"].as_bool() == Some(true) {
+            if let Some(no) = self.suggestions_closed().await {
+                return no;
+            }
+        }
         if args["suggest"].as_bool() == Some(true) {
             let view = routine_view(&self.db.conn, r.clone(), owner, 1).await;
             let data = json!({

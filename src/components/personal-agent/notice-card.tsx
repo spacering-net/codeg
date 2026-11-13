@@ -79,6 +79,8 @@ import { ExchangeSheet } from "./exchange-sheet"
 import { ForgeCard } from "./forge-card"
 import { PrCard } from "./pr-card"
 import { RoutineCard } from "./routine-card"
+import { RuleCard } from "./rule-card"
+import { MutedNote, MuteKindButton } from "./mute-kind"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
@@ -155,6 +157,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "forge") return <ForgeCard item={item} />
   if (kind === "pr") return <PrCard item={item} />
   if (kind === "routine") return <RoutineCard item={item} />
+  if (kind === "rule") return <RuleCard item={item} />
   return null
 }
 
@@ -379,8 +382,16 @@ function ActionCard({
                   ? tc("dismiss")
                   : t("dismiss")}
             </Button>
+            {/* The assistant's own suggestion (6.7). */}
+            {!uncertain && !confirm && state === "open" ? (
+              <MuteKindButton
+                noticeId={Number(row.ref_id)}
+                disabled={busy != null}
+              />
+            ) : null}
           </div>
         ) : null}
+        <MutedNote data={data} />
         {shownError ? (
           <p role="alert" className="mt-2 text-xs break-words text-destructive">
             {t("failed", { error: shownError })}
@@ -439,6 +450,8 @@ function CardFrame({
           <span className="font-medium">{heading}</span>
         </p>
         {children}
+        {/* "Don't suggest these" was pressed on it (6.7). */}
+        <MutedNote data={row.data} />
         {failed ? (
           <p role="alert" className="mt-2 text-xs break-words text-destructive">
             {t("failed", { error: failed })}
@@ -1003,6 +1016,12 @@ function ChangedCard({ item }: { item: NoticeItem }) {
               >
                 {t("dismiss")}
               </Button>
+              {why === "suggest" ? (
+                <MuteKindButton
+                  noticeId={Number(row.ref_id)}
+                  disabled={busy != null}
+                />
+              ) : null}
             </>
           ) : state === "applied" ? (
             <Button
@@ -1281,6 +1300,12 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
             >
               {t("dismiss")}
             </Button>
+            {why === "suggest" && !team ? (
+              <MuteKindButton
+                noticeId={Number(row.ref_id)}
+                disabled={busy != null}
+              />
+            ) : null}
           </>
         ) : state === "applied" && live.length > 0 ? (
           <Button
@@ -1472,6 +1497,12 @@ function AssistantChangedCard({ item }: { item: NoticeItem }) {
             >
               {tc("dismiss")}
             </Button>
+            {why === "suggest" ? (
+              <MuteKindButton
+                noticeId={Number(row.ref_id)}
+                disabled={busy != null}
+              />
+            ) : null}
           </>
         ) : null}
         {state === "editor" ? (

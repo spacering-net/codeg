@@ -216,6 +216,12 @@ pub enum What {
     RoutinePaused {
         text: String,
     },
+    /// One of codeg's proposal rules (6.7) found something: which, and
+    /// what it is about.
+    Rule {
+        rule: String,
+        text: String,
+    },
     /// The reply's first words (none: it said nothing in words).
     Reply {
         text: Option<String>,
@@ -481,6 +487,15 @@ struct Words {
     routine_paused: &'static str,
     why_routine: &'static str,
     why_routine_paused: &'static str,
+    rule_failed: &'static str,
+    rule_review: &'static str,
+    rule_pr_review: &'static str,
+    rule_uncommitted: &'static str,
+    rule_idle: &'static str,
+    rule_new_project: &'static str,
+    rule_behind: &'static str,
+    why_proposal: &'static str,
+    why_proposal_low: &'static str,
 }
 
 const EN: Words = Words {
@@ -531,7 +546,15 @@ const EN: Words = Words {
     routine: "Routine report: {text}",
     routine_paused: "Routine paused: {text}",
     why_routine: "It ran a routine you set up.",
-    why_routine_paused: "It failed three times in a row, or its executor config can't be used; it won't run until you look.",
+    why_routine_paused: "It failed three times in a row, or its executor config can't be used; it won't run until you look.",    rule_failed: "Failed, and nobody's on it: {text}",
+    rule_review: "Waiting long for review: {text}",
+    rule_pr_review: "Waiting for your review: {text}",
+    rule_uncommitted: "Changes left uncommitted: {text}",
+    rule_idle: "Gone quiet: {text}",
+    rule_new_project: "New project: {text}",
+    rule_behind: "Behind its target, with conflicts: {text}",
+    why_proposal: "codeg noticed it; the card has a next step.",
+    why_proposal_low: "codeg noticed it; nothing urgent.",
 };
 
 const ZH_CN: Words = Words {
@@ -582,7 +605,15 @@ const ZH_CN: Words = Words {
     routine: "例程报告：{text}",
     routine_paused: "例程已暂停：{text}",
     why_routine: "你设的例程跑了一次。",
-    why_routine_paused: "连续失败了 3 次，或者它用的执行配置不能用了；你看过之前它不会再跑。",
+    why_routine_paused: "连续失败了 3 次，或者它用的执行配置不能用了；你看过之前它不会再跑。",    rule_failed: "失败了，没人处理：{text}",
+    rule_review: "等验收很久了：{text}",
+    rule_pr_review: "等你评审：{text}",
+    rule_uncommitted: "有改动没提交：{text}",
+    rule_idle: "很久没动了：{text}",
+    rule_new_project: "新项目：{text}",
+    rule_behind: "落后目标分支且有冲突：{text}",
+    why_proposal: "codeg 发现的，卡片上有下一步。",
+    why_proposal_low: "codeg 发现的，不急。",
 };
 
 const ZH_TW: Words = Words {
@@ -633,7 +664,15 @@ const ZH_TW: Words = Words {
     routine: "例程報告：{text}",
     routine_paused: "例程已暫停：{text}",
     why_routine: "你設的例程跑了一次。",
-    why_routine_paused: "連續失敗了 3 次，或者它用的執行設定不能用了；你看過之前它不會再跑。",
+    why_routine_paused: "連續失敗了 3 次，或者它用的執行設定不能用了；你看過之前它不會再跑。",    rule_failed: "失敗了，沒人處理：{text}",
+    rule_review: "等驗收很久了：{text}",
+    rule_pr_review: "等你審查：{text}",
+    rule_uncommitted: "有改動沒提交：{text}",
+    rule_idle: "很久沒動了：{text}",
+    rule_new_project: "新專案：{text}",
+    rule_behind: "落後目標分支且有衝突：{text}",
+    why_proposal: "codeg 發現的，卡片上有下一步。",
+    why_proposal_low: "codeg 發現的，不急。",
 };
 
 const JA: Words = Words {
@@ -684,7 +723,15 @@ const JA: Words = Words {
     routine: "ルーティンの報告：{text}",
     routine_paused: "ルーティンを一時停止しました：{text}",
     why_routine: "設定したルーティンが実行されました。",
-    why_routine_paused: "3 回続けて失敗したか、使う実行設定が使えなくなりました。確認するまで実行されません。",
+    why_routine_paused: "3 回続けて失敗したか、使う実行設定が使えなくなりました。確認するまで実行されません。",    rule_failed: "失敗したまま誰も対応していません：{text}",
+    rule_review: "レビュー待ちが長くなっています：{text}",
+    rule_pr_review: "あなたのレビュー待ち：{text}",
+    rule_uncommitted: "コミットされていない変更：{text}",
+    rule_idle: "しばらく動きがありません：{text}",
+    rule_new_project: "新しいプロジェクト：{text}",
+    rule_behind: "ターゲットより遅れていて競合があります：{text}",
+    why_proposal: "codeg が気づきました。カードに次の一歩があります。",
+    why_proposal_low: "codeg が気づきました。急ぎではありません。",
 };
 
 const KO: Words = Words {
@@ -735,7 +782,15 @@ const KO: Words = Words {
     routine: "루틴 보고: {text}",
     routine_paused: "루틴 일시 중지됨: {text}",
     why_routine: "설정한 루틴이 실행됐어요.",
-    why_routine_paused: "3번 연속 실패했거나 사용하는 실행 구성을 쓸 수 없어요. 확인하기 전까지 실행되지 않아요.",
+    why_routine_paused: "3번 연속 실패했거나 사용하는 실행 구성을 쓸 수 없어요. 확인하기 전까지 실행되지 않아요.",    rule_failed: "실패했는데 아무도 처리하지 않았어요: {text}",
+    rule_review: "검토를 오래 기다리고 있어요: {text}",
+    rule_pr_review: "검토를 기다리고 있어요: {text}",
+    rule_uncommitted: "커밋하지 않은 변경 사항: {text}",
+    rule_idle: "한동안 진행이 없어요: {text}",
+    rule_new_project: "새 프로젝트: {text}",
+    rule_behind: "대상 브랜치보다 뒤처져 있고 충돌이 있어요: {text}",
+    why_proposal: "codeg가 발견했어요. 카드에 다음 단계가 있어요.",
+    why_proposal_low: "codeg가 발견했어요. 급하지 않아요.",
 };
 
 const ES: Words = Words {
@@ -786,7 +841,15 @@ const ES: Words = Words {
     routine: "Informe de la rutina: {text}",
     routine_paused: "Rutina en pausa: {text}",
     why_routine: "Se ejecutó una rutina que configuraste.",
-    why_routine_paused: "Falló tres veces seguidas o ya no se puede usar su configuración de ejecución; no volverá a ejecutarse hasta que la revises.",
+    why_routine_paused: "Falló tres veces seguidas o ya no se puede usar su configuración de ejecución; no volverá a ejecutarse hasta que la revises.",    rule_failed: "Falló y nadie se ocupa: {text}",
+    rule_review: "Lleva mucho esperando revisión: {text}",
+    rule_pr_review: "Espera tu revisión: {text}",
+    rule_uncommitted: "Cambios sin confirmar: {text}",
+    rule_idle: "Sin movimiento hace tiempo: {text}",
+    rule_new_project: "Proyecto nuevo: {text}",
+    rule_behind: "Detrás de su rama destino, con conflictos: {text}",
+    why_proposal: "codeg lo notó; la tarjeta tiene el siguiente paso.",
+    why_proposal_low: "codeg lo notó; nada urgente.",
 };
 
 const DE: Words = Words {
@@ -837,7 +900,15 @@ const DE: Words = Words {
     routine: "Bericht der Routine: {text}",
     routine_paused: "Routine pausiert: {text}",
     why_routine: "Eine Routine, die du eingerichtet hast, ist gelaufen.",
-    why_routine_paused: "Sie ist dreimal hintereinander fehlgeschlagen oder ihre Ausführungskonfiguration ist nicht mehr nutzbar; sie läuft erst wieder, wenn du nachsiehst.",
+    why_routine_paused: "Sie ist dreimal hintereinander fehlgeschlagen oder ihre Ausführungskonfiguration ist nicht mehr nutzbar; sie läuft erst wieder, wenn du nachsiehst.",    rule_failed: "Fehlgeschlagen, niemand kümmert sich: {text}",
+    rule_review: "Wartet lange auf Prüfung: {text}",
+    rule_pr_review: "Wartet auf dein Review: {text}",
+    rule_uncommitted: "Nicht committete Änderungen: {text}",
+    rule_idle: "Seit Längerem unverändert: {text}",
+    rule_new_project: "Neues Projekt: {text}",
+    rule_behind: "Hinter dem Zielbranch, mit Konflikten: {text}",
+    why_proposal: "codeg hat es bemerkt; die Karte hat einen nächsten Schritt.",
+    why_proposal_low: "codeg hat es bemerkt; nichts Dringendes.",
 };
 
 const FR: Words = Words {
@@ -889,7 +960,15 @@ const FR: Words = Words {
     routine: "Rapport de la routine : {text}",
     routine_paused: "Routine en pause : {text}",
     why_routine: "Une routine que vous avez configurée s'est exécutée.",
-    why_routine_paused: "Elle a échoué trois fois de suite ou sa configuration d'exécution n'est plus utilisable ; elle ne s'exécutera plus tant que vous n'aurez pas regardé.",
+    why_routine_paused: "Elle a échoué trois fois de suite ou sa configuration d'exécution n'est plus utilisable ; elle ne s'exécutera plus tant que vous n'aurez pas regardé.",    rule_failed: "Échec, et personne ne s'en occupe : {text}",
+    rule_review: "Attend une revue depuis longtemps : {text}",
+    rule_pr_review: "Attend votre revue : {text}",
+    rule_uncommitted: "Modifications non commitées : {text}",
+    rule_idle: "Plus de mouvement depuis un moment : {text}",
+    rule_new_project: "Nouveau projet : {text}",
+    rule_behind: "En retard sur sa branche cible, avec des conflits : {text}",
+    why_proposal: "codeg l'a remarqué ; la carte propose la suite.",
+    why_proposal_low: "codeg l'a remarqué ; rien d'urgent.",
 };
 
 const PT: Words = Words {
@@ -941,7 +1020,15 @@ const PT: Words = Words {
     routine: "Relatório da rotina: {text}",
     routine_paused: "Rotina pausada: {text}",
     why_routine: "Uma rotina que você configurou foi executada.",
-    why_routine_paused: "Falhou três vezes seguidas ou sua configuração de execução não pode mais ser usada; não roda de novo até você olhar.",
+    why_routine_paused: "Falhou três vezes seguidas ou sua configuração de execução não pode mais ser usada; não roda de novo até você olhar.",    rule_failed: "Falhou e ninguém está cuidando: {text}",
+    rule_review: "Esperando revisão há muito tempo: {text}",
+    rule_pr_review: "Esperando sua revisão: {text}",
+    rule_uncommitted: "Alterações não commitadas: {text}",
+    rule_idle: "Parado há um tempo: {text}",
+    rule_new_project: "Projeto novo: {text}",
+    rule_behind: "Atrás do branch de destino, com conflitos: {text}",
+    why_proposal: "O codeg percebeu; o cartão tem o próximo passo.",
+    why_proposal_low: "O codeg percebeu; nada urgente.",
 };
 
 const AR: Words = Words {
@@ -992,7 +1079,15 @@ const AR: Words = Words {
     routine: "تقرير الروتين: {text}",
     routine_paused: "تم إيقاف الروتين مؤقتًا: {text}",
     why_routine: "تم تشغيل روتين قمت بإعداده.",
-    why_routine_paused: "فشل ثلاث مرات متتالية أو لم يعد من الممكن استخدام إعداد التنفيذ الخاص به؛ لن يعمل حتى تتحقق منه.",
+    why_routine_paused: "فشل ثلاث مرات متتالية أو لم يعد من الممكن استخدام إعداد التنفيذ الخاص به؛ لن يعمل حتى تتحقق منه.",    rule_failed: "فشل ولا أحد يتابعه: {text}",
+    rule_review: "ينتظر المراجعة منذ وقت طويل: {text}",
+    rule_pr_review: "ينتظر مراجعتك: {text}",
+    rule_uncommitted: "تغييرات غير مُودَعة: {text}",
+    rule_idle: "لم يتحرك منذ مدة: {text}",
+    rule_new_project: "مشروع جديد: {text}",
+    rule_behind: "متأخر عن الفرع الهدف وبه تعارضات: {text}",
+    why_proposal: "لاحظ codeg ذلك؛ في البطاقة الخطوة التالية.",
+    why_proposal_low: "لاحظ codeg ذلك؛ ليس عاجلًا.",
 };
 
 fn words(locale: AppLocale) -> &'static Words {
@@ -1050,6 +1145,19 @@ fn main_line(w: &Words, what: &What) -> String {
             }
         }
         What::RoutinePaused { text } => fill(w.routine_paused, text, 0, ""),
+        What::Rule { rule, text } => {
+            let t = match rule.as_str() {
+                "failed" => w.rule_failed,
+                "review" => w.rule_review,
+                "pr_review" => w.rule_pr_review,
+                "uncommitted" => w.rule_uncommitted,
+                "idle" => w.rule_idle,
+                "new_project" => w.rule_new_project,
+                "behind" => w.rule_behind,
+                _ => "{text}",
+            };
+            fill(t, text, 0, "")
+        }
         What::Reply { text } => text.clone().unwrap_or_else(|| w.reply_empty.to_string()),
         What::Plain { text } => text.clone(),
     }
@@ -1077,6 +1185,8 @@ fn reason(w: &Words, kind: &str, what: &What) -> Option<String> {
         "pr_ready" => w.why_pr_ready.into(),
         "routine" => w.why_routine.into(),
         "routine_paused" => w.why_routine_paused.into(),
+        "proposal" => w.why_proposal.into(),
+        "proposal_low" => w.why_proposal_low.into(),
         _ => return None,
     };
     Some(line)
@@ -1358,6 +1468,11 @@ impl Reach {
         (s.focus.len(), s.away.len(), s.digest.len())
     }
 
+    /// What reaching the owner goes by now (the rules ask too, 6.7).
+    pub(super) fn attending_now(&self) -> Attending {
+        self.attending()
+    }
+
     fn attending(&self) -> Attending {
         #[cfg(test)]
         if let Some(a) = self.lock().attending.clone() {
@@ -1606,7 +1721,20 @@ impl EngineHost {
 
     /// Sessions of codeg's that no assistant answers for, waiting on the
     /// owner [`NUDGE_AFTER_MINS`] minutes.
+    #[cfg(test)]
+    pub(super) async fn session_nudges_for_test(&self, now: DateTime<Utc>) -> Vec<News> {
+        self.session_nudges(now).await
+    }
+
     async fn session_nudges(&self, now: DateTime<Utc>) -> Vec<News> {
+        // The rule's card (6.7) says it, with [Open the session], while the
+        // rule is on.
+        if let Ok(Some(p)) = svc::primary_bot(&self.db.conn).await {
+            let prefs = AccountView::from_settings(&p.settings).prefs;
+            if prefs.proactive() && prefs.rule_on("session") {
+                return Vec::new();
+            }
+        }
         let glances = self.manager.session_glances().await;
         let mut out = Vec::new();
         let mut primary: Option<i32> = None;
@@ -1875,6 +2003,7 @@ mod tests {
             last_typed: typing.then_some(now),
             window_focused: true,
             viewing: vec![],
+            viewing_conversations: vec![],
         }
     }
 

@@ -96,6 +96,18 @@ impl Confirming {
     }
 }
 
+/// What a `suggest` call answers: on a card, waiting for the owner.
+fn suggested(id: i32, what: &str) -> super::tools::ToolOutcome {
+    super::tools::ToolOutcome::ok(
+        format!(
+            "Put to the owner as your suggestion on card #{id}: the {what} goes out exactly as \
+             you wrote it only if they accept. You will hear how they answered; do not send it \
+             yourself meanwhile."
+        ),
+        json!({ "notice_id": id, "state": "suggested" }),
+    )
+}
+
 impl PersonalAgentEngine {
     /// Put a dispatch in front of the owner as a proposal card instead of
     /// making it. Returns the card's notice id.
@@ -350,13 +362,15 @@ impl PersonalAgentEngine {
     }
 
     /// Put a follow-up in front of the owner as a proposal card instead of
-    /// sending it.
+    /// sending it: `subject` its topic, `detail` why.
     pub async fn propose_followup(
         &self,
         dispatch_id: i32,
         message: String,
         intent: Option<String>,
         batch_id: Option<i32>,
+        subject: Option<String>,
+        detail: Option<String>,
     ) -> Result<i32, String> {
         let d = svc::get_dispatch_of(&self.db.conn, self.bot().await, dispatch_id)
             .await
@@ -382,11 +396,96 @@ impl PersonalAgentEngine {
             display,
             d.title.clone(),
             batch_id,
-            None,
-            None,
+            detail,
+            subject,
             "proposal",
         )
         .await
+    }
+
+    /// The assistant's suggestion (`suggest`, 6.7) of a dispatch: on a card
+    /// as written, run only if the owner accepts. One like it open, or
+    /// declined within the week, is not raised again.
+    pub(super) async fn suggest_dispatch(&self, v: ValidDispatch, reason: String) -> super::tools::ToolOutcome {
+        let key = ledger::dispatch_key(v.snapshot.assistant_id, v.mode, v.folder_id, &v.title);
+        let subject = format!("suggest:{key}");
+        if let Some(o) = self.declined_lately(&subject).await {
+            return o;
+        }
+        let batch = self.current_batch().await;
+        match self
+            .dispatch_card(&v, batch, Some(reason), Some(subject), "proposal")
+            .await
+        {
+            Ok(id) => suggested(id, "dispatch"),
+            Err(e) => super::tools::ToolOutcome::refused(e),
+        }
+    }
+
+    /// The assistant's suggestion of a follow-up of its own dispatch.
+    pub(super) async fn suggest_followup(
+        &self,
+        dispatch_id: i32,
+        message: String,
+        intent: Option<String>,
+        reason: String,
+    ) -> super::tools::ToolOutcome {
+        if message.trim().is_empty() {
+            return super::tools::ToolOutcome::refused("`message` is required");
+        }
+        let subject = format!("suggest:{}", ledger::followup_key(dispatch_id, intent.as_deref()));
+        if let Some(o) = self.declined_lately(&subject).await {
+            return o;
+        }
+        let batch = self.current_batch().await;
+        match self
+            .propose_followup(dispatch_id, message, intent, batch, Some(subject), Some(reason))
+            .await
+        {
+            Ok(id) => suggested(id, "follow-up"),
+            Err(e) => super::tools::ToolOutcome::refused(e),
+        }
+    }
+
+    /// The assistant's suggestion of a message to another assistant,
+    /// resolved as it is.
+    pub(super) async fn suggest_message(
+        self: &Arc<Self>,
+        call: super::messages::MessageCall,
+        reason: String,
+    ) -> super::tools::ToolOutcome {
+        let resolved = match self.resolve_message(call).await {
+            Ok(r) => r,
+            Err(e) => return super::tools::ToolOutcome::refused(e),
+        };
+        let subject = format!("suggest:{}", Self::resolved_key(&resolved));
+        if let Some(o) = self.declined_lately(&subject).await {
+            return o;
+        }
+        let display = json!({
+            "to": resolved.to,
+            "to_name": resolved.to_name,
+            "message": resolved.body,
+            "reply_to": resolved.reply_to,
+            "wants_reply": resolved.wants_reply,
+        });
+        let title = format!("To {}", resolved.to_name);
+        let batch = self.current_batch().await;
+        match self
+            .raise_proposal(
+                ProposalAction::Message { message: resolved },
+                display,
+                title,
+                batch,
+                Some(reason),
+                Some(subject),
+                "proposal",
+            )
+            .await
+        {
+            Ok(id) => suggested(id, "message"),
+            Err(e) => super::tools::ToolOutcome::refused(e),
+        }
     }
 
     /// `why`: `proposal` (the assistant's suggestion) or `confirm` (the
@@ -463,6 +562,10 @@ impl PersonalAgentEngine {
             .await
             .map_err(|e| e.to_string())?
             .ok_or("no such card")?;
+        // "Don't suggest these" (6.7): the card dismissed, its rule off.
+        if action == "mute" {
+            return self.mute_from_card(&notice).await;
+        }
         // The cards about assistants working with each other answer
         // their own way (4.9, 4.10).
         match notice.kind {
@@ -487,6 +590,8 @@ impl PersonalAgentEngine {
             NoticeKind::Pr => return self.act_on_pr(&notice, action).await,
             // A routine made, changed, suggested, offered or paused (6.9).
             NoticeKind::Routine => return self.act_on_routine(&notice, action).await,
+            // One of codeg's proposal rules (6.7).
+            NoticeKind::Rule => return self.act_on_rule(&notice, action, text).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.

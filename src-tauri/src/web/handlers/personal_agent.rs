@@ -764,6 +764,26 @@ pub async fn personal_agent_routine_act(
     ))
 }
 
+pub async fn personal_agent_rules(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<Vec<crate::personal_agent::rules::RuleView>>, AppCommandError> {
+    Ok(Json(pa::personal_agent_rules_core(&state.db).await?))
+}
+
+#[derive(Deserialize)]
+pub struct RuleResetParams {
+    pub rule: String,
+}
+
+pub async fn personal_agent_rule_reset(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<RuleResetParams>,
+) -> Result<Json<Vec<crate::personal_agent::rules::RuleView>>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_rule_reset_core(&state.db, params.rule).await?,
+    ))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoticeActParams {

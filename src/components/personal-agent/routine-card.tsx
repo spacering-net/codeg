@@ -31,6 +31,7 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
+import { MutedNote, MuteKindButton } from "./mute-kind"
 import { asDraft, precheckWords, RoutineWhen } from "./routine-bits"
 import { AGENT_SURFACE, num, str, usePageScope } from "./shared"
 
@@ -241,6 +242,7 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
             {stateNote}
           </p>
         ) : null}
+        <MutedNote data={data} />
         {!readOnly ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {(what === "made" || what === "changed") && state === "made" ? (
@@ -295,6 +297,7 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
                   {spin("dismiss")}
                   {t("dismiss")}
                 </Button>
+                <MuteKindButton noticeId={noticeId} disabled={busy != null} />
               </>
             ) : null}
             {what === "repeat" && open ? (
@@ -323,6 +326,7 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
                   {spin("dismiss")}
                   {t("dismiss")}
                 </Button>
+                <MuteKindButton noticeId={noticeId} disabled={busy != null} />
               </>
             ) : null}
             {what === "paused" && open ? (

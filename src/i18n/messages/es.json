@@ -8290,6 +8290,102 @@
         "level_routine_paused": {
           "title": "Rutina en pausa",
           "hint": "Falló tres veces seguidas o no se puede usar su configuración de ejecución."
+        },
+        "level_proposal": {
+          "title": "Propuestas: lo que depende de ti",
+          "hint": "Trabajo fallido sin nadie, mucho tiempo esperando revisión, una PR esperando tu revisión."
+        },
+        "level_proposal_low": {
+          "title": "Otras propuestas",
+          "hint": "Cambios sin confirmar, asuntos parados, proyectos nuevos, ramas atrasadas, solicitudes repetidas."
+        },
+        "rule_failed": {
+          "title": "Trabajo fallido sin nadie a cargo",
+          "hint": "Trabajo encargado o tarea del tablero que falló y nadie retomó. La tarjeta aparece en el asistente que lo encargó.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "rule_review": {
+          "title": "Mucho tiempo esperando revisión",
+          "hint": "Una tarea del tablero en revisión sin ronda de aceptación todavía.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "rule_session": {
+          "title": "Una sesión esperándote",
+          "hint": "Cualquier sesión que espere tu aprobación o respuesta mientras no estás en ella. Urgente.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "rule_pr_review": {
+          "title": "Una PR esperando tu revisión",
+          "hint": "En los proyectos que conectaste; cuenta desde que codeg vio la solicitud.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "rule_uncommitted": {
+          "title": "Cambios sin confirmar",
+          "hint": "Un proyecto o worktree con cambios que nadie confirmó.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "rule_idle": {
+          "title": "Un asunto parado",
+          "hint": "Un asunto abierto sin cambios.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "rule_new_project": {
+          "title": "Un proyecto nuevo",
+          "hint": "Un proyecto nuevo en codeg en el que trabajas: ¿lo vigilamos?",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "rule_behind": {
+          "title": "Rama atrasada",
+          "hint": "Una tarea encargada por un asistente cuya rama quedó atrás de su destino y tendría conflictos.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "rule_repeat": {
+          "title": "Una solicitud que repites",
+          "hint": "Con estas solicitudes parecidas en 30 días, propone convertirlo en rutina.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "rule_suggest": {
+          "title": "Sugerencias de los asistentes",
+          "hint": "Desactivado: los asistentes no sugieren nada y una llamada con suggest recibe que ahora no aceptas sugerencias.",
+          "on": "Activado",
+          "off": "Desactivado"
+        },
+        "rule_failed_hours": {
+          "title": "Horas antes de la tarjeta de fallo",
+          "hint": "Horas antes de la tarjeta de fallo"
+        },
+        "rule_review_hours": {
+          "title": "Horas antes de la tarjeta de revisión",
+          "hint": "Horas antes de la tarjeta de revisión"
+        },
+        "rule_session_minutes": {
+          "title": "Minutos antes de la tarjeta de sesión",
+          "hint": "Minutos antes de la tarjeta de sesión"
+        },
+        "rule_pr_review_days": {
+          "title": "Días antes de la tarjeta de revisión pedida",
+          "hint": "Días antes de la tarjeta de revisión pedida"
+        },
+        "rule_uncommitted_hours": {
+          "title": "Horas antes de la tarjeta de cambios sin confirmar",
+          "hint": "Horas antes de la tarjeta de cambios sin confirmar"
+        },
+        "rule_idle_days": {
+          "title": "Días antes de la tarjeta de asunto parado",
+          "hint": "Días antes de la tarjeta de asunto parado"
+        },
+        "rule_repeat_count": {
+          "title": "Solicitudes antes de proponer una rutina",
+          "hint": "Solicitudes antes de proponer una rutina"
         }
       },
       "workdir": {
@@ -9667,6 +9763,140 @@
         "useAnother": "Usar otra",
         "resume": "Reanudar",
         "open": "Abrir rutinas"
+      }
+    },
+    "rules": {
+      "mute": "No sugerir esto",
+      "muted": "Esto no se volverá a sugerir.",
+      "mutedRestore": "Reactivarlo en las preferencias",
+      "notNow": "Ahora no",
+      "failed": "No se pudo: {error}",
+      "since": "desde {when}",
+      "lowered": "Descartaste las tres últimas, así que ya no te avisan.",
+      "loweredNow": "Descartada. Van tres seguidas, así que ya no avisarán (puedes revertirlo en las preferencias).",
+      "dismissed": "Descartada. No volverá en una semana.",
+      "expired": "Ya no hace falta: la situación cambió.",
+      "openPr": "Abrir la PR",
+      "byAuthor": "de {author}",
+      "worktreeOf": "worktree de {project}",
+      "sessions": "{n, plural, one {# sesión} other {# sesiones}} dentro",
+      "behindDetail": "{branch} va por detrás de {base} y la fusión tendría conflictos.",
+      "heading": {
+        "failed": "Falló y nadie se ocupa",
+        "review": "Lleva mucho esperando revisión",
+        "session": "Una sesión te espera",
+        "pr_review": "Una PR espera tu revisión",
+        "uncommitted": "Cambios sin confirmar",
+        "idle": "Un asunto parado",
+        "new_project": "Un proyecto nuevo",
+        "behind": "Rama atrasada, con conflictos"
+      },
+      "wait": {
+        "permission": "Espera tu aprobación",
+        "question": "Te pregunta",
+        "plan": "Un plan por aprobar"
+      },
+      "step": {
+        "failed": {
+          "retry": "Reintentar",
+          "hand": "Que lo mire el asistente"
+        },
+        "review": {
+          "check": "Que el asistente lo acepte primero",
+          "remind": "Recuérdamelo"
+        },
+        "session": {
+          "open": "Abrir la sesión"
+        },
+        "pr_review": {
+          "summary": "Primero un resumen de revisión"
+        },
+        "uncommitted": {
+          "open": "Abrir",
+          "hand": "Que el asistente lo confirme"
+        },
+        "idle": {
+          "hand": "Seguir con ello",
+          "close": "Cerrarlo"
+        },
+        "new_project": {
+          "watch": "Vigilar este proyecto"
+        },
+        "behind": {
+          "rebase": "Pedir un rebase"
+        }
+      },
+      "done": {
+        "handed": "Pasado al asistente.",
+        "retried": "Reintentado.",
+        "checking": "En revisión; el asistente concluirá.",
+        "reminding": "Te lo recordaré mañana por la mañana.",
+        "opened": "Abierto.",
+        "closed": "Asunto cerrado.",
+        "watching": "Los asistentes vigilan ahora este proyecto.",
+        "rebasing": "Devuelto para hacer rebase."
+      },
+      "hand": {
+        "failed": "«{title}» falló y nadie se ha ocupado. Mira qué salió mal y dime qué sugieres.",
+        "review": "La tarea del tablero «{title}» lleva mucho esperando revisión. Revísala tú primero: que alguien mire los cambios y dime tu conclusión.",
+        "remind": "Revisar la tarea del tablero «{title}»",
+        "prReview": "La PR #{number} de {project} lleva un tiempo esperando mi revisión. Dame primero un resumen: {url}",
+        "uncommitted": "{name} ({path}) tiene cambios sin confirmar desde hace un tiempo. Revísalos y confírmalos con sentido.",
+        "idle": "El asunto «{summary}» lleva tiempo parado. Retómalo."
+      },
+      "prefs": {
+        "title": "Tarjetas de propuesta",
+        "hint": "codeg los busca por sí mismo, sin modelo, y te muestra una tarjeta con el siguiente paso. Cada uno se puede desactivar o ajustar.",
+        "mutedMark": "Desactivado con «No sugerir esto» en una tarjeta.",
+        "loweredMark": "Descartaste tres seguidas, así que ya no avisan.",
+        "putBack": "Revertir",
+        "counts": "Últimos 30 días: {raised} tarjetas, {acted} usadas, {dismissed} descartadas",
+        "unit": {
+          "hours": "horas",
+          "minutes": "min",
+          "days": "días",
+          "times": "solicitudes"
+        },
+        "failed": {
+          "title": "Trabajo fallido sin nadie a cargo",
+          "hint": "Trabajo encargado o tarea del tablero que falló y nadie retomó. La tarjeta aparece en el asistente que lo encargó."
+        },
+        "review": {
+          "title": "Mucho tiempo esperando revisión",
+          "hint": "Una tarea del tablero en revisión sin ronda de aceptación todavía."
+        },
+        "session": {
+          "title": "Una sesión esperándote",
+          "hint": "Cualquier sesión que espere tu aprobación o respuesta mientras no estás en ella. Urgente."
+        },
+        "pr_review": {
+          "title": "Una PR esperando tu revisión",
+          "hint": "En los proyectos que conectaste; cuenta desde que codeg vio la solicitud."
+        },
+        "uncommitted": {
+          "title": "Cambios sin confirmar",
+          "hint": "Un proyecto o worktree con cambios que nadie confirmó."
+        },
+        "idle": {
+          "title": "Un asunto parado",
+          "hint": "Un asunto abierto sin cambios."
+        },
+        "new_project": {
+          "title": "Un proyecto nuevo",
+          "hint": "Un proyecto nuevo en codeg en el que trabajas: ¿lo vigilamos?"
+        },
+        "behind": {
+          "title": "Rama atrasada",
+          "hint": "Una tarea encargada por un asistente cuya rama quedó atrás de su destino y tendría conflictos."
+        },
+        "repeat": {
+          "title": "Una solicitud que repites",
+          "hint": "Con estas solicitudes parecidas en 30 días, propone convertirlo en rutina."
+        },
+        "suggest": {
+          "title": "Sugerencias de los asistentes",
+          "hint": "Desactivado: los asistentes no sugieren nada y una llamada con suggest recibe que ahora no aceptas sugerencias."
+        }
       }
     }
   }

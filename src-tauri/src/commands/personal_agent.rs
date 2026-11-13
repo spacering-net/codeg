@@ -1193,6 +1193,27 @@ pub async fn personal_agent_routine_act_core(
         .map_err(refused)
 }
 
+/// codeg's proposal rules (6.7) as the preferences show them: muted from a
+/// card, lowered after the owner kept dismissing their cards, and how their
+/// cards fared in the last 30 days. Their switches and thresholds are
+/// preferences.
+pub async fn personal_agent_rules_core(
+    db: &AppDatabase,
+) -> Result<Vec<crate::personal_agent::rules::RuleView>, AppCommandError> {
+    Ok(crate::personal_agent::rules::rule_views(db).await)
+}
+
+/// Put a rule codeg lowered back where it was (6.7, 5.2).
+pub async fn personal_agent_rule_reset_core(
+    db: &AppDatabase,
+    rule: String,
+) -> Result<Vec<crate::personal_agent::rules::RuleView>, AppCommandError> {
+    crate::personal_agent::rules::reset_rule(db, &rule)
+        .await
+        .map_err(refused)?;
+    Ok(crate::personal_agent::rules::rule_views(db).await)
+}
+
 /// The owner's answer on a native card (`accept` / `dismiss`).
 pub async fn personal_agent_notice_act_core(
     bot_id: Option<i32>,
@@ -1506,6 +1527,7 @@ pub async fn personal_agent_presence(
     idle_ms: Option<u64>,
     typed_ms: Option<u64>,
     viewing: Option<i32>,
+    viewing_conversation: Option<i32>,
 ) -> Result<crate::personal_agent::presence::Presence, AppCommandError> {
     Ok(personal_agent_presence_core(
         &db,
@@ -1515,6 +1537,7 @@ pub async fn personal_agent_presence(
             idle_ms,
             typed_ms,
             viewing,
+            viewing_conversation,
         },
     )
     .await)
@@ -1838,6 +1861,23 @@ pub async fn personal_agent_routine_save(
     notice_id: Option<i32>,
 ) -> Result<crate::personal_agent::routines::RoutineView, AppCommandError> {
     personal_agent_routine_save_core(bot_id, routine_id, draft, notice_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_rules(
+    db: State<'_, AppDatabase>,
+) -> Result<Vec<crate::personal_agent::rules::RuleView>, AppCommandError> {
+    personal_agent_rules_core(&db).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_rule_reset(
+    db: State<'_, AppDatabase>,
+    rule: String,
+) -> Result<Vec<crate::personal_agent::rules::RuleView>, AppCommandError> {
+    personal_agent_rule_reset_core(&db, rule).await
 }
 
 #[cfg(feature = "tauri-runtime")]

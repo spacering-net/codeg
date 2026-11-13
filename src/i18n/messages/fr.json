@@ -8290,6 +8290,102 @@
         "level_routine_paused": {
           "title": "Routine en pause",
           "hint": "Trois échecs d'affilée, ou sa configuration d'exécution est inutilisable."
+        },
+        "level_proposal": {
+          "title": "Propositions : ce qui dépend de vous",
+          "hint": "Échec dont personne ne s’occupe, longue attente de revue, PR attendant votre revue."
+        },
+        "level_proposal_low": {
+          "title": "Autres propositions",
+          "hint": "Modifications non commitées, sujets en sommeil, nouveaux projets, branches en retard, demandes répétées."
+        },
+        "rule_failed": {
+          "title": "Échec dont personne ne s’occupe",
+          "hint": "Travail confié ou tâche du tableau en échec que personne n’a repris. La carte arrive chez l’assistant qui l’a confié.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "rule_review": {
+          "title": "Attend trop longtemps une revue",
+          "hint": "Une tâche en revue sans tour d’acceptation pour l’instant.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "rule_session": {
+          "title": "Une session vous attend",
+          "hint": "Toute session qui attend votre approbation ou réponse alors que vous n’y êtes pas. Urgent.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "rule_pr_review": {
+          "title": "Une PR attend votre revue",
+          "hint": "Dans les projets connectés ; compté depuis que codeg a vu la demande.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "rule_uncommitted": {
+          "title": "Modifications non commitées",
+          "hint": "Un projet ou worktree avec des modifications que personne n’a commitées.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "rule_idle": {
+          "title": "Un sujet en sommeil",
+          "hint": "Un sujet ouvert sans changement.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "rule_new_project": {
+          "title": "Un nouveau projet",
+          "hint": "Un nouveau projet dans codeg où vous travaillez : le surveiller ?",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "rule_behind": {
+          "title": "Branche en retard",
+          "hint": "Une tâche confiée dont la branche est en retard sur sa cible et serait en conflit.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "rule_repeat": {
+          "title": "Une demande répétée",
+          "hint": "À ce nombre de demandes similaires en 30 jours, propose d’en faire une routine.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "rule_suggest": {
+          "title": "Suggestions des assistants",
+          "hint": "Désactivé : les assistants ne proposent rien, et un appel avec suggest apprend que vous n’en acceptez pas pour l’instant.",
+          "on": "Activé",
+          "off": "Désactivé"
+        },
+        "rule_failed_hours": {
+          "title": "Heures avant la carte d’échec",
+          "hint": "Heures avant la carte d’échec"
+        },
+        "rule_review_hours": {
+          "title": "Heures avant la carte de revue",
+          "hint": "Heures avant la carte de revue"
+        },
+        "rule_session_minutes": {
+          "title": "Minutes avant la carte de session",
+          "hint": "Minutes avant la carte de session"
+        },
+        "rule_pr_review_days": {
+          "title": "Jours avant la carte de demande de revue",
+          "hint": "Jours avant la carte de demande de revue"
+        },
+        "rule_uncommitted_hours": {
+          "title": "Heures avant la carte des modifications non commitées",
+          "hint": "Heures avant la carte des modifications non commitées"
+        },
+        "rule_idle_days": {
+          "title": "Jours avant la carte de sujet en sommeil",
+          "hint": "Jours avant la carte de sujet en sommeil"
+        },
+        "rule_repeat_count": {
+          "title": "Demandes avant de proposer une routine",
+          "hint": "Demandes avant de proposer une routine"
         }
       },
       "workdir": {
@@ -9667,6 +9763,140 @@
         "useAnother": "En utiliser une autre",
         "resume": "Reprendre",
         "open": "Ouvrir les routines"
+      }
+    },
+    "rules": {
+      "mute": "Ne plus proposer ce genre",
+      "muted": "Ce genre ne sera plus proposé.",
+      "mutedRestore": "Le réactiver dans les préférences",
+      "notNow": "Pas maintenant",
+      "failed": "Échec : {error}",
+      "since": "depuis {when}",
+      "lowered": "Vous avez écarté les trois dernières : elles ne vous notifient plus.",
+      "loweredNow": "Écartée. C'est la troisième d'affilée : elles ne notifieront plus (modifiable dans les préférences).",
+      "dismissed": "Écartée. Pas avant une semaine.",
+      "expired": "Plus nécessaire : la situation a changé.",
+      "openPr": "Ouvrir la PR",
+      "byAuthor": "par {author}",
+      "worktreeOf": "worktree de {project}",
+      "sessions": "{n, plural, one {# session} other {# sessions}} dedans",
+      "behindDetail": "{branch} est en retard sur {base} et la fusion serait en conflit.",
+      "heading": {
+        "failed": "Échec, et personne ne s'en occupe",
+        "review": "Attend une revue depuis longtemps",
+        "session": "Une session vous attend",
+        "pr_review": "Une PR attend votre revue",
+        "uncommitted": "Modifications non commitées",
+        "idle": "Un sujet en sommeil",
+        "new_project": "Un nouveau projet",
+        "behind": "Branche en retard, avec conflits"
+      },
+      "wait": {
+        "permission": "Attend votre approbation",
+        "question": "Vous pose une question",
+        "plan": "Un plan à approuver"
+      },
+      "step": {
+        "failed": {
+          "retry": "Réessayer",
+          "hand": "Faire regarder l'assistant"
+        },
+        "review": {
+          "check": "Faire d'abord accepter par l'assistant",
+          "remind": "Me le rappeler"
+        },
+        "session": {
+          "open": "Ouvrir la session"
+        },
+        "pr_review": {
+          "summary": "Un résumé de revue d’abord"
+        },
+        "uncommitted": {
+          "open": "Ouvrir",
+          "hand": "Faire commiter par l'assistant"
+        },
+        "idle": {
+          "hand": "Continuer à suivre",
+          "close": "Le fermer"
+        },
+        "new_project": {
+          "watch": "Surveiller ce projet"
+        },
+        "behind": {
+          "rebase": "Faire faire un rebase"
+        }
+      },
+      "done": {
+        "handed": "Confié à l'assistant.",
+        "retried": "Relancé.",
+        "checking": "En cours de vérification ; l'assistant conclura.",
+        "reminding": "Rappel demain matin.",
+        "opened": "Ouvert.",
+        "closed": "Sujet fermé.",
+        "watching": "Les assistants surveillent désormais ce projet.",
+        "rebasing": "Renvoyé pour un rebase."
+      },
+      "hand": {
+        "failed": "« {title} » a échoué et personne ne s'en est occupé. Regarde ce qui n'a pas marché et dis-moi ce que tu proposes.",
+        "review": "La tâche « {title} » attend une revue depuis longtemps. Vérifie-la d’abord : fais regarder les modifications, puis dis-moi ta conclusion.",
+        "remind": "Relire la tâche « {title} »",
+        "prReview": "La PR #{number} de {project} attend ma revue depuis un moment. Fais-moi d’abord un résumé : {url}",
+        "uncommitted": "{name} ({path}) a des modifications non commitées depuis un moment. Regarde-les et commite-les proprement.",
+        "idle": "Le sujet « {summary} » n’a pas bougé depuis un moment. Reprends-le."
+      },
+      "prefs": {
+        "title": "Cartes de proposition",
+        "hint": "codeg les repère lui-même, sans modèle, et vous présente une carte avec la suite. Chacune peut être désactivée ou réglée.",
+        "mutedMark": "Désactivé via « Ne plus proposer ce genre » sur une carte.",
+        "loweredMark": "Trois écartées d’affilée : elles ne notifient plus.",
+        "putBack": "Rétablir",
+        "counts": "30 derniers jours : {raised} cartes, {acted} utilisées, {dismissed} écartées",
+        "unit": {
+          "hours": "heures",
+          "minutes": "min",
+          "days": "jours",
+          "times": "demandes"
+        },
+        "failed": {
+          "title": "Échec dont personne ne s’occupe",
+          "hint": "Travail confié ou tâche du tableau en échec que personne n’a repris. La carte arrive chez l’assistant qui l’a confié."
+        },
+        "review": {
+          "title": "Attend trop longtemps une revue",
+          "hint": "Une tâche en revue sans tour d’acceptation pour l’instant."
+        },
+        "session": {
+          "title": "Une session vous attend",
+          "hint": "Toute session qui attend votre approbation ou réponse alors que vous n’y êtes pas. Urgent."
+        },
+        "pr_review": {
+          "title": "Une PR attend votre revue",
+          "hint": "Dans les projets connectés ; compté depuis que codeg a vu la demande."
+        },
+        "uncommitted": {
+          "title": "Modifications non commitées",
+          "hint": "Un projet ou worktree avec des modifications que personne n’a commitées."
+        },
+        "idle": {
+          "title": "Un sujet en sommeil",
+          "hint": "Un sujet ouvert sans changement."
+        },
+        "new_project": {
+          "title": "Un nouveau projet",
+          "hint": "Un nouveau projet dans codeg où vous travaillez : le surveiller ?"
+        },
+        "behind": {
+          "title": "Branche en retard",
+          "hint": "Une tâche confiée dont la branche est en retard sur sa cible et serait en conflit."
+        },
+        "repeat": {
+          "title": "Une demande répétée",
+          "hint": "À ce nombre de demandes similaires en 30 jours, propose d’en faire une routine."
+        },
+        "suggest": {
+          "title": "Suggestions des assistants",
+          "hint": "Désactivé : les assistants ne proposent rien, et un appel avec suggest apprend que vous n’en acceptez pas pour l’instant."
+        }
       }
     }
   }

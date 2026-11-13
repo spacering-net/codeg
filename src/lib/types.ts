@@ -2842,6 +2842,58 @@ export interface PersonalAgentPrefs {
   level_pr: PersonalAgentNewsLevel
   level_routine: PersonalAgentNewsLevel
   level_routine_paused: PersonalAgentNewsLevel
+  /** codeg's proposal cards about what is stuck on the owner (6.7). */
+  level_proposal: PersonalAgentNewsLevel
+  /** codeg's other proposal cards. */
+  level_proposal_low: PersonalAgentNewsLevel
+  /** codeg's proposal rules (6.7): each on or off, with its threshold. */
+  rule_failed: "on" | "off"
+  rule_failed_hours: number
+  rule_review: "on" | "off"
+  rule_review_hours: number
+  rule_session: "on" | "off"
+  rule_session_minutes: number
+  rule_pr_review: "on" | "off"
+  rule_pr_review_days: number
+  rule_uncommitted: "on" | "off"
+  rule_uncommitted_hours: number
+  rule_idle: "on" | "off"
+  rule_idle_days: number
+  rule_new_project: "on" | "off"
+  rule_behind: "on" | "off"
+  rule_repeat: "on" | "off"
+  rule_repeat_count: number
+  /** The assistants' own suggestions (`suggest: true`). */
+  rule_suggest: "on" | "off"
+}
+
+/** codeg's proposal rules (6.7). */
+export const PROPOSAL_RULES = [
+  "failed",
+  "review",
+  "session",
+  "pr_review",
+  "uncommitted",
+  "idle",
+  "new_project",
+  "behind",
+  "repeat",
+  "suggest",
+] as const
+export type ProposalRule = (typeof PROPOSAL_RULES)[number]
+
+/** One proposal rule's record, as the preferences show it. */
+export interface ProposalRuleView {
+  rule: ProposalRule
+  /** ISO 8601: when the owner muted it from a card (it is off since). */
+  muted_at: string | null
+  /** ISO 8601: when codeg lowered it, the owner having dismissed three of
+   *  its cards in a row. */
+  quiet_since: string | null
+  /** Its cards in the last 30 days. */
+  raised: number
+  acted: number
+  dismissed: number
 }
 
 /** How much a kind of news may interrupt the owner (6.2). */
@@ -2913,6 +2965,10 @@ export type TodayRowKind =
   // A routine (6.9): one that runs later today, a run under way, a report.
   | "routine"
   | "routine_run"
+  // One of codeg's proposal rules (6.7) whose thing no other row stands
+  // for: a pull request waiting for review, changes left uncommitted, a
+  // matter gone quiet, a new project.
+  | "rule"
   | "routine_report"
 
 export interface TodayRow {

@@ -8290,6 +8290,102 @@
         "level_routine_paused": {
           "title": "Routine pausiert",
           "hint": "Dreimal hintereinander fehlgeschlagen oder Ausführungskonfiguration nicht nutzbar."
+        },
+        "level_proposal": {
+          "title": "Vorschläge: hängt an dir",
+          "hint": "Fehlgeschlagen ohne Zuständigen, lange Prüfwartezeit, ein PR wartet auf dein Review."
+        },
+        "level_proposal_low": {
+          "title": "Weitere Vorschläge",
+          "hint": "Nicht committete Änderungen, ruhende Vorgänge, neue Projekte, Branches im Rückstand, wiederkehrende Bitten."
+        },
+        "rule_failed": {
+          "title": "Fehlgeschlagen, niemand kümmert sich",
+          "hint": "Vergebene Arbeit oder Board-Aufgabe, die fehlschlug und liegen blieb. Die Karte erscheint beim Assistenten, der sie vergeben hat.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_review": {
+          "title": "Wartet zu lange auf Prüfung",
+          "hint": "Eine Board-Aufgabe in Prüfung ohne Abnahmerunde.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_session": {
+          "title": "Eine Sitzung wartet auf dich",
+          "hint": "Jede Sitzung, die auf deine Freigabe oder Antwort wartet, während du nicht darin bist. Dringend.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_pr_review": {
+          "title": "Ein PR wartet auf dein Review",
+          "hint": "In den verbundenen Projekten; gezählt ab dem Moment, in dem codeg die Anfrage sah.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_uncommitted": {
+          "title": "Nicht committete Änderungen",
+          "hint": "Ein Projekt oder Worktree mit Änderungen, die niemand committet hat.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_idle": {
+          "title": "Ein ruhender Vorgang",
+          "hint": "Ein offener Vorgang ohne Änderung.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_new_project": {
+          "title": "Ein neues Projekt",
+          "hint": "Ein neues Projekt in codeg, in dem du arbeitest: im Blick behalten?",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_behind": {
+          "title": "Branch im Rückstand",
+          "hint": "Eine vergebene Aufgabe, deren Branch hinter dem Ziel liegt und Konflikte hätte.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_repeat": {
+          "title": "Eine wiederkehrende Bitte",
+          "hint": "Bei so vielen ähnlichen Bitten in 30 Tagen wird eine Routine vorgeschlagen.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_suggest": {
+          "title": "Vorschläge der Assistenten",
+          "hint": "Aus: Die Assistenten schlagen nichts vor; ein Aufruf mit suggest erfährt, dass du gerade keine Vorschläge annimmst.",
+          "on": "An",
+          "off": "Aus"
+        },
+        "rule_failed_hours": {
+          "title": "Stunden bis zur Fehlschlag-Karte",
+          "hint": "Stunden bis zur Fehlschlag-Karte"
+        },
+        "rule_review_hours": {
+          "title": "Stunden bis zur Prüf-Karte",
+          "hint": "Stunden bis zur Prüf-Karte"
+        },
+        "rule_session_minutes": {
+          "title": "Minuten bis zur Sitzungs-Karte",
+          "hint": "Minuten bis zur Sitzungs-Karte"
+        },
+        "rule_pr_review_days": {
+          "title": "Tage bis zur Review-Anfrage-Karte",
+          "hint": "Tage bis zur Review-Anfrage-Karte"
+        },
+        "rule_uncommitted_hours": {
+          "title": "Stunden bis zur Karte für nicht committete Änderungen",
+          "hint": "Stunden bis zur Karte für nicht committete Änderungen"
+        },
+        "rule_idle_days": {
+          "title": "Tage bis zur Karte für ruhende Vorgänge",
+          "hint": "Tage bis zur Karte für ruhende Vorgänge"
+        },
+        "rule_repeat_count": {
+          "title": "Bitten bis zum Routine-Vorschlag",
+          "hint": "Bitten bis zum Routine-Vorschlag"
         }
       },
       "workdir": {
@@ -9667,6 +9763,140 @@
         "useAnother": "Eine andere nehmen",
         "resume": "Fortsetzen",
         "open": "Routinen öffnen"
+      }
+    },
+    "rules": {
+      "mute": "So etwas nicht mehr vorschlagen",
+      "muted": "So etwas wird nicht mehr vorgeschlagen.",
+      "mutedRestore": "In den Einstellungen wieder einschalten",
+      "notNow": "Nicht jetzt",
+      "failed": "Hat nicht geklappt: {error}",
+      "since": "seit {when}",
+      "lowered": "Die letzten drei hast du abgelehnt; solche melden sich nicht mehr.",
+      "loweredNow": "Abgelehnt. Das war die dritte in Folge; solche melden sich nicht mehr (in den Einstellungen änderbar).",
+      "dismissed": "Abgelehnt. Eine Woche lang nicht mehr.",
+      "expired": "Nicht mehr nötig: die Lage hat sich geändert.",
+      "openPr": "PR öffnen",
+      "byAuthor": "von {author}",
+      "worktreeOf": "Worktree von {project}",
+      "sessions": "{n, plural, one {# Sitzung} other {# Sitzungen}} darin",
+      "behindDetail": "{branch} liegt hinter {base}, ein Merge hätte Konflikte.",
+      "heading": {
+        "failed": "Fehlgeschlagen, niemand kümmert sich",
+        "review": "Wartet lange auf Prüfung",
+        "session": "Eine Sitzung wartet auf dich",
+        "pr_review": "Ein PR wartet auf dein Review",
+        "uncommitted": "Nicht committete Änderungen",
+        "idle": "Ein ruhender Vorgang",
+        "new_project": "Ein neues Projekt",
+        "behind": "Branch im Rückstand, mit Konflikten"
+      },
+      "wait": {
+        "permission": "Wartet auf deine Freigabe",
+        "question": "Fragt dich",
+        "plan": "Ein Plan zur Freigabe"
+      },
+      "step": {
+        "failed": {
+          "retry": "Erneut versuchen",
+          "hand": "Den Assistenten nachsehen lassen"
+        },
+        "review": {
+          "check": "Erst den Assistenten abnehmen lassen",
+          "remind": "Erinnere mich"
+        },
+        "session": {
+          "open": "Sitzung öffnen"
+        },
+        "pr_review": {
+          "summary": "Erst eine Review-Zusammenfassung"
+        },
+        "uncommitted": {
+          "open": "Öffnen",
+          "hand": "Den Assistenten committen lassen"
+        },
+        "idle": {
+          "hand": "Dranbleiben",
+          "close": "Schließen"
+        },
+        "new_project": {
+          "watch": "Dieses Projekt im Blick behalten"
+        },
+        "behind": {
+          "rebase": "Rebase veranlassen"
+        }
+      },
+      "done": {
+        "handed": "An den Assistenten übergeben.",
+        "retried": "Erneut versucht.",
+        "checking": "Wird geprüft; der Assistent entscheidet danach.",
+        "reminding": "Morgen früh wirst du erinnert.",
+        "opened": "Geöffnet.",
+        "closed": "Vorgang geschlossen.",
+        "watching": "Die Assistenten behalten dieses Projekt jetzt im Blick.",
+        "rebasing": "Zum Rebase zurückgegeben."
+      },
+      "hand": {
+        "failed": "„{title}“ ist fehlgeschlagen, und niemand hat sich darum gekümmert. Sieh nach, was schiefging, und sag mir, was du vorschlägst.",
+        "review": "Die Board-Aufgabe „{title}“ wartet lange auf Prüfung. Prüf sie zuerst für mich: lass die Änderungen ansehen und sag mir dein Ergebnis.",
+        "remind": "Board-Aufgabe „{title}“ prüfen",
+        "prReview": "PR #{number} in {project} wartet schon eine Weile auf mein Review. Gib mir zuerst eine Zusammenfassung: {url}",
+        "uncommitted": "{name} ({path}) hat seit einer Weile nicht committete Änderungen. Sieh sie dir an und committe sie sinnvoll.",
+        "idle": "Der Vorgang „{summary}“ ruht seit einer Weile. Nimm ihn wieder auf."
+      },
+      "prefs": {
+        "title": "Vorschlagskarten",
+        "hint": "codeg achtet selbst darauf, ohne Modell, und legt dir eine Karte mit dem nächsten Schritt vor. Jede lässt sich abschalten oder anders einstellen.",
+        "mutedMark": "Über „So etwas nicht mehr vorschlagen“ auf einer Karte ausgeschaltet.",
+        "loweredMark": "Drei in Folge abgelehnt; sie melden sich nicht mehr.",
+        "putBack": "Zurücksetzen",
+        "counts": "Letzte 30 Tage: {raised} Karten, {acted} genutzt, {dismissed} abgelehnt",
+        "unit": {
+          "hours": "Std.",
+          "minutes": "Min.",
+          "days": "Tage",
+          "times": "Anfragen"
+        },
+        "failed": {
+          "title": "Fehlgeschlagen, niemand kümmert sich",
+          "hint": "Vergebene Arbeit oder Board-Aufgabe, die fehlschlug und liegen blieb. Die Karte erscheint beim Assistenten, der sie vergeben hat."
+        },
+        "review": {
+          "title": "Wartet zu lange auf Prüfung",
+          "hint": "Eine Board-Aufgabe in Prüfung ohne Abnahmerunde."
+        },
+        "session": {
+          "title": "Eine Sitzung wartet auf dich",
+          "hint": "Jede Sitzung, die auf deine Freigabe oder Antwort wartet, während du nicht darin bist. Dringend."
+        },
+        "pr_review": {
+          "title": "Ein PR wartet auf dein Review",
+          "hint": "In den verbundenen Projekten; gezählt ab dem Moment, in dem codeg die Anfrage sah."
+        },
+        "uncommitted": {
+          "title": "Nicht committete Änderungen",
+          "hint": "Ein Projekt oder Worktree mit Änderungen, die niemand committet hat."
+        },
+        "idle": {
+          "title": "Ein ruhender Vorgang",
+          "hint": "Ein offener Vorgang ohne Änderung."
+        },
+        "new_project": {
+          "title": "Ein neues Projekt",
+          "hint": "Ein neues Projekt in codeg, in dem du arbeitest: im Blick behalten?"
+        },
+        "behind": {
+          "title": "Branch im Rückstand",
+          "hint": "Eine vergebene Aufgabe, deren Branch hinter dem Ziel liegt und Konflikte hätte."
+        },
+        "repeat": {
+          "title": "Eine wiederkehrende Bitte",
+          "hint": "Bei so vielen ähnlichen Bitten in 30 Tagen wird eine Routine vorgeschlagen."
+        },
+        "suggest": {
+          "title": "Vorschläge der Assistenten",
+          "hint": "Aus: Die Assistenten schlagen nichts vor; ein Aufruf mit suggest erfährt, dass du gerade keine Vorschläge annimmst."
+        }
       }
     }
   }

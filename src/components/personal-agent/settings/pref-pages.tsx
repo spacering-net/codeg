@@ -19,6 +19,9 @@ import {
   Bell,
   BellDot,
   CircleX,
+  FolderGit2,
+  FolderPlus,
+  GitBranch,
   GitMerge,
   GitPullRequest,
   GitPullRequestArrow,
@@ -39,6 +42,7 @@ import {
   Keyboard,
   Layers,
   LayoutGrid,
+  Lightbulb,
   ListChecks,
   MessageCircleQuestion,
   MessageSquareReply,
@@ -95,6 +99,7 @@ import type {
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { ProposalRules } from "./proposal-rules"
 import { useSettingsPatch } from "./use-settings"
 
 /** The backend's defaults (`Prefs::default`). */
@@ -151,6 +156,25 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   level_pr: "low",
   level_routine: "normal",
   level_routine_paused: "urgent",
+  level_proposal: "normal",
+  level_proposal_low: "low",
+  rule_failed: "on",
+  rule_failed_hours: 2,
+  rule_review: "on",
+  rule_review_hours: 24,
+  rule_session: "on",
+  rule_session_minutes: 10,
+  rule_pr_review: "on",
+  rule_pr_review_days: 2,
+  rule_uncommitted: "on",
+  rule_uncommitted_hours: 24,
+  rule_idle: "on",
+  rule_idle_days: 7,
+  rule_new_project: "on",
+  rule_behind: "on",
+  rule_repeat: "on",
+  rule_repeat_count: 3,
+  rule_suggest: "on",
 }
 
 /** What each automation level sets (`automation_preset`). */
@@ -193,9 +217,47 @@ export const DISTURB_PRESETS: Record<
   "quiet" | "standard" | "more",
   Partial<PersonalAgentPrefs>
 > = {
-  quiet: { normal_via: "today", low_via: "today" },
-  standard: { normal_via: "system", low_via: "today", focus_wait: 3 },
-  more: { normal_via: "system", low_via: "digest", focus_wait: 0 },
+  quiet: { normal_via: "today", low_via: "today", ...rulePreset("quiet") },
+  standard: {
+    normal_via: "system",
+    low_via: "today",
+    focus_wait: 3,
+    ...rulePreset("standard"),
+  },
+  more: {
+    normal_via: "system",
+    low_via: "digest",
+    focus_wait: 0,
+    ...rulePreset("more"),
+  },
+}
+
+/** The proposal rules at each disturbance level (13.4, `rule_preset`):
+ *  "quiet" keeps only a session waiting and failed work; "more" halves
+ *  every threshold. The assistants' own suggestions are not the level's. */
+function rulePreset(
+  level: "quiet" | "standard" | "more"
+): Partial<PersonalAgentPrefs> {
+  const keep = (on: boolean) => (on ? "on" : "off") as "on" | "off"
+  const time = (n: number) => (level === "more" ? Math.ceil(n / 2) : n)
+  const all = level !== "quiet"
+  return {
+    rule_failed: "on",
+    rule_failed_hours: time(2),
+    rule_review: keep(all),
+    rule_review_hours: time(24),
+    rule_session: "on",
+    rule_session_minutes: time(10),
+    rule_pr_review: keep(all),
+    rule_pr_review_days: time(2),
+    rule_uncommitted: keep(all),
+    rule_uncommitted_hours: time(24),
+    rule_idle: keep(all),
+    rule_idle_days: time(7),
+    rule_new_project: keep(all),
+    rule_behind: keep(all),
+    rule_repeat: keep(all),
+  }
 }
 
 /** The items a preset would change from what they are now. */
@@ -232,6 +294,8 @@ export const LEVEL_ITEMS: PersonalAgentPrefKey[] = [
   "level_pr",
   "level_routine",
   "level_routine_paused",
+  "level_proposal",
+  "level_proposal_low",
 ]
 
 /** The items that take a time of day, `HH:MM`. */
@@ -287,11 +351,18 @@ const CHOICES: Partial<Record<PersonalAgentPrefKey, readonly string[]>> = {
 }
 
 /** The most a count item takes (`PrefKind::Count`). */
-const COUNT_MAX: Partial<Record<PersonalAgentPrefKey, number>> = {
+export const COUNT_MAX: Partial<Record<PersonalAgentPrefKey, number>> = {
   loop_rounds: 1000,
   retry_rounds: 10,
   accept_rounds: 10,
   focus_wait: 60,
+  rule_failed_hours: 720,
+  rule_review_hours: 720,
+  rule_session_minutes: 1440,
+  rule_pr_review_days: 90,
+  rule_uncommitted_hours: 720,
+  rule_idle_days: 90,
+  rule_repeat_count: 20,
 }
 
 const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
@@ -347,6 +418,25 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   level_pr: GitPullRequestDraft,
   level_routine: CalendarCheck,
   level_routine_paused: CalendarX,
+  level_proposal: Lightbulb,
+  level_proposal_low: Lightbulb,
+  rule_failed: TriangleAlert,
+  rule_failed_hours: Timer,
+  rule_review: Hourglass,
+  rule_review_hours: Timer,
+  rule_session: MessageCircleQuestion,
+  rule_session_minutes: Timer,
+  rule_pr_review: GitPullRequest,
+  rule_pr_review_days: Timer,
+  rule_uncommitted: FolderGit2,
+  rule_uncommitted_hours: Timer,
+  rule_idle: BellRing,
+  rule_idle_days: Timer,
+  rule_new_project: FolderPlus,
+  rule_behind: GitBranch,
+  rule_repeat: Repeat,
+  rule_repeat_count: Timer,
+  rule_suggest: Lightbulb,
 }
 
 export const COMMUNICATION_ITEMS: PersonalAgentPrefKey[] = [
@@ -378,6 +468,27 @@ export const AUTOMATION_ITEMS: PersonalAgentPrefKey[] = [
 /** The items of the "About you" page (`about-page.tsx`). */
 export const ABOUT_ITEMS: PersonalAgentPrefKey[] = ["time_zone", "presence"]
 
+/** The proposal rules' items (6.7): each rule's switch and threshold. */
+export const RULE_ITEMS: PersonalAgentPrefKey[] = [
+  "rule_failed",
+  "rule_failed_hours",
+  "rule_review",
+  "rule_review_hours",
+  "rule_session",
+  "rule_session_minutes",
+  "rule_pr_review",
+  "rule_pr_review_days",
+  "rule_uncommitted",
+  "rule_uncommitted_hours",
+  "rule_idle",
+  "rule_idle_days",
+  "rule_new_project",
+  "rule_behind",
+  "rule_repeat",
+  "rule_repeat_count",
+  "rule_suggest",
+]
+
 /** The items of "Proactive & notifications", the kinds of news included. */
 export const PROACTIVE_ITEMS: PersonalAgentPrefKey[] = [
   "proactive",
@@ -392,6 +503,7 @@ export const PROACTIVE_ITEMS: PersonalAgentPrefKey[] = [
   "morning",
   "morning_at",
   ...LEVEL_ITEMS,
+  ...RULE_ITEMS,
 ]
 
 interface PageProps {
@@ -816,6 +928,7 @@ export function ProactivePage({ account, disabled }: PageProps) {
         {row("morning")}
         {prefs.morning === "fixed" ? row("morning_at") : null}
       </SettingCard>
+      <ProposalRules prefs={prefs} disabled={disabled} />
       <div className="space-y-1.5">
         <h3 className="flex items-center gap-1.5 px-1 text-xs font-medium text-muted-foreground">
           <Layers className="size-3.5" aria-hidden />

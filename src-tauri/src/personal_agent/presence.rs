@@ -85,6 +85,10 @@ pub struct Beat {
     /// The assistant whose conversation it shows (1.13).
     #[serde(default)]
     pub viewing: Option<i32>,
+    /// The session (conversation) its workspace has in front (6.7): a
+    /// session waiting on the owner while they are in it is not raised.
+    #[serde(default)]
+    pub viewing_conversation: Option<i32>,
 }
 
 /// Whether the owner is in codeg now.
@@ -100,6 +104,7 @@ struct Window {
     last_input: Option<DateTime<Utc>>,
     last_typed: Option<DateTime<Utc>>,
     viewing: Option<i32>,
+    viewing_conversation: Option<i32>,
     heard: DateTime<Utc>,
 }
 
@@ -116,6 +121,9 @@ pub struct Attending {
     /// The assistants a window with the focus shows, while the owner is
     /// present.
     pub viewing: Vec<i32>,
+    /// The sessions a window with the focus has in front, while the owner
+    /// is present.
+    pub viewing_conversations: Vec<i32>,
 }
 
 /// The windows heard from, and the record's bookkeeping.
@@ -153,11 +161,13 @@ impl Tracker {
             last_input: None,
             last_typed: None,
             viewing: None,
+            viewing_conversation: None,
             heard: now,
         });
         w.focused = b.focused;
         w.heard = now;
         w.viewing = b.viewing.filter(|id| *id > 0);
+        w.viewing_conversation = b.viewing_conversation.filter(|id| *id > 0);
         if let Some(t) = typed {
             w.last_typed = Some(w.last_typed.map_or(t, |had| had.max(t)));
         }
@@ -182,6 +192,17 @@ impl Tracker {
         };
         viewing.sort_unstable();
         viewing.dedup();
+        let mut viewing_conversations: Vec<i32> = if present {
+            self.windows
+                .values()
+                .filter(live)
+                .filter_map(|w| w.viewing_conversation)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        viewing_conversations.sort_unstable();
+        viewing_conversations.dedup();
         Attending {
             present,
             last_typed: self
@@ -192,6 +213,7 @@ impl Tracker {
                 .max(),
             window_focused: self.windows.values().any(|w| live(&w)),
             viewing,
+            viewing_conversations,
         }
     }
 
@@ -553,6 +575,7 @@ mod tests {
                 idle_ms,
                 typed_ms: None,
                 viewing: None,
+                viewing_conversation: None,
             },
             at,
         );

@@ -1934,6 +1934,8 @@ mod tauri_app {
                 crate::commands::personal_agent::personal_agent_routine_runs,
                 crate::commands::personal_agent::personal_agent_routine_save,
                 crate::commands::personal_agent::personal_agent_routine_act,
+                crate::commands::personal_agent::personal_agent_rules,
+                crate::commands::personal_agent::personal_agent_rule_reset,
                 crate::commands::personal_agent::personal_agent_answer_question,
                 crate::commands::personal_agent::personal_agent_answer_plan,
                 crate::commands::personal_agent::personal_agent_respond_permission,
