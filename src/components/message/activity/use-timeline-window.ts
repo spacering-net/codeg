@@ -111,9 +111,11 @@ const REVEAL_ROWS = 15
 
 const DEFAULT_METRICS: ListMetrics = { rem: 16, gap: 8, padTop: 0, width: 640 }
 
-/** Measured row heights (px) by row key — kept across the list mounting again
- *  (the transcript recycling the reply, a fold and unfold), so the spacers
- *  stand for a stretch at the height it was drawn at. */
+/** Measured row heights (px) by `<scope>\u0000<row key>` — kept across the
+ *  list mounting again (the transcript recycling the reply, a fold and
+ *  unfold), so the spacers stand for a stretch at the height it was drawn at.
+ *  Scoped by the kind of list: a group shares its first member's key, and a
+ *  timeline row holding a whole group is not as tall as that member's row. */
 const measuredHeights = new Map<string, number>()
 const MEASURED_HEIGHTS_MAX = 20_000
 
@@ -134,10 +136,55 @@ function sameMetrics(a: ListMetrics, b: ListMetrics) {
   )
 }
 
-/** The scroll port the list scrolls in: the transcript's, else the page. */
+/** Where each list scrolls, found once per list element (its ancestors do not
+ *  change while it is mounted; React never moves it to another parent). */
+const scrollPorts = new WeakMap<Element, HTMLElement | null>()
+
+/**
+ * The scroll port the list scrolls in: the transcript's; else the nearest
+ * ancestor that scrolls on its own — a transcript drawn outside the virtual
+ * list, as the sub-agent drawer draws one, scrolls in a plain overflowing box
+ * whose scrolling the page never hears of; else the page.
+ */
 function scrollPortOf(list: Element): HTMLElement | null {
-  return list.closest<HTMLElement>(".chat-scroll-port")
+  let port = scrollPorts.get(list)
+  if (port !== undefined) return port
+  port = list.closest<HTMLElement>(".chat-scroll-port")
+  if (!port) {
+    for (let node = list.parentElement; node; node = node.parentElement) {
+      if (node === document.body || node === document.documentElement) break
+      const overflowY = getComputedStyle(node).overflowY
+      if (
+        overflowY === "auto" ||
+        overflowY === "scroll" ||
+        overflowY === "overlay"
+      ) {
+        port = node
+        break
+      }
+    }
+  }
+  port ??= null
+  // Detached, it has no ancestors to go by yet: ask again once it has.
+  if (list.isConnected) scrollPorts.set(list, port)
+  return port
 }
+
+/**
+ * Whether the hook keeps the view still in `port` itself (see the observer and
+ * the anchor below): where the browser does not — the transcript's port turns
+ * its anchoring off (`overflow-anchor: none`), WebKit has none. Where it does,
+ * moving the view here too would move it twice.
+ */
+function holdsViewIn(port: HTMLElement): boolean {
+  let holds = selfAnchored.get(port)
+  if (holds === undefined) {
+    holds = getComputedStyle(port).overflowAnchor !== "auto"
+    selfAnchored.set(port, holds)
+  }
+  return holds
+}
+const selfAnchored = new WeakMap<HTMLElement, boolean>()
 
 function viewOf(port: HTMLElement | null) {
   if (port) {
@@ -237,11 +284,16 @@ function heldAbove(
 
 export function useTimelineWindow<T extends WindowRow>({
   listRef,
+  scope,
   rows,
   estimate,
   follow,
 }: {
   listRef: RefObject<HTMLElement | null>
+  /** The kind of list (a timeline's rows, a group's members): the heights it
+   *  measures are kept apart from another kind's, whose keys may be the same.
+   *  Must be stable. */
+  scope: string
   /** The list's rows, or null while it is drawn whole. */
   rows: readonly T[] | null
   /** A row's height (px) before it has been drawn. Must be stable. */
@@ -280,8 +332,9 @@ export function useTimelineWindow<T extends WindowRow>({
   }
 
   const heightOf = useCallback(
-    (row: T) => measuredHeights.get(row.key) ?? estimate(row, metrics),
-    [estimate, metrics]
+    (row: T) =>
+      measuredHeights.get(`${scope}\u0000${row.key}`) ?? estimate(row, metrics),
+    [scope, estimate, metrics]
   )
 
   let span: TimelineWindow | null = null
@@ -379,7 +432,7 @@ export function useTimelineWindow<T extends WindowRow>({
     if (!held) return
     anchor.current = null
     const elements = rowElements(list, rows, start, end).get(held.key)
-    if (!elements || !port) return
+    if (!elements || !port || !holdsViewIn(port)) return
     const moved = elements[0]!.getBoundingClientRect().top - held.top
     if (Math.abs(moved) >= 0.5) port.scrollTop += moved
   }, [listRef, rows, start, end])
@@ -485,7 +538,7 @@ export function useTimelineWindow<T extends WindowRow>({
       const atBottom =
         !port || port.scrollHeight - port.scrollTop - port.clientHeight < 2
       const moves = !atBottom && !heldAbove(list, view)
-      let moved = 0
+      const changed: { rect: DOMRect; was: number | undefined }[] = []
       for (const entry of entries) {
         const element = entry.target
         // Gone with a stretch scrolled away: nothing of the view moved.
@@ -495,16 +548,29 @@ export function useTimelineWindow<T extends WindowRow>({
           continue
         }
         const rect = element.getBoundingClientRect()
-        const was = sizes.get(element)
+        changed.push({ rect, was: sizes.get(element) })
         sizes.set(element, rect.height)
-        if (moves && was !== undefined && rect.bottom <= view.top) {
-          moved += rect.height - was
-        }
+      }
+      // Each row placed where it was before the batch — its top less what the
+      // rows above it in the batch grew by — and moved for if its bottom was
+      // above the view then: a row that grows down across the view's top
+      // pushes what was in view down all the same, and one that a shrinking
+      // row above has pulled up was not above the view for that.
+      changed.sort((a, b) => a.rect.top - b.rect.top)
+      let moved = 0
+      let shift = 0
+      for (const { rect, was } of changed) {
+        if (was === undefined) continue
+        const grew = rect.height - was
+        if (moves && rect.top - shift + was <= view.top) moved += grew
+        shift += grew
       }
       for (const [key, elements] of rowElements(list, rows, start, end)) {
-        rememberHeight(key, extentOf(elements))
+        rememberHeight(`${scope}\u0000${key}`, extentOf(elements))
       }
-      if (port && Math.abs(moved) >= 0.5) port.scrollTop += moved
+      if (port && Math.abs(moved) >= 0.5 && holdsViewIn(port)) {
+        port.scrollTop += moved
+      }
     })
     observer.current = ro
     observeRows(listRef.current, ro)
@@ -512,7 +578,7 @@ export function useTimelineWindow<T extends WindowRow>({
       ro.disconnect()
       observer.current = null
     }
-  }, [windowed, listRef])
+  }, [windowed, listRef, scope])
   // Observe what each commit drew.
   useLayoutEffect(() => {
     observeRows(listRef.current, observer.current)

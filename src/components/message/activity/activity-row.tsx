@@ -361,6 +361,7 @@ export function ActivityMembers<T extends WindowRow>({
       : false
   const { span, reveal } = useTimelineWindow({
     listRef,
+    scope: "member",
     rows: windowed ? members! : null,
     estimate: estimateMemberHeight,
     follow: isStreaming,

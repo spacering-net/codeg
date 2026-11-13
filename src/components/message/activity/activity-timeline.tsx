@@ -226,6 +226,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   const windowed = !pinnedOnly && !nested && items.length > WINDOWED_ROWS
   const { span, reveal } = useTimelineWindow({
     listRef,
+    scope: "item",
     rows: windowed ? items : null,
     estimate: estimateItemHeight,
     follow: isStreaming,
