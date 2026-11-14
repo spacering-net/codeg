@@ -3219,14 +3219,14 @@ impl TaskEngine {
     }
 
     /// A later turn ended on a connection held for its agent's background
-    /// work. The error it reported is now the latest on the generation, for
-    /// the waiter's settle (its answer the waiter reads from the session,
-    /// stamped when it arrived — see `HoldResult::latest_reply`); and a turn
-    /// that did not end normally — stopped, refused, failed — ends the wait,
-    /// the generation settling as that turn ended, as it would have for the
-    /// held turn itself. Nothing changes once the waiter is settling: that
+    /// work. Its answer (as the session stamped it) and the error it reported
+    /// are now the latest on the generation, for the waiter's settle; and a
+    /// turn that did not end normally — stopped, refused, failed — ends the
+    /// wait, the generation settling as that turn ended, as it would have for
+    /// the held turn itself. Nothing changes once the waiter is settling: that
     /// settle is under way with what it had.
     async fn on_held_turn_complete(&self, conn_id: &str, stop_reason: &str) {
+        let reply = turn_end_hold::last_turn_reply(&self.manager, conn_id).await;
         let signal = self.turn_signals.lock().await.remove(conn_id);
         let mut holds = self.holds.lock().await;
         let Some(hold) = holds.get_mut(conn_id).filter(|hold| !hold.settling) else {
@@ -3240,7 +3240,7 @@ impl TaskEngine {
                 None => hold.signal = Some(later),
             }
         }
-        if hold.later.record(stop_reason) {
+        if hold.later.record(stop_reason, reply) {
             tracing::info!(
                 "[work_task] task {} held connection={conn_id}: a later turn ended \
                  ({stop_reason}); settling now",
@@ -3380,7 +3380,7 @@ impl TaskEngine {
         // The newest answer since the hold began — from a turn the agent ran on
         // its own once its work finished, or from a later turn on the
         // connection — else the answer the held turn ended on.
-        let summary = match result.latest_reply(since) {
+        let summary = match result.latest_reply(since, &later) {
             Some(reply) => Some(reply),
             None => self.capture_summary(&conn_id).await.or(held_summary),
         };
@@ -11510,6 +11510,41 @@ mod tests {
         );
         let ends = event_payloads(&engine, task_id, "background_wait_end").await;
         assert_eq!(ends[0]["outcome"], "drained");
+    }
+
+    /// A later turn's answer is the run's once the engine has read it: a
+    /// turn after it that said nothing does not erase it, nor does the
+    /// connection going away before the waiter looks again.
+    #[tokio::test]
+    async fn a_later_turns_answer_survives_an_empty_turn_and_the_connection_going() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::Grok).await;
+        let turn_ends = |answer: Option<&'static str>| {
+            let engine = engine.clone();
+            async move {
+                let state = engine.manager.get_state(PARENT_CONN).await.expect("state");
+                let mut s = state.write().await;
+                s.last_assistant_text = answer.map(str::to_string);
+                s.last_turn_completed_at = Some(chrono::Utc::now());
+            }
+        };
+        turn_ends(Some("The gate failed: 2 tests.")).await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "end_turn"))
+            .await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        turn_ends(None).await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 3, "end_turn"))
+            .await;
+        engine.manager.disconnect(PARENT_CONN).await.expect("gone");
+        settles_to(&engine, task_id, WorkTaskStatus::Review).await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task");
+        assert_eq!(
+            task.result_summary.as_deref(),
+            Some("The gate failed: 2 tests.")
+        );
     }
 
     /// The reconcile tick leaves a held run to its waiter, which settles it

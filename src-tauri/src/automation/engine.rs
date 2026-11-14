@@ -782,14 +782,15 @@ impl AutomationEngine {
         // work (one Grok started on its own, or a prompt sent to the session):
         // the waiter settles the run — with this turn's answer, if it is the
         // newest, and as this turn ended, if it did not end normally.
-        {
+        if self.held.lock().await.contains_key(&conn_id) {
+            let reply = turn_end_hold::last_turn_reply(&self.manager, &conn_id).await;
             let mut held = self.held.lock().await;
-            if let Some(run) = held.get_mut(&conn_id) {
-                if !run.settling && run.later.record(stop_reason) {
+            if let Some(run) = held.get_mut(&conn_id).filter(|run| !run.settling) {
+                if run.later.record(stop_reason, reply) {
                     run.stop.cancel();
                 }
-                return;
             }
+            return;
         }
         let summary = self.capture_summary(&conn_id).await;
         if let Some(timing) = turn_end_hold::HoldTiming::from_env() {
@@ -859,7 +860,7 @@ impl AutomationEngine {
                 result.outcome.as_str()
             );
             if engine.index.lock().await.contains_key(&conn_id) {
-                let summary = match result.latest_reply(since) {
+                let summary = match result.latest_reply(since, &later) {
                     Some(reply) => Some(reply),
                     None => engine.capture_summary(&conn_id).await.or(summary),
                 };

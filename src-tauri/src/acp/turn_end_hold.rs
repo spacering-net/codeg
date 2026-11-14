@@ -271,13 +271,9 @@ pub(crate) fn probe(
         blocker: turn_end_blocker(state, agent_type, now, child_live),
         activity: (state.background_activity_at, state.async_task_activity_at),
         last_background_reply: state.last_background_reply.clone(),
-        last_turn: state.last_turn_completed_at.map(|at| {
-            let reply = state
-                .last_assistant_text
-                .clone()
-                .filter(|text| !text.trim().is_empty());
-            (at, reply)
-        }),
+        last_turn: state
+            .last_turn_completed_at
+            .map(|at| (at, turn_reply_of(state).map(|(_, text)| text))),
         running: running_work(state, agent_type),
     })
 }
@@ -332,7 +328,37 @@ impl HoldOutcome {
     }
 }
 
+/// The answer the connection's last turn gave, stamped when that turn ended
+/// ([`SessionState::last_turn_completed_at`]).
+fn turn_reply_of(state: &SessionState) -> Option<(DateTime<Utc>, String)> {
+    let at = state.last_turn_completed_at?;
+    let text = state
+        .last_assistant_text
+        .clone()
+        .filter(|text| !text.trim().is_empty())?;
+    Some((at, text))
+}
+
+/// Read [`turn_reply_of`] off a live connection: what a turn that just ended
+/// on a held connection leaves for the settle ([`LaterTurns::record`]).
+pub(crate) async fn last_turn_reply(
+    manager: &ConnectionManager,
+    conn_id: &str,
+) -> Option<(DateTime<Utc>, String)> {
+    let (state, _) = manager.get_state_and_emitter(conn_id).await?;
+    let state = state.read().await;
+    turn_reply_of(&state)
+}
+
 impl TurnEndProbe {
+    /// The answer the connection's last turn gave, with when it ended.
+    fn turn_reply(&self) -> Option<(DateTime<Utc>, String)> {
+        match &self.last_turn {
+            Some((at, Some(text))) => Some((*at, text.clone())),
+            _ => None,
+        }
+    }
+
     /// When the turn this probe followed ended — the start of a hold begun on
     /// it, on the clock its answers are stamped with
     /// ([`HoldResult::latest_reply`]). Now, for a connection that never
@@ -345,24 +371,38 @@ impl TurnEndProbe {
     }
 }
 
-/// How the turns that ended on a held connection after the held one ended,
+/// What the turns that ended on a held connection after the held one leave
 /// for its settle. A turn the agent starts on its own (Grok), or a prompt
 /// someone sends the task's session while it waits, ends with a
 /// `TurnComplete` of its own — a later word on the run than the held turn's
-/// `end_turn`. (Their answers need no record here: the probe reads the latest
-/// from the session, stamped when it arrived.)
+/// `end_turn` and answer.
 #[derive(Debug, Default)]
 pub(crate) struct LaterTurns {
+    /// The newest answer one of them gave, stamped by the session when its
+    /// turn ended ([`last_turn_reply`]). Kept here because the session keeps
+    /// only its last turn's answer — a turn that said nothing clears it — and
+    /// goes with the connection.
+    pub reply: Option<(DateTime<Utc>, String)>,
     /// How the first such turn that did not end normally (`end_turn`) ended:
     /// stopped, refused, failed. The run settles that way.
     pub ended: Option<String>,
 }
 
 impl LaterTurns {
-    /// Note a later turn's end. `true` when it ends the wait: a turn that was
+    /// Note a later turn's end, with the connection's last turn answer read
+    /// as it was handled. `true` when it ends the wait: a turn that was
     /// stopped or failed is how the run ends now, as it would have been for
     /// the held turn itself.
-    pub(crate) fn record(&mut self, stop_reason: &str) -> bool {
+    pub(crate) fn record(
+        &mut self,
+        stop_reason: &str,
+        reply: Option<(DateTime<Utc>, String)>,
+    ) -> bool {
+        if let Some(reply) = reply {
+            if self.reply.as_ref().is_none_or(|(at, _)| *at < reply.0) {
+                self.reply = Some(reply);
+            }
+        }
         if stop_reason == "end_turn" {
             return false;
         }
@@ -385,25 +425,20 @@ impl HoldResult {
     /// The newest answer the agent gave after `since` — the held turn's end
     /// ([`TurnEndProbe::turn_ended_at`]) — if any: what it wrote in a turn of
     /// its own (the result it read once its background work finished), or the
-    /// answer of a later turn on the connection, whichever came last. Both are
-    /// stamped by the session as they arrive, so the order is theirs, not
-    /// that of whoever read them.
-    pub(crate) fn latest_reply(&self, since: DateTime<Utc>) -> Option<String> {
-        let probe = self.last.as_ref()?;
-        let background = probe
-            .last_background_reply
-            .as_ref()
-            .map(|(at, text)| (*at, text));
-        let turn = probe
-            .last_turn
-            .as_ref()
-            .and_then(|(at, text)| Some((*at, text.as_ref()?)));
-        [background, turn]
+    /// answer of a later turn on the connection (as the last look found it, or
+    /// as `later` kept it), whichever came last. All are stamped by the
+    /// session as they arrive, so the order is theirs, not that of whoever
+    /// read them.
+    pub(crate) fn latest_reply(&self, since: DateTime<Utc>, later: &LaterTurns) -> Option<String> {
+        let probe = self.last.as_ref();
+        let background = probe.and_then(|probe| probe.last_background_reply.clone());
+        let turn = probe.and_then(TurnEndProbe::turn_reply);
+        [background, turn, later.reply.clone()]
             .into_iter()
             .flatten()
             .filter(|(at, _)| *at > since)
             .max_by_key(|(at, _)| *at)
-            .map(|(_, text)| text.clone())
+            .map(|(_, text)| text)
     }
 
     /// What was still running when the wait ended (empty once drained).
@@ -771,7 +806,9 @@ mod tests {
         let result = waiter.await.expect("waiter");
         assert_eq!(result.outcome, HoldOutcome::ConnectionLost);
         assert_eq!(
-            result.latest_reply(since).as_deref(),
+            result
+                .latest_reply(since, &LaterTurns::default())
+                .as_deref(),
             Some("all green"),
             "what the agent said before going away is kept"
         );
@@ -797,17 +834,18 @@ mod tests {
     fn a_follow_up_reply_counts_only_after_the_hold_began() {
         let since = Utc::now();
         let secs = chrono::Duration::seconds;
+        let none = LaterTurns::default();
         assert_eq!(
-            answered(Some((since + secs(5), "all green")), None).latest_reply(since),
+            answered(Some((since + secs(5), "all green")), None).latest_reply(since, &none),
             Some("all green".to_string())
         );
         assert_eq!(
-            answered(Some((since - secs(5), "all green")), None).latest_reply(since),
+            answered(Some((since - secs(5), "all green")), None).latest_reply(since, &none),
             None,
             "an answer from before the hold is the turn's own, already captured"
         );
         assert_eq!(
-            answered(None, Some((since, Some("still running")))).latest_reply(since),
+            answered(None, Some((since, Some("still running")))).latest_reply(since, &none),
             None,
             "the held turn's own answer is not a later one"
         );
@@ -819,25 +857,49 @@ mod tests {
     fn the_newest_of_the_two_kinds_of_answer_wins() {
         let since = Utc::now();
         let at = |secs: i64| since + chrono::Duration::seconds(secs);
+        let none = LaterTurns::default();
         let background = Some((at(5), "gate failed"));
         assert_eq!(
             answered(background, Some((at(9), Some("gate passed"))))
-                .latest_reply(since)
+                .latest_reply(since, &none)
                 .as_deref(),
             Some("gate passed")
         );
         assert_eq!(
             answered(background, Some((at(2), Some("looking into it"))))
-                .latest_reply(since)
+                .latest_reply(since, &none)
                 .as_deref(),
             Some("gate failed")
         );
+    }
+
+    /// A later turn's answer the engine kept outlives what the session still
+    /// shows: a turn after it that said nothing, or the connection gone before
+    /// the next look.
+    #[test]
+    fn a_kept_later_answer_outlives_the_session() {
+        let since = Utc::now();
+        let at = |secs: i64| since + chrono::Duration::seconds(secs);
+        let mut later = LaterTurns::default();
+        assert!(!later.record("end_turn", Some((at(7), "gate failed".into()))));
+        let empty_turn_after = answered(Some((at(5), "gate passed")), Some((at(9), None)));
         assert_eq!(
-            answered(background, Some((at(9), None)))
-                .latest_reply(since)
-                .as_deref(),
-            Some("gate failed"),
-            "a later turn that said nothing leaves the answer before it standing"
+            empty_turn_after.latest_reply(since, &later).as_deref(),
+            Some("gate failed")
+        );
+        let gone = HoldResult {
+            outcome: HoldOutcome::ConnectionLost,
+            last: None,
+        };
+        assert_eq!(
+            gone.latest_reply(since, &later).as_deref(),
+            Some("gate failed")
+        );
+        // An older read never replaces a newer one.
+        assert!(!later.record("end_turn", Some((at(6), "stale".into()))));
+        assert_eq!(
+            later.reply.as_ref().map(|(_, t)| t.as_str()),
+            Some("gate failed")
         );
     }
 
@@ -846,10 +908,10 @@ mod tests {
     #[test]
     fn a_later_turn_that_did_not_end_normally_ends_the_wait() {
         let mut later = LaterTurns::default();
-        assert!(!later.record("end_turn"));
+        assert!(!later.record("end_turn", None));
         assert!(later.ended.is_none());
-        assert!(later.record("cancelled"));
-        assert!(later.record("refusal"));
+        assert!(later.record("cancelled", None));
+        assert!(later.record("refusal", None));
         assert_eq!(later.ended.as_deref(), Some("cancelled"));
     }
 
