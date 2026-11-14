@@ -58,6 +58,8 @@ pub enum MemoryMetric {
     HighlightCacheEstimatedBytes,
     HighlightInFlight,
     HighlightWaiting,
+    DocumentHidden,
+    DocumentFocused,
     OverlayFoldRefetchEntries,
     SelectorsCacheEntries,
     IframeCount,
@@ -245,7 +247,9 @@ mod tests {
                 "highlightCacheEntries": 13,
                 "highlightCacheEstimatedBytes": 14,
                 "highlightInFlight": 0,
-                "highlightWaiting": 0
+                "highlightWaiting": 0,
+                "documentHidden": 0,
+                "documentFocused": 1
             }
         }"#;
         let parsed: FrontendMemorySample = serde_json::from_str(json).unwrap();
@@ -255,6 +259,7 @@ mod tests {
             6
         );
         assert_eq!(parsed.metrics[&MemoryMetric::MessageViewsRetired], 12);
+        assert_eq!(parsed.metrics[&MemoryMetric::DocumentFocused], 1);
         assert_eq!(
             parsed.metrics[&MemoryMetric::HighlightCacheEstimatedBytes],
             14
