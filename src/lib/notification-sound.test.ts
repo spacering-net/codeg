@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { EventEnvelope } from "./types"
 import {
+  IDLE_SUSPEND_MS,
   playEventSound,
   previewTone,
   primeNotificationSoundOutput,
@@ -46,6 +47,10 @@ let contextsCreated = 0
 /** Notes started and not yet stopped — a cue still audible, in other words. */
 let liveOscillators = 0
 let stateListeners: Array<() => void> = []
+/** How many times the device was handed back to the OS. */
+let suspendCalls = 0
+/** Oscillators handed out, so a test can let a cue finish sounding. */
+let createdOscillators: Array<{ onended: (() => void) | null }> = []
 
 /** The fake audio clock, frozen — nothing here needs time to advance. */
 const FAKE_CURRENT_TIME = 0
@@ -64,7 +69,7 @@ class FakeAudioContext {
   }
   createOscillator() {
     let live = false
-    return {
+    const oscillator = {
       type: "sine",
       frequency: { value: 0 },
       onended: null as (() => void) | null,
@@ -86,6 +91,8 @@ class FakeAudioContext {
         liveOscillators -= 1
       },
     }
+    createdOscillators.push(oscillator)
+    return oscillator
   }
   createGain() {
     return {
@@ -97,6 +104,11 @@ class FakeAudioContext {
   resume() {
     if (resumeRejects) return Promise.reject(new Error("blocked"))
     setOutputState("running")
+    return Promise.resolve()
+  }
+  suspend() {
+    suspendCalls += 1
+    setOutputState("suspended")
     return Promise.resolve()
   }
 }
@@ -117,6 +129,17 @@ function installAudioStub() {
 async function userGesture() {
   window.dispatchEvent(new Event("pointerdown"))
   await vi.advanceTimersByTimeAsync(0)
+}
+
+/**
+ * Let every note handed out finish sounding, the way the audio clock eventually
+ * would. `onended` is what retires a note, so this is what "the cue is over"
+ * means — and what starts the clock on releasing the device.
+ */
+function finishCues() {
+  const pending = createdOscillators
+  createdOscillators = []
+  for (const oscillator of pending) oscillator.onended?.()
 }
 
 function envelope(payload: Record<string, unknown>): EventEnvelope {
@@ -196,6 +219,8 @@ describe("playEventSound", () => {
     liveOscillators = 0
     contextsCreated = 0
     stateListeners = []
+    suspendCalls = 0
+    createdOscillators = []
     audioState = "running"
     resumeRejects = false
     installAudioStub()
@@ -407,5 +432,83 @@ describe("playEventSound", () => {
     })
     vi.advanceTimersByTime(5000)
     expect(playEventSound(TURN_COMPLETE)).toBe(false)
+  })
+
+  // A running context holds the OS audio device open even while it plays
+  // nothing: on macOS the speaker stream takes a `PreventUserIdleSystemSleep`
+  // assertion for as long as it runs and `coreaudiod` never idles. An app that
+  // waits hours between two cues must not pay that for its whole lifetime.
+
+  it("hands the audio device back once a cue has finished sounding", () => {
+    configure({})
+    expect(playEventSound(TURN_COMPLETE)).toBe(true)
+
+    finishCues()
+    // Grace period first: a release must never straddle the tail of a cue.
+    vi.advanceTimersByTime(IDLE_SUSPEND_MS - 1)
+    expect(suspendCalls).toBe(0)
+
+    vi.advanceTimersByTime(1)
+    expect(suspendCalls).toBe(1)
+    expect(audioState).toBe("suspended")
+  })
+
+  it("keeps output open while a cue is still sounding", () => {
+    configure({})
+    expect(playEventSound(TURN_COMPLETE)).toBe(true)
+
+    // No `finishCues()`: the notes are still in flight, so no release is armed
+    // at all — advancing well past the grace period must not suspend them.
+    vi.advanceTimersByTime(IDLE_SUSPEND_MS * 3)
+    expect(suspendCalls).toBe(0)
+    expect(audioState).toBe("running")
+  })
+
+  it("cancels a pending release when the next cue arrives", () => {
+    configure({})
+    expect(playEventSound(TURN_COMPLETE)).toBe(true)
+    finishCues()
+
+    // Still inside the grace period when the next event lands.
+    vi.advanceTimersByTime(1000)
+    expect(playEventSound(PERMISSION)).toBe(true)
+
+    // The release armed for the first cue must not fire underneath the second.
+    vi.advanceTimersByTime(IDLE_SUSPEND_MS)
+    expect(suspendCalls).toBe(0)
+    expect(audioState).toBe("running")
+  })
+
+  it("reopens output on the next gesture after the device was released", async () => {
+    // Releasing the device must not leave the window permanently silent: the
+    // statechange re-arms the unlock, so the user's ordinary next click opens
+    // output ahead of the event that needs it.
+    configure({})
+    expect(playEventSound(TURN_COMPLETE)).toBe(true)
+    finishCues()
+
+    vi.advanceTimersByTime(IDLE_SUSPEND_MS)
+    expect(suspendCalls).toBe(1)
+    expect(audioState).toBe("suspended")
+
+    await userGesture()
+    expect(audioState).toBe("running")
+
+    vi.advanceTimersByTime(2000)
+    startedOscillators = 0
+    expect(playEventSound(TURN_COMPLETE)).toBe(true)
+    expect(startedOscillators).toBeGreaterThan(0)
+  })
+
+  it("leaves a context it never opened alone", () => {
+    // Sounds off: nothing was ever created, so there is no device to release
+    // and no timer to leak.
+    saveNotificationSoundPrefs(DEFAULT_NOTIFICATION_SOUND_PREFS)
+    resetNotificationSoundStateForTests()
+
+    expect(playEventSound(TURN_COMPLETE)).toBe(false)
+    vi.advanceTimersByTime(IDLE_SUSPEND_MS * 2)
+    expect(suspendCalls).toBe(0)
+    expect(contextsCreated).toBe(0)
   })
 })

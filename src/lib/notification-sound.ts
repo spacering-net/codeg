@@ -102,6 +102,35 @@ let context: AudioContext | null = null
 /** Detach handle while gesture listeners are armed; null when they are not. */
 let unlockDetach: (() => void) | null = null
 
+/**
+ * Grace period after the last cue finished before output is handed back.
+ *
+ * A *running* context keeps the OS audio device open even while it is playing
+ * nothing. On macOS the speaker stream takes a `PreventUserIdleSystemSleep`
+ * assertion for as long as it runs and `coreaudiod` never gets to idle —
+ * measured at ~6% of a core, continuously, for the whole life of the app. An
+ * app that sits for minutes or hours between two cues pays that for nothing.
+ *
+ * So a cue that has finished sounding releases the device instead of holding it
+ * until the window closes, and the next cue (or the next user gesture — see
+ * `armUnlockOnGesture`) reopens output.
+ *
+ * The grace period exists so that a run of cues — and the tail of the one still
+ * sounding — never straddles a release: a cue arriving inside it cancels the
+ * release outright.
+ *
+ * The cost is the already-documented closed-output case: an event that lands
+ * after the device was handed back is dropped if no gesture has reopened output
+ * yet. That loses no cooldown, so the following cue still rings — but it is a
+ * real trade, and the reason this is a grace period rather than an immediate
+ * suspend. Five minutes keeps it well clear of a turn being read on screen
+ * while still reclaiming the device for the idle rest of the session.
+ */
+export const IDLE_SUSPEND_MS = 5 * 60 * 1000
+
+/** Pending release of the audio device; null when none is armed. */
+let suspendTimer: ReturnType<typeof setTimeout> | null = null
+
 function audioContextCtor(): AudioContextCtor | null {
   if (typeof window === "undefined") return null
   const w = window as unknown as {
@@ -253,6 +282,9 @@ function retireNote(note: ScheduledNote): void {
   } catch {
     /* already torn down */
   }
+  // Last note of the cue: nothing is sounding any more, so start the clock on
+  // handing the audio device back.
+  if (scheduledNotes.size === 0) scheduleIdleSuspend()
 }
 
 /** Silence every note still in flight. Idempotent. */
@@ -269,9 +301,41 @@ function cancelScheduledCues(): void {
   }
 }
 
+function clearIdleSuspend(): void {
+  if (suspendTimer === null) return
+  clearTimeout(suspendTimer)
+  suspendTimer = null
+}
+
+/**
+ * Hand the audio device back now that nothing is sounding. A no-op while output
+ * is closed already — there is nothing to give up.
+ */
+function scheduleIdleSuspend(): void {
+  const ctx = context
+  if (!ctx || ctx.state !== "running") return
+  clearIdleSuspend()
+  suspendTimer = setTimeout(() => {
+    suspendTimer = null
+    // A cue scheduled after this was armed keeps output open; it arms its own
+    // release when it finishes.
+    if (ctx.state !== "running" || scheduledNotes.size > 0) return
+    try {
+      // The statechange this raises is what re-arms the gesture unlock, so the
+      // next interaction reopens output ahead of the event that needs it.
+      void ctx.suspend().then(undefined, () => {})
+    } catch {
+      /* an engine without suspend() has no device to give back */
+    }
+  }, IDLE_SUSPEND_MS)
+}
+
 /** Schedule one tone's oscillators on a context that is already running. */
 function scheduleTone({ ctx, steps, level }: PreparedTone): boolean {
   try {
+    // A cue is on its way: cancel any pending release of the device, so the
+    // notes below are not suspended out from under themselves.
+    clearIdleSuspend()
     const start = ctx.currentTime
     for (const step of steps) {
       const oscillator = ctx.createOscillator()
@@ -423,6 +487,7 @@ export function playEventSound(envelope: EventEnvelope): boolean {
 /** Test seam: drop the cached preferences and the cooldown history. */
 export function resetNotificationSoundStateForTests(): void {
   resetNotificationSoundPrefsCacheForTests()
+  clearIdleSuspend()
   lastPlayedAt.clear()
   lastAnyPlayedAt = 0
   suppressDepth = 0
