@@ -1,13 +1,18 @@
 "use client"
 
 import { useCallback } from "react"
-import { PanelRight, Settings, SquareTerminal } from "lucide-react"
+import { Globe, PanelRight, Settings, SquareTerminal } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { openSettingsWindow } from "@/lib/api"
+import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
 import { Button } from "@/components/ui/button"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
+import {
+  useOptionalWorkspaceActions,
+  useOptionalWorkspaceView,
+} from "@/contexts/workspace-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { WorkbenchRouteChromeActions } from "@/components/workbench/workbench-content"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
@@ -18,7 +23,7 @@ import { formatShortcutLabel } from "@/lib/keyboard-shortcuts"
 import { rightChromeClusterWidth } from "@/lib/window-chrome"
 
 /**
- * Contents of the window's fixed top-RIGHT chrome overlay: terminal + aux-panel
+ * Contents of the window's fixed top-RIGHT chrome overlay: terminal + browser + aux-panel
  * toggles (conversations) or the active route's own page-level controls
  * (full-page routes), then settings. `FolderLayoutShell` pins this at the
  * window's top-right
@@ -41,9 +46,27 @@ export function RightEdgeChrome() {
   const { isConversations } = useWorkbenchRoute()
   const { isOpen: auxPanelOpen, toggle: toggleAuxPanel } = useAuxPanelContext()
   const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
+  const workspaceView = useOptionalWorkspaceView()
+  const workspaceActions = useOptionalWorkspaceActions()
   const isMac = useIsMac()
   const { shortcuts } = useShortcutSettings()
   const { zoomLevel } = useZoomLevel()
+
+  const hasTabs = workspaceView?.mode === "fusion"
+  const isBrowserPanelOpen = hasTabs && !workspaceView?.conversationMaximized
+
+  const handleToggleBrowser = useCallback(() => {
+    if (!workspaceActions || !workspaceView) return
+    if (workspaceView.mode === "conversation") {
+      workspaceActions.openBrowserTab(BLANK_PAGE_URL)
+    } else {
+      workspaceActions.toggleConversationMaximized()
+    }
+  }, [workspaceActions, workspaceView])
+
+  const browserButtonTitle = !hasTabs
+    ? tTitleBar("newBrowserTab")
+    : tTitleBar("toggleBrowserPanel")
 
   const handleOpenSettings = useCallback(() => {
     openSettingsWindow().catch((err) => {
@@ -73,6 +96,17 @@ export function RightEdgeChrome() {
               })}
             >
               <SquareTerminal className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={`h-6 w-6 hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10 ${isBrowserPanelOpen ? "bg-accent" : ""}`}
+              onClick={handleToggleBrowser}
+              disabled={!activeFolder && !isChatMode}
+              title={browserButtonTitle}
+              aria-label={browserButtonTitle}
+            >
+              <Globe className="h-3.5 w-3.5" />
             </Button>
             <Button
               variant="ghost"
