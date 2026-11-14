@@ -3459,8 +3459,35 @@ impl ConnectionManager {
     }
 
     pub async fn list_connections(&self) -> Vec<ConnectionInfo> {
-        let connections = self.connections.lock().await;
-        connections.values().map(|c| c.info()).collect()
+        // `AgentConnection.status` is only the spawn-time placeholder. The
+        // connection driver publishes every subsequent transition to the
+        // shared SessionState, which is also what snapshots and event
+        // consumers read. Copy the state handles while holding the map lock,
+        // then read them after releasing it so this inventory cannot report a
+        // connection as permanently `connecting` after it has connected.
+        let entries = {
+            let connections = self.connections.lock().await;
+            connections
+                .values()
+                .map(|connection| {
+                    (
+                        connection.id.clone(),
+                        connection.agent_type,
+                        Arc::clone(&connection.state),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut result = Vec::with_capacity(entries.len());
+        for (id, agent_type, state) in entries {
+            result.push(ConnectionInfo {
+                id,
+                agent_type,
+                status: state.read().await.status.clone(),
+            });
+        }
+        result
     }
 
     /// Raw per-connection rows for the pet panel's active-session list.
@@ -5491,6 +5518,29 @@ mod tests {
         // default effort of the selected model, and a mode nobody asked for.
         assert_eq!(current(&options, "effort"), "default");
         assert_eq!(current(&options, "mode"), "plan");
+    }
+
+    #[tokio::test]
+    async fn list_connections_reports_live_session_status() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+
+        // Reproduce the production split: the map entry keeps its spawn-time
+        // placeholder while the shared session state advances through the
+        // connection driver's status events.
+        let state = {
+            let connections = mgr.connections.lock().await;
+            connections.get("c1").unwrap().state.clone()
+        };
+        state.write().await.status = ConnectionStatus::Connected;
+        mgr.connections.lock().await.get_mut("c1").unwrap().status =
+            ConnectionStatus::Connecting;
+
+        let rows = mgr.list_connections().await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "c1");
+        assert_eq!(rows[0].status, ConnectionStatus::Connected);
     }
 
     /// An agent that has left the connection map but not yet exited can still

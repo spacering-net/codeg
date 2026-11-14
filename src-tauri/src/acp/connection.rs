@@ -59,8 +59,8 @@ use crate::acp::terminal_runtime::{
     TerminalRuntime, TerminalRuntimeError, TerminalShellRuntimeConfig,
 };
 use crate::acp::types::{
-    AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionInfo,
-    ConnectionStatus, GrokModelCatalog, GrokModelSpec, KiroReasoning, PermissionAnswerOrigin,
+    AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionStatus,
+    GrokModelCatalog, GrokModelSpec, KiroReasoning, PermissionAnswerOrigin,
     PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure, PromptCapabilitiesInfo,
     PromptInputBlock, RemoteControlInfo, SessionConfigBooleanInfo, SessionConfigKindInfo,
     SessionConfigOptionInfo, SessionConfigSelectGroupInfo, SessionConfigSelectInfo,
@@ -1705,16 +1705,6 @@ pub struct AgentConnection {
     /// the tree without waiting, so the agent may still be alive and still
     /// needs the backstop.
     pub child_pid: Arc<std::sync::atomic::AtomicU32>,
-}
-
-impl AgentConnection {
-    pub fn info(&self) -> ConnectionInfo {
-        ConnectionInfo {
-            id: self.id.clone(),
-            agent_type: self.agent_type,
-            status: self.status.clone(),
-        }
-    }
 }
 
 /// Build an AcpAgent from registry metadata.
