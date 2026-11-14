@@ -4148,7 +4148,8 @@
           "allowAlways": "immer erlaubt",
           "rejected": "abgelehnt",
           "viaChatChannel": "über einen Chat-Kanal",
-          "byPolicy": "durch die Berechtigungsrichtlinie des Laufs"
+          "byPolicy": "durch die Berechtigungsrichtlinie des Laufs",
+          "byAutoApprove": "automatisch durch CODEG_AUTO_APPROVE"
         }
       },
       "messageNav": {

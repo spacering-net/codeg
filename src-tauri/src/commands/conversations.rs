@@ -1568,7 +1568,24 @@ pub async fn get_folder_conversation_core(
         let agent_env = agent_setting_service::load_agent_env(conn, at).await;
         tokio::task::spawn_blocking(move || -> Result<_, AppCommandError> {
             let parser = build_agent_parser(at, &agent_env);
-            match parser.get_conversation(&eid) {
+            let parse_started = std::time::Instant::now();
+            let parsed = parser.get_conversation(&eid);
+            // Duration of a full transcript parse is the quantity the turn
+            // window cannot bound: `apply_turn_window` slices AFTER this
+            // returns, so a 80 MB session is read and turned into messages
+            // whatever the window asks for. Logged for every detail load
+            // because the only way to know whether the window needs to move
+            // into the parsers is to see this number on real sessions.
+            let parse_ms = parse_started.elapsed().as_millis() as u64;
+            tracing::info!(
+                agent = %at,
+                external_id = %eid,
+                parse_ms,
+                turns = parsed.as_ref().map(|d| d.turns.len()).unwrap_or(0),
+                slow = parse_ms > crate::commands::conversations::SLOW_PARSE_MS,
+                "[conversations] transcript parsed"
+            );
+            match parsed {
                 Ok(d) => {
                     // Claude `/clear` (and similar on-disk id changes) make
                     // the parser resolve a different uuid than we asked for.
@@ -2002,6 +2019,11 @@ fn apply_in_flight_message_id(
     turns[target_idx].id = pending.message_id.clone();
     Some(pending.message_id.clone())
 }
+
+/// A full transcript parse slower than this is logged as `slow`. Parsing runs
+/// before the turn window slices anything, so this is the number that decides
+/// whether windows have to move into the parsers themselves.
+pub const SLOW_PARSE_MS: u64 = 500;
 
 /// Resolve the raw `tailTurns` / `fromIndex` request fields into a window
 /// selector. `None` when neither is present (legacy full response); an error
