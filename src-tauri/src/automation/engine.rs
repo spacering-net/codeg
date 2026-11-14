@@ -821,21 +821,23 @@ impl AutomationEngine {
                 &CancellationToken::new(),
             )
             .await;
-            engine.held.lock().await.remove(&conn_id);
             tracing::info!(
                 "[automation] run {run_id} hold on connection={conn_id} ended: {}",
                 result.outcome.as_str()
             );
-            if !engine.index.lock().await.contains_key(&conn_id) {
-                return; // canceled meanwhile
-            }
-            let summary = match result.follow_up_reply(since) {
-                Some(reply) => Some(reply),
-                None => engine.capture_summary(&conn_id).await.or(summary),
-            };
-            engine
-                .settle_turn(&conn_id, run_id, automation_id, &stop_reason, summary)
-                .await;
+            // Still marked held while it settles: the reconcile tick, seeing
+            // the connection gone, would otherwise settle the run from the
+            // conversation first, without the stop reason or the reply.
+            if engine.index.lock().await.contains_key(&conn_id) {
+                let summary = match result.follow_up_reply(since) {
+                    Some(reply) => Some(reply),
+                    None => engine.capture_summary(&conn_id).await.or(summary),
+                };
+                engine
+                    .settle_turn(&conn_id, run_id, automation_id, &stop_reason, summary)
+                    .await;
+            } // else canceled meanwhile: the cancel settled the run
+            engine.held.lock().await.remove(&conn_id);
         });
     }
 

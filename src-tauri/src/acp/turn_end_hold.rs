@@ -145,7 +145,9 @@ pub(crate) fn turn_end_blocker(
     if state.pending_permission.is_some() {
         return Some(ConnectionBusy::PendingPermission);
     }
-    if agent_resumes_after_background_work(agent_type) && background_work_running(state, now) {
+    if agent_resumes_after_background_work(agent_type)
+        && background_work_running(state, agent_type, now)
+    {
         return Some(ConnectionBusy::BackgroundWork);
     }
     if state
@@ -161,22 +163,42 @@ pub(crate) fn turn_end_blocker(
     None
 }
 
+/// Whether this agent's async-task table carries every kind of background
+/// work it runs, so that the table can stand in for the watcher's count.
+/// claude-agent-acp publishes every background shell and monitor there, and
+/// the agent's own follow-up turn. Grok publishes only its workflow runs: its
+/// background sub-agents are counted by `BackgroundActivity` alone.
+fn async_table_is_complete(agent_type: AgentType) -> bool {
+    matches!(agent_type, AgentType::ClaudeCode)
+}
+
+/// Whether the async-task table alone decides what still runs — see
+/// [`background_work_running`].
+fn async_table_decides(state: &SessionState, agent_type: AgentType) -> bool {
+    async_table_is_complete(agent_type) && !state.async_tasks.is_empty()
+}
+
 /// Whether background work still runs, for a hold.
 ///
 /// The idle sweeps OR the transcript watcher's count with the async-task table
 /// ([`SessionState::has_active_background_work`]): a false "still running"
 /// costs them one idle connection. A hold pays more for one — a task stuck in
-/// "running" until the cap — so once the adapter publishes async tasks at all
-/// (claude-agent-acp publishes every background shell and monitor, and the
-/// agent's own follow-up turn, there) that table alone decides: it carries an
-/// explicit terminal state per task, where the watcher infers its count from
-/// transcript records that can go missing. An adapter that never published a
-/// row leaves only the watcher to go by.
-fn background_work_running(state: &SessionState, now: DateTime<Utc>) -> bool {
-    if state.async_tasks.is_empty() {
-        state.has_active_background_work(now)
-    } else {
+/// "running" until the cap — so once an adapter whose table is complete
+/// ([`async_table_is_complete`]) has published a row, that table alone
+/// decides: it carries an explicit terminal state per task, where the
+/// watcher infers its count from transcript records that can go missing. Any
+/// other adapter — one that never published a row, or one whose table covers
+/// only part of its work — keeps the OR: a source that only one of them
+/// reports must not settle the run under work still running.
+fn background_work_running(
+    state: &SessionState,
+    agent_type: AgentType,
+    now: DateTime<Utc>,
+) -> bool {
+    if async_table_decides(state, agent_type) {
         state.has_live_async_task(now)
+    } else {
+        state.has_active_background_work(now)
     }
 }
 
@@ -188,9 +210,9 @@ const MAX_DESCRIPTION_CHARS: usize = 120;
 
 /// The background work still running on this connection, described: the
 /// async-task rows that are not terminal (the agent's own autonomous turn
-/// aside) — or, from an adapter that publishes none, what the transcript
-/// watcher still counts (the same source rule as [`background_work_running`]).
-fn running_work(state: &SessionState) -> Vec<String> {
+/// aside), and — unless that table alone decides — what the transcript watcher
+/// still counts (the same source rule as [`background_work_running`]).
+fn running_work(state: &SessionState, agent_type: AgentType) -> Vec<String> {
     fn push(text: &str, out: &mut Vec<String>) {
         let text: String = text.trim().chars().take(MAX_DESCRIPTION_CHARS).collect();
         if !text.is_empty() && !out.contains(&text) {
@@ -212,7 +234,7 @@ fn running_work(state: &SessionState) -> Vec<String> {
         };
         push(label, &mut out);
     }
-    if state.async_tasks.is_empty() {
+    if !async_table_decides(state, agent_type) {
         for task in &state.background_outstanding_tasks {
             if ids.insert(task.task_id.as_str()) {
                 push(
@@ -244,7 +266,7 @@ pub(crate) fn probe(
         blocker: turn_end_blocker(state, agent_type, now, child_live),
         activity: (state.background_activity_at, state.async_task_activity_at),
         last_background_reply: state.last_background_reply.clone(),
-        running: running_work(state),
+        running: running_work(state, agent_type),
     })
 }
 
@@ -355,9 +377,11 @@ pub(crate) async fn wait_until_settled(
             };
         }
         let Some(probe) = manager.turn_end_probe(conn_id).await else {
+            // The last look is all that is left of what the agent said: a
+            // follow-up reply it gave before going away still counts.
             return HoldResult {
                 outcome: HoldOutcome::ConnectionLost,
-                last: None,
+                last,
             };
         };
         let now = tokio::time::Instant::now();
@@ -492,12 +516,10 @@ mod tests {
         assert!(should_hold(&manager, CONN, "end_turn").await.is_none());
     }
 
-    /// With async tasks published, their terminal states decide: a watcher
-    /// count that never settled must not keep a run waiting for an hour. With
-    /// none published, the watcher is all there is.
-    #[tokio::test]
-    async fn the_async_task_table_outranks_the_watcher_count() {
-        let watcher = |outstanding: u32| AcpEvent::BackgroundActivity {
+    /// What the transcript watcher (or Grok's sub-agent accounting) reports:
+    /// `outstanding` tasks, the one listed described as "watched build".
+    fn watcher(outstanding: u32) -> AcpEvent {
+        AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding,
@@ -510,7 +532,14 @@ mod tests {
             }],
             settled: vec![],
             watermark: 0,
-        };
+        }
+    }
+
+    /// With async tasks published, their terminal states decide: a watcher
+    /// count that never settled must not keep a run waiting for an hour. With
+    /// none published, the watcher is all there is.
+    #[tokio::test]
+    async fn the_async_task_table_outranks_the_watcher_count() {
         let manager = connection(AgentType::ClaudeCode).await;
         apply(&manager, watcher(1)).await;
         let probe = should_hold(&manager, CONN, "end_turn").await.expect("held");
@@ -522,6 +551,31 @@ mod tests {
             should_hold(&manager, CONN, "end_turn").await.is_none(),
             "every published task is terminal"
         );
+    }
+
+    /// Grok's table holds only its workflow runs; a background sub-agent is
+    /// counted by `BackgroundActivity` alone. A finished workflow must not
+    /// hide a sub-agent still running.
+    #[tokio::test]
+    async fn a_partial_async_task_table_does_not_outrank_the_other_count() {
+        let manager = connection(AgentType::Grok).await;
+        apply(&manager, watcher(1)).await;
+        apply(&manager, delta("wf1", "workflow", "running", true)).await;
+        let probe = should_hold(&manager, CONN, "end_turn").await.expect("held");
+        assert_eq!(
+            probe.running,
+            vec!["run wf1".to_string(), "watched build".to_string()]
+        );
+
+        apply(&manager, delta("wf1", "workflow", "completed", false)).await;
+        let probe = should_hold(&manager, CONN, "end_turn")
+            .await
+            .expect("the sub-agent still runs");
+        assert_eq!(probe.blocker, Some(ConnectionBusy::BackgroundWork));
+        assert_eq!(probe.running, vec!["watched build".to_string()]);
+
+        apply(&manager, watcher(0)).await;
+        assert!(should_hold(&manager, CONN, "end_turn").await.is_none());
     }
 
     /// A turn in flight keeps a hold going but never starts one: what the
@@ -644,11 +698,20 @@ mod tests {
                 async move { wait_until_settled(&manager, CONN, timing(3600), &stop).await },
             )
         };
+        let since = Utc::now();
+        {
+            let state = manager.get_state(CONN).await.expect("state");
+            state.write().await.last_background_reply = Some((Utc::now(), "all green".into()));
+        }
         tokio::time::sleep(Duration::from_secs(10)).await;
         manager.disconnect(CONN).await.expect("disconnect");
         let result = waiter.await.expect("waiter");
         assert_eq!(result.outcome, HoldOutcome::ConnectionLost);
-        assert!(result.last.is_none());
+        assert_eq!(
+            result.follow_up_reply(since).as_deref(),
+            Some("all green"),
+            "what the agent said before going away is kept"
+        );
     }
 
     #[test]
