@@ -44,6 +44,120 @@ use super::{
 
 // ── reads ───────────────────────────────────────────────────────────────────
 
+/// Project upload paths in GitLab Markdown are project-relative, even though
+/// they start with `/`. Download through the API: the web route needs a browser
+/// session and does not accept the account's PRIVATE-TOKEN.
+pub async fn read_image(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    upload_path: &str,
+) -> Result<super::ForgeImage, ForgeError> {
+    read_image_in(
+        auth,
+        owner_repo,
+        upload_path,
+        &crate::paths::codeg_forge_images_root(),
+        super::image_cache::IMAGE_MAX_BYTES,
+    )
+    .await
+}
+
+async fn read_image_in(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    upload_path: &str,
+    cache_root: &std::path::Path,
+    max_bytes: u64,
+) -> Result<super::ForgeImage, ForgeError> {
+    let (secret, filename) = image_upload_parts(upload_path)?;
+    let project = project_ref(owner_repo)?;
+    let url = format!(
+        "{}/projects/{project}/uploads/{secret}/{}",
+        auth.api_base,
+        urlencode_path(&filename)
+    );
+    let key = super::image_cache::cache_key(&[
+        "gitlab", &auth.api_base, &auth.account_id, &auth.token, &project, &url,
+    ]);
+    super::image_cache::get_or_download(cache_root, key, max_bytes, || image_get(auth, &url)).await
+}
+
+/// A file in object storage is answered, in GitLab's default "direct" download
+/// mode, with a redirect to a signed storage URL on another origin. The shared
+/// client stops there so `PRIVATE-TOKEN` never leaves GitLab's origin; follow
+/// that one hop here without any credential. The URL's signature is the
+/// authorization, exactly as when a browser follows the same redirect.
+async fn image_get(auth: &ResolvedAuth, url: &str) -> Result<reqwest::Response, ForgeError> {
+    let client = super::http_client()?;
+    let response = client
+        .get(url)
+        .header("PRIVATE-TOKEN", &auth.token)
+        .header("User-Agent", "codeg")
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| ForgeError::Network(e.to_string()))?;
+    if !response.status().is_redirection() {
+        return finish(response).await;
+    }
+    let status = response.status().as_u16();
+    let location = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| response.url().join(value).ok())
+        .filter(|location| matches!(location.scheme(), "http" | "https"))
+        .ok_or_else(|| ForgeError::Api {
+            status,
+            message: "GitLab redirected the image download to an invalid location".into(),
+        })?;
+    // No credential header on this request. A further cross-origin redirect
+    // stops in the shared client and is reported as a failed download.
+    let storage = client
+        .get(location)
+        .header("User-Agent", "codeg")
+        .send()
+        .await
+        .map_err(|e| ForgeError::Network(e.without_url().to_string()))?;
+    if storage.status().is_success() {
+        Ok(storage)
+    } else {
+        Err(ForgeError::Api {
+            status: storage.status().as_u16(),
+            message: "Object storage image download failed".into(),
+        })
+    }
+}
+
+/// Accept upload coordinates only, never a client-supplied host, repository or
+/// API URL. Decode the filename once and re-encode it as one API path segment.
+fn image_upload_parts(path: &str) -> Result<(&str, String), ForgeError> {
+    let invalid = || ForgeError::Invalid("invalid GitLab image upload path".into());
+    if path.len() > 4096 || path.contains(['?', '#']) {
+        return Err(invalid());
+    }
+    let (secret, filename) = path
+        .strip_prefix("/uploads/")
+        .and_then(|p| p.split_once('/'))
+        .ok_or_else(invalid)?;
+    if secret.len() != 32 || !secret.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(invalid());
+    }
+    let filename = urlencoding::decode(filename)
+        .map_err(|_| invalid())?
+        .into_owned();
+    if filename.is_empty()
+        || filename == "."
+        || filename == ".."
+        || filename
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+    {
+        return Err(invalid());
+    }
+    Ok((secret, filename))
+}
+
 pub async fn list_issues(
     auth: &ResolvedAuth,
     req: &ListIssuesRequest,
@@ -1531,8 +1645,231 @@ mod tests {
     use axum::extract::Query;
     use axum::routing::{get, post};
     use axum::Json;
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    const IMAGE_UPLOAD: &str = "/uploads/b1f62467989935311a5735eff346a6c7/image.png";
+
+    #[test]
+    fn image_paths_are_upload_coordinates_not_arbitrary_urls_or_api_paths() {
+        for path in [
+            "https://other.test/uploads/b1f62467989935311a5735eff346a6c7/image.png",
+            "/api/v4/projects/other/uploads/1/image.png",
+            "/uploads/short/image.png",
+            "/uploads/b1f62467989935311a5735eff346a6c7/../image.png",
+            "/uploads/b1f62467989935311a5735eff346a6c7/%2e%2e",
+            "/uploads/b1f62467989935311a5735eff346a6c7/a%2fb.png",
+            "/uploads/b1f62467989935311a5735eff346a6c7/a%5cb.png",
+            "/uploads/b1f62467989935311a5735eff346a6c7/%00.png",
+            "/uploads/b1f62467989935311a5735eff346a6c7/image.png?token=secret",
+            "/uploads/b1f62467989935311a5735eff346a6c7/image.png#fragment",
+        ] {
+            assert!(
+                matches!(image_upload_parts(path), Err(ForgeError::Invalid(_))),
+                "{path}"
+            );
+        }
+        let (_, filename) =
+            image_upload_parts("/uploads/b1f62467989935311a5735eff346a6c7/%E5%9B%BE%20%231.png")
+                .unwrap();
+        assert_eq!(filename, "图 #1.png");
+    }
+
+    #[allow(clippy::type_complexity)]
+    async fn image_api(
+        bytes: Vec<u8>,
+        chunked: bool,
+    ) -> (ResolvedAuth, Arc<std::sync::Mutex<Vec<(String, String)>>>) {
+        let seen: Arc<std::sync::Mutex<Vec<(String, String)>>> = Default::default();
+        let captured = seen.clone();
+        let app =
+            axum::Router::new().route(
+                "/{*path}",
+                get(
+                    move |axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+                          headers: axum::http::HeaderMap| {
+                        let captured = captured.clone();
+                        let bytes = bytes.clone();
+                        async move {
+                            captured.lock().unwrap().push((
+                                uri.to_string(),
+                                headers
+                                    .get("private-token")
+                                    .unwrap()
+                                    .to_str()
+                                    .unwrap()
+                                    .to_string(),
+                            ));
+                            let body =
+                                if chunked {
+                                    axum::body::Body::from_stream(futures_util::stream::iter([
+                                        Ok::<_, std::io::Error>(bytes),
+                                    ]))
+                                } else {
+                                    axum::body::Body::from(bytes)
+                                };
+                            axum::http::Response::builder()
+                                .header("content-type", "application/octet-stream")
+                                .body(body)
+                                .unwrap()
+                        }
+                    },
+                ),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (auth_for(format!("http://{addr}/gitlab/api/v4")), seen)
+    }
+
+    #[tokio::test]
+    async fn image_download_authenticates_and_detects_octet_stream_png() {
+        let cache = tempfile::tempdir().unwrap();
+        let png = STANDARD.decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6TAAAAABJRU5ErkJggg==",
+        ).unwrap();
+        let (auth, seen) = image_api(png.clone(), false).await;
+        let image = read_image_in(
+            &auth,
+            "group/sub/proj",
+            "/uploads/b1f62467989935311a5735eff346a6c7/%E5%9B%BE%20%231.png",
+            cache.path(),
+            1024,
+        )
+        .await
+        .unwrap();
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(std::fs::read(super::super::image_cache::cached_path(&image)).unwrap(), png);
+        let again = read_image_in(
+            &auth,
+            "group/sub/proj",
+            "/uploads/b1f62467989935311a5735eff346a6c7/%E5%9B%BE%20%231.png",
+            cache.path(),
+            1024,
+        ).await.unwrap();
+        assert_eq!(again.url, image.url);
+        let server = axum_test::TestServer::new(
+            axum::Router::new().route(
+                "/api/forge_image/{key}", get(super::super::image_cache::serve_image),
+            ),
+        ).unwrap();
+        let response = server.get(&image.url).await;
+        response.assert_status_ok();
+        response.assert_header("content-type", "image/png");
+        response.assert_header("x-content-type-options", "nosniff");
+        assert_eq!(response.as_bytes().as_ref(), png.as_slice());
+        assert!(response.header("content-security-policy").to_str().unwrap().starts_with("sandbox;"));
+        let denied = format!("{}?cap={}", image.url.split('?').next().unwrap(), uuid::Uuid::new_v4());
+        server.get(&denied).await.assert_status_not_found();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![(
+                "/gitlab/api/v4/projects/group%2Fsub%2Fproj/uploads/b1f62467989935311a5735eff346a6c7/%E5%9B%BE%20%231.png".into(),
+                "tok-test".into(),
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn image_download_follows_object_storage_redirect_without_the_token() {
+        let cache = tempfile::tempdir().unwrap();
+        let png = STANDARD.decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6TAAAAABJRU5ErkJggg==",
+        )
+        .unwrap();
+        type Seen = Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+        let storage_seen: Seen = Default::default();
+        let captured = storage_seen.clone();
+        let body = png.clone();
+        let storage = axum::Router::new().route(
+            "/bucket/{*path}",
+            get(
+                move |axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+                      headers: axum::http::HeaderMap| {
+                    let captured = captured.clone();
+                    let body = body.clone();
+                    async move {
+                        captured.lock().unwrap().push((
+                            uri.to_string(),
+                            headers
+                                .get("private-token")
+                                .map(|v| v.to_str().unwrap().to_string()),
+                        ));
+                        axum::http::Response::builder()
+                            .header("content-type", "image/png")
+                            .body(axum::body::Body::from(body))
+                            .unwrap()
+                    }
+                },
+            ),
+        );
+        let storage_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let storage_addr = storage_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(storage_listener, storage).await.unwrap() });
+
+        // A different port is a different origin: the shared client stops at
+        // this redirect, as it would at an S3/GCS host.
+        let signed = format!("http://{storage_addr}/bucket/image.png?X-Amz-Signature=abc");
+        let gitlab_seen = Arc::new(AtomicUsize::new(0));
+        let hits = gitlab_seen.clone();
+        let gitlab = axum::Router::new().route(
+            "/{*path}",
+            get(move |headers: axum::http::HeaderMap| {
+                let hits = hits.clone();
+                let signed = signed.clone();
+                async move {
+                    assert_eq!(headers.get("private-token").unwrap(), "tok-test");
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    axum::http::Response::builder()
+                        .status(302)
+                        .header("location", signed)
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                }
+            }),
+        );
+        let gitlab_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let gitlab_addr = gitlab_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(gitlab_listener, gitlab).await.unwrap() });
+
+        let auth = auth_for(format!("http://{gitlab_addr}/api/v4"));
+        let image = read_image_in(&auth, "group/proj", IMAGE_UPLOAD, cache.path(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(
+            std::fs::read(super::super::image_cache::cached_path(&image)).unwrap(),
+            png
+        );
+        assert_eq!(gitlab_seen.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *storage_seen.lock().unwrap(),
+            vec![("/bucket/image.png?X-Amz-Signature=abc".to_string(), None)]
+        );
+    }
+
+    #[tokio::test]
+    async fn image_download_rejects_a_successful_html_response() {
+        let cache = tempfile::tempdir().unwrap();
+        let (auth, _) = image_api(b"<html>Sign in</html>".to_vec(), false).await;
+        assert!(matches!(
+            read_image_in(&auth, "group/sub/proj", IMAGE_UPLOAD, cache.path(), 1024).await,
+            Err(ForgeError::Invalid(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn image_download_caps_both_content_length_and_chunked_responses() {
+        for chunked in [false, true] {
+            let cache = tempfile::tempdir().unwrap();
+            let (auth, _) = image_api(vec![0; 1025], chunked).await;
+            let error = read_image_in(&auth, "group/sub/proj", IMAGE_UPLOAD, cache.path(), 1024)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, ForgeError::Invalid(ref message) if message.contains("1024 byte")));
+        }
+    }
 
     fn auth_for(api_base: String) -> ResolvedAuth {
         ResolvedAuth {

@@ -8,7 +8,6 @@ pub mod conversation;
 pub mod folder;
 pub mod message;
 pub mod model_provider;
-pub mod model_provider_file;
 pub mod pet;
 pub mod quick_message;
 pub mod remote_workspace_connection;
@@ -47,25 +46,25 @@ pub use quick_message::QuickMessageInfo;
 pub use remote_workspace_connection::{
     RemoteWorkspaceConnectionInfo, RemoteWorkspaceHeader, ToHeaderMap,
 };
-pub use system::{
-    AvailableTerminalShells, GitCredentials, GitDetectResult, GitHubAccount,
-    GitHubAccountsSettings, GitHubTokenValidation, GitSettings, SystemLanguageSettings,
-    SystemProxySettings, SystemTerminalSettings, TerminalShellOption,
+pub use token_usage::{
+    TokenUsageBreakdownItem, TokenUsageBucket, TokenUsageConversationItem, TokenUsageFacets,
+    TokenUsageFilter, TokenUsageFolderFacet, TokenUsageHeatCell, TokenUsagePoint,
+    TokenUsageReport, TokenUsageStreak, TokenUsageSyncProgress, TokenUsageSyncResult,
+    TokenUsageSyncStatus, TokenUsageTotals,
+};
+pub use work_task::{
+    FollowUpIntent, WorkTaskChangedFile, WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo,
+    WorkTaskFolderSettings, WorkTaskInfo, WorkTaskMergeOp, WorkTaskMergeState, WorkTaskPreflight,
+    WorkTaskQueuedMerge, WorkTaskSource, WorkTaskStatus, WorkTaskTemplateDraft,
+    WorkTaskTemplateInfo, WorkTaskUncommittedFile, DELIVERABLE_REPORT, STAGE_PROMPT_ALL,
 };
 #[cfg(feature = "tauri-runtime")]
 pub use system::{
     CloseWindowBehavior, SystemAutostartSettings, SystemCloseBehaviorSettings,
     SystemCloseBehaviorSettingsView, SystemRenderingSettings,
 };
-pub use token_usage::{
-    TokenUsageBreakdownItem, TokenUsageBucket, TokenUsageConversationItem, TokenUsageFacets,
-    TokenUsageFilter, TokenUsageFolderFacet, TokenUsageHeatCell, TokenUsagePoint, TokenUsageReport,
-    TokenUsageStreak, TokenUsageSyncProgress, TokenUsageSyncResult, TokenUsageSyncStatus,
-    TokenUsageTotals,
-};
-pub use work_task::{
-    FollowUpIntent, WorkTaskChangedFile, WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo,
-    WorkTaskFolderSettings, WorkTaskInfo, WorkTaskMergeOp, WorkTaskMergeState, WorkTaskPreflight,
-    WorkTaskQueuedMerge, WorkTaskSource, WorkTaskStatus, WorkTaskTemplateDraft,
-    WorkTaskTemplateInfo, DELIVERABLE_REPORT, STAGE_PROMPT_ALL,
+pub use system::{
+    AvailableTerminalShells, GitCredentials, GitDetectResult, GitHubAccount,
+    GitHubAccountsSettings, GitHubTokenValidation, GitSettings, SystemLanguageSettings,
+    SystemProxySettings, SystemTerminalSettings, TerminalShellOption,
 };

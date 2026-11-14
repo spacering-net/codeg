@@ -3671,13 +3671,13 @@
             "paper-lookup": "Ayúdame a encontrar artículos relevantes y texto completo de acceso abierto en bases de datos académicas, con citas que pueda reutilizar. Busco: "
           },
           "paper-lookup": "Búsqueda de artículos",
-          "paper-lookupDesc": "Busca en 10 API académicas (PubMed, arXiv, OpenAlex, Crossref…) artículos, citas y texto completo de acceso abierto.",
+          "paper-lookupDesc": "Busca en 18 API académicas (PubMed, arXiv, OpenAlex, Crossref…) artículos, citas y texto completo de acceso abierto.",
           "scientific-critical-thinking": "Pensamiento crítico",
           "scientific-critical-thinkingDesc": "Evalúa afirmaciones científicas y calidad de la evidencia: detecta sesgos y confusores, aplica GRADE y riesgo de sesgo.",
           "scientific-visualization": "Visualización científica",
-          "scientific-visualizationDesc": "Figuras listas para publicar: diseños multipanel, anotaciones de significancia y formato específico de revista.",
+          "scientific-visualizationDesc": "Figuras de publicación veraces y accesibles: diseños multipanel, representación de la incertidumbre, auditoría de color y contraste, y planificación de exportación para revistas.",
           "exploratory-data-analysis": "Análisis exploratorio de datos",
-          "exploratory-data-analysisDesc": "Exploración automatizada de archivos de datos científicos en más de 200 formatos con métricas de calidad e informes.",
+          "exploratory-data-analysisDesc": "Exploración local y acotada de archivos de datos científicos compatibles: estructura, auditoría de valores faltantes y atípicos, e informe EDA.",
           "statistical-analysis": "Análisis estadístico",
           "statistical-analysisDesc": "Análisis estadístico guiado: selección de pruebas, verificación de supuestos, tamaños de efecto e informe estilo APA.",
           "statistical-power": "Potencia estadística",
@@ -4067,8 +4067,7 @@
           "taskFailed": "Tarea fallida",
           "taskStopped": "Tarea detenida",
           "taskRunning": "Tarea en curso",
-          "planUpdated": "Actualizó el plan",
-          "showMoreSteps": "{count, plural, one {Mostrar # paso más} other {Mostrar # pasos más}}"
+          "planUpdated": "Actualizó el plan"
         },
         "explore": {
           "files": "{count, plural, one {# archivo} other {# archivos}}",
@@ -6626,7 +6625,13 @@
     "deliverPrBackDeleteWorktree": "Eliminar el worktree tras enviar",
     "deliverPrBackSubmit": "Enviar",
     "deliverPrBackDone": "Enviado al pull request",
-    "deliverPrBackDoneMr": "Enviado al merge request"
+    "deliverPrBackDoneMr": "Enviado al merge request",
+    "deliverPrUncommitted": "{count, plural, one {Queda # archivo sin confirmar en el worktree de esta tarea. Se confirma primero en {branch} y luego se envía con el resto.} other {Quedan # archivos sin confirmar en el worktree de esta tarea. Se confirman primero en {branch} y luego se envían con el resto.}}",
+    "deliverPrUncommittedFiles": "Archivos que se confirmarán",
+    "deliverPrCommitMessageLabel": "Mensaje del commit",
+    "deliverPrUncommittedHint": "Si prefieres que los confirme el agente, cancela y devuelve la tarea para otra ronda.",
+    "deliverPrCommitSubmit": "Confirmar, enviar y abrir",
+    "deliverPrCommitPushSubmit": "Confirmar y enviar"
   },
   "CustomSkillsSettings": {
     "loading": "Cargando habilidades personalizadas…",

@@ -179,11 +179,9 @@ export const ExploreGroupRow = memo(function ExploreGroupRow({
             what: summary,
             onFold: () => setOpen(false),
           }}
-        >
-          {steps.map((step) => (
-            <ExploreChildRow key={step.key} step={step} />
-          ))}
-        </ActivityMembers>
+          members={steps}
+          renderMember={(step) => <ExploreChildRow step={step} />}
+        />
       )}
     >
       <span className="flex min-w-0 items-baseline gap-2">

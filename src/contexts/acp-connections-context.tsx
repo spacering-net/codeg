@@ -988,21 +988,23 @@ export const STREAM_FLUSH_MAX_MS = 192
 /** Characters of re-rendered live content that buy one more frame. */
 const STREAM_FLUSH_CHARS_PER_FRAME = 8 * 1024
 /**
- * What one re-rendered non-prose block costs, in prose-equivalent characters.
+ * What one non-prose block of the live turn adds to a batch, in
+ * prose-equivalent characters.
  *
- * Measured in the real component tree (jsdom, React 19), re-rendering a live
- * turn the way a batch does — growing prose costs 0.00075 ms/char, while each
- * block that re-renders whole costs a FLAT 0.02 ms (a collapsed thinking
- * block) to 0.18 ms (a plan card), with a tool card at 0.06 ms. That is 30 to
- * 235 prose-equivalent characters; 128 sits inside the range, so 64 cards buy
- * one extra frame.
+ * A block no batch changes is no longer drawn again (see `liveRerenderChars`),
+ * yet each batch still walks it: the live message is rebuilt into turns and
+ * compared, the reply merged and its activity model rebuilt from the parts it
+ * kept. Measured in the browser on a reply of 600 calls and 300 stretches of
+ * prose (Edge, CPU slowed 4×): a text batch costs 0.02 ms more per block, where
+ * the prose it grows costs about 0.006 ms per character — three to four
+ * characters a block. 16 keeps a margin over that: a reply of a thousand
+ * blocks streams in 32 ms batches instead of being held to the ceiling, five
+ * batches a second, as when every block was redrawn on every batch (then 30 to
+ * 235 characters each, measured in jsdom).
  *
- * Flat, not proportional to the block's content, because that is what the
- * measurement shows: a collapsed thinking block costs the same at 200 and at
- * 4000 characters, since the cards render clamped previews and Radix keeps
- * closed content unmounted.
+ * Flat, not proportional to the block's content: what it holds is not drawn.
  */
-const STREAM_FLUSH_BLOCK_CHARS = 128
+const STREAM_FLUSH_BLOCK_CHARS = 16
 /**
  * Deltas one connection may coalesce before the window is cut short. A safety
  * valve for a burst the timer can't keep up with, not a cadence knob — it
@@ -1025,15 +1027,16 @@ const STREAM_QUEUE_CAP = 256
  *   value, so an unchanged run bails out before the markdown renderer.
  *   (Measured: eight extra settled 8 KB blocks cost nothing.)
  * - Everything else — tool cards, closed thinking blocks, plan cards,
- *   steering notes — re-renders on EVERY batch regardless. They memoize on
- *   the part object, and `createMessageTurnAdapter` refuses to cache a
- *   streaming turn (`cacheable = !isStreaming && !inProgress`), so each batch
- *   hands them freshly built objects. Charged a flat
- *   `STREAM_FLUSH_BLOCK_CHARS` each.
+ *   steering notes — is not drawn again unless the batch changed it: the
+ *   rounds of the live message that read the same keep their objects
+ *   (`buildStreamingTurnsFromLiveMessage`), so the adapter, the merged reply
+ *   and the rows they feed keep theirs. Each is still walked on every batch,
+ *   though, and a long reply's timeline draws only the rows in view: charged
+ *   a small flat `STREAM_FLUSH_BLOCK_CHARS` each.
  *
- * A turn that has run a hundred tools and is now writing its summary has a
+ * A turn that has run a thousand tools and is now writing its summary has a
  * short run and a real per-batch cost; sizing from the run alone would leave
- * it on a single frame while it burns a third of every one.
+ * it on a single frame while it burns most of every one.
  */
 export function liveRerenderChars(
   content: readonly LiveContentBlock[] | undefined
@@ -3992,6 +3995,25 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // Stop button until the app restarts. Always mutate through
   // `bindConnectionRoute` / `releaseConnectionRoute`.
   const reverseMapRef = useRef(new Map<string, Set<string>>())
+  // A snapshot may still be pending when its surface closes. Its firehose
+  // capture belongs to that surface, not to the lifetime of the IPC promise.
+  const hydrationEchoOwnersRef = useRef(
+    new Map<string, { connectionId: string; cancel: () => void }>()
+  )
+  const cancelHydrationEchoes = useCallback(
+    (contextKey: string, connectionId?: string) => {
+      const owner = hydrationEchoOwnersRef.current.get(contextKey)
+      if (owner && (!connectionId || owner.connectionId === connectionId)) {
+        owner.cancel()
+      }
+    },
+    []
+  )
+  const cancelAllHydrationEchoes = useCallback(() => {
+    for (const owner of Array.from(hydrationEchoOwnersRef.current.values())) {
+      owner.cancel()
+    }
+  }, [])
 
   /** Route `connectionId`'s firehose events to `contextKey` too. Idempotent. */
   const bindConnectionRoute = useCallback(
@@ -4004,18 +4026,19 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   )
 
   /**
-   * Drop ONLY this surface's route. A no-op for a connection this contextKey
-   * never routed, and — the load-bearing part — it leaves every OTHER surface
-   * watching the same connection routed.
+   * Drop ONLY this surface's route and any snapshot capture it still owns.
+   * A hydrating surface may not have a route yet. Every OTHER surface
+   * watching or hydrating the same connection remains intact.
    */
   const releaseConnectionRoute = useCallback(
     (connectionId: string, contextKey: string) => {
+      cancelHydrationEchoes(contextKey, connectionId)
       const keys = reverseMapRef.current.get(connectionId)
       if (!keys) return
       keys.delete(contextKey)
       if (keys.size === 0) reverseMapRef.current.delete(connectionId)
     },
-    []
+    [cancelHydrationEchoes]
   )
 
   // contextKey → active EventStream subscription handle. Populated only for
@@ -4968,16 +4991,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // (`applyHydrationBacklog`).
   const hydrationEchoesRef = useRef(new Map<string, Set<EventEnvelope[]>>())
 
-  const beginHydrationEchoes = useCallback((connectionId: string) => {
-    const echoes: EventEnvelope[] = []
-    const lists =
-      hydrationEchoesRef.current.get(connectionId) ?? new Set<EventEnvelope[]>()
-    lists.add(echoes)
-    hydrationEchoesRef.current.set(connectionId, lists)
-    return {
-      echoes,
-      /** Stop recording. Idempotent. */
-      stop: () => {
+  const beginHydrationEchoes = useCallback(
+    (contextKey: string, connectionId: string) => {
+      cancelHydrationEchoes(contextKey)
+      const echoes: EventEnvelope[] = []
+      let cancelled = false
+      let cancelSnapshot = () => {}
+      // Settle the frontend wait when its surface goes away, even if native
+      // IPC never answers. Otherwise the suspended async function still owns
+      // the old Provider's store/dispatch after its buffers have been cleared.
+      const cancelledSnapshot = new Promise<null>((resolve) => {
+        cancelSnapshot = () => resolve(null)
+      })
+      const lists =
+        hydrationEchoesRef.current.get(connectionId) ??
+        new Set<EventEnvelope[]>()
+      lists.add(echoes)
+      hydrationEchoesRef.current.set(connectionId, lists)
+      const stop = () => {
         lists.delete(echoes)
         if (
           lists.size === 0 &&
@@ -4985,9 +5016,29 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         ) {
           hydrationEchoesRef.current.delete(connectionId)
         }
-      },
-    }
-  }, [])
+        if (hydrationEchoOwnersRef.current.get(contextKey)?.cancel === cancel) {
+          hydrationEchoOwnersRef.current.delete(contextKey)
+        }
+      }
+      const cancel = () => {
+        cancelled = true
+        stop()
+        echoes.length = 0
+        cancelSnapshot()
+      }
+      hydrationEchoOwnersRef.current.set(contextKey, { connectionId, cancel })
+      return {
+        echoes,
+        /** Successful snapshots keep the backlog for replay after stopping. */
+        stop,
+        cancelledSnapshot,
+        get cancelled() {
+          return cancelled
+        },
+      }
+    },
+    [cancelHydrationEchoes]
+  )
 
   // ── RAF batching for tool_call_update events ──
   const pendingToolCallUpdates = useRef<
@@ -7076,6 +7127,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const reverseMap = reverseMapRef.current
     const attachSubs = attachSubscriptionsRef.current
+    const hydrationOwners = hydrationEchoOwnersRef.current
+    const pendingConnectRequests = pendingConnectRequestsRef.current
     // Capture the store ref at effect-setup time so the cleanup
     // function doesn't read a moving target (`storeRef.current` is the
     // same object across renders by design, but the lint rule
@@ -7083,6 +7136,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     // because in the general case a ref's `.current` can be replaced).
     const store = storeRef.current
     return () => {
+      // Cancelled waits settle immediately; their finally blocks must not
+      // replay a queued connect into a Provider that has just unmounted.
+      pendingConnectRequests.clear()
+      for (const owner of Array.from(hydrationOwners.values())) {
+        owner.cancel()
+      }
       // A connection can be routed by several surfaces (see `reverseMapRef`);
       // tear it down at most once, only if at least one of them OWNS it, and
       // not while any owner still has work in flight.
@@ -7210,7 +7269,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // arrived while the snapshot was in flight — including what another
       // surface already routing it received meanwhile. Mirrors the legacy
       // owner path in `connect()`.
-      const backlog = beginHydrationEchoes(connectionId)
+      const backlog = beginHydrationEchoes(contextKey, connectionId)
       let patch: import("@/lib/snapshot-denormalize").SnapshotPatch | null =
         null
       // `null` (as opposed to a thrown error) is the backend saying it holds no
@@ -7218,8 +7277,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // merely unreachable.
       let connectionGone = false
       try {
-        const snapshot = await acpGetSessionSnapshot(connectionId)
-        if (snapshot) patch = denormalizeSnapshot(snapshot)
+        const snapshot = await Promise.race([
+          acpGetSessionSnapshot(connectionId),
+          backlog.cancelledSnapshot,
+        ])
+        if (snapshot && !backlog.cancelled)
+          patch = denormalizeSnapshot(snapshot)
         else connectionGone = true
       } catch (e) {
         console.warn(
@@ -7229,6 +7292,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         )
       }
       backlog.stop()
+      if (backlog.cancelled) return true
       // Detach race: the tab may have disconnected (disconnect() removed the
       // entry) while the snapshot fetch was in flight. Re-check the store still
       // holds THIS viewer connection BEFORE applying the snapshot, seeding
@@ -8155,6 +8219,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
 
   const disconnectAll = useCallback(async () => {
     const promises: Promise<void>[] = []
+    cancelAllHydrationEchoes()
     pendingConnectRequestsRef.current.clear()
     for (const [contextKey, conn] of storeRef.current.connections) {
       // Viewers attach to a connection another client owns — detach our
@@ -8192,6 +8257,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     await Promise.all(promises)
     dispatch({ type: "REMOVE_ALL" })
   }, [
+    cancelAllHydrationEchoes,
     discardStreamingQueues,
     dispatch,
     retireTurnFailures,
@@ -8454,13 +8520,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // order as `connectAsViewer` — anything that lands while the fetch is in
       // flight is kept, in the unmapped buffer or as an echo of another
       // surface's delivery, and deduped by seq once routed).
-      const backlog = beginHydrationEchoes(connectionId)
+      const backlog = beginHydrationEchoes(connectionId, connectionId)
       void (async () => {
         let patch: import("@/lib/snapshot-denormalize").SnapshotPatch | null =
           null
         try {
-          const snapshot = await acpGetSessionSnapshot(connectionId)
-          if (snapshot) patch = denormalizeSnapshot(snapshot)
+          const snapshot = await Promise.race([
+            acpGetSessionSnapshot(connectionId),
+            backlog.cancelledSnapshot,
+          ])
+          if (snapshot && !backlog.cancelled)
+            patch = denormalizeSnapshot(snapshot)
         } catch (e) {
           console.warn(
             "[acp-context] child snapshot fetch failed for",
@@ -8469,6 +8539,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           )
         }
         backlog.stop()
+        if (backlog.cancelled) return
         // The viewer may have closed while the snapshot was in flight —
         // never hydrate or install routing for a detached child.
         const still = storeRef.current.connections.get(connectionId)

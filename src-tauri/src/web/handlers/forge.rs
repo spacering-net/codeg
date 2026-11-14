@@ -56,6 +56,15 @@ pub struct IssueDetailParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReadImageParams {
+    pub folder_id: i32,
+    pub upload_path: String,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TabCountParams {
     pub folder_id: i32,
     /// Which tab to count. Always the one NOT on screen — the visible tab's
@@ -208,6 +217,21 @@ pub async fn forge_issue_detail(
     Ok(Json(
         core::forge_issue_detail_core(&state.db, params.folder_id, params.number, params.account_id)
             .await?,
+    ))
+}
+
+pub async fn forge_read_image(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ReadImageParams>,
+) -> Result<Json<crate::forge::ForgeImage>, AppCommandError> {
+    Ok(Json(
+        core::forge_read_image_core(
+            &state.db,
+            params.folder_id,
+            params.upload_path,
+            params.account_id,
+        )
+        .await?,
     ))
 }
 

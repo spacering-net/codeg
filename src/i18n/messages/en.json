@@ -3671,13 +3671,13 @@
             "paper-lookup": "Help me find relevant papers and open-access full text across scholarly databases, with citations I can reuse. I'm looking for: "
           },
           "paper-lookup": "Paper Lookup",
-          "paper-lookupDesc": "Search 10 scholarly APIs (PubMed, arXiv, OpenAlex, Crossref…) for papers, citations, and open-access full text.",
+          "paper-lookupDesc": "Search 18 scholarly APIs (PubMed, arXiv, OpenAlex, Crossref…) for papers, citations, and open-access full text.",
           "scientific-critical-thinking": "Critical Thinking",
           "scientific-critical-thinkingDesc": "Appraise scientific claims and evidence quality — spot biases and confounders, apply GRADE and risk-of-bias frameworks.",
           "scientific-visualization": "Scientific Visualization",
-          "scientific-visualizationDesc": "Publication-ready figures — multi-panel layouts, significance annotations, and journal-specific formatting.",
+          "scientific-visualizationDesc": "Truthful, accessible publication figures — multi-panel layouts, uncertainty displays, color/contrast audits, and journal export planning.",
           "exploratory-data-analysis": "Exploratory Data Analysis",
-          "exploratory-data-analysisDesc": "Automated exploration of scientific data files across 200+ formats with quality metrics and reports.",
+          "exploratory-data-analysisDesc": "Bounded, local profiling of supported scientific data files — structure, missingness and outlier audits, and an EDA report.",
           "statistical-analysis": "Statistical Analysis",
           "statistical-analysisDesc": "Guided statistical analysis — test selection, assumption checks, effect sizes, and APA-style reporting.",
           "statistical-power": "Statistical Power",
@@ -4067,8 +4067,7 @@
           "taskFailed": "Task failed",
           "taskStopped": "Task stopped",
           "taskRunning": "Task running",
-          "planUpdated": "Updated plan",
-          "showMoreSteps": "{count, plural, one {Show # more step} other {Show # more steps}}"
+          "planUpdated": "Updated plan"
         },
         "explore": {
           "files": "{count, plural, one {# file} other {# files}}",
@@ -6626,7 +6625,13 @@
     "deliverPrBackDeleteWorktree": "Delete the worktree after pushing",
     "deliverPrBackSubmit": "Push",
     "deliverPrBackDone": "Pushed to the pull request",
-    "deliverPrBackDoneMr": "Pushed to the merge request"
+    "deliverPrBackDoneMr": "Pushed to the merge request",
+    "deliverPrUncommitted": "{count, plural, one {# file is still uncommitted in this task's worktree. It is committed to {branch} first, then pushed with the rest.} other {# files are still uncommitted in this task's worktree. They are committed to {branch} first, then pushed with the rest.}}",
+    "deliverPrUncommittedFiles": "Files to commit",
+    "deliverPrCommitMessageLabel": "Commit message",
+    "deliverPrUncommittedHint": "To have the agent commit them instead, cancel and send the task back for another round.",
+    "deliverPrCommitSubmit": "Commit, push and open",
+    "deliverPrCommitPushSubmit": "Commit and push"
   },
   "CustomSkillsSettings": {
     "loading": "Loading custom skills…",

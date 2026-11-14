@@ -3671,13 +3671,13 @@
             "paper-lookup": "学術データベースから関連論文とオープンアクセス全文を探し、再利用できる引用も示してください。探しているもの："
           },
           "paper-lookup": "論文検索",
-          "paper-lookupDesc": "10 の学術 API（PubMed、arXiv、OpenAlex、Crossref…）で論文・引用・オープンアクセス全文を検索。",
+          "paper-lookupDesc": "18 の学術 API（PubMed、arXiv、OpenAlex、Crossref…）で論文・引用・オープンアクセス全文を検索。",
           "scientific-critical-thinking": "批判的思考",
           "scientific-critical-thinkingDesc": "科学的主張とエビデンスの質を評価。バイアスや交絡を見抜き、GRADE やバイアスリスク枠組みを適用。",
           "scientific-visualization": "科学的可視化",
-          "scientific-visualizationDesc": "出版品質の図。マルチパネル配置、有意差注釈、ジャーナル固有の書式に対応。",
+          "scientific-visualizationDesc": "正確でアクセシブルな出版品質の図。マルチパネル配置、不確実性の表示、配色・コントラスト監査、ジャーナル向け書き出し計画。",
           "exploratory-data-analysis": "探索的データ解析",
-          "exploratory-data-analysisDesc": "200 以上の形式の科学データファイルを自動探索し、品質指標とレポートを生成。",
+          "exploratory-data-analysisDesc": "対応する科学データファイルをローカルで範囲を限定して探索。構造の把握、欠損・外れ値の監査、EDA レポートを生成。",
           "statistical-analysis": "統計解析",
           "statistical-analysisDesc": "ガイド付き統計解析。検定の選択、前提確認、効果量、APA 形式の報告に対応。",
           "statistical-power": "統計的検出力",
@@ -4067,8 +4067,7 @@
           "taskFailed": "タスク失敗",
           "taskStopped": "タスク停止",
           "taskRunning": "タスク実行中",
-          "planUpdated": "計画を更新",
-          "showMoreSteps": "残り {count} ステップを表示"
+          "planUpdated": "計画を更新"
         },
         "explore": {
           "files": "ファイル {count} 件",
@@ -6626,7 +6625,13 @@
     "deliverPrBackDeleteWorktree": "プッシュ後に worktree を削除",
     "deliverPrBackSubmit": "push",
     "deliverPrBackDone": "プルリクエストに push しました",
-    "deliverPrBackDoneMr": "マージリクエストに push しました"
+    "deliverPrBackDoneMr": "マージリクエストに push しました",
+    "deliverPrUncommitted": "タスクのワークツリーに未コミットのファイルが {count} 件あります。先に {branch} にコミットしてから、ほかの変更と一緒に push します。",
+    "deliverPrUncommittedFiles": "コミットするファイル",
+    "deliverPrCommitMessageLabel": "コミットメッセージ",
+    "deliverPrUncommittedHint": "エージェントにコミットさせたい場合は、キャンセルしてタスクを差し戻し、もう一巡させてください。",
+    "deliverPrCommitSubmit": "コミットして push・作成",
+    "deliverPrCommitPushSubmit": "コミットして push"
   },
   "CustomSkillsSettings": {
     "loading": "カスタムスキルを読み込み中…",

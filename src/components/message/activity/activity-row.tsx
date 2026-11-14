@@ -1,6 +1,15 @@
 "use client"
 
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react"
+import {
+  Fragment,
+  useCallback,
+  useContext,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import { ChevronRightIcon } from "lucide-react"
 
 import type { ToolApproval } from "@/lib/activity/approval"
@@ -13,6 +22,13 @@ import { ApprovalChip, showsApproval } from "./approval-chip"
 import { useFoldRow } from "./fold-back"
 import { TimelineFoot } from "./timeline-foot"
 import { useRailGrowth } from "./use-rail-growth"
+import {
+  TimelineRevealContext,
+  useTimelineWindow,
+  WINDOWED_ROWS,
+  type ListMetrics,
+  type WindowRow,
+} from "./use-timeline-window"
 
 const MARKER_POSITION = {
   main: {
@@ -305,6 +321,11 @@ export interface MembersFoot {
   motionScope: string
 }
 
+/** A member row's height before it has been drawn: one line. */
+function estimateMemberHeight(_member: WindowRow, { rem }: ListMetrics) {
+  return 1.75 * rem
+}
+
 /**
  * An open group's members, on their own dashed rail, ending on a foot
  * (`foot`): the turning ring while the group is still going, then a row that
@@ -312,21 +333,87 @@ export interface MembersFoot {
  * from its foot, the group's header comes back into view and takes the focus
  * the foot had. While the reply is written, the rail grows down to each
  * member that joins.
+ *
+ * Handed its members (`members`, drawn by `renderMember`) rather than drawn
+ * rows, a long run of them — an agent running hundreds of commands back to
+ * back — is drawn a stretch at a time as it scrolls into view, as a long
+ * reply's rows are (`useTimelineWindow`).
  */
-export function ActivityMembers({
+export function ActivityMembers<T extends WindowRow>({
   foot,
   children,
+  members,
+  renderMember,
 }: {
   foot?: MembersFoot
-  children: ReactNode
+  /** Rows drawn as they are: a folded group's live member. */
+  children?: ReactNode
+  members?: readonly T[]
+  renderMember?: (member: T) => ReactNode
 }) {
   const { isStreaming } = useActivityRender()
   const listRef = useRef<HTMLUListElement>(null)
   const foldRow = useFoldRow()
   useRailGrowth(listRef, foot !== undefined && isStreaming)
+  const windowed =
+    members !== undefined && renderMember !== undefined
+      ? members.length > WINDOWED_ROWS
+      : false
+  const { span, reveal } = useTimelineWindow({
+    listRef,
+    scope: "member",
+    rows: windowed ? members! : null,
+    estimate: estimateMemberHeight,
+    follow: isStreaming,
+  })
+  // The timeline asked for one of these members to be drawn (its failure
+  // link, see `ActivityTimeline`): now if this list is drawn, or as it mounts.
+  const requests = useContext(TimelineRevealContext)
+  const latest = useRef({ windowed, members, reveal })
+  useLayoutEffect(() => {
+    latest.current = { windowed, members, reveal }
+  })
+  const take = useCallback(() => {
+    const { windowed, members, reveal } = latest.current
+    if (!requests || !windowed || !members) return
+    const wanted = requests.take((key) =>
+      members.some((member) => member.key === key)
+    )
+    if (wanted === null) return
+    reveal(members.findIndex((member) => member.key === wanted))
+  }, [requests])
+  useLayoutEffect(() => {
+    if (!requests) return
+    take()
+    return requests.listen(take)
+  }, [requests, take])
+  const drawn = members && span ? members.slice(span.start, span.end) : members
   return (
-    <ul ref={listRef} role="list" className="activity-children">
-      {children}
+    <ul
+      ref={listRef}
+      role="list"
+      className="activity-children"
+      data-windowed={span ? "" : undefined}
+    >
+      {span && span.start > 0 ? (
+        <MembersSpacer
+          key="window-before"
+          height={span.before}
+          after={foot?.after ?? "ring"}
+        />
+      ) : null}
+      {drawn && renderMember
+        ? drawn.map((member) => (
+            <Fragment key={member.key}>{renderMember(member)}</Fragment>
+          ))
+        : children}
+      {span && members && span.end < members.length ? (
+        <MembersSpacer
+          key="window-after"
+          height={span.after}
+          after={foot?.after ?? "ring"}
+        />
+      ) : null}
       {foot ? (
         <TimelineFoot
           variant="child"
@@ -338,6 +425,29 @@ export function ActivityMembers({
         />
       ) : null}
     </ul>
+  )
+}
+
+/** A stretch of a long run of members not drawn: as tall as they are, their
+ *  dashed rail running through it (globals.css), reaching as far into the
+ *  members either side as theirs do (`after`, their marker). */
+function MembersSpacer({
+  height,
+  after,
+}: {
+  height: number
+  after: "ring" | "dot"
+}) {
+  return (
+    <li
+      aria-hidden="true"
+      className="activity-child"
+      data-marker="spacer"
+      // Not `data-after`: that sets a foot lower, and a spacer's place is
+      // its rows'.
+      data-dots={after === "dot" ? "" : undefined}
+      style={{ height }}
+    />
   )
 }
 

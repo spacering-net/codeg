@@ -2513,6 +2513,12 @@ export interface ForgeChangedFileList {
   has_next: boolean
 }
 
+/** Cached image resource; account credentials and bytes stay off JSON/IPC. */
+export interface ForgeImage {
+  mime_type: string
+  url: string
+}
+
 /** A folder's `origin` remote parsed into forge coordinates. */
 export interface ForgeRemote {
   server_host: string
@@ -2876,6 +2882,14 @@ export interface WorkTaskChangedFile {
   file: string
   additions: number
   deletions: number
+}
+
+/** A file a task worktree holds uncommitted — what a delivery commits first
+ *  when the user agrees to. `status`: `A` added or untracked, `M` modified,
+ *  `D` deleted, `R` renamed or copied. */
+export interface WorkTaskUncommittedFile {
+  file: string
+  status: "A" | "M" | "D" | "R"
 }
 
 // --- Token usage dashboard (mirror of src-tauri/src/models/token_usage.rs) ---
@@ -4478,7 +4492,7 @@ export interface AgentSkillContent {
 }
 
 /**
- * Built-in expert skills, sourced from obra/superpowers v7.0.1 and bundled into
+ * Built-in expert skills, sourced from obra/superpowers v7.0.2 and bundled into
  * the codeg binary. Experts live in a central store at `~/.codeg/skills/`
  * and are linked into agent skill directories on demand.
  */

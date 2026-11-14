@@ -1806,16 +1806,24 @@ export function mergeAdjacentDelegationStatusGroups(
   parts: AdaptedContentPart[]
 ): AdaptedContentPart[] {
   const result: AdaptedContentPart[] = []
+  // The group this pass built last, whose polls it may still append to: a
+  // run of single-poll groups (an agent polling in a loop, a poll a turn)
+  // grows one list instead of copying it once per poll.
+  let built: {
+    type: "delegation-status-group"
+    polls: AdaptedToolCallPart[]
+  } | null = null
   for (const part of parts) {
     const last = result[result.length - 1]
     if (
       part.type === "delegation-status-group" &&
       last?.type === "delegation-status-group"
     ) {
-      result[result.length - 1] = {
-        type: "delegation-status-group",
-        polls: [...last.polls, ...part.polls],
+      if (built !== last) {
+        built = { type: "delegation-status-group", polls: [...last.polls] }
+        result[result.length - 1] = built
       }
+      built.polls.push(...part.polls)
     } else {
       result.push(part)
     }
@@ -1866,16 +1874,22 @@ export function mergeAdjacentBackgroundTaskGroups(
   parts: AdaptedContentPart[]
 ): AdaptedContentPart[] {
   const result: AdaptedContentPart[] = []
+  // As in `mergeAdjacentDelegationStatusGroups`: one list per run of polls.
+  let built: {
+    type: "background-task-group"
+    polls: AdaptedToolCallPart[]
+  } | null = null
   for (const part of parts) {
     const last = result[result.length - 1]
     if (
       part.type === "background-task-group" &&
       last?.type === "background-task-group"
     ) {
-      result[result.length - 1] = {
-        type: "background-task-group",
-        polls: [...last.polls, ...part.polls],
+      if (built !== last) {
+        built = { type: "background-task-group", polls: [...last.polls] }
+        result[result.length - 1] = built
       }
+      built.polls.push(...part.polls)
     } else {
       result.push(part)
     }
@@ -1985,11 +1999,14 @@ function collectGoalObjectives(parts: AdaptedContentPart[]): string[] {
 function mergeGoalObjectiveHints(
   existing: readonly string[] | undefined,
   incoming: readonly string[]
-): string[] {
+): readonly string[] {
   const merged = new Set(existing ?? [])
   for (const objective of incoming) {
     if (objective.trim().length > 0) merged.add(objective.trim())
   }
+  // Nothing new: the same list, so a turn adapted with it reads as adapted
+  // with the hints it has (see the adapter's cache).
+  if (existing && merged.size === existing.length) return existing
   return Array.from(merged).sort((a, b) => b.length - a.length)
 }
 
@@ -2202,6 +2219,112 @@ export function groupGoalRuns(
 
   flushActive()
   return result
+}
+
+/** One merge of a reply split across turns (see `mergeRunParts`). */
+export interface MergedRunParts {
+  parts: AdaptedContentPart[]
+  /**
+   * The merge of every member but the last, kept for the next merge of the
+   * same reply to start from — or null when it cannot be (it holds a goal run,
+   * the one part of the merge that reads across members).
+   */
+  prefix: {
+    /** The members it merges: each one's parts, as they were. */
+    members: readonly AdaptedContentPart[][]
+    parts: AdaptedContentPart[]
+  } | null
+}
+
+/** Merges adjacent poll groups the way the run's merge does, across turns. */
+function mergeAdjacentPollGroups(
+  parts: AdaptedContentPart[]
+): AdaptedContentPart[] {
+  return mergeAdjacentBackgroundTaskGroups(
+    mergeAdjacentDelegationStatusGroups(parts)
+  )
+}
+
+/** Two merged stretches of a run, one after the other: two poll groups of a
+ *  kind that meet across the seam are one group, as in a merge of the whole. */
+function joinMergedParts(
+  head: AdaptedContentPart[],
+  tail: AdaptedContentPart[]
+): AdaptedContentPart[] {
+  if (head.length === 0) return tail
+  if (tail.length === 0) return head
+  const last = head[head.length - 1]!
+  const first = tail[0]!
+  if (
+    (last.type === "delegation-status-group" &&
+      first.type === "delegation-status-group") ||
+    (last.type === "background-task-group" &&
+      first.type === "background-task-group")
+  ) {
+    const joined = {
+      type: last.type,
+      polls: [...last.polls, ...first.polls],
+    } as AdaptedContentPart
+    return [...head.slice(0, -1), joined, ...tail.slice(1)]
+  }
+  return head.concat(tail)
+}
+
+/** A goal's lifecycle: what `groupGoalRuns` reads across the parts. */
+function holdsGoalParts(parts: AdaptedContentPart[]): boolean {
+  return parts.some(
+    (part) =>
+      part.type === "goal-run" || isGoalStartPart(part) || isGoalEndPart(part)
+  )
+}
+
+/**
+ * Merge the parts of a reply the agent split across turns (one per tool round
+ * trip): adjacent poll groups across turns become one, and a goal's lifecycle
+ * becomes its run — `groupGoalRuns(mergeAdjacentPollGroups(all parts))`.
+ *
+ * While a long reply streams, only its last turn or two change from one batch
+ * to the next; merging every turn's parts again on each batch made a batch cost
+ * the whole reply. `previous` — the last merge of the same reply — lets this
+ * start from its merge of the members that did not change, as long as they
+ * hold no goal (a goal run reads across members, so its merge does not extend;
+ * a reply with one merges whole, as before).
+ */
+export function mergeRunParts(
+  members: readonly AdaptedContentPart[][],
+  isStreaming: boolean,
+  previous: MergedRunParts | null
+): MergedRunParts {
+  const count = members.length
+  const kept = previous?.prefix
+  const reuse =
+    kept !== null &&
+    kept !== undefined &&
+    kept.members.length < count &&
+    kept.members.every((parts, index) => parts === members[index])
+  const from = reuse ? kept.members.length : 0
+  let headParts = reuse ? kept.parts : []
+  if (from < count - 1) {
+    const added = members.slice(from, count - 1).flat()
+    if (holdsGoalParts(added)) {
+      return {
+        parts: groupGoalRuns(
+          mergeAdjacentPollGroups(members.flat()),
+          isStreaming
+        ),
+        prefix: null,
+      }
+    }
+    headParts = joinMergedParts(headParts, mergeAdjacentPollGroups(added))
+  }
+  const last = members[count - 1] ?? []
+  return {
+    parts: joinMergedParts(
+      headParts,
+      groupGoalRuns(mergeAdjacentPollGroups(last), isStreaming)
+    ),
+    prefix: { members: members.slice(0, count - 1), parts: headParts },
+  }
 }
 
 /**
@@ -2659,15 +2782,46 @@ interface TurnCacheEntry {
   model: string | null | undefined
   completed_at: string | null | undefined
   source_turn_id: string | null | undefined
+  /** Adapted as a turn still being written. */
+  isStreaming: boolean
+  /** Its calls still running as it was adapted (`inProgressKey`). */
+  inProgressKey: string
+  /** The goal objectives it was adapted with — checked only for a turn still
+   *  being written, which picks up the objectives its own earlier copies named
+   *  (see `collectGoalObjectives`). */
+  hints: readonly string[] | undefined
   adapted: AdaptedMessage
+}
+
+/**
+ * Which of a turn's calls `inProgress` holds, as a string: all the adapter reads
+ * of the set, since a call's running state is all it takes from there.
+ */
+function inProgressKey(
+  turn: MessageTurn,
+  inProgress: ReadonlySet<string> | undefined
+): string {
+  if (!inProgress || inProgress.size === 0) return ""
+  let key = ""
+  for (const block of turn.blocks) {
+    if (
+      block.type === "tool_use" &&
+      block.tool_use_id &&
+      inProgress.has(block.tool_use_id)
+    ) {
+      key += `${block.tool_use_id}\u0000`
+    }
+  }
+  return key
 }
 
 export interface MessageTurnAdapter {
   /**
    * Adapt all turns to messages, reusing previously computed `AdaptedMessage`
-   * references for turns whose content hasn't changed. Streaming turns and
-   * turns with in-progress tool calls are never cached so partial state always
-   * re-flows through the adapter.
+   * references for turns whose content hasn't changed. A turn still being
+   * written is reused too, while it is the same object (the live message keeps
+   * the rounds that did not change, see `buildStreamingTurnsFromLiveMessage`)
+   * with the same calls running.
    */
   adapt(
     turns: MessageTurn[],
@@ -2703,7 +2857,7 @@ export interface MessageTurnAdapter {
  */
 export function createMessageTurnAdapter(): MessageTurnAdapter {
   const cache = new Map<string, TurnCacheEntry>()
-  const goalObjectiveHints = new Map<string, string[]>()
+  const goalObjectiveHints = new Map<string, readonly string[]>()
 
   return {
     adapt(turns, text, streamingIndices, inProgressToolCallIdsByIndex) {
@@ -2715,27 +2869,30 @@ export function createMessageTurnAdapter(): MessageTurnAdapter {
         seen.add(turn.id)
         const isStreaming = streamingIndices?.has(i) ?? false
         const inProgress = inProgressToolCallIdsByIndex?.get(i)
-        const cacheable = !isStreaming && !inProgress
+        const live = isStreaming || inProgress !== undefined
+        const running = inProgressKey(turn, inProgress)
+        const hints = goalObjectiveHints.get(turn.id)
         const blocksLen = turn.blocks.length
 
-        if (cacheable) {
-          const cached = cache.get(turn.id)
-          if (
-            cached &&
-            cached.text === text &&
-            cached.blocks === turn.blocks &&
-            cached.blocksLen === blocksLen &&
-            cached.timestamp === turn.timestamp &&
-            cached.role === turn.role &&
-            cached.usage === turn.usage &&
-            cached.duration_ms === turn.duration_ms &&
-            cached.model === turn.model &&
-            cached.completed_at === turn.completed_at &&
-            cached.source_turn_id === turn.source_turn_id
-          ) {
-            out[i] = cached.adapted
-            continue
-          }
+        const cached = cache.get(turn.id)
+        if (
+          cached &&
+          cached.text === text &&
+          cached.blocks === turn.blocks &&
+          cached.blocksLen === blocksLen &&
+          cached.timestamp === turn.timestamp &&
+          cached.role === turn.role &&
+          cached.usage === turn.usage &&
+          cached.duration_ms === turn.duration_ms &&
+          cached.model === turn.model &&
+          cached.completed_at === turn.completed_at &&
+          cached.source_turn_id === turn.source_turn_id &&
+          cached.isStreaming === isStreaming &&
+          cached.inProgressKey === running &&
+          (!live || cached.hints === hints)
+        ) {
+          out[i] = cached.adapted
+          continue
         }
 
         const adapted = adaptMessageTurn(
@@ -2743,7 +2900,7 @@ export function createMessageTurnAdapter(): MessageTurnAdapter {
           text,
           isStreaming,
           inProgress,
-          goalObjectiveHints.get(turn.id)
+          hints
         )
         out[i] = adapted
 
@@ -2751,27 +2908,26 @@ export function createMessageTurnAdapter(): MessageTurnAdapter {
         if (objectives.length > 0) {
           goalObjectiveHints.set(
             turn.id,
-            mergeGoalObjectiveHints(goalObjectiveHints.get(turn.id), objectives)
+            mergeGoalObjectiveHints(hints, objectives)
           )
         }
 
-        if (cacheable) {
-          cache.set(turn.id, {
-            text,
-            blocks: turn.blocks,
-            blocksLen,
-            timestamp: turn.timestamp,
-            role: turn.role,
-            usage: turn.usage,
-            duration_ms: turn.duration_ms,
-            model: turn.model,
-            completed_at: turn.completed_at,
-            source_turn_id: turn.source_turn_id,
-            adapted,
-          })
-        } else {
-          cache.delete(turn.id)
-        }
+        cache.set(turn.id, {
+          text,
+          blocks: turn.blocks,
+          blocksLen,
+          timestamp: turn.timestamp,
+          role: turn.role,
+          usage: turn.usage,
+          duration_ms: turn.duration_ms,
+          model: turn.model,
+          completed_at: turn.completed_at,
+          source_turn_id: turn.source_turn_id,
+          isStreaming,
+          inProgressKey: running,
+          hints,
+          adapted,
+        })
       }
 
       if (cache.size > seen.size) {

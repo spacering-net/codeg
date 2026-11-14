@@ -540,6 +540,15 @@ pub struct WorkTaskChangedFile {
     pub deletions: i32,
 }
 
+/// A file a task worktree holds uncommitted (`git status`): what committing
+/// the leftovers before a delivery would add. `status` is one letter — `A`
+/// added or untracked, `M` modified, `D` deleted, `R` renamed or copied.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkTaskUncommittedFile {
+    pub file: String,
+    pub status: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

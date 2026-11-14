@@ -3671,13 +3671,13 @@
             "paper-lookup": "Aide-moi à trouver des articles pertinents et du texte intégral en libre accès dans les bases de données savantes, avec des citations réutilisables. Je cherche : "
           },
           "paper-lookup": "Recherche d'articles",
-          "paper-lookupDesc": "Rechercher dans 10 API savantes (PubMed, arXiv, OpenAlex, Crossref…) articles, citations et texte intégral en libre accès.",
+          "paper-lookupDesc": "Rechercher dans 18 API savantes (PubMed, arXiv, OpenAlex, Crossref…) articles, citations et texte intégral en libre accès.",
           "scientific-critical-thinking": "Pensée critique",
           "scientific-critical-thinkingDesc": "Évaluer les affirmations scientifiques et la qualité des preuves : repérer biais et facteurs de confusion, appliquer GRADE.",
           "scientific-visualization": "Visualisation scientifique",
-          "scientific-visualizationDesc": "Figures prêtes à publier : dispositions multipanneaux, annotations de significativité et mise en forme par revue.",
+          "scientific-visualizationDesc": "Figures de publication fidèles et accessibles : dispositions multipanneaux, représentation de l'incertitude, audit couleur et contraste, et planification de l'export pour les revues.",
           "exploratory-data-analysis": "Analyse exploratoire des données",
-          "exploratory-data-analysisDesc": "Exploration automatisée de fichiers de données scientifiques (200+ formats) avec métriques de qualité et rapports.",
+          "exploratory-data-analysisDesc": "Exploration locale et bornée des fichiers de données scientifiques pris en charge : structure, audit des valeurs manquantes et aberrantes, et rapport EDA.",
           "statistical-analysis": "Analyse statistique",
           "statistical-analysisDesc": "Analyse statistique guidée : choix du test, vérification des hypothèses, tailles d'effet et rapport au format APA.",
           "statistical-power": "Puissance statistique",
@@ -4067,8 +4067,7 @@
           "taskFailed": "Tâche en échec",
           "taskStopped": "Tâche arrêtée",
           "taskRunning": "Tâche en cours",
-          "planUpdated": "Plan mis à jour",
-          "showMoreSteps": "{count, plural, one {Afficher # étape de plus} other {Afficher # étapes de plus}}"
+          "planUpdated": "Plan mis à jour"
         },
         "explore": {
           "files": "{count, plural, one {# fichier} other {# fichiers}}",
@@ -6626,7 +6625,13 @@
     "deliverPrBackDeleteWorktree": "Supprimer le worktree après le push",
     "deliverPrBackSubmit": "Pousser",
     "deliverPrBackDone": "Poussé vers la pull request",
-    "deliverPrBackDoneMr": "Poussé vers la merge request"
+    "deliverPrBackDoneMr": "Poussé vers la merge request",
+    "deliverPrUncommitted": "{count, plural, one {# fichier n'est pas encore commité dans le worktree de cette tâche. Il est d'abord commité sur {branch}, puis poussé avec le reste.} other {# fichiers ne sont pas encore commités dans le worktree de cette tâche. Ils sont d'abord commités sur {branch}, puis poussés avec le reste.}}",
+    "deliverPrUncommittedFiles": "Fichiers à commiter",
+    "deliverPrCommitMessageLabel": "Message de commit",
+    "deliverPrUncommittedHint": "Pour que l'agent les commite lui-même, annulez et renvoyez la tâche pour un autre tour.",
+    "deliverPrCommitSubmit": "Commiter, pousser et ouvrir",
+    "deliverPrCommitPushSubmit": "Commiter et pousser"
   },
   "CustomSkillsSettings": {
     "loading": "Chargement des compétences personnalisées…",

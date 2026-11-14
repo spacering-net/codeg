@@ -246,7 +246,10 @@ export function SubagentSessionDialog({
           ) : null}
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        {/* No native scroll anchoring: a long reply's timeline keeps the view
+            still itself as its rows are drawn and change height
+            (`useTimelineWindow`), as in the transcript's own port. */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 [overflow-anchor:none]">
           {loading && messages == null ? (
             <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
               <Loader2 className="mr-2 size-3.5 animate-spin" />

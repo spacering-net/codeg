@@ -11,7 +11,7 @@
 //! database state, and updates propagate automatically when codeg upgrades
 //! and re-extracts the bundled files.
 //!
-//! `experts/skills/` is vendored from Superpowers v7.0.1 (see
+//! `experts/skills/` is vendored from Superpowers v7.0.2 (see
 //! `experts/NOTICE.md` for the pinned source and license) with two
 //! standalone-runtime adaptations. `writing-skills/package.json` carries the
 //! root `"type": "module"` marker that `render-graphs.js` needs after skill
@@ -485,18 +485,16 @@ fn path_is_reparse_point(_path: &Path) -> bool {
 /// filesystem is case-insensitive but `Path` comparison is not — canonical
 /// forms can still differ in drive-letter case or user-supplied casing.
 fn paths_equivalent(a: &Path, b: &Path) -> bool {
-    if a == b {
-        return true;
-    }
     #[cfg(windows)]
     {
-        let a_s = a.as_os_str().to_string_lossy();
-        let b_s = b.as_os_str().to_string_lossy();
-        a_s.eq_ignore_ascii_case(b_s.as_ref())
+        a == b
+            || a.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
     }
     #[cfg(not(windows))]
     {
-        false
+        a == b
     }
 }
 

@@ -4,7 +4,7 @@ Google Scholar Search Tool
 Search Google Scholar and export results.
 
 Note: This script requires the 'scholarly' library.
-Install with: pip install scholarly
+Install with: uv pip install scholarly
 """
 
 import sys
@@ -13,13 +13,22 @@ import json
 import time
 import random
 from typing import List, Dict, Optional
+from itertools import islice
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+
+from _common import (  # noqa: E402
+    citation_key,
+    protect_title,
+    render_entry,
+)
 
 try:
     from scholarly import scholarly, ProxyGenerator
     SCHOLARLY_AVAILABLE = True
 except ImportError:
     SCHOLARLY_AVAILABLE = False
-    print('Warning: scholarly library not installed. Install with: pip install scholarly', file=sys.stderr)
+    print('Warning: scholarly library not installed. Install with: uv pip install scholarly', file=sys.stderr)
 
 class GoogleScholarSearcher:
     """Search Google Scholar using scholarly library."""
@@ -29,10 +38,10 @@ class GoogleScholarSearcher:
         Initialize searcher.
         
         Args:
-            use_proxy: Use free proxy (helps avoid rate limiting)
+            use_proxy: Use an optional scholarly proxy provider (does not authorize bypassing blocks)
         """
         if not SCHOLARLY_AVAILABLE:
-            raise ImportError('scholarly library required. Install with: pip install scholarly')
+            raise ImportError('scholarly library required. Install with: uv pip install scholarly')
         
         # Setup proxy if requested
         if use_proxy:
@@ -71,18 +80,16 @@ class GoogleScholarSearcher:
         
         try:
             # Perform search
-            search_query = scholarly.search_pubs(query)
+            search_query = scholarly.search_pubs(query, year_low=year_start, year_high=year_end)
             
-            for i, result in enumerate(search_query):
-                if i >= max_results:
-                    break
+            for i, result in enumerate(islice(search_query, max_results)):
                 
                 print(f'Retrieved {i+1}/{max_results}', file=sys.stderr)
                 
                 # Extract metadata
                 metadata = {
                     'title': result.get('bib', {}).get('title', ''),
-                    'authors': ', '.join(result.get('bib', {}).get('author', [])),
+                    'authors': ' and '.join(result.get('bib', {}).get('author', [])),
                     'year': result.get('bib', {}).get('pub_year', ''),
                     'venue': result.get('bib', {}).get('venue', ''),
                     'abstract': result.get('bib', {}).get('abstract', ''),
@@ -109,6 +116,7 @@ class GoogleScholarSearcher:
             
         except Exception as e:
             print(f'Error during search: {e}', file=sys.stderr)
+            return []  # A blocked or failed iterator is not a complete search.
         
         # Sort if requested
         if sort_by == 'citations' and results:
@@ -117,63 +125,38 @@ class GoogleScholarSearcher:
         return results
     
     def metadata_to_bibtex(self, metadata: Dict) -> str:
-        """Convert metadata to BibTeX format."""
-        # Generate citation key
-        if metadata.get('authors'):
-            first_author = metadata['authors'].split(',')[0].strip()
-            last_name = first_author.split()[-1] if first_author else 'Unknown'
-        else:
-            last_name = 'Unknown'
-        
-        year = metadata.get('year', 'XXXX')
-        
-        # Get keyword from title
-        import re
-        title = metadata.get('title', '')
-        words = re.findall(r'\b[a-zA-Z]{4,}\b', title)
-        keyword = words[0].lower() if words else 'paper'
-        
-        citation_key = f'{last_name}{year}{keyword}'
-        
+        """Convert metadata to BibTeX format.
+
+        Scholar records carry no DOI and an unstructured venue string, so an
+        entry built from one is a starting point: run it through the metadata
+        enrichment pass before citing it.
+        """
+        authors = metadata.get('authors', '')
+
+        key = citation_key(authors, metadata.get('year', ''), metadata.get('title', ''))
+
         # Determine entry type (guess based on venue)
         venue = metadata.get('venue', '').lower()
-        if 'proceedings' in venue or 'conference' in venue:
+        if 'proceedings' in venue or 'conference' in venue or 'symposium' in venue:
             entry_type = 'inproceedings'
             venue_field = 'booktitle'
         else:
             entry_type = 'article'
             venue_field = 'journal'
-        
-        # Build BibTeX
-        lines = [f'@{entry_type}{{{citation_key},']
-        
-        # Convert authors format
-        if metadata.get('authors'):
-            authors = metadata['authors'].replace(',', ' and')
-            lines.append(f'  author  = {{{authors}}},')
-        
-        if metadata.get('title'):
-            lines.append(f'  title   = {{{metadata["title"]}}},')
-        
-        if metadata.get('venue'):
-            lines.append(f'  {venue_field} = {{{metadata["venue"]}}},')
-        
-        if metadata.get('year'):
-            lines.append(f'  year    = {{{metadata["year"]}}},')
-        
-        if metadata.get('url'):
-            lines.append(f'  url     = {{{metadata["url"]}}},')
-        
-        if metadata.get('citations'):
-            lines.append(f'  note    = {{Cited by: {metadata["citations"]}}},')
-        
-        # Remove trailing comma
-        if lines[-1].endswith(','):
-            lines[-1] = lines[-1][:-1]
-        
-        lines.append('}')
-        
-        return '\n'.join(lines)
+
+        fields = {
+            'author': authors,
+            'title': protect_title(metadata.get('title', '')),
+            venue_field: metadata.get('venue', ''),
+            'year': metadata.get('year', ''),
+            'url': metadata.get('url', ''),
+        }
+
+        # The citation count deliberately does not go in the `.bib`: it changes
+        # every week, and baking it into a bibliography makes the file wrong
+        # the moment it is written. It stays in the JSON output instead.
+
+        return render_entry(entry_type, key, fields)
 
 
 def main():
@@ -211,13 +194,13 @@ def main():
         '--sort-by',
         choices=['relevance', 'citations'],
         default='relevance',
-        help='Sort order (default: relevance)'
+        help='Order within retrieved results; citations is a local sort (default: relevance)'
     )
     
     parser.add_argument(
         '--use-proxy',
         action='store_true',
-        help='Use free proxy to avoid rate limiting'
+        help='Use scholarly free-proxy support; respect upstream access restrictions'
     )
     
     parser.add_argument(
@@ -233,10 +216,12 @@ def main():
     )
     
     args = parser.parse_args()
+    if args.limit < 1:
+        parser.error('--limit must be positive')
     
     if not SCHOLARLY_AVAILABLE:
         print('\nError: scholarly library not installed', file=sys.stderr)
-        print('Install with: pip install scholarly', file=sys.stderr)
+        print('Install with: uv pip install scholarly', file=sys.stderr)
         print('\nAlternatively, use PubMed search for biomedical literature:', file=sys.stderr)
         print('  python search_pubmed.py "your query"', file=sys.stderr)
         sys.exit(1)
@@ -279,4 +264,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

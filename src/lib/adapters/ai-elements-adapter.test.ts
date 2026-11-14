@@ -8,9 +8,12 @@ import {
   extractUserResourcesFromText,
   groupConsecutiveDelegationStatus,
   groupGoalRuns,
+  mergeAdjacentBackgroundTaskGroups,
   mergeAdjacentDelegationStatusGroups,
+  mergeRunParts,
   type AdaptedContentPart,
   type AdaptedToolCallPart,
+  type MergedRunParts,
 } from "./ai-elements-adapter"
 import type { PageHandoffBlock } from "@/lib/browser/page-handoff-block"
 import type { ContentBlock } from "@/lib/types"
@@ -2914,5 +2917,155 @@ describe("createMessageTurnAdapter — per-turn cache invalidation", () => {
       labels
     )
     expect(second).not.toBe(first)
+  })
+})
+
+describe("createMessageTurnAdapter — a turn still being written", () => {
+  const labels = {
+    attachedResources: "Attached resources",
+    toolCallFailed: "Tool failed",
+    pageHandoffName,
+  }
+  const round = {
+    id: "live-7-abc",
+    role: "assistant" as const,
+    timestamp: "2026-06-02T00:00:00.000Z",
+    blocks: [
+      { type: "text" as const, text: "Running the tests." },
+      {
+        type: "tool_use" as const,
+        tool_use_id: "t1",
+        tool_name: "Bash",
+        input_preview: JSON.stringify({ command: "pnpm test" }),
+      },
+      {
+        type: "tool_result" as const,
+        tool_use_id: "t1",
+        output_preview: "1 passed",
+        is_error: false,
+      },
+    ],
+  }
+
+  it("reuses its adapted message while it is the same object", () => {
+    // The live message hands back the rounds that did not change (see
+    // `buildStreamingTurnsFromLiveMessage`), so a long reply's earlier rounds
+    // are not adapted again on every batch.
+    const adapter = createMessageTurnAdapter()
+    const [first] = adapter.adapt([round], labels, new Set([0]))
+    const [second] = adapter.adapt([round], labels, new Set([0]))
+    expect(second).toBe(first)
+  })
+
+  it("adapts it again once it changes, or settles", () => {
+    const adapter = createMessageTurnAdapter()
+    const [first] = adapter.adapt([round], labels, new Set([0]))
+    const [grown] = adapter.adapt(
+      [{ ...round, blocks: [...round.blocks] }],
+      labels,
+      new Set([0])
+    )
+    expect(grown).not.toBe(first)
+    const [settled] = adapter.adapt([round], labels)
+    expect(settled).not.toBe(first)
+    expect(settled).not.toBe(grown)
+  })
+
+  it("adapts it again when one of its calls starts or stops running", () => {
+    const adapter = createMessageTurnAdapter()
+    const running = new Map([[0, new Set(["t1"])]])
+    const [first] = adapter.adapt([round], labels, new Set([0]), running)
+    expect(first.content[1]).toMatchObject({ state: "input-available" })
+    // Another call's state is nothing to this turn.
+    const [same] = adapter.adapt(
+      [round],
+      labels,
+      new Set([0]),
+      new Map([[0, new Set(["t1", "elsewhere"])]])
+    )
+    expect(same).toBe(first)
+    const [done] = adapter.adapt(
+      [round],
+      labels,
+      new Set([0]),
+      new Map([[0, new Set(["elsewhere"])]])
+    )
+    expect(done).not.toBe(first)
+    expect(done.content[1]).toMatchObject({ state: "output-available" })
+  })
+})
+
+describe("mergeRunParts", () => {
+  const delegationPoll = (id: string): AdaptedContentPart => ({
+    type: "delegation-status-group",
+    polls: [poll("get_delegation_status", id)],
+  })
+  const backgroundPoll = (id: string): AdaptedContentPart => ({
+    type: "background-task-group",
+    polls: [poll("TaskOutput", id)],
+  })
+  const say = (words: string): AdaptedContentPart => ({
+    type: "text",
+    text: words,
+  })
+  const call = (id: string, toolName = "Bash"): AdaptedToolCallPart => ({
+    type: "tool-call",
+    toolCallId: id,
+    toolName,
+    input: null,
+    state: "output-available",
+  })
+  /** The merge of the whole, as it was written before it could extend. */
+  const whole = (members: AdaptedContentPart[][], streaming: boolean) =>
+    groupGoalRuns(
+      mergeAdjacentBackgroundTaskGroups(
+        mergeAdjacentDelegationStatusGroups(members.flat())
+      ),
+      streaming
+    )
+
+  it("merges as the whole would, batch after batch, from its last merge", () => {
+    // A reply growing a member at a time, with poll groups that meet across
+    // the seams the incremental merge joins at.
+    const growth: AdaptedContentPart[][] = [
+      [say("a"), call("c1")],
+      [delegationPoll("d1")],
+      [delegationPoll("d1")],
+      [backgroundPoll("b1"), delegationPoll("d2")],
+      [delegationPoll("d2"), say("b")],
+      [call("c2")],
+      [backgroundPoll("b2")],
+      [backgroundPoll("b3"), say("c")],
+    ]
+    let previous: MergedRunParts | null = null
+    for (let count = 2; count <= growth.length; count++) {
+      const members = growth.slice(0, count)
+      // The last member is written in place for a few batches first.
+      for (const last of [[say("…")], members[count - 1]!]) {
+        const batch = [...members.slice(0, -1), last]
+        const merge: MergedRunParts = mergeRunParts(batch, true, previous)
+        expect(merge.parts).toEqual(whole(batch, true))
+        previous = merge
+      }
+    }
+    // The members it did not touch kept their merge: the prefix grew from the
+    // one before rather than being merged again.
+    expect(previous?.prefix?.members).toHaveLength(growth.length - 1)
+  })
+
+  it("merges whole when a member it would keep holds a goal", () => {
+    const start = call("g1", "create_goal")
+    const members = [[say("a"), start], [call("c1")], [say("b")]]
+    const merge = mergeRunParts(members, true, null)
+    expect(merge.parts).toEqual(whole(members, true))
+    expect(merge.prefix).toBeNull()
+    expect(merge.parts[1]).toMatchObject({ type: "goal-run" })
+  })
+
+  it("keeps a goal that only the last member starts", () => {
+    const members = [[say("a")], [call("c1")], [call("g1", "create_goal")]]
+    const merge = mergeRunParts(members, true, null)
+    expect(merge.parts).toEqual(whole(members, true))
+    expect(merge.prefix).not.toBeNull()
   })
 })

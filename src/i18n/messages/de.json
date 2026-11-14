@@ -3671,13 +3671,13 @@
             "paper-lookup": "Hilf mir, relevante Artikel und Open-Access-Volltexte in wissenschaftlichen Datenbanken zu finden, mit wiederverwendbaren Zitaten. Ich suche: "
           },
           "paper-lookup": "Publikationssuche",
-          "paper-lookupDesc": "10 wissenschaftliche APIs (PubMed, arXiv, OpenAlex, Crossref…) nach Artikeln, Zitationen und Open-Access-Volltext durchsuchen.",
+          "paper-lookupDesc": "18 wissenschaftliche APIs (PubMed, arXiv, OpenAlex, Crossref…) nach Artikeln, Zitationen und Open-Access-Volltext durchsuchen.",
           "scientific-critical-thinking": "Kritisches Denken",
           "scientific-critical-thinkingDesc": "Wissenschaftliche Aussagen und Evidenzqualität beurteilen — Verzerrungen und Confounder erkennen, GRADE anwenden.",
           "scientific-visualization": "Wissenschaftliche Visualisierung",
-          "scientific-visualizationDesc": "Publikationsreife Abbildungen — Mehrfeld-Layouts, Signifikanz-Annotationen und journalspezifische Formate.",
+          "scientific-visualizationDesc": "Wahrheitsgetreue, barrierearme Publikationsabbildungen — Mehrfeld-Layouts, Unsicherheitsdarstellung, Farb- und Kontrastprüfung sowie Exportplanung für Journale.",
           "exploratory-data-analysis": "Explorative Datenanalyse",
-          "exploratory-data-analysisDesc": "Automatisierte Exploration wissenschaftlicher Datendateien in über 200 Formaten mit Qualitätsmetriken und Berichten.",
+          "exploratory-data-analysisDesc": "Begrenzte, lokale Exploration unterstützter wissenschaftlicher Datendateien — Struktur, Prüfung fehlender Werte und Ausreißer sowie ein EDA-Bericht.",
           "statistical-analysis": "Statistische Analyse",
           "statistical-analysisDesc": "Geführte statistische Analyse — Testauswahl, Annahmenprüfung, Effektstärken und Bericht im APA-Stil.",
           "statistical-power": "Teststärke",
@@ -4067,8 +4067,7 @@
           "taskFailed": "Aufgabe fehlgeschlagen",
           "taskStopped": "Aufgabe gestoppt",
           "taskRunning": "Aufgabe läuft",
-          "planUpdated": "Plan aktualisiert",
-          "showMoreSteps": "{count, plural, one {# weiteren Schritt zeigen} other {# weitere Schritte zeigen}}"
+          "planUpdated": "Plan aktualisiert"
         },
         "explore": {
           "files": "{count, plural, one {# Datei} other {# Dateien}}",
@@ -6626,7 +6625,13 @@
     "deliverPrBackDeleteWorktree": "Worktree nach dem Push löschen",
     "deliverPrBackSubmit": "Pushen",
     "deliverPrBackDone": "In den Pull Request gepusht",
-    "deliverPrBackDoneMr": "In den Merge Request gepusht"
+    "deliverPrBackDoneMr": "In den Merge Request gepusht",
+    "deliverPrUncommitted": "{count, plural, one {# Datei im Worktree dieser Aufgabe ist noch nicht committet. Sie wird zuerst auf {branch} committet und dann mit dem Rest gepusht.} other {# Dateien im Worktree dieser Aufgabe sind noch nicht committet. Sie werden zuerst auf {branch} committet und dann mit dem Rest gepusht.}}",
+    "deliverPrUncommittedFiles": "Zu committende Dateien",
+    "deliverPrCommitMessageLabel": "Commit-Nachricht",
+    "deliverPrUncommittedHint": "Soll der Agent sie selbst committen, brich ab und schick die Aufgabe für eine weitere Runde zurück.",
+    "deliverPrCommitSubmit": "Committen, pushen und öffnen",
+    "deliverPrCommitPushSubmit": "Committen und pushen"
   },
   "CustomSkillsSettings": {
     "loading": "Benutzerdefinierte Skills werden geladen…",

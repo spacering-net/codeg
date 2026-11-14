@@ -1,6 +1,14 @@
 "use client"
 
-import { memo, useMemo, useRef, useState, type ReactNode } from "react"
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react"
 import { useTranslations } from "next-intl"
 
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
@@ -37,22 +45,107 @@ import { ThoughtRow } from "./rows/thought-row"
 import { TimelineFoot, type ActivityFoot } from "./timeline-foot"
 import { useLiveToolStep } from "./use-live-step"
 import { useRailGrowth } from "./use-rail-growth"
+import { useRowPointing } from "./use-row-pointing"
+import {
+  RevealRequests,
+  TimelineRevealContext,
+  useTimelineWindow,
+  WINDOWED_ROWS,
+  type ListMetrics,
+} from "./use-timeline-window"
 
 /**
  * The activity timeline: a reply's process as one row per step on a left
  * rail. Grouping, status and summary all come from the activity model
  * (`buildActivity`); this only draws it.
  */
-/** Past this many rows a reply opens with its head and tail only. */
-const LONG_TIMELINE_ROWS = 150
-const LONG_TIMELINE_HEAD = 20
-const LONG_TIMELINE_TAIL = 50
-/** Rows each "show more" reveals. */
-const LONG_TIMELINE_STEP = 200
-/** Where a long reply's hidden middle sits among its rows (and its key). */
-const FOLD = "fold"
 /** The foot of a list's rail (its key). */
 const FOOT = "foot"
+/** The spacers standing for the rows of a windowed list not drawn (keys). */
+const BEFORE = "window-before"
+const AFTER = "window-after"
+
+/** Calls drawn as a card of their own on the rail, taller than a row. */
+const CARD_KINDS = new Set([
+  "agent",
+  "collab-agent",
+  "delegation",
+  "delegation-resume",
+  "question",
+  "plan-mode",
+  "workbench",
+  "goal",
+])
+
+/**
+ * How tall a row is before it has been drawn (see `useTimelineWindow`): a step
+ * is a one-line header, prose as many lines as its words take, a card more.
+ * Only a reply opened from history meets rows it has not drawn; a streaming
+ * one has drawn each as it joined.
+ */
+function estimateItemHeight(
+  item: ActivityItem,
+  { rem, width }: ListMetrics
+): number {
+  // A row's header: a 1.5rem line with 0.125rem above and below.
+  const line = 1.75 * rem
+  if (item.type === "group") return line
+  const { step } = item
+  switch (step.type) {
+    case "note": {
+      const text =
+        step.part.type === "text"
+          ? step.part.text
+          : step.part.type === "proposed-plan"
+            ? step.part.markdown
+            : step.part.message
+      // text-sm: 1.25rem lines, glyphs about 0.45rem wide (CJK twice that),
+      // in the column past the rail.
+      const perLine = Math.max(1, (width - 2 * rem) / (0.45 * rem))
+      let lines = 0
+      let paragraphs = 0
+      for (const paragraph of text.split(/\n{2,}/)) {
+        if (!paragraph.trim()) continue
+        paragraphs += 1
+        for (const row of paragraph.split("\n")) {
+          let units = 0
+          for (const char of row) units += char.charCodeAt(0) > 0x2e7f ? 2 : 1
+          lines += Math.max(1, Math.ceil(units / perLine))
+        }
+      }
+      return (
+        0.25 * rem +
+        Math.max(1, lines) * 1.25 * rem +
+        Math.max(0, paragraphs - 1) * rem
+      )
+    }
+    case "tool":
+      return CARD_KINDS.has(step.tool.kind) ? 4 * rem : line
+    case "plan":
+      return 6 * rem
+    case "image":
+      return 12 * rem
+    case "goal":
+      return 4 * rem
+    default:
+      return line
+  }
+}
+
+/**
+ * A stretch of a windowed list's rows that is not drawn: as tall as they are,
+ * the rail running through it (globals.css), nothing to read.
+ */
+function WindowSpacer({ height }: { height: number }) {
+  return (
+    <li
+      aria-hidden="true"
+      className="activity-item"
+      data-marker="spacer"
+      style={{ height }}
+    />
+  )
+}
 
 export const ActivityTimeline = memo(function ActivityTimeline({
   model,
@@ -62,6 +155,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   foot,
   headed = false,
   nested = false,
+  revealRef,
 }: {
   model: ActivityModel
   isStreaming: boolean
@@ -83,8 +177,12 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   headed?: boolean
   /** Drawn inside a step (see `ActivityRenderContextValue.nested`). */
   nested?: boolean
+  /** Handed a function that draws the row holding a step (by its key) and
+   *  scrolls it into view — a long list draws only the rows near the view,
+   *  so the header's failure link cannot find one far off by itself. Null
+   *  while every row is drawn. */
+  revealRef?: RefObject<((stepKey: string) => boolean) | null>
 }) {
-  const t = useTranslations("Folder.chat.activity")
   const context = useMemo(
     () => ({
       renderPart,
@@ -108,10 +206,6 @@ export const ActivityTimeline = memo(function ActivityTimeline({
     }),
     [renderPart, isStreaming, model.summary.recoveredKeys, pinnedOnly, nested]
   )
-  // A giant reply (an agent loop of hundreds of calls) opens with its first
-  // and last rows; the middle is revealed a chunk at a time. Message-level
-  // virtualization keeps working: this only bounds one row's own DOM.
-  const [revealed, setRevealed] = useState(0)
   const items = model.items
   const listRef = useRef<HTMLOListElement>(null)
   // Under the header, the list is there from the start: with no step yet,
@@ -123,69 +217,78 @@ export const ActivityTimeline = memo(function ActivityTimeline({
     listRef,
     !pinnedOnly && isStreaming && (items.length > 0 || standing)
   )
-  const long = items.length > LONG_TIMELINE_ROWS && !pinnedOnly
-  // While it streams, its rows slide into the fold one at a time as new ones
-  // arrive: cutting the tail to size the moment it crossed the threshold would
-  // unmount dozens of rows at once, mid-stream. Settled, it opens trimmed.
-  const tailSize = isStreaming
-    ? LONG_TIMELINE_ROWS - LONG_TIMELINE_HEAD
-    : LONG_TIMELINE_TAIL
-  const hidden = long
-    ? Math.max(0, items.length - LONG_TIMELINE_HEAD - tailSize - revealed)
-    : 0
+  // A nested list's rows are marked by the list it is nested in. Keyed on
+  // the list being drawn at all, so it listens once the list mounts.
+  useRowPointing(listRef, !nested && (items.length > 0 || standing))
+  // A long reply (an agent loop of hundreds of calls) draws the rows near the
+  // view, the rest a scroll away; live, a view resting at its end keeps up
+  // with the rows that join there.
+  const windowed = !pinnedOnly && !nested && items.length > WINDOWED_ROWS
+  const { span, reveal } = useTimelineWindow({
+    listRef,
+    scope: "item",
+    rows: windowed ? items : null,
+    estimate: estimateItemHeight,
+    follow: isStreaming,
+  })
+  // A step in a group's members is drawn by the members, once the group is
+  // (see `TimelineRevealContext`).
+  const [memberRequests] = useState(() => new RevealRequests())
+  useEffect(() => {
+    if (!revealRef) return
+    revealRef.current = (stepKey: string) => {
+      const index = items.findIndex(
+        (item) =>
+          item.key === stepKey ||
+          (item.type === "group" &&
+            item.steps.some((step) => step.key === stepKey))
+      )
+      if (index < 0) return false
+      // A step in a group: the group is drawn, and its members draw and
+      // scroll to the step — the first member too, which shares the group's
+      // key. Scrolling to the group as well would move the step back out.
+      const group = items[index]!.type === "group"
+      if (windowed) reveal(index, !group)
+      memberRequests.ask(group ? stepKey : null)
+      return true
+    }
+  }, [revealRef, windowed, items, reveal, memberRequests])
   if (items.length === 0 && !standing) return null
-  const headSize = LONG_TIMELINE_HEAD + revealed
   // A group the reply has moved past — a row follows it, or the answer under
   // the rows does — takes no more members.
   const lastKey = items.length > 0 ? items[items.length - 1]!.key : null
   const answerFollows = hasVisibleAnswer(model.answer)
-  // One list of children, the fold among them: a row that moves between the
-  // head, the fold and the tail keeps its key's place, never remounting.
-  const rows = items.flatMap<ActivityItem | typeof FOLD>((item, index) => {
-    if (hidden === 0 || index < headSize) return [item]
-    if (index === headSize) return [FOLD]
-    return index >= items.length - tailSize ? [item] : []
-  })
-  return (
+  const drawn = span ? items.slice(span.start, span.end) : items
+  const list = (
     <ActivityRenderProvider value={context}>
       <ol
         ref={listRef}
         role="list"
         className="activity-timeline empty:hidden"
         data-headed={headed ? "" : undefined}
+        data-windowed={span ? "" : undefined}
         // Standing for its first step, the list holds only the turning ring:
         // nothing to read yet, so no list either.
         aria-hidden={items.length === 0 ? true : undefined}
       >
-        {rows.map((item) =>
-          item === FOLD ? (
-            <li key={FOLD} className="activity-item" data-marker="dot">
-              <span className="absolute start-[0.4375rem] top-[0.6875rem] flex size-1.5 items-center justify-center">
-                <span className="size-1.5 rounded-full bg-muted-foreground/50" />
-              </span>
-              <button
-                type="button"
-                className="min-h-7 rounded-sm py-0.5 text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() =>
-                  setRevealed((count) => count + LONG_TIMELINE_STEP)
-                }
-              >
-                {t("row.showMoreSteps", { count: hidden })}
-              </button>
-            </li>
-          ) : (
-            <ActivityItemView
-              key={rowIdentity(item.key)}
-              item={item}
-              followed={
-                item.type === "group" && (item.key !== lastKey || answerFollows)
-              }
-              // The list's last step while the reply is written: if it is
-              // prose, it is the prose being written now.
-              tail={isStreaming && !pinnedOnly && item.key === lastKey}
-            />
-          )
-        )}
+        {span && span.start > 0 ? (
+          <WindowSpacer key={BEFORE} height={span.before} />
+        ) : null}
+        {drawn.map((item) => (
+          <ActivityItemView
+            key={rowIdentity(item.key)}
+            item={item}
+            followed={
+              item.type === "group" && (item.key !== lastKey || answerFollows)
+            }
+            // The list's last step while the reply is written: if it is
+            // prose, it is the prose being written now.
+            tail={isStreaming && !pinnedOnly && item.key === lastKey}
+          />
+        ))}
+        {span && span.end < items.length ? (
+          <WindowSpacer key={AFTER} height={span.after} />
+        ) : null}
         {/* Last, so the rows that join go in above it: the last row's segment
             runs on to it like to a row's ring. The rows still running under
             a folded reply are no list to fold. */}
@@ -200,6 +303,14 @@ export const ActivityTimeline = memo(function ActivityTimeline({
         ) : null}
       </ol>
     </ActivityRenderProvider>
+  )
+  // A nested list's requests go through the reply's.
+  return nested ? (
+    list
+  ) : (
+    <TimelineRevealContext.Provider value={memberRequests}>
+      {list}
+    </TimelineRevealContext.Provider>
   )
 })
 
