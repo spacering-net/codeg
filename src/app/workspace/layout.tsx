@@ -432,7 +432,6 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                   position: conversationFillsArea ? "absolute" : "relative",
                 }}
               >
-                <ConversationPaneSwitcher />
                 {/* Conversation column top bar (UNSPLIT only): the tab strip,
                   plus a left reserve (this column always holds the window's
                   left corner; it is 0 wide while the sidebar covers it) and a
@@ -1396,8 +1395,16 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
 function FolderLayoutShell({ children }: { children: React.ReactNode }) {
   const isMobile = useIsMobile()
   const viewportRef = useMobileViewport(isMobile)
-  const { isWindows, isLinux } = usePlatform()
+  const { isMac, isWindows, isLinux } = usePlatform()
   const winLinuxControls = isDesktop() && (isWindows || isLinux)
+  const { zoomLevel } = useZoomLevel()
+  const { isConversations } = useWorkbenchRoute()
+  const { filesMaximized } = useWorkspaceView()
+  // 两侧预留相同宽度，既避开窗口按钮，也不让左右侧栏改变灵动岛的窗口中心。
+  const paneSwitcherInset = Math.max(
+    leftChromeReserve(isMac && isDesktop(), zoomLevel),
+    rightChromeReserve(winLinuxControls, zoomLevel)
+  )
   const {
     workspaceBgEnabled,
     workspaceBgImageUrl,
@@ -1465,6 +1472,14 @@ function FolderLayoutShell({ children }: { children: React.ReactNode }) {
           beneath these (see leftChromeReserve / rightChromeReserve). */}
       {!isMobile && (
         <>
+          <div
+            className="pointer-events-none absolute top-0 z-40"
+            style={{ left: paneSwitcherInset, right: paneSwitcherInset }}
+          >
+            <KeptMountedSurface hidden={!isConversations || filesMaximized}>
+              <ConversationPaneSwitcher />
+            </KeptMountedSurface>
+          </div>
           <div className="absolute left-0 top-0 z-50 h-10">
             <LeftEdgeChrome />
           </div>
