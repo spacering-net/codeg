@@ -163,6 +163,8 @@ import {
 import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
 import { rememberModelLabels } from "@/lib/model-label-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
+import { registerFrontendMemoryProvider } from "@/lib/frontend-memory"
+import { getCodeHighlightStats } from "@/lib/code-highlighter"
 
 /**
  * A session id we are willing to interpolate into a shell command we hand the
@@ -5052,6 +5054,118 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         cancelAnimationFrame(toolCallUpdateRafId.current)
       }
     }
+  }, [])
+
+  // Opt-in numeric diagnostics. The reader is unregistered with the Provider
+  // so the collector cannot retain this store after the Provider unmounts.
+  // It reads only aggregate sizes and counts; no session ids, prompts, or
+  // tool payloads leave the renderer.
+  useEffect(() => {
+    const unregister = registerFrontendMemoryProvider(storeRef.current, () => {
+      let promptingConnections = 0
+      let liveTextUnits = 0
+      let toolTextUnits = 0
+      let liveBlocks = 0
+
+      for (const connection of storeRef.current.connections.values()) {
+        if (connection.status === "prompting") promptingConnections++
+        for (const block of connection.liveMessage?.content ?? []) {
+          liveBlocks++
+          switch (block.type) {
+            case "text":
+            case "thinking":
+              liveTextUnits += block.text.length
+              break
+            case "steering":
+              liveTextUnits += block.text.length
+              break
+            case "turn_error":
+              liveTextUnits += block.message.length
+              break
+            case "plan":
+              liveTextUnits += block.entries.length
+              break
+            case "tool_call":
+              toolTextUnits += block.info.content?.length ?? 0
+              toolTextUnits += block.info.raw_input?.length ?? 0
+              toolTextUnits += block.info.raw_output_total_bytes
+              break
+          }
+        }
+      }
+
+      let hydrationCaptures = 0
+      let hydrationEvents = 0
+      for (const captures of hydrationEchoesRef.current.values()) {
+        hydrationCaptures += captures.size
+        for (const events of captures) hydrationEvents += events.length
+      }
+
+      let unmappedEvents = 0
+      for (const events of pendingUnmappedEventsRef.current.values()) {
+        unmappedEvents += events.length
+      }
+
+      let streamingEvents = 0
+      for (const events of streamingQueuesRef.current.values()) {
+        streamingEvents += events.length
+      }
+
+      let runtimeDetailTurns = 0
+      let runtimeLocalTurns = 0
+      let runtimeBackgroundTurns = 0
+      let runtimeOptimisticTurns = 0
+      let runtimePendingBackgroundSettlements = 0
+      let runtimeLiveBlocks = 0
+      const runtimeSessions =
+        useConversationRuntimeStore.getState().byConversationId
+      for (const session of runtimeSessions.values()) {
+        runtimeDetailTurns += session.detail?.turns.length ?? 0
+        runtimeLocalTurns += session.localTurns.length
+        runtimeBackgroundTurns += session.backgroundTurns.length
+        runtimeOptimisticTurns += session.optimisticTurns.length
+        runtimePendingBackgroundSettlements +=
+          session.pendingBackgroundSettlements.length
+        runtimeLiveBlocks += session.liveMessage?.content.length ?? 0
+      }
+
+      const openKeys = new Set(openTabKeysRef.current)
+      for (const keys of extraLiveKeysRef.current.values()) {
+        for (const key of keys) openKeys.add(key)
+      }
+
+      const highlighting = getCodeHighlightStats()
+
+      return {
+        connections: storeRef.current.connections.size,
+        promptingConnections,
+        liveTextUnits,
+        toolTextUnits,
+        liveBlocks,
+        openTabKeys: openKeys.size,
+        hydrationCaptures,
+        hydrationEvents,
+        unmappedConnections: pendingUnmappedEventsRef.current.size,
+        unmappedEvents,
+        streamingEvents,
+        pendingToolUpdates: pendingToolCallUpdates.current.length,
+        eventSubscribers: eventSubscribersRef.current.size,
+        runtimeSessions: runtimeSessions.size,
+        runtimeDetailTurns,
+        runtimeLocalTurns,
+        runtimeBackgroundTurns,
+        runtimeOptimisticTurns,
+        runtimePendingBackgroundSettlements,
+        runtimeLiveBlocks,
+        overlayFoldRefetchEntries: overlayFoldRefetchAt.size,
+        selectorsCacheEntries: selectorsCache.size,
+        highlightCacheEntries: highlighting.entries,
+        highlightCacheEstimatedBytes: highlighting.estimatedBytes,
+        highlightInFlight: highlighting.inFlight,
+        highlightWaiting: highlighting.waiting,
+      }
+    })
+    return unregister
   }, [])
 
   /**

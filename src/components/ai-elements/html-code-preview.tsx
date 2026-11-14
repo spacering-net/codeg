@@ -9,6 +9,10 @@ import {
   HTML_PREVIEW_SIZE_MESSAGE_TYPE,
   readHtmlPreviewTheme,
 } from "@/lib/html-preview-frame"
+import {
+  registerFrontendHtmlMemory,
+  registerFrontendMemorySurface,
+} from "@/lib/frontend-memory"
 import { cn, randomUUID } from "@/lib/utils"
 
 interface FrameEntry {
@@ -43,6 +47,17 @@ const FRAME_CACHE_BYTES = 8 * 1024 * 1024
 const VIEW_CACHE_BYTES = 1024 * 1024
 let frameBytes = 0
 let viewBytes = 0
+
+/** Numeric cache counters consumed by the opt-in diagnostics collector. */
+export function readHtmlPreviewMemory() {
+  return {
+    htmlFrames: frames.size,
+    htmlFrameBytes: frameBytes,
+    htmlViews: views.size,
+    htmlViewBytes: viewBytes,
+    htmlPins: pins.size,
+  }
+}
 
 // Count source keys as well as generated documents. A small number of large
 // replies can otherwise keep arbitrarily large strings alive after closing.
@@ -146,6 +161,11 @@ export function HtmlCodePreview({
     key: string
     height: number
   } | null>(null)
+
+  useEffect(() => {
+    registerFrontendHtmlMemory(readHtmlPreviewMemory)
+    return registerFrontendMemorySurface()
+  }, [])
 
   // What is on screen stays in the cache.
   useEffect(() => {
