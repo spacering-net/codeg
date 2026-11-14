@@ -11,7 +11,7 @@
 //! - The idle sweep is NOT a hazard: an in-flight turn sits in `Prompting`, which
 //!   `sweep_idle` already skips (it only reaps `Connected`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -21,8 +21,10 @@ use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
+use tokio_util::sync::CancellationToken;
 
 use crate::acp::manager::ConnectionManager;
+use crate::acp::turn_end_hold;
 use crate::acp::types::{AcpEvent, EventEnvelope, PromptInputBlock};
 use crate::acp::InternalEventBus;
 use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
@@ -88,6 +90,12 @@ pub struct AutomationEngine {
     /// restart — which is why boot reconcile + the conversation-status backstop
     /// exist.
     index: Arc<Mutex<HashMap<String, (i32, i32)>>>,
+    /// Connections whose run's turn ended while the agent still had work going
+    /// (a background shell, the turn Claude Code starts on its own to read it,
+    /// a delegation), held open instead of settled — settling ends the
+    /// connection and the work with it (see `acp::turn_end_hold`). The hold's
+    /// waiter settles the run once that work is done.
+    held: Arc<Mutex<HashSet<String>>>,
     /// Per-automation fire lock. Serializes the overlap-check + run-row insert (and
     /// the whole launch) so a manual run-now, a scheduled fire, and a double-click
     /// can't all pass `has_active_run` and start duplicate concurrent runs.
@@ -155,6 +163,7 @@ pub fn build_engine(
         bus,
         data_dir,
         index: Arc::new(Mutex::new(HashMap::new())),
+        held: Arc::new(Mutex::new(HashSet::new())),
         automation_locks: Arc::new(Mutex::new(HashMap::new())),
         root_locks: Arc::new(Mutex::new(HashMap::new())),
         _engine_lock: engine_lock,
@@ -747,7 +756,7 @@ impl AutomationEngine {
 
     // ── completion ────────────────────────────────────────────────────────────
 
-    async fn on_event(&self, env: &EventEnvelope) {
+    async fn on_event(self: &Arc<Self>, env: &EventEnvelope) {
         let AcpEvent::TurnComplete { stop_reason, .. } = &env.payload else {
             return;
         };
@@ -756,9 +765,90 @@ impl AutomationEngine {
         let Some((run_id, automation_id)) = entry else {
             return; // not an automation run
         };
-
-        let (status, status_str) = classify_stop_reason(stop_reason);
+        // A later turn on a connection already held for its agent's background
+        // work (one Grok started on its own): the waiter settles the run.
+        if self.held.lock().await.contains(&conn_id) {
+            return;
+        }
         let summary = self.capture_summary(&conn_id).await;
+        if let Some(timing) = turn_end_hold::HoldTiming::from_env() {
+            if turn_end_hold::should_hold(&self.manager, &conn_id, stop_reason)
+                .await
+                .is_some()
+            {
+                self.hold_run(
+                    conn_id,
+                    run_id,
+                    automation_id,
+                    stop_reason.clone(),
+                    summary,
+                    timing,
+                )
+                .await;
+                return;
+            }
+        }
+        self.settle_turn(&conn_id, run_id, automation_id, stop_reason, summary)
+            .await;
+    }
+
+    /// Hold a run whose turn ended with work still going (see
+    /// [`AutomationEngine::held`]), and settle it from the background once that
+    /// work is done — with the answer the agent gave after reading its result.
+    /// A cancel meanwhile settles the run itself and drops its index entry,
+    /// which tells the waiter there is nothing left to settle.
+    async fn hold_run(
+        self: &Arc<Self>,
+        conn_id: String,
+        run_id: i32,
+        automation_id: i32,
+        stop_reason: String,
+        summary: Option<String>,
+        timing: turn_end_hold::HoldTiming,
+    ) {
+        tracing::info!(
+            "[automation] run {run_id} turn ended with work still going; holding \
+             connection={conn_id} until it finishes"
+        );
+        self.held.lock().await.insert(conn_id.clone());
+        let since = Utc::now();
+        let engine = Arc::clone(self);
+        tokio::spawn(async move {
+            let result = turn_end_hold::wait_until_settled(
+                &engine.manager,
+                &conn_id,
+                timing,
+                &CancellationToken::new(),
+            )
+            .await;
+            engine.held.lock().await.remove(&conn_id);
+            tracing::info!(
+                "[automation] run {run_id} hold on connection={conn_id} ended: {}",
+                result.outcome.as_str()
+            );
+            if !engine.index.lock().await.contains_key(&conn_id) {
+                return; // canceled meanwhile
+            }
+            let summary = match result.follow_up_reply(since) {
+                Some(reply) => Some(reply),
+                None => engine.capture_summary(&conn_id).await.or(summary),
+            };
+            engine
+                .settle_turn(&conn_id, run_id, automation_id, &stop_reason, summary)
+                .await;
+        });
+    }
+
+    /// Settle a run from how its turn ended, and let its connection go.
+    async fn settle_turn(
+        &self,
+        conn_id: &str,
+        run_id: i32,
+        automation_id: i32,
+        stop_reason: &str,
+        summary: Option<String>,
+    ) {
+        let (status, status_str) = classify_stop_reason(stop_reason);
         let error = if status == AutomationRunStatus::Failed {
             Some(format!("agent stopped: {stop_reason}"))
         } else {
@@ -769,7 +859,7 @@ impl AutomationEngine {
             &self.db.conn,
             run_id,
             status,
-            Some(stop_reason.clone()),
+            Some(stop_reason.to_string()),
             error,
             summary,
         )
@@ -777,8 +867,8 @@ impl AutomationEngine {
 
         // One prompt, one turn, then disconnect (last_assistant_text is cleared
         // at the next turn start, so an automation connection is never reused).
-        self.index.lock().await.remove(&conn_id);
-        let _ = self.manager.disconnect(&conn_id).await;
+        self.index.lock().await.remove(conn_id);
+        let _ = self.manager.disconnect(conn_id).await;
 
         if let Ok(true) = settled {
             self.emit(AutomationChange::RunSettled {
@@ -828,6 +918,11 @@ impl AutomationEngine {
                 // settling here from coarse conversation status would race on_event
                 // and discard stop_reason fidelity (and could mislabel a cancel).
                 if self.manager.get_state_and_emitter(conn_id).await.is_some() {
+                    continue;
+                }
+                // Held for its background work: the waiter sees the connection
+                // go and settles the run itself.
+                if self.held.lock().await.contains(conn_id) {
                     continue;
                 }
                 // Connection gone but still Running: the TurnComplete can never

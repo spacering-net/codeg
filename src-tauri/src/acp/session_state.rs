@@ -371,6 +371,15 @@ pub struct SessionState {
     /// exemption lapses after `background_keepalive_max_age()` instead of
     /// pinning the connection alive forever. Backend-internal; not serialized.
     pub background_activity_at: Option<DateTime<Utc>>,
+    /// The last answer Claude Code wrote in a turn it started on its own (the
+    /// follow-up to a `<task-notification>`), with when it was read. Those
+    /// turns never reach the wire as a prompt's turn — no `TurnComplete`, no
+    /// [`Self::last_assistant_text`] — and arrive only as the watcher's
+    /// `BackgroundActivity` turns, so this is the one place an engine that
+    /// waited them out can read what the agent finally said (see
+    /// `acp::turn_end_hold`). `apply_event` is the only writer.
+    /// Backend-internal; not serialized.
+    pub last_background_reply: Option<(DateTime<Utc>, String)>,
 
     // ACP 协商出的能力
     pub modes: Option<SessionModeStateInfo>,
@@ -929,6 +938,7 @@ impl SessionState {
             background_outstanding: 0,
             background_outstanding_tasks: Vec::new(),
             background_activity_at: None,
+            last_background_reply: None,
             modes: None,
             current_mode: None,
             config_options: None,
@@ -1847,10 +1857,14 @@ impl SessionState {
                 }
             }
             AcpEvent::BackgroundActivity {
+                turns,
                 outstanding,
                 outstanding_tasks,
                 ..
             } => {
+                if let Some(reply) = last_assistant_reply(turns) {
+                    self.last_background_reply = Some((Utc::now(), reply));
+                }
                 // Mirror the watcher's authoritative accounting so the idle
                 // sweeps can exempt this connection while background work is
                 // pending. The turns/settled payloads are frontend-only; the
@@ -2681,6 +2695,25 @@ pub(crate) fn owner_composes_prompts(owner_window_label: &str) -> bool {
         && owner_window_label != crate::cli_run::service::CLI_OWNER_LABEL
         && !crate::acp::one_shot::is_one_shot_owner(owner_window_label)
         && !owner_window_label.starts_with("chat_channel:")
+}
+
+/// The answer of the last assistant turn in `turns`: its last non-empty `Text`
+/// block, trimmed. `None` when no assistant turn in the batch has one (a turn
+/// still on its tool calls, or a batch of user turns only).
+fn last_assistant_reply(turns: &[crate::models::message::MessageTurn]) -> Option<String> {
+    use crate::models::message::{ContentBlock, TurnRole};
+    turns
+        .iter()
+        .rev()
+        .filter(|turn| matches!(turn.role, TurnRole::Assistant))
+        .find_map(|turn| {
+            turn.blocks.iter().rev().find_map(|block| match block {
+                ContentBlock::Text { text } if !text.trim().is_empty() => {
+                    Some(text.trim().to_string())
+                }
+                _ => None,
+            })
+        })
 }
 
 /// Max age of the background keep-alive: how long a connection with
@@ -3645,6 +3678,68 @@ mod tests {
         });
         assert!(!s.has_active_background_work(Utc::now()));
         assert!(s.background_outstanding_tasks.is_empty());
+    }
+
+    /// A turn Claude Code ran on its own only reaches codeg as the watcher's
+    /// overlay turns, so its answer is read off them: the LAST assistant turn's
+    /// last non-empty text. A batch with no such text (a turn still on its
+    /// tools, a user turn) keeps the reply already read.
+    #[test]
+    fn background_activity_records_the_last_assistant_reply() {
+        use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
+        fn turn(role: TurnRole, blocks: Vec<ContentBlock>) -> MessageTurn {
+            MessageTurn {
+                id: "bg-0-0".into(),
+                role,
+                blocks,
+                timestamp: Utc::now(),
+                usage: None,
+                duration_ms: None,
+                model: None,
+                completed_at: None,
+                agent_message_id: None,
+            }
+        }
+        fn text(t: &str) -> ContentBlock {
+            ContentBlock::Text { text: t.into() }
+        }
+        fn activity(turns: Vec<MessageTurn>) -> AcpEvent {
+            AcpEvent::BackgroundActivity {
+                session_id: "sid".into(),
+                turns,
+                outstanding: 0,
+                outstanding_tasks: vec![],
+                settled: vec![],
+                watermark: 0,
+            }
+        }
+        let mut s = fresh_state();
+        assert!(s.last_background_reply.is_none());
+
+        s.apply_event(&activity(vec![
+            turn(TurnRole::Assistant, vec![text("first answer")]),
+            turn(
+                TurnRole::Assistant,
+                vec![
+                    text("checking the log"),
+                    text("  all 12 tests passed  "),
+                    text(" "),
+                ],
+            ),
+            turn(TurnRole::User, vec![text("not an answer")]),
+        ]));
+        assert_eq!(
+            s.last_background_reply.as_ref().map(|(_, t)| t.as_str()),
+            Some("all 12 tests passed")
+        );
+
+        s.apply_event(&activity(vec![turn(TurnRole::Assistant, vec![])]));
+        s.apply_event(&activity(vec![]));
+        assert_eq!(
+            s.last_background_reply.as_ref().map(|(_, t)| t.as_str()),
+            Some("all 12 tests passed"),
+            "a batch without an answer keeps the one already read"
+        );
     }
 
     #[test]

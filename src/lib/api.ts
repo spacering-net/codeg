@@ -4325,6 +4325,12 @@ export async function workTaskDeliverPr(
   })
 }
 
+/** Stop waiting for the background work a running task's agent left going
+ *  and settle the task now; whatever is still running is stopped with it. */
+export async function workTaskStopBackgroundWait(id: number): Promise<void> {
+  return getTransport().call("work_task_stop_background_wait", { id })
+}
+
 /** Withdraw a merge waiting in the project's queue; the task stays in review. */
 export async function workTaskMergeUnqueue(id: number): Promise<void> {
   return getTransport().call("work_task_merge_unqueue", { id })

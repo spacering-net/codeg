@@ -8,6 +8,7 @@ import {
   workTaskDefer,
   workTaskMergeUnqueue,
   workTaskStart,
+  workTaskStopBackgroundWait,
   workTaskUpdate,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -224,6 +225,8 @@ export function useTaskDialogs({
       onFollowUp: () => openFollowUp(task),
       onEdit: () => openEdit(task),
       onSchedule: () => openSchedule(task),
+      onStopBackgroundWait: () =>
+        void act(() => workTaskStopBackgroundWait(task.id)),
     }),
     [
       act,
