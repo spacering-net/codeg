@@ -3710,6 +3710,50 @@ export function setClaudeEnvFlagInConfigText(
   }
 }
 
+/** Top-level settings.json keys for Claude Code's prompt cache lifetime
+ *  (`"5m"` | `"1h"`, Claude Code 2.1.242+): `promptCacheTtl` covers the main
+ *  conversation, `subagentPromptCacheTtl` subagents, workflows and background
+ *  helpers. Unset means Claude's default lifetime. */
+export const CLAUDE_PROMPT_CACHE_TTL_KEY = "promptCacheTtl"
+export const CLAUDE_SUBAGENT_PROMPT_CACHE_TTL_KEY = "subagentPromptCacheTtl"
+export const CLAUDE_PROMPT_CACHE_TTL_ONE_HOUR = "1h"
+export type ClaudePromptCacheTtlKey =
+  | typeof CLAUDE_PROMPT_CACHE_TTL_KEY
+  | typeof CLAUDE_SUBAGENT_PROMPT_CACHE_TTL_KEY
+
+/** Whether the native config asks for the one-hour cache under `key`. Read
+ *  straight off the config text so the switch follows the JSON editor; absent
+ *  (or any other value) is off. */
+export function claudePromptCacheOneHourEnabled(
+  configText: string,
+  key: ClaudePromptCacheTtlKey
+): boolean {
+  const parseResult = parseConfigJsonText(configText)
+  if (parseResult.error) return false
+  // Exact match: Claude rejects anything but "5m" / "1h", so a padded value
+  // must not read as on.
+  return parseResult.config[key] === CLAUDE_PROMPT_CACHE_TTL_ONE_HOUR
+}
+
+/** On writes `"1h"` under `key`, off removes the key; every other key is kept.
+ *  Returns `null` for invalid JSON — rebuilding from `{}` would make the save's
+ *  merge diff delete every other key on disk. */
+export function setClaudePromptCacheTtlInConfigText(
+  configText: string,
+  key: ClaudePromptCacheTtlKey,
+  enabled: boolean
+): string | null {
+  const parseResult = parseConfigJsonText(configText)
+  if (parseResult.error) return null
+  const config: Record<string, unknown> = { ...parseResult.config }
+  if (enabled) {
+    config[key] = CLAUDE_PROMPT_CACHE_TTL_ONE_HOUR
+  } else {
+    delete config[key]
+  }
+  return JSON.stringify(config, null, 2)
+}
+
 /**
  * Materialize both Claude hardening toggles into the native config `env` AND the
  * DB env overlay (envText), writing the explicit "1"/"0" per toggle so the shown
@@ -4870,6 +4914,55 @@ function AgentReorderItem({
     >
       {children(startDrag)}
     </Reorder.Item>
+  )
+}
+
+const CLAUDE_PROMPT_CACHE_SWITCHES = [
+  { key: CLAUDE_PROMPT_CACHE_TTL_KEY, label: "claude.promptCacheMain" },
+  {
+    key: CLAUDE_SUBAGENT_PROMPT_CACHE_TTL_KEY,
+    label: "claude.promptCacheSubagent",
+  },
+] as const
+
+/** Claude Code's one-hour prompt cache switches. Each one reads its key off the
+ *  native config text, so a hand edit of the JSON moves the switch with it;
+ *  while the JSON doesn't parse they are locked rather than guessing. */
+function ClaudePromptCacheFields({
+  configText,
+  onChange,
+}: {
+  configText: string
+  onChange: (key: ClaudePromptCacheTtlKey, enabled: boolean) => void
+}) {
+  const t = useTranslations("AcpAgentSettings")
+  const invalid = parseConfigJsonText(configText).error !== null
+  return (
+    <div className="space-y-1.5 border-t border-border/60 pt-3">
+      <label className="text-xs font-medium">
+        {t("claude.promptCacheMode")}
+      </label>
+      {CLAUDE_PROMPT_CACHE_SWITCHES.map(({ key, label }) => (
+        <div
+          key={key}
+          className="flex items-center justify-between rounded-md border px-3 py-2"
+        >
+          <label className="text-2xs text-muted-foreground">
+            {t(label)}
+            <code className="ml-1.5 font-mono">{key}</code>
+          </label>
+          <Switch
+            checked={claudePromptCacheOneHourEnabled(configText, key)}
+            disabled={invalid}
+            onCheckedChange={(checked) => onChange(key, checked)}
+            aria-label={t(label)}
+          />
+        </div>
+      ))}
+      <p className="text-2xs text-muted-foreground">
+        {t("claude.promptCacheHint")}
+      </p>
+    </div>
   )
 }
 
@@ -6915,6 +7008,28 @@ export function AcpAgentSettings() {
       }))
     },
     [selectedAgent, selectedDraft, t, updateSelectedDraft]
+  )
+
+  // The cache switches live in the native config text itself (top-level keys,
+  // no env mirror), so they need nothing in the draft beyond `configText`.
+  const handleClaudePromptCacheTtlChange = useCallback(
+    (key: ClaudePromptCacheTtlKey, enabled: boolean) => {
+      if (
+        !selectedAgent ||
+        !selectedDraft ||
+        selectedAgent.agent_type !== "claude_code"
+      )
+        return
+      updateSelectedDraft((current) => {
+        const configText = setClaudePromptCacheTtlInConfigText(
+          current.configText,
+          key,
+          enabled
+        )
+        return configText === null ? current : { ...current, configText }
+      })
+    },
+    [selectedAgent, selectedDraft, updateSelectedDraft]
   )
 
   const handleGrokAuthModeChange = useCallback(
@@ -13175,6 +13290,10 @@ base_url = "https://api.openai.com/v1"`}
                             />
                           </div>
                         </div>
+                        <ClaudePromptCacheFields
+                          configText={selectedDraft.configText}
+                          onChange={handleClaudePromptCacheTtlChange}
+                        />
                       </div>
                     ) : (
                       importantFieldsFor(selectedAgent.agent_type).model && (
