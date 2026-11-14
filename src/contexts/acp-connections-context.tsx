@@ -164,6 +164,7 @@ import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
 import { rememberModelLabels } from "@/lib/model-label-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { registerFrontendMemoryProvider } from "@/lib/frontend-memory"
+import { getCodeHighlightStats } from "@/lib/code-highlighter"
 
 /**
  * A session id we are willing to interpolate into a shell command we hand the
@@ -5133,6 +5134,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         for (const key of keys) openKeys.add(key)
       }
 
+      const highlighting = getCodeHighlightStats()
+
       return {
         connections: storeRef.current.connections.size,
         promptingConnections,
@@ -5156,6 +5159,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         runtimeLiveBlocks,
         overlayFoldRefetchEntries: overlayFoldRefetchAt.size,
         selectorsCacheEntries: selectorsCache.size,
+        highlightCacheEntries: highlighting.entries,
+        highlightCacheEstimatedBytes: highlighting.estimatedBytes,
+        highlightInFlight: highlighting.inFlight,
+        highlightWaiting: highlighting.waiting,
       }
     })
     return unregister

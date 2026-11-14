@@ -33,6 +33,17 @@ export const MEMORY_METRIC_KEYS = [
   "runtimeOptimisticTurns",
   "runtimePendingBackgroundSettlements",
   "runtimeLiveBlocks",
+  "runtimeSessionsRetired",
+  "retiredRuntimeSessionsAlive",
+  "runtimeTurnsRetired",
+  "retiredRuntimeTurnsAlive",
+  "messageViewsRetired",
+  "retiredMessageViewsAlive",
+  "lifetimeTrackersDropped",
+  "highlightCacheEntries",
+  "highlightCacheEstimatedBytes",
+  "highlightInFlight",
+  "highlightWaiting",
   "overlayFoldRefetchEntries",
   "selectorsCacheEntries",
   "iframeCount",
@@ -59,6 +70,7 @@ type WeakReferenceConstructor = new <T extends object>(
 ) => WeakReference<T>
 const KEYS = new Set<string>(MEMORY_METRIC_KEYS)
 const TRACKER_LIMIT = 128
+type RuntimeTarget = "session" | "turn"
 const noop = () => {}
 let pendingHtmlReader: Reader | undefined
 
@@ -79,7 +91,17 @@ export function createFrontendMemoryTracker(options: {
     { read: Reader; weak?: WeakReference<object> }
   >()
   const retired = new Map<number, WeakReference<object>>()
+  const retiredSessions = new Map<number, WeakReference<object>>()
+  const retiredTurns = new Map<number, WeakReference<object>>()
+  const retiredViews = new Map<number, WeakReference<object>>()
+  const viewActivations = new WeakMap<object, number>()
+  const runtimeTargets = new WeakMap<object, number>()
   let serial = 0
+  let sessionsRetired = 0
+  let turnsRetired = 0
+  let viewsRetired = 0
+  let droppedLifetimes = 0
+  let disposed = false
   let mounted = 0
   let unmounted = 0
   let droppedActive = 0
@@ -90,6 +112,55 @@ export function createFrontendMemoryTracker(options: {
   let htmlReader: Reader | undefined
   let inFlight = false
   const now = options.now ?? (() => performance.now())
+
+  function remember(
+    entries: Map<number, WeakReference<object>>,
+    id: number,
+    weak: WeakReference<object>
+  ) {
+    if (entries.has(id)) return false
+    if (entries.size >= TRACKER_LIMIT) {
+      const oldest = entries.keys().next().value
+      if (oldest !== undefined) entries.delete(oldest)
+      droppedLifetimes++
+    }
+    entries.set(id, weak)
+    return true
+  }
+
+  function recordRuntimeRetirement(kind: RuntimeTarget, target: object) {
+    if (disposed || typeof weakReference !== "function") return
+    const entries = kind === "session" ? retiredSessions : retiredTurns
+    let id = runtimeTargets.get(target)
+    if (id === undefined) {
+      id = ++serial
+      runtimeTargets.set(target, id)
+    }
+    if (remember(entries, id, new weakReference(target))) {
+      if (kind === "session") sessionsRetired++
+      else turnsRetired++
+    }
+  }
+
+  function retireView(id: number, weak: WeakReference<object>) {
+    if (disposed) return
+    const target = weak.deref()
+    // A StrictMode/layout ref replay may already have reclaimed this DOM
+    // wrapper. An old cleanup must not retire its newer activation.
+    if (!target || viewActivations.get(target) !== id) return
+    if (remember(retiredViews, id, weak)) viewsRetired++
+  }
+
+  function registerMessageView(target: object) {
+    if (disposed || typeof weakReference !== "function") return noop
+    const previous = viewActivations.get(target)
+    if (previous !== undefined) retiredViews.delete(previous)
+    const id = ++serial
+    viewActivations.set(target, id)
+    // The cleanup may itself survive the view. Bind ONLY its WeakRef and ID,
+    // never the DOM wrapper, an application callback, or the view's props.
+    return retireView.bind(undefined, id, new weakReference(target))
+  }
 
   function unregisterProvider(id: number) {
     const entry = providers.get(id)
@@ -108,6 +179,7 @@ export function createFrontendMemoryTracker(options: {
   }
 
   function registerProvider(tracked: object, read: Reader) {
+    if (disposed) return noop
     if (providers.size >= TRACKER_LIMIT) {
       droppedActive++
       return noop
@@ -127,6 +199,7 @@ export function createFrontendMemoryTracker(options: {
   }
 
   function registerSurface() {
+    if (disposed) return noop
     let active = true
     surfaces++
     surfaceMounts++
@@ -143,6 +216,11 @@ export function createFrontendMemoryTracker(options: {
     for (const [id, weak] of retired) {
       if (!weak.deref()) retired.delete(id)
     }
+    for (const entries of [retiredSessions, retiredTurns, retiredViews]) {
+      for (const [id, weak] of entries) {
+        if (!weak.deref()) entries.delete(id)
+      }
+    }
     const metrics: MemoryCounters = {
       providersActive: providers.size,
       providersMounted: mounted,
@@ -155,6 +233,13 @@ export function createFrontendMemoryTracker(options: {
       surfacesActive: surfaces,
       surfacesMounted: surfaceMounts,
       surfacesUnmounted: surfaceUnmounts,
+      runtimeSessionsRetired: sessionsRetired,
+      retiredRuntimeSessionsAlive: retiredSessions.size,
+      runtimeTurnsRetired: turnsRetired,
+      retiredRuntimeTurnsAlive: retiredTurns.size,
+      messageViewsRetired: viewsRetired,
+      retiredMessageViewsAlive: retiredViews.size,
+      lifetimeTrackersDropped: droppedLifetimes,
     }
     const merge = (values: MemoryCounters) => {
       for (const [key, value] of Object.entries(values)) {
@@ -213,14 +298,20 @@ export function createFrontendMemoryTracker(options: {
   return {
     registerProvider,
     registerSurface,
+    registerMessageView,
+    recordRuntimeRetirement,
     setHtmlReader: (read: Reader) => {
       htmlReader = read
     },
     sample,
     flush,
     dispose: () => {
+      disposed = true
       providers.clear()
       retired.clear()
+      retiredSessions.clear()
+      retiredTurns.clear()
+      retiredViews.clear()
       htmlReader = undefined
     },
   }
@@ -273,6 +364,19 @@ export function registerFrontendMemoryProvider(tracked: object, read: Reader) {
 
 export function registerFrontendMemorySurface() {
   return tracker()?.registerSurface() ?? noop
+}
+
+/** Weak JS-wrapper observations only; survival is not a retained-byte count. */
+export function registerFrontendMemoryMessageView(target: object) {
+  return tracker()?.registerMessageView(target) ?? noop
+}
+
+export function recordFrontendMemoryRuntimeRetirement(
+  kind: RuntimeTarget,
+  target: object
+) {
+  // A late teardown after pagehide must not start a new reporter/timer.
+  singleton?.recordRuntimeRetirement(kind, target)
 }
 
 export function registerFrontendHtmlMemory(read: Reader) {

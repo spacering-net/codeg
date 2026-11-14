@@ -17,6 +17,7 @@ import {
   useConversationRuntimeStore,
 } from "@/stores/conversation-runtime-store"
 import { isWindowedDetail } from "@/lib/turn-window"
+import { registerFrontendMemoryMessageView } from "@/lib/frontend-memory"
 import { CompletedTurnContent } from "./completed-turn-content"
 import { ContextCompactionCard } from "./context-compaction-card"
 import { CollapsibleUserMessage } from "./collapsible-user-message"
@@ -2009,6 +2010,14 @@ export function MessageListView({
   // (non-scrolling) frame, so the bubble is clipped to the message area and
   // never overlaps the composer or the tab strip.
   const selectionBoxRef = useRef<HTMLDivElement | null>(null)
+  const releaseMemoryViewRef = useRef<(() => void) | null>(null)
+  const setSelectionBoxRef = useCallback((node: HTMLDivElement | null) => {
+    releaseMemoryViewRef.current?.()
+    selectionBoxRef.current = node
+    releaseMemoryViewRef.current = node
+      ? registerFrontendMemoryMessageView(node)
+      : null
+  }, [])
 
   // The loaded user messages: how many, and where each renders. Cheap — no
   // diff parsing — so the message count and the jumps can use it while
@@ -2386,7 +2395,7 @@ export function MessageListView({
     // sub-agent rows sit in another tree and bring their own host.)
     <SessionViewerHost>
       <div
-        ref={selectionBoxRef}
+        ref={setSelectionBoxRef}
         className="chat-motion-scope relative flex h-full min-h-0 flex-col"
       >
         <MessageThread

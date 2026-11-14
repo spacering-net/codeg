@@ -7,6 +7,7 @@ import type {
 } from "@/contexts/acp-connections-context"
 import { getFolderConversation, getFolderConversationTurns } from "@/lib/api"
 import { registerBackendScopedStoreReset } from "@/stores/backend-scoped-store-reset"
+import { recordFrontendMemoryRuntimeRetirement } from "@/lib/frontend-memory"
 import type {
   AgentExecutionStats,
   AgentTranscriptEntry,
@@ -5251,6 +5252,7 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
         kickoffText,
       }),
     removeConversation: (conversationId) => {
+      const retiring = get().byConversationId.get(conversationId)
       // Invalidate any outstanding fetch for this conversation so a
       // late-arriving response can't resurrect the session with stale
       // detail. See `fetchGeneration` above.
@@ -5262,11 +5264,14 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
       unseenTurnEnds.delete(conversationId)
       cancelUnseenTurnResync(conversationId)
       dispatch({ type: "REMOVE_CONVERSATION", conversationId })
+      if (retiring) recordRetiredSession(retiring)
     },
     reset: () => {
+      const retiring = get().byConversationId
       unseenTurnEnds.clear()
       for (const cancel of [...unseenTurnResyncCancels.values()]) cancel()
       dispatch({ type: "RESET" })
+      for (const session of retiring.values()) recordRetiredSession(session)
     },
   }
 
@@ -5278,6 +5283,21 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
 })
 
 // ─── Read helpers ────────────────────────────────────────────────────────
+
+function recordRetiredSession(session: ConversationRuntimeSession): void {
+  if (process.env.NEXT_PUBLIC_CODEG_MEMORY_DIAGNOSTICS !== "1") return
+  recordFrontendMemoryRuntimeRetirement("session", session)
+  // Bounded representatives of the removed payload graph, not every turn of
+  // a large transcript. No IDs, text or application objects are serialized.
+  const detailTurns = session.detail?.turns
+  for (const turn of [
+    session.liveMessage,
+    session.localTurns[session.localTurns.length - 1],
+    detailTurns && detailTurns[detailTurns.length - 1],
+  ]) {
+    if (turn) recordFrontendMemoryRuntimeRetirement("turn", turn)
+  }
+}
 // Callbacks/effects read fresh state through `getState()` (no subscription);
 // components subscribe via `useConversationRuntimeStore(selector)` instead.
 
@@ -5375,6 +5395,7 @@ export function useConversationRuntimeActions(): RuntimeActions {
  * lifetime and is never reset.
  */
 export function resetConversationRuntimeStore(): void {
+  const retiring = useConversationRuntimeStore.getState().byConversationId
   // NOTE: clearing (vs. epoch-bumping) means a pre-reset in-flight fetch could
   // re-match a post-reset generation and commit stale detail. Harmless today —
   // the only production caller (the backend-identity guard) never fires and tests
@@ -5396,6 +5417,7 @@ export function resetConversationRuntimeStore(): void {
     byConversationId: new Map(),
     conversationIdByExternalId: new Map(),
   })
+  for (const session of retiring.values()) recordRetiredSession(session)
 }
 
 // Reset this backend-scoped store on any (currently-unreachable) in-realm
