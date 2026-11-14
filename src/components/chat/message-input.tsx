@@ -381,9 +381,11 @@ export function MessageInput({
   // Skills read from disk feed the menu only for an agent that does not
   // advertise them itself: Codex under `$` (its native command set is very
   // small), Antigravity and OpenCode under `/` beside their commands (their
-  // ACP servers list only commands, never a skill). Every other agent surfaces
-  // its skills through ACP `availableCommands`, so a disk scan would only
-  // repeat them — skip it.
+  // ACP servers list only commands, never a skill), and custom agents under `/`
+  // from the skill directories their user declared (codeg cannot know what an
+  // arbitrary ACP server advertises). Every other built-in agent surfaces its
+  // skills through ACP `availableCommands`, so a disk scan would only repeat
+  // them — skip it.
   const skillTrigger = diskSkillTrigger(agentType)
   // Pass the working dir so we see both global skills and folder-scoped
   // project skills (e.g. `{folder}/.codex/skills`). Without this, users

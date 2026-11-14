@@ -55,7 +55,10 @@ import {
 } from "@/lib/ask-selection-handoff"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useMessageQueue, type QueuedMessage } from "@/hooks/use-message-queue"
-import { MessageListView } from "@/components/message/message-list-view"
+import {
+  MessageListView,
+  type LiveRunsSource,
+} from "@/components/message/message-list-view"
 import {
   GoalControlProvider,
   type GoalControlValue,
@@ -1476,7 +1479,7 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
-  /** Stop one AIR async task. Returns the adapter's verdict so the strip can
+  /** Stop one AIR async task. Returns the adapter's verdict so the row can
    *  release its button; `false` (the adapter declined) is reported, because
    *  nothing else would tell the user their click did nothing — a successful
    *  stop announces itself by the row disappearing. */
@@ -2132,6 +2135,32 @@ const ConversationTabView = memo(function ConversationTabView({
     [awaitingToolCallId, awaitingUser, approvals]
   )
 
+  // The work this connection has running beyond the turn, for the "N running"
+  // chip on the live activity row. The stop is for owners of a live connection
+  // only — same gate as the failure actions: a viewer has no connection to send
+  // it on.
+  const canStopAsyncTask = conn.connectionId !== null && !conn.isViewer
+  const runsAgentName = getAgentLabel(selectedAgent)
+  const liveRuns = useMemo<LiveRunsSource>(
+    () => ({
+      connectionId: conn.connectionId,
+      asyncTasks: conn.asyncTasks,
+      backgroundTasks: conn.backgroundTasks,
+      delegatedChildren: conn.delegatedChildren,
+      onStopAsyncTask: canStopAsyncTask ? handleStopAsyncTask : undefined,
+      agentName: runsAgentName,
+    }),
+    [
+      conn.connectionId,
+      conn.asyncTasks,
+      conn.backgroundTasks,
+      conn.delegatedChildren,
+      canStopAsyncTask,
+      handleStopAsyncTask,
+      runsAgentName,
+    ]
+  )
+
   const messageListNode = (
     <GoalControlProvider value={goalControlValue}>
       <ActivityLiveProvider value={activityLive}>
@@ -2150,6 +2179,7 @@ const ConversationTabView = memo(function ConversationTabView({
           // The conversation page's navigator, plan and sub-agents show in the
           // Session Details side panel rather than over the messages.
           insightsInSidebar
+          liveRuns={liveRuns}
           onReload={canShowDetailErrorActions ? handleReloadDetail : undefined}
           onNewSession={
             canShowDetailErrorActions ? handleOpenNewSession : undefined
@@ -2298,14 +2328,6 @@ const ConversationTabView = memo(function ConversationTabView({
       claudeApiRetry={conn.claudeApiRetry}
       sessionFailures={conn.sessionFailures}
       onSessionFailureDismiss={handleSessionFailureDismiss}
-      asyncTasks={conn.asyncTasks}
-      onStopAsyncTask={
-        // Owners of a live connection only — same gate as the failure actions:
-        // a viewer has no connection to send the stop on.
-        conn.connectionId !== null && !conn.isViewer
-          ? handleStopAsyncTask
-          : undefined
-      }
       remoteControl={connIsForOtherAgent ? null : conn.remoteControl}
       onRemoteControlOff={
         // Owners of a live connection only, like the stop above.

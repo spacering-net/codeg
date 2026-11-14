@@ -604,9 +604,11 @@ export interface DbConversationSummary {
   parent_id?: number | null
   parent_tool_use_id?: string | null
   delegation_call_id?: string | null
-  /** Set when the conversation was re-parented out of a removed worktree: the
-   *  worktree path it originally ran in. Drives the "source worktree removed"
-   *  badge. */
+  /** The directory this conversation's session was recorded in, when that
+   *  differs from its current folder's path: set when it was re-parented out of
+   *  a removed worktree, or moved to another project by the user (a moved chat
+   *  conversation remembers its scratch dir). Drives the "original working
+   *  directory" line of the hover details. */
   origin_cwd?: string | null
   /** The assistant a delegation child ran as, and its name when the
    *  delegation started (off the child row's snapshot). Absent on every other
@@ -636,6 +638,25 @@ export type ConversationChange =
   | { kind: "status"; id: number; status: string }
 
 export const CONVERSATION_CHANGED_EVENT = "conversation://changed"
+
+/** Why `moveConversations` left a conversation where it was. Mirrors the Rust
+ *  `MoveSkipReason`. */
+export type MoveSkipReason =
+  | "not_found"
+  | "not_movable"
+  | "already_there"
+  | "task_owned"
+  | "busy"
+  | "conflict"
+  | "target_unavailable"
+
+/** Result of `moveConversations`: the root conversations moved (their
+ *  delegation children moved with them) and, per conversation, why the rest
+ *  were left alone. */
+export interface MoveConversationsResult {
+  moved: number[]
+  skipped: { conversationId: number; reason: MoveSkipReason }[]
+}
 
 /** Payload for the global `folder://changed` side-channel. A folder created or
  *  updated headlessly — e.g. the automation engine minting a per-run worktree —
@@ -1670,6 +1691,7 @@ export interface QuestionSpec {
   multi_select: boolean
   options: QuestionOption[]
   is_secret?: boolean
+  allow_other?: boolean
 }
 
 /** Awaiting-answer question set on the session (mirror of `PendingQuestionState`). */
@@ -4122,6 +4144,11 @@ export interface WorkTask {
   /** The personal-agent dispatch that created this task, when one did. It
    *  lands as the board's settings say, like any other task. */
   personal_agent_dispatch_id?: number | null
+  /** The reply drafted for each thread of a forge-sourced task, keyed by item
+   *  number (JSON object keys are strings) — what the write-back posts once
+   *  the task is accepted. Absent = no draft: the comment is then the outcome
+   *  line alone. */
+  writeback_drafts?: Record<string, string> | null
   /** Latest agent_progress milestone OF THIS GENERATION — present on live
    *  (preparing/running/awaiting/merging) rows only. Scoped by run_seq, so a
    *  merge in flight never narrates the work round it is landing. */
@@ -4166,6 +4193,20 @@ export interface ForgeSourceMeta {
   /** The trigger dialog's write-back answer, frozen at trigger time. Absent on
    *  rows minted before the choice lived here — those stay silent. */
   writeback?: boolean | null
+  /** Every issue of a task made from several related issues, lead first (the
+   *  lead is also `number` / `url` / `title`). Absent on a one-item task. */
+  items?: ForgeSourceItem[]
+  /** Which of `items` the task's pull request closes — chosen at its first
+   *  delivery and fixed from then on. Absent until then, and always on a
+   *  one-item task. */
+  pr_closes?: number[] | null
+}
+
+/** One issue of a task made from several related issues. */
+export interface ForgeSourceItem {
+  number: number
+  url: string
+  title: string
 }
 
 /** Where a task without forge provenance delivered its work: the repository
@@ -4432,6 +4473,68 @@ export interface ForgeChangeDetail {
   changed_files: number | null
   commits: number | null
   checks: ForgeCheckList
+  /** Workflow runs held for a maintainer's approval (GitHub fork changes
+   *  only). Null when there is nothing to say — not GitHub, not a fork, or
+   *  Actions not readable. Held runs have produced NO check yet, which is why
+   *  this sits beside `checks` rather than in it. */
+  workflow_approval: ForgeWorkflowApproval | null
+}
+
+/** A workflow run held for approval (mirrors Rust ForgePendingRun). */
+export interface ForgePendingRun {
+  id: string
+  name: string
+  url: string | null
+}
+
+/** Runs a change waits on a maintainer for (mirrors Rust
+ *  ForgeWorkflowApproval). */
+export interface ForgeWorkflowApproval {
+  runs: ForgePendingRun[]
+  /** The search was cut short; there may be held runs not listed here. */
+  incomplete: boolean
+  /** The runs cannot be tied to this change alone (another open change from
+   *  the same fork branch) — approve on the forge, not here. */
+  ambiguous: boolean
+  /** Whether the account can push (what approving needs); null = unknown. */
+  can_approve: boolean | null
+}
+
+/** What an approval did (mirrors Rust ForgeApproveResult). */
+export interface ForgeApproveResult {
+  approved: number
+  failed: { name: string; message: string }[]
+  incomplete: boolean
+}
+
+/** A whole change's CI as one word (mirrors Rust ForgeCheckVerdict). */
+export type ForgeCheckVerdict = "failure" | "running" | "success" | "neutral"
+
+/** Mirrors Rust ForgeCheckCounts. */
+export interface ForgeCheckCounts {
+  passing: number
+  failing: number
+  pending: number
+  neutral: number
+  total: number
+}
+
+/** One list row's CI (mirrors Rust ForgeCheckSummary). */
+export interface ForgeCheckSummary {
+  number: number
+  /** null = the forge says this change has no checks. */
+  verdict: ForgeCheckVerdict | null
+  /** null where the forge gives a verdict without a breakdown. */
+  counts: ForgeCheckCounts | null
+  /** Workflow runs held for approval (GitHub only; 0 elsewhere). */
+  awaiting_approval: number
+}
+
+/** One page's CI summaries. A change missing from `items` is UNKNOWN — not
+ *  the same as `verdict: null` — and both draw nothing. */
+export interface ForgeCheckSummaryList {
+  available: boolean
+  items: ForgeCheckSummary[]
 }
 
 /** How a file was touched (mirrors Rust ForgeFileStatus). */
@@ -4469,6 +4572,12 @@ export interface ForgeChangedFileList {
   has_next: boolean
 }
 
+/** Cached image resource; account credentials and bytes stay off JSON/IPC. */
+export interface ForgeImage {
+  mime_type: string
+  url: string
+}
+
 /** A folder's `origin` remote parsed into forge coordinates. */
 export interface ForgeRemote {
   server_host: string
@@ -4501,6 +4610,9 @@ export interface ForgeTaskLink {
   deferred?: boolean
   verdict: string | null
   updated_at: string
+  /** The numbers of every item the task handles, lead first — more than one
+   *  for a task made from several related issues. Absent on older servers. */
+  items?: number[]
 }
 
 /** How the trigger dialog asks the work item to be handled. A template NAME
@@ -4566,6 +4678,10 @@ export interface ForgePanelSettings {
    *  position: the switch is on screen every time, and what it says when the
    *  user presses Create is what the task records. */
   writeback_default: boolean
+  /** End every comment codeg posts with the "🤖 Generated with Codeg" line.
+   *  Optional here because a blob from a build that predates it has none,
+   *  which the backend reads as on — the default. */
+  comment_footer?: boolean
   /** Standing instructions appended after a scenario's built-in wording,
    *  keyed by scenario id plus the reserved `all` (every scenario). */
   scenario_prompts: Record<string, string>
@@ -4689,6 +4805,44 @@ export type ForgeCreateResult =
   | { outcome: "duplicate"; existing: WorkTask }
   | { outcome: "folder_mismatch"; folder_remote: ForgeRemote | null }
 
+/** Several related issues handled as ONE task (one agent, one worktree, one
+ *  pull request) — coordinates and display snapshots only, like
+ *  `ForgeTaskDraftInput`. */
+export interface ForgeIssuesTaskDraftInput {
+  folder_id: number
+  source: {
+    provider: ForgeProviderId
+    server_host: string
+    account_id?: string | null
+    owner_repo: string
+  }
+  /** At least two distinct issues. */
+  items: {
+    number: number
+    snapshot: ForgeTaskDraftInput["snapshot"]
+  }[]
+  /** `fix` or `plan_first`; absent = `fix`. */
+  scenario?: ForgeScenarioId | null
+  instruction?: string | null
+  /** One answer for every issue — each gets its own comment, or none does. */
+  writeback?: boolean | null
+  agent_type?: string | null
+  force?: boolean
+}
+
+/** One issue a live task already handles, and that task. */
+export interface ForgeCreateConflict {
+  number: number
+  existing: WorkTask
+}
+
+/** `ForgeCreateResult` for several issues: a dedup hit names every issue a
+ *  live task already handles. */
+export type ForgeIssuesCreateResult =
+  | { outcome: "created"; task: WorkTask }
+  | { outcome: "duplicate"; conflicts: ForgeCreateConflict[] }
+  | { outcome: "folder_mismatch"; folder_remote: ForgeRemote | null }
+
 /** A merge parked on a reviewed task while its project lands another one. */
 export interface WorkTaskQueuedMerge {
   /** The commit message the user typed; null = the agent writes it. */
@@ -4787,6 +4941,14 @@ export interface WorkTaskChangedFile {
   file: string
   additions: number
   deletions: number
+}
+
+/** A file a task worktree holds uncommitted — what a delivery commits first
+ *  when the user agrees to. `status`: `A` added or untracked, `M` modified,
+ *  `D` deleted, `R` renamed or copied. */
+export interface WorkTaskUncommittedFile {
+  file: string
+  status: "A" | "M" | "D" | "R"
 }
 
 // --- Token usage dashboard (mirror of src-tauri/src/models/token_usage.rs) ---
@@ -5024,6 +5186,27 @@ export interface BackgroundSettledInfo {
   tool_use_id?: string | null
   result?: string | null
   interim?: boolean
+}
+
+/**
+ * One launched-but-unresolved background task (mirror of Rust
+ * `BackgroundOutstandingTask`), as the producer of `background_activity`
+ * accounts it: the Claude transcript watcher, or OpenCode's / Grok's live
+ * state. `task_id` is the id its settle carries; `tool_use_id` the launching
+ * call (the card a row takes its title from), absent when the launch was never
+ * seen; `description` the launch's own words, capped.
+ *
+ * `kind: "shell"` (Claude's background shells) is also on the AIR async-task
+ * channel, which lists it with a stop, so the composer's running list takes
+ * only `"agent"` from here.
+ */
+export interface BackgroundOutstandingTask {
+  task_id: string
+  kind: "agent" | "shell"
+  tool_use_id?: string | null
+  description?: string | null
+  /** When the producer first saw it launched (or resumed), Unix ms. */
+  started_at_ms: number
 }
 
 export type AcpEvent =
@@ -5289,7 +5472,13 @@ export type AcpEvent =
       message: string
       /**
        * Stable backend identifier: `"resource_not_found"`,
-       * `"session_unavailable"`, `"session_archived"`, or `"session_busy"`.
+       * `"session_unavailable"`, `"session_archived"`, `"session_busy"`, or
+       * `"provider_mismatch"`.
+       *
+       * `"provider_mismatch"` does not mean gone either: codex (0.166+) keeps a
+       * conversation on the model provider it started with and refuses it under
+       * any other, and switching back opens it. `message` is then codex's own
+       * sentence, which names both providers.
        *
        * The first three mean the session is gone. `"session_busy"` does not —
        * another live holder has it open (another Codex client — the app, the
@@ -5338,15 +5527,31 @@ export type AcpEvent =
    * `turns` are UPSERTs keyed by `MessageTurn.id` into the conversation
    * runtime store's background overlay; `settled` entries each raise one OS
    * notification; `outstanding` mirrors into the connection for the idle-sweep
-   * exemption (nothing renders the count).
+   * exemption, and `outstanding_tasks` — the same tasks one by one, the
+   * producer's WHOLE current set on every event (absent = none) — feeds the
+   * composer's running list.
    */
   | {
       type: "background_activity"
       session_id: string
       turns?: MessageTurn[]
       outstanding: number
+      outstanding_tasks?: BackgroundOutstandingTask[]
       settled?: BackgroundSettledInfo[]
       watermark: number
+    }
+  /**
+   * A live progress tick for a background sub-agent whose launch card has left
+   * the live message (Grok: its launching turn ended, or a later turn runs).
+   * `meta` is merged into the launch card's own `meta` in memory, the way a
+   * settle rewrites its lifecycle marker; nothing is persisted.
+   */
+  | {
+      type: "background_task_progress"
+      session_id: string
+      tool_use_id: string
+      task_id: string
+      meta: Record<string, unknown>
     }
   /**
    * A `delegate_to_agent` MCP tool call from the parent agent has spawned a
@@ -5391,6 +5596,17 @@ export type AcpEvent =
       /** Mirrors `delegation_started`'s assistant identity. */
       assistant_id?: number | null
       assistant_name?: string | null
+    }
+  /**
+   * A codeg delegation of this (parent) connection started (`running`) or
+   * reached a terminal state. Lifecycle accounting only: unlike the two events
+   * above it also covers a delegation whose parent tool call couldn't be
+   * identified (no card), which still dies with its parent.
+   */
+  | {
+      type: "delegation_child_running"
+      child_connection_id: string
+      running: boolean
     }
   /**
    * The user's submitted prompt, broadcast on the connection stream so OTHER
@@ -5872,6 +6088,10 @@ export interface LiveSessionSnapshot {
   /** Live sub-agent delegations recoverable from the snapshot. May be absent
    *  on older server payloads (then treated as `[]`). */
   active_delegations?: ActiveDelegationState[]
+  /** Child connection ids of every codeg delegation still running, card or
+   *  not (see `delegation_child_running`). Absent when empty / on older
+   *  servers (then treated as `[]`). */
+  delegated_children?: string[]
   /** Live-feedback notes for the current turn. Absent on older payloads /
    *  when empty (then treated as `[]`). */
   feedback?: FeedbackItem[]
@@ -5880,6 +6100,9 @@ export interface LiveSessionSnapshot {
    *  mid-episode recover the pending count the one-shot `background_activity`
    *  events won't replay. Absent / omitted when zero. */
   background_outstanding?: number
+  /** Those tasks one by one (see `BackgroundOutstandingTask`). Absent /
+   *  omitted when empty. */
+  background_outstanding_tasks?: BackgroundOutstandingTask[]
   /** Whether this agent has the `check_user_feedback` tool (fixed at launch).
    *  The frontend gates the feedback bar on this — the agent's real capability —
    *  not the (possibly later-toggled) global setting. Absent → `false`. */
@@ -6341,7 +6564,7 @@ export interface AgentSkillContent {
 }
 
 /**
- * Built-in expert skills, sourced from obra/superpowers v7.0.1 and bundled into
+ * Built-in expert skills, sourced from obra/superpowers v7.0.2 and bundled into
  * the codeg binary. Experts live in a central store at `~/.codeg/skills/`
  * and are linked into agent skill directories on demand.
  */

@@ -44,11 +44,12 @@ use crate::db::entities::conversation::{self, ConversationStatus};
 use crate::db::entities::work_task::WorkTaskStatus;
 use crate::db::entities::{folder, folder_command};
 use crate::db::service::work_task_service::DeliveryRecord;
-use crate::db::service::{conversation_service, tab_service, work_task_service};
+use crate::db::service::{conversation_service, work_task_service};
 use crate::db::AppDatabase;
 use crate::forge::deliver::{
-    adopt_pull_request, local_pull_request_body, pull_request_body, writeback_comment_body,
-    DeliveryCtx, ForgeDeliveryApi, ForgePr, NewPullRequest, PrAdoption, TaskOutcome,
+    adopt_pull_request, issues_pull_request_body, local_pull_request_body, pull_request_body,
+    writeback_comment_body, DeliveryCtx, ForgeDeliveryApi, ForgePr, NewPullRequest, PrAdoption,
+    TaskOutcome,
 };
 use crate::forge::{
     DeliveryTarget, ForgeItemKind, ForgeProvider, ForgeSourceMeta, WorkTaskDelivery,
@@ -3399,19 +3400,35 @@ impl TaskEngine {
     }
 
     /// `task_complete`: stash the verdict + summary on the current generation;
-    /// the TurnComplete settle reads them to decide review vs failed.
+    /// the TurnComplete settle reads them to decide review vs failed. Thread
+    /// replies ride along as drafts — kept only for the items a forge-sourced
+    /// task handles, sanitized before anyone sees them (see
+    /// `forge::thread_reply`).
     pub async fn record_complete(
         &self,
         conn_id: &str,
         verdict: &str,
         summary: Option<&str>,
+        thread_replies: &[crate::acp::delegation::transport::ThreadReply],
     ) -> TaskReportAck {
         let entry = { self.index.lock().await.get(conn_id).copied() };
         let Some((task_id, run_seq)) = entry else {
             return TaskReportAck::rejected("this session is not executing a work task");
         };
-        match work_task_service::set_verdict(&self.db.conn, task_id, run_seq, verdict, summary)
-            .await
+        let drafts = if thread_replies.is_empty() {
+            None
+        } else {
+            self.thread_reply_drafts(task_id, thread_replies).await
+        };
+        match work_task_service::set_verdict_with_drafts(
+            &self.db.conn,
+            task_id,
+            run_seq,
+            verdict,
+            summary,
+            drafts.as_deref(),
+        )
+        .await
         {
             Ok(true) => {
                 self.emit_upsert(task_id);
@@ -3420,6 +3437,35 @@ impl TaskEngine {
             Ok(false) => TaskReportAck::rejected("the task is not running anymore"),
             Err(e) => TaskReportAck::rejected(&format!("could not record verdict: {e}")),
         }
+    }
+
+    /// The agent's thread replies as `work_task.writeback_drafts` JSON: only
+    /// for a forge-sourced task, only for its own items, with this machine's
+    /// paths made relative to the checkout and anything credential-shaped
+    /// masked. `None` = nothing worth keeping.
+    async fn thread_reply_drafts(
+        &self,
+        task_id: i32,
+        replies: &[crate::acp::delegation::transport::ThreadReply],
+    ) -> Option<String> {
+        let task = work_task_service::get_model(&self.db.conn, task_id).await.ok()?;
+        let (_, meta) = forge_thread(&task)?;
+        let mut roots: Vec<String> = Vec::new();
+        if let Some(wt_id) = task.worktree_folder_id {
+            if let Ok(wt) = get_folder_core(&self.db, wt_id).await {
+                roots.push(wt.path);
+            }
+        }
+        if let Ok(root) = get_folder_core(&self.db, task.folder_id).await {
+            roots.push(root.path);
+        }
+        let roots: Vec<&str> = roots.iter().map(String::as_str).collect();
+        let home = dirs::home_dir().map(|h| h.to_string_lossy().into_owned());
+        crate::forge::thread_reply::drafts_json(
+            replies.iter().map(|r| (r.number, r.body.clone())),
+            &meta.item_numbers(),
+            |body| crate::forge::thread_reply::sanitize_agent_reply(body, &roots, home.as_deref()),
+        )
     }
 
     // ── preflight (acceptance red/green light) ──────────────────────────────
@@ -4385,6 +4431,40 @@ impl TaskEngine {
         delete_worktree: bool,
         mark_done: bool,
     ) -> Result<String, String> {
+        self.deliver_pr_closing(
+            task_id,
+            pr_title,
+            draft,
+            delete_worktree,
+            mark_done,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::deliver_pr`], saying which issues the pull request closes —
+    /// for a task made from several related issues only (see
+    /// [`closing_list`]); `None` keeps the list already fixed for the task,
+    /// or closes every issue on its first delivery.
+    ///
+    /// `commit_message` is the user's answer to a worktree the agent left
+    /// uncommitted: with one, those files are committed onto the task branch
+    /// (under the delivery's claim, after every read-only gate passed) and
+    /// delivered with the rest; without one, a dirty worktree is refused as
+    /// before — so a client that never showed the user those files cannot
+    /// publish them.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn deliver_pr_closing(
+        self: &Arc<Self>,
+        task_id: i32,
+        pr_title: Option<String>,
+        draft: bool,
+        delete_worktree: bool,
+        mark_done: bool,
+        closes: Option<Vec<i64>>,
+        commit_message: Option<String>,
+    ) -> Result<String, String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -4394,6 +4474,7 @@ impl TaskEngine {
         // The gate lives HERE, not in the UI: this command is reachable by id
         // from an old frontend or a direct web API call.
         let source = self.delivery_source(&task).await?;
+        let (source, pin_source_meta) = closing_list(source, closes)?;
 
         let (_root, wt, base_branch, work_branch) = self.merge_coordinates(&task).await?;
         // Whether the push goes INTO a pull request that already exists, and
@@ -4436,15 +4517,28 @@ impl TaskEngine {
         // removal) is tolerant of a worktree already off disk. Publishing a
         // branch on the strength of a question git refused to answer is a very
         // different bet.
-        match task_git::has_changes(&wt.path).await {
-            Ok(false) => {}
-            Ok(true) => {
-                return Err("the task worktree still has uncommitted changes — send it back for \
-                            one more round so the agent commits them, then deliver"
-                    .to_string())
-            }
+        //
+        // A dirty worktree goes ahead only with a commit message: that is the
+        // user, having seen the files, saying "commit these too". The commit
+        // itself waits until every read-only gate below has passed and the
+        // claim is held, so a refused delivery still leaves the worktree
+        // exactly as it was.
+        let commit_message = commit_message
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty());
+        let commit_leftovers = match task_git::has_changes(&wt.path).await {
+            Ok(false) => None,
+            Ok(true) => match commit_message {
+                Some(message) => Some(message),
+                None => {
+                    return Err("the task worktree still has uncommitted changes — commit them \
+                                from the delivery dialog, or send it back for one more round so \
+                                the agent commits them, then deliver"
+                        .to_string())
+                }
+            },
             Err(e) => return Err(format!("could not read the task worktree's state: {e}")),
-        }
+        };
         // GitHub answers an empty pull request with a 422, and a push back that
         // carries nothing leaves the pull request untouched while the task
         // records a delivery. Refuse before the CAS and point at the button that
@@ -4503,14 +4597,44 @@ impl TaskEngine {
             }
         }
 
-        let expected_head = task_git::rev_parse(&wt.path, &work_branch)
-            .await
-            .map_err(|e| format!("could not resolve the task branch: {e}"))?;
+        // Ownership BEFORE the CAS and held across the whole delivery — not
+        // just the dispatch, the way a merge does it. A merge hands off to its
+        // agent session and `recover_merging` then sees a live connection; a
+        // delivery has no session at all, so this claim is the only thing
+        // telling the reconcile tick that the row's `merging` is alive and not
+        // orphaned. It doubles as mutual exclusion: two clients clicking
+        // deliver on the same task must not both run the push — nor both
+        // commit the leftovers below.
+        let Some(token) = self.claim_in_flight(task_id).await else {
+            return Err(
+                "this task is already merging — wait for the operation in flight".to_string(),
+            );
+        };
         // A task its personal assistant accepted is delivered as the version
         // accepted, and the head pushed is recorded on that round (personal
-        // agent 7.5).
+        // agent 7.5). Compared before the leftovers are committed: what was
+        // accepted is the worktree as it stood, uncommitted changes included,
+        // and committing them changes nothing of that.
         let accepted_round =
-            crate::personal_agent::acceptance::delivery_gate(&self.db, &task, &wt.path).await?;
+            match crate::personal_agent::acceptance::delivery_gate(&self.db, &task, &wt.path)
+                .await
+            {
+                Ok(round) => round,
+                Err(e) => {
+                    self.release_in_flight(task_id, token).await;
+                    return Err(e);
+                }
+            };
+        let expected_head = match self
+            .commit_leftovers_and_resolve(task_id, &wt.path, &work_branch, commit_leftovers)
+            .await
+        {
+            Ok(head) => head,
+            Err(e) => {
+                self.release_in_flight(task_id, token).await;
+                return Err(e);
+            }
+        };
         let title = pr_title
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty())
@@ -4536,18 +4660,6 @@ impl TaskEngine {
             ..Default::default()
         };
 
-        // Ownership BEFORE the CAS and held across the whole delivery — not
-        // just the dispatch, the way a merge does it. A merge hands off to its
-        // agent session and `recover_merging` then sees a live connection; a
-        // delivery has no session at all, so this claim is the only thing
-        // telling the reconcile tick that the row's `merging` is alive and not
-        // orphaned. It doubles as mutual exclusion: two clients clicking
-        // deliver on the same task must not both run the push.
-        let Some(token) = self.claim_in_flight(task_id).await else {
-            return Err(
-                "this task is already merging — wait for the operation in flight".to_string(),
-            );
-        };
         let outcome = self
             .deliver_guarded(
                 &task,
@@ -4557,6 +4669,7 @@ impl TaskEngine {
                 &base_branch,
                 &work_branch,
                 &state,
+                pin_source_meta.as_deref(),
             )
             .await;
         // Only after the delivery SUCCEEDED and finished the task: one that
@@ -4575,6 +4688,56 @@ impl TaskEngine {
         self.release_in_flight(task_id, token).await;
         self.emit_upsert(task_id);
         outcome
+    }
+
+    /// The OID a delivery publishes — after committing what the agent left
+    /// uncommitted, when the user asked for that (`commit` is the message).
+    /// Runs under the delivery's claim; the row is read again first, because
+    /// the status gate above was read before the claim and a run or a merge
+    /// generation started since owns the worktree now. A commit that git
+    /// refuses (a hook, say) is the delivery's refusal, worded with git's own
+    /// reason — nothing has moved yet.
+    async fn commit_leftovers_and_resolve(
+        &self,
+        task_id: i32,
+        wt_path: &str,
+        work_branch: &str,
+        commit: Option<String>,
+    ) -> Result<String, String> {
+        if let Some(message) = commit {
+            let task = work_task_service::get_model(&self.db.conn, task_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            if task.status != WorkTaskStatus::Review {
+                return Err("task is not in review".to_string());
+            }
+            // `commit_all` commits onto whatever is checked out, while the
+            // push publishes `work_branch` — a checkout switched to another
+            // branch (or detached) would take the leftovers somewhere the
+            // delivery never looks, and the task would finish without them.
+            let attached = task_git::head_is_branch(wt_path, work_branch)
+                .await
+                .map_err(|e| format!("could not read the task worktree's state: {e}"))?;
+            if !attached {
+                return Err(format!(
+                    "the task worktree is not on its branch '{work_branch}', so its uncommitted \
+                     changes would not be part of the delivery — check out '{work_branch}' there, \
+                     then deliver"
+                ));
+            }
+            task_git::commit_all(&self.db.conn, wt_path, &message)
+                .await
+                .map_err(|e| match e.detail.as_deref().filter(|d| !d.is_empty()) {
+                    // git's own words — a hook's complaint is the reason.
+                    Some(detail) => {
+                        format!("could not commit the worktree's changes: {e}: {detail}")
+                    }
+                    None => format!("could not commit the worktree's changes: {e}"),
+                })?;
+        }
+        task_git::rev_parse(wt_path, work_branch)
+            .await
+            .map_err(|e| format!("could not resolve the task branch: {e}"))
     }
 
     /// What `task` is delivered from — the gate for delivering it at all. A
@@ -4635,10 +4798,10 @@ impl TaskEngine {
     /// pairing `complete_task` documents, aimed at what a DELIVERY publishes
     /// rather than at what a merge lands:
     ///
-    /// - `deliver_pr` refused a dirty worktree before the CAS, but that was
-    ///   before the push and the REST calls. `worktree remove --force` drops
-    ///   whatever appeared since without a word, and a file that was never
-    ///   committed is on no forge at all;
+    /// - `deliver_pr` refused (or committed) a dirty worktree before the CAS,
+    ///   but that was before the push and the REST calls. `worktree remove
+    ///   --force` drops whatever appeared since without a word, and a file that
+    ///   was never committed is on no forge at all;
     /// - a COMMIT made in that same window leaves `git status` spotless and is
     ///   just as unpublished — the delivery pushed `published_head`, not it. So
     ///   the branch tip is checked against the OID that actually reached the
@@ -4707,6 +4870,10 @@ impl TaskEngine {
         }
     }
 
+    /// `pin_source_meta` is the task's snapshot with the closing list its
+    /// first delivery fixes (see [`closing_list`]), written in the same
+    /// transaction the delivery begins in — so the list is on the row before
+    /// anything is published, and never after a refusal that published nothing.
     #[allow(clippy::too_many_arguments)]
     async fn deliver_guarded(
         self: &Arc<Self>,
@@ -4717,12 +4884,18 @@ impl TaskEngine {
         base_branch: &str,
         work_branch: &str,
         state: &WorkTaskMergeState,
+        pin_source_meta: Option<&str>,
     ) -> Result<String, String> {
         let task_id = task.id;
-        let run_seq =
-            match work_task_service::begin_delivery(&self.db.conn, task_id, state, task.run_seq)
-                .await
-            {
+        let run_seq = match work_task_service::begin_delivery_recording(
+            &self.db.conn,
+            task_id,
+            state,
+            task.run_seq,
+            pin_source_meta.map(|meta| (task.source_meta.as_deref(), meta)),
+        )
+        .await
+        {
                 Err(e) => return Err(e.to_string()),
                 Ok(None) => return Err("task left review before the delivery began".to_string()),
                 Ok(Some(seq)) => seq,
@@ -5333,7 +5506,8 @@ impl TaskEngine {
     // ── write the outcome back to the forge (best-effort) ───────────────────
 
     /// Tell the thread a task came from that it finished — a comment carrying
-    /// the outcome, the link and the diff counters, and nothing else.
+    /// the reply drafted for that thread (as the user accepted it), the
+    /// outcome, the link and the diff counters.
     ///
     /// SPAWNED, never awaited by the settle that triggers it. A local merge
     /// settles inside the folder's git lock, and a REST call has no business
@@ -5357,16 +5531,7 @@ impl TaskEngine {
         // Both kinds get a comment; WHERE it goes differs by forge, which is
         // why the item kind is carried rather than assumed (GitHub serves
         // issue and pull-request comments from one endpoint, GitLab from two).
-        let item_kind = match task.source_kind.as_deref() {
-            Some(SOURCE_KIND_ISSUE) => ForgeItemKind::Issue,
-            Some(SOURCE_KIND_PR) => ForgeItemKind::Change,
-            _ => return,
-        };
-        let Some(meta) = task
-            .source_meta
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())
-        else {
+        let Some((item_kind, meta)) = forge_thread(&task) else {
             return;
         };
         // The answer the user gave in the trigger dialog, carried on the task
@@ -5394,10 +5559,6 @@ impl TaskEngine {
                 nothing_to_land: *nothing_to_land,
             },
         };
-        // Where it is posted shapes what it may say: a pull request's thread
-        // hears what happened to that pull request, in its forge's own noun.
-        let body = writeback_comment_body(task_id, meta.provider, item_kind, &outcome, stats);
-
         let ctx = DeliveryCtx {
             conn: &self.db.conn,
             data_dir: &self.data_dir,
@@ -5406,25 +5567,63 @@ impl TaskEngine {
             account_id: &meta.account_id,
             owner_repo: &meta.owner_repo,
         };
-        let (kind, payload) = match self
-            .forge
-            .comment_issue(&ctx, item_kind, meta.number, &body)
+        // Every item the task handles hears it, each in its own thread and on
+        // its own timeline entry — one that fails is recorded as that item's
+        // failure and leaves the others to go ahead.
+        // The replies the user saw when they accepted the task (see
+        // `forge::thread_reply`), and the footer as the settings say NOW — a
+        // presentation choice, not one frozen on the task. Settings that cannot
+        // be read keep the footer, its default.
+        let drafts = crate::forge::thread_reply::parse_drafts(task.writeback_drafts.as_deref());
+        let footer = crate::forge::settings::load_effective(&self.db.conn, task.folder_id)
             .await
-        {
-            Ok(url) => ("forge_writeback", serde_json::json!({ "url": url })),
-            // Failure is recorded and dropped: the task is finished either way,
-            // and a comment nobody sees must not reopen a settled row.
-            Err(error) => (
-                "forge_writeback_failed",
-                serde_json::json!({ "error": error, "number": meta.number }),
-            ),
-        };
-        let _ =
-            work_task_service::record_event(&self.db.conn, task_id, kind, "engine", Some(payload))
-                .await;
-        // The card's own fields did not change; this is what makes an open
-        // detail sheet reload its timeline.
-        self.emit_upsert(task_id);
+            .map(|s| s.comment_footer)
+            .unwrap_or(true);
+        let numbers = meta.item_numbers();
+        let combined = numbers.len() > 1;
+        for &number in &numbers {
+            let others: Vec<i64> = numbers.iter().copied().filter(|n| *n != number).collect();
+            // Where it is posted shapes what it may say: a pull request's
+            // thread hears what happened to that pull request, in its forge's
+            // own noun.
+            let body = writeback_comment_body(
+                meta.provider,
+                item_kind,
+                &outcome,
+                stats,
+                &others,
+                drafts.get(&number).map(String::as_str),
+                footer,
+            );
+            let (kind, payload) = match self
+                .forge
+                .comment_issue(&ctx, item_kind, number, &body)
+                .await
+            {
+                Ok(url) if combined => (
+                    "forge_writeback",
+                    serde_json::json!({ "url": url, "number": number }),
+                ),
+                Ok(url) => ("forge_writeback", serde_json::json!({ "url": url })),
+                // Failure is recorded and dropped: the task is finished either
+                // way, and a comment nobody sees must not reopen a settled row.
+                Err(error) => (
+                    "forge_writeback_failed",
+                    serde_json::json!({ "error": error, "number": number }),
+                ),
+            };
+            let _ = work_task_service::record_event(
+                &self.db.conn,
+                task_id,
+                kind,
+                "engine",
+                Some(payload),
+            )
+            .await;
+            // The card's own fields did not change; this is what makes an
+            // open detail sheet reload its timeline.
+            self.emit_upsert(task_id);
+        }
     }
 
     /// Crash recovery for a delivery: the forge is the only truth about what
@@ -6432,14 +6631,12 @@ struct WorktreeRef {
     path: String,
 }
 
-/// Converge DB + clients once a task worktree is off disk. Split out of
-/// [`TaskEngine::remove_worktree_locked`] so the ordering contract below is
-/// unit-testable without a real git worktree.
-///
-/// Write order: conversations first (never orphaned under a vanishing folder),
-/// then its tabs, then the folder row. Each step ends in a broadcast, because a
-/// removal no client hears about is a removal no client shows: the sidebar keeps
-/// the dead worktree until the next full `fetchFolders` (i.e. a reload).
+/// Converge DB + clients once a task worktree is off disk: the shared sequence
+/// in [`crate::commands::worktree_convergence`] (the branch selector's
+/// worktree delete runs the same one), with this task's bookkeeping — detach
+/// the worktree, record the cleanup — between the writes and the announcement.
+/// Split out of [`TaskEngine::remove_worktree_locked`] so the ordering contract
+/// is unit-testable without a real git worktree.
 async fn converge_worktree_removal(
     db: &AppDatabase,
     emitter: &EventEmitter,
@@ -6448,56 +6645,10 @@ async fn converge_worktree_removal(
     project_folder_id: i32,
     wt_path: &str,
 ) {
-    let moved = conversation_service::reparent_folder_conversations(
-        &db.conn,
-        wt_id,
-        project_folder_id,
-        wt_path,
-    )
-    .await
-    .unwrap_or(0);
+    use crate::commands::worktree_convergence;
 
-    match tab_service::delete_folder_tabs_and_bump(&db.conn, wt_id).await {
-        Ok(inv) => {
-            if let Some(tabs) = inv.emit {
-                emit_event(
-                    emitter,
-                    crate::web::event_bridge::TABS_CHANGED_EVENT,
-                    crate::web::event_bridge::TabsChanged {
-                        version: inv.version,
-                        origin: "server".to_string(),
-                        tabs,
-                    },
-                );
-            }
-        }
-        Err(e) => tracing::warn!("[work_task] tab cleanup failed for folder {wt_id}: {e}"),
-    }
-
-    // Announce the folder drop only when the row really is gone, so a failed
-    // write can't leave clients disagreeing with what a refetch would return.
-    let folder_gone = match folder::Entity::find_by_id(wt_id).one(&db.conn).await {
-        Ok(Some(row)) => {
-            let now = chrono::Utc::now();
-            let mut active = row.into_active_model();
-            active.is_open = Set(false);
-            active.deleted_at = Set(Some(now));
-            active.updated_at = Set(now);
-            match active.update(&db.conn).await {
-                Ok(_) => true,
-                Err(e) => {
-                    tracing::warn!("[work_task] worktree folder {wt_id} soft-delete failed: {e}");
-                    false
-                }
-            }
-        }
-        // Already soft-deleted / never there: a client still holding it is stale.
-        Ok(None) => true,
-        Err(e) => {
-            tracing::warn!("[work_task] worktree folder {wt_id} lookup failed: {e}");
-            false
-        }
-    };
+    let outcome =
+        worktree_convergence::converge_db(db, emitter, wt_id, project_folder_id, wt_path).await;
 
     let _ = work_task_service::clear_worktree(&db.conn, task_id).await;
     let _ = work_task_service::record_event(
@@ -6505,24 +6656,11 @@ async fn converge_worktree_removal(
         task_id,
         "user_action",
         "engine",
-        Some(serde_json::json!({ "action": "cleanup", "reparented": moved })),
+        Some(serde_json::json!({ "action": "cleanup", "reparented": outcome.moved })),
     )
     .await;
 
-    // Conversations first: this starts every client's refetch, so the moved
-    // rows have the shortest possible window with no folder to render under.
-    emit_event(
-        emitter,
-        crate::web::event_bridge::CONVERSATIONS_BULK_CHANGED_EVENT,
-        crate::web::event_bridge::ConversationsBulkChanged {
-            imported: 0,
-            updated: moved as u32,
-            folder_ids: vec![project_folder_id],
-        },
-    );
-    if folder_gone {
-        emit_folder_deleted(emitter, wt_id);
-    }
+    worktree_convergence::announce(emitter, outcome, project_folder_id, wt_id);
 }
 
 /// The commit THIS TASK's own work sits on top of: the point its worktree was
@@ -6716,6 +6854,24 @@ async fn diff_stats_from(wt_path: &str, anchor: &str) -> Option<(i32, i32, i32)>
     let adds: i32 = files.iter().map(|f| f.additions).sum();
     let dels: i32 = files.iter().map(|f| f.deletions).sum();
     Some((files.len() as i32, adds, dels))
+}
+
+/// The forge thread(s) a task came from: what kind of item, and its source
+/// snapshot. `None` for a task without forge provenance, or one whose snapshot
+/// cannot be read — neither has a thread to reply in.
+fn forge_thread(
+    task: &crate::db::entities::work_task::Model,
+) -> Option<(ForgeItemKind, ForgeSourceMeta)> {
+    let kind = match task.source_kind.as_deref() {
+        Some(SOURCE_KIND_ISSUE) => ForgeItemKind::Issue,
+        Some(SOURCE_KIND_PR) => ForgeItemKind::Change,
+        _ => return None,
+    };
+    let meta = task
+        .source_meta
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())?;
+    Some((kind, meta))
 }
 
 /// Row-level auto-merge eligibility: everything the sweep can decide without
@@ -6999,6 +7155,18 @@ impl DeliverySource {
     /// Body of the pull request a delivery of this task opens.
     fn pull_request_body(&self, task_id: i32) -> String {
         match self {
+            // Several issues: the closing list fixed at the first delivery,
+            // which `closing_list` has always filled in by the time a body is
+            // asked for — or every issue, should a row ever lack it.
+            DeliverySource::Issue(meta) if meta.is_combined() => {
+                let items: Vec<(i64, &str)> = meta
+                    .items
+                    .iter()
+                    .map(|item| (item.number, item.url.as_str()))
+                    .collect();
+                let closes = meta.pr_closes.clone().unwrap_or_else(|| meta.item_numbers());
+                issues_pull_request_body(&items, &closes, task_id)
+            }
             DeliverySource::Issue(meta) => pull_request_body(&meta.url, meta.number, task_id),
             // A pull-request task never opens one; the local body is the one
             // that claims nothing.
@@ -7087,6 +7255,85 @@ enum IntoPull {
     /// Closed or merged BEFORE anything was pushed, with commits still to
     /// push. Nothing was published.
     NoLongerOpen(ForgePr),
+}
+
+/// Which issues the pull request of a task made from several related issues
+/// closes, settled before its delivery begins — and the snapshot to record it
+/// in, when this is the delivery that fixes it.
+///
+/// The list is the user's call, taken at the task's FIRST delivery from the
+/// agent's per-issue verdicts (`requested`; `None` there closes every issue),
+/// and fixed from then on: every later delivery — into the pull request that
+/// one opened, into a new one after it was closed, or one a crash recovery
+/// settles — closes the same issues. The engine never edits a pull request it
+/// opened, and an earlier delivery may already have opened one the row does
+/// not know of yet, so a list chosen anew could contradict a description
+/// already published. A request naming a DIFFERENT list is refused, pointing
+/// at where the published one can be edited; naming the same one, or none,
+/// goes ahead.
+///
+/// Only such a task chooses. A one-issue task's pull request closes its issue,
+/// and nothing else closes anything — a list sent for either is refused rather
+/// than ignored, because it says the client believes something false.
+fn closing_list(
+    source: DeliverySource,
+    requested: Option<Vec<i64>>,
+) -> Result<(DeliverySource, Option<String>), String> {
+    let mut meta = match source {
+        DeliverySource::Issue(meta) if meta.is_combined() => meta,
+        other => {
+            return match requested {
+                None => Ok((other, None)),
+                Some(_) => Err(
+                    "only a task made from several issues chooses which of them its pull \
+                     request closes"
+                        .to_string(),
+                ),
+            }
+        }
+    };
+    let members = meta.item_numbers();
+    let requested = match requested {
+        None => None,
+        Some(numbers) => {
+            if let Some(stranger) = numbers.iter().find(|n| !members.contains(n)) {
+                return Err(format!("#{stranger} is not one of this task's issues"));
+            }
+            // In the task's own order, each once.
+            Some(
+                members
+                    .iter()
+                    .copied()
+                    .filter(|n| numbers.contains(n))
+                    .collect::<Vec<_>>(),
+            )
+        }
+    };
+    if let Some(fixed) = meta.pr_closes.clone() {
+        if let Some(asked) = requested {
+            let same = asked.len() == fixed.len() && asked.iter().all(|n| fixed.contains(n));
+            if !same {
+                let named = if fixed.is_empty() {
+                    "none of its issues".to_string()
+                } else {
+                    fixed
+                        .iter()
+                        .map(|n| format!("#{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                return Err(format!(
+                    "this task's pull request closes {named} — the list was fixed at its first \
+                     delivery; edit the pull request's description on the forge to change it"
+                ));
+            }
+        }
+        return Ok((DeliverySource::Issue(meta), None));
+    }
+    meta.pr_closes = Some(requested.unwrap_or(members));
+    let pinned = serde_json::to_string(&meta)
+        .map_err(|e| format!("could not record which issues the pull request closes: {e}"))?;
+    Ok((DeliverySource::Issue(meta), Some(pinned)))
 }
 
 /// What an interrupted delivery was delivering from, read back for crash
@@ -7423,7 +7670,7 @@ async fn compose_prompt(
             )
         } else if original_work_order && cfg.deliverable.as_deref() == Some(DELIVERABLE_REPORT) {
             // Report-deliverable order (forge plan-first / review-only):
-            // the generic "commit as you like" grant would quietly undo the
+            // the generic "commit your work" grant would quietly undo the
             // task's own "analysis only" instruction several blocks earlier —
             // the licence must defer to the task text, not overrule it.
             format!(
@@ -7435,9 +7682,11 @@ async fn compose_prompt(
             )
         } else {
             format!(
-                "Commit to the current branch as you like, but do NOT merge into, rebase onto, \
-                 or push the base branch{base} — the user lands the result after review. Finish \
-                 with a short summary of what you did."
+                "Commit your work to the current branch, and leave nothing uncommitted when you \
+                 finish — the result is delivered from the branch's commits, so a file left \
+                 uncommitted is not part of it. Do NOT merge into, rebase onto, or push the base \
+                 branch{base} — the user lands the result after review. Finish with a short \
+                 summary of what you did."
             )
         };
         blocks.push(PromptInputBlock::Text {
@@ -7449,6 +7698,19 @@ async fn compose_prompt(
                  `needs_review`, or `blocked`, plus a short summary).",
             ),
         });
+        // A task that will comment back in its thread(s) also drafts what the
+        // comment says. Every run but a merge: a send-back changes the work,
+        // so it must refresh the draft that describes it (a new run clears
+        // the old one).
+        if let Some((kind, meta)) = forge_thread(task).filter(|(_, m)| m.writeback == Some(true)) {
+            blocks.push(PromptInputBlock::Text {
+                text: crate::forge::thread_reply::reply_instruction(
+                    meta.provider,
+                    kind,
+                    &meta.item_numbers(),
+                ),
+            });
+        }
     }
 
     // Whatever the user added in task settings, always last: it refines the
@@ -8208,12 +8470,13 @@ impl WorkTaskToolAccess for EngineWorkTaskTools {
         parent_connection_id: &str,
         verdict: &str,
         summary: Option<&str>,
+        thread_replies: &[crate::acp::delegation::transport::ThreadReply],
     ) -> TaskReportAck {
         let Some(engine) = engine() else {
             return TaskReportAck::rejected("no task engine running in this process");
         };
         engine
-            .record_complete(parent_connection_id, verdict, summary)
+            .record_complete(parent_connection_id, verdict, summary, thread_replies)
             .await
     }
 }
@@ -8791,6 +9054,7 @@ mod tests {
             source_meta: None,
             delivery: None,
             personal_agent_dispatch_id: None,
+            writeback_drafts: None,
             created_at: now,
             updated_at: now,
             started_at: None,
@@ -8935,6 +9199,66 @@ mod tests {
         }
     }
 
+    /// A forge task that will comment back asks its agent for the reply, on
+    /// every run but a merge — a send-back changes the work the reply
+    /// describes. One that stays silent, or has no thread at all, is not asked.
+    #[tokio::test]
+    async fn a_task_that_comments_back_asks_for_the_thread_reply() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let forge_row = |writeback: Option<bool>| {
+            let mut meta = serde_json::json!({
+                "provider": "github",
+                "server_host": "github.com",
+                "api_base": "https://api.github.com",
+                "account_id": "acc-1",
+                "owner_repo": "acme/app",
+                "number": 7,
+                "url": "https://github.com/acme/app/issues/7",
+                "title": "Fix the login flow",
+            });
+            if let Some(w) = writeback {
+                meta["writeback"] = serde_json::json!(w);
+            }
+            crate::db::entities::work_task::Model {
+                source_kind: Some(SOURCE_KIND_ISSUE.to_string()),
+                source_meta: Some(meta.to_string()),
+                ..task_row()
+            }
+        };
+        let compose = |task: crate::db::entities::work_task::Model, mode: LaunchMode| {
+            let conn = db.conn.clone();
+            async move {
+                let blocks = compose_prompt(
+                    &task_config(),
+                    &task,
+                    &mode,
+                    &WorkTaskFolderSettings::default(),
+                    true,
+                    &conn,
+                )
+                .await
+                .expect("compose");
+                texts(&blocks).join("\n")
+            }
+        };
+        let asks = |joined: &str| joined.contains("—— Reply for the work item's thread ——");
+
+        let on = compose(forge_row(Some(true)), LaunchMode::Fresh).await;
+        assert!(asks(&on), "{on}");
+        assert!(on.contains("the thread of issue #7"), "{on}");
+        let returned = compose(forge_row(Some(true)), return_mode(FollowUpIntent::Revise)).await;
+        assert!(asks(&returned), "a send-back refreshes the draft: {returned}");
+
+        for (what, task) in [
+            ("silent", forge_row(Some(false))),
+            ("never asked", forge_row(None)),
+            ("not forge", task_row()),
+        ] {
+            let joined = compose(task, LaunchMode::Fresh).await;
+            assert!(!asks(&joined), "{what}: {joined}");
+        }
+    }
+
     /// The standing guard licenses committing, and it is the LAST block the
     /// agent reads — so a question turn has to replace it, not merely say
     /// "don't edit" a few blocks earlier.
@@ -8955,7 +9279,7 @@ mod tests {
             .into_iter()
             .find(|t| t.starts_with("—— Work task context ——"))
             .expect("guard block");
-        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
         assert!(guard.contains("do NOT create, edit, delete or commit any file"));
         // The base-branch rules survive the swap.
         assert!(guard.contains("push the base branch"));
@@ -8973,12 +9297,12 @@ mod tests {
         .expect("compose");
         assert!(texts(&working)
             .iter()
-            .any(|t| t.contains("Commit to the current branch as you like")));
+            .any(|t| t.contains("leave nothing uncommitted when you finish")));
     }
 
     /// A report-deliverable task (forge plan-first / review-only)
     /// swaps the commit licence on its ORIGINAL order — otherwise the guard's
-    /// "commit as you like", being the last block read, would quietly undo the
+    /// "commit your work", being the last block read, would quietly undo the
     /// task's own "analysis only" instruction.
     #[tokio::test]
     async fn a_report_deliverable_order_swaps_the_commit_licence() {
@@ -9005,7 +9329,7 @@ mod tests {
         .await
         .expect("compose");
         let guard = guard_of(&fresh);
-        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
         assert!(guard.contains("This turn delivers a report"));
         // The base-branch rules survive the swap.
         assert!(guard.contains("push the base branch"));
@@ -9036,7 +9360,7 @@ mod tests {
         )
         .await
         .expect("compose");
-        assert!(guard_of(&returned).contains("Commit to the current branch as you like"));
+        assert!(guard_of(&returned).contains("leave nothing uncommitted when you finish"));
 
         // Same for a retry that stands in for an interrupted review follow-up:
         // the outstanding feedback, not the original order, is the work.
@@ -9063,7 +9387,7 @@ mod tests {
         )
         .await
         .expect("compose");
-        assert!(guard_of(&retry_review).contains("Commit to the current branch as you like"));
+        assert!(guard_of(&retry_review).contains("leave nothing uncommitted when you finish"));
 
         // An unrecognized deliverable value reads as a normal task: a config
         // written by a newer build must still launch, not change meaning.
@@ -9081,7 +9405,7 @@ mod tests {
         )
         .await
         .expect("compose");
-        assert!(guard_of(&odd).contains("Commit to the current branch as you like"));
+        assert!(guard_of(&odd).contains("leave nothing uncommitted when you finish"));
     }
 
     /// A retry stands in for the turn it interrupted, and a retry/requeue note
@@ -9129,7 +9453,7 @@ mod tests {
         .expect("compose");
         let guard = guard_of(&blocks);
         assert!(guard.contains("do NOT create, edit, delete or commit any file"));
-        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
 
         // A note layered over a failed "apply the fix" return on a report
         // task: the turn underneath is a change order, so the write licence
@@ -9166,7 +9490,7 @@ mod tests {
         )
         .await
         .expect("compose");
-        assert!(guard_of(&blocks).contains("Commit to the current branch as you like"));
+        assert!(guard_of(&blocks).contains("leave nothing uncommitted when you finish"));
         assert!(texts(&blocks).join("\n").contains("it failed on CI, go again"));
 
         // The same note on a run that never reached review: still the
@@ -9378,7 +9702,7 @@ mod tests {
         assert!(joined.contains("Fix the login flow and add tests."));
         // The original order is still an order: the licence stays the working
         // one (nothing was returned, so there is no follow-up underneath).
-        assert!(joined.contains("Commit to the current branch as you like"));
+        assert!(joined.contains("leave nothing uncommitted when you finish"));
     }
 
     /// #649's requeue lands on `Fresh`, and a task can be sitting on a
@@ -9427,7 +9751,7 @@ mod tests {
 
     /// And the licence follows that same turn. A question the user asked before
     /// stopping the run is still a question after the requeue: the guard's
-    /// "commit as you like" is the last thing the agent reads, so it has to be
+    /// "commit your work" is the last thing the agent reads, so it has to be
     /// withdrawn here just as the retry arm withdraws it.
     #[tokio::test]
     async fn a_requeued_question_keeps_its_read_only_licence() {
@@ -9461,7 +9785,7 @@ mod tests {
             .into_iter()
             .find(|t| t.starts_with("—— Work task context ——"))
             .expect("guard block");
-        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
         assert!(guard.contains("do NOT create, edit, delete or commit any file"));
     }
 
@@ -10149,6 +10473,91 @@ mod tests {
         let dropped = rx.try_recv().expect("folder delete should broadcast");
         assert_eq!(dropped.payload["kind"], "deleted");
         assert_eq!(dropped.payload["id"], 9999);
+    }
+
+    /// The shared convergence keeps the order clients depend on: the closed
+    /// tabs, then the conversations' refetch, then the folder drop — and it
+    /// still closes the worktree's tabs rather than re-pointing them.
+    #[tokio::test]
+    async fn worktree_removal_closes_tabs_before_announcing_the_move() {
+        use crate::db::service::tab_service;
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+        use crate::web::event_bridge::{
+            WebEventBroadcaster, CONVERSATIONS_BULK_CHANGED_EVENT, FOLDER_CHANGED_EVENT,
+            TABS_CHANGED_EVENT,
+        };
+
+        let db = fresh_in_memory_db().await;
+        let root_id = seed_folder(&db, "/tmp/repo3").await;
+        let wt = open_worktree_folder_core(&db, "/tmp/repo3-task-1".to_string(), root_id)
+            .await
+            .expect("worktree folder");
+        let conv = conversation_service::create(&db.conn, wt.id, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("conversation");
+        let kept =
+            conversation_service::create(&db.conn, root_id, AgentType::ClaudeCode, None, None)
+                .await
+                .expect("conversation");
+        let tab = |folder_id: i32, conversation_id: i32, position: i32| crate::models::OpenedTab {
+            id: 0,
+            folder_id,
+            conversation_id: Some(conversation_id),
+            agent_type: AgentType::ClaudeCode,
+            position,
+            is_active: false,
+            is_pinned: false,
+        };
+        tab_service::save_all_tabs_cas(
+            &db.conn,
+            vec![tab(wt.id, conv.id, 0), tab(root_id, kept.id, 1)],
+            0,
+        )
+        .await
+        .expect("tabs");
+        let task = work_task_service::create(
+            &db.conn,
+            crate::models::WorkTaskDraft {
+                folder_id: root_id,
+                title: "fix login".to_string(),
+                config: serde_json::json!({
+                    "display_text": "fix login",
+                    "prompt_blocks": [{ "type": "text", "text": "fix login" }],
+                }),
+            },
+        )
+        .await
+        .expect("task");
+
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+        converge_worktree_removal(&db, &emitter, task.id, wt.id, root_id, &wt.path).await;
+
+        let channels: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|ev| ev.channel.to_string())
+            .collect();
+        assert_eq!(
+            channels,
+            vec![
+                TABS_CHANGED_EVENT.to_string(),
+                CONVERSATIONS_BULK_CHANGED_EVENT.to_string(),
+                FOLDER_CHANGED_EVENT.to_string(),
+            ]
+        );
+        let (tabs, _) = tab_service::snapshot_tabs(&db.conn).await.expect("tabs");
+        assert_eq!(
+            tabs.iter().map(|t| t.conversation_id).collect::<Vec<_>>(),
+            vec![Some(kept.id)],
+            "the worktree's tab is closed, not re-pointed"
+        );
+        let events = work_task_service::list_events(&db.conn, task.id, 10)
+            .await
+            .expect("events");
+        assert!(events
+            .iter()
+            .any(|e| e.kind == "user_action"
+                && e.payload.as_ref().is_some_and(|p| p["reparented"] == 1)));
     }
 
     #[test]
@@ -12206,6 +12615,162 @@ mod tests {
         }
     }
 
+    /// The engine's own `git commit` inherits the real environment, so a
+    /// fixture that has it commit names an identity in the repository itself.
+    fn commit_identity(f: &Delivery) {
+        git_run(&f.root, &["config", "user.name", "t"]);
+        git_run(&f.root, &["config", "user.email", "t@example.com"]);
+    }
+
+    /// What the agent left uncommitted is delivered when the user hands over a
+    /// commit message: committed onto the task branch first, and THAT commit
+    /// is what gets pushed — new files and edits alike.
+    #[tokio::test]
+    async fn a_commit_message_commits_the_leftovers_and_delivers_them() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        commit_identity(&f);
+        std::fs::write(f.worktree.join("a.txt"), "one\ntwo\nthree\n").expect("write");
+        std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+
+        let listed = task_git::uncommitted_files(f.worktree.to_str().unwrap())
+            .await
+            .expect("status");
+        let mut listed: Vec<_> = listed.into_iter().map(|u| (u.file, u.status)).collect();
+        listed.sort();
+        assert_eq!(
+            listed,
+            [("a.txt".to_string(), "M".to_string()), ("new.txt".to_string(), "A".to_string())]
+        );
+
+        f.engine
+            .deliver_pr_closing(
+                f.task_id,
+                None,
+                false,
+                false,
+                true,
+                None,
+                Some("  #7 · Fix the login flow  ".into()),
+            )
+            .await
+            .expect("delivery");
+
+        let wt = f.worktree.to_str().unwrap();
+        assert!(!task_git::has_changes(wt).await.expect("status"), "nothing left behind");
+        let tip = task_git::rev_parse(wt, "task/7").await.expect("tip");
+        assert_ne!(tip, f.head, "a new commit on the task branch");
+        assert!(task_git::is_ancestor(wt, &f.head, &tip).await.expect("ancestry"));
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [("acme/app".to_string(), tip.clone(), "task/7".to_string())],
+            "the commit holding the leftovers is the one published"
+        );
+        let subject = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%s", "task/7"])
+            .current_dir(&f.worktree)
+            .output()
+            .expect("git log");
+        assert_eq!(String::from_utf8_lossy(&subject.stdout).trim(), "#7 · Fix the login flow");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+    }
+
+    /// The commit waits for every read-only gate: a delivery refused by one
+    /// leaves the worktree exactly as it was, leftovers still uncommitted.
+    /// A blank message is no message at all.
+    #[tokio::test]
+    async fn a_refused_delivery_commits_nothing() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        commit_identity(&f);
+        std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("   ".into()))
+            .await
+            .expect_err("a blank message");
+        assert!(err.contains("uncommitted changes"), "got {err}");
+
+        *f.forge.remote_base.lock().await = None;
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+            .await
+            .expect_err("the remote base is unreadable");
+        assert!(err.contains("could not read 'main'"), "got {err}");
+
+        let wt = f.worktree.to_str().unwrap();
+        assert!(task_git::has_changes(wt).await.expect("status"), "still uncommitted");
+        assert_eq!(task_git::rev_parse(wt, "task/7").await.expect("tip"), f.head);
+        assert!(f.forge.pushes.lock().await.is_empty());
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+    }
+
+    /// The leftovers are committed onto whatever is checked out, and the
+    /// delivery publishes the task branch — so a checkout on another branch,
+    /// or detached, is refused rather than committed somewhere the push never
+    /// looks: edits still uncommitted, nothing pushed, task still in review.
+    #[tokio::test]
+    async fn leftovers_off_the_task_branch_are_refused() {
+        for detach in [false, true] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            commit_identity(&f);
+            if detach {
+                git_run(&f.worktree, &["checkout", "-q", "--detach"]);
+            } else {
+                git_run(&f.worktree, &["checkout", "-q", "-b", "elsewhere"]);
+            }
+            std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+
+            let err = f
+                .engine
+                .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+                .await
+                .expect_err("off the task branch");
+            assert!(err.contains("not on its branch 'task/7'"), "got {err}");
+
+            let wt = f.worktree.to_str().unwrap();
+            assert!(task_git::has_changes(wt).await.expect("status"), "still uncommitted");
+            assert_eq!(task_git::rev_parse(wt, "HEAD").await.expect("head"), f.head);
+            assert!(f.forge.pushes.lock().await.is_empty());
+            assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+        }
+    }
+
+    /// A commit git refuses — a pre-commit hook, say — is the delivery's
+    /// refusal, in git's words, with nothing moved and the claim released:
+    /// once the hook lets it through, the same click delivers.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_commit_the_hook_rejects_refuses_the_delivery() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let f = delivery_fixture(FakeForge::default()).await;
+        commit_identity(&f);
+        std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+        let hook = f.root.join(".git").join("hooks").join("pre-commit");
+        std::fs::create_dir_all(hook.parent().unwrap()).expect("hooks dir");
+        std::fs::write(&hook, "#!/bin/sh\necho 'lint failed' >&2\nexit 1\n").expect("hook");
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+            .await
+            .expect_err("the hook refuses");
+        assert!(err.contains("could not commit"), "got {err}");
+        assert!(err.contains("lint failed"), "git's own reason: {err}");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert!(task.last_error.is_none(), "a refusal is not a card banner");
+        assert!(f.forge.pushes.lock().await.is_empty());
+
+        std::fs::remove_file(&hook).expect("drop the hook");
+        f.engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+            .await
+            .expect("the retry delivers");
+    }
+
     /// The gate lives in the engine, not the UI: this command is reachable by
     /// id from an old frontend or a direct web API call.
     ///
@@ -12743,8 +13308,9 @@ mod tests {
         assert!(!body.to_lowercase().contains("accept"), "reads as an approval: {body}");
     }
 
-    /// The comment is a fact sheet: the link and the counters. Nothing the
-    /// agent wrote may reach a thread other people are reading.
+    /// The comment is the reply the user accepted, then the link and the
+    /// counters, then the footer. Nothing else the agent wrote — its result
+    /// summary above all — may reach a thread other people are reading.
     #[tokio::test]
     async fn a_delivered_task_comments_the_link_and_the_numbers() {
         use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
@@ -12758,6 +13324,7 @@ mod tests {
         active.deletions = Set(Some(7));
         active.result_summary =
             Set(Some("I refactored the auth module and rewrote the tests".to_string()));
+        active.writeback_drafts = Set(Some(r#"{"7":"The cause was a stale token."}"#.to_string()));
         active.update(&f.engine.db.conn).await.expect("record the run's result");
 
         f.engine
@@ -12776,13 +13343,161 @@ mod tests {
         let (kind, number, body) = &comments[0];
         assert_eq!(*number, 7, "the comment goes on the issue the task came from");
         assert_eq!(*kind, ForgeItemKind::Issue, "…in the issue's own thread");
-        assert!(body.contains("https://github.test/acme/app/pull/42"), "{body}");
-        assert!(body.contains("(3 files, +42/-7)"), "{body}");
+        assert_eq!(
+            body,
+            &format!(
+                "The cause was a stale token.\n\n\
+                 Delivered in https://github.test/acme/app/pull/42 (3 files, +42/-7).\n\n\
+                 ---\n{}",
+                crate::forge::deliver::comment_footer()
+            )
+        );
         assert!(!body.contains("refactored"), "agent text leaked: {body}");
         assert!(
             events_of(&f.engine, f.task_id).await.contains(&"forge_writeback".to_string()),
             "the comment belongs on the timeline"
         );
+    }
+
+    async fn first_comment(f: &Delivery) -> String {
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        f.forge.comments.lock().await[0].2.clone()
+    }
+
+    /// The answer given in the acceptance dialog is what reaches the thread:
+    /// it switches the comment on for a task whose trigger dialog never did,
+    /// and the reply is the user's text as typed — a mention they wrote is
+    /// theirs to make. Replies for items the task does not handle go nowhere,
+    /// and once the task has left review the answer is refused.
+    #[tokio::test]
+    async fn the_answer_given_at_acceptance_is_what_reaches_the_thread() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let emitter = EventEmitter::test_web_only(Arc::new(
+            crate::web::event_bridge::WebEventBroadcaster::new(),
+        ));
+        let run_seq = row(&f.engine, f.task_id).await.run_seq;
+        // A dialog showing an older generation's reply signs off on nothing.
+        let stale = crate::commands::work_task::work_task_set_writeback_core(
+            &emitter,
+            &f.engine.db,
+            f.task_id,
+            run_seq - 1,
+            false,
+            Default::default(),
+        )
+        .await;
+        assert!(stale.is_err(), "an answer about another run is refused");
+        assert_eq!(source_record(&row(&f.engine, f.task_id).await).writeback, None);
+
+        crate::commands::work_task::work_task_set_writeback_core(
+            &emitter,
+            &f.engine.db,
+            f.task_id,
+            run_seq,
+            true,
+            [(7, "  Fixed, thanks @alice.\r\n".to_string()), (99, "not ours".to_string())]
+                .into_iter()
+                .collect(),
+        )
+        .await
+        .expect("record the answer");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(source_record(&task).writeback, Some(true));
+        assert_eq!(
+            task.writeback_drafts.as_deref(),
+            Some(r#"{"7":"Fixed, thanks @alice."}"#)
+        );
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        let body = first_comment(&f).await;
+        assert!(body.starts_with("Fixed, thanks @alice.\n\nDelivered in "), "{body}");
+
+        let refused = crate::commands::work_task::work_task_set_writeback_core(
+            &emitter,
+            &f.engine.db,
+            f.task_id,
+            row(&f.engine, f.task_id).await.run_seq,
+            false,
+            Default::default(),
+        )
+        .await;
+        assert!(refused.is_err(), "a finished task's comment is not editable");
+        assert_eq!(source_record(&row(&f.engine, f.task_id).await).writeback, Some(true));
+    }
+
+    /// The footer is the settings' to add, read when the comment is posted.
+    #[tokio::test]
+    async fn the_footer_follows_the_settings_at_posting_time() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        enable_writeback(&f).await;
+        crate::forge::settings::save(
+            &f.engine.db.conn,
+            None,
+            Some(crate::forge::settings::ForgePanelSettings {
+                comment_footer: false,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save settings");
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        let body = first_comment(&f).await;
+        assert!(!body.contains("Generated with"), "{body}");
+        assert!(!body.contains("---"), "{body}");
+    }
+
+    /// What the agent hands in is a draft for THIS task's threads, cleaned
+    /// before anyone reads it: this machine's paths made relative to the
+    /// checkout, mentions defused. A reply for an item the task does not
+    /// handle is dropped, and a task without a thread keeps none.
+    #[tokio::test]
+    async fn the_agents_replies_are_kept_sanitized_and_only_for_its_items() {
+        use crate::acp::delegation::transport::ThreadReply;
+        let f = delivery_fixture(FakeForge::default()).await;
+        let replies = [
+            ThreadReply {
+                number: 7,
+                body: format!("Fixed in {}/a.txt, cc @bob", f.worktree.display()),
+            },
+            ThreadReply {
+                number: 8,
+                body: "someone else's".to_string(),
+            },
+        ];
+        let drafts = f.engine.thread_reply_drafts(f.task_id, &replies).await;
+        assert_eq!(drafts.as_deref(), Some(r#"{"7":"Fixed in a.txt, cc `@bob`"}"#));
+
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.source_kind = Set(None);
+        active.update(&f.engine.db.conn).await.expect("no provenance");
+        assert_eq!(f.engine.thread_reply_drafts(f.task_id, &replies).await, None);
+    }
+
+    /// A reply describes the run it came from: claiming a new run drops it.
+    #[tokio::test]
+    async fn a_new_run_drops_the_previous_runs_reply() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.writeback_drafts = Set(Some(r#"{"7":"does not hold"}"#.to_string()));
+        active.update(&f.engine.db.conn).await.expect("draft");
+        work_task_service::claim_for_run(&f.engine.db.conn, f.task_id, WorkTaskStatus::Review, "user")
+            .await
+            .expect("claim")
+            .expect("claimed");
+        assert_eq!(row(&f.engine, f.task_id).await.writeback_drafts, None);
     }
 
     /// A task whose trigger dialog left the box unchecked publishes nothing —
@@ -13783,6 +14498,291 @@ mod tests {
             f.forge.comments.lock().await.is_empty(),
             "no thread to write back to"
         );
+    }
+
+    /// The fixture's issue task as one made from several related issues: #7
+    /// (the lead the fixture already names) with #9 and #12. Delivery and the
+    /// write-back read the item list off the snapshot; the item rows are the
+    /// board's business and play no part here.
+    async fn as_issues_task(f: &Delivery) {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let task = row(&f.engine, f.task_id).await;
+        let mut meta = source_record(&task);
+        meta.items = [7, 9, 12]
+            .into_iter()
+            .map(|number| crate::forge::ForgeSourceItem {
+                number,
+                url: format!("https://github.com/acme/app/issues/{number}"),
+                title: format!("issue {number}"),
+            })
+            .collect();
+        let mut active = task.into_active_model();
+        active.source_meta = Set(Some(serde_json::to_string(&meta).expect("meta json")));
+        active
+            .update(&f.engine.db.conn)
+            .await
+            .expect("as a task of several issues");
+    }
+
+    /// A task made from several issues opens ONE pull request, closing the
+    /// issues its user picked — one keyword per line, which every forge
+    /// honours — and referencing the rest. The pick is fixed at that first
+    /// delivery: the next one, into the same pull request, may repeat it or
+    /// say nothing, but a different list is refused before anything moves.
+    #[tokio::test]
+    async fn an_issues_task_closes_the_issues_picked_at_its_first_delivery() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+
+        let url = f
+            .engine
+            .deliver_pr_closing(
+                f.task_id,
+                None,
+                false,
+                false,
+                false,
+                Some(vec![12, 7]),
+                None,
+            )
+            .await
+            .expect("first delivery");
+        let body = f.forge.bodies.lock().await[0].clone();
+        assert!(
+            body.starts_with("Closes #7\nCloses #12\n\nRelated to #9\n"),
+            "one keyword per closed issue, the rest referenced: {body}"
+        );
+        assert!(body.contains(&format!("work task `{}`", f.task_id)), "{body}");
+        assert!(body.contains("https://github.com/acme/app/issues/9"), "{body}");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        let meta = source_record(&task);
+        assert_eq!(meta.pr_closes, Some(vec![7, 12]), "fixed, in the task's own order");
+        assert_eq!(meta.result_pr.as_deref(), Some(url.as_str()));
+        assert_eq!(meta.items.len(), 3, "the settle kept the item list");
+
+        // A different list: refused before anything moves.
+        f.forge.existing.lock().await.push(opened_pull(&f.head));
+        let round_two = commit_another_round(&f).await;
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, false, Some(vec![9]), None)
+            .await
+            .expect_err("the list is fixed");
+        assert!(err.contains("closes #7, #12"), "{err}");
+        assert!(err.contains("first delivery"), "{err}");
+        assert_eq!(f.forge.pushes.lock().await.len(), 1, "nothing pushed");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+
+        // The same list, in any order, goes ahead — into the pull request the
+        // first delivery opened.
+        let again = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![12, 7]), None)
+            .await
+            .expect("same list");
+        assert_eq!(again, url);
+        let pushes = f.forge.pushes.lock().await.clone();
+        assert_eq!(pushes.last().map(|p| p.1.clone()), Some(round_two));
+        assert_eq!(f.forge.created.lock().await.len(), 1, "one pull request");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(source_record(&task).pr_closes, Some(vec![7, 12]));
+    }
+
+    /// The rules of the list, one answer each: fixed at the first delivery
+    /// (every issue when none was named), held to after it — a repeat in any
+    /// order or silence goes ahead, a different list does not — and only ever
+    /// a task-of-several's to give, among its own issues.
+    #[test]
+    fn the_closing_list_is_fixed_once_and_only_for_a_task_of_several() {
+        let issues = |pinned: Option<Vec<i64>>| {
+            let mut meta: ForgeSourceMeta = serde_json::from_value(serde_json::json!({
+                "provider": "github",
+                "server_host": "github.com",
+                "api_base": "https://api.github.com",
+                "account_id": "acc-1",
+                "owner_repo": "acme/app",
+                "number": 3,
+                "url": "https://github.com/acme/app/issues/3",
+                "title": "t",
+            }))
+            .expect("meta");
+            meta.items = [3, 5, 9]
+                .into_iter()
+                .map(|number| crate::forge::ForgeSourceItem {
+                    number,
+                    url: format!("https://github.com/acme/app/issues/{number}"),
+                    title: "t".into(),
+                })
+                .collect();
+            meta.pr_closes = pinned;
+            DeliverySource::Issue(meta)
+        };
+        let closes = |source: &DeliverySource| match source {
+            DeliverySource::Issue(meta) => meta.pr_closes.clone(),
+            _ => panic!("not an issue source"),
+        };
+        let pinned_of = |json: Option<String>| {
+            json.map(|j| {
+                serde_json::from_str::<ForgeSourceMeta>(&j)
+                    .expect("pinned meta")
+                    .pr_closes
+            })
+        };
+
+        // First delivery: what was named, in the task's order — or every issue.
+        let (source, pin) = closing_list(issues(None), Some(vec![9, 3, 9])).expect("named");
+        assert_eq!(closes(&source), Some(vec![3, 9]));
+        assert_eq!(pinned_of(pin), Some(Some(vec![3, 9])), "recorded as it is fixed");
+        let (source, pin) = closing_list(issues(None), None).expect("unnamed");
+        assert_eq!(closes(&source), Some(vec![3, 5, 9]));
+        assert!(pin.is_some());
+        let (_, pin) = closing_list(issues(None), Some(vec![])).expect("closing none");
+        assert_eq!(pinned_of(pin), Some(Some(vec![])));
+
+        // After it: repeated or unnamed goes ahead and records nothing new.
+        for asked in [None, Some(vec![9, 3])] {
+            let (source, pin) = closing_list(issues(Some(vec![3, 9])), asked).expect("held");
+            assert_eq!(closes(&source), Some(vec![3, 9]));
+            assert!(pin.is_none());
+        }
+        let err = closing_list(issues(Some(vec![3, 9])), Some(vec![3])).expect_err("changed");
+        assert!(err.contains("#3, #9") && err.contains("first delivery"), "{err}");
+        let err = closing_list(issues(Some(vec![])), Some(vec![3])).expect_err("changed");
+        assert!(err.contains("none of its issues"), "{err}");
+
+        // Only its own issues, and only a task of several.
+        let err = closing_list(issues(None), Some(vec![3, 4])).expect_err("stranger");
+        assert!(err.contains("#4 is not one of this task's issues"), "{err}");
+        let single = match issues(None) {
+            DeliverySource::Issue(mut meta) => {
+                meta.items.clear();
+                DeliverySource::Issue(meta)
+            }
+            _ => unreachable!(),
+        };
+        let (_, pin) = closing_list(single.clone(), None).expect("nothing asked");
+        assert!(pin.is_none());
+        assert!(closing_list(single, Some(vec![3])).is_err());
+    }
+
+    /// Without a list, the first delivery closes every issue.
+    #[tokio::test]
+    async fn an_issues_task_delivered_without_a_list_closes_every_issue() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        let body = f.forge.bodies.lock().await[0].clone();
+        assert!(
+            body.starts_with("Closes #7\nCloses #9\nCloses #12\n\nPrepared by"),
+            "{body}"
+        );
+        assert!(!body.contains("Related to"), "{body}");
+        assert_eq!(
+            source_record(&row(&f.engine, f.task_id).await).pr_closes,
+            Some(vec![7, 9, 12])
+        );
+    }
+
+    /// The list is only a task-of-several's to choose, and only among its own
+    /// issues; anything else is refused with the task left as it was. A
+    /// delivery refused before it began fixes nothing either — the user can
+    /// still pick again once the refusal is dealt with.
+    #[tokio::test]
+    async fn a_closing_list_is_refused_where_it_does_not_apply() {
+        let single = delivery_fixture(FakeForge::default()).await;
+        let err = single
+            .engine
+            .deliver_pr_closing(
+                single.task_id,
+                None,
+                false,
+                false,
+                true,
+                Some(vec![7]),
+                None,
+            )
+            .await
+            .expect_err("a one-issue task closes its issue");
+        assert!(err.contains("several issues"), "{err}");
+        assert!(single.forge.pushes.lock().await.is_empty());
+        assert_eq!(
+            row(&single.engine, single.task_id).await.status,
+            WorkTaskStatus::Review
+        );
+
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7, 99]), None)
+            .await
+            .expect_err("not one of its issues");
+        assert!(err.contains("#99"), "{err}");
+
+        // Refused before the delivery began: nothing fixed.
+        std::fs::write(f.worktree.join("scratch.txt"), "wip\n").expect("write");
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![9]), None)
+            .await
+            .expect_err("uncommitted changes");
+        assert!(err.contains("uncommitted"), "{err}");
+        assert_eq!(source_record(&row(&f.engine, f.task_id).await).pr_closes, None);
+        std::fs::remove_file(f.worktree.join("scratch.txt")).expect("clean");
+        f.engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![12]), None)
+            .await
+            .expect("delivery");
+        assert_eq!(
+            source_record(&row(&f.engine, f.task_id).await).pr_closes,
+            Some(vec![12])
+        );
+    }
+
+    /// Every issue of the task hears how it ended, in its own thread and its
+    /// own timeline entry, and each comment names the others — numbers only,
+    /// and nothing about which of them the pull request closes.
+    #[tokio::test]
+    async fn every_issue_of_a_task_of_several_hears_how_it_ended() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+        enable_writeback(&f).await;
+        f.engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]), None)
+            .await
+            .expect("delivery");
+        let forge = f.forge.clone();
+        wait_for("three write-backs", move || {
+            let forge = forge.clone();
+            async move { forge.comments.lock().await.len() == 3 }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        let numbers: Vec<i64> = comments.iter().map(|c| c.1).collect();
+        assert_eq!(numbers, vec![7, 9, 12]);
+        assert!(comments.iter().all(|c| c.0 == ForgeItemKind::Issue));
+        let nine = &comments[1].2;
+        assert!(nine.contains("https://github.test/acme/app/pull/42"), "{nine}");
+        assert!(
+            nine.contains("This issue was handled together with #7 and #12."),
+            "{nine}"
+        );
+        assert!(!nine.to_lowercase().contains("close"), "{nine}");
+        let events = work_task_service::list_events(&f.engine.db.conn, f.task_id, 200)
+            .await
+            .expect("events");
+        let mut posted: Vec<i64> = events
+            .iter()
+            .filter(|e| e.kind == "forge_writeback")
+            .filter_map(|e| e.payload.as_ref()?.get("number")?.as_i64())
+            .collect();
+        posted.sort_unstable();
+        assert_eq!(posted, vec![7, 9, 12], "one timeline entry per issue");
     }
 
     /// Unchecking "mark done" keeps the task: back in review with its pull

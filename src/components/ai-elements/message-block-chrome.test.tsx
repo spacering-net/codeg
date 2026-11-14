@@ -1,13 +1,21 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import postcss from "postcss"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 vi.mock("@/components/ai-elements/link-safety", () => ({
   useStreamdownLinkSafety: () => ({ enabled: false }),
 }))
 
+import { useFallbackOverlayOpen } from "@/lib/browser/native-surface-occlusion"
 import { Message, MessageContent, MessageResponse } from "./message"
 
 // Streamdown's own utility classes live in node_modules, which our Tailwind
@@ -273,6 +281,27 @@ describe("MessageResponse table chrome", () => {
       "min-height": "0",
       padding: "0",
     })
+  })
+
+  it("takes a browser tab's page down while the table is fullscreen", async () => {
+    // A browser tab is a native view painted over every DOM element, so the
+    // fullscreen table (Streamdown's own portal, which holds no lease) must
+    // be seen by the fallback detector or it opens behind the page.
+    const overlay = renderHook(() => useFallbackOverlayOpen())
+    renderReply()
+    expect(overlay.result.current).toBe(false)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("View fullscreen"))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(overlay.result.current).toBe(true)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("Exit fullscreen"))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(overlay.result.current).toBe(false)
   })
 })
 

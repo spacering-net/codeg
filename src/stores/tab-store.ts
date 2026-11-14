@@ -105,13 +105,15 @@ export interface TabItemInternal {
    */
   agentTypeProvisional?: boolean
   /**
-   * Marks a draft tab as "chat mode" (folderless). Set by `openChatModeTab`,
-   * cleared implicitly once the draft binds to a real conversation (whose hidden
-   * hidden chat folder then drives chat-mode chrome via `useIsActiveChatMode`).
-   * **Internal-only and never persisted** — drafts (`conversationId == null`) are
-   * not written to opened_tabs, so this flag only ever lives in memory for the
-   * pre-send draft. While set, the draft has no resolvable folder, so the
-   * composer hides the branch picker and shows the "no-folder" chip.
+   * Marks a tab as "chat mode" (folderless). Set by `openChatModeTab`. It
+   * survives the draft binding to its conversation (`bindConversationTab`
+   * spreads the tab), alongside the hidden chat folder that then also drives
+   * chat-mode chrome via `useIsActiveChatMode`; it is cleared when that
+   * conversation is moved into a project (`alignConversationTabFolders`).
+   * **Internal-only and never persisted** — opened_tabs does not carry it, so a
+   * tab restored from the server never has it. While set on a draft, the draft
+   * has no resolvable folder, so the composer hides the branch picker and shows
+   * the "no-folder" chip.
    */
   isChat?: boolean
 }
@@ -453,23 +455,33 @@ function makeNewConversationTabId(): string {
   return `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-/** Sync identity of a persisted tab — the canonical tab id, which is exactly the
- *  (folder, agent, conversation) triple the persisted row is keyed by. A bound
- *  draft keeps its volatile `new-*` id, so this is deliberately derived from the
+/** Identity of a conversation for tab sync: agent + conversation, deliberately
+ *  WITHOUT the folder. A conversation has one tab at most, and the folder is a
+ *  property of the conversation that can change under the tab (it was moved to
+ *  another project): keyed by folder, the three-way merge would read a moved
+ *  conversation's tab as "closed in one folder, opened in another" — and a
+ *  close this client hadn't pushed yet would come back as a remote open. */
+function conversationSyncKey(
+  agentType: AgentType,
+  conversationId: number
+): string {
+  return `${agentType}:${conversationId}`
+}
+
+/** Sync identity of a persisted tab (see `conversationSyncKey`). A bound draft
+ *  keeps its volatile `new-*` id, so this is deliberately derived from the
  *  fields rather than read off `tab.id`. Drafts have no sync identity (they are
  *  device-local and never persisted) → `null`. */
 function tabSyncKey(tab: TabItemInternal): string | null {
   if (tab.conversationId == null) return null
-  return makeConversationTabId(tab.folderId, tab.agentType, tab.conversationId)
+  return conversationSyncKey(tab.agentType, tab.conversationId)
 }
 
 function snapshotSyncKeys(items: OpenedTab[]): Set<string> {
   const keys = new Set<string>()
   for (const it of items) {
     if (it.conversation_id == null) continue
-    keys.add(
-      makeConversationTabId(it.folder_id, it.agent_type, it.conversation_id)
-    )
+    keys.add(conversationSyncKey(it.agent_type, it.conversation_id))
   }
   return keys
 }
@@ -1368,7 +1380,132 @@ function closeBlankDraftsPerGroup() {
  * tab keeps the array identity stable (no consumer re-render). Called after every
  * rawTabs/childSummaries write, on `conversations` change, and when labels change.
  */
+/**
+ * The conversation row a tab of `conversationId` shows, when this client knows
+ * it: a root from the sidebar list, or a sub-session's seeded summary.
+ */
+function knownConversationRow(
+  conversationId: number,
+  agentType: AgentType
+): DbConversationSummary | undefined {
+  const root = useAppWorkspaceStore
+    .getState()
+    .conversations.find((c) => c.id === conversationId)
+  const row = root ?? useTabStore.getState().childSummaries.get(conversationId)
+  return row && row.agent_type === agentType ? row : undefined
+}
+
+/**
+ * The folder a conversation tab must be opened in: the folder its row is in
+ * NOW when this client knows the row, else the one the caller named. Callers
+ * often carry a folder id from an older snapshot — an automation run's
+ * worktree, the closed-tab stack — and a conversation may have been moved to
+ * another project since.
+ */
+function canonicalConversationFolder(
+  folderId: number,
+  conversationId: number,
+  agentType: AgentType
+): number {
+  return knownConversationRow(conversationId, agentType)?.folder_id ?? folderId
+}
+
+/**
+ * Invariant: a conversation tab lives in the folder its conversation row is in.
+ *
+ * The tab's folder is where the agent works (its connection's cwd is the
+ * folder's path) and part of the tab's sync key, so a conversation moved to
+ * another project — from this client, another one, or while this one was
+ * offline — must take its open tabs along. Run on every derive, so it covers a
+ * row upsert, the full refetch after a reconnect, an applied remote snapshot
+ * (including a rejected save's reconcile) and hydration alike. Each tab is
+ * re-pointed in place: same id, position, pin, group and focus; its working
+ * dir is dropped so the connection re-derives it from the new folder (the
+ * connection lifecycle reconnects on a working-dir change). A bound chat tab
+ * whose row has become a regular project conversation also leaves chat mode.
+ * A second tab for the same conversation goes.
+ *
+ * Tabs whose row this client doesn't know are left alone, and so are drafts;
+ * nothing moves while the conversation list is being refetched.
+ * The three-way merge in `applyRemoteSnapshot` keys tabs by conversation, not
+ * folder (`conversationSyncKey`), so a re-pointed tab is the same tab to it
+ * whether or not the server has re-pointed its own copy yet, and a close this
+ * client has not pushed yet survives a move made elsewhere. A worktree removal
+ * closes its tabs on the server before the conversations are refetched, so
+ * nothing is "rescued" here.
+ */
+function alignConversationTabFolders() {
+  const st = useTabStore.getState()
+  const { conversations, conversationsLoading, allFolders } =
+    useAppWorkspaceStore.getState()
+  // Mid-refetch the rows may be older than the tab set — after a reconnect the
+  // tab snapshot can land first, already showing a move this list predates —
+  // and pointing tabs back at a stale folder would push that back to the
+  // server. Wait for the refetch; its settling re-runs the derive.
+  if (conversationsLoading) return
+  if (conversations.length === 0 && st.childSummaries.size === 0) return
+  if (!st.rawTabs.some((t) => t.conversationId != null)) return
+  // Runs on every derive (status ticks included): one pass over the list, not
+  // one per tab.
+  const roots = new Map(conversations.map((c) => [c.id, c]))
+  const rowOf = (tab: TabItemInternal) => {
+    const id = tab.conversationId as number
+    const row = roots.get(id) ?? st.childSummaries.get(id)
+    return row && row.agent_type === tab.agentType ? row : undefined
+  }
+  let changed = false
+  let activeTabId = st.activeTabId
+  const next: TabItemInternal[] = []
+  const keys = new Set<string>()
+  for (const tab of st.rawTabs) {
+    let item = tab
+    if (tab.conversationId != null) {
+      const row = rowOf(tab)
+      if (row) {
+        const rowFolderKind = allFolders.find(
+          (f) => f.id === row.folder_id
+        )?.kind
+        const leavesChat =
+          tab.isChat === true &&
+          row.kind !== "chat" &&
+          rowFolderKind != null &&
+          rowFolderKind !== "chat"
+        if (row.folder_id !== tab.folderId || leavesChat) {
+          item = {
+            ...tab,
+            folderId: row.folder_id,
+            ...(row.folder_id !== tab.folderId
+              ? { workingDir: undefined }
+              : {}),
+            ...(leavesChat ? { isChat: false } : {}),
+          }
+          changed = true
+        }
+      }
+      const key = tabSyncKey(item)
+      if (key != null) {
+        if (keys.has(key)) {
+          // The conversation is already open in another tab: keep that one.
+          const kept = next.find((t) => tabSyncKey(t) === key)
+          if (activeTabId === tab.id) activeTabId = kept?.id ?? null
+          changed = true
+          continue
+        }
+        keys.add(key)
+      }
+    }
+    next.push(item)
+  }
+  if (!changed) return
+  // A remote apply may have armed the echo guard for the set it just
+  // committed; this correction is ours and has to be pushed.
+  applyingRemote = false
+  lastSavedPayload = null
+  useTabStore.setState({ rawTabs: next, activeTabId })
+}
+
 function recomputeTabs() {
+  alignConversationTabFolders()
   const st = useTabStore.getState()
   const { rawTabs, childSummaries } = st
   const conversations = useAppWorkspaceStore.getState().conversations
@@ -1503,7 +1640,19 @@ function initialTabState() {
 export const useTabStore = create<TabStoreState>()((set, get) => ({
   ...initialTabState(),
 
-  openTab: (folderId, conversationId, agentType, pin = false, title, opts) => {
+  openTab: (
+    requestedFolderId,
+    conversationId,
+    agentType,
+    pin = false,
+    title,
+    opts
+  ) => {
+    const folderId = canonicalConversationFolder(
+      requestedFolderId,
+      conversationId,
+      agentType
+    )
     useFolderTabsStore.getState().activateScope(folderScope(folderId))
     const prevState = get()
     const existingIndex = findTabIndexForConversation(
@@ -3191,10 +3340,14 @@ export function pruneOrphanDraftsOnce() {
 // Recompute `tabs` whenever the app-workspace `conversations` list changes (any
 // agent's turn start/stop): titles/status decorate from it. Reference reuse in
 // recomputeTabs keeps the array stable when no open tab is affected.
-useAppWorkspaceStore.subscribe(() => {
-  const c = useAppWorkspaceStore.getState().conversations
+useAppWorkspaceStore.subscribe((next, previous) => {
+  const c = next.conversations
   if (c !== lastConversations) {
     lastConversations = c
+    recomputeTabs()
+  } else if (previous.conversationsLoading && !next.conversationsLoading) {
+    // A refetch just settled. Its rows landed while it still read as loading,
+    // when `alignConversationTabFolders` holds off; run it now.
     recomputeTabs()
   }
 })
@@ -3318,11 +3471,7 @@ function applyRemoteSnapshot(change: TabsChanged) {
   // rejected). The local close is the newer intent: keep it closed. Anything
   // else on the server is adopted — including tabs opened on another client.
   const convItems = snapshotItems.filter((it) => {
-    const key = makeConversationTabId(
-      it.folder_id,
-      it.agent_type,
-      it.conversation_id as number
-    )
+    const key = conversationSyncKey(it.agent_type, it.conversation_id as number)
     return localKeys.has(key) || !ancestorKeys.has(key)
   })
   // Open here, absent from the snapshot, and never acknowledged by the server →
@@ -3347,6 +3496,7 @@ function applyRemoteSnapshot(change: TabsChanged) {
   applyingRemote = !diverged
 
   const prevById = new Map(prev.rawTabs.map((tb) => [tb.id, tb]))
+  const claimedIds = new Set<string>()
   const remoteTabs: TabItemInternal[] = convItems.map((it) => {
     const canonicalId = makeConversationTabId(
       it.folder_id,
@@ -3355,15 +3505,19 @@ function applyRemoteSnapshot(change: TabsChanged) {
     )
     // Prefer an already-open local tab for this conversation (including a draft
     // that just bound to it and still carries its `new-*` id) so we keep that
-    // stable id and its live runtime session.
-    const existing =
+    // stable id and its live runtime session — in whichever folder it is open
+    // here: the conversation may have been moved to another project, and the
+    // snapshot's folder is then the newer one.
+    const found =
       prevById.get(canonicalId) ??
       prev.rawTabs.find(
         (tb) =>
           tb.conversationId === it.conversation_id &&
-          tb.folderId === it.folder_id &&
           tb.agentType === it.agent_type
       )
+    const existing = found && !claimedIds.has(found.id) ? found : undefined
+    if (existing) claimedIds.add(existing.id)
+    const sameFolder = existing?.folderId === it.folder_id
     return {
       id: existing?.id ?? canonicalId,
       kind: "conversation",
@@ -3376,8 +3530,9 @@ function applyRemoteSnapshot(change: TabsChanged) {
       status: existing?.status,
       // Device-local per-tab fields the payload doesn't carry. Rebuilding the
       // tab from the snapshot must not blank them (a bound chat tab would lose
-      // the scratch working dir it is connected in).
-      workingDir: existing?.workingDir,
+      // the scratch working dir it is connected in) — unless the folder
+      // changed, when the working dir is re-derived from the new one.
+      workingDir: sameFolder ? existing?.workingDir : undefined,
       isChat: existing?.isChat,
     }
   })

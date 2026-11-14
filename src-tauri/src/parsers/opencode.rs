@@ -1737,9 +1737,11 @@ fn normalize_tool_call(raw_tool: &str, state: Option<&serde_json::Value>) -> Nor
         // as written — `command`, plus `workdir` / `timeout` / `background`
         // when the model set them; the frontend reads `shell` as `bash` — but
         // its exit status is taken from the field: the text only says
-        // "Exited with code N" after the output, and only for a non-zero
-        // status (`core/src/shell/result.ts`, `notice`), while a 1.x `bash`
-        // result never printed it at all.
+        // "Exited with code N" (2.2.7: "Exit code: N") after the output, and
+        // only for a non-zero status (`core/src/shell/result.ts`, `notice`),
+        // while a 1.x `bash` result never printed it at all. A command a
+        // signal ended has `metadata.signal` and no `exit`; the frontend reads
+        // its signal from that closing line (`extractAgentReportedExit`).
         "shell" => {
             exit_code = command_exit_code(metadata);
         }
@@ -1937,8 +1939,10 @@ pub(crate) fn structure_read_output(metadata: Option<&serde_json::Value>) -> Opt
 /// `core/src/tool/plugin/read.ts` (`toModelContent`) renders it for the model —
 /// a `Read file <path>, lines <a>-<b>` header, then each line prefixed with its
 /// number and `": "`, then possibly `[Output truncated. Continue reading with
-/// offset: <n>]`. A directory reads as `Read directory <path>, entries <a>-<b>`
-/// followed by one entry per line.
+/// offset: <n>]`. Since 2.2.7 an offset past the end returns the file's last
+/// lines instead of failing, the header then ending in `(offset <o> is past
+/// the end; the file has <n> lines)`. A directory reads as `Read directory
+/// <path>, entries <a>-<b>` followed by one entry per line.
 ///
 /// Returns the same payload as the 1.x path (`{"start_line", "content"}` JSON
 /// for a file, the entries one per line for a directory), or `None` when the
@@ -1959,6 +1963,10 @@ pub(crate) fn structure_read_output_text(text: &str) -> Option<String> {
         return Some(entries.join("\n"));
     }
     let rest = header.strip_prefix("Read file ")?;
+    let rest = match rest.rsplit_once(" (offset ") {
+        Some((head, note)) if note.ends_with(" line)") || note.ends_with(" lines)") => head,
+        _ => rest,
+    };
     if rest.ends_with(", 0 lines") {
         return Some(serde_json::json!({ "start_line": 1, "content": "" }).to_string());
     }
@@ -2662,11 +2670,12 @@ async fn load_media_blobs(conn: &DatabaseConnection, hashes: &[String]) -> Media
 ///
 /// OpenCode 2.2.5 added the table and reads an assistant message's content
 /// from it whenever the message has rows there (`core/src/session/history.ts`,
-/// `withParts`): the rows' data, in order, replaces the message's inline
-/// `content`. 2.2.5 itself writes rows only for a message that already has
-/// some, and then leaves `content: []` in its `session_message` row; its own
-/// comment reserves the table for "a newer release" that moves a message's
-/// parts there. Its rows carry each part whole, `type` included, and the row's
+/// `withParts`; see [`splice_v2_parts`] for how the rows and the inline
+/// `content` combine). 2.2.5 itself writes rows only for a message that
+/// already has some. 2.2.6 writes every new assistant part as a row when
+/// `experimental.part_rows` is on (off by default), moving a message's inline
+/// parts there on its first part write and leaving `content: []` in its
+/// `session_message` row. Its rows carry each part whole, `type` included, and the row's
 /// `type` column says the same, so the column only fills a part that lacks one.
 /// A database from before 2.2.5 has no such table, so a failed read leaves
 /// every message as it is stored inline.
@@ -2716,16 +2725,21 @@ async fn load_v2_session_parts(
 }
 
 /// Give `message` the content parts its `session_part` rows hold, the way
-/// OpenCode reads it: only a message that has rows there, and only in place of
-/// a `content` its data already carries.
+/// OpenCode 2.2.6 reads it (`withParts`): only a message that has rows there,
+/// whose content becomes those parts followed by any inline `content` array it
+/// still carries. 2.2.5 replaced the inline array with the parts, and only when
+/// the message had one. The two readings differ only for a message with both,
+/// which an older build leaves when it writes inline content into a message
+/// that already has rows; 2.2.6 keeps both for that case, rows first.
 fn splice_v2_parts(message: &mut serde_json::Value, parts: Option<Vec<serde_json::Value>>) {
-    let Some(parts) = parts else {
+    let Some(mut parts) = parts else {
         return;
     };
     if let Some(fields) = message.as_object_mut() {
-        if fields.contains_key("content") {
-            fields.insert("content".to_string(), serde_json::Value::Array(parts));
+        if let Some(serde_json::Value::Array(inline)) = fields.remove("content") {
+            parts.extend(inline);
         }
+        fields.insert("content".to_string(), serde_json::Value::Array(parts));
     }
 }
 
@@ -3744,6 +3758,14 @@ mod tests {
 
         // Anything else keeps its text: an image read, an error, a numbering
         // that does not match the header.
+        // 2.2.7 answers an offset past the end with the file's tail and says so
+        // in the header (`core/src/tool/plugin/read.ts`, `toModelContent`).
+        let past_end = "Read file /p/a.txt, lines 2-3 (offset 50 is past the end; the file has 3 lines)\n2: b\n3: c";
+        let structured: serde_json::Value =
+            serde_json::from_str(&super::structure_read_output_text(past_end).expect("past end"))
+                .unwrap();
+        assert_eq!(structured["start_line"], 2);
+        assert_eq!(structured["content"], "b\nc");
         assert!(super::structure_read_output_text("Image read successfully").is_none());
         assert!(super::structure_read_output_text("File not found: /p/x").is_none());
         assert!(super::structure_read_output_text("Read file /p/a, lines 1-2\n1: a\n3: b").is_none());
@@ -5187,26 +5209,37 @@ mod tests {
         );
     }
 
-    /// Parts replace a `content` the message carries and nothing else, as
-    /// OpenCode's `withParts` (`"content" in row.data`) does; no rows, no change.
+    /// Parts come first and an inline `content` array the message still carries
+    /// follows them, as OpenCode 2.2.6's `withParts` reads it; a message with no
+    /// `content` (or a non-array one) gets the parts alone; no rows, no change.
     #[test]
-    fn session_parts_only_replace_a_content_the_message_carries() {
+    fn session_parts_come_before_the_inline_content() {
         let part = serde_json::json!({ "type": "text", "text": "from the part" });
+        let inline = serde_json::json!({ "type": "text", "text": "inline" });
 
-        let mut with_content =
-            serde_json::json!({ "content": [{ "type": "text", "text": "inline" }] });
+        let mut with_content = serde_json::json!({ "content": [inline.clone()] });
         super::splice_v2_parts(&mut with_content, Some(vec![part.clone()]));
-        assert_eq!(with_content["content"], serde_json::json!([part]));
-
-        let mut without_content = serde_json::json!({ "error": { "type": "aborted" } });
-        super::splice_v2_parts(&mut without_content, Some(vec![part]));
         assert_eq!(
-            without_content,
-            serde_json::json!({ "error": { "type": "aborted" } })
+            with_content["content"],
+            serde_json::json!([part.clone(), inline.clone()])
         );
 
-        let mut untouched =
-            serde_json::json!({ "content": [{ "type": "text", "text": "inline" }] });
+        let mut empty_content = serde_json::json!({ "content": [] });
+        super::splice_v2_parts(&mut empty_content, Some(vec![part.clone()]));
+        assert_eq!(empty_content["content"], serde_json::json!([part.clone()]));
+
+        let mut without_content = serde_json::json!({ "error": { "type": "aborted" } });
+        super::splice_v2_parts(&mut without_content, Some(vec![part.clone()]));
+        assert_eq!(
+            without_content,
+            serde_json::json!({ "error": { "type": "aborted" }, "content": [part.clone()] })
+        );
+
+        let mut null_content = serde_json::json!({ "content": null });
+        super::splice_v2_parts(&mut null_content, Some(vec![part.clone()]));
+        assert_eq!(null_content["content"], serde_json::json!([part]));
+
+        let mut untouched = serde_json::json!({ "content": [inline] });
         super::splice_v2_parts(&mut untouched, None);
         assert_eq!(untouched["content"][0]["text"], "inline");
     }

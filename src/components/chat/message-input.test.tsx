@@ -1970,6 +1970,27 @@ describe("MessageInput slash menu for skills an agent does not advertise", () =>
     expect(agentSkills).toHaveBeenCalledWith("antigravity", null)
   })
 
+  it("lists custom ACP agents' skills from disk after their commands", async () => {
+    agentSkills.mockReturnValue([DEPLOY, SHADOWED])
+    await mountAndType({
+      agentType: "custom:antigravity-b",
+      availableCommands: COMMANDS,
+    })
+
+    const menu = await screen.findByTestId("slash-menu")
+    const rows = within(menu)
+      .getAllByRole("button")
+      .map((row) => row.textContent)
+    expect(rows).toEqual([
+      expect.stringMatching(/^\/plan/),
+      expect.stringMatching(/^\/logout/),
+      expect.stringMatching(/^\/usage/),
+      "DeployShip the build",
+    ])
+    expect(within(menu).queryByText("Plan skill")).toBeNull()
+    expect(agentSkills).toHaveBeenCalledWith("custom:antigravity-b", null)
+  })
+
   it("inserts a picked Antigravity skill as its `/` token", async () => {
     agentSkills.mockReturnValue([DEPLOY])
     const { editor } = await mountAndType(

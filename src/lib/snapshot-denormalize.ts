@@ -1,7 +1,9 @@
+import { stripKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import type {
   ActiveDelegationState,
   AskDelegate,
   AsyncTaskRecord,
+  BackgroundOutstandingTask,
   AvailableCommandInfo,
   ConfigStaleKind,
   ConnectionStatus,
@@ -21,6 +23,7 @@ import type {
 } from "@/lib/types"
 
 import { routeAcpError, type AcpErrorLevel } from "@/lib/acp-error-presentation"
+import { replaceLiveToolRawOutput } from "@/lib/live-tool-output"
 import type {
   LiveContentBlock as LocalLiveContentBlock,
   LiveMessage as LocalLiveMessage,
@@ -90,6 +93,9 @@ export interface SnapshotPatch {
    *  `background_activity` events won't replay. `0` when the server omitted
    *  the field. */
   backgroundOutstanding: number
+  /** Those tasks one by one (`background_outstanding_tasks`), for the
+   *  composer's running list. Empty when the server omitted the field. */
+  backgroundTasks: readonly BackgroundOutstandingTask[]
   /** AIR typed session failure table carried by the snapshot — resolved
    *  entries and their revision watermarks included. MERGED into the in-memory
    *  table by the monotonic per-id rule (`mergeSessionFailures`) on BOTH
@@ -119,6 +125,9 @@ export interface SnapshotPatch {
    *  `seedDelegationsFromSnapshot`); the reducer does not store this on
    *  ConnectionState. `[]` when the server omitted the field. */
   activeDelegations: ActiveDelegationState[]
+  /** Child connection ids of every running codeg delegation — the parent's
+   *  busy signal (`ConnectionState.delegatedChildren`). `[]` when absent. */
+  delegatedChildren: string[]
 }
 
 const DEFAULT_PROMPT_CAPS: PromptCapabilitiesInfo = {
@@ -183,6 +192,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     configStale: wire.config_stale ?? false,
     configStaleKind: wire.config_stale_kind ?? null,
     backgroundOutstanding: wire.background_outstanding ?? 0,
+    backgroundTasks: wire.background_outstanding_tasks ?? [],
     sessionFailures: wire.session_failures ?? [],
     toolApprovals: wire.tool_approvals ?? [],
     asyncTasks: wire.async_tasks ?? [],
@@ -191,6 +201,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     lastErrorLevel: routeAcpError(lastErrorCode).level,
     eventSeq: wire.event_seq,
     activeDelegations: wire.active_delegations ?? [],
+    delegatedChildren: wire.delegated_children ?? [],
   }
 }
 
@@ -306,13 +317,8 @@ function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
   // Backend's structured output is collapsed into a single raw chunk for
   // hydration. Chunk history isn't recoverable from the snapshot — the
   // frontend's per-chunk delta tracking will resume from subsequent events.
-  const outputChunks: string[] = []
-  let outputBytes = 0
-  const rawOutput = toolOutputRawText(tc.output)
-  if (rawOutput !== null) {
-    outputChunks.push(rawOutput)
-    outputBytes = rawOutput.length
-  }
+  const output = replaceLiveToolRawOutput(toolOutputRawText(tc.output))
+
   return {
     tool_call_id: tc.id,
     title: tc.label,
@@ -320,10 +326,9 @@ function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
     status: tc.status,
     content: tc.content,
     raw_input: tc.input == null ? null : JSON.stringify(tc.input),
-    raw_output_chunks: outputChunks,
-    raw_output_total_bytes: outputBytes,
+    ...output,
     locations: tc.locations ?? null,
-    meta: tc.meta ?? null,
+    meta: stripKimiMcpOAuth(tc.meta ?? null),
     images: tc.images ?? [],
   }
 }

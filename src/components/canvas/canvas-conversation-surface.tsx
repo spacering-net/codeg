@@ -13,7 +13,10 @@ import { AgentSelector } from "@/components/chat/agent-selector"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import type { ConversationFolderPickerOverride } from "@/components/chat/conversation-context-bar"
 import type { ComposerInjectContent } from "@/components/chat/message-input"
-import { MessageListView } from "@/components/message/message-list-view"
+import {
+  MessageListView,
+  type LiveRunsSource,
+} from "@/components/message/message-list-view"
 import {
   getCachedSelectors,
   useAcpActions,
@@ -764,7 +767,7 @@ export function CanvasConversationSurface({
   )
 
   /** Stop one AIR async task. `false` (the adapter declined) is surfaced —
-   *  a successful stop announces itself by the row leaving the strip, so
+   *  a successful stop announces itself by the row leaving the list, so
    *  silence would be indistinguishable from a click that did nothing. */
   const handleStopAsyncTask = useCallback(
     async (taskId: string) => {
@@ -790,6 +793,28 @@ export function CanvasConversationSurface({
       }
     },
     [conn.connectionId, tAsyncTasks]
+  )
+
+  // The work this connection has running beyond the turn, for the "N running"
+  // chip on the transcript's live activity row.
+  const runsAgentName = getAgentLabel(agentType)
+  const liveRuns = useMemo<LiveRunsSource>(
+    () => ({
+      connectionId: conn.connectionId,
+      asyncTasks: conn.asyncTasks,
+      backgroundTasks: conn.backgroundTasks,
+      delegatedChildren: conn.delegatedChildren,
+      onStopAsyncTask: handleStopAsyncTask,
+      agentName: runsAgentName,
+    }),
+    [
+      conn.connectionId,
+      conn.asyncTasks,
+      conn.backgroundTasks,
+      conn.delegatedChildren,
+      handleStopAsyncTask,
+      runsAgentName,
+    ]
   )
 
   /** Turn Claude Code's Remote Control off the way the user would: by sending
@@ -846,8 +871,6 @@ export function CanvasConversationSurface({
           claudeApiRetry={conn.claudeApiRetry}
           sessionFailures={conn.sessionFailures}
           onSessionFailureDismiss={handleSessionFailureDismiss}
-          asyncTasks={conn.asyncTasks}
-          onStopAsyncTask={handleStopAsyncTask}
           remoteControl={connIsForOtherAgent ? null : conn.remoteControl}
           onRemoteControlOff={
             conn.connectionId !== null && !conn.isViewer
@@ -916,6 +939,7 @@ export function CanvasConversationSurface({
             acpLoadError={acpLoadError}
             hideEmptyState={isDraft}
             onSaveNoteSelection={onSaveSelectionAsNote}
+            liveRuns={liveRuns}
           />
         </ConversationShell>
       </div>

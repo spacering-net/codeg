@@ -65,7 +65,8 @@ pub struct DbConversationSummary {
     pub delegation_call_id: Option<String>,
     /// Mirror of `conversation.origin_cwd`: the working directory this
     /// conversation actually ran in when it differs from its current folder's
-    /// path (set when a removed task worktree's conversations were re-parented).
+    /// path (set when a removed task worktree's conversations were re-parented,
+    /// or the user moved the conversation to another project).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_cwd: Option<String>,
     /// Mirror of `conversation.assistant_id`: the assistant a delegation child

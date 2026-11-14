@@ -199,6 +199,11 @@ pub(crate) fn apply_custom_version_to_url(
 /// [`resolve_npx_command_for`]: PATH, then `~/.local/bin`, then the current npm
 /// global prefix, then the agent vendor's own native install. The fallbacks
 /// handle GUI environments that don't inherit the user's shell PATH.
+///
+/// Qoder on Windows resolves further at launch (see [`crate::acp::qoder`]): a
+/// wrapper whose target the user overrode through Agent Settings env, or one
+/// whose CLI went missing, passes this command-existence gate and reports the
+/// specific problem at connect rather than reading as "not installed" here.
 pub(crate) async fn is_cmd_available(agent_type: AgentType, cmd: &str) -> bool {
     resolve_npx_command_for(agent_type, cmd).await.is_some()
 }
@@ -470,21 +475,24 @@ fn npx_native_install(agent_type: AgentType, cmd: &str) -> Option<PathBuf> {
 /// that PATH, and on Windows nothing lands in `~/.local/bin` either, so without
 /// this a working native install reads as not installed.
 ///
-/// `@xai-official/grok`'s npm postinstall writes its binary to the same place,
-/// and `npm uninstall -g` leaves that copy behind. Grok records which installer
-/// owns `~/.grok/bin` as `[cli].installer` in the `config.toml` beside it:
-/// `"internal"` from its own installers, `"npm"` from the npm package. A copy
-/// recorded as npm's does not count here. An npm-installed Grok resolves
+/// `@xai-official/grok`'s npm package writes its binary to the same place, and
+/// `npm uninstall -g` leaves that copy behind. An npm-installed Grok resolves
 /// through the npm prefix like every other npx agent, and counting its copy
-/// would keep Grok installed after codeg uninstalls it.
+/// would keep Grok installed after codeg uninstalls it, so that copy does not
+/// count here. Grok records which installer owns `~/.grok/bin` as
+/// `[cli].installer` in the `config.toml` beside it: `"internal"` from its own
+/// installers, `"npm"` from the npm package's postinstall. Where npm skipped
+/// that postinstall (npm 12 blocks install scripts it was not told to allow,
+/// and `ignore-scripts` skips them), the package's launcher unpacks the binary
+/// on its first run and records nothing; with no record, the copy is told
+/// apart by where its build lives ([`is_grok_npm_copy`]).
 ///
 /// Only the default location is probed. A `GROK_BIN_DIR` or `GROK_HOME`
 /// relocation is not followed.
 fn grok_native_install(home: &Path, cmd: &str) -> Option<PathBuf> {
     let grok_dir = home.join(".grok");
-    let cand = grok_dir
-        .join("bin")
-        .join(binary_cache::executable_file_name(cmd));
+    let bin_dir = grok_dir.join("bin");
+    let cand = bin_dir.join(binary_cache::executable_file_name(cmd));
     if !cand.is_file() {
         return None;
     }
@@ -499,7 +507,48 @@ fn grok_native_install(home: &Path, cmd: &str) -> Option<PathBuf> {
                 .as_str()
                 .map(str::to_string)
         });
-    (installer.as_deref() != Some("npm")).then_some(cand)
+    let npm_copy = match installer.as_deref() {
+        Some(installer) => installer == "npm",
+        None => is_grok_npm_copy(&bin_dir, &cand, cmd),
+    };
+    (!npm_copy).then_some(cand)
+}
+
+/// Whether `cand`, `<cmd>` in `bin_dir` (`~/.grok/bin`), is laid out as
+/// `@xai-official/grok`'s npm scripts leave it: they unpack the build beside it
+/// as `<cmd>-<version>` (with `.exe` on Windows) and make `cand` a symlink to
+/// that bare name, or on Windows a copy of that file. Grok's own installers and
+/// its updater keep their builds in `~/.grok/downloads` and link or copy `cand`
+/// from there.
+fn is_grok_npm_copy(bin_dir: &Path, cand: &Path, cmd: &str) -> bool {
+    let prefix = format!("{cmd}-");
+    // As the npm scripts' own cleanup matches their builds: a digit right after
+    // the prefix, which leaves out `grok-pager-<version>`.
+    let is_build = |name: &std::ffi::OsStr| {
+        name.to_str()
+            .and_then(|name| name.strip_prefix(prefix.as_str()))
+            .is_some_and(|version| version.starts_with(|c: char| c.is_ascii_digit()))
+    };
+    if let Ok(target) = fs::read_link(cand) {
+        let mut parts = target.components();
+        return matches!(
+            (parts.next(), parts.next()),
+            (Some(std::path::Component::Normal(name)), None) if is_build(name)
+        );
+    }
+    let Ok(len) = fs::metadata(cand).map(|meta| meta.len()) else {
+        return false;
+    };
+    fs::read_dir(bin_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            is_build(&entry.file_name())
+                && entry
+                    .metadata()
+                    .is_ok_and(|meta| meta.is_file() && meta.len() == len)
+        })
 }
 
 #[derive(Default)]
@@ -792,6 +841,11 @@ async fn detect_local_version(agent_type: AgentType) -> Option<String> {
     match meta.distribution {
         registry::AgentDistribution::Npx { cmd, package, .. } => {
             let resolved = resolve_npx_command_for(agent_type, cmd).await?;
+            // A Windows Qoder dispatcher can select a native install even
+            // when a different Qoder version exists in the npm global prefix.
+            if cfg!(windows) && agent_type == AgentType::Qoder {
+                return system_probed_version(agent_type, &resolved, Some(package)).await;
+            }
             // Try `npm list -g <package_name> --json` to get the real installed version.
             let pkg_name = package_name_from_spec(package);
             let mut version = detect_npm_global_version(&pkg_name).await;
@@ -918,6 +972,10 @@ struct AgentDiag {
     /// (NOT `resolve_npx`) is what the verdict uses for non-npx agents, so a
     /// working cached-binary / uvx agent is not misreported as node-missing.
     launchable: Option<String>,
+    /// Windows Qoder only: the program codeg starts behind the launcher
+    /// `launchable` names (see [`crate::acp::qoder`]), or why it could not be
+    /// found. Resolved with the app's env; connect applies the agent's own.
+    direct_launch: Option<Result<String, String>>,
     /// `resolve_npx_command(cmd)` — the resolution the new-session page gates on
     /// (npx agents only; `None` for binary/uvx).
     resolve_npx: Option<String>,
@@ -927,8 +985,9 @@ struct AgentDiag {
     user_prefix_bin: Option<String>,
     /// Homebrew global bin (`/opt/homebrew/bin/<cmd>` etc.) when it exists (macOS).
     homebrew_bin: Option<String>,
-    /// Version seen by `detect_npm_global_version` (covers BOTH prefixes).
+    /// Version of the selected CLI for Windows Qoder; npm globals otherwise.
     detected_version: Option<String>,
+    direct_version_probe: bool,
     /// `agent_setting.installed_version` recorded in the DB.
     db_version: Option<String>,
     /// Set only for ACP *adapter* agents (Claude Code, Codex): the vendor CLI
@@ -1128,11 +1187,23 @@ async fn collect_agent_diag(
             diag.distribution = "npx";
             diag.package = Some(package.to_string());
             diag.node_required = node_required.map(str::to_string);
+            diag.direct_version_probe = cfg!(windows) && agent_type == AgentType::Qoder;
 
             let resolve_npx = resolve_npx_command_for(agent_type, cmd)
                 .await
                 .map(|p| p.to_string_lossy().to_string());
             diag.launchable = resolve_npx.clone();
+            // Qoder on Windows launches the program behind its wrapper (see
+            // `acp::qoder`), so the report adds that program and, for an npm
+            // install, its entry, or why it could not be found, next to the
+            // wrapper the new-session page gates on.
+            if cfg!(windows) && agent_type == AgentType::Qoder {
+                diag.direct_launch = resolve_npx.as_ref().map(|p| {
+                    crate::acp::qoder::resolve_launch(Path::new(p), &BTreeMap::new())
+                        .map(|launch| launch.describe())
+                        .map_err(|error| error.to_string())
+                });
+            }
             diag.resolve_npx = resolve_npx;
 
             diag.system_prefix_bin = npm_prefix_g.and_then(|p| {
@@ -1155,7 +1226,19 @@ async fn collect_agent_diag(
             // is killed on drop via `npm_list_version`'s `kill_on_drop`).
             diag.detected_version = tokio::time::timeout(
                 DIAG_PROBE_TIMEOUT,
-                detect_npm_global_version(&package_name_from_spec(package)),
+                async {
+                    if diag.direct_version_probe {
+                        match diag.resolve_npx.as_deref() {
+                            Some(path) => {
+                                system_probed_version(agent_type, Path::new(path), Some(package))
+                                    .await
+                            }
+                            None => None,
+                        }
+                    } else {
+                        detect_npm_global_version(&package_name_from_spec(package)).await
+                    }
+                },
             )
             .await
             .ok()
@@ -1464,6 +1547,16 @@ fn compute_verdict(inp: &DiagInputs) -> DiagnosticsVerdict {
         );
     }
 
+    // Windows Qoder: the launcher resolves, but connect starts the CLI behind
+    // it, and that could not be found (the reason is in the agent section).
+    if matches!(agent.direct_launch, Some(Err(_))) {
+        return diag_verdict(
+            DiagLevel::Fail,
+            "installed_but_unresolved",
+            "The agent is recorded as installed, but the app cannot locate its executable.",
+        );
+    }
+
     diag_verdict(
         DiagLevel::Ok,
         "ok",
@@ -1560,6 +1653,22 @@ fn build_report(
             if a.launchable.is_some() { DiagLevel::Ok } else { DiagLevel::Fail },
             (a.distribution == "npx").then_some("this is exactly what the new-session page checks"),
         )];
+        if let Some(direct) = &a.direct_launch {
+            checks.push(match direct {
+                Ok(program) => diag_check(
+                    "program behind the launcher",
+                    program,
+                    DiagLevel::Ok,
+                    Some("what connect starts on Windows, instead of the launcher"),
+                ),
+                Err(reason) => diag_check(
+                    "program behind the launcher",
+                    reason,
+                    DiagLevel::Fail,
+                    Some("connect cannot start the CLI behind the launcher"),
+                ),
+            });
+        }
         if let Some(p) = &a.package {
             checks.push(diag_check("package", p, DiagLevel::Info, None));
         }
@@ -1586,10 +1695,18 @@ fn build_report(
                 ));
             }
             checks.push(diag_check(
-                "detect_npm_global_version",
+                if a.direct_version_probe {
+                    "selected CLI --version"
+                } else {
+                    "detect_npm_global_version"
+                },
                 a.detected_version.as_deref().unwrap_or("none"),
                 DiagLevel::Info,
-                Some("covers both prefixes — what the Settings badge uses"),
+                Some(if a.direct_version_probe {
+                    "probes the selected direct launch"
+                } else {
+                    "covers both prefixes — what the Settings badge uses"
+                }),
             ));
         }
         // Adapter agents: show the vendor CLI next to the adapter it is NOT.
@@ -2200,6 +2317,53 @@ fn probe_cache_key(
 static SYSTEM_PROBE_CACHE: std::sync::Mutex<Option<HashMap<ProbeCacheKey, ProbeCacheEntry>>> =
     std::sync::Mutex::new(None);
 
+#[derive(PartialEq, Eq, Hash)]
+struct DirectProbeKey {
+    program: PathBuf,
+    args: Vec<String>,
+}
+
+struct DirectProbeEntry {
+    /// Both the native runtime and its script can change independently.
+    files: Vec<(std::time::SystemTime, u64)>,
+    version: Option<String>,
+}
+
+static DIRECT_PROBE_CACHE: std::sync::Mutex<Option<HashMap<DirectProbeKey, DirectProbeEntry>>> =
+    std::sync::Mutex::new(None);
+
+async fn qoder_probed_version(launch: &crate::acp::qoder::QoderWindowsLaunch) -> Option<String> {
+    let key = DirectProbeKey {
+        program: launch.program.clone(),
+        args: launch.version_probe_args(),
+    };
+    let files = std::iter::once(launch.program.as_path())
+        .chain(launch.prefix_args.iter().map(Path::new))
+        .map(|path| {
+            let metadata = std::fs::metadata(path).ok()?;
+            Some((metadata.modified().ok()?, metadata.len()))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if let Ok(cache) = DIRECT_PROBE_CACHE.lock() {
+        if let Some(entry) = cache.as_ref().and_then(|map| map.get(&key)) {
+            if entry.files == files {
+                return entry.version.clone();
+            }
+        }
+    }
+    let version = probe_cli_version_token(&launch.program, &key.args).await;
+    if let Ok(mut cache) = DIRECT_PROBE_CACHE.lock() {
+        cache.get_or_insert_with(HashMap::new).insert(
+            key,
+            DirectProbeEntry {
+                files,
+                version: version.clone(),
+            },
+        );
+    }
+    version
+}
+
 /// First version-looking token in probe output: starts with a digit (a leading
 /// `v` is tolerated and stripped), is dotted, and is drawn from the semver /
 /// calendar-version alphabet. Whitespace tokens are additionally split on `/`
@@ -2269,6 +2433,20 @@ pub(crate) async fn system_probed_version(
     let declared_probe = agent_type
         .custom_id()
         .and_then(crate::acp::custom_registry::version_probe_of);
+    // Qoder on Windows runs the program behind its launcher, so the version is
+    // read from that exact program — resolved by the same steps the connect
+    // takes — and from nothing else: probing the wrapper or the global npm
+    // package can report an installation the launch will not start. A
+    // resolution that fails here has no version to report; the connect surfaces
+    // its specific error. The probe sees the process environment, so a
+    // per-agent `QODER_CLI_BIN` override shifts the launch only, and the
+    // recorded version stays the default installation's.
+    if cfg!(windows) && agent_type == AgentType::Qoder {
+        let Ok(launch) = crate::acp::qoder::resolve_launch(resolved_bin, &BTreeMap::new()) else {
+            return None;
+        };
+        return qoder_probed_version(&launch).await;
+    }
     system_probed_version_with(declared_probe, resolved_bin, npm_package).await
 }
 
@@ -2360,9 +2538,9 @@ const NPM_INCLUDE_OPTIONAL: &str = "--include=optional";
 /// npm ≥7 hides lifecycle-script output by default. hermes-agent's postinstall
 /// runs a multi-minute runtime bootstrap (pinned upstream checkout + isolated
 /// venv sync); without this flag the install log goes silent for the whole
-/// bootstrap, which reads as a hang (codeg imposes no timeout on npm). Other
-/// agents' packages have no meaningful install scripts, so this only adds
-/// their (empty) script output.
+/// bootstrap, which reads as a hang (codeg imposes no timeout on npm). Grok's
+/// postinstall only unpacks its binary and other agents' packages have no
+/// meaningful install scripts, so for them this adds a few lines at most.
 const NPM_FOREGROUND_SCRIPTS: &str = "--foreground-scripts";
 /// CLI override forcing lifecycle scripts ON. A user-level
 /// `ignore-scripts=true` (.npmrc or npm_config_ignore_scripts) makes `npm
@@ -2377,8 +2555,8 @@ const NPM_FOREGROUND_SCRIPTS: &str = "--foreground-scripts";
 const NPM_RUN_SCRIPTS_OVERRIDE: &str = "--ignore-scripts=false";
 
 /// The flags that let `package`'s own install scripts run, for the packages
-/// whose install is those scripts ([`npm_package_requires_scripts`]); none for
-/// any other package.
+/// whose install needs those scripts ([`npm_package_requires_scripts`]); none
+/// for any other package.
 ///
 /// [`NPM_RUN_SCRIPTS_OVERRIDE`] stopped being enough with npm 12, which runs no
 /// install script it was not told to: npm 12.2.1 skipped hermes-agent's
@@ -2388,7 +2566,8 @@ const NPM_RUN_SCRIPTS_OVERRIDE: &str = "--ignore-scripts=false";
 /// so npm takes `--allow-scripts=<name>` for those, matched against the
 /// package's resolved registry identity: it covers the package being
 /// installed and none of its dependencies. npm 9.6.7, 10.2.4, 10.8.2 and
-/// 11.17.0 accept the flag without a warning and run the script as before.
+/// 11.17.0 accept the flag without a warning and run the script as before
+/// (11.17.0 and 12.2.2 likewise for a scoped name, `@xai-official/grok`).
 fn npm_run_scripts_args(package: &str) -> Vec<String> {
     if !npm_package_requires_scripts(package) {
         return Vec::new();
@@ -2412,10 +2591,28 @@ fn npm_run_scripts_args(package: &str) -> Vec<String> {
 const NODE_ENV_PROXY_VAR: &str = "NODE_USE_ENV_PROXY";
 
 /// Whether an npm package's lifecycle scripts are load-bearing for the
-/// install (skipping them yields a broken command). Only the hermes-agent
-/// community bridge today: its postinstall bootstraps the entire Python
-/// runtime the `hermes` bin execs into.
+/// install, so codeg's install lets them run ([`npm_run_scripts_args`]):
+///
+/// - hermes-agent ([`npm_package_bootstraps_runtime`]): its postinstall
+///   bootstraps the entire Python runtime the `hermes` bin execs into, so
+///   skipping it yields a broken command.
+/// - `@xai-official/grok`: only its postinstall points `~/.grok/bin/grok` at
+///   the build just installed and records that copy as npm's (see
+///   [`grok_native_install`]). Skipping it leaves the package's launcher to
+///   unpack a build there on its first run and to run whatever
+///   `~/.grok/bin/grok` is from then on, so an upgrade never reaches it (on
+///   npm 12.2.2, an upgrade from 1.0.70 to 1.0.77 still ran 1.0.70), and the
+///   copy `npm uninstall -g` leaves records no installer.
 fn npm_package_requires_scripts(package: &str) -> bool {
+    npm_package_bootstraps_runtime(package)
+        || package_name_from_spec(package) == "@xai-official/grok"
+}
+
+/// Whether an npm package is a bootstrap wrapper: its postinstall downloads
+/// the runtime its bin execs into, so the install can die inside those
+/// downloads ([`annotate_npm_bootstrap_failure`]) or leave a bin with no
+/// runtime behind it. Only the hermes-agent community bridge today.
+fn npm_package_bootstraps_runtime(package: &str) -> bool {
     package_name_from_spec(package) == "hermes-agent"
 }
 
@@ -2425,7 +2622,7 @@ fn npm_package_requires_scripts(package: &str) -> bool {
 /// `fetch` go through — worth spelling out, because npm reports it as a bare
 /// `fetch failed` that says nothing about a proxy.
 fn annotate_npm_bootstrap_failure(package: &str, err: AcpError) -> AcpError {
-    if !npm_package_requires_scripts(package) {
+    if !npm_package_bootstraps_runtime(package) {
         return err;
     }
     let AcpError::Protocol(message) = &err else {
@@ -4323,9 +4520,9 @@ fn parse_grok_settings(raw_toml: &str) -> GrokSettings {
 /// (Grok's config reference: "Allowed reasoning-effort values for this model.
 /// When omitted, the menu comes from the endpoint's `/v1/models` row"). That
 /// endpoint is Grok's model catalog (xAI's, or `[endpoints].models_base_url`),
-/// matched by model id: grok 1.0.62 and 1.0.70 never fetch the list of a
-/// model's own `base_url`, so a custom model the catalog lacks has levels only
-/// from here.
+/// matched by model id: grok 1.0.62, 1.0.70 and 1.0.77 never fetch the list of
+/// a model's own `base_url`, so a custom model the catalog lacks has levels
+/// only from here.
 const GROK_REASONING_EFFORTS_KEY: &str = "reasoning_efforts";
 
 /// One `reasoning_efforts` level as the panel compares it: trimmed and
@@ -8543,7 +8740,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
         // Unreachable: Hermes is always an Npx distribution. Fall through to
         // the npx guidance with the same pinned spec so a future match-arm
         // change can't resurrect a stale recipe.
-        _ => "hermes-agent@0.22.2",
+        _ => "hermes-agent@0.23.1",
     };
     (
         hermes_npx_argv(package, &["acp", "--setup"]),
@@ -9868,7 +10065,7 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // a flat `<id>.md` — from `~/.commandcode/skills` and the shared
         // `~/.agents/skills` store, plus `.commandcode/skills` and
         // `.agents/skills` in the project. Verified against 1.84.0, 1.86.3,
-        // 1.88.0, 1.88.1 and 1.88.2 by planting one skill in each candidate
+        // 1.88.0, 1.88.1, 1.88.2 and 1.88.4 by planting one skill in each candidate
         // directory: exactly those four reached the session's commands, while
         // `.claude/skills` (project and user) and the flat file were ignored.
         // The Command Code directory leads so linking targets it without
@@ -11135,8 +11332,9 @@ fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static str, &'stati
         // `auth.type = "gemini-api-key"` reads (the server says so in its own
         // `auth_required` message). `AGY_ACP_DEFAULT_MODEL` is real — it is
         // the env the server's `get_default_model_id` consults before falling
-        // back to `gemini-3.8-flash-high` (`gemini-4-argon-high` for an Agent
-        // Platform session since 1.4.1). There is NO endpoint override, so
+        // back to `gemini-3.8-flash-high` (for an Agent Platform session
+        // `gemini-4-argon-high` from 1.4.1, `gemini-4-carbon-medium` from
+        // 1.5.0). There is NO endpoint override, so
         // the base-url slot stays an inert `AGY_BASE_URL` placeholder for the
         // same reason `CURSOR_MODEL`/`QODER_BASE_URL` above are: it keeps the
         // generic cascade off the `OPENAI_*` keys.
@@ -12412,14 +12610,22 @@ pub async fn acp_get_session_snapshot_by_conversation(
 /// connection by `external_id` and the frontend would mis-tag it as a locally
 /// owned connection, tearing it down (killing the real owner's agent) on tab
 /// close. Discovering it here lets the second client attach as a viewer.
+///
+/// A conversation the user moved to another folder only discovers connections
+/// launched in the folder it is in NOW: one still running in the folder it left
+/// (a client that missed the move, or a turn that was in flight) is not
+/// something to attach to — the next prompt there is refused anyway.
 pub(crate) async fn acp_find_connection_for_conversation_core(
     manager: &ConnectionManager,
+    db: &sea_orm::DatabaseConnection,
     conversation_id: i32,
     session_id: Option<&str>,
     agent_type: AgentType,
 ) -> Result<Option<crate::acp::ConversationConnectionInfo>, AcpError> {
+    let fence = manager.relocation_fence(db, conversation_id).await;
+    let dir = fence.as_ref().map(|(_, path)| path.as_str());
     let connection_id = match manager
-        .find_connection_by_conversation_id(conversation_id)
+        .find_connection_by_conversation_id_in(conversation_id, dir)
         .await
     {
         Some(id) => id,
@@ -12429,7 +12635,7 @@ pub(crate) async fn acp_find_connection_for_conversation_core(
         None => match session_id {
             Some(sid) if !sid.is_empty() => {
                 match manager
-                    .find_connection_by_external_id(sid, agent_type)
+                    .find_connection_by_external_id_in(sid, agent_type, dir)
                     .await
                 {
                     Some(id) => id,
@@ -12472,9 +12678,11 @@ pub async fn acp_find_connection_for_conversation(
     session_id: Option<String>,
     agent_type: AgentType,
     manager: State<'_, ConnectionManager>,
+    db: State<'_, AppDatabase>,
 ) -> Result<Option<crate::acp::ConversationConnectionInfo>, AcpError> {
     acp_find_connection_for_conversation_core(
         &manager,
+        &db.conn,
         conversation_id,
         session_id.as_deref(),
         agent_type,
@@ -14438,7 +14646,7 @@ pub(crate) async fn acp_prepare_npx_agent_core(
             // `~/.local/bin`) legitimately satisfies the check. Without this,
             // a broken install is recorded as installed and only fails at
             // connect time with an opaque error.
-            if npm_package_requires_scripts(&install_spec) {
+            if npm_package_bootstraps_runtime(&install_spec) {
                 emit_agent_install_event(
                     emitter,
                     &task_id,
@@ -16091,6 +16299,114 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn qoder_version_cache_distinguishes_entries_and_refreshes_after_a_change() {
+        use crate::acp::qoder::{QoderInstallKind, QoderWindowsLaunch};
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("version.sh");
+        std::fs::write(
+            &entry,
+            "printf x >> \"${0%/*}/probes\"\nprintf '1.2.3\\n'\n",
+        )
+        .unwrap();
+        let mut launch = QoderWindowsLaunch {
+            program: PathBuf::from("/bin/sh"),
+            prefix_args: vec![entry.clone().into_os_string()],
+            kind: QoderInstallKind::NpmPackage,
+        };
+        for _ in 0..2 {
+            assert_eq!(qoder_probed_version(&launch).await.as_deref(), Some("1.2.3"));
+        }
+        assert_eq!(std::fs::read(dir.path().join("probes")).unwrap(), b"x");
+        // A different file length makes invalidation deterministic even on a
+        // filesystem with coarse timestamps.
+        std::fs::write(
+            &entry,
+            "printf x >> \"${0%/*}/probes\"\nprintf '10.20.30\\n'\n",
+        )
+        .unwrap();
+        assert_eq!(qoder_probed_version(&launch).await.as_deref(), Some("10.20.30"));
+        assert_eq!(std::fs::read(dir.path().join("probes")).unwrap(), b"xx");
+        let other = dir.path().join("other.sh");
+        std::fs::write(&other, "printf '4.5.6\\n'\n").unwrap();
+        launch.prefix_args = vec![other.into_os_string()];
+        assert_eq!(qoder_probed_version(&launch).await.as_deref(), Some("4.5.6"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn qoder_version_cache_also_caches_failed_probes() {
+        use crate::acp::qoder::{QoderInstallKind, QoderWindowsLaunch};
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("failing.sh");
+        std::fs::write(&entry, "printf x >> \"${0%/*}/probes\"\nexit 1\n").unwrap();
+        let launch = QoderWindowsLaunch {
+            program: PathBuf::from("/bin/sh"),
+            prefix_args: vec![entry.into_os_string()],
+            kind: QoderInstallKind::NpmPackage,
+        };
+        for _ in 0..2 {
+            assert_eq!(qoder_probed_version(&launch).await, None);
+        }
+        assert_eq!(std::fs::read(dir.path().join("probes")).unwrap(), b"x");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn qoder_detection_and_diagnostics_probe_the_selected_cli_before_npm() {
+        let node = resolve_command_on_path("node").expect("the fixture needs a real node");
+        let output = crate::process::tokio_command(&node)
+            .arg("--version")
+            .output()
+            .await
+            .unwrap();
+        let expected = extract_version_token(&String::from_utf8_lossy(&output.stdout)).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("qoder.cmd"),
+            "@echo off\r\nset \"DISPATCHER=%~dp0qoder-dispatcher.ps1\"\r\npowershell.exe -File \"%DISPATCHER%\" -- %*\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("npm.cmd"),
+            "@echo off\r\necho {\"dependencies\":{\"@qoder-ai/qodercli\":{\"version\":\"0.0.1\"}}}\r\n",
+        )
+        .unwrap();
+        let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+        let test_path = std::env::join_paths(
+            std::iter::once(root.path().to_path_buf())
+                .chain(std::env::split_paths(&inherited_path)),
+        )
+        .unwrap();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        // A real native executable answers --version, while the competing npm
+        // metadata deliberately describes a different version. The dispatcher
+        // selects the executable through its supported override.
+        temp_env::async_with_vars(
+            [
+                ("PATH", Some(test_path.as_os_str())),
+                ("QODER_CLI_BIN", Some(node.as_os_str())),
+            ],
+            async {
+                assert_eq!(
+                    detect_npm_global_version("@qoder-ai/qodercli")
+                        .await
+                        .as_deref(),
+                    Some("0.0.1")
+                );
+                assert_eq!(
+                    detect_local_version(AgentType::Qoder).await.as_deref(),
+                    Some(expected.as_str())
+                );
+                let diag = collect_agent_diag(&db, AgentType::Qoder, None).await;
+                assert_eq!(diag.detected_version.as_deref(), Some(expected.as_str()));
+                assert!(diag.direct_version_probe);
+            },
+        )
+        .await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn a_failing_declared_probe_falls_back_to_the_version_convention() {
         let dir = tempfile::tempdir().expect("tempdir");
         // `name/version` banner — the shape that motivated the token split.
@@ -17317,8 +17633,8 @@ mod tests {
             },
         )
         .unwrap();
-        // The shape verified against grok 1.0.62 and 1.0.70: bare levels make
-        // it advertise `supportsReasoningEffort` with exactly these
+        // The shape verified against grok 1.0.62, 1.0.70 and 1.0.77: bare levels
+        // make it advertise `supportsReasoningEffort` with exactly these
         // `reasoningEfforts`.
         assert_eq!(
             grok_efforts_text(&merged, "grok-4.7").as_deref(),
@@ -20083,6 +20399,7 @@ wire_api = "chat"
         use crate::web::event_bridge::EventEmitter;
 
         let mgr = ConnectionManager::new();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
         {
@@ -20092,10 +20409,16 @@ wire_api = "chat"
             s.event_seq = 7;
         }
 
-        let info = acp_find_connection_for_conversation_core(&mgr, 42, None, AgentType::ClaudeCode)
-            .await
-            .expect("ok")
-            .expect("a live connection is bound to conversation 42");
+        let info = acp_find_connection_for_conversation_core(
+            &mgr,
+            &db.conn,
+            42,
+            None,
+            AgentType::ClaudeCode,
+        )
+        .await
+        .expect("ok")
+        .expect("a live connection is bound to conversation 42");
         assert_eq!(info.connection_id, "c1");
         assert_eq!(info.event_seq, 7);
     }
@@ -20109,14 +20432,19 @@ wire_api = "chat"
         use crate::web::event_bridge::EventEmitter;
 
         let mgr = ConnectionManager::new();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
-        assert!(
-            acp_find_connection_for_conversation_core(&mgr, 999, None, AgentType::ClaudeCode)
-                .await
-                .expect("ok")
-                .is_none()
-        );
+        assert!(acp_find_connection_for_conversation_core(
+            &mgr,
+            &db.conn,
+            999,
+            None,
+            AgentType::ClaudeCode
+        )
+        .await
+        .expect("ok")
+        .is_none());
     }
 
     #[tokio::test]
@@ -20131,6 +20459,7 @@ wire_api = "chat"
         use crate::web::event_bridge::EventEmitter;
 
         let mgr = ConnectionManager::new();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
         {
@@ -20143,16 +20472,23 @@ wire_api = "chat"
 
         // by-conversation misses, no session fallback → None.
         assert!(
-            acp_find_connection_for_conversation_core(&mgr, 42, None, AgentType::ClaudeCode)
-                .await
-                .expect("ok")
-                .is_none(),
+            acp_find_connection_for_conversation_core(
+                &mgr,
+                &db.conn,
+                42,
+                None,
+                AgentType::ClaudeCode
+            )
+            .await
+            .expect("ok")
+            .is_none(),
             "without a session_id fallback an unbound connection is undiscoverable"
         );
 
         // session fallback finds the live owner (matching agent_type).
         let info = acp_find_connection_for_conversation_core(
             &mgr,
+            &db.conn,
             42,
             Some("sess-abc"),
             AgentType::ClaudeCode,
@@ -20166,6 +20502,7 @@ wire_api = "chat"
         // a non-matching session id still misses.
         assert!(acp_find_connection_for_conversation_core(
             &mgr,
+            &db.conn,
             42,
             Some("other"),
             AgentType::ClaudeCode
@@ -20178,10 +20515,16 @@ wire_api = "chat"
         // (external_id is unique only per agent) — otherwise a viewer could
         // attach to the wrong agent's connection.
         assert!(
-            acp_find_connection_for_conversation_core(&mgr, 42, Some("sess-abc"), AgentType::Codex)
-                .await
-                .expect("ok")
-                .is_none(),
+            acp_find_connection_for_conversation_core(
+                &mgr,
+                &db.conn,
+                42,
+                Some("sess-abc"),
+                AgentType::Codex
+            )
+            .await
+            .expect("ok")
+            .is_none(),
             "external_id fallback must be scoped by agent_type"
         );
     }
@@ -20196,6 +20539,7 @@ wire_api = "chat"
         use crate::models::AgentType;
         use crate::web::event_bridge::EventEmitter;
 
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         for terminal in [ConnectionStatus::Disconnected, ConnectionStatus::Error] {
             let mgr = ConnectionManager::new();
             mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
@@ -20207,10 +20551,16 @@ wire_api = "chat"
                 s.status = terminal.clone();
             }
             assert!(
-                acp_find_connection_for_conversation_core(&mgr, 42, None, AgentType::ClaudeCode)
-                    .await
-                    .expect("ok")
-                    .is_none(),
+                acp_find_connection_for_conversation_core(
+                    &mgr,
+                    &db.conn,
+                    42,
+                    None,
+                    AgentType::ClaudeCode
+                )
+                .await
+                .expect("ok")
+                .is_none(),
                 "terminal status {terminal:?} must not be returned as a live connection"
             );
         }
@@ -20289,18 +20639,19 @@ wire_api = "chat"
         assert!(build_npm_install_spec("cline@3.0.9", Some("latest")).is_err());
     }
 
-    // hermes-agent's postinstall bootstraps its runtime, and it is the only
-    // package codeg force-enables lifecycle scripts for. The spec, not the
-    // agent type, is what `npm_package_requires_scripts` keys off, so a custom
-    // version spec must still name the package, or the install leaves a shim
-    // that only fails later, at connect, with "runtime is not ready". The spec's
-    // own version is also the recorded fallback when detection comes up empty.
+    // hermes-agent's postinstall bootstraps its runtime, so codeg
+    // force-enables its lifecycle scripts. The spec, not the agent type, is
+    // what `npm_package_requires_scripts` keys off, so a custom version spec
+    // must still name the package, or the install leaves a shim that only
+    // fails later, at connect, with "runtime is not ready". The spec's own
+    // version is also the recorded fallback when detection comes up empty.
     #[test]
     fn hermes_custom_version_spec_keeps_lifecycle_scripts_and_records_its_version() {
-        let spec = build_npm_install_spec("hermes-agent@0.22.2", Some("0.23.0")).unwrap();
-        assert_eq!(spec, "hermes-agent@0.23.0");
+        let spec = build_npm_install_spec("hermes-agent@0.23.1", Some("0.24.0")).unwrap();
+        assert_eq!(spec, "hermes-agent@0.24.0");
         assert!(npm_package_requires_scripts(&spec));
-        assert_eq!(version_from_package_spec(&spec).as_deref(), Some("0.23.0"));
+        assert!(npm_package_bootstraps_runtime(&spec));
+        assert_eq!(version_from_package_spec(&spec).as_deref(), Some("0.24.0"));
     }
 
     #[test]
@@ -20436,8 +20787,9 @@ wire_api = "chat"
     }
 
     /// A `grok` in `~/.grok/bin` (`grok.exe` on Windows) counts as Grok's
-    /// native install unless Grok recorded it as the npm package's copy, the
-    /// one `npm uninstall -g` leaves behind.
+    /// native install unless it is the npm package's copy, the one `npm
+    /// uninstall -g` leaves behind: recorded as npm's, or, with no record,
+    /// laid out as the npm package lays it out (see the layout tests below).
     #[test]
     fn grok_native_install_counts_any_copy_but_the_npm_packages() {
         let home = tempfile::tempdir().expect("tempdir");
@@ -20457,7 +20809,8 @@ wire_api = "chat"
         // The record as `install.ps1` writes it, with CRLF line endings.
         assert_eq!(found().as_deref(), Some(bin.as_path()));
 
-        // Only an explicit npm record excludes the copy.
+        // Without an npm record, a copy with no build of the npm package's
+        // beside it still counts.
         for other in ["", "[cli]\nauto_update = false\n", "not = [toml"] {
             std::fs::write(&config, other).expect("write config");
             assert_eq!(found().as_deref(), Some(bin.as_path()), "config: {other:?}");
@@ -20470,6 +20823,89 @@ wire_api = "chat"
         std::fs::write(&config, "[cli]\ninstaller = \"npm\"\nauto_update = true\n")
             .expect("write config");
         assert_eq!(found(), None);
+    }
+
+    /// Where npm skipped the postinstall, the package's launcher unpacks the
+    /// build on its first run and records no installer, and the copy is told
+    /// apart by its layout. This is the Windows one, which the test can build
+    /// on any host: `grok.exe` copied from the `grok-<version>.exe` beside it.
+    #[test]
+    fn grok_native_install_skips_an_unrecorded_copy_of_an_npm_build() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let grok_dir = home.path().join(".grok");
+        let bin_dir = grok_dir.join("bin");
+        let bin = bin_dir.join(binary_cache::executable_file_name("grok"));
+        let build_name = |stem: &str| format!("{stem}{}", std::env::consts::EXE_SUFFIX);
+        let build = bin_dir.join(build_name("grok-1.0.70"));
+        let config = grok_dir.join("config.toml");
+        let found = || grok_native_install(home.path(), "grok");
+
+        std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+        std::fs::write(&build, "build 1.0.70").expect("write build");
+        std::fs::write(&bin, "build 1.0.70").expect("write copy");
+        // The launcher's first run leaves no config; a turn then writes one
+        // with a `[cli]` table and still no installer.
+        assert_eq!(found(), None, "no config");
+        std::fs::write(&config, "[cli]\nauto_update = true\n").expect("write config");
+        assert_eq!(found(), None, "no installer");
+
+        // A record decides over the layout.
+        std::fs::write(&config, "[cli]\ninstaller = \"internal\"\n").expect("write config");
+        assert_eq!(found().as_deref(), Some(bin.as_path()));
+        std::fs::remove_file(&config).expect("remove config");
+
+        // A `grok` that is no copy of that build counts, and so does one beside
+        // files that only look like builds (the pager's, another `grok-…`).
+        std::fs::write(&bin, "another build").expect("write other");
+        assert_eq!(found().as_deref(), Some(bin.as_path()));
+        std::fs::remove_file(&build).expect("remove build");
+        for name in ["grok-pager-1.0.70", "grok-latest"] {
+            let lookalike = bin_dir.join(build_name(name));
+            std::fs::write(&lookalike, "another build").expect("write lookalike");
+            assert_eq!(found().as_deref(), Some(bin.as_path()), "{name}");
+            std::fs::remove_file(&lookalike).expect("remove lookalike");
+        }
+    }
+
+    /// The Unix layout: npm links `grok` to the bare name of the build beside
+    /// it, where Grok's own installers link it into `~/.grok/downloads`.
+    #[cfg(unix)]
+    #[test]
+    fn grok_native_install_skips_an_unrecorded_link_to_an_npm_build() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let grok_dir = home.path().join(".grok");
+        let bin_dir = grok_dir.join("bin");
+        let downloads = grok_dir.join("downloads");
+        let bin = bin_dir.join("grok");
+        let found = || grok_native_install(home.path(), "grok");
+        std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+        std::fs::create_dir_all(&downloads).expect("create downloads");
+        std::fs::write(bin_dir.join("grok-1.0.70"), "build 1.0.70").expect("write build");
+        std::fs::write(downloads.join("grok-macos-aarch64"), "build").expect("write download");
+        let relink = |target: &Path| {
+            let _ = std::fs::remove_file(&bin);
+            symlink(target, &bin).expect("link grok");
+        };
+
+        // What the npm launcher and postinstall leave, with no record.
+        relink(Path::new("grok-1.0.70"));
+        assert_eq!(found(), None);
+        std::fs::write(grok_dir.join("config.toml"), "[cli]\nauto_update = true\n")
+            .expect("write config");
+        assert_eq!(found(), None, "a config without an installer");
+
+        // install.sh's relative link, and the absolute one it makes when the
+        // bin and download directories have different parents.
+        let absolute = downloads.join("grok-macos-aarch64");
+        for target in [
+            Path::new("../downloads/grok-macos-aarch64"),
+            absolute.as_path(),
+        ] {
+            relink(target);
+            assert_eq!(found().as_deref(), Some(bin.as_path()), "{target:?}");
+        }
     }
 
     #[cfg(not(windows))]
@@ -22035,35 +22471,52 @@ wire_api = "chat"
         }
     }
 
-    /// The script flags reach exactly the packages whose install is their
+    /// The script flags reach exactly the packages whose install needs their
     /// scripts, and name the package, which npm 12 needs before it runs a
     /// script of a global install or an `npx` run.
     #[test]
-    fn hermes_installs_name_the_package_whose_scripts_npm_must_run() {
-        for spec in ["hermes-agent@0.22.2", "hermes-agent@0.23.0", "hermes-agent"] {
-            assert_eq!(
-                npm_run_scripts_args(spec),
-                ["--ignore-scripts=false", "--allow-scripts=hermes-agent"],
-                "{spec}"
-            );
+    fn installs_name_the_packages_whose_scripts_npm_must_run() {
+        for (specs, name) in [
+            (
+                &["hermes-agent@0.23.1", "hermes-agent@0.24.0", "hermes-agent"][..],
+                "hermes-agent",
+            ),
+            (
+                &["@xai-official/grok@1.0.77", "@xai-official/grok"][..],
+                "@xai-official/grok",
+            ),
+        ] {
+            for spec in specs {
+                assert_eq!(
+                    npm_run_scripts_args(spec),
+                    [
+                        "--ignore-scripts=false".to_string(),
+                        format!("--allow-scripts={name}"),
+                    ],
+                    "{spec}"
+                );
+            }
         }
-        // Every other agent keeps the user's own script policy.
+        // Every other agent keeps the user's own script policy, and so does a
+        // package whose name only starts like one of those.
         for spec in [
             "cline@3.0.74",
-            "@xai-official/grok@1.0.70",
+            "@xai-official/grok-darwin-arm64@1.0.77",
             "hermes-agent-npm@1.0.0",
         ] {
             assert!(npm_run_scripts_args(spec).is_empty(), "{spec}");
         }
+        // Grok's postinstall downloads nothing and leaves no runtime to check.
+        assert!(!npm_package_bootstraps_runtime("@xai-official/grok@1.0.77"));
         assert_eq!(
-            hermes_npx_argv("hermes-agent@0.22.2", &["acp", "--setup"]),
+            hermes_npx_argv("hermes-agent@0.23.1", &["acp", "--setup"]),
             [
                 "npx",
                 "-y",
                 "--ignore-scripts=false",
                 "--allow-scripts=hermes-agent",
                 "--package",
-                "hermes-agent@0.22.2",
+                "hermes-agent@0.23.1",
                 "hermes",
                 "acp",
                 "--setup",
@@ -22090,7 +22543,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(pkg_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.22.2")
+                    Some("hermes-agent@0.23.1")
                 );
                 assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -22702,19 +23155,25 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.22.2", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.23.1", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
 
         // A package whose install runs no bootstrap can't fail this way, so the
-        // hint would be noise even on a matching message.
-        let other = annotate_npm_bootstrap_failure("@zed-industries/claude-code-acp", download());
-        assert!(!other.to_string().contains("HTTP(S)_PROXY"));
+        // hint would be noise even on a matching message. That includes Grok,
+        // whose postinstall codeg also runs but which downloads nothing.
+        for other in [
+            "@zed-industries/claude-code-acp",
+            "@xai-official/grok@1.0.77",
+        ] {
+            let other = annotate_npm_bootstrap_failure(other, download());
+            assert!(!other.to_string().contains("HTTP(S)_PROXY"));
+        }
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.22.2",
+            "hermes-agent@0.23.1",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));

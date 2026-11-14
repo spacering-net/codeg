@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react"
 import { useTranslations } from "next-intl"
@@ -14,12 +15,14 @@ import {
   ExternalLink,
   Funnel,
   GitPullRequestArrow,
+  Layers,
   Plus,
   RefreshCw,
   Search,
   SquareArrowOutUpRight,
   X,
 } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import {
   Command,
@@ -69,13 +72,19 @@ import {
 import { OPEN_FORGE_SETTINGS_EVENT } from "@/components/forge/forge-chrome-actions"
 import { GIT_TOOLBAR_ICON_BUTTON_CLASS } from "@/components/layout/git-toolbar-controls"
 import { ForgeIssueDetailSheet } from "@/components/forge/forge-issue-detail-sheet"
-import { ForgeIssueRowItem } from "@/components/forge/forge-issue-row"
+import { ForgeMarkdownProvider } from "@/components/forge/forge-markdown"
+import { ForgeCombineDialog } from "@/components/forge/forge-combine-dialog"
+import {
+  ForgeIssueRowItem,
+  type RowSelection,
+} from "@/components/forge/forge-issue-row"
 import { ForgeNewIssueDialog } from "@/components/forge/forge-new-issue-dialog"
 import { ForgeSettingsDialog } from "@/components/forge/forge-settings-dialog"
 import { ForgeStartDialog } from "@/components/forge/forge-start-dialog"
 import { useIsMobile } from "@/hooks/use-mobile"
 import {
   folderForgeRemote,
+  forgeCheckSummaries,
   forgeListIssues,
   forgeListLabels,
   forgeSettingsGet,
@@ -89,6 +98,8 @@ import {
   type AppErrorTranslator,
 } from "@/lib/app-error"
 import { buildForgeSourceKey } from "@/lib/forge-source-key"
+import { chipStateForLink } from "@/lib/forge-task-chip"
+import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import {
   FORGE_PAGE_SIZES,
   loadForgeFolderId,
@@ -105,6 +116,7 @@ import { effectiveForgeSettings } from "@/lib/forge-settings"
 import { openUrl, subscribe } from "@/lib/platform"
 import { cn } from "@/lib/utils"
 import type {
+  ForgeCheckSummary,
   ForgeIssueList,
   ForgeIssueRow,
   ForgeLabel,
@@ -150,11 +162,23 @@ const UNSUPPORTED_HOST_KEY = "errors.unsupportedHost"
  *  see `forgeCorrectedRef`. */
 const WRONG_FORGE_I18N_KEY = "Forge.errors.wrongForge"
 
+/** Keys one reverse lookup may carry — the backend's `LOOKUP_KEYS_CAP`
+ *  (src-tauri/src/commands/forge.rs). A page, the detail panel's item and a
+ *  selection gathered across pages can outgrow it together, so the lookup is
+ *  sent in batches of this size instead of being cut short. */
+const LOOKUP_BATCH = 100
+
 /** How long typing has to stop before the filter becomes a request. GitHub's
  *  search endpoint allows THIRTY calls a minute (its own quota, separate from
  *  the 5000/hour core one), so a per-keystroke fetch would exhaust it inside
  *  one sentence. */
 const SEARCH_DEBOUNCE_MS = 350
+
+/** Forges whose list rows carry a CI mark. CNB's checks cannot be read at all
+ *  (its detail panel says so too), so it is never asked. */
+const CHECKS_PROVIDERS: ReadonlySet<ForgeProviderId> = new Set<ForgeProviderId>(
+  ["github", "gitlab", "gitea"]
+)
 
 /** Page-number slots the strip may use. Narrow phones cannot fit the desktop
  *  seven next to the page-size select without the footer wrapping twice. */
@@ -670,8 +694,57 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
   const [error, setError] = useState<ListFailure | null>(null)
   const [links, setLinks] = useState<Map<string, ForgeTaskLink>>(new Map())
   const [startRow, setStartRow] = useState<ForgeIssueRow | null>(null)
+  /**
+   * The issues picked to be handled together as ONE task, by number, each as
+   * its row read when it was picked — what the task is created from, the
+   * same snapshot discipline "Start" follows.
+   *
+   * Kept across pages, filters, searches and sorts: related issues are rarely
+   * on one page, and finding them takes exactly those. Dropped with the
+   * repository it belongs to (see the reset effect below), with the tab, and
+   * once its task exists. An issue that gains a live task elsewhere leaves it
+   * when the lookup says so (see `refreshLinks`), for good.
+   */
+  const [selected, setSelected] = useState<ReadonlyMap<number, ForgeIssueRow>>(
+    () => new Map()
+  )
+  /** The combine dialog's issues, frozen when it opened; `null` = closed. */
+  const [combineItems, setCombineItems] = useState<ForgeIssueRow[] | null>(null)
+  /** The issue a Shift-click extends a range from: the last one toggled. */
+  const anchorRef = useRef<number | null>(null)
+  const { setRoute } = useWorkbenchRoute()
   /** The item the right-side detail panel is open on, or `null` for closed. */
   const [detailRow, setDetailRow] = useState<ForgeIssueRow | null>(null)
+  /** "Open the panel on its Checks tab" — a row's CI mark was clicked. A fresh
+   *  nonce per click, so clicking the item already on show still switches. */
+  const [checksTabRequest, setChecksTabRequest] = useState<{
+    number: number
+    nonce: number
+  } | null>(null)
+  const checksTabNonceRef = useRef(0)
+  /**
+   * The rows' CI marks, by number, for the list they were read for.
+   *
+   * Their own state rather than fields of the rows: they arrive AFTER the
+   * list, from a separate request, and the rows themselves are replaced by
+   * writes from the panel (`adoptRow`) that know nothing about CI. A number
+   * absent from the map draws nothing — not "no checks", just no mark.
+   */
+  const [checks, setChecks] = useState<{
+    scope: string
+    byNumber: ReadonlyMap<number, ForgeCheckSummary>
+  } | null>(null)
+  /** Which request last asked about each number — so an older answer (a page
+   *  read overtaken by one row's re-read after an approval, or the other way
+   *  round) never lands over a newer one. */
+  const checksGenRef = useRef(new Map<number, number>())
+  /** The numbers a read of their marks is out for, for the list it was sent
+   *  for. A row with no mark yet holds a skeleton while its number is here. */
+  const [checksPending, setChecksPending] = useState<{
+    scope: string
+    numbers: ReadonlySet<number>
+  } | null>(null)
+  const checksSeqRef = useRef(0)
   const [newIssueOpen, setNewIssueOpen] = useState(false)
   /** The panel's preferences, EVERY scope — what a trigger dialog OPENS with,
    *  and nothing else this page reads. Loaded once and replaced in place when
@@ -724,6 +797,14 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     setCounts({})
     setStartRow(null)
     setDetailRow(null)
+    setChecks(null)
+    setChecksPending(null)
+    // The selection names issues by number in THIS repository — kept across
+    // a switch it would hand another project's #12 to a task — and the
+    // combine dialog holds a frozen copy of it.
+    setSelected(new Map())
+    setCombineItems(null)
+    anchorRef.current = null
     // The new-issue dialog goes with them, and for the same reason as the
     // panel: it files against the folder it was opened over, and a folder
     // switch while it is open would file the issue somewhere else.
@@ -825,6 +906,73 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     return countsReqRef.current[which]
   }, [])
 
+  /** Read in the response, not captured: an answer for a folder or tab the
+   *  page has since left is about rows no longer on screen. */
+  const listScopeRef = useRef(listScope)
+  useEffect(() => {
+    listScopeRef.current = listScope
+  }, [listScope])
+
+  /**
+   * The CI marks for these changes — the deferred half of the list, the way
+   * github.com fills its own PR list in after the rows have drawn.
+   *
+   * Decoration in every sense: never an error the page shows, and an answer
+   * the forge could not give (`available: false`) or a request that failed
+   * leaves whatever marks were already there — a moment ago they were true,
+   * and a transient rate limit should not wipe them. A row with no mark yet
+   * holds a small skeleton while the read is out (`checksPending`); however
+   * the read ends, its numbers leave that set, so a failure falls back to
+   * drawing nothing. Only a forge that has checks to read is asked; CNB
+   * never is.
+   */
+  const fetchChecks = useCallback(
+    async (numbers: number[]) => {
+      if (effectiveFolderId == null || readable == null) return
+      if (!CHECKS_PROVIDERS.has(readable.provider)) return
+      if (numbers.length === 0) return
+      const scope = listScope
+      const gen = ++checksSeqRef.current
+      for (const n of numbers) checksGenRef.current.set(n, gen)
+      setChecksPending((prev) => {
+        const next = new Set(prev?.scope === scope ? prev.numbers : [])
+        for (const n of numbers) next.add(n)
+        return { scope, numbers: next }
+      })
+      let result
+      try {
+        result = await forgeCheckSummaries(effectiveFolderId, numbers)
+      } catch {
+        result = null
+      }
+      // Settled, whatever the outcome — but only the numbers no newer read
+      // has claimed since; that one clears its own when it lands.
+      const settled = numbers.filter((n) => checksGenRef.current.get(n) === gen)
+      setChecksPending((prev) => {
+        if (prev?.scope !== scope) return prev
+        const next = new Set(prev.numbers)
+        for (const n of settled) next.delete(n)
+        return { scope, numbers: next }
+      })
+      if (result == null) return
+      if (!result.available || listScopeRef.current !== scope) return
+      // Only the numbers no newer request has asked about since.
+      const fresh = numbers.filter((n) => checksGenRef.current.get(n) === gen)
+      if (fresh.length === 0) return
+      const got = new Map(result.items.map((item) => [item.number, item]))
+      setChecks((prev) => {
+        const next = new Map(prev?.scope === scope ? prev.byNumber : [])
+        for (const n of fresh) {
+          const item = got.get(n)
+          if (item != null) next.set(n, item)
+          else next.delete(n)
+        }
+        return { scope, byNumber: next }
+      })
+    },
+    [effectiveFolderId, readable, listScope]
+  )
+
   const fetchPage = useCallback(async () => {
     if (effectiveFolderId == null || readable == null) return
     const id = ++reqRef.current
@@ -848,6 +996,10 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
       // served from an index that lags a write by seconds.
       const data = reconcile(result, id, placementScope, adoptedRef.current)
       setLoaded({ scope: listScope, data })
+      // Every successful read of the list — a page turn, a filter, the reload
+      // button — re-reads the marks of what it brought back. Not awaited: the
+      // rows are on screen now, and the marks fill in when they come.
+      void fetchChecks(data.rows.filter((r) => r.is_pr).map((r) => r.number))
       // The badge for the tab on screen, free: this response already counted
       // exactly what a probe would have. `incomplete` withholds it — GitHub
       // says the search timed out, so the number is short of the truth, and a
@@ -889,6 +1041,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     countsScope,
     claimCount,
     recordCount,
+    fetchChecks,
     tab,
     stateFilter,
     assignedMe,
@@ -1182,7 +1335,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
   // Reverse lookup for visible rows; re-run on board nudges so a chip follows
   // its task through the pipeline without polling.
   const keyFor = useCallback(
-    (row: ForgeIssueRow) =>
+    (row: Pick<ForgeIssueRow, "is_pr" | "number">) =>
       remote == null
         ? null
         : buildForgeSourceKey({
@@ -1227,6 +1380,78 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
       ) ?? detailRow
     )
   }, [rows, detailRow])
+
+  const clearSelection = useCallback(() => {
+    setSelected(new Map())
+    anchorRef.current = null
+  }, [])
+  /** Whether a row can join the selection: an issue without a live task.
+   *  One whose task finished can — handling it again is what "re-trigger"
+   *  offers too — while one with a task under way would only be refused as
+   *  a duplicate. */
+  const pickable = useCallback(
+    (row: ForgeIssueRow) =>
+      !row.is_pr && chipStateForLink(linkFor(row)) !== "active",
+    [linkFor]
+  )
+  /** Picked issues the current page does not show — counted on the bar, so
+   *  a selection gathered elsewhere never reads as smaller than it is, and
+   *  asked about by the lookup, so their chips stay current. A string, so a
+   *  toggle on this page does not re-send the lookup. */
+  const offPageSelected = useMemo(() => {
+    const here = new Set(rows.filter((r) => !r.is_pr).map((r) => r.number))
+    return [...selected.keys()]
+      .filter((n) => !here.has(n))
+      .sort((a, b) => a - b)
+      .join(",")
+  }, [rows, selected])
+  const offPageCount =
+    offPageSelected === "" ? 0 : offPageSelected.split(",").length
+
+  /** Tick or untick one row — or, with Shift, every pickable row between it
+   *  and the last one toggled on this page, all to the state this row is
+   *  going to. */
+  const toggleRow = (row: ForgeIssueRow, index: number, range: boolean) => {
+    const on = !selected.has(row.number)
+    const anchor = anchorRef.current
+    const from =
+      range && anchor != null
+        ? rows.findIndex((r) => !r.is_pr && r.number === anchor)
+        : -1
+    const span =
+      from >= 0
+        ? rows.slice(Math.min(from, index), Math.max(from, index) + 1)
+        : [row]
+    setSelected((held) => {
+      const next = new Map(held)
+      for (const r of span) {
+        if (!pickable(r)) continue
+        if (on) next.set(r.number, r)
+        else next.delete(r.number)
+      }
+      return next
+    })
+    anchorRef.current = row.number
+  }
+  const selectionFor = (
+    row: ForgeIssueRow,
+    index: number
+  ): RowSelection | undefined => {
+    if (row.is_pr || tab !== "issues") return undefined
+    return {
+      checked: selected.has(row.number),
+      blockedReason: pickable(row) ? null : t("selectBlockedActive"),
+      onToggle: (range) => toggleRow(row, index, range),
+    }
+  }
+  /** Esc on a tick box or the selection bar lets go of the whole selection
+   *  — focus there means the selection is what is being worked on. */
+  const escapeClears = (e: ReactKeyboardEvent) => {
+    if (e.key !== "Escape" || selected.size === 0) return
+    if (!(e.target as HTMLElement).closest("[data-forge-select]")) return
+    e.preventDefault()
+    clearSelection()
+  }
 
   /**
    * Note a row this page took from a write, for the list responses that have
@@ -1448,9 +1673,22 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     // and only a panel outliving its row adds a key here.
     const wanted =
       detail == null || rows.includes(detail) ? rows : [...rows, detail]
-    const keys = wanted
-      .map((r) => keyFor(r))
-      .filter((k): k is string => k != null)
+    // …and so are the picked issues this page does not show: the bar counts
+    // them, and the one that gains a live task elsewhere has to leave the
+    // selection rather than be handed to a second task.
+    const picked =
+      offPageSelected === ""
+        ? []
+        : offPageSelected
+            .split(",")
+            .map((n) => keyFor({ is_pr: false, number: Number(n) }))
+    const keys = [
+      ...new Set(
+        [...wanted.map((r) => keyFor(r)), ...picked].filter(
+          (k): k is string => k != null
+        )
+      ),
+    ]
     if (keys.length === 0) {
       // Claimed the generation above, so this clear is ordered against the
       // in-flight lookups like any other answer: it lands only while it is
@@ -1460,13 +1698,34 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
       return
     }
     try {
-      const found = await workTaskLookupBySource(keys)
+      const batches: string[][] = []
+      for (let at = 0; at < keys.length; at += LOOKUP_BATCH) {
+        batches.push(keys.slice(at, at + LOOKUP_BATCH))
+      }
+      // One generation for the whole set: the answer replaces the map only
+      // once every batch is back, never half of it.
+      const found = (
+        await Promise.all(batches.map((batch) => workTaskLookupBySource(batch)))
+      ).flat()
       if (id !== linksReqRef.current) return
-      setLinks(new Map(found.map((l) => [l.source_key, l])))
+      const next = new Map(found.map((l) => [l.source_key, l]))
+      setLinks(next)
+      setSelected((held) => {
+        let pruned: Map<number, ForgeIssueRow> | null = null
+        for (const number of held.keys()) {
+          const key = keyFor({ is_pr: false, number })
+          const link = key != null ? next.get(key) : undefined
+          if (chipStateForLink(link) === "active") {
+            pruned ??= new Map(held)
+            pruned.delete(number)
+          }
+        }
+        return pruned ?? held
+      })
     } catch {
       // Chips are best-effort decoration; the list itself stays useful.
     }
-  }, [rows, detail, keyFor])
+  }, [rows, detail, keyFor, offPageSelected])
   useEffect(() => {
     void refreshLinks()
   }, [refreshLinks])
@@ -1592,6 +1851,9 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
                 // worth remembering is the one the user chose, and an effect
                 // would also persist the initial value it just read back.
                 saveForgeTab(v as ForgeTab)
+                // Issues and changes are never handled together: the other
+                // tab starts with nothing picked.
+                clearSelection()
                 resetTo(() => setTab(v as ForgeTab))
               }}
             >
@@ -1809,24 +2071,64 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
           // replaced.
           <div
             aria-busy={pending}
+            onKeyDown={escapeClears}
             className={cn(
               "flex flex-col divide-y divide-border/40 transition-opacity",
               pending && "opacity-50"
             )}
           >
-            {rows.map((row) => (
+            {rows.map((row, index) => (
               <ForgeIssueRowItem
                 key={`${row.is_pr ? "pr" : "issue"}-${row.number}`}
                 row={row}
                 link={linkFor(row)}
                 compact={isMobile || embedded}
+                selection={selectionFor(row, index)}
+                checks={
+                  row.is_pr && checks?.scope === listScope
+                    ? checks.byNumber.get(row.number)
+                    : undefined
+                }
+                checksLoading={
+                  row.is_pr &&
+                  checksPending?.scope === listScope &&
+                  checksPending.numbers.has(row.number)
+                }
                 onOpenDetail={() => setDetailRow(row)}
+                onOpenChecks={() => {
+                  setDetailRow(row)
+                  checksTabNonceRef.current += 1
+                  setChecksTabRequest({
+                    number: row.number,
+                    nonce: checksTabNonceRef.current,
+                  })
+                }}
                 onStart={() => setStartRow(row)}
               />
             ))}
           </div>
         )}
       </ScrollArea>
+
+      {selected.size > 0 && readable != null ? (
+        <SelectionBar
+          count={selected.size}
+          offPage={offPageCount}
+          onKeyDown={escapeClears}
+          onClear={clearSelection}
+          onCombine={() =>
+            // The page's own copy where it has one — the freshest read of
+            // that issue — and the snapshot taken when it was picked where
+            // it does not.
+            setCombineItems(
+              [...selected.values()].map(
+                (held) =>
+                  rows.find((r) => !r.is_pr && r.number === held.number) ?? held
+              )
+            )
+          }
+        />
+      ) : null}
 
       {embedded ? (
         // A sidebar has no room for page numbers and a size picker: previous,
@@ -1860,26 +2162,30 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
           the panel open behind the dialog, and comes back to a footer that now
           carries the new task's chip. (The drawer survives the dialog on its
           own — see the Radix-layer shield in `drawer.tsx`.) */}
-      <ForgeIssueDetailSheet
-        row={detail}
-        link={detail != null ? linkFor(detail) : null}
-        // The panel's comment thread needs one coordinate the row does not
-        // carry: which folder's remote the item belongs to. Same value the
-        // list was fetched with, so a folder switch (which closes the panel —
-        // see the reset effect above) cannot leave the two disagreeing.
-        folderId={effectiveFolderId}
-        // CNB's issue list carries no description; the panel reads the item
-        // itself when it opens. Every other forge ships the body with the row.
-        issueBodyOnDemand={remote?.provider === "cnb"}
-        onOpenChange={(open) => {
-          if (!open) setDetailRow(null)
-        }}
-        onStart={() => {
-          if (detail != null) setStartRow(detail)
-        }}
-        onRowUpdated={adoptRow}
-        onCommentPosted={countComment}
-      />
+      <ForgeMarkdownProvider folderId={effectiveFolderId} remote={remote}>
+        <ForgeIssueDetailSheet
+          row={detail}
+          link={detail != null ? linkFor(detail) : null}
+          // The panel's comment thread needs one coordinate the row does not
+          // carry: which folder's remote the item belongs to. Same value the
+          // list was fetched with, so a folder switch (which closes the panel —
+          // see the reset effect above) cannot leave the two disagreeing.
+          folderId={effectiveFolderId}
+          // CNB's issue list carries no description; the panel reads the item
+          // itself when it opens. Every other forge ships the body with the row.
+          issueBodyOnDemand={remote?.provider === "cnb"}
+          onOpenChange={(open) => {
+            if (!open) setDetailRow(null)
+          }}
+          onStart={() => {
+            if (detail != null) setStartRow(detail)
+          }}
+          onRowUpdated={adoptRow}
+          onCommentPosted={countComment}
+          tabRequest={checksTabRequest}
+          onChecksChanged={(number) => void fetchChecks([number])}
+        />
+      </ForgeMarkdownProvider>
 
       {readable != null && effectiveFolderId != null ? (
         <ForgeNewIssueDialog
@@ -1921,6 +2227,27 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
         />
       ) : null}
 
+      {combineItems != null && readable != null && effectiveFolderId != null ? (
+        <ForgeCombineDialog
+          items={combineItems}
+          remote={readable}
+          folderId={effectiveFolderId}
+          settings={effectiveForgeSettings(settings, effectiveFolderId)}
+          onClose={() => setCombineItems(null)}
+          onCreated={(_task, count) => {
+            setCombineItems(null)
+            clearSelection()
+            void refreshLinks()
+            toast.success(t("combineCreated", { count }), {
+              action: {
+                label: t("combineViewBoard"),
+                onClick: () => setRoute("tasks"),
+              },
+            })
+          }}
+        />
+      ) : null}
+
       {/* The route's own: embedded, nothing opens it (see the settings
           listener above). */}
       {embedded ? null : (
@@ -1937,6 +2264,70 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
           onSaved={setSettings}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * What is picked, and the one thing to do with it: hand it to a single task.
+ * Between the list and the pager, so it stays in view whichever page the
+ * list is on — the selection outlives them all. Wraps rather than truncates:
+ * the aux panel is a sidebar's width.
+ */
+function SelectionBar({
+  count,
+  offPage,
+  onKeyDown,
+  onClear,
+  onCombine,
+}: {
+  count: number
+  /** How many of them the list on screen does not show. */
+  offPage: number
+  onKeyDown: (e: ReactKeyboardEvent) => void
+  onClear: () => void
+  onCombine: () => void
+}) {
+  const t = useTranslations("Forge")
+  const tooFew = count < 2
+  return (
+    <div
+      role="region"
+      aria-label={t("selectionLabel")}
+      data-forge-select=""
+      onKeyDown={onKeyDown}
+      className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border/60 bg-muted/30 px-4 py-2 text-xs"
+    >
+      <span className="font-medium">{t("selectionCount", { count })}</span>
+      {offPage > 0 ? (
+        <span className="text-muted-foreground">
+          {t("selectionOffPage", { count: offPage })}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        onClick={onClear}
+        className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+      >
+        {t("selectionClear")}
+      </button>
+      {/* The hint rides on a wrapper: a disabled button gets no pointer
+          events, so its own title would never show. */}
+      <span
+        className="ms-auto"
+        title={tooFew ? t("combineNeedsTwo") : undefined}
+      >
+        <Button
+          type="button"
+          size="sm"
+          className="h-7 gap-1.5 rounded-full px-3 text-xs"
+          disabled={tooFew}
+          onClick={onCombine}
+        >
+          <Layers className="size-3.5" aria-hidden />
+          {t("combineAction", { count })}
+        </Button>
+      </span>
     </div>
   )
 }

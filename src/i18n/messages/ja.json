@@ -2289,7 +2289,7 @@
       "statusRunningBadge": "実行中",
       "runningCountBadge": "{count} 件の会話が実行中",
       "statusCancelledBadge": "キャンセル済み",
-      "worktreeRemovedBadge": "元の worktree は削除済み",
+      "originalWorkingDir": "元の作業ディレクトリ",
       "cliBadge": "コマンドラインから開始",
       "conversationCountUnit": "{count} 件",
       "emptyFolderHint": "会話がありません",
@@ -2330,6 +2330,7 @@
         "untitledConversation": "無題の会話",
         "setStatus": "ステータスを変更…",
         "deleteSelected": "削除",
+        "moveSelected": "移動先…",
         "noConversations": "このフォルダには会話がありません。",
         "noConversationsWorkspace": "ワークスペースに会話がありません。",
         "noMatchingConversations": "条件に一致する会話がありません。",
@@ -2431,7 +2432,7 @@
       "fieldTitle": "タイトル",
       "untitled": "無題の会話",
       "sessionId": "セッション ID",
-      "externalId": "拡張 ID",
+      "externalId": "セッションインデックス",
       "agent": "エージェント",
       "model": "モデル",
       "status": "ステータス",
@@ -2481,6 +2482,33 @@
       "reopen": "再開する",
       "expandSubsessions": "サブ会話を展開",
       "collapseSubsessions": "サブ会話を折りたたむ"
+    },
+    "moveConversation": {
+      "menuLabel": "移動先",
+      "title": "会話を移動",
+      "titleMany": "{count} 件の会話を移動",
+      "intro": "「{title}」を次のフォルダへ移動します：",
+      "introMany": "選択した {count} 件の会話を次のフォルダへ移動します：",
+      "untitledConversation": "無題の会話",
+      "explain": "次のメッセージから、エージェントはこのフォルダで作業します。履歴はそのまま残ります。エージェントが新しいディレクトリでセッションを再開できない場合は、再読み込みするか新しいセッションを開始するよう案内されます。",
+      "chatFilesNote": "チャット中に作成されたファイルは一時ディレクトリ {path} に残り、フォルダには移動されません。",
+      "chatFilesNoteMany": "これらのチャット中に作成されたファイルはそれぞれの一時ディレクトリに残り、フォルダには移動されません。",
+      "noTargets": "開いている他のフォルダがありません",
+      "targetUnavailable": "このフォルダは閉じられたか削除されました。別のフォルダを選んでください。",
+      "cancel": "キャンセル",
+      "move": "移動",
+      "toastMoved": "{count} 件の会話を {folder} に移動しました",
+      "toastSkipped": "{count} 件の会話は移動されませんでした",
+      "toastFailed": "移動できませんでした：{message}",
+      "skipReason": {
+        "not_found": "会話が存在しません",
+        "not_movable": "サブ会話は親と一緒に移動します",
+        "already_there": "すでにこのフォルダにあります",
+        "task_owned": "ToDo タスクに属しています",
+        "busy": "エージェントが作業中です。完了してから再試行してください",
+        "conflict": "移動中に変更されました。再試行してください",
+        "target_unavailable": "移動先のフォルダが閉じられたか削除されました"
+      }
     },
     "search": {
       "dialogTitle": "検索",
@@ -2588,6 +2616,24 @@
         "loadFailed": "状態を取得できませんでした: {message}",
         "openSettings": "詳細設定を開く",
         "refresh": "更新"
+      },
+      "webService": {
+        "title": "Web サービス",
+        "start": "Web サービスを開始",
+        "stop": "Web サービスを停止",
+        "cancel": "キャンセル",
+        "confirmStart": "開始",
+        "confirmTitle": "Codeg をネットワークに公開しますか？",
+        "confirmDescription": "Web サービスは {address} で待ち受けます。同じネットワーク上のどのデバイスからも、アクセストークンがあればターミナルやエージェントを含む Codeg にアクセスできます。",
+        "tooltipNetwork": "Web サービス · {address} で待ち受け中（ネットワークからアクセス可能）",
+        "tooltipLocal": "Web サービス · {address} で待ち受け中（このコンピューターのみ）",
+        "tooltipStopped": "Web サービス · 停止中",
+        "hintNetwork": "{address} で待ち受け中。ネットワーク上のデバイスがアクセストークンで Codeg を開けます。",
+        "hintLocal": "{address} で待ち受け中。このコンピューターからのみアクセスできます。",
+        "hintStoppedNetwork": "停止中。開始すると {address} で待ち受け、ネットワークからアクセスできます。",
+        "hintStoppedLocal": "停止中。開始すると {address} で待ち受け、このコンピューターからのみアクセスできます。",
+        "copyAddress": "アドレスをコピー",
+        "openSettings": "Web サービス設定を開く"
       }
     },
     "auxPanel": {
@@ -3435,6 +3481,7 @@
           "sessionLoadResourceNotFound": "{agent} セッションの読み込みに失敗しました。再読み込みして再試行するか、新しい会話を開始してください。",
           "sessionLoadUnavailable": "{agent} はこのセッションを復元できませんでした。セッションが終了したか、エージェントが停止した可能性があります。再読み込みして再試行するか、新しい会話を開始してください。",
           "sessionLoadBusy": "このセッションは別の場所で開かれています。別の {agent} クライアント（デスクトップアプリ、CLI、IDE 拡張機能）で開いている場合は、そちらで閉じるかそのクライアントを終了してから再読み込みしてください。ここから分岐した直後なら、1 分ほどしてから再読み込みしてください。",
+          "sessionLoadProviderMismatch": "この会話は、{agent} が現在使っているものとは別のモデルプロバイダーで始められました。{agent} は会話を元のプロバイダーでしか続けません。{agent} の設定でそのプロバイダーに戻してから再読み込みするか、新しい会話を始めてください。（{detail}）",
           "sessionArchived": "以前のセッションは {agent} 側でアーカイブされています。ターミナルで {command} を実行して復元してから再読み込みするか、新しい会話を開始してください。",
           "turnFailedRefusal": "{agent} がこのターンの続行を拒否しました。バックエンドまたはゲートウェイのエラーが原因の可能性があります。エージェントのログを確認してください。",
           "turnFailedMaxTokens": "{agent} がこのターンの最大トークン数に達しました。",
@@ -3490,7 +3537,8 @@
         },
         "errors": {
           "connectionFailed": "接続に失敗しました",
-          "sendPromptFailed": "メッセージの送信に失敗しました: {error}"
+          "sendPromptFailed": "メッセージの送信に失敗しました: {error}",
+          "conversationMoved": "この会話は {folder} に移動されました。そちらで続けるには、メッセージをもう一度送信してください。"
         }
       },
       "shared": {
@@ -3672,13 +3720,13 @@
             "paper-lookup": "学術データベースから関連論文とオープンアクセス全文を探し、再利用できる引用も示してください。探しているもの："
           },
           "paper-lookup": "論文検索",
-          "paper-lookupDesc": "10 の学術 API（PubMed、arXiv、OpenAlex、Crossref…）で論文・引用・オープンアクセス全文を検索。",
+          "paper-lookupDesc": "18 の学術 API（PubMed、arXiv、OpenAlex、Crossref…）で論文・引用・オープンアクセス全文を検索。",
           "scientific-critical-thinking": "批判的思考",
           "scientific-critical-thinkingDesc": "科学的主張とエビデンスの質を評価。バイアスや交絡を見抜き、GRADE やバイアスリスク枠組みを適用。",
           "scientific-visualization": "科学的可視化",
-          "scientific-visualizationDesc": "出版品質の図。マルチパネル配置、有意差注釈、ジャーナル固有の書式に対応。",
+          "scientific-visualizationDesc": "正確でアクセシブルな出版品質の図。マルチパネル配置、不確実性の表示、配色・コントラスト監査、ジャーナル向け書き出し計画。",
           "exploratory-data-analysis": "探索的データ解析",
-          "exploratory-data-analysisDesc": "200 以上の形式の科学データファイルを自動探索し、品質指標とレポートを生成。",
+          "exploratory-data-analysisDesc": "対応する科学データファイルをローカルで範囲を限定して探索。構造の把握、欠損・外れ値の監査、EDA レポートを生成。",
           "statistical-analysis": "統計解析",
           "statistical-analysisDesc": "ガイド付き統計解析。検定の選択、前提確認、効果量、APA 形式の報告に対応。",
           "statistical-power": "統計的検出力",
@@ -3933,14 +3981,12 @@
         "readImageLoading": "画像を読み込み中…",
         "readImageError": "画像を読み込めませんでした",
         "shellSession": "セッション {id}",
-        "agentPromptLabel": "プロンプト",
         "agentModelLabel": "モデル",
         "agentEffortLabel": "思考の強度",
         "agentRecoveredNote": "サブエージェントは実際には完了しています。ターン中断のため結果はメインセッションに届きませんでした：",
         "agentProgressTools": "{count} 件のツール呼び出し",
         "agentProgressTurns": "{count} ターン",
         "agentProgressContext": "コンテキスト {pct}%",
-        "agentSessionAction": "サブエージェントのセッションを表示",
         "agentSessionTitle": "サブエージェントのセッション",
         "agentSessionLoading": "サブエージェントの記録を読み込んでいます…",
         "agentSessionEmpty": "サブエージェントはまだ何も書き込んでいません。",
@@ -4008,6 +4054,13 @@
         "htmlPreviewHide": "プレビューを閉じる"
       },
       "activity": {
+        "oauth": {
+          "waiting": "{server} の認可を待機中",
+          "reconnecting": "{server} に再接続中…",
+          "open": "システムブラウザーで認可を開く",
+          "verify": "再接続後、実際の MCP ツール呼び出しでアクセスを確認してください。ブラウザーを開くだけでは認可は確認されません。",
+          "openFailed": "ブラウザーを開けませんでした。認可リンクから再試行してください。"
+        },
         "header": {
           "label": "実行過程",
           "working": "実行中",
@@ -4063,8 +4116,7 @@
           "taskFailed": "タスク失敗",
           "taskStopped": "タスク停止",
           "taskRunning": "タスク実行中",
-          "planUpdated": "計画を更新",
-          "showMoreSteps": "残り {count} ステップを表示"
+          "planUpdated": "計画を更新"
         },
         "explore": {
           "files": "ファイル {count} 件",
@@ -4174,7 +4226,9 @@
         "openFile": "{filePath} を開く",
         "collapse": "折りたたむ",
         "currentMessage": "現在のメッセージ",
-        "scrollToCurrent": "現在のメッセージ（#{ordinal}）へスクロール"
+        "scrollToCurrent": "現在のメッセージ（#{ordinal}）へスクロール",
+        "running": "実行中",
+        "total": "全 {count} 件"
       },
       "replyArtifacts": {
         "title": "変更されたファイル",
@@ -4230,6 +4284,7 @@
         "resumeDelegation": "タスク {task} を再開中",
         "resumeDelegationNoId": "委任タスクを再開中",
         "promptLabel": "プロンプト",
+        "attachmentsLabel": "添付ファイル",
         "ackRecorded": "作業タスクに記録しました",
         "ackNotRecorded": "作業タスクに記録されていません",
         "ackNotRecordedWithReason": "作業タスクに記録されていません: {reason}",
@@ -4301,7 +4356,8 @@
         "failed": "コンテキストの圧縮に失敗しました",
         "summary": "要約",
         "triggerManual": "手動で実行",
-        "triggerAutomatic": "自動で実行"
+        "triggerAutomatic": "自動で実行",
+        "triggerIdle": "アイドル中、プロンプトキャッシュの期限切れ前に実行"
       },
       "sessionFailure": {
         "category": {
@@ -4345,6 +4401,13 @@
         "scheduledWakeup": "スケジュールされた起動",
         "scheduledWakeupAt": "スケジュールされた起動（{time}）",
         "scheduledTask": "スケジュールされたタスク"
+      },
+      "liveRuns": {
+        "count": "{count} 件実行中",
+        "awaiting": "対応待ちのサブエージェントがあります",
+        "groupDelegations": "委任",
+        "background": "バックグラウンド",
+        "delegatedFallback": "委任したサブエージェント"
       },
       "remoteControl": {
         "title": "リモートコントロール有効",
@@ -4533,7 +4596,12 @@
       "permissionDenied": "権限が不足しています。1024 以上のポートを使用するか、より高い権限で実行してください",
       "addressUnavailable": "このアドレスはこの端末では利用できません",
       "bindFailed": "アドレスのバインドに失敗しました"
-    }
+    },
+    "bindHost": "待ち受け",
+    "bindHostAll": "すべてのインターフェース（0.0.0.0）",
+    "bindHostLocal": "このコンピューターのみ（127.0.0.1）",
+    "bindHostAllHint": "ローカルネットワーク上のデバイスがアクセストークンでサービスに接続できます。",
+    "bindHostLocalHint": "このコンピューターからのみ接続できます。リバースプロキシや Tailscale Serve の背後で使う場合などに。"
   },
   "DirectoryBrowser": {
     "title": "ディレクトリを参照",
@@ -4938,7 +5006,7 @@
       "syncFailed": "スキルの同期に失敗"
     },
     "autoPreviewLabel": "プレビューを自動で開く",
-    "autoPreviewHint": "エージェントが Word、Excel、PowerPoint ファイルを作成または編集したときに、ライブプレビューを自動で開きます。"
+    "autoPreviewHint": "エージェントが現在のターンでツールを使って Word、Excel、PowerPoint ファイルを作成または編集したときに、ライブプレビューを自動で開きます。"
   },
   "SkillPacksSettings": {
     "title": "スキルパック",
@@ -6385,6 +6453,11 @@
     "completeDescription": "このタスクはファイルを変更していないため、マージするものはありません。そのまま完了にします。",
     "completeDescriptionNoWorktree": "このタスクの worktree は削除されているため、マージできません。そのまま完了にします。未マージのコミットが残る作業ブランチは保持されます。",
     "completeDeleteWorktree": "完了後に worktree を削除",
+    "threadCommentLabel": "タスク完了時に項目のスレッドへコメントする",
+    "threadCommentLabelSeveral": "タスク完了時に各 Issue のスレッドへコメントする",
+    "threadCommentReplyLabel": "#{number} への返信",
+    "threadCommentPlaceholder": "空欄なら作業の届け方だけを投稿します。",
+    "threadCommentHint": "エージェントの下書きです。公開前に確認してください。Codeg は作業の届け方を示す 1 行を追加し、リポジトリ設定で有効なら Codeg の署名も付けます。",
     "completeSubmit": "完了",
     "settingsTitle": "タスク設定",
     "settingsDescription": "{folder} のタスクの既定値。",
@@ -6444,6 +6517,9 @@
     "preflightRunning": "{name} 実行中…",
     "detailDescription": "タスク詳細",
     "detailSummary": "結果",
+    "detailThreadReply": "スレッドへの返信",
+    "detailThreadReplyHint": "タスクを承認すると投稿されます。承認ダイアログで編集できます。",
+    "detailThreadReplyOffHint": "投稿されません：このタスクはコメントがオフです。承認ダイアログでオンにできます。",
     "detailFiles": "変更ファイル",
     "detailFilesIncludesPr": "PR 自体の変更を含む",
     "detailFilesIncludesMr": "MR 自体の変更を含む",
@@ -6456,6 +6532,7 @@
     "showLess": "折りたたむ",
     "detailInfo": "詳細",
     "detailBranch": "ブランチ",
+    "detailSource": "ソース",
     "detailMergeCommit": "マージコミット",
     "detailChanges": "変更",
     "detailScheduled": "開始予定",
@@ -6505,6 +6582,12 @@
     "deliverPrDescriptionMr": "このタスクのブランチを {repo} にプッシュし、{base} 向けのマージリクエストを作成します。元の Issue は自動でリンクされ、マージ時にクローズされます。",
     "deliverPrDescriptionLocal": "このタスクのブランチを {repo} にプッシュし、{base} 向けのプルリクエストを作成します。",
     "deliverPrDescriptionLocalMr": "このタスクのブランチを {repo} にプッシュし、{base} 向けのマージリクエストを作成します。",
+    "deliverPrDescriptionIssues": "このタスクのブランチを {repo} にプッシュし、{base} 向けのプルリクエストを作成します。マージすると下でチェックしたイシューがクローズされ、それ以外はリンクのみです。",
+    "deliverPrDescriptionIssuesMr": "このタスクのブランチを {repo} にプッシュし、{base} 向けのマージリクエストを作成します。マージすると下でチェックしたイシューがクローズされ、それ以外はリンクのみです。",
+    "deliverPrClosesLabel": "マージ時にクローズ",
+    "deliverPrClosesHint": "この変更で解決していないイシューはチェックを外してください。リンクだけになります。デリバリーを始めると一覧は確定します。",
+    "deliverPrClosesFixed": "このタスクの最初のデリバリーで確定済みです。変更するには、フォージ上でプルリクエストの説明を編集してください。",
+    "deliverPrClosesFixedMr": "このタスクの最初のデリバリーで確定済みです。変更するには、フォージ上でマージリクエストの説明を編集してください。",
     "deliverPrRemoteLoading": "プロジェクトのリモートを読み込んでいます…",
     "deliverPrRemoteFailed": "プロジェクトのリモートを読み込めませんでした。しばらくしてからもう一度お試しください。",
     "deliverPrRemoteUnsupported": "このプロジェクトの origin は GitHub・GitLab・Gitea のいずれでもないため、プルリクエストを作成できません。",
@@ -6537,7 +6620,13 @@
     "deliverPrBackDone": "プルリクエストに push しました",
     "deliverPrBackDoneMr": "マージリクエストに push しました",
     "badgePersonalAgent": "パーソナルエージェント",
-    "badgePersonalAgentExecutor": "パーソナルエージェント · {executor}"
+    "badgePersonalAgentExecutor": "パーソナルエージェント · {executor}",
+    "deliverPrUncommitted": "タスクのワークツリーに未コミットのファイルが {count} 件あります。先に {branch} にコミットしてから、ほかの変更と一緒に push します。",
+    "deliverPrUncommittedFiles": "コミットするファイル",
+    "deliverPrCommitMessageLabel": "コミットメッセージ",
+    "deliverPrUncommittedHint": "エージェントにコミットさせたい場合は、キャンセルしてタスクを差し戻し、もう一巡させてください。",
+    "deliverPrCommitSubmit": "コミットして push・作成",
+    "deliverPrCommitPushSubmit": "コミットして push"
   },
   "CustomSkillsSettings": {
     "loading": "カスタムスキルを読み込み中…",
@@ -7039,7 +7128,11 @@
     "errors": {
       "noAccount": "{host} の {provider} アカウントが設定されていません。「設定 → バージョン管理」で追加するとこのリポジトリを読み込めます。",
       "unsupportedHost": "リポジトリパネルは GitHub、GitLab、Gitea、CNB にのみ対応しており、{host} はそのいずれとしても認識できません。自己ホスト型の GitHub Enterprise、GitLab、Gitea、Forgejo、CNB インスタンスであれば、「設定 → バージョン管理」でアカウントを追加してください。",
-      "wrongForge": "{host} は {provider} でした。別のフォージとして扱われていましたが、判定を修正しました。再読み込みしてください。"
+      "wrongForge": "{host} は {provider} でした。別のフォージとして扱われていましたが、判定を修正しました。再読み込みしてください。",
+      "approveHeadChanged": "確認した後にこのプルリクエストに新しいコミットが追加されました。更新して再確認してから承認してください。",
+      "approveAmbiguous": "これらのワークフロー実行がこのプルリクエストだけのものか判断できません。GitHub 上で承認してください。",
+      "approveForbidden": "このアカウントにはここでワークフロー実行を承認する権限がありません。書き込み権限と、トークンの Actions（書き込み）権限または repo スコープが必要です。",
+      "approveNotOpen": "このプルリクエストはもうオープンではありません。"
     },
     "addAccount": "アカウントを追加",
     "empty": "表示する項目がありません",
@@ -7150,6 +7243,7 @@
     "checksPassing": "{count} 件成功",
     "checksFailing": "{count} 件失敗",
     "checksPending": "{count} 件実行中",
+    "checksNeutralCount": "{count} 件判定なし",
     "checkAllowFailure": "失敗を許容",
     "checkSuccess": "成功",
     "checkFailure": "失敗",
@@ -7187,7 +7281,7 @@
     "dialogDescriptionMr": "{repo} のフォルダーに ToDo タスクを作成し、ワークツリーをこのマージリクエストのヘッドにチェックアウトします。エージェントのコミットはその上に積まれ、承認すると同じマージリクエストに push されます。",
     "instructionPlaceholder": "エージェントへの補足指示（任意）…",
     "writebackLabel": "完了時にこの項目へコメントする",
-    "writebackHint": "タスクが完了すると、この項目に 1 件コメントします。結果・リンク・差分の行数です。",
+    "writebackHint": "タスク完了時に、この項目へコメントを 1 件投稿します：エージェントが下書きした返信（タスクを承認するときに確認・編集できます）と、作業の届け方です。",
     "previewToggle": "タスクに含まれる Issue 内容をプレビュー",
     "previewEmpty": "（説明なし）",
     "duplicateBody": "この項目はすでにアクティブなタスクが対応中です：{title}（{status}）。それでも作成しますか？",
@@ -7197,6 +7291,29 @@
     "creating": "作成中…",
     "createAnyway": "それでも作成",
     "viewExisting": "既存のタスクを表示",
+    "selectItem": "#{number} を選択",
+    "selectBlockedActive": "このイシューには進行中のタスクがあります",
+    "selectionLabel": "選択したイシュー",
+    "selectionCount": "{count} 件を選択中",
+    "selectionOffPage": "うち {count} 件はこの一覧にありません",
+    "selectionClear": "クリア",
+    "combineAction": "{count} 件をまとめて対応",
+    "combineNeedsTwo": "イシューを 2 件以上選んでください",
+    "combineTitle": "{count} 件のイシューをまとめて対応",
+    "combineDescription": "{repo} のフォルダに ToDo タスクを 1 つ作成します。1 つのエージェントが同じワークツリーでこれらのイシューにまとめて対応し、レビュー後に反映されます。",
+    "combineItemsLabel": "このタスクに含まれるイシュー",
+    "combineRemoveItem": "#{number} を外す",
+    "combineScenarioFixHint": "エージェントは報告を 1 件ずつ判断し、妥当なものだけを 1 つの変更でまとめて修正します。妥当でないものには一切手を付けず、結論を添えてあなたの判断を待ちます。",
+    "combineScenarioPlanFirstHint": "エージェントは報告を 1 件ずつ判断し、妥当なものについて 1 つの計画を出して停止します。計画を承認するにはタスクを差し戻して実装させます。",
+    "combineWritebackLabel": "完了時に各イシューへコメントする",
+    "combineWritebackHint": "タスク完了時に、各 Issue へコメントを 1 件ずつ投稿します：エージェントがそれぞれに下書きした返信（タスクを承認するときに確認・編集できます）と、作業の届け方です。",
+    "combineTooFew": "まとめて対応するにはイシューが 2 件以上必要です。1 件だけなら、その行から対応してください。",
+    "combineConflictsBody": "これらのイシューの一部は、すでにアクティブなタスクが対応中です：",
+    "combineConflictItem": "#{number} — {title}（{status}）",
+    "combineRemoveConflicts": "これらのイシューを外す",
+    "combineCreated": "{count} 件のイシューに 1 つのタスクを作成しました",
+    "combineViewBoard": "ボードで表示",
+    "combinedWith": "{numbers} とまとめて対応",
     "scenarioLabel": "処理方法",
     "scenarioFix": "修正・実装する",
     "scenarioFixHint": "エージェントはまず報告が妥当かを判断し、妥当なときだけ修正します。妥当でなければ（再現できない、仕様どおり、修正済みなど）コードを一切変えずに早めに終了し、結論を添えてあなたの判断を待ちます。",
@@ -7222,6 +7339,8 @@
     "settingsPrDefaultHint": "PR または MR の処理ダイアログを開いたときに選択済みになる方法です。",
     "settingsWritebackDefault": "既定でコメントを書き戻す",
     "settingsWritebackDefaultHint": "処理ダイアログにあるスイッチの初期状態です。項目ごとに変更できます。",
+    "settingsCommentFooter": "コメントに Codeg の署名を付ける",
+    "settingsCommentFooterHint": "codeg が投稿するすべてのコメントの末尾に「🤖 Generated with Codeg」を付け、Codeg リポジトリにリンクします。",
     "settingsPromptsIntro": "常設の指示は、選んだシナリオの組み込み文の後ろ、処理ダイアログで入力した補足の前に追加されます（組み込み文をここで繰り返す必要はありません）。付くのはタスクの最初のターンだけです。毎ターン必要な文はタスク設定のプロンプトに書いてください。",
     "settingsPromptsLabel": "シナリオ",
     "settingsPromptAll": "すべてのシナリオ",
@@ -7273,7 +7392,7 @@
     "autoAutoStart": "すぐに開始",
     "autoAutoStartHint": "新しいタスクをすぐにキューに入れます。実行タイミングはタスク設定の同時実行数の上限で決まります。オフ：To-do で待機します。",
     "autoWriteback": "結果をコメントで返す",
-    "autoWritebackHint": "タスク完了時に、トリガーダイアログのスイッチと同じ短いステータスコメントを投稿します。",
+    "autoWritebackHint": "タスク完了時に、開始ダイアログのスイッチと同じコメントを投稿します：エージェントが下書きし、タスク承認時に確認した返信と、作業の届け方です。",
     "autoActivity": "アクティビティ",
     "autoScanNow": "今すぐスキャン",
     "autoScanNowOff": "トリガーを有効にして保存するとスキャンできます。",
@@ -7301,7 +7420,23 @@
     "autoSkipExcludedAuthor": "除外された作成者",
     "autoSkipMissingLabel": "一致するラベルなし",
     "autoSkipAuthorNotIncluded": "作成者がリスト外",
-    "save": "保存"
+    "save": "保存",
+    "checksAwaitingApproval": "承認待ちのワークフロー {count} 件",
+    "checksApprovalShort": "承認待ち",
+    "approveUnknownTitle": "承認待ちのワークフローがある可能性があります",
+    "approveExplain": "このプルリクエストはフォークからのもので、書き込み権限を持つ人が承認するまでワークフローは実行されません。承認するとこのコードがリポジトリの CI で実行されるため、先に変更を確認してください。",
+    "approveIncompleteHint": "すべてのワークフロー実行を確認できませんでした。GitHub 上にさらに承認待ちがある可能性があります。",
+    "approveBlockedAmbiguous": "同じブランチから別のプルリクエストも開かれているため、これらの実行がこのプルリクエストだけのものか判断できません。GitHub 上で承認してください。",
+    "approveBlockedPermission": "このアカウントにはリポジトリへのプッシュ権限がないため、ワークフローを承認できません。",
+    "approveOpenOnForge": "GitHub で開く",
+    "approveWorkflows": "ワークフローの実行を承認",
+    "approving": "承認中…",
+    "approveConfirmTitle": "ワークフローの実行を承認しますか？",
+    "approveConfirmBody": "{count} 件のワークフローが、このプルリクエストのコード（コミット {sha}）をリポジトリの CI で実行します。変更を確認してから承認してください。",
+    "approveDone": "{count} 件のワークフローを承認しました",
+    "approvePartial": "一部のワークフローを承認できませんでした: {names}",
+    "approveNothingHeld": "承認待ちのワークフローはもうありません。",
+    "mergeWorkflowsAwaiting": "承認待ちのワークフローがあります"
   },
   "Canvas": {
     "title": "無限キャンバス",

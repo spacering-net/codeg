@@ -2236,6 +2236,13 @@
   top: 1.125rem;
 }
 
+/* A stretch of a long list's rows that is not drawn (`use-timeline-window.ts`):
+   no ring of its own, so its segment runs on from the one above — which stops
+   0.125rem into it, as it would into a row — to the row below. */
+.activity-item[data-marker="spacer"]::before {
+  top: 0.125rem;
+}
+
 /* The last row: a segment only beside a body under its line — an open panel,
    prose, a card (`data-body`); a folded row ends the rail at its ring. The
    segment ends a little further above the row's bottom edge than a one-line
@@ -2338,6 +2345,19 @@
 
 .activity-child[data-marker="dot"]::before {
   top: 1.1875rem;
+  bottom: calc(-1 * (var(--activity-gap) + 0.5625rem));
+}
+
+/* A stretch of a long run of members not drawn (`use-timeline-window.ts`):
+   its dashed segment runs on from the one above to the member below, as a
+   ring member's would — or, among dot members (`data-dots`), as theirs. */
+.activity-child[data-marker="spacer"]::before {
+  top: 0.25rem;
+  bottom: calc(-1 * (var(--activity-gap) + 0.25rem));
+}
+
+.activity-child[data-marker="spacer"][data-dots]::before {
+  top: 0.5625rem;
   bottom: calc(-1 * (var(--activity-gap) + 0.5625rem));
 }
 
@@ -2485,15 +2505,16 @@
    foot's does.
    The ring is the row's marker (`.activity-marker`), beside the header and
    not in it, so it is found from the row: the nearest row holding the button
-   — not a row whose panel holds a nested row that does. Hover only where
-   there is a pointer that hovers, as Tailwind's `hover:` does, so a tap does
-   not leave the row lit. */
+   — not a row whose panel holds a nested row that does. The timeline marks
+   that row as the button is pointed at or focused (`use-row-pointing.ts`):
+   found with `:has()` instead, every row that joined a list — a group's
+   member, a step under a goal — restyled the whole row around it, all its
+   members with it, on each step. Hover only where there is a pointer that
+   hovers, as Tailwind's `hover:` does, so a tap does not leave the row lit. */
 @media (hover: hover) {
   .activity-row-toggle:hover
     :is(.text-activity-secondary, .text-muted-foreground),
-  :is(.activity-item, .activity-child):has(.activity-row-toggle:hover):not(
-      :has(:is(.activity-item, .activity-child) .activity-row-toggle:hover)
-    )
+  :is(.activity-item, .activity-child)[data-row-pointed]
     > .activity-marker
     [data-quiet] {
     color: var(--foreground);
@@ -2501,13 +2522,7 @@
 }
 .activity-row-toggle:focus-visible
   :is(.text-activity-secondary, .text-muted-foreground),
-:is(.activity-item, .activity-child):has(
-    .activity-row-toggle:focus-visible
-  ):not(
-    :has(
-      :is(.activity-item, .activity-child) .activity-row-toggle:focus-visible
-    )
-  )
+:is(.activity-item, .activity-child)[data-row-focused]
   > .activity-marker
   [data-quiet] {
   color: var(--foreground);

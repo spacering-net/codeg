@@ -456,6 +456,9 @@ pub async fn change_detail(
         // "unavailable" is honest, and the panel draws no strip.
         checks: ForgeCheckList::unavailable(),
         updated_at: None,
+        // Only GitHub holds runs for a maintainer's approval through an API
+        // this panel can act on.
+        workflow_approval: None,
     })
 }
 

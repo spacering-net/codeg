@@ -822,6 +822,7 @@ mod tests {
                 .register(
                     token.into(),
                     TokenEntry {
+                        agent_hosts_tools: false,
                         parent_connection_id: "conn-a".into(),
                         working_dir: std::path::PathBuf::from("/tmp"),
                     },
@@ -832,6 +833,7 @@ mod tests {
             .register(
                 "t3".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "conn-b".into(),
                     working_dir: std::path::PathBuf::from("/tmp"),
                 },

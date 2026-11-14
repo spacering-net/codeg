@@ -66,15 +66,12 @@ import { toast } from "sonner"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { AgentIcon } from "@/components/agent-icon"
 import {
-  CopyPropertyButton,
-  PropertyRow,
-} from "@/components/conversations/session-details-content"
-import {
   AUX_RAIL_CLASS,
   AUX_RAIL_TRIGGER_CLASS,
 } from "@/components/layout/aux-panel-tab-rail"
 import { ChromeReserve } from "@/components/layout/chrome-reserve"
-import { InsightsSection } from "@/components/layout/session-details-insights"
+import { InsightsSection } from "./panel-section"
+import { CopyPropertyButton, PropertyRow } from "./property-row"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import {
   RankedBars,

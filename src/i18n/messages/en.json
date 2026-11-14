@@ -2289,7 +2289,7 @@
       "statusRunningBadge": "Running",
       "runningCountBadge": "{count, plural, one {# session running} other {# sessions running}}",
       "statusCancelledBadge": "Cancelled",
-      "worktreeRemovedBadge": "Source worktree removed",
+      "originalWorkingDir": "Original working directory",
       "cliBadge": "Started from the command line",
       "conversationCountUnit": "{count, plural, one {# conversation} other {# conversations}}",
       "emptyFolderHint": "No conversations",
@@ -2330,6 +2330,7 @@
         "untitledConversation": "Untitled conversation",
         "setStatus": "Set status…",
         "deleteSelected": "Delete",
+        "moveSelected": "Move to…",
         "noConversations": "No conversations in this folder.",
         "noConversationsWorkspace": "No conversations in the workspace.",
         "noMatchingConversations": "No conversations match the filters.",
@@ -2431,7 +2432,7 @@
       "fieldTitle": "Title",
       "untitled": "Untitled conversation",
       "sessionId": "Session ID",
-      "externalId": "Extension ID",
+      "externalId": "Session Index",
       "agent": "Agent",
       "model": "Model",
       "status": "Status",
@@ -2481,6 +2482,33 @@
       "reopen": "Reopen",
       "expandSubsessions": "Expand sub-conversations",
       "collapseSubsessions": "Collapse sub-conversations"
+    },
+    "moveConversation": {
+      "menuLabel": "Move to",
+      "title": "Move conversation",
+      "titleMany": "Move {count, plural, one {# conversation} other {# conversations}}",
+      "intro": "“{title}” will be moved to this folder:",
+      "introMany": "The selected {count, plural, one {conversation} other {# conversations}} will be moved to this folder:",
+      "untitledConversation": "Untitled conversation",
+      "explain": "From the next message on, the agent works in this folder; the history stays as it is. If the agent can't resume the session here, you'll be offered to reload it or start a new session.",
+      "chatFilesNote": "Files created during the chat stay in its scratch directory {path}; they are not moved into the folder.",
+      "chatFilesNoteMany": "Files created during these chats stay in their scratch directories; they are not moved into the folder.",
+      "noTargets": "No other open folder",
+      "targetUnavailable": "This folder was closed or removed — pick another one.",
+      "cancel": "Cancel",
+      "move": "Move",
+      "toastMoved": "{count, plural, one {Moved # conversation} other {Moved # conversations}} to {folder}",
+      "toastSkipped": "{count, plural, one {# conversation was not moved} other {# conversations were not moved}}",
+      "toastFailed": "Couldn't move: {message}",
+      "skipReason": {
+        "not_found": "It no longer exists",
+        "not_movable": "Sub-conversations move with their parent",
+        "already_there": "It is already in this folder",
+        "task_owned": "It belongs to a to-do task",
+        "busy": "An agent is working on it — try again when it's done",
+        "conflict": "It changed while being moved — try again",
+        "target_unavailable": "The folder was closed or removed"
+      }
     },
     "search": {
       "dialogTitle": "Search",
@@ -2588,6 +2616,24 @@
         "loadFailed": "Could not read the status: {message}",
         "openSettings": "Open full settings",
         "refresh": "Refresh"
+      },
+      "webService": {
+        "title": "Web service",
+        "start": "Start web service",
+        "stop": "Stop web service",
+        "cancel": "Cancel",
+        "confirmStart": "Start",
+        "confirmTitle": "Open Codeg to your network?",
+        "confirmDescription": "The web service will listen on {address}. Any device on your network can then reach Codeg — including its terminals and agents — with the access token.",
+        "tooltipNetwork": "Web service · listening on {address} (reachable from your network)",
+        "tooltipLocal": "Web service · listening on {address} (this computer only)",
+        "tooltipStopped": "Web service · stopped",
+        "hintNetwork": "Listening on {address}. Devices on your network can open Codeg with the access token.",
+        "hintLocal": "Listening on {address}. Only this computer can reach it.",
+        "hintStoppedNetwork": "Stopped. Starting will listen on {address}, reachable from your network.",
+        "hintStoppedLocal": "Stopped. Starting will listen on {address}, this computer only.",
+        "copyAddress": "Copy address",
+        "openSettings": "Open Web service settings"
       }
     },
     "auxPanel": {
@@ -3435,6 +3481,7 @@
           "sessionLoadResourceNotFound": "{agent} session failed to load. Reload to retry, or start a new conversation.",
           "sessionLoadUnavailable": "{agent} couldn't restore this session — it may have ended or the agent stopped. Reload to retry, or start a new conversation.",
           "sessionLoadBusy": "This session is open elsewhere. If another {agent} client (the app, the CLI or an IDE extension) has it, close it there or quit that client, then reload. If you just forked it, reload in about a minute.",
+          "sessionLoadProviderMismatch": "This conversation was started with a different model provider than the one {agent} uses now, and {agent} only continues a conversation on its own provider. Switch back to that provider in {agent}'s settings and reload, or start a new conversation. ({detail})",
           "sessionArchived": "The previous session was archived on the {agent} side. Run {command} in a terminal to restore it and reload, or start a new conversation.",
           "turnFailedRefusal": "{agent} refused to continue this turn. This often indicates a backend or gateway error — check the agent's logs.",
           "turnFailedMaxTokens": "{agent} reached the maximum token limit for this turn.",
@@ -3490,7 +3537,8 @@
         },
         "errors": {
           "connectionFailed": "Connection failed",
-          "sendPromptFailed": "Failed to send the message: {error}"
+          "sendPromptFailed": "Failed to send the message: {error}",
+          "conversationMoved": "This conversation was moved to {folder}. Send your message again to continue there."
         }
       },
       "shared": {
@@ -3672,13 +3720,13 @@
             "paper-lookup": "Help me find relevant papers and open-access full text across scholarly databases, with citations I can reuse. I'm looking for: "
           },
           "paper-lookup": "Paper Lookup",
-          "paper-lookupDesc": "Search 10 scholarly APIs (PubMed, arXiv, OpenAlex, Crossref…) for papers, citations, and open-access full text.",
+          "paper-lookupDesc": "Search 18 scholarly APIs (PubMed, arXiv, OpenAlex, Crossref…) for papers, citations, and open-access full text.",
           "scientific-critical-thinking": "Critical Thinking",
           "scientific-critical-thinkingDesc": "Appraise scientific claims and evidence quality — spot biases and confounders, apply GRADE and risk-of-bias frameworks.",
           "scientific-visualization": "Scientific Visualization",
-          "scientific-visualizationDesc": "Publication-ready figures — multi-panel layouts, significance annotations, and journal-specific formatting.",
+          "scientific-visualizationDesc": "Truthful, accessible publication figures — multi-panel layouts, uncertainty displays, color/contrast audits, and journal export planning.",
           "exploratory-data-analysis": "Exploratory Data Analysis",
-          "exploratory-data-analysisDesc": "Automated exploration of scientific data files across 200+ formats with quality metrics and reports.",
+          "exploratory-data-analysisDesc": "Bounded, local profiling of supported scientific data files — structure, missingness and outlier audits, and an EDA report.",
           "statistical-analysis": "Statistical Analysis",
           "statistical-analysisDesc": "Guided statistical analysis — test selection, assumption checks, effect sizes, and APA-style reporting.",
           "statistical-power": "Statistical Power",
@@ -3933,14 +3981,12 @@
         "readImageLoading": "Loading image…",
         "readImageError": "Could not load the image",
         "shellSession": "Session {id}",
-        "agentPromptLabel": "Prompt",
         "agentModelLabel": "Model",
         "agentEffortLabel": "Effort",
         "agentRecoveredNote": "The sub-agent actually finished; its result was never delivered because the turn aborted:",
         "agentProgressTools": "{count} tool calls",
         "agentProgressTurns": "{count} turns",
         "agentProgressContext": "context {pct}%",
-        "agentSessionAction": "View sub-agent session",
         "agentSessionTitle": "Sub-agent session",
         "agentSessionLoading": "Loading the sub-agent's transcript…",
         "agentSessionEmpty": "The sub-agent hasn't written anything yet.",
@@ -4008,6 +4054,13 @@
         "htmlPreviewHide": "Hide preview"
       },
       "activity": {
+        "oauth": {
+          "waiting": "Waiting for {server} authorization",
+          "reconnecting": "Reconnecting {server}…",
+          "open": "Open authorization in system browser",
+          "verify": "After reconnecting, verify access with a real MCP tool call. Opening the browser does not confirm authorization.",
+          "openFailed": "Could not open the browser. Use the authorization link to try again."
+        },
         "header": {
           "label": "Activity",
           "working": "Working",
@@ -4063,8 +4116,7 @@
           "taskFailed": "Task failed",
           "taskStopped": "Task stopped",
           "taskRunning": "Task running",
-          "planUpdated": "Updated plan",
-          "showMoreSteps": "{count, plural, one {Show # more step} other {Show # more steps}}"
+          "planUpdated": "Updated plan"
         },
         "explore": {
           "files": "{count, plural, one {# file} other {# files}}",
@@ -4174,7 +4226,9 @@
         "openFile": "Open {filePath}",
         "collapse": "Collapse",
         "currentMessage": "Current message",
-        "scrollToCurrent": "Scroll to the current message (#{ordinal})"
+        "scrollToCurrent": "Scroll to the current message (#{ordinal})",
+        "running": "Running",
+        "total": "{count, plural, one {# message} other {# messages}}"
       },
       "replyArtifacts": {
         "title": "Files changed",
@@ -4230,6 +4284,7 @@
         "resumeDelegation": "Resuming task {task}",
         "resumeDelegationNoId": "Resuming a delegated task",
         "promptLabel": "Prompt",
+        "attachmentsLabel": "Attachments",
         "ackRecorded": "Recorded on the work task",
         "ackNotRecorded": "Not recorded on the work task",
         "ackNotRecordedWithReason": "Not recorded on the work task: {reason}",
@@ -4301,7 +4356,8 @@
         "failed": "Context compaction failed",
         "summary": "Summary",
         "triggerManual": "Manually triggered",
-        "triggerAutomatic": "Automatically triggered"
+        "triggerAutomatic": "Automatically triggered",
+        "triggerIdle": "Triggered while idle, before the prompt cache expired"
       },
       "sessionFailure": {
         "category": {
@@ -4345,6 +4401,13 @@
         "scheduledWakeup": "Scheduled wakeup",
         "scheduledWakeupAt": "Scheduled wakeup for {time}",
         "scheduledTask": "Scheduled task"
+      },
+      "liveRuns": {
+        "count": "{count} running",
+        "awaiting": "A sub-agent is waiting for you",
+        "groupDelegations": "Delegations",
+        "background": "Background",
+        "delegatedFallback": "Delegated sub-agent"
       },
       "remoteControl": {
         "title": "Remote Control is on",
@@ -4533,7 +4596,12 @@
       "permissionDenied": "Permission denied. Try a port above 1024 or run with higher privileges.",
       "addressUnavailable": "The address is not available on this machine",
       "bindFailed": "Failed to bind address"
-    }
+    },
+    "bindHost": "Listen on",
+    "bindHostAll": "All interfaces (0.0.0.0)",
+    "bindHostLocal": "This computer only (127.0.0.1)",
+    "bindHostAllHint": "Devices on your local network can reach the service with the access token.",
+    "bindHostLocalHint": "Only this computer can reach the service — for example behind a reverse proxy or Tailscale Serve."
   },
   "DirectoryBrowser": {
     "title": "Browse Directory",
@@ -4958,7 +5026,7 @@
       "syncFailed": "Failed to sync skills"
     },
     "autoPreviewLabel": "Auto-open preview",
-    "autoPreviewHint": "When an agent creates or edits a Word, Excel, or PowerPoint file, open its live preview automatically."
+    "autoPreviewHint": "When an agent's tools create or edit a Word, Excel, or PowerPoint file during its current turn, open its live preview automatically."
   },
   "SkillPacksSettings": {
     "title": "Skill Packs",
@@ -6385,6 +6453,11 @@
     "completeDescription": "This task changed no files, so there is nothing to merge — it is marked as done directly.",
     "completeDescriptionNoWorktree": "This task's worktree has been removed, so there is no merge to run — it is marked as done directly. A work branch that still holds unmerged commits is kept.",
     "completeDeleteWorktree": "Delete the worktree after completing",
+    "threadCommentLabel": "Comment in the item's thread when the task finishes",
+    "threadCommentLabelSeveral": "Comment in each issue's thread when the task finishes",
+    "threadCommentReplyLabel": "Reply for #{number}",
+    "threadCommentPlaceholder": "Leave blank to post only how the work was delivered.",
+    "threadCommentHint": "Drafted by the agent — check it before it goes public. Codeg adds a line saying how the work was delivered, and the Codeg footer when it is on in the repository settings.",
     "completeSubmit": "Complete",
     "settingsTitle": "Task settings",
     "settingsDescription": "Defaults for tasks in {folder}.",
@@ -6444,6 +6517,9 @@
     "preflightRunning": "{name} running…",
     "detailDescription": "Task detail",
     "detailSummary": "Result",
+    "detailThreadReply": "Reply for the thread",
+    "detailThreadReplyHint": "Posted when you accept the task — you can edit it in the acceptance dialog.",
+    "detailThreadReplyOffHint": "Not posted: commenting is off for this task. You can turn it on in the acceptance dialog.",
     "detailFiles": "Changed files",
     "detailFilesIncludesPr": "incl. the pull request's own changes",
     "detailFilesIncludesMr": "incl. the merge request's own changes",
@@ -6456,6 +6532,7 @@
     "showLess": "Show less",
     "detailInfo": "Details",
     "detailBranch": "Branch",
+    "detailSource": "Source",
     "detailMergeCommit": "Merge commit",
     "detailChanges": "Changes",
     "detailScheduled": "Scheduled start",
@@ -6505,6 +6582,12 @@
     "deliverPrDescriptionMr": "Pushes this task's branch to {repo} and opens a merge request against {base}. The issue is linked automatically, so merging it closes the issue.",
     "deliverPrDescriptionLocal": "Pushes this task's branch to {repo} and opens a pull request against {base}.",
     "deliverPrDescriptionLocalMr": "Pushes this task's branch to {repo} and opens a merge request against {base}.",
+    "deliverPrDescriptionIssues": "Pushes this task's branch to {repo} and opens a pull request against {base}. Merging it closes the issues ticked below; the others are only referenced.",
+    "deliverPrDescriptionIssuesMr": "Pushes this task's branch to {repo} and opens a merge request against {base}. Merging it closes the issues ticked below; the others are only referenced.",
+    "deliverPrClosesLabel": "Closes when merged",
+    "deliverPrClosesHint": "Untick an issue this work does not resolve — it is referenced instead. The list is fixed once the delivery starts.",
+    "deliverPrClosesFixed": "Fixed at this task's first delivery — to change it, edit the pull request's description on the forge.",
+    "deliverPrClosesFixedMr": "Fixed at this task's first delivery — to change it, edit the merge request's description on the forge.",
     "deliverPrRemoteLoading": "Reading the project's remote…",
     "deliverPrRemoteFailed": "Could not read the project's remote. Try again in a moment.",
     "deliverPrRemoteUnsupported": "This project's origin is not on GitHub, GitLab or Gitea, so there is nowhere to open a pull request.",
@@ -6537,7 +6620,13 @@
     "deliverPrBackDone": "Pushed to the pull request",
     "deliverPrBackDoneMr": "Pushed to the merge request",
     "badgePersonalAgent": "Personal agent",
-    "badgePersonalAgentExecutor": "Personal agent · {executor}"
+    "badgePersonalAgentExecutor": "Personal agent · {executor}",
+    "deliverPrUncommitted": "{count, plural, one {# file is still uncommitted in this task's worktree. It is committed to {branch} first, then pushed with the rest.} other {# files are still uncommitted in this task's worktree. They are committed to {branch} first, then pushed with the rest.}}",
+    "deliverPrUncommittedFiles": "Files to commit",
+    "deliverPrCommitMessageLabel": "Commit message",
+    "deliverPrUncommittedHint": "To have the agent commit them instead, cancel and send the task back for another round.",
+    "deliverPrCommitSubmit": "Commit, push and open",
+    "deliverPrCommitPushSubmit": "Commit and push"
   },
   "CustomSkillsSettings": {
     "loading": "Loading custom skills…",
@@ -7039,7 +7128,11 @@
     "errors": {
       "noAccount": "No {provider} account is configured for {host}. Add one under Settings → Version Control to load this repository.",
       "unsupportedHost": "The repository panel supports GitHub, GitLab, Gitea and CNB only, and {host} is not recognized as any of them. If it is a self-hosted GitHub Enterprise, GitLab, Gitea, Forgejo or CNB instance, add an account for it under Settings → Version Control.",
-      "wrongForge": "{host} is a {provider}, not the forge codeg had it classified as. The detection has been corrected — reload to retry."
+      "wrongForge": "{host} is a {provider}, not the forge codeg had it classified as. The detection has been corrected — reload to retry.",
+      "approveHeadChanged": "This pull request has new commits since you reviewed it. Refresh, review again, then approve.",
+      "approveAmbiguous": "These workflow runs can't be tied to this pull request alone. Approve them on GitHub.",
+      "approveForbidden": "This account isn't allowed to approve workflow runs here. It needs write access, and the token needs the Actions (write) permission or the repo scope.",
+      "approveNotOpen": "This pull request is no longer open."
     },
     "addAccount": "Add an account",
     "empty": "Nothing here",
@@ -7150,6 +7243,7 @@
     "checksPassing": "{count} passing",
     "checksFailing": "{count} failing",
     "checksPending": "{count} in progress",
+    "checksNeutralCount": "{count} without a verdict",
     "checkAllowFailure": "may fail",
     "checkSuccess": "Passed",
     "checkFailure": "Failed",
@@ -7187,7 +7281,7 @@
     "dialogDescriptionMr": "Creates a to-do task in {repo}'s folder, with its worktree checked out at this merge request's head — the agent's commits go on top of it and are pushed back to the same merge request once you accept.",
     "instructionPlaceholder": "Optional extra instruction for the agent…",
     "writebackLabel": "Comment the outcome back on this item",
-    "writebackHint": "When the task finishes, codeg posts one comment on this item: the outcome, the link and the diff counters.",
+    "writebackHint": "When the task finishes, codeg posts one comment on this item: the reply the agent drafts (you review it when you accept the task) and how the work was delivered.",
     "previewToggle": "Preview the issue content the task will carry",
     "previewEmpty": "(no description)",
     "duplicateBody": "An active task already handles this item: {title} ({status}). Create another one anyway?",
@@ -7197,6 +7291,29 @@
     "creating": "Creating…",
     "createAnyway": "Create anyway",
     "viewExisting": "View the existing task",
+    "selectItem": "Select #{number}",
+    "selectBlockedActive": "This issue already has a task under way",
+    "selectionLabel": "Selected issues",
+    "selectionCount": "{count} selected",
+    "selectionOffPage": "{count} not in this list",
+    "selectionClear": "Clear",
+    "combineAction": "Handle {count} together",
+    "combineNeedsTwo": "Pick at least two issues",
+    "combineTitle": "{count, plural, one {Handle # issue together} other {Handle # issues together}}",
+    "combineDescription": "Creates one to-do task in {repo}'s folder — one agent works through these issues in one worktree, and you review before anything lands.",
+    "combineItemsLabel": "Issues in this task",
+    "combineRemoveItem": "Remove #{number}",
+    "combineScenarioFixHint": "The agent judges each report first and fixes the ones that hold up, in one change — the ones that don't are left untouched and handed back to you to decide.",
+    "combineScenarioPlanFirstHint": "The agent judges each report first, then delivers one plan for the ones that hold up and stops — approve it by returning the task for implementation.",
+    "combineWritebackLabel": "Comment the outcome back on each issue",
+    "combineWritebackHint": "When the task finishes, codeg posts one comment on each of these issues: the reply the agent drafts for it (you review them when you accept the task) and how the work was delivered.",
+    "combineTooFew": "Handling issues together takes at least two — start a single issue from its own row instead.",
+    "combineConflictsBody": "Active tasks already handle some of these issues:",
+    "combineConflictItem": "#{number} — {title} ({status})",
+    "combineRemoveConflicts": "Remove these issues",
+    "combineCreated": "{count, plural, one {Created one task for # issue} other {Created one task for # issues}}",
+    "combineViewBoard": "View on the board",
+    "combinedWith": "Handled together with {numbers}",
     "scenarioLabel": "How to handle it",
     "scenarioFix": "Fix / implement",
     "scenarioFixHint": "The agent first judges whether the report holds up, and only then fixes it — if it doesn't (can't reproduce, works as designed, already fixed…), it changes nothing, stops early and hands its finding back to you to decide.",
@@ -7222,6 +7339,8 @@
     "settingsPrDefaultHint": "Preselected when the handling dialog opens on a pull or merge request.",
     "settingsWritebackDefault": "Comment the outcome back by default",
     "settingsWritebackDefaultHint": "The starting position of that switch in the handling dialog — still yours to change per item.",
+    "settingsCommentFooter": "Sign comments with Codeg",
+    "settingsCommentFooterHint": "End every comment codeg posts with “🤖 Generated with Codeg”, linked to the Codeg repository.",
     "settingsPromptsIntro": "Standing instructions are appended after the built-in wording of the scenario you pick, and before whatever you type in the handling dialog — no need to restate the built-ins. They ride with the task's opening order; text you want on every turn belongs in the task settings' prompts.",
     "settingsPromptsLabel": "Scenario",
     "settingsPromptAll": "Every scenario",
@@ -7273,7 +7392,7 @@
     "autoAutoStart": "Start right away",
     "autoAutoStartHint": "Queue each new task at once — your task settings' concurrency limit decides when it runs. Off: it waits in To-do.",
     "autoWriteback": "Comment the outcome back",
-    "autoWritebackHint": "When the task finishes, post the same short status comment the trigger dialog's switch posts.",
+    "autoWritebackHint": "When the task finishes, post the same comment the trigger dialog's switch posts: the agent's drafted reply, reviewed when you accept the task, and how the work was delivered.",
     "autoActivity": "Activity",
     "autoScanNow": "Scan now",
     "autoScanNowOff": "Switch a trigger on and save to scan.",
@@ -7301,7 +7420,23 @@
     "autoSkipExcludedAuthor": "excluded author",
     "autoSkipMissingLabel": "no matching label",
     "autoSkipAuthorNotIncluded": "author not listed",
-    "save": "Save"
+    "save": "Save",
+    "checksAwaitingApproval": "{count} workflows awaiting approval",
+    "checksApprovalShort": "Approval needed",
+    "approveUnknownTitle": "Workflows may be awaiting approval",
+    "approveExplain": "This pull request comes from a fork, and its workflows won't run until someone with write access approves them. Approving runs this code on the repository's CI — review the changes first.",
+    "approveIncompleteHint": "Not every workflow run could be checked; there may be more waiting on GitHub.",
+    "approveBlockedAmbiguous": "Another open pull request comes from the same branch, so these runs can't be tied to this one alone. Approve them on GitHub.",
+    "approveBlockedPermission": "This account can't push to the repository, so it can't approve workflows.",
+    "approveOpenOnForge": "Open on GitHub",
+    "approveWorkflows": "Approve workflows to run",
+    "approving": "Approving…",
+    "approveConfirmTitle": "Approve workflows to run?",
+    "approveConfirmBody": "{count} workflows will run this pull request's code (commit {sha}) on the repository's CI. Only approve after reviewing the changes.",
+    "approveDone": "Approved {count} workflows",
+    "approvePartial": "Some workflows could not be approved: {names}",
+    "approveNothingHeld": "No workflows are waiting for approval anymore.",
+    "mergeWorkflowsAwaiting": "Workflows are awaiting approval"
   },
   "Canvas": {
     "title": "Infinite Canvas",

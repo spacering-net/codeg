@@ -109,6 +109,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { BrowserLink } from "@/components/ui/browser-link"
+import { sourceItems } from "@/lib/forge-source-items"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -460,6 +461,10 @@ export function TaskDetailSheet({
   const mergeRequests = usesMergeRequests(task, folderRemote?.provider)
 
   const canEdit = task.status === "todo" || task.status === "failed"
+  /** The reply drafted for each thread, item order by number. */
+  const threadReplies = Object.entries(task.writeback_drafts ?? {})
+    .filter(([, text]) => text.trim().length > 0)
+    .sort(([a], [b]) => Number(a) - Number(b))
 
   // The next-step panel's buttons — ONE list for every status, review
   // included, so the panel never changes shape from one status to the next.
@@ -930,6 +935,46 @@ export function TaskDetailSheet({
                 </section>
               ) : null}
 
+              {/* The reply drafted for the thread(s) the task came from,
+                  rendered the way the forge will render it. Read-only here:
+                  the acceptance dialogs are where it is edited, because
+                  accepting is what posts it. */}
+              {threadReplies.length > 0 ? (
+                <section className="flex flex-col gap-1.5">
+                  <h3 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+                    {t("detailThreadReply")}
+                  </h3>
+                  {isReview ? (
+                    <p className="text-xs text-muted-foreground">
+                      {task.source_meta?.writeback === true
+                        ? t("detailThreadReplyHint")
+                        : t("detailThreadReplyOffHint")}
+                    </p>
+                  ) : null}
+                  {threadReplies.map(([number, text]) => (
+                    <CollapsibleBlock
+                      key={number}
+                      maxPx={192}
+                      fadeClass="from-muted"
+                    >
+                      <div
+                        className={cn(
+                          "break-words rounded-xl bg-muted p-3 text-xs leading-relaxed",
+                          RESULT_MARKDOWN
+                        )}
+                      >
+                        {threadReplies.length > 1 ? (
+                          <p className="mb-1.5 font-mono text-muted-foreground">
+                            #{number}
+                          </p>
+                        ) : null}
+                        <MessageResponse>{text}</MessageResponse>
+                      </div>
+                    </CollapsibleBlock>
+                  ))}
+                </section>
+              ) : null}
+
               {/* Next-step panel — one shell for EVERY status, below the
                   result and above the details. Amber while the task waits on
                   the user's acceptance, neutral otherwise: the tone changes,
@@ -1195,6 +1240,29 @@ export function TaskDetailSheet({
                     unbroken across the box. nth-last-child(-n+2) is the dt/dd
                     of the final row, which drops its rule. */}
                 <dl className="grid grid-cols-[auto_1fr] overflow-hidden rounded-xl border border-border text-xs [&>*:nth-last-child(-n+2)]:border-b-0">
+                  {/* Where the task came from: its issue or change — every
+                      one of them, for a task made from several issues — each
+                      a way out to the forge. */}
+                  {task.source_meta ? (
+                    <InfoRow label={t("detailSource")}>
+                      <ul className="flex min-w-0 flex-col gap-0.5">
+                        {sourceItems(task.source_meta).map((item) => (
+                          <li key={item.number} className="min-w-0">
+                            <BrowserLink
+                              href={item.url}
+                              className="inline-flex max-w-full items-baseline gap-1.5 underline-offset-2 hover:underline"
+                              title={item.url}
+                            >
+                              <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
+                                #{item.number}
+                              </span>
+                              <span className="truncate">{item.title}</span>
+                            </BrowserLink>
+                          </li>
+                        ))}
+                      </ul>
+                    </InfoRow>
+                  ) : null}
                   {task.work_branch ? (
                     <InfoRow label={t("detailBranch")}>
                       <span className="inline-flex min-w-0 max-w-full items-center gap-1 font-mono text-[0.6875rem]">

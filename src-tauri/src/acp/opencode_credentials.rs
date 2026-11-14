@@ -1,9 +1,10 @@
 //! OpenCode 2 provider credentials, read and written through OpenCode itself.
 //!
 //! OpenCode 2 keeps provider credentials in the `credential` table of
-//! `opencode.db`. It reads `auth.json` exactly once, in the migration that
-//! upgrades a 1.x database (a fresh 2.x database never reads it), so writing
-//! that file no longer connects anything.
+//! `opencode.db`. It reads `auth.json` only when it creates the database: in
+//! the migration that upgrades a 1.x database and, since 2.2.7, when it starts
+//! a fresh one (`core/src/database/migration.ts`, `apply`). Writing that file
+//! later connects nothing.
 //!
 //! Its CLI cannot store an API key without a terminal (`auth login` asks for the
 //! key through an interactive prompt only), and the table is internal: the
@@ -20,8 +21,10 @@
 //! The helper runs with a session's launch environment and in an empty
 //! codeg-owned directory, so it opens the same database and global config a
 //! session does while no project's config can add providers to it. Before any
-//! integration call it asks for the default model, the readiness point
-//! OpenCode's CLI uses too: until the first plugin generation has loaded, an
+//! integration call it asks for the default model, which on 2.2.7 still waits
+//! up to 5 s for the plugins to load, though the integration list itself no
+//! longer waits and OpenCode's own CLI now polls the plugin list instead.
+//! Until the first plugin generation has loaded, an
 //! integration declared in the config is not known yet and connecting it
 //! answers 404.
 //!

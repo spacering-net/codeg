@@ -713,7 +713,9 @@ pub enum AcpEvent {
         /// Stable machine-readable identifier: `"resource_not_found"` for
         /// JSON-RPC -32002, `"session_busy"` for codex-acp's typed
         /// `data.reason: "thread_active_writer"` (2.1.0+; matched on the wire
-        /// message before that), or `"session_unavailable"` /
+        /// message before that), `"provider_mismatch"` for codex 0.166's
+        /// refusal of a thread bound to another model provider (`message` is
+        /// then codex's own sentence), or `"session_unavailable"` /
         /// `"session_archived"` matched on the wire message. See
         /// `classify_session_load_error`.
         code: String,
@@ -766,6 +768,15 @@ pub enum AcpEvent {
         /// into `SessionState` to exempt the connection from both idle sweeps
         /// while work is pending.
         outstanding: u32,
+        /// The same tasks one by one, for the composer's "N running" list: a
+        /// count alone cannot say WHICH background sub-agents still run once
+        /// their launching turn has ended, and the launch cards cannot either
+        /// (a transcript can't tell a live task from one whose CLI died).
+        /// Every emission carries the producer's WHOLE current set, like
+        /// `outstanding` — state, not a delta — so an absent field means none.
+        /// `outstanding` stays its length, for older readers.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        outstanding_tasks: Vec<BackgroundOutstandingTask>,
         /// Tasks settled by `<task-notification>` records in this batch — the
         /// frontend raises one OS notification per entry.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -775,6 +786,27 @@ pub enum AcpEvent {
         /// `transcript_watermark` catches up (`>=`), closing the emit/refetch
         /// race without cross-namespace id dedup.
         watermark: u64,
+    },
+    /// A live progress tick for a background sub-agent whose launch card has
+    /// already left the live message: its launching turn ended (the usual case
+    /// — a background launch returns at once and the turn answers), or a later
+    /// turn is running. A `ToolCallUpdate` cannot reach that card, since the
+    /// frontend diverts out-of-turn wire updates and `SessionState` would
+    /// recreate a ghost live message for one. The frontend merges `meta` into
+    /// the launch card's own `meta` in memory, the way a settle rewrites its
+    /// lifecycle marker. Nothing is persisted: the tick is the only record.
+    ///
+    /// Grok only (`subagent_progress`): its background children report while
+    /// they run, and almost always after the parent's turn has ended.
+    BackgroundTaskProgress {
+        session_id: String,
+        /// The launching tool call — the card to update.
+        tool_use_id: String,
+        /// The sub-agent's own id.
+        task_id: String,
+        /// Keys to merge into the card's `meta` (for Grok,
+        /// `grokSubagentSession` + `grokSubagentProgress`).
+        meta: serde_json::Value,
     },
     /// A `delegate_to_agent` MCP tool call from the parent agent has spawned a
     /// child sub-session and the child's prompt is in flight. Emitted as soon
@@ -823,6 +855,17 @@ pub enum AcpEvent {
         assistant_id: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assistant_name: Option<String>,
+    },
+    /// A codeg delegation of this (parent) connection started (`running`) or
+    /// reached a terminal state. Lifecycle accounting only, so unlike
+    /// `DelegationStarted` / `DelegationCompleted` it is emitted for EVERY
+    /// broker delegation — including one whose parent tool call could not be
+    /// identified (a synthetic `delegation-*` id), which has no card to bind
+    /// but still dies with its parent (`cancel_by_parent`). The teardown gates
+    /// spare a parent while it has a delegated child running.
+    DelegationChildRunning {
+        child_connection_id: String,
+        running: bool,
     },
     /// A human submitted a prompt from the Codeg conversation UI (desktop or
     /// web). Synthetic, notification-only event: it mutates no `SessionState`
@@ -934,6 +977,54 @@ pub enum AcpEvent {
         stale: bool,
         kind: ConfigStaleKind,
     },
+}
+
+/// What kind of work a [`BackgroundOutstandingTask`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskKind {
+    /// A sub-agent running in the background (Claude Code's async `Agent`,
+    /// an OpenCode background `subagent`, a Grok background `spawn_subagent`).
+    Agent,
+    /// A background shell (Claude Code's `Bash(run_in_background)`). The AIR
+    /// async-task channel reports these too, with a stop; the frontend lists
+    /// them from there.
+    Shell,
+}
+
+impl BackgroundTaskKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Shell => "shell",
+        }
+    }
+}
+
+/// Cap on [`BackgroundOutstandingTask::description`]: a row title, not the
+/// prompt. Keeps every emission of the set — each one carries it whole —
+/// small whatever the agent wrote.
+pub const BACKGROUND_TASK_DESCRIPTION_MAX_CHARS: usize = 200;
+
+/// One launched-but-unresolved background task, as the producer of
+/// [`AcpEvent::BackgroundActivity`] accounts it: the Claude transcript
+/// watcher, or the OpenCode / Grok live state. Leaves the set when it settles
+/// (or, for the watcher, when its keep-alive expires).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundOutstandingTask {
+    /// The id its settle will carry (`BackgroundSettledInfo::task_id`).
+    pub task_id: String,
+    pub kind: BackgroundTaskKind,
+    /// The tool call that launched it, when known — the card the frontend
+    /// takes the row's title from. `None` for a task whose launch this
+    /// producer never saw (a Claude interim notification is the one case).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    /// The launch's own description of the task, the row's fallback title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// When the producer first saw it launched (or resumed), Unix ms.
+    pub started_at_ms: i64,
 }
 
 /// One background task settled by a `<task-notification>` transcript record,
@@ -1170,7 +1261,7 @@ pub fn attachment_names_from_prompt(blocks: &[PromptInputBlock]) -> Option<Strin
 /// or backslashes is wrapped in `<…>`. Without that a perfectly ordinary
 /// attachment — `file:///a/b (1).ts`, or a Windows `file:///C:\dir\x` — closed
 /// the link early and rendered as raw `[…](…)` source text.
-fn attachment_marker(label: &str, uri: &str) -> String {
+pub(crate) fn attachment_marker(label: &str, uri: &str) -> String {
     format!(
         "[{}]({})",
         escape_markdown_text(label),

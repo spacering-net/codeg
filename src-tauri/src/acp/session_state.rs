@@ -19,10 +19,10 @@ use crate::acp::feedback::{FeedbackItem, FeedbackStatus};
 use crate::acp::plan_approval::PendingPlanApprovalState;
 use crate::acp::question::PendingQuestionState;
 use crate::acp::types::{
-    AcpEvent, AsyncTaskRecord, AvailableCommandInfo, ConfigStaleKind, ConnectionStatus,
-    EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo, RemoteControlInfo,
-    SessionConfigOptionInfo, SessionFailureRecord, SessionModeStateInfo, ToolApprovalInfo,
-    ToolCallImageInfo,
+    AcpEvent, AsyncTaskRecord, AvailableCommandInfo, BackgroundOutstandingTask, ConfigStaleKind,
+    ConnectionStatus, EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo,
+    RemoteControlInfo, SessionConfigOptionInfo, SessionFailureRecord, SessionModeStateInfo,
+    ToolApprovalInfo, ToolCallImageInfo,
 };
 use crate::models::agent::AgentType;
 use crate::models::message::MessageRole;
@@ -329,6 +329,16 @@ pub struct SessionState {
     /// persisted DB row, not from here. See `ActiveDelegationState`.
     pub active_delegations: BTreeMap<String, ActiveDelegationState>,
 
+    /// Child connection ids of EVERY codeg delegation this connection has
+    /// running, from `DelegationChildRunning`. Lifecycle accounting, unlike
+    /// `active_delegations`, which only holds the ones bound to a card (a
+    /// delegation whose parent tool call couldn't be identified runs under a
+    /// synthetic id and never reaches it). The idle sweep spares a parent while
+    /// one of these is still a live connection, because ending the parent
+    /// cancels them (`cancel_by_parent`). On `to_snapshot()` too, so a client
+    /// that attaches mid-delegation holds the same gate.
+    pub delegated_children: BTreeSet<String>,
+
     /// Live user-feedback ("steering") notes for the current turn. Appended by
     /// `FeedbackSubmitted` (a user note while the agent works), flipped to
     /// `Delivered` by `FeedbackConsumed` (the agent read them via the
@@ -357,6 +367,10 @@ pub struct SessionState {
     /// dies with it). Carried on `to_snapshot()` so a client attaching
     /// mid-episode recovers the pending count without replaying events.
     pub background_outstanding: u32,
+    /// The same tasks one by one (`BackgroundActivity::outstanding_tasks`), so
+    /// a client attaching mid-episode can list WHICH background sub-agents
+    /// still run, not just how many. `apply_event` is the only writer.
+    pub background_outstanding_tasks: Vec<BackgroundOutstandingTask>,
     /// Instant of the most recent `BackgroundActivity` event. Bounds the sweep
     /// exemption: if the watcher stops reporting (task died, bug) the
     /// exemption lapses after `background_keepalive_max_age()` instead of
@@ -592,6 +606,16 @@ pub struct SessionState {
     /// Backend-only.
     pub antigravity_answered_interactions: BTreeSet<String>,
 
+    /// Whether the adapter on this connection is antigravity-acp, so that its
+    /// `interaction_<hex>` questions are bridged into the question card
+    /// (`connection.rs::try_bridge_antigravity_ask`). Always true for the
+    /// built-in Antigravity. A custom agent gets it at initialize only when
+    /// the RUNNING adapter reports `agentInfo.name == "antigravity-acp"` (a
+    /// second Antigravity account registered as a custom agent, say), because
+    /// the id prefix alone says nothing about who minted it
+    /// (`connection.rs::speaks_antigravity_interactions`). Backend-only.
+    pub antigravity_interactions: bool,
+
     /// Whether live-feedback notes for THIS session go over the native ACP
     /// `_session/steering` push channel instead of the `check_user_feedback`
     /// pull tool. Synthesized ONCE at initialize from three gates (extension
@@ -770,6 +794,14 @@ pub struct SessionState {
     /// attachment hydration so a steered note cannot ride into the next turn.
     pub turns_completed: u64,
 
+    /// Auto-preview work scheduled by `apply_event` for the files the running
+    /// turn's tool calls name (see `crate::agent_turn_files`). `apply_event`
+    /// runs under the session lock and never touches the filesystem; the
+    /// emitter (`emit_with_state_built`) drains this after applying and runs
+    /// the jobs on a blocking thread. Bounded: a caller that applies events
+    /// without draining (tests, side paths) cannot grow it.
+    pub(crate) turn_file_jobs: Vec<crate::agent_turn_files::TurnFileJob>,
+
     /// Whether the most recently completed turn ended via a stop reason other
     /// than `"end_turn"` (cancelled, refusal, max_tokens, max_turn_requests,
     /// empty, unknown — the same "abnormal ending" bucket `connection.rs`
@@ -916,9 +948,11 @@ impl SessionState {
             pending_plan_approval: None,
             ask_delegate: None,
             active_delegations: BTreeMap::new(),
+            delegated_children: BTreeSet::new(),
             feedback: Vec::new(),
             tool_approvals: Vec::new(),
             background_outstanding: 0,
+            background_outstanding_tasks: Vec::new(),
             background_activity_at: None,
             modes: None,
             current_mode: None,
@@ -952,6 +986,7 @@ impl SessionState {
             feedback_tool_available: false,
             result_tool_available: false,
             antigravity_answered_interactions: BTreeSet::new(),
+            antigravity_interactions: agent_type == AgentType::Antigravity,
             native_steering_available: false,
             codex_user_input_shape: None,
             agent_info: None,
@@ -969,6 +1004,7 @@ impl SessionState {
             turn_in_flight: false,
             agent_initiated_turn: false,
             turns_completed: 0,
+            turn_file_jobs: Vec::new(),
             last_turn_ended_abnormally: false,
             config_stale: false,
             config_stale_kind: None,
@@ -1038,6 +1074,154 @@ impl SessionState {
             self.reply_turns
                 .apply(payload, self.event_seq + 1, turn_open);
         }
+        let was_prompting = self.status == ConnectionStatus::Prompting;
+        // A tool call's status before this event, to spot the moment it settles.
+        let tool_call_before = match payload {
+            AcpEvent::ToolCall { tool_call_id, .. }
+            | AcpEvent::ToolCallUpdate { tool_call_id, .. } => Some(
+                self.active_tool_calls
+                    .get(tool_call_id)
+                    .map(|tc| tc.status.clone()),
+            ),
+            _ => None,
+        };
+        self.apply_event_inner(payload);
+        self.track_turn_files(payload, was_prompting, tool_call_before);
+    }
+
+    /// Keep `crate::agent_turn_files` in step with this connection: a turn
+    /// begins on the rise into `Prompting` and ends on the fall out of it (a
+    /// normal `TurnComplete` gets one final check; cancel, error and
+    /// disconnect just drop the record). Tool calls feed it the Office paths
+    /// they name, and each call that settles schedules a confirm.
+    fn track_turn_files(
+        &mut self,
+        payload: &AcpEvent,
+        was_prompting: bool,
+        tool_call_before: Option<Option<ToolCallStatus>>,
+    ) {
+        use crate::agent_turn_files as turn_files;
+        let is_prompting = self.status == ConnectionStatus::Prompting;
+        if !was_prompting && is_prompting {
+            turn_files::begin_turn(&self.connection_id, std::time::SystemTime::now());
+        }
+        if let Some(before) = &tool_call_before {
+            match payload {
+                AcpEvent::ToolCall {
+                    tool_call_id,
+                    title,
+                    raw_input,
+                    locations,
+                    ..
+                } => self.note_tool_call_files(
+                    tool_call_id,
+                    Some(title.as_str()),
+                    raw_input.as_deref(),
+                    locations.as_ref(),
+                    before.as_ref(),
+                ),
+                AcpEvent::ToolCallUpdate {
+                    tool_call_id,
+                    title,
+                    raw_input,
+                    locations,
+                    ..
+                } => self.note_tool_call_files(
+                    tool_call_id,
+                    title.as_deref(),
+                    raw_input.as_deref(),
+                    locations.as_ref(),
+                    before.as_ref(),
+                ),
+                _ => {}
+            }
+        }
+        if was_prompting && !is_prompting {
+            let normal = matches!(
+                payload,
+                AcpEvent::TurnComplete { stop_reason, .. }
+                    if matches!(stop_reason.as_str(), "end_turn" | "max_tokens" | "max_turn_requests")
+            );
+            if let Some(job) =
+                turn_files::end_turn(&self.connection_id, normal, std::time::SystemTime::now())
+            {
+                self.push_turn_file_job(job);
+            }
+        }
+    }
+
+    fn note_tool_call_files(
+        &mut self,
+        tool_call_id: &str,
+        title: Option<&str>,
+        raw_input: Option<&str>,
+        locations: Option<&serde_json::Value>,
+        before: Option<&ToolCallStatus>,
+    ) {
+        use crate::agent_turn_files::{self as turn_files, extract};
+        let Some(entry) = self.active_tool_calls.get(tool_call_id) else {
+            return;
+        };
+        let settled = |status: &ToolCallStatus| {
+            matches!(status, ToolCallStatus::Completed | ToolCallStatus::Failed)
+        };
+        let just_settled = settled(&entry.status) && !before.is_some_and(settled);
+        // Extract when this event brings a mention: new input that already
+        // parses, or a title/locations naming a path (taken as they arrive — a
+        // later update may replace them). Once more when the call settles —
+        // streamed input may only be complete then, and an extension can
+        // straddle two chunks, so that check runs on the assembled input. The
+        // cheap extension check skips the walk for the vast majority of calls.
+        let event_mentions = (entry.input.is_some()
+            && raw_input.is_some_and(extract::mentions_office_extension))
+            || title.is_some_and(extract::mentions_office_extension)
+            || locations.is_some_and(|l| extract::mentions_office_extension(&l.to_string()));
+        let assembled = just_settled.then(|| entry.raw_input_chunks.concat());
+        let settled_mentions = assembled.as_deref().is_some_and(|joined| {
+            extract::mentions_office_extension(joined)
+                || extract::mentions_office_extension(&entry.label)
+                || entry
+                    .locations
+                    .as_ref()
+                    .is_some_and(|l| extract::mentions_office_extension(&l.to_string()))
+        });
+        if event_mentions || settled_mentions {
+            let unparsed;
+            let input = match (&entry.input, assembled) {
+                (Some(value), _) => Some(value),
+                (None, Some(joined)) if !joined.is_empty() => {
+                    unparsed = serde_json::Value::String(joined);
+                    Some(&unparsed)
+                }
+                _ => None,
+            };
+            let home = dirs::home_dir();
+            let paths = extract::extract_tool_call_paths(
+                input,
+                Some(entry.label.as_str()).filter(|l| !l.is_empty()),
+                entry.locations.as_ref(),
+                self.working_dir.as_deref(),
+                home.as_deref(),
+            );
+            turn_files::mention(&self.connection_id, paths);
+        }
+        if just_settled {
+            if let Some(job) = turn_files::confirm_job(&self.connection_id) {
+                self.push_turn_file_job(job);
+            }
+        }
+    }
+
+    fn push_turn_file_job(&mut self, job: crate::agent_turn_files::TurnFileJob) {
+        // Only reached by callers that never drain (see the field doc).
+        const MAX_PENDING_TURN_FILE_JOBS: usize = 64;
+        if self.turn_file_jobs.len() >= MAX_PENDING_TURN_FILE_JOBS {
+            self.turn_file_jobs.remove(0);
+        }
+        self.turn_file_jobs.push(job);
+    }
+
+    fn apply_event_inner(&mut self, payload: &AcpEvent) {
         match payload {
             AcpEvent::SessionStarted { session_id } => {
                 if self.external_id.as_deref() != Some(session_id.as_str()) {
@@ -1626,6 +1810,16 @@ impl SessionState {
                     },
                 );
             }
+            AcpEvent::DelegationChildRunning {
+                child_connection_id,
+                running,
+            } => {
+                if *running {
+                    self.delegated_children.insert(child_connection_id.clone());
+                } else {
+                    self.delegated_children.remove(child_connection_id);
+                }
+            }
             AcpEvent::DelegationCompleted {
                 parent_tool_use_id, ..
             } => {
@@ -1694,13 +1888,24 @@ impl SessionState {
                     }
                 }
             }
-            AcpEvent::BackgroundActivity { outstanding, .. } => {
+            AcpEvent::BackgroundActivity {
+                outstanding,
+                outstanding_tasks,
+                ..
+            } => {
                 // Mirror the watcher's authoritative accounting so the idle
                 // sweeps can exempt this connection while background work is
                 // pending. The turns/settled payloads are frontend-only; the
                 // trailing `last_activity_at = now` below additionally resets
                 // the backend idle timer on every batch of transcript activity.
                 self.background_outstanding = *outstanding;
+                self.background_outstanding_tasks = outstanding_tasks.clone();
+                self.background_activity_at = Some(Utc::now());
+            }
+            AcpEvent::BackgroundTaskProgress { .. } => {
+                // The card patch is frontend-only. The tick itself is the agent
+                // saying a background child is alive right now, so it refreshes
+                // the keep-alive clock the outstanding count is bounded by.
                 self.background_activity_at = Some(Utc::now());
             }
             AcpEvent::SessionFailure { record } => {
@@ -2469,9 +2674,11 @@ impl SessionState {
             ask_delegate: self.ask_delegate,
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
+            delegated_children: self.delegated_children.iter().cloned().collect(),
             feedback: self.feedback.clone(),
             tool_approvals: self.tool_approvals.clone(),
             background_outstanding: self.background_outstanding,
+            background_outstanding_tasks: self.background_outstanding_tasks.clone(),
             feedback_tool_available: self.feedback_tool_available,
             native_steering_available: self.native_steering_available,
             modes: self.modes.clone(),
@@ -2587,6 +2794,12 @@ pub struct LiveSessionSnapshot {
     /// doesn't bloat every snapshot with an empty array.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_delegations: Vec<ActiveDelegationState>,
+    /// Every running delegation's child connection id (see
+    /// `SessionState.delegated_children`), so a client attaching mid-delegation
+    /// keeps the parent alive like one that saw it start. Absent when empty and
+    /// on older servers, like `active_delegations`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegated_children: Vec<String>,
     /// Live user-feedback notes for the current turn (see `SessionState.feedback`).
     /// `#[serde(default)]` so older server payloads without this field still
     /// deserialize; `skip_serializing_if` keeps the common empty case off the
@@ -2607,6 +2820,10 @@ pub struct LiveSessionSnapshot {
     /// common no-background case keeps the wire shape byte-identical.
     #[serde(default, skip_serializing_if = "u32_is_zero")]
     pub background_outstanding: u32,
+    /// Those tasks one by one (see `SessionState.background_outstanding_tasks`).
+    /// Same `default` / skip-when-empty treatment as the count.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_outstanding_tasks: Vec<BackgroundOutstandingTask>,
     /// Whether this agent has the `check_user_feedback` tool (see
     /// `SessionState.feedback_tool_available`). `#[serde(default)]` so older
     /// payloads deserialize to `false`; the frontend gates the feedback bar on
@@ -3426,14 +3643,30 @@ mod tests {
         let mut s = fresh_state();
         assert!(!s.has_active_background_work(Utc::now()));
 
+        let agent = crate::acp::types::BackgroundOutstandingTask {
+            task_id: "a1".into(),
+            kind: crate::acp::types::BackgroundTaskKind::Agent,
+            tool_use_id: Some("toolu_1".into()),
+            description: Some("Run the build".into()),
+            started_at_ms: 1_000,
+        };
+        let shell = crate::acp::types::BackgroundOutstandingTask {
+            task_id: "b1".into(),
+            kind: crate::acp::types::BackgroundTaskKind::Shell,
+            tool_use_id: None,
+            description: None,
+            started_at_ms: 2_000,
+        };
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding: 2,
+            outstanding_tasks: vec![agent.clone(), shell],
             settled: vec![],
             watermark: 42,
         });
         assert_eq!(s.background_outstanding, 2);
+        assert_eq!(s.background_outstanding_tasks.len(), 2);
         let now = Utc::now();
         assert!(s.has_active_background_work(now));
 
@@ -3442,15 +3675,28 @@ mod tests {
         let long_after = now + background_keepalive_max_age() + chrono::Duration::seconds(1);
         assert!(!s.has_active_background_work(long_after));
 
-        // Settled back to zero: no exemption regardless of recency.
+        // Each event is the whole set: one that lists less REPLACES it.
+        s.apply_event(&AcpEvent::BackgroundActivity {
+            session_id: "sid".into(),
+            turns: vec![],
+            outstanding: 1,
+            outstanding_tasks: vec![agent.clone()],
+            settled: vec![],
+            watermark: 43,
+        });
+        assert_eq!(s.background_outstanding_tasks, vec![agent]);
+
+        // Settled back to zero: no exemption regardless of recency, no rows.
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding: 0,
+            outstanding_tasks: vec![],
             settled: vec![],
-            watermark: 43,
+            watermark: 44,
         });
         assert!(!s.has_active_background_work(Utc::now()));
+        assert!(s.background_outstanding_tasks.is_empty());
     }
 
     #[test]
@@ -3459,22 +3705,42 @@ mod tests {
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
-            outstanding: 3,
+            outstanding: 1,
+            outstanding_tasks: vec![crate::acp::types::BackgroundOutstandingTask {
+                task_id: "a1".into(),
+                kind: crate::acp::types::BackgroundTaskKind::Agent,
+                tool_use_id: Some("toolu_1".into()),
+                description: None,
+                started_at_ms: 1_000,
+            }],
             settled: vec![],
             watermark: 0,
         });
-        assert_eq!(s.to_snapshot().background_outstanding, 3);
+        assert_eq!(s.to_snapshot().background_outstanding, 1);
         let json = serde_json::to_value(s.to_snapshot()).unwrap();
         assert_eq!(
             json.get("background_outstanding").and_then(|v| v.as_u64()),
-            Some(3)
+            Some(1)
         );
+        assert_eq!(
+            json.get("background_outstanding_tasks"),
+            Some(&serde_json::json!([{
+                "task_id": "a1",
+                "kind": "agent",
+                "tool_use_id": "toolu_1",
+                "started_at_ms": 1000,
+            }]))
+        );
+        // And back: a client hydrating from it gets the rows whole.
+        let back: LiveSessionSnapshot = serde_json::from_value(json).unwrap();
+        assert_eq!(back.background_outstanding_tasks, s.background_outstanding_tasks);
 
         // Zero is skipped so the common no-background snapshot stays
         // byte-identical with the pre-feature wire shape.
         let zero = fresh_state();
         let json = serde_json::to_value(zero.to_snapshot()).unwrap();
         assert!(json.get("background_outstanding").is_none());
+        assert!(json.get("background_outstanding_tasks").is_none());
     }
 
     #[test]
@@ -4888,6 +5154,45 @@ mod tests {
         assert_eq!(back.active_delegations.len(), 1);
         assert_eq!(back.active_delegations[0].parent_tool_use_id, "pt-1");
         assert_eq!(back.active_delegations[0].child_conversation_id, 99);
+    }
+
+    /// Lifecycle accounting for every delegation, card or not: running children
+    /// are tracked by connection id, outlive the parent's turn, reach the
+    /// snapshot, and a replayed frame changes nothing.
+    #[test]
+    fn delegated_children_track_every_running_delegation() {
+        let running = |child: &str, running: bool| AcpEvent::DelegationChildRunning {
+            child_connection_id: child.into(),
+            running,
+        };
+        let mut s = fresh_state();
+        s.apply_event(&running("child-a", true));
+        s.apply_event(&running("child-b", true));
+        s.apply_event(&running("child-a", true));
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        assert_eq!(
+            s.delegated_children.iter().collect::<Vec<_>>(),
+            vec!["child-a", "child-b"]
+        );
+        assert!(s.active_delegations.is_empty(), "neither has a card");
+
+        let json = serde_json::to_string(&s.to_snapshot()).unwrap();
+        let back: LiveSessionSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.delegated_children, vec!["child-a", "child-b"]);
+
+        s.apply_event(&running("child-a", false));
+        s.apply_event(&running("child-a", false));
+        s.apply_event(&running("child-b", false));
+        assert!(s.delegated_children.is_empty());
+        let json = serde_json::to_string(&s.to_snapshot()).unwrap();
+        assert!(
+            !json.contains("delegated_children"),
+            "kept off the wire when empty"
+        );
     }
 
     #[test]

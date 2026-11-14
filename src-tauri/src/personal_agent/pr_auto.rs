@@ -1509,10 +1509,13 @@ impl PersonalAgentEngine {
             // Nothing is posted on the pull request about the task: the
             // push is what the pull request hears.
             writeback: Some(false),
+            items: Vec::new(),
+            pr_closes: None,
         };
         Ok(crate::models::WorkTaskSource {
             kind: crate::forge::SOURCE_KIND_PR.to_string(),
             key,
+            extra_keys: Vec::new(),
             meta: serde_json::to_value(&meta).map_err(|e| e.to_string())?,
         })
     }

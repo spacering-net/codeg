@@ -40,59 +40,6 @@
   </tr>
 </table>
 
-## 💖 スポンサー
-
-<table>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg" target="_blank"><img src="../images/compshare.png" alt="Compshare" width="160" /></a><br/>
-      <strong><a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg">Compshare（UCloud）</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった Compshare に感謝します！Compshare は UCloud 傘下の AI クラウドプラットフォームで、月額制・従量制のコストパフォーマンスに優れた国内モデル agent Plan プランを提供しており、月額 49 元から利用可能です。安定した公式リダイレクトによる海外モデルへのアクセスも提供しています。Claude Code、Codex、API 連携に対応。企業向けの高並列対応、7×24 テクニカルサポート、セルフ請求書発行をサポートしています。<a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg">こちらのリンク</a>から登録された方には、5 元分の無料プラットフォームクレジットが進呈されます！</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://hezu.ink/sign-up?aff=0wVz" target="_blank"><img src="../images/hezu-ink.jpg" alt="合租巴士" width="200" /></a><br/>
-      <strong><a href="https://hezu.ink/sign-up?aff=0wVz">合租巴士</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった合租巴士に感謝します！合租巴士は、Codex や Claude Code などの主流モデルに高い安定性の中継機能を提供する、信頼性が高く効率的な AI 中継サービスプラットフォームです。チャージ比率は透明（1:1）で、Codex のレート補助は 0.08 から利用可能です。<a href="https://hezu.ink/sign-up?aff=0wVz">公式サイトからグループに参加すると $5 分の体験クレジットがもらえます</a>。</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://go.apimart.ai/gh-codeg" target="_blank"><img src="../images/apimart-ai.png" alt="APIMart" width="200" /></a><br/>
-      <strong><a href="https://go.apimart.ai/gh-codeg">APIMart</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった APIMart に感謝します！APIMart は AI 画像・動画生成に特化した低価格 API プラットフォームです。GPT-Image-2 は 1 枚 $0.006 から、1 ドルで 160 枚以上を生成できます。画像も動画も 1 つの非同期 API でカバー：タスクを送信して ID を受け取り、ポーリングまたはコールバックで結果を取得します。数万枚のバッチ処理でもタイムアウトせず、モデルを切り替えてもコードの変更は不要です。従量課金で月額費用は不要——<a href="https://go.apimart.ai/gh-codeg">こちらから登録</a>すればすぐに使い始められます。</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg" target="_blank"><img src="../images/astraflow.png" alt="UCloud ·星图AstraFlow" width="120" /></a><br/>
-      <strong><a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a></strong>
-    </td>
-    <td>
-      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a><br/>
-      UCloud の星図 AstraFlow 大規模モデルプラットフォームは、200 以上のモデルをワンクリックで呼び出せます。Kimi K3、DeepSeek V4/V3、Qwen 3、GLM5.2、happyhorse など世界トップクラスのオープンソース大規模モデルを内蔵しており、自前の学習は不要、すぐに使い始められます。<br/>
-      上のリンクから<strong>メールアドレス</strong>で登録し、実名認証を完了すると<a href="https://f.howxm.com/xs/u/HVFW5X8EIYV1">50 元分の計算リソースクレジットを受け取れます</a>。
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG" target="_blank"><img src="../images/sidrune-ai.png" alt="Sidrune AI" width="200" /></a><br/>
-      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">Sidrune AI</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった Sidrune AI に感謝します！Sidrune AI は、ひとつの API で GPT、Claude をはじめとする主要な AI モデルへのアクセスを提供します。新規ユーザーは<a href="https://fluxionai.space/register?source=github&campaign=github-sidrune-codeg&promo=SDRCODEG">専用リンク</a>からプロモーションコード <code>SDRCODEG</code> で登録すると $3 分の API クレジットを受け取れます。</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA" target="_blank"><img src="../images/beeapi.jpg" alt="BeeAPI" width="200" /></a><br/>
-      <strong><a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a> に感謝します！BeeAPI は、マルチモデル対応の AI API 中継・集約プラットフォームです。複数のサービスプロバイダーと主要な AI モデルを集約し、事業者間の価格比較、グループ単位のスマートルーティング、統一された API 接続と課金に対応しており、より柔軟・安定・低コストに AI サービスを呼び出せます。</td>
-  </tr>
-</table>
-
-> Codeg のスポンサーになりませんか？[メールでお問い合わせください。](mailto:itpkcn@gmail.com)
-
 ## ✨ 機能
 
 <table>

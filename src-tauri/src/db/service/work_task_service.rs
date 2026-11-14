@@ -27,7 +27,10 @@ use sea_orm::{
 };
 
 use crate::db::entities::work_task::WorkTaskStatus;
-use crate::db::entities::{folder, work_task, work_task_event, work_task_settings, work_task_template};
+use crate::db::entities::{
+    folder, work_task, work_task_event, work_task_settings, work_task_source_key,
+    work_task_template,
+};
 use crate::db::error::DbError;
 use crate::models::{
     WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
@@ -105,6 +108,10 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
         personal_agent_dispatch_id: m.personal_agent_dispatch_id,
+        writeback_drafts: m
+            .writeback_drafts
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok()),
         latest_progress: None,
         compacting: false,
         created_at: m.created_at,
@@ -604,7 +611,10 @@ pub async fn create_on_pull_for_personal_agent(
     .await?;
     if let Some(existing) = other_active_with_same_source(&txn, row.id, &source.key).await? {
         txn.rollback().await?;
-        return Ok(ForgeCreateOutcome::Duplicate(to_info(existing)));
+        return Ok(ForgeCreateOutcome::Duplicate(vec![SourceConflict {
+            key: source.key.clone(),
+            existing: to_info(existing),
+        }]));
     }
     record_event(
         &txn,
@@ -623,16 +633,28 @@ pub async fn create_on_pull_for_personal_agent(
     )
     .await?;
     txn.commit().await?;
-    Ok(ForgeCreateOutcome::Created(to_info(row)))
+    Ok(ForgeCreateOutcome::Created(Box::new(to_info(row))))
 }
 
 /// Outcome of a forge-triggered create: either the new task, or the ACTIVE
-/// task that already handles the same source_key (dedup hit, not an error —
-/// the UI offers "view it" / "create anyway").
+/// tasks that already handle its items (dedup hit, not an error — the UI
+/// offers "view it" / "create anyway").
 #[derive(Debug)]
 pub enum ForgeCreateOutcome {
-    Created(WorkTaskInfo),
-    Duplicate(WorkTaskInfo),
+    /// Boxed: the row dwarfs the conflict list beside it.
+    Created(Box<WorkTaskInfo>),
+    /// Every item of the new task that a live task already handles, in the
+    /// new task's own order, each with the newest such task. Never empty; a
+    /// task triggered from one item has exactly one entry.
+    Duplicate(Vec<SourceConflict>),
+}
+
+/// One item of a task being created that ANOTHER live task already handles.
+#[derive(Debug)]
+pub struct SourceConflict {
+    /// The item's canonical source key.
+    pub key: String,
+    pub existing: WorkTaskInfo,
 }
 
 /// Create a forge-triggered task. This is the ONLY path that writes the
@@ -698,11 +720,19 @@ pub async fn create_from_forge_by(
     let row =
         insert_todo_row(&txn, &draft, config_str, max_order, now, Some(&source), None).await?;
     if !force {
-        if let Some(existing) =
-            other_active_with_same_source(&txn, row.id, &source.key).await?
-        {
+        let keys: Vec<String> = source.keys().cloned().collect();
+        let conflicts = other_active_for_keys(&txn, row.id, &keys).await?;
+        if !conflicts.is_empty() {
             txn.rollback().await?;
-            return Ok(ForgeCreateOutcome::Duplicate(to_info(existing)));
+            return Ok(ForgeCreateOutcome::Duplicate(
+                conflicts
+                    .into_iter()
+                    .map(|(key, existing)| SourceConflict {
+                        key,
+                        existing: to_info(existing),
+                    })
+                    .collect(),
+            ));
         }
     }
     let (actor, created_payload) = match auto_trigger {
@@ -710,16 +740,15 @@ pub async fn create_from_forge_by(
         Some(trigger) => ("auto", Some(serde_json::json!({ "auto": trigger }))),
     };
     record_event(&txn, row.id, "created", actor, created_payload).await?;
-    record_event(
-        &txn,
-        row.id,
-        "forge_linked",
-        actor,
-        Some(serde_json::json!({ "source_key": source.key, "kind": source.kind })),
-    )
-    .await?;
+    // `source_key` is the lead item, as it always was; a task made from
+    // several items names all of them besides.
+    let mut linked = serde_json::json!({ "source_key": source.key, "kind": source.kind });
+    if !source.extra_keys.is_empty() {
+        linked["source_keys"] = serde_json::json!(source.keys().collect::<Vec<_>>());
+    }
+    record_event(&txn, row.id, "forge_linked", actor, Some(linked)).await?;
     txn.commit().await?;
-    Ok(ForgeCreateOutcome::Created(to_info(row)))
+    Ok(ForgeCreateOutcome::Created(Box::new(to_info(row))))
 }
 
 /// Which of `keys` have EVER had a task — any status, archived and deleted
@@ -737,19 +766,25 @@ pub async fn source_keys_ever_tasked(
 ) -> Result<std::collections::HashSet<String>, DbError> {
     let mut found = std::collections::HashSet::new();
     // Chunked so a scan of a busy repository cannot outgrow SQLite's
-    // bound-parameter limit in one `IN (…)`.
-    for chunk in keys.chunks(500) {
-        let rows: Vec<Option<String>> = work_task::Entity::find()
+    // bound-parameter limit in one `IN (…)`. Straight off the item rows, which
+    // outlive their task's soft delete — every item of a task made from
+    // several issues counts, not only the one its row names.
+    for chunk in keys.chunks(KEY_CHUNK) {
+        let rows: Vec<String> = work_task_source_key::Entity::find()
             .select_only()
-            .column(work_task::Column::SourceKey)
-            .filter(work_task::Column::SourceKey.is_in(chunk.iter().cloned()))
+            .column(work_task_source_key::Column::SourceKey)
+            .filter(work_task_source_key::Column::SourceKey.is_in(chunk.iter().cloned()))
             .into_tuple()
             .all(conn)
             .await?;
-        found.extend(rows.into_iter().flatten());
+        found.extend(rows);
     }
     Ok(found)
 }
+
+/// How many keys one `IN (…)` carries — far below SQLite's bound-parameter
+/// limit, whatever a caller hands in.
+const KEY_CHUNK: usize = 500;
 
 /// Every non-terminal status — the single definition of "active" shared by
 /// the create dedup and the resurrection guards, so the two can never drift.
@@ -772,28 +807,121 @@ fn duplicate_active_source_error(other: &work_task::Model) -> DbError {
     ))
 }
 
-/// Resurrection guard: does ANOTHER active task share this task's source_key?
-/// Called (inside the claiming/requeue transaction) before a failed/canceled
-/// forge task returns to the active set — without it, "trigger a replacement,
-/// then requeue the old card" silently ends with two live tasks on one issue.
+/// Does ANOTHER active task handle this work item? The newest one if so.
 pub async fn other_active_with_same_source<C: ConnectionTrait>(
     conn: &C,
     task_id: i32,
     source_key: &str,
 ) -> Result<Option<work_task::Model>, DbError> {
-    Ok(work_task::Entity::find()
-        .filter(work_task::Column::SourceKey.eq(source_key))
-        .filter(work_task::Column::Id.ne(task_id))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .filter(work_task::Column::Status.is_in(ACTIVE_STATUSES))
-        .order_by_desc(work_task::Column::CreatedAt)
-        .one(conn)
+    Ok(other_active_for_keys(conn, task_id, &[source_key.to_string()])
+        .await?
+        .into_iter()
+        .next()
+        .map(|(_, task)| task))
+}
+
+/// For each of `keys` that ANOTHER active task (not `task_id`, not deleted)
+/// handles, that key with the newest such task — in the order `keys` came
+/// in, which for a task's own items is its own order.
+///
+/// The dedup of a create and the resurrection guards of a retry or requeue
+/// both ask this, inside their writing transaction. Read from the item rows,
+/// so an item a combined task handles is guarded like the one its row names.
+pub async fn other_active_for_keys<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+    keys: &[String],
+) -> Result<Vec<(String, work_task::Model)>, DbError> {
+    let mut newest: std::collections::HashMap<String, work_task::Model> =
+        std::collections::HashMap::new();
+    for chunk in keys.chunks(KEY_CHUNK) {
+        let rows = work_task_source_key::Entity::find()
+            .filter(work_task_source_key::Column::SourceKey.is_in(chunk.iter().cloned()))
+            .filter(work_task_source_key::Column::TaskId.ne(task_id))
+            .find_also_related(work_task::Entity)
+            .filter(work_task::Column::DeletedAt.is_null())
+            .filter(work_task::Column::Status.is_in(ACTIVE_STATUSES))
+            .order_by_desc(work_task::Column::CreatedAt)
+            .order_by_desc(work_task::Column::Id)
+            .all(conn)
+            .await?;
+        for (item, task) in rows {
+            if let Some(task) = task {
+                newest.entry(item.source_key).or_insert(task);
+            }
+        }
+    }
+    Ok(keys
+        .iter()
+        .filter_map(|key| newest.remove(key).map(|task| (key.clone(), task)))
+        .collect())
+}
+
+/// The items a task handles, lead first.
+pub async fn task_source_keys<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+) -> Result<Vec<String>, DbError> {
+    Ok(work_task_source_key::Entity::find()
+        .select_only()
+        .column(work_task_source_key::Column::SourceKey)
+        .filter(work_task_source_key::Column::TaskId.eq(task_id))
+        .order_by_asc(work_task_source_key::Column::Position)
+        .order_by_asc(work_task_source_key::Column::Id)
+        .into_tuple()
+        .all(conn)
         .await?)
+}
+
+/// The items of each of `task_ids`, lead first — what the reverse lookup
+/// says about a task made from several issues besides its status.
+pub async fn source_keys_of_tasks(
+    conn: &DatabaseConnection,
+    task_ids: &[i32],
+) -> Result<std::collections::HashMap<i32, Vec<String>>, DbError> {
+    let mut out: std::collections::HashMap<i32, Vec<String>> = std::collections::HashMap::new();
+    for chunk in task_ids.chunks(KEY_CHUNK) {
+        let rows = work_task_source_key::Entity::find()
+            .filter(work_task_source_key::Column::TaskId.is_in(chunk.iter().copied()))
+            .order_by_asc(work_task_source_key::Column::TaskId)
+            .order_by_asc(work_task_source_key::Column::Position)
+            .order_by_asc(work_task_source_key::Column::Id)
+            .all(conn)
+            .await?;
+        for row in rows {
+            out.entry(row.task_id).or_default().push(row.source_key);
+        }
+    }
+    Ok(out)
+}
+
+/// Resurrection guard: does ANOTHER active task handle one of this task's
+/// items? Called (inside the claiming/requeue transaction) before a
+/// failed/canceled forge task returns to the active set — without it,
+/// "trigger a replacement, then requeue the old card" silently ends with two
+/// live tasks on one issue. Every item counts: a combined task coming back
+/// while one of its issues has moved on to a task of its own is the same
+/// collision.
+async fn other_active_for_task<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+) -> Result<Option<work_task::Model>, DbError> {
+    let keys = task_source_keys(conn, task_id).await?;
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    Ok(other_active_for_keys(conn, task_id, &keys)
+        .await?
+        .into_iter()
+        .next()
+        .map(|(_, task)| task))
 }
 
 /// Latest task row (any state, newest `created_at` per key) for each of the
 /// given source keys — the workbench's reverse lookup for its visible rows.
-/// One indexed query; missing keys simply have no entry.
+/// One indexed query over the item rows; missing keys simply have no entry.
+/// The key handed back is the ITEM's, so every issue of a combined task maps
+/// to that task, not only the one its row names.
 pub async fn lookup_latest_by_source_keys(
     conn: &DatabaseConnection,
     keys: &[String],
@@ -801,21 +929,25 @@ pub async fn lookup_latest_by_source_keys(
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let rows = work_task::Entity::find()
-        .filter(work_task::Column::SourceKey.is_in(keys.iter().cloned()))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .order_by_desc(work_task::Column::CreatedAt)
-        .order_by_desc(work_task::Column::Id)
-        .all(conn)
-        .await?;
     let mut seen = std::collections::HashSet::new();
-    Ok(rows
-        .into_iter()
-        .filter_map(|m| {
-            let key = m.source_key.clone()?;
-            seen.insert(key.clone()).then_some((key, m))
-        })
-        .collect())
+    let mut out = Vec::new();
+    for chunk in keys.chunks(KEY_CHUNK) {
+        let rows = work_task_source_key::Entity::find()
+            .filter(work_task_source_key::Column::SourceKey.is_in(chunk.iter().cloned()))
+            .find_also_related(work_task::Entity)
+            .filter(work_task::Column::DeletedAt.is_null())
+            .order_by_desc(work_task::Column::CreatedAt)
+            .order_by_desc(work_task::Column::Id)
+            .all(conn)
+            .await?;
+        for (item, task) in rows {
+            let Some(task) = task else { continue };
+            if seen.insert(item.source_key.clone()) {
+                out.push((item.source_key, task));
+            }
+        }
+    }
+    Ok(out)
 }
 
 async fn insert_todo_row<C: ConnectionTrait>(
@@ -868,6 +1000,7 @@ async fn insert_todo_row<C: ConnectionTrait>(
         source_meta: Set(source_meta),
         delivery: Set(None),
         personal_agent_dispatch_id: Set(dispatch_id),
+        writeback_drafts: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
         started_at: Set(None),
@@ -875,7 +1008,23 @@ async fn insert_todo_row<C: ConnectionTrait>(
         finished_at: Set(None),
         deleted_at: Set(None),
     };
-    Ok(active.insert(txn).await?)
+    let row = active.insert(txn).await?;
+    // The task's items, in the same transaction as the row that carries them
+    // — the one record every "which tasks handle item X" question reads.
+    if let Some(source) = source {
+        let items = source
+            .keys()
+            .enumerate()
+            .map(|(position, key)| work_task_source_key::ActiveModel {
+                id: NotSet,
+                task_id: Set(row.id),
+                source_key: Set(key.clone()),
+                position: Set(position as i32),
+            })
+            .collect::<Vec<_>>();
+        work_task_source_key::Entity::insert_many(items).exec(txn).await?;
+    }
+    Ok(row)
 }
 
 /// Edit title/config. Only meaningful outside an active run: allowed in
@@ -1093,6 +1242,10 @@ async fn claim_inner(
         // A fresh generation invalidates the previous run's self-reported
         // verdict (result_summary stays visible until the next settle).
         .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
+        // …and the thread replies it drafted: a reply describes the run it
+        // came from, and posting one written before a send-back would tell the
+        // thread about work the next run may have undone.
+        .col_expr(work_task::Column::WritebackDrafts, Expr::value(None::<String>))
         // A user-driven claim supersedes any auto-remerge intent and stale
         // preflight light, resurrects an archived terminal task, picks a
         // deferred one back up (this run IS the "later"), and consumes the
@@ -1138,11 +1291,9 @@ async fn claim_inner(
     if matches!(from, WorkTaskStatus::Failed | WorkTaskStatus::Canceled)
         && !allow_duplicate_source
     {
-        if let Some(key) = claimed.source_key.as_deref() {
-            if let Some(other) = other_active_with_same_source(&txn, id, key).await? {
-                txn.rollback().await?;
-                return Err(duplicate_active_source_error(&other));
-            }
+        if let Some(other) = other_active_for_task(&txn, id).await? {
+            txn.rollback().await?;
+            return Err(duplicate_active_source_error(&other));
         }
     }
     let run_seq = claimed.run_seq;
@@ -1243,6 +1394,7 @@ pub async fn auto_claim_next(
             // carried in from an older run (review → cancel → requeue → todo)
             // would decide an outcome it knows nothing about.
             .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
+            .col_expr(work_task::Column::WritebackDrafts, Expr::value(None::<String>))
             .col_expr(work_task::Column::FinishedAt, Expr::value(None::<chrono::DateTime<Utc>>))
             .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
             .filter(work_task::Column::Id.eq(head.id))
@@ -1374,6 +1526,7 @@ pub async fn claim_due_scheduled(
             // Same reason as every other claim: the settle path treats a
             // present `verdict` as this generation's self-report.
             .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
+            .col_expr(work_task::Column::WritebackDrafts, Expr::value(None::<String>))
             .col_expr(
                 work_task::Column::FinishedAt,
                 Expr::value(None::<chrono::DateTime<Utc>>),
@@ -1460,15 +1613,9 @@ pub async fn requeue_canceled(
     // Same resurrection guard as `claim_inner` — canceled → todo is the other
     // road back into the active set.
     if !allow_duplicate_source {
-        let row = work_task::Entity::find_by_id(id)
-            .one(&txn)
-            .await?
-            .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
-        if let Some(key) = row.source_key.as_deref() {
-            if let Some(other) = other_active_with_same_source(&txn, id, key).await? {
-                txn.rollback().await?;
-                return Err(duplicate_active_source_error(&other));
-            }
+        if let Some(other) = other_active_for_task(&txn, id).await? {
+            txn.rollback().await?;
+            return Err(duplicate_active_source_error(&other));
         }
     }
     // An attachment is an instruction on its own: a screenshot with no sentence
@@ -1835,9 +1982,31 @@ pub async fn set_verdict(
     verdict: &str,
     summary: Option<&str>,
 ) -> Result<bool, DbError> {
+    set_verdict_with_drafts(conn, id, run_seq, verdict, summary, None).await
+}
+
+/// [`set_verdict`], also recording the thread replies the agent drafted
+/// (`writeback_drafts`, already sanitized and serialized by the caller) in the
+/// same CAS. `None` leaves whatever an earlier report of this run recorded:
+/// a second `task_complete` without replies must not wipe the first one's.
+pub async fn set_verdict_with_drafts(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    verdict: &str,
+    summary: Option<&str>,
+    writeback_drafts: Option<&str>,
+) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many();
+    if let Some(drafts) = writeback_drafts {
+        update = update.col_expr(
+            work_task::Column::WritebackDrafts,
+            Expr::value(Some(drafts.to_string())),
+        );
+    }
+    let res = update
         .col_expr(
             work_task::Column::Verdict,
             Expr::value(Some(verdict.to_string())),
@@ -1870,6 +2039,63 @@ pub async fn set_verdict(
     .await?;
     txn.commit().await?;
     Ok(true)
+}
+
+/// The user's answer about the thread comment, given while accepting a
+/// forge-sourced task: whether it is posted (`source_meta.writeback`, the
+/// trigger dialog's switch, overwritten) and the reply text to post with it
+/// (`writeback_drafts`, replaced — `None` clears it).
+///
+/// Only while the task sits in review in generation `expect_run_seq` — the
+/// one whose reply the user was shown — and bound to the snapshot this read:
+/// the CAS covers status, `run_seq` AND the `source_meta` text, so neither a
+/// run claimed in between nor a delivery that pinned its closing list into the
+/// snapshot meanwhile can be overwritten with a stale copy, and a dialog left
+/// open across a send-back cannot sign off on a reply it never showed.
+/// `Ok(false)` = the task moved on (or is not forge-sourced); nothing was
+/// written.
+pub async fn set_writeback(
+    conn: &DatabaseConnection,
+    id: i32,
+    expect_run_seq: i32,
+    writeback: bool,
+    drafts: Option<&str>,
+) -> Result<bool, DbError> {
+    let task = get_model(conn, id).await?;
+    if task.status != WorkTaskStatus::Review
+        || task.run_seq != expect_run_seq
+        || task.source_kind.is_none()
+    {
+        return Ok(false);
+    }
+    let Some(old_meta) = task.source_meta.clone() else {
+        return Ok(false);
+    };
+    // Edited as a JSON object rather than through `ForgeSourceMeta`, so keys a
+    // newer build wrote survive the round trip.
+    let mut meta: serde_json::Value = serde_json::from_str(&old_meta)
+        .map_err(|e| DbError::Validation(format!("unreadable source snapshot: {e}")))?;
+    let Some(object) = meta.as_object_mut() else {
+        return Err(DbError::Validation("unreadable source snapshot".to_string()));
+    };
+    object.insert("writeback".to_string(), serde_json::Value::Bool(writeback));
+    let new_meta = serde_json::to_string(&meta)
+        .map_err(|e| DbError::Validation(format!("source snapshot not serializable: {e}")))?;
+    let res = work_task::Entity::update_many()
+        .col_expr(work_task::Column::SourceMeta, Expr::value(Some(new_meta)))
+        .col_expr(
+            work_task::Column::WritebackDrafts,
+            Expr::value(drafts.map(str::to_string)),
+        )
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::RunSeq.eq(task.run_seq))
+        .filter(work_task::Column::SourceMeta.eq(old_meta))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
 }
 
 /// Re-write the diff counters of a task that is ALREADY in review, without
@@ -2278,11 +2504,44 @@ pub async fn begin_delivery(
     state: &WorkTaskMergeState,
     expect_run_seq: i32,
 ) -> Result<Option<i32>, DbError> {
+    begin_delivery_recording(conn, id, state, expect_run_seq, None).await
+}
+
+/// [`begin_delivery`], also replacing the row's `source_meta` with
+/// `source_meta` when given — how a task made from several issues fixes the
+/// list of issues its pull request closes at its first delivery: in the same
+/// write as the CAS, so the list is recorded exactly when the delivery that
+/// publishes it begins. Serialized by the CALLER from the row it read, and
+/// handed in beside the text it read (`(read, new)`): the CAS on status and
+/// `run_seq` keeps the run current, and the one on the read text keeps the
+/// snapshot current — the write-back answer ([`set_writeback`]) is written
+/// there while a task sits in review.
+pub async fn begin_delivery_recording(
+    conn: &DatabaseConnection,
+    id: i32,
+    state: &WorkTaskMergeState,
+    expect_run_seq: i32,
+    source_meta: Option<(Option<&str>, &str)>,
+) -> Result<Option<i32>, DbError> {
     let state_json = serde_json::to_string(state)
         .map_err(|e| DbError::Validation(format!("merge state not serializable: {e}")))?;
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many();
+    if let Some((read, meta)) = source_meta {
+        update = update.col_expr(
+            work_task::Column::SourceMeta,
+            Expr::value(Some(meta.to_string())),
+        );
+        // The snapshot is rewritten from the copy the caller read, so it must
+        // still be that copy: the user's write-back answer ([`set_writeback`])
+        // is the one other write a task in review takes there.
+        update = match read {
+            Some(read) => update.filter(work_task::Column::SourceMeta.eq(read)),
+            None => update.filter(work_task::Column::SourceMeta.is_null()),
+        };
+    }
+    let res = update
         .col_expr(
             work_task::Column::Status,
             Expr::value(status_str(WorkTaskStatus::Merging)),
@@ -2988,6 +3247,28 @@ pub async fn clear_worktree(conn: &DatabaseConnection, id: i32) -> Result<(), Db
         .exec(conn)
         .await?;
     Ok(())
+}
+
+/// Which of `conversation_ids` a live (not deleted) to-do task is bound to, in
+/// any status — finished tasks included. A task's conversation belongs to the
+/// task: its resume, retry and transcript view all find the session through
+/// the task's worktree and row, so "move to project" refuses these outright.
+pub async fn conversations_bound_to_tasks(
+    conn: &DatabaseConnection,
+    conversation_ids: &[i32],
+) -> Result<std::collections::HashSet<i32>, DbError> {
+    if conversation_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let rows: Vec<Option<i32>> = work_task::Entity::find()
+        .select_only()
+        .column(work_task::Column::ConversationId)
+        .filter(work_task::Column::ConversationId.is_in(conversation_ids.to_vec()))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .into_tuple()
+        .all(conn)
+        .await?;
+    Ok(rows.into_iter().flatten().collect())
 }
 
 /// Tasks in a status that is actively using their worktree — mid-run or
@@ -5550,6 +5831,7 @@ mod tests {
         crate::models::WorkTaskSource {
             kind: "forge_issue".to_string(),
             key: key.to_string(),
+            extra_keys: Vec::new(),
             meta: serde_json::json!({
                 "provider": "github",
                 "server_host": "github.com",
@@ -5596,7 +5878,11 @@ mod tests {
             .await
             .unwrap()
         {
-            ForgeCreateOutcome::Duplicate(existing) => assert_eq!(existing.id, first.id),
+            ForgeCreateOutcome::Duplicate(conflicts) => {
+                assert_eq!(conflicts.len(), 1);
+                assert_eq!(conflicts[0].key, key);
+                assert_eq!(conflicts[0].existing.id, first.id);
+            }
             other => panic!("expected Duplicate, got {other:?}"),
         }
         // …unless the user explicitly forces a second one.
@@ -5763,6 +6049,197 @@ mod tests {
         assert_eq!((created, duplicate), (1, 1));
     }
 
+    /// A task made from several related issues: the lead first, then the rest.
+    fn issues_source(keys: &[&str]) -> crate::models::WorkTaskSource {
+        let mut source = source(keys[0]);
+        source.extra_keys = keys[1..].iter().map(|k| k.to_string()).collect();
+        source
+    }
+
+    const K3: &str = "github:github.com:acme/app:issue:3";
+    const K5: &str = "github:github.com:acme/app:issue:5";
+    const K9: &str = "github:github.com:acme/app:issue:9";
+    const K12: &str = "github:github.com:acme/app:issue:12";
+
+    /// Every item of a task made from several issues counts, not only the
+    /// lead its own column names: a later trigger on ANY of them is a dedup
+    /// hit naming each colliding item, the reverse lookup maps each of them
+    /// to the task, and auto-processing's "ever had a task" knows them all —
+    /// soft-deleted or not.
+    #[tokio::test]
+    async fn every_item_of_a_task_of_several_is_seen_by_dedup_lookup_and_scan() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-forge-several").await;
+
+        let combined = match create_from_forge(
+            &db.conn,
+            draft(folder_id, "#3 #5 #9 · login"),
+            issues_source(&[K3, K5, K9]),
+            false,
+        )
+        .await
+        .unwrap()
+        {
+            ForgeCreateOutcome::Created(t) => t,
+            other => panic!("expected Created, got {other:?}"),
+        };
+        assert_eq!(combined.source_key.as_deref(), Some(K3), "the lead, for display");
+        assert_eq!(
+            task_source_keys(&db.conn, combined.id).await.unwrap(),
+            vec![K3, K5, K9]
+        );
+        let events = list_events(&db.conn, combined.id, 100).await.unwrap();
+        let linked = events
+            .iter()
+            .find(|e| e.kind == "forge_linked")
+            .and_then(|e| e.payload.clone())
+            .expect("forge_linked");
+        assert_eq!(linked["source_key"], serde_json::json!(K3));
+        assert_eq!(linked["source_keys"], serde_json::json!([K3, K5, K9]));
+
+        // A one-issue trigger on an item that is NOT the lead.
+        match create_from_forge(&db.conn, draft(folder_id, "#5"), source(K5), false)
+            .await
+            .unwrap()
+        {
+            ForgeCreateOutcome::Duplicate(conflicts) => {
+                let hit: Vec<(&str, i32)> = conflicts
+                    .iter()
+                    .map(|c| (c.key.as_str(), c.existing.id))
+                    .collect();
+                assert_eq!(hit, vec![(K5, combined.id)]);
+            }
+            other => panic!("expected Duplicate, got {other:?}"),
+        }
+        // Another task of several overlapping two of them: both named, in the
+        // new task's own order.
+        match create_from_forge(
+            &db.conn,
+            draft(folder_id, "#9 #12 #5"),
+            issues_source(&[K9, K12, K5]),
+            false,
+        )
+        .await
+        .unwrap()
+        {
+            ForgeCreateOutcome::Duplicate(conflicts) => {
+                let keys: Vec<&str> = conflicts.iter().map(|c| c.key.as_str()).collect();
+                assert_eq!(keys, vec![K9, K5]);
+            }
+            other => panic!("expected Duplicate, got {other:?}"),
+        }
+        // The refused attempts left no rows behind, item rows included.
+        assert_eq!(list(&db.conn, Some(folder_id)).await.unwrap().len(), 1);
+        assert_eq!(
+            source_keys_ever_tasked(&db.conn, &[K12.to_string()]).await.unwrap().len(),
+            0
+        );
+
+        let found = lookup_latest_by_source_keys(
+            &db.conn,
+            &[K5.to_string(), K9.to_string(), K12.to_string()],
+        )
+        .await
+        .unwrap();
+        let mapped: Vec<(&str, i32)> = found.iter().map(|(k, t)| (k.as_str(), t.id)).collect();
+        assert_eq!(mapped.len(), 2, "{mapped:?}");
+        assert!(mapped.contains(&(K5, combined.id)) && mapped.contains(&(K9, combined.id)));
+        let items = source_keys_of_tasks(&db.conn, &[combined.id]).await.unwrap();
+        assert_eq!(items.get(&combined.id), Some(&vec![K3.to_string(), K5.to_string(), K9.to_string()]));
+
+        let wanted = [K3, K5, K9, K12].map(str::to_string);
+        let ever = source_keys_ever_tasked(&db.conn, &wanted).await.unwrap();
+        assert_eq!(ever.len(), 3);
+        assert!(!ever.contains(K12));
+
+        // Deleted: gone from the lookup, still "handled" for the scan.
+        assert!(soft_delete(&db.conn, combined.id, WorkTaskStatus::Todo).await.unwrap());
+        assert!(lookup_latest_by_source_keys(&db.conn, &[K5.to_string()])
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(source_keys_ever_tasked(&db.conn, &wanted)
+            .await
+            .unwrap()
+            .contains(K9));
+        // …and no longer a dedup hit.
+        assert!(matches!(
+            create_from_forge(&db.conn, draft(folder_id, "#9"), source(K9), false)
+                .await
+                .unwrap(),
+            ForgeCreateOutcome::Created(_)
+        ));
+    }
+
+    /// The resurrection guards cover every item, both ways round: a failed
+    /// task of several cannot come back while one of its issues has a live
+    /// task of its own, and a failed one-issue task cannot come back while a
+    /// live task of several holds its issue.
+    #[tokio::test]
+    async fn resurrection_guards_cover_every_item_of_a_task_of_several() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-forge-several-res").await;
+        let set_status = |id: i32, status: WorkTaskStatus| {
+            let conn = db.conn.clone();
+            async move {
+                let mut active: work_task::ActiveModel =
+                    get_model(&conn, id).await.unwrap().into_active_model();
+                active.status = Set(status);
+                active.update(&conn).await.unwrap();
+            }
+        };
+        let created = |outcome: ForgeCreateOutcome| match outcome {
+            ForgeCreateOutcome::Created(t) => t,
+            other => panic!("expected Created, got {other:?}"),
+        };
+
+        let combined = created(
+            create_from_forge(&db.conn, draft(folder_id, "#3 #5"), issues_source(&[K3, K5]), false)
+                .await
+                .unwrap(),
+        );
+        set_status(combined.id, WorkTaskStatus::Failed).await;
+        let single =
+            created(create_from_forge(&db.conn, draft(folder_id, "#5"), source(K5), false).await.unwrap());
+
+        let err = claim_for_run_with_action(
+            &db.conn,
+            combined.id,
+            WorkTaskStatus::Failed,
+            "user",
+            None,
+            false,
+        )
+        .await
+        .expect_err("#5 is live elsewhere");
+        assert!(err.to_string().contains("duplicate_active_source"), "{err}");
+        assert!(err.to_string().contains(&format!("#{}", single.id)), "{err}");
+        set_status(combined.id, WorkTaskStatus::Canceled).await;
+        let err = requeue_canceled(&db.conn, combined.id, None, &[], false)
+            .await
+            .expect_err("requeue too");
+        assert!(err.to_string().contains("duplicate_active_source"), "{err}");
+
+        // The other way round.
+        set_status(single.id, WorkTaskStatus::Failed).await;
+        let _holder = created(
+            create_from_forge(&db.conn, draft(folder_id, "#5 #9"), issues_source(&[K5, K9]), false)
+                .await
+                .unwrap(),
+        );
+        let err = claim_for_run_with_action(
+            &db.conn,
+            single.id,
+            WorkTaskStatus::Failed,
+            "user",
+            None,
+            false,
+        )
+        .await
+        .expect_err("#5 is held by a task of several");
+        assert!(err.to_string().contains("duplicate_active_source"), "{err}");
+    }
+
     /// Resurrection guards on BOTH roads back into the active set: a failed
     /// retry claim and a canceled requeue must refuse while another active
     /// task holds the same source key — and the explicit override waives it.
@@ -5862,5 +6339,44 @@ mod tests {
         .unwrap()
         .is_some());
         let _ = replacement;
+    }
+
+    /// "Move to project" refuses a task's conversation whatever the task's
+    /// status — a finished task still owns its session — but not once the task
+    /// itself is deleted.
+    #[tokio::test]
+    async fn conversations_bound_to_tasks_ignores_status_but_not_deletion() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-bound-convs").await;
+        let bind = |id: i32, conv: i32, status: WorkTaskStatus, deleted: bool| {
+            let conn = db.conn.clone();
+            async move {
+                let mut q = work_task::Entity::update_many()
+                    .col_expr(work_task::Column::ConversationId, Expr::value(Some(conv)))
+                    .col_expr(work_task::Column::Status, Expr::value(status_str(status)));
+                if deleted {
+                    q = q.col_expr(work_task::Column::DeletedAt, Expr::value(Some(Utc::now())));
+                }
+                q.filter(work_task::Column::Id.eq(id))
+                    .exec(&conn)
+                    .await
+                    .unwrap();
+            }
+        };
+        let done = create(&db.conn, draft(folder_id, "done")).await.unwrap();
+        let running = create(&db.conn, draft(folder_id, "running")).await.unwrap();
+        let deleted = create(&db.conn, draft(folder_id, "deleted")).await.unwrap();
+        bind(done.id, 11, WorkTaskStatus::Done, false).await;
+        bind(running.id, 12, WorkTaskStatus::Running, false).await;
+        bind(deleted.id, 13, WorkTaskStatus::Done, true).await;
+
+        let bound = conversations_bound_to_tasks(&db.conn, &[11, 12, 13, 14])
+            .await
+            .unwrap();
+        assert_eq!(bound, [11, 12].into_iter().collect());
+        assert!(conversations_bound_to_tasks(&db.conn, &[])
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

@@ -15,6 +15,7 @@
 
 pub mod acp;
 pub mod acp_transcript;
+pub mod agent_turn_files;
 pub use acp::{
     idle_sweep_task, idle_timeout_from_env, lifecycle_subscriber_task, SWEEP_INTERVAL_SECS,
 };
@@ -1964,6 +1965,7 @@ mod tauri_app {
                 conversation_tags::get_conversation_branch_tag,
                 conversation_tags::update_conversation_branch_tag,
                 conversations::delete_conversation,
+                conversations::move_conversations,
                 folders::load_folder_history,
                 folders::get_folder,
                 folders::list_open_folder_details,
@@ -2068,6 +2070,9 @@ mod tauri_app {
                 folders::list_directory_with_files,
                 folders::get_file_tree,
                 folders::list_workspace_files,
+                crate::commands::workspace_file_search::search_workspace_files,
+                crate::commands::workspace_file_search::cancel_workspace_file_search,
+                crate::commands::workspace_file_search::prepare_workspace_file_search,
                 folders::read_file_base64,
                 folders::read_workspace_file_base64,
                 folders::read_file_preview,
@@ -2102,6 +2107,7 @@ mod tauri_app {
                 remote_workspace_commands::open_remote_workspace,
                 workspace_windows::take_workspace_restore_failures,
                 remote_proxy_commands::remote_http_call,
+                remote_proxy_commands::remote_cache_forge_image,
                 remote_proxy_commands::remote_upload_attachment,
                 remote_proxy_commands::remote_upload_workspace_paths,
                 remote_proxy_commands::remote_cancel_workspace_transfer,
@@ -2409,9 +2415,11 @@ mod tauri_app {
                 work_task_commands::work_task_complete,
                 work_task_commands::work_task_archive,
                 work_task_commands::work_task_defer,
+                work_task_commands::work_task_set_writeback,
                 work_task_commands::work_task_cleanup,
                 work_task_commands::work_task_diff,
                 work_task_commands::work_task_changed_files,
+                work_task_commands::work_task_uncommitted_files,
                 work_task_commands::work_task_settings_get,
                 work_task_commands::work_task_settings_get_own,
                 work_task_commands::work_task_settings_effective,
@@ -2423,6 +2431,7 @@ mod tauri_app {
                 forge_commands::folder_forge_remote,
                 forge_commands::forge_list_issues,
                 forge_commands::forge_issue_detail,
+                forge_commands::forge_read_image,
                 forge_commands::forge_tab_count,
                 forge_commands::forge_list_labels,
                 forge_commands::forge_list_comments,
@@ -2430,11 +2439,14 @@ mod tauri_app {
                 forge_commands::forge_set_item_state,
                 forge_commands::forge_create_issue,
                 forge_commands::forge_change_detail,
+                forge_commands::forge_check_summaries,
+                forge_commands::forge_approve_workflows,
                 forge_commands::forge_change_files,
                 forge_commands::forge_identity,
                 forge_commands::forge_merge_options,
                 forge_commands::forge_merge_change,
                 forge_commands::work_task_create_from_forge,
+                forge_commands::work_task_create_from_forge_issues,
                 forge_commands::work_task_lookup_by_source,
                 forge_commands::forge_settings_get,
                 forge_commands::forge_settings_set,

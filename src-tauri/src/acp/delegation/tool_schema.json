@@ -252,7 +252,7 @@
   },
   {
     "name": "create_work_task",
-    "description": "Queue a card on codeg's to-dos. A task is a unit of work an agent later executes on its own branch/worktree, then hands back for the user to review and merge. Use it when the user wants work PARKED rather than done now — 'add a task to…', 'put this on the board', 'we should also fix X later' — or when you are splitting a large request into reviewable pieces and the user asked for that. Do NOT use it to do the thing the user just asked you to do in this conversation, and do NOT queue a task per trivial step. The executing agent starts cold with no view of this chat, so `prompt` must carry the full briefing. The tool returns the task id; the user tracks it in their to-dos.",
+    "description": "Queue a card on codeg's to-dos. A task is a unit of work an agent later executes on its own branch/worktree, then hands back for the user to review and merge. Use it when the user wants work PARKED rather than done now — 'add a task to…', 'put this on the board', 'we should also fix X later' — or when you are splitting a large request into reviewable pieces and the user asked for that. Do NOT use it to do the thing the user just asked you to do in this conversation, and do NOT queue a task per trivial step. The executing agent starts cold with no view of this chat, so `prompt` must carry the full briefing. Screenshots, mockups, logs or other files that belong to the briefing go in `attachments`. The tool returns the task id; the user tracks it in their to-dos.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -275,6 +275,14 @@
         "folder_path": {
           "type": "string",
           "description": "Absolute path of the target project. Defaults to the project this conversation is in; pass it only to target a different project already open in codeg."
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "string"
+          },
+          "description": "Files to attach to the task, as absolute paths on this machine (at most 10). Images (.png, .jpg/.jpeg, .gif, .webp; up to 20 MB each, 40 MB in total) are copied into the task, so the executing agent sees them even if the file is later deleted. Any other file is attached as a reference to its path, so it must still exist when the task runs — put a file you created only for this task somewhere that lasts, not in a temporary directory. (When you run with your own file sandbox, every attachment, images included, is attached as a path reference; the reply says so.) Every path must name an existing file; if one does not, nothing is created and the reply says which."
         }
       }
     }
@@ -316,6 +324,27 @@
         "summary": {
           "type": "string",
           "description": "Short result summary shown on the task card: what changed, and anything the reviewer should look at."
+        },
+        "thread_replies": {
+          "type": "array",
+          "description": "Only when the task context asks for it: the comment to post in the thread of each issue / pull request the task came from, written for that thread's readers. Saved as a draft the user reviews and may edit before it is posted once they accept the task.",
+          "items": {
+            "type": "object",
+            "required": [
+              "number",
+              "body"
+            ],
+            "properties": {
+              "number": {
+                "type": "integer",
+                "description": "The issue / pull request number the reply is for."
+              },
+              "body": {
+                "type": "string",
+                "description": "The reply, in Markdown."
+              }
+            }
+          }
         }
       }
     }

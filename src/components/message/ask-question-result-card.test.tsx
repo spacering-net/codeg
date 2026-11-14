@@ -88,6 +88,41 @@ describe("AskQuestionResultCard", () => {
     expect(screen.queryByRole("button", { name: "Skip" })).toBeNull()
   })
 
+  it("keeps Other hidden in the record of an ask that disallowed it", () => {
+    // pi / Antigravity answered capsules carry `allowOther: false`.
+    const input = JSON.stringify({
+      questions: [
+        {
+          question: "Which approach?",
+          multiSelect: false,
+          allowOther: false,
+          options: [
+            { label: "Incremental", description: "" },
+            { label: "Rewrite", description: "" },
+          ],
+        },
+      ],
+    })
+    const output = JSON.stringify({
+      answers: [
+        { header: "", question: "Which approach?", selected: ["Rewrite"] },
+      ],
+      declined: false,
+    })
+    renderWithIntl(
+      <AskQuestionResultCard
+        input={input}
+        output={output}
+        state="output-available"
+      />
+    )
+    expand()
+
+    expect(screen.getAllByRole("radio")).toHaveLength(2)
+    expect(screen.getByRole("radio", { name: "Rewrite" })).toBeChecked()
+    expect(screen.queryByRole("radio", { name: "Other" })).toBeNull()
+  })
+
   it("checks the picked options and surfaces a free-text Other answer in multi-select", () => {
     const input = JSON.stringify({
       questions: [

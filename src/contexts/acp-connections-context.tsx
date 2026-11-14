@@ -1,6 +1,14 @@
 "use client"
 
 import {
+  readKimiMcpOAuth,
+  rebindKimiMcpOAuth,
+  startKimiMcpOAuth,
+  stripKimiMcpOAuth,
+  updateKimiMcpOAuth,
+} from "@/lib/kimi-mcp-oauth"
+
+import {
   createContext,
   useCallback,
   useContext,
@@ -64,6 +72,7 @@ import type {
   ActiveDelegationState,
   AsyncTaskDelta,
   AsyncTaskRecord,
+  BackgroundOutstandingTask,
   AvailableCommandInfo,
   ConfigStaleKind,
   ConnectionStatus,
@@ -103,7 +112,6 @@ import {
 } from "@/lib/session-failures"
 import {
   adoptUnknownAsyncTasks,
-  liveAsyncTasks,
   mergeAsyncTasks,
   upsertAsyncTask,
 } from "@/lib/async-tasks"
@@ -125,6 +133,10 @@ import {
 } from "@/lib/acp-error-presentation"
 import { dismissNotification, notify, type NotifyAction } from "@/lib/notify"
 import type { SnapshotPatch } from "@/lib/snapshot-denormalize"
+import {
+  appendLiveToolRawOutput,
+  replaceLiveToolRawOutput,
+} from "@/lib/live-tool-output"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
   localizeConfigOptionLabel,
@@ -404,8 +416,8 @@ export interface ConnectionState {
   toolApprovals: ToolApprovalMap
   /** AIR async tasks — Claude's background shells / workflows / monitors (see
    *  `lib/async-tasks.ts` for the merge contract). Retained after they settle,
-   *  because the adapter keeps revising a finished task; the strip filters to
-   *  the live ones itself. */
+   *  because the adapter keeps revising a finished task; the composer's
+   *  running list takes the live ones itself (`lib/live-runs.ts`). */
   asyncTasks: AsyncTaskRecord[]
   /**
    * One-line localized message for this session's current turn / connection
@@ -506,6 +518,27 @@ export interface ConnectionState {
    * popover warns before interrupting that work.
    */
   backgroundOutstanding: number
+  /**
+   * The same tasks one by one, mirrored from the event's `outstanding_tasks`
+   * (and the snapshot's `background_outstanding_tasks`): the composer's
+   * running list reads the background sub-agents still running after their
+   * turn ended from here — the launch cards can't say, a transcript can't tell
+   * a live task from a dead one. Every event carries the whole set, so each
+   * one replaces it.
+   */
+  backgroundTasks: readonly BackgroundOutstandingTask[]
+  /**
+   * Child connection ids of the codeg delegations (`delegate_to_agent`) this
+   * connection still has running, mirrored from the backend's
+   * `delegated_children`: added and dropped by `delegation_child_running`,
+   * recovered from the snapshot by a client that attaches mid-delegation.
+   * Every delegation, including one with no card (its parent tool call could
+   * not be identified, so `delegation_started` never names it). A busy signal
+   * like `backgroundOutstanding`: an async delegation outlives the turn that
+   * started it, and the backend cancels every sub-agent a parent has in flight
+   * when the parent goes.
+   */
+  delegatedChildren: string[]
   /**
    * Tool-call context observed OUT-OF-TURN (status !== "prompting"), kept
    * ONLY so a background permission request can still render its command/
@@ -642,6 +675,16 @@ type Action =
       type: "SET_BACKGROUND_OUTSTANDING"
       contextKey: string
       outstanding: number
+      /** The event's `outstanding_tasks`, whole (absent on the wire = none). */
+      tasks: readonly BackgroundOutstandingTask[]
+    }
+  | {
+      // A codeg delegation this connection started began (`running`) or
+      // finished. Idempotent, so a replayed event changes nothing.
+      type: "DELEGATION_RUNNING"
+      contextKey: string
+      childConnectionId: string
+      running: boolean
     }
   | StreamingAction
   | { type: "STREAM_BATCH"; actions: StreamingAction[] }
@@ -933,21 +976,23 @@ export const STREAM_FLUSH_MAX_MS = 192
 /** Characters of re-rendered live content that buy one more frame. */
 const STREAM_FLUSH_CHARS_PER_FRAME = 8 * 1024
 /**
- * What one re-rendered non-prose block costs, in prose-equivalent characters.
+ * What one non-prose block of the live turn adds to a batch, in
+ * prose-equivalent characters.
  *
- * Measured in the real component tree (jsdom, React 19), re-rendering a live
- * turn the way a batch does — growing prose costs 0.00075 ms/char, while each
- * block that re-renders whole costs a FLAT 0.02 ms (a collapsed thinking
- * block) to 0.18 ms (a plan card), with a tool card at 0.06 ms. That is 30 to
- * 235 prose-equivalent characters; 128 sits inside the range, so 64 cards buy
- * one extra frame.
+ * A block no batch changes is no longer drawn again (see `liveRerenderChars`),
+ * yet each batch still walks it: the live message is rebuilt into turns and
+ * compared, the reply merged and its activity model rebuilt from the parts it
+ * kept. Measured in the browser on a reply of 600 calls and 300 stretches of
+ * prose (Edge, CPU slowed 4×): a text batch costs 0.02 ms more per block, where
+ * the prose it grows costs about 0.006 ms per character — three to four
+ * characters a block. 16 keeps a margin over that: a reply of a thousand
+ * blocks streams in 32 ms batches instead of being held to the ceiling, five
+ * batches a second, as when every block was redrawn on every batch (then 30 to
+ * 235 characters each, measured in jsdom).
  *
- * Flat, not proportional to the block's content, because that is what the
- * measurement shows: a collapsed thinking block costs the same at 200 and at
- * 4000 characters, since the cards render clamped previews and Radix keeps
- * closed content unmounted.
+ * Flat, not proportional to the block's content: what it holds is not drawn.
  */
-const STREAM_FLUSH_BLOCK_CHARS = 128
+const STREAM_FLUSH_BLOCK_CHARS = 16
 /**
  * Deltas one connection may coalesce before the window is cut short. A safety
  * valve for a burst the timer can't keep up with, not a cadence knob — it
@@ -970,15 +1015,16 @@ const STREAM_QUEUE_CAP = 256
  *   value, so an unchanged run bails out before the markdown renderer.
  *   (Measured: eight extra settled 8 KB blocks cost nothing.)
  * - Everything else — tool cards, closed thinking blocks, plan cards,
- *   steering notes — re-renders on EVERY batch regardless. They memoize on
- *   the part object, and `createMessageTurnAdapter` refuses to cache a
- *   streaming turn (`cacheable = !isStreaming && !inProgress`), so each batch
- *   hands them freshly built objects. Charged a flat
- *   `STREAM_FLUSH_BLOCK_CHARS` each.
+ *   steering notes — is not drawn again unless the batch changed it: the
+ *   rounds of the live message that read the same keep their objects
+ *   (`buildStreamingTurnsFromLiveMessage`), so the adapter, the merged reply
+ *   and the rows they feed keep theirs. Each is still walked on every batch,
+ *   though, and a long reply's timeline draws only the rows in view: charged
+ *   a small flat `STREAM_FLUSH_BLOCK_CHARS` each.
  *
- * A turn that has run a hundred tools and is now writing its summary has a
+ * A turn that has run a thousand tools and is now writing its summary has a
  * short run and a real per-batch cost; sizing from the run alone would leave
- * it on a single frame while it burns a third of every one.
+ * it on a single frame while it burns most of every one.
  */
 export function liveRerenderChars(
   content: readonly LiveContentBlock[] | undefined
@@ -1041,7 +1087,6 @@ export function streamFlushDelayMs(liveRunChars: number): number {
 }
 
 type ConnectionsMap = Map<string, ConnectionState>
-const MAX_LIVE_TOOL_RAW_OUTPUT_CHARS = 200_000
 const MAX_BUFFERED_UNMAPPED_EVENTS_PER_CONNECTION = 64
 const MAX_BUFFERED_UNMAPPED_CONNECTIONS = 128
 /**
@@ -1663,6 +1708,27 @@ function ensureLiveMessage(prev: LiveMessage | null): LiveMessage {
 /** Shared empty `steeredMessageIds`, so a turn that steers nothing (almost all
  *  of them) keeps a stable reference through `connRenderEqual`. */
 const EMPTY_STEERED_MESSAGE_IDS: string[] = []
+const EMPTY_DELEGATED_CHILDREN: string[] = []
+const EMPTY_BACKGROUND_TASKS: readonly BackgroundOutstandingTask[] = []
+
+/** Whether two outstanding-task sets list the same tasks, the same way. */
+function sameBackgroundTasks(
+  a: readonly BackgroundOutstandingTask[],
+  b: readonly BackgroundOutstandingTask[]
+): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  return a.every((task, i) => {
+    const other = b[i]
+    return (
+      task.task_id === other.task_id &&
+      task.kind === other.kind &&
+      (task.tool_use_id ?? null) === (other.tool_use_id ?? null) &&
+      (task.description ?? null) === (other.description ?? null) &&
+      task.started_at_ms === other.started_at_ms
+    )
+  })
+}
 
 /** Last time an out-of-turn drop was logged — module-level sampling clock. */
 let lastOutOfTurnDropLogAt = 0
@@ -1834,6 +1900,40 @@ function recordOutOfTurnToolCall(
   return next
 }
 
+/** Keep the Kimi OAuth bindings this client established when a newer snapshot
+ *  replaces the live message (see `rebindKimiMcpOAuth`). Matched by tool-call
+ *  id; a call the snapshot no longer has, or has settled, loses its binding. */
+function carryKimiMcpOAuth(
+  previous: LiveMessage | null,
+  hydrated: LiveMessage | null
+): LiveMessage | null {
+  if (!previous || !hydrated) return hydrated
+  const bound = new Map<string, ToolCallMeta>()
+  for (const block of previous.content) {
+    if (block.type === "tool_call" && readKimiMcpOAuth(block.info.meta)) {
+      bound.set(block.info.tool_call_id, block.info.meta)
+    }
+  }
+  if (bound.size === 0) return hydrated
+  let changed = false
+  const content = hydrated.content.map((block) => {
+    if (block.type !== "tool_call") return block
+    const previousMeta = bound.get(block.info.tool_call_id)
+    if (previousMeta === undefined) return block
+    changed = true
+    return {
+      ...block,
+      info: {
+        ...block.info,
+        // The bound name, as `mergeToolCallUpdate` keeps it while live.
+        title: readKimiMcpOAuth(previousMeta)?.toolName ?? block.info.title,
+        meta: rebindKimiMcpOAuth(previousMeta, block.info),
+      },
+    }
+  })
+  return changed ? { ...hydrated, content } : hydrated
+}
+
 type ToolCallUpdateAction = Extract<Action, { type: "TOOL_CALL_UPDATE" }>
 
 /** Fold one `tool_call_update` into the tool call it revises. Shared by the
@@ -1843,51 +1943,21 @@ function mergeToolCallUpdate(
   info: ToolCallInfo,
   update: ToolCallUpdateAction
 ): ToolCallInfo {
-  let newChunks: string[]
-  let newTotalBytes: number
+  const output =
+    update.raw_output === null || update.raw_output_append
+      ? appendLiveToolRawOutput(info, update.raw_output)
+      : replaceLiveToolRawOutput(update.raw_output)
 
-  if (update.raw_output === null) {
-    newChunks = info.raw_output_chunks
-    newTotalBytes = info.raw_output_total_bytes
-  } else if (update.raw_output_append) {
-    newChunks = [...info.raw_output_chunks, update.raw_output]
-    newTotalBytes = info.raw_output_total_bytes + update.raw_output.length
-
-    // 超限时从头部批量移除 chunks（单次 slice 替代循环 shift）
-    if (
-      newTotalBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS &&
-      newChunks.length > 1
-    ) {
-      let evictCount = 0
-      let evictedBytes = 0
-      while (
-        evictCount < newChunks.length - 1 &&
-        newTotalBytes - evictedBytes > MAX_LIVE_TOOL_RAW_OUTPUT_CHARS
-      ) {
-        evictedBytes += newChunks[evictCount].length
-        evictCount++
-      }
-      if (evictCount > 0) {
-        newChunks = newChunks.slice(evictCount)
-        newTotalBytes -= evictedBytes
-      }
-    }
-  } else {
-    // 非 append 模式（替换）
-    newChunks = [update.raw_output]
-    newTotalBytes = update.raw_output.length
-  }
-
+  const oauth = readKimiMcpOAuth(info.meta)
   return {
     ...info,
-    title: update.title ?? info.title,
+    title: oauth?.toolName ?? update.title ?? info.title,
     status: update.status ?? info.status,
     content: update.content ?? info.content,
     raw_input: update.raw_input ?? info.raw_input,
-    raw_output_chunks: newChunks,
+    ...output,
     locations: update.locations ?? info.locations,
-    meta: update.meta ?? info.meta,
-    raw_output_total_bytes: newTotalBytes,
+    meta: updateKimiMcpOAuth(info.meta, update, info.status),
     images: update.images !== null ? update.images : info.images,
   }
 }
@@ -1977,6 +2047,8 @@ function connectionsReducer(
         configStaleKind: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
+        backgroundTasks: EMPTY_BACKGROUND_TASKS,
+        delegatedChildren: EMPTY_DELEGATED_CHILDREN,
         outOfTurnToolCalls: null,
         hasPrompted: false,
         cancelledTurn: null,
@@ -2043,6 +2115,8 @@ function connectionsReducer(
         configStaleKind: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
+        backgroundTasks: EMPTY_BACKGROUND_TASKS,
+        delegatedChildren: EMPTY_DELEGATED_CHILDREN,
         outOfTurnToolCalls: null,
         hasPrompted: false,
         cancelledTurn: null,
@@ -2180,7 +2254,9 @@ function connectionsReducer(
         return next
       }
 
-      const hydratedLiveMessage = action.patch.liveMessage
+      const hydratedLiveMessage = sameSession
+        ? carryKimiMcpOAuth(current.liveMessage, action.patch.liveMessage)
+        : action.patch.liveMessage
       const hydratedPendingPermission = mergePendingPermissionWithLiveMessage(
         action.patch.pendingPermission,
         hydratedLiveMessage ?? current.liveMessage
@@ -2240,6 +2316,10 @@ function connectionsReducer(
         // recovers the pending-background count the one-shot events won't
         // replay for it, so its teardown gates hold.
         backgroundOutstanding: action.patch.backgroundOutstanding,
+        backgroundTasks: action.patch.backgroundTasks,
+        // Current state too, and the only way a client that attaches while a
+        // delegation runs learns of it: the running frame is one-shot.
+        delegatedChildren: action.patch.delegatedChildren,
         sessionFailures: mergedSessionFailures,
         toolApprovals: mergedToolApprovals,
         asyncTasks: mergedAsyncTasks,
@@ -2356,11 +2436,33 @@ function connectionsReducer(
     case "SET_BACKGROUND_OUTSTANDING": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
-      if (conn.backgroundOutstanding === action.outstanding) return state
+      const sameTasks = sameBackgroundTasks(conn.backgroundTasks, action.tasks)
+      if (conn.backgroundOutstanding === action.outstanding && sameTasks) {
+        return state
+      }
       const next = new Map(state)
       next.set(action.contextKey, {
         ...conn,
         backgroundOutstanding: action.outstanding,
+        // Kept by reference while unchanged, so the running list's memo holds.
+        backgroundTasks: sameTasks ? conn.backgroundTasks : action.tasks,
+      })
+      return next
+    }
+
+    case "DELEGATION_RUNNING": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const running = conn.delegatedChildren.includes(action.childConnectionId)
+      if (running === action.running) return state
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        delegatedChildren: action.running
+          ? [...conn.delegatedChildren, action.childConnectionId]
+          : conn.delegatedChildren.filter(
+              (id) => id !== action.childConnectionId
+            ),
       })
       return next
     }
@@ -2417,6 +2519,7 @@ function connectionsReducer(
     case "TOOL_CALL": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
+      const meta = startKimiMcpOAuth(conn.agentType, action.title, action.meta)
       // Out-of-turn wire tool activity stays OUT of `liveMessage` (the
       // transcript overlay renders that content — grafting it here recreated
       // the garbled-timeline bug), but its context is still recorded so a
@@ -2429,11 +2532,9 @@ function connectionsReducer(
           status: action.status,
           content: action.content,
           raw_input: action.raw_input,
-          raw_output_chunks:
-            action.raw_output !== null ? [action.raw_output] : [],
-          raw_output_total_bytes: action.raw_output?.length ?? 0,
+          ...replaceLiveToolRawOutput(action.raw_output),
           locations: action.locations,
-          meta: action.meta,
+          meta,
           images: action.images ?? [],
         }
         const next = new Map(state)
@@ -2472,21 +2573,16 @@ function connectionsReducer(
                 status: action.status ?? block.info.status,
                 content: action.content ?? block.info.content,
                 raw_input: action.raw_input ?? block.info.raw_input,
-                raw_output_chunks:
-                  action.raw_output !== null
-                    ? [action.raw_output]
-                    : block.info.raw_output_chunks,
-                raw_output_total_bytes:
-                  action.raw_output !== null
-                    ? action.raw_output.length
-                    : block.info.raw_output_total_bytes,
+                ...(action.raw_output !== null
+                  ? replaceLiveToolRawOutput(action.raw_output)
+                  : appendLiveToolRawOutput(block.info, null)),
                 // The block may be the placeholder a permission request drew
                 // before this frame was applied (the agent's announcement and
                 // its request reach codeg on separate paths, either first).
                 // The announcement is what names the tool
                 // (`_meta.claudeCode.toolName`), so its `_meta` must land.
                 locations: action.locations ?? block.info.locations,
-                meta: action.meta ?? block.info.meta,
+                meta: meta ?? block.info.meta,
                 images:
                   action.images !== null ? action.images : block.info.images,
               },
@@ -2508,11 +2604,9 @@ function connectionsReducer(
               status: action.status,
               content: action.content,
               raw_input: action.raw_input,
-              raw_output_chunks:
-                action.raw_output !== null ? [action.raw_output] : [],
-              raw_output_total_bytes: action.raw_output?.length ?? 0,
+              ...replaceLiveToolRawOutput(action.raw_output),
               locations: action.locations ?? null,
-              meta: action.meta ?? null,
+              meta,
               images: action.images ?? [],
             },
           },
@@ -2592,9 +2686,7 @@ function connectionsReducer(
       let newContent: LiveContentBlock[]
 
       if (existingIndex === -1) {
-        const initialChunks =
-          action.raw_output !== null ? [action.raw_output] : []
-        const initialBytes = action.raw_output?.length ?? 0
+        const output = replaceLiveToolRawOutput(action.raw_output)
         newContent = [
           ...prev.content,
           {
@@ -2605,11 +2697,12 @@ function connectionsReducer(
               kind: action.fallback_kind,
               status:
                 action.status ??
-                (initialChunks.length > 0 ? "in_progress" : "pending"),
+                (output.raw_output_chunks.length > 0
+                  ? "in_progress"
+                  : "pending"),
               content: action.content,
               raw_input: action.raw_input,
-              raw_output_chunks: initialChunks,
-              raw_output_total_bytes: initialBytes,
+              ...output,
               locations: action.locations ?? null,
               meta: action.meta ?? null,
               images: action.images ?? [],
@@ -2894,7 +2987,7 @@ function connectionsReducer(
       // published on the id this connection has left and never route here
       // again. The backend drops its table, and an empty snapshot table can't
       // clear ours for us (`mergeAsyncTasks` treats empty as "nothing to say"),
-      // so without this the strip shows tasks that can never finish AND the
+      // so without this the running list shows tasks that can never finish AND the
       // idle sweep below defers on them forever. Guarded on the id actually
       // changing, so a replayed announcement stays idempotent.
       const forked = conn.sessionId !== action.sessionId
@@ -3533,6 +3626,15 @@ export interface AcpActionsValue {
   /** Pause or clear the session's active Codex goal (codex-acp #293). */
   goalControl(contextKey: string, action: "pause" | "clear"): Promise<void>
   setActiveKey(key: string | null): void
+  /**
+   * Give the active key back — but only while it is still `key`. A view that
+   * claimed it (`setActiveKey`) calls this when it goes away for good: left
+   * claimed, the keepalive would keep touching that connection and the idle
+   * sweep would keep skipping it, so the busy owner a closed tab leaves running
+   * would never be reclaimed once its work settles. Compare-and-clear, so a
+   * view that already took over the key keeps it.
+   */
+  releaseActiveKey(key: string): void
   touchActivity(contextKey: string): void
   registerOpenTabKeys(keys: Set<string>): void
   /**
@@ -3889,6 +3991,25 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // Stop button until the app restarts. Always mutate through
   // `bindConnectionRoute` / `releaseConnectionRoute`.
   const reverseMapRef = useRef(new Map<string, Set<string>>())
+  // A snapshot may still be pending when its surface closes. Its firehose
+  // capture belongs to that surface, not to the lifetime of the IPC promise.
+  const hydrationEchoOwnersRef = useRef(
+    new Map<string, { connectionId: string; cancel: () => void }>()
+  )
+  const cancelHydrationEchoes = useCallback(
+    (contextKey: string, connectionId?: string) => {
+      const owner = hydrationEchoOwnersRef.current.get(contextKey)
+      if (owner && (!connectionId || owner.connectionId === connectionId)) {
+        owner.cancel()
+      }
+    },
+    []
+  )
+  const cancelAllHydrationEchoes = useCallback(() => {
+    for (const owner of Array.from(hydrationEchoOwnersRef.current.values())) {
+      owner.cancel()
+    }
+  }, [])
 
   /** Route `connectionId`'s firehose events to `contextKey` too. Idempotent. */
   const bindConnectionRoute = useCallback(
@@ -3901,18 +4022,19 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   )
 
   /**
-   * Drop ONLY this surface's route. A no-op for a connection this contextKey
-   * never routed, and — the load-bearing part — it leaves every OTHER surface
-   * watching the same connection routed.
+   * Drop ONLY this surface's route and any snapshot capture it still owns.
+   * A hydrating surface may not have a route yet. Every OTHER surface
+   * watching or hydrating the same connection remains intact.
    */
   const releaseConnectionRoute = useCallback(
     (connectionId: string, contextKey: string) => {
+      cancelHydrationEchoes(contextKey, connectionId)
       const keys = reverseMapRef.current.get(connectionId)
       if (!keys) return
       keys.delete(contextKey)
       if (keys.size === 0) reverseMapRef.current.delete(connectionId)
     },
-    []
+    [cancelHydrationEchoes]
   )
 
   // contextKey → active EventStream subscription handle. Populated only for
@@ -4414,6 +4536,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     [notifyActiveKeyListeners]
   )
 
+  const releaseActiveKey = useCallback(
+    (key: string) => {
+      if (storeRef.current.activeKey !== key) return
+      storeRef.current.activeKey = null
+      notifyActiveKeyListeners()
+    },
+    [notifyActiveKeyListeners]
+  )
+
   // ── Store API (stable object — never recreated) ──
 
   const storeApi = useMemo<ConnectionStoreApi>(() => {
@@ -4856,16 +4987,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // (`applyHydrationBacklog`).
   const hydrationEchoesRef = useRef(new Map<string, Set<EventEnvelope[]>>())
 
-  const beginHydrationEchoes = useCallback((connectionId: string) => {
-    const echoes: EventEnvelope[] = []
-    const lists =
-      hydrationEchoesRef.current.get(connectionId) ?? new Set<EventEnvelope[]>()
-    lists.add(echoes)
-    hydrationEchoesRef.current.set(connectionId, lists)
-    return {
-      echoes,
-      /** Stop recording. Idempotent. */
-      stop: () => {
+  const beginHydrationEchoes = useCallback(
+    (contextKey: string, connectionId: string) => {
+      cancelHydrationEchoes(contextKey)
+      const echoes: EventEnvelope[] = []
+      let cancelled = false
+      let cancelSnapshot = () => {}
+      // Settle the frontend wait when its surface goes away, even if native
+      // IPC never answers. Otherwise the suspended async function still owns
+      // the old Provider's store/dispatch after its buffers have been cleared.
+      const cancelledSnapshot = new Promise<null>((resolve) => {
+        cancelSnapshot = () => resolve(null)
+      })
+      const lists =
+        hydrationEchoesRef.current.get(connectionId) ??
+        new Set<EventEnvelope[]>()
+      lists.add(echoes)
+      hydrationEchoesRef.current.set(connectionId, lists)
+      const stop = () => {
         lists.delete(echoes)
         if (
           lists.size === 0 &&
@@ -4873,9 +5012,29 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         ) {
           hydrationEchoesRef.current.delete(connectionId)
         }
-      },
-    }
-  }, [])
+        if (hydrationEchoOwnersRef.current.get(contextKey)?.cancel === cancel) {
+          hydrationEchoOwnersRef.current.delete(contextKey)
+        }
+      }
+      const cancel = () => {
+        cancelled = true
+        stop()
+        echoes.length = 0
+        cancelSnapshot()
+      }
+      hydrationEchoOwnersRef.current.set(contextKey, { connectionId, cancel })
+      return {
+        echoes,
+        /** Successful snapshots keep the backlog for replay after stopping. */
+        stop,
+        cancelledSnapshot,
+        get cancelled() {
+          return cancelled
+        },
+      }
+    },
+    [cancelHydrationEchoes]
+  )
 
   // ── RAF batching for tool_call_update events ──
   const pendingToolCallUpdates = useRef<
@@ -5225,7 +5384,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             raw_input: e.raw_input,
             raw_output: e.raw_output,
             locations: e.locations ?? null,
-            meta: (e.meta as ToolCallMeta) ?? null,
+            meta: stripKimiMcpOAuth((e.meta as ToolCallMeta) ?? null),
             images: e.images ?? null,
           })
           break
@@ -5243,7 +5402,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             raw_output: e.raw_output,
             raw_output_append: e.raw_output_append,
             locations: e.locations ?? null,
-            meta: (e.meta as ToolCallMeta) ?? null,
+            meta: stripKimiMcpOAuth((e.meta as ToolCallMeta) ?? null),
             images: e.images ?? null,
           })
           scheduleToolCallUpdateFlush()
@@ -5426,6 +5585,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             type: "SET_BACKGROUND_OUTSTANDING",
             contextKey,
             outstanding: e.outstanding,
+            tasks:
+              e.outstanding_tasks && e.outstanding_tasks.length > 0
+                ? e.outstanding_tasks
+                : EMPTY_BACKGROUND_TASKS,
           })
           // 2. overlay turns → the conversation runtime store (resolved via
           //    the external-id index; unresolved = this conversation was never
@@ -5546,6 +5709,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 })
               }
             }
+          }
+          break
+        }
+        case "background_task_progress": {
+          // A background sub-agent reporting while it runs, after its launch
+          // turn ended: patch the launch card in memory (resolved like a
+          // settle; an unopened conversation has no card to patch).
+          const conversationId = getConversationIdByExternalIdFromStore(
+            e.session_id
+          )
+          if (conversationId != null) {
+            useConversationRuntimeStore
+              .getState()
+              .actions.applyBackgroundTaskProgress(
+                conversationId,
+                e.tool_use_id,
+                e.meta
+              )
           }
           break
         }
@@ -5891,10 +6072,22 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           })
           break
         }
+        case "delegation_child_running":
+          // Rides the PARENT's stream, for every delegation (the card events
+          // skip one with no card). It keeps the parent's busy signal current:
+          // ending the parent cancels every sub-agent it still has running.
+          dispatch({
+            type: "DELEGATION_RUNNING",
+            contextKey,
+            childConnectionId: e.child_connection_id,
+            running: e.running,
+          })
+          break
         case "async_task": {
           // JetBrains AIR async-task delta (claude only) — Claude's background
           // shells / workflows / monitors. Merged into the connection's task
-          // table; the live rows render in `AsyncTaskStrip` under the composer.
+          // table; the live rows render in the "N running" list above the
+          // composer (`LiveRunsChip`).
           dispatch({
             type: "ASYNC_TASK",
             contextKey,
@@ -6238,6 +6431,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               case "session_busy":
                 return t("backendErrors.sessionLoadBusy", {
                   agent: agentLabel,
+                })
+              // codex keeps a conversation on the model provider it started
+              // with. codeg's own Codex settings move the provider between the
+              // ChatGPT login and a custom endpoint, so this is what reopening
+              // an older conversation after such a switch meets. The fix is to
+              // switch back, so the message says that, and quotes codex's
+              // sentence, which names both providers.
+              case "provider_mismatch":
+                return t("backendErrors.sessionLoadProviderMismatch", {
+                  agent: agentLabel,
+                  detail: e.message,
                 })
               case "session_archived":
                 return recoveryCommand
@@ -6898,23 +7102,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // would kill another client's agent. The viewer is torn down when its
         // tab unmounts (disconnect's isViewer branch detaches it).
         if (conn.isViewer) continue
-        // Launched-but-unresolved background work (async sub-agent /
-        // background shell): disconnecting would kill the agent CLI and the
-        // background task with it. The backend watcher settles or max-age
-        // expires the accounting and emits `outstanding: 0`, which re-arms
-        // this sweep for the connection.
-        if (conn.backgroundOutstanding > 0) continue
-        // The AIR channel's half of the same rule. The watcher above only sees
-        // background work that leaves a transcript trace; a workflow or monitor
-        // task announces itself here and nowhere else, so without this check a
-        // quiet interval would disconnect the connection and kill a task the
-        // strip is actively showing as running. Mirrors the backend's
-        // `has_active_background_work`, which ORs the two the same way.
-        if (liveAsyncTasks(conn.asyncTasks).length > 0) continue
-        // Claude Code's Remote Control runs in the agent CLI: disconnecting
-        // would end the session the user handed to claude.ai/code or a phone.
-        // The backend sweep spares it too (`sweep_idle`).
-        if (conn.remoteControl) continue
+        // Work a disconnect would destroy — launched-but-unresolved background
+        // work on either the watcher's count or the AIR task table, or Remote
+        // Control (see `isConnectionBusy`). The same gate the unmount and
+        // preview releases use, so the busy owner a closed tab left behind
+        // becomes reclaimable here once its work settles: the watcher's
+        // `outstanding: 0` or the task's terminal frame re-arms this sweep.
+        if (isConnectionBusy(conn)) continue
         const lastActive = lastActivityRef.current.get(contextKey) ?? 0
         if (now - lastActive > CONNECTION_IDLE_TIMEOUT_MS) {
           toDisconnect.push({
@@ -6946,10 +7140,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     teardownAttachSubscription,
   ])
 
-  // Disconnect all on unmount
+  // Disconnect every idle owned connection on unmount
   useEffect(() => {
     const reverseMap = reverseMapRef.current
     const attachSubs = attachSubscriptionsRef.current
+    const hydrationOwners = hydrationEchoOwnersRef.current
+    const pendingConnectRequests = pendingConnectRequestsRef.current
     // Capture the store ref at effect-setup time so the cleanup
     // function doesn't read a moving target (`storeRef.current` is the
     // same object across renders by design, but the lint rule
@@ -6957,10 +7153,18 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     // because in the general case a ref's `.current` can be replaced).
     const store = storeRef.current
     return () => {
+      // Cancelled waits settle immediately; their finally blocks must not
+      // replay a queued connect into a Provider that has just unmounted.
+      pendingConnectRequests.clear()
+      for (const owner of Array.from(hydrationOwners.values())) {
+        owner.cancel()
+      }
       // A connection can be routed by several surfaces (see `reverseMapRef`);
-      // tear it down at most once, and only if at least one of them OWNS it.
-      const alreadyTornDown = new Set<string>()
+      // tear it down at most once, only if at least one of them OWNS it, and
+      // not while any owner still has work in flight.
       for (const [connectionId, contextKeys] of reverseMap) {
+        let owned = false
+        let busy = false
         for (const contextKey of contextKeys) {
           // Delegation-child entries are not real user-facing
           // connections — the broker owns their backend lifecycle and
@@ -6974,10 +7178,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // acpDisconnect it on our unmount. The attach-sub detach loop below
           // releases our read-only subscription cleanly.
           if (conn?.isViewer) continue
-          if (alreadyTornDown.has(connectionId)) continue
-          alreadyTornDown.add(connectionId)
-          acpDisconnect(connectionId).catch(() => {})
+          owned = true
+          // Nobody asked to stop anything: the tree is going away under a live
+          // page (the i18n boot gate swaps it out while a new locale loads).
+          // A busy owner is left to the backend sweep, which spares it until
+          // its work settles — the same rule as a closed tab.
+          if (conn && isConnectionBusy(conn)) busy = true
         }
+        if (owned && !busy) acpDisconnect(connectionId).catch(() => {})
       }
       for (const [, sub] of attachSubs) {
         try {
@@ -7078,7 +7286,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // arrived while the snapshot was in flight — including what another
       // surface already routing it received meanwhile. Mirrors the legacy
       // owner path in `connect()`.
-      const backlog = beginHydrationEchoes(connectionId)
+      const backlog = beginHydrationEchoes(contextKey, connectionId)
       let patch: import("@/lib/snapshot-denormalize").SnapshotPatch | null =
         null
       // `null` (as opposed to a thrown error) is the backend saying it holds no
@@ -7086,8 +7294,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // merely unreachable.
       let connectionGone = false
       try {
-        const snapshot = await acpGetSessionSnapshot(connectionId)
-        if (snapshot) patch = denormalizeSnapshot(snapshot)
+        const snapshot = await Promise.race([
+          acpGetSessionSnapshot(connectionId),
+          backlog.cancelledSnapshot,
+        ])
+        if (snapshot && !backlog.cancelled)
+          patch = denormalizeSnapshot(snapshot)
         else connectionGone = true
       } catch (e) {
         console.warn(
@@ -7097,6 +7309,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         )
       }
       backlog.stop()
+      if (backlog.cancelled) return true
       // Detach race: the tab may have disconnected (disconnect() removed the
       // entry) while the snapshot fetch was in flight. Re-check the store still
       // holds THIS viewer connection BEFORE applying the snapshot, seeding
@@ -8011,6 +8224,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
 
   const disconnectAll = useCallback(async () => {
     const promises: Promise<void>[] = []
+    cancelAllHydrationEchoes()
     pendingConnectRequestsRef.current.clear()
     for (const [contextKey, conn] of storeRef.current.connections) {
       // Viewers attach to a connection another client owns — detach our
@@ -8048,6 +8262,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     await Promise.all(promises)
     dispatch({ type: "REMOVE_ALL" })
   }, [
+    cancelAllHydrationEchoes,
     discardStreamingQueues,
     dispatch,
     retireTurnFailures,
@@ -8310,13 +8525,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // order as `connectAsViewer` — anything that lands while the fetch is in
       // flight is kept, in the unmapped buffer or as an echo of another
       // surface's delivery, and deduped by seq once routed).
-      const backlog = beginHydrationEchoes(connectionId)
+      const backlog = beginHydrationEchoes(connectionId, connectionId)
       void (async () => {
         let patch: import("@/lib/snapshot-denormalize").SnapshotPatch | null =
           null
         try {
-          const snapshot = await acpGetSessionSnapshot(connectionId)
-          if (snapshot) patch = denormalizeSnapshot(snapshot)
+          const snapshot = await Promise.race([
+            acpGetSessionSnapshot(connectionId),
+            backlog.cancelledSnapshot,
+          ])
+          if (snapshot && !backlog.cancelled)
+            patch = denormalizeSnapshot(snapshot)
         } catch (e) {
           console.warn(
             "[acp-context] child snapshot fetch failed for",
@@ -8325,6 +8544,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           )
         }
         backlog.stop()
+        if (backlog.cancelled) return
         // The viewer may have closed while the snapshot was in flight —
         // never hydrate or install routing for a detached child.
         const still = storeRef.current.connections.get(connectionId)
@@ -8399,6 +8619,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       answerQuestion,
       answerPlanApproval,
       setActiveKey,
+      releaseActiveKey,
       touchActivity,
       registerOpenTabKeys,
       registerLiveSurfaceKeys,
@@ -8427,6 +8648,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       answerQuestion,
       answerPlanApproval,
       setActiveKey,
+      releaseActiveKey,
       touchActivity,
       registerOpenTabKeys,
       registerLiveSurfaceKeys,

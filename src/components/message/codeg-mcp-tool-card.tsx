@@ -172,6 +172,7 @@ export function CodegMcpToolCard({
   const isRunning = model.status === "running"
   const resultText = model.resultText?.trim() ?? ""
   const prompt = model.prompt?.trim() ?? ""
+  const attachments = model.attachments
   // The progress message / completion summary, which the row cuts off at one
   // line — the panel is where it can be read whole.
   const report =
@@ -184,7 +185,11 @@ export function CodegMcpToolCard({
   // worth reading in full, and both arrive with the arguments, long before any
   // result. Past that, anything that came back is worth a look.
   const expandable =
-    resultText !== "" || prompt !== "" || report !== "" || ack !== null
+    resultText !== "" ||
+    prompt !== "" ||
+    attachments.length > 0 ||
+    report !== "" ||
+    ack !== null
 
   // `title` restores the full text on hover: a long progress message or task
   // summary is CSS-truncated here, and the panel below has to be opened to
@@ -307,6 +312,22 @@ export function CodegMcpToolCard({
                   {prompt}
                 </div>
               </ScrollArea>
+            </div>
+          )}
+          {/* The files handed to the board task, as the paths that were sent:
+              the result only says how many made it in. */}
+          {attachments.length > 0 && (
+            <div>
+              <div className="mb-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+                {t("attachmentsLabel")}
+              </div>
+              <ul className="flex flex-col gap-0.5 rounded-md bg-muted/40 px-2 py-1.5 font-mono text-xs text-foreground/90">
+                {attachments.map((path) => (
+                  <li key={path} className="break-all">
+                    {path}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           {/* The report through the chat's Markdown renderer, as the task

@@ -708,13 +708,13 @@ impl PersonalAgentEngine {
                 .await
                 .map_err(|e| e.to_string())?
                 {
-                    crate::db::service::work_task_service::ForgeCreateOutcome::Created(t) => t,
-                    crate::db::service::work_task_service::ForgeCreateOutcome::Duplicate(t) => {
+                    crate::db::service::work_task_service::ForgeCreateOutcome::Created(t) => *t,
+                    crate::db::service::work_task_service::ForgeCreateOutcome::Duplicate(c) => {
+                        let id = c.first().map(|c| c.existing.id).unwrap_or_default();
                         return Err(format!(
-                            "task #{} is already working on this pull request; two tasks pushing \
-                             to one branch would undo each other",
-                            t.id
-                        ))
+                            "task #{id} is already working on this pull request; two tasks \
+                             pushing to one branch would undo each other"
+                        ));
                     }
                 }
             }

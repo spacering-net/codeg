@@ -1,8 +1,9 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import { listWorkspaceFiles } from "@/lib/api"
+import { searchWorkspaceFiles } from "@/lib/api"
 import type { WorkspaceFileEntry } from "@/lib/types"
+import { randomUUID } from "@/lib/utils"
 
 export interface FlatFileEntry {
   name: string
@@ -18,47 +19,91 @@ export interface FlatFileEntry {
 interface UseFileTreeOptions {
   folderPath: string | undefined
   enabled: boolean
+  query: string
+  limit?: number
+  filesOnly?: boolean
 }
 
 interface UseFileTreeResult {
   allFiles: FlatFileEntry[]
   loading: boolean
   loaded: boolean
-  /** Clear cached data so the next `enabled=true` triggers a fresh load. */
-  reset: () => void
+  /** Discard local results; an explicit refresh also invalidates native data. */
+  reset: (refreshIndex?: boolean) => void
 }
 
 /**
- * Loads a flat, gitignore-aware listing of every file/dir under `folderPath`
- * (lazily, when `enabled`) for in-memory file search — shared by the search
- * dialog and the composer `@`-mention picker.
- *
- * Discovery and gitignore filtering run on the backend (`list_workspace_files`),
- * which prunes ignored directories *during* the walk and applies no depth cap,
- * so deeply nested files are reachable while `node_modules`/`target`/… are never
- * descended. The result is cached per folder path; a folder switch keeps showing
- * the previous list until the new one loads (`loaded` gates that transition).
+ * Keep only the current query's bounded matches in the renderer. Discovery,
+ * indexing and ranking are shared in the backend, with a native cache budget.
  */
 export function useFileTree({
   folderPath,
   enabled,
+  query,
+  limit = 100,
+  filesOnly = false,
 }: UseFileTreeOptions): UseFileTreeResult {
   const [allFiles, setAllFiles] = useState<FlatFileEntry[]>([])
   const [loading, setLoading] = useState(false)
   const loadedForPathRef = useRef<string | null>(null)
+  const [revision, setRevision] = useState(0)
+  const generation = useRef(0)
+  const refresh = useRef(false)
+  // Set when a refresh was requested and the picker is next enabled: every
+  // query until the next reset then needs a native snapshot built since that
+  // moment. A window (not a per-request flag) lets later keystrokes reuse the
+  // snapshot the first one built, even if that first response was aborted.
+  const freshSince = useRef<number | null>(null)
+  const consumer = useRef<string | undefined>(undefined)
+
+  // Results for the previous keystroke stay visible (callers re-rank them
+  // against the new query) until the new response lands, so typing does not
+  // blank the list. Only a different workspace or result shape clears them.
+  const scopeRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!enabled || !folderPath) return
-    if (loadedForPathRef.current === folderPath) return
-
+    const current = ++generation.current
+    const scope = `${enabled}\0${folderPath ?? ""}\0${filesOnly}`
+    if (scopeRef.current !== scope) {
+      scopeRef.current = scope
+      loadedForPathRef.current = null
+      setAllFiles([])
+    }
+    if (!enabled || !folderPath) {
+      setLoading(false)
+      return
+    }
     let canceled = false
+    const abort = new AbortController()
     setLoading(true)
+    if (refresh.current) {
+      refresh.current = false
+      freshSince.current = performance.now()
+    }
+    const since = freshSince.current
 
     async function load() {
       try {
-        const files: WorkspaceFileEntry[] = await listWorkspaceFiles(
-          folderPath!
+        const files: WorkspaceFileEntry[] = await searchWorkspaceFiles(
+          folderPath!,
+          query,
+          {
+            limit,
+            filesOnly,
+            refresh: false,
+            ...(since === null
+              ? {}
+              : {
+                  maxAgeMs: Math.max(0, Math.floor(performance.now() - since)),
+                }),
+            request: {
+              consumerId: (consumer.current ??= randomUUID()),
+              generation: current,
+            },
+            signal: abort.signal,
+          }
         )
+        if (canceled || generation.current !== current) return
         const flat: FlatFileEntry[] = files.map((f) => ({
           name: f.name,
           relativePath: f.path,
@@ -67,26 +112,35 @@ export function useFileTree({
           lowerName: f.name.toLowerCase(),
         }))
 
-        if (!canceled) {
+        if (!canceled && generation.current === current) {
           setAllFiles(flat)
           loadedForPathRef.current = folderPath!
         }
       } catch {
-        if (!canceled) setAllFiles([])
+        if (!canceled && generation.current === current) setAllFiles([])
       } finally {
-        if (!canceled) setLoading(false)
+        if (!canceled && generation.current === current) setLoading(false)
       }
     }
 
-    void load()
+    const timer = setTimeout(() => void load(), query.trim() ? 150 : 0)
     return () => {
       canceled = true
+      abort.abort()
+      clearTimeout(timer)
     }
-  }, [enabled, folderPath])
+  }, [enabled, folderPath, query, limit, filesOnly, revision])
 
-  const reset = useCallback(() => {
+  const reset = useCallback((refreshIndex = false) => {
     loadedForPathRef.current = null
+    scopeRef.current = null
+    generation.current += 1
+    if (refreshIndex) {
+      refresh.current = true
+      freshSince.current = null
+    }
     setAllFiles([])
+    setRevision((value) => value + 1)
   }, [])
 
   return {

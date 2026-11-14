@@ -426,8 +426,31 @@ pub async fn delete_conversation(
     conv_commands::delete_conversation_with_cleanup_core(
         &state.emitter,
         &state.db.conn,
+        &state.connection_manager,
         params.conversation_id,
     )
     .await?;
     Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveConversationsParams {
+    pub conversation_ids: Vec<i32>,
+    pub target_folder_id: i32,
+}
+
+pub async fn move_conversations(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<MoveConversationsParams>,
+) -> Result<Json<conv_commands::MoveConversationsResult>, AppCommandError> {
+    let result = conv_commands::move_conversations_core(
+        &state.emitter,
+        &state.db.conn,
+        &state.connection_manager,
+        params.conversation_ids,
+        params.target_folder_id,
+    )
+    .await?;
+    Ok(Json(result))
 }

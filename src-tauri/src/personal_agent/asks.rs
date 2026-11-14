@@ -2180,6 +2180,7 @@ mod tests {
                 })
                 .collect(),
             is_secret: false,
+            allow_other: true,
         }
     }
 

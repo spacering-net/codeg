@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::UNIX_EPOCH;
 
 use base64::Engine as _;
@@ -3584,19 +3584,13 @@ async fn reparent_target(
     target.filter(|id| *id != worktree_folder_id)
 }
 
-/// Converge DB + clients once a worktree directory is off disk: its
-/// conversations move to `project_folder_id` (stamped with `origin_cwd` so
-/// history still resolves), its tabs close, its folder row is soft-deleted, any
-/// to-do task pointing at it is detached, and every client is told. Returns the
-/// number of conversations moved.
+/// Converge DB + clients once a worktree directory is off disk — the shared
+/// sequence in [`crate::commands::worktree_convergence`] — plus what only this
+/// path does: detach any to-do task that pointed at the folder and stop its
+/// office watches. Returns the number of conversations moved.
 ///
-/// Write order matters — conversations first, so they are never left pointing at
-/// a folder that has already vanished — and each step ends in a broadcast,
-/// because a removal no client hears about is a removal no client shows: the
-/// sidebar keeps the dead worktree until the next full `fetchFolders`.
-///
-/// The work-task engine runs the same sequence for the worktree it minted
-/// (`converge_worktree_removal`), wrapped in its own task bookkeeping.
+/// The work-task engine runs the same shared sequence for the worktree it
+/// minted (`converge_worktree_removal`), wrapped in its own task bookkeeping.
 async fn converge_removed_worktree_folder(
     db: &AppDatabase,
     emitter: &EventEmitter,
@@ -3604,45 +3598,17 @@ async fn converge_removed_worktree_folder(
     project_folder_id: i32,
     worktree_path: &str,
 ) -> u32 {
-    use crate::db::service::{conversation_service, tab_service, work_task_service};
+    use crate::commands::worktree_convergence;
+    use crate::db::service::work_task_service;
 
-    let moved = conversation_service::reparent_folder_conversations(
-        &db.conn,
+    let outcome = worktree_convergence::converge_db(
+        db,
+        emitter,
         worktree_folder_id,
         project_folder_id,
         worktree_path,
     )
-    .await
-    .unwrap_or(0) as u32;
-
-    match tab_service::delete_folder_tabs_and_bump(&db.conn, worktree_folder_id).await {
-        Ok(inv) => {
-            if let Some(tabs) = inv.emit {
-                crate::web::event_bridge::emit_event(
-                    emitter,
-                    crate::web::event_bridge::TABS_CHANGED_EVENT,
-                    crate::web::event_bridge::TabsChanged {
-                        version: inv.version,
-                        origin: "server".to_string(),
-                        tabs,
-                    },
-                );
-            }
-        }
-        Err(e) => {
-            tracing::warn!("[folders] tab cleanup failed for folder {worktree_folder_id}: {e}")
-        }
-    }
-
-    // Announce the folder drop only when the row really is gone, so a failed
-    // write can't leave clients disagreeing with what a refetch would return.
-    let folder_gone = match folder_service::soft_delete_folder(&db.conn, worktree_folder_id).await {
-        Ok(()) => true,
-        Err(e) => {
-            tracing::warn!("[folders] worktree folder {worktree_folder_id} soft-delete failed: {e}");
-            false
-        }
-    };
+    .await;
 
     // A settled to-do task may own this worktree (its card offers a cleanup and
     // a diff that would now only fail). The engine detaches the ones it removes
@@ -3654,20 +3620,7 @@ async fn converge_removed_worktree_folder(
             Vec::new()
         });
 
-    // Conversations first: this starts every client's refetch, so the moved rows
-    // have the shortest possible window with no folder to render under.
-    crate::web::event_bridge::emit_event(
-        emitter,
-        crate::web::event_bridge::CONVERSATIONS_BULK_CHANGED_EVENT,
-        crate::web::event_bridge::ConversationsBulkChanged {
-            imported: 0,
-            updated: moved,
-            folder_ids: vec![project_folder_id],
-        },
-    );
-    if folder_gone {
-        emit_folder_deleted(emitter, worktree_folder_id);
-    }
+    worktree_convergence::announce(emitter, outcome, project_folder_id, worktree_folder_id);
     for task_id in detached {
         crate::web::event_bridge::emit_event(
             emitter,
@@ -3676,7 +3629,7 @@ async fn converge_removed_worktree_folder(
         );
     }
     crate::office_watch::stop_office_watches_under_root(worktree_path);
-    moved
+    outcome.moved as u32
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -4872,7 +4825,7 @@ pub async fn list_directory_with_files(
 /// Only *authorized* links are returned (see [`crate::folder_links`]): a
 /// symlink that merely happens to sit in the tree — the `secrets -> ~/.ssh` a
 /// cloned repo might ship — is not one of them and stays unfollowed.
-fn authorized_links_in(root: &Path) -> Vec<(String, PathBuf)> {
+pub(super) fn authorized_links_in(root: &Path) -> Vec<(String, PathBuf)> {
     let Ok(canonical_root) = std::fs::canonicalize(root) else {
         return Vec::new();
     };
@@ -5174,29 +5127,86 @@ fn build_file_tree(
 }
 
 /// Flat, gitignore-aware listing of every file and directory under `path`, for
-/// fuzzy file search. Unlike [`get_file_tree`], ignored directories
-/// (`node_modules`, `target`, `dist`, …) are pruned *during* the walk, so no
-/// depth cap is needed: deep files stay reachable while the heavy trees are
-/// never descended and the payload stays small. Gitignore handling that used to
-/// run client-side now happens here at native speed in a single pass.
+/// compatibility with clients that need enumeration. Search surfaces use
+/// `workspace_file_search` so an unbounded listing never reaches the renderer.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn list_workspace_files(
     path: String,
 ) -> Result<Vec<WorkspaceFileEntry>, AppCommandError> {
-    let root = PathBuf::from(&path);
+    let mut entries = Vec::new();
+    visit_workspace_files(&path, |entry| {
+        entries.push(entry);
+        true
+    });
+    Ok(entries)
+}
+
+/// Visit the search-visible entries without collecting the whole workspace.
+/// Returning false stops both the main walk and any authorized linked roots.
+pub(super) fn visit_workspace_files(path: &str, mut visit: impl FnMut(WorkspaceFileEntry) -> bool) {
+    let root = PathBuf::from(path);
     // Linked directories are walked separately below, rooted at the link so
     // their own `.gitignore` applies. Excluded from the main pass because the
     // walker reports a symlink as a leaf file.
     let linked = authorized_links_in(&root);
     let linked_names: HashSet<String> = linked.iter().map(|(name, _)| name.clone()).collect();
+    if !visit_workspace_main_pass(&root, linked_names, None, &mut visit) {
+        return;
+    }
 
+    for (link_name, target) in linked {
+        if !visit(WorkspaceFileEntry {
+            name: link_name.clone(),
+            path: link_name.clone(),
+            kind: WorkspaceEntryKind::Dir,
+        }) {
+            return;
+        }
+        // Rooted at the resolved target so the linked project's own ignore
+        // files apply, then re-prefixed with the link name so every path stays
+        // relative to the workspace root and resolves back through the link.
+        if !visit_files_under(&target, &link_name, &mut visit) {
+            return;
+        }
+    }
+}
+
+/// Relative-path predicate for [`visit_workspace_focused`]: entries it rejects
+/// are neither yielded nor descended.
+pub(super) type WalkFocus = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// The main pass of [`visit_workspace_files`] restricted to the entries
+/// `focus` keeps. Descending through each kept ancestor reads that directory's
+/// ignore files exactly as a full walk would, so a handful of changed paths
+/// can be re-evaluated with full-walk semantics without walking everything.
+/// Authorized linked roots are not visited.
+pub(super) fn visit_workspace_focused(
+    path: &str,
+    focus: WalkFocus,
+    mut visit: impl FnMut(WorkspaceFileEntry) -> bool,
+) {
+    let root = PathBuf::from(path);
+    let linked_names = authorized_links_in(&root)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    visit_workspace_main_pass(&root, linked_names, Some(focus), &mut visit);
+}
+
+fn visit_workspace_main_pass(
+    root: &Path,
+    linked_names: HashSet<String>,
+    focus: Option<WalkFocus>,
+    visit: &mut impl FnMut(WorkspaceFileEntry) -> bool,
+) -> bool {
     // Conservative gitignore parity with the previous client-side pass: respect
     // in-tree `.gitignore`/`.ignore`/`.git/info/exclude`, but not the global
     // gitignore or parent-directory ignores (the workspace root is the
     // boundary). `require_git(false)` keeps `.gitignore` effective even outside
     // a git repo. `hidden(false)` keeps dotfiles visible. The `filter_entry`
     // mirrors `get_file_tree`'s hardcoded ignores exactly.
-    let walker = WalkBuilder::new(&root)
+    let filter_root = root.to_path_buf();
+    let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(false)
         .ignore(true)
@@ -5206,21 +5216,28 @@ pub async fn list_workspace_files(
         .require_git(false)
         .sort_by_file_name(|a, b| a.cmp(b))
         .filter_entry(move |e| {
+            if e.depth() == 0 {
+                return true;
+            }
             let name = e.file_name().to_string_lossy();
             if e.depth() == 1 && linked_names.contains(name.as_ref()) {
                 return false;
             }
-            if e.file_type()
+            let kept = if e
+                .file_type()
                 .is_some_and(|t| entry_presents_as_dir(&t, e.path()))
             {
                 !FILE_TREE_IGNORED_DIRS.contains(&name.as_ref())
             } else {
                 name != ".DS_Store"
-            }
+            };
+            kept && focus.as_ref().is_none_or(|focus| {
+                let rel = e.path().strip_prefix(&filter_root).unwrap_or(e.path());
+                focus(&rel.to_string_lossy().replace('\\', "/"))
+            })
         })
         .build();
 
-    let mut entries: Vec<WorkspaceFileEntry> = Vec::new();
     for result in walker {
         // Skip unreadable entries (permission errors, transient races) rather
         // than failing the whole search.
@@ -5239,12 +5256,12 @@ pub async fn list_workspace_files(
             .is_some_and(|t| entry_presents_as_dir(&t, entry_path));
         let name = entry.file_name().to_string_lossy().to_string();
         let rel_path = entry_path
-            .strip_prefix(&root)
+            .strip_prefix(root)
             .unwrap_or(entry_path)
             .to_string_lossy()
             .replace('\\', "/");
 
-        entries.push(WorkspaceFileEntry {
+        if !visit(WorkspaceFileEntry {
             name,
             path: rel_path,
             kind: if is_dir {
@@ -5252,28 +5269,21 @@ pub async fn list_workspace_files(
             } else {
                 WorkspaceEntryKind::File
             },
-        });
+        }) {
+            return false;
+        }
     }
-
-    for (link_name, target) in linked {
-        entries.push(WorkspaceFileEntry {
-            name: link_name.clone(),
-            path: link_name.clone(),
-            kind: WorkspaceEntryKind::Dir,
-        });
-        // Rooted at the resolved target so the linked project's own ignore
-        // files apply, then re-prefixed with the link name so every path stays
-        // relative to the workspace root and resolves back through the link.
-        entries.extend(list_files_under(&target, &link_name));
-    }
-
-    Ok(entries)
+    true
 }
 
 /// Flat listing of `root`, with every path prefixed by `prefix/`. Shares the
 /// ignore configuration of [`list_workspace_files`]; nested symlinks are not
 /// followed, so this cannot recurse.
-fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
+fn visit_files_under(
+    root: &Path,
+    prefix: &str,
+    visit: &mut impl FnMut(WorkspaceFileEntry) -> bool,
+) -> bool {
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(false)
@@ -5295,7 +5305,6 @@ fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
         })
         .build();
 
-    let mut entries = Vec::new();
     for result in walker {
         let Ok(entry) = result else { continue };
         let entry_path = entry.path();
@@ -5308,7 +5317,7 @@ fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
         let is_dir = entry
             .file_type()
             .is_some_and(|t| entry_presents_as_dir(&t, entry_path));
-        entries.push(WorkspaceFileEntry {
+        if !visit(WorkspaceFileEntry {
             name: entry.file_name().to_string_lossy().to_string(),
             path: format!("{prefix}/{}", rel.to_string_lossy().replace('\\', "/")),
             kind: if is_dir {
@@ -5316,9 +5325,11 @@ fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
             } else {
                 WorkspaceEntryKind::File
             },
-        });
+        }) {
+            return false;
+        }
     }
-    entries
+    true
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -8292,6 +8303,77 @@ mod tests {
             moved.origin_cwd.as_deref(),
             Some(wt_path.as_str()),
             "the session remembers where it actually ran"
+        );
+    }
+
+    /// The branch selector's removal runs the same shared convergence as the
+    /// task engine, with its own bookkeeping after the folder drop: closed tabs,
+    /// the conversations' refetch, the folder drop, then the detached task.
+    #[tokio::test]
+    async fn remove_worktree_announces_in_order_and_detaches_the_task_last() {
+        use crate::db::service::{conversation_service, tab_service};
+        use crate::models::agent::AgentType;
+        use crate::web::event_bridge::{
+            WebEventBroadcaster, CONVERSATIONS_BULK_CHANGED_EVENT, FOLDER_CHANGED_EVENT,
+            TABS_CHANGED_EVENT, WORK_TASK_CHANGED_EVENT,
+        };
+
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo.clone()).await.expect("root");
+        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
+            .await
+            .expect("worktree folder");
+        let conv =
+            conversation_service::create(&db.conn, wt_folder.id, AgentType::ClaudeCode, None, None)
+                .await
+                .expect("conversation");
+        tab_service::save_all_tabs_cas(
+            &db.conn,
+            vec![crate::models::OpenedTab {
+                id: 0,
+                folder_id: wt_folder.id,
+                conversation_id: Some(conv.id),
+                agent_type: AgentType::ClaudeCode,
+                position: 0,
+                is_active: true,
+                is_pinned: false,
+            }],
+            0,
+        )
+        .await
+        .expect("tabs");
+        seed_task_on_worktree(&db, root.id, wt_folder.id).await;
+
+        let broadcaster = std::sync::Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+        let removal =
+            git_remove_worktree_core(&emitter, &db, repo, "wt".into(), root.id, true, false)
+                .await
+                .expect("worktree + branch removal");
+        assert_eq!(removal.reparented, 1);
+
+        let channels: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|ev| ev.channel.to_string())
+            .filter(|c| {
+                [
+                    TABS_CHANGED_EVENT,
+                    CONVERSATIONS_BULK_CHANGED_EVENT,
+                    FOLDER_CHANGED_EVENT,
+                    WORK_TASK_CHANGED_EVENT,
+                ]
+                .contains(&c.as_str())
+            })
+            .collect();
+        assert_eq!(
+            channels,
+            vec![
+                TABS_CHANGED_EVENT.to_string(),
+                CONVERSATIONS_BULK_CHANGED_EVENT.to_string(),
+                FOLDER_CHANGED_EVENT.to_string(),
+                WORK_TASK_CHANGED_EVENT.to_string(),
+            ]
         );
     }
 

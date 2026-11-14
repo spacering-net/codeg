@@ -189,6 +189,22 @@ pub const COMPUTER_TOOLS_SETTINGS_CHANGED_EVENT: &str = "computer-tools-settings
 /// (`{ "automations_enabled": bool, "work_tasks_enabled": bool }`).
 pub const CHAT_AUTHORING_SETTINGS_CHANGED_EVENT: &str = "chat-authoring-settings://changed";
 
+/// Announces that the desktop web service started or stopped, from whichever
+/// surface did it — the Settings window, the status-bar toggle, or auto-start
+/// at launch. Every window (each workspace's status bar, an open Settings
+/// page) follows it by re-reading `get_web_server_status`. Payload is
+/// [`WebServiceStatusChanged`] and deliberately nothing more: like every side
+/// channel it also reaches the web broadcaster, and the status itself carries
+/// the access token.
+pub const WEB_SERVICE_STATUS_CHANGED_EVENT: &str = "web-service://status-changed";
+
+/// Payload for [`WEB_SERVICE_STATUS_CHANGED_EVENT`].
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebServiceStatusChanged {
+    pub running: bool,
+}
+
 /// Announces a delegation-settings write. Same cross-window rationale as
 /// [`CHAT_AUTHORING_SETTINGS_CHANGED_EVENT`], and load-bearing for the same
 /// reason: the record has two editors — the settings form, which writes all
@@ -564,7 +580,7 @@ pub async fn emit_with_state_built<F>(
 where
     F: FnOnce(&mut SessionState) -> Option<AcpEvent>,
 {
-    let (envelope_arc, stream, evicted) = {
+    let (envelope_arc, stream, evicted, turn_file_jobs) = {
         let mut s = state.write().await;
         let Some(payload) = build(&mut s) else {
             return false;
@@ -577,8 +593,27 @@ where
             payload,
         });
         let evicted = s.push_recent_event(Arc::clone(&envelope));
-        (envelope, s.event_stream(), evicted)
+        let turn_file_jobs = std::mem::take(&mut s.turn_file_jobs);
+        (envelope, s.event_stream(), evicted, turn_file_jobs)
     };
+
+    // Office auto-preview: confirm the files this turn's tool calls named.
+    // Filesystem work, so off the session lock and off the async workers.
+    if !turn_file_jobs.is_empty() {
+        let emitter = emitter.clone();
+        let run = move || {
+            for job in turn_file_jobs {
+                crate::agent_turn_files::run_job(job, &emitter);
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(run);
+            }
+            // Not reachable from the async callers today; never drop the work.
+            Err(_) => run(),
+        }
+    }
 
     // Per-connection broadcaster — primary delivery path for web/remote-
     // desktop transports (they use Subscribe-with-Snapshot attach for ACP
@@ -711,6 +746,12 @@ mod tests {
             rx.try_recv().is_err(),
             "non-status ACP events must not emit on conversation://changed"
         );
+    }
+
+    #[test]
+    fn web_service_status_changed_carries_only_the_running_flag() {
+        let wire = serde_json::to_value(WebServiceStatusChanged { running: true }).unwrap();
+        assert_eq!(wire, serde_json::json!({ "running": true }));
     }
 
     #[test]

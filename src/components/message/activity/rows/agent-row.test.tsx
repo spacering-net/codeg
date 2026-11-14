@@ -36,6 +36,7 @@ const DELEGATION: DelegationContextValue = {
   findByParentToolUseId: () => undefined,
   findByChildConversationId: () => undefined,
   findByTaskId: () => undefined,
+  bindingsForParent: () => [],
 }
 
 function renderRow(part: ToolCallPart) {
@@ -881,6 +882,44 @@ describe("sub-agent row: Grok's live progress", () => {
     ).toBeInTheDocument()
     expect(
       screen.queryByText(/Subagent started in background/)
+    ).not.toBeInTheDocument()
+  })
+
+  // A reloaded card holds the cold parse's pending marker, which alone can't
+  // say the child still runs. A tick that reached it since (out of turn, as
+  // `background_task_progress`) can.
+  const pendingMarker =
+    '[[codeg-background-task]]{"task_id":"sub-1","status":null,"summary":null,"result":null}'
+
+  it("reads a reloaded pending card as running once its child ticks", () => {
+    renderRow(
+      agent(
+        JSON.stringify({ description: "map repo", prompt: "map it" }),
+        "output-available",
+        {
+          output: pendingMarker,
+          meta: {
+            grokSubagentProgress: { toolCallCount: 4, durationMs: 9000 },
+          },
+        }
+      )
+    )
+    expect(screen.getByText("4 tool calls · 9s")).toBeInTheDocument()
+    expect(
+      within(header()).getByText("Running in background")
+    ).toBeInTheDocument()
+  })
+
+  it("leaves a reloaded pending card launched while no tick has come", () => {
+    renderRow(
+      agent(
+        JSON.stringify({ description: "map repo", prompt: "map it" }),
+        "output-available",
+        { output: pendingMarker }
+      )
+    )
+    expect(
+      within(header()).queryByText("Running in background")
     ).not.toBeInTheDocument()
   })
 })

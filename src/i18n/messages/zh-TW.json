@@ -2289,7 +2289,7 @@
       "statusRunningBadge": "運行中",
       "runningCountBadge": "{count} 個會話進行中",
       "statusCancelledBadge": "已取消",
-      "worktreeRemovedBadge": "來源 worktree 已刪除",
+      "originalWorkingDir": "最初執行目錄",
       "cliBadge": "從命令列啟動",
       "conversationCountUnit": "{count} 條",
       "emptyFolderHint": "暫無對話",
@@ -2330,6 +2330,7 @@
         "untitledConversation": "未命名會話",
         "setStatus": "設為狀態…",
         "deleteSelected": "刪除",
+        "moveSelected": "移動到…",
         "noConversations": "此資料夾暫無會話。",
         "noConversationsWorkspace": "工作區暫無會話。",
         "noMatchingConversations": "沒有符合過濾條件的會話。",
@@ -2431,7 +2432,7 @@
       "fieldTitle": "標題",
       "untitled": "未命名對話",
       "sessionId": "對話 ID",
-      "externalId": "擴充 ID",
+      "externalId": "對話索引",
       "agent": "智能體",
       "model": "模型",
       "status": "狀態",
@@ -2481,6 +2482,33 @@
       "reopen": "重新開啟",
       "expandSubsessions": "展開子會話",
       "collapseSubsessions": "摺疊子會話"
+    },
+    "moveConversation": {
+      "menuLabel": "移動到",
+      "title": "移動對話",
+      "titleMany": "移動 {count} 個對話",
+      "intro": "「{title}」將移動到以下資料夾：",
+      "introMany": "選取的 {count} 個對話將移動到以下資料夾：",
+      "untitledConversation": "未命名對話",
+      "explain": "從下一則訊息起，代理會在該資料夾中工作，歷史記錄保持不變。若代理無法在新目錄中恢復對話，會提示你重新載入或新建對話。",
+      "chatFilesNote": "聊天中產生的檔案仍保留在原暫存目錄 {path}，不會搬進該資料夾。",
+      "chatFilesNoteMany": "這些聊天中產生的檔案仍保留在各自的暫存目錄，不會搬進該資料夾。",
+      "noTargets": "沒有其他已開啟的資料夾",
+      "targetUnavailable": "該資料夾已關閉或移除，請另選一個。",
+      "cancel": "取消",
+      "move": "移動",
+      "toastMoved": "已將 {count} 個對話移動到 {folder}",
+      "toastSkipped": "{count} 個對話未移動",
+      "toastFailed": "移動失敗：{message}",
+      "skipReason": {
+        "not_found": "對話已不存在",
+        "not_movable": "子對話會隨父對話一起移動",
+        "already_there": "已在該資料夾中",
+        "task_owned": "屬於看板任務",
+        "busy": "代理正在處理它，請等它完成後再試",
+        "conflict": "移動過程中對話發生了變化，請重試",
+        "target_unavailable": "目標資料夾已關閉或移除"
+      }
     },
     "search": {
       "dialogTitle": "搜尋",
@@ -2588,6 +2616,24 @@
         "loadFailed": "無法讀取狀態：{message}",
         "openSettings": "開啟詳細設定",
         "refresh": "重新整理"
+      },
+      "webService": {
+        "title": "Web 服務",
+        "start": "啟動 Web 服務",
+        "stop": "停止 Web 服務",
+        "cancel": "取消",
+        "confirmStart": "啟動",
+        "confirmTitle": "向區域網路開放 Codeg？",
+        "confirmDescription": "Web 服務將監聽 {address}。同一網路中的任何裝置都能憑存取權杖連上 Codeg，包括其中的終端機和智慧體。",
+        "tooltipNetwork": "Web 服務 · 正在監聽 {address}（區域網路可存取）",
+        "tooltipLocal": "Web 服務 · 正在監聽 {address}（僅本機）",
+        "tooltipStopped": "Web 服務 · 已停止",
+        "hintNetwork": "正在監聽 {address}。同一網路中的裝置可憑存取權杖開啟 Codeg。",
+        "hintLocal": "正在監聽 {address}。只有本機能存取。",
+        "hintStoppedNetwork": "已停止。啟動後將監聽 {address}，區域網路可存取。",
+        "hintStoppedLocal": "已停止。啟動後將監聽 {address}，僅本機可存取。",
+        "copyAddress": "複製位址",
+        "openSettings": "開啟 Web 服務設定"
       }
     },
     "auxPanel": {
@@ -3435,6 +3481,7 @@
           "sessionLoadResourceNotFound": "{agent} 會話載入失敗，可重新載入重試，或開始新會話。",
           "sessionLoadUnavailable": "{agent} 無法還原此會話，它可能已結束或 agent 已停止。可重新載入重試，或開始新會話。",
           "sessionLoadBusy": "這個工作階段正在別處開啟。如果是另一個 {agent} 用戶端（桌面應用程式、CLI 或 IDE 擴充功能）開著它，先在那邊關閉它或結束那個用戶端，再重新載入；如果剛從它分叉過，約一分鐘後重新載入即可。",
+          "sessionLoadProviderMismatch": "這個工作階段是用另一個模型供應商開始的，與 {agent} 現在使用的不同，而 {agent} 只會在原本的供應商上繼續工作階段。請在 {agent} 設定裡切回那個供應商後重新載入，或者開始新的工作階段。（{detail}）",
           "sessionArchived": "原會話已在 {agent} 側歸檔，可在終端機執行 {command} 找回歷史後重新載入，或直接開始新會話。",
           "turnFailedRefusal": "{agent} 拒絕繼續此輪回覆，通常代表後端或網關出錯，請檢查代理日誌。",
           "turnFailedMaxTokens": "{agent} 已達到此輪回覆的最大 Token 限制。",
@@ -3490,7 +3537,8 @@
         },
         "errors": {
           "connectionFailed": "連線失敗",
-          "sendPromptFailed": "訊息傳送失敗：{error}"
+          "sendPromptFailed": "訊息傳送失敗：{error}",
+          "conversationMoved": "此對話已移到 {folder}，請重新傳送訊息，在那裡繼續。"
         }
       },
       "shared": {
@@ -3672,13 +3720,13 @@
             "paper-lookup": "幫我在學術資料庫中查找相關論文與開放取用全文，並提供可重用的引用。我要找的是："
           },
           "paper-lookup": "論文檢索",
-          "paper-lookupDesc": "檢索 10 個學術 API（PubMed、arXiv、OpenAlex、Crossref…）查找論文、引用與開放取用全文。",
+          "paper-lookupDesc": "檢索 18 個學術 API（PubMed、arXiv、OpenAlex、Crossref…）查找論文、引用與開放取用全文。",
           "scientific-critical-thinking": "批判性思維",
           "scientific-critical-thinkingDesc": "評估科學主張與證據品質：辨識偏誤與干擾，運用 GRADE 與偏誤風險框架。",
           "scientific-visualization": "科學視覺化",
-          "scientific-visualizationDesc": "出版級圖表：多面板佈局、顯著性標註與期刊專屬格式。",
+          "scientific-visualizationDesc": "真實、無障礙的出版級圖表：多面板佈局、不確定性呈現、配色與對比度審查及期刊匯出規劃。",
           "exploratory-data-analysis": "探索性資料分析",
-          "exploratory-data-analysisDesc": "對 200+ 種格式的科學資料檔案做自動化探索，輸出品質指標與報告。",
+          "exploratory-data-analysisDesc": "對受支援的科學資料檔案做本機、有邊界的探索：結構概覽、缺失與離群稽核，並輸出 EDA 報告。",
           "statistical-analysis": "統計分析",
           "statistical-analysisDesc": "引導式統計分析：檢定選擇、假設檢查、效應量與 APA 格式報告。",
           "statistical-power": "統計檢定力",
@@ -3933,14 +3981,12 @@
         "readImageLoading": "正在載入圖片…",
         "readImageError": "無法載入圖片",
         "shellSession": "工作階段 {id}",
-        "agentPromptLabel": "提示詞",
         "agentModelLabel": "模型",
         "agentEffortLabel": "思考強度",
         "agentRecoveredNote": "子智慧體實際已完成，以下產出因回合中斷未送達主工作階段：",
         "agentProgressTools": "{count} 次工具調用",
         "agentProgressTurns": "{count} 輪",
         "agentProgressContext": "上下文 {pct}%",
-        "agentSessionAction": "檢視子智慧體工作階段",
         "agentSessionTitle": "子智慧體工作階段",
         "agentSessionLoading": "正在載入子智慧體的對話記錄…",
         "agentSessionEmpty": "子智慧體尚未寫入任何內容。",
@@ -4008,6 +4054,13 @@
         "htmlPreviewHide": "收起預覽"
       },
       "activity": {
+        "oauth": {
+          "waiting": "等待 {server} 授權",
+          "reconnecting": "正在重新連線 {server}…",
+          "open": "在系統瀏覽器中開啟授權",
+          "verify": "重新連線後，請用實際 MCP 工具呼叫驗證存取。開啟瀏覽器不代表授權成功。",
+          "openFailed": "無法開啟瀏覽器，請透過授權連結重試。"
+        },
         "header": {
           "label": "執行過程",
           "working": "進行中",
@@ -4063,8 +4116,7 @@
           "taskFailed": "任務失敗",
           "taskStopped": "任務已停止",
           "taskRunning": "任務執行中",
-          "planUpdated": "更新了計畫",
-          "showMoreSteps": "顯示其餘 {count} 步"
+          "planUpdated": "更新了計畫"
         },
         "explore": {
           "files": "{count} 個檔案",
@@ -4174,7 +4226,9 @@
         "openFile": "開啟 {filePath}",
         "collapse": "收合",
         "currentMessage": "目前訊息",
-        "scrollToCurrent": "捲動到目前訊息（#{ordinal}）"
+        "scrollToCurrent": "捲動到目前訊息（#{ordinal}）",
+        "running": "進行中",
+        "total": "共 {count} 則"
       },
       "replyArtifacts": {
         "title": "變更檔案",
@@ -4230,6 +4284,7 @@
         "resumeDelegation": "恢復任務 {task}",
         "resumeDelegationNoId": "恢復委派任務",
         "promptLabel": "指令",
+        "attachmentsLabel": "附件",
         "ackRecorded": "已記錄到待辦任務",
         "ackNotRecorded": "未記錄到待辦任務",
         "ackNotRecordedWithReason": "未記錄到待辦任務：{reason}",
@@ -4301,7 +4356,8 @@
         "failed": "上下文壓縮失敗",
         "summary": "摘要",
         "triggerManual": "手動觸發",
-        "triggerAutomatic": "自動觸發"
+        "triggerAutomatic": "自動觸發",
+        "triggerIdle": "閒置時觸發，在提示快取過期前"
       },
       "sessionFailure": {
         "category": {
@@ -4345,6 +4401,13 @@
         "scheduledWakeup": "定時喚醒",
         "scheduledWakeupAt": "定時喚醒（{time}）",
         "scheduledTask": "定時任務"
+      },
+      "liveRuns": {
+        "count": "{count} 個執行中",
+        "awaiting": "有子智慧體在等你處理",
+        "groupDelegations": "委派",
+        "background": "背景",
+        "delegatedFallback": "委派的子智慧體"
       },
       "remoteControl": {
         "title": "遠端控制已開啟",
@@ -4533,7 +4596,12 @@
       "permissionDenied": "權限不足，請使用 1024 以上的連接埠，或以更高權限執行",
       "addressUnavailable": "該位址在本機不可用",
       "bindFailed": "綁定位址失敗"
-    }
+    },
+    "bindHost": "監聽位址",
+    "bindHostAll": "所有網路介面（0.0.0.0）",
+    "bindHostLocal": "僅本機（127.0.0.1）",
+    "bindHostAllHint": "區域網路中的裝置可憑存取權杖連線此服務。",
+    "bindHostLocalHint": "只有本機能連線此服務，例如放在反向代理或 Tailscale Serve 之後使用。"
   },
   "DirectoryBrowser": {
     "title": "瀏覽目錄",
@@ -4938,7 +5006,7 @@
       "syncFailed": "同步技能失敗"
     },
     "autoPreviewLabel": "自動開啟預覽",
-    "autoPreviewHint": "當智慧代理建立或編輯 Word、Excel、PowerPoint 檔案時，自動開啟其即時預覽。"
+    "autoPreviewHint": "智慧代理在目前回合透過工具建立或修改 Word、Excel、PowerPoint 檔案時，自動開啟其即時預覽。"
   },
   "SkillPacksSettings": {
     "title": "技能包",
@@ -6385,6 +6453,11 @@
     "completeDescription": "此任務沒有變更任何檔案，無須合併，將直接標記為已完成。",
     "completeDescriptionNoWorktree": "此任務的 worktree 已被刪除，無法再合併，將直接標記為已完成。若工作分支上仍有未合併的提交，分支會被保留。",
     "completeDeleteWorktree": "完成後刪除 worktree",
+    "threadCommentLabel": "任務完成後在條目下發評論",
+    "threadCommentLabelSeveral": "任務完成後在每個議題下發評論",
+    "threadCommentReplyLabel": "#{number} 的回覆",
+    "threadCommentPlaceholder": "留空則只發布交付情況。",
+    "threadCommentHint": "由智慧體起草，公開前請檢查。Codeg 會在後面補一行交付情況；儲存庫設定裡開著落款時還會附上 Codeg 落款。",
     "completeSubmit": "完成",
     "settingsTitle": "任務設定",
     "settingsDescription": "{folder} 中任務的預設配置。",
@@ -6444,6 +6517,9 @@
     "preflightRunning": "{name} 執行中…",
     "detailDescription": "任務詳情",
     "detailSummary": "結果",
+    "detailThreadReply": "評論回覆",
+    "detailThreadReplyHint": "接受任務時發布，可在接受對話框裡修改。",
+    "detailThreadReplyOffHint": "不會發布：這個任務沒開回寫評論，可在接受對話框裡打開。",
     "detailFiles": "變更檔案",
     "detailFilesIncludesPr": "含 PR 自身的變更",
     "detailFilesIncludesMr": "含 MR 自身的變更",
@@ -6456,6 +6532,7 @@
     "showLess": "收起",
     "detailInfo": "詳情",
     "detailBranch": "分支",
+    "detailSource": "來源",
     "detailMergeCommit": "合併提交",
     "detailChanges": "變更",
     "detailScheduled": "預計開始",
@@ -6505,6 +6582,12 @@
     "deliverPrDescriptionMr": "把該任務的分支推送到 {repo}，並向 {base} 建立合併請求。內文會自動關聯來源 Issue，合併請求合併時 Issue 一併關閉。",
     "deliverPrDescriptionLocal": "把該任務的分支推送到 {repo}，並向 {base} 建立 Pull Request。",
     "deliverPrDescriptionLocalMr": "把該任務的分支推送到 {repo}，並向 {base} 建立合併請求。",
+    "deliverPrDescriptionIssues": "把該任務的分支推送到 {repo}，並向 {base} 建立 Pull Request。PR 合併時關閉下面勾選的議題，未勾選的只做關聯。",
+    "deliverPrDescriptionIssuesMr": "把該任務的分支推送到 {repo}，並向 {base} 建立合併請求。合併請求合併時關閉下面勾選的議題，未勾選的只做關聯。",
+    "deliverPrClosesLabel": "合併時關閉",
+    "deliverPrClosesHint": "這次改動沒解決的議題請取消勾選，它只會被關聯。交付開始後清單就定下來了。",
+    "deliverPrClosesFixed": "已在這個任務第一次交付時定下——要改的話，請到平台上編輯這個 Pull Request 的描述。",
+    "deliverPrClosesFixedMr": "已在這個任務第一次交付時定下——要改的話，請到平台上編輯這個合併請求的描述。",
     "deliverPrRemoteLoading": "正在讀取專案的遠端儲存庫…",
     "deliverPrRemoteFailed": "無法讀取專案的遠端儲存庫，請稍後再試。",
     "deliverPrRemoteUnsupported": "該專案的 origin 不在 GitHub、GitLab 或 Gitea 上，無法建立 PR。",
@@ -6537,7 +6620,13 @@
     "deliverPrBackDone": "已推回 PR",
     "deliverPrBackDoneMr": "已推回合併請求",
     "badgePersonalAgent": "個人助手派出",
-    "badgePersonalAgentExecutor": "個人助手派出 · {executor}"
+    "badgePersonalAgentExecutor": "個人助手派出 · {executor}",
+    "deliverPrUncommitted": "任務工作樹裡還有 {count} 個未提交的檔案。會先提交到 {branch}，再和其餘變更一起推送。",
+    "deliverPrUncommittedFiles": "要提交的檔案",
+    "deliverPrCommitMessageLabel": "提交訊息",
+    "deliverPrUncommittedHint": "想讓智能體自己提交的話，取消後把任務退回再跑一輪。",
+    "deliverPrCommitSubmit": "提交、推送並建立",
+    "deliverPrCommitPushSubmit": "提交並推送"
   },
   "CustomSkillsSettings": {
     "loading": "正在載入自訂技能…",
@@ -7039,7 +7128,11 @@
     "errors": {
       "noAccount": "尚未為 {host} 設定 {provider} 帳號。請先在「設定 → 版本控制」中新增，才能載入這個儲存庫。",
       "unsupportedHost": "儲存庫面板目前僅支援 GitHub、GitLab、Gitea 與 CNB，而 {host} 不屬於其中任何一種。如果它是自架的 GitHub Enterprise、GitLab、Gitea、Forgejo 或 CNB 執行個體，請在「設定 → 版本控制」中為它新增帳號。",
-      "wrongForge": "{host} 實際上是 {provider}，先前被誤判為另一種程式碼託管服務。已自動更正，請重新載入。"
+      "wrongForge": "{host} 實際上是 {provider}，先前被誤判為另一種程式碼託管服務。已自動更正，請重新載入。",
+      "approveHeadChanged": "你審閱之後這個拉取請求又有了新提交。請重新整理、重新審閱後再核准。",
+      "approveAmbiguous": "無法確定這些工作流程執行只屬於這個拉取請求。請到 GitHub 上核准。",
+      "approveForbidden": "此帳號無權在這裡核准工作流程執行：需要儲存庫寫入權限，且權杖需要 Actions（寫入）權限或 repo 範圍。",
+      "approveNotOpen": "這個拉取請求已經不是開啟狀態。"
     },
     "addAccount": "新增帳號",
     "empty": "暫無內容",
@@ -7150,6 +7243,7 @@
     "checksPassing": "{count} 項通過",
     "checksFailing": "{count} 項失敗",
     "checksPending": "{count} 項進行中",
+    "checksNeutralCount": "{count} 項無結論",
     "checkAllowFailure": "允許失敗",
     "checkSuccess": "通過",
     "checkFailure": "失敗",
@@ -7187,7 +7281,7 @@
     "dialogDescriptionMr": "將在 {repo} 對應的資料夾建立一個待辦任務，工作樹直接檢出到這個合併請求的頭提交——智能體的提交疊在它上面，驗收後推回同一個合併請求。",
     "instructionPlaceholder": "給智慧體的補充說明（可選）…",
     "writebackLabel": "完成後回寫留言",
-    "writebackHint": "任務完成後，在這個項目下發一則留言：結果、連結與變更行數。",
+    "writebackHint": "任務完成後，在這個條目下發一則評論：智慧體起草的處理回覆（接受任務時可審閱修改），以及工作是怎麼交付的。",
     "previewToggle": "預覽任務將攜帶的 Issue 內容",
     "previewEmpty": "（無描述）",
     "duplicateBody": "已有一個進行中的任務在處理該條目：{title}（{status}）。仍要再建一個嗎？",
@@ -7197,6 +7291,29 @@
     "creating": "建立中…",
     "createAnyway": "仍要新建",
     "viewExisting": "檢視既有任務",
+    "selectItem": "選擇 #{number}",
+    "selectBlockedActive": "這個議題已有進行中的任務",
+    "selectionLabel": "已選的議題",
+    "selectionCount": "已選 {count} 項",
+    "selectionOffPage": "其中 {count} 項不在目前列表",
+    "selectionClear": "清除",
+    "combineAction": "合併處理 {count} 項",
+    "combineNeedsTwo": "至少選 2 個議題",
+    "combineTitle": "合併處理 {count} 個議題",
+    "combineDescription": "將在 {repo} 對應的資料夾建立一個待辦任務——一個智慧體在同一個工作樹裡一起處理這些議題，你驗收後才落地。",
+    "combineItemsLabel": "這個任務包含的議題",
+    "combineRemoveItem": "移除 #{number}",
+    "combineScenarioFixHint": "智慧體先逐一判斷報告是否屬實，把屬實的在同一處改動裡一起修好；不屬實的一行都不動，帶著結論回來等你處理。",
+    "combineScenarioPlanFirstHint": "智慧體先逐一判斷報告是否屬實，再為屬實的那些產出一份方案並停下；同意方案後退回任務，讓它實作。",
+    "combineWritebackLabel": "完成後在每個議題下回寫評論",
+    "combineWritebackHint": "任務完成後，在每個議題下各發一則評論：智慧體為它起草的處理回覆（接受任務時可審閱修改），以及工作是怎麼交付的。",
+    "combineTooFew": "合併處理至少要 2 個議題——只處理一個的話，請在它那一列點「處理」。",
+    "combineConflictsBody": "其中有些議題已有活躍任務在處理：",
+    "combineConflictItem": "#{number}——{title}（{status}）",
+    "combineRemoveConflicts": "移除這些議題",
+    "combineCreated": "已為 {count} 個議題建立一個任務",
+    "combineViewBoard": "在看板中查看",
+    "combinedWith": "與 {numbers} 合併處理",
     "scenarioLabel": "處理方式",
     "scenarioFix": "直接修復 / 實作",
     "scenarioFixHint": "智慧體先判斷報告是否屬實，屬實才動手修復；不屬實（無法重現、依設計如此、已修復……）就提前終止、不改任何程式碼，帶著結論回來等你處理。",
@@ -7222,6 +7339,8 @@
     "settingsPrDefaultHint": "開啟 PR 或 MR 的處理對話框時預先選取的方式。",
     "settingsWritebackDefault": "預設回寫留言",
     "settingsWritebackDefaultHint": "處理對話框裡那個開關的初始狀態，每個項目仍可單獨調整。",
+    "settingsCommentFooter": "評論末尾附 Codeg 落款",
+    "settingsCommentFooterHint": "在 codeg 發出的每則評論末尾加上「🤖 Generated with Codeg」，並連結到 Codeg 儲存庫。",
     "settingsPromptsIntro": "常駐提示詞會接在所選情境的內建指令之後、你在處理對話框裡填的補充說明之前，內建指令不需在這裡重複。它只隨任務的第一輪送出；每一輪都要帶的內容請寫在待辦任務設定的提示詞裡。",
     "settingsPromptsLabel": "情境",
     "settingsPromptAll": "所有情境",
@@ -7273,7 +7392,7 @@
     "autoAutoStart": "立即開始",
     "autoAutoStartHint": "新任務建立後立即排隊，何時執行由任務設定的並行上限決定。關閉時：任務留在待辦中。",
     "autoWriteback": "完成後回寫留言",
-    "autoWritebackHint": "任務完成時，在項目下發布與發起對話框「回寫留言」開關相同的簡短狀態留言。",
+    "autoWritebackHint": "任務完成時，在條目下發布與發起對話框中「回帖」開關相同的評論：智慧體起草、你在接受任務時審閱過的處理回覆，以及交付情況。",
     "autoActivity": "執行情況",
     "autoScanNow": "立即掃描",
     "autoScanNowOff": "開啟一種觸發方式並儲存後才能掃描。",
@@ -7301,7 +7420,23 @@
     "autoSkipExcludedAuthor": "作者被排除",
     "autoSkipMissingLabel": "無符合標籤",
     "autoSkipAuthorNotIncluded": "作者不在名單",
-    "save": "儲存"
+    "save": "儲存",
+    "checksAwaitingApproval": "{count} 個工作流程等待核准",
+    "checksApprovalShort": "待核准",
+    "approveUnknownTitle": "可能有工作流程在等待核准",
+    "approveExplain": "這個拉取請求來自 fork，它的工作流程要等有寫入權限的人核准後才會執行。核准會在儲存庫的 CI 上執行這些程式碼，請先審閱變更。",
+    "approveIncompleteHint": "沒能查完所有工作流程執行，GitHub 上可能還有更多在等待。",
+    "approveBlockedAmbiguous": "同一分支還有另一個開啟的拉取請求，無法確定這些執行只屬於這一個。請到 GitHub 上核准。",
+    "approveBlockedPermission": "此帳號沒有該儲存庫的推送權限，無法核准工作流程。",
+    "approveOpenOnForge": "在 GitHub 上開啟",
+    "approveWorkflows": "核准工作流程執行",
+    "approving": "正在核准…",
+    "approveConfirmTitle": "核准工作流程執行嗎？",
+    "approveConfirmBody": "{count} 個工作流程將在儲存庫的 CI 上執行這個拉取請求的程式碼（提交 {sha}）。請在審閱變更後再核准。",
+    "approveDone": "已核准 {count} 個工作流程",
+    "approvePartial": "部分工作流程未能核准：{names}",
+    "approveNothingHeld": "已經沒有等待核准的工作流程了。",
+    "mergeWorkflowsAwaiting": "有工作流程等待核准"
   },
   "Canvas": {
     "title": "無限畫布",

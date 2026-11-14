@@ -89,6 +89,11 @@ pub struct WorkTaskInfo {
     /// The personal-agent dispatch that created this task, when one did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personal_agent_dispatch_id: Option<i32>,
+    /// The reply drafted for each thread of a forge-sourced task, keyed by
+    /// item number — what the write-back posts once the task is accepted.
+    /// `None` = no draft (the comment is then the outcome line alone).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub writeback_drafts: Option<std::collections::BTreeMap<i64, String>>,
     /// Latest `agent_progress` milestone OF THIS GENERATION (filled by `list`
     /// for live tasks only — the card's realtime progress line). Scoped by
     /// `run_seq`: a retry, a follow-up and a merge each start a new one, and
@@ -140,10 +145,24 @@ pub struct WorkTaskDraft {
 pub struct WorkTaskSource {
     /// 'forge_issue' | 'forge_pr'
     pub kind: String,
-    /// Canonical key from `forge::source_key` — recomputed server-side.
+    /// Canonical key from `forge::source_key` — recomputed server-side. The
+    /// task's lead item: its only one, unless `extra_keys` names more.
     pub key: String,
+    /// The other items a task made from several related issues handles, in
+    /// the task's own order after the lead. Empty for a task triggered from
+    /// one item. Same derivation as `key`.
+    #[serde(default)]
+    pub extra_keys: Vec<String>,
     /// `ForgeSourceMeta` as JSON (URL, title, account id, PR head/base …).
     pub meta: serde_json::Value,
+}
+
+impl WorkTaskSource {
+    /// Every item the task handles, lead first — what its
+    /// `work_task_source_key` rows record.
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.key).chain(self.extra_keys.iter())
+    }
 }
 
 /// Wire DTO for a saved task template: a display name plus the title seed and
@@ -527,6 +546,15 @@ pub struct WorkTaskChangedFile {
     pub file: String,
     pub additions: i32,
     pub deletions: i32,
+}
+
+/// A file a task worktree holds uncommitted (`git status`): what committing
+/// the leftovers before a delivery would add. `status` is one letter — `A`
+/// added or untracked, `M` modified, `D` deleted, `R` renamed or copied.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkTaskUncommittedFile {
+    pub file: String,
+    pub status: String,
 }
 
 #[cfg(test)]

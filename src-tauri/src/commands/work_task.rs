@@ -13,7 +13,7 @@ use crate::db::service::work_task_service;
 use crate::db::AppDatabase;
 use crate::models::{
     FollowUpIntent, WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings,
-    WorkTaskInfo, WorkTaskTemplateDraft, WorkTaskTemplateInfo,
+    WorkTaskInfo, WorkTaskTemplateDraft, WorkTaskTemplateInfo, WorkTaskUncommittedFile,
 };
 use crate::web::event_bridge::{
     emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
@@ -654,20 +654,33 @@ pub async fn work_task_merge_unqueue_core(
 /// the task lands, the same offer the merge and complete acceptances make. It
 /// never changes the result: a removal that fails leaves a retryable
 /// `cleanup_state` on the card and the delivered URL still comes back.
+///
+/// `closes` is which issues the pull request closes, for a task made from
+/// several related issues only — chosen at its first delivery and fixed from
+/// then on (see `engine::closing_list`). `None` keeps the list already fixed,
+/// or closes them all on a first delivery.
+///
+/// `commit_message` commits what the agent left uncommitted in the worktree
+/// (see [`work_task_uncommitted_files_core`]) before the push; `None` refuses
+/// a dirty worktree, which is what every client did before the choice existed.
 pub async fn work_task_deliver_pr_core(
     id: i32,
     pr_title: Option<String>,
     draft: bool,
     delete_worktree: bool,
     mark_done: Option<bool>,
+    closes: Option<Vec<i64>>,
+    commit_message: Option<String>,
 ) -> Result<String, DbError> {
     engine()?
-        .deliver_pr(
+        .deliver_pr_closing(
             id,
             pr_title,
             draft,
             delete_worktree,
             mark_done.unwrap_or(true),
+            closes,
+            commit_message,
         )
         .await
         .map_err(DbError::Validation)
@@ -681,6 +694,62 @@ pub async fn work_task_complete_core(id: i32, delete_worktree: bool) -> Result<(
         .complete_task(id, delete_worktree)
         .await
         .map_err(DbError::Validation)
+}
+
+/// The user's answer about the thread comment of a forge-sourced task in
+/// review, given in the acceptance dialog right before the acceptance itself:
+/// whether a comment is posted when the task finishes, and the reply it
+/// carries for each of the task's items (an item left out, or left blank,
+/// gets the outcome line alone). Pure DB, like the trigger dialog's own
+/// switch it overrides.
+///
+/// The text is the user's: kept as typed (normalized and capped, see
+/// `forge::thread_reply::normalize_user_reply`), never re-sanitized — what they
+/// see in the dialog is what gets posted. Replies for numbers the task does not
+/// handle are dropped.
+///
+/// `run_seq` is the generation the dialog was showing. The dialogs send their
+/// answer before EVERY acceptance, changed or not, so this is also what binds
+/// an acceptance to the reply on screen: a task sent back and reviewed again
+/// meanwhile has a newer draft, and the answer is refused rather than letting
+/// the acceptance post a reply nobody read.
+pub async fn work_task_set_writeback_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    id: i32,
+    run_seq: i32,
+    writeback: bool,
+    drafts: std::collections::BTreeMap<i64, String>,
+) -> Result<(), DbError> {
+    let task = work_task_service::get_model(&db.conn, id).await?;
+    let items = task
+        .source_meta
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<crate::forge::ForgeSourceMeta>(s).ok())
+        .map(|meta| meta.item_numbers())
+        .ok_or_else(|| {
+            DbError::Validation("this task did not come from an issue or pull request".to_string())
+        })?;
+    let drafts = crate::forge::thread_reply::drafts_json(
+        drafts,
+        &items,
+        crate::forge::thread_reply::normalize_user_reply,
+    );
+    if !work_task_service::set_writeback(&db.conn, id, run_seq, writeback, drafts.as_deref())
+        .await?
+    {
+        return Err(DbError::Validation(
+            "the task changed since this dialog opened (it left review or ran again) — \
+             nothing was accepted; reopen it to see the current reply"
+                .to_string(),
+        ));
+    }
+    emit_event(
+        emitter,
+        WORK_TASK_CHANGED_EVENT,
+        WorkTaskChange::Upsert { id },
+    );
+    Ok(())
 }
 
 /// Archive / unarchive a terminal task (pure DB; no engine needed). Archived
@@ -746,9 +815,10 @@ pub async fn work_task_cleanup_core(id: i32) -> Result<(), DbError> {
 /// while the base branch advances, and base content the agent merged in is not
 /// shown as the task's change). `file = None` → full patch.
 ///
-/// Uncommitted work is part of it: nothing makes the agent commit before the
-/// task reaches review (the merge generation commits the leftovers itself), so
-/// a review that showed only committed work would be reviewing half the task.
+/// Uncommitted work is part of it: the agent is told to commit, but nothing
+/// enforces that before the task reaches review (the merge generation and the
+/// delivery dialog commit the leftovers themselves), so a review that showed
+/// only committed work would be reviewing half the task.
 /// New files therefore render as `new file mode` hunks rather than as an empty
 /// diff — see [`crate::work_task::git::diff_patch_with_untracked`].
 pub async fn work_task_diff_core(
@@ -794,6 +864,26 @@ pub async fn work_task_changed_files_core(
         return Ok(vec![]);
     };
     crate::work_task::git::diff_numstat_with_untracked(&wt.path, &base).await
+}
+
+/// What the task's worktree holds uncommitted — the files a delivery would
+/// commit first (see [`work_task_deliver_pr_core`]). Empty when the task has
+/// no worktree; a git error is an error, so the dialog never reads a question
+/// git refused to answer as "clean".
+pub async fn work_task_uncommitted_files_core(
+    db: &AppDatabase,
+    id: i32,
+) -> Result<Vec<WorkTaskUncommittedFile>, AppCommandError> {
+    let task = work_task_service::get_model(&db.conn, id)
+        .await
+        .map_err(AppCommandError::from)?;
+    let Some(wt_id) = task.worktree_folder_id else {
+        return Ok(vec![]);
+    };
+    let wt = get_folder_core(db, wt_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    crate::work_task::git::uncommitted_files(&wt.path).await
 }
 
 pub async fn work_task_settings_get_core(
@@ -1082,14 +1172,39 @@ pub async fn work_task_deliver_pr(
     draft: bool,
     delete_worktree: bool,
     mark_done: Option<bool>,
+    closes: Option<Vec<i64>>,
+    commit_message: Option<String>,
 ) -> Result<String, DbError> {
-    work_task_deliver_pr_core(id, pr_title, draft, delete_worktree, mark_done).await
+    work_task_deliver_pr_core(
+        id,
+        pr_title,
+        draft,
+        delete_worktree,
+        mark_done,
+        closes,
+        commit_message,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn work_task_complete(id: i32, delete_worktree: bool) -> Result<(), DbError> {
     work_task_complete_core(id, delete_worktree).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_set_writeback(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    id: i32,
+    run_seq: i32,
+    writeback: bool,
+    drafts: std::collections::BTreeMap<i64, String>,
+) -> Result<(), DbError> {
+    work_task_set_writeback_core(&EventEmitter::Tauri(app), &db, id, run_seq, writeback, drafts)
+        .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1137,6 +1252,15 @@ pub async fn work_task_changed_files(
     id: i32,
 ) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
     work_task_changed_files_core(&db, id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_uncommitted_files(
+    db: tauri::State<'_, AppDatabase>,
+    id: i32,
+) -> Result<Vec<WorkTaskUncommittedFile>, AppCommandError> {
+    work_task_uncommitted_files_core(&db, id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

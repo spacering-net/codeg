@@ -104,6 +104,13 @@ export interface CodegMcpToolModel {
    */
   prompt: string | null
   /**
+   * `create_work_task`'s `attachments` — the file paths handed to the task
+   * (images are stored in it, other files referenced). Empty for every other
+   * tool and when none were passed. Surfaced like `prompt`: the result only
+   * reports how many were attached, never which.
+   */
+  attachments: string[]
+  /**
    * `resume_delegation`'s optional `reason` argument — why the run was being
    * revived. `null` for every other tool and when the LLM omitted it.
    *
@@ -140,6 +147,20 @@ function str(obj: Record<string, unknown>, key: string): string | null {
   if (typeof value !== "string") return null
   const trimmed = value.trim()
   return trimmed ? trimmed : null
+}
+
+/** `create_work_task`'s `attachments`, read the way the companion reads them:
+ *  an array of paths or a lone path, blanks dropped and repeats collapsed. */
+function attachmentPaths(obj: Record<string, unknown>): string[] {
+  const value = obj.attachments
+  const items = Array.isArray(value) ? value : [value]
+  const paths: string[] = []
+  for (const item of items) {
+    if (typeof item !== "string") continue
+    const path = item.trim()
+    if (path && !paths.includes(path)) paths.push(path)
+  }
+  return paths
 }
 
 // Same wrapper keys `delegation-card.ts` peels — JSON-RPC/MCP relays pack a
@@ -429,6 +450,8 @@ export function parseCodegMcpToolCall(params: {
     detail: args ? spec.detail(args) : null,
     verdict: params.tool === "task_complete" ? parseVerdict(args) : null,
     prompt: authoring && args ? str(args, "prompt") : null,
+    attachments:
+      params.tool === "create_work_task" && args ? attachmentPaths(args) : [],
     reason:
       params.tool === "resume_delegation" && args ? str(args, "reason") : null,
     ack,

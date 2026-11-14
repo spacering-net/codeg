@@ -1,6 +1,7 @@
 import {
   getActiveRemoteConnectionId,
   getShellTransport,
+  getServerBaseUrl,
   getTransport,
   isDesktop,
   isRemoteDesktopMode,
@@ -12,6 +13,7 @@ import {
   unauthorizedSource,
 } from "./transport/web-auth"
 import { notifyWebUnauthorized } from "./transport/web-connection-store"
+import { randomUUID } from "./utils"
 import { getCurrentEffectiveAppLocale } from "./i18n"
 import {
   DEFAULT_FORGE_COMMENT_PAGE_SIZE,
@@ -19,6 +21,7 @@ import {
   DEFAULT_FORGE_PAGE_SIZE,
 } from "./forge-list-prefs"
 import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
+import { asConversationMovedError } from "./conversation-moved"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
@@ -84,7 +87,9 @@ import type {
   DeepSeekModelCatalog,
   ForgeAutoScanReport,
   ForgeAutoStatus,
+  ForgeApproveResult,
   ForgeChangeDetail,
+  ForgeCheckSummaryList,
   ForgeChangedFileList,
   ForgeComment,
   ForgeCreateResult,
@@ -92,11 +97,14 @@ import type {
   ForgeIdentity,
   ForgeIssueList,
   ForgeIssueRow,
+  ForgeIssuesCreateResult,
+  ForgeIssuesTaskDraftInput,
   ForgeLabelList,
   ForgeMergeMethod,
   ForgeMergeOptions,
   ForgePanelSettings,
   ForgeRemote,
+  ForgeImage,
   ForgeSettingsStore,
   ForgeSort,
   ForgeStateAction,
@@ -110,6 +118,7 @@ import type {
   WorkTaskEvent,
   WorkTaskFolderSettings,
   WorkTaskTemplate,
+  WorkTaskUncommittedFile,
   ConversationSummary,
   ConversationDetail,
   ConversationOutline,
@@ -176,6 +185,7 @@ import type {
   WorktreeResolution,
   GitWorktreeRemoval,
   DbConversationSummary,
+  MoveConversationsResult,
   ImportResult,
   ImportSelectedResult,
   ScanResult,
@@ -382,7 +392,7 @@ export async function acpPrompt(
     })
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
-    throw e
+    throw asConversationMovedError(e) ?? e
   }
 }
 
@@ -4414,6 +4424,8 @@ export type SettingsSection =
   | "version-control"
   | "shortcuts"
   | "system"
+  // Desktop only: the web nav has no Web service page.
+  | "web-service"
 
 interface OpenSettingsWindowOptions {
   agentType?: AgentType | null
@@ -4643,6 +4655,22 @@ export async function deleteConversation(
   conversationId: number
 ): Promise<void> {
   return getTransport().call("delete_conversation", { conversationId })
+}
+
+/**
+ * Move conversations to another open project folder. From the next message on
+ * the agent works in the target folder; the history is untouched. Each
+ * conversation is judged on its own — see {@link MoveConversationsResult} —
+ * and the call rejects only for an invalid target.
+ */
+export async function moveConversations(
+  conversationIds: number[],
+  targetFolderId: number
+): Promise<MoveConversationsResult> {
+  return getTransport().call("move_conversations", {
+    conversationIds,
+    targetFolderId,
+  })
 }
 
 // Folder command management
@@ -5045,7 +5073,15 @@ export async function workTaskDeliverPr(
   prTitle: string | null,
   draft: boolean,
   deleteWorktree: boolean,
-  markDone: boolean
+  markDone: boolean,
+  /** Which issues the pull request closes — a task made from several related
+   *  issues only, and only before its first delivery fixed the list. Omitted
+   *  (`undefined`) for every other delivery. */
+  closes?: number[],
+  /** Commit what the worktree holds uncommitted, with this message, before
+   *  the push (see `workTaskUncommittedFiles`). Omitted, a dirty worktree is
+   *  refused. */
+  commitMessage?: string
 ): Promise<string> {
   return getTransport().call("work_task_deliver_pr", {
     id,
@@ -5053,6 +5089,8 @@ export async function workTaskDeliverPr(
     draft,
     deleteWorktree,
     markDone,
+    ...(closes === undefined ? {} : { closes }),
+    ...(commitMessage === undefined ? {} : { commitMessage }),
   })
 }
 
@@ -5087,6 +5125,28 @@ export async function workTaskDefer(
   return getTransport().call("work_task_defer", { id, deferred })
 }
 
+/**
+ * The answer about a forge-sourced task's thread comment, given while
+ * accepting it: whether it is posted when the task finishes, and the reply it
+ * carries per item number (blank or missing = the outcome line alone). Only
+ * while the task is in review in generation `runSeq` — the one the dialog
+ * showed; call it before the acceptance itself, which it then binds to that
+ * generation (refused once the task ran again).
+ */
+export async function workTaskSetWriteback(
+  id: number,
+  runSeq: number,
+  writeback: boolean,
+  drafts: Record<number, string>
+): Promise<void> {
+  return getTransport().call("work_task_set_writeback", {
+    id,
+    runSeq,
+    writeback,
+    drafts,
+  })
+}
+
 /** Remove the task's worktree + branch (also retries a failed cleanup). */
 export async function workTaskCleanup(id: number): Promise<void> {
   return getTransport().call("work_task_cleanup", { id })
@@ -5104,6 +5164,14 @@ export async function workTaskChangedFiles(
   id: number
 ): Promise<WorkTaskChangedFile[]> {
   return getTransport().call("work_task_changed_files", { id })
+}
+
+/** What the task's worktree holds uncommitted — the files a delivery would
+ *  commit before pushing. */
+export async function workTaskUncommittedFiles(
+  id: number
+): Promise<WorkTaskUncommittedFile[]> {
+  return getTransport().call("work_task_uncommitted_files", { id })
 }
 
 /** Effective settings after the folder → global → built-in fallback — what
@@ -5790,14 +5858,66 @@ export async function getFileTree(
 }
 
 /**
- * Flat, gitignore-aware listing of every file/dir under `path`. Ignored
- * directories are pruned during the backend walk (no depth cap), so deeply
- * nested files are reachable while the payload stays small. Used by file search.
+ * Enumerate every non-ignored file/dir under `path`, without a depth cap.
+ * This can return millions of entries; search surfaces use searchWorkspaceFiles
+ * to keep the renderer's payload and retained state bounded.
  */
 export async function listWorkspaceFiles(
   path: string
 ): Promise<WorkspaceFileEntry[]> {
   return getTransport().call("list_workspace_files", { path })
+}
+
+/** Compatibility no-op. Discovery starts only with a cancellable query. */
+export async function prepareWorkspaceFileSearch(path: string): Promise<void> {
+  return getTransport().call("prepare_workspace_file_search", { path })
+}
+
+/** Rank across the workspace and transfer only a bounded set of matches. */
+export async function searchWorkspaceFiles(
+  path: string,
+  query: string,
+  options: {
+    limit?: number
+    filesOnly?: boolean
+    refresh?: boolean
+    /** Reject a cached snapshot built more than this many ms ago. */
+    maxAgeMs?: number
+    request?: { consumerId: string; generation: number }
+    signal?: AbortSignal
+  } = {}
+): Promise<WorkspaceFileEntry[]> {
+  const {
+    signal,
+    request = { consumerId: randomUUID(), generation: 0 },
+    ...params
+  } = options
+  if (signal?.aborted) return []
+  const transport = getTransport()
+  const cancel = () => {
+    void transport
+      .call("cancel_workspace_file_search", { request })
+      .catch(() => {})
+  }
+  signal?.addEventListener("abort", cancel, { once: true })
+  try {
+    return await transport.call(
+      "search_workspace_files",
+      {
+        path,
+        query,
+        ...params,
+        request,
+      },
+      {
+        // The backend bounds queue wait + traversal to five minutes. Give both
+        // HTTP transports time to receive that result, including a cold build.
+        timeoutMs: 330_000,
+      }
+    )
+  } finally {
+    signal?.removeEventListener("abort", cancel)
+  }
 }
 
 export async function startWorkspaceStateStream(
@@ -6080,7 +6200,20 @@ export interface WebServerInfo {
   port: number
   token: string
   addresses: string[]
+  /** Address the listener is bound to: `0.0.0.0` (every interface, so the
+   *  local network can reach it) or `127.0.0.1` (this machine only). */
+  bindHost: string
 }
+
+/** Bind hosts the desktop web service can be configured with (Rust
+ *  `WEB_SERVICE_HOST_CANDIDATES`); the first is the default. */
+export const WEB_SERVICE_HOSTS = ["0.0.0.0", "127.0.0.1"] as const
+export type WebServiceHost = (typeof WEB_SERVICE_HOSTS)[number]
+export const DEFAULT_WEB_SERVICE_HOST: WebServiceHost = "0.0.0.0"
+
+/** Broadcast whenever the desktop web service starts or stops, from any
+ *  window or from auto-start. Carries only `running`; re-read the status. */
+export const WEB_SERVICE_STATUS_CHANGED_EVENT = "web-service://status-changed"
 
 export async function startWebServer(params?: {
   port?: number
@@ -6106,6 +6239,8 @@ export interface WebServiceConfig {
   token: string | null
   port: number | null
   autoStart: boolean
+  /** Saved bind host; `null`/absent means never chosen (the default). */
+  host?: WebServiceHost | null
 }
 
 export async function getWebServiceConfig(): Promise<WebServiceConfig> {
@@ -7086,6 +7221,37 @@ export async function forgeIssueDetail(
   })
 }
 
+/** Download to the backend cache; render its binary resource URL. */
+export async function forgeReadImage(
+  folderId: number,
+  uploadPath: string,
+  accountId?: string | null
+): Promise<ForgeImage> {
+  const connectionId = getActiveRemoteConnectionId()
+  const baseUrl = getServerBaseUrl()
+  const image = await getTransport().call<ForgeImage>("forge_read_image", {
+    folderId,
+    uploadPath,
+    accountId: accountId ?? null,
+  })
+  if (connectionId != null) {
+    // Preserve the remote connection's custom auth headers and support HTTP
+    // remote servers: Rust copies the binary into this desktop's cache.
+    try {
+      return await getShellTransport().call<ForgeImage>(
+        "remote_cache_forge_image",
+        { connectionId, url: image.url }
+      )
+    } catch (error) {
+      if (isRemoteAuthenticationFailed(error)) {
+        notifyRemoteDesktopUnauthorized()
+      }
+      throw error
+    }
+  }
+  return isDesktop() ? image : { ...image, url: `${baseUrl}${image.url}` }
+}
+
 /** Everything a COUNT may be narrowed by. No page and no order: neither can
  *  change the number, which is what lets the switcher survive a page turn
  *  without spending a request. */
@@ -7270,6 +7436,35 @@ export async function forgeChangeDetail(
   })
 }
 
+/** CI summaries for one page of proposed changes — the list rows' marks.
+ *  Asked AFTER the list has drawn, and never an error the page shows: a forge
+ *  that cannot answer comes back `available: false`, which draws nothing. */
+export async function forgeCheckSummaries(
+  folderId: number,
+  numbers: number[],
+  accountId?: string | null
+): Promise<ForgeCheckSummaryList> {
+  return getTransport().call("forge_check_summaries", {
+    folderId,
+    query: { numbers, accountId: accountId ?? null },
+  })
+}
+
+/** Approve the workflow runs held on a pull request (GitHub). `headSha` is the
+ *  commit the person reviewed: the backend refuses if the change has moved on
+ *  since, rather than approving a push nobody looked at. */
+export async function forgeApproveWorkflows(
+  folderId: number,
+  number: number,
+  headSha: string,
+  accountId?: string | null
+): Promise<ForgeApproveResult> {
+  return getTransport().call("forge_approve_workflows", {
+    folderId,
+    request: { number, headSha, accountId: accountId ?? null },
+  })
+}
+
 /** One page of the files a proposed change touches. Paths and counters only —
  *  reading the diff itself is what the task worktree and the app's diff view
  *  are for. */
@@ -7370,6 +7565,13 @@ export async function workTaskCreateFromForge(
   draft: ForgeTaskDraftInput
 ): Promise<ForgeCreateResult> {
   return getTransport().call("work_task_create_from_forge", { draft })
+}
+
+/** One task for several related issues — see `ForgeIssuesTaskDraftInput`. */
+export async function workTaskCreateFromForgeIssues(
+  draft: ForgeIssuesTaskDraftInput
+): Promise<ForgeIssuesCreateResult> {
+  return getTransport().call("work_task_create_from_forge_issues", { draft })
 }
 
 /** Latest task per source key (any state) — drives the row chips. */

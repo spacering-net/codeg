@@ -2093,6 +2093,7 @@ mod tests {
             commits: None,
             checks: ForgeCheckList::available(checks),
             updated_at: None,
+            workflow_approval: None,
         }
     }
 

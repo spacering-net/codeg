@@ -4564,6 +4564,7 @@ fn question(id: &str) -> crate::acp::question::QuestionSpec {
         multi_select: false,
         options: Vec::new(),
         is_secret: false,
+        allow_other: true,
     }
 }
 
@@ -6341,6 +6342,7 @@ async fn the_overview_says_how_every_assistant_is_and_what_waits_on_the_owner() 
                 multi_select: false,
                 options: vec![],
                 is_secret: false,
+                allow_other: true,
             }],
             created_at: chrono::Utc::now(),
         });
@@ -6737,6 +6739,7 @@ fn ask_spec(id: &str, header: &str, options: &[&str]) -> QuestionSpec {
             })
             .collect(),
         is_secret: false,
+        allow_other: true,
     }
 }
 
@@ -8017,6 +8020,7 @@ async fn a_secret_answer_to_the_brains_question_is_not_kept() {
         multi_select: false,
         options: vec![],
         is_secret: true,
+        allow_other: true,
     };
     state.write().await.pending_question = Some(crate::acp::question::PendingQuestionState {
         question_id: "qs".into(),
@@ -13107,6 +13111,7 @@ async fn a_session_waiting_on_the_owner_gets_a_card_unless_they_are_in_it() {
             multi_select: false,
             options: vec![],
             is_secret: false,
+            allow_other: true,
         }],
         created_at: chrono::Utc::now() - chrono::Duration::minutes(minutes),
     };

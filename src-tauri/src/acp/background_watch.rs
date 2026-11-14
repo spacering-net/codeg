@@ -68,14 +68,17 @@ use tokio::sync::RwLock;
 
 use crate::acp::session_state::{background_keepalive_max_age, SessionState};
 use crate::acp::session_title::{publish_native_title, release_held_wire_title};
-use crate::acp::types::{AcpEvent, BackgroundSettledInfo, ConnectionStatus};
+use crate::acp::types::{
+    AcpEvent, BackgroundOutstandingTask, BackgroundSettledInfo, BackgroundTaskKind, ConnectionStatus,
+    BACKGROUND_TASK_DESCRIPTION_MAX_CHARS,
+};
 use crate::models::agent::AgentType;
 use crate::models::message::MessageTurn;
 use crate::parsers::claude::{
     capture_tag, capture_title_record, claude_uri_link, find_clear_rollover_successor,
-    find_session_file_in, group_into_turns, is_meta_message, queued_human_prompt,
-    queued_task_notification, slash_command_display, task_notification_is_interim,
-    task_notification_result_regex, task_notification_status_regex,
+    find_session_file_in, group_into_turns, is_compact_command, is_meta_message,
+    queued_human_prompt, queued_task_notification, slash_command_display,
+    task_notification_is_interim, task_notification_result_regex, task_notification_status_regex,
     task_notification_summary_regex, task_notification_task_id_regex,
     task_notification_tool_use_id_regex, unescape_task_notification_text, ClaudeRecordAccumulator,
     BACKGROUND_RESULT_MAX_CHARS, CONTEXT_CONTINUATION_PREFIX,
@@ -759,8 +762,31 @@ async fn run_watch(
 
 /// One launched-but-unresolved background task.
 struct TaskEntry {
-    kind: &'static str,
+    kind: BackgroundTaskKind,
+    /// The max-age valve's clock.
     started_at: Instant,
+    /// Wall-clock twin of `started_at`, for the frontend's elapsed time.
+    started_at_ms: i64,
+}
+
+impl TaskEntry {
+    fn new(kind: BackgroundTaskKind) -> Self {
+        Self {
+            kind,
+            started_at: Instant::now(),
+            started_at_ms: chrono::Utc::now().timestamp_millis(),
+        }
+    }
+}
+
+/// What a task's launch said about it: the launching call and the task's own
+/// description. Kept apart from [`TaskEntry`], and past the task's settle,
+/// because a `SendMessage` re-arms a settled sub-agent under the SAME id with
+/// no launch record of its own to read them from.
+#[derive(Clone, Default)]
+struct TaskIdentity {
+    tool_use_id: Option<String>,
+    description: Option<String>,
 }
 
 /// The current out-of-turn episode: a contiguous run of transcript records
@@ -801,6 +827,10 @@ pub(crate) struct WatchState {
     mode: Mode,
     episode: Option<Episode>,
     tasks: HashMap<String, TaskEntry>,
+    /// Task id → what its launch said ([`TaskIdentity`]). Never pruned on a
+    /// settle (a resume re-arms the id), so it shares `settled_ids`' lifetime
+    /// and is carried across a fork / `/clear` with it.
+    task_identities: HashMap<String, TaskIdentity>,
     /// Task ids that have settled at least once — a later `SendMessage` to
     /// such an id re-arms it (the resumed sub-agent will notify again).
     settled_ids: HashSet<String>,
@@ -857,6 +887,24 @@ pub(crate) struct WatchState {
     /// an unrelated initiator, and the safe failure is the pre-fix duplicate,
     /// never a hidden turn.
     foreground_submission_id: Option<String>,
+    /// The records of a compaction read in `Foreground` mode, held back until
+    /// the transcript says whose it is (see [`is_held_compaction_record`]).
+    ///
+    /// Claude Code writes a `/compact` in this order: the `compact_boundary`
+    /// record, the continuation summary, the `<local-command-caveat>`, and only
+    /// then the command's own echo. Which turn the compaction belongs to is
+    /// known only at the echo: a `/compact` codeg sent matches the ledger, and
+    /// the wire renders it. One the ledger does not hold is out-of-turn — the
+    /// one claude-agent-acp 0.101.0 sends itself when a large session has sat
+    /// idle for 54 minutes (#1522), with no prompt open — and opens an episode.
+    /// That episode is handed these records first, so the overlay draws the
+    /// divider and its summary exactly as the history parse will, instead of
+    /// the echo alone (which the parser drops when no divider precedes it) —
+    /// unless codeg is prompting when the echo is read: a prompt sent while
+    /// the compaction ran takes its remaining frames into the wire's turn. Any
+    /// other record ends the hold: an `assistant` record is the turn going on
+    /// after the CLI compacted it automatically, which the wire renders.
+    held_compaction: Vec<serde_json::Value>,
     /// `Prompting` state for the tick currently being processed. Set once at
     /// `tick()` entry from the caller-supplied snapshot so `account()` (called
     /// per transcript line within the same tick) can read it without an extra
@@ -869,7 +917,10 @@ pub(crate) struct WatchState {
     /// never outlive the tick that created them.
     turn_origin_task_ids: HashMap<String, Option<String>>,
     last_disk_activity: Option<Instant>,
-    last_emitted_outstanding: Option<u32>,
+    /// The outstanding set as last emitted, sorted (see `outstanding_tasks`).
+    /// Compared whole rather than by count: a task that settles while another
+    /// starts leaves the count alone but changes what the frontend lists.
+    last_emitted_tasks: Vec<BackgroundOutstandingTask>,
     armed_logged: bool,
     /// Base of the most recently created episode's id namespace. Episode
     /// bases must be STRICTLY increasing: two episodes created while
@@ -926,18 +977,20 @@ impl WatchState {
             mode: Mode::Foreground,
             episode: None,
             tasks: HashMap::new(),
+            task_identities: HashMap::new(),
             settled_ids: HashSet::new(),
             current_turn_launched_ids: HashSet::new(),
             was_prompting: false,
             foreground_awaiting_reply: false,
             foreground_submission_id: None,
+            held_compaction: Vec::new(),
             currently_prompting: false,
             turn_origin_task_ids: HashMap::new(),
             last_disk_activity: None,
-            // Some(0), not None: consumers assume zero until told otherwise,
-            // so the first tick must not emit an accounting-only event for a
-            // connection with no background work.
-            last_emitted_outstanding: Some(0),
+            // Empty, as consumers assume until told otherwise, so the first
+            // tick must not emit an accounting-only event for a connection
+            // with no background work.
+            last_emitted_tasks: Vec::new(),
             armed_logged: false,
             last_episode_base: 0,
             epoch: None,
@@ -1007,6 +1060,7 @@ impl WatchState {
 
     fn rearm(&mut self, session_id: String, epoch: std::time::SystemTime) {
         let tasks = std::mem::take(&mut self.tasks);
+        let task_identities = std::mem::take(&mut self.task_identities);
         let settled_ids = std::mem::take(&mut self.settled_ids);
         *self = Self::new();
         // Keep the accounting across a fork/resume of the same CLI process —
@@ -1017,6 +1071,7 @@ impl WatchState {
         // set the re-arm is missed — outstanding stays 0 and closing the tab
         // could kill the resumed work.
         self.tasks = tasks;
+        self.task_identities = task_identities;
         self.settled_ids = settled_ids;
         self.session_id = Some(session_id);
         self.epoch = Some(epoch);
@@ -1035,10 +1090,12 @@ impl WatchState {
     fn adopt_rollover(&mut self, new_id: String, f: PathBuf) {
         let session_id = self.session_id.take();
         let tasks = std::mem::take(&mut self.tasks);
+        let task_identities = std::mem::take(&mut self.task_identities);
         let settled_ids = std::mem::take(&mut self.settled_ids);
         *self = Self::new();
         self.session_id = session_id;
         self.tasks = tasks;
+        self.task_identities = task_identities;
         self.settled_ids = settled_ids;
         self.pending_transcript_id = Some(new_id.clone());
         self.rolled_over_id = Some(new_id);
@@ -1129,7 +1186,7 @@ impl WatchState {
             if !keep {
                 tracing::info!(
                     "[bg-watch] expiring {} task={id} after max-age (completion never observed)",
-                    t.kind
+                    t.kind.as_str()
                 );
             }
             keep
@@ -1215,6 +1272,7 @@ impl WatchState {
             self.committed = meta.len();
             self.carry.clear();
             self.episode = None;
+            self.held_compaction.clear();
             self.mode = Mode::Foreground;
         } else if !unchanged {
             match self.read_new_lines(&path) {
@@ -1288,17 +1346,18 @@ impl WatchState {
             !matches!(origin, Some(task_id) if self.current_turn_launched_ids.contains(&task_id))
         });
 
-        let outstanding = self.tasks.len() as u32;
-        let accounting_changed =
-            expired_any || self.last_emitted_outstanding != Some(outstanding);
+        let outstanding_tasks = self.outstanding_tasks();
+        let outstanding = outstanding_tasks.len() as u32;
+        let accounting_changed = expired_any || self.last_emitted_tasks != outstanding_tasks;
         if changed_turns.is_empty() && settled.is_empty() && !accounting_changed {
             return None;
         }
-        self.last_emitted_outstanding = Some(outstanding);
+        self.last_emitted_tasks = outstanding_tasks.clone();
         Some(AcpEvent::BackgroundActivity {
             session_id,
             turns: changed_turns,
             outstanding,
+            outstanding_tasks,
             settled,
             watermark: self.committed,
         })
@@ -1326,6 +1385,8 @@ impl WatchState {
             self.seed_titles_from_history(&f, self.committed);
         }
         self.read_failed = false;
+        // Records held from another file belong to none of this one's turns.
+        self.held_compaction.clear();
         self.file = Some(f);
     }
 
@@ -1418,6 +1479,65 @@ impl WatchState {
         Ok(lines)
     }
 
+    /// The outstanding set as the frontend lists it, oldest first (ties by
+    /// id, so the order — and the emission gate comparing it — is stable).
+    fn outstanding_tasks(&self) -> Vec<BackgroundOutstandingTask> {
+        let mut out: Vec<BackgroundOutstandingTask> = self
+            .tasks
+            .iter()
+            .map(|(id, entry)| {
+                let identity = self.task_identities.get(id).cloned().unwrap_or_default();
+                BackgroundOutstandingTask {
+                    task_id: id.clone(),
+                    kind: entry.kind,
+                    tool_use_id: identity.tool_use_id,
+                    description: identity.description,
+                    started_at_ms: entry.started_at_ms,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            a.started_at_ms
+                .cmp(&b.started_at_ms)
+                .then_with(|| a.task_id.cmp(&b.task_id))
+        });
+        out
+    }
+
+    /// Record what a launch ack says about its task: the `tool_use_id` of the
+    /// `tool_result` block it answers, and the task's description. The first
+    /// sighting wins — a resumed sub-agent's repeated ack keeps its original
+    /// launching call, the card the frontend titles it from.
+    fn remember_identity(&mut self, id: &str, record: &serde_json::Value, description: Option<&str>) {
+        if self.task_identities.contains_key(id) {
+            return;
+        }
+        let tool_use_id = record
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+            .and_then(|blocks| {
+                blocks.iter().find_map(|block| {
+                    (block.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
+                        .then(|| block.get("tool_use_id").and_then(|v| v.as_str()))
+                        .flatten()
+                })
+            })
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let description = description
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| truncate_str(s, BACKGROUND_TASK_DESCRIPTION_MAX_CHARS));
+        self.task_identities.insert(
+            id.to_string(),
+            TaskIdentity {
+                tool_use_id,
+                description,
+            },
+        );
+    }
+
     /// An interim `<task-notification>` ([`task_notification_is_interim`]):
     /// the sub-agent stopped while background work of its own still runs, or
     /// is being resumed with messages that came too late, and it notifies again
@@ -1430,10 +1550,7 @@ impl WatchState {
         let known = self.tasks.contains_key(id);
         self.tasks
             .entry(id.to_string())
-            .or_insert_with(|| TaskEntry {
-                kind: "agent",
-                started_at: Instant::now(),
-            });
+            .or_insert_with(|| TaskEntry::new(BackgroundTaskKind::Agent));
         tracing::info!("[bg-watch] interim notification task={id} known={known}, kept outstanding");
     }
 
@@ -1486,11 +1603,13 @@ impl WatchState {
                             // alive. The log fires only on first registration.
                             self.tasks.entry(id.to_string()).or_insert_with(|| {
                                 tracing::info!("[bg-watch] registered async agent task={id}");
-                                TaskEntry {
-                                    kind: "agent",
-                                    started_at: Instant::now(),
-                                }
+                                TaskEntry::new(BackgroundTaskKind::Agent)
                             });
+                            self.remember_identity(
+                                id,
+                                value,
+                                tur.get("description").and_then(|v| v.as_str()),
+                            );
                             // This turn is still `Prompting` at launch time — a
                             // later out-of-turn follow-up for this SAME id is
                             // therefore held-open content already rendering on
@@ -1512,11 +1631,9 @@ impl WatchState {
                         // reads of this identical shape.
                         self.tasks.entry(id.to_string()).or_insert_with(|| {
                             tracing::info!("[bg-watch] registered background shell task={id}");
-                            TaskEntry {
-                                kind: "shell",
-                                started_at: Instant::now(),
-                            }
+                            TaskEntry::new(BackgroundTaskKind::Shell)
                         });
+                        self.remember_identity(id, value, None);
                         // Deliberately NOT inserted into `current_turn_launched_ids`:
                         // #870 never holds a turn open for a shell (this
                         // module's own top-of-file doc comment — "a hold must
@@ -1641,10 +1758,7 @@ impl WatchState {
                                 tracing::info!("[bg-watch] re-armed resumed task={to}");
                                 self.tasks.insert(
                                     to.to_string(),
-                                    TaskEntry {
-                                        kind: "agent",
-                                        started_at: Instant::now(),
-                                    },
+                                    TaskEntry::new(BackgroundTaskKind::Agent),
                                 );
                                 // Mirrors the launch-time insert in the
                                 // `async_launched` branch above: if THIS turn
@@ -1697,6 +1811,17 @@ impl WatchState {
         if value.get("type").and_then(|t| t.as_str()) == Some("assistant") {
             self.foreground_awaiting_reply = false;
         }
+
+        // A compaction read while the wire owns the transcript waits for its
+        // `/compact` echo to say whose it is (see `held_compaction`); any other
+        // record ends the wait, and the records go wherever this one does.
+        if matches!(self.mode, Mode::Foreground)
+            && is_held_compaction_record(value, !self.held_compaction.is_empty())
+        {
+            self.held_compaction.push(value.clone());
+            return;
+        }
+        let held_compaction = std::mem::take(&mut self.held_compaction);
 
         // A message folded into the running turn continues that turn and never
         // starts one. Matched against the ledger — a prompt codeg sent that
@@ -1761,17 +1886,37 @@ impl WatchState {
                 .episode
                 .as_ref()
                 .is_some_and(|e| e.acc.messages.len() >= MAX_EPISODE_MESSAGES);
-            if matches!(self.mode, Mode::Foreground) || self.episode.is_none() || rotate {
+            let from_foreground = matches!(self.mode, Mode::Foreground);
+            if from_foreground || self.episode.is_none() || rotate {
                 if rotate {
                     self.collect_changed_turns(cwd, changed_turns);
                 }
                 // Any stable, strictly-increasing base works — turn ids only
                 // need to be unique and stable within the watch.
+                let mut acc = ClaudeRecordAccumulator::new(
+                    self.file.clone().unwrap_or_else(|| PathBuf::from("")),
+                );
+                // A `/compact` nobody sent through codeg was written after its
+                // own boundary and summary: the episode reads them first, so
+                // the divider (and the echo the parser places at it) is drawn
+                // as the history parse draws it. Only the echo claims them —
+                // another initiator after a held compaction (none is known to
+                // occur) leaves them to the wire, as before. So does a prompt
+                // codeg sent while the compaction ran: its turn takes the
+                // compaction's remaining frames, and the composer draws the
+                // card there.
+                if from_foreground
+                    && !self.currently_prompting
+                    && matches!(&initiator, TurnInitiatorText::ReconstructedSlashCommand(display)
+                        if is_compact_command(display))
+                {
+                    for record in held_compaction {
+                        acc.feed_value(record);
+                    }
+                }
                 self.episode = Some(Episode {
                     start_offset: self.next_episode_base(),
-                    acc: ClaudeRecordAccumulator::new(
-                        self.file.clone().unwrap_or_else(|| PathBuf::from("")),
-                    ),
+                    acc,
                     emitted_hashes: HashMap::new(),
                     origin_task_id: task_notification_origin_id(initiator_text),
                 });
@@ -1948,6 +2093,38 @@ fn turn_initiator_text(value: &serde_json::Value) -> Option<TurnInitiatorText> {
         return None;
     }
     Some(TurnInitiatorText::Verbatim(text))
+}
+
+/// Whether `value` is one of the records a compaction writes ahead of its
+/// `/compact` echo (see `WatchState::held_compaction`). A `compact_boundary`
+/// record starts the run. While one is `holding`, the continuation summary,
+/// the `<local-command-caveat>` the CLI writes before a local command's echo,
+/// and every record that is neither `user` nor `assistant` (attachments, the
+/// CLI's bookkeeping) join it. Anything else — an `assistant` record, the echo,
+/// a prompt — ends it.
+fn is_held_compaction_record(value: &serde_json::Value, holding: bool) -> bool {
+    let record_type = value.get("type").and_then(|t| t.as_str());
+    if record_type == Some("system")
+        && value.get("subtype").and_then(|s| s.as_str()) == Some("compact_boundary")
+    {
+        return true;
+    }
+    if !holding {
+        return false;
+    }
+    match record_type {
+        Some("assistant") => false,
+        Some("user") => {
+            if value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true) {
+                return true;
+            }
+            let text = user_record_text(value).unwrap_or_default();
+            let text = text.trim_start();
+            text.starts_with(CONTEXT_CONTINUATION_PREFIX)
+                || (is_meta_message(value) && text.starts_with("<local-command-caveat>"))
+        }
+        _ => true,
+    }
 }
 
 /// The text of a message the user sent mid-turn, which Claude Code folded into
@@ -3131,6 +3308,221 @@ mod tests {
         );
     }
 
+    /// The records Claude Code 2.1.318 writes for one `/compact`, in file
+    /// order, as a live transcript has them (claude-agent-acp 0.101.0): the
+    /// boundary, the continuation summary, the caveat, the command's echo and
+    /// its output. The echo's timestamp precedes the boundary's, but it is
+    /// written after it.
+    fn compact_records(tag: &str, prompt_id: &str) -> Vec<String> {
+        vec![
+            format!(
+                r#"{{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","isMeta":false,"timestamp":"2026-11-05T23:39:59.760Z","uuid":"b-{tag}","level":"info","compactMetadata":{{"trigger":"manual","preTokens":251005,"durationMs":18,"postTokens":2644,"cumulativeDroppedTokens":248361}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"timestamp":"2026-11-05T23:39:59.761Z","uuid":"s-{tag}","message":{{"role":"user","content":"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nPROBE SUMMARY: the user said hello.\n\nContinue the conversation from where it left off without asking the user any further questions."}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","isMeta":true,"timestamp":"2026-11-05T23:39:59.740Z","uuid":"c-{tag}","message":{{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>"}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","timestamp":"2026-11-05T23:39:59.740Z","uuid":"e-{tag}","message":{{"role":"user","content":"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}}}"#
+            ),
+            format!(
+                r#"{{"type":"user","promptId":"{prompt_id}","repeatsCompactSummary":true,"timestamp":"2026-11-05T23:39:59.872Z","uuid":"o-{tag}","message":{{"role":"user","content":"<local-command-stdout>Compacted PostCompact [callback] completed successfully</local-command-stdout>"}}}}"#
+            ),
+        ]
+    }
+
+    /// What a turn shows, without the ids and times that name its position.
+    fn shown(turns: &[MessageTurn]) -> Vec<serde_json::Value> {
+        turns
+            .iter()
+            .map(|t| serde_json::json!({ "role": t.role, "blocks": t.blocks }))
+            .collect()
+    }
+
+    /// claude-agent-acp 0.101.0 (#1522) sends `/compact` itself when a large
+    /// session has sat idle for 54 minutes: no prompt is open and codeg's
+    /// ledger holds nothing. The wire carries the compaction's frames outside
+    /// any turn, which the composer does not draw, so the overlay is the only
+    /// live view of it, and it must draw what reopening the conversation will:
+    /// the divider with its summary and the echo the parser places above it —
+    /// not the echo alone, which is all an episode opened at the echo saw.
+    #[test]
+    fn a_compact_nobody_sent_through_codeg_surfaces_with_its_divider() {
+        use crate::models::message::{ContentBlock, TurnRole};
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("hello idle");
+        write_lines(
+            &path,
+            &[
+                &user_prompt_array("u1", "hello idle"),
+                &assistant_text("a1", "ok"),
+            ],
+        );
+        assert!(tick_now(&mut ws, &ledger).is_none());
+
+        let records = compact_records("idle", "p-idle");
+        let lines: Vec<&str> = records.iter().map(String::as_str).collect();
+        write_lines(&path, &lines);
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("the idle compaction surfaces"));
+
+        let mut history = ClaudeRecordAccumulator::new(path.clone());
+        for line in &lines {
+            history.feed_line(line);
+        }
+        let history = group_into_turns(history.messages);
+        assert_eq!(
+            shown(&turns),
+            shown(&history),
+            "the overlay draws what history does"
+        );
+        assert_eq!(turns.len(), 2, "{turns:#?}");
+        assert!(matches!(turns[0].role, TurnRole::User));
+        assert!(matches!(
+            turns[0].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == "/compact"
+        ));
+        let divider = serde_json::to_string(&turns[1].blocks).unwrap();
+        assert!(divider.contains("\"preTokens\":251005"), "{divider}");
+        assert!(
+            divider.contains("PROBE SUMMARY: the user said hello."),
+            "{divider}"
+        );
+    }
+
+    /// The same records split across two reads: the hold outlives the tick.
+    #[test]
+    fn a_held_compaction_waits_across_ticks_for_its_echo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        let records = compact_records("split", "p-split");
+        let lines: Vec<&str> = records.iter().map(String::as_str).collect();
+        write_lines(&path, &lines[..3]);
+        assert!(tick_now(&mut ws, &ledger).is_none(), "nothing is known yet");
+        write_lines(&path, &lines[3..]);
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("surfaces at the echo"));
+        assert_eq!(turns.len(), 2, "{turns:#?}");
+        assert!(serde_json::to_string(&turns[1].blocks)
+            .unwrap()
+            .contains("\"preTokens\":251005"));
+    }
+
+    /// A `/compact` codeg sent stays on the wire, whichever tick reads its
+    /// records — the ledger claims the echo, and the held records go with it.
+    #[test]
+    fn a_compact_codeg_sent_never_reaches_the_overlay() {
+        for split in [5, 3] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = temp_session(&dir);
+            write_lines(&path, &[]);
+            let ledger = PromptLedger::shared();
+            let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+            ledger.record_text("/compact");
+            let records = compact_records("sent", "p-sent");
+            let lines: Vec<&str> = records.iter().map(String::as_str).collect();
+            write_lines(&path, &lines[..split]);
+            let first = tick_prompting(&mut ws, &ledger);
+            write_lines(&path, &lines[split..]);
+            let second = tick_now(&mut ws, &ledger);
+            for event in [first, second].into_iter().flatten() {
+                assert!(
+                    unpack(event).0.is_empty(),
+                    "split at {split}: the wire renders a /compact codeg sent"
+                );
+            }
+        }
+    }
+
+    /// The CLI compacts a long turn by itself: the boundary and the summary land
+    /// mid-turn and the reply goes on. That compaction is the wire's.
+    #[test]
+    fn an_automatic_compaction_inside_a_codeg_turn_stays_on_the_wire() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("refactor the parser");
+        let records = compact_records("auto", "p-auto");
+        write_lines(
+            &path,
+            &[
+                &user_prompt_array("u1", "refactor the parser"),
+                &assistant_text("a1", "Reading the files."),
+                &records[0].replace("\"manual\"", "\"auto\""),
+                &records[1],
+                &assistant_text("a2", "Continuing after the compaction."),
+            ],
+        );
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(event.is_none() || unpack(event.unwrap()).0.is_empty());
+        assert!(ws.held_compaction.is_empty(), "the reply ended the hold");
+    }
+
+    /// A prompt sent while the adapter's own compaction runs takes the
+    /// compaction's remaining frames into its turn, which the composer draws:
+    /// the overlay stays out of it rather than drawing the divider again.
+    #[test]
+    fn a_compact_read_while_codeg_prompts_is_left_to_the_wire() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        ledger.record_text("back again");
+        let records = compact_records("race", "p-race");
+        let mut lines: Vec<&str> = records.iter().map(String::as_str).collect();
+        let prompt = user_prompt_array("u2", "back again");
+        let reply = assistant_text("a2", "Picking up from the summary.");
+        lines.extend([prompt.as_str(), reply.as_str()]);
+        write_lines(&path, &lines);
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(
+            event.is_none() || unpack(event.unwrap()).0.is_empty(),
+            "the turn on the wire draws this compaction"
+        );
+    }
+
+    /// Only a `/compact` echo claims a held compaction: another initiator after
+    /// one opens its episode without it, as before.
+    #[test]
+    fn a_held_compaction_is_not_handed_to_another_initiator() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        let records = compact_records("other", "p-other");
+        write_lines(
+            &path,
+            &[
+                &records[0],
+                &records[1],
+                &cron_prompt("keep going"),
+                &assistant_text("a2", "resuming"),
+            ],
+        );
+        let (turns, ..) = unpack(tick_now(&mut ws, &ledger).expect("the cron turn surfaces"));
+        assert!(
+            !serde_json::to_string(&turns).unwrap().contains("preTokens"),
+            "{turns:#?}"
+        );
+    }
+
     /// An MCP prompt sent the way the `/` menu offers it, `/mcp:<server>:<prompt>`,
     /// is recorded under Claude Code's own name for the command. The records are
     /// the ones claude-agent-acp 0.100.0 and Claude Code 2.1.316 wrote for a
@@ -3635,6 +4027,79 @@ mod tests {
         assert!(matches!(ws.mode, Mode::Foreground));
         // A settled sub-agent can still be resumed and re-armed.
         assert!(ws.settled_ids.contains("agent1"));
+    }
+
+    fn unpack_tasks(event: AcpEvent) -> (u32, Vec<BackgroundOutstandingTask>) {
+        match event {
+            AcpEvent::BackgroundActivity {
+                outstanding,
+                outstanding_tasks,
+                ..
+            } => (outstanding, outstanding_tasks),
+            other => panic!("expected BackgroundActivity, got {other:?}"),
+        }
+    }
+
+    /// Each event lists the tasks still out, not just how many — what their
+    /// launch said (the call it answers, the sub-agent's description) and when
+    /// the watch first saw them, oldest first — so the composer can say WHICH
+    /// background sub-agents still run once their turn has ended.
+    #[test]
+    fn acks_list_each_outstanding_task_with_its_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+
+        write_lines(&path, &[&agent_ack("agent1"), &bash_ack("bash1")]);
+        let (outstanding, tasks) =
+            unpack_tasks(tick_now(&mut ws, &ledger).expect("accounting event"));
+        assert_eq!(outstanding, 2);
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|t| (
+                    t.task_id.as_str(),
+                    t.kind,
+                    t.tool_use_id.as_deref(),
+                    t.description.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "agent1",
+                    BackgroundTaskKind::Agent,
+                    Some("toolu_01"),
+                    Some("Run pnpm build")
+                ),
+                ("bash1", BackgroundTaskKind::Shell, Some("toolu_02"), None),
+            ]
+        );
+        assert!(tasks.iter().all(|t| t.started_at_ms > 0), "{tasks:?}");
+    }
+
+    /// One task settling quietly as another starts leaves the count where it
+    /// was, but not the list — the swap must still go out, or the composer
+    /// would keep listing the finished one and never the new one.
+    #[test]
+    fn a_task_swap_that_keeps_the_count_still_emits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[&agent_ack("agent1")]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        let (outstanding, _) = unpack_tasks(tick_now(&mut ws, &ledger).expect("launch event"));
+        assert_eq!(outstanding, 1);
+
+        write_lines(&path, &[&folded_notification("agent1"), &agent_ack("agent2")]);
+        let (outstanding, tasks) =
+            unpack_tasks(tick_prompting(&mut ws, &ledger).expect("the swap goes out"));
+        assert_eq!(outstanding, 1);
+        assert_eq!(
+            tasks.iter().map(|t| t.task_id.as_str()).collect::<Vec<_>>(),
+            vec!["agent2"]
+        );
     }
 
     /// The `<task-notification>` CLI 2.1.300 writes for a background sub-agent
@@ -4499,8 +4964,13 @@ mod tests {
 
         let send = r#"{"type":"assistant","timestamp":"2026-07-07T03:52:00.000Z","uuid":"a-send","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_03","name":"SendMessage","input":{"to":"agentX","summary":"continue","message":"go on"}}]}}"#;
         write_lines(&path, &[send]);
-        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).unwrap());
+        let (outstanding, tasks) = unpack_tasks(tick_now(&mut ws, &ledger).unwrap());
         assert_eq!(outstanding, 1, "resumed sub-agent re-arms the keep-alive");
+        // The resume has no launch record of its own: the row keeps the
+        // original launch's call and description.
+        assert_eq!(tasks[0].task_id, "agentX");
+        assert_eq!(tasks[0].tool_use_id.as_deref(), Some("toolu_01"));
+        assert_eq!(tasks[0].description.as_deref(), Some("Run pnpm build"));
     }
 
     /// A page the built-in browser handed over, as codeg sends it with nothing

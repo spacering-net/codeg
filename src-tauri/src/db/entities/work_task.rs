@@ -131,9 +131,13 @@ pub struct Model {
     /// Set once at creation by the forge trigger command, never by the public
     /// create/update DTO paths, and never mutated afterwards.
     pub source_kind: Option<String>,
-    /// Canonical lookup/dedup key (`forge::source_key` output). Queried — the
-    /// one exception to `config`'s "never queried" rule, which is exactly why
-    /// it is a column and not part of `config`.
+    /// Canonical key (`forge::source_key` output) of the task's LEAD item —
+    /// its only item, unless the task was made from several related issues.
+    /// Display and deep-link only: which items a task handles is recorded in
+    /// `work_task_source_key`, and every query asking "which tasks handle item
+    /// X" (dedup, the resurrection guards, the reverse lookup, auto-processing)
+    /// goes there instead. Reading this column for that would miss every item
+    /// of a combined task but its first.
     pub source_key: Option<String>,
     /// JSON snapshot of the source (URL, title, account id, PR head/base …).
     /// Same discipline as `config`: replayed/displayed, never queried.
@@ -152,6 +156,13 @@ pub struct Model {
     /// create/update DTO paths. Such a task lands as the board's settings
     /// say, like any other.
     pub personal_agent_dispatch_id: Option<i32>,
+    /// JSON `{"<item number>": "<markdown>"}` — the reply drafted for each
+    /// thread a forge-sourced task handles: written by the agent through
+    /// `task_complete` (sanitized on the way in), editable by the user while
+    /// the task waits in review, and posted by the write-back once the task is
+    /// accepted. Cleared by every claim of a new run. NULL = no draft.
+    #[sea_orm(column_type = "Text")]
+    pub writeback_drafts: Option<String>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub started_at: Option<DateTimeUtc>,
@@ -166,6 +177,8 @@ pub struct Model {
 pub enum Relation {
     #[sea_orm(has_many = "super::work_task_event::Entity")]
     Events,
+    #[sea_orm(has_many = "super::work_task_source_key::Entity")]
+    SourceKeys,
     #[sea_orm(
         belongs_to = "super::folder::Entity",
         from = "Column::FolderId",
@@ -177,6 +190,12 @@ pub enum Relation {
 impl Related<super::work_task_event::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Events.def()
+    }
+}
+
+impl Related<super::work_task_source_key::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::SourceKeys.def()
     }
 }
 

@@ -259,6 +259,7 @@ mod tests {
             source_meta: None,
             delivery: None,
             personal_agent_dispatch_id: Some(1),
+            writeback_drafts: None,
             created_at: now,
             updated_at: now,
             started_at: Some(now),

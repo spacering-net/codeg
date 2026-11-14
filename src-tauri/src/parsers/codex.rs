@@ -11,6 +11,7 @@ use walkdir::WalkDir;
 use crate::acp::agent_mentions::{contains_only_internal_frames, strip_internal_frames};
 use crate::acp::js_text::is_js_whitespace;
 use crate::models::*;
+use crate::parsers::codex_async_questions::{self, AsyncQuestionCall, ReplyMessage};
 use crate::parsers::codex_code_mode::{
     extract_chunk_ids, extract_shell_session_ids, is_code_mode_call, parse_code_mode_script,
     script_card_input,
@@ -1615,6 +1616,30 @@ struct CompletedMcpCall {
     input_preview: Option<String>,
     output_preview: Option<String>,
     is_error: bool,
+    /// The result's `image` blocks. Live, the same call's card shows them
+    /// (codex-acp reports the result's `content` as `rawOutput`). A result over
+    /// 64 KiB was persisted as a text stand-in and has none left to show.
+    images: Vec<ImageData>,
+}
+
+/// The `image` blocks of an MCP result's `content`.
+fn mcp_result_images(result: Option<&serde_json::Value>) -> Vec<ImageData> {
+    result
+        .and_then(|result| result.get("content"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("image"))
+        .filter_map(|block| {
+            let data = block.get("data")?.as_str()?;
+            let mime_type = block.get("mimeType")?.as_str()?;
+            (!data.is_empty() && mime_type.starts_with("image/")).then(|| ImageData {
+                data: data.to_string(),
+                mime_type: mime_type.to_string(),
+                uri: None,
+            })
+        })
+        .collect()
 }
 
 /// How much of a serialized MCP result stands in for a call that answered in
@@ -1893,6 +1918,7 @@ fn completed_mcp_call(payload: &serde_json::Value) -> Option<CompletedMcpCall> {
                 && (infer_tool_call_output_is_error(item, result, output_preview.as_deref())
                     || blocks_report_failure(blocks))),
         output_preview,
+        images: mcp_result_images(result),
     })
 }
 
@@ -1968,7 +1994,7 @@ fn unwrap_completed_mcp_calls(
             output_preview: item.output_preview,
             is_error: item.is_error,
             agent_stats: None,
-            images: Vec::new(),
+            images: item.images,
             exit_code: None,
         });
     }
@@ -3324,6 +3350,9 @@ impl CodexParser {
         // Live and reconstructed capsules never double-render (live during
         // streaming, this on reload).
         let mut spawn_agent_call_ids: HashSet<String> = HashSet::new();
+        // codex's `request_user_input_async` calls by call id, for the reply
+        // envelope that answers them (see `codex_async_questions`).
+        let mut async_question_calls: HashMap<String, AsyncQuestionCall> = HashMap::new();
         let mut agent_id_to_spawn_call_id: HashMap<String, String> = HashMap::new();
         // `agent_path` ("/root/history_limits") → the thread id currently
         // answering to it. Last write wins, which is exactly the pairing an
@@ -3353,6 +3382,11 @@ impl CodexParser {
         let mut close_agent_targets: HashMap<String, String> = HashMap::new();
         let mut active_agent_count: u32 = 0;
         let mut call_id_tool_names: HashMap<String, String> = HashMap::new();
+        // Direct MCP calls (`namespace: "mcp__<server>"`, or the older
+        // `mcp__<server>__<tool>` name). Only their outputs hand images to the
+        // card: live, codex-acp reports an MCP result's image blocks, but a
+        // `view_image` only as a link to its path.
+        let mut mcp_call_ids: HashSet<String> = HashSet::new();
         // Code-mode scripts (`custom_tool_call` named `exec`) awaiting their
         // output. A placeholder script card is pushed when the call is read, so
         // an interrupted turn still shows it in place; the output arm rewrites
@@ -3654,6 +3688,22 @@ impl CodexParser {
                                     push_plan_review_marker(&mut messages, timestamp);
                                     continue;
                                 }
+
+                                let text = match codex_async_questions::take_reply(
+                                    &text,
+                                    &mut async_question_calls,
+                                ) {
+                                    ReplyMessage::NotAReply => text,
+                                    ReplyMessage::Display(display) => display,
+                                    ReplyMessage::Answered(calls) => {
+                                        refresh_async_question_results(
+                                            &mut messages,
+                                            &async_question_calls,
+                                            &calls,
+                                        );
+                                        continue;
+                                    }
+                                };
 
                                 let normalized = normalize_user_text(&text);
                                 if title.is_none() {
@@ -4295,6 +4345,13 @@ impl CodexParser {
                                     None
                                 };
 
+                                let async_question = (raw_tool_name
+                                    == codex_async_questions::TOOL_NAME)
+                                    .then(|| parse_codex_json_arg(payload))
+                                    .flatten()
+                                    .as_ref()
+                                    .and_then(AsyncQuestionCall::from_arguments);
+
                                 match raw_tool_name {
                                     // No card of its own: the output it is about
                                     // to collect IS the parked script's return
@@ -4305,6 +4362,32 @@ impl CodexParser {
                                         {
                                             deferred_waits.insert(id, cell);
                                         }
+                                    }
+                                    // codex's async question: the answered-question
+                                    // card live codeg shows for it, answered by the
+                                    // reply envelope later in the file.
+                                    _ if async_question.is_some() && tool_use_id.is_some() => {
+                                        let call = async_question.expect("guarded");
+                                        let id = tool_use_id.expect("guarded");
+                                        messages.push(UnifiedMessage {
+                                            id: format!("tool-{}", messages.len()),
+                                            role: MessageRole::Assistant,
+                                            content: vec![ContentBlock::ToolUse {
+                                                tool_use_id: Some(id.clone()),
+                                                tool_name: codex_async_questions::CARD_TOOL_NAME
+                                                    .to_string(),
+                                                input_preview: Some(call.card_input()),
+                                                status: None,
+                                                meta: None,
+                                            }],
+                                            timestamp,
+                                            usage: None,
+                                            duration_ms: None,
+                                            model: None,
+                                            completed_at: Some(timestamp),
+                                            agent_message_id: None,
+                                        });
+                                        async_question_calls.insert(id, call);
                                     }
                                     "spawn_agent" => {
                                         let args = parse_codex_json_arg(payload);
@@ -4450,6 +4533,14 @@ impl CodexParser {
                                         if let Some(ref id) = tool_use_id {
                                             call_id_tool_names
                                                 .insert(id.clone(), raw_tool_name.to_string());
+                                            let is_mcp = raw_tool_name.starts_with("mcp__")
+                                                || payload
+                                                    .get("namespace")
+                                                    .and_then(|v| v.as_str())
+                                                    .is_some_and(|ns| ns.starts_with("mcp__"));
+                                            if is_mcp {
+                                                mcp_call_ids.insert(id.clone());
+                                            }
                                         }
                                         let raw_args = || {
                                             // `send_message` and friends carry a
@@ -4653,6 +4744,31 @@ impl CodexParser {
                                         model: None,
                                         completed_at: Some(timestamp),
                                     agent_message_id: None,
+                                    });
+                                } else if let Some(call) = tool_use_id
+                                    .as_ref()
+                                    .and_then(|id| async_question_calls.get_mut(id))
+                                {
+                                    // Not `{"accepted":true}`: what the user
+                                    // answered, as far as the file has said yet.
+                                    call.result_index = Some(messages.len());
+                                    messages.push(UnifiedMessage {
+                                        id: format!("tool-result-{}", messages.len()),
+                                        role: MessageRole::Tool,
+                                        content: vec![ContentBlock::ToolResult {
+                                            tool_use_id,
+                                            output_preview: Some(call.card_output()),
+                                            is_error: false,
+                                            agent_stats: None,
+                                            images: Vec::new(),
+                                            exit_code: None,
+                                        }],
+                                        timestamp,
+                                        usage: None,
+                                        duration_ms: None,
+                                        model: None,
+                                        completed_at: Some(timestamp),
+                                        agent_message_id: None,
                                     });
                                 } else if is_spawn {
                                     if let Some(output_obj) = parse_codex_json_output(payload) {
@@ -4864,6 +4980,27 @@ impl CodexParser {
                                             output_value,
                                             output.as_deref(),
                                         );
+                                    // The item_completed preview can truncate an
+                                    // MCP image. The response item has the original.
+                                    let is_mcp = tool_use_id
+                                        .as_ref()
+                                        .is_some_and(|id| mcp_call_ids.contains(id));
+                                    let images = output_value
+                                        .filter(|_| is_mcp)
+                                        .and_then(serde_json::Value::as_array)
+                                        .into_iter()
+                                        .flatten()
+                                        .filter(|item| {
+                                            item.get("type").and_then(|v| v.as_str())
+                                                == Some("input_image")
+                                        })
+                                        .filter_map(parse_input_image_data_uri)
+                                        .map(|(mime_type, data)| ImageData {
+                                            data,
+                                            mime_type,
+                                            uri: None,
+                                        })
+                                        .collect();
                                     messages.push(UnifiedMessage {
                                         id: format!("tool-result-{}", messages.len()),
                                         role: MessageRole::Tool,
@@ -4872,7 +5009,7 @@ impl CodexParser {
                                             output_preview: output,
                                             is_error,
                                             agent_stats: None,
-                                            images: Vec::new(),
+                                            images,
                                             exit_code: None,
                                         }],
                                         timestamp,
@@ -4947,7 +5084,32 @@ impl CodexParser {
                                 };
                                 // An image-only record has nothing for the
                                 // deny-lists (which are text rules) to judge.
-                                let text = first_text_block(&blocks).unwrap_or_default();
+                                let mut text = first_text_block(&blocks).unwrap_or_default();
+                                let mut blocks = blocks;
+                                // A reply to codex's async questions folds into
+                                // their card (see `codex_async_questions`).
+                                if is_user {
+                                    match codex_async_questions::take_reply(
+                                        &text,
+                                        &mut async_question_calls,
+                                    ) {
+                                        ReplyMessage::NotAReply => {}
+                                        ReplyMessage::Display(display) => {
+                                            blocks = vec![ContentBlock::Text {
+                                                text: display.clone(),
+                                            }];
+                                            text = display;
+                                        }
+                                        ReplyMessage::Answered(calls) => {
+                                            refresh_async_question_results(
+                                                &mut messages,
+                                                &async_question_calls,
+                                                &calls,
+                                            );
+                                            continue;
+                                        }
+                                    }
+                                }
 
                                 // Plan mode's plan document, intercepted ahead of
                                 // the promotion gate. It must render even where the
@@ -5949,6 +6111,29 @@ const PROMOTED_USER_DENY_PREFIXES: &[&str] = &[
     "<recommended_plugins>",
     "Warning: apply_patch was requested via exec_command",
 ];
+
+/// Rewrite the result cards of the async question `calls` with the answers
+/// they now hold. A call whose output the file has not reached yet takes them
+/// when it does.
+fn refresh_async_question_results(
+    messages: &mut [UnifiedMessage],
+    async_question_calls: &HashMap<String, AsyncQuestionCall>,
+    calls: &[String],
+) {
+    for id in calls {
+        let Some(call) = async_question_calls.get(id) else {
+            continue;
+        };
+        let Some(message) = call.result_index.and_then(|i| messages.get_mut(i)) else {
+            continue;
+        };
+        for block in &mut message.content {
+            if let ContentBlock::ToolResult { output_preview, .. } = block {
+                *output_preview = Some(call.card_output());
+            }
+        }
+    }
+}
 
 /// Whether a candidate user record is machine context rather than a prompt.
 fn is_promotable_user_text(input: &str) -> bool {
@@ -11092,6 +11277,73 @@ mod tests {
         serde_json::json!({ "timestamp": ts, "type": msg_type, "payload": payload }).to_string()
     }
 
+    #[test]
+    fn codex_mcp_screenshot_history_uses_the_full_function_output() {
+        let ts = "2026-11-11T09:20:00Z";
+        let image_data = "AQID".repeat(20_000);
+        let lines = [
+            rollout_line(
+                ts,
+                "response_item",
+                serde_json::json!({
+                    "type": "function_call",
+                    "namespace": "mcp__cua_repl",
+                    "name": "js",
+                    "arguments": "{}",
+                    "call_id": "screenshot"
+                }),
+            ),
+            rollout_line(
+                ts,
+                "event_msg",
+                serde_json::json!({
+                    "type": "item_completed",
+                    "item": {
+                        "type": "McpToolCall",
+                        "id": "screenshot",
+                        "server": "cua_repl",
+                        "tool": "js",
+                        "status": "completed",
+                        "result": {"content": [{"type": "text", "text": "… truncated …"}]}
+                    }
+                }),
+            ),
+            rollout_line(
+                ts,
+                "response_item",
+                serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": "screenshot",
+                    "output": [
+                        {"type": "input_text", "text": "Page loaded"},
+                        {"type": "input_image", "image_url": format!("data:image/jpeg;base64,{image_data}")}
+                    ]
+                }),
+            ),
+        ];
+        let detail = parse_rollout("mcp-screenshot", &lines.join("\n"), "session-1");
+        let results: Vec<_> = detail
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.blocks)
+            .filter_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview,
+                    images,
+                    ..
+                } if id == "screenshot" => Some((output_preview, images)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 1);
+        let (output, images) = results[0];
+        assert_eq!(output.as_deref(), Some("Page loaded\n"));
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].mime_type, "image/jpeg");
+        assert_eq!(images[0].data, image_data);
+    }
+
     /// A directory of its own, for the tests that exercise the sibling-file
     /// lookup: `parse_codex_subagent_stats` scans the whole session directory,
     /// so it must not see other tests' rollouts (or the rest of `/tmp`).
@@ -13278,6 +13530,31 @@ mod tests {
             .collect()
     }
 
+    /// Each tool result's id and the `(mime_type, data)` of its images.
+    fn tool_result_images(
+        detail: &crate::models::ConversationDetail,
+    ) -> Vec<(String, Vec<(String, String)>)> {
+        detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    images,
+                    ..
+                } => Some((
+                    tool_use_id.clone().unwrap_or_default(),
+                    images
+                        .iter()
+                        .map(|img| (img.mime_type.clone(), img.data.clone()))
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn tool_results(
         detail: &crate::models::ConversationDetail,
     ) -> Vec<(String, Option<String>, bool)> {
@@ -13872,6 +14149,14 @@ mod tests {
         assert!(
             output.as_deref().is_some_and(|text| text.contains("image")),
             "a textless result must still carry its content: {output:?}"
+        );
+        // And the picture itself, as the live card shows it.
+        assert_eq!(
+            tool_result_images(&detail),
+            vec![(
+                "exec-shot".to_string(),
+                vec![("image/png".to_string(), "iVBORw0KGgo=".to_string())]
+            )]
         );
     }
 
@@ -15014,6 +15299,11 @@ mod tests {
         for (id, output, is_error) in &results {
             assert_eq!(output, &None, "{id}");
             assert!(!is_error, "{id}");
+        }
+        // Not an MCP call: live, codex-acp reports a `view_image` as a link to
+        // its path, so its card must not turn into an image card on reload.
+        for (id, images) in tool_result_images(&detail) {
+            assert!(images.is_empty(), "{id}: {images:?}");
         }
     }
 
@@ -17402,6 +17692,116 @@ mod tests {
                 ("assistant", Some("Plain answer.".into())),
             ]
         );
+    }
+
+    /// codex 0.166's `request_user_input_async` through codex-acp 2.6.0,
+    /// recorded live (GPT-6.1 Sol): the call, codex's async agent message, the
+    /// `{"accepted":true}` output, then the answer the adapter steered into the
+    /// running turn as a reply envelope. History shows the answered-question
+    /// card live codeg showed, and no user bubble of raw envelope JSON.
+    #[test]
+    fn an_async_question_and_its_reply_read_as_one_answered_card() {
+        let envelope = "<send_user_message_question_reply>\n[{\"answer\":\"Staging\\n\\nprobe note\",\"question\":\"Which environment should I deploy to?\",\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"call_1\\\",0]\"}]\n</send_user_message_question_reply>";
+        let content = jsonl(&[
+            record(
+                "2026-11-09T12:41:40.770Z",
+                "session_meta",
+                serde_json::json!({"id": "ask-1", "cwd": "/w", "cli_version": "0.166.0", "model_provider": "fake"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.771Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.776Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ASKASYNC please"}],
+                    "internal_chat_message_metadata_passthrough": {"turn_id": "t1", "content_item_kinds": ["user.text"]}}),
+            ),
+            record(
+                "2026-11-09T12:41:40.776Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "UserMessage", "id": "u1", "content": [{"type": "text", "text": "ASKASYNC please", "text_elements": []}]}}),
+            ),
+            record(
+                "2026-11-09T12:41:40.786Z",
+                "response_item",
+                serde_json::json!({"type": "function_call", "id": "fc_1", "name": "request_user_input_async",
+                    "arguments": "{\"questions\": [{\"title\": \"Which environment should I deploy to?\", \"options\": [\"Staging\", \"Production\"]}]}",
+                    "call_id": "call_1"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.787Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "AgentMessage", "id": "call_1",
+                    "content": [{"type": "Text", "text": "Which environment should I deploy to?\n- Staging\n- Production"}],
+                    "phase": "final_answer", "delivery": "async",
+                    "questions": [{"title": "Which environment should I deploy to?", "options": ["Staging", "Production"]}]}}),
+            ),
+            record(
+                "2026-11-09T12:41:40.789Z",
+                "response_item",
+                serde_json::json!({"type": "function_call_output", "id": "fco_1", "call_id": "call_1", "output": "{\"accepted\":true}"}),
+            ),
+            token_count("2026-11-09T12:41:40.790Z", 1000, 10),
+            record(
+                "2026-11-09T12:41:41.800Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": envelope}]}),
+            ),
+            record(
+                "2026-11-09T12:41:41.801Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "UserMessage", "id": "u2", "client_id": "0532430b", "content": [{"type": "text", "text": envelope, "text_elements": []}]}}),
+            ),
+            record(
+                "2026-11-09T12:41:41.825Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "AgentMessage", "id": "msg_3", "content": [{"type": "Text", "text": "Deploying to staging."}]}}),
+            ),
+            assistant_item("2026-11-09T12:41:41.826Z", "Deploying to staging."),
+            token_count("2026-11-09T12:41:41.830Z", 2000, 20),
+            record(
+                "2026-11-09T12:41:41.831Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t1", "last_agent_message": "Deploying to staging."}),
+            ),
+        ]);
+        let detail = parse_rollout("async-question", &content, "ask-1");
+
+        let uses = tool_uses(&detail);
+        assert_eq!(uses.len(), 1, "{uses:?}");
+        assert_eq!(uses[0].0, "call_1");
+        assert_eq!(uses[0].1, "request_user_input");
+        let input: serde_json::Value =
+            serde_json::from_str(uses[0].2.as_deref().expect("input")).unwrap();
+        assert_eq!(
+            input["questions"][0]["question"],
+            "Which environment should I deploy to?"
+        );
+        let results = tool_results(&detail);
+        assert_eq!(results.len(), 1, "{results:?}");
+        let output: serde_json::Value =
+            serde_json::from_str(results[0].1.as_deref().expect("output")).unwrap();
+        assert_eq!(
+            output,
+            serde_json::json!({"answers": {"question_0": {"answers": ["Staging", "user_note: probe note"]}}})
+        );
+        // One user turn: the envelope is folded into the card.
+        let texts = turn_texts(&detail);
+        assert_eq!(
+            texts.iter().filter(|(role, _)| *role == "user").count(),
+            1,
+            "{texts:?}"
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|(_, text)| text.as_deref().is_some_and(|t| t.contains("send_user_message"))),
+            "{texts:?}"
+        );
+        assert!(texts.contains(&("assistant", Some("Deploying to staging.".into()))));
     }
 
     /// codex 0.165 turns `reasoning_effort_override` on: under a ChatGPT

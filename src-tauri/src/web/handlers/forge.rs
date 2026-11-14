@@ -17,7 +17,7 @@ use crate::app_state::AppState;
 use crate::commands::forge as core;
 use crate::forge::settings::{ForgePanelSettings, ForgeSettingsStore};
 use crate::forge::{
-    ChangeFilesQuery, ChangeMergeRequest, ChangeQuery, CommentDraft, CommentFilters, CountFilters,
+    ApproveWorkflowsRequest, CheckSummariesQuery, ChangeFilesQuery, ChangeMergeRequest, ChangeQuery, CommentDraft, CommentFilters, CountFilters,
     ListFilters, NewIssueDraft, StateChangeRequest,
 };
 
@@ -50,6 +50,15 @@ pub struct ListIssuesParams {
 pub struct IssueDetailParams {
     pub folder_id: i32,
     pub number: i64,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadImageParams {
+    pub folder_id: i32,
+    pub upload_path: String,
     #[serde(default)]
     pub account_id: Option<String>,
 }
@@ -102,6 +111,20 @@ pub struct CreateIssueParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CheckSummariesParams {
+    pub folder_id: i32,
+    pub query: CheckSummariesQuery,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApproveWorkflowsParams {
+    pub folder_id: i32,
+    pub request: ApproveWorkflowsRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChangeDetailParams {
     pub folder_id: i32,
     pub query: ChangeQuery,
@@ -141,6 +164,12 @@ pub struct MergeChangeParams {
 #[serde(rename_all = "camelCase")]
 pub struct CreateFromForgeParams {
     pub draft: core::ForgeTaskDraft,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFromForgeIssuesParams {
+    pub draft: core::ForgeIssuesTaskDraft,
 }
 
 #[derive(Deserialize)]
@@ -188,6 +217,21 @@ pub async fn forge_issue_detail(
     Ok(Json(
         core::forge_issue_detail_core(&state.db, params.folder_id, params.number, params.account_id)
             .await?,
+    ))
+}
+
+pub async fn forge_read_image(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ReadImageParams>,
+) -> Result<Json<crate::forge::ForgeImage>, AppCommandError> {
+    Ok(Json(
+        core::forge_read_image_core(
+            &state.db,
+            params.folder_id,
+            params.upload_path,
+            params.account_id,
+        )
+        .await?,
     ))
 }
 
@@ -254,6 +298,24 @@ pub async fn forge_change_detail(
     ))
 }
 
+pub async fn forge_check_summaries(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<CheckSummariesParams>,
+) -> Result<Json<crate::forge::ForgeCheckSummaryList>, AppCommandError> {
+    Ok(Json(
+        core::forge_check_summaries_core(&state.db, params.folder_id, params.query).await?,
+    ))
+}
+
+pub async fn forge_approve_workflows(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ApproveWorkflowsParams>,
+) -> Result<Json<crate::forge::ForgeApproveResult>, AppCommandError> {
+    Ok(Json(
+        core::forge_approve_workflows_core(&state.db, params.folder_id, params.request).await?,
+    ))
+}
+
 pub async fn forge_change_files(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ChangeFilesParams>,
@@ -296,6 +358,16 @@ pub async fn work_task_create_from_forge(
 ) -> Result<Json<core::ForgeCreateResult>, AppCommandError> {
     Ok(Json(
         core::work_task_create_from_forge_core(&state.emitter, &state.db, params.draft).await?,
+    ))
+}
+
+pub async fn work_task_create_from_forge_issues(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<CreateFromForgeIssuesParams>,
+) -> Result<Json<core::ForgeIssuesCreateResult>, AppCommandError> {
+    Ok(Json(
+        core::work_task_create_from_forge_issues_core(&state.emitter, &state.db, params.draft)
+            .await?,
     ))
 }
 
