@@ -4479,6 +4479,27 @@ impl ConnectionManager {
         None
     }
 
+    /// What `conn_id` is still doing now that its turn has ended — the input
+    /// of `acp::turn_end_hold`. `None` when the connection is gone or its
+    /// agent has ended.
+    pub(crate) async fn turn_end_probe(
+        &self,
+        conn_id: &str,
+    ) -> Option<crate::acp::turn_end_hold::TurnEndProbe> {
+        let now = chrono::Utc::now();
+        let (state, agent_type, live): (_, _, std::collections::HashSet<String>) = {
+            let conns = self.connections.lock().await;
+            let conn = conns.get(conn_id)?;
+            (
+                conn.state.clone(),
+                conn.agent_type,
+                conns.keys().cloned().collect(),
+            )
+        };
+        let s = state.read().await;
+        crate::acp::turn_end_hold::probe(&s, agent_type, now, |child| live.contains(child))
+    }
+
     /// End every connection under `lock` (all idle — the caller checked
     /// [`Self::busy_reason`]) and then release the locks. `disconnect` does not
     /// take the prompt lock, so ending them while it is held cannot deadlock.

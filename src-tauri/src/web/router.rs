@@ -1950,6 +1950,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::work_task::work_task_merge_unqueue),
         )
         .route(
+            "/work_task_stop_background_wait",
+            post(handlers::work_task::work_task_stop_background_wait),
+        )
+        .route(
             "/work_task_complete",
             post(handlers::work_task::work_task_complete),
         )

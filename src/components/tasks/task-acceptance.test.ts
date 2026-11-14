@@ -493,6 +493,7 @@ describe("the acceptance a review-only pull-request task offers", () => {
     onFollowUp: () => {},
     onEdit: () => {},
     onSchedule: () => {},
+    onStopBackgroundWait: () => {},
   }
   const primary = (t: WorkTask): string | null =>
     buildTaskActions(t, (key) => key, handlers).primary?.label ?? null
@@ -580,6 +581,7 @@ function actions(t: WorkTask) {
     onFollowUp: handler("followUp"),
     onEdit: handler("edit"),
     onSchedule: handler("schedule"),
+    onStopBackgroundWait: handler("stopBackgroundWait"),
   }
   const { primary, secondaries } = buildTaskActions(t, (key) => key, handlers)
   return {
@@ -630,6 +632,35 @@ describe("the actions a task awaiting input offers", () => {
       expect(live.primary).toBe("actionCancel")
       expect(live.secondaries).toEqual(["actionViewSession"])
     }
+  })
+})
+
+describe("the actions a task held for its background work offers", () => {
+  const wait = { since: "2026-08-01T02:00:00Z", tasks: ["Run the test suite"] }
+
+  it("offers settling now, beside the live task's own actions", () => {
+    // The turn ended with work still going; what it waits for may never end
+    // on its own (a dev server), and this is the way out short of canceling.
+    const held = actions(task({ status: "running", background_wait: wait }))
+    expect(held.primary).toBe("actionCancel")
+    expect(held.secondaries).toEqual([
+      "actionStopBackgroundWait",
+      "actionViewSession",
+    ])
+    expect(held.click("actionStopBackgroundWait")).toEqual([
+      "stopBackgroundWait",
+    ])
+    const merging = actions(task({ status: "merging", background_wait: wait }))
+    expect(merging.secondaries).toEqual([
+      "actionStopBackgroundWait",
+      "actionViewSession",
+    ])
+  })
+
+  it("is not offered when nothing is being waited for", () => {
+    expect(actions(task({ status: "running" })).secondaries).toEqual([
+      "actionViewSession",
+    ])
   })
 })
 
