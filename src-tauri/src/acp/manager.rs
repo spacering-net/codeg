@@ -804,7 +804,6 @@ impl ConnectionManager {
         let conn = AgentConnection {
             id: id.to_string(),
             agent_type,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -848,7 +847,6 @@ impl ConnectionManager {
         let conn = AgentConnection {
             id: id.to_string(),
             agent_type,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -2912,18 +2910,18 @@ impl ConnectionManager {
     /// the two and conclude nothing is running.
     pub async fn live_or_draining_agent_names(&self) -> Vec<String> {
         let connections = self.connections.lock().await;
-        let mut names: Vec<String> = connections
-            .values()
-            .filter(|c| {
-                matches!(
-                    c.status,
-                    ConnectionStatus::Connecting
-                        | ConnectionStatus::Connected
-                        | ConnectionStatus::Prompting
-                )
-            })
-            .map(|c| c.agent_type.to_string())
-            .collect();
+        let mut names = Vec::new();
+        for connection in connections.values() {
+            let state = connection.state.read().await;
+            if matches!(
+                state.status,
+                ConnectionStatus::Connecting
+                    | ConnectionStatus::Connected
+                    | ConnectionStatus::Prompting
+            ) {
+                names.push(connection.agent_type.to_string());
+            }
+        }
         let mut draining = self.draining.lock().await;
         prune_reaped(&mut draining);
         names.extend(draining.iter().map(|c| c.agent.to_string()));
@@ -5526,21 +5524,18 @@ mod tests {
         mgr.insert_test_connection("c1", AgentType::Codex, None, EventEmitter::Noop)
             .await;
 
-        // Reproduce the production split: the map entry keeps its spawn-time
-        // placeholder while the shared session state advances through the
-        // connection driver's status events.
+        // The connection driver advances the shared session state through its
+        // status events; inventory must report that authoritative state.
         let state = {
             let connections = mgr.connections.lock().await;
             connections.get("c1").unwrap().state.clone()
         };
-        state.write().await.status = ConnectionStatus::Connected;
-        mgr.connections.lock().await.get_mut("c1").unwrap().status =
-            ConnectionStatus::Connecting;
+        state.write().await.status = ConnectionStatus::Prompting;
 
         let rows = mgr.list_connections().await;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "c1");
-        assert_eq!(rows[0].status, ConnectionStatus::Connected);
+        assert_eq!(rows[0].status, ConnectionStatus::Prompting);
     }
 
     /// An agent that has left the connection map but not yet exited can still
@@ -5717,7 +5712,6 @@ mod tests {
         AgentConnection {
             id: id.to_string(),
             agent_type: crate::models::agent::AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -6305,7 +6299,6 @@ mod tests {
         let conn = AgentConnection {
             id: conn_id.to_string(),
             agent_type,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -7476,7 +7469,6 @@ mod tests {
         let conn = AgentConnection {
             id: "c-shield".to_string(),
             agent_type: AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -9250,7 +9242,6 @@ mod tests {
         let conn = AgentConnection {
             id: conn_id.to_string(),
             agent_type: crate::models::agent::AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -10043,7 +10034,6 @@ mod tests {
         let conn = AgentConnection {
             id: "c-relink".to_string(),
             agent_type: AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),

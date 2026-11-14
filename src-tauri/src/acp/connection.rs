@@ -1649,7 +1649,6 @@ impl<V: Send + 'static> Drop for ConnectionCleanupGuard<V> {
 pub struct AgentConnection {
     pub id: String,
     pub agent_type: AgentType,
-    pub status: ConnectionStatus,
     pub owner_window_label: String,
     pub cmd_tx: mpsc::Sender<ConnectionCommand>,
     /// Cancelled by every manager path that ends this connection, before it
@@ -2982,7 +2981,6 @@ pub async fn spawn_agent_connection(
         AgentConnection {
             id: connection_id,
             agent_type,
-            status: ConnectionStatus::Connecting,
             owner_window_label,
             cmd_tx,
             handshake: handshake.clone(),
