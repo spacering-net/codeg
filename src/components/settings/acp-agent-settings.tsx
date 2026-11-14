@@ -3730,11 +3730,9 @@ export function claudePromptCacheOneHourEnabled(
 ): boolean {
   const parseResult = parseConfigJsonText(configText)
   if (parseResult.error) return false
-  const value = parseResult.config[key]
-  return (
-    typeof value === "string" &&
-    value.trim() === CLAUDE_PROMPT_CACHE_TTL_ONE_HOUR
-  )
+  // Exact match: Claude rejects anything but "5m" / "1h", so a padded value
+  // must not read as on.
+  return parseResult.config[key] === CLAUDE_PROMPT_CACHE_TTL_ONE_HOUR
 }
 
 /** On writes `"1h"` under `key`, off removes the key; every other key is kept.

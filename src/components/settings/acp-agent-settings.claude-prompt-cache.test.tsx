@@ -138,6 +138,12 @@ describe("Claude prompt cache helpers", () => {
       )
     ).toBe(false)
     expect(
+      claudePromptCacheOneHourEnabled(
+        '{"promptCacheTtl":" 1h "}',
+        "promptCacheTtl"
+      )
+    ).toBe(false)
+    expect(
       claudePromptCacheOneHourEnabled('{"promptCacheTtl":', "promptCacheTtl")
     ).toBe(false)
   })
