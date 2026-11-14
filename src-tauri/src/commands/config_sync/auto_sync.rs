@@ -16,11 +16,20 @@
 //! cannot be forgotten by a future feature, and sends zero network traffic
 //! when nothing changed.
 //!
-//! ## Upload only
+//! ## Upload only — and never over a snapshot this device has not seen
 //!
 //! This loop never downloads. Pulling remote configuration is always an
 //! explicit user action, because an automatic pull is indistinguishable from
 //! "another machine silently overwrote my settings".
+//!
+//! The same argument runs the other way. The remote holds one snapshot and no
+//! history, so an automatic upload over a snapshot ANOTHER machine wrote — a
+//! fresh install's defaults over everything the first machine set up — is that
+//! same silent overwrite, with the only copy of the other machine's settings as
+//! the casualty. So every upload reads the remote manifest first and stands
+//! down when it names a snapshot this device neither wrote nor restored; the
+//! panel then offers "restore it" or "replace it" (see
+//! `webdav_sync::upload_snapshot_core`).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -29,7 +38,9 @@ use std::time::Duration;
 use sea_orm::DatabaseConnection;
 use serde::Serialize;
 
-use super::webdav_sync::{load_settings, load_state, upload_snapshot_core};
+use super::webdav_sync::{
+    load_settings, load_state_view, upload_snapshot_core, RemoteConflict, UploadRequest,
+};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 /// Emitted ONLY by this loop. A frontend receiving it knows the sync was
@@ -57,6 +68,9 @@ static SUPPRESSION_DEPTH: AtomicUsize = AtomicUsize::new(0);
 pub struct ConfigSyncStatusPayload {
     pub last_sync_at: Option<String>,
     pub last_error: Option<String>,
+    /// Set while uploads are held back because the remote holds a snapshot
+    /// this device has not seen.
+    pub conflict: Option<RemoteConflict>,
 }
 
 /// Held while local configuration is being rewritten from a remote snapshot.
@@ -130,15 +144,21 @@ pub async fn run_auto_sync_loop(
             continue;
         }
 
-        match upload_snapshot_core(&conn, &app_version, false).await {
+        let request = UploadRequest {
+            automatic: true,
+            ..UploadRequest::default()
+        };
+        match upload_snapshot_core(&conn, &app_version, request).await {
             Ok(outcome) => {
+                // A held-back upload is a decision waiting on the user, not a
+                // failure: backing off would only delay noticing it was resolved.
                 consecutive_failures = 0;
-                // Only announce an upload that happened. A no-op tick would
-                // otherwise repaint "last synced" every few minutes with a
-                // timestamp nothing was written at.
-                if outcome.uploaded {
-                    let state = load_state(&conn).await;
-                    emit_status(&emitter, &state.last_sync_at, &None);
+                // Only announce what happened. A no-op tick would otherwise
+                // repaint "last synced" every few minutes with a timestamp
+                // nothing was written at.
+                if outcome.uploaded || outcome.conflict.is_some() {
+                    let state = load_state_view(&conn).await;
+                    emit_status(&emitter, &state.last_sync_at, &None, &state.conflict);
                 }
             }
             Err(err) => {
@@ -147,8 +167,13 @@ pub async fn run_auto_sync_loop(
                     "[CONFIG-SYNC] auto sync failed ({consecutive_failures} in a row): {}",
                     err.message
                 );
-                let state = load_state(&conn).await;
-                emit_status(&emitter, &state.last_sync_at, &Some(err.message));
+                let state = load_state_view(&conn).await;
+                emit_status(
+                    &emitter,
+                    &state.last_sync_at,
+                    &Some(err.message),
+                    &state.conflict,
+                );
             }
         }
 
@@ -161,6 +186,7 @@ fn emit_status(
     emitter: &EventEmitter,
     last_sync_at: &Option<String>,
     last_error: &Option<String>,
+    conflict: &Option<RemoteConflict>,
 ) {
     emit_event(
         emitter,
@@ -168,6 +194,7 @@ fn emit_status(
         ConfigSyncStatusPayload {
             last_sync_at: last_sync_at.clone(),
             last_error: last_error.clone(),
+            conflict: conflict.clone(),
         },
     );
 }

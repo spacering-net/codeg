@@ -5402,15 +5402,17 @@
       "customAgents": "カスタムエージェント",
       "quickMessages": "クイックメッセージ",
       "taskTemplates": "タスクテンプレート",
-      "preferences": "アプリ設定（言語・外観・切り替え）",
-      "assistants": "アシスタント"
+      "preferences": "アプリ設定（言語・切り替え）",
+      "assistants": "アシスタント",
+      "appearance": "外観（ライト／ダーク、テーマカラー、ズーム、フォント、背景の設定、カスタムスタイル）"
     },
     "scopeExcluded": {
       "conversations": "会話履歴",
       "uploads": "アップロードしたファイルと画像",
       "workspaces": "ワークスペースのプロジェクトとパス",
       "mcp": "MCP サーバー（各 CLI が管理）",
-      "credentials": "ログイン認証情報とトークン"
+      "credentials": "ログイン認証情報とトークン",
+      "backgroundImage": "背景画像ファイルそのもの（各マシンに残ります）"
     },
     "fileTitle": "設定ファイル",
     "exportButton": "ファイルに書き出す",
@@ -5439,7 +5441,7 @@
     "profile": "プロファイル",
     "profileHint": "同じプロファイルを使うマシンは同じ設定を共有します。仕事用と個人用を分けたい場合は別のプロファイル名にしてください。",
     "autoSyncLabel": "自動でアップロード",
-    "autoSyncHint": "定期的に確認し、設定が変わったときだけ送信します。",
+    "autoSyncHint": "定期的に確認し、設定が変わったときだけ送信します。別のマシンがアップロードしたスナップショットは、復元するか置き換えを選ぶまで上書きしません。",
     "intervalLabel": "確認間隔",
     "intervalOption": "{minutes} 分ごと",
     "saveButton": "保存",
@@ -5460,7 +5462,7 @@
     "plaintextWarning": "スナップショットは暗号化せずに送信され、API キーも含まれます。自分だけがアクセスできる WebDAV サーバーを使ってください。同期用の認証情報自体は含まれません。",
     "importConfirmTitle": "設定を読み込みますか？",
     "importConfirmBody": "ファイルの項目がこのマシンに追加・更新されます。ファイルにない既存項目はそのまま残ります。",
-    "restartHint": "外観・言語・プロバイダー一覧などの一部の変更は、codeg を再起動すると反映されます。",
+    "restartHint": "言語・プロバイダー一覧などの一部の変更は、codeg を再起動すると反映されます。",
     "importConfirmAction": "読み込む",
     "restoreConfirmTitle": "リモートから復元しますか？",
     "restoreConfirmBody": "{device} が {time} に作成したスナップショットをこのマシンに適用します。スナップショットにない既存項目は残ります。",
@@ -5474,7 +5476,8 @@
       "quickMessages": "クイックメッセージ {count} 件",
       "taskTemplates": "タスクテンプレート {count} 件",
       "preferences": "アプリ設定 {count} 件",
-      "assistants": "アシスタント {count} 件"
+      "assistants": "アシスタント {count} 件",
+      "appearance": "外観設定 {count} 件"
     },
     "rollbackTitle": "インポートを元に戻す",
     "rollbackHint": "インポートと復元のたびに、直前のこのマシンの設定を保存します。最新の 10 件が残ります。",
@@ -5491,7 +5494,17 @@
     "passphraseKeep": "空のままにすると保存済みのパスフレーズを使います",
     "passphrasePlaceholder": "暗号化パスフレーズ",
     "passphraseHint": "このマシンのキーチェーンにのみ保存され、アップロードされません。他のマシンでも同じパスフレーズを入力してください。",
-    "assistantsRenamed": "このマシンに同じ名前のアシスタントがあったため、{count} 件の名前を変更しました。"
+    "assistantsRenamed": "このマシンに同じ名前のアシスタントがあったため、{count} 件の名前を変更しました。",
+    "conflictTitle": "自動アップロードを一時停止しています",
+    "conflictBody": "サーバーには {device} が {time} に作成した、このマシンでまだ復元していないスナップショットがあります。アップロードするとそれを置き換え、サーバーには以前のコピーが残りません。",
+    "conflictRestore": "復元する",
+    "conflictOverwrite": "このマシンの設定で置き換える",
+    "conflictUnknownDevice": "不明なマシン",
+    "conflictChanged": "サーバーのスナップショットがまた変わりました。置き換える前に新しいものを確認してください。",
+    "overwriteConfirmTitle": "サーバーのスナップショットを置き換えますか？",
+    "overwriteConfirmBody": "{device} が {time} に作成したスナップショットを、このマシンの設定で置き換えます。サーバーには以前のコピーが残らないため、そのマシンの設定はそのマシンからしか取り戻せません。",
+    "overwriteConfirmAction": "置き換える",
+    "lastPulledAt": "最終復元：{time}"
   },
   "backup": {
     "restore": {

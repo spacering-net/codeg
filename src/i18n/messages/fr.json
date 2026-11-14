@@ -5402,15 +5402,17 @@
       "customAgents": "Agents personnalisés",
       "quickMessages": "Messages rapides",
       "taskTemplates": "Modèles de tâches",
-      "preferences": "Préférences de l'app (langue, apparence, options)",
-      "assistants": "Assistants"
+      "preferences": "Préférences de l'app (langue, options)",
+      "assistants": "Assistants",
+      "appearance": "Apparence (mode clair/sombre, couleur du thème, zoom, polices, réglages de l’arrière-plan, styles personnalisés)"
     },
     "scopeExcluded": {
       "conversations": "Conversations et historique",
       "uploads": "Fichiers et images importés",
       "workspaces": "Projets et chemins de l'espace de travail",
       "mcp": "Serveurs MCP (gérés par chaque CLI)",
-      "credentials": "Identifiants de connexion et jetons"
+      "credentials": "Identifiants de connexion et jetons",
+      "backgroundImage": "L’image d’arrière-plan elle-même (chaque machine garde la sienne)"
     },
     "fileTitle": "Fichier de configuration",
     "exportButton": "Exporter vers un fichier",
@@ -5439,7 +5441,7 @@
     "profile": "Profil",
     "profileHint": "Les machines qui partagent un profil partagent une même configuration. Utilisez des profils distincts pour séparer le travail et le personnel.",
     "autoSyncLabel": "Envoyer automatiquement",
-    "autoSyncHint": "Vérifie régulièrement et n’envoie que si la configuration a changé.",
+    "autoSyncHint": "Vérifie régulièrement et n’envoie que si la configuration a changé. Un instantané envoyé par une autre machine n’est jamais remplacé tant que vous ne l’avez pas restauré ou choisi de le remplacer.",
     "intervalLabel": "Intervalle de vérification",
     "intervalOption": "Toutes les {minutes} minutes",
     "saveButton": "Enregistrer",
@@ -5460,7 +5462,7 @@
     "plaintextWarning": "L’instantané est envoyé sans chiffrement et contient des clés d’API : utilisez un serveur WebDAV auquel vous seul avez accès. Les identifiants de synchronisation, eux, n’y figurent jamais.",
     "importConfirmTitle": "Importer la configuration ?",
     "importConfirmBody": "Les entrées du fichier seront ajoutées ou mises à jour sur cette machine. Les entrées existantes absentes du fichier sont conservées.",
-    "restartHint": "Certains changements (apparence, langue et liste des fournisseurs) prennent effet après le redémarrage de codeg.",
+    "restartHint": "Certains changements (langue et liste des fournisseurs) prennent effet après le redémarrage de codeg.",
     "importConfirmAction": "Importer",
     "restoreConfirmTitle": "Restaurer depuis le serveur ?",
     "restoreConfirmBody": "L’instantané de {device} pris le {time} sera appliqué à cette machine. Les entrées existantes absentes de l’instantané sont conservées.",
@@ -5474,7 +5476,8 @@
       "quickMessages": "{count, plural, one {# message rapide} other {# messages rapides}}",
       "taskTemplates": "{count, plural, one {# modèle de tâche} other {# modèles de tâches}}",
       "preferences": "{count, plural, one {# préférence} other {# préférences}}",
-      "assistants": "{count, plural, one {# assistant} other {# assistants}}"
+      "assistants": "{count, plural, one {# assistant} other {# assistants}}",
+      "appearance": "{count, plural, one {# réglage d’apparence} other {# réglages d’apparence}}"
     },
     "rollbackTitle": "Annuler un import",
     "rollbackHint": "Chaque import et chaque restauration enregistrent d'abord l'état de cette machine. Les dix derniers sont conservés.",
@@ -5491,7 +5494,17 @@
     "passphraseKeep": "Laissez vide pour conserver la phrase enregistrée",
     "passphrasePlaceholder": "Phrase secrète de chiffrement",
     "passphraseHint": "Conservée dans le trousseau de cette machine et jamais envoyée. Saisissez la même phrase sur vos autres machines.",
-    "assistantsRenamed": "{count, plural, one {# assistant a été renommé : un assistant portait déjà son nom ici.} other {# assistants ont été renommés : des assistants portaient déjà leurs noms ici.}}"
+    "assistantsRenamed": "{count, plural, one {# assistant a été renommé : un assistant portait déjà son nom ici.} other {# assistants ont été renommés : des assistants portaient déjà leurs noms ici.}}",
+    "conflictTitle": "Envoi automatique en pause",
+    "conflictBody": "Le serveur contient un instantané de {device}, pris le {time}, que cette machine n’a pas restauré. L’envoyer le remplacerait, et le serveur ne garde aucune copie antérieure.",
+    "conflictRestore": "Le restaurer",
+    "conflictOverwrite": "Le remplacer par celui de cette machine",
+    "conflictUnknownDevice": "une machine inconnue",
+    "conflictChanged": "L’instantané du serveur a encore changé. Examinez le nouveau avant de le remplacer.",
+    "overwriteConfirmTitle": "Remplacer l’instantané du serveur ?",
+    "overwriteConfirmBody": "L’instantané de {device}, pris le {time}, sera remplacé par la configuration de cette machine. Le serveur ne garde aucune copie antérieure : les réglages de cette autre machine ne pourront être retrouvés que sur elle.",
+    "overwriteConfirmAction": "Remplacer",
+    "lastPulledAt": "Dernière restauration : {time}"
   },
   "backup": {
     "restore": {

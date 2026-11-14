@@ -870,6 +870,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::config_sync::config_sync_apply_rollback),
         )
         .route(
+            "/config_sync_mirror_appearance",
+            post(handlers::config_sync::config_sync_mirror_appearance),
+        )
+        .route(
             "/download_workspace_file",
             post(handlers::workspace_files::download_workspace_file),
         )

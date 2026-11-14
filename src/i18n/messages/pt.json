@@ -5402,15 +5402,17 @@
       "customAgents": "Agentes personalizados",
       "quickMessages": "Mensagens rápidas",
       "taskTemplates": "Modelos de tarefa",
-      "preferences": "Preferências do app (idioma, aparência, opções)",
-      "assistants": "Assistentes"
+      "preferences": "Preferências do app (idioma, opções)",
+      "assistants": "Assistentes",
+      "appearance": "Aparência (modo claro/escuro, cor do tema, zoom, fontes, ajustes do plano de fundo, estilos personalizados)"
     },
     "scopeExcluded": {
       "conversations": "Conversas e histórico",
       "uploads": "Arquivos e imagens enviados",
       "workspaces": "Projetos e caminhos do espaço de trabalho",
       "mcp": "Servidores MCP (mantidos por cada CLI)",
-      "credentials": "Credenciais de login e tokens"
+      "credentials": "Credenciais de login e tokens",
+      "backgroundImage": "A imagem de fundo em si (cada máquina mantém a sua)"
     },
     "fileTitle": "Arquivo de configuração",
     "exportButton": "Exportar para arquivo",
@@ -5439,7 +5441,7 @@
     "profile": "Perfil",
     "profileHint": "Máquinas com o mesmo perfil compartilham uma configuração. Use perfis diferentes para separar trabalho e uso pessoal.",
     "autoSyncLabel": "Enviar automaticamente",
-    "autoSyncHint": "Verifica periodicamente e envia apenas quando a configuração muda.",
+    "autoSyncHint": "Verifica periodicamente e envia apenas quando a configuração muda. Nunca substitui um instantâneo enviado por outra máquina até você restaurá-lo ou escolher substituí-lo.",
     "intervalLabel": "Intervalo de verificação",
     "intervalOption": "A cada {minutes} minutos",
     "saveButton": "Salvar",
@@ -5460,7 +5462,7 @@
     "plaintextWarning": "O instantâneo é enviado sem criptografia e contém chaves de API, então use um servidor WebDAV que só você acesse. As credenciais de sincronização nunca fazem parte do instantâneo.",
     "importConfirmTitle": "Importar configuração?",
     "importConfirmBody": "Os itens do arquivo serão adicionados ou atualizados nesta máquina. Os itens existentes que o arquivo não menciona são mantidos.",
-    "restartHint": "Algumas alterações (aparência, idioma e a lista de provedores) só têm efeito depois de reiniciar o codeg.",
+    "restartHint": "Algumas alterações (idioma e a lista de provedores) só têm efeito depois de reiniciar o codeg.",
     "importConfirmAction": "Importar",
     "restoreConfirmTitle": "Restaurar do servidor?",
     "restoreConfirmBody": "O instantâneo de {device}, criado em {time}, será aplicado a esta máquina. Os itens existentes que o instantâneo não menciona são mantidos.",
@@ -5474,7 +5476,8 @@
       "quickMessages": "{count, plural, one {# mensagem rápida} other {# mensagens rápidas}}",
       "taskTemplates": "{count, plural, one {# modelo de tarefa} other {# modelos de tarefa}}",
       "preferences": "{count, plural, one {# preferência} other {# preferências}}",
-      "assistants": "{count, plural, one {# assistente} other {# assistentes}}"
+      "assistants": "{count, plural, one {# assistente} other {# assistentes}}",
+      "appearance": "{count, plural, one {# ajuste de aparência} other {# ajustes de aparência}}"
     },
     "rollbackTitle": "Desfazer uma importação",
     "rollbackHint": "Cada importação e cada restauração guardam antes o estado desta máquina. Os dez últimos são mantidos.",
@@ -5491,7 +5494,17 @@
     "passphraseKeep": "Deixe vazio para manter a frase-passe guardada",
     "passphrasePlaceholder": "Frase-passe de cifra",
     "passphraseHint": "Fica no porta-chaves desta máquina e nunca é enviada. Introduza a mesma frase-passe nas suas outras máquinas.",
-    "assistantsRenamed": "{count, plural, one {# assistente foi renomeado: já havia um com o mesmo nome aqui.} other {# assistentes foram renomeados: já havia outros com os mesmos nomes aqui.}}"
+    "assistantsRenamed": "{count, plural, one {# assistente foi renomeado: já havia um com o mesmo nome aqui.} other {# assistentes foram renomeados: já havia outros com os mesmos nomes aqui.}}",
+    "conflictTitle": "Envio automático pausado",
+    "conflictBody": "O servidor tem um instantâneo de {device}, criado em {time}, que esta máquina não restaurou. Enviar o substituiria, e o servidor não guarda nenhuma cópia anterior.",
+    "conflictRestore": "Restaurá-lo",
+    "conflictOverwrite": "Substituir pelo desta máquina",
+    "conflictUnknownDevice": "uma máquina desconhecida",
+    "conflictChanged": "O instantâneo no servidor mudou de novo. Verifique o novo antes de substituí-lo.",
+    "overwriteConfirmTitle": "Substituir o instantâneo do servidor?",
+    "overwriteConfirmBody": "O instantâneo de {device}, criado em {time}, será substituído pela configuração desta máquina. O servidor não guarda nenhuma cópia anterior, então as configurações daquela máquina só poderão ser recuperadas nela.",
+    "overwriteConfirmAction": "Substituir",
+    "lastPulledAt": "Última restauração: {time}"
   },
   "backup": {
     "restore": {

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import type { ThemeProviderProps } from "next-themes"
 import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes"
 import {
@@ -9,6 +9,7 @@ import {
   THEME_COLOR_MEDIA_DARK,
   THEME_COLOR_MEDIA_LIGHT,
 } from "@/lib/theme-color"
+import { scheduleAppearanceMirror } from "@/lib/appearance-sync"
 
 function colorForMedia(media: string | null): string | null {
   if (media === THEME_COLOR_MEDIA_DARK) return THEME_COLOR_DARK
@@ -65,10 +66,32 @@ function ThemeColorMetaSync() {
   return null
 }
 
+/**
+ * Light / dark / system is the one synced appearance setting next-themes
+ * writes itself, past the appearance provider's `persist`, so its changes are
+ * mirrored for config sync from here. Not on the first render: that is the
+ * stored value being read, not a change (the launch-time mirror covers it).
+ */
+function ThemeModeMirror() {
+  const { theme } = useTheme()
+  const seen = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (seen.current === undefined) {
+      seen.current = theme ?? ""
+      return
+    }
+    if (seen.current === (theme ?? "")) return
+    seen.current = theme ?? ""
+    scheduleAppearanceMirror()
+  }, [theme])
+  return null
+}
+
 export function ThemeProvider({ children, ...props }: ThemeProviderProps) {
   return (
     <NextThemesProvider {...props}>
       <ThemeColorMetaSync />
+      <ThemeModeMirror />
       {children}
     </NextThemesProvider>
   )
