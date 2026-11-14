@@ -79,6 +79,23 @@ fn lenient_accept_rounds<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Erro
         .unwrap_or(DEFAULT_ACCEPT_ROUNDS))
 }
 
+/// How many rounds codeg starts by itself to fix one watched pull request
+/// — its checks, a conflict — before it is the owner's (7.4); 0 is never.
+pub const DEFAULT_CI_ROUNDS: u32 = 3;
+/// The most that can be set.
+pub const MAX_CI_ROUNDS: u32 = 10;
+
+fn default_ci_rounds() -> u32 {
+    DEFAULT_CI_ROUNDS
+}
+
+fn lenient_ci_rounds<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_u64()
+        .map(|n| n.min(MAX_CI_ROUNDS as u64) as u32)
+        .unwrap_or(DEFAULT_CI_ROUNDS))
+}
+
 fn lenient_rounds<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let v = Value::deserialize(d)?;
     Ok(v.as_u64()
@@ -143,6 +160,19 @@ pub enum AskFirst {
     #[default]
     Auto,
     Ask,
+}
+
+/// What codeg does when a watched pull request's checks fail (7.4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CiFailure {
+    /// Its task fixes it: a follow-up, or a new task on the pull request.
+    #[default]
+    Fix,
+    /// The owner is asked on its card first.
+    Ask,
+    /// Only the card.
+    Tell,
 }
 
 /// Who answers an executor's questions or plan approvals (7.3.1).
@@ -670,6 +700,25 @@ pub struct Prefs {
     /// put to the owner on a confirm card first.
     #[serde(default, deserialize_with = "lenient")]
     pub routine_dispatch: AskFirst,
+    /// A watched pull request whose checks failed (7.4): fixed by its task,
+    /// the owner asked first, or only told.
+    #[serde(default, deserialize_with = "lenient")]
+    pub ci_failure: CiFailure,
+    /// A watched pull request that conflicts with its base: its task brings
+    /// it up to date at once, or the owner is asked first.
+    #[serde(default, deserialize_with = "lenient")]
+    pub pr_conflict: AskFirst,
+    /// Review feedback from those who can write to the repository: handed
+    /// to the pull request's task at once, or the owner asked first.
+    #[serde(default, deserialize_with = "lenient")]
+    pub review_feedback: AskFirst,
+    /// Comments from those who cannot: the assistant judges whether its
+    /// task should have them, or the owner is asked.
+    #[serde(default, deserialize_with = "lenient")]
+    pub outsider_comments: AskFirst,
+    /// Rounds codeg starts by itself to fix one pull request; 0 is never.
+    #[serde(default = "default_ci_rounds", deserialize_with = "lenient_ci_rounds")]
+    pub ci_rounds: u32,
     /// The owner's time zone: `system`, or an IANA name (1.12).
     #[serde(default = "default_zone", deserialize_with = "lenient_zone")]
     pub time_zone: String,
@@ -907,6 +956,11 @@ impl Default for Prefs {
             issue_close: AskFirst::default(),
             pr_merge: AskFirst::default(),
             routine_dispatch: AskFirst::default(),
+            ci_failure: CiFailure::default(),
+            pr_conflict: AskFirst::default(),
+            review_feedback: AskFirst::default(),
+            outsider_comments: AskFirst::default(),
+            ci_rounds: DEFAULT_CI_ROUNDS,
             time_zone: default_zone(),
             presence: OnOff::default(),
             proactive: OnOff::default(),
@@ -1122,6 +1176,31 @@ pub const PREFS: &[PrefSpec] = &[
         key: "routine_dispatch",
         kind: PrefKind::Choice(&["auto", "ask"]),
         label: "the work your dispatch routines hand out",
+    },
+    PrefSpec {
+        key: "ci_failure",
+        kind: PrefKind::Choice(&["fix", "ask", "tell"]),
+        label: "a watched pull request whose checks failed",
+    },
+    PrefSpec {
+        key: "pr_conflict",
+        kind: PrefKind::Choice(&["auto", "ask"]),
+        label: "a watched pull request that conflicts with its base",
+    },
+    PrefSpec {
+        key: "review_feedback",
+        kind: PrefKind::Choice(&["auto", "ask"]),
+        label: "review feedback on a watched pull request from those who can write to it",
+    },
+    PrefSpec {
+        key: "outsider_comments",
+        kind: PrefKind::Choice(&["auto", "ask"]),
+        label: "comments on a watched pull request from those who cannot write to it",
+    },
+    PrefSpec {
+        key: "ci_rounds",
+        kind: PrefKind::Count { max: MAX_CI_ROUNDS },
+        label: "rounds codeg starts by itself to fix one pull request",
     },
     PrefSpec {
         key: "time_zone",
@@ -1617,6 +1696,10 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("issue_close", json!("auto")),
             ("pr_merge", json!("auto")),
             ("routine_dispatch", json!("auto")),
+            ("ci_failure", json!("fix")),
+            ("pr_conflict", json!("auto")),
+            ("review_feedback", json!("auto")),
+            ("outsider_comments", json!("auto")),
         ]),
         "ask_more" => Some(vec![
             ("confirm_dispatch", json!("code")),
@@ -1631,6 +1714,10 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("issue_close", json!("ask")),
             ("pr_merge", json!("ask")),
             ("routine_dispatch", json!("ask")),
+            ("ci_failure", json!("ask")),
+            ("pr_conflict", json!("ask")),
+            ("review_feedback", json!("ask")),
+            ("outsider_comments", json!("ask")),
         ]),
         _ => None,
     }
@@ -2007,6 +2094,40 @@ fn brain_value(key: &str, value: &Value) -> String {
         ("accept_revise", "ask") => {
             "put to the owner on the acceptance card, with what you would send back".into()
         }
+        ("ci_failure", "fix") => {
+            "the pull request's task fixes it by itself: a follow-up while it is in review, else \
+             a new task on the pull request; codeg pushes the fix once it is accepted"
+                .into()
+        }
+        ("ci_failure", "ask") => "the owner is asked on its card whether to fix it".into(),
+        ("ci_failure", "tell") => "only the card; nothing is fixed by itself".into(),
+        ("pr_conflict", "auto") => {
+            "its task brings the branch up to date with its base by itself (merging the base in)"
+                .into()
+        }
+        ("pr_conflict", "ask") => "the owner is asked on its card first".into(),
+        ("review_feedback", "auto") => {
+            "handed to the pull request's task at once, word for word, to accept, clarify or \
+             answer with reasons point by point"
+                .into()
+        }
+        ("review_feedback", "ask") => "the owner is asked on its card first".into(),
+        ("outsider_comments", "auto") => {
+            "you are told who wrote what; you judge whether its task should have it \
+             (pr_feedback_forward), tell the owner, or let it be"
+                .into()
+        }
+        ("outsider_comments", "ask") => {
+            "the owner is asked on a card whether the task should have them".into()
+        }
+        ("ci_rounds", _) => match value.as_u64() {
+            Some(0) => "none: codeg fixes nothing by itself; the owner decides".into(),
+            Some(n) => format!(
+                "at most {n} for one pull request, then it is the owner's — urgently, with what \
+                 each round changed"
+            ),
+            None => value.to_string(),
+        },
         ("accept_rounds", _) => match value.as_u64() {
             Some(0) => "none: nothing is sent back on its own; the owner decides".into(),
             Some(n) => format!("at most {n} checks, then it is the owner's call"),

@@ -105,6 +105,12 @@ pub struct Model {
     /// the work (7.5): its acceptance is judged against it.
     #[sea_orm(column_type = "Text", nullable)]
     pub done_when: Option<String>,
+    /// A round codeg started to fix a watched pull request (7.4, phase 3),
+    /// as JSON (`personal_agent::pr_auto::PrFix`): which watch, why (failed
+    /// checks, a conflict, review feedback), and whether it was a new task
+    /// or a follow-up — codeg delivers it to the pull request once accepted.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub pr_fix: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

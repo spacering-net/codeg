@@ -88,6 +88,11 @@ pub struct Model {
     pub backoff: bool,
     #[sea_orm(column_type = "Text", nullable)]
     pub last_error: Option<String>,
+    /// What codeg did on it by itself (7.4, phase 3), as JSON: the rounds
+    /// it started to fix it, the review feedback read, the merge it made
+    /// (`personal_agent::pr_auto::Auto`).
+    #[sea_orm(column_type = "Text", nullable)]
+    pub auto: Option<String>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

@@ -181,6 +181,10 @@ pub struct ForgeCall {
     /// `suggest` (the assistant only thinks it fits); `cnb` (a merge there).
     #[serde(default)]
     pub why: String,
+    /// codeg's own, on a pull request it watches (7.4, phase 3): no
+    /// assistant called for it.
+    #[serde(default)]
+    pub auto: bool,
 }
 
 impl ForgeCall {
@@ -239,6 +243,34 @@ fn short(sha: &str) -> &str {
 /// The marker a comment carries, so it can be found again.
 fn marker(op_id: &str) -> String {
     format!("<!-- codeg-op:{op_id} -->")
+}
+
+/// `owner/repo#12` — `!12` for a GitLab merge request.
+pub fn label_of(repo: &DeliveryTarget, kind: &str, number: i64) -> String {
+    let sigil = if repo.provider == ForgeProvider::GitLab && kind == "pr" {
+        "!"
+    } else {
+        "#"
+    };
+    format!("{}{sigil}{number}", repo.owner_repo)
+}
+
+/// What a watch's merge (7.4, phase 3) came to.
+#[derive(Debug, Clone)]
+pub(super) enum WatchMerge {
+    /// Merged (or being, or in doubt), on its card; with why when the forge
+    /// refused it.
+    Merging(i32, Option<String>),
+    /// On an approval card for the owner.
+    Asked(i32),
+    /// The merged-version rules said no, and why: the owner is told it is
+    /// ready to merge, and why codeg did not.
+    Refused(String),
+    /// The forge could not be read to plan it.
+    Unread(String),
+    /// Its head moved since the read, or its card is up already: the next
+    /// read decides.
+    Not,
 }
 
 /// What running an action came to.
@@ -424,6 +456,7 @@ impl PersonalAgentEngine {
             guaranteed: false,
             reason,
             why: String::new(),
+            auto: false,
         };
         match action {
             ForgeAction::Comment => {
@@ -689,16 +722,31 @@ impl PersonalAgentEngine {
         number: i64,
     ) -> Option<crate::db::entities::work_task::Model> {
         use crate::db::entities::work_task;
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+        use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};
+        // Delivered with no provenance (its `delivery`), or a forge task's
+        // (its source), the latest first: a task on a pull request that
+        // pushed to it is the pull request's now (7.4).
         let rows = work_task::Entity::find()
-            .filter(work_task::Column::Delivery.is_not_null())
+            .filter(
+                Condition::any()
+                    .add(work_task::Column::Delivery.is_not_null())
+                    .add(work_task::Column::SourceMeta.is_not_null()),
+            )
             .filter(work_task::Column::DeletedAt.is_null())
             .order_by_desc(work_task::Column::Id)
             .all(&self.db.conn)
             .await
             .ok()?;
         rows.into_iter().find(|t| {
-            super::ladder::pr_target(t).is_some_and(|(r, n)| {
+            // Pushed there: a task on the pull request that has not pushed
+            // yet is not what the pull request carries.
+            let pushed = t.delivery.is_some()
+                || t.source_meta
+                    .as_deref()
+                    .and_then(|m| serde_json::from_str::<crate::forge::ForgeSourceMeta>(m).ok())
+                    .is_some_and(|m| m.result_pr_number.is_some());
+            pushed
+                && super::ladder::pr_target(t).is_some_and(|(r, n)| {
                 n == number
                     && r.provider == repo.provider
                     && r.server_host.eq_ignore_ascii_case(&repo.server_host)
@@ -883,6 +931,182 @@ impl PersonalAgentEngine {
             guaranteed: !cnb,
             method,
         })
+    }
+
+    /// A watch's merge of `w` at `head` (7.4, phase 3): done now through
+    /// the shared entry and the merged-version rules, or — `ask`, or CNB —
+    /// put to the owner on an approval card. Once per head: its card is
+    /// keyed by it, and so is the operation.
+    pub(super) async fn watch_merge_card(
+        self: &Arc<Self>,
+        w: &crate::db::entities::personal_agent_watch::Model,
+        head: &str,
+        ask: bool,
+    ) -> WatchMerge {
+        let Some(repo) = crate::db::service::personal_agent_watch_service::target_of(w) else {
+            return WatchMerge::Unread("the watch names no forge codeg knows".into());
+        };
+        let subject = format!("watch-merge:{}:{}", w.id, head.to_ascii_lowercase());
+        if svc::notice_of_subject(&self.db.conn, self.bot().await, NoticeKind::Forge, &subject)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return WatchMerge::Not;
+        }
+        let account_name = crate::commands::forge::auth_at(&self.db, &repo)
+            .await
+            .ok()
+            .map(|a| a.username);
+        let mut call = ForgeCall {
+            action: ForgeAction::Merge,
+            target: ForgeTarget {
+                repo,
+                kind: "pr".into(),
+                number: w.number,
+                task_id: None,
+                url: w.url.clone(),
+                account_name,
+            },
+            body: None,
+            method: None,
+            head: None,
+            version: None,
+            round_id: None,
+            checks: None,
+            guaranteed: false,
+            reason: None,
+            why: String::new(),
+            auto: true,
+        };
+        match Box::pin(self.plan_merge(&call.target, None)).await {
+            Ok(plan) if plan.head.eq_ignore_ascii_case(head) => call.adopt(&plan),
+            // Moved since the read: the next one tells.
+            Ok(_) => return WatchMerge::Not,
+            Err(MergeNo::Read(e)) => return WatchMerge::Unread(e),
+            Err(MergeNo::Rule { why, .. }) => return WatchMerge::Refused(why),
+        }
+        let cnb = call.target.repo.provider == ForgeProvider::Cnb;
+        call.why = if cnb {
+            "cnb"
+        } else if ask {
+            "confirm"
+        } else {
+            "direct"
+        }
+        .into();
+        if call.why != "direct" {
+            let id = match self
+                .raise_forge_card(&call, "open", None, Some(subject), Value::Null)
+                .await
+            {
+                Ok(id) => id,
+                Err(e) => return WatchMerge::Unread(e),
+            };
+            // The owner hears it can be merged — on CNB, that there is no
+            // conflict and its checks are unknown.
+            if let Some(host) = self.host_ref() {
+                let bot = self.bot().await;
+                let row_id = svc::get_notice(&self.db.conn, id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|n| n.timeline_id);
+                let text = match &w.title {
+                    Some(t) if !t.trim().is_empty() => {
+                        format!("{} {}", call.target.label(), super::reach::glimpse(t))
+                    }
+                    _ => call.target.label(),
+                };
+                host.tell(super::reach::News {
+                    key: format!("forge:{id}"),
+                    bot_id: bot,
+                    kind: "pr_ready",
+                    what: if cnb {
+                        super::reach::What::PrNoConflict { text }
+                    } else {
+                        super::reach::What::PrReady { text }
+                    },
+                    link: Some(super::reach::NotifyLink::Bot {
+                        bot_id: bot,
+                        row_id,
+                    }),
+                    need: None,
+                })
+                .await;
+            }
+            return WatchMerge::Asked(id);
+        }
+        let id = match self
+            .raise_forge_card(&call, "acting", None, Some(subject.clone()), Value::Null)
+            .await
+        {
+            Ok(id) => id,
+            Err(e) => return WatchMerge::Unread(e),
+        };
+        let op_id = format!("pa-watch-merge-{}-{}", w.id, head.to_ascii_lowercase());
+        let (state, text) = Box::pin(self.run_forge(&call, LedgerSlot::outside(op_id), id)).await;
+        self.tell_forge(id, state, &text).await;
+        WatchMerge::Merging(id, (state == "failed").then_some(text))
+    }
+
+    /// The approval cards of `w`'s merges that no longer stand: for another
+    /// head than the one there now, or the pull request no longer open.
+    pub(super) async fn retire_merge_asks(
+        self: &Arc<Self>,
+        w: &crate::db::entities::personal_agent_watch::Model,
+        detail: &crate::forge::ForgeChangeDetail,
+    ) {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        let prefix = format!("watch-merge:{}:", w.id);
+        let open = notice_entity::Entity::find()
+            .filter(notice_entity::Column::BotId.eq(w.bot_id))
+            .filter(notice_entity::Column::Kind.eq(NoticeKind::Forge))
+            .filter(notice_entity::Column::State.eq(NoticeState::Open))
+            .filter(notice_entity::Column::SubjectKey.starts_with(prefix.as_str()))
+            .all(&self.db.conn)
+            .await
+            .unwrap_or_default();
+        let head = detail
+            .head_sha
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        for n in open {
+            // Only one never run: a merge sent whose answer was lost is in
+            // doubt, and its look on the forge settles it.
+            let phase = serde_json::from_str::<Value>(&n.payload)
+                .ok()
+                .and_then(|p| p["phase"].as_str().map(str::to_string));
+            if phase.as_deref() != Some("approve") {
+                continue;
+            }
+            let card_head = n
+                .subject_key
+                .as_deref()
+                .and_then(|k| k.strip_prefix(prefix.as_str()))
+                .unwrap_or("");
+            let why = match detail.state.as_str() {
+                "merged" => "the pull request was merged meanwhile",
+                "closed" => "the pull request was closed meanwhile",
+                _ if card_head != head => "the pull request has a new head since",
+                _ => continue,
+            };
+            if self
+                .forge_card_to(
+                    n.id,
+                    &[NoticeState::Open],
+                    NoticeState::Expired,
+                    "not_run",
+                    json!({ "error": why }),
+                )
+                .await
+            {
+                self.tell_forge(n.id, "not_run", &format!("its merge was not done: {why}."))
+                    .await;
+            }
+        }
     }
 
     // ── running one ─────────────────────────────────────────────────────────
@@ -1434,10 +1658,32 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// A merge landed: the round whose version it is records it.
+    /// A merge landed: the round whose version it is records it. On CNB,
+    /// which merges whatever the head is, the head it merged is compared
+    /// with the one approved: another is the owner's to hear, urgently.
     async fn forge_landed(&self, call: &ForgeCall, result: &Value) {
         if call.action != ForgeAction::Merge {
             return;
+        }
+        if !call.guaranteed {
+            if let (Some(want), Ok(Ok(d))) = (
+                call.head.as_deref(),
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(FORGE_ACT_SECS),
+                    crate::commands::forge::change_detail_at(
+                        &self.db,
+                        &call.target.repo,
+                        call.target.number,
+                    ),
+                )
+                .await,
+            ) {
+                if let Some(got) = d.head_sha.as_deref() {
+                    if !got.eq_ignore_ascii_case(want) {
+                        self.not_the_approved_head(call, want, got).await;
+                    }
+                }
+            }
         }
         let Some(round) = call.round_id else {
             return;
@@ -1456,6 +1702,49 @@ impl PersonalAgentEngine {
             },
         )
         .await;
+    }
+
+    /// CNB merged a head other than the one approved: urgent news, and the
+    /// card says so.
+    async fn not_the_approved_head(&self, call: &ForgeCall, want: &str, got: &str) {
+        let label = call.target.label();
+        if let Some(host) = self.host_ref() {
+            let bot = self.bot().await;
+            host.tell(super::reach::News {
+                key: format!("cnb-head:{label}:{got}"),
+                bot_id: bot,
+                kind: "used_up",
+                what: super::reach::What::Plain {
+                    text: format!(
+                        "{label}: merged at {}, not at the approved {} (CNB merges whatever the \
+                         head is)",
+                        short(got),
+                        short(want)
+                    ),
+                },
+                link: None,
+                need: None,
+            })
+            .await;
+        }
+        let _ = svc::insert_event(
+            &self.db.conn,
+            self.bot().await,
+            "forge",
+            &format!("cnb-head:{label}:{got}"),
+            None,
+            format!(
+                "{label} was merged on CNB at head {}, not at the head {} that was approved: \
+                 CNB's merge takes no head, and a commit landed in between. Tell the owner what \
+                 went in.",
+                short(got),
+                short(want)
+            ),
+            Some(json!({ "approved_head": want, "merged_head": got })),
+            true,
+        )
+        .await;
+        self.nudge();
     }
 
     /// Done on the forge: low news, by default (1.13).
@@ -1478,7 +1767,9 @@ impl PersonalAgentEngine {
         host.tell(super::reach::News {
             key: format!("forge:{notice_id}"),
             bot_id: bot,
-            kind: "forge",
+            // A watched pull request codeg merged by itself: told as one
+            // that can be merged would be (7.4).
+            kind: if call.auto { "pr_ready" } else { "forge" },
             what,
             link: Some(super::reach::NotifyLink::Bot {
                 bot_id: bot,
@@ -2039,6 +2330,7 @@ mod unit {
             guaranteed: false,
             reason: None,
             why: String::new(),
+            auto: false,
         }
     }
 

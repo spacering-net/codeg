@@ -424,6 +424,9 @@ pub struct PersonalAgentEngine {
     /// A push of the reply in flight is scheduled.
     reply_push_pending: AtomicBool,
     reply_push: Mutex<ReplyPush>,
+    /// This engine, for what a `&self` path hands to a task of its own (a
+    /// merge's later look, a dispatch it starts).
+    me: std::sync::Weak<PersonalAgentEngine>,
 }
 
 impl PersonalAgentEngine {
@@ -438,7 +441,8 @@ impl PersonalAgentEngine {
         fixed_bot: Option<i32>,
         host: std::sync::Weak<super::host::EngineHost>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|me| Self {
+            me: me.clone(),
             fixed_bot,
             host,
             bot_cache: AtomicI32::new(0),
@@ -888,6 +892,11 @@ impl PersonalAgentEngine {
     }
 
     /// The host running this engine, when one does.
+    /// This engine as an `Arc`; `None` only while it is being dropped.
+    pub(super) fn arc(&self) -> Option<Arc<PersonalAgentEngine>> {
+        self.me.upgrade()
+    }
+
     pub(super) fn host_ref(&self) -> Option<Arc<super::host::EngineHost>> {
         self.host.upgrade()
     }

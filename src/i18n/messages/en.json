@@ -8266,13 +8266,42 @@
           "auto": "Merge when its checks pass",
           "ask": "Ask me first (approval card)"
         },
+        "ci_failure": {
+          "title": "A watched PR's checks failed",
+          "hint": "Its task fixes it: a follow-up while the task that delivered it is still in review, else a new task on the pull request. codeg pushes the fix once it's accepted, at most the rounds set below.",
+          "fix": "Fix it automatically",
+          "ask": "Ask me first (on its card)",
+          "tell": "Just tell me"
+        },
+        "pr_conflict": {
+          "title": "A watched PR conflicts",
+          "hint": "Its task merges the base branch in and resolves the conflict (not a rebase: codeg never force-pushes onto a PR).",
+          "auto": "Resolve it automatically",
+          "ask": "Ask me first (on its card)"
+        },
+        "review_feedback": {
+          "title": "Review feedback from those who can write",
+          "hint": "A review asking for changes, or a comment on a line, by someone who can write to the repository: it goes to the task word for word, to accept, clarify or answer with reasons point by point.",
+          "auto": "Hand it to the task",
+          "ask": "Ask me first (on its card)"
+        },
+        "outsider_comments": {
+          "title": "Comments from those who can't write",
+          "hint": "The assistant hears who wrote what and judges: hand it to the task, tell you, or let it be (bots, noise).",
+          "auto": "The assistant decides",
+          "ask": "Ask me first (on its card)"
+        },
+        "ci_rounds": {
+          "title": "Rounds of fixing one PR",
+          "hint": "Failed checks and conflicts count, across tasks. After this many, the next failure is yours, urgently, with what each round changed. 0 fixes nothing by itself."
+        },
         "level_forge": {
           "title": "On a forge",
           "hint": "A comment posted, an issue closed or a pull request merged by an assistant."
         },
         "level_pr_ready": {
           "title": "A PR ready to merge",
-          "hint": "A watched pull request whose checks are green and the forge can merge."
+          "hint": "A watched pull request whose checks are green and the forge can merge — or one codeg merged by itself."
         },
         "level_pr": {
           "title": "Other PR news",
@@ -9816,7 +9845,8 @@
         "mergeable": "Ready to merge",
         "no_conflict": "No conflict, checks unknown",
         "merged": "Merged",
-        "closed": "Closed without merging"
+        "closed": "Closed without merging",
+        "feedback": "Review feedback"
       },
       "head": "Head {head}",
       "checks": {
@@ -9835,7 +9865,60 @@
       },
       "view": "View PR",
       "gotIt": "Got it",
-      "unwatch": "Stop watching"
+      "unwatch": "Stop watching",
+      "fix": {
+        "followup": {
+          "checks": "Its task is fixing it — round {n}, a follow-up.",
+          "conflict": "Its task is merging the base in — round {n}, a follow-up."
+        },
+        "task": {
+          "checks": "A new task on it is fixing it — round {n}.",
+          "conflict": "A new task on it is merging the base in — round {n}."
+        },
+        "failed": "codeg couldn't start a fix: {error}",
+        "none": "codeg can't fix it by itself: {why}",
+        "busy": "A round on it is under way; codeg looks again when it ends.",
+        "ask": {
+          "checks": "Have its task fix it?",
+          "conflict": "Have its task merge the base in?"
+        },
+        "told": "Only told, as your settings say.",
+        "off": "codeg fixes nothing by itself (0 rounds in your settings).",
+        "gaveUpHeading": "Fixed as often as allowed, still failing",
+        "gaveUp": "codeg fixed it {n} times; it's yours now. What each round did:",
+        "round": "Round {n}",
+        "cause": {
+          "checks": "failed checks",
+          "conflict": "a conflict"
+        },
+        "lines": "{files} files, +{added} −{removed}",
+        "doChecks": "Fix it",
+        "doConflict": "Merge the base in"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "asks for changes",
+          "review": "review",
+          "line": "on a line",
+          "comment": "comment"
+        },
+        "someone": "Someone",
+        "writer": "can write",
+        "outsider": "can't write",
+        "forward": "Hand it to the task",
+        "skip": "Not needed",
+        "forwarded": "Handed to the task.",
+        "waiting": "It goes to the task once the round under way ends."
+      },
+      "round": {
+        "checks": "fixing its checks — round {n}",
+        "conflict": "merging its base in — round {n}",
+        "feedback": "its review feedback"
+      },
+      "merge": {
+        "refused": "codeg didn't merge it by itself: {why}",
+        "unread": "codeg couldn't read the forge to merge it: {why}"
+      }
     },
     "routines": {
       "zone": "({zone})",

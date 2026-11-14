@@ -455,6 +455,7 @@ pub async fn change_detail(
         // commit-status list the other clients fold into `ForgeCheck`; saying
         // "unavailable" is honest, and the panel draws no strip.
         checks: ForgeCheckList::unavailable(),
+        updated_at: None,
     })
 }
 

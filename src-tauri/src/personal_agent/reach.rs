@@ -207,6 +207,11 @@ pub enum What {
     PrClosed {
         text: String,
     },
+    /// Fixed as many rounds as the owner allows, its checks still failing.
+    PrGaveUp {
+        text: String,
+        rounds: u32,
+    },
     /// A routine's report: its title, and the reply's first words.
     RoutineReport {
         title: String,
@@ -500,6 +505,10 @@ struct Words {
     pr_ready: &'static str,
     pr_no_conflict: &'static str,
     pr_closed: &'static str,
+    pr_gave_up: &'static str,
+    why_pr_gave_up: &'static str,
+    why_pr_merged: &'static str,
+    why_pr_cnb: &'static str,
     why_pr: &'static str,
     why_pr_ready: &'static str,
     routine: &'static str,
@@ -571,6 +580,10 @@ const EN: Words = Words {
     pr_ready: "Ready to merge: {text}",
     pr_no_conflict: "No conflict, checks unknown: {text}",
     pr_closed: "Closed without merging: {text}",
+    pr_gave_up: "Fixed {n} times, still failing: {text}",
+    why_pr_gave_up: "codeg fixed it as many times as you allow; it's yours now.",
+    why_pr_merged: "Its checks were green, so codeg merged it.",
+    why_pr_cnb: "CNB shows no checks; it's merged once you approve.",
     why_pr: "It watches this pull request for you.",
     why_pr_ready: "Its checks are green and the forge can merge it.",
     routine: "Routine report: {text}",
@@ -641,6 +654,10 @@ const ZH_CN: Words = Words {
     pr_ready: "可以合并了：{text}",
     pr_no_conflict: "没有冲突，检查状态未知：{text}",
     pr_closed: "没合并就关了：{text}",
+    pr_gave_up: "已经修了 {n} 次，还是没过：{text}",
+    why_pr_gave_up: "codeg 已经按你允许的次数修过了，接下来交给你。",
+    why_pr_merged: "检查全绿，codeg 直接合并了。",
+    why_pr_cnb: "CNB 读不到检查，你批准了才合并。",
     why_pr: "这是它替你看护的 PR。",
     why_pr_ready: "检查全绿，平台也显示能合。",
     routine: "例程报告：{text}",
@@ -711,6 +728,10 @@ const ZH_TW: Words = Words {
     pr_ready: "可以合併了：{text}",
     pr_no_conflict: "沒有衝突，檢查狀態未知：{text}",
     pr_closed: "沒合併就關了：{text}",
+    pr_gave_up: "已經修了 {n} 次，還是沒過：{text}",
+    why_pr_gave_up: "codeg 已經按你允許的次數修過了，接下來交給你。",
+    why_pr_merged: "檢查全綠，codeg 直接合併了。",
+    why_pr_cnb: "CNB 讀不到檢查，你批准了才合併。",
     why_pr: "這是它替你看護的 PR。",
     why_pr_ready: "檢查全綠，平台也顯示能合併。",
     routine: "例程報告：{text}",
@@ -781,6 +802,10 @@ const JA: Words = Words {
     pr_ready: "マージできます：{text}",
     pr_no_conflict: "コンフリクトなし、チェック状態は不明：{text}",
     pr_closed: "マージされずにクローズ：{text}",
+    pr_gave_up: "{n} 回修正してもまだ失敗：{text}",
+    why_pr_gave_up: "codeg は許可された回数まで修正しました。ここからはあなたの判断です。",
+    why_pr_merged: "チェックがすべて通ったので、codeg がマージしました。",
+    why_pr_cnb: "CNB ではチェックを読めないため、承認されてからマージします。",
     why_pr: "あなたの代わりに見守っている PR です。",
     why_pr_ready: "チェックがすべて成功し、プラットフォームでもマージできます。",
     routine: "ルーティンの報告：{text}",
@@ -851,6 +876,10 @@ const KO: Words = Words {
     pr_ready: "병합 가능: {text}",
     pr_no_conflict: "충돌 없음, 검사 상태 알 수 없음: {text}",
     pr_closed: "병합 없이 닫힘: {text}",
+    pr_gave_up: "{n}번 고쳤지만 여전히 실패: {text}",
+    why_pr_gave_up: "codeg가 허용된 횟수만큼 고쳤습니다. 이제 직접 봐 주세요.",
+    why_pr_merged: "검사가 모두 통과해서 codeg가 병합했습니다.",
+    why_pr_cnb: "CNB에서는 검사를 읽을 수 없어 승인해야 병합됩니다.",
     why_pr: "대신 지켜보는 PR이에요.",
     why_pr_ready: "검사가 모두 통과했고 플랫폼에서도 병합할 수 있어요.",
     routine: "루틴 보고: {text}",
@@ -921,6 +950,10 @@ const ES: Words = Words {
     pr_ready: "Lista para fusionar: {text}",
     pr_no_conflict: "Sin conflictos, comprobaciones desconocidas: {text}",
     pr_closed: "Cerrada sin fusionar: {text}",
+    pr_gave_up: "Corregido {n} veces y sigue fallando: {text}",
+    why_pr_gave_up: "codeg lo corrigió tantas veces como permites; ahora te toca a ti.",
+    why_pr_merged: "Sus comprobaciones estaban en verde, así que codeg lo fusionó.",
+    why_pr_cnb: "CNB no muestra comprobaciones; se fusiona cuando lo apruebes.",
     why_pr: "Vigila esta pull request por ti.",
     why_pr_ready: "Sus comprobaciones están en verde y la forja puede fusionarla.",
     routine: "Informe de la rutina: {text}",
@@ -991,6 +1024,10 @@ const DE: Words = Words {
     pr_ready: "Bereit zum Mergen: {text}",
     pr_no_conflict: "Kein Konflikt, Prüfungen unbekannt: {text}",
     pr_closed: "Ohne Merge geschlossen: {text}",
+    pr_gave_up: "{n}-mal repariert, schlägt weiter fehl: {text}",
+    why_pr_gave_up: "codeg hat es so oft repariert, wie du erlaubst; jetzt bist du dran.",
+    why_pr_merged: "Die Prüfungen waren grün, also hat codeg es zusammengeführt.",
+    why_pr_cnb: "CNB zeigt keine Prüfungen; es wird zusammengeführt, sobald du zustimmst.",
     why_pr: "Es beobachtet diesen Pull Request für dich.",
     why_pr_ready: "Die Prüfungen sind grün und die Forge kann ihn mergen.",
     routine: "Bericht der Routine: {text}",
@@ -1062,6 +1099,10 @@ const FR: Words = Words {
     pr_ready: "Prête à fusionner : {text}",
     pr_no_conflict: "Pas de conflit, vérifications inconnues : {text}",
     pr_closed: "Fermée sans fusion : {text}",
+    pr_gave_up: "Corrigé {n} fois, échoue toujours : {text}",
+    why_pr_gave_up: "codeg l'a corrigé autant de fois que tu le permets ; à toi maintenant.",
+    why_pr_merged: "Ses vérifications étaient au vert, codeg l'a donc fusionné.",
+    why_pr_cnb: "CNB n'affiche pas de vérifications ; il est fusionné dès que tu approuves.",
     why_pr: "Il surveille cette pull request pour vous.",
     why_pr_ready: "Ses vérifications sont au vert et la forge peut la fusionner.",
     routine: "Rapport de la routine : {text}",
@@ -1133,6 +1174,10 @@ const PT: Words = Words {
     pr_ready: "Pronto para mesclar: {text}",
     pr_no_conflict: "Sem conflito, verificações desconhecidas: {text}",
     pr_closed: "Fechado sem mesclar: {text}",
+    pr_gave_up: "Corrigido {n} vezes e ainda falha: {text}",
+    why_pr_gave_up: "O codeg corrigiu quantas vezes você permite; agora é com você.",
+    why_pr_merged: "As verificações estavam verdes, então o codeg fez o merge.",
+    why_pr_cnb: "O CNB não mostra verificações; o merge acontece quando você aprovar.",
     why_pr: "Ele acompanha este pull request para você.",
     why_pr_ready: "As verificações estão verdes e a forja pode mesclá-lo.",
     routine: "Relatório da rotina: {text}",
@@ -1203,6 +1248,10 @@ const AR: Words = Words {
     pr_ready: "جاهز للدمج: {text}",
     pr_no_conflict: "لا يوجد تعارض، وحالة الفحوصات غير معروفة: {text}",
     pr_closed: "أُغلق دون دمج: {text}",
+    pr_gave_up: "أُصلح {n} مرات وما زال يفشل: {text}",
+    why_pr_gave_up: "أصلحه codeg بقدر ما تسمح به؛ الأمر لك الآن.",
+    why_pr_merged: "كانت فحوصه ناجحة، فدمجه codeg.",
+    why_pr_cnb: "لا يعرض CNB أي فحوص؛ يُدمج بعد موافقتك.",
     why_pr: "هذا طلب سحب يراقبه نيابةً عنك.",
     why_pr_ready: "نجحت الفحوصات كلها والمنصة تستطيع دمجه.",
     routine: "تقرير الروتين: {text}",
@@ -1277,6 +1326,7 @@ fn main_line(w: &Words, what: &What) -> String {
         What::PrReady { text } => fill(w.pr_ready, text, 0, ""),
         What::PrNoConflict { text } => fill(w.pr_no_conflict, text, 0, ""),
         What::PrClosed { text } => fill(w.pr_closed, text, 0, ""),
+        What::PrGaveUp { text, rounds } => fill(w.pr_gave_up, text, *rounds as i64, ""),
         What::RoutineReport { title, text } => {
             let main = fill(w.routine, title, 0, "");
             match text {
@@ -1344,10 +1394,17 @@ fn reason(w: &Words, kind: &str, what: &What) -> Option<String> {
         "done" => w.why_done.into(),
         "reply" => w.why_reply.into(),
         "acceptance" => w.why_acceptance.into(),
-        "used_up" => w.why_used_up.into(),
+        "used_up" => match what {
+            What::PrGaveUp { .. } => w.why_pr_gave_up.into(),
+            _ => w.why_used_up.into(),
+        },
         "forge" => w.why_forge.into(),
         "pr" => w.why_pr.into(),
-        "pr_ready" => w.why_pr_ready.into(),
+        "pr_ready" => match what {
+            What::Merged { .. } => w.why_pr_merged.into(),
+            What::PrNoConflict { .. } => w.why_pr_cnb.into(),
+            _ => w.why_pr_ready.into(),
+        },
         "routine" => w.why_routine.into(),
         "routine_paused" => w.why_routine_paused.into(),
         "proposal" => w.why_proposal.into(),
@@ -1683,6 +1740,8 @@ pub fn need_kind(n: &NeedsYou) -> Option<&'static str> {
         "mergeable" => "pr_ready",
         // A routine codeg paused (6.9).
         "routine_paused" => "routine_paused",
+        // A watched pull request codeg fixed as often as allowed (7.4).
+        "pr_gave_up" => "used_up",
         _ => return None,
     })
 }
@@ -1692,8 +1751,12 @@ pub fn need_kind(n: &NeedsYou) -> Option<&'static str> {
 fn news_of_need(bot: i32, n: &NeedsYou, key: &str) -> Option<News> {
     let text = n.text.clone();
     // An acceptance card was told when it was raised (7.5).
-    let kind = need_kind(n)
-        .filter(|k| !matches!(*k, "waiting" | "acceptance" | "pr_ready" | "routine_paused"))?;
+    let kind = need_kind(n).filter(|k| {
+        !matches!(
+            *k,
+            "waiting" | "acceptance" | "pr_ready" | "routine_paused" | "used_up"
+        )
+    })?;
     let what = if kind == "approval" {
         What::Approval { text }
     } else {

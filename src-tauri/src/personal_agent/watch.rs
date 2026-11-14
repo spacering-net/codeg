@@ -446,12 +446,20 @@ fn label_of(w: &watch_entity::Model) -> String {
     format!("{}{sigil}{}", w.owner_repo, w.number)
 }
 
-/// A board task's pull request, delivered: what is watched.
+/// A board task's pull request, delivered: what is watched — done by its
+/// delivery, or kept in review after it (7.4, phase 3: such a task is
+/// followed up when the pull request needs fixing).
 fn delivered_pr(t: &work_task::Model) -> bool {
-    t.status == WorkTaskStatus::Done
+    let done = t.status == WorkTaskStatus::Done
         && t.completion_kind.as_deref()
-            == Some(crate::db::service::work_task_service::COMPLETION_DELIVERED_PR)
-        && super::ladder::pr_target(t).is_some()
+            == Some(crate::db::service::work_task_service::COMPLETION_DELIVERED_PR);
+    let kept = t.status == WorkTaskStatus::Review
+        && (t.delivery.is_some()
+            || t.source_meta
+                .as_deref()
+                .and_then(|m| serde_json::from_str::<crate::forge::ForgeSourceMeta>(m).ok())
+                .is_some_and(|m| m.result_pr_number.is_some()));
+    (done || kept) && super::ladder::pr_target(t).is_some()
 }
 
 // ── coding events ───────────────────────────────────────────────────────────
@@ -851,7 +859,9 @@ impl PersonalAgentEngine {
         .await;
         let now = Utc::now();
         match read {
-            Ok(Ok(detail)) => Ok(self.watch_read(w, &target, detail, now).await),
+            // Boxed: a read goes on to what follows it (a round, a merge, the
+            // feedback), a deep future for a worker thread's stack.
+            Ok(Ok(detail)) => Ok(Box::pin(self.watch_read(w, &target, detail, now)).await),
             Ok(Err(ForgeError::RateLimited { retry_after })) => {
                 let secs = retry_after
                     .map(|s| s as i64)
@@ -1009,11 +1019,18 @@ impl PersonalAgentEngine {
                 write.ended_reason = Some(Some(reason.into()));
             }
         }
+        // What codeg does about it by itself (phase 3) shapes how it is
+        // told.
+        let hint = match event {
+            Some(e) => Box::pin(self.hint_of(&w, e, &detail)).await,
+            None => super::pr_auto::Hint::default(),
+        };
         // Told before it is written: a cut-off read is told again on the
         // next one, never lost; the card and the event are keyed, so it is
         // told once.
+        let mut told = None;
         if let Some(e) = event {
-            self.tell_pr(&w, e, &tally, &detail).await;
+            told = Box::pin(self.tell_pr(&w, e, &tally, &detail, &hint)).await;
         }
         // A card is open only while it is true: the one for where it stands
         // now stays, the rest say it moved on (a "ready to merge" no longer
@@ -1064,7 +1081,7 @@ impl PersonalAgentEngine {
             Some("closed") => self.settle_work(&w, false).await,
             _ => {}
         }
-        match wsvc::update(&self.db.conn, w.id, Some(&[w.state]), write).await {
+        let saved = match wsvc::update(&self.db.conn, w.id, Some(&[w.state]), write).await {
             Ok(Some(saved)) => {
                 // Changed, or back from being held: its card is redrawn.
                 if changed || w.backoff {
@@ -1077,7 +1094,14 @@ impl PersonalAgentEngine {
                 .ok()
                 .flatten()
                 .unwrap_or(w),
-        }
+        };
+        // Then what follows by itself: a round, a merge, the feedback.
+        Box::pin(self.after_read(&saved, &hint, told, &detail)).await;
+        wsvc::get(&self.db.conn, saved.id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(saved)
     }
 
     /// The work behind a merged (done) or closed (dropped) pull request.
@@ -1085,7 +1109,24 @@ impl PersonalAgentEngine {
         let Some(d) = w.dispatch_id else {
             return;
         };
-        let Ok(Some(item)) = svc::item_of_dispatch(&self.db.conn, d).await else {
+        // A round codeg ran on the pull request has no matter of its own:
+        // the work that made it does.
+        let item = match svc::item_of_dispatch(&self.db.conn, d).await {
+            Ok(Some(item)) => Some(item),
+            _ => match svc::get_dispatch(&self.db.conn, d).await {
+                Ok(Some(dm)) => {
+                    match super::pr_auto::pr_fix_of(&dm).and_then(|f| f.origin_dispatch_id) {
+                        Some(origin) => svc::item_of_dispatch(&self.db.conn, origin)
+                            .await
+                            .ok()
+                            .flatten(),
+                        None => None,
+                    }
+                }
+                _ => None,
+            },
+        };
+        let Some(item) = item else {
             return;
         };
         if !matches!(item.status, ItemStatus::Open | ItemStatus::Waiting) {
@@ -1108,15 +1149,17 @@ impl PersonalAgentEngine {
         self.emit_for(w.bot_id, PersonalAgentChange::Item { id: item.id });
     }
 
-    /// Tell what a read of `w` found: a card, an event for the brain, a
-    /// coding event, news.
-    async fn tell_pr(
+    /// Tell what a read of `w` found: a card (unless `hint` says its
+    /// action's own card tells it), an event for the brain, a coding event,
+    /// news. The card's notice, when one was raised.
+    pub(super) async fn tell_pr(
         &self,
         w: &watch_entity::Model,
         event: PrEvent,
         tally: &CheckTally,
         detail: &ForgeChangeDetail,
-    ) {
+        hint: &super::pr_auto::Hint,
+    ) -> Option<i32> {
         let bot = w.bot_id;
         let head = detail.head_sha.clone().unwrap_or_default();
         let subject = pr_subject(w.id, event, &head);
@@ -1126,7 +1169,7 @@ impl PersonalAgentEngine {
             .flatten()
             .is_some()
         {
-            return;
+            return None;
         }
         let label = label_of(w);
         let dispatch = match w.dispatch_id {
@@ -1135,7 +1178,79 @@ impl PersonalAgentEngine {
         };
         // The cards before it said what was true then.
         self.retire_pr_cards(bot, w.id, None, "later").await;
-        let data = json!({
+        let wake = hint.wake.unwrap_or(event.wakes());
+        let lineage = dispatch
+            .as_ref()
+            .map(|d| svc::Lineage {
+                origin_bot_id: d.origin_bot_id,
+                origin_row_id: d.origin_row_id,
+                thread_id: d.thread_id,
+                for_input: d.for_input.clone(),
+            })
+            .unwrap_or_default();
+        let mut summary = event_summary(event, w, &label, tally, &head, dispatch.as_ref(), hint);
+        if let Some(note) = hint.note.as_deref() {
+            summary.push(' ');
+            summary.push_str(note);
+        }
+        let signal_kind = match event {
+            PrEvent::ChecksFailed => "pr_checks_failed",
+            PrEvent::ChecksPassed => "pr_checks_passed",
+            PrEvent::Conflict => "pr_conflict",
+            PrEvent::Mergeable => "pr_mergeable",
+            PrEvent::NoConflict => "pr_no_conflict",
+            PrEvent::Merged => "pr_merged",
+            PrEvent::Closed => "pr_closed",
+        };
+        let signal_facts = json!({
+            "watch_id": w.id,
+            "target": label,
+            "number": w.number,
+            "url": w.url,
+            "head": head,
+            "task_id": w.work_task_id,
+            "dispatch_id": w.dispatch_id,
+            "failing": tally.failing.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        });
+        // Its action's own card tells it: the brain and the routines still
+        // hear of it.
+        if hint.no_card {
+            if let Err(e) = svc::insert_new_event(
+                &self.db.conn,
+                bot,
+                NewEvent {
+                    kind: "pr".into(),
+                    source_key: format!("pr:{}:{}", w.id, told_key(event, &head)),
+                    coalesce_key: Some(format!("watch:{}", w.id)),
+                    summary,
+                    payload: Some(json!({
+                        "watch_id": w.id,
+                        "event": event,
+                        "dispatch_id": w.dispatch_id,
+                    })),
+                    wake,
+                    lineage,
+                },
+            )
+            .await
+            {
+                tracing::warn!("[personal_agent] PR event not queued: {e}");
+            }
+            signal(
+                &self.db,
+                signal_kind,
+                format!("pr:{}:{}", w.id, told_key(event, &head)),
+                Some(bot),
+                w.folder_id,
+                signal_facts,
+            )
+            .await;
+            if wake {
+                self.nudge();
+            }
+            return None;
+        }
+        let mut data = json!({
             "notice": "pr",
             "event": event,
             "state": "open",
@@ -1151,6 +1266,11 @@ impl PersonalAgentEngine {
             "task_id": w.work_task_id,
             "dispatch_id": w.dispatch_id,
         });
+        if let (Some(map), Value::Object(extra)) = (data.as_object_mut(), hint.data.clone()) {
+            map.extend(extra);
+        }
+        // The owner is asked on it whether its task fixes it.
+        let asks = hint.data["fix"]["state"].as_str() == Some("ask");
         let mut row = NewRow::new(TimelineKind::Notice, card_body(event, &label, tally, &head));
         row.segment_id = self.state.lock().await.connection_segment;
         row.data = Some(data);
@@ -1161,13 +1281,17 @@ impl PersonalAgentEngine {
             NewNotice {
                 kind: NoticeKind::Pr,
                 subject_key: Some(subject),
-                level: if event == PrEvent::Mergeable {
+                level: hint.level.unwrap_or(if event == PrEvent::Mergeable {
                     NoticeLevel::Normal
                 } else {
                     NoticeLevel::Low
-                },
+                }),
                 batch_id: None,
-                payload: json!({ "watch_id": w.id, "event": event, "head": head }),
+                payload: if asks {
+                    json!({ "watch_id": w.id, "event": event, "head": head, "ask": "fix" })
+                } else {
+                    json!({ "watch_id": w.id, "event": event, "head": head })
+                },
             },
             row,
         )
@@ -1176,22 +1300,12 @@ impl PersonalAgentEngine {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!("[personal_agent] PR card not raised: {e}");
-                return;
+                return None;
             }
         };
         self.emit_rows(vec![svc::to_row(card)]);
         // For its brain: the facts and a summary — the full text is
         // `pr_status`'s (7.2).
-        let lineage = dispatch
-            .as_ref()
-            .map(|d| svc::Lineage {
-                origin_bot_id: d.origin_bot_id,
-                origin_row_id: d.origin_row_id,
-                thread_id: d.thread_id,
-                for_input: d.for_input.clone(),
-            })
-            .unwrap_or_default();
-        let summary = event_summary(event, w, &label, tally, &head, dispatch.as_ref());
         if let Err(e) = svc::insert_new_event(
             &self.db.conn,
             bot,
@@ -1206,7 +1320,7 @@ impl PersonalAgentEngine {
                     "notice_id": notice.id,
                     "dispatch_id": w.dispatch_id,
                 })),
-                wake: event.wakes(),
+                wake,
                 lineage,
             },
         )
@@ -1216,31 +1330,14 @@ impl PersonalAgentEngine {
         }
         signal(
             &self.db,
-            match event {
-                PrEvent::ChecksFailed => "pr_checks_failed",
-                PrEvent::ChecksPassed => "pr_checks_passed",
-                PrEvent::Conflict => "pr_conflict",
-                PrEvent::Mergeable => "pr_mergeable",
-                PrEvent::NoConflict => "pr_no_conflict",
-                PrEvent::Merged => "pr_merged",
-                PrEvent::Closed => "pr_closed",
-            },
+            signal_kind,
             format!("pr:{}:{}", w.id, told_key(event, &head)),
             Some(bot),
             w.folder_id,
-            json!({
-                "watch_id": w.id,
-                "target": label,
-                "number": w.number,
-                "url": w.url,
-                "head": head,
-                "task_id": w.work_task_id,
-                "dispatch_id": w.dispatch_id,
-                "failing": tally.failing.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
-            }),
+            signal_facts,
         )
         .await;
-        if let Some(host) = self.host_ref() {
+        if let (Some(host), false) = (self.host_ref(), hint.quiet) {
             use super::reach::What;
             let text = match &w.title {
                 Some(t) if !t.trim().is_empty() => format!("{label} {}", super::reach::glimpse(t)),
@@ -1258,8 +1355,8 @@ impl PersonalAgentEngine {
             host.tell(super::reach::News {
                 key: format!("pr:{}", notice.id),
                 bot_id: bot,
-                kind: event.news_kind(),
-                what,
+                kind: hint.news_kind.unwrap_or(event.news_kind()),
+                what: hint.news.clone().unwrap_or(what),
                 link: Some(super::reach::NotifyLink::Bot {
                     bot_id: bot,
                     row_id: notice.timeline_id,
@@ -1269,9 +1366,10 @@ impl PersonalAgentEngine {
             .await;
         }
         self.emit(PersonalAgentChange::Status);
-        if event.wakes() {
+        if wake {
             self.nudge();
         }
+        Some(notice.id)
     }
 
     /// The open cards of watch `watch_id` but `keep` (a subject): no longer
@@ -1383,6 +1481,7 @@ impl PersonalAgentEngine {
                 self.retire_pr_cards(self.bot().await, id, None, "stopped")
                     .await;
             }
+            "fix" | "forward" => Box::pin(self.act_on_pr_ask(n, action)).await?,
             other => return Err(format!("unknown action on a PR card: {other}")),
         }
         self.emit(PersonalAgentChange::Status);
@@ -1670,7 +1769,10 @@ fn event_summary(
     t: &CheckTally,
     head: &str,
     dispatch: Option<&dispatch_entity::Model>,
+    hint: &super::pr_auto::Hint,
 ) -> String {
+    // What codeg does about it is said after the facts (`hint.note`).
+    let handled = hint.note.is_some();
     let whose = match (dispatch, w.work_task_id) {
         (Some(d), _) => format!(" (dispatch #{} \"{}\")", d.id, d.title),
         (None, Some(task)) => format!(" (board task #{task})"),
@@ -1680,14 +1782,18 @@ fn event_summary(
     let body = match event {
         PrEvent::ChecksFailed => format!(
             "checks failed on head {head}: {} — {}. The logs are at the checks' links; \
-             pr_status reads more. codeg does not fix it on its own yet: decide whether to tell \
-             the owner or hand out a fix.",
+             pr_status reads more.{}",
             t.phrase(),
             t.failing
                 .iter()
                 .map(|c| c.name.as_str())
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", "),
+            if handled {
+                ""
+            } else {
+                " Decide whether to tell the owner or hand out a fix."
+            }
         ),
         PrEvent::ChecksPassed => format!(
             "checks green again on head {head} ({}), but the forge will not merge it yet{}.",
@@ -1698,16 +1804,25 @@ fn event_summary(
                 .unwrap_or_default()
         ),
         PrEvent::Conflict => format!(
-            "conflicts with its base{} — it cannot be merged as it is. Decide whether to tell \
-             the owner or hand out a rebase.",
+            "conflicts with its base{} — it cannot be merged as it is.{}",
             w.merge_state
                 .as_deref()
                 .map(|m| format!(" ({m})"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            if handled {
+                ""
+            } else {
+                " Decide whether to tell the owner or hand out a fix (merging its base in)."
+            }
         ),
         PrEvent::Mergeable => format!(
-            "ready to merge on head {head} ({}); the owner was told.",
-            t.phrase()
+            "ready to merge on head {head} ({}){}",
+            t.phrase(),
+            if handled {
+                "."
+            } else {
+                "; the owner was told."
+            }
         ),
         PrEvent::NoConflict => format!(
             "no conflict on head {head}; its checks cannot be read, so it is not said to be ready."
@@ -1977,6 +2092,7 @@ mod tests {
             changed_files: None,
             commits: None,
             checks: ForgeCheckList::available(checks),
+            updated_at: None,
         }
     }
 

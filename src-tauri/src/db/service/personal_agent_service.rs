@@ -2642,6 +2642,8 @@ pub struct NewDispatch {
     pub lineage: Lineage,
     /// What done looks like (7.5).
     pub done_when: Option<String>,
+    /// A round codeg starts to fix a watched pull request (7.4), as JSON.
+    pub pr_fix: Option<String>,
 }
 
 /// Where an input's chain started — an assistant and its timeline row (an
@@ -2696,6 +2698,7 @@ fn dispatch_active(new: NewDispatch) -> dispatch::ActiveModel {
         finished_at: Set(None),
         round_op_id: Set(None),
         done_when: Set(new.done_when),
+        pr_fix: Set(new.pr_fix),
     }
 }
 
@@ -3363,6 +3366,8 @@ pub struct DispatchWrite {
     pub round_op_id: Option<Option<String>>,
     /// Only while the round is this operation's.
     pub expect_round_op: Option<String>,
+    /// The pull-request fix round it carries (7.4), or none.
+    pub pr_fix: Option<Option<String>>,
 }
 
 /// Update a dispatch. With `expect`, only while it is in one of those states
@@ -3422,6 +3427,9 @@ pub async fn update_dispatch(
     }
     if let Some(v) = write.source_batch_id {
         update = update.col_expr(dispatch::Column::SourceBatchId, Expr::value(v));
+    }
+    if let Some(v) = write.pr_fix {
+        update = update.col_expr(dispatch::Column::PrFix, Expr::value(v));
     }
     if write.bump_turns {
         update = update.col_expr(dispatch::Column::Turns, Expr::col(dispatch::Column::Turns).add(1));

@@ -9,6 +9,7 @@ pub mod auto;
 pub mod cnb;
 pub mod deliver;
 pub mod envelope;
+pub mod feedback;
 pub mod gitea;
 pub mod github;
 pub mod gitlab;
@@ -1556,7 +1557,7 @@ fn default_files_per_page() -> u32 {
 /// only sometimes a `changes_count` (and that one as a STRING, "12+" once the
 /// diff is truncated). Showing a zero where the forge said nothing would claim
 /// a change touches nothing, so absent stays absent.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ForgeChangeDetail {
     pub number: i64,
     /// Where it would land — `main`, `release/1.2`.
@@ -1592,6 +1593,12 @@ pub struct ForgeChangeDetail {
     /// CI as the forge reports it for the head commit. Empty means the forge
     /// answered and there is nothing running; see [`ForgeCheckList`].
     pub checks: ForgeCheckList,
+    /// When the forge last saw anything happen on it — a push, a review, a
+    /// comment — as it spells it. What tells a watcher there may be new
+    /// review feedback to read (7.4) without reading it every time. `None`
+    /// where the forge does not say (CNB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 /// How a check ended up, in ONE vocabulary.
@@ -1603,7 +1610,7 @@ pub struct ForgeChangeDetail {
 /// skipped/manual/waiting_for_resource). Three vocabularies, one strip of
 /// indicators — so they are folded here, at the boundary, and the UI switches
 /// on five values instead of eighteen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ForgeCheckState {
     /// Not started yet.
@@ -1626,7 +1633,7 @@ impl ForgeCheckState {
 }
 
 /// One CI check on a change's head commit.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForgeCheck {
     /// Stable within one response — the forge's own id where there is one, so
     /// React keys survive a refresh that reorders the strip.
@@ -1657,7 +1664,7 @@ pub struct ForgeCheck {
 /// gets a 403 from one and an empty `200 []` from the other. Reporting that as
 /// a complete empty list is the original bug wearing a disguise — the pipeline
 /// is red, and the panel says nothing ran.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForgeCheckList {
     pub checks: Vec<ForgeCheck>,
     pub available: bool,

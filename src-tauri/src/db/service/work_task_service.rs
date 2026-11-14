@@ -557,6 +557,75 @@ async fn create_inner(
     Ok(to_info(row))
 }
 
+/// A task a personal-agent dispatch makes on a pull request (7.4): the
+/// pull request is its source, so it works on that branch and its delivery
+/// pushes back to it, exactly as a forge-triggered pull-request task does.
+/// Refused — the active task returned — when another active task already
+/// works on the same pull request: two of them pushing to one branch would
+/// undo each other.
+pub async fn create_on_pull_for_personal_agent(
+    conn: &DatabaseConnection,
+    draft: WorkTaskDraft,
+    source: crate::models::WorkTaskSource,
+    dispatch_id: i32,
+) -> Result<ForgeCreateOutcome, DbError> {
+    validate_draft(&draft)?;
+    let folder = folder::Entity::find_by_id(draft.folder_id)
+        .one(conn)
+        .await?
+        .filter(|f| f.deleted_at.is_none())
+        .ok_or_else(|| DbError::NotFound(format!("folder {}", draft.folder_id)))?;
+    if folder.parent_id.is_some() {
+        return Err(DbError::Validation(
+            "tasks must target a project folder, not a worktree".into(),
+        ));
+    }
+    let config_str = serde_json::to_string(&draft.config)
+        .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
+    let now = Utc::now();
+    let max_order = work_task::Entity::find()
+        .filter(work_task::Column::FolderId.eq(draft.folder_id))
+        .order_by_desc(work_task::Column::SortOrder)
+        .one(conn)
+        .await?
+        .map(|m| m.sort_order)
+        .unwrap_or(0);
+    let txn = conn.begin().await?;
+    // FIRST statement: the write (see `create_from_forge_by`).
+    let row = insert_todo_row(
+        &txn,
+        &draft,
+        config_str,
+        max_order,
+        now,
+        Some(&source),
+        Some(dispatch_id),
+    )
+    .await?;
+    if let Some(existing) = other_active_with_same_source(&txn, row.id, &source.key).await? {
+        txn.rollback().await?;
+        return Ok(ForgeCreateOutcome::Duplicate(to_info(existing)));
+    }
+    record_event(
+        &txn,
+        row.id,
+        "created",
+        "agent",
+        Some(serde_json::json!({ "personal_agent_dispatch": dispatch_id })),
+    )
+    .await?;
+    record_event(
+        &txn,
+        row.id,
+        "forge_linked",
+        "agent",
+        Some(serde_json::json!({ "source_key": source.key, "kind": source.kind })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(ForgeCreateOutcome::Created(to_info(row)))
+}
+
 /// Outcome of a forge-triggered create: either the new task, or the ACTIVE
 /// task that already handles the same source_key (dedup hit, not an error —
 /// the UI offers "view it" / "create anyway").

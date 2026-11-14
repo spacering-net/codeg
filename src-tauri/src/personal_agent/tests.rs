@@ -370,6 +370,7 @@ async fn the_owner_writing_in_a_dispatched_conversation_takes_it_over() {
             on_done: None,
             lineage: Default::default(),
             done_when: None,
+            pr_fix: None,
         },
     )
     .await
@@ -515,6 +516,7 @@ async fn session_dispatch(engine: &PersonalAgentEngine, state: DispatchState, co
             on_done: None,
             lineage: Default::default(),
             done_when: None,
+            pr_fix: None,
         },
     )
     .await
@@ -593,6 +595,7 @@ async fn a_put_back_event_lists_what_the_interrupted_turn_dispatched() {
             on_done: None,
             lineage: Default::default(),
             done_when: None,
+            pr_fix: None,
         },
     )
     .await
@@ -2009,6 +2012,7 @@ async fn live_session_dispatch(
             on_done: None,
             lineage: Default::default(),
             done_when: None,
+            pr_fix: None,
         },
     )
     .await
@@ -2795,6 +2799,7 @@ async fn a_task_follow_up_is_settled_by_the_claim_record() {
             on_done: None,
             lineage: Default::default(),
             done_when: None,
+            pr_fix: None,
         },
     )
     .await
@@ -3302,6 +3307,7 @@ async fn two_workers_keep_their_records_apart() {
             on_done: None,
             lineage: Default::default(),
             done_when: None,
+            pr_fix: None,
         },
     )
     .await
@@ -5671,6 +5677,7 @@ async fn a_work_assistants_dispatch_runs_on_its_own_executor_and_says_who_sent_i
             on_done: None,
             lineage: Default::default(),
             done_when: None,
+            pr_fix: None,
         },
     )
     .await
@@ -6253,6 +6260,7 @@ async fn task_dispatch(
             on_done: None,
             lineage: Default::default(),
             done_when: None,
+            pr_fix: None,
         },
     )
     .await
@@ -9906,6 +9914,7 @@ async fn work_in_review(engine: &Arc<PersonalAgentEngine>, tmp: &tempfile::TempD
                 on_done: None,
                 lineage: Default::default(),
                 done_when: None,
+                pr_fix: None,
             },
         )
         .await
@@ -10717,6 +10726,12 @@ mod against_a_forge {
         fail_with: Vec<u16>,
         /// Each read of a pull request takes this long.
         slow_ms: u64,
+        /// Its reviews and line comments (3.1), who can write to the
+        /// repository, and when it was last touched.
+        reviews: Vec<serde_json::Value>,
+        line_comments: Vec<serde_json::Value>,
+        writers: Vec<String>,
+        updated: Option<String>,
     }
 
     type Shared = Arc<StdMutex<Forge>>;
@@ -10730,6 +10745,7 @@ mod against_a_forge {
             "mergeable_state": if f.conflict { "dirty" } else if f.blocked { "blocked" } else { "clean" },
             "head": { "ref": "fix", "sha": f.head, "repo": { "full_name": "acme/app" } },
             "base": { "ref": "main", "sha": "base0", "repo": { "full_name": "acme/app" } },
+            "updated_at": f.updated,
         })
     }
 
@@ -10810,6 +10826,24 @@ mod against_a_forge {
                     f.merged = true;
                     f.merges.push(body);
                     Json(json!({ "sha": "m3rg3c0mm17", "merged": true })).into_response()
+                }),
+            )
+            .route(
+                "/api/v3/repos/acme/app/pulls/{n}/reviews",
+                get(|State(s): State<Shared>| async move { Json(serde_json::Value::from(s.lock().unwrap().reviews.clone())) }),
+            )
+            .route(
+                "/api/v3/repos/acme/app/pulls/{n}/comments",
+                get(|State(s): State<Shared>| async move { Json(serde_json::Value::from(s.lock().unwrap().line_comments.clone())) }),
+            )
+            .route(
+                "/api/v3/repos/acme/app/collaborators/{login}/permission",
+                get(|State(s): State<Shared>, UrlPath(login): UrlPath<String>| async move {
+                    if s.lock().unwrap().writers.contains(&login) {
+                        Json(json!({ "permission": "write" })).into_response()
+                    } else {
+                        (axum::http::StatusCode::NOT_FOUND, Json(json!({ "message": "Not Found" }))).into_response()
+                    }
                 }),
             )
             .route(
@@ -11208,7 +11242,8 @@ mod against_a_forge {
             assert!(pr_cards(primary_ref).await.is_empty());
             let events = svc::pending_events(&primary_ref.db.conn, w).await.unwrap();
             let ev = events.iter().find(|e| e.kind == "pr").expect("an event");
-            assert!(ev.wake && ev.summary.contains("checks failed") && !ev.summary.contains("http://forge.test/ci"), "{}", ev.summary);
+            // Its task fixes it by itself (3.1): told, nothing to wake for.
+            assert!(!ev.wake && ev.summary.contains("checks failed") && ev.summary.contains("round 1 of 3") && !ev.summary.contains("http://forge.test/ci"), "{}", ev.summary);
             // Read again unchanged: told once.
             read_now(&worker, watch.id).await;
             assert_eq!(pr_cards(&worker).await.len(), 1);
@@ -11499,10 +11534,15 @@ mod against_a_forge {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
             host_ref.board_tick().await;
             let t = delivered(primary_ref, project, "Docs", 7).await;
+            // Work an assistant handed out whose acceptance has not passed:
+            // codeg does not merge it, the owner's card says it is ready.
+            let coder = role_assistant(primary_ref, "Coder", true).await;
+            task_dispatch(primary_ref, coder, project, t.id, "Docs", DispatchState::Completed).await;
             host_ref.board_tick().await;
             let w = wsvc::of_tasks(&primary_ref.db.conn, &[t.id]).await.unwrap().remove(&t.id).unwrap();
             read_now(primary_ref, w.id).await;
             assert_eq!(pr_cards(primary_ref).await.last().unwrap()["event"], "mergeable");
+            assert_eq!(pr_cards(primary_ref).await.last().unwrap()["merge"]["state"], "refused");
             let row = primary_ref.agent_row().await.unwrap();
             assert!(super::super::live::db_facts(&primary_ref.db, &row).await.needs.iter().any(|n| n.kind == "mergeable"));
             let out = call_tool(primary_ref, "pr_status", json!({ "task_id": t.id, "watch": false })).await;
@@ -11524,6 +11564,8 @@ mod against_a_forge {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
             host_ref.board_tick().await;
             let t = delivered(primary_ref, project, "Docs", 7).await;
+            let coder = role_assistant(primary_ref, "Coder", true).await;
+            task_dispatch(primary_ref, coder, project, t.id, "Docs", DispatchState::Completed).await;
             host_ref.board_tick().await;
             let w = wsvc::of_tasks(&primary_ref.db.conn, &[t.id]).await.unwrap().remove(&t.id).unwrap();
             let row = primary_ref.agent_row().await.unwrap();
@@ -11592,9 +11634,584 @@ mod against_a_forge {
             assert_eq!(cards[0]["event"], "checks_failed");
             let me = primary_ref.bot().await;
             let events = svc::pending_events(&primary_ref.db.conn, me).await.unwrap();
-            assert!(events.iter().any(|e| e.kind == "pr" && e.wake), "{events:?}");
+            // Its task fixes it by itself (3.1): the round the deleted
+            // assistant's read started was handed over with its work, and
+            // the primary is told it is under way.
+            assert!(events.iter().any(|e| e.kind == "pr" && e.summary.contains("under way (dispatch #")), "{events:?}");
         })
         .await;
+    }
+
+    // ── 3.1: what codeg does on a watched pull request by itself ────────────
+
+    /// The dispatches carrying a round on a pull request, oldest first.
+    async fn rounds_of(engine: &PersonalAgentEngine) -> Vec<(crate::db::entities::personal_agent_dispatch::Model, super::super::pr_auto::PrFix)> {
+        let all = svc::list_dispatches(&engine.db.conn, engine.bot().await, &[], None, 100).await.unwrap();
+        let mut out: Vec<_> = all
+            .into_iter()
+            .filter_map(|d| super::super::pr_auto::pr_fix_of(&d).map(|f| (d, f)))
+            .collect();
+        out.sort_by_key(|(d, _)| d.id);
+        out
+    }
+
+    /// Wait until the board task a new round made exists.
+    async fn task_of_round(engine: &PersonalAgentEngine, dispatch: i32) -> work_task_entity::Model {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        for _ in 0..200 {
+            if let Some(t) = work_task_entity::Entity::find()
+                .filter(work_task_entity::Column::PersonalAgentDispatchId.eq(dispatch))
+                .one(&engine.db.conn)
+                .await
+                .unwrap()
+            {
+                return t;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("no task for dispatch #{dispatch}");
+    }
+
+    async fn settle_round(engine: &PersonalAgentEngine, id: i32, state: DispatchState) {
+        svc::update_dispatch(&engine.db.conn, id, None, DispatchWrite { state: Some(state), ..Default::default() })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_checks_are_fixed_by_a_task_on_the_pull_request_one_round_at_a_time_up_to_the_cap() {
+        use crate::db::entities::personal_agent_item::{ItemKind, ItemStatus, WaitsFor};
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        let (host, _w, tmp) = hosted().await;
+        let primary = host.primary();
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "h1".into(), checks: vec![running("build")], ..Default::default() }));
+        let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            let coder = role_assistant(primary_ref, "Coder", true).await;
+            host_ref.board_tick().await;
+            let task = delivered(primary_ref, project, "Fix login", 7).await;
+            let d = task_dispatch(primary_ref, coder, project, task.id, "Fix login", DispatchState::Completed).await;
+            let me = primary_ref.bot().await;
+            let item = svc::create_item(&primary_ref.db.conn, me, ItemKind::Dispatch, Some(d.id), ItemStatus::Open, Some(WaitsFor::External), "Fix login".into(), None, None)
+                .await
+                .unwrap();
+            host_ref.board_tick().await;
+            let watch = wsvc::of_tasks(&primary_ref.db.conn, &[task.id]).await.unwrap().remove(&task.id).unwrap();
+            read_now(primary_ref, watch.id).await;
+            // Red on a pull request whose task is done: a new task on the
+            // pull request fixes it — told, nobody woken, no news.
+            state_ref.lock().unwrap().checks = vec![failed("build")];
+            read_now(primary_ref, watch.id).await;
+            let rounds = rounds_of(primary_ref).await;
+            assert_eq!(rounds.len(), 1);
+            let (r1, fix) = &rounds[0];
+            assert_eq!((fix.n, fix.how, fix.cause, fix.head.as_str()), (1, super::super::pr_auto::How::Task, super::super::pr_auto::Cause::Checks, "h1"));
+            assert_eq!(fix.origin_dispatch_id, Some(d.id));
+            assert!(r1.prompt.contains("The checks of pull request acme/app#7") && r1.prompt.contains("build — http://forge.test/ci/build"), "{}", r1.prompt);
+            assert!(r1.prompt.contains("----[forge-data-begin]----"), "the checks are fenced as data");
+            assert!(r1.done_when.is_some());
+            let card = pr_cards(primary_ref).await.pop().unwrap();
+            assert_eq!(card["fix"]["state"], "started", "{card}");
+            assert_eq!(card["fix"]["dispatch_id"], r1.id);
+            let ev = svc::pending_events(&primary_ref.db.conn, me).await.unwrap().into_iter().find(|e| e.kind == "pr").unwrap();
+            assert!(!ev.wake, "{}", ev.summary);
+            // Its task works on the pull request: its source, its branches.
+            let fix_task = task_of_round(primary_ref, r1.id).await;
+            assert_eq!(fix_task.source_kind.as_deref(), Some("forge_pr"));
+            let meta: crate::forge::ForgeSourceMeta = serde_json::from_str(fix_task.source_meta.as_deref().unwrap()).unwrap();
+            assert_eq!((meta.number, meta.head_ref.as_deref(), meta.base_ref.as_deref(), meta.writeback), (7, Some("fix"), Some("main"), Some(false)));
+            // Under the matter of the work that made the pull request.
+            assert!(svc::item_of_dispatch(&primary_ref.db.conn, r1.id).await.unwrap().is_none());
+            assert_eq!(svc::item_of_dispatch(&primary_ref.db.conn, d.id).await.unwrap().unwrap().id, item.id);
+            // While it runs, a new red head starts no second round.
+            settle_round(primary_ref, r1.id, DispatchState::Running).await;
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.head = "h2".into();
+            }
+            read_now(primary_ref, watch.id).await;
+            assert_eq!(rounds_of(primary_ref).await.len(), 1);
+            assert_eq!(pr_cards(primary_ref).await.pop().unwrap()["fix"]["state"], "busy");
+            // Pushed and done: the next red head is round 2, then 3…
+            for (n, head) in [(2u32, "h3"), (3, "h4")] {
+                let last = rounds_of(primary_ref).await.pop().unwrap().0;
+                settle_round(primary_ref, last.id, DispatchState::Completed).await;
+                state_ref.lock().unwrap().head = head.into();
+                read_now(primary_ref, watch.id).await;
+                let rounds = rounds_of(primary_ref).await;
+                assert_eq!(rounds.len() as u32, n);
+                assert_eq!(rounds.last().unwrap().1.n, n);
+            }
+            // …and after the third, the owner's — urgently, with each round.
+            let last = rounds_of(primary_ref).await.pop().unwrap().0;
+            settle_round(primary_ref, last.id, DispatchState::Completed).await;
+            state_ref.lock().unwrap().head = "h5".into();
+            read_now(primary_ref, watch.id).await;
+            assert_eq!(rounds_of(primary_ref).await.len(), 3);
+            let card = pr_cards(primary_ref).await.pop().unwrap();
+            assert_eq!(card["fix"]["state"], "gave_up", "{card}");
+            assert_eq!(card["fix"]["rounds"].as_array().unwrap().len(), 3);
+            let n = svc::notice_of_subject(&primary_ref.db.conn, me, NoticeKind::Pr, &format!("watch:{}:checks_failed@h5", watch.id))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(n.level, crate::db::entities::personal_agent_notice::NoticeLevel::Urgent);
+            let row = primary_ref.agent_row().await.unwrap();
+            let needs = super::super::live::db_facts(&primary_ref.db, &row).await.needs;
+            assert!(needs.iter().any(|x| x.kind == "pr_gave_up"), "{needs:?}");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn asked_first_a_red_pull_request_waits_on_its_card_and_only_told_starts_nothing() {
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        let (host, _w, tmp) = hosted().await;
+        let primary = host.primary();
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "h1".into(), checks: vec![running("build")], ..Default::default() }));
+        let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            let coder = role_assistant(primary_ref, "Coder", true).await;
+            host_ref.board_tick().await;
+            let task = delivered(primary_ref, project, "Fix login", 7).await;
+            task_dispatch(primary_ref, coder, project, task.id, "Fix login", DispatchState::Completed).await;
+            host_ref.board_tick().await;
+            let watch = wsvc::of_tasks(&primary_ref.db.conn, &[task.id]).await.unwrap().remove(&task.id).unwrap();
+            read_now(primary_ref, watch.id).await;
+            set_pref(primary_ref, "ci_failure", json!("ask")).await;
+            state_ref.lock().unwrap().checks = vec![failed("build")];
+            read_now(primary_ref, watch.id).await;
+            assert!(rounds_of(primary_ref).await.is_empty());
+            let card = last_card(primary_ref, "pr").await;
+            assert_eq!(data_of(&card)["fix"]["state"], "ask");
+            let row = primary_ref.agent_row().await.unwrap();
+            assert!(super::super::live::db_facts(&primary_ref.db, &row).await.needs.iter().any(|x| x.kind == "confirm"));
+            // [Fix it]: round 1, and the card no longer waits.
+            primary_ref.act_on_notice(card_id(&card), "fix").await.unwrap();
+            assert_eq!(rounds_of(primary_ref).await.len(), 1);
+            assert_eq!(data_of(&last_card(primary_ref, "pr").await)["fix"]["state"], "started");
+            assert!(!super::super::live::db_facts(&primary_ref.db, &row).await.needs.iter().any(|x| x.kind == "confirm"));
+            assert!(primary_ref.act_on_notice(card_id(&card), "fix").await.is_err(), "answered once");
+            // Only told: a red head starts nothing.
+            let last = rounds_of(primary_ref).await.pop().unwrap().0;
+            settle_round(primary_ref, last.id, DispatchState::Completed).await;
+            set_pref(primary_ref, "ci_failure", json!("tell")).await;
+            state_ref.lock().unwrap().head = "h2".into();
+            read_now(primary_ref, watch.id).await;
+            assert_eq!(rounds_of(primary_ref).await.len(), 1);
+            assert_eq!(data_of(&last_card(primary_ref, "pr").await)["fix"]["state"], "told");
+            // Asked about a head that moved on: nothing is started.
+            set_pref(primary_ref, "pr_conflict", json!("ask")).await;
+            state_ref.lock().unwrap().head = "h3".into();
+            state_ref.lock().unwrap().conflict = true;
+            read_now(primary_ref, watch.id).await;
+            let asked = last_card(primary_ref, "pr").await;
+            assert_eq!((data_of(&asked)["event"].as_str(), data_of(&asked)["fix"]["state"].as_str()), (Some("conflict"), Some("ask")));
+            state_ref.lock().unwrap().head = "h4".into();
+            read_now(primary_ref, watch.id).await;
+            assert!(primary_ref.act_on_notice(card_id(&asked), "fix").await.is_err());
+            assert_eq!(rounds_of(primary_ref).await.len(), 1);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_green_pull_request_is_merged_at_its_head_or_put_to_the_owner_as_they_say() {
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        let (host, _w, tmp) = hosted().await;
+        let primary = host.primary();
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "h1".into(), checks: vec![running("build")], ..Default::default() }));
+        let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            host_ref.board_tick().await;
+            // The owner's own pull request: no acceptance, its green head.
+            let task = delivered(primary_ref, project, "Docs", 7).await;
+            host_ref.board_tick().await;
+            let watch = wsvc::of_tasks(&primary_ref.db.conn, &[task.id]).await.unwrap().remove(&task.id).unwrap();
+            read_now(primary_ref, watch.id).await;
+            state_ref.lock().unwrap().checks = vec![green("build")];
+            read_now(primary_ref, watch.id).await;
+            let merges = state_ref.lock().unwrap().merges.clone();
+            assert_eq!(merges.len(), 1);
+            assert_eq!(merges[0]["sha"], "h1");
+            let card = data_of(&last_card(primary_ref, "forge").await);
+            assert_eq!((card["state"].as_str(), card["version"].as_str()), (Some("done"), Some("green")));
+            assert!(pr_cards(primary_ref).await.iter().all(|c| c["event"] != "mergeable"), "no ready card: it was merged");
+            // Read merged: no second card for it, the watch ends.
+            read_now(primary_ref, watch.id).await;
+            let w = wsvc::get(&primary_ref.db.conn, watch.id).await.unwrap().unwrap();
+            assert_eq!(w.ended_reason.as_deref(), Some("merged"));
+            assert!(pr_cards(primary_ref).await.iter().all(|c| c["event"] != "merged"));
+            assert_eq!(state_ref.lock().unwrap().merges.len(), 1, "merged once");
+
+            // Asked first: an approval card, the owner's.
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.merged = false;
+                f.head = "k1".into();
+            }
+            set_pref(primary_ref, "pr_merge", json!("ask")).await;
+            let other = delivered(primary_ref, project, "Readme", 8).await;
+            host_ref.board_tick().await;
+            let watch = wsvc::of_tasks(&primary_ref.db.conn, &[other.id]).await.unwrap().remove(&other.id).unwrap();
+            read_now(primary_ref, watch.id).await;
+            assert_eq!(state_ref.lock().unwrap().merges.len(), 1, "not merged by itself");
+            let card = last_card(primary_ref, "forge").await;
+            let data = data_of(&card);
+            assert_eq!((data["state"].as_str(), data["why"].as_str(), data["head"].as_str()), (Some("open"), Some("confirm"), Some("k1")));
+            let row = primary_ref.agent_row().await.unwrap();
+            assert!(super::super::live::db_facts(&primary_ref.db, &row).await.needs.iter().any(|x| x.kind == "confirm"));
+            primary_ref.act_on_notice(card_id(&card), "accept").await.unwrap();
+            assert_eq!(state_ref.lock().unwrap().merges.len(), 2);
+
+            // An approval card for a head the pull request moved on from no
+            // longer waits; merged on the forge, it is told as ever.
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.merged = false;
+                f.head = "q1".into();
+            }
+            let third = delivered(primary_ref, project, "Changelog", 9).await;
+            host_ref.board_tick().await;
+            let watch = wsvc::get(&primary_ref.db.conn, wsvc::of_tasks(&primary_ref.db.conn, &[third.id]).await.unwrap().remove(&third.id).unwrap().id).await.unwrap().unwrap();
+            read_now(primary_ref, watch.id).await;
+            let first = last_card(primary_ref, "forge").await;
+            assert_eq!((data_of(&first)["state"].as_str(), data_of(&first)["head"].as_str()), (Some("open"), Some("q1")));
+            // A merge in doubt (its answer lost) is left to its look on the
+            // forge; only one never run gives way.
+            let first_notice = svc::get_notice(&primary_ref.db.conn, card_id(&first)).await.unwrap().unwrap();
+            let mut doubt: serde_json::Value = serde_json::from_str(&first_notice.payload).unwrap();
+            doubt["phase"] = json!("unknown");
+            svc::set_notice_payload(&primary_ref.db.conn, first_notice.id, &doubt).await.unwrap();
+            state_ref.lock().unwrap().head = "q2".into();
+            read_now(primary_ref, watch.id).await;
+            let kept = svc::get_row(&primary_ref.db.conn, first.id).await.unwrap().unwrap();
+            assert_eq!(data_of(&kept)["state"], "open", "in doubt: not retired");
+            let second = last_card(primary_ref, "forge").await;
+            assert_eq!((data_of(&second)["state"].as_str(), data_of(&second)["head"].as_str()), (Some("open"), Some("q2")));
+            // Never run after all: it gives way at the next read, as does the
+            // card of the head merged on the forge.
+            doubt["phase"] = json!("approve");
+            svc::set_notice_payload(&primary_ref.db.conn, first_notice.id, &doubt).await.unwrap();
+            state_ref.lock().unwrap().merged = true;
+            read_now(primary_ref, watch.id).await;
+            let first = svc::get_row(&primary_ref.db.conn, first.id).await.unwrap().unwrap();
+            assert_eq!(data_of(&first)["state"], "not_run", "{}", data_of(&first));
+            let second = svc::get_row(&primary_ref.db.conn, second.id).await.unwrap().unwrap();
+            assert_eq!(data_of(&second)["state"], "not_run");
+            assert!(pr_cards(primary_ref).await.iter().any(|c| c["event"] == "merged" && c["watch_id"] == watch.id), "merged by the owner: told");
+            assert!(!super::super::live::db_facts(&primary_ref.db, &row).await.needs.iter().any(|x| x.kind == "confirm"));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn review_feedback_from_writers_goes_to_the_task_and_the_rest_to_the_assistant() {
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        let (host, _w, tmp) = hosted().await;
+        let primary = host.primary();
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "h1".into(), checks: vec![running("build")], updated: Some("2026-11-14T00:00:00Z".into()), ..Default::default() }));
+        let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            let coder = role_assistant(primary_ref, "Coder", true).await;
+            host_ref.board_tick().await;
+            let task = delivered(primary_ref, project, "Fix login", 7).await;
+            task_dispatch(primary_ref, coder, project, task.id, "Fix login", DispatchState::Completed).await;
+            host_ref.board_tick().await;
+            let watch = wsvc::of_tasks(&primary_ref.db.conn, &[task.id]).await.unwrap().remove(&task.id).unwrap();
+            read_now(primary_ref, watch.id).await;
+            let after = (chrono::Utc::now() + chrono::Duration::seconds(5)).to_rfc3339();
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.writers = vec!["maint".into()];
+                f.reviews = vec![
+                    json!({ "id": 1, "user": { "login": "maint" }, "state": "CHANGES_REQUESTED", "body": "Split the parser.", "submitted_at": after }),
+                    json!({ "id": 2, "user": { "login": "maint" }, "state": "APPROVED", "body": "", "submitted_at": after }),
+                ];
+                f.line_comments = vec![json!({ "id": 11, "user": { "login": "maint" }, "body": "Off by one here.", "path": "src/a.rs", "line": 9, "created_at": after })];
+                f.comments = vec![
+                    json!({ "id": 21, "user": { "login": "stranger" }, "body": "This breaks my setup.", "created_at": after }),
+                    json!({ "id": 22, "user": { "login": "codeg-bot" }, "body": "Done.\n\n<!-- codeg-op:pa-1 -->", "created_at": after }),
+                ];
+                f.updated = Some("2026-11-14T01:00:00Z".into());
+            }
+            read_now(primary_ref, watch.id).await;
+            // The writer's: to the task, word for word, as a round.
+            let rounds = rounds_of(primary_ref).await;
+            assert_eq!(rounds.len(), 1, "{rounds:?}");
+            let (r, fix) = &rounds[0];
+            assert_eq!(fix.cause, super::super::pr_auto::Cause::Feedback);
+            assert!(r.prompt.contains("Split the parser.") && r.prompt.contains("Off by one here."), "{}", r.prompt);
+            assert!(!r.prompt.contains("This breaks my setup.") && !r.prompt.contains("codeg-op"), "{}", r.prompt);
+            // The stranger's: to the assistant, with its id, kept for it.
+            let me = primary_ref.bot().await;
+            let events = svc::pending_events(&primary_ref.db.conn, me).await.unwrap();
+            let told = events.iter().find(|e| e.summary.contains("`comment:21`")).expect("told");
+            assert!(told.wake && told.summary.contains("cannot write"), "{}", told.summary);
+            // Read again, untouched: nothing new.
+            read_now(primary_ref, watch.id).await;
+            assert_eq!(rounds_of(primary_ref).await.len(), 1);
+            // The assistant hands it over with a sentence of its own: a round
+            // is under way, so it waits — with that sentence — and goes once
+            // the round ends.
+            settle_round(primary_ref, r.id, DispatchState::Running).await;
+            let out = call_tool(primary_ref, "pr_feedback_forward", json!({ "comment_ids": ["comment:21"], "note": "Their setup matters." })).await;
+            assert!(out.ok && out.data["waiting"] == true, "{}", out.text);
+            assert_eq!(rounds_of(primary_ref).await.len(), 1);
+            settle_round(primary_ref, r.id, DispatchState::Completed).await;
+            read_now(primary_ref, watch.id).await;
+            let rounds = rounds_of(primary_ref).await;
+            assert_eq!(rounds.len(), 2);
+            assert!(rounds[1].0.prompt.contains("This breaks my setup.") && rounds[1].0.prompt.contains("Their setup matters."));
+            let out = call_tool(primary_ref, "pr_feedback_forward", json!({ "comment_ids": ["comment:999"] })).await;
+            assert!(!out.ok, "{}", out.text);
+            // Asked first: a card holds what is new until the owner says.
+            settle_round(primary_ref, rounds[1].0.id, DispatchState::Completed).await;
+            set_pref(primary_ref, "review_feedback", json!("ask")).await;
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.line_comments.push(json!({ "id": 12, "user": { "login": "maint" }, "body": "Rename it.", "path": "src/b.rs", "line": 2, "created_at": after }));
+                f.updated = Some("2026-11-14T02:00:00Z".into());
+            }
+            read_now(primary_ref, watch.id).await;
+            assert_eq!(rounds_of(primary_ref).await.len(), 2);
+            let card = last_card(primary_ref, "pr").await;
+            let data = data_of(&card);
+            assert_eq!((data["event"].as_str(), data["ask"].as_str()), (Some("feedback"), Some("forward")));
+            assert_eq!(data["feedback"][0]["id"], "line:12");
+            primary_ref.act_on_notice(card_id(&card), "forward").await.unwrap();
+            let rounds = rounds_of(primary_ref).await;
+            assert_eq!(rounds.len(), 3);
+            assert!(rounds[2].0.prompt.contains("Rename it."));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn long_feedback_goes_round_by_round_and_a_comment_on_two_pull_requests_needs_its_watch() {
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        let (host, _w, tmp) = hosted().await;
+        let primary = host.primary();
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "h1".into(), checks: vec![running("build")], updated: Some("2026-11-14T00:00:00Z".into()), ..Default::default() }));
+        let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            let coder = role_assistant(primary_ref, "Coder", true).await;
+            host_ref.board_tick().await;
+            let one = delivered(primary_ref, project, "One", 7).await;
+            task_dispatch(primary_ref, coder, project, one.id, "One", DispatchState::Completed).await;
+            let two = delivered(primary_ref, project, "Two", 8).await;
+            task_dispatch(primary_ref, coder, project, two.id, "Two", DispatchState::Completed).await;
+            host_ref.board_tick().await;
+            let w1 = wsvc::of_tasks(&primary_ref.db.conn, &[one.id]).await.unwrap().remove(&one.id).unwrap();
+            let w2 = wsvc::of_tasks(&primary_ref.db.conn, &[two.id]).await.unwrap().remove(&two.id).unwrap();
+            read_now(primary_ref, w1.id).await;
+            read_now(primary_ref, w2.id).await;
+            let after = (chrono::Utc::now() + chrono::Duration::seconds(5)).to_rfc3339();
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.writers = vec!["maint".into()];
+                // Three long ones: more than one round takes whole.
+                f.line_comments = (0..3)
+                    .map(|i| json!({ "id": 30 + i, "user": { "login": "maint" }, "body": format!("{i}:{}", "y".repeat(6_000)), "path": "a.rs", "line": i, "created_at": after }))
+                    .collect();
+                // The same comment id seen on both pull requests.
+                f.comments = vec![json!({ "id": 21, "user": { "login": "stranger" }, "body": "Breaks my setup.", "created_at": after })];
+                f.updated = Some("2026-11-14T01:00:00Z".into());
+            }
+            read_now(primary_ref, w1.id).await;
+            let mine = |w: i32| {
+                let w = w;
+                async move {
+                    rounds_of(primary_ref)
+                        .await
+                        .into_iter()
+                        .filter(|(_, f)| f.watch_id == w)
+                        .collect::<Vec<_>>()
+                }
+            };
+            let rounds = mine(w1.id).await;
+            assert_eq!(rounds.len(), 1);
+            assert!(rounds[0].0.prompt.contains("0:yyy") && !rounds[0].0.prompt.contains("1:yyy"));
+            assert!(!rounds[0].0.prompt.contains("truncated"));
+            let a = super::super::pr_auto::auto_of(&wsvc::get(&primary_ref.db.conn, w1.id).await.unwrap().unwrap());
+            assert_eq!(a.feedback.pending.len(), 2, "the rest waits");
+            // The round ends: the next read hands over the next one.
+            settle_round(primary_ref, rounds[0].0.id, DispatchState::Completed).await;
+            read_now(primary_ref, w1.id).await;
+            let rounds = mine(w1.id).await;
+            assert_eq!(rounds.len(), 2);
+            assert!(rounds[1].0.prompt.contains("1:yyy") && !rounds[1].0.prompt.contains("2:yyy"));
+            // The other pull request has the same comment id told.
+            read_now(primary_ref, w2.id).await;
+            let out = call_tool(primary_ref, "pr_feedback_forward", json!({ "comment_ids": ["comment:21"] })).await;
+            assert!(!out.ok && out.text.contains("more than one pull request"), "{}", out.text);
+            for (_, f) in rounds_of(primary_ref).await {
+                let d = rounds_of(primary_ref).await.into_iter().find(|(_, g)| g == &f).unwrap().0;
+                settle_round(primary_ref, d.id, DispatchState::Completed).await;
+            }
+            let out = call_tool(primary_ref, "pr_feedback_forward", json!({ "comment_ids": ["comment:21"], "watch_id": w2.id })).await;
+            assert!(out.ok, "{}", out.text);
+            let last = rounds_of(primary_ref).await.pop().unwrap();
+            assert_eq!(last.1.watch_id, w2.id);
+            assert!(last.0.prompt.contains("Breaks my setup."));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn sixty_comments_read_at_once_all_reach_the_task() {
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        let (host, _w, tmp) = hosted().await;
+        let primary = host.primary();
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "h1".into(), checks: vec![running("build")], updated: Some("2026-11-14T00:00:00Z".into()), ..Default::default() }));
+        let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            let coder = role_assistant(primary_ref, "Coder", true).await;
+            host_ref.board_tick().await;
+            let task = delivered(primary_ref, project, "One", 7).await;
+            task_dispatch(primary_ref, coder, project, task.id, "One", DispatchState::Completed).await;
+            host_ref.board_tick().await;
+            let w = wsvc::of_tasks(&primary_ref.db.conn, &[task.id]).await.unwrap().remove(&task.id).unwrap();
+            read_now(primary_ref, w.id).await;
+            let after = (chrono::Utc::now() + chrono::Duration::seconds(5)).to_rfc3339();
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.writers = vec!["maint".into()];
+                f.line_comments = (0..60)
+                    .map(|i| json!({ "id": 100 + i, "user": { "login": "maint" }, "body": format!("c{i}: {}", "z".repeat(300)), "path": "a.rs", "line": i, "created_at": after }))
+                    .collect();
+                f.updated = Some("2026-11-14T01:00:00Z".into());
+            }
+            read_now(primary_ref, w.id).await;
+            let rounds = rounds_of(primary_ref).await;
+            assert_eq!(rounds.len(), 1);
+            let a = super::super::pr_auto::auto_of(&wsvc::get(&primary_ref.db.conn, w.id).await.unwrap().unwrap());
+            let in_round = (0..60).filter(|i| rounds[0].0.prompt.contains(&format!("c{i}: "))).count();
+            assert_eq!(in_round + a.feedback.pending.len(), 60, "none dropped: {in_round} + {}", a.feedback.pending.len());
+            assert!(in_round > 0 && !a.feedback.pending.is_empty());
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_follow_up_round_replayed_keeps_the_generation_it_followed_up() {
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        use sea_orm::Set;
+        let (host, _w, tmp) = hosted().await;
+        let primary = host.primary();
+        let state: Shared = Arc::new(StdMutex::new(Forge { head: "h1".into(), checks: vec![failed("build")], ..Default::default() }));
+        let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            let coder = role_assistant(primary_ref, "Coder", true).await;
+            set_pref(primary_ref, "ci_failure", json!("tell")).await;
+            host_ref.board_tick().await;
+            // Kept in review after it delivered #7, at generation 4.
+            let remote = crate::commands::forge::folder_forge_remote_core(&primary_ref.db, project).await.unwrap().unwrap();
+            let delivery = json!({
+                "provider": "github", "server_host": remote.server_host, "account_id": "acc-pa",
+                "owner_repo": "acme/app", "pr_url": "http://forge.test/acme/app/pull/7", "pr_number": 7,
+            });
+            let task = board_task(primary_ref, project, "Fix login", WorkTaskStatus::Review, |t| {
+                t.delivery = Set(Some(delivery.to_string()));
+                t.run_seq = Set(4);
+                t.updated_at = Set(chrono::Utc::now());
+            })
+            .await;
+            let d = task_dispatch(primary_ref, coder, project, task.id, "Fix login", DispatchState::Review).await;
+            host_ref.board_tick().await;
+            let w = wsvc::of_tasks(&primary_ref.db.conn, &[task.id]).await.unwrap().remove(&task.id).expect("kept in review, watched");
+            read_now(primary_ref, w.id).await;
+            let w = wsvc::get(&primary_ref.db.conn, w.id).await.unwrap().unwrap();
+            assert!(matches!(primary_ref.route_of(&w, "h1").await, super::super::pr_auto::Route::Followup(_)));
+            // Its round was written (following up generation 3) and went out
+            // before codeg stopped.
+            let fix = super::super::pr_auto::PrFix {
+                watch_id: w.id,
+                cause: super::super::pr_auto::Cause::Checks,
+                n: 1,
+                head: "h1".into(),
+                how: super::super::pr_auto::How::Followup,
+                label: "acme/app#7".into(),
+                origin_dispatch_id: Some(d.id),
+                delivered: false,
+                pushing: false,
+                since_run_seq: Some(3),
+            };
+            svc::update_dispatch(&primary_ref.db.conn, d.id, None, DispatchWrite { pr_fix: Some(serde_json::to_string(&fix).ok()), ..Default::default() })
+                .await
+                .unwrap();
+            svc::begin_op(
+                &primary_ref.db.conn,
+                svc::NewOp {
+                    bot_id: primary_ref.bot().await,
+                    slot: svc::LedgerSlot::outside(format!("pa-pr-fix-{}-1", w.id)),
+                    kind: "followup",
+                    payload: json!({}),
+                    target: None,
+                    notice_id: None,
+                },
+            )
+            .await
+            .unwrap();
+            // Replayed: the record stands as written.
+            let detail: crate::forge::ForgeChangeDetail = serde_json::from_str(w.detail.as_deref().unwrap()).unwrap();
+            let round = primary_ref.start_fix(&w, super::super::pr_auto::Cause::Checks, "h1", &detail).await.unwrap();
+            assert_eq!(round.dispatch_id, d.id);
+            let d = svc::get_dispatch(&primary_ref.db.conn, d.id).await.unwrap().unwrap();
+            assert_eq!(super::super::pr_auto::pr_fix_of(&d).unwrap().since_run_seq, Some(3));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_cnb_pull_request_is_never_merged_by_itself() {
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        let (engine, _tmp) = configured().await;
+        let target = crate::forge::DeliveryTarget {
+            provider: crate::forge::ForgeProvider::Cnb,
+            server_host: "cnb.cool".into(),
+            account_id: "acc".into(),
+            owner_repo: "acme/app".into(),
+        };
+        let (w, _) = wsvc::insert_or_get(
+            &engine.db.conn,
+            wsvc::NewWatch {
+                bot_id: engine.bot().await,
+                target,
+                kind: "pr".into(),
+                number: 3,
+                folder_id: None,
+                work_task_id: Some(1),
+                dispatch_id: None,
+                source: "task".into(),
+                state: crate::db::entities::personal_agent_watch::WatchState::Watching,
+                url: None,
+                title: None,
+                quiet_first: false,
+            },
+        )
+        .await
+        .unwrap();
+        let detail: crate::forge::ForgeChangeDetail = serde_json::from_value(json!({
+            "number": 3, "base_ref": "main", "head_ref": "x", "head_repo": null, "head_sha": "c1",
+            "draft": false, "state": "open", "mergeable": true, "merge_state": "mergeable",
+            "additions": null, "deletions": null, "changed_files": null, "commits": null,
+            "checks": { "checks": [], "available": false, "partial": false }
+        }))
+        .unwrap();
+        let hint = engine.hint_of(&w, super::super::watch::PrEvent::NoConflict, &detail).await;
+        assert_eq!(hint.then, super::super::pr_auto::Then::Merge { ask: true });
+        assert!(hint.no_card);
+        // GitHub's ready one is merged by itself, by default.
+        let hint = engine.hint_of(&w, super::super::watch::PrEvent::Mergeable, &detail).await;
+        assert_eq!(hint.then, super::super::pr_auto::Then::Nothing, "CNB never reaches ready");
     }
 }
 
@@ -12244,6 +12861,7 @@ async fn failed_dispatch(
             on_done: None,
             lineage: Default::default(),
             done_when: None,
+            pr_fix: None,
         },
     )
     .await
@@ -14534,6 +15152,7 @@ async fn time_machine_steps() {
                 on_done: None,
                 lineage: Default::default(),
                 done_when: None,
+                pr_fix: None,
             },
         )
         .await
@@ -15042,6 +15661,7 @@ async fn profile_steps() {
         on_done: None,
         lineage: Default::default(),
         done_when: None,
+        pr_fix: None,
     };
     let mut made = Vec::new();
     for (i, (state, turns, minutes)) in [

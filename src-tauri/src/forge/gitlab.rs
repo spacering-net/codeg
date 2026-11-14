@@ -602,6 +602,7 @@ pub async fn change_detail(
         changed_files: raw.changes_count.as_deref().and_then(exact_changes_count),
         commits: None,
         checks,
+        updated_at: raw.updated_at.filter(|s| !s.is_empty()),
     })
 }
 
@@ -1301,6 +1302,8 @@ impl RawNote {
 /// does not: the merge status, a head pipeline, and a `changes_count`.
 #[derive(Debug, Deserialize)]
 struct RawMergeRequestDetail {
+    #[serde(default)]
+    updated_at: Option<String>,
     #[serde(default)]
     iid: i64,
     #[serde(default)]

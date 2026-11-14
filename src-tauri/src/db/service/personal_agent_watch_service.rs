@@ -173,6 +173,7 @@ pub async fn insert_or_get(
         failures: Set(0),
         backoff: Set(false),
         last_error: Set(None),
+        auto: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -225,6 +226,11 @@ pub struct WatchWrite {
     pub failures: Option<i32>,
     pub backoff: Option<bool>,
     pub last_error: Option<Option<String>>,
+    /// What codeg did on it by itself (7.4, phase 3), as JSON.
+    pub auto: Option<Option<String>>,
+    /// Only while `auto` still reads this: what was read before the write
+    /// was worked out.
+    pub expect_auto: Option<Option<String>>,
 }
 
 /// Write `w` to watch `id`; when `from` is given, only while the watch is
@@ -276,6 +282,13 @@ pub async fn update(
     set!(failures, Failures);
     set!(backoff, Backoff);
     set!(last_error, LastError);
+    set!(auto, Auto);
+    if let Some(expect) = w.expect_auto {
+        q = match expect {
+            Some(v) => q.filter(watch::Column::Auto.eq(v)),
+            None => q.filter(watch::Column::Auto.is_null()),
+        };
+    }
     let res = q.exec(conn).await?;
     if res.rows_affected == 0 {
         return Ok(None);

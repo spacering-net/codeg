@@ -8267,13 +8267,42 @@
           "auto": "Mesclar quando as verificações passarem",
           "ask": "Perguntar antes (cartão de aprovação)"
         },
+        "ci_failure": {
+          "title": "As verificações de um PR acompanhado falham",
+          "hint": "A tarefa corrige: uma continuação enquanto a tarefa que o entregou ainda está em revisão, senão uma nova tarefa no PR. O codeg envia a correção quando for aceita, no máximo as rodadas abaixo.",
+          "fix": "Corrigir automaticamente",
+          "ask": "Perguntar antes (no cartão)",
+          "tell": "Só me avisar"
+        },
+        "pr_conflict": {
+          "title": "Um PR acompanhado tem conflito",
+          "hint": "A tarefa mescla o branch base e resolve o conflito (não é rebase: o codeg nunca força push em um PR).",
+          "auto": "Resolver automaticamente",
+          "ask": "Perguntar antes (no cartão)"
+        },
+        "review_feedback": {
+          "title": "Feedback de revisão de quem pode escrever",
+          "hint": "Uma revisão pedindo mudanças, ou um comentário em uma linha, de quem pode escrever no repositório: vai à tarefa palavra por palavra, para aceitar, esclarecer ou responder com motivos ponto a ponto.",
+          "auto": "Passar para a tarefa",
+          "ask": "Perguntar antes (no cartão)"
+        },
+        "outsider_comments": {
+          "title": "Comentários de quem não pode escrever",
+          "hint": "O assistente vê quem escreveu o quê e decide: passar à tarefa, avisar você ou deixar (bots, ruído).",
+          "auto": "O assistente decide",
+          "ask": "Perguntar antes (no cartão)"
+        },
+        "ci_rounds": {
+          "title": "Rodadas para corrigir um PR",
+          "hint": "Verificações com falha e conflitos contam, entre tarefas. Depois disso, a próxima falha é sua, com urgência e com o que cada rodada mudou. 0 não corrige nada sozinho."
+        },
         "level_forge": {
           "title": "Numa forja",
           "hint": "Um comentário, uma issue fechada ou um PR mesclado por um assistente."
         },
         "level_pr_ready": {
           "title": "Um PR pronto para mesclar",
-          "hint": "Um PR acompanhado com verificações verdes que a forja pode mesclar."
+          "hint": "Um PR acompanhado com verificações verdes que a forja pode mesclar, ou um que o codeg mesclou sozinho."
         },
         "level_pr": {
           "title": "Outras novidades de PR",
@@ -9816,7 +9845,8 @@
         "mergeable": "Pronto para mesclar",
         "no_conflict": "Sem conflito, verificações desconhecidas",
         "merged": "Mesclado",
-        "closed": "Fechado sem mesclar"
+        "closed": "Fechado sem mesclar",
+        "feedback": "Feedback de revisão"
       },
       "head": "Head {head}",
       "checks": {
@@ -9835,7 +9865,60 @@
       },
       "view": "Ver PR",
       "gotIt": "Entendi",
-      "unwatch": "Parar de acompanhar"
+      "unwatch": "Parar de acompanhar",
+      "fix": {
+        "followup": {
+          "checks": "A tarefa está corrigindo — rodada {n}, uma continuação.",
+          "conflict": "A tarefa está mesclando a base — rodada {n}, uma continuação."
+        },
+        "task": {
+          "checks": "Uma nova tarefa nele está corrigindo — rodada {n}.",
+          "conflict": "Uma nova tarefa nele está mesclando a base — rodada {n}."
+        },
+        "failed": "O codeg não conseguiu começar a corrigir: {error}",
+        "none": "O codeg não consegue corrigir sozinho: {why}",
+        "busy": "Já há uma rodada em andamento; o codeg olha de novo quando terminar.",
+        "ask": {
+          "checks": "Fazer a tarefa corrigir?",
+          "conflict": "Fazer a tarefa mesclar a base?"
+        },
+        "told": "Só aviso, como dizem suas configurações.",
+        "off": "O codeg não corrige nada sozinho (0 rodadas nas configurações).",
+        "gaveUpHeading": "Corrigido o máximo permitido e ainda falha",
+        "gaveUp": "O codeg corrigiu {n} vezes; agora é com você. O que cada rodada fez:",
+        "round": "Rodada {n}",
+        "cause": {
+          "checks": "verificações com falha",
+          "conflict": "um conflito"
+        },
+        "lines": "{files} arquivos, +{added} −{removed}",
+        "doChecks": "Corrigir",
+        "doConflict": "Mesclar a base"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "pede mudanças",
+          "review": "revisão",
+          "line": "em uma linha",
+          "comment": "comentário"
+        },
+        "someone": "Alguém",
+        "writer": "pode escrever",
+        "outsider": "não pode escrever",
+        "forward": "Passar para a tarefa",
+        "skip": "Não precisa",
+        "forwarded": "Passado para a tarefa.",
+        "waiting": "Vai para a tarefa quando a rodada em andamento terminar."
+      },
+      "round": {
+        "checks": "corrigindo as verificações — rodada {n}",
+        "conflict": "mesclando a base — rodada {n}",
+        "feedback": "o feedback de revisão"
+      },
+      "merge": {
+        "refused": "O codeg não fez o merge sozinho: {why}",
+        "unread": "O codeg não conseguiu ler a forja para fazer o merge: {why}"
+      }
     },
     "routines": {
       "zone": "({zone})",

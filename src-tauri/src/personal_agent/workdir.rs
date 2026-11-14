@@ -1540,22 +1540,35 @@ when nothing was found; do not guess what was decided.
 
 codeg watches every pull request a board task delivered — yours, the
 owner's, those of issues — and reads it every few minutes. When it comes to a
-new place you get a `pr` event and the owner a card: its checks failed (you
-are woken), it conflicts with its base (you are woken), its checks are green
-again, it can be merged (the owner is told), it was merged or closed (the
-work's matter is settled). The event has the facts and a summary, never the
-forge's own text; `pr_status` reads more (`full` for the discussion).
+new place you get a `pr` event and the owner a card: its checks failed, it
+conflicts with its base, its checks are green again, it can be merged, it was
+merged or closed (the work's matter is settled). The event has the facts and a
+summary, never the forge's own text; `pr_status` reads more (`full` for the
+discussion and the review feedback).
 
-- Checks failed or a conflict on work you dispatched: its task is done on the
-  board, so a follow-up does not reach it. Decide whether to tell the owner,
-  or — when they want fixes handed out — dispatch new work that names the pull
-  request, its branch and what failed, so its agent reads the logs itself.
-  codeg does not fix it on its own yet.
-- Ready to merge: the owner was told. Merge it with `pr_merge` only when they
-  asked you to, or their settings say so.
+What codeg does by itself, as the owner's settings say — the event tells you
+which, so you know there is nothing to do:
+
+- Checks failed, or a conflict: the task fixes it — a follow-up while the
+  task that delivered it is still in review, else a new task on the pull
+  request under the same matter — and codeg pushes the fix once it is
+  accepted. A conflict is fixed by merging the base in, never by a rebase.
+  One round at a time, a few rounds at most; then it is the owner's,
+  urgently. When codeg says it cannot fix it by itself (or the owner only
+  wants to be told), decide whether to tell the owner or hand out a fix.
+- Ready to merge: codeg merges it (the version accepted and delivered, its
+  checks green), or puts it on an approval card when the owner wants to
+  approve merges first. CNB is always an approval card.
+- Review feedback from those who can write to the repository — a review
+  asking for changes, a comment on a line — goes to the task word for word.
+- Everything else (other people's comments, plain comments) comes to you as
+  who wrote what, each with an id. Judge it: hand what should change the work
+  to its task with `pr_feedback_forward` (the ids and a sentence of yours),
+  tell the owner what is theirs to decide, let noise be (bots, thanks).
 - To have codeg watch any other pull request, `pr_status` with `watch: true`;
   `watch: false` to stop. A pull request named by `project_id` and `number` is
-  resolved in that project the first time and is the same one after.
+  resolved in that project the first time and is the same one after. codeg
+  only tells you of those: what to do about them is yours.
 
 ## Acting on a forge
 

@@ -8267,13 +8267,42 @@
           "auto": "Fusionar cuando pasen las comprobaciones",
           "ask": "Preguntarme antes (tarjeta de aprobación)"
         },
+        "ci_failure": {
+          "title": "Fallan las comprobaciones de un PR vigilado",
+          "hint": "Su tarea lo corrige: una continuación mientras la tarea que lo entregó sigue en revisión, si no una tarea nueva sobre el PR. codeg sube la corrección cuando se acepta, como mucho las rondas de abajo.",
+          "fix": "Corregirlo automáticamente",
+          "ask": "Preguntarme antes (en su tarjeta)",
+          "tell": "Solo avisarme"
+        },
+        "pr_conflict": {
+          "title": "Un PR vigilado tiene conflictos",
+          "hint": "Su tarea integra la rama base y resuelve el conflicto (no un rebase: codeg nunca fuerza un push sobre un PR).",
+          "auto": "Resolverlo automáticamente",
+          "ask": "Preguntarme antes (en su tarjeta)"
+        },
+        "review_feedback": {
+          "title": "Comentarios de revisión de quien puede escribir",
+          "hint": "Una revisión que pide cambios, o un comentario en una línea, de alguien que puede escribir en el repositorio: va a la tarea tal cual, para aceptar, aclarar o responder con razones punto por punto.",
+          "auto": "Pasárselo a la tarea",
+          "ask": "Preguntarme antes (en su tarjeta)"
+        },
+        "outsider_comments": {
+          "title": "Comentarios de quien no puede escribir",
+          "hint": "El asistente ve quién escribió qué y decide: pasarlo a la tarea, avisarte o dejarlo (bots, ruido).",
+          "auto": "Decide el asistente",
+          "ask": "Preguntarme antes (en su tarjeta)"
+        },
+        "ci_rounds": {
+          "title": "Rondas para arreglar un PR",
+          "hint": "Cuentan las comprobaciones fallidas y los conflictos, entre tareas. Tras estas rondas, el siguiente fallo es tuyo, con urgencia y con lo que cambió cada ronda. 0 no corrige nada solo."
+        },
         "level_forge": {
           "title": "En una forja",
           "hint": "Un comentario, una issue cerrada o una PR fusionada por un asistente."
         },
         "level_pr_ready": {
           "title": "Una PR lista para fusionar",
-          "hint": "Una PR vigilada con las comprobaciones en verde que la forja puede fusionar."
+          "hint": "Un PR vigilado con las comprobaciones en verde que la forja puede fusionar, o uno que codeg fusionó por sí solo."
         },
         "level_pr": {
           "title": "Otras novedades de PR",
@@ -9816,7 +9845,8 @@
         "mergeable": "Lista para fusionar",
         "no_conflict": "Sin conflictos, comprobaciones desconocidas",
         "merged": "Fusionada",
-        "closed": "Cerrada sin fusionar"
+        "closed": "Cerrada sin fusionar",
+        "feedback": "Comentarios de revisión"
       },
       "head": "Cabeza {head}",
       "checks": {
@@ -9835,7 +9865,60 @@
       },
       "view": "Ver PR",
       "gotIt": "Entendido",
-      "unwatch": "Dejar de vigilar"
+      "unwatch": "Dejar de vigilar",
+      "fix": {
+        "followup": {
+          "checks": "Su tarea lo está corrigiendo — ronda {n}, una continuación.",
+          "conflict": "Su tarea está integrando la base — ronda {n}, una continuación."
+        },
+        "task": {
+          "checks": "Una tarea nueva sobre él lo está corrigiendo — ronda {n}.",
+          "conflict": "Una tarea nueva sobre él está integrando la base — ronda {n}."
+        },
+        "failed": "codeg no pudo empezar a corregirlo: {error}",
+        "none": "codeg no puede corregirlo por sí solo: {why}",
+        "busy": "Ya hay una ronda en curso; codeg vuelve a mirar cuando termine.",
+        "ask": {
+          "checks": "¿Hacer que su tarea lo corrija?",
+          "conflict": "¿Hacer que su tarea integre la base?"
+        },
+        "told": "Solo aviso, como dicen tus ajustes.",
+        "off": "codeg no corrige nada solo (0 rondas en tus ajustes).",
+        "gaveUpHeading": "Corregido las veces permitidas y sigue fallando",
+        "gaveUp": "codeg lo corrigió {n} veces; ahora te toca a ti. Lo que hizo cada ronda:",
+        "round": "Ronda {n}",
+        "cause": {
+          "checks": "comprobaciones fallidas",
+          "conflict": "un conflicto"
+        },
+        "lines": "{files} archivos, +{added} −{removed}",
+        "doChecks": "Corregir",
+        "doConflict": "Integrar la base"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "pide cambios",
+          "review": "revisión",
+          "line": "en una línea",
+          "comment": "comentario"
+        },
+        "someone": "Alguien",
+        "writer": "puede escribir",
+        "outsider": "no puede escribir",
+        "forward": "Pasárselo a la tarea",
+        "skip": "No hace falta",
+        "forwarded": "Pasado a la tarea.",
+        "waiting": "Irá a la tarea cuando termine la ronda en curso."
+      },
+      "round": {
+        "checks": "arreglando sus comprobaciones — ronda {n}",
+        "conflict": "integrando su base — ronda {n}",
+        "feedback": "sus comentarios de revisión"
+      },
+      "merge": {
+        "refused": "codeg no lo fusionó por sí solo: {why}",
+        "unread": "codeg no pudo leer la forja para fusionarlo: {why}"
+      }
     },
     "routines": {
       "zone": "({zone})",

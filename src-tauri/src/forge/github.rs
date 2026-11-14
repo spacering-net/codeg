@@ -650,6 +650,8 @@ struct RawPull {
     head: Option<RawPullRef>,
     #[serde(default)]
     base: Option<RawPullRef>,
+    #[serde(default)]
+    updated_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -734,6 +736,7 @@ pub async fn change_detail(
         changed_files: raw.changed_files,
         commits: raw.commits,
         checks,
+        updated_at: raw.updated_at.filter(|s| !s.is_empty()),
     })
 }
 

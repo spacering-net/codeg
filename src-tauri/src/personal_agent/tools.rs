@@ -410,6 +410,8 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 .forge_act_call(super::forge_acts::ForgeAction::Merge, &args)
                 .await
         }
+        // A watched pull request's comments, handed to its task (7.4).
+        "pr_feedback_forward" => engine.pr_feedback_forward_call(&args).await,
         "usage_summary" => engine.usage_summary_call(&args).await,
         "activity_summary" => engine.activity_summary_call(&args).await,
         // The time machine (8.2).

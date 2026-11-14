@@ -211,9 +211,18 @@ export function waitsForOwner(row: TimelineRow): boolean {
       data?.state === "unknown"
     )
   }
-  // A watched pull request the owner can merge now (7.4).
+  // A watched pull request the owner can merge now (7.4), one they are
+  // asked about (have its task fix it, hand it the feedback), or one codeg
+  // fixed as often as allowed.
   if (row.kind === "notice" && data?.notice === "pr") {
-    return data?.state === "open" && data?.event === "mergeable"
+    const fix = data?.fix as { state?: string } | undefined
+    return (
+      data?.state === "open" &&
+      (data?.event === "mergeable" ||
+        data?.event === "feedback" ||
+        fix?.state === "ask" ||
+        fix?.state === "gave_up")
+    )
   }
   if (row.kind !== "notice" || data?.state !== "open") return false
   if (data?.why === "suggest") return false

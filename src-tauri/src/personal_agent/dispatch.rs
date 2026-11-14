@@ -78,6 +78,9 @@ pub struct ValidDispatch {
     /// The input it is dispatched for, and the chain and thread it inherits
     /// from that input (`for`, 4.11); empty when nothing started it.
     pub lineage: svc::Lineage,
+    /// A round codeg starts on a watched pull request (7.4): its task works
+    /// on that pull request and is delivered back to it once accepted.
+    pub pr_fix: Option<super::pr_auto::PrFix>,
 }
 
 impl ValidDispatch {
@@ -111,6 +114,9 @@ pub enum DispatchAuth {
     /// A routine's run hands it out (6.9): once per run, whatever repeats
     /// it. `label` names the routine on its card.
     Routine { run_id: i32, label: serde_json::Value },
+    /// codeg's own step under a stable operation id (a round fixing a
+    /// watched pull request, 7.4): one on record already is not made again.
+    Op { op_id: String },
 }
 
 /// What recording a dispatch came to.
@@ -399,6 +405,7 @@ impl PersonalAgentEngine {
             on_done,
             done_when,
             lineage: svc::Lineage::default(),
+            pr_fix: None,
         })
     }
 
@@ -421,6 +428,7 @@ impl PersonalAgentEngine {
             on_done,
             done_when,
             lineage,
+            pr_fix,
         } = v;
         let thread = lineage.thread_id;
         let request = DispatchRequest {
@@ -445,7 +453,9 @@ impl PersonalAgentEngine {
         }
         let origin_batch_id = match &auth {
             DispatchAuth::Ledgered { batch_id, .. } => Some(*batch_id),
-            DispatchAuth::Card { .. } | DispatchAuth::Routine { .. } => None,
+            DispatchAuth::Card { .. } | DispatchAuth::Routine { .. } | DispatchAuth::Op { .. } => {
+                None
+            }
             DispatchAuth::Direct => self.current_batch().await,
         };
         let routine_label = match &auth {
@@ -469,6 +479,7 @@ impl PersonalAgentEngine {
             on_done: on_done.clone(),
             lineage,
             done_when: done_when.clone(),
+            pr_fix: pr_fix.as_ref().and_then(|f| serde_json::to_string(f).ok()),
         };
         let payload = serde_json::to_value(&request).ok();
         let row = match &auth {
@@ -526,6 +537,16 @@ impl PersonalAgentEngine {
                     Ledgered::Earlier(earlier) => return self.earlier_dispatch(&earlier).await,
                 }
             }
+            DispatchAuth::Op { op_id } => {
+                let slot = LedgerSlot::outside(op_id.clone());
+                match svc::create_dispatch_ledgered(&self.db.conn, new, &slot, payload, None)
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    Ledgered::New(row) => row,
+                    Ledgered::Earlier(earlier) => return self.earlier_dispatch(&earlier).await,
+                }
+            }
         };
         // The card, then the ledger entry pointing back at it.
         let mut card = NewRow::new(TimelineKind::Dispatch, title.clone());
@@ -544,20 +565,34 @@ impl PersonalAgentEngine {
             "done_when": done_when,
             // The routine whose run handed it out (6.9).
             "routine": routine_label,
+            // The watched pull request it fixes, and why (7.4).
+            "pr_fix": pr_fix,
         }));
         let card = self.push_row(card).await;
-        let _ = svc::create_item(
-            &self.db.conn,
-            self.bot().await,
-            ItemKind::Dispatch,
-            Some(row.id),
-            ItemStatus::Open,
-            Some(WaitsFor::External),
-            title,
-            on_done,
-            card.map(|c| c.id),
-        )
-        .await;
+        // A round on a pull request belongs to the matter of the work that
+        // made it, when there is one: no matter of its own (7.4).
+        let under = match pr_fix.as_ref().and_then(|f| f.origin_dispatch_id) {
+            Some(origin) => svc::item_of_dispatch(&self.db.conn, origin)
+                .await
+                .ok()
+                .flatten()
+                .is_some(),
+            None => false,
+        };
+        if !under {
+            let _ = svc::create_item(
+                &self.db.conn,
+                self.bot().await,
+                ItemKind::Dispatch,
+                Some(row.id),
+                ItemStatus::Open,
+                Some(WaitsFor::External),
+                title,
+                on_done,
+                card.map(|c| c.id),
+            )
+            .await;
+        }
         // Work handed out is progress on the thread it is for (4.9).
         if let Some(t) = thread {
             self.thread_progress(t).await;
@@ -658,13 +693,39 @@ impl PersonalAgentEngine {
             title: d.title.clone(),
             config: serde_json::to_value(&config).map_err(|e| e.to_string())?,
         };
-        let task = crate::db::service::work_task_service::create_for_personal_agent(
-            &self.db.conn,
-            draft,
-            d.id,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+        // A round on a watched pull request works on that pull request
+        // (7.4): it is the task's source, so its delivery pushes back there.
+        let on_pull = super::pr_auto::pr_fix_of(d).filter(|f| f.how == super::pr_auto::How::Task);
+        let task = match on_pull {
+            Some(fix) => {
+                let source = self.pull_source(&fix).await?;
+                match crate::db::service::work_task_service::create_on_pull_for_personal_agent(
+                    &self.db.conn,
+                    draft,
+                    source,
+                    d.id,
+                )
+                .await
+                .map_err(|e| e.to_string())?
+                {
+                    crate::db::service::work_task_service::ForgeCreateOutcome::Created(t) => t,
+                    crate::db::service::work_task_service::ForgeCreateOutcome::Duplicate(t) => {
+                        return Err(format!(
+                            "task #{} is already working on this pull request; two tasks pushing \
+                             to one branch would undo each other",
+                            t.id
+                        ))
+                    }
+                }
+            }
+            None => crate::db::service::work_task_service::create_for_personal_agent(
+                &self.db.conn,
+                draft,
+                d.id,
+            )
+            .await
+            .map_err(|e| e.to_string())?,
+        };
         crate::web::event_bridge::emit_event(
             &self.emitter,
             crate::web::event_bridge::WORK_TASK_CHANGED_EVENT,
@@ -1372,6 +1433,17 @@ impl PersonalAgentEngine {
             d.state,
             DispatchState::Queued | DispatchState::Running | DispatchState::HandedOver
         ) && !accepting;
+        // A round codeg pushed to a watched pull request: its watch says
+        // what comes of it (7.4).
+        if super::pr_auto::pushed_or_pushing(d)
+            && matches!(d.state, DispatchState::Completed | DispatchState::Review)
+        {
+            wake = false;
+            summary.push_str(
+                " codeg pushed it to the pull request and watches its checks; nothing to do \
+                 unless you hear more.",
+            );
+        }
         // A question or a plan approval is told by its own card (7.3.1).
         let asking = d.state == DispatchState::WaitingInput && self.waits_on_ask(d).await;
         let quiet = matches!(d.state, DispatchState::Queued | DispatchState::Running) || asking;
@@ -1508,8 +1580,12 @@ impl PersonalAgentEngine {
         self.emit_rows(vec![svc::to_row(card)]);
         // Done, failed or ready for review: the owner hears of it (1.13) —
         // of work being accepted, once it is (7.5).
+        // A round codeg runs on a watched pull request tells no news of its
+        // own: the pull request's card does (7.4).
+        let pr_round = super::pr_auto::pushed_or_pushing(d);
         let what = match d.state {
             _ if accepting || landed => None,
+            DispatchState::Completed | DispatchState::Review if pr_round => None,
             DispatchState::Completed
                 if ladder == crate::models::personal_agent_overview::Ladder::PrOpen =>
             {
@@ -1938,6 +2014,11 @@ impl PersonalAgentEngine {
             ..Default::default()
         })
         .map_err(|e| e.to_string())?;
+        // The assistant's or the owner's own follow-up: the work is theirs
+        // again, not a round codeg delivers to a pull request by itself.
+        if !matches!(auth, FollowupAuth::Op { .. }) && d.pr_fix.is_some() {
+            super::pr_auto::forget_round(&self.db, &d).await;
+        }
         let (slot, notice_id) = match auth {
             FollowupAuth::Ledgered { batch_id, scope } => {
                 let key = ledger::followup_key(id, intent.as_deref());

@@ -41,7 +41,7 @@ use crate::acp::session_state::LiveContentBlock;
 use crate::acp::types::ConnectionStatus;
 use crate::db::entities::personal_agent::{self as agent_entity, BotKind};
 use crate::db::entities::personal_agent_dispatch::{DispatchMode, DispatchState};
-use crate::db::entities::personal_agent_notice::{NoticeKind, NoticeState};
+use crate::db::entities::personal_agent_notice::{NoticeKind, NoticeLevel, NoticeState};
 use crate::db::entities::personal_agent_timeline::TimelineKind;
 use crate::db::service::personal_agent_message_service as msvc;
 use crate::db::service::personal_agent_service as svc;
@@ -294,6 +294,11 @@ async fn needs_of(
                 // A watched pull request the owner can merge now (7.4,
                 // 8.6): theirs until it moves on.
                 NoticeKind::Pr if payload["event"].as_str() == Some("mergeable") => "mergeable",
+                // The owner asked on it whether its task fixes it, or has
+                // the feedback (7.4, phase 3).
+                NoticeKind::Pr if payload["ask"].is_string() => "confirm",
+                // Fixed as often as allowed: theirs now.
+                NoticeKind::Pr if n.level == NoticeLevel::Urgent => "pr_gave_up",
                 // A routine codeg paused: it runs no more until the owner
                 // looks (6.9).
                 NoticeKind::Routine if payload["what"].as_str() == Some("paused") => {

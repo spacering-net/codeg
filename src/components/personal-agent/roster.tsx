@@ -163,7 +163,9 @@ export function rowLine(
         ? "answer"
         : needs.kind === "acceptance"
           ? "acceptance"
-          : needs.kind === "uncertain" || needs.kind === "loop"
+          : needs.kind === "uncertain" ||
+              needs.kind === "loop" ||
+              needs.kind === "pr_gave_up"
             ? "you"
             : "approval"
     return {

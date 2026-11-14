@@ -170,7 +170,10 @@ pub fn wants_acceptance(
         && d.deliverable.as_deref() != Some("report")
         && d.state != DispatchState::HandedOver
         && task.personal_agent_dispatch_id == Some(d.id)
-        && task.source_kind.is_none()
+        // A forge task carries text strangers wrote; a round codeg itself
+        // started on a watched pull request is the assistant's own work
+        // (7.4), checked like any.
+        && (task.source_kind.is_none() || d.pr_fix.is_some())
         && task.files_changed != Some(0)
 }
 
@@ -523,6 +526,8 @@ impl PersonalAgentEngine {
             }
             self.ensure_round(&d, &task).await;
         }
+        // A round on a watched pull request accepted and not pushed (7.4).
+        self.settle_pr_rounds().await;
         // A round whose task moved on before its conclusion was carried out.
         for r in vsvc::open_rounds(&self.db.conn, Some(bot))
             .await
@@ -842,6 +847,7 @@ impl PersonalAgentEngine {
                     for_input: d.for_input.clone(),
                 },
                 done_when: None,
+                pr_fix: None,
             },
         )
         .await
@@ -1628,7 +1634,18 @@ back). You may disagree with the check: say why in `reason`.\n{}\n</codeg-accept
                 .ok_or_else(|| stale_words(&r))?;
                 self.raise_acceptance_card(&moved, &d, NoticeState::Acted)
                     .await;
-                self.tell_acceptance(&d, &moved, AcceptNews::Accepted).await;
+                // A round codeg runs on a watched pull request is pushed
+                // there now (7.4): the pull request's card tells the rest.
+                let pr_round = super::pr_auto::pr_fix_of(&d).is_some_and(|f| !f.delivered);
+                if pr_round {
+                    // Off the acceptance lock: a push takes its time.
+                    if let Some(me) = self.arc() {
+                        let (d, task) = (d.clone(), task.clone());
+                        tokio::spawn(async move { me.deliver_round(&d, &task).await });
+                    }
+                } else {
+                    self.tell_acceptance(&d, &moved, AcceptNews::Accepted).await;
+                }
                 // The board lands it now, if its settings say so.
                 if let Some(engine) = crate::work_task::engine() {
                     engine.sweep_merge_backlog(Some(task.folder_id)).await;

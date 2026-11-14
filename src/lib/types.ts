@@ -2384,6 +2384,81 @@ export type PrEvent =
   | "no_conflict"
   | "merged"
   | "closed"
+  /** Review feedback the owner is asked to hand to the task (7.4, phase 3). */
+  | "feedback"
+
+/** Why codeg started a round on a watched pull request (7.4, phase 3). */
+export type PrFixCause = "checks" | "conflict" | "feedback"
+
+/** One round codeg ran on a pull request, as its "fixed as often as
+ *  allowed" card lists it. */
+export interface PrFixRound {
+  n: number
+  cause: PrFixCause
+  how: "followup" | "task"
+  head: string
+  dispatch_id: number
+  task_id: number | null
+  /** What its task said it did. */
+  summary: string | null
+  files: number | null
+  additions: number | null
+  deletions: number | null
+}
+
+/** What codeg does about failed checks or a conflict, on its PR card:
+ *  starting / started a round (`n`, `how`, `dispatch_id`), could not
+ *  (`failed`: `error`; `none`: `why`), one under way (`busy`), asking the
+ *  owner (`ask`), only telling (`told`), fixing nothing (`off`), or fixed as
+ *  often as allowed (`gave_up`, with the `rounds`). */
+export interface PrFixState {
+  state:
+    | "starting"
+    | "started"
+    | "failed"
+    | "none"
+    | "busy"
+    | "ask"
+    | "told"
+    | "off"
+    | "gave_up"
+  cause: PrFixCause
+  n?: number
+  how?: "followup" | "task"
+  dispatch_id?: number
+  error?: string
+  why?: string
+  rounds?: PrFixRound[]
+}
+
+/** A piece of review feedback on a feedback card. */
+export interface PrFeedbackShown {
+  id: string
+  kind: "review" | "line" | "comment"
+  verdict: "approved" | "changes_requested" | "commented" | "dismissed" | null
+  author: string | null
+  bot: boolean
+  /** Its author can write to the repository. */
+  writer: boolean
+  path: string | null
+  line: number | null
+  at: string | null
+  url: string | null
+  /** The beginning of what it says. */
+  text: string
+}
+
+/** A round on a watched pull request, as its dispatch card carries it. */
+export interface PrFixMark {
+  watch_id: number
+  cause: PrFixCause
+  n: number
+  head: string
+  how: "followup" | "task"
+  label: string
+  origin_dispatch_id: number | null
+  delivered: boolean
+}
 
 /** One failing check, as a PR card names it. */
 export interface PrCheckLine {
@@ -2409,8 +2484,8 @@ export interface PrCardData {
   notice: "pr"
   event: PrEvent
   /** open; later: a newer card followed; stopped: no longer watched;
-   *  dismissed. */
-  state: "open" | "later" | "stopped" | "dismissed"
+   *  dismissed; acted: a feedback card answered. */
+  state: "open" | "later" | "stopped" | "dismissed" | "acted"
   watch_id: number
   /** `owner/repo#12` (`!12` on GitLab). */
   target: string
@@ -2424,6 +2499,15 @@ export interface PrCardData {
   merge_state: string | null
   task_id: number | null
   dispatch_id: number | null
+  /** What codeg does about it by itself (7.4, phase 3). */
+  fix?: PrFixState
+  /** A feedback card: what was written. */
+  feedback?: PrFeedbackShown[]
+  /** A feedback card answered: the round it went to, or that it waits. */
+  forwarded?: { dispatch_id?: number; waiting?: boolean }
+  /** Ready to merge, but codeg did not merge it by itself: its rules said
+   *  no (`refused`), or the forge could not be read (`unread`), and why. */
+  merge?: { state: "refused" | "unread"; why: string }
 }
 
 /** One setting an assistant changed from the conversation (Rust
@@ -2828,6 +2912,20 @@ export interface PersonalAgentPrefs {
   pr_merge: "auto" | "ask"
   /** The work a dispatch routine hands out (6.9). */
   routine_dispatch: "auto" | "ask"
+  /** A watched pull request whose checks failed (7.4): fixed by its task,
+   *  the owner asked first, or only told. */
+  ci_failure: "fix" | "ask" | "tell"
+  /** One that conflicts with its base: its task merges the base in, or the
+   *  owner is asked first. */
+  pr_conflict: "auto" | "ask"
+  /** Review feedback from those who can write to the repository: handed to
+   *  the task at once, or the owner asked first. */
+  review_feedback: "auto" | "ask"
+  /** Comments from those who cannot: the assistant judges, or the owner is
+   *  asked. */
+  outsider_comments: "auto" | "ask"
+  /** Rounds codeg starts by itself to fix one pull request; 0 is never. */
+  ci_rounds: number
   /** The owner's time zone: `system` (follow the system's) or an IANA
    *  name (1.12). */
   time_zone: string
@@ -3567,6 +3665,8 @@ export interface BotNeedsYou {
     | "mergeable"
     /** A routine codeg paused (6.9). */
     | "routine_paused"
+    /** A watched pull request codeg fixed as often as allowed (7.4). */
+    | "pr_gave_up"
     | string
   text: string
   since: string

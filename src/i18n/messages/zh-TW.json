@@ -8267,13 +8267,42 @@
           "auto": "檢查全綠時直接合併",
           "ask": "先問我（出審批卡）"
         },
+        "ci_failure": {
+          "title": "看護的 PR 檢查沒過",
+          "hint": "由它的任務去修：交付它的任務還在待驗收時續作，否則在這個 PR 上開一個新任務。驗收通過後 codeg 把修復推上去，最多修下面設的次數。",
+          "fix": "自動修",
+          "ask": "先問我（卡片上確認）",
+          "tell": "只告訴我"
+        },
+        "pr_conflict": {
+          "title": "看護的 PR 有衝突",
+          "hint": "由它的任務把目標分支合進來並解決衝突（不是 rebase：codeg 從不往 PR 上強推）。",
+          "auto": "自動解決",
+          "ask": "先問我（卡片上確認）"
+        },
+        "review_feedback": {
+          "title": "有寫權限的人的評審意見",
+          "hint": "能寫這個倉庫的人要求修改、或者在某一行留了意見：原文交給任務，逐條「接受 / 澄清 / 有理由地反駁」。",
+          "auto": "交回任務",
+          "ask": "先問我（卡片上確認）"
+        },
+        "outsider_comments": {
+          "title": "沒有寫權限的人的評論",
+          "hint": "助手看到是誰寫了什麼，自己判斷：交給任務、告訴你，或者不理（比如機器人洗版）。",
+          "auto": "助手判斷要不要交給任務",
+          "ask": "先問我（卡片上確認）"
+        },
+        "ci_rounds": {
+          "title": "同一個 PR 最多自動修幾次",
+          "hint": "檢查沒過和有衝突都算，跨任務累計。修到這麼多次還不行，下一次失敗就緊急告訴你，並寫明每次改了什麼。0 是不自動修。"
+        },
         "level_forge": {
           "title": "forge 上的動作",
           "hint": "助手留的言、關的 issue、合的 PR。"
         },
         "level_pr_ready": {
           "title": "PR 可以合併",
-          "hint": "看護的 PR 檢查全綠、平台也能合併了。"
+          "hint": "看護的 PR 檢查全綠、平台也能合了，或者 codeg 已經自動合併了。"
         },
         "level_pr": {
           "title": "PR 的其他動態",
@@ -9816,7 +9845,8 @@
         "mergeable": "可以合併了",
         "no_conflict": "沒有衝突，檢查狀態未知",
         "merged": "已合併",
-        "closed": "沒合併就關了"
+        "closed": "沒合併就關了",
+        "feedback": "評審意見"
       },
       "head": "頭提交 {head}",
       "checks": {
@@ -9835,7 +9865,60 @@
       },
       "view": "查看 PR",
       "gotIt": "知道了",
-      "unwatch": "不用再盯了"
+      "unwatch": "不用再盯了",
+      "fix": {
+        "followup": {
+          "checks": "它的任務在修 —— 第 {n} 次，續作。",
+          "conflict": "它的任務在把目標分支合進來 —— 第 {n} 次，續作。"
+        },
+        "task": {
+          "checks": "在這個 PR 上開了新任務去修 —— 第 {n} 次。",
+          "conflict": "在這個 PR 上開了新任務把目標分支合進來 —— 第 {n} 次。"
+        },
+        "failed": "codeg 沒能開始修：{error}",
+        "none": "codeg 沒法自己修：{why}",
+        "busy": "這個 PR 上已經有一輪在進行，結束後 codeg 再看。",
+        "ask": {
+          "checks": "要讓它的任務去修嗎？",
+          "conflict": "要讓它的任務把目標分支合進來嗎？"
+        },
+        "told": "按你的設定，只告訴你。",
+        "off": "codeg 不自動修（設定裡是 0 次）。",
+        "gaveUpHeading": "修到上限了，還是沒過",
+        "gaveUp": "codeg 已經修了 {n} 次，接下來交給你。每次改了什麼：",
+        "round": "第 {n} 次",
+        "cause": {
+          "checks": "檢查沒過",
+          "conflict": "有衝突"
+        },
+        "lines": "{files} 個檔案，+{added} −{removed}",
+        "doChecks": "去修",
+        "doConflict": "把目標分支合進來"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "要求修改",
+          "review": "評審",
+          "line": "行內意見",
+          "comment": "評論"
+        },
+        "someone": "有人",
+        "writer": "有寫權限",
+        "outsider": "沒有寫權限",
+        "forward": "交給任務",
+        "skip": "不用",
+        "forwarded": "已交給任務。",
+        "waiting": "等正在進行的這一輪結束後交給任務。"
+      },
+      "round": {
+        "checks": "修 CI —— 第 {n} 次",
+        "conflict": "解決衝突 —— 第 {n} 次",
+        "feedback": "處理評審意見"
+      },
+      "merge": {
+        "refused": "codeg 沒有自動合併：{why}",
+        "unread": "codeg 讀不到平台，沒能合併：{why}"
+      }
     },
     "routines": {
       "zone": "（{zone}）",

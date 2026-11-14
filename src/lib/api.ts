@@ -3123,6 +3123,10 @@ export type NoticeAction =
   | "summary"
   | "close"
   | "watch"
+  // A watched pull request's card (7.4): have its task fix it, hand it the
+  // feedback.
+  | "fix"
+  | "forward"
   | "rebase"
   // The weekly review's questions (6.6): show changes first; hide or (once
   // the page deleted it) delete an idle work assistant.

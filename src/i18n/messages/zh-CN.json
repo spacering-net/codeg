@@ -8266,13 +8266,42 @@
           "auto": "检查全绿时直接合并",
           "ask": "先问我（出审批卡）"
         },
+        "ci_failure": {
+          "title": "看护的 PR 检查没过",
+          "hint": "由它的任务去修：交付它的任务还在待验收时续作，否则在这个 PR 上开一个新任务。验收通过后 codeg 把修复推上去，最多修下面设的次数。",
+          "fix": "自动修",
+          "ask": "先问我（卡片上确认）",
+          "tell": "只告诉我"
+        },
+        "pr_conflict": {
+          "title": "看护的 PR 有冲突",
+          "hint": "由它的任务把目标分支合进来并解决冲突（不是 rebase：codeg 从不往 PR 上强推）。",
+          "auto": "自动解决",
+          "ask": "先问我（卡片上确认）"
+        },
+        "review_feedback": {
+          "title": "有写权限的人的评审意见",
+          "hint": "能写这个仓库的人要求修改、或者在某一行留了意见：原文交给任务，逐条「接受 / 澄清 / 有理由地反驳」。",
+          "auto": "交回任务",
+          "ask": "先问我（卡片上确认）"
+        },
+        "outsider_comments": {
+          "title": "没有写权限的人的评论",
+          "hint": "助手看到是谁写了什么，自己判断：交给任务、告诉你，或者不理（比如机器人刷屏）。",
+          "auto": "助手判断要不要交给任务",
+          "ask": "先问我（卡片上确认）"
+        },
+        "ci_rounds": {
+          "title": "同一个 PR 最多自动修几次",
+          "hint": "检查没过和有冲突都算，跨任务累计。修到这么多次还不行，下一次失败就紧急告诉你，并写明每次改了什么。0 是不自动修。"
+        },
         "level_forge": {
           "title": "forge 上的动作",
           "hint": "助手发的评论、关的 issue、合的 PR。"
         },
         "level_pr_ready": {
           "title": "PR 可以合并",
-          "hint": "看护的 PR 检查全绿、平台也能合了。"
+          "hint": "看护的 PR 检查全绿、平台也能合了，或者 codeg 已经自动合并了。"
         },
         "level_pr": {
           "title": "PR 的其他动态",
@@ -9816,7 +9845,8 @@
         "mergeable": "可以合并了",
         "no_conflict": "没有冲突，检查状态未知",
         "merged": "已合并",
-        "closed": "没合并就关了"
+        "closed": "没合并就关了",
+        "feedback": "评审意见"
       },
       "head": "头提交 {head}",
       "checks": {
@@ -9835,7 +9865,60 @@
       },
       "view": "查看 PR",
       "gotIt": "知道了",
-      "unwatch": "不用再盯了"
+      "unwatch": "不用再盯了",
+      "fix": {
+        "followup": {
+          "checks": "它的任务在修 —— 第 {n} 次，续作。",
+          "conflict": "它的任务在把目标分支合进来 —— 第 {n} 次，续作。"
+        },
+        "task": {
+          "checks": "在这个 PR 上开了新任务去修 —— 第 {n} 次。",
+          "conflict": "在这个 PR 上开了新任务把目标分支合进来 —— 第 {n} 次。"
+        },
+        "failed": "codeg 没能开始修：{error}",
+        "none": "codeg 没法自己修：{why}",
+        "busy": "这个 PR 上已经有一轮在进行，结束后 codeg 再看。",
+        "ask": {
+          "checks": "要让它的任务去修吗？",
+          "conflict": "要让它的任务把目标分支合进来吗？"
+        },
+        "told": "按你的设置，只告诉你。",
+        "off": "codeg 不自动修（设置里是 0 次）。",
+        "gaveUpHeading": "修到上限了，还是没过",
+        "gaveUp": "codeg 已经修了 {n} 次，接下来交给你。每次改了什么：",
+        "round": "第 {n} 次",
+        "cause": {
+          "checks": "检查没过",
+          "conflict": "有冲突"
+        },
+        "lines": "{files} 个文件，+{added} −{removed}",
+        "doChecks": "去修",
+        "doConflict": "把目标分支合进来"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "要求修改",
+          "review": "评审",
+          "line": "行内意见",
+          "comment": "评论"
+        },
+        "someone": "有人",
+        "writer": "有写权限",
+        "outsider": "没有写权限",
+        "forward": "交给任务",
+        "skip": "不用",
+        "forwarded": "已交给任务。",
+        "waiting": "等正在进行的这一轮结束后交给任务。"
+      },
+      "round": {
+        "checks": "修 CI —— 第 {n} 次",
+        "conflict": "解决冲突 —— 第 {n} 次",
+        "feedback": "处理评审意见"
+      },
+      "merge": {
+        "refused": "codeg 没有自动合并：{why}",
+        "unread": "codeg 读不到平台，没能合并：{why}"
+      }
     },
     "routines": {
       "zone": "（{zone}）",

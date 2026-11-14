@@ -1107,6 +1107,35 @@ pub async fn item_facts_at(
     }
 }
 
+/// Change `number` at recorded coordinates as a task on it needs it: its
+/// branches and head, read with the account recorded.
+pub async fn pull_at(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+    number: i64,
+) -> Result<(forge::deliver::ForgePr, forge::ResolvedAuth), ForgeError> {
+    let auth = auth_at(db, target).await?;
+    let repo = &target.owner_repo;
+    let pull = match target.provider {
+        ForgeProvider::GitHub => forge::deliver::get_pull(&auth, repo, number).await?,
+        ForgeProvider::GitLab => forge::gitlab::get_merge_request(&auth, repo, number).await?,
+        ForgeProvider::Gitea => forge::gitea::get_pull(&auth, repo, number).await?,
+        ForgeProvider::Cnb => forge::cnb::get_pull(&auth, repo, number).await?,
+    };
+    Ok((pull, auth))
+}
+
+/// The review feedback on change `number` at recorded coordinates (7.4).
+pub async fn feedback_at(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+    number: i64,
+    since: Option<&str>,
+) -> Result<forge::feedback::Feedback, ForgeError> {
+    let auth = auth_at(db, target).await?;
+    forge::feedback::change_feedback(&auth, &target.owner_repo, number, since).await
+}
+
 pub async fn comments_at(
     db: &AppDatabase,
     target: &forge::DeliveryTarget,

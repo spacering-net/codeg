@@ -303,6 +303,157 @@ describe("a PR card", () => {
   })
 })
 
+describe("what codeg does on a PR by itself (3.1)", () => {
+  it("says a round of its task is fixing it, and asks first when told to", async () => {
+    draw(
+      pr({
+        fix: {
+          state: "started",
+          cause: "checks",
+          n: 2,
+          how: "task",
+          dispatch_id: 9,
+        },
+      })
+    )
+    expect(
+      screen.getByText("A new task on it is fixing it — round 2.")
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Fix it" })).toBeNull()
+    cleanup()
+    const asked = pr({ fix: { state: "ask", cause: "checks", n: 1 } })
+    expect(waitsForOwner(asked)).toBe(true)
+    draw(asked, { zh: true })
+    expect(screen.getByText("要让它的任务去修吗？")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "去修" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(31, "fix", 7)
+    )
+    cleanup()
+    draw(pr({ event: "conflict", fix: { state: "ask", cause: "conflict" } }))
+    expect(
+      screen.getByRole("button", { name: "Merge the base in" })
+    ).toBeInTheDocument()
+  })
+
+  it("lists what each round did once it has fixed it as often as allowed", () => {
+    const r = pr({
+      fix: {
+        state: "gave_up",
+        cause: "checks",
+        rounds: [
+          {
+            n: 1,
+            cause: "checks",
+            how: "task",
+            head: "a1",
+            dispatch_id: 3,
+            task_id: 8,
+            summary: "Pinned the toolchain.",
+            files: 1,
+            additions: 2,
+            deletions: 1,
+          },
+          {
+            n: 2,
+            cause: "conflict",
+            how: "task",
+            head: "a2",
+            dispatch_id: 4,
+            task_id: 9,
+            summary: null,
+            files: 3,
+            additions: 10,
+            deletions: 4,
+          },
+        ],
+      },
+    })
+    expect(waitsForOwner(r)).toBe(true)
+    draw(r)
+    expect(
+      screen.getByText("Fixed as often as allowed, still failing")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Pinned the toolchain.")).toBeInTheDocument()
+    expect(
+      screen.getByText(/a conflict · 3 files, \+10 −4/)
+    ).toBeInTheDocument()
+  })
+
+  it("asks whether review feedback goes to its task", async () => {
+    const r = pr({
+      event: "feedback",
+      ask: "forward",
+      feedback: [
+        {
+          id: "line:12",
+          kind: "line",
+          verdict: null,
+          author: "maint",
+          bot: false,
+          writer: true,
+          path: "src/b.rs",
+          line: 2,
+          at: null,
+          url: "https://forge/c12",
+          text: "Rename it.",
+        },
+        {
+          id: "comment:3",
+          kind: "comment",
+          verdict: null,
+          author: "stranger",
+          bot: false,
+          writer: false,
+          path: null,
+          line: null,
+          at: null,
+          url: null,
+          text: "Breaks my setup.",
+        },
+      ],
+    })
+    expect(waitsForOwner(r)).toBe(true)
+    draw(r)
+    expect(screen.getByText("Review feedback")).toBeInTheDocument()
+    expect(screen.getByText("· src/b.rs:2")).toBeInTheDocument()
+    expect(screen.getByText("can't write")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Rename it." }))
+    expect(platform.openUrl).toHaveBeenCalledWith("https://forge/c12")
+    expect(screen.queryByRole("button", { name: "Stop watching" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Hand it to the task" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(31, "forward", 7)
+    )
+    cleanup()
+    draw(
+      pr({
+        event: "feedback",
+        state: "acted",
+        feedback: [],
+        forwarded: { waiting: true },
+      })
+    )
+    expect(
+      screen.getByText("It goes to the task once the round under way ends.")
+    ).toBeInTheDocument()
+  })
+
+  it("says why a PR ready to merge was not merged by itself", () => {
+    draw(
+      pr({
+        event: "mergeable",
+        merge: { state: "refused", why: "its acceptance has not passed" },
+      })
+    )
+    expect(
+      screen.getByText(
+        "codeg didn't merge it by itself: its acceptance has not passed"
+      )
+    ).toBeInTheDocument()
+  })
+})
+
 describe("the PR ladder", () => {
   it("shows how far the checks are, and that the read may be out of date", () => {
     wrap(<LadderChip ladder="waiting_checks" pr={watched()} />, { zh: true })

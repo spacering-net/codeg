@@ -12,7 +12,8 @@
  * mark, the kind of work and where — is the news card's, from the assistant
  * that ran it, which comes later in the list. Under a pill, the
  * assistant's acceptance criteria when it wrote them (7.5); over the pill of
- * the check codeg sent out for an acceptance, which round it checks.
+ * the check codeg sent out for an acceptance, which round it checks; over a
+ * round codeg runs on a watched pull request, which and why (7.4).
  */
 
 import { useEffect, useState } from "react"
@@ -20,7 +21,12 @@ import { useTranslations } from "next-intl"
 
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useElapsedLabel } from "@/hooks/use-elapsed-label"
-import type { DispatchInfo, DispatchState, TimelineRow } from "@/lib/types"
+import type {
+  DispatchInfo,
+  DispatchState,
+  PrFixMark,
+  TimelineRow,
+} from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import {
@@ -37,6 +43,40 @@ import { WorkPill } from "./work-card"
 
 /** Pills shown before the rest fold into "N more". */
 const SHOWN_PILLS = 3
+
+function prFixOf(v: unknown): PrFixMark | null {
+  if (!v || typeof v !== "object") return null
+  const f = v as Partial<PrFixMark>
+  return typeof f.label === "string" && typeof f.cause === "string"
+    ? (f as PrFixMark)
+    : null
+}
+
+/** A round codeg runs on a watched pull request: which pull request, why,
+ *  and which round of fixing it (7.4). */
+function PrFixLabel({
+  fix,
+  className,
+}: {
+  fix: PrFixMark
+  className?: string
+}) {
+  const t = useTranslations("PersonalAgent.pr.round")
+  const why =
+    fix.cause === "conflict"
+      ? t("conflict", { n: fix.n })
+      : fix.cause === "feedback"
+        ? t("feedback")
+        : t("checks", { n: fix.n })
+  return (
+    <p
+      className={cn("text-xs text-muted-foreground", className)}
+      data-pa-pr-round={fix.cause}
+    >
+      <span dir="ltr">{fix.label}</span> · {why}
+    </p>
+  )
+}
 
 function useTicking(on: boolean): number {
   const [now, setNow] = useState(() => Date.now())
@@ -79,6 +119,7 @@ function DispatchPill({
       ? str(via as Record<string, unknown>, "name")
       : null
   const doneWhen = info?.done_when ?? str(data, "done_when")
+  const prFix = prFixOf(data?.pr_fix)
   const pill = (
     <WorkPill
       rowId={row.id}
@@ -91,12 +132,13 @@ function DispatchPill({
       onOpen={canOpenWork(target) ? () => openWork(target) : null}
     />
   )
-  if (checkFor == null && !doneWhen) return pill
+  if (checkFor == null && !doneWhen && !prFix) return pill
   return (
     <div className="flex max-w-full min-w-0 flex-col items-start gap-1">
       {checkFor != null ? (
         <CheckLabel round={checkRound} via={viaName} className="ps-1" />
       ) : null}
+      {prFix ? <PrFixLabel fix={prFix} className="ps-1" /> : null}
       {pill}
       {doneWhen && data?.followup !== true ? (
         <DoneWhen text={doneWhen} className="ps-1" />

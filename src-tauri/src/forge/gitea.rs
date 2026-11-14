@@ -485,6 +485,7 @@ pub async fn change_detail(
         // `ForgeChangeDetail`.
         commits: None,
         checks,
+        updated_at: raw.updated_at.filter(|s| !s.is_empty()),
     })
 }
 
@@ -1402,6 +1403,8 @@ const UNKNOWN_HEAD_REPO: &str = "unknown-head-repository";
 
 #[derive(Debug, Deserialize)]
 struct RawPull {
+    #[serde(default)]
+    updated_at: Option<String>,
     #[serde(default)]
     number: i64,
     #[serde(default)]

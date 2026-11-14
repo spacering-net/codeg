@@ -8267,13 +8267,42 @@
           "auto": "Fusionner quand les vérifications réussissent",
           "ask": "Me demander d'abord (carte d'approbation)"
         },
+        "ci_failure": {
+          "title": "Les vérifications d'une PR suivie échouent",
+          "hint": "Sa tâche le corrige : une suite tant que la tâche qui l'a livrée est en revue, sinon une nouvelle tâche sur la PR. codeg pousse la correction une fois acceptée, au plus le nombre de tours ci-dessous.",
+          "fix": "Le corriger automatiquement",
+          "ask": "Me demander d'abord (sur sa carte)",
+          "tell": "Seulement me prévenir"
+        },
+        "pr_conflict": {
+          "title": "Une PR suivie a un conflit",
+          "hint": "Sa tâche fusionne la branche de base et résout le conflit (pas de rebase : codeg ne force jamais un push sur une PR).",
+          "auto": "Le résoudre automatiquement",
+          "ask": "Me demander d'abord (sur sa carte)"
+        },
+        "review_feedback": {
+          "title": "Retours de revue de ceux qui peuvent écrire",
+          "hint": "Une revue demandant des changements, ou un commentaire sur une ligne, de quelqu'un qui peut écrire dans le dépôt : transmis tel quel à la tâche, pour accepter, clarifier ou répondre avec des raisons point par point.",
+          "auto": "La transmettre à la tâche",
+          "ask": "Me demander d'abord (sur sa carte)"
+        },
+        "outsider_comments": {
+          "title": "Commentaires de ceux qui ne peuvent pas écrire",
+          "hint": "L'assistant voit qui a écrit quoi et juge : le transmettre à la tâche, vous le dire ou laisser (bots, bruit).",
+          "auto": "L'assistant décide",
+          "ask": "Me demander d'abord (sur sa carte)"
+        },
+        "ci_rounds": {
+          "title": "Tours de correction d'une PR",
+          "hint": "Les vérifications échouées et les conflits comptent, d'une tâche à l'autre. Au-delà, le prochain échec vous revient en urgence, avec ce que chaque tour a changé. 0 ne corrige rien tout seul."
+        },
         "level_forge": {
           "title": "Sur une forge",
           "hint": "Un commentaire, une issue fermée ou une PR fusionnée par un assistant."
         },
         "level_pr_ready": {
           "title": "Une PR prête à fusionner",
-          "hint": "Une PR surveillée dont les vérifications sont au vert et que la forge peut fusionner."
+          "hint": "Une PR suivie dont les vérifications sont au vert et que la forge peut fusionner, ou que codeg a fusionnée lui-même."
         },
         "level_pr": {
           "title": "Autres nouvelles des PR",
@@ -9816,7 +9845,8 @@
         "mergeable": "Prête à fusionner",
         "no_conflict": "Pas de conflit, vérifications inconnues",
         "merged": "Fusionnée",
-        "closed": "Fermée sans fusion"
+        "closed": "Fermée sans fusion",
+        "feedback": "Retours de revue"
       },
       "head": "Tête {head}",
       "checks": {
@@ -9835,7 +9865,60 @@
       },
       "view": "Voir la PR",
       "gotIt": "Compris",
-      "unwatch": "Ne plus surveiller"
+      "unwatch": "Ne plus surveiller",
+      "fix": {
+        "followup": {
+          "checks": "Sa tâche le corrige — tour {n}, une suite.",
+          "conflict": "Sa tâche fusionne la base — tour {n}, une suite."
+        },
+        "task": {
+          "checks": "Une nouvelle tâche dessus le corrige — tour {n}.",
+          "conflict": "Une nouvelle tâche dessus fusionne la base — tour {n}."
+        },
+        "failed": "codeg n'a pas pu lancer de correction : {error}",
+        "none": "codeg ne peut pas le corriger seul : {why}",
+        "busy": "Un tour est déjà en cours ; codeg regardera à nouveau à la fin.",
+        "ask": {
+          "checks": "Faire corriger par sa tâche ?",
+          "conflict": "Faire fusionner la base par sa tâche ?"
+        },
+        "told": "Seulement prévenu, comme le veulent vos réglages.",
+        "off": "codeg ne corrige rien seul (0 tour dans vos réglages).",
+        "gaveUpHeading": "Corrigé autant que permis, échoue toujours",
+        "gaveUp": "codeg l'a corrigé {n} fois ; à vous maintenant. Ce que chaque tour a fait :",
+        "round": "Tour {n}",
+        "cause": {
+          "checks": "vérifications échouées",
+          "conflict": "un conflit"
+        },
+        "lines": "{files} fichiers, +{added} −{removed}",
+        "doChecks": "Corriger",
+        "doConflict": "Fusionner la base"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "demande des changements",
+          "review": "revue",
+          "line": "sur une ligne",
+          "comment": "commentaire"
+        },
+        "someone": "Quelqu'un",
+        "writer": "peut écrire",
+        "outsider": "ne peut pas écrire",
+        "forward": "Transmettre à la tâche",
+        "skip": "Pas besoin",
+        "forwarded": "Transmis à la tâche.",
+        "waiting": "Transmis à la tâche dès que le tour en cours se termine."
+      },
+      "round": {
+        "checks": "correction des vérifications — tour {n}",
+        "conflict": "fusion de la base — tour {n}",
+        "feedback": "ses retours de revue"
+      },
+      "merge": {
+        "refused": "codeg ne l'a pas fusionnée de lui-même : {why}",
+        "unread": "codeg n'a pas pu lire la forge pour la fusionner : {why}"
+      }
     },
     "routines": {
       "zone": "({zone})",

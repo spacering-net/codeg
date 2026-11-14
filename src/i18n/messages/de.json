@@ -8267,13 +8267,42 @@
           "auto": "Mergen, wenn die Checks bestanden sind",
           "ask": "Erst fragen (Freigabekarte)"
         },
+        "ci_failure": {
+          "title": "Prüfungen eines beobachteten PRs schlagen fehl",
+          "hint": "Die Aufgabe repariert es: eine Fortsetzung, solange die liefernde Aufgabe noch in Prüfung ist, sonst eine neue Aufgabe auf dem PR. codeg pusht die Korrektur nach der Abnahme, höchstens so oft wie unten eingestellt.",
+          "fix": "Automatisch reparieren",
+          "ask": "Erst fragen (auf der Karte)",
+          "tell": "Nur Bescheid geben"
+        },
+        "pr_conflict": {
+          "title": "Ein beobachteter PR hat Konflikte",
+          "hint": "Die Aufgabe führt den Basis-Branch ein und löst den Konflikt (kein Rebase: codeg pusht nie mit Force auf einen PR).",
+          "auto": "Automatisch lösen",
+          "ask": "Erst fragen (auf der Karte)"
+        },
+        "review_feedback": {
+          "title": "Review-Feedback von Schreibberechtigten",
+          "hint": "Ein Review mit Änderungswunsch oder ein Zeilenkommentar von jemandem mit Schreibrecht: geht wörtlich an die Aufgabe, Punkt für Punkt annehmen, klären oder begründet widersprechen.",
+          "auto": "An die Aufgabe geben",
+          "ask": "Erst fragen (auf der Karte)"
+        },
+        "outsider_comments": {
+          "title": "Kommentare ohne Schreibrecht",
+          "hint": "Der Assistent sieht, wer was geschrieben hat, und entscheidet: an die Aufgabe geben, dir sagen oder liegen lassen (Bots, Rauschen).",
+          "auto": "Der Assistent entscheidet",
+          "ask": "Erst fragen (auf der Karte)"
+        },
+        "ci_rounds": {
+          "title": "Reparaturrunden pro PR",
+          "hint": "Fehlgeschlagene Prüfungen und Konflikte zählen, über Aufgaben hinweg. Danach ist der nächste Fehlschlag dringend deiner, mit den Änderungen jeder Runde. 0 repariert nichts selbst."
+        },
         "level_forge": {
           "title": "Auf einer Forge",
           "hint": "Ein Kommentar, ein geschlossenes Issue oder ein gemergter PR eines Assistenten."
         },
         "level_pr_ready": {
           "title": "Ein PR bereit zum Mergen",
-          "hint": "Ein beobachteter PR mit grünen Checks, den die Forge mergen kann."
+          "hint": "Ein beobachteter PR mit grünen Prüfungen, den die Forge zusammenführen kann – oder einer, den codeg selbst zusammengeführt hat."
         },
         "level_pr": {
           "title": "Weitere PR-Neuigkeiten",
@@ -9816,7 +9845,8 @@
         "mergeable": "Bereit zum Mergen",
         "no_conflict": "Kein Konflikt, Checks unbekannt",
         "merged": "Gemergt",
-        "closed": "Ohne Merge geschlossen"
+        "closed": "Ohne Merge geschlossen",
+        "feedback": "Review-Feedback"
       },
       "head": "Head {head}",
       "checks": {
@@ -9835,7 +9865,60 @@
       },
       "view": "PR ansehen",
       "gotIt": "Verstanden",
-      "unwatch": "Nicht mehr beobachten"
+      "unwatch": "Nicht mehr beobachten",
+      "fix": {
+        "followup": {
+          "checks": "Die Aufgabe repariert es — Runde {n}, als Fortsetzung.",
+          "conflict": "Die Aufgabe führt die Basis ein — Runde {n}, als Fortsetzung."
+        },
+        "task": {
+          "checks": "Eine neue Aufgabe darauf repariert es — Runde {n}.",
+          "conflict": "Eine neue Aufgabe darauf führt die Basis ein — Runde {n}."
+        },
+        "failed": "codeg konnte keine Reparatur starten: {error}",
+        "none": "codeg kann es nicht selbst reparieren: {why}",
+        "busy": "Eine Runde läuft schon; codeg schaut wieder, wenn sie fertig ist.",
+        "ask": {
+          "checks": "Soll die Aufgabe es reparieren?",
+          "conflict": "Soll die Aufgabe die Basis einführen?"
+        },
+        "told": "Nur Bescheid, wie deine Einstellungen sagen.",
+        "off": "codeg repariert nichts selbst (0 Runden eingestellt).",
+        "gaveUpHeading": "So oft repariert wie erlaubt, schlägt weiter fehl",
+        "gaveUp": "codeg hat es {n}-mal repariert; jetzt bist du dran. Was jede Runde tat:",
+        "round": "Runde {n}",
+        "cause": {
+          "checks": "fehlgeschlagene Prüfungen",
+          "conflict": "ein Konflikt"
+        },
+        "lines": "{files} Dateien, +{added} −{removed}",
+        "doChecks": "Reparieren",
+        "doConflict": "Basis einführen"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "bittet um Änderungen",
+          "review": "Review",
+          "line": "an einer Zeile",
+          "comment": "Kommentar"
+        },
+        "someone": "Jemand",
+        "writer": "schreibberechtigt",
+        "outsider": "nicht schreibberechtigt",
+        "forward": "An die Aufgabe geben",
+        "skip": "Nicht nötig",
+        "forwarded": "An die Aufgabe gegeben.",
+        "waiting": "Geht an die Aufgabe, sobald die laufende Runde endet."
+      },
+      "round": {
+        "checks": "Prüfungen reparieren — Runde {n}",
+        "conflict": "Basis einführen — Runde {n}",
+        "feedback": "sein Review-Feedback"
+      },
+      "merge": {
+        "refused": "codeg hat es nicht selbst zusammengeführt: {why}",
+        "unread": "codeg konnte die Forge nicht lesen, um es zusammenzuführen: {why}"
+      }
     },
     "routines": {
       "zone": "({zone})",
