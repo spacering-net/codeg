@@ -3338,9 +3338,75 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   * #1589 stops the Bun release executable from loading the
             //     project's `.env` and `bunfig.toml`. codeg runs the npm package
             //     under Node, which never loaded them.
+            //
+            // 0.107.0 (2026-11-13) moves the Claude Agent SDK to 0.3.323 (Claude
+            // Code 2.1.322 → 2.1.323); the ACP SDK stays 2.6.0 and
+            // `engines.node` stays ">=22". Measured live as for 0.106.0,
+            // 0.106.0 and 0.107.0 side by side, plus Fast mode turned on
+            // through the gateway, and the window a session on an unknown
+            // model id reports. Every frame and transcript record codeg reads
+            // is the same apart from ids, paths and timing, except as (ooooo)
+            // says.
+            //
+            // (ooooo) **Two changes codeg shows as they come.**
+            //   * #1602 explains every reason Claude Code gives for turning Fast
+            //     mode off. Through a gateway that authenticates with
+            //     `ANTHROPIC_AUTH_TOKEN`, Claude Code turns it off at the first
+            //     turn with the reason `preference`, which 0.106.0 left
+            //     unexplained. So the toggle went back to off without a word. Now
+            //     a warning notice follows: `Fast mode turned off`, `Not enabled
+            //     for your organization or API gateway.`, which codeg shows as a
+            //     notification. The option's description carries the same reason
+            //     while it is off. codeg replays a saved `fast` = `on` on every
+            //     connect (`apply_preferred_session_options`), so a gateway user
+            //     who once turned it on gets that notice once per session until
+            //     they pick off again. Whether a refused pick should stop being
+            //     replayed is a product call that this bump does not make. Some
+            //     reasons do not last (`network_error`, and `model_not_allowed`
+            //     until the model changes), and the notice carries no reason code.
+            //   * Since 2.1.323, Claude Code takes the window of a model id it
+            //     does not know as 1M instead of 200K, and #1613 makes the
+            //     adapter's placeholder 1M too. Measured with `ANTHROPIC_MODEL`
+            //     set to `my-gateway-model`: `usage_update.size` is 1000000
+            //     where 0.106.0 reported 200000. `claude-sonnet-4-5` stays at
+            //     200000 on both pins. The live gauge reads `size` as it is.
+            //     `parsers::claude` still gives no window for a non-`claude`
+            //     id: the transcript keeps no trace of a gateway's served window
+            //     or `CLAUDE_CODE_DISABLE_1M_CONTEXT`.
+            //
+            // (ppppp) Nothing to change in codeg, each checked:
+            //   * #1610 adds `rateLimit` (`status`, `rateLimitType`,
+            //     `resetsAt`) to the `data` of a prompt that fails with
+            //     `errorKind: "rate_limit"`. codeg reads neither field. It shows
+            //     the error's message, which already names the reset time.
+            //   * #1616 ends a tool call whose response Claude Code took back
+            //     (a refusal fallback) as `failed`, with its own text, where
+            //     0.106.0 left it open and then failed the prompt with
+            //     `incomplete_tool_call`. codeg shows a failed call as it
+            //     comes. Upstream could not trigger the case on demand, and
+            //     neither can the fake API.
+            //   * #1594 gives the AIR `api_retry` warning a `details` line (the
+            //     cause and the wait). The failure strip already shows
+            //     `details`, and each revision replaces the whole record, so the
+            //     terminal revision, which has none, clears it.
+            //   * #1612 drops the 30-second `tool_progress` beats of a slow
+            //     hook, which 0.106.0 put on the tool call they name. It also
+            //     follows the SDK's new title rule (only a `custom-title` /
+            //     `ai-title` record names a session). `parsers::claude` already
+            //     reads titles by record type.
+            //   * #1608 changes only the RFD form of subagent reporting, and
+            //     codeg does not declare `subagents`. AIR output is unchanged.
+            //   * #1615 and #1614 touch only a managed `deniedModels` list
+            //     together with an `availableModels` allowlist, and a log line.
+            //     codeg sends only `modelPicker` in `--settings`.
+            //   * #1599 and #1598 change only the v2 agent. #1601 and #1581
+            //     move code and change nothing.
+            //   * Per its changelog, CLI 2.1.323 also stops offering "don't ask
+            //     again" for Bash writes into `.git` or `.claude`. codeg lists
+            //     the permission options the adapter sends.
             distribution: AgentDistribution::Npx {
-                version: "0.106.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.106.0",
+                version: "0.107.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.107.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -8882,8 +8948,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.106.0",
-            "@agentclientprotocol/claude-agent-acp@0.106.0",
+            "0.107.0",
+            "@agentclientprotocol/claude-agent-acp@0.107.0",
             Some("22.0.0"),
         );
         assert_npx_version(
