@@ -3344,9 +3344,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `engines.node` stays ">=22". Measured live as for 0.106.0,
             // 0.106.0 and 0.107.0 side by side, plus Fast mode turned on
             // through the gateway, and the window a session on an unknown
-            // model id reports. Every frame and transcript record codeg reads
-            // is the same apart from ids, paths and timing, except as (ooooo)
-            // says.
+            // model id reports. The frames and transcript records codeg reads
+            // match apart from ids, paths, token counts and timing (a gateway
+            // retry, or an `_auth/status_update` sent later in one run than in
+            // the other), except as (ooooo) says.
             //
             // (ooooo) **Two changes codeg shows as they come.**
             //   * #1602 explains every reason Claude Code gives for turning Fast
