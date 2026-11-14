@@ -3457,12 +3457,11 @@ impl ConnectionManager {
     }
 
     pub async fn list_connections(&self) -> Vec<ConnectionInfo> {
-        // `AgentConnection.status` is only the spawn-time placeholder. The
-        // connection driver publishes every subsequent transition to the
-        // shared SessionState, which is also what snapshots and event
-        // consumers read. Copy the state handles while holding the map lock,
-        // then read them after releasing it so this inventory cannot report a
-        // connection as permanently `connecting` after it has connected.
+        // Status comes from the shared SessionState: the connection driver
+        // publishes every transition there (`emit_with_state`), and snapshots
+        // and event consumers read the same field. Copy the state handles
+        // while holding the map lock, then read them after releasing it, so
+        // one connection's busy writer cannot stall the map for everyone.
         let entries = {
             let connections = self.connections.lock().await;
             connections
@@ -5536,6 +5535,36 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "c1");
         assert_eq!(rows[0].status, ConnectionStatus::Prompting);
+    }
+
+    /// The restore gate reads the same session status. A connection still in
+    /// its handshake counts; one whose driver has already published a terminal
+    /// status (it is unwinding, its map entry not yet removed) does not — the
+    /// filter `restore::live_agent_names` documents, which the frozen spawn-time
+    /// copy used to defeat by reporting every entry as `Connecting`.
+    #[tokio::test]
+    async fn live_or_draining_agent_names_follows_session_status() {
+        let mgr = ConnectionManager::new();
+        for (id, agent_type) in [
+            ("handshake", AgentType::Codex),
+            ("errored", AgentType::ClaudeCode),
+            ("closed", AgentType::Gemini),
+        ] {
+            mgr.insert_test_connection(id, agent_type, None, EventEmitter::Noop)
+                .await;
+        }
+        for (id, status) in [
+            ("handshake", ConnectionStatus::Connecting),
+            ("errored", ConnectionStatus::Error),
+            ("closed", ConnectionStatus::Disconnected),
+        ] {
+            mgr.get_state(id).await.unwrap().write().await.status = status;
+        }
+
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Codex CLI".to_string()]
+        );
     }
 
     /// An agent that has left the connection map but not yet exited can still
