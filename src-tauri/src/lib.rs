@@ -26,6 +26,7 @@ mod app_error;
 mod app_menu;
 pub mod app_state;
 pub mod appimage_env;
+pub mod appshots;
 pub mod automation;
 pub mod backgrounds;
 /// Built-in browser. Only its wire types and its grant rules compile in server
@@ -1287,6 +1288,10 @@ mod tauri_app {
                         computer_tools_config.clone(),
                     );
                     app.manage(computer_service.clone());
+                    crate::appshots::desktop::Appshots::start(
+                        app.handle().clone(),
+                        computer_tools_config.clone(),
+                    );
 
                     let listener_broker = broker.clone();
                     let listener = crate::acp::delegation::listener::DelegationListener::new(
@@ -2115,6 +2120,12 @@ mod tauri_app {
                 crate::commands::computer_tools::set_computer_tools_enabled,
                 crate::commands::computer_tools::set_computer_tools_preferences,
                 crate::commands::computer::computer_status,
+                crate::appshots::desktop::appshot_get_settings,
+                crate::appshots::desktop::appshot_request_permission,
+                crate::appshots::desktop::appshot_set_shortcut,
+                crate::appshots::desktop::appshot_capture,
+                crate::appshots::desktop::appshot_take_pending,
+                crate::appshots::desktop::appshot_dismiss,
                 crate::commands::computer::computer_request_permission,
                 crate::commands::computer::computer_open_permission_settings,
                 crate::commands::computer::computer_reveal_helper,

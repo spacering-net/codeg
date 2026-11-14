@@ -7793,5 +7793,35 @@
         "probeFailed": "内蔵ブラウザーがトンネル経由でリモートホストに届くことを確認できませんでした。しばらくしてからもう一度お試しください。"
       }
     }
+  },
+  "Appshots": {
+    "title": "App snapshot",
+    "description": "Capture a window image and its available text, then add them to a conversation.",
+    "capture": "Capture in 3 seconds",
+    "switchApp": "Switch to the app to capture. Capture starts in 3 seconds.",
+    "shortcut": "Global shortcut",
+    "recordShortcut": "Press a key combination",
+    "shortcutHint": "Use two modifiers, including Control or Command. Leave empty to turn off.",
+    "shortcutInvalid": "Use a letter, number or function key with at least two modifiers, including Control or Command.",
+    "shortcutFailed": "The shortcut could not be registered. Choose different keys or save to retry.",
+    "clear": "Clear",
+    "save": "Save shortcut",
+    "previewHint": "Review the image and text. Adding them to a conversation does not send a message.",
+    "failedHint": "Switch to the app you want to capture and try again. On macOS, check the helper’s Screen Recording and Accessibility permissions.",
+    "imageAlt": "Captured application window",
+    "textUnavailable": "Available text could not be fully read. The window image is still included.",
+    "truncated": "Application text was shortened to fit the snapshot limit.",
+    "text": "Application text",
+    "conversation": "Conversation",
+    "chooseConversation": "Choose an open conversation",
+    "noConversation": "Open a conversation, then return to this snapshot.",
+    "conversationGone": "That conversation is closed or its input is not ready. Choose another conversation or try again.",
+    "textOnly": "Added application text only: this agent does not accept images.",
+    "added": "Snapshot added to the conversation input.",
+    "accessibility": "Open Accessibility settings",
+    "screenRecording": "Open Screen Recording settings",
+    "cancel": "Cancel",
+    "add": "Add to conversation",
+    "newConversation": "New conversation"
   }
 }

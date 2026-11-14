@@ -5,6 +5,7 @@ import { StatusBarTasks } from "@/components/layout/status-bar-tasks"
 import { StatusBarAlerts } from "@/components/layout/status-bar-alerts"
 import { StatusBarMcp } from "@/components/layout/status-bar-mcp"
 import { StatusBarComputer } from "@/components/layout/status-bar-computer"
+import { DesktopAppshots } from "@/components/layout/desktop-appshots"
 import { StatusBarUpdate } from "@/components/layout/status-bar-update"
 import { StatusBarWebService } from "@/components/layout/status-bar-web-service"
 import { CommandDropdown } from "@/components/layout/command-dropdown"
@@ -28,6 +29,7 @@ export function StatusBar() {
         <div className="flex items-center gap-3">
           <StatusBarUpdate />
           <CommandDropdown />
+          <DesktopAppshots />
           {/* Narrow is a viewport width, not a browser: a desktop window
               shrunk below the breakpoint must still say the web service is
               listening. Renders nothing outside the local desktop. */}
@@ -73,6 +75,7 @@ export function StatusBar() {
         {/* Computer use: which windows agents may see right now. Renders
             nothing unless the desktop runtime has it switched on. */}
         <StatusBarComputer />
+        <DesktopAppshots />
         {/* Web service (remote access): whether the desktop is reachable over
             HTTP right now, and how far. Beside computer use because both say
             what is exposed. Local desktop only. */}
