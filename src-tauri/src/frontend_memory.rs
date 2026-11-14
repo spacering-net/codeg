@@ -40,6 +40,15 @@ pub enum MemoryMetric {
     StreamingEvents,
     PendingToolUpdates,
     EventSubscribers,
+    RuntimeSessions,
+    RuntimeDetailTurns,
+    RuntimeLocalTurns,
+    RuntimeBackgroundTurns,
+    RuntimeOptimisticTurns,
+    RuntimePendingBackgroundSettlements,
+    RuntimeLiveBlocks,
+    OverlayFoldRefetchEntries,
+    SelectorsCacheEntries,
     IframeCount,
     HtmlFrames,
     HtmlFrameBytes,
@@ -199,6 +208,30 @@ mod tests {
         assert!(sample("12345678-1234-4234-8234-123456789abc", 1)
             .validate()
             .is_ok());
+    }
+
+    #[test]
+    fn accepts_runtime_retention_metric_vocabulary() {
+        let json = r#"{
+            "reporterId": "12345678-1234-4234-8234-123456789abc",
+            "metrics": {
+                "runtimeSessions": 1,
+                "runtimeDetailTurns": 2,
+                "runtimeLocalTurns": 3,
+                "runtimeBackgroundTurns": 4,
+                "runtimeOptimisticTurns": 5,
+                "runtimePendingBackgroundSettlements": 6,
+                "runtimeLiveBlocks": 7,
+                "overlayFoldRefetchEntries": 8,
+                "selectorsCacheEntries": 9
+            }
+        }"#;
+        let parsed: FrontendMemorySample = serde_json::from_str(json).unwrap();
+        parsed.validate().unwrap();
+        assert_eq!(
+            parsed.metrics[&MemoryMetric::RuntimePendingBackgroundSettlements],
+            6
+        );
     }
 
     #[test]
