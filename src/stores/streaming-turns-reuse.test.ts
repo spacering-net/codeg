@@ -7,7 +7,9 @@ import type {
 } from "@/contexts/acp-connections-context"
 import {
   buildStreamingTurnsFromLiveMessage,
+  getTimelineTurns,
   resetConversationRuntimeStore,
+  useConversationRuntimeStore,
 } from "./conversation-runtime-store"
 
 function bash(
@@ -104,5 +106,87 @@ describe("buildStreamingTurnsFromLiveMessage — rebuilt on every batch", () => 
     const other = buildStreamingTurnsFromLiveMessage(2, message(content))
     expect(other.turns[0]).not.toBe(first.turns[0])
     expect(other.turns[0]!.id).not.toBe(first.turns[0]!.id)
+  })
+})
+
+describe("streaming build cache lifetime", () => {
+  function stream(conversationId: number, id = "m1") {
+    const live = { ...message([{ type: "text", text: "reply" }]), id }
+    const actions = useConversationRuntimeStore.getState().actions
+    actions.setLiveMessage(conversationId, live, true)
+    const turn = getTimelineTurns(conversationId)[0].turn
+    return { actions, live, turn }
+  }
+
+  it("releases a closed session's build without invalidating another live stream", () => {
+    const closed = stream(1)
+    const active = stream(11)
+    closed.actions.removeConversation(1)
+
+    expect(useConversationRuntimeStore.getState().byConversationId.has(1)).toBe(
+      false
+    )
+    expect(
+      buildStreamingTurnsFromLiveMessage(1, closed.live).turns[0]
+    ).not.toBe(closed.turn)
+    expect(buildStreamingTurnsFromLiveMessage(11, active.live).turns[0]).toBe(
+      active.turn
+    )
+  })
+
+  it("keeps the active build across unrelated session updates", () => {
+    const active = stream(1)
+    active.actions.setExternalId(1, "session-1")
+
+    expect(getTimelineTurns(1)[0].turn).toBe(active.turn)
+  })
+
+  it("promotes the completed reply but retires its streaming-only cache", () => {
+    const finished = stream(1)
+    finished.actions.completeTurn(1)
+
+    const session = useConversationRuntimeStore
+      .getState()
+      .byConversationId.get(1)
+    expect(session?.localTurns[0]).toBe(finished.turn)
+    expect(session?.liveMessage).toBeNull()
+    expect(
+      buildStreamingTurnsFromLiveMessage(1, finished.live).turns[0]
+    ).not.toBe(finished.turn)
+  })
+
+  it("retires the previous message's build when a new live message takes over", () => {
+    const previous = stream(1)
+    const current = stream(1, "m2")
+
+    expect(
+      buildStreamingTurnsFromLiveMessage(1, previous.live).turns[0]
+    ).not.toBe(previous.turn)
+    expect(buildStreamingTurnsFromLiveMessage(1, current.live).turns[0]).toBe(
+      current.turn
+    )
+  })
+
+  it("clears builds on the public store reset", () => {
+    const previous = stream(1)
+    previous.actions.reset()
+
+    expect(useConversationRuntimeStore.getState().byConversationId.size).toBe(0)
+    expect(
+      buildStreamingTurnsFromLiveMessage(1, previous.live).turns[0]
+    ).not.toBe(previous.turn)
+  })
+
+  it("releases the old conversation's build when its session migrates", () => {
+    const previous = stream(1)
+    previous.actions.migrateConversation(1, 2)
+
+    expect(useConversationRuntimeStore.getState().byConversationId.has(1)).toBe(
+      false
+    )
+    expect(getTimelineTurns(2)[0].turn.id).toBe("live-2-m1")
+    expect(
+      buildStreamingTurnsFromLiveMessage(1, previous.live).turns[0]
+    ).not.toBe(previous.turn)
   })
 })
