@@ -46,6 +46,51 @@ pub const MAX_ENTRIES: usize = 500;
 /// The name of the built-in skill installed into the working directory.
 pub const SKILL_NAME: &str = "codeg-personal-agent";
 
+/// The assistant's process skills (7.8): `process-skills/<name>/SKILL.md`,
+/// a folder each, kept in git with the rest of the directory. codeg installs
+/// them into its brain's project skill folder — never the owner's global
+/// one, which every session of theirs would load. Not `skills/`: that is
+/// OpenClaw's project skill folder, which the directory's `.gitignore`
+/// leaves out.
+pub const SKILLS_DIR: &str = "process-skills";
+/// A skill's own file in its folder.
+pub const SKILL_FILE: &str = "SKILL.md";
+/// Most process skills one assistant has installed (19 #13): the rest, by
+/// name, stay in its folder and are not loaded.
+pub const MAX_SKILLS: usize = 30;
+/// Most process skills the page lists.
+const LISTED_SKILLS: usize = 100;
+/// The file codeg leaves in each copy of a process skill it installs, so it
+/// knows its own copies from anything else in the folder.
+const INSTALLED_MARK: &str = ".codeg-process-skill";
+
+/// Whether `name` can name a process skill: lowercase letters and digits in
+/// words joined by single hyphens, at most 64 bytes — as agents name their
+/// skills — and not codeg's own skill.
+pub fn valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name != SKILL_NAME
+        && name.split('-').all(|w| {
+            !w.is_empty()
+                && w.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
+}
+
+/// The process skill `path` is the file of — `process-skills/<name>/SKILL.md` — or
+/// `None`.
+pub fn skill_name_of(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix(SKILLS_DIR)?.strip_prefix('/')?;
+    let name = rest.strip_suffix(SKILL_FILE)?.strip_suffix('/')?;
+    valid_skill_name(name).then_some(name)
+}
+
+/// The file of process skill `name`, as the page and the cards name it.
+pub fn skill_path(name: &str) -> String {
+    format!("{SKILLS_DIR}/{name}/{SKILL_FILE}")
+}
+
 /// Largest file the page reads or writes, in bytes.
 pub const MAX_FILE_BYTES: usize = 512 * 1024;
 
@@ -119,6 +164,16 @@ fn is_symlink(path: &Path) -> bool {
 fn resolve(path: &Path, name: &str) -> std::io::Result<PathBuf> {
     if EDITABLE_FILES.contains(&name) {
         return Ok(path.join(name));
+    }
+    // A process skill's file: through real folders, as a regular file.
+    if let Some(skill) = skill_name_of(name) {
+        let folder = path.join(SKILLS_DIR);
+        let own = folder.join(skill);
+        let target = own.join(SKILL_FILE);
+        if is_symlink(&folder) || is_symlink(&own) || is_symlink(&target) || target.is_dir() {
+            return Err(not_a_file(name));
+        }
+        return Ok(target);
     }
     let file = entry_file(name).ok_or_else(|| not_a_file(name))?;
     let folder = path.join(MEMORY_DIR);
@@ -416,6 +471,11 @@ async fn git(path: &Path, args: &[&str]) -> Result<std::process::Output, String>
             "commit.gpgsign=false",
             "-c",
             "core.hooksPath=/dev/null",
+            // What is committed is what is on disk, byte for byte — the
+            // owner's own `core.autocrlf` would otherwise make a file read
+            // back from history differ from the one just written.
+            "-c",
+            "core.autocrlf=false",
         ])
         .args(args)
         .current_dir(path)
@@ -442,6 +502,13 @@ pub async fn commit_all(path: &Path, message: &str) -> bool {
     commit(path, message).await.is_some()
 }
 
+/// Hold every write of every working directory, as an undo or a turn's
+/// commit does while it runs.
+#[cfg(test)]
+pub async fn hold_writes_for_test() -> tokio::sync::MutexGuard<'static, ()> {
+    GIT_WRITE.lock().await
+}
+
 /// [`commit_all`], with the commit made: `None` when nothing was committed.
 pub async fn commit(path: &Path, message: &str) -> Option<String> {
     let _held = GIT_WRITE.lock().await;
@@ -454,6 +521,109 @@ pub async fn commit(path: &Path, message: &str) -> Option<String> {
 pub async fn commit_only(path: &Path, message: &str, names: &[&str]) -> Option<String> {
     let _held = GIT_WRITE.lock().await;
     commit_locked(path, message, Some(names)).await
+}
+
+/// A turn's commit (7.7, 7.8), and — when some of its files are for the
+/// owner to see first — the commit that set them aside, and which; or why
+/// they could not be (the files it was to set aside then stand as the turn
+/// left them).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TurnCommit {
+    pub rev: String,
+    pub aside: Option<String>,
+    pub aside_paths: Vec<String>,
+    /// The files that were to be set aside and are not, and why.
+    pub not_aside: Vec<String>,
+    pub not_aside_why: Option<String>,
+}
+
+/// Commit whatever a turn changed and, in the same hold of the lock — no
+/// other write of the directory between — set aside the files `aside`
+/// picks out of it (its memory and process skill files, as
+/// [`memory_changes`] and [`skill_changes`] name them): back as they were
+/// before the turn, as one more commit. `None` when nothing was committed.
+pub async fn commit_turn(
+    path: &Path,
+    message: &str,
+    aside: impl Fn(&MemoryFile) -> bool,
+    aside_message: &str,
+) -> Option<TurnCommit> {
+    let _held = GIT_WRITE.lock().await;
+    let rev = commit_locked(path, message, None).await?;
+    let mut files = memory_changes(path, &rev).await;
+    files.extend(skill_changes(path, &rev).await);
+    files.retain(|f| aside(f));
+    let mut done = TurnCommit {
+        rev: rev.clone(),
+        ..Default::default()
+    };
+    if files.is_empty() {
+        return Some(done);
+    }
+    let why = match undo_change_locked(path, &rev, &files, aside_message, true).await {
+        Ok(u) if u.kept.is_empty() && u.commit.is_some() => {
+            done.aside = u.commit;
+            done.aside_paths = u.back;
+            return Some(done);
+        }
+        Ok(u) if !u.kept.is_empty() => format!("{} could not be taken back", u.kept.join(", ")),
+        Ok(_) => "the draft could not be committed".to_string(),
+        Err(e) => e,
+    };
+    tracing::warn!("[personal_agent] a draft could not be set aside: {why}");
+    // A process skill among them stays unloaded all the same: it loads only
+    // as a version the owner approved (`SkillSwitches`), and this one is not.
+    done.not_aside = files.into_iter().map(|f| f.path).collect();
+    done.not_aside_why = Some(why);
+    Some(done)
+}
+
+/// How one file of [`write_for_owner`] changes: from what is there now (or
+/// `None` when there is nothing) to what to write, `None` to leave it.
+pub type OwnerUpdate<'a> = &'a (dyn Fn(Option<&str>) -> Option<String> + Sync);
+
+/// What codeg writes for the owner — their edit on the page, what to call
+/// them, a new role's template — one write of the directory at a time with
+/// every other (an undo, a draft applied, a turn's commit): each of `files`
+/// is read and rewritten under the lock (`update` returning `None` leaves it
+/// as it is), and only those are committed. The commit, when there was one.
+pub async fn write_for_owner(
+    path: &Path,
+    files: &[(&str, OwnerUpdate<'_>)],
+    message: &str,
+) -> std::io::Result<Option<String>> {
+    let _held = GIT_WRITE.lock().await;
+    let mut written: Vec<&str> = Vec::new();
+    for (name, update) in files {
+        let now = read_file(path, name)?;
+        if let Some(content) = update(now.as_deref()) {
+            write_file(path, name, &content)?;
+            written.push(name);
+        }
+    }
+    if written.is_empty() {
+        return Ok(None);
+    }
+    Ok(commit_locked(path, message, Some(&written)).await)
+}
+
+/// Delete an entry for the owner, with its index lines, and commit that —
+/// under the lock, as [`write_for_owner`].
+pub async fn delete_entry_for_owner(path: &Path, name: &str, message: &str) -> std::io::Result<()> {
+    let _held = GIT_WRITE.lock().await;
+    delete_entry(path, name)?;
+    commit_locked(path, message, Some(&[name, MEMORY_FILE])).await;
+    Ok(())
+}
+
+/// Delete process skill `name` for the owner — its folder — and commit
+/// that, under the lock.
+pub async fn delete_skill_for_owner(path: &Path, name: &str, message: &str) -> std::io::Result<()> {
+    let _held = GIT_WRITE.lock().await;
+    delete_skill(path, name)?;
+    let folder = format!("{SKILLS_DIR}/{name}");
+    commit_locked(path, message, Some(&[folder.as_str()])).await;
+    Ok(())
 }
 
 async fn commit_locked(path: &Path, message: &str, only: Option<&[&str]>) -> Option<String> {
@@ -689,7 +859,40 @@ pub async fn undo_memory(
     files: &[MemoryFile],
     message: &str,
 ) -> Result<MemoryUndo, String> {
+    undo_change(path, rev, files, message, false).await
+}
+
+/// [`undo_memory`], all or nothing: when any file cannot have the change
+/// taken out of it, nothing is written and `kept` names those files. A draft
+/// set aside is applied this way — never half of it (7.7).
+pub async fn undo_whole(
+    path: &Path,
+    rev: &str,
+    files: &[MemoryFile],
+    message: &str,
+) -> Result<MemoryUndo, String> {
+    undo_change(path, rev, files, message, true).await
+}
+
+async fn undo_change(
+    path: &Path,
+    rev: &str,
+    files: &[MemoryFile],
+    message: &str,
+    whole: bool,
+) -> Result<MemoryUndo, String> {
     let _held = GIT_WRITE.lock().await;
+    undo_change_locked(path, rev, files, message, whole).await
+}
+
+/// [`undo_change`], with the directory's write lock already held.
+async fn undo_change_locked(
+    path: &Path,
+    rev: &str,
+    files: &[MemoryFile],
+    message: &str,
+    whole: bool,
+) -> Result<MemoryUndo, String> {
     if !path.join(".git").exists() {
         return Err("the working directory has no history".into());
     }
@@ -698,6 +901,9 @@ pub async fn undo_memory(
     // The index last: its lines follow what became of the entries.
     let mut order: Vec<&MemoryFile> = files.iter().collect();
     order.sort_by_key(|f| f.kind == "index");
+    // Worked out first, written after: an undo that must be whole writes
+    // nothing when any file does not take it.
+    let mut puts: Vec<(PathBuf, &MemoryFile, Option<String>)> = Vec::new();
     for f in order {
         let target = resolve(path, &f.path).map_err(|e| e.to_string())?;
         let at = if f.status == "deleted" {
@@ -723,28 +929,42 @@ pub async fn undo_memory(
                 let kept = undo.kept.clone();
                 Some(Some(undo_lines(n, a, b, |line| !links_to(line, &kept))))
             }
-            _ if now == at => Some(before),
+            _ if same_text(now.as_deref(), at.as_deref()) => Some(before),
             (Some(n), Some(a), Some(b)) => merge3(path, n, a, b).await.map(Some),
             _ => None,
         };
         match put {
-            Some(Some(content)) => {
+            Some(content) => puts.push((target, f, content)),
+            None => undo.kept.push(f.path.clone()),
+        }
+    }
+    if whole && !undo.kept.is_empty() {
+        return Ok(undo);
+    }
+    for (target, f, content) in puts {
+        match content {
+            Some(content) => {
                 if let Some(parent) = target.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
                 std::fs::write(&target, content).map_err(|e| e.to_string())?;
-                undo.back.push(f.path.clone());
             }
-            Some(None) => {
+            None => {
                 match std::fs::remove_file(&target) {
                     Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => return Err(e.to_string()),
                 }
-                undo.back.push(f.path.clone());
+                // A process skill taken out takes its folder with it, when
+                // nothing else is in it.
+                if skill_name_of(&f.path).is_some() {
+                    if let Some(parent) = target.parent() {
+                        let _ = std::fs::remove_dir(parent);
+                    }
+                }
             }
-            None => undo.kept.push(f.path.clone()),
         }
+        undo.back.push(f.path.clone());
     }
     // The index follows what became of the entries, whichever commit its
     // lines went in with (an edit of the owner's may have taken a turn's
@@ -791,6 +1011,15 @@ pub async fn undo_memory(
     let names: Vec<&str> = undo.back.iter().map(String::as_str).collect();
     undo.commit = commit_locked(path, message, Some(&names)).await;
     Ok(undo)
+}
+
+/// Whether a file's content now is what a commit left, line endings aside
+/// (a repository's own attributes may still convert them).
+fn same_text(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a == b || a.replace("\r\n", "\n") == b.replace("\r\n", "\n"),
+        (a, b) => a == b,
+    }
 }
 
 /// Whether an index line links to one of `names` (`](memory/x.md)`, also as
@@ -1194,19 +1423,20 @@ pub fn persona_digest(path: &Path, agent_name: &str) -> String {
 /// directory on purpose: a global skill would reach every session of that
 /// agent, not just the personal agent's. Best-effort.
 pub fn sync_skill(path: &Path, agent_type: crate::models::AgentType, enabled: bool) {
-    sync_bot_skill(path, agent_type, enabled, false, CardUse::default())
+    sync_bot_skill(
+        path,
+        agent_type,
+        enabled,
+        false,
+        CardUse::default(),
+        &Default::default(),
+    )
 }
 
 /// Where `agent_type` loads the built-in skill from in this working
 /// directory; `None` for an agent codeg manages no skills for.
 pub fn skill_dir(path: &Path, agent_type: crate::models::AgentType) -> Option<PathBuf> {
-    crate::commands::acp::preferred_scope_skill_dir(
-        agent_type,
-        crate::acp::types::AgentSkillScope::Project,
-        Some(&path.to_string_lossy()),
-    )
-    .ok()
-    .map(|dir| dir.join(SKILL_NAME))
+    skill_root(path, agent_type).map(|dir| dir.join(SKILL_NAME))
 }
 
 /// The copies of the skill codeg installed in the working directory for
@@ -1225,14 +1455,17 @@ fn other_skill_copies(path: &Path, keep: Option<&Path>) -> Vec<PathBuf> {
 }
 
 /// [`sync_skill`] for an assistant: a worker's tells it that the facts about
-/// the owner are the primary's.
+/// the owner are the primary's. Its process skills are installed with it,
+/// as `switches` allow (7.8).
 pub fn sync_bot_skill(
     path: &Path,
     agent_type: crate::models::AgentType,
     enabled: bool,
     worker: bool,
     cards: CardUse,
+    switches: &SkillSwitches,
 ) {
+    sync_process_skills(path, agent_type, switches);
     let dir = skill_dir(path, agent_type);
     // A brain before this one left its copy in its own agent's folder; a new
     // brain that reads that folder too would load the skill twice (18 #6).
@@ -1266,6 +1499,350 @@ pub fn sync_bot_skill(
         }
     } else if dir.join("SKILL.md").is_file() {
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+// ── process skills (7.8) ────────────────────────────────────────────────────
+
+/// A process skill, as its file says it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProcessSkill {
+    /// Its folder's name.
+    pub name: String,
+    /// What it is called: its first heading, else its front matter's `name`,
+    /// else its folder's.
+    pub title: String,
+    /// When it is for: its front matter's `description`.
+    pub description: String,
+}
+
+/// The fields of a file's front matter (`---` … `---`) and what follows it.
+fn front_matter(content: &str) -> (std::collections::HashMap<String, String>, &str) {
+    let mut fields = std::collections::HashMap::new();
+    let Some(rest) = content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))
+    else {
+        return (fields, content);
+    };
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        offset += line.len();
+        if line.trim_end() == "---" {
+            return (fields, &rest[offset..]);
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            let k = k.trim();
+            if !k.is_empty() && !k.contains(' ') {
+                let v = v.trim().trim_matches(['"', '\'']).trim();
+                fields.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+    // Never closed: no front matter at all.
+    (std::collections::HashMap::new(), content)
+}
+
+/// What skill `name`'s `SKILL.md` (`content`) calls it and says it is for.
+pub fn skill_meta(name: &str, content: &str) -> ProcessSkill {
+    let (fields, body) = front_matter(content);
+    let heading = body
+        .lines()
+        .find_map(|l| l.trim_start().strip_prefix("# "))
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
+    ProcessSkill {
+        name: name.to_string(),
+        title: heading
+            .map(str::to_string)
+            .or_else(|| fields.get("name").filter(|n| !n.is_empty()).cloned())
+            .unwrap_or_else(|| name.to_string()),
+        description: fields.get("description").cloned().unwrap_or_default(),
+    }
+}
+
+/// The process skills in the working directory, by name, each with its
+/// `SKILL.md` as `process-skills/<name>/SKILL.md`: real folders with a valid name
+/// and a regular file of at most [`MAX_FILE_BYTES`]; at most 100.
+pub fn list_skills(path: &Path) -> Vec<(String, String)> {
+    let folder = path.join(SKILLS_DIR);
+    if is_symlink(&folder) {
+        return Vec::new();
+    }
+    let Ok(read) = std::fs::read_dir(&folder) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = read
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| valid_skill_name(n))
+        .collect();
+    names.sort();
+    let mut out = Vec::new();
+    for name in names.into_iter().take(LISTED_SKILLS) {
+        let file = skill_path(&name);
+        let Ok(meta) = std::fs::symlink_metadata(folder.join(&name).join(SKILL_FILE)) else {
+            continue;
+        };
+        if !meta.is_file() || meta.len() as usize > MAX_FILE_BYTES {
+            continue;
+        }
+        if let Ok(Some(content)) = read_file(path, &file) {
+            out.push((file, content));
+        }
+    }
+    out
+}
+
+/// The process skills an assistant has, as their files say them.
+pub fn process_skills(path: &Path) -> Vec<ProcessSkill> {
+    list_skills(path)
+        .into_iter()
+        .filter_map(|(file, content)| skill_name_of(&file).map(|n| skill_meta(n, &content)))
+        .collect()
+}
+
+/// Delete process skill `name`: its whole folder. One already gone is no
+/// error.
+pub fn delete_skill(path: &Path, name: &str) -> std::io::Result<()> {
+    if !valid_skill_name(name) {
+        return Err(not_a_file(name));
+    }
+    let folder = path.join(SKILLS_DIR);
+    let own = folder.join(name);
+    if is_symlink(&folder) || is_symlink(&own) {
+        return Err(not_a_file(name));
+    }
+    match std::fs::remove_dir_all(&own) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// The process skills commit `rev` changed: each `process-skills/<name>/SKILL.md`
+/// added, changed or deleted, named as it was (`kind` is `skill`).
+pub async fn skill_changes(path: &Path, rev: &str) -> Vec<MemoryFile> {
+    let Ok(out) = git(
+        path,
+        &[
+            "diff-tree",
+            "-r",
+            "--root",
+            "--no-commit-id",
+            "--name-status",
+            "--no-renames",
+            "-z",
+            rev,
+            "--",
+            SKILLS_DIR,
+        ],
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+    let raw = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut parts = raw.split('\0').filter(|p| !p.is_empty());
+    let mut changed = Vec::new();
+    while let (Some(code), Some(name)) = (parts.next(), parts.next()) {
+        let Some(skill) = skill_name_of(name) else {
+            continue;
+        };
+        let status = match code.chars().next() {
+            Some('A') => "added",
+            Some('D') => "deleted",
+            _ => "modified",
+        };
+        changed.push((name.to_string(), skill.to_string(), status));
+    }
+    if changed.is_empty() {
+        return Vec::new();
+    }
+    let parent = parent_of(path, rev).await;
+    let mut files = Vec::with_capacity(changed.len());
+    for (file, skill, status) in changed {
+        let at = if status == "deleted" {
+            parent.as_deref()
+        } else {
+            Some(rev)
+        };
+        let content = match at {
+            Some(at) => show_at(path, at, &file).await.unwrap_or_default(),
+            None => String::new(),
+        };
+        files.push(MemoryFile {
+            path: file,
+            status: status.to_string(),
+            kind: "skill".into(),
+            title: skill_meta(&skill, &content).title,
+        });
+    }
+    files
+}
+
+/// Skill `name`'s file as commit `rev` has it.
+pub async fn skill_at(path: &Path, rev: &str, name: &str) -> Option<String> {
+    show_at(path, rev, &skill_path(name)).await
+}
+
+/// Where `agent_type` loads project skills from in this working directory.
+fn skill_root(path: &Path, agent_type: crate::models::AgentType) -> Option<PathBuf> {
+    crate::commands::acp::preferred_scope_skill_dir(
+        agent_type,
+        crate::acp::types::AgentSkillScope::Project,
+        Some(&path.to_string_lossy()),
+    )
+    .ok()
+}
+
+/// What decides whether an assistant's process skill loads (7.8): the owner
+/// turned it off or not, and the version of it that may load. A skill loads
+/// only as the content approved for it — taken in at once by codeg, or by
+/// the owner (their own edit, a draft installed, a change undone, turned
+/// on) — so a change kept from them, or one that could not be set aside,
+/// never loads before they say so: nothing has to be written to hold it out.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SkillSwitches {
+    pub off: std::collections::BTreeSet<String>,
+    /// Each skill's approved content, as [`content_hash`].
+    pub approved: std::collections::BTreeMap<String, String>,
+}
+
+impl SkillSwitches {
+    /// Whether skill `name`, its file now being `content`, loads.
+    pub fn loads(&self, name: &str, content: &str) -> bool {
+        !self.off.contains(name)
+            && self
+                .approved
+                .get(name)
+                .is_some_and(|h| *h == content_hash(content))
+    }
+}
+
+/// A file's content as an approval names it: its SHA-256, in hex.
+pub fn content_hash(content: &str) -> String {
+    let digest = Sha256::digest(content.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The process skills that load, by name: listed, on, as approved — at most
+/// [`MAX_SKILLS`].
+pub fn loadable_skills(
+    path: &Path,
+    switches: &SkillSwitches,
+) -> std::collections::BTreeSet<String> {
+    list_skills(path)
+        .into_iter()
+        .filter_map(|(file, content)| {
+            skill_name_of(&file)
+                .filter(|n| switches.loads(n, &content))
+                .map(str::to_string)
+        })
+        .take(MAX_SKILLS)
+        .collect()
+}
+
+/// Install the process skills for `agent_type`: each in the working
+/// directory's `process-skills/` that loads (`switches`) — but those past
+/// [`MAX_SKILLS`], is copied into the brain's project skill folder; every
+/// copy codeg made earlier that is not one of them now — turned off,
+/// deleted, or left in another agent's folder by a brain before this one —
+/// is removed. A folder of the same name codeg did not make is left alone.
+/// Returns the names installed. Best-effort.
+pub fn sync_process_skills(
+    path: &Path,
+    agent_type: crate::models::AgentType,
+    switches: &SkillSwitches,
+) -> Vec<String> {
+    let root = skill_root(path, agent_type);
+    let wanted: Vec<(String, String)> = list_skills(path)
+        .into_iter()
+        .filter_map(|(file, content)| skill_name_of(&file).map(|n| (n.to_string(), content)))
+        .filter(|(n, content)| switches.loads(n, content))
+        .take(MAX_SKILLS)
+        .collect();
+    let mut roots: Vec<PathBuf> = crate::models::agent::BUILTIN_AGENT_TYPES
+        .iter()
+        .filter_map(|agent| skill_root(path, *agent))
+        .collect();
+    roots.sort();
+    roots.dedup();
+    for dir in roots {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in read.flatten() {
+            let copy = e.path();
+            if !copy.join(INSTALLED_MARK).is_file() {
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().into_owned();
+            let keep = Some(&dir) == root.as_ref() && wanted.iter().any(|(n, _)| *n == name);
+            if !keep {
+                if let Err(err) = std::fs::remove_dir_all(&copy) {
+                    tracing::warn!("[personal_agent] process skill copy not removed: {err}");
+                }
+            }
+        }
+    }
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    let mut installed = Vec::new();
+    for (name, content) in wanted {
+        let copy = root.join(&name);
+        if copy.exists() && !copy.join(INSTALLED_MARK).is_file() {
+            continue;
+        }
+        let written = std::fs::create_dir_all(&copy)
+            .and_then(|_| {
+                let file = copy.join(SKILL_FILE);
+                if std::fs::read_to_string(&file).ok().as_deref() == Some(content.as_str()) {
+                    Ok(())
+                } else {
+                    std::fs::write(file, content.as_bytes())
+                }
+            })
+            .and_then(|_| std::fs::write(copy.join(INSTALLED_MARK), name.as_bytes()));
+        match written {
+            Ok(()) => installed.push(name),
+            Err(e) => tracing::warn!("[personal_agent] process skill install failed: {e}"),
+        }
+    }
+    installed
+}
+
+/// Whether process skill `name` is installed for `agent_type` now.
+pub fn skill_installed(path: &Path, agent_type: crate::models::AgentType, name: &str) -> bool {
+    skill_root(path, agent_type).is_some_and(|root| root.join(name).join(INSTALLED_MARK).is_file())
+}
+
+// ── the nightly tidy-up (7.7) ───────────────────────────────────────────────
+
+/// The log of `day` (`YYYY-MM-DD`), as the agent wrote it; empty when none.
+pub fn log_of(path: &Path, day: &str) -> String {
+    if day.len() != 10 || !day.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return String::new();
+    }
+    read_text(&path.join(LOG_DIR), &format!("{day}.md"))
+}
+
+/// The subjects of the commits made since `since`, newest first, at most
+/// 200 — what happened in the working directory meanwhile.
+pub async fn commits_since(path: &Path, since: chrono::DateTime<chrono::Utc>) -> Vec<String> {
+    if !path.join(".git").exists() {
+        return Vec::new();
+    }
+    let since = format!("--since={}", since.to_rfc3339());
+    match git(path, &["log", &since, "-n", "200", "--format=%s"]).await {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .filter(|l| !l.is_empty())
+            .collect(),
+        Err(_) => Vec::new(),
     }
 }
 
@@ -1833,7 +2410,8 @@ you need them. So it can grow without every session starting heavier.
   - `reference`: where something is — a link, a path, a dashboard.
 - `log/YYYY-MM-DD.md`: a short daily log when something notable happened.
 - `SOUL.md` and `AGENTS.md` are the owner's: your persona and your rules.
-  Change them only when the owner asks you to.
+  Change them only when the owner asks you to, or when a nightly tidy-up
+  asks you to tidy them.
 
 When something is worth keeping, write its file first, then its line in the
 index. Before adding an entry, look in the index for one that covers it and
@@ -1850,6 +2428,34 @@ on your own.
 Before codeg compacts your context it may first send a `<codeg-flush>` turn:
 append the day's points so far to that day's log, as it says, and reply with
 `[[silent]]` alone — nothing else in that turn.
+
+Each night, once the owner has stopped for the day, codeg may send a
+`<codeg-tidy>` turn: tidy your memory as it says — merge entries that say the
+same thing, date what may have gone stale, keep `USER.md` (when you keep
+one) current from the owner's own words, delete what turned out wrong, tidy
+`SOUL.md` and `AGENTS.md` where they are out of date — and reply with
+`[[silent]]` alone. codeg commits it as one change; the owner sees a card and
+can take it back as a whole.
+
+## Process skills
+
+When the owner wants something done the same way every time — they say "from
+now on, do it like this", or codeg sends a `<codeg-reflect>` turn about work
+that went well — write the way down as a process skill:
+`process-skills/<name>/SKILL.md` in your working directory, `<name>` in
+lowercase letters, digits and hyphens. Give it front matter with
+`name: <name>` and a `description:` of when to use it, in the owner's words
+for it; then the steps in order — what each does, who carries it out (a work
+assistant by name, or an executor config with its mode), what done looks
+like — and where to stop and wait for the owner (before anything that cannot
+be taken back: a tag, a publish, a merge). Change an existing one rather than
+writing a second.
+
+codeg installs your skills where your brain loads them and shows the owner a
+card for each new one and each change: they can look, turn it off, delete it
+or take the change back, and you are told when they do. When the owner asks
+for what one is for, follow it, and stop where it says to wait for them. One
+they turned off is not yours to follow until they turn it back on.
 
 ## Continuity
 
@@ -1941,7 +2547,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         let cards = CardUse::default();
-        sync_bot_skill(dir, AgentType::Cline, true, false, cards);
+        sync_bot_skill(
+            dir,
+            AgentType::Cline,
+            true,
+            false,
+            cards,
+            &Default::default(),
+        );
         let cline = skill_dir(dir, AgentType::Cline).unwrap();
         assert!(
             cline.ends_with(".agents/skills/codeg-personal-agent"),
@@ -1952,17 +2565,38 @@ mod tests {
         std::fs::create_dir_all(&owners).unwrap();
         std::fs::write(owners.join("SKILL.md"), "mine").unwrap();
 
-        sync_bot_skill(dir, AgentType::Codex, true, false, cards);
+        sync_bot_skill(
+            dir,
+            AgentType::Codex,
+            true,
+            false,
+            cards,
+            &Default::default(),
+        );
         let codex = skill_dir(dir, AgentType::Codex).unwrap();
         assert!(codex.join("SKILL.md").is_file());
         assert!(!cline.exists(), "Codex reads .agents/skills too");
         assert!(owners.join("SKILL.md").is_file(), "the owner's skill stays");
 
-        sync_bot_skill(dir, AgentType::ClaudeCode, true, false, cards);
+        sync_bot_skill(
+            dir,
+            AgentType::ClaudeCode,
+            true,
+            false,
+            cards,
+            &Default::default(),
+        );
         assert!(!codex.exists());
         assert_eq!(other_skill_copies(dir, None).len(), 1);
         // A brain codeg keeps no skill for: none is left behind either.
-        sync_bot_skill(dir, AgentType::Hermes, true, false, cards);
+        sync_bot_skill(
+            dir,
+            AgentType::Hermes,
+            true,
+            false,
+            cards,
+            &Default::default(),
+        );
         assert!(other_skill_copies(dir, None).is_empty());
         assert!(owners.join("SKILL.md").is_file());
     }
@@ -2551,6 +3185,292 @@ mod tests {
         assert_eq!(
             undo_lines(now, at, before, |l| l != "- x"),
             "# M\n- a\n- b\n- x\n- c\n"
+        );
+    }
+
+    // ── process skills (7.8) ────────────────────────────────────────────
+
+    #[test]
+    fn a_process_skill_is_named_as_agents_name_skills() {
+        for ok in ["release", "fix-ci", "a1", "x"] {
+            assert!(valid_skill_name(ok), "{ok}");
+        }
+        for bad in [
+            "", "Release", "fix_ci", "-a", "a-", "a--b", "../x", "a b", SKILL_NAME,
+        ] {
+            assert!(!valid_skill_name(bad), "{bad}");
+        }
+        assert!(!valid_skill_name(&"a".repeat(65)));
+        assert_eq!(
+            skill_name_of("process-skills/release/SKILL.md"),
+            Some("release")
+        );
+        assert_eq!(skill_name_of("process-skills/release/notes.md"), None);
+        assert_eq!(skill_name_of("process-skills/Release/SKILL.md"), None);
+        assert_eq!(skill_name_of("memory/release.md"), None);
+        assert_eq!(skill_path("release"), "process-skills/release/SKILL.md");
+    }
+
+    #[test]
+    fn a_skill_says_what_it_is_called_and_when_it_is_for() {
+        let s = skill_meta(
+            "release",
+            "---\nname: release\ndescription: \"when the owner says release\"\n---\n\n# Cut a release\n\n1. Notes\n",
+        );
+        assert_eq!(s.title, "Cut a release");
+        assert_eq!(s.description, "when the owner says release");
+        // No heading: its name; nothing: its folder's.
+        assert_eq!(
+            skill_meta("x", "---\nname: ship-it\n---\nsteps").title,
+            "ship-it"
+        );
+        assert_eq!(skill_meta("x", "steps").title, "x");
+        // A front matter never closed is none: its `name` is not read.
+        assert_eq!(skill_meta("x", "---\nname: y\nsteps").title, "x");
+        assert_eq!(skill_meta("x", "---\nname: y\n# T").title, "T");
+    }
+
+    #[tokio::test]
+    async fn the_skills_are_installed_for_the_brain_and_only_codegs_copies_go() {
+        use crate::models::AgentType;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("pa");
+        ensure_initialized(&dir, AppLocale::En).await.unwrap();
+        write_file(&dir, "process-skills/release/SKILL.md", "# Release\n").unwrap();
+        write_file(&dir, "process-skills/triage/SKILL.md", "# Triage\n").unwrap();
+        // Not a skill: a bad name, a folder without its file.
+        std::fs::create_dir_all(dir.join("process-skills/Bad")).unwrap();
+        std::fs::write(dir.join("process-skills/Bad/SKILL.md"), "x").unwrap();
+        std::fs::create_dir_all(dir.join("process-skills/empty")).unwrap();
+        assert_eq!(
+            list_skills(&dir)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect::<Vec<_>>(),
+            vec![
+                "process-skills/release/SKILL.md",
+                "process-skills/triage/SKILL.md"
+            ]
+        );
+        let approve = |pairs: &[(&str, &str)]| SkillSwitches {
+            off: Default::default(),
+            approved: pairs
+                .iter()
+                .map(|(n, c)| (n.to_string(), content_hash(c)))
+                .collect(),
+        };
+        // Nothing approved: nothing loads.
+        assert!(
+            sync_process_skills(&dir, AgentType::ClaudeCode, &SkillSwitches::default()).is_empty()
+        );
+        let both = approve(&[("release", "# Release\n"), ("triage", "# Triage\n")]);
+        let installed = sync_process_skills(&dir, AgentType::ClaudeCode, &both);
+        assert_eq!(installed, vec!["release", "triage"]);
+        assert_eq!(loadable_skills(&dir, &both).len(), 2);
+        let claude = dir.join(".claude/skills");
+        assert_eq!(
+            read_text(&claude.join("release"), SKILL_FILE),
+            "# Release\n"
+        );
+        assert!(skill_installed(&dir, AgentType::ClaudeCode, "triage"));
+        // The owner's own folder of the same name stays theirs.
+        std::fs::create_dir_all(claude.join("mine")).unwrap();
+        std::fs::write(claude.join("mine/SKILL.md"), "mine").unwrap();
+        write_file(&dir, "process-skills/mine/SKILL.md", "# Not theirs\n").unwrap();
+        // One turned off: its copy goes; the file stays.
+        let mut off = approve(&[
+            ("release", "# Release\n"),
+            ("triage", "# Triage\n"),
+            ("mine", "# Not theirs\n"),
+        ]);
+        off.off.insert("triage".into());
+        let installed = sync_process_skills(&dir, AgentType::ClaudeCode, &off);
+        assert_eq!(installed, vec!["release"]);
+        assert!(!claude.join("triage").exists());
+        assert!(dir.join("process-skills/triage/SKILL.md").is_file());
+        assert_eq!(
+            std::fs::read_to_string(claude.join("mine/SKILL.md")).unwrap(),
+            "mine"
+        );
+        // A change not approved: its copy goes too, until it is.
+        write_file(&dir, "process-skills/release/SKILL.md", "# Release v2\n").unwrap();
+        assert!(sync_process_skills(&dir, AgentType::ClaudeCode, &off).is_empty());
+        assert!(!claude.join("release").exists());
+        let v2 = approve(&[("release", "# Release v2\n")]);
+        sync_process_skills(&dir, AgentType::ClaudeCode, &v2);
+        assert_eq!(
+            read_text(&claude.join("release"), SKILL_FILE),
+            "# Release v2\n"
+        );
+        // A deleted one goes.
+        delete_skill(&dir, "triage").unwrap();
+        assert!(!dir.join("process-skills/triage").exists());
+        // A new brain: its own folder, none left in the old one's.
+        sync_process_skills(&dir, AgentType::Codex, &v2);
+        assert!(!claude.join("release").exists());
+        assert!(skill_installed(&dir, AgentType::Codex, "release"));
+        assert_eq!(
+            std::fs::read_to_string(claude.join("mine/SKILL.md")).unwrap(),
+            "mine"
+        );
+        // And the built-in skill is no process skill of theirs.
+        assert!(delete_skill(&dir, SKILL_NAME).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_draft_is_applied_whole_or_not_at_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("pa");
+        ensure_initialized(&dir, AppLocale::En).await.unwrap();
+        write_file(&dir, "memory/a.md", "A\n").unwrap();
+        write_file(&dir, "memory/b.md", "B\n").unwrap();
+        commit(&dir, "base").await.unwrap();
+        write_file(&dir, "memory/a.md", "A2\n").unwrap();
+        write_file(&dir, "memory/b.md", "B2\n").unwrap();
+        let rev = commit(&dir, "change").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        // Set aside, then b written otherwise meanwhile.
+        let aside = undo_memory(&dir, &rev, &files, "aside").await.unwrap();
+        let aside = aside.commit.unwrap();
+        write_file(&dir, "memory/b.md", "B3\n").unwrap();
+        commit(&dir, "owner").await.unwrap();
+        let back = memory_changes(&dir, &aside).await;
+        let whole = undo_whole(&dir, &aside, &back, "apply").await.unwrap();
+        assert_eq!(whole.kept, vec!["memory/b.md".to_string()]);
+        assert!(whole.back.is_empty() && whole.commit.is_none());
+        assert_eq!(
+            read_text(&dir, "memory/a.md"),
+            "A\n",
+            "nothing of it written"
+        );
+        assert_eq!(read_text(&dir, "memory/b.md"), "B3\n");
+        // Undone in part, the ordinary way: a goes, b stays.
+        let part = undo_memory(&dir, &aside, &back, "apply").await.unwrap();
+        assert_eq!(part.back, vec!["memory/a.md".to_string()]);
+        assert_eq!(read_text(&dir, "memory/a.md"), "A2\n");
+    }
+
+    #[tokio::test]
+    async fn a_turns_commit_sets_aside_what_the_owner_sees_first_in_the_same_hold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("pa");
+        ensure_initialized(&dir, AppLocale::En).await.unwrap();
+        let rules = read_text(&dir, RULES_FILE);
+        write_file(&dir, RULES_FILE, &format!("{rules}- New rule.\n")).unwrap();
+        write_file(&dir, "process-skills/release/SKILL.md", "# Release\n").unwrap();
+        std::fs::write(dir.join("log").join("2026-11-14.md"), "- a day\n").unwrap();
+        // Only the skill is to be seen first.
+        let done = commit_turn(&dir, "turn", |f| f.kind == "skill", "aside")
+            .await
+            .unwrap();
+        assert_eq!(
+            done.aside_paths,
+            vec!["process-skills/release/SKILL.md".to_string()]
+        );
+        let aside = done.aside.clone().expect("set aside");
+        assert!(
+            !dir.join("process-skills/release").exists(),
+            "back as it was"
+        );
+        assert!(
+            read_text(&dir, RULES_FILE).ends_with("- New rule.\n"),
+            "the rest stays"
+        );
+        // The turn's commit has it all; the next takes the skill back out.
+        assert_eq!(skill_changes(&dir, &done.rev).await.len(), 1);
+        let back = skill_changes(&dir, &aside).await;
+        assert_eq!((back.len(), back[0].status.as_str()), (1, "deleted"));
+        // Nothing to see first: no second commit.
+        write_file(&dir, RULES_FILE, &rules).unwrap();
+        let plain = commit_turn(&dir, "turn 2", |_| false, "aside")
+            .await
+            .unwrap();
+        assert!(plain.aside.is_none() && plain.aside_paths.is_empty());
+        // Nothing changed: no commit at all.
+        assert!(commit_turn(&dir, "turn 3", |_| true, "aside")
+            .await
+            .is_none());
+    }
+
+    /// Line endings do not make a draft fail to be set aside: not the
+    /// owner's `core.autocrlf`, nor a repository's own `text` attribute.
+    #[tokio::test]
+    async fn a_draft_with_crlf_line_endings_is_set_aside_all_the_same() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("pa");
+        ensure_initialized(&dir, AppLocale::En).await.unwrap();
+        // The owner's git converts line endings.
+        git(&dir, &["config", "core.autocrlf", "true"])
+            .await
+            .unwrap();
+        write_file(
+            &dir,
+            "memory/crlf.md",
+            "---\r\nname: crlf\r\n---\r\nWindows.\r\n",
+        )
+        .unwrap();
+        write_file(
+            &dir,
+            "process-skills/ship/SKILL.md",
+            "# Ship\r\n\r\n1. Go.\r\n",
+        )
+        .unwrap();
+        let done = commit_turn(&dir, "turn", |_| true, "aside").await.unwrap();
+        assert!(done.not_aside.is_empty(), "{:?}", done.not_aside_why);
+        assert!(done.aside.is_some());
+        assert!(!dir.join("memory/crlf.md").exists());
+        assert!(!dir.join("process-skills/ship").exists());
+        // A repository that normalizes text itself.
+        std::fs::write(dir.join(".gitattributes"), "* text=auto\n").unwrap();
+        commit(&dir, "attributes").await.unwrap();
+        write_file(&dir, "memory/crlf.md", "Again.\r\n").unwrap();
+        let done = commit_turn(&dir, "turn 2", |f| f.kind == "entry", "aside")
+            .await
+            .unwrap();
+        assert!(done.not_aside.is_empty(), "{:?}", done.not_aside_why);
+        assert_eq!(done.aside_paths, vec!["memory/crlf.md".to_string()]);
+        assert!(!dir.join("memory/crlf.md").exists());
+    }
+
+    /// A draft that cannot be set aside — here a filter that rewrites what
+    /// is committed — still does not load: nothing approved it, and nothing
+    /// has to be written to keep it out; approved, it loads.
+    #[tokio::test]
+    async fn a_skill_that_cannot_be_set_aside_does_not_load_until_approved() {
+        use crate::models::AgentType;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("pa");
+        ensure_initialized(&dir, AppLocale::En).await.unwrap();
+        git(&dir, &["config", "filter.up.clean", "tr a-z A-Z"])
+            .await
+            .unwrap();
+        std::fs::write(dir.join(".gitattributes"), "process-skills/** filter=up\n").unwrap();
+        commit(&dir, "attributes").await.unwrap();
+        write_file(&dir, "process-skills/ship/SKILL.md", "# ship\n").unwrap();
+        let done = commit_turn(&dir, "turn", |f| f.kind == "skill", "aside")
+            .await
+            .unwrap();
+        assert!(done.aside.is_none());
+        assert_eq!(
+            done.not_aside,
+            vec!["process-skills/ship/SKILL.md".to_string()]
+        );
+        assert!(done.not_aside_why.is_some());
+        assert!(
+            dir.join("process-skills/ship/SKILL.md").is_file(),
+            "still there"
+        );
+        let none = SkillSwitches::default();
+        assert!(sync_process_skills(&dir, AgentType::ClaudeCode, &none).is_empty());
+        assert!(!skill_installed(&dir, AgentType::ClaudeCode, "ship"));
+        assert!(loadable_skills(&dir, &none).is_empty());
+        let approved = SkillSwitches {
+            off: Default::default(),
+            approved: [("ship".to_string(), content_hash("# ship\n"))].into(),
+        };
+        assert_eq!(
+            sync_process_skills(&dir, AgentType::ClaudeCode, &approved),
+            vec!["ship"]
         );
     }
 }

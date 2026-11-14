@@ -94,9 +94,49 @@ impl Tally {
         }
         format!("Memory updated — {}", parts.join(" · "))
     }
+
+    /// What a change came to, counted: "1 new, 2 removed · persona".
+    pub fn short(&self) -> String {
+        let counts: Vec<String> = [
+            ("new", &self.added),
+            ("updated", &self.updated),
+            ("removed", &self.removed),
+        ]
+        .into_iter()
+        .filter(|(_, list)| !list.is_empty())
+        .map(|(word, list)| format!("{} {word}", list.len()))
+        .collect();
+        let mut parts = Vec::new();
+        if !counts.is_empty() {
+            parts.push(counts.join(", "));
+        }
+        for (on, word) in [
+            (self.user, "the owner's profile"),
+            (self.soul, "persona"),
+            (self.rules, "rules"),
+        ] {
+            if on {
+                parts.push(word.to_string());
+            }
+        }
+        if parts.is_empty() {
+            parts.push("the memory index".into());
+        }
+        parts.join(" · ")
+    }
+
+    /// The titles a notification names: the entries, by title.
+    pub fn titles(&self) -> Vec<String> {
+        self.added
+            .iter()
+            .chain(&self.updated)
+            .chain(&self.removed)
+            .cloned()
+            .collect()
+    }
 }
 
-fn notice_level(l: Level) -> NoticeLevel {
+pub(super) fn notice_level(l: Level) -> NoticeLevel {
     match l {
         Level::Urgent => NoticeLevel::Urgent,
         Level::Normal => NoticeLevel::Normal,
@@ -287,8 +327,9 @@ impl PersonalAgentEngine {
         Ok(card)
     }
 
-    /// Write `extra` onto a memory card's row.
-    async fn memory_row(
+    /// Write `extra` onto a memory card's row (a tidy-up's and a skill's
+    /// too).
+    pub(super) async fn memory_row(
         &self,
         notice: &notice_entity::Model,
         extra: Value,

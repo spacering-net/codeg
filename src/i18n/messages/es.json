@@ -8066,7 +8066,8 @@
         "persona": "Personalidad",
         "rules": "Reglas",
         "owner": "Sobre ti",
-        "memory": "Memoria"
+        "memory": "Memoria",
+        "skills": "Habilidades de proceso"
       },
       "byOwner": "Lo mantienes tú",
       "byAgent": "Lo mantiene el agente",
@@ -8689,7 +8690,7 @@
         },
         "level_memory": {
           "title": "Cambios en la memoria",
-          "hint": "Un asistente cambió lo que recuerda, su personalidad o sus reglas."
+          "hint": "Un asistente cambió lo que recuerda, su persona o sus reglas; también su orden nocturno y sus habilidades de proceso."
         },
         "plans": {
           "title": "Planes",
@@ -8710,6 +8711,13 @@
           "hint": "Otra configuración de ejecución saca un tipo de trabajo a la primera claramente más a menudo que su primera opción en el reparto (20 puntos o más, con al menos 5 trabajos terminados en cada lado).",
           "on": "Activado",
           "off": "Desactivado"
+        },
+        "tidy": {
+          "title": "Orden de memoria y habilidades de proceso",
+          "hint": "Cada noche, cuando terminas, los asistentes ordenan su memoria, su persona y sus reglas; cuando una cadena de trabajo sale bien, la forma de hacerlo queda escrita como habilidad.",
+          "auto": "Al momento, con deshacer en la tarjeta",
+          "draft": "Muéstramelo antes (tarjeta en borrador, se aplica cuando lo diga)",
+          "off": "No"
         }
       },
       "workdir": {
@@ -8895,7 +8903,16 @@
         "byBot": "Por asistente y modo",
         "someone": "Trabajo anterior",
         "unjudged": "{count} encargados, ninguno terminado aún"
-      }
+      },
+      "processSkillHint": "Una forma de hacer algo que el asistente dejó por escrito: cuando lo pidas, la sigue. Lo que cambies aquí entra en vigor al guardar; desactivada, ya no se carga.",
+      "skillOff": "Desactivada",
+      "skillTurnOn": "Activar",
+      "skillTurnOff": "Desactivar",
+      "skillTurnedOn": "{name} activada",
+      "skillTurnedOff": "{name} desactivada",
+      "deleteSkill": "Eliminar habilidad",
+      "confirmDeleteSkillHint": "¿Eliminar esta habilidad de proceso? Su carpeta se quita del directorio de trabajo.",
+      "skillDeleted": "{name} eliminada"
     },
     "statusWord": {
       "idle": "Inactivo",
@@ -9792,7 +9809,27 @@
         "silent": "Rutina: sin cambios"
       },
       "preparingBrief": "Preparando tu resumen de la mañana…",
-      "preparingWrap": "Preparando el cierre del día…"
+      "preparingWrap": "Preparando el cierre del día…",
+      "tidy": {
+        "acted": "Memoria ordenada",
+        "draft": "Orden pendiente de ti",
+        "applied": "Orden aplicado",
+        "undone": "Orden deshecho",
+        "discarded": "Orden descartado",
+        "stale": "Borrador de orden desactualizado"
+      },
+      "skill": {
+        "acted": "Habilidad de proceso",
+        "draft": "Habilidad de proceso pendiente de ti",
+        "applied": "Habilidad de proceso instalada",
+        "undone": "Cambio de habilidad deshecho",
+        "discarded": "Habilidad de proceso no instalada",
+        "stale": "Borrador de habilidad desactualizado",
+        "deleted": "Habilidad de proceso eliminada"
+      },
+      "apply": "Aplicar",
+      "install": "Instalar",
+      "notThis": "Este no"
     },
     "meet": {
       "name": {
@@ -10589,6 +10626,75 @@
         "depends_on": "de qué depende",
         "kind": "tipo de trabajo"
       }
+    },
+    "tidy": {
+      "title": {
+        "acted": "Memoria ordenada ({day})",
+        "draft": "Orden del {day}, en borrador",
+        "applied": "Orden del {day}, aplicado",
+        "undone": "Orden del {day}, deshecho",
+        "discarded": "Orden del {day}, descartado",
+        "stale": "Orden del {day}, desactualizado"
+      },
+      "note": {
+        "draft": "Guardado como borrador: tu memoria sigue igual hasta que lo apliques.",
+        "applied": "Aplicado: la memoria quedó como la dejó este orden.",
+        "discarded": "Descartado: la memoria sigue como está.",
+        "stale": "La memoria cambió después y este borrador ya no encaja; la próxima noche se ordena de nuevo.",
+        "notAside": "No se pudo guardar como borrador ({why}): ya está en vigor; Deshacer todo lo revierte."
+      },
+      "undoAll": "Deshacer todo",
+      "apply": "Aplicar",
+      "dismiss": "Este no",
+      "lines": "Ordenado anoche",
+      "view": "Ver",
+      "line": {
+        "done": "{name} ordenó su memoria: {text}",
+        "draft": "{name} ordenó su memoria, en borrador: {text}"
+      },
+      "state": {
+        "applied": "Aplicado",
+        "undone": "Deshecho",
+        "discarded": "Descartado",
+        "stale": "Desactualizado: se ordena de nuevo esta noche"
+      }
+    },
+    "skill": {
+      "heading": {
+        "added": "Nueva habilidad de proceso",
+        "modified": "Habilidad de proceso cambiada",
+        "deleted": "Habilidad de proceso eliminada",
+        "draft": "Habilidad de proceso en borrador"
+      },
+      "line": {
+        "learned": "Convertí «{title}» en una habilidad de proceso: la próxima vez que lo pidas, la sigo.",
+        "changed": "Cambié la habilidad de proceso «{title}»; ya está en vigor.",
+        "removed": "Eliminé la habilidad de proceso «{title}».",
+        "draft": "Escribí la habilidad de proceso «{title}»; entra en vigor cuando la instales."
+      },
+      "when": "Cuándo: {text}",
+      "note": {
+        "off": "Desactivada: ya no se carga.",
+        "draft": "Aún no cambió nada.",
+        "applied": "Instalada.",
+        "undone": "Cambio deshecho.",
+        "discarded": "No se instaló; sigue como estaba.",
+        "stale": "Cambió de nuevo después; este borrador ya no encaja.",
+        "deleted": "Eliminada.",
+        "notAside": "No se pudo guardar como borrador ({why}): queda desactivada; Activar la carga.",
+        "notAsideOn": "No se pudo guardar como borrador ({why}) ni desactivar: ya está en vigor; desactívala o deshazla."
+      },
+      "show": "Ver contenido",
+      "hide": "Ocultar",
+      "view": "Ver",
+      "disable": "Desactivar",
+      "enable": "Activar",
+      "undo": "Deshacer",
+      "delete": "Eliminar",
+      "confirmDelete": "Eliminarla",
+      "cancel": "Cancelar",
+      "install": "Instalar",
+      "dismiss": "Esta no"
     }
   }
 }

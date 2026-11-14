@@ -68,6 +68,17 @@ const GROUP_TONE: Record<GroupKey, string> = {
 /** Where a row opens: its card, a session, a task, a piece of work. */
 type Opener = (row: TodayRow) => (() => void) | null
 
+/** How a tidy-up's and a process skill's rows can stand (7.7, 7.8). */
+const TIDY_ROW_STATES = new Set([
+  "acted",
+  "draft",
+  "applied",
+  "undone",
+  "discarded",
+  "stale",
+])
+const SKILL_ROW_STATES = new Set([...TIDY_ROW_STATES, "deleted"])
+
 /** The way each row opens, from the page around it. */
 function useOpener(
   today: Pick<PersonalAgentToday, "dispatches">,
@@ -166,6 +177,15 @@ function useRowWords() {
         return row.state === "undone"
           ? t("kind.memoryUndone")
           : t("kind.memory")
+      // Its nightly tidy-up, a process skill it wrote (7.7, 7.8).
+      case "tidy":
+        return t(
+          `tidy.${TIDY_ROW_STATES.has(row.state ?? "") ? row.state : "acted"}` as "tidy.acted"
+        )
+      case "skill":
+        return t(
+          `skill.${SKILL_ROW_STATES.has(row.state ?? "") ? row.state : "acted"}` as "skill.acted"
+        )
       case "pr":
         return t(`pr.${row.state ?? "open"}` as "pr.open")
       case "item": {
@@ -497,6 +517,42 @@ function UndoAction({ row }: { row: TodayRow }) {
   )
 }
 
+/** A tidy-up or a process skill kept as a draft (7.7, 7.8): taken in, or
+ *  let go. */
+function DraftActions({ row }: { row: TodayRow }) {
+  const t = useTranslations("PersonalAgent.today")
+  const [acting, setActing] = useState(false)
+  const act = (action: "apply" | "dismiss") => {
+    if (row.notice_id == null) return
+    setActing(true)
+    personalAgentNoticeAct(row.notice_id, action, row.bot_id)
+      .then(() => refreshToday())
+      .catch((e) => toast.error(toErrorMessage(e)))
+      .finally(() => setActing(false))
+  }
+  return (
+    <>
+      <Button
+        size="xs"
+        disabled={acting || row.notice_id == null}
+        onClick={() => act("apply")}
+        data-pa-today-act="apply"
+      >
+        {row.kind === "skill" ? t("install") : t("apply")}
+      </Button>
+      <Button
+        size="xs"
+        variant="ghost"
+        disabled={acting || row.notice_id == null}
+        onClick={() => act("dismiss")}
+        data-pa-today-act="dismiss"
+      >
+        {t("notThis")}
+      </Button>
+    </>
+  )
+}
+
 function TodayRowCard({
   row,
   now,
@@ -526,7 +582,13 @@ function TodayRowCard({
   const actions = readOnly ? null : row.kind === "reminder" ||
     row.kind === "item" ? (
     <MatterActions row={row} />
-  ) : (row.kind === "changed" || row.kind === "memory") && row.undo ? (
+  ) : (row.kind === "tidy" || row.kind === "skill") && row.state === "draft" ? (
+    <DraftActions row={row} />
+  ) : (row.kind === "changed" ||
+      row.kind === "memory" ||
+      row.kind === "tidy" ||
+      row.kind === "skill") &&
+    row.undo ? (
     <UndoAction row={row} />
   ) : null
   const body = (

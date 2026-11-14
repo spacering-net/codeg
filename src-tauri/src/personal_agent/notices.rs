@@ -608,6 +608,10 @@ impl PersonalAgentEngine {
             // A plan (7.6): start, stop, cancel, a step confirmed or
             // canceled, a change taken back.
             NoticeKind::Plan => return Box::pin(self.act_on_plan(&notice, action)).await,
+            // An assistant's nightly tidy-up (7.7), and its process skills
+            // (7.8).
+            NoticeKind::Tidy => return Box::pin(self.act_on_tidy(&notice, action)).await,
+            NoticeKind::Skill => return Box::pin(self.act_on_skill(&notice, action)).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.

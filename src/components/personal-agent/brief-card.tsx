@@ -7,7 +7,8 @@
  * the assistants watch, the day's schedule, a line for each work assistant,
  * loose ends, the owner's yesterday — each row opening what it is about, as
  * "today"'s rows do — and, once a week, the week's figures (6.6). Nothing is
- * settled from it.
+ * settled from it but last night's tidy-ups, a line each with its own
+ * buttons (7.7).
  */
 
 import { useTranslations } from "next-intl"
@@ -28,6 +29,7 @@ import { cn } from "@/lib/utils"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { AGENT_SURFACE } from "./shared"
+import { TidyLines, tidyRowsOf } from "./tidy-lines"
 import { BriefRows } from "./today-section"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
@@ -375,6 +377,7 @@ export function BriefCard({ item }: { item: NoticeItem }) {
   const y = m?.yesterday ?? null
   const week = m?.week ?? null
   const messages = Array.isArray(m?.tonight_messages) ? m.tonight_messages : []
+  const tidied = tidyRowsOf(m?.tidied)
   const parts: { name: string; rows: TodayRow[] }[] = [
     { name: "needs", rows: rowsOf(m?.needs) },
     { name: "tonight", rows: rowsOf(m?.tonight) },
@@ -387,6 +390,7 @@ export function BriefCard({ item }: { item: NoticeItem }) {
     messages.length === 0 &&
     bots.length === 0 &&
     loose.length === 0 &&
+    tidied.length === 0 &&
     week == null
   return (
     <MessageRow
@@ -424,6 +428,7 @@ export function BriefCard({ item }: { item: NoticeItem }) {
             messages={p.name === "tonight" ? messages : undefined}
           />
         ))}
+        <TidyLines rows={tidied} />
         {bots.length > 0 ? (
           <Part name="bots" title={t("part.bots")}>
             <ul className="flex flex-col gap-0.5">

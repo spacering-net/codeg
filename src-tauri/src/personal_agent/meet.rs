@@ -527,16 +527,19 @@ impl PersonalAgentEngine {
         if let Some(c) = call.as_deref() {
             let locale = self.owner_locale(&primary, None).await;
             let dir = self.workdir_of(&primary);
-            let text = workdir::read_text(&dir, workdir::USER_FILE);
-            let updated = with_call(&text, words(locale).call_line, c);
-            match workdir::write_file(&dir, workdir::USER_FILE, &updated) {
-                Ok(()) => {
-                    tokio::spawn(async move {
-                        workdir::commit_only(&dir, "owner: what to call them", &[workdir::USER_FILE])
-                            .await;
-                    });
-                }
-                Err(e) => tracing::warn!("[personal-agent] USER.md was not written: {e}"),
+            let line = words(locale).call_line;
+            // Read and written under the directory's lock, with every
+            // other write of it.
+            let written = workdir::write_for_owner(
+                &dir,
+                &[(workdir::USER_FILE, &|now| {
+                    Some(with_call(now.unwrap_or_default(), line, c))
+                })],
+                "owner: what to call them",
+            )
+            .await;
+            if let Err(e) = written {
+                tracing::warn!("[personal-agent] USER.md was not written: {e}");
             }
         }
         if let Some(map) = data.as_object_mut() {

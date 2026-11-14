@@ -3152,6 +3152,11 @@ export type NoticeAction =
   | "cancel"
   | `confirm:${number}`
   | `cancel_step:${number}`
+  // A tidy-up's or a process skill's card (7.7, 7.8): a draft applied (or
+  // let go with "dismiss"), a skill turned off or on (and "delete").
+  | "apply"
+  | "disable"
+  | "enable"
 
 export async function personalAgentAnswerQuestion(
   questionId: string,
@@ -3243,13 +3248,27 @@ export async function personalAgentFileSave(
 }
 
 /** A memory entry (`memory/<name>.md`), with the lines of the index that
- *  link to it. */
+ *  link to it; or a process skill (`process-skills/<name>/SKILL.md`), its folder. */
 export async function personalAgentFileDelete(
   name: string,
   bot?: number | null
 ): Promise<void> {
   return getTransport().call("personal_agent_file_delete", {
     name,
+    botId: bot ?? null,
+  })
+}
+
+/** Turn one of an assistant's process skills (`name`, its folder) on or
+ *  off (7.8): off, it is kept and not loaded. */
+export async function personalAgentSkillSwitch(
+  name: string,
+  on: boolean,
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_skill_switch", {
+    name,
+    on,
     botId: bot ?? null,
   })
 }

@@ -679,6 +679,9 @@ pub struct PersonalAgentFile {
     pub name: String,
     pub content: String,
     pub exists: bool,
+    /// A process skill the owner turned off (7.8): kept, not loaded.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub off: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

@@ -250,6 +250,23 @@ pub enum What {
         rules: bool,
         user: bool,
     },
+    /// An assistant's nightly tidy-up of its memory (7.7): the entries it
+    /// touched, and whether its persona, rules or the owner's profile were
+    /// among them — and whether it is a draft for the owner.
+    Tidy {
+        titles: Vec<String>,
+        soul: bool,
+        rules: bool,
+        user: bool,
+        draft: bool,
+    },
+    /// A process skill an assistant wrote, changed or removed (7.8): its
+    /// title, `added` / `modified` / `deleted`, and whether it is a draft.
+    Skill {
+        title: String,
+        status: String,
+        draft: bool,
+    },
     /// A plan carried out to its end (7.6): its title.
     PlanDone {
         text: String,
@@ -555,6 +572,12 @@ struct Words {
     memory_soul: &'static str,
     memory_rules: &'static str,
     memory_user: &'static str,
+    tidied: &'static str,
+    tidied_draft: &'static str,
+    skill_added: &'static str,
+    skill_changed: &'static str,
+    skill_removed: &'static str,
+    skill_draft: &'static str,
     why_memory: &'static str,
     plan_done: &'static str,
     plan_stuck: &'static str,
@@ -636,6 +659,12 @@ const EN: Words = Words {
     memory_soul: "persona",
     memory_rules: "rules",
     memory_user: "your profile",
+    tidied: "Tidied its memory: {text}",
+    tidied_draft: "Tidied its memory, as a draft for you: {text}",
+    skill_added: "Wrote down a process: {text}",
+    skill_changed: "Changed its process skill: {text}",
+    skill_removed: "Removed its process skill: {text}",
+    skill_draft: "A process skill for you to look at: {text}",
     why_memory: "It changed what it remembers; the card can undo it.",
     plan_done: "Plan done: {text}",
     plan_stuck: "Plan stuck: {text}",
@@ -726,6 +755,12 @@ const ZH_CN: Words = Words {
     memory_soul: "人设",
     memory_rules: "规则",
     memory_user: "你的资料",
+    tidied: "整理了记忆：{text}",
+    tidied_draft: "整理了记忆，草稿等你看：{text}",
+    skill_added: "整理成了流程技能：{text}",
+    skill_changed: "改了流程技能：{text}",
+    skill_removed: "删掉了流程技能：{text}",
+    skill_draft: "有个流程技能等你看：{text}",
     why_memory: "它改了记忆，卡片上可以撤销。",
     plan_done: "计划完成：{text}",
     plan_stuck: "计划卡住了：{text}",
@@ -816,6 +851,12 @@ const ZH_TW: Words = Words {
     memory_soul: "人設",
     memory_rules: "規則",
     memory_user: "你的資料",
+    tidied: "整理了記憶：{text}",
+    tidied_draft: "整理了記憶，草稿等你看：{text}",
+    skill_added: "整理成了流程技能：{text}",
+    skill_changed: "改了流程技能：{text}",
+    skill_removed: "刪掉了流程技能：{text}",
+    skill_draft: "有個流程技能等你看：{text}",
     why_memory: "它改了記憶，卡片上可以撤銷。",
     plan_done: "計畫完成：{text}",
     plan_stuck: "計畫卡住了：{text}",
@@ -897,6 +938,12 @@ const JA: Words = Words {
     memory_soul: "人格設定",
     memory_rules: "ルール",
     memory_user: "あなたのプロフィール",
+    tidied: "記憶を整理しました：{text}",
+    tidied_draft: "記憶を整理しました（下書きです）：{text}",
+    skill_added: "手順をスキルにまとめました：{text}",
+    skill_changed: "手順スキルを変更しました：{text}",
+    skill_removed: "手順スキルを削除しました：{text}",
+    skill_draft: "確認待ちの手順スキル：{text}",
     why_memory: "記憶を更新しました。カードから元に戻せます。",
     plan_done: "計画が完了しました：{text}",
     plan_stuck: "計画が止まっています：{text}",
@@ -978,6 +1025,12 @@ const KO: Words = Words {
     memory_soul: "페르소나",
     memory_rules: "규칙",
     memory_user: "당신의 프로필",
+    tidied: "기억을 정리했어요: {text}",
+    tidied_draft: "기억을 정리했어요(초안이에요): {text}",
+    skill_added: "절차를 스킬로 정리했어요: {text}",
+    skill_changed: "절차 스킬을 바꿨어요: {text}",
+    skill_removed: "절차 스킬을 지웠어요: {text}",
+    skill_draft: "확인할 절차 스킬이 있어요: {text}",
     why_memory: "기억을 바꿨어요. 카드에서 되돌릴 수 있어요.",
     plan_done: "계획 완료: {text}",
     plan_stuck: "계획이 막혔어요: {text}",
@@ -1059,6 +1112,12 @@ const ES: Words = Words {
     memory_soul: "personalidad",
     memory_rules: "reglas",
     memory_user: "tu perfil",
+    tidied: "Ordenó su memoria: {text}",
+    tidied_draft: "Ordenó su memoria, como borrador para ti: {text}",
+    skill_added: "Anotó un proceso: {text}",
+    skill_changed: "Cambió su habilidad de proceso: {text}",
+    skill_removed: "Quitó su habilidad de proceso: {text}",
+    skill_draft: "Una habilidad de proceso para que la revises: {text}",
     why_memory: "Cambió lo que recuerda; la tarjeta permite deshacerlo.",
     plan_done: "Plan terminado: {text}",
     plan_stuck: "Plan atascado: {text}",
@@ -1140,6 +1199,12 @@ const DE: Words = Words {
     memory_soul: "Persona",
     memory_rules: "Regeln",
     memory_user: "dein Profil",
+    tidied: "Hat sein Gedächtnis aufgeräumt: {text}",
+    tidied_draft: "Hat sein Gedächtnis aufgeräumt, als Entwurf für dich: {text}",
+    skill_added: "Hat einen Ablauf festgehalten: {text}",
+    skill_changed: "Hat seinen Ablauf-Skill geändert: {text}",
+    skill_removed: "Hat seinen Ablauf-Skill entfernt: {text}",
+    skill_draft: "Ein Ablauf-Skill zum Ansehen: {text}",
     why_memory: "Es hat sein Gedächtnis geändert; auf der Karte lässt sich das rückgängig machen.",
     plan_done: "Plan erledigt: {text}",
     plan_stuck: "Plan hängt fest: {text}",
@@ -1222,6 +1287,12 @@ const FR: Words = Words {
     memory_soul: "personnalité",
     memory_rules: "règles",
     memory_user: "votre profil",
+    tidied: "A rangé sa mémoire : {text}",
+    tidied_draft: "A rangé sa mémoire, en brouillon pour vous : {text}",
+    skill_added: "A consigné un processus : {text}",
+    skill_changed: "A modifié sa compétence de processus : {text}",
+    skill_removed: "A supprimé sa compétence de processus : {text}",
+    skill_draft: "Une compétence de processus à examiner : {text}",
     why_memory: "Il a modifié sa mémoire ; la carte permet d’annuler.",
     plan_done: "Plan terminé : {text}",
     plan_stuck: "Plan bloqué : {text}",
@@ -1304,6 +1375,12 @@ const PT: Words = Words {
     memory_soul: "persona",
     memory_rules: "regras",
     memory_user: "seu perfil",
+    tidied: "Organizou a memória: {text}",
+    tidied_draft: "Organizou a memória, como rascunho para você: {text}",
+    skill_added: "Registrou um processo: {text}",
+    skill_changed: "Alterou sua skill de processo: {text}",
+    skill_removed: "Removeu sua skill de processo: {text}",
+    skill_draft: "Uma skill de processo para você revisar: {text}",
     why_memory: "Mudou o que lembra; o cartão permite desfazer.",
     plan_done: "Plano concluído: {text}",
     plan_stuck: "Plano travado: {text}",
@@ -1385,6 +1462,12 @@ const AR: Words = Words {
     memory_soul: "الشخصية",
     memory_rules: "القواعد",
     memory_user: "ملفك الشخصي",
+    tidied: "رتّب ذاكرته: {text}",
+    tidied_draft: "رتّب ذاكرته، كمسودة لك: {text}",
+    skill_added: "دوّن عملية: {text}",
+    skill_changed: "غيّر مهارة العملية: {text}",
+    skill_removed: "أزال مهارة العملية: {text}",
+    skill_draft: "مهارة عملية بانتظار مراجعتك: {text}",
     why_memory: "غيّر ما يتذكره؛ يمكنك التراجع من البطاقة.",
     plan_done: "اكتملت الخطة: {text}",
     plan_stuck: "الخطة متوقفة: {text}",
@@ -1500,6 +1583,42 @@ fn main_line(w: &Words, what: &What) -> String {
                 parts.push("MEMORY.md".into());
             }
             fill(w.memory, &glimpse(&parts.join(", ")), 0, "")
+        }
+        What::Tidy {
+            titles,
+            soul,
+            rules,
+            user,
+            draft,
+        } => {
+            let mut parts = titles.clone();
+            for (on, word) in [
+                (*user, w.memory_user),
+                (*soul, w.memory_soul),
+                (*rules, w.memory_rules),
+            ] {
+                if on {
+                    parts.push(word.to_string());
+                }
+            }
+            if parts.is_empty() {
+                parts.push("MEMORY.md".into());
+            }
+            let line = if *draft { w.tidied_draft } else { w.tidied };
+            fill(line, &glimpse(&parts.join(", ")), 0, "")
+        }
+        What::Skill {
+            title,
+            status,
+            draft,
+        } => {
+            let line = match (status.as_str(), *draft) {
+                (_, true) => w.skill_draft,
+                ("added", _) => w.skill_added,
+                ("deleted", _) => w.skill_removed,
+                _ => w.skill_changed,
+            };
+            fill(line, &glimpse(title), 0, "")
         }
         What::PlanDone { text } => fill(w.plan_done, text, 0, ""),
         What::PlanStuck { text } => fill(w.plan_stuck, text, 0, ""),
@@ -2657,6 +2776,58 @@ mod tests {
                 "{locale:?}: {memory}"
             );
             assert!(w.memory.contains("{text}"), "{locale:?}");
+            // A tidy-up and a process skill say theirs, a draft as one
+            // (7.7, 7.8).
+            let tidied = main_line(
+                w,
+                &What::Tidy {
+                    titles: vec!["Home".into()],
+                    soul: false,
+                    rules: true,
+                    user: false,
+                    draft: false,
+                },
+            );
+            assert!(
+                tidied.contains("Home") && tidied.contains(w.memory_rules),
+                "{locale:?}: {tidied}"
+            );
+            let draft = |status: &str, draft: bool| {
+                main_line(
+                    w,
+                    &What::Skill {
+                        title: "Release".into(),
+                        status: status.into(),
+                        draft,
+                    },
+                )
+            };
+            let lines = [
+                draft("added", false),
+                draft("modified", false),
+                draft("deleted", false),
+                draft("added", true),
+            ];
+            for l in &lines {
+                assert!(l.contains("Release"), "{locale:?}: {l}");
+            }
+            let mut distinct = lines.to_vec();
+            distinct.dedup();
+            assert_eq!(distinct.len(), 4, "{locale:?}: {lines:?}");
+            assert_ne!(
+                tidied,
+                main_line(
+                    w,
+                    &What::Tidy {
+                        titles: vec!["Home".into()],
+                        soul: false,
+                        rules: true,
+                        user: false,
+                        draft: true,
+                    },
+                ),
+                "{locale:?}"
+            );
             for t in [
                 w.waiting, w.approval, w.waited, w.session, w.done, w.failed, w.review, w.reminder,
             ] {

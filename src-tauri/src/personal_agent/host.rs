@@ -71,6 +71,13 @@ pub struct EngineHost {
     pub(super) rules: super::rules::RuleClock,
     /// The morning brief's and the wrap-up's look (`brief`, 6.4, 6.5).
     pub(super) briefs: super::brief::BriefClock,
+    /// The nightly tidy-up's look (`tidy`, 7.7).
+    pub(super) tidies: super::tidy::TidyClock,
+    /// The look for work that went well, to learn a process from (`skills`,
+    /// 7.8).
+    pub(super) reflects: super::skills::ReflectClock,
+    /// One night look at a time.
+    pub(super) night_busy: AtomicBool,
     /// The menu bar and the dock (`menubar`, 10.10).
     pub(super) menubar: super::menubar::MenuBar,
     /// The time machine's readers (`history`, 8.2).
@@ -125,6 +132,9 @@ pub async fn run(host: Arc<EngineHost>) {
             // The morning brief and the wrap-up, and the computer kept
             // awake for tonight's work (6.4, 6.5), off this loop.
             ticker.spawn_brief_tick();
+            // The nightly tidy-up, and the look back at work that went well
+            // (7.7, 7.8), off this loop.
+            ticker.spawn_night_tick();
         }
     });
     // The usage figures are caught up while nothing runs (8.1).
@@ -181,10 +191,28 @@ impl EngineHost {
                 reach: super::reach::Reach::default(),
                 rules: super::rules::RuleClock::default(),
                 briefs: super::brief::BriefClock::default(),
+                tidies: super::tidy::TidyClock::default(),
+                reflects: super::skills::ReflectClock::default(),
+                night_busy: AtomicBool::new(false),
                 menubar: super::menubar::MenuBar::default(),
                 history: super::history::HistoryIndex::default(),
             }
         })
+    }
+
+    /// Every tick: whether a tidy-up is due, and whether work went well
+    /// enough to learn from — one look at a time, off the ticker's loop.
+    fn spawn_night_tick(self: &Arc<Self>) {
+        if self.night_busy.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let me = self.clone();
+        tokio::spawn(async move {
+            let now = super::clock::now();
+            me.tidy_tick(now).await;
+            me.reflect_tick(now).await;
+            me.night_busy.store(false, Ordering::SeqCst);
+        });
     }
 
     /// A host for tests: not published, its engines booted as they are made

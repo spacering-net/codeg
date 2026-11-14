@@ -289,6 +289,10 @@ pub struct Material {
     /// The weekly review (6.6), when this is the one to carry it.
     #[serde(default)]
     pub week: Option<super::weekly::Week>,
+    /// The assistants' tidy-ups since the last brief (7.7): a line each,
+    /// shown under the brief with its own buttons.
+    #[serde(default)]
+    pub tidied: Vec<Value>,
 }
 
 impl Material {
@@ -301,6 +305,7 @@ impl Material {
             && self.tonight_messages.is_empty()
             && self.schedule.is_empty()
             && self.week.is_none()
+            && self.tidied.is_empty()
     }
 
     /// How many things wait on the owner.
@@ -569,6 +574,22 @@ pub async fn gather(
             });
             m.tonight = as_values(&t);
             rows.extend(tonight);
+            // Last night's tidy-ups, a line for each (7.7): their own part,
+            // not again among the rest — a draft since the last brief too.
+            let mut tidied: Vec<TodayRow> = view
+                .done
+                .iter()
+                .chain(view.needs.iter().filter(|r| r.at >= since))
+                .filter(|r| r.kind == "tidy")
+                .cloned()
+                .collect();
+            tidied.sort_by_key(|r| r.at);
+            let keys: HashSet<String> = tidied.iter().map(|r| r.key.clone()).collect();
+            m.night
+                .retain(|v| v["key"].as_str().is_none_or(|k| !keys.contains(k)));
+            m.needs
+                .retain(|v| v["key"].as_str().is_none_or(|k| !keys.contains(k)));
+            m.tidied = as_values(&tidied);
         }
         if part("schedule") {
             m.schedule = as_values(&view.schedule);
@@ -1197,6 +1218,15 @@ pub fn material_text(m: &Material, tz: Tz) -> String {
             "night",
         );
         rows_part(&mut out, "Watching", &m.running, m, tz, "running");
+        rows_part(
+            &mut out,
+            "Tidied their memory since (codeg shows a line for each under your brief, with its \
+             buttons: say no more of them than a word)",
+            &m.tidied,
+            m,
+            tz,
+            "night",
+        );
         rows_part(&mut out, "Today's schedule", &m.schedule, m, tz, "schedule");
         let bots: Vec<String> = m
             .bots
@@ -1403,7 +1433,15 @@ fn ask_text(m: &Material, cards: CardUse) -> String {
 /// The tag of a reply that is a brief or a wrap-up, as the brief records it.
 pub(super) async fn tag_of_row(db: &AppDatabase, row_id: i32) -> Value {
     match bsvc::of_row(&db.conn, row_id).await.ok().flatten() {
-        Some(b) => json!({ "id": b.id, "kind": b.kind }),
+        Some(b) => {
+            let tidied = b
+                .material
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Material>(s).ok())
+                .map(|m| m.tidied)
+                .unwrap_or_default();
+            json!({ "id": b.id, "kind": b.kind, "tidied": tidied })
+        }
         None => Value::Null,
     }
 }
@@ -1421,16 +1459,23 @@ pub(super) fn is_brief_event(e: &event_entity::Model) -> bool {
     e.kind == BRIEF_EVENT || e.kind == WRAP_EVENT
 }
 
-/// The morning brief and the wrap-up go in a delivery of their own: not
-/// with the owner's messages (after them), and one at a time, alone.
+/// Whether an event goes in a delivery of its own: the morning brief, the
+/// wrap-up, the nightly tidy-up (7.7) and a look back at work (7.8).
+pub(super) fn is_solo_event(e: &event_entity::Model) -> bool {
+    is_brief_event(e) || super::tidy::is_tidy_event(e) || super::skills::is_reflect_event(e)
+}
+
+/// The morning brief, the wrap-up, the nightly tidy-up and a look back at
+/// work go in a delivery of their own: not with the owner's messages (after
+/// them), and one at a time, alone.
 pub(super) fn solo(
     events: Vec<event_entity::Model>,
     owner_waiting: bool,
 ) -> Vec<event_entity::Model> {
     if owner_waiting {
-        return events.into_iter().filter(|e| !is_brief_event(e)).collect();
+        return events.into_iter().filter(|e| !is_solo_event(e)).collect();
     }
-    match events.iter().find(|e| is_brief_event(e) && e.wake) {
+    match events.iter().find(|e| is_solo_event(e) && e.wake) {
         Some(e) => vec![e.clone()],
         None => events,
     }
@@ -1459,12 +1504,24 @@ impl PersonalAgentEngine {
         format!("{}\n\n{}", material_text(&m, tz), ask_text(&m, prefs.cards))
     }
 
-    /// The tag a delivery's reply carries when it is a brief or a wrap-up.
-    pub(super) fn brief_tag(events: &[event_entity::Model]) -> Option<Value> {
+    /// The tag a delivery's reply carries when it is a brief or a wrap-up —
+    /// and the tidy-ups a brief shows under it, a line each (7.7).
+    pub(super) async fn brief_tag(&self, events: &[event_entity::Model]) -> Option<Value> {
         let e = events.iter().find(|e| is_brief_event(e))?;
-        Some(
-            json!({ "id": brief_id_of(e), "kind": if e.kind == WRAP_EVENT { WRAP } else { BRIEF } }),
-        )
+        let tidied = match self.brief_of_event(e).await {
+            Some(b) => b
+                .material
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Material>(s).ok())
+                .map(|m| m.tidied)
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        Some(json!({
+            "id": brief_id_of(e),
+            "kind": if e.kind == WRAP_EVENT { WRAP } else { BRIEF },
+            "tidied": tidied,
+        }))
     }
 
     /// The briefs a delivery carries: on their way with it.

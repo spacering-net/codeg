@@ -175,6 +175,20 @@ pub enum CiFailure {
     Tell,
 }
 
+/// The nightly tidy-up of an assistant's memory and the process skills it
+/// learns from work that went well (7.7, 7.8).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TidyMode {
+    /// Made at once, each with a card that takes it back.
+    #[default]
+    Auto,
+    /// Kept as a draft on its card: made only when the owner applies it.
+    Draft,
+    /// Not done.
+    Off,
+}
+
 /// Who answers an executor's questions or plan approvals (7.3.1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -614,7 +628,7 @@ pub const NEWS: &[(&str, Level, &str)] = &[
     (
         "memory",
         Level::Low,
-        "what an assistant changed in its memory, persona or rules",
+        "what an assistant changed in its memory, persona, rules or process skills — its nightly tidy-up too",
     ),
     ("plan", Level::Normal, "a plan carried out to its end"),
     (
@@ -710,6 +724,11 @@ pub struct Prefs {
     /// owner first and started on their [Start].
     #[serde(default, deserialize_with = "lenient")]
     pub plans: AskFirst,
+    /// The nightly tidy-up of every assistant's memory, and the process
+    /// skills learned from work that went well (7.7, 7.8): made at once with
+    /// a card that undoes it, kept as drafts, or not done.
+    #[serde(default, deserialize_with = "lenient")]
+    pub tidy: TidyMode,
     /// A watched pull request whose checks failed (7.4): fixed by its task,
     /// the owner asked first, or only told.
     #[serde(default, deserialize_with = "lenient")]
@@ -975,6 +994,7 @@ impl Default for Prefs {
             pr_merge: AskFirst::default(),
             routine_dispatch: AskFirst::default(),
             plans: AskFirst::default(),
+            tidy: TidyMode::default(),
             ci_failure: CiFailure::default(),
             pr_conflict: AskFirst::default(),
             review_feedback: AskFirst::default(),
@@ -1203,6 +1223,11 @@ pub const PREFS: &[PrefSpec] = &[
         key: "plans",
         kind: PrefKind::Choice(&["auto", "ask"]),
         label: "the plans you lay out",
+    },
+    PrefSpec {
+        key: "tidy",
+        kind: PrefKind::Choice(&["auto", "draft", "off"]),
+        label: "the nightly tidy-up of each assistant's memory, persona and rules, and the process skills learned from work that went well",
     },
     PrefSpec {
         key: "ci_failure",
@@ -1740,6 +1765,7 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("pr_merge", json!("auto")),
             ("routine_dispatch", json!("auto")),
             ("plans", json!("auto")),
+            ("tidy", json!("auto")),
             ("ci_failure", json!("fix")),
             ("pr_conflict", json!("auto")),
             ("review_feedback", json!("auto")),
@@ -1759,6 +1785,7 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("pr_merge", json!("ask")),
             ("routine_dispatch", json!("ask")),
             ("plans", json!("ask")),
+            ("tidy", json!("draft")),
             ("ci_failure", json!("ask")),
             ("pr_conflict", json!("ask")),
             ("review_feedback", json!("ask")),
@@ -2148,6 +2175,22 @@ fn brain_value(key: &str, value: &Value) -> String {
         }
         ("plans", "ask") => {
             "a plan is shown to the owner first; codeg starts it once they press Start".into()
+        }
+        ("tidy", "auto") => {
+            "each night codeg has every assistant tidy its memory, persona and rules, and after \
+             work that went well has its assistant write the process down as a skill: both made \
+             at once, each with a card that undoes it"
+                .into()
+        }
+        ("tidy", "draft") => {
+            "the nightly tidy-up and the process skills learned from work are kept as drafts on \
+             their cards; made only when the owner applies them"
+                .into()
+        }
+        ("tidy", "off") => {
+            "no nightly tidy-up and no process skills learned from work; a skill the owner asks \
+             for is still written"
+                .into()
         }
         ("accept_revise", "ask") => {
             "put to the owner on the acceptance card, with what you would send back".into()

@@ -388,7 +388,15 @@ impl PersonalAgentEngine {
             )));
         }
         let cards = self.prefs().await.cards;
-        workdir::sync_bot_skill(&dir, brain.agent_type, settings.skill_enabled, true, cards);
+        // A new assistant has no process skills turned off.
+        workdir::sync_bot_skill(
+            &dir,
+            brain.agent_type,
+            settings.skill_enabled,
+            true,
+            cards,
+            &Default::default(),
+        );
 
         // How its executor config is used, and the kind of work it is first
         // for — when no one is yet.
@@ -801,28 +809,30 @@ impl PersonalAgentEngine {
             .map(super::templates::template_locale)
             .unwrap_or(AppLocale::En);
         let dir = self.workdir_of(&row);
-        for (file, was, now) in [
-            (
-                workdir::SOUL_FILE,
-                templates::soul_md(locale, &old),
-                templates::soul_md(locale, new.id),
-            ),
-            (
-                workdir::RULES_FILE,
-                templates::rules_md(locale, &old),
-                templates::rules_md(locale, new.id),
-            ),
-        ] {
-            if workdir::read_text(&dir, file) == was {
-                workdir::write_file(&dir, file, &now).map_err(|e| e.to_string())?;
-            }
-        }
-        workdir::commit_only(
+        // Each still the old role's template is the new role's: read and
+        // written under the directory's lock, with every other write of it.
+        let (soul_was, soul_now) = (
+            templates::soul_md(locale, &old),
+            templates::soul_md(locale, new.id),
+        );
+        let (rules_was, rules_now) = (
+            templates::rules_md(locale, &old),
+            templates::rules_md(locale, new.id),
+        );
+        workdir::write_for_owner(
             &dir,
+            &[
+                (workdir::SOUL_FILE, &|now| {
+                    (now.unwrap_or_default() == soul_was).then(|| soul_now.clone())
+                }),
+                (workdir::RULES_FILE, &|now| {
+                    (now.unwrap_or_default() == rules_was).then(|| rules_now.clone())
+                }),
+            ],
             "role changed on the opening card",
-            &[workdir::SOUL_FILE, workdir::RULES_FILE],
         )
-        .await;
+        .await
+        .map_err(|e| e.to_string())?;
         // Its executor config, where it is still the old role's.
         if let Some(id) = row.executor_assistant_id {
             if let Ok(Some(a)) = crate::db::service::assistant_service::get(&self.db.conn, id).await

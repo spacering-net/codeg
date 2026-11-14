@@ -442,6 +442,8 @@ const ANSWERED_KINDS: &[NoticeKind] = &[
     NoticeKind::Routine,
     NoticeKind::Rule,
     NoticeKind::Memory,
+    NoticeKind::Tidy,
+    NoticeKind::Skill,
 ];
 
 pub fn notice_kind_name(k: NoticeKind) -> &'static str {
@@ -464,6 +466,8 @@ pub fn notice_kind_name(k: NoticeKind) -> &'static str {
         NoticeKind::Brief => "brief",
         NoticeKind::Memory => "memory",
         NoticeKind::Plan => "plan",
+        NoticeKind::Tidy => "tidy",
+        NoticeKind::Skill => "skill",
     }
 }
 

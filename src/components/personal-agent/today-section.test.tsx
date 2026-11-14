@@ -471,6 +471,80 @@ describe("today", () => {
     )
   })
 
+  it("lists a tidy-up and a process skill with their undo, and a draft to apply or let go (7.7, 7.8)", async () => {
+    draw(
+      today({
+        needs: [
+          row({
+            key: "tidy:9",
+            kind: "tidy",
+            bot_id: 2,
+            notice_id: 9,
+            row_id: 15,
+            title: "Tidy-up of 2026-11-14, a draft — 1 new",
+            state: "draft",
+          }),
+          row({
+            key: "skill:11",
+            kind: "skill",
+            bot_id: 2,
+            notice_id: 11,
+            row_id: 17,
+            title: 'Process skill "Release" — a draft to install',
+            state: "draft",
+          }),
+        ],
+        done: [
+          row({
+            key: "tidy:8",
+            kind: "tidy",
+            bot_id: 2,
+            notice_id: 8,
+            row_id: 14,
+            title: "Tidied memory (2026-11-13) — 1 updated",
+            state: "acted",
+            undo: true,
+          }),
+          row({
+            key: "skill:10",
+            kind: "skill",
+            bot_id: 2,
+            notice_id: 10,
+            row_id: 16,
+            title: 'Process skill "Release" — learned, followed next time',
+            state: "acted",
+            undo: true,
+          }),
+        ],
+      })
+    )
+    const tidied = document.querySelector('[data-key="tidy:8"]') as HTMLElement
+    expect(tidied.textContent).toContain("Tidied up memory")
+    fireEvent.click(within(tidied).getByRole("button", { name: "Undo" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(8, "undo", 2)
+    )
+    const learned = document.querySelector(
+      '[data-key="skill:10"]'
+    ) as HTMLElement
+    expect(learned.textContent).toContain("Process skill")
+    expect(within(learned).getByRole("button", { name: "Undo" })).toBeTruthy()
+    const draft = document.querySelector('[data-key="tidy:9"]') as HTMLElement
+    expect(draft.textContent).toContain("Tidy-up waiting for you")
+    expect(within(draft).queryByRole("button", { name: "Undo" })).toBeNull()
+    fireEvent.click(within(draft).getByRole("button", { name: "Apply" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(9, "apply", 2)
+    )
+    const skill = document.querySelector('[data-key="skill:11"]') as HTMLElement
+    expect(skill.textContent).toContain("Process skill waiting for you")
+    fireEvent.click(within(skill).getByRole("button", { name: "Not this one" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(11, "dismiss", 2)
+    )
+    expect(within(skill).getByRole("button", { name: "Install" })).toBeTruthy()
+  })
+
   it("lists what an assistant did on a forge, opening its card (7.4)", () => {
     draw(
       today({

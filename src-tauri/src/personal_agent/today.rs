@@ -193,6 +193,33 @@ fn level_rank(l: Option<Level>) -> u8 {
     }
 }
 
+/// A card's row on its timeline.
+async fn card_row_of(
+    db: &AppDatabase,
+    n: &notice_entity::Model,
+) -> Option<crate::db::entities::personal_agent_timeline::Model> {
+    svc::get_row(&db.conn, n.timeline_id?).await.ok().flatten()
+}
+
+/// A tidy-up's or a process skill's card as "today" lists it (7.7, 7.8):
+/// its words, how it stands now, and whether it can still be undone.
+fn row_of_card(
+    kind: &'static str,
+    bot: i32,
+    n: &notice_entity::Model,
+    card: &crate::db::entities::personal_agent_timeline::Model,
+) -> TodayRow {
+    let data = card.data.as_deref().map(payload_of).unwrap_or(Value::Null);
+    let at = n.acted_at.unwrap_or(n.updated_at);
+    let mut row = TodayRow::new(format!("{kind}:{}", n.id), kind, one_line(&card.body), at);
+    row.bot_id = Some(bot);
+    row.state = data["state"].as_str().map(str::to_string);
+    row.row_id = Some(card.id);
+    row.notice_id = Some(n.id);
+    row.undo = n.state == NoticeState::Acted;
+    row
+}
+
 fn payload_of(raw: &str) -> Value {
     serde_json::from_str(raw).unwrap_or(Value::Null)
 }
@@ -383,6 +410,31 @@ pub async fn today_from(
         row.bot_id = Some(bot);
         row.row_id = n.timeline_id;
         row.notice_id = Some(n.id);
+        view.needs.push(row);
+    }
+    // A tidy-up or a process skill kept as a draft for the owner to look
+    // at (7.7, 7.8): theirs to apply or let go.
+    for n in notice_entity::Entity::find()
+        .filter(notice_entity::Column::State.eq(NoticeState::Open))
+        .filter(notice_entity::Column::Kind.is_in([NoticeKind::Tidy, NoticeKind::Skill]))
+        .order_by_asc(notice_entity::Column::Id)
+        .all(&db.conn)
+        .await
+        .unwrap_or_default()
+    {
+        let Some(bot) = n.bot_id.filter(|b| bots.iter().any(|x| x.id == *b)) else {
+            continue;
+        };
+        let Some(card) = card_row_of(db, &n).await else {
+            continue;
+        };
+        let name = if n.kind == NoticeKind::Tidy {
+            "tidy"
+        } else {
+            "skill"
+        };
+        let mut row = row_of_card(name, bot, &n, &card);
+        row.level = Some(Level::Low);
         view.needs.push(row);
     }
     // Handed-out work that failed lately, outside the board.
@@ -882,6 +934,35 @@ pub async fn today_from(
         row.notice_id = Some(n.id);
         row.undo = n.state == NoticeState::Acted;
         view.done.push(row);
+    }
+    // Their nightly tidy-ups and process skills (7.7, 7.8): low, each with
+    // its undo while it stands. A draft waits on the owner (in "needs").
+    for (kind, name) in [(NoticeKind::Tidy, "tidy"), (NoticeKind::Skill, "skill")] {
+        for n in svc::notices_since(
+            &db.conn,
+            kind,
+            &[
+                NoticeState::Acted,
+                NoticeState::Undone,
+                NoticeState::Dismissed,
+                NoticeState::Expired,
+            ],
+            done_from,
+        )
+        .await
+        .unwrap_or_default()
+        {
+            let Some(bot) = n.bot_id.filter(|b| bot_ids.contains(b)) else {
+                continue;
+            };
+            if n.created_at < done_from && n.state != NoticeState::Undone {
+                continue;
+            }
+            let Some(row) = card_row_of(db, &n).await else {
+                continue;
+            };
+            view.done.push(row_of_card(name, bot, &n, &row));
+        }
     }
     // What the assistants did on a forge for the owner today (7.4).
     for n in svc::notices_since(

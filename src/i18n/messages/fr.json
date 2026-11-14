@@ -8066,7 +8066,8 @@
         "persona": "Persona",
         "rules": "Règles",
         "owner": "À propos de vous",
-        "memory": "Mémoire"
+        "memory": "Mémoire",
+        "skills": "Compétences de processus"
       },
       "byOwner": "Rédigé par vous",
       "byAgent": "Tenu par l'agent",
@@ -8689,7 +8690,7 @@
         },
         "level_memory": {
           "title": "Changements de mémoire",
-          "hint": "Un assistant a modifié sa mémoire, sa personnalité ou ses règles."
+          "hint": "Un assistant a changé ce qu’il retient, sa persona ou ses règles — son rangement nocturne et ses compétences de processus aussi."
         },
         "plans": {
           "title": "Plans",
@@ -8710,6 +8711,13 @@
           "hint": "Une autre configuration d’exécution réussit un type de travail du premier coup nettement plus souvent que son premier choix dans la répartition (20 points ou plus, avec au moins 5 travaux terminés de chaque côté).",
           "on": "Activé",
           "off": "Désactivé"
+        },
+        "tidy": {
+          "title": "Rangement de la mémoire et compétences de processus",
+          "hint": "Chaque nuit, une fois que vous avez arrêté, les assistants rangent leur mémoire, leur persona et leurs règles ; quand une suite de travaux se passe bien, la façon de faire est consignée en compétence.",
+          "auto": "Effet immédiat, annulable sur la carte",
+          "draft": "Me montrer d’abord (carte en brouillon, appliquée sur mon accord)",
+          "off": "Non"
         }
       },
       "workdir": {
@@ -8895,7 +8903,16 @@
         "byBot": "Par assistant et mode",
         "someone": "Travail antérieur",
         "unjudged": "{count} confiés, aucun terminé pour l’instant"
-      }
+      },
+      "processSkillHint": "Une façon de faire que l’assistant a consignée : quand vous la demandez, il la suit. Ce que vous modifiez ici s’applique à l’enregistrement ; désactivée, elle n’est plus chargée.",
+      "skillOff": "Désactivée",
+      "skillTurnOn": "Activer",
+      "skillTurnOff": "Désactiver",
+      "skillTurnedOn": "{name} activée",
+      "skillTurnedOff": "{name} désactivée",
+      "deleteSkill": "Supprimer la compétence",
+      "confirmDeleteSkillHint": "Supprimer cette compétence de processus ? Son dossier est retiré du répertoire de travail.",
+      "skillDeleted": "{name} supprimée"
     },
     "statusWord": {
       "idle": "Inactif",
@@ -9792,7 +9809,27 @@
         "silent": "Routine : aucun changement"
       },
       "preparingBrief": "Préparation de votre point du matin…",
-      "preparingWrap": "Préparation du bilan du jour…"
+      "preparingWrap": "Préparation du bilan du jour…",
+      "tidy": {
+        "acted": "Mémoire rangée",
+        "draft": "Rangement en attente de vous",
+        "applied": "Rangement appliqué",
+        "undone": "Rangement annulé",
+        "discarded": "Rangement écarté",
+        "stale": "Brouillon de rangement dépassé"
+      },
+      "skill": {
+        "acted": "Compétence de processus",
+        "draft": "Compétence en attente de vous",
+        "applied": "Compétence installée",
+        "undone": "Modification de compétence annulée",
+        "discarded": "Compétence non installée",
+        "stale": "Brouillon de compétence dépassé",
+        "deleted": "Compétence supprimée"
+      },
+      "apply": "Appliquer",
+      "install": "Installer",
+      "notThis": "Pas celui-ci"
     },
     "meet": {
       "name": {
@@ -10589,6 +10626,75 @@
         "depends_on": "ce qu’elle attend",
         "kind": "type de travail"
       }
+    },
+    "tidy": {
+      "title": {
+        "acted": "Mémoire rangée ({day})",
+        "draft": "Rangement du {day}, en brouillon",
+        "applied": "Rangement du {day}, appliqué",
+        "undone": "Rangement du {day}, annulé",
+        "discarded": "Rangement du {day}, écarté",
+        "stale": "Rangement du {day}, dépassé"
+      },
+      "note": {
+        "draft": "Gardé en brouillon : votre mémoire reste telle quelle tant que vous ne l’appliquez pas.",
+        "applied": "Appliqué : la mémoire est telle que ce rangement l’a laissée.",
+        "discarded": "Écarté : la mémoire reste telle quelle.",
+        "stale": "La mémoire a changé depuis et ce brouillon ne s’y applique plus ; la nuit prochaine, elle est rangée à nouveau.",
+        "notAside": "Impossible de le garder en brouillon ({why}) : il s’applique déjà — « Tout annuler » le retire."
+      },
+      "undoAll": "Tout annuler",
+      "apply": "Appliquer",
+      "dismiss": "Pas celui-ci",
+      "lines": "Rangé la nuit dernière",
+      "view": "Voir",
+      "line": {
+        "done": "{name} a rangé sa mémoire : {text}",
+        "draft": "{name} a rangé sa mémoire, en brouillon : {text}"
+      },
+      "state": {
+        "applied": "Appliqué",
+        "undone": "Annulé",
+        "discarded": "Écarté",
+        "stale": "Dépassé — rangé à nouveau ce soir"
+      }
+    },
+    "skill": {
+      "heading": {
+        "added": "Nouvelle compétence de processus",
+        "modified": "Compétence de processus modifiée",
+        "deleted": "Compétence de processus supprimée",
+        "draft": "Compétence de processus en brouillon"
+      },
+      "line": {
+        "learned": "J’ai fait de « {title} » une compétence de processus : la prochaine fois que vous le demandez, je la suis.",
+        "changed": "J’ai modifié la compétence de processus « {title} » ; elle s’applique dès maintenant.",
+        "removed": "J’ai supprimé la compétence de processus « {title} ».",
+        "draft": "J’ai écrit la compétence de processus « {title} » ; elle s’applique une fois installée."
+      },
+      "when": "Quand : {text}",
+      "note": {
+        "off": "Désactivée : elle n’est plus chargée.",
+        "draft": "Rien n’a encore changé.",
+        "applied": "Installée.",
+        "undone": "Modification annulée.",
+        "discarded": "Pas installée ; elle reste telle quelle.",
+        "stale": "Elle a changé depuis ; ce brouillon ne s’applique plus.",
+        "deleted": "Supprimée.",
+        "notAside": "Impossible de la garder en brouillon ({why}) : elle reste désactivée — « Activer » la charge.",
+        "notAsideOn": "Impossible de la garder en brouillon ({why}) ou de la désactiver : elle s’applique déjà — désactivez-la ou annulez."
+      },
+      "show": "Voir le contenu",
+      "hide": "Masquer",
+      "view": "Voir",
+      "disable": "Désactiver",
+      "enable": "Activer",
+      "undo": "Annuler",
+      "delete": "Supprimer",
+      "confirmDelete": "La supprimer",
+      "cancel": "Annuler",
+      "install": "Installer",
+      "dismiss": "Pas celle-ci"
     }
   }
 }

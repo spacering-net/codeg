@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   personalAgentFiles: vi.fn(),
   personalAgentFileSave: vi.fn(),
   personalAgentFileDelete: vi.fn(),
+  personalAgentSkillSwitch: vi.fn(),
 }))
 const toasts = vi.hoisted(() => ({ message: vi.fn(), error: vi.fn() }))
 vi.mock("@/lib/api", () => api)
@@ -23,7 +24,12 @@ vi.mock("@/contexts/personal-agent-context", () => ({
 }))
 vi.mock("sonner", () => ({ toast: toasts }))
 
-import { entryMeta, PersonaFiles, withoutEntryLine } from "./persona-files"
+import {
+  entryMeta,
+  PersonaFiles,
+  skillMeta,
+  withoutEntryLine,
+} from "./persona-files"
 
 const file = (name: string, content: string): PersonalAgentFile => ({
   name,
@@ -65,6 +71,7 @@ beforeEach(() => {
   api.personalAgentFiles.mockResolvedValue(files())
   api.personalAgentFileSave.mockResolvedValue(undefined)
   api.personalAgentFileDelete.mockResolvedValue(undefined)
+  api.personalAgentSkillSwitch.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -279,6 +286,80 @@ describe("PersonaFiles", () => {
     fireEvent.click(screen.getByRole("button", { name: "Persona" }))
     expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toBe(
       "# Persona\n\nCalm and brief."
+    )
+  })
+})
+
+describe("process skills (7.8)", () => {
+  const RELEASE =
+    "---\nname: release\ndescription: when the owner says release\n---\n# Release\n\n1. Notes\n"
+  const withSkills = (off = false): PersonalAgentFile[] => [
+    ...files(),
+    { ...file("process-skills/release/SKILL.md", RELEASE), off },
+    file("process-skills/triage/SKILL.md", "# Triage\n"),
+  ]
+
+  it("names a skill by its heading, else its name or folder, and says when it is for", () => {
+    expect(skillMeta("process-skills/release/SKILL.md", RELEASE)).toEqual({
+      title: "Release",
+      description: "when the owner says release",
+    })
+    expect(
+      skillMeta("process-skills/ci/SKILL.md", "---\nname: ci-fix\n---\nsteps")
+    ).toEqual({ title: "ci-fix", description: null })
+    expect(skillMeta("process-skills/ci/SKILL.md", "steps")).toEqual({
+      title: "ci",
+      description: null,
+    })
+  })
+
+  it("lists them last, edits one, turns it off and on, and deletes it", async () => {
+    api.personalAgentFiles.mockResolvedValue(withSkills())
+    const { container } = draw()
+    await screen.findByText("Process skills")
+    expect(
+      container.querySelector("[data-pa-persona-skills]")?.textContent
+    ).toContain("Triage")
+    fireEvent.click(screen.getByText("Release"))
+    const box = screen.getByLabelText(
+      "process-skills/release/SKILL.md"
+    ) as HTMLTextAreaElement
+    expect(box.value).toBe(RELEASE)
+    fireEvent.change(box, { target: { value: RELEASE + "2. Tag\n" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save file" }))
+    await waitFor(() =>
+      expect(api.personalAgentFileSave).toHaveBeenCalledWith(
+        "process-skills/release/SKILL.md",
+        RELEASE + "2. Tag\n",
+        null
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Turn off" }))
+    await waitFor(() =>
+      expect(api.personalAgentSkillSwitch).toHaveBeenCalledWith(
+        "release",
+        false,
+        null
+      )
+    )
+    await screen.findByRole("button", { name: "Turn on" })
+    expect(screen.getAllByText("Off").length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole("button", { name: "Delete skill" }))
+    expect(
+      screen.getByText(
+        "Delete this process skill? Its folder is removed from the working directory."
+      )
+    ).toBeTruthy()
+    api.personalAgentFiles.mockResolvedValue(files())
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }))
+    await waitFor(() =>
+      expect(api.personalAgentFileDelete).toHaveBeenCalledWith(
+        "process-skills/release/SKILL.md",
+        null
+      )
+    )
+    await waitFor(() =>
+      expect(container.querySelector("[data-pa-persona-skills]")).toBeNull()
     )
   })
 })

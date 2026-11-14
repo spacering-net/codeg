@@ -2937,6 +2937,10 @@ export interface PersonalAgentPrefs {
   /** A plan an assistant lays out (7.6): started at once, or shown to the
    *  owner first and started on their Start. */
   plans: "auto" | "ask"
+  /** The nightly tidy-up of every assistant's memory and the process
+   *  skills learned from work that went well (7.7, 7.8): made at once with a
+   *  card that undoes it, kept as drafts the owner applies, or not done. */
+  tidy: "auto" | "draft" | "off"
   /** A watched pull request whose checks failed (7.4): fixed by its task,
    *  the owner asked first, or only told. */
   ci_failure: "fix" | "ask" | "tell"
@@ -3170,6 +3174,10 @@ export type TodayRowKind =
   | "changed"
   // What an assistant remembered (7.7).
   | "memory"
+  // An assistant's nightly tidy-up, and a process skill it wrote (7.7,
+  // 7.8): done today, or a draft waiting on the owner.
+  | "tidy"
+  | "skill"
   // Something an assistant did on a forge (7.4).
   | "forge"
   // A watched pull request: one to merge (waits on the owner), one watched,
@@ -3302,6 +3310,8 @@ export interface BriefMaterial {
   owner?: string | null
   /** The weekly review, when this one carries it (6.6). */
   week?: BriefWeek | null
+  /** The assistants' tidy-ups since the last brief, a line each (7.7). */
+  tidied?: TodayRow[]
 }
 
 /** A name and how many, in the weekly review. */
@@ -4024,6 +4034,8 @@ export interface PersonalAgentFile {
   name: string
   content: string
   exists: boolean
+  /** A process skill the owner turned off (7.8): kept, not loaded. */
+  off?: boolean
 }
 
 export interface PersonalAgentDayStat {

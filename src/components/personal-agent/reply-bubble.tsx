@@ -56,6 +56,7 @@ import {
 import { isChoiceQuestionRow, QuestionChoiceCard } from "./question-choice-card"
 import { splitReply } from "./reply-split"
 import { StepSlot } from "./step-slot"
+import { TidyLines, tidyRowsOf } from "./tidy-lines"
 
 type ReplyItem = Extract<MessageItem, { kind: "reply" }>
 
@@ -252,6 +253,11 @@ function UsedMemory({ memories }: { memories: ReplyMemory[] }) {
   )
 }
 
+/** The tidy-ups a morning brief shows under it (7.7). */
+function tidiedOf(v: unknown): unknown {
+  return v && typeof v === "object" ? (v as { tidied?: unknown }).tidied : null
+}
+
 /** The morning brief or the wrap-up a reply is (6.4, 6.5). */
 function briefOf(v: unknown): "brief" | "wrap" | null {
   if (!v || typeof v !== "object") return null
@@ -384,6 +390,11 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
       ) : null}
       {!view.running ? (
         <UsedMemory memories={memoriesOf(row?.data?.memories)} />
+      ) : null}
+      {brief === "brief" && !view.running ? (
+        <div className="mt-3">
+          <TidyLines rows={tidyRowsOf(tidiedOf(row?.data?.brief))} />
+        </div>
       ) : null}
       {view.ending ? <Ending ending={view.ending} /> : null}
       {view.resend.length > 0 && !scope.readOnly ? (

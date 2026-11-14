@@ -968,6 +968,23 @@ pub async fn personal_agent_file_delete(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SkillSwitchParams {
+    /// The assistant it is about; left out, the primary.
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub name: String,
+    pub on: bool,
+}
+
+pub async fn personal_agent_skill_switch(
+    Json(params): Json<SkillSwitchParams>,
+) -> Result<Json<()>, AppCommandError> {
+    pa::personal_agent_skill_switch_core(params.bot_id, params.name, params.on).await?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetWorkdirParams {
     /// The assistant it is about; left out, the primary.
     #[serde(default)]

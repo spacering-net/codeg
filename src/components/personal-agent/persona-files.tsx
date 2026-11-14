@@ -9,7 +9,10 @@
  * lessons about its own way of working, by the `type` in their frontmatter,
  * the lessons first. A line under the file's name says who writes it and
  * how much of it the agent starts each session with. Each file is saved on
- * its own; an entry can be deleted, its index line with it.
+ * its own; an entry can be deleted, its index line with it. Last, its process
+ * skills (7.8), the ways of doing things it wrote down: each can be edited —
+ * what the owner writes is installed as written — turned off and on, or
+ * deleted.
  */
 
 import { useEffect, useMemo, useState } from "react"
@@ -20,6 +23,7 @@ import {
   FileText,
   ScrollText,
   UserRound,
+  Workflow,
   type LucideIcon,
 } from "lucide-react"
 
@@ -32,6 +36,7 @@ import {
   personalAgentFileDelete,
   personalAgentFileSave,
   personalAgentFiles,
+  personalAgentSkillSwitch,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { PersonalAgentFile } from "@/lib/types"
@@ -56,6 +61,8 @@ export const FIXED_FILES: readonly FixedFile[] = [
 /** The index the entries are listed in, and their folder. */
 const INDEX_FILE = "MEMORY.md"
 const ENTRY_FOLDER = "memory/"
+/** Where the process skills are, `process-skills/<name>/SKILL.md` (7.8). */
+const SKILL_FOLDER = "process-skills/"
 
 /** The kinds of entry, in the order the list shows them: the lessons about
  *  the agent's own way of working first. */
@@ -101,6 +108,23 @@ export function entryMeta(
     title: link?.[1]?.trim() || fm.name || heading || file,
     description: fm.description || null,
     type: ENTRY_TYPES.find((k) => k === type) ?? null,
+  }
+}
+
+/** What the list calls a process skill and when it is for: its first
+ *  heading (else its front matter's `name`, else its folder) and its front
+ *  matter's `description`. */
+export function skillMeta(
+  path: string,
+  content: string
+): { title: string; description: string | null } {
+  const fm = frontmatter(content)
+  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "")
+  const heading = body.match(/^#\s+(.+)$/m)?.[1]?.trim()
+  const folder = path.slice(SKILL_FOLDER.length).split("/")[0] ?? path
+  return {
+    title: heading || fm.name || folder,
+    description: fm.description || null,
   }
 }
 
@@ -164,6 +188,18 @@ export function PersonaFiles({
           typeRank(a.type) - typeRank(b.type) || a.title.localeCompare(b.title)
       )
   }, [files])
+  // The process skills, by name (their folders').
+  const skills = useMemo(
+    () =>
+      (files ?? [])
+        .filter((f) => f.name.startsWith(SKILL_FOLDER))
+        .map((f) => ({
+          name: f.name,
+          off: f.off === true,
+          ...skillMeta(f.name, f.content),
+        })),
+    [files]
+  )
   // Another file drops a delete that was waiting to be confirmed.
   const pick = (name: string) => {
     setActive(name)
@@ -179,7 +215,8 @@ export function PersonaFiles({
   }
   const current = files.find((f) => f.name === active) ?? null
   const fixed = FIXED_FILES.find((f) => f.name === active) ?? null
-  const isEntry = current != null && fixed == null
+  const skill = skills.find((k) => k.name === active)
+  const isEntry = current != null && fixed == null && skill == null
   const entry = isEntry ? entries.find((e) => e.name === active) : undefined
   const dirty = current != null && drafts[active] !== current.content
   const isDirty = (name: string) => {
@@ -205,6 +242,25 @@ export function PersonaFiles({
   }
 
   const remove = () => {
+    if (skill) {
+      const name = active
+      setSaving(true)
+      personalAgentFileDelete(name, botId)
+        .then(() => personalAgentFiles(botId))
+        .then((list) => {
+          setFiles(list)
+          setDrafts((d) => {
+            const next: Record<string, string> = {}
+            for (const f of list) next[f.name] = d[f.name] ?? f.content
+            return next
+          })
+          pick("SOUL.md")
+          toast.message(t("skillDeleted", { name: skill.title }))
+        })
+        .catch((e) => toast.error(toErrorMessage(e)))
+        .finally(() => setSaving(false))
+      return
+    }
     if (!isEntry) return
     const name = active
     setSaving(true)
@@ -235,7 +291,29 @@ export function PersonaFiles({
       .finally(() => setSaving(false))
   }
 
+  const switchSkill = () => {
+    if (!skill) return
+    const on = skill.off
+    const name = active
+    const folder = name.slice(SKILL_FOLDER.length).split("/")[0] ?? ""
+    setSaving(true)
+    personalAgentSkillSwitch(folder, on, botId)
+      .then(() => {
+        setFiles((list) =>
+          (list ?? []).map((f) => (f.name === name ? { ...f, off: !on } : f))
+        )
+        toast.message(
+          on
+            ? t("skillTurnedOn", { name: skill.title })
+            : t("skillTurnedOff", { name: skill.title })
+        )
+      })
+      .catch((e) => toast.error(toErrorMessage(e)))
+      .finally(() => setSaving(false))
+  }
+
   const hint = (() => {
+    if (skill) return t("processSkillHint")
     if (isEntry) return t("entryHint")
     switch (fixed?.group) {
       case "persona":
@@ -297,23 +375,58 @@ export function PersonaFiles({
               </div>
             )
           })}
+          {skills.length > 0 ? (
+            <div className="flex flex-col gap-0.5" data-pa-persona-skills>
+              <p className="flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.8125rem] text-muted-foreground">
+                <Workflow className="size-3.5 shrink-0" aria-hidden />
+                <span className="min-w-0 flex-1 truncate">
+                  {t("fileGroups.skills")}
+                </span>
+                <span className="shrink-0 text-[0.6875rem] text-muted-foreground/70 tabular-nums">
+                  {skills.length}
+                </span>
+              </p>
+              <div className="ms-3.5 flex flex-col gap-0.5 border-s border-border/70 ps-1.5">
+                {skills.map((k) => (
+                  <FileButton
+                    key={k.name}
+                    selected={active === k.name}
+                    dirty={isDirty(k.name)}
+                    onClick={() => pick(k.name)}
+                    label={k.title}
+                    tag={k.off ? t("skillOff") : undefined}
+                    title={k.description ?? k.name}
+                    entry
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
         </nav>
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="min-w-0">
             <div className="flex min-w-0 items-baseline gap-2">
               <span className="truncate text-sm font-medium text-foreground">
-                {isEntry
-                  ? (entry?.title ?? active)
-                  : fixed
-                    ? t(`fileGroups.${fixed.group}`)
-                    : active}
+                {skill
+                  ? skill.title
+                  : isEntry
+                    ? (entry?.title ?? active)
+                    : fixed
+                      ? t(`fileGroups.${fixed.group}`)
+                      : active}
               </span>
               <span className="shrink-0 truncate font-mono text-[0.6875rem] text-muted-foreground">
                 {active}
               </span>
-              {fixed || entry?.type ? (
+              {fixed || entry?.type || skill ? (
                 <span className="ms-auto shrink-0 rounded-full bg-foreground/[0.06] px-2 text-[0.6875rem] leading-5 text-muted-foreground">
-                  {fixed ? writer : t(`entryType.${entry!.type!}`)}
+                  {skill
+                    ? skill.off
+                      ? t("skillOff")
+                      : t("byAgent")
+                    : fixed
+                      ? writer
+                      : t(`entryType.${entry!.type!}`)}
                 </span>
               ) : null}
             </div>
@@ -333,11 +446,25 @@ export function PersonaFiles({
             className="field-scrollbar min-h-64 flex-1 bg-background font-mono text-xs"
           />
           <div className="flex items-center justify-end gap-2">
-            {isEntry ? (
+            {skill && !confirming ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={saving}
+                onClick={switchSkill}
+                data-pa-persona-skill-switch={skill.off ? "on" : "off"}
+              >
+                {skill.off ? t("skillTurnOn") : t("skillTurnOff")}
+              </Button>
+            ) : null}
+            {isEntry || skill ? (
               confirming ? (
                 <>
                   <span className="me-auto text-xs text-muted-foreground">
-                    {t("confirmDeleteHint")}
+                    {skill
+                      ? t("confirmDeleteSkillHint")
+                      : t("confirmDeleteHint")}
                   </span>
                   <Button
                     type="button"
@@ -367,7 +494,7 @@ export function PersonaFiles({
                   disabled={saving}
                   onClick={() => setConfirming(true)}
                 >
-                  {t("deleteEntry")}
+                  {skill ? t("deleteSkill") : t("deleteEntry")}
                 </Button>
               )
             ) : null}

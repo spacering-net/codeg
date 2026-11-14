@@ -8066,7 +8066,8 @@
         "persona": "Persona",
         "rules": "Regeln",
         "owner": "Über dich",
-        "memory": "Gedächtnis"
+        "memory": "Gedächtnis",
+        "skills": "Ablauf-Skills"
       },
       "byOwner": "Von dir gepflegt",
       "byAgent": "Vom Agenten gepflegt",
@@ -8689,7 +8690,7 @@
         },
         "level_memory": {
           "title": "Gedächtnisänderungen",
-          "hint": "Ein Assistent hat sein Gedächtnis, seine Persona oder seine Regeln geändert."
+          "hint": "Ein Assistent hat geändert, was er sich merkt, seine Persona oder seine Regeln – auch sein nächtliches Aufräumen und seine Ablauf-Skills."
         },
         "plans": {
           "title": "Pläne",
@@ -8710,6 +8711,13 @@
           "hint": "Eine andere Ausführungskonfiguration schafft eine Art Arbeit deutlich öfter beim ersten Mal als ihre erste Wahl in der Arbeitsteilung (20 Punkte oder mehr, mit mindestens 5 erledigten auf jeder Seite).",
           "on": "An",
           "off": "Aus"
+        },
+        "tidy": {
+          "title": "Aufräumen und Ablauf-Skills",
+          "hint": "Jede Nacht, nachdem du aufgehört hast, räumen die Assistenten ihr Gedächtnis, ihre Persona und ihre Regeln auf; läuft eine Kette von Arbeit gut, wird der Ablauf als Skill festgehalten.",
+          "auto": "Sofort wirksam, auf der Karte rückgängig",
+          "draft": "Erst zeigen (Entwurfskarte, wirksam, wenn ich zustimme)",
+          "off": "Nicht"
         }
       },
       "workdir": {
@@ -8895,7 +8903,16 @@
         "byBot": "Nach Assistent und Art",
         "someone": "Frühere Arbeit",
         "unjudged": "{count} vergeben, noch keine erledigt"
-      }
+      },
+      "processSkillHint": "Ein Weg, etwas zu tun, den der Assistent festgehalten hat: Wenn du danach fragst, folgt er ihm. Was du hier änderst, gilt nach dem Speichern; ausgeschaltet wird er nicht mehr geladen.",
+      "skillOff": "Aus",
+      "skillTurnOn": "Einschalten",
+      "skillTurnOff": "Ausschalten",
+      "skillTurnedOn": "{name} eingeschaltet",
+      "skillTurnedOff": "{name} ausgeschaltet",
+      "deleteSkill": "Skill löschen",
+      "confirmDeleteSkillHint": "Diesen Ablauf-Skill löschen? Sein Ordner wird aus dem Arbeitsverzeichnis entfernt.",
+      "skillDeleted": "{name} gelöscht"
     },
     "statusWord": {
       "idle": "Bereit",
@@ -9792,7 +9809,27 @@
         "silent": "Routine: keine Änderung"
       },
       "preparingBrief": "Dein Morgen-Briefing wird vorbereitet…",
-      "preparingWrap": "Der Tagesabschluss wird vorbereitet…"
+      "preparingWrap": "Der Tagesabschluss wird vorbereitet…",
+      "tidy": {
+        "acted": "Gedächtnis aufgeräumt",
+        "draft": "Aufräumen wartet auf dich",
+        "applied": "Aufräumen übernommen",
+        "undone": "Aufräumen rückgängig",
+        "discarded": "Aufräumen verworfen",
+        "stale": "Aufräum-Entwurf veraltet"
+      },
+      "skill": {
+        "acted": "Ablauf-Skill",
+        "draft": "Ablauf-Skill wartet auf dich",
+        "applied": "Ablauf-Skill installiert",
+        "undone": "Skill-Änderung rückgängig",
+        "discarded": "Ablauf-Skill nicht installiert",
+        "stale": "Skill-Entwurf veraltet",
+        "deleted": "Ablauf-Skill gelöscht"
+      },
+      "apply": "Übernehmen",
+      "install": "Installieren",
+      "notThis": "Nicht diesen"
     },
     "meet": {
       "name": {
@@ -10589,6 +10626,75 @@
         "depends_on": "worauf er wartet",
         "kind": "Art der Arbeit"
       }
+    },
+    "tidy": {
+      "title": {
+        "acted": "Gedächtnis aufgeräumt ({day})",
+        "draft": "Aufräumen vom {day}, als Entwurf",
+        "applied": "Aufräumen vom {day}, übernommen",
+        "undone": "Aufräumen vom {day}, rückgängig",
+        "discarded": "Aufräumen vom {day}, verworfen",
+        "stale": "Aufräumen vom {day}, veraltet"
+      },
+      "note": {
+        "draft": "Als Entwurf behalten: Das Gedächtnis bleibt, wie es war, bis du ihn übernimmst.",
+        "applied": "Übernommen: Das Gedächtnis ist so, wie das Aufräumen es hinterließ.",
+        "discarded": "Verworfen: Das Gedächtnis bleibt, wie es ist.",
+        "stale": "Das Gedächtnis hat sich seitdem so geändert, dass der Entwurf nicht mehr passt; in der nächsten Nacht wird neu aufgeräumt.",
+        "notAside": "Konnte nicht als Entwurf behalten werden ({why}): Es gilt bereits – „Alles rückgängig“ nimmt es zurück."
+      },
+      "undoAll": "Alles rückgängig",
+      "apply": "Übernehmen",
+      "dismiss": "Nicht diesen",
+      "lines": "Letzte Nacht aufgeräumt",
+      "view": "Ansehen",
+      "line": {
+        "done": "{name} hat sein Gedächtnis aufgeräumt: {text}",
+        "draft": "{name} hat sein Gedächtnis aufgeräumt, als Entwurf: {text}"
+      },
+      "state": {
+        "applied": "Übernommen",
+        "undone": "Rückgängig gemacht",
+        "discarded": "Verworfen",
+        "stale": "Veraltet – heute Nacht neu"
+      }
+    },
+    "skill": {
+      "heading": {
+        "added": "Neuer Ablauf-Skill",
+        "modified": "Ablauf-Skill geändert",
+        "deleted": "Ablauf-Skill entfernt",
+        "draft": "Ablauf-Skill als Entwurf"
+      },
+      "line": {
+        "learned": "Ich habe „{title}“ als Ablauf-Skill festgehalten: Wenn du das nächste Mal danach fragst, folge ich ihm.",
+        "changed": "Ich habe den Ablauf-Skill „{title}“ geändert; er gilt ab jetzt.",
+        "removed": "Ich habe den Ablauf-Skill „{title}“ entfernt.",
+        "draft": "Ich habe den Ablauf-Skill „{title}“ geschrieben; er gilt, sobald du ihn installierst."
+      },
+      "when": "Wann: {text}",
+      "note": {
+        "off": "Ausgeschaltet: Er wird nicht mehr geladen.",
+        "draft": "Noch hat sich nichts geändert.",
+        "applied": "Installiert.",
+        "undone": "Änderung zurückgenommen.",
+        "discarded": "Nicht installiert; er bleibt, wie er war.",
+        "stale": "Er hat sich seitdem wieder geändert; dieser Entwurf passt nicht mehr.",
+        "deleted": "Gelöscht.",
+        "notAside": "Konnte nicht als Entwurf behalten werden ({why}): Er bleibt aus – „Einschalten“ lädt ihn.",
+        "notAsideOn": "Konnte weder als Entwurf behalten ({why}) noch ausgeschaltet werden: Er gilt bereits – ausschalten oder rückgängig machen."
+      },
+      "show": "Inhalt zeigen",
+      "hide": "Ausblenden",
+      "view": "Ansehen",
+      "disable": "Ausschalten",
+      "enable": "Einschalten",
+      "undo": "Rückgängig",
+      "delete": "Löschen",
+      "confirmDelete": "Löschen",
+      "cancel": "Abbrechen",
+      "install": "Installieren",
+      "dismiss": "Nicht diesen"
     }
   }
 }

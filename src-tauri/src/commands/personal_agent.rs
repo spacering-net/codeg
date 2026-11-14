@@ -352,11 +352,30 @@ pub async fn personal_agent_files_core(
             name: name.to_string(),
             exists: content.is_some(),
             content: content.unwrap_or_default(),
+            off: false,
         });
     }
     // Then the entries the index lists, as `memory/<name>.md`.
     for (name, content) in workdir::list_entries(&dir) {
-        out.push(PersonalAgentFile { name, content, exists: true });
+        out.push(PersonalAgentFile {
+            name,
+            content,
+            exists: true,
+            off: false,
+        });
+    }
+    // Then its process skills, as `process-skills/<name>/SKILL.md` (7.8).
+    let switches = crate::personal_agent::engine::skill_switches(&row);
+    for (name, content) in workdir::list_skills(&dir) {
+        // Off: not loaded now — turned off, or a version not approved.
+        let turned_off =
+            workdir::skill_name_of(&name).is_some_and(|n| !switches.loads(n, &content));
+        out.push(PersonalAgentFile {
+            name,
+            content,
+            exists: true,
+            off: turned_off,
+        });
     }
     Ok(out)
 }
@@ -1460,6 +1479,19 @@ pub async fn personal_agent_file_delete_core(
     engine(bot_id).await?.delete_file(&name).await.map_err(refused)
 }
 
+/// Turn one of an assistant's process skills on or off (7.8).
+pub async fn personal_agent_skill_switch_core(
+    bot_id: Option<i32>,
+    name: String,
+    on: bool,
+) -> Result<(), AppCommandError> {
+    engine(bot_id)
+        .await?
+        .switch_skill(&name, on)
+        .await
+        .map_err(refused)
+}
+
 pub async fn personal_agent_set_workdir_core(
     bot_id: Option<i32>,
     path: Option<String>,
@@ -2176,6 +2208,16 @@ pub async fn personal_agent_file_delete(
     name: String,
 ) -> Result<(), AppCommandError> {
     personal_agent_file_delete_core(bot_id, name).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_skill_switch(
+    bot_id: Option<i32>,
+    name: String,
+    on: bool,
+) -> Result<(), AppCommandError> {
+    personal_agent_skill_switch_core(bot_id, name, on).await
 }
 
 #[cfg(feature = "tauri-runtime")]

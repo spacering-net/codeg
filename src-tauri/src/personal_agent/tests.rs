@@ -17391,3 +17391,1055 @@ async fn a_plan_step_carries_its_kind_of_work_to_its_dispatch() {
     let (_, card) = plan_card(&primary, id).await;
     assert_eq!(card["plan"]["steps"][0]["kind"], "research");
 }
+
+// ── 3.4: the nightly tidy-up and process skills (7.7, 7.8) ─────────────────
+
+/// The owner's message delivered and its turn run to its end, the
+/// assistant doing `work` in its working directory meanwhile.
+async fn owner_said(
+    engine: &Arc<PersonalAgentEngine>,
+    rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>,
+    state: &State,
+    conn: &str,
+    said: &str,
+    work: impl FnOnce(),
+) -> i32 {
+    let row = engine
+        .send_owner_message(said.into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(rx);
+    start_prompt(state, Some(&token)).await;
+    work();
+    emit(engine, state, conn, text("Noted."), true).await;
+    emit(engine, state, conn, turn_complete("end_turn"), true).await;
+    row.id
+}
+
+/// The internal turn the engine sends next: its prompt, run to its end
+/// with the assistant doing `work`; its batch.
+async fn internal_turn(
+    engine: &Arc<PersonalAgentEngine>,
+    rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>,
+    state: &State,
+    conn: &str,
+    work: impl FnOnce(),
+) -> (String, i32) {
+    engine.pump().await;
+    let (prompt, token) = take_prompt(rx);
+    start_prompt(state, Some(&token)).await;
+    let batch = engine.current_batch().await.expect("a turn runs");
+    work();
+    emit(engine, state, conn, text("[[silent]]"), true).await;
+    emit(engine, state, conn, turn_complete("end_turn"), true).await;
+    (prompt, batch)
+}
+
+/// 03:00 of the owner's day `now` is in — still that day: it breaks at
+/// 04:00.
+async fn night_of(engine: &PersonalAgentEngine) -> chrono::DateTime<chrono::Utc> {
+    let tz = engine.owner_tz().await;
+    let day = super::presence::hours_day(super::clock::now(), tz) + chrono::Duration::days(1);
+    super::due::local_at(tz, day.and_hms_opt(3, 0, 0).unwrap())
+}
+
+async fn tidy_events(host: &EngineHost) -> Vec<crate::db::entities::personal_agent_event::Model> {
+    svc::events_in_flight(&host.db.conn, super::tidy::TIDY_EVENT)
+        .await
+        .unwrap()
+}
+
+async fn cards_of(
+    engine: &PersonalAgentEngine,
+    notice: &str,
+) -> Vec<crate::db::entities::personal_agent_timeline::Model> {
+    notice_rows(engine)
+        .await
+        .into_iter()
+        .filter(|r| data_of(r)["notice"] == notice)
+        .collect()
+}
+
+/// Until the last commit is one whose subject starts with `prefix` (the
+/// owner's edits are committed off the call).
+async fn wait_subject(dir: &std::path::Path, prefix: &str) {
+    for _ in 0..100 {
+        if head_subject(dir).await.starts_with(prefix) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("no commit `{prefix}…`: {}", head_subject(dir).await);
+}
+
+async fn head_subject(dir: &std::path::Path) -> String {
+    let out = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%s"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Once the owner's day is over — 03:00 at the latest — each assistant with
+/// something new since its last tidy-up is woken for one, one at a time: an
+/// internal turn with its log, the owner's own words and its index, and no
+/// reply shown. What it changed is one commit and one card, in the next
+/// brief's own part, undone as a whole.
+#[tokio::test]
+async fn the_nightly_tidy_up_comes_once_the_day_is_over_one_at_a_time_and_is_undone_whole() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    primary.boot().await;
+    let seg = open_segment(&primary).await;
+    let (mut rx, state) = live_connection(&primary, seg, "pa-34a").await;
+    let dir = workdir_now(&primary).await;
+    let index = workdir::read_text(&dir, workdir::MEMORY_FILE);
+    let rules = workdir::read_text(&dir, workdir::RULES_FILE);
+    // The day: the owner said where they live now, and two entries say the
+    // same old thing.
+    let said = owner_said(
+        &primary,
+        &mut rx,
+        &state,
+        "pa-34a",
+        "I moved to Berlin last week",
+        || {
+            workdir::write_file(
+                &dir,
+                "memory/home.md",
+                "---\nname: home\ntype: fact\n---\nLives in Munich.\n",
+            )
+            .unwrap();
+            workdir::write_file(
+                &dir,
+                "memory/city.md",
+                "---\nname: city\ntype: fact\n---\nThe owner lives in Munich.\n",
+            )
+            .unwrap();
+            workdir::write_file(
+                &dir,
+                workdir::MEMORY_FILE,
+                &format!(
+                    "{index}- [Home](memory/home.md) — Munich\n- [City](memory/city.md) — Munich\n"
+                ),
+            )
+            .unwrap();
+        },
+    )
+    .await;
+    let before_index = workdir::read_text(&dir, workdir::MEMORY_FILE);
+    let before_home = workdir::read_text(&dir, "memory/home.md");
+    // The work assistant has something new too: the owner wrote to it.
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    worker
+        .send_owner_message("Remember the staging box".into(), Vec::new(), None)
+        .await
+        .unwrap();
+
+    // The evening, their hours not known: not yet.
+    host.tidy_tick(owner_time(&primary, 22 * 60).await).await;
+    assert!(tidy_events(&host).await.is_empty());
+    // 03:00: the primary first, alone.
+    let night = night_of(&primary).await;
+    host.tidy_tick(night).await;
+    let flying = tidy_events(&host).await;
+    assert_eq!(flying.len(), 1, "one at a time");
+    assert_eq!(flying[0].bot_id, Some(primary.bot().await));
+    host.tidy_tick(night + chrono::Duration::minutes(5)).await;
+    assert_eq!(tidy_events(&host).await.len(), 1, "the next waits for it");
+
+    let (prompt, batch) = internal_turn(&primary, &mut rx, &state, "pa-34a", || {
+        std::fs::remove_file(dir.join("memory/city.md")).unwrap();
+        workdir::write_file(
+            &dir,
+            "memory/home.md",
+            "---\nname: home\ntype: fact\n---\nLives in Berlin (as of now).\n",
+        )
+        .unwrap();
+        workdir::write_file(
+            &dir,
+            workdir::MEMORY_FILE,
+            &format!("{index}- [Home](memory/home.md) — Berlin\n"),
+        )
+        .unwrap();
+        workdir::write_file(
+            &dir,
+            workdir::RULES_FILE,
+            &format!("{rules}Keep replies short.\n"),
+        )
+        .unwrap();
+    })
+    .await;
+    assert!(prompt.contains("<codeg-tidy day=\""), "{prompt}");
+    assert!(
+        prompt.contains(&format!("[#{said} ")) && prompt.contains("I moved to Berlin last week"),
+        "the owner's own words: {prompt}"
+    );
+    assert!(
+        prompt.contains("- [City](memory/city.md) — Munich"),
+        "the index: {prompt}"
+    );
+    assert!(prompt.contains("Update USER.md"), "{prompt}");
+    assert!(
+        prompt.contains("it is night: your memory is to be tidied up"),
+        "{prompt}"
+    );
+    let bt = svc::get_batch(&host.db.conn, batch).await.unwrap().unwrap();
+    assert_eq!(
+        bt.trigger,
+        Some(crate::db::entities::personal_agent_batch::BatchTrigger::Consolidate)
+    );
+    assert!(
+        svc::reply_row_of_batch(&host.db.conn, batch)
+            .await
+            .unwrap()
+            .is_none(),
+        "no reply is shown"
+    );
+
+    // One commit, one card: low, made, and no memory card besides.
+    assert!(head_subject(&dir)
+        .await
+        .starts_with("personal agent: tidy "));
+    let cards = cards_of(&primary, "tidy").await;
+    assert_eq!(cards.len(), 1);
+    assert!(
+        cards_of(&primary, "memory")
+            .await
+            .iter()
+            .all(|c| c.batch_id != Some(batch)),
+        "the tidy-up's card only"
+    );
+    let card = &cards[0];
+    let data = data_of(card);
+    assert_eq!(data["state"], "acted");
+    assert!(card.body.starts_with("Tidied memory ("), "{}", card.body);
+    assert!(
+        card.body.contains("1 updated, 1 removed · rules"),
+        "{}",
+        card.body
+    );
+    let id = notice_id_of(card);
+    let notice = svc::get_notice(&host.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(notice.kind, NoticeKind::Tidy);
+    assert_eq!(notice.state, NoticeState::Acted);
+    assert_eq!(
+        notice.level,
+        crate::db::entities::personal_agent_notice::NoticeLevel::Low
+    );
+    // The next look: the work assistant's turn now.
+    host.tidy_tick(night + chrono::Duration::minutes(10)).await;
+    let flying = tidy_events(&host).await;
+    assert_eq!(flying.len(), 1);
+    assert_eq!(flying[0].bot_id, Some(w));
+
+    // Today lists it with its undo; the brief has it in a part of its own.
+    let now = super::clock::now();
+    let (today, _) = super::today::today(&host.db, &host.manager, now).await;
+    let row = today
+        .done
+        .iter()
+        .find(|r| r.kind == "tidy")
+        .expect("in today");
+    assert!(row.undo);
+    assert_eq!(row.state.as_deref(), Some("acted"));
+    let prefs = primary.prefs().await;
+    let m = super::brief::gather(
+        &host.db,
+        &host.manager,
+        "brief",
+        now,
+        now - chrono::Duration::hours(12),
+        &prefs,
+    )
+    .await;
+    assert_eq!(m.tidied.len(), 1, "{:?}", m.tidied);
+    assert_eq!(m.tidied[0]["notice_id"], id);
+    assert!(
+        m.night.iter().all(|v| v["kind"] != "tidy"),
+        "not again in the night's"
+    );
+    assert!(!m.is_empty());
+    let text_of = super::brief::material_text(&m, primary.owner_tz().await);
+    assert!(text_of.contains("Tidied their memory since"), "{text_of}");
+
+    // Undo all: every file as it was before it, and the assistant told.
+    let row = primary.act_on_notice(id, "undo").await.unwrap();
+    assert_eq!(
+        data_of(&svc::get_row(&host.db.conn, row.id).await.unwrap().unwrap())["state"],
+        "undone"
+    );
+    assert!(dir.join("memory/city.md").is_file());
+    assert_eq!(workdir::read_text(&dir, "memory/home.md"), before_home);
+    assert_eq!(workdir::read_text(&dir, workdir::MEMORY_FILE), before_index);
+    assert_eq!(workdir::read_text(&dir, workdir::RULES_FILE), rules);
+    assert!(head_subject(&dir).await.starts_with("owner: undo tidy "));
+    let told = svc::pending_events(&host.db.conn, primary.bot().await)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.summary.contains("undid your tidy-up"))
+        .expect("told");
+    assert!(!told.wake);
+    assert!(
+        SegmentState::parse(
+            &svc::get_segment(&host.db.conn, seg)
+                .await
+                .unwrap()
+                .unwrap()
+                .state
+        )
+        .persona_resend,
+        "its rules are handed over again"
+    );
+    assert!(primary.act_on_notice(id, "undo").await.is_err(), "once");
+}
+
+/// Nothing said and nothing written since the last tidy-up: no tidy-up.
+/// With the owner's "don't", none at all.
+#[tokio::test]
+async fn nothing_new_no_tidy_up_and_with_it_off_none_at_all() {
+    let (host, _w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let night = night_of(&primary).await;
+    host.tidy_tick(night).await;
+    assert!(tidy_events(&host).await.is_empty(), "nothing new");
+    primary
+        .send_owner_message("hello".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    set_pref(&primary, "tidy", json!("off")).await;
+    host.tidy_tick(night + chrono::Duration::minutes(5)).await;
+    assert!(tidy_events(&host).await.is_empty(), "off");
+    set_pref(&primary, "tidy", json!("auto")).await;
+    host.tidy_tick(night + chrono::Duration::minutes(10)).await;
+    assert_eq!(tidy_events(&host).await.len(), 1);
+    // One of an earlier night that never came round is let go.
+    let e = tidy_events(&host).await.remove(0);
+    let tomorrow = night + chrono::Duration::days(1);
+    host.tidy_tick(tomorrow).await;
+    let flying = tidy_events(&host).await;
+    assert!(
+        flying.iter().all(|x| x.id != e.id),
+        "the stale one is let go"
+    );
+}
+
+/// With "show me first" the tidy-up is set aside at once: the memory as it
+/// was, the card a draft — applied whole, or let go. A draft the memory
+/// moved past is stale: nothing of it applied, and the next night tidies
+/// again.
+#[tokio::test]
+async fn a_tidy_up_to_see_first_is_a_draft_applied_whole_or_stale() {
+    let (host, _w, _tmp) = hosted().await;
+    let primary = host.primary();
+    primary.boot().await;
+    set_pref(&primary, "tidy", json!("draft")).await;
+    let seg = open_segment(&primary).await;
+    let (mut rx, state) = live_connection(&primary, seg, "pa-34d").await;
+    let dir = workdir_now(&primary).await;
+    let index = workdir::read_text(&dir, workdir::MEMORY_FILE);
+    owner_said(
+        &primary,
+        &mut rx,
+        &state,
+        "pa-34d",
+        "We ship on Fridays",
+        || {},
+    )
+    .await;
+    let night = night_of(&primary).await;
+    host.tidy_tick(night).await;
+    internal_turn(&primary, &mut rx, &state, "pa-34d", || {
+        workdir::write_file(
+            &dir,
+            "memory/ship.md",
+            "---\nname: ship\ntype: fact\n---\nFridays.\n",
+        )
+        .unwrap();
+        workdir::write_file(
+            &dir,
+            workdir::MEMORY_FILE,
+            &format!("{index}- [Ship](memory/ship.md) — Fridays\n"),
+        )
+        .unwrap();
+    })
+    .await;
+    // Set aside: the memory as it was.
+    assert!(!dir.join("memory/ship.md").exists());
+    assert_eq!(workdir::read_text(&dir, workdir::MEMORY_FILE), index);
+    let card = cards_of(&primary, "tidy").await.remove(0);
+    assert_eq!(data_of(&card)["state"], "draft");
+    assert!(card.body.contains("a draft"), "{}", card.body);
+    let id = notice_id_of(&card);
+    assert_eq!(
+        svc::get_notice(&host.db.conn, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        NoticeState::Open
+    );
+    assert!(svc::pending_events(&host.db.conn, primary.bot().await)
+        .await
+        .unwrap()
+        .iter()
+        .any(|e| e.summary.contains("kept as a draft")));
+    // It waits on the owner in "today".
+    let (today, _) = super::today::today(&host.db, &host.manager, super::clock::now()).await;
+    let row = today
+        .needs
+        .iter()
+        .find(|r| r.kind == "tidy")
+        .expect("waits on the owner");
+    assert_eq!(row.state.as_deref(), Some("draft"));
+    // Applied: whole.
+    let row = primary.act_on_notice(id, "apply").await.unwrap();
+    assert_eq!(
+        data_of(&svc::get_row(&host.db.conn, row.id).await.unwrap().unwrap())["state"],
+        "applied"
+    );
+    assert!(dir.join("memory/ship.md").is_file());
+    assert!(workdir::read_text(&dir, workdir::MEMORY_FILE)
+        .contains("- [Ship](memory/ship.md) — Fridays"));
+    assert!(head_subject(&dir).await.starts_with("owner: apply tidy "));
+    assert!(primary.act_on_notice(id, "apply").await.is_err(), "once");
+    // …and undone from there.
+    primary.act_on_notice(id, "undo").await.unwrap();
+    assert!(!dir.join("memory/ship.md").exists());
+
+    // Another night's draft changes an entry the owner then writes
+    // otherwise: stale.
+    let entry = "---\nname: ship\ntype: fact\n---\nFridays.\n";
+    primary.save_file("memory/ship.md", entry).await.unwrap();
+    wait_subject(&dir, "owner: edit memory/ship.md").await;
+    assert!(svc::insert_event(
+        &host.db.conn,
+        primary.bot().await,
+        super::tidy::TIDY_EVENT,
+        "tidy:2026-01-02",
+        None,
+        "Your nightly tidy-up of 2026-01-02 is due.".into(),
+        Some(json!({ "day": "2026-01-02" })),
+        true,
+    )
+    .await
+    .unwrap());
+    internal_turn(&primary, &mut rx, &state, "pa-34d", || {
+        workdir::write_file(
+            &dir,
+            "memory/ship.md",
+            &entry.replace("Fridays", "Thursdays"),
+        )
+        .unwrap();
+    })
+    .await;
+    let draft = cards_of(&primary, "tidy")
+        .await
+        .into_iter()
+        .find(|c| data_of(c)["day"] == "2026-01-02")
+        .unwrap();
+    assert_eq!(data_of(&draft)["state"], "draft");
+    assert_eq!(
+        workdir::read_text(&dir, "memory/ship.md"),
+        entry,
+        "set aside"
+    );
+    let mine = entry.replace("Fridays", "Mondays");
+    primary.save_file("memory/ship.md", &mine).await.unwrap();
+    wait_subject(&dir, "owner: edit memory/ship.md").await;
+    let id = notice_id_of(&draft);
+    let row = primary.act_on_notice(id, "apply").await.unwrap();
+    assert_eq!(
+        data_of(&svc::get_row(&host.db.conn, row.id).await.unwrap().unwrap())["state"],
+        "stale"
+    );
+    assert_eq!(
+        workdir::read_text(&dir, "memory/ship.md"),
+        mine,
+        "the owner's edit stays"
+    );
+    assert_eq!(
+        svc::get_notice(&host.db.conn, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        NoticeState::Expired
+    );
+    // The next night tidies again: the stale draft is new since the last
+    // tidy-up that ran — and only until the next one runs.
+    let since = primary.tidy_since(super::clock::now()).await;
+    assert!(
+        primary.has_new_content(since).await,
+        "a stale draft is tidied again"
+    );
+    assert!(
+        !primary
+            .has_new_content(super::clock::now() + chrono::Duration::hours(1))
+            .await,
+        "once"
+    );
+    // A draft let go.
+    let _ = primary
+        .act_on_notice(id, "dismiss")
+        .await
+        .expect_err("a stale one is no draft");
+}
+
+/// Work for one request of the owner's that went well — three pieces, all
+/// done, quiet a while — is looked back at once, by the assistant it was
+/// for, with codeg's record of it. The skill it writes is installed into
+/// its brain's skills and shown on a card: turned off and on, a change of
+/// it (after the owner's own edit) undone, deleted.
+#[tokio::test]
+async fn work_that_went_well_becomes_a_process_skill_installed_turned_off_changed_and_deleted() {
+    let (host, _w, _tmp) = hosted().await;
+    let primary = host.primary();
+    primary.boot().await;
+    let seg = open_segment(&primary).await;
+    let (mut rx, state) = live_connection(&primary, seg, "pa-34r").await;
+    let dir = workdir_now(&primary).await;
+    let asked = owner_said(
+        &primary,
+        &mut rx,
+        &state,
+        "pa-34r",
+        "Cut the 1.2 release",
+        || {},
+    )
+    .await;
+    let releaser = role_assistant(&primary, "Releaser", true).await;
+    let mut ids = Vec::new();
+    for (title, kind) in [
+        ("Write the notes", "release"),
+        ("Fix the red CI", "fix_ci"),
+        ("Tag rc1", "release"),
+    ] {
+        let d = svc::create_dispatch(
+            &host.db.conn,
+            NewDispatch {
+                bot_id: primary.bot().await,
+                mode: DispatchMode::Chat,
+                executor_assistant_id: releaser,
+                executor_snapshot_json: "{}".into(),
+                folder_id: None,
+                deliverable: None,
+                title: title.into(),
+                prompt: format!("{title}, please."),
+                origin_batch_id: None,
+                on_done: None,
+                lineage: svc::Lineage {
+                    origin_bot_id: Some(primary.bot().await),
+                    origin_row_id: Some(asked),
+                    ..Default::default()
+                },
+                done_when: None,
+                pr_fix: None,
+                kind: Some(kind.into()),
+            },
+        )
+        .await
+        .unwrap();
+        svc::update_dispatch(
+            &host.db.conn,
+            d.id,
+            None,
+            DispatchWrite {
+                state: Some(DispatchState::Completed),
+                result_excerpt: Some(Some(format!("{title}: done"))),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        ids.push(d.id);
+    }
+    // Just done: not yet.
+    let now = super::clock::now();
+    host.reflect_tick(now).await;
+    assert!(
+        svc::events_in_flight(&host.db.conn, super::skills::REFLECT_EVENT)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // Quiet for a while: the primary looks back (no release assistant).
+    host.reflect_tick(now + chrono::Duration::minutes(40)).await;
+    let flying = svc::events_in_flight(&host.db.conn, super::skills::REFLECT_EVENT)
+        .await
+        .unwrap();
+    assert_eq!(flying.len(), 1);
+    assert_eq!(flying[0].bot_id, Some(primary.bot().await));
+    let skill_md = "---\nname: release\ndescription: when the owner says release\n---\n# Release\n\n1. Notes — Releaser, chat.\n2. Stop for the owner before the tag.\n";
+    let (prompt, batch) = internal_turn(&primary, &mut rx, &state, "pa-34r", || {
+        workdir::write_file(&dir, "process-skills/release/SKILL.md", skill_md).unwrap();
+    })
+    .await;
+    assert!(prompt.contains("<codeg-reflect>"), "{prompt}");
+    assert!(
+        prompt.contains("3 pieces of work handed out for one request"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("This was a release"), "{prompt}");
+    assert!(
+        prompt.contains(&format!("The owner asked (#{asked}"))
+            && prompt.contains("Cut the 1.2 release"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("\"Fix the red CI\" — fix_ci · Releaser · chat"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Came back: Tag rc1: done"), "{prompt}");
+    assert!(
+        prompt.contains("work you were responsible for went well"),
+        "{prompt}"
+    );
+    let bt = svc::get_batch(&host.db.conn, batch).await.unwrap().unwrap();
+    assert_eq!(
+        bt.trigger,
+        Some(crate::db::entities::personal_agent_batch::BatchTrigger::Reflect)
+    );
+    assert!(svc::reply_row_of_batch(&host.db.conn, batch)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(head_subject(&dir)
+        .await
+        .starts_with(&format!("personal agent: look back at request #{asked}")));
+    // Looked back at once.
+    host.reflect_tick(now + chrono::Duration::minutes(50)).await;
+    assert!(
+        svc::events_in_flight(&host.db.conn, super::skills::REFLECT_EVENT)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Installed, with a card.
+    let installed = dir.join(".claude/skills/release/SKILL.md");
+    assert_eq!(std::fs::read_to_string(&installed).unwrap(), skill_md);
+    assert!(workdir::skill_installed(
+        &dir,
+        AgentType::ClaudeCode,
+        "release"
+    ));
+    let card = cards_of(&primary, "skill").await.remove(0);
+    let data = data_of(&card);
+    assert_eq!(
+        (
+            data["state"].as_str(),
+            data["status"].as_str(),
+            data["title"].as_str(),
+            data["name"].as_str()
+        ),
+        (
+            Some("acted"),
+            Some("added"),
+            Some("Release"),
+            Some("release")
+        )
+    );
+    assert_eq!(data["description"], "when the owner says release");
+    assert!(card.body.contains("learned"), "{}", card.body);
+    let id = notice_id_of(&card);
+    // A new session's handoff names it.
+    let switches = super::engine::skill_switches(&primary.agent_row().await.unwrap());
+    let lines = super::skills::skills_lines(
+        &workdir::process_skills(&dir),
+        &workdir::loadable_skills(&dir, &switches),
+    );
+    assert!(
+        lines.contains("- release — when the owner says release (process-skills/release/SKILL.md)"),
+        "{lines}"
+    );
+
+    // Off: not loaded, kept; on again.
+    primary.act_on_notice(id, "disable").await.unwrap();
+    assert!(!installed.exists());
+    assert!(dir.join("process-skills/release/SKILL.md").is_file());
+    let files =
+        crate::commands::personal_agent::personal_agent_files_core(&host.db, &host.data_dir, None)
+            .await
+            .unwrap();
+    assert!(files
+        .iter()
+        .any(|f| f.name == "process-skills/release/SKILL.md" && f.off));
+    assert_eq!(
+        data_of(&svc::get_row(&host.db.conn, card.id).await.unwrap().unwrap())["off"],
+        true
+    );
+    primary.act_on_notice(id, "enable").await.unwrap();
+    assert!(installed.is_file());
+
+    // The owner edits it: installed as they wrote it.
+    let mine = skill_md.replace(
+        "Stop for the owner before the tag.",
+        "Stop for me before the tag and before publishing.",
+    );
+    primary
+        .save_file("process-skills/release/SKILL.md", &mine)
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&installed).unwrap(), mine);
+    wait_subject(&dir, "owner: edit process-skills/release").await;
+    // The assistant changes it again: at once, with a diff card.
+    let theirs = mine.replace("1. Notes", "1. Release notes");
+    owner_said(
+        &primary,
+        &mut rx,
+        &state,
+        "pa-34r",
+        "Call them release notes",
+        || {
+            workdir::write_file(&dir, "process-skills/release/SKILL.md", &theirs).unwrap();
+        },
+    )
+    .await;
+    assert_eq!(std::fs::read_to_string(&installed).unwrap(), theirs);
+    let changed = cards_of(&primary, "skill")
+        .await
+        .into_iter()
+        .find(|c| data_of(c)["status"] == "modified")
+        .expect("a diff card");
+    assert!(data_of(&changed)["diff"]
+        .as_str()
+        .unwrap()
+        .contains("+1. Release notes"));
+    primary
+        .act_on_notice(notice_id_of(&changed), "undo")
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&installed).unwrap(),
+        mine,
+        "back to the owner's"
+    );
+
+    // Deleted: gone, its card says so.
+    primary.act_on_notice(id, "delete").await.unwrap();
+    assert!(!dir.join("process-skills/release").exists());
+    assert!(!installed.exists());
+    assert_eq!(
+        data_of(&svc::get_row(&host.db.conn, card.id).await.unwrap().unwrap())["state"],
+        "deleted"
+    );
+    assert!(svc::pending_events(&host.db.conn, primary.bot().await)
+        .await
+        .unwrap()
+        .iter()
+        .any(|e| e.summary.contains("deleted your process skill release")));
+}
+
+/// A release is looked back at by the release work assistant; two pieces
+/// of work that went as two did before, for a request like it, are looked
+/// back at too; work that failed is not.
+#[tokio::test]
+async fn a_release_goes_to_the_release_assistant_and_the_same_steps_twice_are_looked_back_at() {
+    let (host, _w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let release = worker_row(&primary, "Ship").await;
+    crate::db::entities::personal_agent::Entity::update_many()
+        .col_expr(
+            crate::db::entities::personal_agent::Column::Template,
+            sea_orm::sea_query::Expr::value("release"),
+        )
+        .filter(crate::db::entities::personal_agent::Column::Id.eq(release))
+        .exec(&host.db.conn)
+        .await
+        .unwrap();
+    let exec = role_assistant(&primary, "Runner", true).await;
+    let me = primary.bot().await;
+    async fn chain(
+        host: &EngineHost,
+        bot: i32,
+        exec: i32,
+        row: i32,
+        steps: &[(&str, &str, DispatchState)],
+    ) {
+        for (title, kind, st) in steps {
+            let d = svc::create_dispatch(
+                &host.db.conn,
+                NewDispatch {
+                    bot_id: bot,
+                    mode: DispatchMode::Chat,
+                    executor_assistant_id: exec,
+                    executor_snapshot_json: "{}".into(),
+                    folder_id: None,
+                    deliverable: None,
+                    title: (*title).into(),
+                    prompt: "do".into(),
+                    origin_batch_id: None,
+                    on_done: None,
+                    lineage: svc::Lineage {
+                        origin_bot_id: Some(bot),
+                        origin_row_id: Some(row),
+                        ..Default::default()
+                    },
+                    done_when: None,
+                    pr_fix: None,
+                    kind: Some((*kind).into()),
+                },
+            )
+            .await
+            .unwrap();
+            svc::update_dispatch(
+                &host.db.conn,
+                d.id,
+                None,
+                DispatchWrite {
+                    state: Some(*st),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+    }
+    let owner_row = |text: &'static str| {
+        let p = primary.clone();
+        async move {
+            p.send_owner_message(text.into(), Vec::new(), None)
+                .await
+                .unwrap()
+                .id
+        }
+    };
+    let r1 = owner_row("Ship 1.3").await;
+    chain(
+        &host,
+        me,
+        exec,
+        r1,
+        &[
+            ("notes", "release", DispatchState::Completed),
+            ("tag", "release", DispatchState::Completed),
+            ("docker", "release", DispatchState::Completed),
+        ],
+    )
+    .await;
+    let r2 = owner_row("Check the deps for security updates").await;
+    chain(
+        &host,
+        me,
+        exec,
+        r2,
+        &[
+            ("scan deps", "research", DispatchState::Completed),
+            ("write up", "docs", DispatchState::Completed),
+        ],
+    )
+    .await;
+    let r3 = owner_row("Check the deps for security updates again").await;
+    chain(
+        &host,
+        me,
+        exec,
+        r3,
+        &[
+            ("scan deps", "research", DispatchState::Completed),
+            ("write up", "docs", DispatchState::Completed),
+        ],
+    )
+    .await;
+    let r4 = owner_row("Fix the flaky test").await;
+    chain(
+        &host,
+        me,
+        exec,
+        r4,
+        &[
+            ("fix", "code", DispatchState::Completed),
+            ("verify", "test", DispatchState::Failed),
+            ("again", "code", DispatchState::Completed),
+        ],
+    )
+    .await;
+
+    host.reflect_tick(super::clock::now() + chrono::Duration::minutes(40))
+        .await;
+    let flying = svc::events_in_flight(&host.db.conn, super::skills::REFLECT_EVENT)
+        .await
+        .unwrap();
+    let of = |row: i32| {
+        flying
+            .iter()
+            .find(|e| super::skills::origin_of_event(e) == Some(row))
+    };
+    assert_eq!(
+        of(r1).and_then(|e| e.bot_id),
+        Some(release),
+        "a release: the release assistant"
+    );
+    assert!(of(r2).is_none(), "the first time: no");
+    let again = of(r3).expect("the same steps again");
+    assert_eq!(again.bot_id, Some(me));
+    let p: serde_json::Value = serde_json::from_str(again.payload.as_deref().unwrap()).unwrap();
+    assert_eq!(p["before"]["origin_row"], r2);
+    assert!(of(r4).is_none(), "one failed");
+    assert_eq!(flying.len(), 2);
+    // Off: none.
+    let (host2, _w2, _tmp2) = hosted().await;
+    set_pref(&host2.primary(), "tidy", json!("off")).await;
+    host2
+        .reflect_tick(super::clock::now() + chrono::Duration::minutes(40))
+        .await;
+    assert!(
+        svc::events_in_flight(&host2.db.conn, super::skills::REFLECT_EVENT)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// With "show me first", a skill the assistant writes is set aside: not in
+/// its folder, not installed, until the owner installs it.
+#[tokio::test]
+async fn a_skill_to_see_first_is_installed_only_when_the_owner_says() {
+    let (engine, _tmp) = configured().await;
+    set_pref(&engine, "tidy", json!("draft")).await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-34s").await;
+    let dir = workdir_now(&engine).await;
+    owner_said(
+        &engine,
+        &mut rx,
+        &state,
+        "pa-34s",
+        "From now on, do releases like this",
+        || {
+            workdir::write_file(
+                &dir,
+                "process-skills/release/SKILL.md",
+                "---\nname: release\ndescription: releases\n---\n# Release\n",
+            )
+            .unwrap();
+        },
+    )
+    .await;
+    assert!(
+        !dir.join("process-skills/release/SKILL.md").exists(),
+        "set aside"
+    );
+    assert!(!workdir::skill_installed(
+        &dir,
+        AgentType::ClaudeCode,
+        "release"
+    ));
+    let card = cards_of(&engine, "skill").await.remove(0);
+    assert_eq!(data_of(&card)["state"], "draft");
+    let id = notice_id_of(&card);
+    engine.act_on_notice(id, "apply").await.unwrap();
+    assert!(dir.join("process-skills/release/SKILL.md").is_file());
+    assert!(workdir::skill_installed(
+        &dir,
+        AgentType::ClaudeCode,
+        "release"
+    ));
+    assert_eq!(
+        data_of(
+            &svc::get_row(&engine.db.conn, card.id)
+                .await
+                .unwrap()
+                .unwrap()
+        )["state"],
+        "applied"
+    );
+}
+
+/// The owner's edit on the page waits for any other write of the
+/// directory — an undo, a draft applied, a turn's commit — and is written
+/// and committed in one hold of it: nothing written meanwhile writes over it.
+#[tokio::test]
+async fn the_owners_page_edit_waits_for_any_other_write_of_the_directory() {
+    let (engine, _tmp) = configured().await;
+    let dir = workdir_now(&engine).await;
+    let mine = "# Rules\n\n- Mine.\n";
+    let held = workdir::hold_writes_for_test().await;
+    let e = engine.clone();
+    let save = tokio::spawn(async move { e.save_file(workdir::RULES_FILE, mine).await });
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_ne!(
+        workdir::read_text(&dir, workdir::RULES_FILE),
+        mine,
+        "not written while another write holds the directory"
+    );
+    drop(held);
+    save.await.unwrap().unwrap();
+    assert_eq!(workdir::read_text(&dir, workdir::RULES_FILE), mine);
+    assert!(
+        head_subject(&dir)
+            .await
+            .starts_with("owner: edit AGENTS.md"),
+        "and committed with it"
+    );
+}
+
+/// A tidy-up or a look back queued before the owner switched them off is
+/// let go, not sent; one switched off while it ran is kept aside — a draft
+/// on its card — not taken in.
+#[tokio::test]
+async fn switched_off_a_queued_tidy_up_is_let_go_and_one_running_is_kept_aside() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-34o").await;
+    let dir = workdir_now(&engine).await;
+    let index = workdir::read_text(&dir, workdir::MEMORY_FILE);
+    let queue = |key: &'static str, kind: &'static str| {
+        let e = engine.clone();
+        async move {
+            assert!(svc::insert_event(
+                &e.db.conn,
+                e.bot().await,
+                kind,
+                key,
+                None,
+                "due".into(),
+                Some(json!({ "day": "2026-01-03", "origin_row": 1 })),
+                true,
+            )
+            .await
+            .unwrap());
+        }
+    };
+    queue("tidy:2026-01-03", super::tidy::TIDY_EVENT).await;
+    queue("reflect:1:1", super::skills::REFLECT_EVENT).await;
+    set_pref(&engine, "tidy", json!("off")).await;
+    engine.pump().await;
+    assert!(no_prompt(&mut rx), "nothing sent");
+    let left = svc::pending_events(&engine.db.conn, engine.bot().await)
+        .await
+        .unwrap();
+    assert!(
+        left.iter()
+            .all(|e| e.kind != super::tidy::TIDY_EVENT && e.kind != super::skills::REFLECT_EVENT),
+        "let go: {left:?}"
+    );
+
+    // Running when it is switched off: what it changed is kept aside.
+    set_pref(&engine, "tidy", json!("auto")).await;
+    queue("tidy:2026-01-04", super::tidy::TIDY_EVENT).await;
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains("<codeg-tidy"), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    workdir::write_file(
+        &dir,
+        workdir::MEMORY_FILE,
+        &format!("{index}- [X](memory/x.md) — x\n"),
+    )
+    .unwrap();
+    set_pref(&engine, "tidy", json!("off")).await;
+    emit(&engine, &state, "pa-34o", text("[[silent]]"), true).await;
+    emit(&engine, &state, "pa-34o", turn_complete("end_turn"), true).await;
+    assert_eq!(
+        workdir::read_text(&dir, workdir::MEMORY_FILE),
+        index,
+        "not taken in"
+    );
+    let card = cards_of(&engine, "tidy").await.remove(0);
+    assert_eq!(data_of(&card)["state"], "draft");
+}

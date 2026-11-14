@@ -8065,7 +8065,8 @@
         "persona": "Persona",
         "rules": "Rules",
         "owner": "About you",
-        "memory": "Memory"
+        "memory": "Memory",
+        "skills": "Process skills"
       },
       "byOwner": "You write it",
       "byAgent": "The agent keeps it",
@@ -8688,7 +8689,7 @@
         },
         "level_memory": {
           "title": "Memory changes",
-          "hint": "An assistant changed what it remembers, its persona or its rules."
+          "hint": "An assistant changed what it remembers, its persona or its rules — its nightly tidy-up and its process skills too."
         },
         "plans": {
           "title": "Plans",
@@ -8709,6 +8710,13 @@
           "hint": "Another executor config passes a kind of work the first time clearly more often than its first pick in the division (20 points or more, with at least 5 pieces done on each side).",
           "on": "On",
           "off": "Off"
+        },
+        "tidy": {
+          "title": "Tidy-ups and process skills",
+          "hint": "Each night, after you stop, the assistants tidy their memory, persona and rules; when a chain of work goes well, the way it went is written down as a skill.",
+          "auto": "Take effect at once, undo on the card",
+          "draft": "Show me first (a draft card, applied when I say)",
+          "off": "Don't"
         }
       },
       "workdir": {
@@ -8895,7 +8903,16 @@
         "byBot": "By assistant and mode",
         "someone": "Earlier work",
         "unjudged": "{count} handed out, none done yet"
-      }
+      },
+      "processSkillHint": "A way of doing something the assistant wrote down: when you ask for it, it follows it. What you change here takes effect once saved; turned off, it is no longer loaded.",
+      "skillOff": "Off",
+      "skillTurnOn": "Turn on",
+      "skillTurnOff": "Turn off",
+      "skillTurnedOn": "Turned on {name}",
+      "skillTurnedOff": "Turned off {name}",
+      "deleteSkill": "Delete skill",
+      "confirmDeleteSkillHint": "Delete this process skill? Its folder is removed from the working directory.",
+      "skillDeleted": "Deleted {name}"
     },
     "statusWord": {
       "idle": "Idle",
@@ -9792,7 +9809,27 @@
         "silent": "Routine: no change"
       },
       "preparingBrief": "Preparing your morning brief…",
-      "preparingWrap": "Preparing the day's wrap-up…"
+      "preparingWrap": "Preparing the day's wrap-up…",
+      "tidy": {
+        "acted": "Tidied up memory",
+        "draft": "Tidy-up waiting for you",
+        "applied": "Tidy-up applied",
+        "undone": "Tidy-up undone",
+        "discarded": "Tidy-up not used",
+        "stale": "Tidy-up out of date"
+      },
+      "skill": {
+        "acted": "Process skill",
+        "draft": "Process skill waiting for you",
+        "applied": "Process skill installed",
+        "undone": "Process skill change undone",
+        "discarded": "Process skill not installed",
+        "stale": "Process skill draft out of date",
+        "deleted": "Process skill deleted"
+      },
+      "apply": "Apply",
+      "install": "Install",
+      "notThis": "Not this one"
     },
     "meet": {
       "name": {
@@ -10589,6 +10626,75 @@
         "depends_on": "what it waits for",
         "kind": "kind of work"
       }
+    },
+    "tidy": {
+      "title": {
+        "acted": "Tidied up memory ({day})",
+        "draft": "Tidy-up of {day}, a draft",
+        "applied": "Tidy-up of {day}, applied",
+        "undone": "Tidy-up of {day}, undone",
+        "discarded": "Tidy-up of {day}, not used",
+        "stale": "Tidy-up of {day}, out of date"
+      },
+      "note": {
+        "draft": "Kept as a draft: your memory is as it was until you apply it.",
+        "applied": "Applied: the memory is as the tidy-up left it.",
+        "discarded": "Not used: the memory stays as it is.",
+        "stale": "The memory changed since in a way this draft no longer fits; the next night tidies again.",
+        "notAside": "Could not be kept as a draft ({why}): it is in effect — Undo all takes it back."
+      },
+      "undoAll": "Undo all",
+      "apply": "Apply",
+      "dismiss": "Not this one",
+      "lines": "Tidied up last night",
+      "view": "View",
+      "line": {
+        "done": "{name} tidied its memory: {text}",
+        "draft": "{name} tidied its memory, as a draft: {text}"
+      },
+      "state": {
+        "applied": "Applied",
+        "undone": "Undone",
+        "discarded": "Not used",
+        "stale": "Out of date — tidied again tonight"
+      }
+    },
+    "skill": {
+      "heading": {
+        "added": "New process skill",
+        "modified": "Process skill changed",
+        "deleted": "Process skill removed",
+        "draft": "Process skill, a draft"
+      },
+      "line": {
+        "learned": "I made “{title}” a process skill: the next time you ask for it, I follow it.",
+        "changed": "I changed the process skill “{title}”; it is in effect now.",
+        "removed": "I removed the process skill “{title}”.",
+        "draft": "I wrote the process skill “{title}”; it takes effect once you install it."
+      },
+      "when": "When: {text}",
+      "note": {
+        "off": "Turned off: it is no longer loaded.",
+        "draft": "Nothing changed yet.",
+        "applied": "Installed.",
+        "undone": "Taken back.",
+        "discarded": "Not installed; it stays as it was.",
+        "stale": "It changed again since; this draft no longer fits.",
+        "deleted": "Deleted.",
+        "notAside": "Could not be kept as a draft ({why}): it is kept off — Turn on loads it.",
+        "notAsideOn": "Could not be kept as a draft ({why}), nor turned off: it is in effect — Turn off or Undo."
+      },
+      "show": "Show",
+      "hide": "Hide",
+      "view": "View",
+      "disable": "Turn off",
+      "enable": "Turn on",
+      "undo": "Undo",
+      "delete": "Delete",
+      "confirmDelete": "Delete it",
+      "cancel": "Cancel",
+      "install": "Install",
+      "dismiss": "Not this one"
     }
   }
 }

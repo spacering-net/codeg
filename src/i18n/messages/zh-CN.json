@@ -8065,7 +8065,8 @@
         "persona": "人设",
         "rules": "规则",
         "owner": "主人",
-        "memory": "记忆"
+        "memory": "记忆",
+        "skills": "流程技能"
       },
       "byOwner": "你维护",
       "byAgent": "助手维护",
@@ -8688,7 +8689,7 @@
         },
         "level_memory": {
           "title": "记忆更新",
-          "hint": "助手改了它的记忆、人设或规则。"
+          "hint": "助手改了它的记忆、人设或规则，包括夜间整理和流程技能。"
         },
         "plans": {
           "title": "计划",
@@ -8709,6 +8710,13 @@
           "hint": "某类活另一个执行配置的一次过率明显高于分工里的首选（高 20 个百分点以上，两边各至少 5 件做完的）。",
           "on": "开",
           "off": "关"
+        },
+        "tidy": {
+          "title": "整理记忆与流程技能",
+          "hint": "每晚你停下之后，各助手整理自己的记忆、人设和规则；一串活顺利做完后，把做法写成流程技能。",
+          "auto": "自动生效，出卡可撤销",
+          "draft": "先给我看（出草稿卡，点了才生效）",
+          "off": "不做"
         }
       },
       "workdir": {
@@ -8895,7 +8903,16 @@
         "byBot": "按助手和方式",
         "someone": "早先的派活",
         "unjudged": "派了 {count} 件，还没有做完的"
-      }
+      },
+      "processSkillHint": "助手自己写下的做事流程：你说要做这件事时，它照着走。你在这里改的，保存就生效；停用后不再加载。",
+      "skillOff": "已停用",
+      "skillTurnOn": "启用",
+      "skillTurnOff": "停用",
+      "skillTurnedOn": "已启用 {name}",
+      "skillTurnedOff": "已停用 {name}",
+      "deleteSkill": "删除技能",
+      "confirmDeleteSkillHint": "删除这个流程技能？它的文件夹会从工作目录里删掉。",
+      "skillDeleted": "已删除 {name}"
     },
     "statusWord": {
       "idle": "空闲",
@@ -9792,7 +9809,27 @@
         "silent": "例程：没有变化"
       },
       "preparingBrief": "正在准备晨报…",
-      "preparingWrap": "正在准备收尾…"
+      "preparingWrap": "正在准备收尾…",
+      "tidy": {
+        "acted": "整理了记忆",
+        "draft": "整理草稿等你看",
+        "applied": "整理已应用",
+        "undone": "整理已撤销",
+        "discarded": "整理没用",
+        "stale": "整理草稿已过时"
+      },
+      "skill": {
+        "acted": "流程技能",
+        "draft": "流程技能草稿等你看",
+        "applied": "流程技能已安装",
+        "undone": "流程技能改动已撤销",
+        "discarded": "流程技能没装",
+        "stale": "流程技能草稿已过时",
+        "deleted": "流程技能已删除"
+      },
+      "apply": "应用",
+      "install": "安装",
+      "notThis": "不用"
     },
     "meet": {
       "name": {
@@ -10589,6 +10626,75 @@
         "depends_on": "依赖",
         "kind": "活的种类"
       }
+    },
+    "tidy": {
+      "title": {
+        "acted": "整理了记忆（{day}）",
+        "draft": "{day} 的整理（草稿）",
+        "applied": "{day} 的整理（已应用）",
+        "undone": "{day} 的整理（已整次撤销）",
+        "discarded": "{day} 的整理（没用）",
+        "stale": "{day} 的整理（已过时）"
+      },
+      "note": {
+        "draft": "整理结果先存成了草稿，现在的记忆没变；点「应用」才生效。",
+        "applied": "已应用：记忆按这次整理改好了。",
+        "discarded": "没有用这次整理，记忆保持原样。",
+        "stale": "草稿之后记忆又改过，合不进来了；下一晚会重新整理。",
+        "notAside": "没能先存成草稿（{why}），已经生效；可以整次撤销。"
+      },
+      "undoAll": "整次撤销",
+      "apply": "应用",
+      "dismiss": "不用",
+      "lines": "昨晚整理",
+      "view": "查看",
+      "line": {
+        "done": "{name}整理了记忆：{text}",
+        "draft": "{name}整理了记忆（草稿）：{text}"
+      },
+      "state": {
+        "applied": "已应用",
+        "undone": "已整次撤销",
+        "discarded": "没有用",
+        "stale": "已过时，今晚重新整理"
+      }
+    },
+    "skill": {
+      "heading": {
+        "added": "新的流程技能",
+        "modified": "流程技能有改动",
+        "deleted": "流程技能删掉了",
+        "draft": "流程技能草稿"
+      },
+      "line": {
+        "learned": "我把「{title}」整理成了流程技能，下次你要做这件事，我就照这个走。",
+        "changed": "我改了流程技能「{title}」，已经生效。",
+        "removed": "我删掉了流程技能「{title}」。",
+        "draft": "我写了流程技能「{title}」，你点「安装」才生效。"
+      },
+      "when": "什么时候用：{text}",
+      "note": {
+        "off": "已停用：不再加载。",
+        "draft": "现在还是原来的样子。",
+        "applied": "已安装。",
+        "undone": "已撤销这次改动。",
+        "discarded": "没有装，保持原样。",
+        "stale": "之后又改过，这份草稿装不上了。",
+        "deleted": "已删除。",
+        "notAside": "没能先存成草稿（{why}），先停用了：点「启用」才加载。",
+        "notAsideOn": "没能先存成草稿（{why}），也没能停用：已经生效，可以停用或撤销。"
+      },
+      "show": "看内容",
+      "hide": "收起",
+      "view": "查看",
+      "disable": "停用",
+      "enable": "启用",
+      "undo": "撤销",
+      "delete": "删除",
+      "confirmDelete": "确定删除",
+      "cancel": "取消",
+      "install": "安装",
+      "dismiss": "不用"
     }
   }
 }

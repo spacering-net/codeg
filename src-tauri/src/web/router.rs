@@ -630,6 +630,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_file_delete),
         )
         .route(
+            "/personal_agent_skill_switch",
+            post(handlers::personal_agent::personal_agent_skill_switch),
+        )
+        .route(
             "/personal_agent_set_workdir",
             post(handlers::personal_agent::personal_agent_set_workdir),
         )

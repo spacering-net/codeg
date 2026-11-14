@@ -11,6 +11,8 @@ import type { BriefMaterial, TimelineRow, TodayRow } from "@/lib/types"
 
 const api = vi.hoisted(() => ({
   personalAgentBots: vi.fn(async () => []),
+  personalAgentTimelineRows: vi.fn(async (): Promise<unknown[]> => []),
+  personalAgentNoticeAct: vi.fn(async () => ({})),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
@@ -285,5 +287,26 @@ describe("the brief codeg wrote itself", () => {
   it("says when nothing needs the owner", () => {
     draw(card(material({ needs: [], bots: [], loose: [], yesterday: null })))
     expect(screen.getByText("Nothing needs you today.")).toBeTruthy()
+  })
+})
+
+describe("last night's tidy-ups in the brief (7.7)", () => {
+  it("get a line each, with its buttons, in a part of their own", async () => {
+    const tidied = need({
+      key: "tidy:9",
+      kind: "tidy",
+      bot_id: 2,
+      title: "Tidied memory (2026-11-12) — 1 updated",
+      state: "acted",
+      row_id: 41,
+      notice_id: 9,
+      undo: true,
+    })
+    const { container } = draw(card(material({ tidied: [tidied] })))
+    const part = container.querySelector("[data-pa-brief-tidied]")
+    expect(part?.textContent).toContain("Tidied up last night")
+    expect(container.querySelector("[data-pa-tidy-line='acted']")).toBeTruthy()
+    expect(screen.getByText("Undo all")).toBeTruthy()
+    expect(api.personalAgentTimelineRows).toHaveBeenCalledWith([41], 2)
   })
 })

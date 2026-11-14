@@ -16,10 +16,17 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 const api = vi.hoisted(() => ({
   personalAgentCancel: vi.fn(),
   personalAgentResend: vi.fn(),
+  personalAgentTimelineRows: vi.fn(async (): Promise<unknown[]> => []),
+  personalAgentNoticeAct: vi.fn(),
+  personalAgentBots: vi.fn(async () => []),
 }))
 const pa = vi.hoisted(() => ({ dispatchById: new Map<number, unknown>() }))
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 vi.mock("@/lib/api", () => api)
+vi.mock("@/lib/platform", () => ({
+  subscribe: () => Promise.resolve(() => {}),
+  onTransportReconnect: () => () => {},
+}))
 vi.mock("sonner", () => ({ toast: toasts }))
 vi.mock("@/contexts/personal-agent-context", () => ({
   useBotId: () => null,
@@ -575,6 +582,52 @@ describe("the bubbles", () => {
       const tag = container.querySelector("[data-pa-reply-brief]")
       expect(tag?.getAttribute("data-pa-reply-brief")).toBe(kind)
       expect(tag?.textContent).toBe(words)
+      unmount()
+    }
+  })
+
+  it("shows last night's tidy-ups under a morning brief it wrote (7.7)", () => {
+    const line = {
+      key: "tidy:9",
+      kind: "tidy",
+      bot_id: 2,
+      project: null,
+      title: "Tidied memory (2026-11-12) — 1 updated",
+      text: null,
+      at: "2026-11-12T19:00:00Z",
+      state: "acted",
+      row_id: 41,
+      dispatch_id: null,
+      task_id: null,
+      conversation_id: null,
+      item_id: null,
+      notice_id: 9,
+      agent_type: null,
+      undo: true,
+    }
+    for (const [kind, shown] of [
+      ["brief", true],
+      ["wrap", false],
+    ] as const) {
+      const item = itemOf(
+        [
+          row(10, "reply", {
+            batch_id: 7,
+            body: "Good morning.",
+            data: { state: "done", brief: { id: 3, kind, tidied: [line] } },
+          }),
+        ],
+        "reply"
+      ) as Extract<MessageItem, { kind: "reply" }>
+      const { container, unmount } = draw(<ReplyBubble item={item} />)
+      expect(container.querySelector("[data-pa-brief-tidied]") != null).toBe(
+        shown
+      )
+      if (shown) {
+        expect(
+          container.querySelector("[data-pa-tidy-line='acted']")
+        ).toBeTruthy()
+      }
       unmount()
     }
   })

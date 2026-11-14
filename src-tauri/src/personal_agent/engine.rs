@@ -60,6 +60,7 @@ use crate::models::personal_agent::{
 };
 use crate::models::system::{AppLocale, LanguageMode};
 use crate::models::personal_agent_bots::BotAvatar;
+use crate::models::personal_agent_prefs::TidyMode;
 use crate::models::{AgentType, AssistantAgentConfig, AssistantLabelSnapshot};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 use crate::work_task::compact;
@@ -229,6 +230,19 @@ struct ActiveTurn {
     /// For a delivery: the notes before a compaction (7.7) — no reply; it
     /// gives way to the owner's message like any turn without one (4.7).
     flush: Option<FlushRun>,
+    /// For a delivery: an internal turn of the assistant's own — the nightly
+    /// tidy-up (7.7) or a look back at work (7.8) — with no reply shown;
+    /// what it is says what its commit is and which card it brings.
+    internal: Option<Internal>,
+}
+
+/// What an internal turn is for (7.7, 7.8).
+#[derive(Debug, Clone, PartialEq)]
+enum Internal {
+    /// The nightly tidy-up of the owner's day `day`.
+    Tidy { day: String },
+    /// A look back at the work for the owner's request `origin_row`.
+    Reflect { origin_row: Option<i32> },
 }
 
 /// How a turn ended.
@@ -595,6 +609,7 @@ impl PersonalAgentEngine {
             ledger_scope: vec![batch_id],
             preempted: false,
             flush: None,
+            internal: None,
         });
     }
 
@@ -640,6 +655,7 @@ impl PersonalAgentEngine {
             ledger_scope: vec![batch_id],
             preempted: false,
             flush: None,
+            internal: None,
         });
         row.id
     }
@@ -2064,9 +2080,22 @@ impl PersonalAgentEngine {
         let owners = svc::queued_owner_rows(&self.db.conn, self.bot().await)
             .await
             .map_err(|e| e.to_string())?;
-        let events = svc::pending_events(&self.db.conn, self.bot().await)
+        let mut events = svc::pending_events(&self.db.conn, self.bot().await)
             .await
             .map_err(|e| e.to_string())?;
+        // The owner switched codeg's own tidy-ups and looks back off since
+        // one was queued: it is let go, not sent (7.7, 7.8).
+        if self.prefs().await.tidy == TidyMode::Off {
+            let gone: Vec<i32> = events
+                .iter()
+                .filter(|e| super::tidy::is_tidy_event(e) || super::skills::is_reflect_event(e))
+                .map(|e| e.id)
+                .collect();
+            if !gone.is_empty() {
+                let _ = svc::drop_events(&self.db.conn, &gone).await;
+                events.retain(|e| !gone.contains(&e.id));
+            }
+        }
         // The morning brief and the wrap-up go in a delivery of their own,
         // after the owner's messages (6.4).
         let events = super::brief::solo(events, !owners.is_empty());
@@ -2328,6 +2357,7 @@ impl PersonalAgentEngine {
             settings.skill_enabled,
             row.kind == BotKind::Worker,
             self.prefs().await.cards,
+            &skill_switches(row),
         );
         let env = crate::commands::acp::build_session_runtime_env(
             &self.db,
@@ -2539,6 +2569,7 @@ impl PersonalAgentEngine {
                     then,
                     timed_out: false,
                 }),
+                internal: None,
             });
             // Taken once per compaction, however it ends.
             st.flushed = Some(session.segment.id);
@@ -2731,6 +2762,7 @@ impl PersonalAgentEngine {
                 ledger_scope: Vec::new(),
                 preempted: false,
                 flush: None,
+                internal: None,
             });
             st.last_check = Some(CompactCheck {
                 at: Utc::now(),
@@ -3096,7 +3128,7 @@ impl PersonalAgentEngine {
                 e.kind != msvc::MESSAGE_EVENT
                     && e.kind != svc::ASK_EVENT
                     && e.kind != super::acceptance::ACCEPT_EVENT
-                    && !super::brief::is_brief_event(e)
+                    && !super::brief::is_solo_event(e)
             })
             .cloned()
             .collect();
@@ -3116,6 +3148,14 @@ impl PersonalAgentEngine {
         // write (6.4, 6.5).
         for e in events.iter().filter(|e| super::brief::is_brief_event(e)) {
             asks.push(self.brief_block(e).await);
+        }
+        // The nightly tidy-up (7.7), and a look back at work that went well
+        // (7.8): the materials, and what to do.
+        for e in events.iter().filter(|e| super::tidy::is_tidy_event(e)) {
+            asks.push(self.tidy_block(e).await);
+        }
+        for e in events.iter().filter(|e| super::skills::is_reflect_event(e)) {
+            asks.push(self.reflect_block(e).await);
         }
         // What started it — recorded only, for the status, the statistics
         // and the `<codeg-now>` line.
@@ -3137,6 +3177,10 @@ impl PersonalAgentEngine {
             BatchTrigger::Brief
         } else if events.iter().any(|e| e.kind == super::brief::WRAP_EVENT) {
             BatchTrigger::Wrap
+        } else if events.iter().any(super::tidy::is_tidy_event) {
+            BatchTrigger::Consolidate
+        } else if events.iter().any(super::skills::is_reflect_event) {
+            BatchTrigger::Reflect
         } else {
             BatchTrigger::Event
         };
@@ -3150,6 +3194,10 @@ impl PersonalAgentEngine {
                 BatchTrigger::Routine => "a routine of yours came round",
                 BatchTrigger::Brief => "the owner's morning brief is due",
                 BatchTrigger::Wrap => "the owner's wrap-up of the day is due",
+                BatchTrigger::Consolidate => "it is night: your memory is to be tidied up",
+                BatchTrigger::Reflect => {
+                    "work you were responsible for went well: a look back at it"
+                }
                 _ => "news of work you dispatched or of your matters",
             };
             cards_text.insert(0, self.now_line(before, started_by).await);
@@ -3291,6 +3339,24 @@ impl PersonalAgentEngine {
             .unwrap_or_default();
         self.note_routine_batch(&events, batch.id).await;
         self.note_brief_batch(&events, batch.id).await;
+        // An internal turn — the nightly tidy-up, a look back at work — has
+        // nothing of the owner's to answer, and shows no reply (7.7, 7.8).
+        let internal = if owners.is_empty() && messages.is_empty() {
+            if let Some(e) = events.iter().find(|e| super::tidy::is_tidy_event(e)) {
+                Some(Internal::Tidy {
+                    day: super::tidy::day_of_event(e).unwrap_or_default(),
+                })
+            } else {
+                events
+                    .iter()
+                    .find(|e| super::skills::is_reflect_event(e))
+                    .map(|e| Internal::Reflect {
+                        origin_row: super::skills::origin_of_event(e),
+                    })
+            }
+        } else {
+            None
+        };
         // The reply exists from the start: it streams in place and settles
         // in place.
         let started_at = Utc::now();
@@ -3311,7 +3377,7 @@ impl PersonalAgentEngine {
         };
         // The morning brief or the wrap-up it writes (6.4, 6.5).
         let brief = if owners.is_empty() && messages.is_empty() {
-            Self::brief_tag(&events)
+            self.brief_tag(&events).await
         } else {
             None
         };
@@ -3321,7 +3387,13 @@ impl PersonalAgentEngine {
             "routine": routine,
             "brief": brief,
         }));
-        let reply = svc::insert_row(&self.db.conn, self.bot().await, reply).await.ok();
+        let reply = if internal.is_some() {
+            None
+        } else {
+            svc::insert_row(&self.db.conn, self.bot().await, reply)
+                .await
+                .ok()
+        };
         let token = format!("pa-{}-{}", batch.id, uuid::Uuid::new_v4().simple());
         let start_seq = self.current_seq(&session.conn_id).await;
         // Registered before the send, for the reason `start_compaction` gives.
@@ -3343,11 +3415,14 @@ impl PersonalAgentEngine {
                 compaction_reported: None,
                 agent_compacted: false,
                 reply_row_id: reply.as_ref().map(|r| r.id),
-                reply_token: reply.as_ref().map(|_| token.clone()),
+                // An internal turn's too: its tag tells its end from any
+                // other's, though no row shows its reply.
+                reply_token: (reply.is_some() || internal.is_some()).then(|| token.clone()),
                 auto_quote,
                 ledger_scope,
                 preempted: false,
                 flush: None,
+                internal: internal.clone(),
             });
             st.last_error = None;
         }
@@ -3365,7 +3440,7 @@ impl PersonalAgentEngine {
                 blocks,
                 Some(session.folder_id),
                 session.segment.conversation_id,
-                reply.as_ref().map(|_| token.clone()),
+                (reply.is_some() || internal.is_some()).then(|| token.clone()),
             )
             .await;
         if let Err(e) = sent {
@@ -3651,6 +3726,10 @@ impl PersonalAgentEngine {
             cards: self.prefs().await.cards,
             skill: settings_of(row).skill_enabled
                 && workdir::skill_dir(workdir, config.agent_type).is_some(),
+            skills: &super::skills::skills_lines(
+                &workdir::process_skills(workdir),
+                &workdir::loadable_skills(workdir, &skill_switches(row)),
+            ),
         })
     }
 
@@ -3981,10 +4060,50 @@ impl PersonalAgentEngine {
                 let _ = svc::set_segment_state(&self.db.conn, seg.id, json).await;
             }
             // Committed here, as the turn settles: the commit is this turn's
-            // alone, and its memory card says what of it was memory (7.7).
-            let message = format!("personal agent: session {} turn {}", seg.seq, turn.batch_id);
-            if let Some(rev) = workdir::commit(&workdir, &message).await {
-                self.memory_card(&workdir, &rev, turn.batch_id, seg.id)
+            // alone, and its memory card says what of it was memory (7.7) —
+            // a tidy-up's card, for the nightly tidy-up — and a card for
+            // each process skill it wrote or changed (7.8).
+            let message = match &turn.internal {
+                Some(Internal::Tidy { day }) => format!("personal agent: tidy {day}"),
+                Some(Internal::Reflect {
+                    origin_row: Some(row),
+                }) => format!("personal agent: look back at request #{row}"),
+                _ => format!("personal agent: session {} turn {}", seg.seq, turn.batch_id),
+            };
+            // What the owner sees first (7.7, 7.8): with "show me first", a
+            // tidy-up's memory files and any turn's process skills are set
+            // aside in the same hold of the lock as the commit, nothing
+            // between — and so is an internal turn the owner switched off
+            // while it ran: kept, not taken in.
+            let mode = self.prefs().await.tidy;
+            let first =
+                mode == TidyMode::Draft || (turn.internal.is_some() && mode == TidyMode::Off);
+            let tidy = matches!(turn.internal, Some(Internal::Tidy { .. }));
+            let aside_message = match &turn.internal {
+                Some(Internal::Tidy { day }) => {
+                    format!("personal agent: tidy {day}, kept as a draft")
+                }
+                _ => "personal agent: process skills, kept as drafts".to_string(),
+            };
+            let done = workdir::commit_turn(
+                &workdir,
+                &message,
+                |f| first && (tidy || f.kind == "skill"),
+                &aside_message,
+            )
+            .await;
+            if let Some(done) = done {
+                match &turn.internal {
+                    Some(Internal::Tidy { day }) => {
+                        self.tidy_card(&workdir, &done, turn.batch_id, seg.id, day)
+                            .await;
+                    }
+                    _ => {
+                        self.memory_card(&workdir, &done.rev, turn.batch_id, seg.id)
+                            .await;
+                    }
+                }
+                self.skill_cards(&workdir, &done, Some(turn.batch_id), Some(seg.id))
                     .await;
             }
         }
@@ -4719,6 +4838,7 @@ impl PersonalAgentEngine {
                 settings.skill_enabled,
                 saved.kind == BotKind::Worker,
                 self.prefs().await.cards,
+                &skill_switches(&saved),
             );
         }
         self.emit(PersonalAgentChange::Agent);
@@ -4742,6 +4862,7 @@ impl PersonalAgentEngine {
             settings_of(&row).skill_enabled,
             row.kind == BotKind::Worker,
             self.prefs().await.cards,
+            &skill_switches(&row),
         );
     }
 
@@ -4908,34 +5029,43 @@ impl PersonalAgentEngine {
             return Err("the owner's profile is the primary assistant's: edit it there".into());
         }
         let workdir = self.workdir_of(&row);
-        workdir::write_file(&workdir, name, content).map_err(|e| e.to_string())?;
+        // Written and committed in one hold of the directory's lock: an undo
+        // or a draft applied meanwhile never writes over it. Only the file
+        // they saved: what a turn left uncommitted stays the turn's, for its
+        // memory card (7.7).
+        let content = content.to_string();
+        workdir::write_for_owner(
+            &workdir,
+            &[(name, &|_| Some(content.clone()))],
+            &format!("owner: edit {name}"),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         if name == workdir::SOUL_FILE || name == workdir::RULES_FILE {
             if let Ok(Some(seg)) = svc::open_segment(&self.db.conn, self.bot().await).await {
                 self.update_segment_state(seg.id, |s| s.persona_resend = true).await;
             }
         }
-        // Only the file they saved: what a turn left uncommitted stays the
-        // turn's, for its memory card (7.7).
-        let message = format!("owner: edit {name}");
-        let name = name.to_string();
-        tokio::spawn(async move {
-            workdir::commit_only(&workdir, &message, &[name.as_str()]).await;
-        });
+        // A process skill of theirs is installed as they wrote it (7.8).
+        if let Some(skill) = workdir::skill_name_of(name) {
+            self.approve_skill(skill, Some(content.as_str())).await?;
+            self.resync_skill().await;
+        }
         Ok(())
     }
 
     /// Delete a memory entry the owner no longer wants kept, with its line in
     /// the index.
     pub async fn delete_file(&self, name: &str) -> Result<(), String> {
+        // A process skill goes with its folder (7.8).
+        if let Some(skill) = workdir::skill_name_of(name) {
+            return self.delete_skill(skill).await;
+        }
         let row = self.agent_row().await.ok_or("configure the personal agent first")?;
         let workdir = self.workdir_of(&row);
-        workdir::delete_entry(&workdir, name).map_err(|e| e.to_string())?;
-        let message = format!("owner: delete {name}");
-        let name = name.to_string();
-        tokio::spawn(async move {
-            workdir::commit_only(&workdir, &message, &[name.as_str(), workdir::MEMORY_FILE]).await;
-        });
-        Ok(())
+        workdir::delete_entry_for_owner(&workdir, name, &format!("owner: delete {name}"))
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Whether `connection_id` is the personal agent's current connection —
@@ -5125,6 +5255,51 @@ pub(super) fn enum_str<T: Serialize>(v: &T) -> String {
 
 pub(super) fn settings_of(row: &agent_entity::Model) -> PersonalAgentSettings {
     serde_json::from_str(&row.settings).unwrap_or_default()
+}
+
+/// Where an assistant's settings keep the process skills the owner turned
+/// off (7.8): `{ "<name>": true }`, one key each, so turning one off or on
+/// is a patch of its own key — never a write over another's.
+pub(super) const SKILLS_OFF_KEY: &str = "skills_off";
+
+/// Where an assistant's settings keep the version of each process skill
+/// that may load (7.8): `{ "<name>": "<content hash>" }`, one key each.
+pub(super) const SKILLS_APPROVED_KEY: &str = "skills_approved";
+
+/// What decides which of this assistant's process skills load: the ones
+/// turned off, and each one's approved version.
+pub fn skill_switches(row: &agent_entity::Model) -> workdir::SkillSwitches {
+    let approved = serde_json::from_str::<serde_json::Value>(&row.settings)
+        .ok()
+        .and_then(|v| {
+            v.get(SKILLS_APPROVED_KEY)
+                .and_then(|o| o.as_object())
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(name, h)| h.as_str().map(|h| (name.clone(), h.to_string())))
+                        .collect()
+                })
+        })
+        .unwrap_or_default();
+    workdir::SkillSwitches {
+        off: skills_off(row),
+        approved,
+    }
+}
+
+/// The process skills the owner turned off for this assistant.
+pub fn skills_off(row: &agent_entity::Model) -> std::collections::BTreeSet<String> {
+    serde_json::from_str::<serde_json::Value>(&row.settings)
+        .ok()
+        .and_then(|v| {
+            v.get(SKILLS_OFF_KEY).and_then(|o| o.as_object()).map(|o| {
+                o.iter()
+                    .filter(|(_, on)| on.as_bool() == Some(true))
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
 }
 
 /// The brain, as an assistant stores one.

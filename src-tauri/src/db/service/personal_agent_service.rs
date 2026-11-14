@@ -1748,6 +1748,62 @@ pub async fn pending_events(
         .await?)
 }
 
+/// Every assistant's events of `kind` still on their way: waiting for a
+/// delivery, or riding in one.
+pub async fn events_in_flight(
+    conn: &DatabaseConnection,
+    kind: &str,
+) -> Result<Vec<event::Model>, DbError> {
+    Ok(event::Entity::find()
+        .filter(event::Column::Kind.eq(kind))
+        .filter(event::Column::State.is_in([EventState::Pending, EventState::Delivered]))
+        .order_by_asc(event::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// Let pending events go unhandled: they are done, and no delivery takes
+/// them. One already handed out is left to its batch.
+pub async fn drop_events(conn: &DatabaseConnection, ids: &[i32]) -> Result<u64, DbError> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let res = event::Entity::update_many()
+        .col_expr(event::Column::State, Expr::value(EventState::Done))
+        .col_expr(event::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(event::Column::Id.is_in(ids.to_vec()))
+        .filter(event::Column::State.eq(EventState::Pending))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected)
+}
+
+/// The newest event of `kind` in assistant `bot`'s queue that a delivery
+/// took — one let go before any did is not it.
+pub async fn latest_delivered_event_of(
+    conn: &DatabaseConnection,
+    bot: i32,
+    kind: &str,
+) -> Result<Option<event::Model>, DbError> {
+    Ok(event::Entity::find()
+        .filter(event::Column::BotId.eq(bot))
+        .filter(event::Column::Kind.eq(kind))
+        .filter(event::Column::BatchId.is_not_null())
+        .order_by_desc(event::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// Whether an event whose key ends with `suffix` was ever queued, for any
+/// assistant (a worker's keys carry its prefix).
+pub async fn event_key_ends_with(conn: &DatabaseConnection, suffix: &str) -> Result<bool, DbError> {
+    Ok(event::Entity::find()
+        .filter(event::Column::SourceKey.ends_with(suffix))
+        .count(conn)
+        .await?
+        > 0)
+}
+
 /// Hand pending events to a batch. Returns the ids actually moved.
 pub async fn mark_events_delivered(
     conn: &DatabaseConnection,
@@ -3337,6 +3393,34 @@ pub async fn notice_of_subject(
         .await?)
 }
 
+/// Assistant `bot`'s newest card of `kind`, whatever came of it.
+pub async fn latest_notice_of(
+    conn: &DatabaseConnection,
+    bot: i32,
+    kind: NoticeKind,
+) -> Result<Option<notice::Model>, DbError> {
+    Ok(notice::Entity::find()
+        .filter(notice::Column::BotId.eq(bot))
+        .filter(notice::Column::Kind.eq(kind))
+        .order_by_desc(notice::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// Every assistant's cards of `kind` made since `since`, in any state.
+pub async fn notices_made_since(
+    conn: &DatabaseConnection,
+    kind: NoticeKind,
+    since: DateTime<Utc>,
+) -> Result<Vec<notice::Model>, DbError> {
+    Ok(notice::Entity::find()
+        .filter(notice::Column::Kind.eq(kind))
+        .filter(notice::Column::CreatedAt.gte(since))
+        .order_by_asc(notice::Column::Id)
+        .all(conn)
+        .await?)
+}
+
 /// The cards of `kind`, of any assistant, that moved to one of `states`
 /// since `since`.
 pub async fn notices_since(
@@ -3521,6 +3605,36 @@ pub async fn dispatches_by_ids(
         .filter(dispatch::Column::BotId.eq(bot))
         .filter(dispatch::Column::Id.is_in(ids.iter().copied().take(500).collect::<Vec<_>>()))
         .order_by_desc(dispatch::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// Every assistant's dispatches made since `since` for a request whose
+/// start is known (7.8), oldest first.
+pub async fn dispatches_with_origin_since(
+    conn: &DatabaseConnection,
+    since: DateTime<Utc>,
+) -> Result<Vec<dispatch::Model>, DbError> {
+    Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::CreatedAt.gte(since))
+        .filter(dispatch::Column::OriginRowId.is_not_null())
+        .filter(dispatch::Column::OriginBotId.is_not_null())
+        .order_by_asc(dispatch::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// Dispatches by id, whichever assistant's, oldest first.
+pub async fn dispatches_by_id_any(
+    conn: &DatabaseConnection,
+    ids: &[i32],
+) -> Result<Vec<dispatch::Model>, DbError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::Id.is_in(ids.iter().copied().take(200).collect::<Vec<_>>()))
+        .order_by_asc(dispatch::Column::Id)
         .all(conn)
         .await?)
 }

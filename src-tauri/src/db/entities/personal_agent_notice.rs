@@ -91,6 +91,16 @@ pub enum NoticeKind {
     /// how far it got — and stop, start, cancel, take back a change.
     #[sea_orm(string_value = "plan")]
     Plan,
+    /// An assistant's nightly tidy-up of its memory, persona and rules
+    /// (7.7): what it merged, changed and removed, as one commit — undone as
+    /// a whole; or, kept as a draft, applied or let go.
+    #[sea_orm(string_value = "tidy")]
+    Tidy,
+    /// A process skill an assistant wrote or changed (7.8): installed into
+    /// its brain's skills, turned off, deleted or taken back; or, kept as a
+    /// draft, installed or let go.
+    #[sea_orm(string_value = "skill")]
+    Skill,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
