@@ -2116,9 +2116,10 @@ const HYDRATION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_mi
 /// The fork's reply waits on hydration for the agents it runs for (see
 /// `handle_fork_or_exit`), so an agent that never answers the load must not be
 /// able to hold the fork — and the connection behind it — open forever. Past
-/// this the branch opens without its history, which is where it was before
-/// hydration existed. Generous on purpose: a long session's replay is written
-/// before the answer, and a slow answer is still a correct one.
+/// this the connection is ended and the fork reported failed: an unanswered
+/// load leaves no bound on its replay, which would otherwise reach the live loop
+/// and be recorded as new output. Generous on purpose: a long session's replay
+/// is written before the answer, and a slow answer is still a correct one.
 const HYDRATION_LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The transcript entry one replayed update is recorded as.
@@ -2175,9 +2176,12 @@ fn hydration_entry(
 /// has — and copying those into a branch is what leaves a later fork naming a
 /// message id the agent cannot find.
 ///
-/// Best effort, deliberately: the fork has already succeeded and its sibling row
-/// exists. A load that fails, or a drain that stalls, costs the branch its
-/// history — where it already was before this call — never the session.
+/// Best effort, deliberately: the fork has already succeeded on the agent. A
+/// load that fails, or a drain that stalls, costs the branch its history — where
+/// it already was before this call — never the session. The one `Err` is a load
+/// that is never answered (see [`HYDRATION_LOAD_TIMEOUT`]): its replay cannot be
+/// told apart from live output, so the caller ends the connection rather than
+/// let the live loop record it as the branch's history.
 #[allow(clippy::too_many_arguments)]
 async fn hydrate_forked_transcript(
     cx: &ConnectionTo<Agent>,
@@ -2189,25 +2193,52 @@ async fn hydrate_forked_transcript(
     new_sid: &str,
     cwd: &std::path::Path,
     mcp_servers: &[McpServer],
-) {
+) -> Result<(), agent_client_protocol::Error> {
     // An agent with its own store reads its history from there, and its fork
     // already wrote it. Only codeg's own transcript needs this.
     let Some(dir) = transcript_dir_for(agent_type) else {
-        return;
+        return Ok(());
     };
     // ACP: a client MUST NOT send `session/load` to an agent that has not
     // advertised `loadSession` — the same gate the reconnect ladder keeps. Such
     // an agent has no replay to hand over, so its branch opens without history,
     // as it did before this existed.
     if !supports_load {
-        return;
+        return Ok(());
     }
     // Nothing to hydrate if the child already recorded turns — the same gate the
     // reconnect ladder uses, and it reads the FILE, where the header just
     // written does not count as history.
     if crate::acp_transcript::has_recorded_history(dir, new_sid) {
-        return;
+        return Ok(());
     }
+    // The staging is opened BEFORE the load goes out, so that failing to open it
+    // costs nothing but the hydration. Once a load has been sent, its replay is
+    // on its way into this session's channel, and every exit from here on has
+    // to consume it: whatever is left there when the live loop starts reads as
+    // the agent talking NOW — rendered as output, and recorded into this very
+    // transcript as live entries, where `has_recorded_history` would then take a
+    // partial replay for the branch's history and never hydrate it again.
+    //
+    // The replay is STAGED beside the transcript and published in one rename at
+    // the end, never appended to the transcript as it arrives:
+    // `has_recorded_history` reads the FILE, so a half-written replay would look
+    // like history, stay permanently short, and never be retried. See
+    // `acp_transcript::HydrationStaging`.
+    let header = crate::acp_transcript::TranscriptHeader::new(
+        &agent_type.as_wire(),
+        new_sid,
+        &cwd.to_string_lossy(),
+        crate::acp_transcript::now_epoch_ms(),
+    );
+    let Some(mut staging) = crate::acp_transcript::HydrationStaging::begin(dir, new_sid, &header)
+    else {
+        tracing::warn!(
+            "[ACP] could not stage a replay for the forked session {new_sid}; the branch \
+             opens without its history"
+        );
+        return Ok(());
+    };
     let claude = state.read().await.claude_session_options();
     let req = build_load_session_request(
         agent_type,
@@ -2216,6 +2247,13 @@ async fn hydrate_forked_transcript(
         mcp_servers.to_vec(),
         &claude,
     );
+    // Staging stopped, but the drain goes on: the replay has to be CONSUMED even
+    // when it cannot be kept, or the leftover frames reach the live loop and get
+    // rendered as a turn that is not happening now.
+    let mut failed = false;
+    // The load itself failed: whatever replay it sent is drained and dropped,
+    // and the branch opens without its history.
+    let mut load_failed = false;
     match tokio::time::timeout(
         HYDRATION_LOAD_TIMEOUT,
         cx.send_request_to(Agent, req).block_task(),
@@ -2223,20 +2261,34 @@ async fn hydrate_forked_transcript(
     .await
     {
         Ok(Ok(_)) => {}
+        // An ANSWER, even an error one, bounds the replay exactly as a success
+        // does (see below): everything the agent sent before it is already in
+        // this session's channel. So the drain still runs, keeping nothing.
         Ok(Err(e)) => {
             tracing::warn!(
                 "[ACP] could not load the forked session {new_sid} to hydrate its transcript \
                  ({e}); the branch opens without its history"
             );
-            return;
+            failed = true;
+            load_failed = true;
         }
+        // No answer, so nothing bounds the replay: it may still be arriving, and
+        // no drain can tell its last frame from the agent's next live one. Going
+        // on would hand that uncertainty to the live loop, which records what it
+        // reads as this branch's history. End the connection instead: the held
+        // fork reply is dropped with it, so the fork reports a failure and the
+        // conversation stays on the session it forked from. Dropping `staging`
+        // removes the sidecar.
         Err(_) => {
             tracing::warn!(
                 "[ACP] the forked session {new_sid} did not answer session/load within {}s; \
-                 the branch opens without its history",
+                 ending the connection so its replay cannot surface as live output",
                 HYDRATION_LOAD_TIMEOUT.as_secs()
             );
-            return;
+            return Err(agent_client_protocol::util::internal_error(format!(
+                "the forked session did not answer session/load within {}s",
+                HYDRATION_LOAD_TIMEOUT.as_secs()
+            )));
         }
     }
     // Every frame that becomes this branch's HISTORY is written before the load
@@ -2271,26 +2323,6 @@ async fn hydrate_forked_transcript(
     //
     // The response bounds what is RECORDED; it is not a promise that nothing else
     // ever arrives, which is why this is a window and not a single read.
-    //
-    // The replay is STAGED beside the transcript and published in one rename at
-    // the end, never appended to the transcript as it arrives:
-    // `has_recorded_history` reads the FILE, so a half-written replay would look
-    // like history, stay permanently short, and never be retried. See
-    // `acp_transcript::HydrationStaging`.
-    let header = crate::acp_transcript::TranscriptHeader::new(
-        &agent_type.as_wire(),
-        new_sid,
-        &cwd.to_string_lossy(),
-        crate::acp_transcript::now_epoch_ms(),
-    );
-    let Some(mut staging) = crate::acp_transcript::HydrationStaging::begin(dir, new_sid, &header)
-    else {
-        tracing::warn!(
-            "[ACP] could not stage a replay for the forked session {new_sid}; the branch \
-             opens without its history"
-        );
-        return;
-    };
     // How the drain ended decides whether the replay may be published. Only a
     // quiet channel MAY: a drain that ended because the session's channel closed,
     // because an entry would not serialize, or because handling a dispatch failed
@@ -2305,10 +2337,6 @@ async fn hydrate_forked_transcript(
         Closed,
     }
     let mut drained = 0u32;
-    // Staging stopped, but the drain goes on: the replay has to be CONSUMED even
-    // when it cannot be kept, or the leftover frames reach the live loop and get
-    // rendered as a turn that is not happening now.
-    let mut failed = false;
     let end = loop {
         match tokio::time::timeout(HYDRATION_IDLE_TIMEOUT, session.read_update()).await {
             // Idle: the agent wrote the whole replay before it answered, and this
@@ -2387,6 +2415,8 @@ async fn hydrate_forked_transcript(
     // and leaves the header the caller already recorded — the state a retry
     // starts from.
     match end {
+        // Already reported, and there was never a replay to keep.
+        _ if load_failed => {}
         DrainEnd::Quiet if failed => tracing::warn!(
             "[ACP] the replay for the forked session {new_sid} was not recorded in full \
              ({drained} updates read); nothing was published, so the branch opens without it"
@@ -2423,6 +2453,7 @@ async fn hydrate_forked_transcript(
              ({drained} updates read); nothing was published, so the branch opens without it"
         ),
     }
+    Ok(())
 }
 
 /// Build the `with_debug` callback for a spawned agent.
@@ -13871,8 +13902,9 @@ async fn handle_fork_or_exit(
     // have the refetch read a header-only transcript and show the branch empty,
     // with nothing to refetch it once the replay landed. Those agents' reply is
     // held until hydration is over — published, refused, or given up on; its
-    // load and its publish are both time-bounded — and still goes out before
-    // `SessionStarted`, the order the fork's persistence is written against.
+    // load and its publish are both time-bounded, and a load that runs out of
+    // time ends the connection — and still goes out before `SessionStarted`,
+    // the order the fork's persistence is written against.
     // If the connection dies first, the reply is dropped and the fork reports a
     // failure: the conversation row stays on the parent, which is the session
     // that still has a history to show.
@@ -14052,9 +14084,10 @@ async fn handle_fork_or_exit(
         cwd,
         mcp_servers,
     )
-    .await;
+    .await?;
     // The held reply (see above): the branch's history is now as complete as it
-    // is going to get, so the refetch it triggers reads it.
+    // is going to get, so the refetch it triggers reads it. An `Err` above drops
+    // it instead, and the fork reports a failure.
     if let Some((reply, result)) = held_reply.take() {
         let _ = reply.send(Ok(result));
     }
@@ -49239,6 +49272,16 @@ mod tests {
         claude.shutdown().await;
     }
 
+    /// How the agent behind [`ForkTransition`] answers `session/load`. Every
+    /// mode sends the same two-frame replay first.
+    #[derive(Clone, Copy)]
+    enum LoadAnswer {
+        Loaded,
+        Refused,
+        /// Never: the request stays open for the rest of the test.
+        Unanswered,
+    }
+
     /// How the agent behind [`ForkTransition`] answers `session/close`.
     #[derive(Clone, Copy)]
     enum CloseAnswer {
@@ -49303,16 +49346,19 @@ mod tests {
                 supports_close,
                 answer,
                 false,
+                LoadAnswer::Loaded,
             )
             .await
         }
 
         /// A transcript-owned `agent_type` whose agent does (or does not)
-        /// advertise `loadSession`, so the fork's hydration runs (or must not).
+        /// advertise `loadSession`, so the fork's hydration runs (or must not),
+        /// and answers the load as `load` says.
         async fn start_hydrating(
             agent_type: AgentType,
             fork_id: &'static str,
             supports_load: bool,
+            load: LoadAnswer,
         ) -> Self {
             Self::start_full(
                 agent_type,
@@ -49321,10 +49367,12 @@ mod tests {
                 true,
                 CloseAnswer::Closed,
                 supports_load,
+                load,
             )
             .await
         }
 
+        #[allow(clippy::too_many_arguments)]
         async fn start_full(
             agent_type: AgentType,
             mcp_servers: Vec<McpServer>,
@@ -49332,6 +49380,7 @@ mod tests {
             supports_close: bool,
             answer: CloseAnswer,
             supports_load: bool,
+            load: LoadAnswer,
         ) -> Self {
             use agent_client_protocol::schema::v1::{
                 CloseSessionResponse, ForkSessionRequest, ForkSessionResponse, PromptResponse,
@@ -49418,7 +49467,19 @@ mod tests {
                                     serde_json::json!({"sessionId": sid, "update": update}),
                                 )?)?;
                             }
-                            responder.respond(LoadSessionResponse::new())
+                            match load {
+                                LoadAnswer::Loaded => responder.respond(LoadSessionResponse::new()),
+                                LoadAnswer::Refused => responder.respond_with_error(
+                                    agent_client_protocol::util::internal_error("not loading"),
+                                ),
+                                LoadAnswer::Unanswered => {
+                                    tokio::spawn(async move {
+                                        std::future::pending::<()>().await;
+                                        drop(responder);
+                                    });
+                                    Ok(())
+                                }
+                            }
                         },
                         on_receive_request!(),
                     )
@@ -49545,6 +49606,20 @@ mod tests {
             }
         }
 
+        /// Fork the session the loop is on; `false` when the fork's reply never
+        /// came — the connection ended before it went out.
+        async fn fork_replied(&self) -> bool {
+            let (reply, answer) = oneshot::channel();
+            self.cmd_tx
+                .send(ConnectionCommand::Fork {
+                    fork_point: None,
+                    reply,
+                })
+                .await
+                .expect("the loop is running");
+            matches!(answer.await, Ok(Ok(_)))
+        }
+
         /// Fork the session the loop is on; returns the reply's `(forked,
         /// original)` session ids.
         async fn fork(&self) -> (String, String) {
@@ -49573,6 +49648,35 @@ mod tests {
                         .expect("event stream");
                 if matches(&envelope.payload) {
                     return envelope.payload.clone();
+                }
+            }
+        }
+
+        /// Prompt the session the loop is on and return EVERY event emitted
+        /// since the last one read, up to and including the turn's end.
+        async fn prompt_seeing_all(&mut self) -> Vec<AcpEvent> {
+            self.state.write().await.turn_in_flight = true;
+            self.cmd_tx
+                .send(ConnectionCommand::Prompt {
+                    blocks: vec![PromptInputBlock::Text {
+                        text: "go on".into(),
+                    }],
+                    user_message: None,
+                    internal_suffix: Vec::new(),
+                })
+                .await
+                .expect("the loop is running");
+            let mut seen = Vec::new();
+            loop {
+                let envelope =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), self.events.recv())
+                        .await
+                        .expect("timed out waiting for the turn's end")
+                        .expect("event stream");
+                let done = matches!(envelope.payload, AcpEvent::TurnComplete { .. });
+                seen.push(envelope.payload.clone());
+                if done {
+                    return seen;
                 }
             }
         }
@@ -49627,6 +49731,15 @@ mod tests {
             let closes = self.closes.lock().unwrap().clone();
             closes
         }
+    }
+
+    /// Whether the replay the scripted `session/load` sends reached the client
+    /// as live output — what a drain that left it in the session's channel
+    /// would hand the live loop.
+    fn replay_surfaced_live(events: &[AcpEvent]) -> bool {
+        events.iter().any(|e| {
+            matches!(e, AcpEvent::ContentDelta { text, .. } if text.contains("the answer"))
+        })
     }
 
     /// What [`ForkTransition::prompt_to_end`] returns for a turn the agent
@@ -49688,7 +49801,9 @@ mod tests {
         with_scratch_transcripts("replies-after", || async {
             let agent_type = AgentType::Custom("fork-hydration-test");
             let dir = transcript_dir_for(agent_type).expect("a custom agent owns its transcript");
-            let mut fork = ForkTransition::start_hydrating(agent_type, "child-h", true).await;
+            let mut fork =
+                ForkTransition::start_hydrating(agent_type, "child-h", true, LoadAnswer::Loaded)
+                    .await;
             assert_eq!(
                 fork.fork().await,
                 ("child-h".to_string(), "parent".to_string())
@@ -49701,12 +49816,17 @@ mod tests {
             );
             assert!(crate::acp_transcript::has_recorded_history(dir, "child-h"));
             assert_eq!(*fork.loads.lock().unwrap(), vec!["child-h".to_string()]);
-            fork.until(
-                "the child's start",
-                |e| matches!(e, AcpEvent::SessionStarted { session_id } if session_id == "child-h"),
-            )
-            .await;
-            assert_eq!(fork.prompt_to_end().await, answered("child-h"));
+            let events = fork.prompt_seeing_all().await;
+            assert!(
+                events.iter().any(
+                    |e| matches!(e, AcpEvent::TurnComplete { session_id, .. } if session_id == "child-h")
+                ),
+                "the prompt ran on the child"
+            );
+            assert!(
+                !replay_surfaced_live(&events),
+                "the drain consumed the replay; none of it reached the live loop"
+            );
             fork.shutdown().await;
         })
         .await;
@@ -49720,7 +49840,9 @@ mod tests {
     async fn a_fork_sends_no_load_the_agent_did_not_advertise() {
         with_scratch_transcripts("no-load", || async {
             let agent_type = AgentType::Custom("fork-hydration-test");
-            let mut fork = ForkTransition::start_hydrating(agent_type, "child-n", false).await;
+            let mut fork =
+                ForkTransition::start_hydrating(agent_type, "child-n", false, LoadAnswer::Loaded)
+                    .await;
             assert_eq!(
                 fork.fork().await,
                 ("child-n".to_string(), "parent".to_string())
@@ -49735,6 +49857,103 @@ mod tests {
                 fork.loads.lock().unwrap().is_empty(),
                 "no session/load to an agent without loadSession"
             );
+            fork.shutdown().await;
+        })
+        .await;
+    }
+
+    /// A load the agent REFUSES after replaying part of the session still
+    /// bounds that replay — everything it sent came before the answer — so the
+    /// drain consumes it and keeps nothing. Left in the session's channel, those
+    /// frames would reach the live loop as the agent talking now, and render as
+    /// a reply nobody asked for.
+    #[tokio::test]
+    async fn a_refused_load_leaves_no_replay_for_the_live_loop() {
+        with_scratch_transcripts("refused-load", || async {
+            let agent_type = AgentType::Custom("fork-hydration-test");
+            let dir = transcript_dir_for(agent_type).expect("a custom agent owns its transcript");
+            let mut fork =
+                ForkTransition::start_hydrating(agent_type, "child-r", true, LoadAnswer::Refused)
+                    .await;
+            assert_eq!(
+                fork.fork().await,
+                ("child-r".to_string(), "parent".to_string())
+            );
+            assert_eq!(*fork.loads.lock().unwrap(), vec!["child-r".to_string()]);
+            let events = fork.prompt_seeing_all().await;
+            assert!(
+                !replay_surfaced_live(&events),
+                "a replay the load refused must not surface as live output"
+            );
+            // The prompt's own turn is on disk by now, so the file was read to
+            // its end, and the refused replay is not in it either.
+            assert_eq!(
+                crate::acp_transcript::session_records_message_id(dir, "child-r", "77:1"),
+                Some(false),
+                "nor recorded as the branch's history"
+            );
+            fork.shutdown().await;
+        })
+        .await;
+    }
+
+    /// A load the agent never answers leaves nothing that bounds its replay, so
+    /// no drain can tell the replay's last frame from live output. The fork
+    /// does not carry on into the live loop with that: the connection ends, the
+    /// held reply goes with it, and the fork reports a failure instead of a
+    /// branch whose transcript the replay would leak into.
+    #[tokio::test(start_paused = true)]
+    async fn an_unanswered_load_ends_the_fork_instead_of_leaking_its_replay() {
+        with_scratch_transcripts("unanswered-load", || async {
+            let agent_type = AgentType::Custom("fork-hydration-test");
+            let dir = transcript_dir_for(agent_type).expect("a custom agent owns its transcript");
+            let fork = ForkTransition::start_hydrating(
+                agent_type,
+                "child-u",
+                true,
+                LoadAnswer::Unanswered,
+            )
+            .await;
+            assert!(
+                !fork.fork_replied().await,
+                "the fork must not report a branch it gave up hydrating"
+            );
+            assert_eq!(*fork.loads.lock().unwrap(), vec!["child-u".to_string()]);
+            assert_ne!(
+                crate::acp_transcript::session_records_message_id(dir, "child-u", "77:1"),
+                Some(true),
+                "nothing of the replay reached the transcript"
+            );
+            fork.shutdown().await;
+        })
+        .await;
+    }
+
+    /// When the replay cannot even be staged, no load goes out at all — a load
+    /// sent first would have a replay in flight with nowhere to drain it to.
+    #[tokio::test]
+    async fn a_replay_that_cannot_be_staged_is_never_asked_for() {
+        with_scratch_transcripts("unstageable", || async {
+            let agent_type = AgentType::Custom("fork-hydration-test");
+            let dir = transcript_dir_for(agent_type).expect("a custom agent owns its transcript");
+            // A directory where the sidecar would go: it cannot be opened as a
+            // file, so staging fails before the load would be sent.
+            let sidecar = crate::paths::codeg_acp_transcripts_root()
+                .join(dir)
+                .join("child-s.jsonl.hydrating");
+            std::fs::create_dir_all(&sidecar).unwrap();
+            let mut fork =
+                ForkTransition::start_hydrating(agent_type, "child-s", true, LoadAnswer::Loaded)
+                    .await;
+            assert_eq!(
+                fork.fork().await,
+                ("child-s".to_string(), "parent".to_string())
+            );
+            assert!(
+                fork.loads.lock().unwrap().is_empty(),
+                "no load for a replay that has nowhere to go"
+            );
+            assert_eq!(fork.prompt_to_end().await, answered("child-s"));
             fork.shutdown().await;
         })
         .await;
