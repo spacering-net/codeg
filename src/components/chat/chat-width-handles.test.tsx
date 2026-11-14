@@ -11,6 +11,15 @@ import {
   CHAT_CONTENT_WIDTH_VAR,
 } from "@/lib/chat-content-width"
 
+const device = vi.hoisted(() => ({ mobile: false }))
+vi.mock("@/hooks/use-mobile", () => ({
+  useIsMobile: () => device.mobile,
+}))
+
+beforeEach(() => {
+  device.mobile = false
+})
+
 const messages = {
   Folder: { chat: { messageList: { resizeWidth: "Resize" } } },
 }
@@ -406,6 +415,12 @@ describe("ChatWidthHandles wheel", () => {
 })
 
 describe("ChatWidthHandles accessibility", () => {
+  it("does not expose width controls on phone layouts, including landscape", () => {
+    device.mobile = true
+    render(<ChatWidthHandles />)
+    expect(screen.queryByRole("separator")).toBeNull()
+  })
+
   it("reports the width and its range once focused, and after each key", () => {
     const { right } = setup()
     expect(right).not.toHaveAttribute("aria-valuenow")

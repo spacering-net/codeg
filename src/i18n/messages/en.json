@@ -1,4 +1,22 @@
 {
+  "ConversationPanes": {
+    "label": "Pane",
+    "create": "New Pane",
+    "rename": "Rename",
+    "remove": "Remove Pane",
+    "move": "Move to Pane",
+    "name": "Pane name",
+    "save": "Save",
+    "cancel": "Cancel",
+    "removeDraftTitle": "Remove a Pane with unsent content?",
+    "removeDraftDescription": "Unsent content in this Pane will no longer be shown. Conversation history is kept and running tasks continue.",
+    "empty": "No conversations open in this Pane",
+    "emptyHint": "Open a conversation from the sidebar or start a new one.",
+    "settingsTitle": "Multi-project island",
+    "settingsDescription": "Organize conversations from different projects into named Panes, each with its own tab groups and split layout.",
+    "enabled": "Enable multi-project island",
+    "enabledDescription": "Off by default. Turning it off restores regular tabs and keeps your Panes for next time. This preference applies to this device."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Preview",
@@ -2137,6 +2155,13 @@
     }
   },
   "Folder": {
+    "mobileTabs": {
+      "title": "Open tabs",
+      "open": "Switch tabs ({count})",
+      "conversations": "Conversations",
+      "files": "Files and previews",
+      "empty": "No open tabs"
+    },
     "workspaceStatus": {
       "degradedTitle": "Live updates unavailable",
       "degradedHint": "Watcher failed to start (e.g. permission denied). Refresh manually to see changes.",

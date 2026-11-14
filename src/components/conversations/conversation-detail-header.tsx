@@ -265,7 +265,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     // message canvas below it rather than as a frosted chrome band. With a
     // workspace background image on, the tab strip above it is transparent too,
     // so the whole top of the column reveals the canvas.
-    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/50 px-3">
+    <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border/50 px-2 md:h-10 md:gap-2 md:px-3">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         {/* Folder selector — replaces the old folder-name breadcrumb. Switches
             folders for a draft; a static chip for a bound conversation. */}
@@ -286,7 +286,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
         {/* Capped at half the row so a long tag list squeezes its own chips
             (they truncate) before it squeezes the title. */}
         {taggable && conversationId != null ? (
-          <div className="flex max-w-[50%] min-w-0 shrink items-center">
+          <div className="flex max-w-[35%] min-w-0 shrink items-center md:max-w-[50%]">
             <ConversationHeaderTags
               conversationId={conversationId}
               folderId={folderId}
@@ -302,7 +302,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:text-foreground"
+              className="flex size-10 shrink-0 touch-manipulation items-center justify-center rounded text-muted-foreground/60 transition-colors hover:text-foreground md:size-7"
               aria-label={tConv("moreActions")}
               title={tConv("moreActions")}
             >

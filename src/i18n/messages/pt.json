@@ -1,4 +1,22 @@
 {
+  "ConversationPanes": {
+    "label": "Pane",
+    "create": "Novo Pane",
+    "rename": "Alterar nome",
+    "remove": "Remover Pane",
+    "move": "Mover para Pane",
+    "name": "Nome do Pane",
+    "save": "Salvar",
+    "cancel": "Cancelar",
+    "removeDraftTitle": "Remover Pane com conteúdo não enviado?",
+    "removeDraftDescription": "O conteúdo não enviado deixará de ser exibido. O histórico é mantido e as tarefas em execução continuam.",
+    "empty": "Nenhuma conversa aberta neste Pane",
+    "emptyHint": "Abra uma conversa na barra lateral ou inicie uma nova.",
+    "settingsTitle": "Ilha de vários projetos",
+    "settingsDescription": "Organize conversas de projetos diferentes em Panes nomeados, cada um com seus grupos de abas e layout.",
+    "enabled": "Ativar ilha de vários projetos",
+    "enabledDescription": "Desativada por padrão. Desativar restaura as abas normais e mantém seus Panes para a próxima vez. Esta preferência se aplica a este dispositivo."
+  },
   "HtmlCodePreview": {
     "code": "Código",
     "preview": "Prévia",
@@ -2137,6 +2155,13 @@
     }
   },
   "Folder": {
+    "mobileTabs": {
+      "title": "Abas abertas",
+      "open": "Alternar abas ({count})",
+      "conversations": "Conversas",
+      "files": "Arquivos e prévias",
+      "empty": "Nenhuma aba aberta"
+    },
     "workspaceStatus": {
       "degradedTitle": "Atualizações em tempo real indisponíveis",
       "degradedHint": "O observador falhou ao iniciar (por exemplo, permissão negada). Atualize manualmente para ver as mudanças.",

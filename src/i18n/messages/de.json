@@ -1,4 +1,22 @@
 {
+  "ConversationPanes": {
+    "label": "Pane",
+    "create": "Neues Pane",
+    "rename": "Umbenennen",
+    "remove": "Pane entfernen",
+    "move": "In Pane verschieben",
+    "name": "Pane-Name",
+    "save": "Speichern",
+    "cancel": "Abbrechen",
+    "removeDraftTitle": "Pane mit ungesendeten Inhalten entfernen?",
+    "removeDraftDescription": "Ungesendete Inhalte werden nicht mehr angezeigt. Der Gesprächsverlauf bleibt erhalten und laufende Aufgaben werden fortgesetzt.",
+    "empty": "Keine Gespräche in diesem Pane geöffnet",
+    "emptyHint": "Öffnen Sie ein Gespräch in der Seitenleiste oder beginnen Sie ein neues.",
+    "settingsTitle": "Projektübergreifende Insel",
+    "settingsDescription": "Gespräche verschiedener Projekte in benannten Panes mit eigenen Tab-Gruppen und geteilten Layouts organisieren.",
+    "enabled": "Projektübergreifende Insel aktivieren",
+    "enabledDescription": "Standardmäßig aus. Beim Ausschalten werden normale Tabs wiederhergestellt; Panes bleiben für später erhalten. Diese Einstellung gilt für dieses Gerät."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Vorschau",
@@ -2137,6 +2155,13 @@
     }
   },
   "Folder": {
+    "mobileTabs": {
+      "title": "Offene Tabs",
+      "open": "Tabs wechseln ({count})",
+      "conversations": "Unterhaltungen",
+      "files": "Dateien und Vorschauen",
+      "empty": "Keine offenen Tabs"
+    },
     "workspaceStatus": {
       "degradedTitle": "Live-Aktualisierungen nicht verfügbar",
       "degradedHint": "Beobachter konnte nicht gestartet werden (z. B. Berechtigung verweigert). Aktualisiere manuell, um Änderungen zu sehen.",

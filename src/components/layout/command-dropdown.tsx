@@ -330,9 +330,12 @@ export function CommandDropdown() {
           className="h-6 rounded-full px-2 text-xs gap-1 hover:text-foreground/80"
           onClick={() => setManageOpen(true)}
           disabled={bootstrapping}
+          aria-label={bootstrapping ? t("loading") : t("addCommand")}
         >
           <Plus className="h-3 w-3" />
-          {bootstrapping ? t("loading") : t("addCommand")}
+          <span className="hidden md:inline">
+            {bootstrapping ? t("loading") : t("addCommand")}
+          </span>
         </Button>
       ) : (
         // Has commands → one cohesive control: [name ▼ | run/stop]. The whole

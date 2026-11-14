@@ -1,4 +1,22 @@
 {
+  "ConversationPanes": {
+    "label": "Pane",
+    "create": "Nuevo Pane",
+    "rename": "Cambiar nombre",
+    "remove": "Eliminar Pane",
+    "move": "Mover a Pane",
+    "name": "Nombre del Pane",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "removeDraftTitle": "¿Eliminar un Pane con contenido sin enviar?",
+    "removeDraftDescription": "El contenido sin enviar dejará de mostrarse. Se conserva el historial y las tareas en curso continúan.",
+    "empty": "No hay conversaciones abiertas en este Pane",
+    "emptyHint": "Abre una conversación en la barra lateral o inicia una nueva.",
+    "settingsTitle": "Isla de varios proyectos",
+    "settingsDescription": "Organiza conversaciones de distintos proyectos en Panes con nombre, cada uno con sus grupos de pestañas y disposición.",
+    "enabled": "Activar isla de varios proyectos",
+    "enabledDescription": "Desactivada por defecto. Al desactivarla se restauran las pestañas habituales y se conservan los Panes. Este ajuste se aplica a este dispositivo."
+  },
   "HtmlCodePreview": {
     "code": "Código",
     "preview": "Vista previa",
@@ -2137,6 +2155,13 @@
     }
   },
   "Folder": {
+    "mobileTabs": {
+      "title": "Pestañas abiertas",
+      "open": "Cambiar de pestaña ({count})",
+      "conversations": "Conversaciones",
+      "files": "Archivos y vistas previas",
+      "empty": "No hay pestañas abiertas"
+    },
     "workspaceStatus": {
       "degradedTitle": "Actualizaciones en vivo no disponibles",
       "degradedHint": "El observador no pudo iniciarse (por ejemplo, permiso denegado). Actualiza manualmente para ver los cambios.",

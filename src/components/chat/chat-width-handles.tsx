@@ -10,6 +10,7 @@ import type {
 import { useTranslations } from "next-intl"
 
 import { useChatContentWidth } from "@/hooks/use-appearance"
+import { useIsMobile } from "@/hooks/use-mobile"
 import {
   CHAT_CONTENT_MIN,
   chatZoomFactor,
@@ -362,6 +363,8 @@ function WidthHandle({ side }: { side: Side }) {
  * for the conversation tab, never inside a zoomed canvas card).
  */
 export function ChatWidthHandles() {
+  const isMobile = useIsMobile()
+  if (isMobile) return null
   return (
     <>
       <WidthHandle side="left" />

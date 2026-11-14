@@ -1,4 +1,22 @@
 {
+  "ConversationPanes": {
+    "label": "Pane",
+    "create": "新建 Pane",
+    "rename": "重命名",
+    "remove": "移除 Pane",
+    "move": "移动到 Pane",
+    "name": "Pane 名称",
+    "save": "保存",
+    "cancel": "取消",
+    "removeDraftTitle": "移除包含未发送内容的 Pane？",
+    "removeDraftDescription": "此 Pane 中的未发送内容将不再显示。历史会话会保留，正在运行的任务继续执行。",
+    "empty": "此 Pane 尚未打开会话",
+    "emptyHint": "从左侧打开会话，或新建一条会话。",
+    "settingsTitle": "多项目灵动岛",
+    "settingsDescription": "将不同项目的会话整理到命名 Pane 中，分别保留标签页组和分屏布局。",
+    "enabled": "启用多项目灵动岛",
+    "enabledDescription": "默认关闭。关闭后恢复普通标签页，已创建的 Pane 会保留，下次开启可继续使用。此设置仅影响当前设备。"
+  },
   "HtmlCodePreview": {
     "code": "代码",
     "preview": "预览",
@@ -2137,6 +2155,13 @@
     }
   },
   "Folder": {
+    "mobileTabs": {
+      "title": "已打开的标签页",
+      "open": "切换标签页（{count}）",
+      "conversations": "会话",
+      "files": "文件与预览",
+      "empty": "暂无打开的标签页"
+    },
     "workspaceStatus": {
       "degradedTitle": "实时更新不可用",
       "degradedHint": "监听器启动失败（如目录无读取权限）。请手动刷新以获取最新变更。",

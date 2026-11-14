@@ -71,6 +71,7 @@ pub(crate) async fn converge_db(
                         version: inv.version,
                         origin: "server".to_string(),
                         tabs,
+                        pane_state: inv.pane_state,
                     },
                 );
             }

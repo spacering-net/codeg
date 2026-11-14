@@ -1,4 +1,22 @@
 {
+  "ConversationPanes": {
+    "label": "Pane",
+    "create": "Pane を作成",
+    "rename": "名前を変更",
+    "remove": "Pane を削除",
+    "move": "Pane に移動",
+    "name": "Pane 名",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "removeDraftTitle": "未送信の内容がある Pane を削除しますか？",
+    "removeDraftDescription": "この Pane の未送信内容は表示されなくなります。会話履歴は保持され、実行中のタスクは続行します。",
+    "empty": "この Pane に開いている会話はありません",
+    "emptyHint": "サイドバーから会話を開くか、新しい会話を開始してください。",
+    "settingsTitle": "複数プロジェクトのアイランド",
+    "settingsDescription": "異なるプロジェクトの会話を名前付き Pane にまとめ、タブグループと分割レイアウトを個別に保持します。",
+    "enabled": "複数プロジェクトのアイランドを有効にする",
+    "enabledDescription": "初期設定はオフです。オフにすると通常のタブに戻り、Pane は次回のために保持されます。この設定はこの端末に適用されます。"
+  },
   "HtmlCodePreview": {
     "code": "コード",
     "preview": "プレビュー",
@@ -2137,6 +2155,13 @@
     }
   },
   "Folder": {
+    "mobileTabs": {
+      "title": "開いているタブ",
+      "open": "タブを切り替える（{count}）",
+      "conversations": "会話",
+      "files": "ファイルとプレビュー",
+      "empty": "開いているタブはありません"
+    },
     "workspaceStatus": {
       "degradedTitle": "リアルタイム更新は利用できません",
       "degradedHint": "ウォッチャーの起動に失敗しました（アクセス権限エラーなど）。最新の変更を反映するには手動で更新してください。",

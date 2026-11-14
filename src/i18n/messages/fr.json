@@ -1,4 +1,22 @@
 {
+  "ConversationPanes": {
+    "label": "Pane",
+    "create": "Nouveau Pane",
+    "rename": "Renommer",
+    "remove": "Supprimer le Pane",
+    "move": "Déplacer vers un Pane",
+    "name": "Nom du Pane",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "removeDraftTitle": "Supprimer un Pane avec du contenu non envoyé ?",
+    "removeDraftDescription": "Le contenu non envoyé ne sera plus affiché. L’historique est conservé et les tâches en cours continuent.",
+    "empty": "Aucune conversation ouverte dans ce Pane",
+    "emptyHint": "Ouvrez une conversation dans la barre latérale ou commencez-en une.",
+    "settingsTitle": "Îlot multi-projets",
+    "settingsDescription": "Regroupez les conversations de différents projets dans des Panes nommés avec leurs propres groupes d’onglets et dispositions.",
+    "enabled": "Activer l’îlot multi-projets",
+    "enabledDescription": "Désactivé par défaut. La désactivation rétablit les onglets habituels et conserve vos Panes. Ce réglage s’applique à cet appareil."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Aperçu",
@@ -2137,6 +2155,13 @@
     }
   },
   "Folder": {
+    "mobileTabs": {
+      "title": "Onglets ouverts",
+      "open": "Changer d’onglet ({count})",
+      "conversations": "Conversations",
+      "files": "Fichiers et aperçus",
+      "empty": "Aucun onglet ouvert"
+    },
     "workspaceStatus": {
       "degradedTitle": "Mises à jour en temps réel indisponibles",
       "degradedHint": "L’observateur n’a pas pu démarrer (par ex. permission refusée). Actualisez manuellement pour voir les modifications.",
