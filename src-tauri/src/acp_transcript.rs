@@ -449,11 +449,14 @@ impl SessionWriter {
         // that come after. See `PendingRecord::Publish`.
         if let PendingRecord::Publish { sidecar } = &queued.record {
             self.flush();
-            // A flush that failed leaves this writer poisoned and its records off
-            // the disk, so publishing now would replace the transcript with a
-            // replay that is not the whole history either. Refuse, and clean up
-            // the sidecar this call took ownership of.
-            if self.poisoned {
+            // A flush that failed leaves its records off the disk — dropped by a
+            // poisoned writer, or still buffered by one that deferred the write
+            // to retry it later. Either way the "still header-only" test below
+            // would be answered by a file that is missing them: publishing would
+            // replace the transcript with a replay the deferred records then land
+            // AFTER (a second header in the middle of it, say). Refuse, and clean
+            // up the sidecar this call took ownership of.
+            if self.poisoned || !self.pending.is_empty() {
                 let _ = std::fs::remove_file(sidecar);
                 return; // a dropped `ack` reports the refusal
             }
@@ -1068,9 +1071,6 @@ pub fn append_line_in(root: &Path, agent_dir: &str, session_id: &str, line: &str
     }
 }
 
-/// Read one session's transcript. Missing file → empty transcript. Malformed
-/// lines are skipped so a single truncated write (e.g. a hard kill mid-append)
-/// cannot poison the rest of the history.
 /// A `session/load` replay being recorded beside its transcript, published only
 /// once the replay is complete.
 ///
@@ -1211,6 +1211,9 @@ impl Drop for HydrationStaging {
     }
 }
 
+/// Read one session's transcript. Missing file → empty transcript. Malformed
+/// lines are skipped so a single truncated write (e.g. a hard kill mid-append)
+/// cannot poison the rest of the history.
 pub fn read_transcript(agent_dir: &str, session_id: &str) -> Transcript {
     read_transcript_in(
         &crate::paths::codeg_acp_transcripts_root(),
@@ -1872,6 +1875,73 @@ mod tests {
             Some(false),
             "and the refused replay is not in the transcript"
         );
+    }
+
+    /// A record queued ahead of a publish whose write was DEFERRED (an append
+    /// that failed and will be retried) is still history, just not on disk yet.
+    /// The file then reads as header-only, so the header-only test alone would
+    /// let the publish rename over it — and the retried record would land after
+    /// the replay. The publish must refuse instead, and the record must still
+    /// land once the disk lets it.
+    ///
+    /// The deferral is produced with a read-only transcript: appending fails,
+    /// reading (and renaming over it, which needs only the directory) does not.
+    #[cfg(unix)]
+    #[test]
+    fn a_publish_waits_out_no_deferred_write() {
+        let root = temp_root();
+        append_line_in(&root, "goose", "child4", &header_line("child4"));
+        let target = root.join("goose").join("child4.jsonl");
+        let header = TranscriptHeader::new("custom:goose", "child4", "/repo", 1_750_000_000_000);
+        let mut staging = HydrationStaging::begin_in(&root, "goose", "child4", &header).unwrap();
+        assert!(staging.push(&staged_entry("46:1")));
+
+        let set_readonly = |readonly: bool| {
+            let mut perms = std::fs::metadata(&target).unwrap().permissions();
+            perms.set_readonly(readonly);
+            std::fs::set_permissions(&target, perms).unwrap();
+        };
+        set_readonly(true);
+        if std::fs::OpenOptions::new().append(true).open(&target).is_ok() {
+            // Running with privileges that ignore the mode; nothing to defer.
+            set_readonly(false);
+            return;
+        }
+
+        // A barrier, so the writer tries to land it at once — and defers it.
+        let prompt_ack = record_entry_in(
+            &root,
+            "goose",
+            "child4",
+            EntryKind::Prompt,
+            serde_json::json!([{ "type": "text", "text": "deferred" }]),
+        );
+        let publish_ack = staging.publish().expect("handed to the transcript writer");
+        assert!(
+            publish_ack.blocking_recv().is_err(),
+            "a publish must not rename over a record still waiting to be written"
+        );
+
+        set_readonly(false);
+        assert!(
+            prompt_ack.blocking_recv().is_ok(),
+            "the deferred record lands once the disk takes it"
+        );
+        let transcript = read_transcript_in(&root, "goose", "child4");
+        assert_eq!(
+            transcript
+                .entries
+                .iter()
+                .filter(|e| e.k == EntryKind::Prompt)
+                .count(),
+            1
+        );
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "child4", "46:1"),
+            Some(false),
+            "the refused replay is not in the transcript"
+        );
+        assert!(!root.join("goose").join("child4.jsonl.hydrating").exists());
     }
 
     /// A publish must not replace the transcript when the writer cannot verify

@@ -1379,6 +1379,12 @@ const ConversationTabView = memo(function ConversationTabView({
     handleSendRef.current = handleSend
   }, [handleSend])
 
+  // One fork at a time — see the guard in `handleForkFromTurn`.
+  const forkInFlightRef = useRef(false)
+  // The ref is the SYNCHRONOUS guard: it has to bite before React re-renders, so
+  // it cannot be state. This is what the button RENDERS from, so a second
+  // activation is refused visibly instead of looking like nothing happened.
+  const [forkInFlight, setForkInFlight] = useState(false)
   // "Fork from here": fork at a rendered assistant turn, sending nothing. The
   // ONLY fork entry point — the composer's fork-and-send was removed once this
   // existed, since the tail is just one of the turns this can be aimed at.
@@ -1387,22 +1393,18 @@ const ConversationTabView = memo(function ConversationTabView({
   // untouched and the same click can be retried, or aimed elsewhere.
   //
   // Which turns the agent can actually name is the backend's call
-  // (`resolve_fork_point`): a turn it cannot name forks at the tail rather than
-  // failing, so this never has to reason about per-agent identity.
+  // (`resolve_fork_point`). A built-in agent forks a turn it cannot name at
+  // the tail; a custom agent refuses one, and that refusal is reported here
+  // like any other failure. `turnId` is `null` for an explicit tail fork (the
+  // thread's last reply before the reparse has named it, see `forkTurnIdFor`).
   //
   // Liveness is read off `connStatusRef` rather than captured: this callback is
   // handed to every rendered reply, so taking `connStatus` as a dependency
   // would swap its identity at both ends of every turn and re-render the whole
   // mounted transcript window for nothing. The ref is also the fresher answer
   // at click time.
-  // One fork at a time — see the guard in `handleForkFromTurn`.
-  const forkInFlightRef = useRef(false)
-  // The ref is the SYNCHRONOUS guard: it has to bite before React re-renders, so
-  // it cannot be state. This is what the button RENDERS from, so a second
-  // activation is refused visibly instead of looking like nothing happened.
-  const [forkInFlight, setForkInFlight] = useState(false)
   const handleForkFromTurn = useCallback(
-    async (turnId: string) => {
+    async (turnId: string | null) => {
       const connectionId = conn.connectionId
       if (!connectionId || connStatusRef.current !== "connected") return
       // The agent round-trip is not instant — `session/fork`, plus the call that

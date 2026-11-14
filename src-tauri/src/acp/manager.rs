@@ -2583,11 +2583,19 @@ impl ConnectionManager {
         if let (Some(point), AgentType::Custom(_)) = (fork_point.as_ref(), &agent_type) {
             let current_sid = state_arc.read().await.external_id.clone();
             if let Some(current_sid) = current_sid.filter(|sid| !sid.is_empty()) {
-                if crate::acp::fork::session_lacks_message_id(
-                    agent_type,
-                    &current_sid,
-                    &point.message_id,
-                ) {
+                // A whole-file scan of a transcript that can run to tens of
+                // megabytes: off the async workers. A scan that cannot finish
+                // is "cannot tell", which never refuses.
+                let lacks = {
+                    let sid = current_sid.clone();
+                    let message_id = point.message_id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::acp::fork::session_lacks_message_id(agent_type, &sid, &message_id)
+                    })
+                    .await
+                    .unwrap_or(false)
+                };
+                if lacks {
                     tracing::warn!(
                         connection_id = %conn_id,
                         turn_id = %fork_from_turn_id.as_deref().unwrap_or_default(),

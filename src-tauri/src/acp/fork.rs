@@ -264,17 +264,25 @@ pub fn resolve_fork_point(
         // — codeg's transcript and the agent's own log are two stores and can
         // drift — surfaces as its own error, and must not be retried as a tail
         // fork either.
+        //
+        // Except at the TAIL. A turn nothing follows needs no name: the tail
+        // fork IS a fork at it, so refusing there would only take "fork from
+        // here" away from every custom agent that forks without stamping ids —
+        // which used to work at the newest reply and still should.
         AgentType::Custom(_) => {
-            let message_id = turn
+            match turn
                 .agent_message_id
                 .as_ref()
                 .filter(|id| !id.trim().is_empty())
-                .ok_or(ForkPointError::MissingMessageId)?;
-            Ok(Some(ForkPoint {
-                message_id: message_id.clone(),
-                message_fingerprint: None,
-                message_occurrence: None,
-            }))
+            {
+                Some(message_id) => Ok(Some(ForkPoint {
+                    message_id: message_id.clone(),
+                    message_fingerprint: None,
+                    message_occurrence: None,
+                })),
+                None if is_tail_turn(turns, idx) => Ok(None),
+                None => Err(ForkPointError::MissingMessageId),
+            }
         }
         // Every other agent either has no `session/fork` or no fork point in
         // it. This `Ok(None)` is RETAINED OLD BEHAVIOUR, not a located fork
@@ -283,6 +291,19 @@ pub fn resolve_fork_point(
         // scoped to `Custom(_)` and not to `_`.
         _ => Ok(None),
     }
+}
+
+/// Whether nothing the agent was told or answered follows `turns[idx]` — the
+/// one position where a tail fork lands exactly where the user pointed.
+///
+/// Only user and assistant turns count. A system turn (a failed turn's line,
+/// say) is codeg's account of something, not a message in the agent's history,
+/// so it does not move the tail — the same call the frontend's `markThreadTail`
+/// makes.
+fn is_tail_turn(turns: &[MessageTurn], idx: usize) -> bool {
+    turns[idx + 1..]
+        .iter()
+        .all(|t| matches!(t.role, TurnRole::System))
 }
 
 /// Whether the agent's CURRENT session is known to LACK the message
@@ -848,7 +869,7 @@ mod tests {
         let point = resolve_fork_point(
             &turns,
             "turn-1",
-            AgentType::Custom("deepseek-official-acp".into()),
+            AgentType::Custom("deepseek-official-acp"),
         )
         .unwrap()
         .unwrap();
@@ -864,13 +885,46 @@ mod tests {
     /// the whole turn's) and openma answers `invalid` when nothing matches.
     #[test]
     fn custom_agents_refuse_a_turn_the_agent_never_named() {
-        let turns = vec![turn("turn-1", TurnRole::Assistant, "hello", None)];
+        let turns = vec![
+            turn("turn-1", TurnRole::Assistant, "hello", None),
+            turn("turn-2", TurnRole::User, "and then?", None),
+            turn("turn-3", TurnRole::Assistant, "then this", None),
+        ];
         assert_eq!(
             resolve_fork_point(
                 &turns,
                 "turn-1",
-                AgentType::Custom("deepseek-official-acp".into())
+                AgentType::Custom("deepseek-official-acp")
             ),
+            Err(ForkPointError::MissingMessageId)
+        );
+    }
+
+    /// ...except at the tail, where the tail fork IS the fork the user asked
+    /// for. A custom agent that forks without stamping ids could always fork
+    /// its newest reply; refusing that would be a regression with nothing
+    /// gained. A system line after the reply (a failed turn's account) is not
+    /// in the agent's history, so it does not move the tail; a user turn does.
+    #[test]
+    fn custom_agents_tail_fork_an_unnamed_reply_nothing_follows() {
+        let custom = || AgentType::Custom("deepseek-official-acp");
+        let turns = vec![
+            turn("turn-0", TurnRole::User, "hi", None),
+            turn("turn-1", TurnRole::Assistant, "hello", None),
+        ];
+        assert_eq!(resolve_fork_point(&turns, "turn-1", custom()), Ok(None));
+
+        let mut with_error_line = turns.clone();
+        with_error_line.push(turn("turn-2", TurnRole::System, "failed", None));
+        assert_eq!(
+            resolve_fork_point(&with_error_line, "turn-1", custom()),
+            Ok(None)
+        );
+
+        let mut with_steer = turns;
+        with_steer.push(turn("turn-2", TurnRole::User, "wait", None));
+        assert_eq!(
+            resolve_fork_point(&with_steer, "turn-1", custom()),
             Err(ForkPointError::MissingMessageId)
         );
     }
@@ -973,7 +1027,7 @@ mod tests {
             resolve_fork_point(
                 &turns,
                 "turn-9",
-                AgentType::Custom("deepseek-official-acp".into())
+                AgentType::Custom("deepseek-official-acp")
             ),
             Err(ForkPointError::TurnNotFound)
         );
@@ -1002,7 +1056,7 @@ mod tests {
         // A custom agent with no transcript for this session is equally
         // unanswerable — the file may simply not exist yet.
         assert!(!session_lacks_message_id(
-            AgentType::Custom("deepseek-official-acp".into()),
+            AgentType::Custom("deepseek-official-acp"),
             "sess-that-was-never-recorded",
             "msg_01"
         ));
