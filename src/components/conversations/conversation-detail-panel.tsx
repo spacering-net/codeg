@@ -1379,6 +1379,12 @@ const ConversationTabView = memo(function ConversationTabView({
     handleSendRef.current = handleSend
   }, [handleSend])
 
+  // One fork at a time — see the guard in `handleForkFromTurn`.
+  const forkInFlightRef = useRef(false)
+  // The ref is the SYNCHRONOUS guard: it has to bite before React re-renders, so
+  // it cannot be state. This is what the button RENDERS from, so a second
+  // activation is refused visibly instead of looking like nothing happened.
+  const [forkInFlight, setForkInFlight] = useState(false)
   // "Fork from here": fork at a rendered assistant turn, sending nothing. The
   // ONLY fork entry point — the composer's fork-and-send was removed once this
   // existed, since the tail is just one of the turns this can be aimed at.
@@ -1387,8 +1393,10 @@ const ConversationTabView = memo(function ConversationTabView({
   // untouched and the same click can be retried, or aimed elsewhere.
   //
   // Which turns the agent can actually name is the backend's call
-  // (`resolve_fork_point`): a turn it cannot name forks at the tail rather than
-  // failing, so this never has to reason about per-agent identity.
+  // (`resolve_fork_point`). A built-in agent forks a turn it cannot name at
+  // the tail; a custom agent refuses one, and that refusal is reported here
+  // like any other failure. `turnId` is `null` for an explicit tail fork (the
+  // thread's last reply before the reparse has named it, see `forkTurnIdFor`).
   //
   // Liveness is read off `connStatusRef` rather than captured: this callback is
   // handed to every rendered reply, so taking `connStatus` as a dependency
@@ -1396,30 +1404,48 @@ const ConversationTabView = memo(function ConversationTabView({
   // mounted transcript window for nothing. The ref is also the fresher answer
   // at click time.
   const handleForkFromTurn = useCallback(
-    async (turnId: string) => {
+    async (turnId: string | null) => {
       const connectionId = conn.connectionId
       if (!connectionId || connStatusRef.current !== "connected") return
-      // Snapshot which live turns belong to the PRE-fork session, before the
-      // await. The fork RPC is a window in which a send can still start — a
-      // queued auto-flush, a fast typist, another client — and such a turn
-      // legitimately runs on the forked session, so it must not be swept away
-      // with the history it isn't part of. Naming the stale turns instead of
-      // clearing wholesale is what keeps that distinction.
-      //
-      // COMPLETED turns only. An optimistic user turn is one whose prompt has
-      // not reached the agent yet, and the backend refuses a fork while a turn
-      // is in flight (`AcpError::TurnInProgress`) — so a fork that SUCCEEDS
-      // proves any optimistic turn standing at this moment never started a
-      // turn on the old session, and it will therefore run on the forked one.
-      // Sweeping it would erase the user's own message while its reply streams
-      // in underneath.
-      const preForkSession = useConversationRuntimeStore
-        .getState()
-        .byConversationId.get(effectiveConversationId)
-      const staleLiveTurnIds = (preForkSession?.localTurns ?? []).map(
-        (t) => t.id
-      )
+      // The agent round-trip is not instant — `session/fork`, plus the call that
+      // makes the child usable, runs for seconds — and nothing else in the UI
+      // knows one is running: the button's disabled state tracks a PROMPTING
+      // connection (`forkBusy`), never a forking one. A second activation inside
+      // that window forks the session the FIRST one just produced, chaining
+      // S1 → S2 → S3: the sidebar gains two rows, one of them a session that was
+      // abandoned the moment it existed and holds no history at all. Refusing
+      // here covers every entry point, including the retry a user starts because
+      // the first click looked like it did nothing.
+      if (forkInFlightRef.current) return
+      forkInFlightRef.current = true
+      // Everything after the flag lives INSIDE the `try`. An exception raised
+      // between setting it and entering the `try` would leave it set for the
+      // life of the component — `finally` would never run — and fork would then
+      // be dead in that tab with no way back. The frontend guard is interaction
+      // feedback only: two CLIENTS of the same session still race, and only the
+      // backend can settle that.
       try {
+        setForkInFlight(true)
+        // Snapshot which live turns belong to the PRE-fork session, before the
+        // await. The fork RPC is a window in which a send can still start — a
+        // queued auto-flush, a fast typist, another client — and such a turn
+        // legitimately runs on the forked session, so it must not be swept away
+        // with the history it isn't part of. Naming the stale turns instead of
+        // clearing wholesale is what keeps that distinction.
+        //
+        // COMPLETED turns only. An optimistic user turn is one whose prompt has
+        // not reached the agent yet, and the backend refuses a fork while a turn
+        // is in flight (`AcpError::TurnInProgress`) — so a fork that SUCCEEDS
+        // proves any optimistic turn standing at this moment never started a
+        // turn on the old session, and it will therefore run on the forked one.
+        // Sweeping it would erase the user's own message while its reply streams
+        // in underneath.
+        const preForkSession = useConversationRuntimeStore
+          .getState()
+          .byConversationId.get(effectiveConversationId)
+        const staleLiveTurnIds = (preForkSession?.localTurns ?? []).map(
+          (t) => t.id
+        )
         const { forkedSessionId } = await acpFork(
           connectionId,
           dbConvIdRef.current,
@@ -1466,6 +1492,9 @@ const ConversationTabView = memo(function ConversationTabView({
                         : String(err),
                 }),
         })
+      } finally {
+        forkInFlightRef.current = false
+        setForkInFlight(false)
       }
     },
     [
@@ -2209,6 +2238,7 @@ const ConversationTabView = memo(function ConversationTabView({
               ? handleForkFromTurn
               : undefined
           }
+          forkInFlight={forkInFlight}
         />
       </ActivityLiveProvider>
     </GoalControlProvider>

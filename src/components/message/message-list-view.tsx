@@ -230,7 +230,14 @@ interface MessageListViewProps {
    * is transient and comes back, so the view renders it as a disabled button
    * (see `forkBusy`) rather than making every reply's footer flicker.
    */
-  onForkFromTurn?: (turnId: string) => void
+  onForkFromTurn?: (turnId: string | null) => void
+  /**
+   * A fork this surface started is still running. The host's ref is the
+   * synchronous guard; this is what RENDERS, so a second activation is refused
+   * visibly instead of looking like it did nothing — which is what makes a user
+   * click again.
+   */
+  forkInFlight?: boolean
   /**
    * The connection's work that can outlive a turn, for the "N running" chip
    * on the live activity row above the composer (see `LiveRunsChip`). Every
@@ -1265,8 +1272,8 @@ export function markThreadTail(items: ThreadRenderItem[]): void {
  *
  * A turn this session streamed carries a `live-…` id until the post-turn
  * reparse backfills the parser's name (`source_turn_id`). The backend cannot
- * resolve such an id and deliberately degrades to a TAIL fork rather than
- * refusing the click. That is exactly right at the END of the thread — the tail
+ * resolve such an id, so the only fork it can stand for is a TAIL fork (see
+ * `forkTurnIdFor`). That is exactly right at the END of the thread — the tail
  * IS the fork point — and a silent lie anywhere before it.
  *
  * Anywhere before it is reachable: a reply the user steered mid-turn promotes
@@ -1284,6 +1291,24 @@ export function isForkPointUnnamed(
 ): boolean {
   if (forkPoint === null || isThreadTail) return false
   return forkPoint.source_turn_id == null && isLiveTurnId(forkPoint.id)
+}
+
+/**
+ * The turn id "fork from here" sends for `forkPoint`, or `null` for an explicit
+ * tail fork.
+ *
+ * The parser's name (`source_turn_id`) first, then a parser id. A `live-…` id
+ * is not sent at all: the backend cannot resolve one, and the only place its
+ * button is enabled is the thread tail (`isForkPointUnnamed`), where a tail
+ * fork is exactly the fork the user asked for. Sending the live id instead
+ * leaned on the backend degrading an unresolvable id to the tail, which a
+ * custom agent no longer does — it refuses, so the newest reply could not be
+ * forked until the reparse caught up. For a built-in agent the request is the
+ * same tail fork it always was. Exported for tests.
+ */
+export function forkTurnIdFor(forkPoint: MessageTurn): string | null {
+  if (forkPoint.source_turn_id) return forkPoint.source_turn_id
+  return isLiveTurnId(forkPoint.id) ? null : forkPoint.id
 }
 
 const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
@@ -1311,7 +1336,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   roundOpen?: boolean
   onRoundOpenChange?: (open: boolean) => void
   foldEpoch?: number
-  onForkFromTurn?: (turnId: string) => void
+  onForkFromTurn?: (turnId: string | null) => void
   forkDisabled?: boolean
   /** Whether nothing follows this group in the thread — the one position where
    *  a turn the backend cannot name still forks where the user pointed. */
@@ -1403,11 +1428,12 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
             // `live-…`, which the backend cannot resolve against its own parse
             // — sending it forked at the tail and produced a copy of the parent.
             // The post-turn reparse backfills the parser's name; `id` is the
-            // right answer only for turns that came from the parser already,
-            // and for the newest reply, where the tail IS the fork point.
+            // right answer only for turns that came from the parser already.
+            // The newest reply, before that backfill, asks for the tail fork
+            // outright — there the tail IS the fork point (`forkTurnIdFor`).
             onForkFromTurn && isResponseComplete && forkPoint
               ? () => {
-                  onForkFromTurn(forkPoint.source_turn_id ?? forkPoint.id)
+                  onForkFromTurn(forkTurnIdFor(forkPoint))
                 }
               : undefined
           }
@@ -1542,6 +1568,7 @@ export function MessageListView({
   onAskSelection,
   onSaveNoteSelection,
   onForkFromTurn,
+  forkInFlight = false,
   liveRuns = null,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
@@ -1891,7 +1918,7 @@ export function MessageListView({
                 onRoundOpenChange={handleRoundOpenChange}
                 foldEpoch={fold.epoch}
                 onForkFromTurn={onForkFromTurn}
-                forkDisabled={forkBusy}
+                forkDisabled={forkBusy || forkInFlight}
                 isThreadTail={item.isThreadTail}
               />
             </div>
@@ -1928,6 +1955,7 @@ export function MessageListView({
       handleRoundOpenChange,
       onForkFromTurn,
       forkBusy,
+      forkInFlight,
     ]
   )
 

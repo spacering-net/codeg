@@ -7,6 +7,7 @@ import {
   dedupeCompactionItems,
   extractDelegationSources,
   extractMessageDelegationSources,
+  forkTurnIdFor,
   groupDelegationSources,
   hoistedCompaction,
   isForkPointUnnamed,
@@ -972,6 +973,37 @@ describe("isForkPointUnnamed", () => {
 
   it("says nothing about a group with no turns", () => {
     expect(isForkPointUnnamed(null, false)).toBe(false)
+  })
+})
+
+/**
+ * What "fork from here" actually sends. A live id would be refused by a custom
+ * agent (the backend cannot find it and will not relocate the fork), so the one
+ * position where a live id's button is enabled — the thread tail — asks for the
+ * tail fork outright instead.
+ */
+describe("forkTurnIdFor", () => {
+  function forkTurn(id: string, sourceTurnId?: string | null): MessageTurn {
+    return {
+      id,
+      role: "assistant",
+      blocks: [],
+      timestamp: "",
+      ...(sourceTurnId !== undefined ? { source_turn_id: sourceTurnId } : {}),
+    }
+  }
+
+  it("prefers the parser's name the reparse backfilled", () => {
+    expect(forkTurnIdFor(forkTurn("live-7-lm-1", "turn-4"))).toBe("turn-4")
+  })
+
+  it("sends a parser id as it is", () => {
+    expect(forkTurnIdFor(forkTurn("turn-4"))).toBe("turn-4")
+  })
+
+  it("asks for the tail fork for a live id the backend cannot resolve", () => {
+    expect(forkTurnIdFor(forkTurn("live-7-lm-1"))).toBeNull()
+    expect(forkTurnIdFor(forkTurn("live-7-lm-1", null))).toBeNull()
   })
 })
 
